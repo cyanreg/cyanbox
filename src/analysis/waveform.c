@@ -32,11 +32,12 @@
  *   item 2) and confirmed on ~2100 rekordbox files: PWAV heights are never
  *   below 2 and PWV2 heights never below 1. rekordbox never writes lower
  *   values, and Nexus firmware rejects a preview that has a zero column.
- * - The three-band levels of PWV7 and PWV6 are recalibrated (see "PWV7"
- *   below): dj's are several times too hot in the mid and high bands, so
- *   loud masters drew an all-cream overview. PWAV, PWV2, PWV3, PWV4, PWV5
- *   and PWVC stay byte-identical to dj (PWV4 is still derived from dj's
- *   PWV6 levels, which baken fitted it against). */
+ * - The three-band levels of PWV7 and PWV6 are recalibrated per band
+ *   against rekordbox's own bytes (see "PWV7" and "PWV6" below): dj's mid
+ *   and high bands are several times too hot, so loud masters drew an
+ *   all-cream overview. PWAV, PWV2, PWV3, PWV4, PWV5 and PWVC stay
+ *   byte-identical to dj (PWV4 is still derived from dj's PWV6 levels,
+ *   which baken fitted it against). */
 
 #include "rxbox/analysis.h"
 
@@ -67,8 +68,9 @@ static const double GAIN_TARGET[3] = { 78.0, 105.0, 115.0 };
 static const double GAIN_FLOOR[3]  = { 80, 80, 95 };
 static const double GAIN_CAP[3]    = { 267, 300, 500 };
 static const double BAND_SCALE[3]  = { 1.25, 1.15, 0.6 };
-/* PWV6 = range mean of PWV7 times these (baken's fit of rekordbox's PWV6
- * against rekordbox's PWV7); PWV4 bytes 3..5 = PWV6 times these. */
+/* dj's PWV6 = range mean of dj's PWV7 times these (baken's fit of
+ * rekordbox's PWV6 against rekordbox's PWV7), and PWV4 bytes 3..5 = that
+ * PWV6 times these. rxbox writes its own PWV6 and keeps dj's only for PWV4. */
 static const double PWV6_SCALE[3]  = { 0.56, 0.71, 2.0 };
 static const double PWV4_SCALE[3]  = { 2.4, 1.6, 1.1 };
 
@@ -223,8 +225,9 @@ static void rms_over(const Columns *c, const double *cs, const int64_t *cc,
 }
 
 /* dj's PWV6 rule: range means of PWV7 over a 1200-way split, rescaled per
- * band. `acc` holds (n + 1) * 3 running sums. */
-static void pwv6_from(const uint8_t *pwv7, int64_t n, double *acc, uint8_t *pwv6)
+ * band. `acc` holds (n + 1) * 3 running sums. rxbox uses it only for dj's
+ * PWV6 levels that PWV4 is built from. */
+static void pwv6_dj(const uint8_t *pwv7, int64_t n, double *acc, uint8_t *pwv6)
 {
     for (int j = 0; j < 3; j++)
         acc[j] = 0.0;
@@ -237,6 +240,26 @@ static void pwv6_from(const uint8_t *pwv7, int64_t n, double *acc, uint8_t *pwv6
         for (int j = 0; j < 3; j++) {
             double mean = (acc[b * 3 + j] - acc[a * 3 + j]) / (double)(b - a);
             pwv6[k * 3 + j] = (uint8_t)fmin(127, round_half(PWV6_SCALE[j] * mean));
+        }
+    }
+}
+
+/* rxbox's PWV6 (see its use): range means of rxbox's PWV7 over a 1200-way
+ * split, 0.5 * mean for low and mid, 0.5 * sqrt(127 * mean) for high. */
+static void pwv6_rxbox(const uint8_t *pwv7, int64_t n, double *acc, uint8_t *pwv6)
+{
+    for (int j = 0; j < 3; j++)
+        acc[j] = 0.0;
+    for (int64_t i = 0; i < n; i++)
+        for (int j = 0; j < 3; j++)
+            acc[(i + 1) * 3 + j] = acc[i * 3 + j] + pwv7[i * 3 + j];
+    for (int k = 0; k < RX_WAVE_PWV6_COLUMNS; k++) {
+        int64_t a, b;
+        split_range(n, RX_WAVE_PWV6_COLUMNS, k, &a, &b);
+        for (int j = 0; j < 3; j++) {
+            double mean = (acc[b * 3 + j] - acc[a * 3 + j]) / (double)(b - a);
+            double v = j < 2 ? 0.5 * mean : 0.5 * sqrt(127 * mean);
+            pwv6[k * 3 + j] = (uint8_t)fmin(127, round_half(v));
         }
     }
 }
@@ -322,36 +345,41 @@ int rx_waveforms_compute(const float *mono, int64_t nb_samples, int rate, RxWave
         out->gains[j] = (uint16_t)g;
     }
     /* dj writes u = min(127, BAND_SCALE * gain * envelope) as the level.
-     * rxbox writes 127 * (u / 127)^2 instead: the same envelopes and gains,
-     * but levels squared, as rekordbox's PWV3 height is the squared peak.
+     * The gain brings each band's loudest column to GAIN_TARGET * BAND_SCALE
+     * (97.5, 120.75, 69) unless it hits its floor or cap. rxbox takes
+     * x = min(1, u / that), so every band's loudest column is 1 as in
+     * rekordbox (whose PWV7 reaches 126..127 in all three bands), and writes
+     * 127 * x^1.5 for the low and mid bands and 127 * x^2.5 for the high band
+     * (x * sqrt(x) and x * x * sqrt(x): exact operations, so Python mirrors
+     * them byte for byte). The envelopes and gains are dj's, so PWVC is too.
      *
-     * Measured (mean, p50, p95, max of the bytes per band, low | mid | high):
+     * Fitted per band (exponents from 1, 1.25, 1.5, 2, 2.5, 3) to rekordbox's
+     * own PWV7 bytes. Mean, p50, p95, max per band, low | mid | high:
      *
-     *   rekordbox's own PWV7, the two rekordbox 6.6.1 demo tracks (the only
-     *   rekordbox-written .2EX with waveform bytes at hand: rekordcrate's
-     *   data/complete_export, pyrekordbox's .testdata; the ~2100 seabass
-     *   .2EX carry only PWVC, whose gains, median 80/108/109, agree with
-     *   ours), 45074 columns:
-     *       48.8 53 94 126 | 24.8 19 71 126 |  6.2  1 34 127
-     *   dj's rule on 10 tracks of build-check/acceptance/list.txt (lines 1,
-     *   5, 17, 20, 23, 27, 33, 42, 51, 55: house, drum & bass, J-pop, jazz;
-     *   FLAC, Opus, MP3), 302k columns:
-     *       64.9 68 108 127 | 45.1 44 82 127 | 20.5 18 49  97
-     *   this rule, same tracks:
-     *       39.7 36  93 127 | 19.5 15 53 127 |  5.0  2 19  74
+     *   rekordbox, its two 6.6.1 demo tracks:   48.8 53 94 126 | 24.8 19 71 126 |  6.2  1 34 127
+     *   dj's rule, 10 tracks:                    47.4 49 78 100 | 41.5 41 73 121 | 17.2 15 40  69
+     *   this rule, the same tracks:              46.3 46 91 127 | 27.6 25 60 127 |  7.5  3 33 127
      *
-     * dj's high band sat at a fifth of its peak almost everywhere (median
-     * 18) where rekordbox's is near zero except on transients (median 1).
-     * Squaring brings every band's mean and median to rekordbox's without
-     * touching the gains, so PWVC is still dj's. The detail keeps its shape
-     * (same envelope), with more contrast. With two reference tracks this
-     * is a calibration, not rekordbox's algorithm. */
+     * The rekordbox bytes are the only rekordbox-written .2EX with waveform
+     * bytes at hand (rekordcrate's data/complete_export, pyrekordbox's
+     * .testdata; the ~2100 seabass .2EX carry only PWVC, whose gains, median
+     * 80/108/109, agree with ours). The 10 tracks are lines 1, 5, 17, 20,
+     * 23, 27, 33, 42, 51 and 55 of build-check/acceptance/list.txt (house,
+     * drum & bass, J-pop, jazz; FLAC, Opus, MP3; 302k columns), mixed to
+     * mono as the app does (the mean of the channels). dj's high band sat at
+     * a fifth of its peak almost everywhere (median 15) where rekordbox's is
+     * near zero except on transients (median 1), and its mid was half as
+     * hot again as rekordbox's. With two reference tracks this is a
+     * calibration, not rekordbox's algorithm. */
     for (int j = 0; j < 3; j++) {
         double scale = BAND_SCALE[j] * out->gains[j];
+        double full = GAIN_TARGET[j] * BAND_SCALE[j];
         for (int64_t i = 0; i < n; i++) {
             double u = fmin(127, scale * env[i * 3 + j]);
             dj7[i * 3 + j] = (uint8_t)round_half(u);
-            out->pwv7[i * 3 + j] = (uint8_t)round_half(u * u / 127);
+            double x = fmin(1.0, u / full), sx = sqrt(x);
+            double v = j < 2 ? x * sx : x * x * sx;
+            out->pwv7[i * 3 + j] = (uint8_t)round_half(127 * v);
         }
     }
 
@@ -404,19 +432,34 @@ int rx_waveforms_compute(const float *mono, int64_t nb_samples, int rate, RxWave
         out->pwv2[k] = (uint8_t)fmax(h, PWV2_MIN_HEIGHT);
     }
 
-    /* PWV6 from rxbox's PWV7 levels. With them its bands relate as
-     * rekordbox's do (measured as for PWV7 above):
+    /* PWV6 from rxbox's PWV7: the range means over a 1200-way split, halved
+     * for the low and mid bands, and 0.5 * sqrt(127 * mean) for the high
+     * band. The square root keeps a bright track's highs from reaching past
+     * its bass: the overview draws each band's reach over the last (blue,
+     * amber, then cream), so the fraction of columns where high >= low is
+     * the fraction drawn all cream, and where mid >= low all amber.
      *
-     *   rekordbox, the two demo tracks:   22.1 26 37 43 | 15.3 15 29 39 | 13.6 13 28  38
-     *   dj's rule, the 10 tracks:         34.1 37 55 64 | 30.7 31 51 72 | 38.3 37 81 115
-     *   this rule, the same tracks:       20.3 20 43 58 | 13.2 12 30 58 |  9.2  7 29  53
+     * Fitted (multipliers 0.3..3, exponents 0.5, 0.75, 1 for mid and high)
+     * to rekordbox's two demo tracks, where high >= low in 28 % and 32 % of
+     * columns and mid >= low in 32 % and 25 %, with the band means below.
+     * On the 10 tracks above, high >= low / mid >= low:
      *
-     * The high band's mean was 1.12 times the low band's (0.5 to 1.7 per
-     * track, so the overview was all "every band" cream); rekordbox's is
-     * 0.55 and 0.66 on its two tracks, this gives 0.45 (0.14 to 0.94). */
+     *   track (list line)     1    5    17   20   23   27   33   42   51   55
+     *   dj's rule           .44  .68  .69  .97  .76  .78  .12  .86  .79  .60
+     *                       .40  .57  .43  .81  .85  .79  .55  .49  .62  .75
+     *   this rule           .04  .21  .10  .33  .11  .20  .10  .30  .29  .19
+     *                       .06  .23  .11  .17  .36  .39  .28  .13  .28  .37
+     *
+     * Line 20 is a loud drum & bass master: with dj's levels its overview
+     * was cream in 97 % of the columns, now a blue body with amber and the
+     * cream at its peaks. Band means, p50, p95, max:
+     *
+     *   rekordbox, the two demo tracks:   22.1 26 37 43 | 15.3 15 29 39 | 13.6 13 28 38
+     *   dj's rule, the 10 tracks:         25.3 27 39 52 | 28.3 30 46 71 | 31.7 33 60 82
+     *   this rule, the same tracks:       21.8 23 39 59 | 13.2 13 25 48 | 12.3 13 25 34 */
     uint8_t dj6[RX_WAVE_PWV6_COLUMNS * 3];
-    pwv6_from(out->pwv7, n, acc, out->pwv6);
-    pwv6_from(dj7, n, acc, dj6);
+    pwv6_rxbox(out->pwv7, n, acc, out->pwv6);
+    pwv6_dj(dj7, n, acc, dj6);
 
     /* PWV4: bytes 3..5 are the PWV6 bands rescaled; byte 0 follows the
      * strongest of them, byte 1 falls as byte 0 rises, byte 2 is their
@@ -473,7 +516,7 @@ void rx_waveforms_free(RxWaveforms *w)
  * content of a .rxw file; all integers little-endian:
  *
  *   0   4  "RXWV"
- *   4   4  version (2)
+ *   4   4  version (3)
  *   8   4  nb_detail
  *  12   4  rate
  *  16   6  gains, 3 x u16
@@ -487,10 +530,11 @@ void rx_waveforms_free(RxWaveforms *w)
  * with -EINVAL. Unpack checks the size exactly against the header before
  * reading anything.
  *
- * Version 1 held dj's PWV6/PWV7 levels; version 2 the recalibrated ones
- * (see "PWV7" above), so version 1 blobs must not be used. */
+ * Version 1 held dj's PWV6/PWV7 levels, version 2 a first recalibration
+ * (dj's levels squared), version 3 the per-band one (see "PWV7" and
+ * "PWV6" above); older blobs must not be used. */
 #define RXW_MAGIC "RXWV"
-#define RXW_VERSION 2
+#define RXW_VERSION 3
 #define RXW_HEADER 24
 /* 24 hours of columns: anything above is a damaged file, not a track. */
 #define RXW_MAX_DETAIL (COLUMNS_PER_SECOND * 3600 * 24)
@@ -560,8 +604,8 @@ int rx_waveforms_unpack(const uint8_t *data, size_t size, RxWaveforms *w)
     *w = (RxWaveforms) { 0 };
     if (!data || size < RXW_HEADER || memcmp(data, RXW_MAGIC, 4))
         return RX_ERROR(EINVAL);
-    /* Another format version (1: dj's three-band levels): not damaged, but
-     * stale, so the caller recomputes */
+    /* Another format version (1, 2: older three-band levels): not damaged,
+     * but stale, so the caller recomputes */
     if (get_le32(data + 4) != RXW_VERSION)
         return RX_ERROR(EPROTO);
     uint32_t n = get_le32(data + 8), rate = get_le32(data + 12);

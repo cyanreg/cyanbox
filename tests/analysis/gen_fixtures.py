@@ -11,8 +11,9 @@ form, no random numbers) as raw little-endian float32 mono (`<name>.f32`) and
 the waveform tags for each of them (`<name>.tags`): PWAV, PWV2, PWV3, PWV4,
 PWV5 and PWVC exactly as dj.analysis.waveform.compute produced them (without
 rxbox's firmware minimums; the C test applies those to this side before
-comparing), PWV6 and PWV7 by rxbox's recalibration of dj's rule (three_band()
-below; dj's levels are several times too hot), and keys.txt, the
+comparing), PWV6 and PWV7 by rxbox's per-band recalibration of dj's rule
+(three_band() below; dj's mid and high levels are several times too hot),
+and keys.txt, the
 expectations of test_key.c: the true key of each tonal() signal, with dj's
 answer for information (rxbox fixes dj's tuning estimate, so they differ).
 
@@ -234,10 +235,11 @@ SIGNALS = {
 
 def three_band(x: np.ndarray, rate: int, gains: np.ndarray):
     """rxbox's PWV7 and PWV6, which replace dj's (src/analysis/waveform.c has
-    the measurements): the same band envelopes and gains as dj, but the
-    level written is the square of dj's normalised level, 127 * (u / 127)^2,
-    and PWV6 is dj's range mean of that. Mirrors the C step for step so the
-    bytes agree exactly."""
+    the measurements against rekordbox's own bytes): the same band envelopes
+    and gains as dj, x = min(1, u / (GAIN_TARGET * BAND_SCALE)) of dj's
+    level u, PWV7 = 127 * x^1.5 (low, mid) and 127 * x^2.5 (high), PWV6 =
+    half the range mean of that (low, mid) and 0.5 * sqrt(127 * range mean)
+    (high). Mirrors the C step for step so the bytes agree exactly."""
     from scipy.signal import lfilter
 
     W = waveform
@@ -265,8 +267,18 @@ def three_band(x: np.ndarray, rate: int, gains: np.ndarray):
             prev = v if v > prev * r else prev * r
             out[i] = prev
     u = np.minimum(127, W.BAND_SCALE * gains * env)
-    pwv7 = np.floor(u * u / 127 + 0.5).astype(np.uint8)
-    pwv6 = np.minimum(127, W._round(W.PWV6_SCALE * W._range_mean(pwv7.astype(np.float64), *W._split(n, 1200))))
+    full = W.GAIN_TARGET * W.BAND_SCALE
+    x = np.minimum(1.0, u / full)
+    sx = np.sqrt(x)
+    v = np.empty_like(x)
+    v[:, :2] = x[:, :2] * sx[:, :2]
+    v[:, 2] = x[:, 2] * x[:, 2] * sx[:, 2]
+    pwv7 = np.floor(127 * v + 0.5).astype(np.uint8)
+    mean = W._range_mean(pwv7.astype(np.float64), *W._split(n, 1200))
+    p6 = np.empty_like(mean)
+    p6[:, :2] = 0.5 * mean[:, :2]
+    p6[:, 2] = 0.5 * np.sqrt(127 * mean[:, 2])
+    pwv6 = np.minimum(127, np.floor(p6 + 0.5))
     return pwv7, pwv6.astype(np.uint8)
 
 

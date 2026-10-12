@@ -15,11 +15,13 @@
  * comparing, and the number of bytes they changed is printed.
  *
  * PWV6 and PWV7 in the fixtures are NOT dj's: they are rxbox's
- * recalibration (levels squared; src/analysis/waveform.c has the
+ * per-band recalibration (src/analysis/waveform.c has the
  * measurements against rekordbox's own files), computed by gen_fixtures.py's
  * three_band() from dj's envelopes and gains. test_three_band() checks the
- * property the recalibration is for without fixtures: the high band stays
- * well below the low band where the music is bass-led.
+ * property the recalibration is for without fixtures: on a loud, bright,
+ * bass-led master the high and mid bands reach past the low band in few
+ * overview columns, as in rekordbox's files, where dj's rule had them do so
+ * in most.
  *
  * With arguments, `test_waveform SIGNAL.f32 TAGS` compares one pair (the
  * real-track check: gen_fixtures.py --real writes those). */
@@ -205,13 +207,13 @@ static double kick(double t)
     return sin(2 * M_PI * (50 * t + 120 * (1 - exp(-40 * t)) / 40)) * exp(-12 * t);
 }
 
-/* A loud drum & bass style master in closed form, 174 BPM: a 55 Hz bass,
+/* A loud drum & bass style master in closed form, 174 BPM: a 55 Hz sub, a
+ * reese (harmonics 3..24 of 55 Hz, slowly swelling) filling the mid band,
  * kicks on 1 and 3, a snare body on 2 and 4, sixteenth hats made of twenty
  * inharmonic partials from 3 to 15 kHz over a faint wash, all saturated
- * with tanh to a hot, dense level. Its brightness was chosen so dj's rule
- * gives it about the band balance it gave the 10 real tracks of the
- * acceptance list (high/low band means: PWV6 1.37 here, 1.12 there; PWV7
- * 0.38 and 0.32). */
+ * with tanh to a hot, dense level. Its balance is that of the loud drum &
+ * bass track of the acceptance list under dj's rule: high >= low in most
+ * PWV6 columns (0.75 here, 0.97 there), mid >= low in half (0.55, 0.81). */
 static float *loud_master(int rate, double secs, int64_t *nb)
 {
     static const double snare[5] = { 180, 330, 670, 1230, 1870 };
@@ -235,6 +237,10 @@ static float *loud_master(int rate, double secs, int64_t *nb)
         for (int k = 0; k < 5; k++)
             body += sin(2 * M_PI * snare[k] * t + k);
         v += 0.5 * body / 2 * exp(-25 * fmod(t + beat, 2 * beat));
+        double reese = 0.0;
+        for (int h = 3; h < 25; h++)
+            reese += sin(2 * M_PI * 55 * h * t) / h;
+        v += 0.35 * reese * (0.6 + 0.4 * sin(2 * M_PI * t / (8 * beat)));
         x[i] = (float)(tanh(1.5 * v) / tanh(1.5));
     }
     *nb = n;
@@ -251,11 +257,23 @@ static void band_means(const uint8_t *v, int64_t n, double mean[3])
     }
 }
 
+/* The fraction of PWV6 columns where band `j` reaches as far as the low
+ * band: drawn over it, that column shows no blue. */
+static double reach_fraction(const uint8_t *pwv6, int j)
+{
+    int nb = 0;
+    for (int k = 0; k < RX_WAVE_PWV6_COLUMNS; k++)
+        nb += pwv6[k * 3 + j] >= pwv6[k * 3];
+    return (double)nb / RX_WAVE_PWV6_COLUMNS;
+}
+
 /* The three-band levels, statistically, without fixtures. rekordbox's own
- * files (the two demo tracks, see src/analysis/waveform.c) have a high band
- * whose mean is 0.55..0.66 of the low band's in PWV6 and ~0.13 in PWV7. On
- * the loud master dj's rule gives 1.37 and 0.38 (an all-cream overview),
- * rxbox's 0.60 and 0.17; the bounds sit between. The 60 Hz / 5 kHz signal
+ * files (the two demo tracks, see src/analysis/waveform.c) have high >= low
+ * in 28-32 % of PWV6 columns and mid >= low in 25-32 %, a high band whose
+ * mean is 0.55..0.66 of the low band's in PWV6 and ~0.13 in PWV7. On the
+ * loud master dj's rule gives 0.75 and 0.55 of the columns and 1.38 and
+ * 0.39 of the mean (an overview cream almost everywhere), rxbox's 0.05,
+ * 0.04, 0.53 and 0.22; the bounds sit between. The 60 Hz / 5 kHz signal
  * checks each band stays where it belongs. */
 static int test_three_band(void)
 {
@@ -270,18 +288,22 @@ static int test_three_band(void)
     double m6[3], m7[3];
     band_means(w.pwv6, RX_WAVE_PWV6_COLUMNS, m6);
     band_means(w.pwv7, w.nb_detail, m7);
-    printf("three-band means on the loud master: PWV6 %.1f %.1f %.1f (high/low %.2f), "
-           "PWV7 %.1f %.1f %.1f (high/low %.2f)\n", m6[0], m6[1], m6[2], m6[2] / m6[0],
-           m7[0], m7[1], m7[2], m7[2] / m7[0]);
+    double hl = reach_fraction(w.pwv6, 2), ml = reach_fraction(w.pwv6, 1);
+    printf("three-band on the loud master: PWV6 means %.1f %.1f %.1f (high/low %.2f), "
+           "high >= low in %.2f, mid >= low in %.2f of the columns; "
+           "PWV7 means %.1f %.1f %.1f (high/low %.2f)\n", m6[0], m6[1], m6[2], m6[2] / m6[0],
+           hl, ml, m7[0], m7[1], m7[2], m7[2] / m7[0]);
+    CHECK(hl < 0.4);
+    CHECK(ml < 0.4);
     CHECK(m6[2] < 0.8 * m6[0]);
-    CHECK(m7[2] < 0.25 * m7[0]);
+    CHECK(m7[2] < 0.3 * m7[0]);
     /* rekordbox's PWV6 stays below ~100 on real music (rbxport, 80 tracks) */
     for (int i = 0; i < RX_WAVE_PWV6_COLUMNS * 3; i++)
         CHECK(w.pwv6[i] <= 100);
     rx_waveforms_free(&w);
 
-    /* 60 Hz then 5 kHz: no high band in the first half; in the second, no
-     * low band once its envelope has released (0.97 a column) */
+    /* 60 Hz then 5 kHz: no high band in the first half; in the second, the
+     * low band fading as its envelope releases (0.97 a column), then gone */
     if (signal_load(DATA_DIR "cols48k.f32", &x, &nb) < 0)
         return fails + 1;
     CHECK(rx_waveforms_compute(x, nb, 48000, &w) == 0);
@@ -290,7 +312,9 @@ static int test_three_band(void)
         CHECK(w.pwv6[k * 3 + 2] == 0);
         CHECK(w.pwv6[k * 3 + 0] > 20);
         CHECK(w.pwv6[(600 + k) * 3 + 2] > 20);
-        if (k >= 200)
+        if (k >= 100)
+            CHECK(4 * w.pwv6[(600 + k) * 3 + 0] < w.pwv6[(600 + k) * 3 + 2]);
+        if (k >= 300)
             CHECK(w.pwv6[(600 + k) * 3 + 0] == 0);
     }
     rx_waveforms_free(&w);
@@ -387,7 +411,7 @@ static int test_pack(void)
         return fails + 1;
     }
     CHECK(size == 24 + 400 + 100 + 7200 + 3600 + (size_t)w.nb_detail * 6);
-    CHECK(!memcmp(data, "RXWV", 4) && le32(data + 4) == 2 && le32(data + 8) == (uint32_t)w.nb_detail &&
+    CHECK(!memcmp(data, "RXWV", 4) && le32(data + 4) == 3 && le32(data + 8) == (uint32_t)w.nb_detail &&
           le32(data + 12) == 44100);
     CHECK(rx_waveforms_unpack(data, size, &r) == 0);
     CHECK(same_waves(&r, &w));
@@ -408,12 +432,14 @@ static int test_pack(void)
     CHECK(rx_waveforms_unpack(data, size, &r) == RX_ERROR(EINVAL));
     data[0] = 'R';
     /* Another version is stale, not damaged: -EPROTO, so the app recomputes.
-     * Version 1 blobs hold dj's three-band levels, which rxbox replaced. */
+     * Versions 1 and 2 hold older three-band levels (dj's, then squared). */
     put32(data + 4, 1);
     CHECK(rx_waveforms_unpack(data, size, &r) == RX_ERROR(EPROTO) && !r.pwv3);
-    put32(data + 4, 3);
-    CHECK(rx_waveforms_unpack(data, size, &r) == RX_ERROR(EPROTO));
     put32(data + 4, 2);
+    CHECK(rx_waveforms_unpack(data, size, &r) == RX_ERROR(EPROTO) && !r.pwv3);
+    put32(data + 4, 4);
+    CHECK(rx_waveforms_unpack(data, size, &r) == RX_ERROR(EPROTO));
+    put32(data + 4, 3);
     put32(data + 8, (uint32_t)w.nb_detail + 1);
     CHECK(rx_waveforms_unpack(data, size, &r) == RX_ERROR(EINVAL));
     put32(data + 8, 0);
@@ -482,7 +508,7 @@ static int test_cache(void)
     buf[4] = 1;
     CHECK(rx_file_write_atomic(path, buf, size) == 0);
     CHECK(rx_waveforms_load(path, &r) == RX_ERROR(EPROTO) && !r.pwv3);
-    buf[4] = 2;
+    buf[4] = 3;
     buf[0] = 'X';
     CHECK(rx_file_write_atomic(path, buf, size) == 0);
     CHECK(rx_waveforms_load(path, &r) == RX_ERROR(EINVAL));
