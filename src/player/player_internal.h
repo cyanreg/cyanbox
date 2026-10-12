@@ -84,6 +84,13 @@ static inline RxPos rx_pos_sub(RxPos a, RxPos b)
     if (r.f < 0.0) {
         r.f += 1.0;
         r.i--;
+        /* A difference within 2^-54 below zero plus the borrow rounds to
+         * exactly 1.0: that is the next whole frame, and rx_pos_cmp needs
+         * the fraction in [0, 1) to order positions by value. */
+        if (r.f >= 1.0) {
+            r.f -= 1.0;
+            r.i++;
+        }
     }
     return r;
 }

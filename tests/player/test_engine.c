@@ -17,6 +17,7 @@
 
 #include <math.h>
 #include <stdio.h>
+#include <sys/mman.h>
 #include <time.h>
 
 #include "src/player/player_internal.h"
@@ -49,14 +50,14 @@ static float click_amp(int k)
     return 0.25f + 0.005f * (k % 100);
 }
 
-static RxAudio *make_track(int channels, double seconds)
+static RxAudio *make_track_frames(int channels, int64_t nb_frames)
 {
     RxAudio *a = calloc(1, sizeof(*a));
     if (!a)
         abort();
     a->rate = RATE;
     a->channels = channels;
-    a->nb_frames = (int64_t)(seconds * RATE);
+    a->nb_frames = nb_frames;
     a->samples = calloc((size_t)a->nb_frames * channels, sizeof(float));
     if (!a->samples)
         abort();
@@ -67,6 +68,11 @@ static RxAudio *make_track(int channels, double seconds)
             s[1] = -click_amp(k);
     }
     return a;
+}
+
+static RxAudio *make_track(int channels, double seconds)
+{
+    return make_track_frames(channels, (int64_t)(seconds * RATE));
 }
 
 /* Releases are recorded so the tests can see when they happen. */
@@ -304,6 +310,56 @@ static void test_loop_fold(void)
     rx_player_destroy(p);
 }
 
+/* A loop that ends at the end of the track. For about one track length in
+ * fourteen, nb_frames / rate * rate rounds above nb_frames, so the out
+ * point the owner sends lies a fraction of a frame past the last frame. At
+ * tempo 1 on a device at the track's rate the playhead lands exactly on
+ * nb_frames: it must wrap there, not stop at the end of the track. */
+static void test_loop_at_end(void)
+{
+    int64_t n = 10 * RATE;
+    while ((double)n / RATE * RATE <= (double)n)
+        n++;
+    RxPlayer *p = make_player(RATE);
+    rx_deck_load(p, 0, make_track_frames(2, n), NULL);
+    double dur = (double)n / RATE;
+
+    /* From a whole frame, so every step lands on one. */
+    int64_t start = n - RATE / 2;
+    while ((double)start / RATE * RATE != (double)start)
+        start--;
+    rx_deck_set_loop(p, 0, dur - 1.0, dur, true);
+    rx_deck_play_from(p, 0, (double)start / RATE);
+    for (int i = 0; i < 8; i++) {
+        rx_player_null_advance(p, RATE / 4);
+        RxDeckState s = st(p);
+        CHECK(s.playing, "%lld frames: still looping after %d/4 s", (long long)n, i + 1);
+        CHECK(s.position >= dur - 1.0 && s.position < dur, "inside the loop: %f of %f",
+              s.position, dur);
+        if (!s.playing)
+            break;
+    }
+    rx_player_destroy(p);
+}
+
+/* Positions keep their fraction in [0, 1): a difference of two fractions
+ * one ulp apart must not round up to a fraction of exactly 1.0, which
+ * rx_pos_cmp would order before the equal whole frame. */
+static void test_pos_arith(void)
+{
+    RxPos a = { .i = 10, .f = 0.3 }, b = { .i = 3, .f = nextafter(0.3, 1.0) };
+    RxPos r = rx_pos_sub(a, b);
+    CHECK(r.f >= 0.0 && r.f < 1.0, "fraction %.17g", r.f);
+    CHECK(rx_pos_cmp(r, (RxPos) { .i = 7 }) == 0, "7 - 2^-54 rounds to frame 7: %lld + %.17g",
+          (long long)r.i, r.f);
+
+    RxPos c = { .i = 5, .f = 0.25 };
+    rx_pos_add(&c, 2.75);
+    CHECK(c.i == 8 && c.f == 0.0, "add carries: %lld + %f", (long long)c.i, c.f);
+    RxPos d = rx_pos_sub((RxPos) { .i = 8, .f = 0.25 }, (RxPos) { .i = 2, .f = 0.5 });
+    CHECK(d.i == 5 && d.f == 0.75, "sub borrows: %lld + %f", (long long)d.i, d.f);
+}
+
 static void test_pause_resume(void)
 {
     double ratio = (double)RATE / 48000;
@@ -404,6 +460,115 @@ static void test_release(void)
     rx_deck_load(p, 0, make_track(2, 1.0), NULL);
     rx_player_destroy(p);
     CHECK(nb_released == 4, "destroy releases everything: %d", nb_released);
+}
+
+/* The swap while voices are still sounding: a de-click tail and scrub
+ * grains are in flight when B replaces A. Voices keep positions, not
+ * buffers, so once A is released (and freed by on_release) nothing reads
+ * it, which ASan checks; and they stop at the swap rather than play A's
+ * positions out of B, which is a constant here so any of them would be
+ * heard. */
+static void test_release_voices(void)
+{
+    nb_released = 0;
+    RxPlayer *p = make_player(48000);
+    RxAudio *a = make_track(2, 10.0);
+    rx_deck_load(p, 0, a, NULL);
+    rx_deck_play_from(p, 0, 1.0);
+    rx_player_null_advance(p, PERIOD);
+
+    rx_deck_scrub_begin(p, 0);
+    rx_deck_scrub_to(p, 0, 2.0);
+    render(p, NULL, 100);
+
+    RxAudio *b = make_track(2, 5.0);
+    for (int64_t i = 0; i < 2 * b->nb_frames; i++)
+        b->samples[i] = 0.5f;
+    CHECK(rx_deck_load(p, 0, b, NULL) == 0, "load b");
+    render(p, NULL, 1);
+    st(p);
+    CHECK(nb_released == 1 && released[0] == a, "a released after the swap");
+
+    static float buf[2 * 4800];
+    render(p, buf, 4800);
+    float peak = 0.0f;
+    for (int n = 0; n < 2 * 4800; n++)
+        peak = fmaxf(peak, fabsf(buf[n]));
+    CHECK(peak == 0.0f, "nothing of a is heard: %f", peak);
+    CHECK(!st(p).scrubbing && !st(p).playing, "b waits");
+    rx_player_destroy(p);
+}
+
+static void unmap_release(void *opaque, RxAudio *audio)
+{
+    munmap(audio->samples, (size_t)audio->nb_frames * audio->channels * sizeof(float));
+    free(audio);
+}
+
+/* A track longer than 2^31 frames (12.4 hours at 48 kHz): positions, a
+ * seek, a loop near the end and the end itself, past any 32-bit frame
+ * count. The samples are a sparse mapping that reads as zeros. */
+static void test_long_track(void)
+{
+    int64_t n = ((int64_t)1 << 31) + 30 * 48000;
+    size_t bytes = (size_t)n * sizeof(float);
+    float *samples = mmap(NULL, bytes, PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE,
+                          -1, 0);
+    if (samples == MAP_FAILED) {
+        printf("skipping the long track: no address space\n");
+        return;
+    }
+    RxAudio *a = calloc(1, sizeof(*a));
+    if (!a)
+        abort();
+    *a = (RxAudio) {
+        .samples   = samples,
+        .channels  = 1,
+        .rate      = 48000,
+        .nb_frames = n,
+    };
+
+    RxPlayerOptions opt;
+    rx_player_options_default(&opt);
+    opt.backend = RX_AUDIO_NULL;
+    opt.rate = 44100;
+    opt.period = -PERIOD;
+    opt.release = unmap_release;
+    RxPlayer *p = NULL;
+    if (rx_player_create(&p, &opt) < 0)
+        abort();
+    CHECK(rx_deck_load(p, 0, a, NULL) == 0, "load");
+
+    double dur = (double)n / 48000;
+    double inc = 48000.0 / 44100;
+    rx_deck_play_from(p, 0, dur - 20.0);
+    rx_player_null_advance(p, 44100);
+    RxDeckState s = st(p);
+    double want = (dur - 20.0) * 48000 + 44100 * inc;
+    CHECK(fabs(s.position * 48000 - want) < 1e-3, "%f frames, want %f", s.position * 48000, want);
+    CHECK(s.frame == (int64_t)floor(want) && s.frame > INT32_MAX, "frame %lld",
+          (long long)s.frame);
+
+    /* A loop of 1.5 beats at 128 BPM, 10 s before the end, wraps on its
+     * arithmetic as it does at the start of a track. */
+    double in = dur - 10.0, out = in + 1.5 * 60.0 / 128.0;
+    rx_deck_set_loop(p, 0, in, out, true);
+    rx_deck_play_from(p, 0, in);
+    double start = in * 48000, len = (out - in) * 48000;
+    for (int i = 1; i <= 20; i++) {
+        rx_player_null_advance(p, 4 * PERIOD + 17);
+        double t = start + fmod(i * (4 * PERIOD + 17) * inc, len);
+        s = st(p);
+        CHECK(fabs(s.position * 48000 - t) < 1e-3, "loop: %f, want %f", s.position * 48000, t);
+    }
+
+    rx_deck_clear_loop(p, 0);
+    rx_deck_play_from(p, 0, dur - 0.5);
+    rx_player_null_advance(p, 44100);
+    s = st(p);
+    CHECK(!s.playing && s.frame == n && s.position == dur, "stops at the end: %lld",
+          (long long)s.frame);
+    rx_player_destroy(p);
 }
 
 /* A drag: the deck follows the pointer, grains sound while it moves,
@@ -595,10 +760,14 @@ int main(void)
     test_loop_exact();
     test_loop_fractional();
     test_loop_fold();
+    test_loop_at_end();
+    test_pos_arith();
     test_pause_resume();
     test_tempo_change();
     test_end();
     test_release();
+    test_release_voices();
+    test_long_track();
     test_scrub();
     test_levels_and_limits();
     test_ring_full();

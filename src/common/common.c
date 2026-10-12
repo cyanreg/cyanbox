@@ -129,6 +129,17 @@ static uint32_t fold(uint32_t c)
     return c;
 }
 
+/* The whole needle matches at q. Both sides are decoded as they are
+ * compared, so a needle of any length is compared in full. */
+static bool match_at(const char *q, const char *n)
+{
+    while (*n) {
+        if (!*q || fold(utf8_next(&q)) != fold(utf8_next(&n)))
+            return false;
+    }
+    return true;
+}
+
 bool rx_str_contains_fold(const char *haystack, const char *needle)
 {
     if (!needle || !*needle)
@@ -136,25 +147,9 @@ bool rx_str_contains_fold(const char *haystack, const char *needle)
     if (!haystack)
         return false;
 
-    /* Decode the needle once. */
-    uint32_t nd[256];
-    int nn = 0;
-    const char *p = needle;
-    while (*p && nn < (int)RX_ARRAY_ELEMS(nd))
-        nd[nn++] = fold(utf8_next(&p));
-
-    const char *h = haystack;
-    while (*h) {
-        const char *q = h;
-        int i = 0;
-        while (i < nn && *q) {
-            if (fold(utf8_next(&q)) != nd[i])
-                break;
-            i++;
-        }
-        if (i == nn)
+    for (const char *h = haystack; *h; utf8_next(&h)) {
+        if (match_at(h, needle))
             return true;
-        utf8_next(&h);
     }
     return false;
 }
@@ -172,7 +167,8 @@ char *rx_path_join(const char *a, const char *b)
     size_t la = strlen(a);
     while (la > 1 && a[la - 1] == '/')
         la--;
-    return rx_asprintf("%.*s/%s", (int)la, a, b);
+    /* Only the root itself still ends in '/': "/" + "x" is "/x". */
+    return rx_asprintf("%.*s%s%s", (int)la, a, a[la - 1] == '/' ? "" : "/", b);
 }
 
 const char *rx_path_base(const char *path)
@@ -206,16 +202,17 @@ char *rx_path_abs(const char *path)
         return NULL;
     char *abs = realpath(expanded, NULL);
     if (!abs) {
-        /* The file may not exist yet: resolve the directory part. */
+        /* The file may not exist yet: resolve the directory part, which
+         * for "/name" is the root. */
         char *slash = strrchr(expanded, '/');
-        if (slash && slash != expanded) {
+        if (slash) {
             *slash = '\0';
-            char *dir = realpath(expanded, NULL);
+            char *dir = realpath(slash == expanded ? "/" : expanded, NULL);
             if (dir) {
                 abs = rx_path_join(dir, slash + 1);
                 free(dir);
             }
-        } else if (!slash) {
+        } else {
             char cwd[PATH_MAX];
             if (getcwd(cwd, sizeof(cwd)))
                 abs = rx_path_join(cwd, expanded);
@@ -237,6 +234,10 @@ char *rx_path_expand(const char *path)
 
 int rx_mkdir_p(const char *path)
 {
+    /* The loop below starts after the first byte, so "" needs its own
+     * answer: mkdir("")'s. */
+    if (!path || !*path)
+        return RX_ERROR(ENOENT);
     char *tmp = rx_strdup(path);
     if (!tmp)
         return RX_ERROR(ENOMEM);
@@ -251,8 +252,15 @@ int rx_mkdir_p(const char *path)
         }
         *p = '/';
     }
-    if (!ret && mkdir(tmp, 0755) < 0 && errno != EEXIST)
-        ret = RX_ERROR(errno);
+    if (!ret && mkdir(tmp, 0755) < 0) {
+        /* EEXIST is success only when what is there is a directory (a
+         * file in the middle of the path fails the next mkdir instead). */
+        int err = errno;
+        if (err != EEXIST)
+            ret = RX_ERROR(err);
+        else if (!rx_dir_exists(tmp))
+            ret = RX_ERROR(ENOTDIR);
+    }
     free(tmp);
     return ret;
 }
@@ -299,7 +307,10 @@ int rx_file_read(const char *path, uint8_t **out, size_t *size)
 
 int rx_file_write_atomic(const char *path, const void *data, size_t size)
 {
-    char *tmp = rx_asprintf("%s.tmp-%ld", path, (long)getpid());
+    /* The temporary is named after the thread, not the process: two
+     * threads saving the same file at once would otherwise truncate and
+     * rename each other's temporary. (The main thread's id is the pid.) */
+    char *tmp = rx_asprintf("%s.tmp-%ld", path, (long)gettid());
     if (!tmp)
         return RX_ERROR(ENOMEM);
     int ret = 0;
@@ -323,7 +334,8 @@ int rx_file_write_atomic(const char *path, const void *data, size_t size)
     }
     if (!ret && fsync(fd) < 0)
         ret = RX_ERROR(errno);
-    close(fd);
+    if (close(fd) < 0 && !ret)
+        ret = RX_ERROR(errno);
     if (!ret && rename(tmp, path) < 0)
         ret = RX_ERROR(errno);
     if (ret)

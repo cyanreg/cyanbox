@@ -656,6 +656,115 @@ static void test_active_loop(void)
     teardown();
 }
 
+/* The ends of things: the memory cue limit, a cue at 0, a loop at the end
+ * of the track, a beat jump past it, and a hot loop and an active memory
+ * loop across the tempo change at 30 s. */
+static void test_edges(void)
+{
+    setup(true);
+
+    /* Ten memory cues; the eleventh is refused and nothing changes. */
+    enum RxLogLevel level = rx_log_level();
+    rx_log_set_level(RX_LOG_WARN);
+    rx_ctl_set_quantize(&c, false);
+    for (int k = 0; k < 11; k++) {
+        rx_ctl_seek(&c, 1.0 + k);
+        rx_ctl_cue_press(&c);
+        rx_ctl_cue_release(&c);
+        rx_ctl_memory_set(&c);
+    }
+    rx_log_set_level(level);
+    CHECK(nb_memory() == 10 && changes == 10, "limit: %d cues, %d changes", nb_memory(), changes);
+    rx_ctl_set_quantize(&c, true);
+
+    /* A cue at 0 is a cue: CUE there previews from it. */
+    rx_ctl_seek(&c, 0.0);
+    rx_ctl_cue_press(&c);
+    rx_ctl_cue_release(&c);
+    CHECK(c.cue_point == 0.0, "cue at 0: %f", c.cue_point);
+    rx_ctl_cue_press(&c);
+    CHECK(c.cue_held && playing(), "preview from 0");
+    rx_ctl_cue_release(&c);
+    CHECK(!playing() && pos() == 0.0, "back at 0");
+
+    /* An auto loop at the end of the track is cut at the end, wraps
+     * there, and x2 cannot take it past it. 59 s is a beat at 120 BPM. */
+    rx_ctl_seek(&c, SECONDS - 1.0);
+    rx_ctl_play_pause(&c);
+    rx_ctl_auto_loop(&c, 4);
+    CHECK(c.looping && c.loop_in == SECONDS - 1.0 && c.loop_out == SECONDS, "end loop %f %f",
+          c.loop_in, c.loop_out);
+    CHECK(stays_inside(3.0, SECONDS - 1.0, SECONDS) && playing(), "wraps at the end");
+    rx_ctl_loop_double(&c);
+    CHECK(c.loop_out == SECONDS && st().loop_out == SECONDS, "x2 stays inside: %f", c.loop_out);
+    rx_ctl_beat_jump(&c, 4);
+    CHECK(c.looping && c.loop_in == SECONDS - 1.0, "a loop is not moved past the end");
+    rx_ctl_loop_exit(&c);
+
+    /* Beat jump past the end: the deck stops at the end. */
+    rx_ctl_beat_jump(&c, 8);
+    CHECK(pos() == SECONDS && !playing(), "jumped to the end: %f", pos());
+
+    /* A hot loop over the tempo change, set with QUANTIZE: 4 beats from
+     * beat 62 (29.0625 s) end at 31 s; it follows a grid shift. */
+    rx_ctl_seek(&c, 29.0);
+    rx_ctl_auto_loop(&c, 4);
+    CHECK(c.loop_in == B(62) && NEAR(c.loop_out, 31.0), "over the change: %f %f", c.loop_in,
+          c.loop_out);
+    rx_ctl_hot_cue_press(&c, 3);
+    rx_ctl_loop_exit(&c);
+    int d = rx_track_hot_cue(track, 3);
+    CHECK(d >= 0 && track->cues[d].loop_beats == 4.0, "a hot loop of 4 beats");
+    rx_grid_shift(&track->grid, 0.05);
+    rx_ctl_grid_changed(&c);
+    rx_ctl_seek(&c, 10.0);
+    rx_ctl_hot_cue_press(&c, 3);
+    CHECK(c.looping && NEAR(c.loop_in, B(62) + 0.05) && NEAR(c.loop_out, 31.05),
+          "moved with the grid: %f %f", c.loop_in, c.loop_out);
+    CHECK(stays_inside(3.0, B(62) + 0.05, 31.05), "loops there");
+    rx_ctl_loop_exit(&c);
+
+    /* The same loop as an active memory loop (once a memory slot is
+     * free) engages when played into. */
+    rx_ctl_seek(&c, 1.0);
+    rx_ctl_memory_delete(&c);
+    CHECK(nb_memory() == 9, "one deleted: %d", nb_memory());
+    rx_ctl_hot_cue_press(&c, 3);
+    rx_ctl_memory_set(&c);
+    rx_ctl_loop_exit(&c);
+    int m = rx_track_memory_cue_at(track, B(62) + 0.05, 0.001);
+    CHECK(m >= 0 && rx_cue_is_loop(&track->cues[m]), "memory loop over the change");
+    rx_ctl_memory_set_active(&c, m, true);
+    rx_ctl_seek(&c, 28.0);
+    run(1.5);
+    CHECK(c.looping && c.active_memory_loop >= 0, "engaged");
+    CHECK(stays_inside(3.0, B(62) + 0.05, 31.05), "loops over the change");
+    teardown();
+}
+
+/* A hot loop whose end is not after its start (an ANLZ loop entry with an
+ * end of 0 imports as one) cannot loop: the deck refuses it, so the pad
+ * calls it as a hot cue rather than leave the controls "looping" over a
+ * deck that plays straight on, as a memory cue call already does. */
+static void test_degenerate_hot_loop(void)
+{
+    setup(false);
+    RxCue cue;
+    rx_cue_init(&cue, B(8));
+    cue.hot = 0;
+    cue.loop_end = 0.0;
+    CHECK(rx_track_add_cue(track, &cue) >= 0, "added");
+
+    rx_ctl_hot_cue_press(&c, 0);
+    RxDeckState s = st();
+    CHECK(s.playing && s.position == B(8), "called: %f", s.position);
+    CHECK(!c.looping && !s.loop_enabled, "not looping: controls %d, deck %d", c.looping,
+          s.loop_enabled);
+    run(4.0);
+    CHECK(!c.looping && NEAR(pos(), B(8) + 4.0), "plays on: %f", pos());
+    teardown();
+}
+
 static void test_grid_changed(void)
 {
     setup(false);
@@ -685,6 +794,8 @@ int main(void)
     test_auto_loop();
     test_beat_jump();
     test_active_loop();
+    test_edges();
+    test_degenerate_hot_loop();
     test_grid_changed();
 
     if (failures) {

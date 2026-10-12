@@ -22,7 +22,7 @@
  * Buffer release: loading or unloading hands the old buffer to a pending
  * list together with the deck serial of the command that replaced it.
  * Applying that command is the real-time thread's last use of the buffer
- * (it also silences the voices still reading it), and the serial is
+ * (it replaces the deck's only pointer to it), and the serial is
  * published with release order after it, so once the owner reads a serial
  * at least that high with acquire order, freeing is safe. No second ring
  * is needed and nothing can overflow. The pending list is drained by every

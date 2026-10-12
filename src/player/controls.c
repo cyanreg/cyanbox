@@ -351,9 +351,11 @@ static void call_hot_cue(RxDeckCtl *c, const RxCue *cue)
         c->_resume_after_hold = true;
 
     double t = cue->time;
-    if (rx_cue_is_loop(cue)) {
+    if (rx_cue_is_loop(cue) && cue->loop_end > t) {
         /* A hot loop plays as a loop from its in point; RELOOP/EXIT
-         * leaves it (manual p.59). */
+         * leaves it (manual p.59). One that ends before it starts (an
+         * imported loop entry with no end) is called as a hot cue: the
+         * deck would refuse the loop. */
         rx_deck_play_from(c->player, c->deck, t);
         engage_loop(c, t, cue->loop_end);
         c->active_memory_loop = -1;

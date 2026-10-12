@@ -6,9 +6,11 @@
  * Everything here runs on the real-time thread and follows its rules: no
  * allocation, no locks, no logging, no system calls. The buffer is read,
  * never written; the owner keeps it alive until this deck has applied the
- * command that replaced it (see the release path in player.c), which is
- * why a load or unload also silences every voice still reading the old
- * buffer (the de-click tail and the scrub grains) at once.
+ * command that replaced it (see the release path in player.c). Voices keep
+ * positions, never a pointer, so after the swap nothing reads the old
+ * buffer; a load or unload still silences the de-click tail and the scrub
+ * grains at once, or they would play the old track's positions out of the
+ * new one.
  *
  * Varispeed and resampling are one step: the read position advances by
  * (tempo + bend) * track_rate / device_rate per output frame and every
@@ -189,9 +191,10 @@ void rx_player_deck_apply(RxDeckRT *d, const RxCmd *cmd, int rate)
     case RX_CMD_LOAD:
     case RX_CMD_UNLOAD:
         /* The old buffer may be freed as soon as this command is
-         * acknowledged, so nothing may read it any more: no tail, no
-         * grains. A track change on a playing deck is a hard cut, as on
-         * a CDJ. */
+         * acknowledged; d->samples is the only pointer to it. The tail and
+         * the grains are positions in the old track and must not go on in
+         * the new one. A track change on a playing deck is a hard cut, as
+         * on a CDJ. */
         silence_voices(d);
         d->samples      = cmd->type == RX_CMD_LOAD ? cmd->samples : NULL;
         d->channels     = cmd->type == RX_CMD_LOAD ? cmd->channels : 0;
@@ -241,8 +244,12 @@ void rx_player_deck_apply(RxDeckRT *d, const RxCmd *cmd, int rate)
         d->gain = (float)cmd->a;
         break;
     case RX_CMD_LOOP_SET:
-        d->loop_in  = rx_pos_from(cmd->a);
-        d->loop_out = rx_pos_from(cmd->b);
+        /* Clamped like a seek: an out point at the end of the track comes
+         * from seconds, and duration * rate can round a fraction of a frame
+         * past nb_frames. A playhead landing exactly on nb_frames would then
+         * not have crossed it, and the deck would stop instead of wrapping. */
+        d->loop_in  = clamp_frames(d, cmd->a);
+        d->loop_out = clamp_frames(d, cmd->b);
         d->loop_len = rx_pos_sub(d->loop_out, d->loop_in);
         /* The owner guarantees at least one frame; a shorter loop could
          * never be left by subtracting its length. */

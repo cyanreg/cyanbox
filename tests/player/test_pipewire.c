@@ -1,7 +1,11 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
 /* PipeWire smoke test: connects to the sink named by RXBOX_PW_SINK, plays
- * a second of silence and checks the stream ran and the deck moved.
+ * a second of silence and checks the stream ran and the deck moved, then
+ * the teardown paths: a player destroyed while its stream is still
+ * connecting, a buffer unloaded while playing (released only once
+ * PipeWire's data thread has let go of it), and a player destroyed while
+ * its stream is playing.
  *
  * Skipped (exit 77) unless RXBOX_PW_TEST=1 and RXBOX_PW_SINK are both set,
  * so `meson test` never opens an audio device by itself. Use a null sink:
@@ -26,6 +30,31 @@ static void sleep_ms(int ms)
     nanosleep(&ts, NULL);
 }
 
+static int released;
+
+static void on_release(void *opaque, RxAudio *audio)
+{
+    released++;
+    free(audio->samples);
+    free(audio);
+}
+
+static RxAudio *silence(void)
+{
+    RxAudio *a = calloc(1, sizeof(*a));
+    if (!a)
+        return NULL;
+    a->rate = 44100;
+    a->channels = 2;
+    a->nb_frames = 3 * 44100;
+    a->samples = calloc((size_t)a->nb_frames * 2, sizeof(float));
+    if (!a->samples) {
+        free(a);
+        return NULL;
+    }
+    return a;
+}
+
 int main(void)
 {
     const char *enable = getenv("RXBOX_PW_TEST");
@@ -40,9 +69,19 @@ int main(void)
     rx_player_options_default(&opt);
     opt.backend = RX_AUDIO_PIPEWIRE;
     opt.sink = sink;
+    opt.release = on_release;
 
+    /* Torn down before the stream has had time to connect. */
     RxPlayer *p = NULL;
     int ret = rx_player_create(&p, &opt);
+    if (ret < 0) {
+        fprintf(stderr, "create: %s\n", strerror(-ret));
+        return 1;
+    }
+    rx_player_destroy(p);
+
+    p = NULL;
+    ret = rx_player_create(&p, &opt);
     if (ret < 0) {
         fprintf(stderr, "create: %s\n", strerror(-ret));
         return 1;
@@ -61,14 +100,8 @@ int main(void)
     }
     printf("running on %s at %d Hz\n", sink, rx_player_rate(p));
 
-    RxAudio *a = calloc(1, sizeof(*a));
-    if (!a)
-        return 1;
-    a->rate = 44100;
-    a->channels = 2;
-    a->nb_frames = 3 * 44100;
-    a->samples = calloc((size_t)a->nb_frames * 2, sizeof(float));
-    if (!a->samples || rx_deck_load(p, 0, a, NULL) < 0)
+    RxAudio *a = silence();
+    if (!a || rx_deck_load(p, 0, a, NULL) < 0)
         return 1;
 
     rx_deck_play(p, 0);
@@ -80,11 +113,31 @@ int main(void)
               s.serial >= 2;
     printf("after 1 s: playing %d, position %.3f s, serial %llu\n", s.playing, s.position,
            (unsigned long long)s.serial);
-
-    rx_player_destroy(p);
-    if (!ok) {
+    if (!ok)
         fprintf(stderr, "the deck did not play\n");
-        return 1;
+
+    /* Unloaded while playing: released once the data thread has applied
+     * the unload, from rx_deck_state on this thread. */
+    rx_deck_unload(p, 0);
+    for (int i = 0; i < 200 && !released; i++) {
+        sleep_ms(5);
+        rx_deck_state(p, 0, &s);
     }
-    return 0;
+    if (released != 1) {
+        fprintf(stderr, "the unloaded buffer was not released: %d\n", released);
+        ok = false;
+    }
+
+    /* Destroyed while playing: the stream goes first, then the buffer. */
+    a = silence();
+    if (!a || rx_deck_load(p, 0, a, NULL) < 0)
+        return 1;
+    rx_deck_play(p, 0);
+    sleep_ms(200);
+    rx_player_destroy(p);
+    if (released != 2) {
+        fprintf(stderr, "destroy did not release the loaded buffer: %d\n", released);
+        ok = false;
+    }
+    return ok ? 0 : 1;
 }

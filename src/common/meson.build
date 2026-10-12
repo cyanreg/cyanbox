@@ -15,3 +15,12 @@ test('common_thread',
     suite: 'common',
     timeout: 60,
 )
+
+test('common_helpers',
+    executable('test_common_helpers', '../../tests/common/test_common.c',
+        include_directories: rx_inc,
+        dependencies: [ rx_common_dep ],
+    ),
+    suite: 'common',
+    timeout: 60,
+)
