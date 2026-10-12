@@ -5,8 +5,8 @@
  *
  * Durations are on the players' timeline: an MP3's comes from the frame scan
  * (exact, the silent header frame included when rekordbox counts it), a
- * FLAC's from STREAMINFO, anything else from the container; the decoder
- * gives the exact count of those later. Tags are the stream's then the
+ * FLAC's from STREAMINFO, anything else from the container, made to agree
+ * with the decoder (container_samples()). Tags are the stream's then the
  * container's, keys lower-cased, a container tag replacing a stream tag of
  * the same key (dj filled a dict in that order). Values are stored trimmed
  * of white space the way Python's str.strip() trims it, since dj only ever
@@ -254,6 +254,63 @@ const char *rx_probe_tag(const RxProbe *p, const char *name, ...)
 
 /* -------------------------------------------------------------------- probe */
 
+static int64_t to_samples(int64_t ts, AVRational tb, int rate)
+{
+    return av_rescale_q(ts, tb, (AVRational) { 1, rate });
+}
+
+/* The decoded length of anything but MP3 and FLAC files, from what the
+ * container says, made to agree with rx_decode (checked in test_decode on
+ * files ffmpeg makes, and on the user's library):
+ *
+ * - MP4/M4A (AAC, ALAC, Opus): the stream duration already leaves out the
+ *   priming the edit list skips, which is what the decoder drops.
+ * - Ogg: the duration counts from granule 0, so Opus's pre-skip (initial
+ *   padding) is in it, and Vorbis's first packet starts before 0 (a
+ *   negative start time); the decoder drops both.
+ * - A duration libavformat only estimated from the bitrate (ADTS AAC and
+ *   other raw streams; off by a factor of three on a VBR AAC here): the
+ *   packet durations, summed over the whole file. Nothing is trimmed there.
+ * - Matroska/WebM keep milliseconds only: the duration less the codec delay
+ *   is within a few samples, not exact.
+ * - WAV, AIFF, everything else: the stream duration as it is. */
+static int64_t container_samples(AVFormatContext *fmt, int idx)
+{
+    const AVStream *st = fmt->streams[idx];
+    const AVCodecParameters *par = st->codecpar;
+    int rate = par->sample_rate;
+
+    if (fmt->duration_estimation_method == AVFMT_DURATION_FROM_BITRATE) {
+        AVPacket *pkt = av_packet_alloc();
+        if (pkt) {
+            int64_t total = 0;
+            while (av_read_frame(fmt, pkt) >= 0) {
+                if (pkt->stream_index == idx && pkt->duration > 0)
+                    total += to_samples(pkt->duration, st->time_base, rate);
+                av_packet_unref(pkt);
+            }
+            av_packet_free(&pkt);
+            if (total > 0)
+                return total;
+        }
+    }
+
+    int64_t total = 0;
+    if (st->duration != AV_NOPTS_VALUE && st->duration > 0)
+        total = to_samples(st->duration, st->time_base, rate);
+    else if (fmt->duration != AV_NOPTS_VALUE && fmt->duration > 0)
+        total = av_rescale(fmt->duration, rate, AV_TIME_BASE);
+
+    if (rx_audio_is_container(fmt, "ogg")) {
+        if (st->start_time != AV_NOPTS_VALUE && st->start_time < 0)
+            total += to_samples(st->start_time, st->time_base, rate);
+        total -= par->initial_padding;
+    } else if (rx_audio_is_container(fmt, "matroska")) {
+        total -= par->initial_padding;
+    }
+    return RX_MAX(total, (int64_t)0);
+}
+
 int rx_probe(const char *path, RxProbe *p)
 {
     *p = (RxProbe) { 0 };
@@ -325,18 +382,8 @@ int rx_probe(const char *path, RxProbe *p)
         if (p->flac.total_samples > 0)
             p->total_samples = p->flac.total_samples;
     }
-    if (p->total_samples < 0) {
-        double d = 0.0;
-        if (st->duration != AV_NOPTS_VALUE && st->duration > 0)
-            d = (double)st->duration * av_q2d(st->time_base);
-        else if (fmt->duration != AV_NOPTS_VALUE && fmt->duration > 0)
-            d = (double)fmt->duration / AV_TIME_BASE;
-        p->total_samples = llround(d * p->sample_rate);
-        /* The decoder drops the encoder's priming (Opus pre-skip) that the
-         * container's duration still counts; an MP3 elsewhere keeps it */
-        if (par->codec_id != AV_CODEC_ID_MP3)
-            p->total_samples = RX_MAX(p->total_samples - par->initial_padding, (int64_t)0);
-    }
+    if (p->total_samples < 0)
+        p->total_samples = container_samples(fmt, idx);
     p->duration = p->sample_rate > 0 ? (double)p->total_samples / p->sample_rate : 0.0;
 
     avformat_close_input(&fmt);

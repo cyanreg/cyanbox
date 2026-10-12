@@ -401,6 +401,48 @@ int main(void)
         free(m4a);
     }
 
+    /* rx_probe's length is rx_decode's for every codec and container the
+     * container can say it for: AAC with its priming (ffmpeg's and FDK's
+     * encoders) in MP4, AAC in ADTS (bitrate-estimated duration), Opus in
+     * Ogg and MP4, Vorbis, ALAC, WAV */
+    {
+        static const struct {
+            const char *name, *encoder;
+            const char *args[6];
+        } kinds[] = {
+            { "aac.m4a",    "aac",        { "-c:a", "aac", "-b:a", "192k" } },
+            { "fdk.m4a",    "libfdk_aac", { "-c:a", "libfdk_aac" } },
+            { "adts.aac",   "aac",        { "-c:a", "aac", "-b:a", "192k" } },
+            { "opus.opus",  "libopus",    { "-c:a", "libopus" } },
+            { "opus.mp4",   "libopus",    { "-c:a", "libopus" } },
+            { "vorbis.ogg", "libvorbis",  { "-c:a", "libvorbis" } },
+            { "alac.m4a",   "alac",       { "-c:a", "alac" } },
+            { "pcm.wav",    "pcm_s24le",  { "-c:a", "pcm_s24le" } },
+        };
+        for (size_t k = 0; k < RX_ARRAY_ELEMS(kinds); k++) {
+            if (!have_encoder(kinds[k].encoder)) {
+                fprintf(stderr, "no %s encoder: %s skipped\n", kinds[k].encoder, kinds[k].name);
+                continue;
+            }
+            char *file = test_path(dir, kinds[k].name);
+            /* ffmpeg() stops at the first NULL: pad short lists with a no-op */
+            const char *const *a = kinds[k].args;
+            const char *a2 = a[2] ? a[2] : "-hide_banner", *a3 = a[3] ? a[3] : "-hide_banner";
+            CHECK(!ffmpeg("-i", wav, a[0], a[1], a2, a3, file, NULL), "encode %s", kinds[k].name);
+            RxProbe pk;
+            RxAudio ak;
+            CHECK(rx_probe(file, &pk) >= 0 && rx_decode(file, 0, 0, &ak) >= 0, "%s", kinds[k].name);
+            CHECK(pk.total_samples == ak.nb_frames, "%s (%s in %s): probe %" PRId64
+                  " samples, decoder %" PRId64, kinds[k].name, pk.codec, pk.container,
+                  pk.total_samples, ak.nb_frames);
+            CHECK(fabs(pk.duration * ak.rate - (double)ak.nb_frames) < 1e-6, "%s: duration %f",
+                  kinds[k].name, pk.duration);
+            rx_audio_free(&ak);
+            rx_probe_free(&pk);
+            free(file);
+        }
+    }
+
     /* Ten minutes at 96 kHz: the buffer grows without trouble */
     {
         char *big = test_path(dir, "long96k.flac");
