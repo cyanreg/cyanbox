@@ -75,7 +75,7 @@ One binary, `rxbox`:
 ```
 rxbox                      the interface
 rxbox add <path>...        add files or folders to the library and analyse them
-rxbox analyze [paths]      (re)analyse; only missing sidecar sections are filled
+rxbox analyze [paths]      (re)analyse; by default only what is missing
 rxbox show <track>         print the resolved grid, key and cues
 rxbox export <stick>       write a stick (both libraries, ANLZ, artwork, presets)
 rxbox inspect <stick>      re-read and validate a stick
@@ -254,12 +254,12 @@ Keyboard follows rekordbox's Export preset (space, C, M, I/O/R, 1–3 hot cues,
 ## 7. Testing
 
 - `meson test`: format writers against the rekordbox fixtures from dj
-  (`tests/data`), sidecar round trips, grid arithmetic, cue-control semantics on
+  (`tests/data`), library round trips through SQLite, grid arithmetic, cue-control semantics on
   the null audio backend, analysis on synthetic tracks, and waveform bytes
   compared with the Python implementation's output on a fixture.
-- A port check: the same library exported by the Python `dj` and by `rxbox`
-  must produce identical `export.pdb`, settings and ANLZ bytes when the
-  sidecars are the same.
+- A port check: the same tracks, grids and cues exported by the Python `dj`
+  and by `rxbox` must produce identical `export.pdb`, settings and ANLZ
+  bytes, apart from the documented fixes.
 - The interface runs on a private headless sway (`WLR_BACKENDS=headless`), never
   on the user's session; screenshots with `grim`. `rxbox --frames N` runs N
   frames and exits for that.

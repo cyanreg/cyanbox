@@ -6,7 +6,7 @@
 /* Background work for the interface and the CLI: analysing tracks and
  * decoding tracks for the decks, on a pool, with results handed back to
  * the owner thread through a mailbox. Jobs never touch the library; the
- * owner applies results (sidecar, cache, deck load). */
+ * owner applies results (library writes, deck load). */
 
 #include "rxbox/thread.h"
 #include "rxbox/analysis.h"
