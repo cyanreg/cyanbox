@@ -1,0 +1,233 @@
+/* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
+
+/* Playlists and folders (src/core/playlist.c): create, rename, entries
+ * (add, move, remove, no duplicates), reparenting, deletion with its
+ * cascade, positions dense after every edit (checked in SQL), the tree
+ * after a reopen, and m3u8 export and import (relative paths, order
+ * prefix, BOM, CRLF, file:// URLs, missing and new files). */
+
+#include "rxbox/library.h"
+
+#include <sqlite3.h>
+
+#include "src/core/core.h"
+#include "util.h"
+
+static int sql_int(const RxLibrary *lib, const char *sql)
+{
+    sqlite3_stmt *st;
+    int n = -1;
+    if (sqlite3_prepare_v2(lib->db->db, sql, -1, &st, NULL) == SQLITE_OK) {
+        if (sqlite3_step(st) == SQLITE_ROW)
+            n = sqlite3_column_int(st, 0);
+        sqlite3_finalize(st);
+    }
+    return n;
+}
+
+/* n distinct positions in [0, n) among each set of siblings are 0..n-1. */
+static bool dense(const RxLibrary *lib)
+{
+    return sql_int(lib, "SELECT count(*) FROM playlist p WHERE position < 0 OR position >= "
+                        "(SELECT count(*) FROM playlist q WHERE q.parent_id IS p.parent_id "
+                        "AND q.is_folder = p.is_folder)") == 0 &&
+           sql_int(lib, "SELECT count(*) FROM (SELECT count(*) c FROM playlist "
+                        "GROUP BY parent_id, is_folder, position HAVING c > 1)") == 0 &&
+           sql_int(lib, "SELECT count(*) FROM playlist_entry e WHERE position < 0 OR position >= "
+                        "(SELECT count(*) FROM playlist_entry f WHERE f.playlist_id = e.playlist_id)") == 0;
+}
+
+static bool ids_are(const RxPlaylist *p, int nb, const uint64_t *ids)
+{
+    if (!p || p->nb != nb)
+        return false;
+    for (int i = 0; i < nb; i++) {
+        if (p->track_ids[i] != ids[i])
+            return false;
+    }
+    return true;
+}
+
+#define IDS(...) (int)RX_ARRAY_ELEMS(((uint64_t[]) { __VA_ARGS__ })), ((uint64_t[]) { __VA_ARGS__ })
+
+static void test_tree(const char *root, const char *music)
+{
+    RxLibrary lib;
+    CHECK(rx_library_open(&lib, root) == 0);
+    CHECK(rx_library_add_path(&lib, music, NULL, NULL) == 4);
+    RxTrack *t[5] = { NULL };
+    for (int i = 1; i <= 4; i++)
+        t[i] = rx_library_find_id(&lib, (uint64_t)i);
+    CHECK(t[1] && t[4]);
+    if (!t[1] || !t[4])
+        return;
+
+    RxPlaylistFolder *genres = rx_library_folder_create(&lib, NULL, "Genres");
+    RxPlaylistFolder *house = rx_library_folder_create(&lib, genres, "House");
+    RxPlaylist *warmup = rx_library_playlist_create(&lib, NULL, "Warmup");
+    RxPlaylist *peak = rx_library_playlist_create(&lib, NULL, "Peak");
+    RxPlaylist *deep = rx_library_playlist_create(&lib, house, "Deep");
+    CHECK(genres && house && warmup && peak && deep);
+    CHECK(!rx_library_playlist_create(&lib, NULL, "  "));
+    CHECK(lib.root_folder->nb_folders == 1 && lib.root_folder->nb_playlists == 2);
+    CHECK(rx_library_folder_of(&lib, deep) == house && rx_library_folder_of(&lib, warmup) == lib.root_folder);
+    CHECK(dense(&lib));
+
+    /* Entries. */
+    for (int i = 1; i <= 3; i++)
+        CHECK(rx_library_playlist_add(&lib, warmup, t[i], -1) == 0);
+    CHECK(rx_library_playlist_add(&lib, warmup, t[4], 0) == 0);
+    CHECK(ids_are(warmup, IDS(4, 1, 2, 3)));
+    CHECK(rx_library_playlist_add(&lib, warmup, t[1], -1) == RX_ERROR(EEXIST));
+    CHECK(rx_library_playlist_move(&lib, warmup, 0, 3) == 0);
+    CHECK(ids_are(warmup, IDS(1, 2, 3, 4)));
+    CHECK(rx_library_playlist_move(&lib, warmup, 3, 1) == 0);
+    CHECK(ids_are(warmup, IDS(1, 4, 2, 3)));
+    CHECK(rx_library_playlist_remove_at(&lib, warmup, 1) == 0);
+    CHECK(ids_are(warmup, IDS(1, 2, 3)));
+    CHECK(rx_library_playlist_remove_at(&lib, warmup, 5) == RX_ERROR(EINVAL));
+    CHECK(rx_library_playlist_add(&lib, deep, t[4], -1) == 0);
+    CHECK(rx_library_playlist_add(&lib, peak, t[2], -1) == 0);
+    CHECK(dense(&lib));
+
+    CHECK(rx_library_playlist_rename(&lib, warmup, "Warm-up") == 0 && !strcmp(warmup->name, "Warm-up"));
+    CHECK(rx_library_folder_rename(&lib, genres, "Styles") == 0 && !strcmp(genres->name, "Styles"));
+    CHECK(rx_library_playlist_rename(&lib, warmup, "") == RX_ERROR(EINVAL));
+    CHECK(rx_library_folder_rename(&lib, lib.root_folder, "x") == RX_ERROR(EINVAL));
+
+    /* Reparenting: Peak to the top of House; a folder never into itself. */
+    CHECK(rx_library_playlist_reparent(&lib, peak, house, 0) == 0);
+    CHECK(house->nb_playlists == 2 && house->playlists[0] == peak && house->playlists[1] == deep);
+    CHECK(lib.root_folder->nb_playlists == 1 && lib.root_folder->playlists[0] == warmup);
+    CHECK(rx_library_folder_reparent(&lib, genres, house, -1) == RX_ERROR(EINVAL));
+    CHECK(rx_library_folder_reparent(&lib, genres, genres, -1) == RX_ERROR(EINVAL));
+    RxPlaylistFolder *other = rx_library_folder_create(&lib, NULL, "Other");
+    CHECK(rx_library_folder_reparent(&lib, house, other, -1) == 0);
+    CHECK(!genres->nb_folders && other->nb_folders == 1 && other->folders[0] == house);
+    CHECK(rx_library_folder_reparent(&lib, other, NULL, 0) == 0);
+    CHECK(lib.root_folder->folders[0] == other && lib.root_folder->folders[1] == genres);
+    CHECK(rx_library_playlist_reparent(&lib, warmup, NULL, 5) == 0);   /* same place */
+    CHECK(dense(&lib));
+
+    RxPlaylist *all[8];
+    CHECK(rx_library_playlists_flat(&lib, NULL, 0) == 3);
+    CHECK(rx_library_playlists_flat(&lib, all, 8) == 3);
+    CHECK(all[0] == peak && all[1] == deep && all[2] == warmup);
+    CHECK(rx_library_playlists_flat(&lib, all, 1) == 3 && all[0] == peak);
+    CHECK(rx_library_playlist_find(&lib, "Deep") == deep && !rx_library_playlist_find(&lib, "Nope"));
+
+    /* Deleting a playlist renumbers its siblings. */
+    CHECK(rx_library_playlist_delete(&lib, peak) == 0);
+    CHECK(house->nb_playlists == 1 && house->playlists[0] == deep);
+    CHECK(dense(&lib));
+    CHECK(rx_library_check(&lib) == 0);
+    rx_library_close(&lib);
+
+    /* The same tree after a reopen. */
+    CHECK(rx_library_open(&lib, root) == 0);
+    RxPlaylistFolder *r = lib.root_folder;
+    CHECK(r->nb_folders == 2 && r->nb_playlists == 1);
+    if (r->nb_folders == 2 && r->nb_playlists == 1) {
+        CHECK_STR(r->folders[0]->name, "Other");
+        CHECK_STR(r->folders[1]->name, "Styles");
+        CHECK(r->folders[0]->nb_folders == 1 && !strcmp(r->folders[0]->folders[0]->name, "House"));
+        RxPlaylistFolder *h = r->folders[0]->folders[0];
+        CHECK(h->nb_playlists == 1 && !strcmp(h->playlists[0]->name, "Deep"));
+        CHECK(ids_are(h->playlists[0], IDS(4)));
+        CHECK_STR(r->playlists[0]->name, "Warm-up");
+        CHECK(ids_are(r->playlists[0], IDS(1, 2, 3)));
+
+        /* Folder delete takes everything in it, in memory and on disk. */
+        CHECK(rx_library_folder_delete(&lib, r->folders[0]) == 0);
+        CHECK(r->nb_folders == 1 && !strcmp(r->folders[0]->name, "Styles"));
+        CHECK(sql_int(&lib, "SELECT count(*) FROM playlist") == 2);
+        CHECK(sql_int(&lib, "SELECT count(*) FROM playlist_entry") == 3);
+        CHECK(rx_library_folder_delete(&lib, r) == RX_ERROR(EINVAL));
+        CHECK(dense(&lib));
+    }
+
+    /* Damaged positions are renumbered at open. */
+    sqlite3_exec(lib.db->db, "UPDATE playlist SET position = position + 7; "
+                             "UPDATE playlist_entry SET position = position * 3 + 10", NULL, NULL, NULL);
+    rx_library_close(&lib);
+    CHECK(rx_library_open(&lib, root) == 0);
+    CHECK(dense(&lib));
+    CHECK(lib.root_folder->nb_playlists == 1 && ids_are(lib.root_folder->playlists[0], IDS(1, 2, 3)));
+    CHECK(rx_library_check(&lib) == 0);
+    rx_library_close(&lib);
+}
+
+static void test_m3u(const char *dir, const char *root, const char *music)
+{
+    RxLibrary lib;
+    CHECK(rx_library_open(&lib, root) == 0);
+    RxPlaylist *p = rx_library_playlist_find(&lib, "Warm-up");
+    CHECK(p != NULL);
+    if (!p)
+        return;
+
+    char *exp_dir = rx_asprintf("%s/export", dir);
+    rx_mkdir_p(exp_dir);
+    char *m3u = rx_asprintf("%s/03 Warm.m3u8", exp_dir);
+    CHECK(rx_library_playlist_export_m3u(&lib, p, m3u) == 0);
+    uint8_t *text;
+    size_t size;
+    CHECK(rx_file_read(m3u, &text, &size) == 0);
+    CHECK(rx_str_starts((char *)text, "#EXTM3U\n#EXTINF:1,"));
+    CHECK(strstr((char *)text, "\n../music/a.wav\n") && strstr((char *)text, "\n../music/b.wav\n"));
+    free(text);
+
+    /* Import: the order prefix only orders, the tracks are the same. */
+    RxPlaylist *in;
+    CHECK(rx_library_playlist_import_m3u(&lib, NULL, m3u, &in) == 3);
+    CHECK(in && !strcmp(in->name, "Warm") && ids_are(in, IDS(1, 2, 3)));
+
+    /* Other shapes: BOM, CRLF, comments, absolute, file:// with %20, a
+     * duplicate, a missing file, and a file not yet in the library. */
+    char *fresh = rx_asprintf("%s/new one.wav", music);
+    test_write_wav(fresh, 0.25, 44100, 2, "Fresh", NULL, NULL);
+    char *hand = rx_asprintf("%s/hand.m3u", exp_dir);
+    FILE *f = fopen(hand, "w");
+    fprintf(f, "\xef\xbb\xbf#EXTM3U\r\n\r\n# a comment\r\n../music/b.wav\r\n%s/a.wav\r\n"
+               "file://%s/new%%20one.wav\r\n  ../music/./sub/../b.wav  \r\n../music/gone.wav\r\n",
+            music, music);
+    fclose(f);
+    int before = lib.nb_tracks;
+    CHECK(rx_library_playlist_import_m3u(&lib, NULL, hand, &in) == 3);
+    CHECK(lib.nb_tracks == before + 1);
+    RxTrack *t = rx_library_find_path(&lib, fresh);
+    CHECK(t && !strcmp(t->meta.title, "Fresh"));
+    CHECK(in && !strcmp(in->name, "hand") && t && ids_are(in, IDS(2, 1, t->id)));
+    CHECK(dense(&lib));
+    CHECK(rx_library_check(&lib) == 0);
+    rx_library_close(&lib);
+
+    free(fresh);
+    free(hand);
+    free(m3u);
+    free(exp_dir);
+}
+
+int main(void)
+{
+    char *dir = test_dir("playlist");
+    if (!dir)
+        return 1;
+    char *music = rx_asprintf("%s/music", dir), *root = rx_asprintf("%s/lib", dir);
+    static const char *const names[] = { "a.wav", "b.wav", "c.wav", "d.wav" };
+    for (size_t i = 0; i < RX_ARRAY_ELEMS(names); i++) {
+        char *p = rx_asprintf("%s/%s", music, names[i]);
+        test_write_wav(p, 1.0, 44100, 2, NULL, NULL, NULL);
+        free(p);
+    }
+
+    test_tree(root, music);
+    test_m3u(dir, root, music);
+
+    if (!test_failures)
+        test_rm_rf(dir);
+    free(music);
+    free(root);
+    free(dir);
+    return test_done("core_playlist");
+}

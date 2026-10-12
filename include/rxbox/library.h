@@ -114,6 +114,9 @@ void rx_library_close(RxLibrary *lib);
 /* Re-checks `missing` on every track (also called by open). Returns how
  * many changed state. */
 int  rx_library_rescan_missing(RxLibrary *lib);
+/* Runs SQLite's integrity_check and foreign_key_check: 0 when both pass,
+ * -EIO with every problem logged otherwise. */
+int  rx_library_check(const RxLibrary *lib);
 
 RxTrack *rx_library_find_id(const RxLibrary *lib, uint64_t id);
 RxTrack *rx_library_find_path(const RxLibrary *lib, const char *abs_path);
