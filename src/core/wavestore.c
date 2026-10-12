@@ -35,7 +35,13 @@ int rx_library_waveforms_load(const RxLibrary *lib, uint64_t id, RxWaveforms *w)
         return ret;
     ret = rx_waveforms_unpack(data, size, w);
     free(data);
-    if (ret < 0)
+    /* A blob of another format version (-EPROTO) is expected after a
+     * calibration change and is recomputed quietly; damaged data is an
+     * error worth hearing about. */
+    if (ret == RX_ERROR(EPROTO))
+        rx_debug("track %llu: stored waveforms are an older format; recomputing",
+                 (unsigned long long)id);
+    else if (ret < 0)
         rx_err("track %llu: stored waveforms do not unpack (%s); analyse it again",
                (unsigned long long)id, strerror(-ret));
     return ret;
