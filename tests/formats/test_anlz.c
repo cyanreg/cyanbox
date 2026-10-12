@@ -87,6 +87,9 @@ static void fill_waves(RxWaveforms *w, int n)
     memset(w->pwv2, 3, sizeof(w->pwv2));
     memset(w->pwv4, 7, sizeof(w->pwv4));
     memset(w->pwv6, 9, sizeof(w->pwv6));
+    w->gains[0] = 80;
+    w->gains[1] = 0x8A;
+    w->gains[2] = 0x18C;
 }
 
 static void plan_cue(RxPlanCue *c, double time, int hot, double loop_end, bool active,
@@ -202,6 +205,28 @@ static void layout(void)
     CHECK_EQ(rx_anlz_read_cues(f.dat, f.dat_size, &rc, &n), 0);
     CHECK(n == 3 && rc[1].active && rc[1].loop_end == 4.0 && !rc[2].active);
     free(rc);
+
+    /* PWVC carries the gains PWV7 was scaled by (docs/anlz.md 4.14):
+     * 0, low, mid, high, big-endian, len_header 0x0E, 20 bytes. */
+    RxAnlzTag *tags;
+    int nt;
+    CHECK_EQ(rx_anlz_parse(f.ex2, f.ex2_size, &tags, &nt), 0);
+    const RxAnlzTag *pwvc = nt == 4 ? &tags[3] : NULL;
+    static const uint8_t want_pwvc[20] = {
+        'P', 'W', 'V', 'C', 0, 0, 0, 0x0E, 0, 0, 0, 0x14, 0, 0, 0, 80, 0, 0x8A, 0x01, 0x8C,
+    };
+    CHECK(pwvc && pwvc->raw_size == 20 && !memcmp(pwvc->raw, want_pwvc, 20));
+    free(tags);
+    /* No gains: the neutral 80, 100, 100. */
+    RxAnlzFiles g;
+    RxWaveforms w0 = w;
+    w0.gains[0] = w0.gains[1] = w0.gains[2] = 0;
+    CHECK_EQ(rx_anlz_build(&t, &w0, &g), 0);
+    CHECK_EQ(rx_anlz_parse(g.ex2, g.ex2_size, &tags, &nt), 0);
+    CHECK(nt == 4 && rx_rd_be16(tags[3].raw + 0x0E) == 80 && rx_rd_be16(tags[3].raw + 0x10) == 100 &&
+          rx_rd_be16(tags[3].raw + 0x12) == 100);
+    free(tags);
+    rx_anlz_files_free(&g);
 
     /* Waveforms read back from the three files. */
     RxWaveforms r = { 0 };

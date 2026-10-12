@@ -24,8 +24,8 @@
 #     detail columns) longer. libmp3lame at 320k writes plain stereo, the
 #     Info frame says the same, so the frame counts for two.mp3 here. Grid
 #     and cue times are the library's in both and agree;
-#   - .2EX is not compared: rxbox has no PWVC gains (its waveforms do not
-#     carry them) and writes the neutral 80/100/100.
+#   - .2EX is not compared (the brief asks for .DAT/.EXT; its PWV6/PWV7 and
+#     the PWVC gains follow the analysis module's port).
 # Anything else that differs is a porting bug.
 
 set -eu

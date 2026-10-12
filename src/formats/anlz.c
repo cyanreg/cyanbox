@@ -438,14 +438,15 @@ int rx_anlz_build(const RxPlanTrack *t, const RxWaveforms *waves, RxAnlzFiles *o
         rx_buf_be32(&b, RX_WAVE_PWV6_COLUMNS);
         rx_buf_put(&b, waves->pwv6, sizeof(waves->pwv6));
         tag(&ex2, "PWV6", 0x14, &b);
-        /* PWVC: the 3-band gains (4.14). RxWaveforms does not carry the
-         * gains dj's encoder used to scale PWV7, so this writes the
-         * neutral values the document gives for that case. */
+        /* PWVC: the low, mid and high gains PWV7 was scaled by (4.14, dj's
+         * encoder); without them (all zero) the neutral values the
+         * document gives for that case. */
+        bool have = waves->gains[0] || waves->gains[1] || waves->gains[2];
         b = (RxBuf) { 0 };
         rx_buf_be16(&b, 0);
-        rx_buf_be16(&b, 80);
-        rx_buf_be16(&b, 100);
-        rx_buf_be16(&b, 100);
+        rx_buf_be16(&b, have ? waves->gains[0] : 80);
+        rx_buf_be16(&b, have ? waves->gains[1] : 100);
+        rx_buf_be16(&b, have ? waves->gains[2] : 100);
         tag(&ex2, "PWVC", 0x0E, &b);
     }
 
