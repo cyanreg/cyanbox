@@ -356,6 +356,7 @@ static void analysis_options(const RxConfig *cfg, RxAnalysisOptions *opt)
         opt->bpm_max = cfg->bpm_max;
     }
     opt->snap_bpm = cfg->snap_bpm;
+    opt->allow_sections = cfg->allow_sections;
 }
 
 typedef struct Pending {
@@ -1643,6 +1644,22 @@ static int cmd_config(Cli *cli, int argc, char **argv)
                c->bpm_max > 0 ? fmt_bpm(c->bpm_max, bpm, sizeof(bpm)) : "(auto)");
         printf("analysis.snap_bpm = %s\n", c->snap_bpm ? "true" : "false");
         printf("analysis.auto_cues = %s\n", c->auto_cues ? "true" : "false");
+        printf("analysis.allow_sections = %s\n", c->allow_sections ? "true" : "false");
+        static const struct {
+            unsigned    bit;
+            const char *name;
+        } what_names[] = {
+            { RX_ANALYSE_BEATS, "beats" },
+            { RX_ANALYSE_KEY,   "key"   },
+            { RX_ANALYSE_WAVES, "waves" },
+        };
+        char what[32] = "";
+        for (size_t i = 0; i < RX_ARRAY_ELEMS(what_names); i++) {
+            size_t len = strlen(what);
+            if (c->analyse_what & what_names[i].bit)
+                snprintf(what + len, sizeof(what) - len, "%s%s", len ? "," : "", what_names[i].name);
+        }
+        printf("analysis.what = %s\n", what);
         printf("export.key_notation = %s\n", c->key_notation);
         printf("export.pdb = %s\n", c->export_pdb ? "true" : "false");
         printf("export.onelibrary = %s\n", c->export_onelibrary ? "true" : "false");
@@ -1667,6 +1684,10 @@ static const char *settings_section(const char *file)
     if (!rx_strcasecmp(file, "DJMMYSETTING.DAT"))
         return "mixer";
     if (!rx_strcasecmp(file, "DEVSETTING.DAT"))
+        return "device";
+    /* background_color is a device.* key too, though the databases carry
+     * it rather than DEVSETTING.DAT (src/formats/settings.c, rx_settings_list). */
+    if (!strcmp(file, "export.pdb, exportLibrary.db"))
         return "device";
     return file;
 }

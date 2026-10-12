@@ -37,9 +37,6 @@
 #include <SDL3/SDL.h>
 #include <fontconfig/fontconfig.h>
 
-/* imgui_dep passes -DIMGUI_DEFINE_MATH_OPERATORS (= 1) and imconfig.h
- * defines it again (empty), which is a redefinition warning in every file
- * that includes imgui.h. */
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"
 #include "imgui_impl_vulkan.h"

@@ -77,11 +77,23 @@ typedef struct RxApp {
         char **prune_list; int nb_prune;   /* stick files the export would delete (owned here) */
         int    unsynced;            /* "check" items about changes not synced back */
         int    done, total;
+        /* What the real run did, counted from its stages: audio files
+         * copied and skipped (already on the stick), files deleted, and
+         * the steps that rewrite the rest (a track's ANLZ files, an
+         * artwork, a settings file or database). */
+        int    copied, skipped, pruned, rewritten;
         char   stage[32];
         char   item[256];
         char   log[4096];
         int    result;
     } export_state;
+
+    /* The stick read or inspection the Sync from USB and Inspect dialogs
+     * asked for (rx_app_read_stick, rx_app_inspect_stick), one at a time on
+     * a worker. The finished result waits here until the interface takes
+     * it (it then frees it with rx_job_result_free). */
+    uint64_t   stick_request;       /* in flight, 0 none */
+    RxJobResult *stick_result;
 
     /* Interface preferences (persisted in the library's ui.* settings) */
     int        wave_palette;        /* 0 3band, 1 blue, 2 rgb */
@@ -119,6 +131,11 @@ void rx_app_save_track(RxApp *app, RxTrack *t);      /* to the library now */
 void rx_app_set_status(RxApp *app, const char *fmt, ...) RX_PRINTF(2, 3);
 void rx_app_rebuild_rows(RxApp *app);
 int  rx_app_start_export(RxApp *app);                /* from export_state */
+/* RX_JOB_STICK_READ against the library as saved (pending saves are
+ * written first), or RX_JOB_INSPECT, of the stick at `mount`; see
+ * stick_request. -EBUSY while one is in flight. */
+int  rx_app_read_stick(RxApp *app, const char *mount);
+int  rx_app_inspect_stick(RxApp *app, const char *mount);
 /* Applies a finished analysis to a track: grid (unless locked), key,
  * waveforms, auto cues; saves the track. */
 int  rx_app_apply_analysis(RxApp *app, RxTrack *t, RxAnalysis *a);
@@ -144,7 +161,7 @@ bool rx_ui_frame(RxApp *app);
 enum RxColumn {
     RX_COL_ART = 0, RX_COL_TITLE, RX_COL_ARTIST, RX_COL_ALBUM, RX_COL_BPM, RX_COL_KEY,
     RX_COL_TIME, RX_COL_RATING, RX_COL_COLOR, RX_COL_CUES, RX_COL_PREVIEW, RX_COL_GENRE,
-    RX_COL_YEAR, RX_COL_ADDED, RX_COL_PATH, RX_COL_COUNT,
+    RX_COL_YEAR, RX_COL_ADDED, RX_COL_PATH, RX_COL_PLAYS, RX_COL_LAST_PLAYED, RX_COL_COUNT,
 };
 
 #endif /* RXBOX_APP_H */

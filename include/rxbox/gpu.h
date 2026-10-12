@@ -62,8 +62,15 @@ int   rx_window_frames_drawn(const RxWindow *w);
 /* Milliseconds the compositor's last frame interval suggests (16.7 at 60 Hz). */
 double rx_window_frame_interval_ms(const RxWindow *w);
 /* Saves the last presented frame as PNG (reads the swapchain image back;
- * for the headless tests). */
+ * for the headless tests). Not from inside a frame. */
 int   rx_window_screenshot(RxWindow *w, const char *png_path);
+/* Saves the next presented frame as PNG: rx_window_end_frame captures it,
+ * presents it, then reads it back and writes the file. Callable from inside
+ * a frame (that frame is the one saved); a second call before then
+ * replaces the path. */
+void  rx_window_screenshot_next(RxWindow *w, const char *png_path);
+/* The GPU's name (VkPhysicalDeviceProperties.deviceName). */
+const char *rx_window_gpu_name(const RxWindow *w);
 
 /* ----------------------------------------------------------------- textures */
 

@@ -98,16 +98,25 @@ The style is the one of the user's libcraw and avtransport, exactly:
 
 ```
 include/rxbox/    module interfaces (owned by the architecture, edit with care)
-src/common        common.c log.c thread.c                      -> rx_common_dep
-src/audio         decode.c probe.c mp3.c flac.c artwork.c transcode.c   -> rx_audio_dep (common)
-src/core          model.c grid.c db.c library.c playlist.c config.c notation.c -> rx_core_dep (common, audio)
-src/analysis      spectrum.c onset.c tempo.c grid_fit.c downbeat.c beats.c key.c waveform.c analysis.c -> rx_analysis_dep
-src/formats       pdb.c anlz.c onelibrary.c sqlcipher.c settings.c colors.c -> rx_formats_dep
-src/export        plan.c export.c inspect.c sync.c              -> rx_export_dep
-src/player        player.c pipewire.c nullout.c deck.c controls.c -> rx_player_dep (core)
-src/app           jobs.c app.c                                  -> rx_app_dep (everything above)
-src/gpu           window.c vk.c swapchain.c textures.c wave.c imgui_glue.cpp shaders/   (executable only)
-src/ui            ui.cpp deck_view.cpp waveform_view.cpp browser.cpp tree.cpp dialogs.cpp keys.cpp (C++)
+src/common        common.c log.c thread.c                             -> rx_common_dep
+src/audio         decode.c probe.c mp3.c flac.c artwork.c             -> rx_audio_dep (common)
+                  transcode.c internal.h
+src/core          model.c grid.c db.c library.c playlist.c config.c   -> rx_core_dep (common, audio)
+                  notation.c wavestore.c core.h
+src/analysis      spectrum.c onset.c tempo.c grid_fit.c downbeat.c    -> rx_analysis_dep
+                  beats.c beats_internal.h key.c waveform.c
+                  analysis.c
+src/formats       pdb.c anlz.c onelibrary.c sqlcipher.c settings.c    -> rx_formats_dep
+                  colors.c util.c buf.h formats_priv.h nfc_tables.h
+src/export        plan.c export.c inspect.c stick.c export_priv.h     -> rx_export_dep
+src/player        player.c pipewire.c nullout.c deck.c controls.c     -> rx_player_dep (core)
+                  player_internal.h
+src/app           jobs.c app.c                                        -> rx_app_dep (everything above)
+                  headless.c (src/gpu and src/ui stand-ins for rxbox-cli and test_app)
+src/gpu           window.c vk.c swapchain.c textures.c wave.c         (executable only)
+                  imgui_glue.cpp gpu_priv.h gpu_demo.h shaders/
+src/ui            ui.cpp deck_view.cpp waveform_view.cpp browser.cpp  (C++)
+                  tree.cpp dialogs.cpp keys.cpp ui_internal.h
 src/cli.c         the subcommands; src/main.c
 tests/<module>/   meson tests, registered from src/<module>/meson.build with suite: '<module>'
 tools/            developer tools (analysis evaluation, dumpers)

@@ -715,6 +715,30 @@ int rx_window_screenshot(RxWindow *w, const char *png_path)
             return RX_ERROR(EAGAIN);
     }
 
+    return rx_swapchain_save_png(w, png_path);
+}
+
+void rx_window_screenshot_next(RxWindow *w, const char *png_path)
+{
+    if (!w || !png_path)
+        return;
+    if (!w->can_capture) {
+        rx_err("gpu: the swapchain images cannot be read back");
+        return;
+    }
+    char *path = rx_strdup(png_path);
+    if (!path)
+        return;
+    free(w->shot_path);
+    w->shot_path = path;
+    w->capture_next = true;
+}
+
+int rx_swapchain_save_png(RxWindow *w, const char *png_path)
+{
+    if (!w->cap_serial || w->cap_serial != w->last_present_serial)
+        return RX_ERROR(EAGAIN);
+
     uint8_t *rgba = NULL;
     int width = 0, height = 0;
     int ret = rx_swapchain_readback(w, &rgba, &width, &height);

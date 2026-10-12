@@ -532,6 +532,11 @@ int rx_vk_create(RxWindow *w)
     return 0;
 }
 
+const char *rx_window_gpu_name(const RxWindow *w)
+{
+    return w->props.deviceName;
+}
+
 static void free_upload(RxWindow *w, RxUpload *up)
 {
     rx_vk_buffer_free(w, &up->staging);

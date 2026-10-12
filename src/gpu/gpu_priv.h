@@ -171,6 +171,7 @@ struct RxWindow {
     uint64_t cap_serial;
     uint64_t last_present_serial;
     bool capture_next;
+    char *shot_path;                /* rx_window_screenshot_next: where the next frame goes */
 
     /* Waveforms (wave.c) */
     VkPipelineLayout wave_layout;
@@ -230,6 +231,8 @@ void rx_swapchain_destroy(RxWindow *w);
 int  rx_swapchain_frame(RxWindow *w, void *draw_data, bool capture);
 /* Reads the last captured frame back as tightly packed RGBA. */
 int  rx_swapchain_readback(RxWindow *w, uint8_t **rgba, int *width, int *height);
+/* Writes the last presented frame as PNG; -EAGAIN when it was not captured. */
+int  rx_swapchain_save_png(RxWindow *w, const char *png_path);
 
 /* ------------------------------------------------------------- textures.c */
 

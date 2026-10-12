@@ -58,6 +58,9 @@ typedef struct RxPlayer RxPlayer;
 int  rx_player_create(RxPlayer **p, const RxPlayerOptions *opt);
 void rx_player_destroy(RxPlayer *p);
 int  rx_player_rate(const RxPlayer *p);
+enum RxAudioBackend rx_player_backend(const RxPlayer *p);
+/* The PipeWire node the stream was told to connect to; NULL = the default. */
+const char *rx_player_sink(const RxPlayer *p);
 /* True once the stream is running; the error string when it is not
  * (NULL while running). */
 bool rx_player_running(const RxPlayer *p);

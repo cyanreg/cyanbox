@@ -4,8 +4,9 @@
  * library in a scratch directory, two copies of a 128 BPM WAV added and
  * analysed through the jobs, the analysis applied (grid, waveforms, the
  * automatic cue), what still needs analysing, the rows (search, sort, a
- * playlist), loading the deck, rescanning, and an export to a directory
- * running through its phases to the end.
+ * playlist), loading the deck, rescanning, an export to a directory
+ * running through its phases to the end, and reading and inspecting that
+ * stick on a worker.
  *
  * Usage: test_app FILE.wav SCRATCH_DIR */
 
@@ -77,6 +78,11 @@ static bool deck_loaded(RxApp *app)
 static bool export_done(RxApp *app)
 {
     return !app->export_state.running || app->export_state.confirm;
+}
+
+static bool stick_done(RxApp *app)
+{
+    return !app->stick_request;
 }
 
 static RxTrack *track_named(RxApp *app, const char *base)
@@ -235,6 +241,10 @@ int main(int argc, char **argv)
     printf("export: %s, result %d (%s)\n%s", app.export_state.stage, app.export_state.result,
            strerror(-app.export_state.result), app.export_state.log);
     CHECK(app.export_state.result >= 0, "the export failed");
+    /* The "Test" playlist holds b alone. */
+    CHECK(app.export_state.copied == 1 && app.export_state.skipped == 0 &&
+          app.export_state.rewritten > 0, "counted %d copied, %d skipped, %d rewritten",
+          app.export_state.copied, app.export_state.skipped, app.export_state.rewritten);
 
     /* Exporting only another playlist: the dry run finds b's files on the
      * stick, asks, and pruning on the answer deletes them. */
@@ -263,6 +273,8 @@ int main(int argc, char **argv)
             CHECK(tick_until(&app, export_done, 300), "the pruning export did not finish");
             CHECK(!app.export_state.confirm && app.export_state.result >= 0, "pruning export: %s",
                   strerror(-app.export_state.result));
+            CHECK(app.export_state.pruned == app.export_state.nb_prune, "%d pruned of %d",
+                  app.export_state.pruned, app.export_state.nb_prune);
             for (int i = 0; i < app.export_state.nb_prune; i++) {
                 char *f = rx_path_join(stick, app.export_state.prune_list[i] + 1);
                 CHECK(f && !rx_file_exists(f), "%s was not pruned", f);
@@ -272,6 +284,32 @@ int main(int argc, char **argv)
         app.export_state.playlists = NULL;
         app.export_state.nb_playlists = 0;
     }
+
+    /* The stick read on a worker, one at a time: nothing changed on the
+     * stick since the export. */
+    ret = rx_app_read_stick(&app, stick);
+    CHECK(ret == 0, "read the stick: %s", strerror(-ret));
+    CHECK(rx_app_read_stick(&app, stick) == RX_ERROR(EBUSY), "a second read while one runs");
+    CHECK(tick_until(&app, stick_done, 60), "the stick read did not finish");
+    RxJobResult *r = app.stick_result;
+    app.stick_result = NULL;
+    CHECK(r && r->kind == RX_JOB_STICK_READ && !r->err && r->stick, "stick read: %s",
+          r ? strerror(-r->err) : "no result");
+    if (r && r->stick)
+        CHECK(r->stick->nb_tracks > 0 && r->nb_sync_items == 0, "%d tracks, %d changes",
+              r->stick->nb_tracks, r->nb_sync_items);
+    rx_job_result_free(r);
+
+    ret = rx_app_inspect_stick(&app, stick);
+    CHECK(ret == 0, "inspect the stick: %s", strerror(-ret));
+    CHECK(tick_until(&app, stick_done, 60), "the inspection did not finish");
+    r = app.stick_result;
+    app.stick_result = NULL;
+    CHECK(r && r->kind == RX_JOB_INSPECT && !r->err && r->report && !r->problems,
+          "inspect: %s, %d problems", r ? strerror(-r->err) : "no result", r ? r->problems : -1);
+    if (r && r->report)
+        printf("inspect:\n%s", r->report);
+    rx_job_result_free(r);
 
 end:
     rx_app_destroy(&app);

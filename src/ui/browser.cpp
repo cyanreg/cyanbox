@@ -63,9 +63,8 @@ static const UiColSpec COLS[COL_N] = {
     { "Date Added",   84, RX_COL_ADDED,  FIXED, true },
     { "Album",       160, RX_COL_ALBUM,  FIXED | HIDDEN, false },
     { "Location",    260, RX_COL_PATH,   FIXED | HIDDEN, false },
-    // RxColumn has no play count or last-played sort yet.
-    { "Plays",        46, NO_SORT,       FIXED | HIDDEN | UNSORTED, true },
-    { "Last Played",  84, NO_SORT,       FIXED | HIDDEN | UNSORTED, true },
+    { "Plays",        46, RX_COL_PLAYS,  FIXED | HIDDEN, true },
+    { "Last Played",  84, RX_COL_LAST_PLAYED, FIXED | HIDDEN, true },
 };
 
 static const char DASH[] = "\xE2\x80\x94";

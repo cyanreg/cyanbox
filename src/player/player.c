@@ -403,6 +403,16 @@ int rx_player_rate(const RxPlayer *p)
     return atomic_load_explicit(&p->device_rate, memory_order_relaxed);
 }
 
+enum RxAudioBackend rx_player_backend(const RxPlayer *p)
+{
+    return p->opt.backend;
+}
+
+const char *rx_player_sink(const RxPlayer *p)
+{
+    return p->sink;
+}
+
 bool rx_player_running(const RxPlayer *p)
 {
     return p && atomic_load_explicit(&p->out_state, memory_order_acquire) == RX_OUT_RUNNING;

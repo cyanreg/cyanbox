@@ -5,6 +5,7 @@
  * Settings are rows of the `setting` table, text keys and text values:
  *
  *   analysis.bpm_min  analysis.bpm_max  analysis.snap_bpm  analysis.auto_cues
+ *   analysis.allow_sections  analysis.what
  *   export.key_notation  export.pdb  export.onelibrary  export.compat_transcode
  *   export.device_name
  *   player.<name>  mixer.<name>  device.<name>     My Settings, names as
@@ -12,7 +13,8 @@
  *   audio.sink
  *   ui.wave_palette  ui.detail_bars  ui.split_player  ui.split_tree
  *
- * Booleans are "true"/"false", numbers their shortest exact decimal form.
+ * Booleans are "true"/"false", numbers their shortest exact decimal form,
+ * analysis.what the names `rxbox analyze --what` takes ("beats,key,waves").
  * A value that does not parse is logged and the default kept, so a bad row
  * never stops the library from opening. Other keys are free for
  * rx_library_setting_get/set (the interface's column layout and such) and
@@ -23,11 +25,15 @@
 #include <math.h>
 #include <stdio.h>
 
+#include "rxbox/analysis.h"
+
 void rx_config_defaults(RxConfig *c)
 {
     *c = (RxConfig) {
         .snap_bpm          = true,
         .auto_cues         = true,
+        .allow_sections    = true,
+        .analyse_what      = RX_ANALYSE_ALL,
         .key_notation      = "classic",
         .export_pdb        = true,
         .export_onelibrary = true,
@@ -103,6 +109,47 @@ static bool parse_double(const char *s, double *out)
     return true;
 }
 
+static const struct {
+    const char *name;
+    unsigned    bit;
+} what_names[] = {
+    { "beats", RX_ANALYSE_BEATS },
+    { "key",   RX_ANALYSE_KEY   },
+    { "waves", RX_ANALYSE_WAVES },
+};
+
+static bool parse_what(const char *s, unsigned *out)
+{
+    char buf[64];
+    snprintf(buf, sizeof(buf), "%s", s);
+    unsigned what = 0;
+    char *save = NULL;
+    for (char *w = strtok_r(buf, ", ", &save); w; w = strtok_r(NULL, ", ", &save)) {
+        size_t i = 0;
+        while (i < RX_ARRAY_ELEMS(what_names) && strcmp(w, what_names[i].name))
+            i++;
+        if (i == RX_ARRAY_ELEMS(what_names))
+            return false;
+        what |= what_names[i].bit;
+    }
+    if (!what)
+        return false;
+    *out = what;
+    return true;
+}
+
+static const char *fmt_what(unsigned what, char *buf, size_t size)
+{
+    buf[0] = '\0';
+    for (size_t i = 0; i < RX_ARRAY_ELEMS(what_names); i++) {
+        size_t len = strlen(buf);
+        if (what & what_names[i].bit)
+            snprintf(buf + len, size - len, "%s%s", len ? "," : "", what_names[i].name);
+    }
+    /* Nothing asked: the row goes and the default comes back. */
+    return buf[0] ? buf : NULL;
+}
+
 static int kv_push(RxKv **kv, int *nb, const char *key, const char *value)
 {
     RxKv *n = realloc(*kv, (size_t)(*nb + 1) * sizeof(*n));
@@ -160,6 +207,12 @@ static int apply_setting(RxConfig *c, const char *key, const char *value)
             bad_value(key, value);
     } else if (!strcmp(key, "analysis.auto_cues")) {
         if (!parse_bool(value, &c->auto_cues))
+            bad_value(key, value);
+    } else if (!strcmp(key, "analysis.allow_sections")) {
+        if (!parse_bool(value, &c->allow_sections))
+            bad_value(key, value);
+    } else if (!strcmp(key, "analysis.what")) {
+        if (!parse_what(value, &c->analyse_what))
             bad_value(key, value);
     } else if (!strcmp(key, "export.key_notation")) {
         if (strcmp(value, "classic") && strcmp(value, "camelot") && strcmp(value, "open"))
@@ -256,7 +309,7 @@ static int put_group(RxLibrary *lib, const char *prefix, const RxKv *kv, int nb)
 int rx_library_config_save(RxLibrary *lib)
 {
     const RxConfig *c = &lib->cfg;
-    char bpm_min[32], bpm_max[32], bars[32], split_p[32], split_t[32];
+    char bpm_min[32], bpm_max[32], what[32], bars[32], split_p[32], split_t[32];
     const struct {
         const char *key, *value;
     } rows[] = {
@@ -264,6 +317,8 @@ int rx_library_config_save(RxLibrary *lib)
         { "analysis.bpm_max",        rx_core_fmt_double(c->bpm_max, bpm_max, sizeof(bpm_max)) },
         { "analysis.snap_bpm",       c->snap_bpm ? "true" : "false" },
         { "analysis.auto_cues",      c->auto_cues ? "true" : "false" },
+        { "analysis.allow_sections", c->allow_sections ? "true" : "false" },
+        { "analysis.what",           fmt_what(c->analyse_what, what, sizeof(what)) },
         { "export.key_notation",     c->key_notation },
         { "export.pdb",              c->export_pdb ? "true" : "false" },
         { "export.onelibrary",       c->export_onelibrary ? "true" : "false" },

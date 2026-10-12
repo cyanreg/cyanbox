@@ -3,14 +3,17 @@
 #ifndef RXBOX_JOBS_H
 #define RXBOX_JOBS_H
 
-/* Background work for the interface and the CLI: analysing tracks and
- * decoding tracks for the decks, on a pool, with results handed back to
- * the owner thread through a mailbox. Jobs never touch the library; the
- * owner applies results (library writes, deck load). */
+/* Background work for the interface and the CLI: analysing tracks,
+ * decoding tracks for the decks, cover art and reading sticks, on a pool,
+ * with results handed back to the owner thread through a mailbox. Jobs
+ * never touch the owner's library; the owner applies results (library
+ * writes, deck load). A stick read, which compares the stick with the
+ * library, opens a library handle of its own. */
 
 #include "rxbox/thread.h"
 #include "rxbox/analysis.h"
 #include "rxbox/audio.h"
+#include "rxbox/export.h"
 
 typedef struct RxJobs RxJobs;
 
@@ -18,6 +21,8 @@ enum RxJobKind {
     RX_JOB_ANALYSE,     /* decode + analyse: result->analysis */
     RX_JOB_DECODE,      /* decode for a deck: result->audio */
     RX_JOB_ARTWORK,     /* cover art RGBA: result->rgba, and result->jpeg */
+    RX_JOB_STICK_READ,  /* rx_stick_read + rx_stick_diff: result->stick, result->sync_items */
+    RX_JOB_INSPECT,     /* rx_inspect: result->report, result->problems */
 };
 
 typedef struct RxJobResult {
@@ -32,6 +37,12 @@ typedef struct RxJobResult {
     uint8_t    *rgba; int width, height;
     uint8_t    *jpeg; size_t jpeg_size;   /* RX_JOB_ARTWORK: the library's 240 px thumbnail
                                              (rx_image_jpeg_square), NULL if it failed */
+    RxStickState *stick;        /* RX_JOB_STICK_READ: owned by the receiver (rx_stick_state_free,
+                                   then free); set once the read worked, even if the diff failed */
+    RxSyncItem *sync_items; int nb_sync_items;  /* RX_JOB_STICK_READ: owned by the receiver */
+    char       *report;         /* RX_JOB_INSPECT: the report's lines, also on error; owned by
+                                   the receiver */
+    int         problems;       /* RX_JOB_INSPECT: rx_inspect's count */
 } RxJobResult;
 
 int  rx_jobs_create(RxJobs **j, int threads);
@@ -42,6 +53,11 @@ uint64_t rx_jobs_analyse(RxJobs *j, uint64_t track_id, const char *path,
                          const RxAnalysisOptions *opt, unsigned what);
 uint64_t rx_jobs_decode(RxJobs *j, uint64_t track_id, const char *path, int deck);
 uint64_t rx_jobs_artwork(RxJobs *j, uint64_t track_id, const char *path, int max_size);
+/* Reads the stick mounted at `mount` and compares it with the library at
+ * `library_root`, which the worker opens as a second connection to the
+ * same database (so the owner saves pending edits first). */
+uint64_t rx_jobs_stick_read(RxJobs *j, const char *library_root, const char *mount);
+uint64_t rx_jobs_inspect(RxJobs *j, const char *mount);
 /* Drops a request not yet started; a running one finishes and is reported. */
 void     rx_jobs_cancel(RxJobs *j, uint64_t request);
 void     rx_jobs_cancel_all(RxJobs *j);

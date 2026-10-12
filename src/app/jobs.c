@@ -1,8 +1,9 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
 /* Background jobs (rxbox/jobs.h): decoding and analysing tracks, decoding
- * them for a deck and scaling their cover art, on an RxThreadPool, with the
- * results handed back to the owner thread through an RxMailbox.
+ * them for a deck, scaling their cover art, and reading and inspecting
+ * sticks, on an RxThreadPool, with the results handed back to the owner
+ * thread through an RxMailbox.
  *
  * Ownership and threads:
  *  - A Job is allocated by the owner when it submits, then belongs to the
@@ -14,8 +15,10 @@
  *  - A worker allocates the RxJobResult and its payload and posts it; from
  *    then on it belongs to whoever takes it from the mailbox (the owner),
  *    who releases it with rx_job_result_free().
- *  - Workers never see the library: a job carries copies of the path and
- *    the options, nothing else.
+ *  - Workers never see the owner's library: a job carries copies of the
+ *    path and the options, nothing else. The stick read needs a library to
+ *    compare with, so it opens one of its own from the root path (a second
+ *    connection to the database, as the export does) and closes it again.
  *  - The counters and the per-worker active track ids are read without the
  *    lock (atomics), so the status bar can poll them from a const RxJobs.
  *
@@ -49,7 +52,8 @@ typedef struct Job {
     enum RxJobKind kind;
     uint64_t request;
     uint64_t track_id;
-    char *path;
+    char *path;                     /* the audio file, or the stick's mount */
+    char *root;                     /* RX_JOB_STICK_READ: the library */
     int deck;
     int max_size;
     unsigned what;
@@ -80,6 +84,7 @@ static void job_free(Job *job)
     if (!job)
         return;
     free(job->path);
+    free(job->root);
     free(job);
 }
 
@@ -176,6 +181,49 @@ static int run_artwork(Job *job, RxJobResult *r)
     return 0;
 }
 
+static int run_stick_read(Job *job, RxJobResult *r)
+{
+    RxLibrary lib = { 0 };
+    int ret = rx_library_open(&lib, job->root);
+    if (ret < 0)
+        return ret;
+
+    RxStickState *s = calloc(1, sizeof(*s));
+    if (!s) {
+        rx_library_close(&lib);
+        return RX_ERROR(ENOMEM);
+    }
+    ret = rx_stick_read(&lib, job->path, s);
+    if (ret < 0) {
+        free(s);
+    } else {
+        r->stick = s;
+        ret = rx_stick_diff(&lib, s, &r->sync_items, &r->nb_sync_items);
+    }
+    rx_library_close(&lib);
+    return ret;
+}
+
+static void report_line(void *opaque, const char *line)
+{
+    fprintf(opaque, "%s\n", line);
+}
+
+static int run_inspect(Job *job, RxJobResult *r)
+{
+    size_t size = 0;
+    FILE *f = open_memstream(&r->report, &size);
+    if (!f)
+        return RX_ERROR(ENOMEM);
+    int ret = rx_inspect(job->path, report_line, f);
+    if (fclose(f))
+        return RX_ERROR(ENOMEM);
+    if (ret < 0)
+        return ret;
+    r->problems = ret;
+    return 0;
+}
+
 /* Runs on a pool worker. */
 static void run_job(void *arg)
 {
@@ -225,6 +273,12 @@ static void run_job(void *arg)
             break;
         case RX_JOB_ARTWORK:
             ret = run_artwork(job, r);
+            break;
+        case RX_JOB_STICK_READ:
+            ret = run_stick_read(job, r);
+            break;
+        case RX_JOB_INSPECT:
+            ret = run_inspect(job, r);
             break;
         default:
             ret = RX_ERROR(EINVAL);
@@ -406,6 +460,31 @@ uint64_t rx_jobs_artwork(RxJobs *j, uint64_t track_id, const char *path, int max
     return submit(j, job);
 }
 
+uint64_t rx_jobs_stick_read(RxJobs *j, const char *library_root, const char *mount)
+{
+    if (!library_root || !mount)
+        return (uint64_t)(int64_t)RX_ERROR(EINVAL);
+    Job *job = job_new(RX_JOB_STICK_READ, 0, mount);
+    if (!job)
+        return (uint64_t)(int64_t)RX_ERROR(ENOMEM);
+    job->root = rx_strdup(library_root);
+    if (!job->root) {
+        job_free(job);
+        return (uint64_t)(int64_t)RX_ERROR(ENOMEM);
+    }
+    return submit(j, job);
+}
+
+uint64_t rx_jobs_inspect(RxJobs *j, const char *mount)
+{
+    if (!mount)
+        return (uint64_t)(int64_t)RX_ERROR(EINVAL);
+    Job *job = job_new(RX_JOB_INSPECT, 0, mount);
+    if (!job)
+        return (uint64_t)(int64_t)RX_ERROR(ENOMEM);
+    return submit(j, job);
+}
+
 void rx_jobs_cancel(RxJobs *j, uint64_t request)
 {
     if (!j || !request)
@@ -463,6 +542,12 @@ void rx_job_result_free(RxJobResult *r)
     }
     free(r->rgba);
     free(r->jpeg);
+    if (r->stick) {
+        rx_stick_state_free(r->stick);
+        free(r->stick);
+    }
+    free(r->sync_items);
+    free(r->report);
     free(r);
 }
 

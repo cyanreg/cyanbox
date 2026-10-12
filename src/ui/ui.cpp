@@ -16,10 +16,10 @@
 // once it is loaded (RXBOX_UI_AUTOLOAD_AT=<seconds>: from there);
 // RXBOX_UI_SHOW=<list> opens panels and dialogs on the first frame (grid,
 // info, half, export, sync, inspect, analysis, add, keys, about, demo);
-// RXBOX_UI_SCREENSHOT=<png> ends the run after frame 100
-// (RXBOX_UI_SCREENSHOT_FRAME=<n>: frame n) and saves that frame when the
-// interface shuts down: rx_window_screenshot() reads back the last
-// presented frame and cannot run inside one, which rx_ui_frame always is.
+// RXBOX_UI_SCREENSHOT=<png> saves frame 100 (RXBOX_UI_SCREENSHOT_FRAME=<n>:
+// frame n) through rx_window_screenshot_next(), which writes it once it is
+// presented, and the run goes on; a run that ends before that frame
+// (--frames below it) saves its last frame at shutdown instead.
 
 #include "ui_internal.h"
 
@@ -737,7 +737,7 @@ static void menu_bar(UiState *ui)
             for (int i = 0; i < app->nb_selection; i++) {
                 RxTrack *t = rx_library_find_id(&app->lib, app->selection[i]);
                 if (t)
-                    rx_app_analyse_track(app, t, ui->analyse_what, false);
+                    rx_app_analyse_track(app, t, app->lib.cfg.analyse_what, false);
             }
         }
         if (ImGui::MenuItem("Analyse all unanalysed"))
@@ -746,7 +746,7 @@ static void menu_bar(UiState *ui)
             for (int i = 0; i < app->nb_selection; i++) {
                 RxTrack *t = rx_library_find_id(&app->lib, app->selection[i]);
                 if (t)
-                    rx_app_analyse_track(app, t, ui->analyse_what, true);
+                    rx_app_analyse_track(app, t, app->lib.cfg.analyse_what, true);
             }
         }
         ImGui::Separator();
@@ -777,29 +777,32 @@ static void status_bar(UiState *ui, ImVec2 a, ImVec2 b)
     float ty = (a.y + b.y - PX(fs)) * 0.5f - PX(1);
     float w = b.x - a.x;
 
-    // Right: audio state, library size.
-    char right[256];
+    // Right, inwards from the edge: the GPU, the library size, the audio
+    // state (the stream's error in red while it is not running).
+    float x = b.x - PX(8);
+    const char *gpu = rx_window_gpu_name(app->window);
+    if (gpu && gpu[0]) {
+        x -= ui_text_width(ui, nullptr, fs, gpu);
+        ui_text(ui, dl, nullptr, fs, ImVec2(x, ty), UI_DIM, gpu);
+        x -= PX(16);
+    }
     char tracks[48];
     snprintf(tracks, sizeof(tracks), "%d tracks", app->lib.nb_tracks);
-    bool audio_ok = app->player && rx_player_running(app->player);
+    x -= ui_text_width(ui, nullptr, fs, tracks);
+    ui_text(ui, dl, nullptr, fs, ImVec2(x, ty), UI_DIM, tracks);
     char audio[160];
-    if (!app->player) {
-        snprintf(audio, sizeof(audio), "No audio");
-    } else if (audio_ok) {
-        const char *sink = app->lib.cfg.audio_sink ? app->lib.cfg.audio_sink : "default output";
-        snprintf(audio, sizeof(audio), "Audio %.1f kHz \xC2\xB7 %s",
-                 rx_player_rate(app->player) / 1000.0, sink);
+    const char *err = nullptr;
+    if (!app->player || rx_player_backend(app->player) == RX_AUDIO_NULL) {
+        snprintf(audio, sizeof(audio), "Audio: none");
+    } else if ((err = rx_player_error(app->player))) {
+        snprintf(audio, sizeof(audio), "%s", err);
     } else {
-        const char *err = rx_player_error(app->player);
-        snprintf(audio, sizeof(audio), "Audio: %s", err && err[0] ? err : "not running");
+        const char *sink = rx_player_sink(app->player);
+        snprintf(audio, sizeof(audio), "PipeWire %g kHz \xC2\xB7 %s",
+                 rx_player_rate(app->player) / 1000.0, sink ? sink : "default");
     }
-    snprintf(right, sizeof(right), "%s", tracks);
-    float rw = ui_text_width(ui, nullptr, fs, right);
-    float aw = ui_text_width(ui, nullptr, fs, audio);
-    float x = b.x - PX(8) - rw;
-    ui_text(ui, dl, nullptr, fs, ImVec2(x, ty), UI_DIM, right);
-    x -= PX(16) + aw;
-    ui_text(ui, dl, nullptr, fs, ImVec2(x, ty), audio_ok ? UI_DIM : UI_RED, audio);
+    x -= PX(16) + ui_text_width(ui, nullptr, fs, audio);
+    ui_text(ui, dl, nullptr, fs, ImVec2(x, ty), err ? UI_RED : UI_DIM, audio);
     float right_edge = x - PX(16);
 
     // Middle: analysis and export progress, each with a thin bar.
@@ -889,8 +892,6 @@ int rx_ui_init(RxApp *app)
     ui->deck_split = -1.0f;
     ui->tree_width = 220.0f;
     ui->anchor_row = -1;
-    ui->analyse_what = RX_ANALYSE_ALL;
-    ui->allow_sections = true;
     for (int i = 0; i < RX_DECKS; i++) {
         UiDeck *ud = &ui->decks[i];
         ud->jump_size = 1;
@@ -975,8 +976,8 @@ void rx_ui_shutdown(RxApp *app)
     UiState *ui = ui_of(app);
     if (!ui)
         return;
-    // The screenshot hook: the loop has ended after the frame asked for
-    // (or earlier, with --frames N below it).
+    // The screenshot hook, when the run ended before the frame asked for
+    // (--frames N below it): the last frame.
     if (app->window && !ui->screenshot_path.empty()) {
         int ret = rx_window_screenshot(app->window, ui->screenshot_path.c_str());
         if (ret < 0)
@@ -1098,9 +1099,13 @@ bool rx_ui_frame(RxApp *app)
         ui->s = 1.0f;
 
     autoload_tick(ui);
-    // The screenshot hook: this is the frame to keep; stop after it.
-    if (!ui->screenshot_path.empty() && rx_window_frames_drawn(app->window) + 1 >= ui->screenshot_frame)
-        app->quit = true;
+    // The screenshot hook: this is the frame to keep; the window saves it
+    // once it is presented.
+    if (!ui->screenshot_path.empty() &&
+        rx_window_frames_drawn(app->window) + 1 >= ui->screenshot_frame) {
+        rx_window_screenshot_next(app->window, ui->screenshot_path.c_str());
+        ui->screenshot_path.clear();
+    }
     // The rows follow the library (app.c may have rebuilt them already).
     if (app->rows_dirty || app->rows_generation != app->lib.generation || !app->rows)
         rx_app_rebuild_rows(app);

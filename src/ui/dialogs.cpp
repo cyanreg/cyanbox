@@ -9,11 +9,12 @@
 // a dry run; when it finds stick files to prune or player changes not yet
 // synced back it stops with `confirm` set, and the dialog asks ("Delete N
 // files from the stick?", "The stick has N changes you have not synced")
-// before starting the real run. Sync from USB reads the stick and lists
-// what the player wrote (rx_stick_read/rx_stick_diff) for review; the
-// accepted rows are applied with rx_stick_apply. The app has no job for
-// reading a stick, so read and apply run on this thread (a few seconds on
-// a full stick) with a status message first.
+// before starting the real run. Sync from USB reads the stick on a worker
+// (rx_app_read_stick: rx_stick_read/rx_stick_diff) and lists what the
+// player wrote for review; the accepted rows are applied with
+// rx_stick_apply on this thread, which owns the library. Inspect USB runs
+// rx_inspect on a worker too (rx_app_inspect_stick). Both take their
+// result from app->stick_result when its request is theirs.
 
 #include "ui_internal.h"
 
@@ -266,10 +267,12 @@ static void analysis_settings(UiState *ui)
     ui_settle_centred();
     bool changed = false;
     ImGui::SeparatorText("Analyse");
-    bool beats = ui->analyse_what & RX_ANALYSE_BEATS, key = ui->analyse_what & RX_ANALYSE_KEY;
-    if (ImGui::Checkbox("BPM and beat grid", &beats) | ImGui::Checkbox("Key", &key))
-        ui->analyse_what = RX_ANALYSE_WAVES | (beats ? RX_ANALYSE_BEATS : 0) |
-                           (key ? RX_ANALYSE_KEY : 0);
+    bool beats = cfg->analyse_what & RX_ANALYSE_BEATS, key = cfg->analyse_what & RX_ANALYSE_KEY;
+    if (ImGui::Checkbox("BPM and beat grid", &beats) | ImGui::Checkbox("Key", &key)) {
+        cfg->analyse_what = RX_ANALYSE_WAVES | (beats ? RX_ANALYSE_BEATS : 0) |
+                            (key ? RX_ANALYSE_KEY : 0);
+        changed = true;
+    }
     ImGui::TextDisabled("Waveforms are always made.");
 
     ImGui::SeparatorText("Tempo");
@@ -291,9 +294,8 @@ static void analysis_settings(UiState *ui)
         ImGui::EndCombo();
     }
     changed |= ImGui::Checkbox("Snap to whole BPM when the track allows", &cfg->snap_bpm);
-    ImGui::Checkbox("Allow tempo sections", &ui->allow_sections);
-    ImGui::SetItemTooltip("Split the grid where the tempo or phase really changes.\n"
-                          "(Not yet a library setting: kept for this session.)");
+    changed |= ImGui::Checkbox("Allow tempo sections", &cfg->allow_sections);
+    ImGui::SetItemTooltip("Split the grid where the tempo or phase really changes.");
     ImGui::SeparatorText("Cues");
     changed |= ImGui::Checkbox("Memory cue at the first downbeat", &cfg->auto_cues);
     if (changed)
@@ -483,6 +485,9 @@ static void export_dialog(UiState *ui)
                                strerror(-es.result));
         } else {
             ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(UI_PLAY), "Export finished.");
+            ImGui::SameLine();
+            ImGui::TextDisabled("%d copied, %d already on the stick, %d rewritten, %d deleted",
+                                es.copied, es.skipped, es.rewritten, es.pruned);
         }
         ImGui::BeginChild("##log", ImVec2(0, -PX(40)), ImGuiChildFlags_Borders);
         ImGui::TextUnformatted(es.log);
@@ -595,19 +600,41 @@ static void sync_read(UiState *ui)
     RxApp *app = ui->app;
     sync_free(ui);
     ui->sync_error.clear();
-    rx_app_set_status(app, "Reading %s...", ui->stick_path);
-    memset(&ui->sync_state, 0, sizeof(ui->sync_state));
-    int ret = rx_stick_read(&app->lib, ui->stick_path, &ui->sync_state);
+    int ret = rx_app_read_stick(app, ui->stick_path);
     if (ret < 0) {
         ui->sync_error = std::string("Could not read the stick: ") + strerror(-ret);
         return;
     }
-    ui->sync_state_valid = true;
-    ret = rx_stick_diff(&app->lib, &ui->sync_state, &ui->sync_items, &ui->nb_sync_items);
-    if (ret < 0) {
-        ui->sync_error = std::string("Could not compare the stick with the library: ") + strerror(-ret);
+    ui->sync_request = app->stick_request;
+    rx_app_set_status(app, "Reading %s...", ui->stick_path);
+}
+
+// The read's result, once the worker has posted it.
+static void sync_take(UiState *ui)
+{
+    RxApp *app = ui->app;
+    RxJobResult *r = app->stick_result;
+    if (!ui->sync_request || !r || r->request != ui->sync_request)
+        return;
+    app->stick_result = nullptr;
+    ui->sync_request = 0;
+    if (r->stick) {
+        ui->sync_state = *r->stick;
+        ui->sync_state_valid = true;
+        free(r->stick);
+        r->stick = nullptr;
+    }
+    if (r->err < 0) {
+        ui->sync_error = std::string(ui->sync_state_valid ?
+                                     "Could not compare the stick with the library: " :
+                                     "Could not read the stick: ") + strerror(-r->err);
+        rx_job_result_free(r);
         return;
     }
+    ui->sync_items = r->sync_items;
+    ui->nb_sync_items = r->nb_sync_items;
+    r->sync_items = nullptr;
+    rx_job_result_free(r);
     for (int i = 0; i < ui->nb_sync_items; i++)
         ui->sync_items[i].accepted = true;
     ui->sync_stage = 1;
@@ -620,6 +647,7 @@ static void sync_dialog(UiState *ui)
     RxApp *app = ui->app;
     if (!ui->dlg_sync)
         return;
+    sync_take(ui);
     ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing,
                             ImVec2(0.5f, 0.5f));
     ImGuiWindowFlags wf = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings;
@@ -650,10 +678,15 @@ static void sync_dialog(UiState *ui)
         volume_picker(ui, ui->stick_path, sizeof(ui->stick_path));
         if (!ui->sync_error.empty())
             ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(UI_RED), "%s", ui->sync_error.c_str());
-        ImGui::BeginDisabled(!ui->stick_path[0]);
+        bool reading = ui->sync_request != 0;
+        ImGui::BeginDisabled(!ui->stick_path[0] || app->stick_request);
         if (ImGui::Button("Read the stick", ImVec2(PX(140), PX(28))))
             sync_read(ui);
         ImGui::EndDisabled();
+        if (reading) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("Reading the stick...");
+        }
     } else if (ui->sync_stage == 1) {
         RxStickState &s = ui->sync_state;
         ImGui::Text("%d track%s on the stick", s.nb_tracks, s.nb_tracks == 1 ? "" : "s");
@@ -780,17 +813,20 @@ void ui_open_inspect(UiState *ui)
         snprintf(ui->stick_path, sizeof(ui->stick_path), "%s", ui->volumes[0].c_str());
 }
 
-static void inspect_line(void *opaque, const char *line)
-{
-    UiState *ui = (UiState *)opaque;
-    ui->inspect_report += line;
-    ui->inspect_report += '\n';
-}
-
 static void inspect_dialog(UiState *ui)
 {
+    RxApp *app = ui->app;
     if (!ui->dlg_inspect)
         return;
+    RxJobResult *r = app->stick_result;
+    if (ui->inspect_request && r && r->request == ui->inspect_request) {
+        app->stick_result = nullptr;
+        ui->inspect_request = 0;
+        ui->inspect_report = r->report ? r->report : "";
+        ui->inspect_result = r->err < 0 ? r->err : r->problems;
+        ui->inspect_done = true;
+        rx_job_result_free(r);
+    }
     centre_next(ui, 700, 500);
     if (!ImGui::Begin("Inspect USB", &ui->dlg_inspect,
                       ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings)) {
@@ -799,15 +835,23 @@ static void inspect_dialog(UiState *ui)
     }
     ui_settle_centred();
     volume_picker(ui, ui->stick_path, sizeof(ui->stick_path));
-    ImGui::BeginDisabled(!ui->stick_path[0]);
+    ImGui::BeginDisabled(!ui->stick_path[0] || app->stick_request);
     if (ImGui::Button("Inspect", ImVec2(PX(120), 0))) {
-        // Synchronous: it only reads, and the report is wanted at once.
         ui->inspect_report.clear();
-        ui->inspect_result = rx_inspect(ui->stick_path, inspect_line, ui);
-        ui->inspect_done = true;
+        ui->inspect_done = false;
+        int ret = rx_app_inspect_stick(app, ui->stick_path);
+        if (ret < 0) {
+            ui->inspect_result = ret;
+            ui->inspect_done = true;
+        } else {
+            ui->inspect_request = app->stick_request;
+        }
     }
     ImGui::EndDisabled();
-    if (ui->inspect_done) {
+    if (ui->inspect_request) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("Inspecting...");
+    } else if (ui->inspect_done) {
         ImGui::SameLine();
         if (ui->inspect_result < 0)
             ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(UI_RED), "Failed: %s",

@@ -32,8 +32,10 @@ void *rx_mailbox_take(RxMailbox *mb);
 /* Blocks up to timeout_ms (-1: forever) for an item; NULL on timeout. */
 void *rx_mailbox_wait(RxMailbox *mb, int timeout_ms);
 
-/* A cancellation flag shared between the owner and a job. */
-typedef struct RxCancel { _Atomic int flag; } RxCancel;
+/* A cancellation flag shared between the owner and a job. A plain int,
+ * read and written only through the __atomic builtins, so the header also
+ * parses as C++ (src/ui). */
+typedef struct RxCancel { int flag; } RxCancel;
 static inline bool rx_cancelled(const RxCancel *c) { return c && __atomic_load_n(&c->flag, __ATOMIC_RELAXED); }
 static inline void rx_cancel(RxCancel *c) { __atomic_store_n(&c->flag, 1, __ATOMIC_RELAXED); }
 

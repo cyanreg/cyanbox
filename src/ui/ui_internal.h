@@ -17,17 +17,9 @@
 #include <string>
 #include <vector>
 
-// imconfig.h defines IMGUI_DEFINE_MATH_OPERATORS and so does imgui_dep's
-// command line; drop the command-line one so the header's is not a
-// redefinition.
-#undef IMGUI_DEFINE_MATH_OPERATORS
 #include "imgui.h"
 #include "imgui_internal.h"
 
-// rxbox/thread.h declares RxCancel with C11 `_Atomic int`, which C++17 does
-// not parse. The interface never touches an RxCancel; an int has the same
-// size and alignment, so the declaration is read as a plain int here.
-#define _Atomic
 extern "C" {
 #include "rxbox/common.h"
 #include "rxbox/model.h"
@@ -41,7 +33,6 @@ extern "C" {
 #include "rxbox/notation.h"
 #include "rxbox/export.h"
 }
-#undef _Atomic
 
 #define PX(v) (ui->s * (float)(v))
 
@@ -210,9 +201,7 @@ struct UiState {
 
     // Dialogs.
     bool      dlg_analysis, dlg_export, dlg_keys, dlg_about, dlg_add, dlg_inspect, dlg_sync;
-    unsigned  analyse_what;
     int       bpm_preset;
-    bool      allow_sections;
     std::string fb_path;
     char      fb_edit[1024];
     std::vector<UiFileEntry> fb_entries;
@@ -225,8 +214,10 @@ struct UiState {
     std::string inspect_report;
     int       inspect_result;
     bool      inspect_done;
-    // Sync from USB: read + diff, review, apply.
+    uint64_t  inspect_request; // the inspection running on a worker, 0 none
+    // Sync from USB: read + diff (on a worker), review, apply.
     int       sync_stage;      // 0 pick, 1 review, 2 applied
+    uint64_t  sync_request;    // the read running on a worker, 0 none
     RxStickState sync_state;
     bool      sync_state_valid;
     RxSyncItem *sync_items;

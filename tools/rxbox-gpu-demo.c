@@ -375,7 +375,7 @@ static void frame(Demo *d)
 
     float px = floorf(ww * 0.40f);
     if (rx_demo_begin("Waveforms", px, 10.0f, ww - px - 10.0f, wh - 20.0f)) {
-        rx_demo_text("%s, frame %d, %.2f ms a frame", rx_window_device_name(w),
+        rx_demo_text("%s, frame %d, %.2f ms a frame", rx_window_gpu_name(w),
                      rx_window_frames_drawn(w), rx_window_frame_interval_ms(w));
         rx_demo_text("日本語のタイトル: CJK fallback");
 

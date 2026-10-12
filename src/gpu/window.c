@@ -336,6 +336,15 @@ void rx_window_end_frame(RxWindow *w)
         w->capture_next = false;
         if (w->settle > 0)
             w->settle--;
+        /* rx_window_screenshot_next: this frame was captured and is now
+         * presented. The readback waits for its submission, once. */
+        if (w->shot_path) {
+            int err = rx_swapchain_save_png(w, w->shot_path);
+            if (err < 0)
+                rx_err("gpu: screenshot to %s failed (%d)", w->shot_path, err);
+            free(w->shot_path);
+            w->shot_path = NULL;
+        }
     }
 
     wl_display_flush(w->wl_dpy);
@@ -369,11 +378,6 @@ double rx_window_frame_interval_ms(const RxWindow *w)
 int rx_window_validation_errors(const RxWindow *w)
 {
     return w->validation_errors;
-}
-
-const char *rx_window_device_name(const RxWindow *w)
-{
-    return w->props.deviceName;
 }
 
 bool rx_window_frame_pending(const RxWindow *w)
@@ -550,5 +554,6 @@ void rx_window_destroy(RxWindow *w)
     free(w->title);
     free(w->font);
     free(w->device);
+    free(w->shot_path);
     free(w);
 }

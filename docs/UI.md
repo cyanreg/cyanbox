@@ -149,8 +149,9 @@ focus loss as overrides in the library (the file's own tags are kept).
 
 Left: the last message (`rx_app_set_status`). Middle: analysis progress
 (`Analysing 12/340: Artist - Title`) with a thin bar; export progress
-likewise. Right: audio state (`PipeWire 48 kHz · rxbox-null`, or the
-error in red), the library track count, the GPU name.
+likewise. Right: audio state (`PipeWire 48 kHz · rxbox-null`, `Audio: none`
+under `--audio none`, or the error in red), the library track count, the
+GPU name.
 
 ## Dialogs and menus
 

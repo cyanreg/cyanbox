@@ -12,8 +12,9 @@
  *    RxJobs (rxbox/jobs.h), whose results come back in rx_app_tick(), which
  *    applies and frees them.
  *  - Two job queues: app->jobs (every CPU but one) analyses; a private
- *    two-thread queue decodes for the deck and makes artwork, so loading a
- *    track or showing covers never waits behind a library-wide analysis.
+ *    two-thread queue decodes for the deck, makes artwork and reads sticks,
+ *    so loading a track, showing covers or reading a stick never waits
+ *    behind a library-wide analysis.
  *    Request ids are per queue; each kind of request only ever goes to one
  *    of them.
  *  - A decode result's RxAudio is handed to the player: rx_deck_load takes
@@ -166,6 +167,7 @@ static void analysis_options(const RxConfig *cfg, RxAnalysisOptions *opt)
         opt->bpm_max = cfg->bpm_max;
     }
     opt->snap_bpm = cfg->snap_bpm;
+    opt->allow_sections = cfg->allow_sections;
 }
 
 static const char *track_name(const RxTrack *t, char *buf, size_t size)
@@ -951,6 +953,27 @@ static void handle_artwork(RxApp *app, RxJobResult *r)
     }
 }
 
+/* A stick read or inspection is kept whole until the interface takes it.
+ * drain_jobs frees the result it hands in, so the payload moves to a copy. */
+static void handle_stick(RxApp *app, RxJobResult *r)
+{
+    if (r->request != app->stick_request)
+        return;
+    app->stick_request = 0;
+    RxJobResult *keep = malloc(sizeof(*keep));
+    if (!keep) {
+        rx_app_set_status(app, "Out of memory reading the stick");
+        return;
+    }
+    *keep = *r;
+    r->stick = NULL;
+    r->sync_items = NULL;
+    r->nb_sync_items = 0;
+    r->report = NULL;
+    rx_job_result_free(app->stick_result);
+    app->stick_result = keep;
+}
+
 static void handle_result(RxApp *app, RxJobResult *r)
 {
     switch (r->kind) {
@@ -963,7 +986,45 @@ static void handle_result(RxApp *app, RxJobResult *r)
     case RX_JOB_ARTWORK:
         handle_artwork(app, r);
         break;
+    case RX_JOB_STICK_READ:
+    case RX_JOB_INSPECT:
+        handle_stick(app, r);
+        break;
     }
+}
+
+/* On the io queue: a read is mostly waiting on the stick, and must not
+ * queue behind a library-wide analysis. */
+static int stick_job(RxApp *app, const char *mount, bool inspect)
+{
+    RxAppPriv *priv = app->priv;
+    if (!priv || !priv->io_jobs || !mount || !mount[0])
+        return RX_ERROR(EINVAL);
+    if (app->stick_request)
+        return RX_ERROR(EBUSY);
+
+    /* The worker compares with the library as the database holds it. */
+    if (!inspect)
+        flush_saves(app);
+    uint64_t req = inspect ? rx_jobs_inspect(priv->io_jobs, mount)
+                           : rx_jobs_stick_read(priv->io_jobs, app->lib.root, mount);
+    if ((int64_t)req < 0)
+        return (int)(int64_t)req;
+
+    rx_job_result_free(app->stick_result);
+    app->stick_result = NULL;
+    app->stick_request = req;
+    return 0;
+}
+
+int rx_app_read_stick(RxApp *app, const char *mount)
+{
+    return stick_job(app, mount, false);
+}
+
+int rx_app_inspect_stick(RxApp *app, const char *mount)
+{
+    return stick_job(app, mount, true);
 }
 
 /* ----------------------------------------------------------------- add path */
@@ -1263,6 +1324,7 @@ static void export_run(RxApp *app, bool dry_run)
     }
     es->done = 0;
     es->total = 0;
+    es->copied = es->skipped = es->pruned = es->rewritten = 0;
     es->item[0] = '\0';
     snprintf(es->stage, sizeof(es->stage), "prepare");
     priv->export_last_stage[0] = '\0';
@@ -1305,6 +1367,22 @@ static void export_apply_msg(RxApp *app, const ExportMsg *m)
     snprintf(es->item, sizeof(es->item), "%s", m->item ? m->item : "");
     if (!m->item)
         return;
+
+    /* The summary's counts. A step of a stage carries its total; a message
+     * about one (export.c's reportf) carries none. */
+    if (!dry && m->total > 0) {
+        if (!strcmp(m->stage, "copy"))
+            es->copied++;
+        else if (!strcmp(m->stage, "skip"))
+            es->skipped++;
+        else if (!strcmp(m->stage, "prune") && es->prune)
+            es->pruned++;
+        else if (!strcmp(m->stage, "analysis") || !strcmp(m->stage, "artwork") ||
+                 !strcmp(m->stage, "database"))
+            es->rewritten++;
+    } else if (!dry && !strcmp(m->stage, "prune") && rx_str_starts(m->item, "cannot remove")) {
+        es->pruned--;
+    }
 
     if (!strcmp(m->stage, "check")) {
         /* The checks name their problems in `item`. */
@@ -1617,6 +1695,14 @@ static SortVal sort_value(const RxTrack *t, int column)
         v.num = (double)t->added;
         v.known = true;
         return v;
+    case RX_COL_PLAYS:
+        v.num = t->play_count;
+        v.known = true;
+        return v;
+    case RX_COL_LAST_PLAYED:
+        v.num = (double)t->last_played;
+        v.known = v.num > 0;
+        return v;
     default:
         /* `#`, artwork and preview: the natural order. */
         return v;
@@ -1882,6 +1968,9 @@ void rx_app_destroy(RxApp *app)
     app->jobs = NULL;
     rx_jobs_destroy(priv->io_jobs);
     priv->io_jobs = NULL;
+    rx_job_result_free(app->stick_result);
+    app->stick_result = NULL;
+    app->stick_request = 0;
 
     for (int d = 0; d < RX_DECKS; d++)
         deck_clear(app, d);

@@ -12,7 +12,6 @@
 
 /* Errors the validation layer reported (opts.validation). */
 int  rx_window_validation_errors(const RxWindow *w);
-const char *rx_window_device_name(const RxWindow *w);
 /* A frame was presented and the compositor has not answered it yet. */
 bool rx_window_frame_pending(const RxWindow *w);
 /* Captures the next presented frame for rx_window_readback(). */

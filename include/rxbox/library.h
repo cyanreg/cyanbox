@@ -49,6 +49,10 @@ typedef struct RxConfig {
     double bpm_min, bpm_max;    /* 0 = unset */
     bool   snap_bpm;            /* default true */
     bool   auto_cues;           /* memory cue on the first downbeat, default true */
+    bool   allow_sections;      /* tempo sections where the tempo or phase really changes,
+                                   default true (RxAnalysisOptions.allow_sections) */
+    unsigned analyse_what;      /* RxAnalyseWhat the interface's Analyse asks for,
+                                   default RX_ANALYSE_ALL */
 
     /* export.* */
     char   key_notation[8];     /* classic (default), camelot, open */
