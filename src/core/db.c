@@ -400,9 +400,34 @@ char *rx_db_column_text(sqlite3_stmt *st, int col, int *err)
 
 /* --------------------------------------------------------- transactions */
 
+/* SQLite rolls the whole transaction back by itself after some errors
+ * (SQLITE_FULL or SQLITE_IOERR outside a statement journal, a write
+ * interrupted as it starts; sqlite.org/lang_transaction.html), savepoints
+ * and all. Nothing is open then although depth says otherwise, and a
+ * SAVEPOINT would start a transaction of its own that its RELEASE commits:
+ * the rest of a batch would be written behind the caller, who is about to
+ * report the whole batch as failed. So nothing nests in a lost
+ * transaction, and its commit fails (and says why, once). */
+static bool transaction_lost(const RxDb *db)
+{
+    return db->depth > 0 && sqlite3_get_autocommit(db->db);
+}
+
 int rx_db_begin(RxDb *db)
 {
+    if (transaction_lost(db))
+        return RX_ERROR(EIO);
     int ret = rx_db_exec(db, db->depth ? "SAVEPOINT rx" : "BEGIN IMMEDIATE");
+    if (ret >= 0)
+        db->depth++;
+    return ret;
+}
+
+int rx_db_begin_read(RxDb *db)
+{
+    if (db->depth)
+        return rx_db_begin(db);
+    int ret = rx_db_exec(db, "BEGIN");
     if (ret >= 0)
         db->depth++;
     return ret;
@@ -412,11 +437,13 @@ void rx_db_rollback(RxDb *db)
 {
     if (db->depth <= 0)
         return;
-    if (db->depth > 1) {
-        rx_db_exec(db, "ROLLBACK TO rx");
-        rx_db_exec(db, "RELEASE rx");
-    } else if (!sqlite3_get_autocommit(db->db)) {
-        rx_db_exec(db, "ROLLBACK");
+    if (!transaction_lost(db)) {
+        if (db->depth > 1) {
+            rx_db_exec(db, "ROLLBACK TO rx");
+            rx_db_exec(db, "RELEASE rx");
+        } else {
+            rx_db_exec(db, "ROLLBACK");
+        }
     }
     db->depth--;
 }
@@ -425,6 +452,13 @@ int rx_db_commit(RxDb *db)
 {
     if (db->depth <= 0)
         return RX_ERROR(EINVAL);
+    if (transaction_lost(db)) {
+        if (db->depth == 1)
+            rx_err("library database: SQLite rolled the transaction back after an error; "
+                   "nothing of it was saved");
+        db->depth--;
+        return RX_ERROR(EIO);
+    }
     int ret = rx_db_exec(db, db->depth > 1 ? "RELEASE rx" : "COMMIT");
     if (ret < 0) {
         rx_db_rollback(db);
@@ -448,55 +482,104 @@ static int pragma_int(RxDb *db, const char *sql, int64_t *out)
     return ret < 0 ? ret : 0;
 }
 
-static int migrate(RxDb *db)
+/* Refuses what is not ours to touch before anything is written to it (the
+ * journal mode included): a database of something else, even one without
+ * an application id, and one from a newer rxbox. One statement, so one
+ * snapshot: a library another process is creating right now is either
+ * empty or whole here. *version: its schema. */
+static int check_identity(RxDb *db, int64_t *version)
 {
-    int64_t app_id = 0, version = 0;
-    int ret = pragma_int(db, "PRAGMA application_id", &app_id);
-    if (ret >= 0)
-        ret = pragma_int(db, "PRAGMA user_version", &version);
+    static const char sql[] =
+        "SELECT (SELECT application_id FROM pragma_application_id), "
+        "(SELECT user_version FROM pragma_user_version), (SELECT count(*) FROM sqlite_schema)";
+    sqlite3_stmt *st = rx_db_prepare(db, sql);
+    if (!st)
+        return RX_ERROR(EIO);
+    int ret = rx_db_row(db, st, "reading the schema version");
+    int64_t app_id = 0, tables = 0;
+    *version = 0;
+    if (ret > 0) {
+        app_id = sqlite3_column_int64(st, 0);
+        *version = sqlite3_column_int64(st, 1);
+        tables = sqlite3_column_int64(st, 2);
+    }
+    sqlite3_finalize(st);
     if (ret < 0)
         return ret;
 
-    /* A database of something else, even one without an application id,
-     * must not get our tables added to it. */
-    int64_t tables = 0;
-    if (!app_id && !version)
-        ret = pragma_int(db, "SELECT count(*) FROM sqlite_schema", &tables);
-    if (ret < 0)
-        return ret;
-    if ((app_id && app_id != RX_DB_APPLICATION_ID) || tables) {
+    if ((app_id && app_id != RX_DB_APPLICATION_ID) || (!app_id && !*version && tables)) {
         rx_err("%s is not an rxbox library", db->path);
         return RX_ERROR(EINVAL);
     }
     int64_t current = (int64_t)RX_ARRAY_ELEMS(migrations);
-    if (version > current) {
+    if (*version > current) {
         rx_err("%s was written by a newer rxbox (schema %lld, this build knows %lld); "
-               "not touching it", db->path, (long long)version, (long long)current);
+               "not touching it", db->path, (long long)*version, (long long)current);
         return RX_ERROR(EPROTO);
     }
+    return 0;
+}
 
-    for (int64_t v = version; v < current; v++) {
-        char bump[96];
-        snprintf(bump, sizeof(bump), "PRAGMA user_version = %lld; PRAGMA application_id = %d",
-                 (long long)(v + 1), RX_DB_APPLICATION_ID);
-        ret = rx_db_begin(db);
+static int migrate(RxDb *db, int64_t version)
+{
+    int64_t current = (int64_t)RX_ARRAY_ELEMS(migrations);
+    while (version < current) {
+        int ret = rx_db_begin(db);
         if (ret < 0)
             return ret;
-        ret = rx_db_exec(db, migrations[v]);
-        if (ret >= 0)
-            ret = rx_db_exec(db, bump);
+        /* Again under the write lock: another process opening the same new
+         * library at the same moment may have created it meanwhile. */
+        int64_t now = version;
+        ret = pragma_int(db, "PRAGMA user_version", &now);
+        if (ret >= 0 && now == version) {
+            char bump[96];
+            snprintf(bump, sizeof(bump), "PRAGMA user_version = %lld; PRAGMA application_id = %d",
+                     (long long)(version + 1), RX_DB_APPLICATION_ID);
+            ret = rx_db_exec(db, migrations[version]);
+            if (ret >= 0)
+                ret = rx_db_exec(db, bump);
+        }
         if (ret < 0) {
             rx_db_rollback(db);
-            rx_err("%s: migration to schema %lld failed", db->path, (long long)(v + 1));
+            rx_err("%s: migration to schema %lld failed", db->path, (long long)(version + 1));
             return ret;
         }
         ret = rx_db_commit(db);
         if (ret < 0)
             return ret;
-        if (v > 0)
-            rx_info("%s: library upgraded to schema %lld", db->path, (long long)(v + 1));
+        if (now != version) {
+            version = now;
+            continue;
+        }
+        if (version > 0)
+            rx_info("%s: library upgraded to schema %lld", db->path, (long long)(version + 1));
+        version++;
     }
     return 0;
+}
+
+/* WAL is a property of the file. Switching needs the database to itself:
+ * two connections switching a new library at once deadlock on their read
+ * locks and SQLite answers one of them SQLITE_BUSY at once, without
+ * waiting. The other one switches it, and SQLite moves every connection
+ * to WAL when it sees the file is, so that one goes on as it is. */
+static int set_wal(RxDb *db)
+{
+    sqlite3_stmt *st = rx_db_prepare(db, "PRAGMA journal_mode = WAL");
+    if (!st)
+        return RX_ERROR(EIO);
+    int rc = sqlite3_step(st);
+    if (rc == SQLITE_ROW && sqlite3_stricmp((const char *)sqlite3_column_text(st, 0), "wal"))
+        rx_warn("%s: WAL journal not available here (%s); using it as it is", db->path,
+                (const char *)sqlite3_column_text(st, 0));
+    sqlite3_finalize(st);
+    if (rc == SQLITE_ROW || rc == SQLITE_DONE)
+        return 0;
+    if ((rc & 0xff) == SQLITE_BUSY) {
+        rx_debug("%s: busy, not switched to WAL by this connection", db->path);
+        return 0;
+    }
+    return rx_db_error(db, rc, "journal_mode");
 }
 
 int rx_db_open(RxDb **out, const char *path)
@@ -520,26 +603,16 @@ int rx_db_open(RxDb **out, const char *path)
     sqlite3_extended_result_codes(db->db, 1);
     sqlite3_busy_timeout(db->db, 5000);
 
+    int64_t version;
     ret = rx_db_exec(db, "PRAGMA foreign_keys = ON");
-    if (ret < 0)
-        goto fail;
-
-    sqlite3_stmt *st = rx_db_prepare(db, "PRAGMA journal_mode = WAL");
-    if (!st) {
-        ret = RX_ERROR(EIO);
-        goto fail;
-    }
-    ret = rx_db_row(db, st, "journal_mode");
-    if (ret > 0 && sqlite3_stricmp((const char *)sqlite3_column_text(st, 0), "wal"))
-        rx_warn("%s: WAL journal not available here (%s); using it as it is", path,
-                (const char *)sqlite3_column_text(st, 0));
-    sqlite3_finalize(st);
-    if (ret < 0)
-        goto fail;
-
-    ret = rx_db_exec(db, "PRAGMA synchronous = NORMAL");
     if (ret >= 0)
-        ret = migrate(db);
+        ret = check_identity(db, &version);
+    if (ret >= 0)
+        ret = set_wal(db);
+    if (ret >= 0)
+        ret = rx_db_exec(db, "PRAGMA synchronous = NORMAL");
+    if (ret >= 0)
+        ret = migrate(db, version);
     if (ret < 0)
         goto fail;
 

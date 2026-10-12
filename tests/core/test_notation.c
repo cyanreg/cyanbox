@@ -71,6 +71,15 @@ static void test_positions(void)
     CHECK(!rx_format_grid_position(&none, 1.0, buf, sizeof(buf)) && !buf[0]);
     CHECK(!rx_format_grid_position(&g, NAN, buf, sizeof(buf)));
     rx_grid_free(&g);
+
+    /* A beat index past any track (a damaged row): no bar arithmetic
+     * overflowing into a made-up bar, just the number. (Starting at 100 s,
+     * the index of the beat at 0 is -200.) */
+    rx_grid_init(&g, 100.0, 120.0);
+    CHECK(rx_format_grid_position(&g, 2e300, buf, sizeof(buf)) && rx_str_starts(buf, "beat "));
+    CHECK(rx_format_grid_position(&g, -1e20, buf, sizeof(buf)) && rx_str_starts(buf, "beat -"));
+    CHECK_STR(rx_format_grid_position(&g, 4.0, buf, sizeof(buf)), "bar 2");
+    rx_grid_free(&g);
 }
 
 /* format then parse gives the beat back, on grids with tempo changes and

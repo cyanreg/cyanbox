@@ -166,10 +166,36 @@ static void test_meta(void)
     rx_track_free(t);
 }
 
+/* A loop on the pickup stays a loop when a grid edit carries it before 0
+ * (loop_end < 0 means "no loop": a save then would drop it for good), and
+ * comes back where it was when the edit is undone. Beat indices count
+ * from the first downbeat after 0, so only cues before it can go there. */
+static void test_loop_before_zero(void)
+{
+    RxTrack *t = rx_track_new("/music/z.flac");
+    rx_grid_init(&t->grid, 0.5, 120.0);
+    RxCue c = cue(0.0, -1);                 /* the pickup beat, half a beat long */
+    c.loop_end = 0.25;
+    rx_cue_attach_to_grid(&c, &t->grid);
+    CHECK(c.grid_beat == -1.0 && c.loop_beats == 0.5);
+    rx_track_add_cue(t, &c);
+
+    rx_grid_shift(&t->grid, -0.4);
+    rx_track_resolve_cues(t);
+    CHECK(fabs(t->cues[0].time + 0.4) < 1e-12);
+    CHECK(rx_cue_is_loop(&t->cues[0]) && t->cues[0].loop_beats == 0.5);
+
+    rx_grid_shift(&t->grid, 0.4);
+    rx_track_resolve_cues(t);
+    CHECK(fabs(t->cues[0].time) < 1e-12 && fabs(t->cues[0].loop_end - 0.25) < 1e-12);
+    rx_track_free(t);
+}
+
 int main(void)
 {
     test_cue_list();
     test_musical();
     test_meta();
+    test_loop_before_zero();
     return test_done("core_cues");
 }

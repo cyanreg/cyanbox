@@ -97,8 +97,12 @@ char *rx_db_column_text(sqlite3_stmt *st, int col, int *err);
 
 /* Transactions. The outermost is BEGIN IMMEDIATE ... COMMIT; inner ones
  * are savepoints, so a failing step inside a batch undoes only itself.
- * rx_db_commit rolls back on failure. */
+ * rx_db_commit rolls back on failure. rx_db_begin_read starts the
+ * outermost one as a plain BEGIN: one snapshot for several queries
+ * without holding the write lock (writes inside it may then fail with
+ * -EBUSY when another connection committed since it began). */
 int  rx_db_begin(RxDb *db);
+int  rx_db_begin_read(RxDb *db);
 int  rx_db_commit(RxDb *db);
 void rx_db_rollback(RxDb *db);
 

@@ -4,10 +4,16 @@
  *
  * A grid is a list of constant-tempo sections. Section i has its beats at
  * start + k * 60/bpm for k = 0 .. n-1, where n counts the beats before the
- * next section's start exactly as dj's Grid.beats() does
- * (ceil((end - start) / period - 1e-9)); the first section also has every
- * k < 0, back to the start of the track and beyond, and the last section
- * has every k >= 0. Every beat time anywhere in this file is computed as
+ * next section's start as dj's Grid.beats() does
+ * (ceil((end - start) / period - 1e-9)), less the last one when it is
+ * within half a period of that start: rbxport's SAME_HIT
+ * (crates/rbl-analysis/src/tempo.rs), measured on rekordbox's hand grids,
+ * which keep an old-tempo beat three fifths of a period before a change
+ * and drop one a two-hundredth before it. Such a beat and the next
+ * section's first are the same hit, and it is the new tempo's (dj kept
+ * both, two beats a few ms apart on the stick). The first section also
+ * has every k < 0, back to the start of the track and beyond, and the last
+ * section has every k >= 0. Every beat time anywhere in this file is computed as
  * `start + (double)k * period` and nothing else, so the beat list, the
  * nearest beat, quantize and an integer beat index all agree to the bit.
  *
@@ -26,10 +32,10 @@
  * The two agree whenever sections begin on bar lines.
  *
  * Between the last beat of a section and the next section's start (a gap
- * shorter than a beat) the fractional beat index is interpolated linearly,
- * as dj's beat_time() did. Every query walks the sections from the first:
- * there are rarely more than a handful, and the walk keeps the struct plain
- * data with no cache to invalidate. */
+ * shorter than a beat and a half) the fractional beat index is interpolated
+ * linearly, as dj's beat_time() did. Every query walks the sections from
+ * the first: there are rarely more than a handful, and the walk keeps the
+ * struct plain data with no cache to invalidate. */
 
 #include "rxbox/model.h"
 
@@ -61,6 +67,18 @@ static int64_t clamp_k(double x)
     if (x > (double)K_LIMIT)
         return K_LIMIT;
     return (int64_t)x;
+}
+
+/* Tempos a grid may have. Below and above them is no music (the players'
+ * tempo field holds at most 655.35 BPM), only damaged data, on which the
+ * beat list of one track would run to billions of entries and the walks
+ * would lose every bit of precision; such a grid is not valid. */
+#define BPM_MIN 1.0
+#define BPM_MAX 1000.0
+
+static bool bpm_ok(double bpm)
+{
+    return bpm >= BPM_MIN && bpm <= BPM_MAX;
 }
 
 static int bpb_of(const RxGrid *g)
@@ -144,6 +162,9 @@ static void set_extent(const RxGrid *g, Sec *s)
     if (n < 0)
         n = 0;
     while (n > 0 && beat_time(s, n - 1) >= s->end)
+        n--;
+    /* SAME_HIT (above) */
+    if (n > 0 && s->end - beat_time(s, n - 1) < 0.5 * s->period)
         n--;
     s->n = n;
 }
@@ -365,7 +386,7 @@ static int64_t bar_beat_index(const RxGrid *g, const Ref *r, int64_t bar, int64_
 int rx_grid_init(RxGrid *g, double start, double bpm)
 {
     *g = (RxGrid) { .beats_per_bar = 4 };
-    if (!isfinite(start) || !isfinite(bpm) || bpm <= 0)
+    if (!isfinite(start) || !bpm_ok(bpm))
         return RX_ERROR(EINVAL);
     g->sections = malloc(sizeof(*g->sections));
     if (!g->sections)
@@ -415,7 +436,7 @@ bool rx_grid_valid(const RxGrid *g)
         return false;
     for (int i = 0; i < g->nb_sections; i++) {
         const RxTempoSection *s = &g->sections[i];
-        if (!isfinite(s->start) || !isfinite(s->bpm) || s->bpm <= 0)
+        if (!isfinite(s->start) || !bpm_ok(s->bpm))
             return false;
         if (i > 0 && !(s->start > g->sections[i - 1].start))
             return false;
@@ -450,7 +471,7 @@ double rx_grid_bpm_at(const RxGrid *g, double t)
 int rx_grid_add_section(RxGrid *g, double start, double bpm, int beat)
 {
     int bpb = bpb_of(g);
-    if (!isfinite(start) || !isfinite(bpm) || bpm <= 0 || beat < 0 || beat > bpb)
+    if (!isfinite(start) || !bpm_ok(bpm) || beat < 0 || beat > bpb)
         return RX_ERROR(EINVAL);
 
     RxTempoSection sec = {
@@ -502,7 +523,8 @@ int rx_grid_beats(const RxGrid *g, double duration, RxBeat **beats, int *nb)
     if (!rx_grid_valid(g) || !(duration > 0))
         return 0;
 
-    /* Two passes: count, then fill. */
+    /* Two passes: count, section by section (so a duration no file has is
+     * refused at once), then fill. */
     RxBeat *out = NULL;
     int64_t total = 0;
     for (int pass = 0; pass < 2; pass++) {
@@ -516,16 +538,17 @@ int rx_grid_beats(const RxGrid *g, double duration, RxBeat **beats, int *nb)
             if (s.index > 0 && lo < 0)
                 lo = 0;
             int64_t hi = RX_MIN(s.n, ceil_k(&s, duration));
+            if (pass == 0) {
+                i += RX_MAX(hi - lo, (int64_t)0);
+                continue;
+            }
             for (int64_t k = lo; k < hi; k++) {
-                if (pass == 1) {
-                    Beat b = beat_at(&s, k);
-                    out[i] = (RxBeat) {
-                        .time   = b.time,
-                        .number = b.number,
-                        .bpm    = g->sections[s.index].bpm,
-                    };
-                }
-                i++;
+                Beat b = beat_at(&s, k);
+                out[i++] = (RxBeat) {
+                    .time   = b.time,
+                    .number = b.number,
+                    .bpm    = g->sections[s.index].bpm,
+                };
             }
         } while (walk_next(g, &s));
 
@@ -548,7 +571,9 @@ int rx_grid_beats(const RxGrid *g, double duration, RxBeat **beats, int *nb)
 
 double rx_grid_nearest_beat(const RxGrid *g, double t, int *number)
 {
-    if (!rx_grid_valid(g)) {
+    /* Not a time on the timeline (NaN, an infinity): given back as it is;
+     * the walks would clamp it to some beat 2^50 periods away. */
+    if (!rx_grid_valid(g) || !isfinite(t)) {
         if (number)
             *number = 0;
         return t;
@@ -571,7 +596,7 @@ double rx_grid_quantize(const RxGrid *g, double t)
 
 double rx_grid_beat_before(const RxGrid *g, double t)
 {
-    if (!rx_grid_valid(g))
+    if (!rx_grid_valid(g) || !isfinite(t))
         return t;
     Beat before;
     locate(g, t + AT_TOLERANCE, &before, NULL);
@@ -580,7 +605,7 @@ double rx_grid_beat_before(const RxGrid *g, double t)
 
 double rx_grid_beat_after(const RxGrid *g, double t)
 {
-    if (!rx_grid_valid(g))
+    if (!rx_grid_valid(g) || !isfinite(t))
         return t;
     Beat before, after;
     locate(g, t + AT_TOLERANCE, &before, &after);
@@ -620,7 +645,7 @@ double rx_grid_bar_time(const RxGrid *g, int bar, int beat)
 
 void rx_grid_bar_of(const RxGrid *g, double t, int *bar, int *beat)
 {
-    if (!rx_grid_valid(g)) {
+    if (!rx_grid_valid(g) || !isfinite(t)) {
         *bar = 0;
         *beat = 0;
         return;
@@ -645,7 +670,7 @@ void rx_grid_shift(RxGrid *g, double delta)
 void rx_grid_set_bpm_at(RxGrid *g, double t, double bpm)
 {
     int i = rx_grid_section_at(g, t);
-    if (i < 0 || !isfinite(bpm) || bpm <= 0)
+    if (i < 0 || isnan(t) || !bpm_ok(bpm))
         return;
     g->sections[i].bpm = bpm;
 }
@@ -663,7 +688,7 @@ static Beat nearest(const RxGrid *g, double t, Sec *s, int64_t *k)
 
 void rx_grid_set_downbeat(RxGrid *g, double t)
 {
-    if (!rx_grid_valid(g))
+    if (!rx_grid_valid(g) || !isfinite(t))
         return;
     Sec s;
     int64_t k;
@@ -682,7 +707,7 @@ void rx_grid_set_downbeat(RxGrid *g, double t)
 
 int rx_grid_split_at(RxGrid *g, double t)
 {
-    if (!rx_grid_valid(g))
+    if (!rx_grid_valid(g) || !isfinite(t))
         return RX_ERROR(EINVAL);
     Sec s;
     int64_t k;
@@ -700,6 +725,8 @@ int rx_grid_merge_at(RxGrid *g, double t)
 {
     if (!g || g->nb_sections < 2)
         return RX_ERROR(ENOENT);
+    if (isnan(t))
+        return RX_ERROR(EINVAL);
     int best = 1;
     for (int i = 2; i < g->nb_sections; i++) {
         if (fabs(g->sections[i].start - t) < fabs(g->sections[best].start - t))

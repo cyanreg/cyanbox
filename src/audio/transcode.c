@@ -74,6 +74,7 @@ static int copy_tags(AVDictionary **dst, const AVFormatContext *in, const AVStre
 
 int rx_transcode_flac(const char *path, const char *out_path, int max_rate)
 {
+    rx_audio_init_logging();
     AVFormatContext *in;
     int ret = rx_audio_open(path, &in, true);
     if (ret < 0)

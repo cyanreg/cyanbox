@@ -22,6 +22,14 @@
 
 #include "rxbox/common.h"
 
+/* Routes libav's own log lines through rx_log, once per process (thread
+ * safe, every call after the first does nothing): warnings and errors at
+ * RX_LOG_WARN, notes at RX_LOG_DEBUG, as "libav: <what said it>: <line>";
+ * av_log_set_level() still filters first. rx_probe, rx_decode and the
+ * other entry points here call it; call it directly before using libav
+ * elsewhere. */
+void rx_audio_init_logging(void);
+
 typedef struct RxTag { char *key; char *value; } RxTag;   /* key lower-cased */
 
 typedef struct RxMp3Info {
@@ -62,7 +70,9 @@ typedef struct RxProbe {
     int64_t  total_samples;     /* players' timeline, at sample_rate */
     int      sample_rate, channels, bit_rate, bit_depth;   /* bit_depth 0 for lossy */
     RxTag   *tags; int nb_tags;
-    bool     has_artwork;       /* an attached picture stream */
+    bool     has_artwork;       /* an attached picture stream, or else a cover file beside it
+                                 * (rx_artwork_find_file): a cover rx_artwork_rgba finds unless
+                                 * the picture does not decode; looked for at probe time */
     RxMp3Info  mp3;             /* valid for MP3 only */
     RxFlacInfo flac;            /* valid for FLAC only */
 } RxProbe;

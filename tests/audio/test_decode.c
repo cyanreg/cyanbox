@@ -13,6 +13,9 @@
 
 #include <inttypes.h>
 #include <math.h>
+#include <unistd.h>
+
+#include <libavutil/log.h>
 
 #include "util.h"
 
@@ -73,6 +76,60 @@ static void write_bytes(const char *path, const uint8_t *d, size_t n)
     if (!f || fwrite(d, 1, n, f) != n)
         exit(1);
     fclose(f);
+}
+
+/* Lines a log sink was given */
+typedef struct LogCatch {
+    int n;
+    enum RxLogLevel level[4];
+    char line[4][256];
+} LogCatch;
+
+static void catch_line(void *opaque, enum RxLogLevel level, const char *line)
+{
+    LogCatch *c = opaque;
+    if (c->n < 4) {
+        c->level[c->n] = level;
+        snprintf(c->line[c->n], sizeof(c->line[0]), "%s", line);
+    }
+    c->n++;
+}
+
+/* libav's own lines ("timescale not set") go through rxbox's log and not
+ * to stderr, with the name of what said them: warnings and errors as
+ * warnings, notes at debug. The level libav is set to still filters
+ * first (the tests quiet it that way). */
+static void test_logging(void)
+{
+    rx_audio_init_logging();
+    LogCatch lc = { 0 };
+    enum RxLogLevel was = rx_log_level();
+    int av_was = av_log_get_level();
+    rx_log_set_level(RX_LOG_DEBUG);
+    av_log_set_level(AV_LOG_INFO);
+    rx_log_set_sink(catch_line, &lc);
+
+    static const AVClass cls = {
+        .class_name = "testdemux",
+        .item_name  = av_default_item_name,
+        .version    = LIBAVUTIL_VERSION_INT,
+    };
+    const AVClass *ctx = &cls;
+    av_log(&ctx, AV_LOG_WARNING, "timescale not set\n");
+    av_log(&ctx, AV_LOG_INFO, "a note %d\n", 7);
+    av_log(&ctx, AV_LOG_VERBOSE, "chatter\n");
+    av_log_set_level(AV_LOG_QUIET);
+    av_log(&ctx, AV_LOG_ERROR, "silenced\n");
+
+    rx_log_set_sink(NULL, NULL);
+    rx_log_set_level(was);
+    av_log_set_level(av_was);
+    CHECK(lc.n == 2, "%d lines from libav", lc.n);
+    CHECK(lc.n >= 1 && lc.level[0] == RX_LOG_WARN && strstr(lc.line[0], "testdemux") &&
+          strstr(lc.line[0], "timescale not set") && !strchr(lc.line[0], '\n'),
+          "warning line: %d '%s'", lc.level[0], lc.line[0]);
+    CHECK(lc.n >= 2 && lc.level[1] == RX_LOG_DEBUG && strstr(lc.line[1], "testdemux") &&
+          strstr(lc.line[1], "a note 7"), "note line: %d '%s'", lc.level[1], lc.line[1]);
 }
 
 static void test_mp3(const char *dir, const char *wav)
@@ -357,6 +414,31 @@ int main(void)
     CHECK(rx_decode(weird, 1, 0, &aw) >= 0 && aw.nb_frames == n, "decode weird name");
     rx_audio_free(&aw);
 
+    /* A WAV cut off mid-frame (an interrupted copy): every whole sample
+     * frame decodes, exactly, and nothing more. The last packet decodes but
+     * for its stray bytes, which libavcodec then reports as an error: that
+     * is not a packet lost, and its length must not come again as silence.
+     * The probe says the same length. */
+    {
+        char *cut = test_path(dir, "cut.wav");
+        const int64_t keep = 30000;
+        CHECK(write_wav(cut, SIG_RATE, 2, pcm, n) >= 0 && !truncate(cut, 44 + keep * 4 + 3),
+              "write cut wav");
+        RxProbe pc;
+        RxAudio ac;
+        CHECK(rx_probe(cut, &pc) >= 0 && rx_decode(cut, 0, 0, &ac) >= 0, "cut wav");
+        CHECK(ac.nb_frames == keep && pc.total_samples == keep,
+              "cut wav: decoded %" PRId64 ", probe %" PRId64 ", want %" PRId64, ac.nb_frames,
+              pc.total_samples, keep);
+        bool exact = ac.nb_frames >= keep;
+        for (int64_t i = 0; exact && i < keep * 2; i++)
+            exact = ac.samples[i] == s16f(pcm[i]);
+        CHECK(exact, "cut wav: samples differ");
+        rx_audio_free(&ac);
+        rx_probe_free(&pc);
+        free(cut);
+    }
+
     /* Errors */
     char *missing = test_path(dir, "missing.flac");
     CHECK(rx_probe(missing, &p) == -ENOENT, "missing file");
@@ -442,6 +524,8 @@ int main(void)
             free(file);
         }
     }
+
+    test_logging();
 
     /* Ten minutes at 96 kHz: the buffer grows without trouble */
     {

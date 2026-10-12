@@ -8,6 +8,7 @@
 
 #include "rxbox/library.h"
 
+#include <pthread.h>
 #include <unistd.h>
 
 #include <sqlite3.h>
@@ -360,6 +361,17 @@ static void test_missing_relocate_remove(void)
     CHECK(rx_library_relocate(&lib, c, c_new) == 0);
     CHECK(!c->missing && !strcmp(c->path, c_new));
     CHECK(rx_library_relocate(&lib, c, rx_library_find_id(&lib, 1)->path) == RX_ERROR(EEXIST));
+    /* The same file under another spelling is still that track's file:
+     * two tracks must never share one. */
+    char *a_other = path_in(music, "sub/../a.wav");
+    CHECK(rx_library_relocate(&lib, c, a_other) == RX_ERROR(EEXIST));
+    CHECK(!strcmp(c->path, c_new));
+    char *a_link = path_in(music, "sub/link to a.wav");
+    CHECK(symlink(rx_library_find_id(&lib, 1)->path, a_link) == 0);
+    CHECK(rx_library_relocate(&lib, c, a_link) == RX_ERROR(EEXIST));
+    unlink(a_link);
+    free(a_link);
+    free(a_other);
     rx_library_close(&lib);
     CHECK(rx_library_open(&lib, root) == 0);
     c = rx_library_find_id(&lib, 3);
@@ -440,6 +452,13 @@ static void test_refusals(void)
     sqlite3_exec(s, "PRAGMA application_id = 0", NULL, NULL, NULL);
     sqlite3_close(s);
     CHECK(rx_library_open(&lib, dir) == RX_ERROR(EINVAL));
+    /* Refused before anything is written: still in its own journal mode. */
+    sqlite3_open(db, &s);
+    sqlite3_stmt *st;
+    sqlite3_prepare_v2(s, "PRAGMA journal_mode", -1, &st, NULL);
+    CHECK(sqlite3_step(st) == SQLITE_ROW && !strcmp((const char *)sqlite3_column_text(st, 0), "delete"));
+    sqlite3_finalize(st);
+    sqlite3_close(s);
     free(db);
     test_rm_rf(dir);
     free(dir);
@@ -456,6 +475,245 @@ static void test_refusals(void)
     free(r);
 }
 
+/* SQLite rolls a whole transaction back by itself on some errors (a write
+ * interrupted before its statement journal opened, SQLITE_FULL or
+ * SQLITE_IOERR without one). A batch that loses its transaction that way
+ * must not go on writing in autocommit mode: every file of it is reported
+ * failed, so none of them may be in the database afterwards either. The
+ * statement after the second track row is interrupted as it starts. */
+typedef struct Interrupt {
+    int inserts;
+    bool armed;
+    int fired;
+} Interrupt;
+
+static void count_inserts(void *opaque, int op, const char *db, const char *table, sqlite3_int64 rowid)
+{
+    Interrupt *in = opaque;
+    if (op == SQLITE_INSERT && !strcmp(table, "track"))
+        in->inserts++;
+}
+
+static int arm_at_statement(unsigned type, void *opaque, void *stmt, void *sql)
+{
+    Interrupt *in = opaque;
+    if (in->inserts == 2 && !in->fired)
+        in->armed = true;
+    return 0;
+}
+
+static int interrupt_once(void *opaque)
+{
+    Interrupt *in = opaque;
+    if (!in->armed)
+        return 0;
+    in->armed = false;
+    in->fired++;
+    return 1;
+}
+
+static int track_rows(const RxLibrary *lib)
+{
+    sqlite3_stmt *st;
+    int n = -1;
+    if (sqlite3_prepare_v2(lib->db->db, "SELECT count(*) FROM track", -1, &st, NULL) == SQLITE_OK) {
+        if (sqlite3_step(st) == SQLITE_ROW)
+            n = sqlite3_column_int(st, 0);
+        sqlite3_finalize(st);
+    }
+    return n;
+}
+
+static void test_lost_transaction(void)
+{
+    char *dir = test_dir("library-lost");
+    char *files = path_in(dir, "music"), *lroot = path_in(dir, "lib");
+    static const char *const names[] = { "a.wav", "b.wav", "c.wav", "d.wav" };
+    for (size_t i = 0; i < RX_ARRAY_ELEMS(names); i++) {
+        char *p = path_in(files, names[i]);
+        test_write_wav(p, 0.1, 44100, 1, NULL, NULL, NULL);
+        free(p);
+    }
+
+    RxLibrary lib;
+    CHECK(rx_library_open(&lib, lroot) == 0);
+    Interrupt in = { 0 };
+    sqlite3_update_hook(lib.db->db, count_inserts, &in);
+    sqlite3_trace_v2(lib.db->db, SQLITE_TRACE_STMT, arm_at_statement, &in);
+    sqlite3_progress_handler(lib.db->db, 1, interrupt_once, &in);
+    AddLog log = { 0 };
+    int n = rx_library_add_path(&lib, files, add_cb, &log);
+    sqlite3_progress_handler(lib.db->db, 0, NULL, NULL);
+    sqlite3_trace_v2(lib.db->db, 0, NULL, NULL);
+    sqlite3_update_hook(lib.db->db, NULL, NULL);
+    CHECK(in.fired == 1);
+    CHECK(n < 0 && lib.nb_tracks == 0 && log.failed == 4 && !log.reported);
+    CHECK(track_rows(&lib) == 0);
+    CHECK(lib.db->depth == 0);
+
+    /* And the library works on: the same files go in normally. */
+    log = (AddLog) { 0 };
+    CHECK(rx_library_add_path(&lib, files, add_cb, &log) == 4 && lib.nb_tracks == 4);
+    CHECK(track_rows(&lib) == 4 && log.reported == 4);
+    rx_library_close(&lib);
+    CHECK(rx_library_open(&lib, lroot) == 0 && lib.nb_tracks == 4);
+    rx_library_close(&lib);
+
+    test_rm_rf(dir);
+    free(files);
+    free(lroot);
+    free(dir);
+}
+
+/* A Linux path is bytes, not necessarily UTF-8: such a file goes in, comes
+ * back from the database byte for byte, and is found by its path. */
+static void test_byte_paths(void)
+{
+    char *dir = test_dir("library-bytes");
+    char *files = path_in(dir, "m\xe4sic"), *lroot = path_in(dir, "lib");
+    char *p = path_in(files, "\xff\xfe caf\xe9 \x80.wav");
+    test_write_wav(p, 0.1, 44100, 1, NULL, NULL, NULL);
+
+    RxLibrary lib;
+    CHECK(rx_library_open(&lib, lroot) == 0);
+    int err;
+    RxTrack *t = rx_library_add_file(&lib, p, &err);
+    CHECK(t && !strcmp(t->path, p) && !strcmp(t->meta.title, "\xff\xfe caf\xe9 \x80"));
+    rx_library_close(&lib);
+    CHECK(rx_library_open(&lib, lroot) == 0 && lib.nb_tracks == 1);
+    t = rx_library_find_path(&lib, p);
+    CHECK(t && !t->missing && !strcmp(t->meta.title, "\xff\xfe caf\xe9 \x80"));
+    CHECK(rx_library_add_file(&lib, p, &err) == t && lib.nb_tracks == 1);
+    CHECK(rx_library_check(&lib) == 0);
+    rx_library_close(&lib);
+
+    test_rm_rf(dir);
+    free(p);
+    free(files);
+    free(lroot);
+    free(dir);
+}
+
+/* The export job opens the library on a connection of its own while the
+ * interface's goes on committing edits. What the job loads must be one
+ * moment of the database: here the interface adds a track to a playlist
+ * just as the job starts reading the playlists, after it read the tracks.
+ * (An auto extension hooks the job's connection as it is opened.) */
+typedef struct Meddle {
+    RxLibrary *ui;
+    const char *path;
+    bool done;
+} Meddle;
+
+static Meddle meddle;
+
+static int meddle_at_playlists(unsigned type, void *opaque, void *stmt, void *sql)
+{
+    const char *text = sqlite3_sql(stmt);
+    if (meddle.done || !text || !rx_str_starts(text, "SELECT id, parent_id"))
+        return 0;
+    meddle.done = true;
+    int err;
+    RxTrack *t = rx_library_add_file(meddle.ui, meddle.path, &err);
+    RxPlaylist *p = rx_library_playlist_find(meddle.ui, "Set");
+    if (t && p)
+        rx_library_playlist_add(meddle.ui, p, t, -1);
+    return 0;
+}
+
+static int hook_connection(sqlite3 *db, const char **err, const struct sqlite3_api_routines *api)
+{
+    sqlite3_trace_v2(db, SQLITE_TRACE_STMT, meddle_at_playlists, NULL);
+    return SQLITE_OK;
+}
+
+static void test_open_snapshot(void)
+{
+    char *dir = test_dir("library-snapshot");
+    char *files = path_in(dir, "music"), *lroot = path_in(dir, "lib");
+    char *a = path_in(files, "a.wav"), *b = path_in(files, "b.wav");
+    test_write_wav(a, 0.1, 44100, 1, NULL, NULL, NULL);
+    test_write_wav(b, 0.1, 44100, 1, NULL, NULL, NULL);
+
+    RxLibrary ui, job;
+    CHECK(rx_library_open(&ui, lroot) == 0);
+    int err;
+    RxTrack *t = rx_library_add_file(&ui, a, &err);
+    RxPlaylist *p = rx_library_playlist_create(&ui, NULL, "Set");
+    CHECK(t && p && rx_library_playlist_add(&ui, p, t, -1) == 0);
+
+    meddle = (Meddle) { .ui = &ui, .path = b };
+    sqlite3_auto_extension((void (*)(void))hook_connection);
+    CHECK(rx_library_open(&job, lroot) == 0);
+    sqlite3_cancel_auto_extension((void (*)(void))hook_connection);
+    CHECK(meddle.done && ui.nb_tracks == 2 && p->nb == 2);
+
+    RxPlaylist *jp = rx_library_playlist_find(&job, "Set");
+    CHECK(jp != NULL);
+    for (int i = 0; jp && i < jp->nb; i++) {
+        if (!rx_library_find_id(&job, jp->track_ids[i])) {
+            fprintf(stderr, "the job's playlist holds track %llu, its track list does not\n",
+                    (unsigned long long)jp->track_ids[i]);
+            test_failures++;
+        }
+    }
+    rx_library_close(&job);
+    rx_library_close(&ui);
+
+    test_rm_rf(dir);
+    free(a);
+    free(b);
+    free(files);
+    free(lroot);
+    free(dir);
+}
+
+/* Two processes starting on a new library at once (the CLI and the
+ * interface): whichever creates the schema, the other opens it. */
+typedef struct Opener {
+    const char *root;
+    pthread_barrier_t *go;
+    int ret;
+} Opener;
+
+static void *open_thread(void *arg)
+{
+    Opener *o = arg;
+    RxLibrary lib;
+    pthread_barrier_wait(o->go);
+    o->ret = rx_library_open(&lib, o->root);
+    if (o->ret >= 0)
+        rx_library_close(&lib);
+    return NULL;
+}
+
+static void test_concurrent_create(void)
+{
+    char *dir = test_dir("library-race");
+    for (int round = 0; round < 8; round++) {
+        char *lroot = rx_asprintf("%s/lib%d", dir, round);
+        enum { N = 6 };
+        pthread_barrier_t go;
+        pthread_barrier_init(&go, NULL, N);
+        pthread_t th[N];
+        Opener o[N];
+        for (int i = 0; i < N; i++) {
+            o[i] = (Opener) { .root = lroot, .go = &go };
+            pthread_create(&th[i], NULL, open_thread, &o[i]);
+        }
+        int failed = 0;
+        for (int i = 0; i < N; i++) {
+            pthread_join(th[i], NULL);
+            failed += o[i].ret < 0;
+        }
+        pthread_barrier_destroy(&go);
+        CHECK(!failed);
+        free(lroot);
+    }
+    test_rm_rf(dir);
+    free(dir);
+}
+
 int main(void)
 {
     char *dir = test_dir("library");
@@ -470,6 +728,10 @@ int main(void)
     test_refresh();
     test_missing_relocate_remove();
     test_refusals();
+    test_lost_transaction();
+    test_byte_paths();
+    test_open_snapshot();
+    test_concurrent_create();
 
     if (!test_failures)
         test_rm_rf(dir);

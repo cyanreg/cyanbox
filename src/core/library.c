@@ -511,8 +511,8 @@ static int load_tracks(RxLibrary *lib)
     for (int i = 0; ret >= 0 && i < lib->nb_tracks; i++) {
         RxTrack *t = lib->tracks[i];
         if (t->grid.nb_sections && !rx_grid_valid(&t->grid))
-            rx_warn("track %llu (%s): its grid sections are out of order; check the grid",
-                    (unsigned long long)t->id, t->path);
+            rx_warn("track %llu (%s): its grid is not valid (sections out of order or a "
+                    "tempo out of range); check the grid", (unsigned long long)t->id, t->path);
     }
     return ret;
 }
@@ -548,11 +548,23 @@ int rx_library_open(RxLibrary *lib, const char *root)
     if (ret < 0)
         goto fail;
 
+    /* Everything is read in one transaction, so from one snapshot: the
+     * export job opens the library on its own connection while the
+     * interface's may be committing, and tracks and playlists read a moment
+     * apart would not agree (an entry whose track is not in the list). The
+     * missing flags are written after it, in a transaction of their own. */
+    ret = rx_db_begin_read(lib->db);
+    if (ret < 0)
+        goto fail;
     ret = rx_core_config_load(lib);
     if (ret >= 0)
         ret = load_tracks(lib);
     if (ret >= 0)
         ret = rx_core_playlists_load(lib);
+    if (ret >= 0)
+        ret = rx_db_commit(lib->db);
+    else
+        rx_db_rollback(lib->db);
     if (ret >= 0)
         ret = rx_library_rescan_missing(lib);
     if (ret < 0)
@@ -1203,12 +1215,18 @@ int rx_library_relocate(RxLibrary *lib, RxTrack *t, const char *new_abs_path)
 {
     if (rx_library_index_of(lib, t) < 0 || !new_abs_path || new_abs_path[0] != '/')
         return RX_ERROR(EINVAL);
-    RxTrack *other = rx_library_find_path(lib, new_abs_path);
-    if (other && other != t)
-        return RX_ERROR(EEXIST);
-    char *path = rx_strdup(new_abs_path);
+    /* Spelled as adding the file would spell it (symlinks and "..", resolved),
+     * so the same file is never two tracks: one added under its own path
+     * and one moved there by another name. */
+    char *path = rx_file_exists(new_abs_path) ? rx_path_abs(new_abs_path)
+                                              : rx_strdup(new_abs_path);
     if (!path)
         return RX_ERROR(ENOMEM);
+    RxTrack *other = rx_library_find_path(lib, path);
+    if (other && other != t) {
+        free(path);
+        return RX_ERROR(EEXIST);
+    }
 
     bool missing = !rx_file_exists(path);
     sqlite3_stmt *st = rx_db_stmt(lib->db, RX_STMT_TRACK_PATH);

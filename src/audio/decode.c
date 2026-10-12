@@ -468,7 +468,10 @@ fail:
 }
 
 /* Sends one packet (NULL to flush) and takes every frame it gives. A packet
- * that does not decode becomes `silence` frames of silence. */
+ * that does not decode becomes `silence` frames of silence, less what it
+ * did give: a decoder can return the good part of a packet and then fail
+ * on the rest (a PCM packet cut mid-frame at the end of a truncated WAV),
+ * and only what is missing is silence. */
 static int decode_packet(AVCodecContext *dec, Sink *s, AVFrame *frame, const AVPacket *pkt,
                          int64_t silence)
 {
@@ -481,6 +484,7 @@ static int decode_packet(AVCodecContext *dec, Sink *s, AVFrame *frame, const AVP
         return sink_silence(s, silence);
     }
 
+    int64_t got = 0;
     while (1) {
         ret = avcodec_receive_frame(dec, frame);
         if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
@@ -488,10 +492,12 @@ static int decode_packet(AVCodecContext *dec, Sink *s, AVFrame *frame, const AVP
         if (ret < 0) {
             if (ret == AVERROR(ENOMEM))
                 return RX_ERROR(ENOMEM);
+            int64_t missing = RX_MAX(silence - got, (int64_t)0);
             rx_debug("%s: damaged frame (%s), %" PRId64 " samples of silence", s->path,
-                     av_err2str(ret), silence);
-            return pkt ? sink_silence(s, silence) : 0;
+                     av_err2str(ret), missing);
+            return pkt ? sink_silence(s, missing) : 0;
         }
+        got += frame->nb_samples;
         ret = sink_frame(s, frame);
         av_frame_unref(frame);
         if (ret < 0)
@@ -675,6 +681,7 @@ end:
 
 int rx_decode(const char *path, int channels, int rate, RxAudio *out)
 {
+    rx_audio_init_logging();
     *out = (RxAudio) { 0 };
     if (channels < 0 || channels > 2 || rate < 0)
         return RX_ERROR(EINVAL);
@@ -724,6 +731,7 @@ int rx_audio_to_mono(const RxAudio *in, RxAudio *out)
 
 int rx_audio_resample(const RxAudio *in, int rate, RxAudio *out)
 {
+    rx_audio_init_logging();
     *out = (RxAudio) { 0 };
     if (in->channels <= 0 || in->rate <= 0 || rate <= 0 || in->nb_frames < 0)
         return RX_ERROR(EINVAL);

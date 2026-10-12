@@ -227,6 +227,7 @@ static enum AVCodecID sniff(const uint8_t *d, size_t n)
 
 int rx_image_decode(const uint8_t *data, size_t size, uint8_t **rgba, int *width, int *height)
 {
+    rx_audio_init_logging();
     *rgba = NULL;
     *width = *height = 0;
 
@@ -601,14 +602,21 @@ static int take_bytes(Take *t, const char *file)
     return 0;
 }
 
+/* The same test as take_bytes on the first bytes only: rx_probe asks this
+ * for every track it probes, and a cover can be megabytes. */
 static int take_path(void *opaque, const char *file)
 {
     Take *t = opaque;
-    int ret = take_bytes(t, file);
-    if (ret < 0)
-        return ret;
-    free(t->data);
-    t->data = NULL;
+    uint8_t head[16];
+    FILE *f = fopen(file, "rbe");
+    if (!f)
+        return RX_ERROR(ENOENT);
+    size_t n = fread(head, 1, sizeof(head), f);
+    fclose(f);
+    if (sniff(head, n) == AV_CODEC_ID_NONE) {
+        rx_debug("%s: not an image", file);
+        return RX_ERROR(ENOENT);
+    }
     t->path = rx_strdup(file);
     return t->path ? 0 : RX_ERROR(ENOMEM);
 }
@@ -696,6 +704,7 @@ int rx_artwork_rgba(const char *path, uint8_t **rgba, int *width, int *height)
 int rx_image_scale(const uint8_t *rgba, int width, int height, int max_w, int max_h,
                    uint8_t **out, int *out_w, int *out_h)
 {
+    rx_audio_init_logging();
     *out = NULL;
     *out_w = *out_h = 0;
     if (width <= 0 || height <= 0 || max_w <= 0 || max_h <= 0)
@@ -789,6 +798,7 @@ end:
 int rx_image_jpeg_square(const uint8_t *rgba, int width, int height, int size, int quality,
                          uint8_t **jpeg, size_t *jpeg_size)
 {
+    rx_audio_init_logging();
     *jpeg = NULL;
     *jpeg_size = 0;
     if (width <= 0 || height <= 0 || size <= 0)

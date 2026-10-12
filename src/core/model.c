@@ -337,6 +337,10 @@ void rx_track_resolve_cues(RxTrack *t)
             c->loop_end = rx_grid_beat_to_time(g, c->grid_beat + c->loop_beats);
         else
             c->loop_end = rx_grid_offset_beats(g, c->time, c->loop_beats);
+        /* A grid edit can carry a loop on the pickup before 0, where a
+         * negative end would read as "not a loop" and the next save would
+         * drop it; loop_beats brings the end back with the grid. */
+        c->loop_end = fmax(c->loop_end, 0.0);
     }
 
     /* Musical and absolute cues can trade places after a grid edit:

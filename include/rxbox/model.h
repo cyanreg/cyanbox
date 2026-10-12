@@ -41,7 +41,7 @@ typedef struct RxBeat {
 int    rx_grid_init(RxGrid *g, double start, double bpm);     /* one section, beat 1 at start */
 int    rx_grid_copy(RxGrid *dst, const RxGrid *src);
 void   rx_grid_free(RxGrid *g);
-bool   rx_grid_valid(const RxGrid *g);                         /* >= 1 section, bpm > 0, sorted */
+bool   rx_grid_valid(const RxGrid *g);                         /* >= 1 section, bpm 1..1000, sorted */
 double rx_grid_bpm(const RxGrid *g);                           /* of the first section; 0 if none */
 double rx_grid_bpm_at(const RxGrid *g, double t);
 /* Adds a section at `start` (sorted in), replacing one at the same time. */

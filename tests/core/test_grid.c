@@ -299,6 +299,110 @@ static void test_exact(void)
     rx_grid_free(&g);
 }
 
+/* A tempo no music has (a damaged row, a corrupt stick) is not a grid:
+ * above it the beat list of one track runs to billions of entries and the
+ * walks lose all precision. It is refused where a tempo comes in and makes
+ * a grid invalid where one is found. */
+static void test_absurd_tempo(void)
+{
+    RxGrid g;
+    CHECK(rx_grid_init(&g, 0.0, 1e9) == RX_ERROR(EINVAL));
+    CHECK(rx_grid_init(&g, 0.0, 1e-9) == RX_ERROR(EINVAL));
+    CHECK(rx_grid_init(&g, 0.0, 0.0) == RX_ERROR(EINVAL));
+    CHECK(rx_grid_init(&g, 0.5, 999.0) == 0);
+    CHECK(rx_grid_add_section(&g, 10.0, 1e12, 0) == RX_ERROR(EINVAL) && g.nb_sections == 1);
+    rx_grid_set_bpm_at(&g, 1.0, 1e9);
+    CHECK(g.sections[0].bpm == 999.0);
+
+    g.sections[0].bpm = 1e9;                /* as a damaged row loads */
+    CHECK(!rx_grid_valid(&g));
+    RxBeat *b;
+    int nb;
+    int64_t t0 = rx_time_us();
+    CHECK(rx_grid_beats(&g, 1.0, &b, &nb) == 0 && nb == 0 && !b);
+    free(b);
+    CHECK(rx_grid_quantize(&g, 100.0) == 100.0);
+    CHECK(rx_time_us() - t0 < 1000000);
+    rx_grid_free(&g);
+
+    /* A duration no file has (a corrupt header's) is refused at once, not
+     * counted beat by beat first. */
+    rx_grid_init(&g, 0.5, 120.0);
+    t0 = rx_time_us();
+    CHECK(rx_grid_beats(&g, 2e9, &b, &nb) == RX_ERROR(ERANGE) && !nb && !b);
+    CHECK(rx_grid_beats(&g, INFINITY, &b, &nb) == RX_ERROR(ERANGE) && !nb && !b);
+    CHECK(rx_time_us() - t0 < 1000000);
+    rx_grid_free(&g);
+}
+
+/* A time that is not a number (an unset playhead, a failed computation)
+ * is not on the grid: queries give it back, edits leave the grid alone. */
+static void test_not_a_time(void)
+{
+    RxGrid g = grid(2, (const RxTempoSection[]) { { 0.5, 120.0, 1 }, { 60.5, 126.0, 0 } });
+    int num = 7, bar = 7, beat = 7;
+    CHECK(isnan(rx_grid_nearest_beat(&g, NAN, &num)) && num == 0);
+    CHECK(isnan(rx_grid_quantize(&g, NAN)));
+    CHECK(isnan(rx_grid_beat_before(&g, NAN)) && isnan(rx_grid_beat_after(&g, NAN)));
+    CHECK(rx_grid_quantize(&g, INFINITY) == INFINITY && rx_grid_quantize(&g, -INFINITY) == -INFINITY);
+    rx_grid_bar_of(&g, NAN, &bar, &beat);
+    CHECK(bar == 0 && beat == 0);
+
+    rx_grid_set_downbeat(&g, NAN);
+    rx_grid_set_bpm_at(&g, NAN, 90.0);
+    CHECK(rx_grid_split_at(&g, NAN) == RX_ERROR(EINVAL));
+    CHECK(rx_grid_merge_at(&g, NAN) == RX_ERROR(EINVAL));
+    CHECK(rx_grid_split_at(&g, INFINITY) == RX_ERROR(EINVAL));
+    CHECK(g.nb_sections == 2 && g.sections[0].start == 0.5 && g.sections[0].beat == 1);
+    CHECK(g.sections[0].bpm == 120.0 && g.sections[1].start == 60.5 && g.sections[1].bpm == 126.0);
+    rx_grid_free(&g);
+}
+
+/* rbxport's SAME_HIT: a section that starts 2 ms after a beat of the one
+ * before has its first beat on that same hit, and the hit is the new
+ * tempo's. The old beat goes from the list and from every other route to
+ * a beat, and the count goes on through the new one. (dj kept both.) */
+static void test_same_hit(void)
+{
+    RxGrid g = grid(2, (const RxTempoSection[]) { { 0.5, 120.0, 1 }, { 10.502, 125.0, 0 } });
+    RxBeat *b;
+    int nb;
+    CHECK(rx_grid_beats(&g, 12.0, &b, &nb) == 0);
+    CHECK(nb == 25);
+    int close = 0, at = -1;
+    for (int i = 0; i < nb; i++) {
+        if (i && b[i].time - b[i - 1].time < 0.25)
+            close++;
+        if (b[i].time == 10.502)
+            at = i;
+    }
+    CHECK(!close && at == 21);
+    if (at == 21) {
+        CHECK(b[at - 1].time == 10.0 && b[at - 1].number == 4 && b[at - 1].bpm == 120.0);
+        CHECK(b[at].number == 1 && b[at].bpm == 125.0);
+    }
+    free(b);
+
+    CHECK(rx_grid_nearest_beat(&g, 10.5, NULL) == 10.502);
+    CHECK(rx_grid_quantize(&g, 10.49) == 10.502);
+    CHECK(rx_grid_beat_after(&g, 10.0) == 10.502);
+    CHECK(rx_grid_beat_before(&g, 10.501) == 10.0);
+    CHECK(rx_grid_time_to_beat(&g, 10.0) == 19.0 && rx_grid_time_to_beat(&g, 10.502) == 20.0);
+    CHECK(rx_grid_beat_to_time(&g, 20.0) == 10.502);
+    int bar, beat;
+    rx_grid_bar_of(&g, 10.502, &bar, &beat);
+    CHECK(bar == 6 && beat == 1);
+    CHECK(rx_grid_bar_time(&g, 6, 1) == 10.502);
+
+    /* Half a period after the beat: two hits, both kept. */
+    rx_grid_free(&g);
+    g = grid(2, (const RxTempoSection[]) { { 0.5, 120.0, 1 }, { 10.75, 125.0, 0 } });
+    CHECK(rx_grid_beats(&g, 12.0, &b, &nb) == 0 && nb == 25);
+    CHECK(nb == 25 && b[21].time == 10.5 && b[22].time == 10.75);
+    free(b);
+    rx_grid_free(&g);
+}
+
 int main(void)
 {
     test_single();
@@ -307,5 +411,8 @@ int main(void)
     test_first_section_beat();
     test_edits();
     test_exact();
+    test_absurd_tempo();
+    test_not_a_time();
+    test_same_hit();
     return test_done("core_grid");
 }

@@ -16,6 +16,7 @@
 
 #include <fcntl.h>
 #include <math.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -25,6 +26,47 @@
 #include <libavutil/avstring.h>
 
 #include "internal.h"
+
+/* ------------------------------------------------------------------ logging */
+
+/* libav's callback. It may be called from any thread at once; everything
+ * here is on the stack and rx_log serialises. A line arriving in pieces
+ * (libav continues some without a newline) is logged piece by piece. */
+static void av_log_line(void *avcl, int level, const char *fmt, va_list args)
+{
+    level &= 0xff;                              /* the colour bits */
+    if (level > av_log_get_level())
+        return;
+    enum RxLogLevel rl = level <= AV_LOG_FATAL ? RX_LOG_ERROR :
+                         level <= AV_LOG_WARNING ? RX_LOG_WARN : RX_LOG_DEBUG;
+    if (rl > rx_log_level())
+        return;
+
+    char msg[1024];
+    vsnprintf(msg, sizeof(msg), fmt, args);
+    size_t n = strlen(msg);
+    while (n && (msg[n - 1] == '\n' || msg[n - 1] == '\r'))
+        msg[--n] = '\0';
+    if (!n)
+        return;
+    const AVClass *cls = avcl ? *(const AVClass **)avcl : NULL;
+    const char *name = cls && cls->item_name ? cls->item_name(avcl) : NULL;
+    if (name)
+        rx_log(rl, "libav: %s: %s", name, msg);
+    else
+        rx_log(rl, "libav: %s", msg);
+}
+
+static void set_log_callback(void)
+{
+    av_log_set_callback(av_log_line);
+}
+
+void rx_audio_init_logging(void)
+{
+    static pthread_once_t once = PTHREAD_ONCE_INIT;
+    pthread_once(&once, set_log_callback);
+}
 
 /* ------------------------------------------------------------------ helpers */
 
@@ -106,6 +148,7 @@ size_t rx_audio_skip_id3v2(const uint8_t *data, size_t size)
 
 int rx_audio_open(const char *path, AVFormatContext **out, bool find_info)
 {
+    rx_audio_init_logging();
     *out = NULL;
     char *url = rx_asprintf("file:%s", path);
     if (!url)
@@ -313,6 +356,7 @@ static int64_t container_samples(AVFormatContext *fmt, int idx)
 
 int rx_probe(const char *path, RxProbe *p)
 {
+    rx_audio_init_logging();
     *p = (RxProbe) { 0 };
 
     AVFormatContext *fmt;
@@ -364,6 +408,17 @@ int rx_probe(const char *path, RxProbe *p)
         if (s->codecpar->codec_type == AVMEDIA_TYPE_VIDEO &&
             (s->disposition & AV_DISPOSITION_ATTACHED_PIC))
             p->has_artwork = true;
+    }
+    /* Else the cover beside it that the deck and the stick will use
+     * (rx_artwork_find_file), so the interface shows it too and not a
+     * placeholder for an Opus or WAV in a folder with a front.jpg: a
+     * directory listing and the first bytes of a candidate or two. */
+    if (!p->has_artwork) {
+        char *image;
+        if (rx_artwork_find_file(path, &image) >= 0) {
+            p->has_artwork = true;
+            free(image);
+        }
     }
 
     /* The players' timeline */

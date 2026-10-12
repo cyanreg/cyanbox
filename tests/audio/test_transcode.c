@@ -43,7 +43,11 @@ int main(void)
     CHECK(rx_probe(hi, &ph) >= 0 && ph.bit_depth == 24 && ph.sample_rate == 48000 && ph.has_artwork,
           "hires source: %d bits %d Hz", ph.bit_depth, ph.sample_rate);
 
-    char *out = test_path(dir, "out:hires?.flac");
+    /* Written where no cover file is beside it, so has_artwork is the
+     * embedded picture's */
+    char *outdir = test_path(dir, "out");
+    rx_mkdir_p(outdir);
+    char *out = test_path(outdir, "out:hires?.flac");
     remove(out);
     int ret = rx_transcode_flac(hi, out, 44100);
     CHECK(ret >= 0, "transcode hires: %d", ret);
@@ -133,6 +137,7 @@ int main(void)
     free(wav);
     free(hi);
     free(out);
+    free(outdir);
     free(out16);
     free(missing);
     free(nowhere);

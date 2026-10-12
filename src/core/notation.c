@@ -187,8 +187,14 @@ const char *rx_format_grid_position(const RxGrid *grid, double grid_beat, char *
         return NULL;
 
     /* Within a millionth of a beat is on the beat: grid_beat of a quantised
-     * time comes out a few ulps off. */
+     * time comes out a few ulps off. Beyond a trillion beats (a damaged row;
+     * that is 15000 years at 120 BPM) the bar arithmetic would overflow, so
+     * such an index is only written as a number. */
     double whole = round(grid_beat);
+    if (fabs(whole) >= 1e12) {
+        snprintf(buf, size, "beat %g", grid_beat + 1);
+        return buf;
+    }
     if (fabs(grid_beat - whole) < 1e-6) {
         int64_t bar;
         int beat;
