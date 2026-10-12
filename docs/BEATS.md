@@ -212,10 +212,27 @@ merged fit keeps the kept line's own scale (an MM-estimate): a scale
 re-estimated from a mostly-disagreeing union grows until nothing is an
 outlier.
 
-After the off-beat decisions (section 8) two sections that end up on one
-line again (same tempo, the later one's first beat within 5 ms of the
-earlier one's grid: a stretch tracked on the off-beat that its own decision
-moved back) are merged.
+After the off-beat decisions (section 8) two neighbours whose lines end up
+within the merge tolerance again are merged: one line holds the other's
+beats within 15 ms at both of its ends (the lines are straight, so the ends
+are the worst). That is a stretch tracked on the off-beat that its own
+decision moved back, or a "re-entry" a few ms late. Such a cut is no cut a
+DJ could hear, and on a stick it is two beats a few ms apart, every downbeat
+after it a beat early (an acceptance trial found one at 2.2 ms on a Photon
+Maiden remix, flagged `tempo-change`). The line kept is the one with more
+attacks, if it holds both; otherwise the other one, if it does.
+
+**The exported beats.** A section's beats run up to the next section's
+start, less the last one when it lies within half a period of that start
+(`rx_grid_beats` in `src/core/grid.c`, rbxport's SAME_HIT): that beat and
+the new section's first are the same hit. A section boundary that survives
+therefore never puts two beats closer than half a period, and the beat count
+across it stays right (a section that continues the count numbers its first
+beat after the last beat kept). `test_beats` expands every synthetic grid
+this way and fails on two beats closer than half a period or a section
+downbeat not numbered 1; `rxbox-eval` counts such grids ("grids with two
+beats closer than half a period": 0 of the 150 sample tracks and 0 of the 58
+acceptance tracks).
 
 **The boundary** sits on the first beat the new line explains: at a change
 made on the beat (a DJ edit cut on the bar line), the beat at the join lies
@@ -256,8 +273,9 @@ same and double are each judged by:
   as strongly as on the beats. At 87 for drum & bass they are its snares on
   2 and 4; at 64 for house its claps. Likelihood (1 − subdivision)/0.5.
 - **Too slow, by the kick**: kicks on the half beats, but only when the next
-  level up has a kick on every beat alike (UK hardcore at 175 read at 87.5),
-  never for a syncopated kick (drum & bass's kick on the "and" of 3).
+  level up has a kick on every beat alike (UK hardcore at 175 read at 87.5)
+  and is itself a plausible tempo (inside the range; at most 200 BPM without
+  one), never for a syncopated kick (drum & bass's kick on the "and" of 3).
 - **Too fast**: every other beat lacks snares and claps. Likelihood
   balance/0.8.
 - **Four on the floor**: a kick on every beat alike and hardly between marks
@@ -269,12 +287,33 @@ same and double are each judged by:
   are floored at 0.25 so the rhythm can overrule the prior only where it is
   nearly even.
 
+- **The comfortable range**: without a requested range, a level above 200
+  or below 60 BPM must win by a factor of four (its prior × 1/4). A pop song
+  at 105 with sixteenths on the hats reads as a four-on-the-floor 210
+  (Orange Pekoe's "Happy Valley" came out 210.24); drum & bass at 170-180
+  is inside and unaffected. With `bpm_min`/`bpm_max` set, the range is the
+  user's and nothing is folded.
+
 Each level's beats are chosen from the finest down, because the line may
 still sit on any eighth of the double level at this stage (a tracker held at
 half the tempo can lock onto the "and"s): the double level's beats are the
 line's beats and half beats or those a quarter beat later, whichever carry
-more kick and snare; the line's level is every other one of those, the
-parity with more kick; the half level every other one again, by kick.
+more kick and snare; the line's level is every other one of those, again by
+kick and snare; the half level every other one again, by kick alone (at
+half tempo the beats would be the kicks; counting the snares there, drum &
+bass's snares would win and hide the test).
+
+The line's level used to take the parity with more kick. On a drum & bass
+track whose kicks fall on the "and"s as often as on the beats ("Juggernaut.
+– Determination", AD:Drum'n Bass 5) that put the 175 level on the "and"s:
+its snares then sat on its own half beats (subdivision 1.48, "too slow"),
+and the track came out 87.5 at confidence 1.00 while its seven album mates
+were 172-180. With the snares counted, the 175 level's beats carry them, the
+87.5 level has them on its half beats (subdivision 1.78), and 175 wins by
+4.7. The kick veto ("too slow, by the kick") also applies only when the
+level one up is inside the range (200 BPM without one): a busy drum & bass
+kick, on the beats and the "and"s, is no four-on-the-floor at 344, and
+had brought "Roundabout" (172) within 2 % of 86.
 
 The kick band as a general veto was tried and made things worse (an off-beat
 bass fills it between the kicks). The full band was tried and was worse
@@ -327,16 +366,46 @@ Flags (`RxGridFlag`), and what they should mean to the DJ in the interface:
 
 | Flag | Set when | Meaning for the user |
 | --- | --- | --- |
-| `tempo-change` | more than one section | The grid changes tempo or jumps phase; check each boundary. |
+| `tempo-change` | a section at another tempo than the one before it (more than 0.5 % apart) | The grid changes tempo; check each boundary. |
+| `phase-cut` | a section at the same tempo as the one before it, re-entering shifted | An edit or a skip: the grid jumps phase at the boundary; check it. |
 | `octave-uncertain` | the octave decision's margin < 1.5 | Half or double tempo was almost as likely: try ×2 / ÷2. |
 | `phase-uncertain` | on-beat vs off-beat evidence < 1.5× | The grid may be half a beat off: listen to the first kick. |
 | `downbeat-weak` | best beat position < 1.2× the next, or the section is too short to vote | Beat 1 may be another beat of the bar: use "set downbeat". |
-| `no-kicks` | the kick band carries less than half the beat's periodicity | Timed on clicks and claps; less precise. |
+| `no-kicks` | the kick band carries less than half the full band's periodicity at the beat rate and at twice it, and less than all of it at half the beat rate | Timed on clicks and claps; less precise. |
 | `low-confidence` | confidence < 0.5 | The grid does not follow the hits in many places: check by ear. |
-| `unsteady` | jitter (robust spread of the attacks around the line) > 6 ms | Live playing: the grid is the best straight line, beats scatter around it. |
+| `unsteady` | in some section, the attacks spread around the line by more than 6 ms *and* scatter from beat to beat by more than 4 ms | Live playing: the grid is the best straight line, beats scatter around it. |
 
-On the evaluation sample, 76 of 89 electronic tracks carry no flag at all,
-and 30 of the 61 others.
+**Phase cuts** were reported as `tempo-change` until an acceptance trial
+(AZKi's "明けない夜があったなら": the music re-enters 71 ms late at 3:52, same
+176 BPM). A DJ wants to know which: a phase cut is checked by ear at one
+point, a tempo change needs the new tempo checked too. A grid can carry
+both.
+
+**No kicks** used the share of the beat-rate periodicity in the kick band
+(at the beat rate or twice it). Drum & bass's two-step kick (on 1 and the
+"and" of 3) lands half a period apart at the beat rate and cancels there:
+"Neon" (174), whose kicks are plain on a bar pattern, read 0.14 and 0.31
+and was flagged. At half the beat rate they do not cancel; the drum & bass
+tracks of the sample read 1.7-4.9 there (against 0.1-0.5 at the beat rate).
+That rate counts half, because a bass or a pianist's left hand moving twice
+a bar reads there too (0.8 on an AD:PIANO VIVACE track). The flag is now
+read at the tempo of the longest section. On the sample it went from 6
+tracks to 1: two drum & bass tracks and a 133 BPM broken beat (kicks on 1,
+3 and the "and" of 4) lost it, as did two multi-section tracks with a kick
+drum once read at their main section's tempo (a piano-led dance track, an
+Orange Pekoe song); the one left is AD:PIANO VIVACE "Cloud9" (0.33 at the
+beat rate, 0.29 at twice it, 0.81 at half of it).
+
+**Unsteady** used the spread around the line alone. A re-entry a few ms
+late that is merged into one line (above) or a slow drift spreads the
+attacks without scattering them, and a sequenced track was flagged. The
+beat-to-beat scatter (the robust spread of the second differences of
+consecutive attacks, over √6: white jitter σ gives σ) is what a drummer
+shows; the flag wants both. Where a section has too few runs of three
+consecutive attacks to measure the scatter, the spread alone decides.
+
+On the evaluation sample, 78 of 89 electronic tracks carry no flag at all,
+and 34 of the 61 others.
 
 ## Parameters
 
@@ -346,7 +415,8 @@ and 30 of the 61 others.
 | Flux delay | 2 frames (13.3 ms) | log flux peaks early; measured |
 | Band alignment | ±8 frames | per-track lag, far short of an off-beat |
 | Tempo range | 50-220 BPM | dj's |
-| Prior | 125 BPM, 0.4 octave, rhythm floored at 0.25 | 82 of 83 octave-labelled tracks |
+| Prior | 125 BPM, 0.4 octave, rhythm floored at 0.25 | 83 of 83 octave-labelled tracks |
+| Comfortable range | 60-200 BPM without a requested range; ×1/4 outside | pop at 105 read as 210; drum & bass inside |
 | Tracker tightness | 100 | follows a few % drift, walks through fills |
 | Envelope window | 8192 samples, ±58 ms read | filter ringing never reaches the read part |
 | Envelope bands | <150, 150-2500, 2500-16000 Hz | dj's |
@@ -354,12 +424,13 @@ and 30 of the 61 others.
 | Phase searches | 30, 5, 3 ms | shrinking: no walking |
 | Snap tolerance | 5 ms at each end | inaudible |
 | Section penalty | 3 ln(n), σ ≥ 2 ms | proposes generously; tests decide |
-| Merge tolerance | 15 ms (running median of 9) | below what a DJ hears as drift |
+| Merge tolerance | 15 ms (running median of 9); after the off-beat decisions, 15 ms at both ends of a line | below what a DJ hears as drift |
 | Support ratio | 1.25 on the kick band; 1.5 for a phase cut | rbxport: 1.5 for the new phase |
 | Min section | 16 attacks, 32 beats; 64 for a phase, 128 half a beat away | rbxport's outro rule; off-beat basses |
 | Tempogram | 12 s windows, 3 s hop, 4 windows | 21 s of a new tempo |
 | Family check | runner-up within 25 %, 10 % more support | 3:2 and 4:3 |
-| Unsteady | jitter > 6 ms | live drums scatter 5-15 ms, sequencers < 1 |
+| Unsteady | spread > 6 ms and beat-to-beat scatter > 4 ms | live drums scatter 5-15 ms, sequencers < 1 |
+| No kicks | kick/full periodicity < 0.5 at 1× and 2× the beat rate, < 1 at ½× | two-step kicks cancel at the beat rate |
 | Low confidence | < 0.5 | |
 
 ## Evaluation
@@ -376,7 +447,9 @@ Yokokura) and 30 Opus from `music_temp` (10 from AD:Drum'n Bass 5).
 
 All pass: tempo within 0.05 BPM (all exact), phase within 3 ms (all within
 1.8 ms), downbeat right, sections and boundaries right (boundaries within
-1.3 ms), flags as required.
+1.3 ms), flags as required. Every grid is also expanded as a player gets it
+(`rx_grid_beats`): no two beats closer than half a period, and each section's
+first downbeat numbered 1.
 
 | Case | Result |
 | --- | --- |
@@ -387,9 +460,10 @@ All pass: tempo within 0.05 BPM (all exact), phase within 3 ms (all within
 | drum & bass 172 with 8 half-time bars | 172.000, +0.0 ms, one section |
 | hip-hop 90 | 90.000 (not 180), −0.7 ms |
 | live drums 118, 8 ms Gaussian jitter | 118.000, −1.7 ms, one section, `unsteady` |
-| DJ edit 124 → 130 at bar 32 | two sections, boundary −1.2 ms, count continues |
-| phase cut: 126, re-enters 0.2 s late at bar 32 | two sections, boundary −1.3 ms, new bar 1 |
-| DJ edit house 128 → drum & bass 174 at bar 32 | two sections, boundary +0.0 ms |
+| DJ edit 124 → 130 at bar 32 | two sections, boundary −1.2 ms, count continues, `tempo-change` |
+| phase cut: 126, re-enters 0.2 s late at bar 32 | two sections, boundary −1.3 ms, new bar 1, `phase-cut` |
+| DJ edit house 128 → drum & bass 174 at bar 32 | two sections, boundary +0.0 ms, `tempo-change` |
+| re-entry 8 ms late at bar 32 (within the merge tolerance) | one section, no flags |
 | determinism; 48 kHz input | identical; within 0.5 ms of 44.1 kHz |
 | `rx_analyse` on stereo 48 kHz; auto cue | grid as mono, key "Am", cue on the first downbeat |
 
@@ -400,7 +474,7 @@ All pass: tempo within 0.05 BPM (all exact), phase within 3 ms (all within
 | BPM equal within 0.1 | 110 of 150 (73 %) |
 | octave related | 11 |
 | other | 29: 12 at 3:2 or 4:3, 11 within 3 % (live recordings), 6 unrelated (live, rubato) |
-| phase within 15 ms (same or octave tempo) | 85 of 121 (70 %) |
+| phase within 15 ms (same or octave tempo) | 86 of 121 (71 %) |
 | downbeat within 15 ms (same tempo) | 72 of 110 |
 | same phase, downbeat a whole beat apart | 8 |
 
@@ -408,12 +482,12 @@ Where they disagree, independent evidence says:
 
 - **Octave, on the 83 tracks whose octave is certain from their album**
   (house, techno, garage between 100 and 160; drum & bass between 150 and
-  200): rxbox right on 82, dj on 77. The prior alone would get 78.
+  200): rxbox right on all 83, dj on 77. The prior alone would get 78.
 - **Phase.** Of the 34 tracks where both agree on tempo and differ in phase
   by more than 10 ms, the click band (Butterworth above 2.5 kHz, scipy, folded
   over the whole track: `build-beats/eval/judge.py`) starts rising within 10 ms
   of rxbox's beats on 33, of dj's on 14.
-- **Downbeat.** Of the electronic tracks whose music starts on a beat, all 73
+- **Downbeat.** Of the electronic tracks whose music starts on a beat, all 74
   start on rxbox's beat 1 (dj: 52 of 52; dj's start vote decides nearly
   every track because its summed novelty is nearly flat).
 - **BPM tags.** The whole library has 14 tagged files; 7 are one album with
@@ -427,13 +501,14 @@ Where they disagree, independent evidence says:
 - Mean confidence 0.96 on electronic tracks (dj 0.73), 0.78 on the others
   (dj 0.67).
 - Strong onsets locked to the grid (within 15 ms of their median offset from
-  the nearest beat): kick band 42 %, full band 44 % of the strongest tenth of
+  the nearest beat): kick band 43 %, full band 45 % of the strongest tenth of
   their peaks (the rest are off-beat hats, basses, fills).
 - Kick band and full band put their hits at the same place of the beat on
   81 % of tracks.
-- Flags on the 89 electronic tracks: 5 `tempo-change` (three AD:PIANO
-  VIVACE piano pieces, a trance remix and a garage track), 5 `unsteady`, 1
-  `low-confidence`. On the 61 others: 12, 22, 14.
+- Sections on the 89 electronic tracks: 4 (three AD:PIANO VIVACE piano
+  pieces and a garage track), flagged 2 `tempo-change` and 3 `phase-cut`;
+  4 `unsteady`, 1 `low-confidence`. On the 61 others: 8 `tempo-change`, 5
+  `phase-cut`, 22 `unsteady`, 14 `low-confidence`.
 
 ### Speed
 
@@ -444,6 +519,52 @@ other builds running beside it. dj: 4.98 s per track. Per six-minute track, roug
 spectrum 165 ms (two thirds of it av_tx), onsets 15, tempo 14, tracking,
 envelopes, attacks, sections and refinement 110, octave and family refits
 when needed 100 each, phase, downbeat and bass 11, confidence 5.
+
+### Memory
+
+Peak resident memory above the decoded input (`rxbox-eval --mem`, which
+resets the kernel's high-water mark after decoding; `--all` runs the whole
+`rx_analyse`: waveforms, beats and key). Files made by concatenating
+AD:HOUSE albums with ffmpeg; mono 44.1 kHz as the application decodes:
+
+| Length | Input (mono float) | Beats | `rx_analyse` | Whole process, `rx_analyse` |
+| --- | --- | --- | --- | --- |
+| 5 min | 53 MB | 8 MB | 17 MB | 96 MB |
+| 10 min | 106 MB | 14 MB | 32 MB | 162 MB |
+| 30 min | 318 MB | 41 MB | 88 MB | 419 MB |
+| 60 min | 635 MB | 81 MB | 176 MB | 810 MB |
+
+The beat analyser grows by about 1.35 MB per minute: the onset signals, the
+per-half-beat profiles and the tracked beats, but not the spectrum. The
+largest stage of `rx_analyse` on an hour is the key analysis (151 MB above
+the input), then the beats (82), then the waveforms (68).
+
+At 48 kHz an hour costs 687 MB in the beat analyser and 781 MB in
+`rx_analyse`, of which 606 MB is the one 44.1 kHz copy the analysers read;
+stereo input at 44.1 kHz costs 781 MB in `rx_analyse`, of which 635 MB is
+the mono mix that the waveform and key interfaces take. The decoder's own
+transient peak (the audio module's) comes on top before the analysis starts.
+
+Before this was measured, an hour cost 180 MB in the beat analyser and 790
+MB in `rx_analyse` above a mono 44.1 kHz input, 1840 MB in the beat analyser
+at 48 kHz and 1395 MB in `rx_analyse` for stereo. What changed, with every
+result bit-identical (the synthetic suite, and `rxbox-eval --csv` over the
+150 tracks with `--ffmpeg` decoding; with `rx_decode` too, except one file's
+duration, which the decoder itself now reports differently):
+
+- The mel frames are not kept. The STFT loop keeps three frames (SuperFlux
+  compares each with the one two frames back), computes the three fluxes
+  as it goes, and keeps only what later stages read: the kick band, and the
+  16-band profiles (sums of four mel bands) that the downbeat's structure
+  novelty reads per half beat. An hour was 580 000 frames of 64 floats.
+- `rx_analyse` does not copy a 44.1 kHz input: the beat and key analysers
+  read it in place. At other rates the waveforms are computed first, then
+  one resampled copy is made and the own mono mix freed before beats and key.
+- The resampler works in chunks of 65 536 samples, with each call's output
+  bounded by `swr_get_out_samples`: given the whole hour's output size at
+  once, libswresample allocated 1.2 GB internally.
+- The family check frees the first fit's beat envelopes while the runner-up
+  is fitted, and cuts them again only if the first fit is kept.
 
 ### Hand-checked cases
 
@@ -466,7 +587,7 @@ bands in 16ths (`pattern.py`), and by musical reasoning about the genre.
 | AD:HOUSE Winter 3 / White Lie | 127 | 127 | Same. Showed the need for the four-on-the-floor rule: a stab on the "and" of 1 and 3 made the snare test halve it. |
 | ADvantage / Kneading | 104 | 138.66 | Undecided: 208 = 1.5 × 138.667 exactly, so one is a 3:2 reading; versions of rxbox have given 208, 138.667 and 104. |
 | emome CASE01 / FVERTEX | 150 | 75 | rxbox, probably (dj's confidence 0.01). |
-| COLORS / INTO THE LIGHT (Nhato remix) | 75, three sections | 112.5 | Neither, probably: a trance remix, likely 150. rxbox flags octave-uncertain and unsteady. The one labelled octave rxbox gets wrong. |
+| COLORS / INTO THE LIGHT (Nhato remix) | 150, one section | 112.5 | rxbox, probably: a trance remix at 150. Earlier versions said 75 in three sections, flagged octave-uncertain and unsteady; choosing the line's beats by kick and snare (section 7) fixed it. |
 | AD:Drum'n Bass 5 / Penglaishan | 190 | 190 | Same, flagged octave-uncertain: 95 and 190 were nearly tied. |
 | AD:HOUSE 13 / When the Salsa Turns Orange | 123 | 123 | Same; an earlier version halved it (the octave test read the phase of the DFT's fundamental, 42 ms before the kick). |
 | Taiyou no Kakera (Electric Sheep Remix) | 118.99 | 118.99 | Same. Showed that the tempogram must not override a 4:3 family (it gave 158.65). |
@@ -475,6 +596,30 @@ bands in 16ths (`pattern.py`), and by musical reasoning about the genre.
 | Bootleg (eKiog UKHardcore) | 175 | 175 | Tag says 170; both say 175. Before the four-on-the-floor kick veto rxbox said 87.5. |
 | TRY UNITE! (Uplifting Trance Mix) | 139 | 139 | Tag says 140; both independently 139.000: the tag is rounded. |
 | Orange Pekoe / Taiyou no Flight (live) | 142.7, two sections | 140.3 | Neither is trustworthy: rubato live jazz; both have low confidence (0.27, 0.14). |
+
+### Acceptance trial (58 library tracks)
+
+A trial imported 58 tracks into a library and read the grids back
+(`build-check/acceptance/`). Its findings, and what each change did there:
+
+| Track | Trial | Now | Change |
+| --- | --- | --- | --- |
+| AD:Drum'n Bass 5 / Determination | 87.5, conf 1.00, `octave-uncertain` | 175 (margin 4.7) | the line's level chosen by kick and snare (section 7) |
+| AD:Drum'n Bass 5 / Roundabout | 172 | 172 (margin 4.1) | the kick veto only below 200 BPM; it had fallen to a 2 % margin |
+| AD:Drum'n Bass 5 / Hullbreaker, Keeps Me High | 175, 174, `octave-uncertain` | same, without it | the kick veto only below 200 BPM |
+| AD:Drum'n Bass 5 / Neon | 174, `no-kicks` | 174 | kick presence also at half the beat rate |
+| Orange Pekoe / Happy Valley | 210.24 | 105.13 | the comfortable range (60-200) |
+| Photon Maiden / We never stop (DJ Shimamura Remix) | two sections, the second 2.2 ms off at 4:41.6, `tempo-change` | one section | lines within the merge tolerance merged after the off-beat decisions |
+| AZKi / 明けない夜があったなら | `tempo-change`, `unsteady` | `phase-cut`, `unsteady` | the new flag |
+| Orange Pekoe / Tonight: Hoshi No Furu Yoru Ni | 138.02, `octave-uncertain`, `unsteady` | 138.02, `unsteady` (margin 1.1 → 32) | the line's level by kick and snare: its snares had sat on its half beats |
+| Orange Pekoe / Introduction (36 s, no steady beat) | 80.26, `octave-uncertain`, `low-confidence`, `unsteady` | 156.38, `phase-uncertain`, `downbeat-weak`, `unsteady` | the kick veto; neither reading means much |
+
+All seven album mates of Determination are now 172-180, and none of the 58
+grids has two beats closer than half a period. On the 150-track sample the
+same changes left the agreement with dj as it was (110 equal, 11 octave, 29
+other; downbeat 72), moved one phase into agreement (86), fixed the one
+labelled octave rxbox had wrong (INTO THE LIGHT: 83 of 83), and otherwise
+changed only flags.
 
 ### What was tried and dropped
 
@@ -490,7 +635,7 @@ bands in 16ths (`pattern.py`), and by musical reasoning about the genre.
 
 ## Known weaknesses
 
-- **Octave and family remain the main errors** (1 of 83 labelled; more on
+- **Octave and family remain the main errors** (none of 83 labelled; more on
   J-pop and hard dance, where the right answer is often a convention, and
   3:2 readings like Kneading that neither analyser settles). The
   `octave-uncertain` flag marks most of them; ×2 and ÷2 in the interface fix
@@ -502,9 +647,9 @@ bands in 16ths (`pattern.py`), and by musical reasoning about the genre.
   (each at least 32 beats), not followed beat by beat.
 - **DJ mixes** work but are not what it is tuned for: a 65-minute mix of
   pop songs comes out as one section per song where the tempogram finds the
-  song's tempo settled (confidence 0.88), in 11 s of CPU and 2.8 GB of
-  memory, most of it the decoded audio at two rates and the mel frames (a
-  mix of an hour is 580 000 frames of 64 bands).
+  song's tempo settled (confidence 0.88), in 11 s of CPU. An hour at 44.1
+  kHz costs 176 MB above the decoded audio (635 MB mono); see "Memory".
+  Going lower needs a decoder that streams.
 - **Downbeat** has no ground truth beyond "the music starts on beat 1"; the
   structure vote is rbxport's method, which they measured at 153 of 155.
 - **Sub-millisecond phase** is relative to the half-energy point of the click

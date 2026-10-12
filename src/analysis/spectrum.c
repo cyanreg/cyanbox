@@ -76,20 +76,26 @@ int rx_resample_mono(const float *in, int64_t n, int in_rate, int out_rate,
      * for its filter's delay itself): an impulse at 1 s from 22.05, 32, 48
      * or 96 kHz comes out at 1 s to a hundredth of a sample. Everything is
      * fed, then flushed, then cut to the expected length. */
+    /* Small steps, each with an output limit to match: handed the whole
+     * output buffer as its limit, libswresample allocated internal buffers
+     * of that size (1.2 GB for an hour at 48 kHz). The samples it produces
+     * do not depend on the steps. */
     int64_t got = 0;
-    const int64_t chunk = 1 << 20;
+    const int64_t chunk = 1 << 16;
     for (int64_t pos = 0; pos < n; pos += chunk) {
         int len = (int)RX_MIN(chunk, n - pos);
         const uint8_t *src[1] = { (const uint8_t *)(in + pos) };
         uint8_t *dst[1] = { (uint8_t *)(buf + got) };
-        ret = swr_convert(swr, dst, (int)(cap - got), src, len);
+        int lim = (int)RX_MIN((int64_t)swr_get_out_samples(swr, len), cap - got);
+        ret = swr_convert(swr, dst, lim, src, len);
         if (ret < 0)
             goto fail;
         got += ret;
     }
     while (1) {
         uint8_t *dst[1] = { (uint8_t *)(buf + got) };
-        ret = swr_convert(swr, dst, (int)(cap - got), NULL, 0);
+        int lim = (int)RX_MIN((int64_t)chunk, cap - got);
+        ret = lim > 0 ? swr_convert(swr, dst, lim, NULL, 0) : 0;
         if (ret < 0)
             goto fail;
         if (ret == 0)
@@ -139,9 +145,14 @@ int rx_spectrum_compute(const float *x, int64_t n, RxSpectrum *s)
         return RX_ERROR(EINVAL);
     s->nb_frames = (int)nf;
     s->fps = (double)RX_BEAT_RATE / hop;
-    s->nb_mels = RX_BEAT_NMELS;
-    s->mel = malloc((size_t)nf * RX_BEAT_NMELS * sizeof(*s->mel));
+    s->prof = malloc((size_t)nf * RX_BEAT_NPROF * sizeof(*s->prof));
     s->kick = malloc((size_t)nf * sizeof(*s->kick));
+    s->flux_full = calloc((size_t)nf, sizeof(*s->flux_full));
+    s->flux_mid = calloc((size_t)nf, sizeof(*s->flux_mid));
+    s->flux_high = calloc((size_t)nf, sizeof(*s->flux_high));
+    /* The last three mel frames: the flux at frame t compares t + 1 with
+     * t - 1. */
+    float ring[3][RX_BEAT_NMELS];
 
     AVTXContext *tx = NULL;
     av_tx_fn fn = NULL;
@@ -151,7 +162,8 @@ int rx_spectrum_compute(const float *x, int64_t n, RxSpectrum *s)
     float *pow2 = av_malloc(nbins * sizeof(*pow2));
     float *weights = malloc(2 * nbins * sizeof(*weights));
     MelBand bands[RX_BEAT_NMELS];
-    if (!s->mel || !s->kick || !win || !frame || !spec || !pow2 || !weights) {
+    if (!s->prof || !s->kick || !s->flux_full || !s->flux_mid || !s->flux_high || !win ||
+        !frame || !spec || !pow2 || !weights) {
         ret = RX_ERROR(ENOMEM);
         goto fail;
     }
@@ -198,6 +210,19 @@ int rx_spectrum_compute(const float *x, int64_t n, RxSpectrum *s)
         { 1, 0.5f }, { 2, 1.0f }, { 3, 1.0f }, { 4, 1.0f }, { 5, 1.0f }, { 6, 1.0f }, { 7, 0.5f },
     };
 
+    /* The flux bands: 150..2500 Hz (snares, claps) and above 5 kHz (hats),
+     * by band centre. */
+    int mid0 = RX_BEAT_NMELS, mid1 = 0, high0 = RX_BEAT_NMELS;
+    for (int b = 0; b < RX_BEAT_NMELS; b++) {
+        if (s->mel_hz[b] >= 150.0 && s->mel_hz[b] < 2500.0) {
+            mid0 = RX_MIN(mid0, b);
+            mid1 = b + 1;
+        }
+        if (s->mel_hz[b] >= 5000.0)
+            high0 = RX_MIN(high0, b);
+    }
+    mid1 = RX_MAX(mid1, mid0);
+
     const float comp = 1000.0f / (N / 4);
     for (int f = 0; f < s->nb_frames; f++) {
         int64_t c = (int64_t)f * hop, a = c - N / 2;
@@ -218,7 +243,7 @@ int rx_spectrum_compute(const float *x, int64_t n, RxSpectrum *s)
 
         /* Four accumulators: a single one makes every band a chain of
          * dependent multiply-adds, which was most of this function's time. */
-        float *out = s->mel + (size_t)f * RX_BEAT_NMELS;
+        float *out = ring[f % 3];
         for (int b = 0; b < RX_BEAT_NMELS; b++) {
             const MelBand *mb = &bands[b];
             const float *w = mb->w - mb->k0;
@@ -238,6 +263,21 @@ int rx_spectrum_compute(const float *x, int64_t n, RxSpectrum *s)
         for (size_t i = 0; i < RX_ARRAY_ELEMS(kick_bins); i++)
             kick += kick_bins[i].w * pow2[kick_bins[i].k];
         s->kick[f] = logf(1.0f + comp * sqrtf(kick));
+
+        /* The downbeat's profile bands: sums of four mel bands. */
+        float *pr = s->prof + (size_t)f * RX_BEAT_NPROF;
+        for (int g = 0; g < RX_BEAT_NPROF; g++) {
+            float acc = 0.0f;
+            for (int k = 0; k < RX_BEAT_GROUP; k++)
+                acc += out[g * RX_BEAT_GROUP + k];
+            pr[g] = acc;
+        }
+
+        /* The flux of frame f - 1, now that frame f is known (frames 0 and
+         * nb_frames - 1 have none). */
+        if (f >= 2)
+            rx_superflux_frame(ring[(f - 2) % 3], out, mid0, mid1, high0, &s->flux_full[f - 1],
+                               &s->flux_mid[f - 1], &s->flux_high[f - 1]);
     }
 
 fail:
@@ -254,8 +294,11 @@ fail:
 
 void rx_spectrum_free(RxSpectrum *s)
 {
-    free(s->mel);
+    free(s->prof);
     free(s->kick);
+    free(s->flux_full);
+    free(s->flux_mid);
+    free(s->flux_high);
     memset(s, 0, sizeof(*s));
 }
 

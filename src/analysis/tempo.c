@@ -49,6 +49,9 @@
 /* The least each rhythm likelihood can be: how far the rhythm can
  * overrule the prior. */
 #define OCTAVE_FLOOR 0.25
+/* The automatic range's comfortable octave (rx_tempo_octave_decide). */
+#define OCTAVE_AUTO_LO 60.0
+#define OCTAVE_AUTO_HI 200.0
 
 /* ------------------------------------------------------------ utilities */
 
@@ -551,7 +554,8 @@ void rx_tempo_octave_decide(const RxOnsets *o, double t0, double period, double 
     out->margin = 10.0;
     if (prior <= 0.0)
         prior = DEFAULT_PRIOR;
-    if (!(lo > 0.0 && hi > lo)) {
+    bool automatic = !(lo > 0.0 && hi > lo);
+    if (automatic) {
         lo = RX_TEMPO_MIN;
         hi = RX_TEMPO_MAX;
     }
@@ -560,12 +564,14 @@ void rx_tempo_octave_decide(const RxOnsets *o, double t0, double period, double 
      * lock onto the "and"s: the off-beat is decided later, with the
      * structure). Double: the line's beats and half beats, or those a
      * quarter beat later, whichever carry more kick and snare. Same: every
-     * other one of those, the parity with more kick. Half: every other one
-     * of those, the parity with more kick (at half tempo the beats would
-     * be the kicks; with the snares counted, drum & bass's snares would
-     * win and hide the test). */
+     * other one of those, again by kick and snare (by the kick alone, a
+     * drum & bass track whose kicks fall on the "and"s put the snares on
+     * its half beats and lost to half tempo). Half: every other one of
+     * those, the parity with more kick (at half tempo the beats would be
+     * the kicks; with the snares counted, drum & bass's snares would win
+     * and hide the test). */
     double t2 = level_phase(o, o->low, o->mid, t0, period / 2.0, period / 4.0, from, to);
-    double t1 = level_phase(o, o->low, NULL, t2, period, period / 2.0, from, to);
+    double t1 = level_phase(o, o->low, o->mid, t2, period, period / 2.0, from, to);
     double th = level_phase(o, o->low, NULL, t1, 2.0 * period, period, from, to);
     const double lt0[3] = { th, t1, t2 };
     const double lp[3] = { 2.0 * period, period, period / 2.0 };
@@ -589,9 +595,18 @@ void rx_tempo_octave_decide(const RxOnsets *o, double t0, double period, double 
          * to a four-on-the-floor one level up (every beat of it has a kick
          * alike: UK hardcore at 175 read at 87.5), not when they are a
          * syncopation (drum & bass's kick on the "and" of 3, whose next
-         * level up alternates). */
-        if (l < 2 && out->ev[l + 1].kick_alt >= 0.7)
+         * level up alternates). Nor when that level is beyond the range
+         * (above 200 BPM without one): a busy drum & bass kick, on the
+         * beats and the "and"s, is no four-on-the-floor at 344. */
+        double up_hi = automatic ? OCTAVE_AUTO_HI : hi;
+        if (l < 2 && out->ev[l + 1].kick_alt >= 0.7 && out->bpm[l + 1] <= up_hi * 1.001)
             slow = fmin(slow, RX_CLAMP((1.0 - out->ev[l].kick_sub) / 0.5, OCTAVE_FLOOR, 1.0));
+        /* Without a requested range, a level above 200 or below 60 BPM
+         * must win by a factor of four: a pop song at 105 with sixteenths
+         * on the hats reads as a four-on-the-floor 210. (Drum & bass at
+         * 170-180 is inside.) */
+        if (automatic && (out->bpm[l] > OCTAVE_AUTO_HI || out->bpm[l] < OCTAVE_AUTO_LO))
+            pr *= 0.25;
         out->ev[l].score = slow * fast;
         bool in = out->bpm[l] >= lo * 0.999 && out->bpm[l] <= hi * 1.001;
         score[l] = in ? slow * fast * pr : -1.0;

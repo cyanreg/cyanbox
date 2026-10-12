@@ -63,38 +63,29 @@ void rx_onset_normalise(float *o, int n, double fps)
         o[i] *= g;
 }
 
-/* SuperFlux rises of every band of frame t against frame t - 2, summed
- * over all bands, the mid bands and the high bands in one pass. */
-static void superflux(const RxSpectrum *s, int mid0, int mid1, int high0,
-                      float *full, float *mid, float *high)
+void rx_superflux_frame(const float *ref, const float *cur, int mid0, int mid1, int high0,
+                        float *full, float *mid, float *high)
 {
-    const int nm = s->nb_mels, n = s->nb_frames;
+    const int nm = RX_BEAT_NMELS;
     float d[RX_BEAT_NMELS];
-    for (int t = 0; t < n; t++) {
-        full[t] = mid[t] = high[t] = 0.0f;
-        if (t < 1 || t + 1 >= n)
-            continue;
-        const float *cur = s->mel + (size_t)(t + 1) * nm;
-        const float *ref = s->mel + (size_t)(t - 1) * nm;
-        for (int b = 0; b < nm; b++) {
-            float r = ref[b];
-            if (b > 0)
-                r = fmaxf(r, ref[b - 1]);
-            if (b + 1 < nm)
-                r = fmaxf(r, ref[b + 1]);
-            d[b] = fmaxf(cur[b] - r, 0.0f);
-        }
-        float a = 0.0f, m = 0.0f, h = 0.0f;
-        for (int b = 0; b < nm; b++)
-            a += d[b];
-        for (int b = mid0; b < mid1; b++)
-            m += d[b];
-        for (int b = high0; b < nm; b++)
-            h += d[b];
-        full[t] = a;
-        mid[t] = m;
-        high[t] = h;
+    for (int b = 0; b < nm; b++) {
+        float r = ref[b];
+        if (b > 0)
+            r = fmaxf(r, ref[b - 1]);
+        if (b + 1 < nm)
+            r = fmaxf(r, ref[b + 1]);
+        d[b] = fmaxf(cur[b] - r, 0.0f);
     }
+    float a = 0.0f, m = 0.0f, h = 0.0f;
+    for (int b = 0; b < nm; b++)
+        a += d[b];
+    for (int b = mid0; b < mid1; b++)
+        m += d[b];
+    for (int b = high0; b < nm; b++)
+        h += d[b];
+    *full = a;
+    *mid = m;
+    *high = h;
 }
 
 /* Shifts v by the lag that best aligns it with ref. */
@@ -124,32 +115,22 @@ static void align_band(const float *ref, float *v, int n)
     }
 }
 
-int rx_onsets_compute(const RxSpectrum *s, RxOnsets *o)
+int rx_onsets_compute(RxSpectrum *s, RxOnsets *o)
 {
     memset(o, 0, sizeof(*o));
     const int n = s->nb_frames;
     o->nb = n;
     o->fps = s->fps;
-    o->full = calloc(RX_MAX(n, 1), sizeof(float));
+    o->full = s->flux_full;
+    o->mid = s->flux_mid;
+    o->high = s->flux_high;
+    s->flux_full = s->flux_mid = s->flux_high = NULL;
     o->low = calloc(RX_MAX(n, 1), sizeof(float));
-    o->mid = calloc(RX_MAX(n, 1), sizeof(float));
-    o->high = calloc(RX_MAX(n, 1), sizeof(float));
     o->accent = calloc(RX_MAX(n, 1), sizeof(float));
     if (!o->full || !o->low || !o->mid || !o->high || !o->accent) {
         rx_onsets_free(o);
         return RX_ERROR(ENOMEM);
     }
-
-    int mid0 = s->nb_mels, mid1 = 0, high0 = s->nb_mels;
-    for (int b = 0; b < s->nb_mels; b++) {
-        if (s->mel_hz[b] >= 150.0 && s->mel_hz[b] < 2500.0) {
-            mid0 = RX_MIN(mid0, b);
-            mid1 = b + 1;
-        }
-        if (s->mel_hz[b] >= 5000.0)
-            high0 = RX_MIN(high0, b);
-    }
-    superflux(s, mid0, RX_MAX(mid1, mid0), high0, o->full, o->mid, o->high);
     for (int t = 1; t + 1 < n; t++)
         o->low[t] = fmaxf(0.0f, s->kick[t + 1] - s->kick[t - 1]);
 

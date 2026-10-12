@@ -32,14 +32,14 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define GROUP 4                         /* mel bands per profile band: 16 bands */
+#define GROUP RX_BEAT_GROUP             /* mel bands per profile band: 16 bands */
 #define BASS_WEIGHT 0.5                 /* the bass vote against one novelty scale's 1 */
 /* The music's start, as much as one scale: in the evaluation sample, 59 of
  * the 66 electronic tracks whose music starts on a beat had beat 1 there by
  * structure alone, the rest mostly on weak votes; with the start worth a
  * scale, all of them do (docs/BEATS.md). */
 #define START_WEIGHT 1.0
-#define NPROF (RX_BEAT_NMELS / GROUP)
+#define NPROF RX_BEAT_NPROF
 
 /* The bass-note vote: where the bass's pitch class changes between the two
  * beats before and the two beats after, peaks only, normalised to sum 1. */
@@ -118,11 +118,9 @@ int rx_downbeat_vote(const RxSpectrum *s, const float *x, int64_t n,
         int f0 = RX_MAX((int)ceil(a * fps), 0), f1 = RX_MIN((int)ceil(b * fps), s->nb_frames);
         float *p = prof + (size_t)j * NPROF;
         for (int f = f0; f < f1; f++) {
-            const float *m = s->mel + (size_t)f * s->nb_mels;
-            for (int g = 0; g < NPROF; g++) {
-                for (int k = 0; k < GROUP; k++)
-                    p[g] += m[g * GROUP + k];
-            }
+            const float *m = s->prof + (size_t)f * NPROF;
+            for (int g = 0; g < NPROF; g++)
+                p[g] += m[g];
         }
         if (f1 > f0) {
             for (int g = 0; g < NPROF; g++)

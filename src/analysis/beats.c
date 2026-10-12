@@ -32,6 +32,7 @@ static const char *const flag_names[] = {
     "no-kicks",
     "low-confidence",
     "unsteady",
+    "phase-cut",
 };
 
 const char *rx_grid_flag_name(enum RxGridFlag f)
@@ -85,6 +86,10 @@ void rx_beat_result_free(RxBeatResult *r)
 #define SNAP_TOL          0.005
 /* A live drummer's beats scatter by 5-15 ms; a sequencer's by under 1. */
 #define UNSTEADY_JITTER   0.006
+#define UNSTEADY_SCATTER  0.004
+/* Two sections whose lines agree this closely are one (grid_fit.c's
+ * SEG_MAX_DEV, the segmentation's test 1). */
+#define SECTION_MERGE_DEV 0.015
 
 typedef struct Ctx {
     const RxAnalysisOptions *opt;
@@ -144,6 +149,49 @@ static double section_jitter(const RxBeatObs *beats, const RxFitSection *s)
     return j;
 }
 
+/* How far line d strays from section x's beats: the distance of x's
+ * first and last beats, on x's line, from d's nearest beats. The lines
+ * are straight, so the ends are the worst. */
+static double line_distance(const RxBeatObs *beats, const RxFitSection *x, const RxFitSection *d)
+{
+    double dev = 0.0;
+    const int ends[] = { x->first, x->last };
+    for (size_t e = 0; e < RX_ARRAY_ELEMS(ends); e++) {
+        double k = (rx_beat_predict(beats, ends[e], x) - d->t0) / d->period;
+        dev = fmax(dev, fabs(k - round(k)) * d->period);
+    }
+    return dev;
+}
+
+/* Beat-to-beat scatter of the attacks: the robust spread of the second
+ * differences of consecutive attacks, divided by sqrt(6) (white jitter of
+ * sigma gives sigma). Unlike the spread around the line, a step or a slow
+ * drift hardly moves it: it is what a live drummer shows. -1 when there
+ * are too few runs of three attacks to tell. */
+static double section_scatter(const RxBeatObs *beats, const RxFitSection *s)
+{
+    int n = 0;
+    double *r = malloc((size_t)(s->last - s->first + 1) * sizeof(*r));
+    if (!r)
+        return 0.0;
+    for (int i = s->first + 1; i < s->last; i++) {
+        const RxBeatObs *a = &beats[i - 1], *b = &beats[i], *c = &beats[i + 1];
+        if (a->weight <= 0.0 || b->weight <= 0.0 || c->weight <= 0.0 || isnan(a->attack) ||
+            isnan(b->attack) || isnan(c->attack))
+            continue;
+        if (b->index - a->index != 1 || c->index - b->index != 1)
+            continue;
+        r[n++] = fabs(c->attack - 2.0 * b->attack + a->attack);
+    }
+    double sc = -1.0;
+    if (n >= 8) {
+        qsort(r, n, sizeof(*r), cmp_dbl);
+        sc = 1.4826 * r[n / 2] / sqrt(6.0);
+    }
+    free(r);
+    return sc;
+}
+
 /* Puts a section on its attacks. The fold of the whole section chooses
  * the band and moves the line onto the start of the average beat's hit;
  * then the attacks are measured close to the line and the line refitted
@@ -185,6 +233,7 @@ static int refine_section(Ctx *c, RxFitSection *s, double *contrast)
      * scatter short and call it steady). */
     rx_measure_attacks(&c->envs, c->beats, s->first, s->last, band, s, 0.035);
     s->jitter = section_jitter(c->beats, s);
+    s->scatter = section_scatter(c->beats, s);
     return band;
 }
 
@@ -482,6 +531,50 @@ static void fit_put(Ctx *c, Fit *f)
     memset(f, 0, sizeof(*f));
 }
 
+/* Whether the kick band carries the beat, for the flag: the strength of
+ * its periodicity against the full band's at the beat rate or twice it,
+ * whichever shows the kick best; or at half the beat rate, counted half.
+ * Half: a two-step kick (on 1 and on the "and" of 3, drum & bass) lands
+ * half a period apart at the beat rate and cancels there, but not at half
+ * of it (the drum & bass tracks of the sample read 1.7-4.9 there, against
+ * 0.1-0.5 at the beat rate). Counted half, because a bass or a pianist's
+ * left hand moving twice a bar also reads there (0.8 on a piano track). */
+static double kick_presence(const Ctx *c, double bpm)
+{
+    static const struct { double mult, weight; } rates[] = {
+        { 0.5, 0.5 }, { 1.0, 1.0 }, { 2.0, 1.0 },
+    };
+    double best = 0.0;
+    for (size_t i = 0; i < RX_ARRAY_ELEMS(rates); i++) {
+        double s_low, s_full;
+        rx_tempo_phase(c->ons.low, c->ons.nb, c->ons.fps, bpm * rates[i].mult, &s_low);
+        rx_tempo_phase(c->ons.full, c->ons.nb, c->ons.fps, bpm * rates[i].mult, &s_full);
+        if (s_full > 0.0)
+            best = fmax(best, rates[i].weight * s_low / s_full);
+    }
+    return best;
+}
+
+/* Cuts every beat's envelopes again at the centres they were cut at
+ * (rx_env_window rounds the same time to the same sample). */
+static int recut_envs(Ctx *c)
+{
+    RxBeatEnvs *e = &c->envs;
+    e->env = malloc((size_t)RX_MAX(e->nb, 1) * RX_NB_BANDS * RX_ENV_LEN * sizeof(*e->env));
+    if (!e->env)
+        return RX_ERROR(ENOMEM);
+    for (int i = 0; i < e->nb; i++) {
+        double centre;
+        int ret = rx_env_window(c->envctx, e->centre[i],
+                                e->env + (size_t)i * RX_NB_BANDS * RX_ENV_LEN, &centre);
+        if (ret < 0)
+            return ret;
+        if (centre != e->centre[i])
+            return RX_ERROR(EINVAL);
+    }
+    return 0;
+}
+
 /* Stage timings for the debug log. */
 static void stage(int64_t *tm, const char *name)
 {
@@ -702,6 +795,10 @@ int rx_analyse_beats_dbg(const float *mono, int64_t nb_samples, int rate,
     if (alt > 0.0 && alt <= rhi && c.tempo.second_ratio >= 0.75) {
         double s1 = grid_support(&c);
         Fit first = fit_take(&c);
+        /* Its envelopes go while the other is tried (an hour of them is
+         * 30 MB); their centres are enough to cut them again. */
+        free(first.envs.env);
+        first.envs.env = NULL;
         int r2 = fit_grid(&c, alt, lo, hi);
         if (r2 < 0) {
             fit_free(&first);
@@ -727,6 +824,8 @@ int rx_analyse_beats_dbg(const float *mono, int64_t nb_samples, int rate,
             bpm0 = alt;
         } else {
             fit_put(&c, &first);
+            if ((ret = recut_envs(&c)) < 0)
+                goto fail;
         }
     }
 
@@ -779,25 +878,38 @@ int rx_analyse_beats_dbg(const float *mono, int64_t nb_samples, int rate,
             goto fail;
     }
 
-    /* Sections the half-beat decisions have put back on one line (the
-     * cut was a stretch tracked on the off-beat, and its own decision moved
-     * it back) are one section again: same tempo, and the later one's first
-     * beat within 5 ms of the earlier one's grid. */
+    /* Sections the half-beat decisions have put back on (nearly) one line
+     * are one section again: one line holds the other's beats within the
+     * merge tolerance (15 ms, the segmentation's test 1). Such a "cut" is
+     * no cut a DJ could hear, and on a stick it would make two beats a few
+     * ms apart. The line kept is the one with more attacks if it holds
+     * both, expressed in the earlier one's count (its t0 stays on the same
+     * beat, which the downbeat vote counts from). */
     for (int i = 1; i < c.nb_secs;) {
         RxFitSection *a = &c.secs[i - 1], *b = &c.secs[i];
-        double tb = rx_beat_predict(c.beats, b->first, b);
-        double k = (tb - a->t0) / a->period;
-        if (fabs(a->period / b->period - 1.0) > 1e-4 || fabs(k - round(k)) * a->period > 0.005) {
-            i++;
-            continue;
+        const RxFitSection *keep = b->supported > a->supported ? b : a;
+        const RxFitSection *other = keep == a ? b : a;
+        if (line_distance(c.beats, other, keep) > SECTION_MERGE_DEV) {
+            const RxFitSection *t = keep;
+            keep = other;
+            other = t;
+            if (line_distance(c.beats, other, keep) > SECTION_MERGE_DEV) {
+                i++;
+                continue;
+            }
         }
+        double t0 = keep->t0 + round((a->t0 - keep->t0) / keep->period) * keep->period;
+        double period = keep->period;
         for (int j = b->first; j <= b->last; j++) {
             double t = rx_beat_predict(c.beats, j, b);
-            c.beats[j].index = a->index0 + (int)lrint((t - a->t0) / a->period);
+            c.beats[j].index = a->index0 + (int)lrint((t - t0) / period);
         }
+        a->t0 = t0;
+        a->period = period;
         a->last = b->last;
         a->supported += b->supported;
         a->jitter = fmax(a->jitter, b->jitter);
+        a->scatter = fmax(a->scatter, b->scatter);
         sinfo[i - 1].end = sinfo[i].end;
         memmove(c.secs + i, c.secs + i + 1, (c.nb_secs - i - 1) * sizeof(*c.secs));
         memmove(sinfo + i, sinfo + i + 1, (c.nb_secs - i - 1) * sizeof(*sinfo));
@@ -882,24 +994,41 @@ int rx_analyse_beats_dbg(const float *mono, int64_t nb_samples, int rate,
     stage(&tm, "confidence");
     rx_debug("beats: total      %6.1f ms\n", (rx_time_us() - tm0) / 1000.0);
     out->bpm_second_best = c.tempo.second_bpm;
+    /* A boundary between two sections at one tempo is a phase cut (the
+     * music re-enters shifted), any other a tempo change. */
     unsigned flags = 0;
-    if (c.nb_secs > 1)
-        flags |= RX_GRID_FLAG_TEMPO_CHANGE;
+    for (int i = 1; i < c.nb_secs; i++) {
+        if (fabs(c.secs[i].period / c.secs[i - 1].period - 1.0) < 0.005)
+            flags |= RX_GRID_FLAG_PHASE_CUT;
+        else
+            flags |= RX_GRID_FLAG_TEMPO_CHANGE;
+    }
     if (out->octave_margin < 1.5)
         flags |= RX_GRID_FLAG_OCTAVE_UNCERTAIN;
     if (out->phase_margin < 1.5)
         flags |= RX_GRID_FLAG_PHASE_UNCERTAIN;
     if (!sinfo[main_sec].has_vote || sinfo[main_sec].down_margin < 1.2)
         flags |= RX_GRID_FLAG_DOWNBEAT_WEAK;
-    if (kick_share < 0.5)
+    if (kick_presence(&c, 60.0 / c.secs[longest_section(&c)].period) < 0.5)
         flags |= RX_GRID_FLAG_NO_KICKS;
     if (out->confidence < 0.5)
         flags |= RX_GRID_FLAG_LOW_CONFIDENCE;
-    double jit = 0.0;
-    for (int i = 0; i < c.nb_secs; i++)
+    double jit = 0.0, scat = 0.0;
+    for (int i = 0; i < c.nb_secs; i++) {
         jit = fmax(jit, c.secs[i].jitter);
-    if (jit > UNSTEADY_JITTER)
-        flags |= RX_GRID_FLAG_UNSTEADY;
+        scat = fmax(scat, c.secs[i].scatter);
+    }
+    /* Live playing spreads the attacks around the line and scatters them
+     * from beat to beat. A small step merged into one line (a re-entry
+     * within 15 ms) or a slow drift only spreads them; an alternation
+     * (the attack taken on another hit every other beat) mostly
+     * scatters them. Both are needed (the spread alone where too few
+     * consecutive attacks show the scatter). */
+    for (int i = 0; i < c.nb_secs; i++) {
+        const RxFitSection *s = &c.secs[i];
+        if (s->jitter > UNSTEADY_JITTER && (s->scatter < 0.0 || s->scatter > UNSTEADY_SCATTER))
+            flags |= RX_GRID_FLAG_UNSTEADY;
+    }
     out->flags = flags;
 
     if (dbg) {
@@ -918,6 +1047,7 @@ int rx_analyse_beats_dbg(const float *mono, int64_t nb_samples, int rate,
         dbg->half_shift = sinfo[main_sec].shifted;
         dbg->kick_share = kick_share;
         dbg->jitter = jit;
+        dbg->scatter = scat;
         dbg->band = bands[0];
     }
 

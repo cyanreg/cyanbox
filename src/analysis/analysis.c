@@ -4,11 +4,14 @@
  * cues dj added after it.
  *
  * The audio is mixed to mono once (the decoder's mean of the channels, so
- * that the analyser and the deck agree on what mono is). The waveforms are
- * cut from it at the file's own rate, because their columns are counted on
- * the players' timeline at that rate. Beats and key both work at 44.1 kHz:
- * the mono signal is resampled once (time-aligned, libswresample) and both
- * read the same buffer.
+ * that the analyser and the deck agree on what mono is); the app decodes
+ * mono, so usually there is nothing to mix. The waveforms are cut from it
+ * at the file's own rate, because their columns are counted on the
+ * players' timeline at that rate. Beats and key both work at 44.1 kHz:
+ * they read the mono signal itself when it is at 44.1 kHz, else one copy
+ * resampled after the waveforms are done (time-aligned, libswresample),
+ * with our own mono mix freed first. No more than one full-length signal
+ * of ours is alive at any time.
  *
  * Inside one call everything runs on the calling thread: the library
  * analyses many tracks at once on its pool, and a call that spawned its
@@ -56,9 +59,18 @@ int rx_analyse(const RxAudio *audio, const RxAnalysisOptions *opt, unsigned what
     }
 
     if (what & (RX_ANALYSE_BEATS | RX_ANALYSE_KEY)) {
-        float *x44 = NULL;
-        int64_t n44 = 0;
-        ret = rx_resample_mono(x, n, audio->rate, RX_BEAT_RATE, &x44, &n44);
+        /* At 44.1 kHz beats and key read the mono signal itself. Otherwise
+         * one resampled copy, and our own mono mix goes before they run:
+         * an hour of mono float is 635 MB at 44.1 kHz, and the library
+         * analyses up to eleven tracks at once. */
+        const float *x44 = x;
+        float *own44 = NULL;
+        int64_t n44 = n;
+        if (audio->rate != RX_BEAT_RATE) {
+            ret = rx_resample_mono(x, n, audio->rate, RX_BEAT_RATE, &own44, &n44);
+            x44 = own44;
+            rx_audio_free(&mono);
+        }
         if (ret < 0) {
             if (!first_err)
                 first_err = ret;
@@ -77,8 +89,8 @@ int rx_analyse(const RxAudio *audio, const RxAnalysisOptions *opt, unsigned what
                 else if (!first_err)
                     first_err = ret;
             }
-            free(x44);
         }
+        free(own44);
     }
 
     rx_audio_free(&mono);

@@ -150,6 +150,7 @@ typedef struct Spec {
     double bpm2;
     double change_gap;
     int    style2;                  /* the style after the change (0: the same) */
+    bool   one_line;                /* the change is too small to be a section */
     int    break_from, break_to;    /* BAR_BREAK bars [from, to) */
     int    half_from, half_to;      /* BAR_HALF bars [from, to) */
     int    intro_bars;              /* BAR_INTRO bars at the start */
@@ -175,18 +176,19 @@ static int synth(const Spec *sp, Track *t, Truth *truth)
     static const int prog[4][3] = { { 0, 3, 7 }, { 5, 8, 12 }, { 7, 11, 14 }, { 0, 3, 7 } };
     const int tonic = 9;
 
-    truth->nb_secs = sp->change_bar ? 2 : 1;
+    truth->nb_secs = sp->change_bar && !sp->one_line ? 2 : 1;
     truth->start[0] = sp->first_downbeat;
     truth->bpm[0] = sp->bpm;
-    if (sp->change_bar) {
-        truth->start[1] = sp->first_downbeat + 4.0 * p1 * sp->change_bar + sp->change_gap;
+    double start2 = sp->first_downbeat + 4.0 * p1 * sp->change_bar + sp->change_gap;
+    if (sp->change_bar && !sp->one_line) {
+        truth->start[1] = start2;
         truth->bpm[1] = sp->bpm2;
     }
 
     for (int b = 0; b < sp->bars; b++) {
         bool second = sp->change_bar && b >= sp->change_bar;
         double p = second ? p2 : p1;
-        double tb = second ? truth->start[1] + 4.0 * p * (b - sp->change_bar)
+        double tb = second ? start2 + 4.0 * p * (b - sp->change_bar)
                            : sp->first_downbeat + 4.0 * p * b;
         int kind = BAR_FULL;
         if (b < sp->intro_bars)
@@ -299,6 +301,9 @@ static const Spec cases[] = {
     { .name = "DJ edit house 128 -> drum & bass 174 at bar 32", .style = STYLE_HOUSE,
       .bpm = 128.0, .first_downbeat = 0.35, .bars = 72, .change_bar = 32, .bpm2 = 174.0,
       .style2 = STYLE_DNB, .seed = 10 },
+    { .name = "re-entry 8 ms late at bar 32 (no cut: within the merge tolerance)",
+      .style = STYLE_HOUSE, .bpm = 125.0, .first_downbeat = 0.4, .bars = 64, .change_bar = 32,
+      .bpm2 = 125.0, .change_gap = 0.008, .one_line = true, .seed = 11 },
 };
 
 typedef struct Want {
@@ -306,17 +311,21 @@ typedef struct Want {
     unsigned flags_clear;       /* must not be set */
 } Want;
 
+/* One section: neither kind of cut. */
+#define CUTS (RX_GRID_FLAG_TEMPO_CHANGE | RX_GRID_FLAG_PHASE_CUT)
+
 static const Want wants[] = {
-    { 0, RX_GRID_FLAG_TEMPO_CHANGE | RX_GRID_FLAG_UNSTEADY | RX_GRID_FLAG_LOW_CONFIDENCE },
-    { 0, RX_GRID_FLAG_TEMPO_CHANGE | RX_GRID_FLAG_UNSTEADY },
-    { 0, RX_GRID_FLAG_TEMPO_CHANGE | RX_GRID_FLAG_UNSTEADY },
-    { 0, RX_GRID_FLAG_TEMPO_CHANGE | RX_GRID_FLAG_UNSTEADY },
-    { 0, RX_GRID_FLAG_TEMPO_CHANGE | RX_GRID_FLAG_UNSTEADY },
-    { 0, RX_GRID_FLAG_TEMPO_CHANGE | RX_GRID_FLAG_UNSTEADY },
-    { RX_GRID_FLAG_UNSTEADY, RX_GRID_FLAG_TEMPO_CHANGE },
-    { RX_GRID_FLAG_TEMPO_CHANGE, RX_GRID_FLAG_UNSTEADY },
-    { RX_GRID_FLAG_TEMPO_CHANGE, RX_GRID_FLAG_UNSTEADY },
-    { RX_GRID_FLAG_TEMPO_CHANGE, RX_GRID_FLAG_UNSTEADY },
+    { 0, CUTS | RX_GRID_FLAG_UNSTEADY | RX_GRID_FLAG_LOW_CONFIDENCE },
+    { 0, CUTS | RX_GRID_FLAG_UNSTEADY },
+    { 0, CUTS | RX_GRID_FLAG_UNSTEADY },
+    { 0, CUTS | RX_GRID_FLAG_UNSTEADY },
+    { 0, CUTS | RX_GRID_FLAG_UNSTEADY },
+    { 0, CUTS | RX_GRID_FLAG_UNSTEADY },
+    { RX_GRID_FLAG_UNSTEADY, CUTS },
+    { RX_GRID_FLAG_TEMPO_CHANGE, RX_GRID_FLAG_UNSTEADY | RX_GRID_FLAG_PHASE_CUT },
+    { RX_GRID_FLAG_PHASE_CUT, RX_GRID_FLAG_UNSTEADY | RX_GRID_FLAG_TEMPO_CHANGE },
+    { RX_GRID_FLAG_TEMPO_CHANGE, RX_GRID_FLAG_UNSTEADY | RX_GRID_FLAG_PHASE_CUT },
+    { 0, CUTS | RX_GRID_FLAG_UNSTEADY },
 };
 
 /* ----------------------------------------------------------- the checks */
@@ -386,6 +395,29 @@ static int check(int idx)
                 FAILF(" boundary is beat %d of its bar (beat field %d)", num, g->beat);
         }
     }
+    /* The grid as the stick gets it (rxbox/model.h's expansion): no two
+     * beats closer than half a period, and every section's first downbeat
+     * numbered 1. */
+    RxBeat *bt = NULL;
+    int nbt = 0;
+    double dur = (double)t.n / RATE;
+    if (rx_grid_beats(&r.grid, dur, &bt, &nbt) == 0) {
+        for (int i = 1; i < nbt; i++) {
+            double gap = bt[i].time - bt[i - 1].time;
+            if (gap < 0.5 * 60.0 / fmax(bt[i].bpm, bt[i - 1].bpm)) {
+                FAILF(" beats %.4f and %.4f only %.1f ms apart", bt[i - 1].time, bt[i].time,
+                      gap * 1e3);
+                break;
+            }
+        }
+        for (int s = 1; s < truth.nb_secs; s++) {
+            for (int i = 0; i < nbt; i++) {
+                if (fabs(bt[i].time - truth.start[s]) < 0.010 && bt[i].number != 1)
+                    FAILF(" section %d's downbeat is numbered %d", s, bt[i].number);
+            }
+        }
+        free(bt);
+    }
     const Want *w = &wants[idx];
     if ((r.flags & w->flags_set) != w->flags_set)
         FAILF(" flags 0x%x lack 0x%x", r.flags, w->flags_set);
@@ -409,7 +441,7 @@ static int check_misc(void)
 {
     int fails = 0;
     /* Flag names round-trip. */
-    for (unsigned f = 1; f <= RX_GRID_FLAG_UNSTEADY; f <<= 1) {
+    for (unsigned f = 1; f <= RX_GRID_FLAG_PHASE_CUT; f <<= 1) {
         const char *n = rx_grid_flag_name((enum RxGridFlag)f);
         if (!n || !*n || rx_grid_flag_parse(n) != f) {
             printf("FAIL flag name 0x%x\n", f);

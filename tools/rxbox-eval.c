@@ -18,6 +18,11 @@
  *     -v                      the analyser's diagnostics per file
  *
  *     --ffmpeg                decode with the ffmpeg command line instead of rx_decode
+ *     --all                   run the whole rx_analyse (native channels, waveforms
+ *                             and key too), as the app does; beat results only
+ *     --what MASK             with --all: only these stages (1 beats, 2 key, 4 waveforms)
+ *     --mem                   print resident memory after decoding and the peak
+ *                             after the analysis (meaningful with -j 1)
  *
  * Audio is decoded by rx_decode, mono at the file's own rate, as
  * rx_analyse sees it (the analyser resamples). With --ffmpeg it is piped
@@ -156,9 +161,10 @@ typedef struct Result {
     double first_onset;
     double ms;
     double tag_bpm;
+    double closest;             /* closest two beats of the expanded grid, in periods */
     /* diagnostics */
     double octave_margin, phase_margin, kick_share, jitter, strong_on_grid;
-    double full_on_grid, kick_delay, full_delay;
+    double full_on_grid, kick_delay, full_delay, scatter;
     double second_bpm;
     RxOctaveDecision oct;
     int    band;
@@ -230,6 +236,9 @@ typedef struct Job {
     RxAnalysisOptions  opt;
     const char        *dump;
     bool               ffmpeg;
+    bool               mem;
+    bool               all;
+    unsigned           what;
 } Job;
 
 static double cpu_ms(void)
@@ -237,6 +246,21 @@ static double cpu_ms(void)
     struct timespec ts;
     clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts);
     return ts.tv_sec * 1e3 + ts.tv_nsec / 1e6;
+}
+
+/* The closest two beats of the grid as a player gets it (rx_grid_beats),
+ * in periods of the faster side: under a half, two beats are one hit. */
+static double closest_beats(const RxGrid *g, double duration)
+{
+    RxBeat *b = NULL;
+    int nb = 0;
+    if (rx_grid_beats(g, duration, &b, &nb) < 0)
+        return NAN;
+    double m = INFINITY;
+    for (int i = 1; i < nb; i++)
+        m = fmin(m, (b[i].time - b[i - 1].time) / (60.0 / fmax(b[i].bpm, b[i - 1].bpm)));
+    free(b);
+    return m;
 }
 
 static int cmp_dbl(const void *a, const void *b)
@@ -318,10 +342,103 @@ static void dump_files(const char *base, int idx, const RxBeatDebug *d, const Re
     free(fn);
 }
 
+/* Resident memory now, and the process's peak so far, in MB. */
+static double rss_mb(void)
+{
+    long pages = 0, res = 0;
+    FILE *f = fopen("/proc/self/statm", "r");
+    if (f) {
+        if (fscanf(f, "%ld %ld", &pages, &res) != 2)
+            res = 0;
+        fclose(f);
+    }
+    return res * (double)sysconf(_SC_PAGESIZE) / 1048576.0;
+}
+
+/* The peak resident size since the last peak_reset (VmHWM). */
+static double peak_mb(void)
+{
+    char line[256];
+    double kb = 0.0;
+    FILE *f = fopen("/proc/self/status", "r");
+    if (!f)
+        return 0.0;
+    while (fgets(line, sizeof(line), f)) {
+        if (!strncmp(line, "VmHWM:", 6))
+            kb = atof(line + 6);
+    }
+    fclose(f);
+    return kb / 1024.0;
+}
+
+/* Resets the peak to the current size (Linux: clear_refs 5), so that the
+ * analysis's own peak is not hidden under the decoder's. */
+static void peak_reset(void)
+{
+    FILE *f = fopen("/proc/self/clear_refs", "w");
+    if (f) {
+        fputs("5", f);
+        fclose(f);
+    }
+}
+
+/* --all: the whole rx_analyse, as the app runs it (native channels;
+ * waveforms and key too). Fills the beat result only. */
+static int analyse_all(Job *job, Result *r, RxBeatResult *br)
+{
+    RxAudio au = { 0 };
+    if (rx_decode(r->path, 0, 0, &au) < 0) {
+        fprintf(stderr, "%s: decoding failed\n", r->path);
+        return -1;
+    }
+    r->duration = (double)au.nb_frames / au.rate;
+    double peak0 = peak_mb();
+    peak_reset();
+    double rss0 = rss_mb();
+    RxAnalysis an;
+    double t0 = cpu_ms();
+    int ret = rx_analyse(&au, &job->opt, job->what ? job->what : RX_ANALYSE_ALL, &an);
+    r->ms = cpu_ms() - t0;
+    rx_audio_free(&au);
+    if (job->mem)
+        printf("memory: decoded %.0f MB resident (peak %.0f), peak after analysis %.0f MB: "
+               "analysis %.0f MB above its input  %s\n", rss0, peak0, peak_mb(),
+               peak_mb() - rss0, rx_path_base(r->path));
+    if (ret < 0) {
+        fprintf(stderr, "%s: analysis failed (%d)\n", r->path, ret);
+        return -1;
+    }
+    *br = an.beats;
+    an.beats = (RxBeatResult) { 0 };
+    rx_analysis_free(&an);
+    return 0;
+}
+
 static void analyse_one(Job *job, int i)
 {
     Result *r = &job->res[i];
     r->path = job->paths[i];
+    if (job->all) {
+        RxBeatResult br;
+        if (analyse_all(job, r, &br) < 0)
+            return;
+        r->ok = br.grid.nb_sections > 0;
+        r->nb_secs = RX_MIN(br.grid.nb_sections, MAX_SECS);
+        memcpy(r->secs, br.grid.sections, r->nb_secs * sizeof(*r->secs));
+        r->closest = closest_beats(&br.grid, r->duration);
+        r->confidence = br.confidence;
+        r->flags = br.flags;
+        flags_to_str(br.flags, r->flagstr, sizeof(r->flagstr));
+        r->first_onset = br.first_onset;
+        if (r->ok) {
+            r->downbeat = nearest_downbeat(r, 0.0);
+            double bar = 4 * 60.0 / r->secs[0].bpm;
+            while (r->downbeat < 0.0)
+                r->downbeat += bar;
+        }
+        rx_beat_result_free(&br);
+        return;
+    }
     float *x = NULL;
     int64_t n = 0;
     int rate = 44100;
@@ -349,9 +466,18 @@ static void analyse_one(Job *job, int i)
 
     RxBeatResult br;
     RxBeatDebug dbg;
+    double peak0 = peak_mb();
+    peak_reset();
+    double rss0 = rss_mb();
     double t0 = cpu_ms();
-    int ret = rx_analyse_beats_dbg(x, n, rate, &job->opt, &br, &dbg);
+    int ret = rx_analyse_beats_dbg(x, n, rate, &job->opt, &br, job->mem ? NULL : &dbg);
     r->ms = cpu_ms() - t0;
+    if (job->mem) {
+        printf("memory: decoded %.0f MB resident (peak %.0f), peak after analysis %.0f MB: "
+               "analysis %.0f MB above its input  %s\n", rss0, peak0, peak_mb(),
+               peak_mb() - rss0, rx_path_base(r->path));
+        memset(&dbg, 0, sizeof(dbg));
+    }
     free(x);
     if (ret < 0) {
         fprintf(stderr, "%s: analysis failed (%d)\n", r->path, ret);
@@ -360,6 +486,7 @@ static void analyse_one(Job *job, int i)
     r->ok = br.grid.nb_sections > 0;
     r->nb_secs = RX_MIN(br.grid.nb_sections, MAX_SECS);
     memcpy(r->secs, br.grid.sections, r->nb_secs * sizeof(*r->secs));
+    r->closest = closest_beats(&br.grid, r->duration);
     r->confidence = br.confidence;
     r->flags = br.flags;
     flags_to_str(br.flags, r->flagstr, sizeof(r->flagstr));
@@ -374,11 +501,14 @@ static void analyse_one(Job *job, int i)
             r->downbeat += bar;
         r->kick_share = dbg.kick_share;
         r->jitter = dbg.jitter;
+        r->scatter = dbg.scatter;
         r->oct = dbg.octave;
         r->shifted = dbg.half_shift;
         r->band = dbg.band;
-        r->strong_on_grid = locked_to_grid(&dbg.ons, dbg.ons.low, r, &r->kick_delay);
-        r->full_on_grid = locked_to_grid(&dbg.ons, dbg.ons.full, r, &r->full_delay);
+        if (dbg.ons.nb) {
+            r->strong_on_grid = locked_to_grid(&dbg.ons, dbg.ons.low, r, &r->kick_delay);
+            r->full_on_grid = locked_to_grid(&dbg.ons, dbg.ons.full, r, &r->full_delay);
+        }
         if (job->dump)
             dump_files(job->dump, i, &dbg, r);
     }
@@ -519,6 +649,7 @@ static int read_csv(const char *fn, Result **out)
         memset(r, 0, sizeof(*r));
         r->path = rx_strdup(fl[0]);
         r->duration = atof(fl[1]);
+        r->closest = INFINITY;
         char *sp = fl[3];
         while (*sp && r->nb_secs < MAX_SECS) {
             RxTempoSection *s = &r->secs[r->nb_secs++];
@@ -649,7 +780,8 @@ static void usage(void)
     fprintf(stderr, "usage: rxbox-eval [-j N] [-l LIST] [--csv OUT] [--from CSV]\n"
                     "                  [--compare REF.csv]\n"
                     "                  [--dump-onsets BASE] [--bpm-range LO HI] [--no-sections]\n"
-                    "                  [--ffmpeg] [-v|-vv] FILE...\n");
+                    "                  [--ffmpeg] [--all] [--what MASK] [--mem]\n"
+                    "                  [-v|-vv] FILE...\n");
 }
 
 int main(int argc, char **argv)
@@ -681,6 +813,13 @@ int main(int argc, char **argv)
             job.opt.bpm_max = atof(argv[++i]);
         } else if (!strcmp(a, "--ffmpeg")) {
             job.ffmpeg = true;
+        } else if (!strcmp(a, "--mem")) {
+            job.mem = true;
+        } else if (!strcmp(a, "--all")) {
+            job.all = true;
+        } else if (!strcmp(a, "--what") && i + 1 < argc) {
+            job.all = true;
+            job.what = (unsigned)atoi(argv[++i]);
         } else if (!strcmp(a, "--no-sections")) {
             job.opt.allow_sections = false;
         } else if (!strcmp(a, "-v")) {
@@ -769,7 +908,8 @@ int main(int argc, char **argv)
                r->confidence, r->ms, r->flagstr);
         if (r->tag_bpm > 0)
             printf("  tag %g", r->tag_bpm);
-        printf("  %s%s\n", rx_path_base(r->path), secs);
+        printf("  %s%s%s\n", rx_path_base(r->path), secs,
+               r->closest < 0.5 ? "  NEAR-DUPLICATE BEATS" : "");
         if (!verbose || from)
             continue;
         printf("          2nd %.2f  octave x%g margin %.2f:", r->second_bpm, r->oct.factor,
@@ -778,18 +918,19 @@ int main(int argc, char **argv)
             printf("  %.1f (snare %.2f/%.2f kick %.2f/%.2f)", r->oct.bpm[l],
                    r->oct.ev[l].balance, r->oct.ev[l].subdiv, r->oct.ev[l].kick_alt,
                    r->oct.ev[l].kick_sub);
-        printf("\n          phase %.2f%s  kick %.2f  jit %.1f ms  band %d"
+        printf("\n          phase %.2f%s  kick %.2f  jit %.1f ms  scatter %.1f ms  band %d"
                "  locked: kick %.2f at %+.1f ms, full %.2f at %+.1f ms\n",
                r->phase_margin, r->shifted ? " (moved)" : "", r->kick_share, r->jitter * 1e3,
-               r->band, r->strong_on_grid, r->kick_delay * 1e3, r->full_on_grid,
+               r->scatter * 1e3, r->band, r->strong_on_grid, r->kick_delay * 1e3, r->full_on_grid,
                r->full_delay * 1e3);
     }
     if (ok && !from) {
         double sog = 0.0, sfg = 0.0, conf = 0.0;
-        int agree = 0;
+        int agree = 0, dups = 0;
         for (int i = 0; i < nb; i++) {
             if (!res[i].ok)
                 continue;
+            dups += res[i].closest < 0.5;
             sog += res[i].strong_on_grid;
             sfg += res[i].full_on_grid;
             conf += res[i].confidence;
@@ -802,6 +943,7 @@ int main(int argc, char **argv)
                "full band %.1f %%; kick and full band agree on %d (%.0f %%)\n",
                ok, tot_ms / ok, tot_ms / (tot_dur / 60.0), conf / ok, 100.0 * sog / ok,
                100.0 * sfg / ok, agree, 100.0 * agree / ok);
+        printf("grids with two beats closer than half a period: %d\n", dups);
     }
     if (csv)
         write_csv(csv, res, nb);

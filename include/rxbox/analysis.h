@@ -45,8 +45,9 @@ int  rx_waveforms_compute(const float *mono, int64_t nb_samples, int rate, RxWav
 void rx_waveforms_free(RxWaveforms *w);
 /* The packed form stored in the library (and the .rxw file format):
  * "RXWV", version, nb_detail, rate, gains, then the tags. Unpack (and load)
- * return -EPROTO for a blob of another format version (version 1 held dj's
- * three-band levels): recompute the waveforms; -EINVAL for damaged data. */
+ * return -EPROTO for a blob of another format version (versions 1 and 2
+ * held older three-band levels): recompute the waveforms; -EINVAL for
+ * damaged data. */
 int  rx_waveforms_pack(const RxWaveforms *w, uint8_t **data, size_t *size);
 int  rx_waveforms_unpack(const uint8_t *data, size_t size, RxWaveforms *w);
 int  rx_waveforms_save(const RxWaveforms *w, const char *path);
@@ -55,13 +56,14 @@ int  rx_waveforms_load(const char *path, RxWaveforms *w);
 /* ------------------------------------------------------------------- beats */
 
 enum RxGridFlag {
-    RX_GRID_FLAG_TEMPO_CHANGE     = 1 << 0,   /* more than one section was needed */
+    RX_GRID_FLAG_TEMPO_CHANGE     = 1 << 0,   /* a section at another tempo was needed */
     RX_GRID_FLAG_OCTAVE_UNCERTAIN = 1 << 1,   /* half or double tempo scored close */
     RX_GRID_FLAG_PHASE_UNCERTAIN  = 1 << 2,   /* off-beat phase scored close */
     RX_GRID_FLAG_DOWNBEAT_WEAK    = 1 << 3,   /* bar position chosen by a small margin */
     RX_GRID_FLAG_NO_KICKS         = 1 << 4,   /* no kick band to follow; broadband used */
     RX_GRID_FLAG_LOW_CONFIDENCE   = 1 << 5,   /* confidence below 0.5: check by ear */
     RX_GRID_FLAG_UNSTEADY         = 1 << 6,   /* onsets jitter around the line: live drums? */
+    RX_GRID_FLAG_PHASE_CUT        = 1 << 7,   /* a section re-enters at the same tempo, shifted */
 };
 const char *rx_grid_flag_name(enum RxGridFlag f);      /* "tempo-change" ... */
 unsigned    rx_grid_flag_parse(const char *name);     /* 0 if unknown */

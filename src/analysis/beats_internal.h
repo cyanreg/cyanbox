@@ -25,17 +25,27 @@
 #define RX_BEAT_HOP   294           /* 150 frames a second, the waveform column rate */
 #define RX_BEAT_NMELS 64
 
+#define RX_BEAT_GROUP 4             /* mel bands per downbeat profile band */
+#define RX_BEAT_NPROF (RX_BEAT_NMELS / RX_BEAT_GROUP)
+
+/* What the later stages read of the spectrum. The mel frames themselves
+ * are not kept (an hour of them is 138 MB): the flux is taken frame by
+ * frame as they are computed, and the downbeat's profile bands are summed
+ * from them on the way. */
 typedef struct RxSpectrum {
     int    nb_frames;               /* frame f is centred on sample f * RX_BEAT_HOP */
     double fps;
-    int    nb_mels;
-    float *mel;                     /* [nb_frames][nb_mels], log1p(1000 * amplitude / (N/4)) */
-    float *kick;                    /* [nb_frames], the same compression, 30..150 Hz */
+    float *prof;                    /* [nb_frames][RX_BEAT_NPROF]: sums of 4 log-mel bands */
+    float *kick;                    /* [nb_frames], log-compressed amplitude 30..150 Hz */
+    float *flux_full;               /* [nb_frames] SuperFlux over all mel bands, at the window */
+    float *flux_mid;                /* centre, before the onset stage's corrections */
+    float *flux_high;
     double mel_hz[RX_BEAT_NMELS];   /* centre of each band */
 } RxSpectrum;
 
 /* Centred Hann STFT, triangular mel bands (30 Hz .. 16 kHz, like dj) on
- * the power spectrum, square-rooted back to an amplitude per band. */
+ * the power spectrum, square-rooted back to an amplitude per band and
+ * compressed as dj's log1p(1000 * amplitude / (N/4)). */
 int  rx_spectrum_compute(const float *x, int64_t n, RxSpectrum *s);
 void rx_spectrum_free(RxSpectrum *s);
 
@@ -90,7 +100,13 @@ typedef struct RxOnsets {
     double kick_share;              /* periodic energy in the kick band vs the full band */
 } RxOnsets;
 
-int  rx_onsets_compute(const RxSpectrum *s, RxOnsets *o);
+/* The SuperFlux rises of mel frame `cur` against frame `ref` (two frames
+ * earlier), summed over all bands, bands [mid0, mid1) and bands from
+ * high0. Called by the STFT for every frame. */
+void rx_superflux_frame(const float *ref, const float *cur, int mid0, int mid1, int high0,
+                        float *full, float *mid, float *high);
+/* Takes the spectrum's flux signals (they move into the onsets). */
+int  rx_onsets_compute(RxSpectrum *s, RxOnsets *o);
 void rx_onsets_free(RxOnsets *o);
 /* The first onset that is loud relative to the track (dj's rule). */
 double rx_onsets_first(const RxOnsets *o);
@@ -178,7 +194,8 @@ typedef struct RxFitSection {
     int    index0;                  /* beat count at t0 */
     double t0, period;
     double rms;                     /* weighted residual RMS of the supported beats (s) */
-    double jitter;                  /* robust beat-to-beat jitter estimate (s) */
+    double jitter;                  /* robust spread of the attacks around the line (s) */
+    double scatter;                 /* robust beat-to-beat scatter (s), from second differences */
     int    supported;               /* beats with an attack */
 } RxFitSection;
 
@@ -274,6 +291,7 @@ typedef struct RxBeatDebug {
     RxDownbeat      downbeat;
     double          kick_share;
     double          jitter;         /* largest section jitter (s) */
+    double          scatter;        /* largest section beat-to-beat scatter (s) */
     int             band;           /* envelope band of the first section */
     bool            half_shift;     /* the grid was moved by half a beat */
 } RxBeatDebug;
