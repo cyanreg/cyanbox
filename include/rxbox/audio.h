@@ -99,12 +99,13 @@ void rx_audio_free(RxAudio *a);
 /* ----------------------------------------------------------------- artwork */
 
 /* The track's cover: the embedded picture (attached picture stream) when
- * there is one, else an image file in the track's directory, else one in
- * the parent directory (disc subfolders). Among the files there, in this
- * order of preference, any case, .jpg/.jpeg/.png/.webp: front, cover,
- * folder, album, art, then a numbered first one (front1, cover_01, ...),
- * then, if the directory holds exactly one image, that one. back, obi,
- * booklet, spine, scan, cd, inlay, inside, disc and tray are never used
+ * there is one, else an image file in the track's directory, else, when
+ * that directory is a disc folder (CD1, Disc 2 ...), one in its parent.
+ * Among the files there, in this order of preference, any case,
+ * .jpg/.jpeg/.png/.webp: front, cover, folder, album, art, then a
+ * numbered first one (front1, cover_01, ...), then, if the directory
+ * holds exactly one image, that one. back, obi, booklet, spine, scan, cd,
+ * inlay, inside, disc and tray are never used
  * (measured on the user's library: 200 of 232 album folders use front.*,
  * the rest cover.* or folder.*, with back/obi/booklet scans beside them).
  * RGBA8, malloc'd. -ENOENT when there is none. */
@@ -117,8 +118,9 @@ int  rx_artwork_raw(const char *path, uint8_t **data, size_t *size, char codec[1
 int  rx_artwork_find_file(const char *audio_path, char **image_path);
 /* Decodes an image file in memory (JPEG, PNG, WebP ...) to RGBA8. */
 int  rx_image_decode(const uint8_t *data, size_t size, uint8_t **rgba, int *width, int *height);
-/* Scales (box filter, aspect kept, centred on black) to size x size and
- * encodes a baseline JPEG at `quality` (1..100; dj used 90). */
+/* As dj's _jpeg: the centred square of side min(width, height), scaled
+ * (Lanczos) to size x size, encoded as a baseline 4:2:0 JPEG at `quality`
+ * (1..100, libjpeg's tables; dj used 90). */
 int  rx_image_jpeg_square(const uint8_t *rgba, int width, int height, int size, int quality,
                           uint8_t **jpeg, size_t *jpeg_size);
 /* Scales to at most max_w x max_h keeping aspect (for interface thumbnails). */
@@ -127,9 +129,10 @@ int  rx_image_scale(const uint8_t *rgba, int width, int height, int max_w, int m
 
 /* ------------------------------------------------------------- transcoding */
 
-/* Writes `path` as 16-bit/44.1 kHz FLAC (or keeps the rate when <= 48 kHz)
- * to `out_path`, copying tags and artwork. For the stick's compatibility
- * mode. */
+/* Writes `path` as a 16-bit FLAC to `out_path`, at the native rate or at
+ * max_rate when that is lower (max_rate <= 0: native), copying tags and
+ * artwork. The audio is rx_decode's, on the players' timeline. For the
+ * stick's compatibility mode. */
 int  rx_transcode_flac(const char *path, const char *out_path, int max_rate);
 
 #endif /* RXBOX_AUDIO_H */
