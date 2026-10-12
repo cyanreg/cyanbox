@@ -1,63 +1,125 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
-/* Musical key from a tuning-corrected, percussion-suppressed chroma: a port
- * of dj's analysis/key.py, with dj's tuning estimate fixed (below).
+/* Musical key: a tuning-corrected, whitened semitone spectrum, folded into
+ * three chroma vectors (bass, middle, treble) and matched against key
+ * templates fitted on electronic dance music. docs/KEY.md has the
+ * evaluation behind every choice: the GiantSteps MTG key set (1159 tracks)
+ * is the development set everything was tuned on, the GiantSteps key set
+ * (604) the held-out test, plus 216 synthetic tracks and 20 of the user's.
+ * On the test set this names 64.7 % of the keys exactly (MIREX score
+ * 0.704); dj's detector, which this file replaced, 30.3 % (0.404), and
+ * libKeyFinder 60.4 % (0.674).
  *
- * The chain, as in dj: the mono mix is resampled to 44.1 kHz and then to
- * 11025 Hz with scipy's resample_poly (dj's export path resamples with
- * resample_poly, not ffmpeg, before analyse_key resamples again; both steps
- * are ported here so the samples match); a centred, periodic-Hann STFT of
- * 8192 points every 2048 samples (av_tx); the 60..2200 Hz bins; a 9-frame
- * median along time per bin, which keeps sustained partials and drops drum
- * hits; a global tuning offset from the spectral peaks; triangular weights
- * from each bin onto the semitones C2..B6, log-compressed and folded into
- * 12 pitch classes, summed over the track; and the best of the 24 rotations
- * of Temperley's (2005) Kostka-Payne key profiles by correlation. The
- * confidence is the margin between the best and second-best correlation.
+ * The chain:
  *
- * Instead of keeping the whole spectrogram, frames are produced on demand
- * into a ring of nine (the median's span) and reduced at once: the tuning
- * needs only the mean of each bin and the chroma only the per-bin sum of the
- * log-compressed magnitudes (the semitone weights are linear), so memory
- * stays small for any track length.
+ * 1. Decimation to ~11 kHz: by the integer d nearest rate / 11025 (44.1 kHz
+ *    is 4, 48 kHz gives 12 kHz), through a Kaiser-windowed sinc of 16d + 1
+ *    taps cut at the new Nyquist. Nothing above B6 is used but the tuning
+ *    peaks (to 4 kHz), and those lie in the passband.
+ * 2. An 8192-point Hann STFT every 4096 samples (0.74 s windows, 1.35 Hz
+ *    bins at 11025 Hz), av_tx. A hop of 2048 measured the same.
+ * 3. The tuning: the spectral peaks between 150 Hz and 4 kHz within 40 dB
+ *    of the frame's loudest, in windows that do not overlap, each read to a
+ *    fraction of a bin by a parabola through the log magnitudes; the
+ *    circular mean of their offsets from the equal-tempered semitones,
+ *    weighted by power. dj's estimate (the median-filtered mean spectrum's
+ *    peaks from 80 Hz, weighted by magnitude) is right on sines but up to
+ *    7.6 cents off on the synthetic tracks, pulled by the kick's pitch sweep
+ *    and the bass's few, wide peaks; this one is within 2 cents on all of
+ *    them.
+ * 4. A semitone spectrum, C1..B6, on the tuned semitones: each band sums
+ *    the magnitudes under a raised-cosine window 0.8 semitone wide (at
+ *    least two bins), scaled so that a sinusoid reads the same at any
+ *    pitch. That is KeyFinder's spectral kernel (Sha'ath, "Estimation of
+ *    key in digital music recordings", MSc thesis, Birkbeck 2011;
+ *    libKeyFinder's chromatransform.cpp). Windows of 3 s, nearer its
+ *    3.7 s, did no better than these 0.74 s ones.
+ * 5. Whitening: each frame divided by its own moving average over 13
+ *    semitones (an octave), so that a loud bass or a bright mix does not
+ *    decide the key by level, and quiet passages count as well as loud
+ *    ones. +2 points on the development set. The other HPCP-style steps
+ *    measured no better (Gómez, "Tonal description of music audio
+ *    signals", PhD thesis, UPF 2006): harmonic summation (each band
+ *    credited to the fundamentals it can be a harmonic of) -0.6..+0.5, a
+ *    nine-frame median against drums -0.8, weighting frames by how peaked
+ *    their chroma is, to ignore drum-only frames, -1.6..-5.6: a drum-only
+ *    frame adds a nearly flat chroma that the templates' shape ignores,
+ *    while the weighting also drops tonal frames it cannot tell from drums.
+ * 6. Three chroma vectors summed over the track: C2..B2 (the bass line),
+ *    C3..B4 and C5..B6, each scaled to unit length. C1 is left out: the
+ *    kick lives there, and the bass's harmonics carry its pitch class.
+ * 7. Each of the 24 keys scores the dot product of the three vectors,
+ *    rotated to its tonic, with the template of its mode (36 weights per
+ *    mode, TEMPLATES below), fitted as one multinomial logistic regression
+ *    over the 24 keys with the weights shared by all tonics
+ *    (gen_key_fixtures.py train) on the development set. The published
+ *    profiles on the same front end, development / test accuracy:
+ *    Sha'ath's (KeyFinder's) 56.7 / 63.6 %, Krumhansl's 48.7 / 50.7,
+ *    Temperley's 44.8 / 47.2, Faraldo's EDM profiles (Faraldo, Gómez, Jordà,
+ *    Herrera, "Key estimation in electronic dance music", ECIR 2016)
+ *    "edma" 47.3 / 52.6 and "edmm" 52.6 / 61.8 (it never names a major
+ *    key), their gated "bgate" (Faraldo, Jordà, Herrera, "A multi-profile
+ *    method for key estimation in EDM", AES Semantic Audio 2017) 52.5 /
+ *    55.0; sums of several of them did worse than Sha'ath's alone. The
+ *    fitted templates: 63.2 % (cross-validated) / 64.7 %, and they name
+ *    every synthetic track, where Sha'ath's miss 19 % of the minor ones.
+ *    Adding Sha'ath's scores to them changed nothing.
+ * 8. A major key gets MAJOR_BIAS added to its score: with it the detector
+ *    names as many tracks major as the development set's annotators did
+ *    (32.6 against 32.5 %); without, 24.6 %, the dataset's minor majority
+ *    leaking into the templates. It costs 1.3 points there and 0.2 on the
+ *    test set, and gains 8 on major tracks in both: the user's library has
+ *    more of them than Beatport's.
+ * 9. Ties (equal scores to 1e-9, as a perfectly symmetric chroma gives)
+ *    go to the higher cosine against Sha'ath's profiles on the summed
+ *    chroma, then to minor (most dance music is), then to the lower tonic.
  *
- * Deliberate differences from dj:
+ * The confidence is a probability that the key is right: a softmax over
+ * the 24 scores at the temperature that fits the development set best; its
+ * top probability, with the agreement of the track's 20-second segments
+ * with the whole (the share whose own best key is the same), mapped
+ * through a logistic fitted on the development set's cross-validated
+ * answers (dj's margin between the two best correlations, 0..0.33 on the
+ * user's tracks, said little). On the test set the answers at 0.9 or more
+ * are right 89 % of the time, at 0.6..0.8 70 %, at 0.4..0.6 46 %. Answers of major keys
+ * are less reliable there than their confidence says, as the test set is
+ * 85 % minor where the development set is 67 %.
  *
- * - dj's _tuning interpolates each peak's frequency from its index in the
- *   band-limited spectrum, which starts at the first bin above 60 Hz
- *   (bin 45), as if it started at bin 0, so every peak reads 45 bins
- *   (60.6 Hz) low. A perfectly tuned A440 tone then measures +44 cents, real
- *   tracks typically -45..-50 cents, and the chroma is shifted by that before
- *   folding: in dj a pure A440 lands 56 % on A and 44 % on Ab, and a track
- *   detuned by +30 cents can come out in an unrelated key. rxbox measures
- *   from the true bin, so tuning_cents is a real estimate (within ~2 cents
- *   on the test signals) and the key is read on the right semitones. Keys
- *   therefore differ from dj's sidecars on some tracks (on the synthetic
- *   test signals dj names 5 of 9 correctly, rxbox 7 of 9; see
- *   tests/analysis/test_key.c).
- * - Silence (no tonal energy at all) gives "" rather than dj's arbitrary
- *   "Bm" with confidence 0. */
+ * Memory: the decimated signal (a quarter of the input at 44.1 kHz), the
+ * whitened 72-band frames of the whole track (2.8 MB an hour) and one FFT.
+ * Time: ~80 ms for five minutes at 44.1 kHz on one core (dj's: ~550 ms):
+ * 30 in the decimation, 30 in the tuning pass, 20 in the band pass.
+ *
+ * Silence (no tonal energy at all) gives "" and confidence 0, as before. */
 
 #include "rxbox/analysis.h"
 
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include <libavutil/mem.h>
 #include <libavutil/tx.h>
 
 #include "rxbox/common.h"
 
-#define ANALYSIS_RATE 44100
-#define KEY_RATE 11025
+#define KEY_RATE 11025.0
 #define N_FFT 8192
-#define HOP 2048
-#define NB_BINS (N_FFT / 2 + 1)
-/* Median span in frames (scipy median_filter size (9, 1), mode "nearest"). */
-#define MEDIAN 9
-/* C2 .. B6 */
-#define MIDI_LO 36
-#define MIDI_HI 96
+#define HOP 4096
+/* The bands: C1 .. B6 */
+#define MIDI_LO 24
+#define NB_BANDS 72
+/* Whitening half-width in semitones */
+#define WHITE 6
+/* The chroma vectors: C2..B2, C3..B4, C5..B6 (band index ranges) */
+#define NB_FEAT 36
+/* Tuning peaks */
+#define PEAK_LO 150.0
+#define PEAK_HI 4000.0
+#define PEAK_FLOOR 1e-2f
+#define TUNE_STEP (N_FFT / HOP)
+#define SEG_SECONDS 20.0
 
 static const char *const MAJOR_NAMES[12] = {
     "C", "Db", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B",
@@ -67,17 +129,45 @@ static const char *const MINOR_NAMES[12] = {
     "Cm", "Dbm", "Dm", "Ebm", "Em", "Fm", "F#m", "Gm", "Abm", "Am", "Bbm", "Bm",
 };
 
-/* Temperley (2005), Kostka-Payne corpus; dj's default profiles. */
-static const double TP_MAJOR[12] = {
-    0.748, 0.060, 0.488, 0.082, 0.670, 0.460, 0.096, 0.715, 0.104, 0.366, 0.057, 0.400,
-};
-static const double TP_MINOR[12] = {
-    0.712, 0.084, 0.474, 0.618, 0.049, 0.460, 0.105, 0.747, 0.404, 0.067, 0.133, 0.330,
+/* Sha'ath's profiles (libKeyFinder constants.cpp), for ties only */
+static const double SHAATH[2][12] = {
+    { 7.23900502618145, 3.50351166725159, 3.58445177536649, 2.84511816478676, 5.81898892118550,
+      4.55865057415321, 2.44778850545507, 6.99473192146830, 3.39106613673505, 4.55614256655143,
+      4.07392666663524, 4.45932757378887 },
+    { 7.00255045060284, 3.14360279015997, 4.35904319714963, 5.40418120718934, 3.67234420879306,
+      4.08971184917798, 3.90791435991554, 6.19960288562316, 3.63424625625277, 2.87241191079876,
+      5.35467999794543, 3.83242038595048 },
 };
 
-/* ------------------------------------------------------------- resampling */
+/* gen_key_fixtures.py train: per mode, the weights of the bass, middle and
+ * treble chroma, each by interval above the tonic. */
+static const double TEMPLATES[2][NB_FEAT] = {
+    {
+        +3.831086, +0.422911, -0.541941, -0.268662, -0.156559, -0.494596,
+        -1.285167, +2.300662, -1.089226, -0.421346, -1.739469, -0.762827,
+        +9.146794, -4.450626, +2.018196, -7.888354, +7.598707, -1.006002,
+        -4.606749, +6.932495, -5.131950, +0.977236, -2.524926, +0.054478,
+        +8.470257, -6.448374, +2.721740, -4.680061, +7.415636, -0.726577,
+        -6.426598, +8.398842, -8.124914, -0.729397, -4.172607, +0.629826,
+    },
+    {
+        +4.320080, +0.815372, -1.393019, +0.151058, -1.310203, -0.692815,
+        -0.389036, +1.268844, -0.019809, -3.557954, +1.532833, -0.520218,
+        +8.244831, -5.135689, +0.128518, +1.839275, +1.997730, -2.337059,
+        -4.984217, +8.378914, -3.717863, -4.856572, +2.971073, -3.648241,
+        +9.820503, -5.160344, +0.129472, +6.367447, -2.777826, +0.897393,
+        -3.997295, +10.009723, -5.713693, -3.671759, +2.989522, -5.220917,
+    },
+};
+static const double MAJOR_BIAS = 0.442;
+static const double TEMPERATURE = 0.9349;
+/* confidence = 1 / (1 + exp(-(CAL_A * logit(p) + CAL_B * agreement + CAL_C))) */
+static const double CAL_A = 0.62796;
+static const double CAL_B = 0.79616;
+static const double CAL_C = -0.33589;
 
-/* Modified Bessel function of the first kind, order 0 (power series). */
+/* ------------------------------------------------------------- decimation */
+
 static double bessel_i0(double x)
 {
     double sum = 1.0, term = 1.0, q = x * x / 4;
@@ -90,69 +180,59 @@ static double bessel_i0(double x)
     return sum;
 }
 
-/* scipy.signal.resample_poly(x, up, down) with its defaults: a low-pass of
- * 2 * 10 * max(up, down) + 1 taps from firwin with a Kaiser window
- * (beta 5), cutoff 1 / max(up, down) of Nyquist, unit DC gain, times up;
- * zero padding; ceil(n * up / down) outputs, output k centred on input
- * k * down / up. The taps are rounded to float as scipy does for float32
- * input; the sums are kept in double. */
-static int resample_poly(const float *x, int64_t n, int up, int down, float **out, int64_t *nb_out)
+/* Keeps every d-th sample of x (d >= 2) after a low-pass at the new
+ * Nyquist: a sinc under a Kaiser window (beta 6, ~60 dB) of 16d + 1 taps,
+ * padded with zeros to a multiple of 8 so that the dot products run as
+ * eight lanes. Output k is centred on input k * d, zero padded at the
+ * ends. */
+static int decimate(const float *x, int64_t n, int d, float **out, int64_t *nb_out)
 {
-    int ret = 0;
-    int max_rate = RX_MAX(up, down);
-    int half = 10 * max_rate, taps = 2 * half + 1;
-    int64_t nout = (n * up + down - 1) / down;
-    double *h = malloc(sizeof(*h) * taps);
-    float *hf = malloc(sizeof(*hf) * taps);
-    float *y = malloc(sizeof(*y) * RX_MAX(nout, 1));
-    if (!h || !hf || !y) {
-        ret = RX_ERROR(ENOMEM);
-        goto fail;
-    }
+    int64_t ny = (n + d - 1) / d;
+    float *y = malloc(sizeof(*y) * RX_MAX(ny, 1));
+    if (!y)
+        return RX_ERROR(ENOMEM);
 
-    double fc = 1.0 / max_rate, sum = 0.0, i0b = bessel_i0(5.0);
+    int half = 8 * d, taps = 2 * half + 1, padded = (taps + 7) & ~7;
+    float *h = calloc(padded, sizeof(*h));
+    if (!h) {
+        free(y);
+        return RX_ERROR(ENOMEM);
+    }
+    double sum = 0.0, i0b = bessel_i0(6.0);
     for (int i = 0; i < taps; i++) {
-        double m = i - half;
-        double s = m == 0 ? 1.0 : sin(M_PI * fc * m) / (M_PI * fc * m);
-        double r = m / half;
-        double win = bessel_i0(5.0 * sqrt(1 - r * r)) / i0b;
-        h[i] = fc * s * win;
+        double m = i - half, r = m / half;
+        double s = m == 0 ? 1.0 : sin(M_PI * m / d) / (M_PI * m / d);
+        h[i] = (float)(s * bessel_i0(6.0 * sqrt(1 - r * r)) / i0b);
         sum += h[i];
     }
-    for (int i = 0; i < taps; i++) {
-        hf[i] = (float)(h[i] / sum);
-        hf[i] *= (float)up;
-    }
+    for (int i = 0; i < taps; i++)
+        h[i] = (float)(h[i] / sum);
 
-    for (int64_t k = 0; k < nout; k++) {
-        /* Inputs i with 0 <= c - up * i <= 2 * half */
-        int64_t c = k * down + half;
-        int64_t lo = c > 2 * half ? (c - 2 * half + up - 1) / up : 0;
-        int64_t hi = RX_MIN(c / up, n - 1);
-        double acc = 0.0;
-        for (int64_t i = lo; i <= hi; i++)
-            acc += (double)hf[c - up * i] * x[i];
-        y[k] = (float)acc;
+    for (int64_t k = 0; k < ny; k++) {
+        int64_t c = k * d;
+        if (c >= half && c - half + padded <= n) {
+            const float *p = x + c - half;
+            float acc[8] = { 0 };
+            for (int i = 0; i < padded; i += 8)
+                for (int j = 0; j < 8; j++)
+                    acc[j] += h[i + j] * p[i + j];
+            float lo4 = (acc[0] + acc[1]) + (acc[2] + acc[3]);
+            float hi4 = (acc[4] + acc[5]) + (acc[6] + acc[7]);
+            y[k] = lo4 + hi4;
+        } else {
+            float acc = 0;
+            for (int i = 0; i < taps; i++) {
+                int64_t j = c - half + i;
+                if (j >= 0 && j < n)
+                    acc += h[i] * x[j];
+            }
+            y[k] = acc;
+        }
     }
-
-    *out = y;
-    *nb_out = nout;
-    y = NULL;
-fail:
     free(h);
-    free(hf);
-    free(y);
-    return ret;
-}
-
-static int64_t gcd64(int64_t a, int64_t b)
-{
-    while (b) {
-        int64_t t = a % b;
-        a = b;
-        b = t;
-    }
-    return a;
+    *out = y;
+    *nb_out = ny;
+    return 0;
 }
 
 /* ------------------------------------------------------------------- STFT */
@@ -160,34 +240,11 @@ static int64_t gcd64(int64_t a, int64_t b)
 typedef struct Stft {
     const float *x;
     int64_t n;
-    int64_t nb_frames;
-    int bin_lo, nb;                 /* the band kept: bins [bin_lo, bin_lo + nb) */
     AVTXContext *tx;
     av_tx_fn fn;
-    float *win, *frame;
+    float *win, *frame, *mag;
     AVComplexFloat *spec;
-    float *ring;                    /* MEDIAN frames of nb magnitudes */
-    int64_t done;                   /* frames computed so far */
 } Stft;
-
-/* dj's stft_mag: frame f is centred on sample f * HOP, zero padded, times a
- * periodic Hann window (np.hanning(N + 1)[:-1] as float32); magnitudes of
- * the bins in the band go into the ring. */
-static void stft_next(Stft *s)
-{
-    int64_t f = s->done++;
-    int64_t start = f * HOP - N_FFT / 2;
-    for (int i = 0; i < N_FFT; i++) {
-        int64_t j = start + i;
-        s->frame[i] = j >= 0 && j < s->n ? s->x[j] * s->win[i] : 0.0f;
-    }
-    s->fn(s->tx, s->spec, s->frame, sizeof(float));
-    float *row = &s->ring[(f % MEDIAN) * s->nb];
-    for (int b = 0; b < s->nb; b++) {
-        AVComplexFloat v = s->spec[s->bin_lo + b];
-        row[b] = hypotf(v.re, v.im);
-    }
-}
 
 static void stft_free(Stft *s)
 {
@@ -195,136 +252,288 @@ static void stft_free(Stft *s)
     av_freep(&s->win);
     av_freep(&s->frame);
     av_freep(&s->spec);
-    free(s->ring);
+    av_freep(&s->mag);
 }
 
-static int stft_init(Stft *s, const float *x, int64_t n, int bin_lo, int nb)
+static int stft_init(Stft *s, const float *x, int64_t n)
 {
-    *s = (Stft) {
-        .x         = x,
-        .n         = n,
-        .nb_frames = n / HOP + 1,
-        .bin_lo    = bin_lo,
-        .nb        = nb,
-    };
+    *s = (Stft) { .x = x, .n = n };
     float scale = 1.0f;
-    int ret = av_tx_init(&s->tx, &s->fn, AV_TX_FLOAT_RDFT, 0, N_FFT, &scale, 0);
     /* AVERROR(e) is -e on POSIX systems, the same convention as rxbox's */
+    int ret = av_tx_init(&s->tx, &s->fn, AV_TX_FLOAT_RDFT, 0, N_FFT, &scale, 0);
     if (ret < 0)
         return ret;
     s->win = av_malloc(sizeof(*s->win) * N_FFT);
     s->frame = av_malloc(sizeof(*s->frame) * (N_FFT + 2));
-    s->spec = av_malloc(sizeof(*s->spec) * (NB_BINS + 1));
-    s->ring = malloc(sizeof(*s->ring) * MEDIAN * nb);
-    if (!s->win || !s->frame || !s->spec || !s->ring)
+    s->spec = av_malloc(sizeof(*s->spec) * (N_FFT / 2 + 1));
+    s->mag = av_malloc(sizeof(*s->mag) * (N_FFT / 2 + 1));
+    if (!s->win || !s->frame || !s->spec || !s->mag)
         return RX_ERROR(ENOMEM);
     for (int i = 0; i < N_FFT; i++)
         s->win[i] = (float)(0.5 - 0.5 * cos(2 * M_PI * i / N_FFT));
     return 0;
 }
 
-/* The median of MEDIAN values (an insertion sort: nine values, millions
- * of times). */
-static float median9(float *v)
+/* The magnitudes of bins [0, nb) of frame f, centred on sample f * HOP */
+static void stft_frame(Stft *s, int64_t f, int nb)
 {
-    for (int i = 1; i < MEDIAN; i++) {
-        float t = v[i];
-        int j = i;
-        for (; j > 0 && v[j - 1] > t; j--)
-            v[j] = v[j - 1];
-        v[j] = t;
+    int64_t start = f * HOP - N_FFT / 2;
+    for (int i = 0; i < N_FFT; i++) {
+        int64_t j = start + i;
+        s->frame[i] = j >= 0 && j < s->n ? s->x[j] * s->win[i] : 0.0f;
     }
-    return v[MEDIAN / 2];
+    s->fn(s->tx, s->spec, s->frame, sizeof(float));
+    for (int b = 0; b < nb; b++)
+        s->mag[b] = hypotf(s->spec[b].re, s->spec[b].im);
 }
 
-/* ------------------------------------------------------------------ chroma */
+/* ----------------------------------------------------------------- tuning */
 
-/* dj's _tuning, corrected: the magnitude-weighted circular mean of the
- * peaks' offsets from the equal-tempered semitones, in semitones. `s` is
- * the mean percussion-suppressed spectrum of the band, which starts at bin
- * `bin_lo`, and `freq` its bin frequencies. */
-static double estimate_tuning(const double *s, const double *freq, int nb, int bin_lo)
+/* The power-weighted circular mean of the peaks' offsets from the
+ * equal-tempered semitones, in semitones, over every TUNE_STEP-th frame
+ * (windows that do not overlap: the tuning is one number for the whole
+ * track, and the peaks are most of the cost). */
+static double estimate_tuning(Stft *s, int64_t nb_frames, double fs)
 {
-    double df = (double)KEY_RATE / N_FFT, re = 0.0, im = 0.0;
-    int nb_peaks = 0;
-    for (int i = 1; i < nb - 1; i++) {
-        if (!(s[i] > s[i - 1] && s[i] >= s[i + 1]) || !(freq[i] > 80 && freq[i] < 2000))
+    double df = fs / N_FFT, re = 0.0, im = 0.0;
+    int lo = RX_MAX((int)ceil(PEAK_LO / df), 1);
+    int hi = RX_MIN((int)(fmin(PEAK_HI, 0.45 * fs) / df), N_FFT / 2 - 1);
+    if (hi <= lo)
+        return 0.0;
+    for (int64_t f = 0; f < nb_frames; f += TUNE_STEP) {
+        stft_frame(s, f, hi + 2);
+        float top = 0;
+        for (int b = lo; b <= hi; b++)
+            top = fmaxf(top, s->mag[b]);
+        if (top <= 0)
             continue;
-        double a = log(s[i - 1] + 1e-9), b = log(s[i] + 1e-9), c = log(s[i + 1] + 1e-9);
-        double off = RX_CLAMP(0.5 * (a - c) / (a - 2 * b + c + 1e-12), -0.5, 0.5);
-        /* From the true bin number; dj used i alone (see the top of the file) */
-        double f = (bin_lo + i + off) * df;
-        double dev = 12 * log2(f / 440.0);
-        /* np.round: half to even, as rint does in the default rounding mode */
-        dev -= rint(dev);
-        re += s[i] * cos(2 * M_PI * dev);
-        im += s[i] * sin(2 * M_PI * dev);
-        nb_peaks++;
+        float floor_mag = top * PEAK_FLOOR;
+        for (int b = lo; b <= hi; b++) {
+            float m = s->mag[b];
+            if (!(m > floor_mag && m > s->mag[b - 1] && m >= s->mag[b + 1]))
+                continue;
+            float a = logf(s->mag[b - 1] + 1e-9f), c = logf(s->mag[b + 1] + 1e-9f), l = logf(m);
+            float off = RX_CLAMP(0.5f * (a - c) / (a - 2 * l + c - 1e-12f), -0.5f, 0.5f);
+            float peak = l - 0.25f * (a - c) * off;
+            float dev = 12 * log2f((b + off) * (float)df / 440.0f);
+            float w = expf(2 * peak);
+            float sn, cs;
+            sincosf(2 * (float)M_PI * (dev - rintf(dev)), &sn, &cs);
+            re += w * cs;
+            im += w * sn;
+        }
     }
-    if (!nb_peaks)
+    if (re == 0.0 && im == 0.0)
         return 0.0;
     return atan2(im, re) / (2 * M_PI);
 }
 
-typedef struct Score {
-    double r;
-    int tonic;
-    bool minor;
-} Score;
+/* ------------------------------------------------------------- the bands */
 
-/* Python's descending sort of (score, tonic, minor) tuples. */
-static int cmp_score(const void *pa, const void *pb)
+typedef struct Kernel {
+    int start[NB_BANDS], len[NB_BANDS];
+    float *w;                       /* the bands' weights, one after another */
+    int nb_bins;                    /* bins the bands read: [0, nb_bins) */
+} Kernel;
+
+/* KeyFinder's kernel on the tuned semitones (see the top of the file) */
+static int kernel_init(Kernel *k, double fs, double tuning)
 {
-    const Score *a = pa, *b = pb;
-    if (a->r != b->r)
-        return a->r < b->r ? 1 : -1;
-    if (a->tonic != b->tonic)
-        return a->tonic < b->tonic ? 1 : -1;
-    return (int)b->minor - (int)a->minor;
+    *k = (Kernel) { 0 };
+    int total = 0;
+    double width[NB_BANDS], centre[NB_BANDS];
+    for (int m = 0; m < NB_BANDS; m++) {
+        double fc = 440.0 * pow(2.0, (MIDI_LO + m - 69 + tuning) / 12);
+        centre[m] = fc * N_FFT / fs;
+        width[m] = fmax(centre[m] * 0.8 * (pow(2.0, 1 / 12.0) - 1), 2.0);
+        double b0 = centre[m] - width[m] / 2;
+        int first = (int)ceil(b0), last = (int)floor(b0 + width[m]);
+        /* Bands above Nyquist (very low rates) stay empty */
+        if (last >= N_FFT / 2)
+            last = first - 1;
+        k->start[m] = first;
+        k->len[m] = RX_MAX(last - first + 1, 0);
+        total += k->len[m];
+        if (k->len[m])
+            k->nb_bins = RX_MAX(k->nb_bins, last + 1);
+    }
+    k->w = malloc(sizeof(*k->w) * RX_MAX(total, 1));
+    if (!k->w)
+        return RX_ERROR(ENOMEM);
+    float *w = k->w;
+    for (int m = 0; m < NB_BANDS; m++) {
+        double b0 = centre[m] - width[m] / 2, sum = 0.0;
+        for (int i = 0; i < k->len[m]; i++) {
+            w[i] = (float)(1 - cos(2 * M_PI * (k->start[m] + i - b0) / width[m]));
+            sum += w[i];
+        }
+        for (int i = 0; i < k->len[m]; i++)
+            w[i] = (float)(w[i] / sum * width[m]);
+        w += k->len[m];
+    }
+    return 0;
 }
 
-/* dj's estimate_key: Pearson correlation of the chroma with each rotation of
- * the major and minor profiles. */
-static void estimate_key(const double chroma[12], RxKeyResult *out)
-{
-    double cm = 0.0, c[12], cn = 0.0;
-    for (int i = 0; i < 12; i++)
-        cm += chroma[i];
-    cm /= 12;
-    for (int i = 0; i < 12; i++) {
-        c[i] = chroma[i] - cm;
-        cn += c[i] * c[i];
-    }
-    cn = sqrt(cn);
+/* --------------------------------------------------------------- features */
 
-    Score scores[24];
-    for (int mode = 0; mode < 2; mode++) {
-        const double *prof = mode ? TP_MINOR : TP_MAJOR;
-        double pm = 0.0, p[12], pn = 0.0;
+typedef struct KeyFrames {
+    int64_t nb_frames;
+    float *bands;                   /* nb_frames x NB_BANDS, whitened */
+    double tuning;                  /* semitones */
+    double fs;                      /* the analysis rate */
+} KeyFrames;
+
+static void key_frames_free(KeyFrames *kf)
+{
+    free(kf->bands);
+    kf->bands = NULL;
+}
+
+/* Steps 1-5: the whitened semitone bands of every frame */
+static int key_frames(const float *mono, int64_t n, int rate, KeyFrames *kf)
+{
+    *kf = (KeyFrames) { 0 };
+    int ret = 0;
+    float *own = NULL;
+    Stft s = { 0 };
+    Kernel k = { 0 };
+
+    /* Rates up to ~16.5 kHz are analysed as they are */
+    int d = RX_MAX((int)lrint(rate / KEY_RATE), 1);
+    const float *y = mono;
+    int64_t ny = n;
+    if (d > 1) {
+        ret = decimate(mono, n, d, &own, &ny);
+        if (ret < 0)
+            goto fail;
+        y = own;
+    }
+    kf->fs = (double)rate / d;
+    kf->nb_frames = ny / HOP + 1;
+
+    ret = stft_init(&s, y, ny);
+    if (ret < 0)
+        goto fail;
+    kf->tuning = estimate_tuning(&s, kf->nb_frames, kf->fs);
+    ret = kernel_init(&k, kf->fs, kf->tuning);
+    if (ret < 0)
+        goto fail;
+
+    kf->bands = malloc(sizeof(*kf->bands) * kf->nb_frames * NB_BANDS);
+    if (!kf->bands) {
+        ret = RX_ERROR(ENOMEM);
+        goto fail;
+    }
+    float top = 0;
+    for (int64_t f = 0; f < kf->nb_frames; f++) {
+        stft_frame(&s, f, k.nb_bins);
+        float *row = &kf->bands[f * NB_BANDS];
+        const float *w = k.w;
+        for (int m = 0; m < NB_BANDS; m++) {
+            float acc = 0;
+            for (int i = 0; i < k.len[m]; i++)
+                acc += w[i] * s.mag[k.start[m] + i];
+            w += k.len[m];
+            row[m] = acc;
+            top = fmaxf(top, acc);
+        }
+    }
+
+    /* Whitening: each band over the mean of the 2 * WHITE + 1 around it,
+     * the edge bands repeated beyond the ends; the floor keeps silence at
+     * zero rather than amplifying rounding noise */
+    float floor_mag = 1e-6f * top + 1e-12f;
+    for (int64_t f = 0; f < kf->nb_frames; f++) {
+        float *row = &kf->bands[f * NB_BANDS], env[NB_BANDS];
+        for (int m = 0; m < NB_BANDS; m++) {
+            float acc = 0;
+            for (int j = m - WHITE; j <= m + WHITE; j++)
+                acc += row[RX_CLAMP(j, 0, NB_BANDS - 1)];
+            env[m] = acc / (2 * WHITE + 1);
+        }
+        for (int m = 0; m < NB_BANDS; m++)
+            row[m] = row[m] / (env[m] + floor_mag);
+    }
+
+fail:
+    if (ret < 0)
+        key_frames_free(kf);
+    stft_free(&s);
+    free(k.w);
+    free(own);
+    return ret;
+}
+
+/* Step 6: the three chroma vectors of frames [f0, f1), each of unit length
+ * (all zero if the frames hold nothing). Pitch class 0 is C. */
+static void key_chroma(const KeyFrames *kf, int64_t f0, int64_t f1, double out[NB_FEAT])
+{
+    static const int range[3][2] = { { 12, 24 }, { 24, 48 }, { 48, 72 } };
+    memset(out, 0, sizeof(*out) * NB_FEAT);
+    for (int64_t f = f0; f < f1; f++) {
+        const float *row = &kf->bands[f * NB_BANDS];
+        for (int v = 0; v < 3; v++)
+            for (int m = range[v][0]; m < range[v][1]; m++)
+                out[12 * v + (MIDI_LO + m) % 12] += row[m];
+    }
+    for (int v = 0; v < 3; v++) {
+        double norm = 0.0;
         for (int i = 0; i < 12; i++)
-            pm += prof[i];
-        pm /= 12;
-        for (int i = 0; i < 12; i++) {
-            p[i] = prof[i] - pm;
-            pn += p[i] * p[i];
-        }
-        pn = sqrt(pn);
+            norm += out[12 * v + i] * out[12 * v + i];
+        norm = sqrt(norm);
+        for (int i = 0; i < 12; i++)
+            out[12 * v + i] = norm > 0 ? out[12 * v + i] / norm : 0.0;
+    }
+}
+
+/* Step 7-8: the score of each key, major tonics 0..11 then minor. */
+static void key_scores(const double x[NB_FEAT], double score[24])
+{
+    for (int mode = 0; mode < 2; mode++) {
         for (int k = 0; k < 12; k++) {
-            double dot = 0.0;
-            for (int i = 0; i < 12; i++)
-                dot += c[i] * p[(i - k + 12) % 12];
-            scores[mode * 12 + k] = (Score) {
-                .r     = dot / (cn * pn + 1e-12),
-                .tonic = k,
-                .minor = mode,
-            };
+            double acc = mode ? 0.0 : MAJOR_BIAS;
+            for (int v = 0; v < 3; v++)
+                for (int i = 0; i < 12; i++)
+                    acc += TEMPLATES[mode][12 * v + i] * x[12 * v + (i + k) % 12];
+            score[12 * mode + k] = acc;
         }
     }
-    qsort(scores, 24, sizeof(*scores), cmp_score);
-    const char *name = scores[0].minor ? MINOR_NAMES[scores[0].tonic] : MAJOR_NAMES[scores[0].tonic];
-    snprintf(out->key, sizeof(out->key), "%s", name);
-    out->confidence = RX_CLAMP(scores[0].r - scores[1].r, 0.0, 1.0);
 }
+
+/* Sha'ath's cosine for key `key` on the summed chroma: the tie-breaker */
+static double shaath_cosine(const double x[NB_FEAT], int key)
+{
+    const double *p = SHAATH[key / 12];
+    double c[12], dot = 0.0, nc = 0.0, np = 0.0;
+    for (int i = 0; i < 12; i++)
+        c[i] = x[i] + x[12 + i] + x[24 + i];
+    for (int i = 0; i < 12; i++) {
+        double v = c[(i + key) % 12];
+        dot += v * p[i];
+        nc += v * v;
+        np += p[i] * p[i];
+    }
+    return nc > 0 ? dot / sqrt(nc * np) : 0.0;
+}
+
+/* Step 9: the best key, ties broken as described at the top */
+static int best_key(const double x[NB_FEAT], const double score[24])
+{
+    int best = 0;
+    for (int k = 1; k < 24; k++) {
+        double d = score[k] - score[best];
+        if (d > 1e-9) {
+            best = k;
+        } else if (d >= -1e-9) {
+            double sk = shaath_cosine(x, k), sb = shaath_cosine(x, best);
+            if (sk > sb + 1e-12 || (fabs(sk - sb) <= 1e-12 && k >= 12 && best < 12))
+                best = k;
+        }
+    }
+    return best;
+}
+
+/* ------------------------------------------------------------------- key */
 
 int rx_analyse_key(const float *mono, int64_t nb_samples, int rate, RxKeyResult *out)
 {
@@ -334,105 +543,53 @@ int rx_analyse_key(const float *mono, int64_t nb_samples, int rate, RxKeyResult 
     if (!nb_samples)
         return 0;
 
-    int ret = 0;
-    float *x44 = NULL, *y = NULL;
-    double *mean = NULL, *logsum = NULL, *freq = NULL;
-    float *col = NULL;
-    Stft s = { 0 };
-
-    /* dj's export path: native rate -> 44.1 kHz, then analyse_key's
-     * 44.1 kHz -> 11025 Hz, both with resample_poly. */
-    const float *x = mono;
-    int64_t n = nb_samples;
-    if (rate != ANALYSIS_RATE) {
-        int64_t g = gcd64(ANALYSIS_RATE, rate);
-        ret = resample_poly(mono, nb_samples, (int)(ANALYSIS_RATE / g), (int)(rate / g), &x44, &n);
-        if (ret < 0)
-            goto fail;
-        x = x44;
-    }
-    int64_t ny;
-    ret = resample_poly(x, n, 1, ANALYSIS_RATE / KEY_RATE, &y, &ny);
-    free(x44);
-    x44 = NULL;
+    KeyFrames kf;
+    int ret = key_frames(mono, nb_samples, rate, &kf);
     if (ret < 0)
-        goto fail;
+        return ret;
 
-    /* The 60..2200 Hz bins, with frequencies computed as numpy does. */
-    int bin_lo = -1, bin_hi = -1;
-    for (int k = 0; k < NB_BINS; k++) {
-        double f = (double)(k * KEY_RATE) / N_FFT;
-        if (f > 60 && f < 2200) {
-            if (bin_lo < 0)
-                bin_lo = k;
-            bin_hi = k;
-        }
+    double x[NB_FEAT], score[24];
+    key_chroma(&kf, 0, kf.nb_frames, x);
+    double energy = 0.0;
+    for (int i = 0; i < NB_FEAT; i++)
+        energy += x[i];
+    if (energy <= 0) {
+        key_frames_free(&kf);
+        return 0;
     }
-    int nb = bin_hi - bin_lo + 1;
+    key_scores(x, score);
+    int best = best_key(x, score);
 
-    mean = calloc(nb, sizeof(*mean));
-    logsum = calloc(nb, sizeof(*logsum));
-    freq = malloc(sizeof(*freq) * nb);
-    col = malloc(sizeof(*col) * MEDIAN);
-    if (!mean || !logsum || !freq || !col) {
-        ret = RX_ERROR(ENOMEM);
-        goto fail;
+    /* The probability of the best key */
+    double sum = 0.0;
+    for (int k = 0; k < 24; k++)
+        sum += exp(TEMPERATURE * (score[k] - score[best]));
+    double p = RX_CLAMP(1.0 / sum, 1e-6, 1 - 1e-6);
+
+    /* The agreement of the 20-second segments; a last one shorter than
+     * half a segment, and silent ones, are left out */
+    int64_t seg = RX_MAX(llrint(SEG_SECONDS * kf.fs / HOP), 1);
+    int nb_seg = 0, nb_agree = 0;
+    for (int64_t f0 = 0; f0 < kf.nb_frames; f0 += seg) {
+        int64_t f1 = RX_MIN(f0 + seg, kf.nb_frames);
+        if (f0 && f1 - f0 < seg / 2)
+            break;
+        double xs[NB_FEAT], ss[24], e = 0.0;
+        key_chroma(&kf, f0, f1, xs);
+        for (int i = 0; i < NB_FEAT; i++)
+            e += xs[i];
+        if (e <= 0)
+            continue;
+        key_scores(xs, ss);
+        nb_agree += best_key(xs, ss) == best;
+        nb_seg++;
     }
-    for (int b = 0; b < nb; b++)
-        freq[b] = (double)((bin_lo + b) * KEY_RATE) / N_FFT;
+    double agreement = nb_seg ? (double)nb_agree / nb_seg : 0.0;
 
-    ret = stft_init(&s, y, ny, bin_lo, nb);
-    if (ret < 0)
-        goto fail;
-
-    /* Median over frames f-4 .. f+4 (clamped to the ends) per bin. The ring
-     * holds the last MEDIAN frames, enough for that span. */
-    int64_t nf = s.nb_frames;
-    for (int64_t f = 0; f < nf; f++) {
-        while (s.done <= RX_MIN(f + MEDIAN / 2, nf - 1))
-            stft_next(&s);
-        for (int b = 0; b < nb; b++) {
-            for (int d = 0; d < MEDIAN; d++) {
-                int64_t j = RX_CLAMP(f + d - MEDIAN / 2, 0, nf - 1);
-                col[d] = s.ring[(j % MEDIAN) * nb + b];
-            }
-            double harm = median9(col);
-            mean[b] += harm;
-            /* Full-scale sine -> ~1.0 before compression, as in dj */
-            logsum[b] += log1p(100.0 * harm / (N_FFT / 4));
-        }
-    }
-    for (int b = 0; b < nb; b++)
-        mean[b] /= nf;
-
-    double tuning = estimate_tuning(mean, freq, nb, bin_lo);
-
-    /* Triangular weights from each bin onto the semitone centres, folded
-     * into pitch classes. */
-    double chroma[12] = { 0 };
-    for (int b = 0; b < nb; b++) {
-        double midi = 69 + 12 * log2(freq[b] / 440.0) - tuning;
-        for (int m = MIDI_LO; m < MIDI_HI; m++) {
-            double w = 1.0 - fabs(midi - m);
-            if (w > 0)
-                chroma[m % 12] += logsum[b] * w;
-        }
-    }
-
-    out->tuning_cents = 100 * tuning;
-    double cmax = 0.0;
-    for (int i = 0; i < 12; i++)
-        cmax = fmax(cmax, chroma[i]);
-    if (cmax > 0)
-        estimate_key(chroma, out);
-
-fail:
-    stft_free(&s);
-    free(x44);
-    free(y);
-    free(mean);
-    free(logsum);
-    free(freq);
-    free(col);
-    return ret;
+    const char *name = best >= 12 ? MINOR_NAMES[best - 12] : MAJOR_NAMES[best];
+    snprintf(out->key, sizeof(out->key), "%s", name);
+    out->confidence = 1 / (1 + exp(-(CAL_A * log(p / (1 - p)) + CAL_B * agreement + CAL_C)));
+    out->tuning_cents = 100 * kf.tuning;
+    key_frames_free(&kf);
+    return 0;
 }
