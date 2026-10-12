@@ -36,6 +36,7 @@ typedef struct RxPlanTrack {
     char        *source;        /* absolute path of the file to copy (the transcode when used) */
     char        *usb_path;      /* "/Contents/Artist/Album/01 Track.flac" (FAT-safe, unique) */
     char        *anlz_dir;      /* "/PIONEER/USBANLZ/P0xx/xxxxxxxx" */
+    int          anlz_index;    /* nnnn of ANLZnnnn.DAT: tracks hashing to one directory count up (docs/anlz.md 1.1) */
     int          file_type;     /* DeviceSQL file type: mp3 1, aac 4, flac 5, alac 6, wav 11, aiff 12 */
     int          bit_rate, sample_rate, bit_depth;
     int64_t      file_size;
@@ -53,7 +54,7 @@ typedef struct RxPlanTrack {
 typedef struct RxPlanName { uint32_t id; char *name; uint32_t artist_id; } RxPlanName;   /* artist_id for albums only */
 typedef struct RxPlanPlaylist {
     uint32_t  id, parent_id;    /* parent 0 = root */
-    int       sort_order;       /* 1-based among siblings */
+    int       sort_order;       /* 0-based among siblings (docs/pdb.md playlist_tree) */
     bool      is_folder;
     char     *name;
     uint32_t *track_ids; int nb;
@@ -81,6 +82,7 @@ typedef struct RxPlan {
     char            key_notation[8];
     bool            hot_cue_auto_load;
     int             background_color;
+    uint32_t        library_id;     /* one constant per library: track row 0x18, OneLibrary masterDbId */
     const RxConfig *cfg;
 } RxPlan;
 

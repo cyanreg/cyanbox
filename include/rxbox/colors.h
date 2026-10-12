@@ -29,7 +29,8 @@ extern const char *const rx_hot_cue_color_names[RX_HOT_CUE_COLORS];
 int         rx_hot_cue_color(const char *name_or_hex, int *code, uint32_t *rgb);
 uint32_t    rx_cue_palette_rgb(int code);                         /* the 64-entry table, 0 for code 0 */
 const char *rx_cue_palette_name(int code);                        /* nearest named colour */
-/* The LED/colour byte the PCPT (DAT) record stores for a hot cue colour. */
+/* The pad (LED) RGB the PCP2 entry stores after the colour code: the same
+ * measured table as rx_cue_palette_rgb. */
 int         rx_hot_cue_led(int code);
 /* Pad colour when a hot cue has no colour (per slot A..H). */
 uint32_t    rx_hot_cue_default_rgb(int slot);

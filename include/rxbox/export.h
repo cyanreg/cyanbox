@@ -97,7 +97,7 @@ typedef struct RxSyncItem {
     int       slot;           /* hot cue slot for the hot cue kinds */
     int64_t   played_at;      /* RX_SYNC_PLAY: epoch seconds, 0 when the player gave no time */
     int       play_index;     /* position in the history list */
-    char      setting_key[48];    /* RX_SYNC_SETTING: "player.quantize" ... */
+    char      setting_key[48];    /* RX_SYNC_SETTING: "player.quantize" ...; RX_SYNC_PLAY: the history marker apply records */
     char      setting_value[32];
     char      setting_old[32];
     bool      accepted;       /* the interface's choice; default true */
@@ -111,6 +111,7 @@ typedef struct RxStickState {
     struct { uint64_t track_id; int64_t played_at; char *label; } *plays; int nb_plays;
     RxKv     *settings; int nb_settings;  /* every value in the settings files found */
     bool      has_pdb, has_onelibrary;
+    struct RxStickPriv *priv;         /* the reader's own state for the diff (the export's sync record, history lists) */
 } RxStickState;
 
 int  rx_stick_read(const RxLibrary *lib, const char *mount, RxStickState *out);
