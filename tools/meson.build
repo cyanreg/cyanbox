@@ -12,5 +12,5 @@ executable('rxbox-eval', 'rxbox-eval.c',
 # runs N frames and screenshots (gpu module).
 executable('rxbox-gpu-demo', 'rxbox-gpu-demo.c', gpu_sources,
     include_directories: rx_inc,
-    dependencies: [ rx_common_dep, rx_audio_dep, vulkan_dep, sdl3_dep, wayland_client, imgui_dep, vma_dep ] + gpu_deps,
+    dependencies: [ rx_common_dep, vulkan_dep, sdl3_dep, wayland_client, imgui_dep, vma_dep ] + gpu_deps,
 )
