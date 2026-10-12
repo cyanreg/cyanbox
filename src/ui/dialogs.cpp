@@ -19,6 +19,7 @@
 #include "ui_internal.h"
 
 #include <dirent.h>
+#include <errno.h>
 #include <math.h>
 #include <stdio.h>
 #include <sys/stat.h>
@@ -128,12 +129,17 @@ static void confirm_load(UiState *ui)
         rx_track_display(t, name, sizeof(name));
     ImGui::Text("The player is playing. Load \"%s\" anyway?", name);
     ImGui::Spacing();
-    if (ImGui::Button("Load", ImVec2(PX(110), 0)) || ImGui::IsKeyPressed(ImGuiKey_Enter)) {
+    // Enter on a row asks in the frame it was pressed: that press is not
+    // the answer, nor is a key held down and repeating.
+    bool keys = !ImGui::IsWindowAppearing();
+    if (ImGui::Button("Load", ImVec2(PX(110), 0)) ||
+        (keys && ImGui::IsKeyPressed(ImGuiKey_Enter, false))) {
         ui_load_confirmed(ui);
         ImGui::CloseCurrentPopup();
     }
     ImGui::SameLine();
-    if (ImGui::Button("Cancel", ImVec2(PX(110), 0)) || ImGui::IsKeyPressed(ImGuiKey_Escape))
+    if (ImGui::Button("Cancel", ImVec2(PX(110), 0)) ||
+        (keys && ImGui::IsKeyPressed(ImGuiKey_Escape, false)))
         ImGui::CloseCurrentPopup();
     ImGui::EndPopup();
 }
@@ -312,9 +318,36 @@ void ui_open_export(UiState *ui)
     RxApp *app = ui->app;
     ui->dlg_export = true;
     app->export_state.open = true;
+    // Closed on its summary with the title bar's x: the choices again.
+    if (!app->export_state.running)
+        ui->export_seen_running = false;
     ui_scan_volumes(ui);
     if (!app->export_state.dest[0] && ui->volumes.size() == 1)
         snprintf(app->export_state.dest, sizeof(app->export_state.dest), "%s", ui->volumes[0].c_str());
+}
+
+static bool playlist_in(const RxPlaylistFolder *f, const RxPlaylist *p)
+{
+    for (int i = 0; i < f->nb_playlists; i++) {
+        if (f->playlists[i] == p)
+            return true;
+    }
+    for (int i = 0; i < f->nb_folders; i++) {
+        if (playlist_in(f->folders[i], p))
+            return true;
+    }
+    return false;
+}
+
+// The chosen playlists that still exist: the tree can delete one while the
+// dialog is open, and the pointer must not reach rx_app_start_export().
+static void playlists_prune(UiState *ui)
+{
+    const RxPlaylistFolder *root = ui->app->lib.root_folder;
+    auto &sel = ui->export_playlists;
+    sel.erase(std::remove_if(sel.begin(), sel.end(), [root](RxPlaylist *p) {
+        return !root || !playlist_in(root, p);
+    }), sel.end());
 }
 
 static void playlist_checks(UiState *ui, RxPlaylistFolder *f)
@@ -347,6 +380,9 @@ static void export_start(UiState *ui)
 {
     RxApp *app = ui->app;
     auto &es = app->export_state;
+    playlists_prune(ui);
+    if (ui->export_scope == 1 && ui->export_playlists.empty())
+        return;
     es.cancel = false;
     es.ignore_unsynced = false;
     es.prune = false;
@@ -397,6 +433,7 @@ static void export_dialog(UiState *ui)
 
     if (!es.running && !ui->export_seen_running) {
         // The choices.
+        playlists_prune(ui);
         ImGui::SeparatorText("Stick");
         volume_picker(ui, es.dest, sizeof(es.dest));
         ImGui::SeparatorText("What");
@@ -875,18 +912,24 @@ static void inspect_dialog(UiState *ui)
 static void fb_scan(UiState *ui)
 {
     ui->fb_entries.clear();
+    ui->fb_error.clear();
     ui->fb_dirty = false;
     DIR *d = opendir(ui->fb_path.c_str());
-    if (!d)
+    if (!d) {
+        ui->fb_error = std::string("Cannot read this folder: ") + strerror(errno);
         return;
+    }
     struct dirent *e;
     while ((e = readdir(d))) {
         if (e->d_name[0] == '.')
             continue;
         std::string full = ui->fb_path + "/" + e->d_name;
         struct stat stt;
-        if (stat(full.c_str(), &stt) < 0)
+        if (stat(full.c_str(), &stt) < 0) {
+            if (ui->fb_error.empty())
+                ui->fb_error = std::string("Cannot read ") + e->d_name + ": " + strerror(errno);
             continue;
+        }
         UiFileEntry fe;
         fe.name = e->d_name;
         fe.dir = S_ISDIR(stt.st_mode);
@@ -979,7 +1022,9 @@ static void add_dialog(UiState *ui)
             ImGui::PopStyleColor();
         ImGui::PopID();
     }
-    if (ui->fb_entries.empty())
+    if (!ui->fb_error.empty())
+        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(UI_RED), "%s", ui->fb_error.c_str());
+    else if (ui->fb_entries.empty())
         ImGui::TextDisabled("No folders or audio files here.");
     ImGui::EndChild();
     if (!go.empty())
@@ -990,17 +1035,27 @@ static void add_dialog(UiState *ui)
         char label[64];
         snprintf(label, sizeof(label), "Add %d selected", nsel);
         if (ImGui::Button(label, ImVec2(PX(160), PX(28)))) {
-            int added = 0;
+            // One item: its own status says what came of it. Several: a
+            // count, the failures in it (each is in the log).
+            int added = 0, failed = 0;
             for (const UiFileEntry &fe : ui->fb_entries) {
-                if (fe.selected && rx_app_add_path(app, (ui->fb_path + "/" + fe.name).c_str()) >= 0)
+                if (!fe.selected)
+                    continue;
+                if (rx_app_add_path(app, (ui->fb_path + "/" + fe.name).c_str()) >= 0)
                     added++;
+                else
+                    failed++;
             }
-            rx_app_set_status(app, "Adding %d item%s", added, added == 1 ? "" : "s");
+            if (nsel > 1 && failed)
+                rx_app_set_status(app, "Added %d of %d items; %d could not be added", added, nsel,
+                                  failed);
+            else if (nsel > 1)
+                rx_app_set_status(app, "Added %d items", added);
             ui->dlg_add = false;
         }
     } else if (ImGui::Button("Add this folder", ImVec2(PX(160), PX(28)))) {
-        if (rx_app_add_path(app, ui->fb_path.c_str()) >= 0)
-            rx_app_set_status(app, "Adding %s", ui->fb_path.c_str());
+        // rx_app_add_path's status says what came of it.
+        rx_app_add_path(app, ui->fb_path.c_str());
         ui->dlg_add = false;
     }
     ImGui::SameLine();

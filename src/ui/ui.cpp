@@ -19,7 +19,11 @@
 // RXBOX_UI_SCREENSHOT=<png> saves frame 100 (RXBOX_UI_SCREENSHOT_FRAME=<n>:
 // frame n) through rx_window_screenshot_next(), which writes it once it is
 // presented, and the run goes on; a run that ends before that frame
-// (--frames below it) saves its last frame at shutdown instead.
+// (--frames below it) saves its last frame at shutdown instead. The state
+// the tests look at (the loaded track, playing, a popup open) is logged
+// with it. RXBOX_UI_EVENTS=<frame>:<event>,... gives ImGui input at those
+// frames: down:<key> and up:<key> (ImGui's key names: C, Enter,
+// DownArrow...), focus-out and focus-in.
 
 #include "ui_internal.h"
 
@@ -450,11 +454,17 @@ void ui_load(UiState *ui, RxTrack *t)
     load_now(ui, 0, t);
 }
 
+// The answer to the question: the app never replaces a playing track
+// (rx_app_load_deck says EBUSY), so the player stops first.
 void ui_load_confirmed(UiState *ui)
 {
-    RxTrack *t = rx_library_find_id(&ui->app->lib, ui->confirm_track);
-    if (t)
-        load_now(ui, 0, t);
+    RxApp *app = ui->app;
+    RxTrack *t = rx_library_find_id(&app->lib, ui->confirm_track);
+    if (!t)
+        return;
+    if (deck_playing(ui, 0))
+        rx_deck_pause(app->player, 0);
+    load_now(ui, 0, t);
 }
 
 /* ------------------------------------------------------------------- style */
@@ -880,6 +890,68 @@ static float splitter(UiState *ui, const char *id, ImVec2 pos, ImVec2 size, bool
     return vertical ? d.x : d.y;
 }
 
+/* ------------------------------------------------------------ test hooks */
+
+// RXBOX_UI_EVENTS (see the top of the file).
+static void parse_test_events(UiState *ui, const char *spec)
+{
+    std::string all = spec;
+    size_t at = 0;
+    while (at < all.size()) {
+        size_t end = all.find(',', at);
+        std::string one = all.substr(at, end == std::string::npos ? std::string::npos : end - at);
+        at = end == std::string::npos ? all.size() : end + 1;
+
+        UiTestEvent ev = {};
+        char what[32] = "", key[32] = "";
+        if (sscanf(one.c_str(), "%d:%31[^:]:%31s", &ev.frame, what, key) < 2)
+            continue;
+        if (!strcmp(what, "focus-out") || !strcmp(what, "focus-in")) {
+            ev.type = what[6] == 'o' ? 2 : 3;
+        } else if (!strcmp(what, "down") || !strcmp(what, "up")) {
+            ev.type = what[0] == 'd' ? 0 : 1;
+            ev.key = ImGuiKey_None;
+            for (int k = ImGuiKey_NamedKey_BEGIN; k < ImGuiKey_NamedKey_END; k++) {
+                if (!strcmp(ImGui::GetKeyName((ImGuiKey)k), key))
+                    ev.key = (ImGuiKey)k;
+            }
+            if (ev.key == ImGuiKey_None) {
+                rx_warn("RXBOX_UI_EVENTS: no key %s", key);
+                continue;
+            }
+        } else {
+            rx_warn("RXBOX_UI_EVENTS: no event %s", what);
+            continue;
+        }
+        ui->test_events.push_back(ev);
+    }
+}
+
+// Queued now, seen by the next frame's NewFrame().
+static void test_events(UiState *ui)
+{
+    ImGuiIO &io = ImGui::GetIO();
+    for (const UiTestEvent &ev : ui->test_events) {
+        if (ev.frame != ui->frame_no)
+            continue;
+        if (ev.type <= 1)
+            io.AddKeyEvent(ev.key, ev.type == 0);
+        else
+            io.AddFocusEvent(ev.type == 3);
+    }
+}
+
+static void log_test_state(UiState *ui)
+{
+    RxApp *app = ui->app;
+    RxDeckState st;
+    ui_deck_position(ui, 0, &st);
+    bool popup = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+    rx_info("ui test: frame %d track %llu playing %d position %.2f popup %d", ui->frame_no,
+            (unsigned long long)(app->decks[0].track ? app->decks[0].track->id : 0), st.playing,
+            st.position, popup);
+}
+
 /* ------------------------------------------------------------- entry points */
 
 int rx_ui_init(RxApp *app)
@@ -968,6 +1040,9 @@ int rx_ui_init(RxApp *app)
         ui->screenshot_path = shot;
     const char *shot_frame = getenv("RXBOX_UI_SCREENSHOT_FRAME");
     ui->screenshot_frame = shot_frame && atoi(shot_frame) > 0 ? atoi(shot_frame) : 100;
+    const char *events = getenv("RXBOX_UI_EVENTS");
+    if (events && events[0])
+        parse_test_events(ui, events);
     return 0;
 }
 
@@ -1099,12 +1174,15 @@ bool rx_ui_frame(RxApp *app)
         ui->s = 1.0f;
 
     autoload_tick(ui);
+    if (!ui->test_events.empty())
+        test_events(ui);
     // The screenshot hook: this is the frame to keep; the window saves it
     // once it is presented.
     if (!ui->screenshot_path.empty() &&
         rx_window_frames_drawn(app->window) + 1 >= ui->screenshot_frame) {
         rx_window_screenshot_next(app->window, ui->screenshot_path.c_str());
         ui->screenshot_path.clear();
+        log_test_state(ui);
     }
     // The rows follow the library (app.c may have rebuilt them already).
     if (app->rows_dirty || app->rows_generation != app->lib.generation || !app->rows)

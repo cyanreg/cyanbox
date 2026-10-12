@@ -4,7 +4,7 @@
  * interface; the subcommands work on the library and never call into
  * src/gpu, so they run anywhere without a display (ssh, cron, the tests).
  * Results go to stdout, problems to stderr. Exit codes: 0 success, 1 usage,
- * 2 failure.
+ * 2 failure (stdout that could not be written included).
  *
  * The analysing subcommands use RxJobs directly with every CPU, and apply
  * each result with rx_app_apply_analysis() on an RxApp that holds only the
@@ -14,6 +14,7 @@
  * holding library.db) is -c/--library DIR, else $RXBOX_LIBRARY, else
  * ~/.local/share/rxbox (rx_library_default_root). */
 
+#include <errno.h>
 #include <limits.h>
 #include <math.h>
 #include <stdio.h>
@@ -83,6 +84,9 @@ static const char usage_text[] =
     "  playlist create NAME     create a playlist (\"Folder/Name\" creates the folders)\n"
     "  playlist add NAME TRACK...\n"
     "                           append tracks to a playlist\n"
+    "  playlist remove NAME TRACK...\n"
+    "                           take tracks out of a playlist (they stay in the library)\n"
+    "  playlist delete NAME     delete a playlist (its tracks stay in the library)\n"
     "  playlist import FILE.m3u8\n"
     "                           make a playlist from an m3u8 file\n"
     "  playlist export NAME FILE.m3u8\n"
@@ -321,10 +325,16 @@ static int resolve_tracks(RxLibrary *lib, const char *arg, RxArray *out)
                 found++;
             }
         }
-        if (!found)
-            fail("%s: no library tracks under it (rxbox add it first)", arg);
         free(abs);
-        return found ? found : RX_ERROR(ENOENT);
+        abs = NULL;
+        if (found)
+            return found;
+        /* A number that happens to name a directory here (a year, say)
+         * with no library tracks under it is still an id. */
+        if (!all_digits(arg)) {
+            fail("%s: no library tracks under it (rxbox add it first)", arg);
+            return RX_ERROR(ENOENT);
+        }
     }
 
     /* A track whose file went missing is still found by its path. */
@@ -688,6 +698,64 @@ static int playlist_add(Cli *cli, const char *name, char **args, int nb_args)
     return ret;
 }
 
+static int playlist_remove(Cli *cli, const char *name, char **args, int nb_args)
+{
+    RxLibrary *lib = &cli->app.lib;
+    RxPlaylist *p = find_playlist(lib, name);
+    if (!p)
+        return EXIT_FAIL;
+
+    RxArray tracks;
+    rx_array_init(&tracks, sizeof(RxTrack *));
+    int ret = EXIT_OK;
+    for (int i = 0; i < nb_args; i++) {
+        if (resolve_tracks(lib, args[i], &tracks) < 0)
+            ret = EXIT_FAIL;
+    }
+
+    int removed = 0, absent = 0;
+    for (size_t i = 0; i < tracks.nb; i++) {
+        RxTrack *t = *(RxTrack **)rx_array_at(&tracks, i);
+        int at = -1;
+        for (int k = p->nb - 1; k >= 0 && at < 0; k--) {
+            if (p->track_ids[k] == t->id)
+                at = k;
+        }
+        if (at < 0) {
+            absent++;
+            continue;
+        }
+        int err = rx_library_playlist_remove_at(lib, p, at);
+        if (err < 0) {
+            ret = fail("cannot remove %s from %s: %s", t->path, name, strerror(-err));
+            continue;
+        }
+        removed++;
+    }
+    printf("removed %d track%s from %s", removed, removed == 1 ? "" : "s", p->name);
+    if (absent)
+        printf(" (%d not in it)", absent);
+    printf("; %d left\n", p->nb);
+
+    rx_array_free(&tracks);
+    return ret;
+}
+
+static int playlist_delete(Cli *cli, const char *name)
+{
+    RxLibrary *lib = &cli->app.lib;
+    RxPlaylist *p = find_playlist(lib, name);
+    if (!p)
+        return EXIT_FAIL;
+    int nb = p->nb;
+    int err = rx_library_playlist_delete(lib, p);
+    if (err < 0)
+        return fail("cannot delete the playlist %s: %s", name, strerror(-err));
+    printf("deleted playlist %s (its %d track%s stay in the library)\n", name, nb,
+           nb == 1 ? "" : "s");
+    return EXIT_OK;
+}
+
 static int playlist_import(Cli *cli, const char *file)
 {
     RxLibrary *lib = &cli->app.lib;
@@ -853,8 +921,10 @@ static int cmd_add(Cli *cli, int argc, char **argv)
             ctx.failed++;
             continue;
         }
+        /* A failure the callback reported is said and counted once. */
+        int failed = ctx.failed;
         int ret = rx_library_add_path(lib, abs, add_cb, &ctx);
-        if (ret < 0) {
+        if (ret < 0 && ctx.failed == failed) {
             fail("cannot add %s: %s", abs, strerror(-ret));
             ctx.failed++;
         }
@@ -1754,11 +1824,13 @@ static int cmd_playlist(Cli *cli, int argc, char **argv)
         { "list",   0, 0,       "playlist list" },
         { "create", 1, 1,       "playlist create NAME" },
         { "add",    2, INT_MAX, "playlist add NAME TRACK..." },
+        { "remove", 2, INT_MAX, "playlist remove NAME TRACK..." },
+        { "delete", 1, 1,       "playlist delete NAME" },
         { "import", 1, 1,       "playlist import FILE.m3u8" },
         { "export", 2, 2,       "playlist export NAME FILE.m3u8" },
     };
     if (!nb) {
-        code = usage_error("playlist: list, create, add, import or export");
+        code = usage_error("playlist: list, create, add, remove, delete, import or export");
         goto end;
     }
     size_t k = 0;
@@ -1782,6 +1854,10 @@ static int cmd_playlist(Cli *cli, int argc, char **argv)
         code = playlist_create(cli, a[1]);
     else if (!strcmp(a[0], "add"))
         code = playlist_add(cli, a[1], a + 2, nb - 2);
+    else if (!strcmp(a[0], "remove"))
+        code = playlist_remove(cli, a[1], a + 2, nb - 2);
+    else if (!strcmp(a[0], "delete"))
+        code = playlist_delete(cli, a[1]);
     else if (!strcmp(a[0], "import"))
         code = playlist_import(cli, a[1]);
     else
@@ -1852,7 +1928,7 @@ static const struct {
     { "playlist", cmd_playlist },
 };
 
-int rx_cli_main(int argc, char **argv)
+static int cli_run(int argc, char **argv)
 {
     Cli cli = {
         .audio = RX_AUDIO_PIPEWIRE,
@@ -1932,4 +2008,19 @@ int rx_cli_main(int argc, char **argv)
         return EXIT_OK;
     }
     return usage_error("unknown command %s", argv[i]);
+}
+
+int rx_cli_main(int argc, char **argv)
+{
+    int code = cli_run(argc, argv);
+
+    /* Output that could not all be written (a full disk, a closed pipe
+     * that does not kill us) is a failure, not a silent success. */
+    int err = fflush(stdout) == EOF ? errno : ferror(stdout) ? EIO : 0;
+    if (err) {
+        fprintf(stderr, "rxbox: cannot write the output: %s\n", strerror(err));
+        if (code == EXIT_OK)
+            code = EXIT_FAIL;
+    }
+    return code;
 }

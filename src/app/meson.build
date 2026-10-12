@@ -29,13 +29,24 @@ if ffmpeg_prog.found()
                    '-ac', '2', '-c:a', 'pcm_s16le', '@OUTPUT@' ],
     )
 
+    # The same, 40 s long, mono: long enough to count as a play (30 s).
+    app_long_wav = custom_target('app_long_wav',
+        output: 'click128-40s.wav',
+        build_by_default: true,
+        command: [ ffmpeg_prog, '-v', 'error', '-nostdin', '-y', '-f', 'lavfi', '-i',
+                   'aevalsrc=exprs=\'0.8*sin(2*PI*55*mod(t,0.46875))*exp(-mod(t,0.46875)*25)' +
+                   '+0.2*sin(2*PI*2000*t)*exp(-mod(t,0.46875)*200)\':s=48000:d=40',
+                   '-ac', '1', '-c:a', 'pcm_s16le', '@OUTPUT@' ],
+    )
+
     test_jobs = executable('test_jobs', files('../../tests/app/test_jobs.c'),
         include_directories: rx_inc, dependencies: [ rx_app_dep ])
     test('jobs', test_jobs, args: [ app_click_wav ], suite: 'app', timeout: 300)
 
     test_app = executable('test_app', files('../../tests/app/test_app.c', 'headless.c'),
         include_directories: rx_inc, dependencies: [ rx_app_dep ])
-    test('app', test_app, args: [ app_click_wav, meson.current_build_dir() / 'test-app' ],
+    test('app', test_app,
+        args: [ app_click_wav, meson.current_build_dir() / 'test-app', app_long_wav ],
         suite: 'app', timeout: 300)
 
     test('cli', find_program('../../tests/app/cli_test.sh'),

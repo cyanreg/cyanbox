@@ -109,6 +109,9 @@ typedef struct RxWaveDraw {
     float  alpha;               /* 1 */
     float  dim;                 /* 0..1: darkens the part before col_dim_until (played part), 0 = off */
     double dim_until;           /* column */
+    float  gain;                /* every band's level is multiplied by it before the full
+                                   scale clamps it (an overview of PWV6 at rekordbox's
+                                   levels needs about 4 to fill its height); 0 = 1 */
 } RxWaveDraw;
 
 /* Adds the draw to an ImDrawList (passed as void* from C++) as a render

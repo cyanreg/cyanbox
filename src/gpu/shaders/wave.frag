@@ -32,6 +32,8 @@
 //     on that, in blue, amber and cream, scaled by 128, 256 and 128.
 //   - Blue: height / 31, coloured from #0055E1 to #F5EBD7 by whiteness / 7.
 //   - RGB: the strongest channel at full, the others in proportion.
+//   - `gain` multiplies every band's level before the full scale clamps
+//     it (an overview of PWV6 at rekordbox's levels fills its height so).
 //   - Insets keep rows clear above and below; `dim` darkens the columns
 //     before `dim_off` (the played part); `alpha` fades the whole.
 //
@@ -64,6 +66,7 @@ layout(push_constant, std430) uniform Push {
     float   dim;
     float   dim_off;        // dim_until minus col_base
     uint    flags;          // bit 0: detail
+    float   gain;           // every band's level times this, before full scale clamps it
 } pc;
 
 layout(location = 0) out vec4 out_colour;
@@ -205,7 +208,7 @@ void main()
             for (int i = first; i < last; i += stride)
                 v = max(v, bands(i));
         }
-        v = min(v, vec3(127.0));
+        v = min(v * pc.gain, vec3(127.0));
         silent = all(equal(v, vec3(0.0)));
 
         if (!silent && pc.mode == MODE_STACKED) {
@@ -275,7 +278,7 @@ void main()
         silent = col.a <= 0.0;
 
         if (!silent) {
-            float h = min(col.a, 1.0);
+            float h = min(col.a * pc.gain, 1.0);
             float cov = centred
                 ? cover(centre - max(0.5 * pc.unit, h * usable * 0.5),
                         centre + max(0.5 * pc.unit, h * usable * 0.5))

@@ -143,6 +143,13 @@ struct UiFileEntry {
     bool selected;
 };
 
+// An input event the test hook gives ImGui at a frame (RXBOX_UI_EVENTS).
+struct UiTestEvent {
+    int      frame;
+    int      type;             // 0 key down, 1 key up, 2 focus out, 3 focus in
+    ImGuiKey key;
+};
+
 struct UiState {
     RxApp *app;
     float  s;                  // layout scale (see top of file)
@@ -205,6 +212,7 @@ struct UiState {
     std::string fb_path;
     char      fb_edit[1024];
     std::vector<UiFileEntry> fb_entries;
+    std::string fb_error;      // why fb_path could not be listed
     bool      fb_dirty;
     std::vector<std::string> volumes;
     bool      export_seen_running;
@@ -237,6 +245,7 @@ struct UiState {
     uint64_t  autoload;
     double    autoload_at;     // seconds to start from, < 0: the auto-cue
     std::string autoshow;      // panels and dialogs to open (test hook)
+    std::vector<UiTestEvent> test_events;   // input to give ImGui (test hook)
     bool      autoload_done;
     double    saved_zoom;
 };

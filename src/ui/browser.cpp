@@ -402,14 +402,19 @@ static void row_cells(UiState *ui, RxTrack *t, int row, float row_h, const uint6
             break;
         }
         case COL_ART: {
+            // Every visible row asks: the library may hold a thumbnail for a
+            // track whose flag is off (a folder image found later); app.c
+            // looks once per track and reads the file only when the flag
+            // says there is art.
             float s = ImMin(row_h - PX(4), w);
             ImVec2 a(p.x + (w - s) * 0.5f, p.y + (row_h - s) * 0.5f), b(a.x + s, a.y + s);
-            uint64_t tex = t->has_artwork && !t->missing ? rx_app_artwork_texture(app, t) : 0;
+            uint64_t tex = rx_app_artwork_texture(app, t);
             if (tex)
-                dl->AddImage(ImTextureRef((ImTextureID)tex), a, b);
+                dl->AddImage(ImTextureRef((ImTextureID)tex), a, b, ImVec2(0, 0), ImVec2(1, 1),
+                             dim ? IM_COL32(0xFF, 0xFF, 0xFF, 0x60) : IM_COL32_WHITE);
             else
                 ui_record_icon(dl, a, b);
-            if (!tex && t->has_artwork && !t->missing)
+            if (!tex && rx_app_artwork_pending(app, t))
                 ui->previews_pending = true;
             break;
         }
@@ -823,6 +828,38 @@ static void fact(const char *name, const char *value)
     ImGui::TextWrapped("%s", value);
 }
 
+// A path breaks after any '/' (ImGui wraps only at spaces, so a long path
+// ran off the panel), inside a word only when a name alone is too wide;
+// the tooltip has it on one line.
+static void path_fact(const char *name, const char *path)
+{
+    ImGui::TextDisabled("%s", name);
+    ImGui::SameLine(ImGui::GetFontSize() * 6.0f);
+    float avail = ImMax(ImGui::GetContentRegionAvail().x, ImGui::GetFontSize() * 4.0f);
+    ImGui::BeginGroup();
+    const char *p = path, *end = path + strlen(path);
+    while (p < end) {
+        const char *cut = p, *slash = nullptr;
+        while (cut < end) {
+            const char *next = cut + 1;
+            while (next < end && ((unsigned char)*next & 0xC0) == 0x80)
+                next++;
+            if (cut > p && ImGui::CalcTextSize(p, next).x > avail)
+                break;
+            if (*cut == '/')
+                slash = next;
+            cut = next;
+        }
+        if (cut < end && slash)
+            cut = slash;
+        ImGui::TextUnformatted(p, cut);
+        p = cut;
+    }
+    ImGui::EndGroup();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+        ImGui::SetTooltip("%s", path);
+}
+
 void ui_info_panel(UiState *ui, ImVec2 size)
 {
     RxApp *app = ui->app;
@@ -881,9 +918,8 @@ void ui_info_panel(UiState *ui, ImVec2 size)
     ImGui::PushID("inforating");
     rating_cell(ui, t, rp, PX(80), ImGui::GetFrameHeight(), false);
     ImGui::PopID();
-    ImGui::AlignTextToFramePadding();
+    // The nine swatches are wider than what is left beside a label.
     ImGui::TextDisabled("Colour");
-    ImGui::SameLine(label_w);
     char col[RX_COLOR_MAX];
     if (ui_track_colour_menu(ui, t->meta.color, col)) {
         snprintf(t->meta.color, sizeof(t->meta.color), "%s", col);
@@ -923,7 +959,7 @@ void ui_info_panel(UiState *ui, ImVec2 size)
         snprintf(buf, sizeof(buf), "%d (last %s)", t->play_count, date);
         fact("Plays", buf);
     }
-    fact("Path", t->path);
+    path_fact("Path", t->path);
     if (t->missing)
         ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(UI_ACCENT), "The file is missing.");
     ImGui::EndChild();

@@ -23,6 +23,12 @@
 #include <math.h>
 #include <stdio.h>
 
+// The 3-band overview's gain (rx_wave_draw). PWV6 at rekordbox's levels
+// peaks around 27 to 35 of 127 on loud tracks (measured on the acceptance
+// library: house and drum & bass, means 11 to 17), so value/127 would draw
+// a thin strip; rekordbox's overview fills its height, which 127/32 does.
+#define UI_OVERVIEW_GAIN (127.0f / 32.0f)
+
 /* ------------------------------------------------------------- grid helpers */
 
 double ui_zoom_step(double bars, int dir)
@@ -242,6 +248,11 @@ void ui_overview(UiState *ui, int deck, ImVec2 a, ImVec2 b)
         // The played part at 55 % brightness, as rekordbox dims it.
         d.dim = 0.45f;
         d.dim_until = pos / dur * cols;
+        // PWV6 at rekordbox's levels is drawn up to fill the strip, as
+        // rekordbox's overview does (UI_OVERVIEW_GAIN); PWAV and PWV4
+        // heights already fill it.
+        if (app->wave_palette == 0)
+            d.gain = UI_OVERVIEW_GAIN;
         rx_wave_draw(app->window, dl, dv->wave_preview, &d);
     } else {
         ui_text_centre(ui, dl, nullptr, 11.0f, a, b, UI_FAINT, t->has_waveforms ? "" : "not analysed");

@@ -54,6 +54,7 @@ typedef struct RxWavePush {
     float    dim;
     float    dim_off;
     uint32_t flags;
+    float    gain;
 } RxWavePush;
 
 static_assert(offsetof(RxWavePush, rect) == 16, "push constant layout");
@@ -61,6 +62,7 @@ static_assert(offsetof(RxWavePush, fb_size) == 32, "push constant layout");
 static_assert(offsetof(RxWavePush, col_base) == 48, "push constant layout");
 static_assert(offsetof(RxWavePush, inset_top) == 64, "push constant layout");
 static_assert(offsetof(RxWavePush, flags) == 88, "push constant layout");
+static_assert(offsetof(RxWavePush, gain) == 92, "push constant layout");
 static_assert(sizeof(RxWavePush) <= 128, "push constants beyond the guaranteed 128 bytes");
 
 #define RX_WAVE_FLAG_DETAIL 1u
@@ -299,10 +301,12 @@ void rx_wave_draw(RxWindow *w, void *im_draw_list, const RxWaveGpu *g, const RxW
     if (!w || !im_draw_list || !g || !d || !g->buf.buf || g->nb_columns <= 0)
         return;
 
-    /* Nothing to draw, or columns too far out for the shader's integer
-     * column numbers. */
+    /* Nothing to draw, columns too far out for the shader's integer
+     * column numbers, or a rectangle with an infinite edge (Vulkan leaves
+     * a primitive with non-finite positions undefined). */
     if (!(d->x1 > d->x0) || !(d->y1 > d->y0) || !(d->col1 > d->col0) || !(d->alpha > 0.0f) ||
-        fabs(d->col0) > 1e9 || fabs(d->col1) > 1e9)
+        fabs(d->col0) > 1e9 || fabs(d->col1) > 1e9 || !isfinite(d->x0) || !isfinite(d->x1) ||
+        !isfinite(d->y0) || !isfinite(d->y1))
         return;
 
     RxWaveCmd c = {
@@ -372,6 +376,7 @@ void rx_wave_record(const RxWaveCmd *c, VkCommandBuffer cmd, const RxWaveView *v
         .dim          = RX_CLAMP(d->dim, 0.0f, 1.0f),
         .dim_off      = (float)RX_CLAMP(d->dim_until - base, -1e9, 1e9),
         .flags        = d->detail ? RX_WAVE_FLAG_DETAIL : 0,
+        .gain         = d->gain > 0.0f && isfinite(d->gain) ? fminf(d->gain, 127.0f) : 1.0f,
     };
     vkCmdPushConstants(cmd, w->wave_layout,
                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,

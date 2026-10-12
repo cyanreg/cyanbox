@@ -29,6 +29,7 @@ layout(push_constant, std430) uniform Push {
     float   dim;
     float   dim_off;
     uint    flags;
+    float   gain;
 } pc;
 
 void main()

@@ -16,6 +16,13 @@
 # headless output; without it, one shot at the output's size. RXBOX_UI_SHOW
 # (passed through) opens panels and dialogs for the shot (src/ui/ui.cpp).
 #
+# Then the variants, each a run with input given at set frames
+# (RXBOX_UI_EVENTS) and the state the interface logs with the screenshot
+# checked: CUE held while the window loses the keyboard is let go; Enter on
+# another track while one plays asks first (the key press that asked is not
+# the answer), and a second Enter loads it; the Add browser on a folder it
+# cannot read says so.
+#
 # usage: screenshot.sh RXBOX OUTDIR
 
 set -eu
@@ -83,6 +90,7 @@ rx playlist add "Peak/Main room" "$AUDIO/02-dnb.flac" "$AUDIO/04-techno.flac" > 
 
 ID=$(rx show "$AUDIO/01-house.flac" | sed -n 's/^  id \([0-9]*\).*/\1/p' | head -n 1)
 [ -n "$ID" ] || { echo "no id for the first track"; rx show "$AUDIO/01-house.flac"; exit 1; }
+ID2=$(rx show "$AUDIO/02-dnb.flac" | sed -n 's/^  id \([0-9]*\).*/\1/p' | head -n 1)
 
 # Hot cues, memory cues and loops on the first track, written straight
 # into the library (no CLI command sets cues). 128 BPM: a bar is 1.875 s.
@@ -119,10 +127,24 @@ shoot() {
     rm -f "$png"
     RXBOX_UI_AUTOLOAD=$ID RXBOX_UI_AUTOLOAD_AT=${RXBOX_UI_AUTOLOAD_AT:-13.5} \
     RXBOX_UI_SCREENSHOT=$png timeout 120 \
-        "$RXBOX" -c "$LIB" --audio none --frames 120 > "$png.log" 2>&1 || {
+        "$RXBOX" -c "$LIB" --audio none --frames ${FRAMES:-120} > "$png.log" 2>&1 || {
         echo "rxbox failed:"; cat "$png.log"; exit 1; }
     [ -s "$png" ] || { echo "no screenshot at $png"; cat "$png.log"; exit 1; }
     echo "screenshot: $png"
+}
+
+# variant NAME EVENTS STATE: a shot with RXBOX_UI_EVENTS, whose logged
+# state ("ui test: frame N track ID playing P position S popup Q") must
+# match the extended regular expression STATE.
+variant() {
+    name=$1 events=$2 want=$3
+    export RXBOX_UI_EVENTS="$events"
+    shoot "$OUT/variant-$name.png"
+    unset RXBOX_UI_EVENTS
+    state=$(grep "ui test:" "$OUT/variant-$name.png.log" || true)
+    echo "$name: $state"
+    echo "$state" | grep -Eq "$want" || {
+        echo "FAIL: variant $name: want \"$want\""; cat "$OUT/variant-$name.png.log"; exit 1; }
 }
 
 if [ -n "${RXBOX_UI_SWAYSOCK:-}" ]; then
@@ -132,4 +154,36 @@ if [ -n "${RXBOX_UI_SWAYSOCK:-}" ]; then
     done
 else
     shoot "$OUT/rxbox.png"
+fi
+
+# The track plays from 13.5 s and its cue point is the memory cue at 0. C
+# pauses it there; C held previews; the key comes up as the window loses
+# the keyboard, which ImGui reports as every key cleared: the preview
+# stops and the deck is back on the cue point.
+variant cue-focus "70:down:C,72:up:C,80:down:C,88:up:C,88:focus-out" \
+    "track $ID playing 0 position 0\.00 "
+
+# Enter on the next row while the deck plays: the question, not the load.
+variant enter-asks "70:down:DownArrow,71:up:DownArrow,75:down:Enter,76:up:Enter" \
+    "track $ID playing 1 .*popup 1"
+
+# A second Enter answers it: the deck stops and the other track loads.
+FRAMES=160
+export RXBOX_UI_SCREENSHOT_FRAME=140
+variant enter-confirms \
+    "70:down:DownArrow,71:up:DownArrow,75:down:Enter,76:up:Enter,90:down:Enter,91:up:Enter" \
+    "track $ID2 playing 0 .*popup 0"
+unset FRAMES RXBOX_UI_SCREENSHOT_FRAME
+
+# The Add browser on a folder it cannot read ($HOME/Music) says why.
+if [ "$(id -u)" != 0 ]; then
+    chmod -R u+rwx "$OUT/home" 2> /dev/null || true
+    rm -rf "$OUT/home"
+    mkdir -p "$OUT/home/Music/inside"
+    chmod 000 "$OUT/home/Music"
+    (
+        export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}" HOME="$OUT/home" RXBOX_UI_SHOW=add
+        shoot "$OUT/variant-add-noperm.png"
+    ) || { chmod 755 "$OUT/home/Music"; exit 1; }
+    chmod 755 "$OUT/home/Music"
 fi

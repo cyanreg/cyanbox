@@ -51,14 +51,16 @@ void ui_keys(UiState *ui)
     UiDeck *ud = &ui->decks[0];
     RxDeckCtl *c = &dv->ctl;
 
-    // A held key is released even if the focus moved meanwhile.
-    if (ud->key_cue_down && ImGui::IsKeyReleased(ImGuiKey_C)) {
+    // A held key is released even if the focus moved meanwhile. Up, not
+    // "released": when the window loses the keyboard ImGui clears every key
+    // and IsKeyReleased() never fires, which would leave CUE previewing.
+    if (ud->key_cue_down && !ImGui::IsKeyDown(ImGuiKey_C)) {
         ud->key_cue_down = false;
         rx_ctl_cue_release(c);
     }
     static const ImGuiKey hot_keys[3] = { ImGuiKey_1, ImGuiKey_2, ImGuiKey_3 };
     for (int i = 0; i < 3; i++) {
-        if ((ud->keys_hot_down & (1u << i)) && ImGui::IsKeyReleased(hot_keys[i])) {
+        if ((ud->keys_hot_down & (1u << i)) && !ImGui::IsKeyDown(hot_keys[i])) {
             ud->keys_hot_down &= ~(1u << i);
             rx_ctl_hot_cue_release(c, i);
         }

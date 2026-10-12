@@ -10,7 +10,11 @@
  * writes a screenshot of the last frame.
  *
  *   --check       also draw a reference strip of known columns and check
- *                 pixels of the last frame against the colour rules
+ *                 pixels of the last frame against the colour rules, and
+ *                 draws that must leave their box black (no columns,
+ *                 reversed or NaN columns, an infinite rectangle) or stay
+ *                 inside it (insets larger than the rectangle), and the
+ *                 gain (a quiet column drawn up to full height, or not)
  *   --idle        stop asking for redraws after the first frames (the
  *                 loop should then sleep: watch it with top)
  *   --validation  Vulkan validation layer; any error fails the run
@@ -38,6 +42,8 @@ typedef struct Demo {
     uint8_t    blue_cols[NB_COLUMNS];
     RxWaveGpu *band, *blue, *rgb;
     RxWaveGpu *ref[NB_REF];
+    RxWaveGpu *empty;               /* uploaded with no columns */
+    RxWaveGpu *quiet;               /* one column, low band at 32 */
     uint64_t   tex;
     bool       check;
     double     playhead;
@@ -119,6 +125,7 @@ static const uint8_t ref_rgb[]    = { 0xE0, 31 << 2, 0xEC, 31 << 2 };  /* r=7; r
 static const uint8_t ref_pwv4[]   = { 127, 0, 0, 100, 50, 0 };
 static const uint8_t ref_stack[]  = { 127, 0, 0, 64, 127, 0 };          /* low; low under mid */
 static const uint8_t ref_low[]    = { 127, 0, 0 };
+static const uint8_t ref_quiet[]  = { 32, 0, 0 };
 static const uint8_t ref_lowmid[] = { 127, 64, 0 };
 /* Detail interpolation: 40 -> 60 ramps, 0 -> 100 is a sharp attack. */
 static const uint8_t ref_interp[] = { 40, 0, 0, 60, 0, 0, 0, 0, 0, 100, 0, 0 };
@@ -182,6 +189,79 @@ static int ref_upload(Demo *d)
     }
     return 0;
 }
+
+/* ------------------------------------------------------------- edge cases */
+
+/* Boxes right of the reference strips, EDGE_W wide, each with one draw
+ * that must leave it black, or (the last) keep inside it. */
+#define EDGE_W   40.0f
+#define EDGE_GAP 10.0f
+#define NB_EDGES 8
+
+static float edge_x(int i)
+{
+    return ref_col_x(1000) - REF_GAP + 20.0f + i * (EDGE_W + EDGE_GAP);
+}
+
+static void draw_edges(Demo *d)
+{
+    void *dl = rx_demo_foreground_draw_list();
+    float y = ref_y(d->w);
+    rx_demo_rect(dl, edge_x(0) - 4, y - 24, edge_x(NB_EDGES) + 4, y + REF_H + 24, 0x000000FF);
+
+    for (int i = 0; i < NB_EDGES; i++) {
+        float x = edge_x(i);
+        RxWaveDraw wd = {
+            .x0 = x,  .y0 = y,
+            .x1 = x + EDGE_W,  .y1 = y + REF_H,
+            .col0 = 0, .col1 = 1,
+            .mode  = RX_WAVE_CENTRED,
+            .alpha = 1.0f,
+        };
+        const RxWaveGpu *g = d->ref[6];             /* one loud low column */
+        switch (i) {
+        case 0: g = d->empty; break;                /* no columns */
+        case 1: wd.col0 = 1; wd.col1 = 0; break;    /* reversed */
+        case 2: wd.col0 = NAN; break;
+        case 3: wd.x1 = INFINITY; break;
+        case 4: wd.alpha = NAN; break;
+        case 5:                                     /* insets past the rectangle */
+            wd.inset_top = 1000.0f;
+            wd.inset_bottom = 1000.0f;
+            wd.dim = NAN;
+            wd.dim_until = NAN;
+            break;
+        case 6:                                     /* 32 of 127 at full height */
+            g = d->quiet;
+            wd.gain = 127.0f / 32.0f;
+            break;
+        case 7:                                     /* gain 0: none */
+            g = d->quiet;
+            break;
+        }
+        rx_wave_draw(d->w, dl, g, &wd);
+    }
+}
+
+static const struct {
+    const char *what;
+    int box;
+    float dy;           /* from the box's centre line */
+    uint32_t rgb;
+} edge_probes[] = {
+    { "no columns",                    0,   0.5f, 0x000000 },
+    { "reversed columns",              1,   0.5f, 0x000000 },
+    { "NaN column",                    2,   0.5f, 0x000000 },
+    { "infinite rectangle",            3,   0.5f, 0x000000 },
+    { "right of the infinite one",     4,  30.0f, 0x000000 },
+    { "NaN alpha",                     4,   0.5f, 0x000000 },
+    { "huge insets: above the box",    5, -62.0f, 0x000000 },
+    { "huge insets: below the box",    5,  62.0f, 0x000000 },
+    { "huge insets: the centre line",  5,   0.0f, 0x0055E1 },
+    { "gain: near the top",            6, -45.0f, 0x0055E1 },
+    { "no gain: near the top",         7, -45.0f, 0x000000 },
+    { "no gain: within 32/127",        7,  -8.0f, 0x0055E1 },
+};
 
 static void draw_reference(Demo *d)
 {
@@ -283,11 +363,32 @@ static int run_checks(Demo *d)
                px[0], px[1], px[2], p->rgb, ok ? "ok" : "WRONG");
     }
 
+    for (size_t i = 0; i < RX_ARRAY_ELEMS(edge_probes); i++) {
+        float lx = edge_x(edge_probes[i].box) + EDGE_W * 0.5f;
+        float ly = centre + edge_probes[i].dy;
+        int x = (int)floorf(lx * scale), y = (int)floorf(ly * scale);
+        if (x < 0 || y < 0 || x >= width || y >= height) {
+            rx_err("demo: probe %s is outside the frame", edge_probes[i].what);
+            failed++;
+            continue;
+        }
+        const uint8_t *px = rgba + ((size_t)y * width + x) * 4;
+        uint32_t want = edge_probes[i].rgb;
+        bool ok = abs(px[0] - (int)(want >> 16 & 0xFF)) <= 2 &&
+                  abs(px[1] - (int)(want >> 8 & 0xFF)) <= 2 && abs(px[2] - (int)(want & 0xFF)) <= 2;
+        if (!ok)
+            failed++;
+        rx_log(ok ? RX_LOG_INFO : RX_LOG_ERROR,
+               "demo: %-26s at %4d,%4d: %02X%02X%02X, want %06X %s", edge_probes[i].what, x, y,
+               px[0], px[1], px[2], want, ok ? "ok" : "WRONG");
+    }
+
     free(rgba);
+    size_t total = RX_ARRAY_ELEMS(probes) + RX_ARRAY_ELEMS(edge_probes);
     if (failed)
-        rx_err("demo: %d of %zu pixel checks failed", failed, RX_ARRAY_ELEMS(probes));
+        rx_err("demo: %d of %zu pixel checks failed", failed, total);
     else
-        rx_info("demo: all %zu pixel checks pass", RX_ARRAY_ELEMS(probes));
+        rx_info("demo: all %zu pixel checks pass", total);
     return failed ? RX_ERROR(EINVAL) : 0;
 }
 
@@ -395,8 +496,10 @@ static void frame(Demo *d)
     }
     rx_demo_end();
 
-    if (d->check)
+    if (d->check) {
         draw_reference(d);
+        draw_edges(d);
+    }
 
     churn(d);
     rx_window_end_frame(w);
@@ -463,8 +566,11 @@ int main(int argc, char **argv)
     d.rgb       = rx_wave_upload(d.w, RX_WAVE_RGB_DETAIL, rgb, NB_COLUMNS);
 
     d.tex = make_texture(d.w, 0);
+    d.empty = rx_wave_upload(d.w, RX_WAVE_3BAND, NULL, 0);
+    d.quiet = rx_wave_upload(d.w, RX_WAVE_3BAND, ref_quiet, 1);
 
-    if (!d.band || !d.blue || !d.rgb || !d.tex || ref_upload(&d) < 0) {
+    if (!d.band || !d.blue || !d.rgb || !d.tex || ref_upload(&d) < 0 || !d.empty ||
+        rx_wave_columns(d.empty) != 0 || !d.quiet) {
         rx_err("demo: could not create the resources");
         ret = RX_ERROR(ENOMEM);
         goto end;
@@ -512,6 +618,8 @@ end:;
     rx_wave_release(d.w, d.rgb);
     for (int i = 0; i < NB_REF; i++)
         rx_wave_release(d.w, d.ref[i]);
+    rx_wave_release(d.w, d.empty);
+    rx_wave_release(d.w, d.quiet);
     rx_window_destroy(d.w);
 
     return ret < 0 || errors ? 1 : 0;

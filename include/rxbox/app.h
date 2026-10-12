@@ -122,9 +122,11 @@ void rx_app_unload_deck(RxApp *app, int deck);
 int  rx_app_analyse_track(RxApp *app, RxTrack *t, unsigned what, bool force);
 int  rx_app_analyse_all(RxApp *app, bool force);     /* everything not yet analysed */
 /* Which of `what` (RxAnalyseWhat) a track still lacks; everything asked
- * when force. A track without waveforms in the library always needs them;
- * a locked grid never needs beats unless force; a missing file needs
- * nothing (it cannot be read). Needs only app->lib. */
+ * when force. A track without waveforms in the library always needs them,
+ * and so does one whose stored waveforms are of a format version the
+ * library no longer reads (-EPROTO: made before a recalibration; they are
+ * loaded once to see); a locked grid never needs beats unless force; a
+ * missing file needs nothing (it cannot be read). Needs only app->lib. */
 unsigned rx_app_analysis_needed(const RxApp *app, const RxTrack *t, unsigned what, bool force);
 int  rx_app_add_path(RxApp *app, const char *path);  /* add + queue analysis */
 void rx_app_save_track(RxApp *app, RxTrack *t);      /* to the library now */
@@ -149,6 +151,10 @@ int  rx_app_rescan(RxApp *app);
  * until the next rx_app_tick. */
 uint64_t   rx_app_artwork_texture(RxApp *app, const RxTrack *t);
 RxWaveGpu *rx_app_preview_wave(RxApp *app, const RxTrack *t);
+/* The thumbnail is still being looked for (the library's is tried for
+ * every track, the file's art only when has_artwork): the 0 that
+ * rx_app_artwork_texture() returns may change. */
+bool       rx_app_artwork_pending(RxApp *app, const RxTrack *t);
 
 /* The interface (src/ui, C++). */
 int  rx_ui_init(RxApp *app);
