@@ -729,13 +729,13 @@ void rx_ctl_loop_double(RxDeckCtl *c)
 /* ----------------------------------------------------------------- jumps */
 
 /* Beat jump: +-N beats, keeping the playing state (manual p.62). With
- * QUANTIZE the jump is counted on the grid, beat by beat through every
- * section crossed, so the playhead keeps its place relative to the beat
- * (the point of quantize: "without breaking the rhythm", manual p.61);
- * without it the jump is N beats of the tempo at the playhead, in
- * seconds (rbxport player.ts jumpSeconds). During a loop the loop moves
- * with the playhead (manual p.62, Loop Move). 0 is the 10 ms fine jump,
- * forward, or back for -0.0. */
+ * QUANTIZE the jump lands on the grid, as rekordbox's does: the playhead
+ * is snapped to the nearest beat, then moved N whole grid beats, beat by
+ * beat through every section crossed. Without it the jump is N beats of
+ * the tempo at the playhead, in seconds, from the exact position (rbxport
+ * player.ts jumpSeconds). During a loop the loop moves N beats with the
+ * playhead (manual p.62, Loop Move). 0 is the 10 ms fine jump, forward,
+ * or back for -0.0. */
 void rx_ctl_beat_jump(RxDeckCtl *c, double beats)
 {
     if (!ready(c) || !isfinite(beats))
@@ -751,13 +751,20 @@ void rx_ctl_beat_jump(RxDeckCtl *c, double beats)
     RxDeckState s = state(c);
     bool on_grid = c->quantize;
     double step = beats * 60.0 / rx_grid_bpm_at(g, s.position);
-    double target = on_grid ? rx_grid_offset_beats(g, s.position, beats) : s.position + step;
+    double target = s.position + step;
+    if (on_grid)
+        target = rx_grid_offset_beats(g, rx_grid_quantize(g, s.position), beats);
 
     if (c->looping) {
         double in  = on_grid ? rx_grid_offset_beats(g, c->loop_in, beats) : c->loop_in + step;
         double out = on_grid ? rx_grid_offset_beats(g, c->loop_out, beats) : c->loop_out + step;
         if (in < 0.0 || out > s.duration)
             return;
+        /* From the loop's last half beat the snapped playhead lands on
+         * the moved out point, which inside a loop is its in point. */
+        if (target >= out)
+            target -= out - in;
+        target = RX_CLAMP(target, in, out);
         rx_deck_seek(c->player, c->deck, target);
         c->active_memory_loop = -1;
         engage_loop(c, in, out);

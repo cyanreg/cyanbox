@@ -77,7 +77,7 @@ static int64_t now_us(void)
 /* Real-time side. Sequence lock writer: odd while writing. The release
  * fence after the odd store keeps the data stores from moving above it;
  * the final release store orders them before the even value. */
-static void publish(RxDeckPub *pub, const RxDeckRT *d, int64_t time_us)
+static void publish(RxDeckPub *pub, const RxDeckRT *d, int64_t time_us, int64_t span_us)
 {
     unsigned seq = atomic_load_explicit(&pub->seq, memory_order_relaxed);
     atomic_store_explicit(&pub->seq, seq + 1, memory_order_relaxed);
@@ -88,6 +88,7 @@ static void publish(RxDeckPub *pub, const RxDeckRT *d, int64_t time_us)
     atomic_store_explicit(&pub->speed, dbits(d->playing ? rx_player_deck_speed(d) : 0.0),
                           memory_order_relaxed);
     atomic_store_explicit(&pub->time_us, time_us, memory_order_relaxed);
+    atomic_store_explicit(&pub->span_us, span_us, memory_order_relaxed);
     atomic_store_explicit(&pub->playing, d->playing, memory_order_relaxed);
     atomic_store_explicit(&pub->serial, d->applied, memory_order_relaxed);
 
@@ -113,6 +114,7 @@ static void snapshot(const RxDeckPub *cpub, RxDeckSnap *s)
             uint64_t sp = atomic_load_explicit(&pub->speed, memory_order_relaxed);
             *s = (RxDeckSnap) {
                 .time_us = atomic_load_explicit(&pub->time_us, memory_order_relaxed),
+                .span_us = atomic_load_explicit(&pub->span_us, memory_order_relaxed),
                 .playing = atomic_load_explicit(&pub->playing, memory_order_relaxed),
                 .serial  = atomic_load_explicit(&pub->serial, memory_order_relaxed),
             };
@@ -177,7 +179,7 @@ void rx_player_mix(RxPlayer *p, float *out, int frames)
     }
 
     for (int i = 0; i < RX_DECKS; i++)
-        publish(&p->pub[i], &p->rt[i], time_us);
+        publish(&p->pub[i], &p->rt[i], time_us, rate > 0 ? (int64_t)frames * 1000000 / rate : 0);
 }
 
 /* ------------------------------------------------------------ owner side */
@@ -755,11 +757,13 @@ void rx_deck_state(const RxPlayer *cp, int deck, RxDeckState *out)
 
     double end = (double)o->audio->nb_frames;
     /* Between callbacks the playhead moves on: extrapolate from the
-     * callback's time stamp, for at most 50 ms (a stalled stream does not
-     * run away), and not past a loop's out point or the end. The manual
-     * null backend is exact instead. */
+     * callback's time stamp by at most the length of the block it rendered,
+     * which is where the next callback will publish. A late callback then
+     * holds the playhead still instead of making it step back, and a
+     * stalled stream does not run away. Never past a loop's out point or
+     * the end. The manual null backend is exact instead. */
     if (!pending && playing && !o->scrubbing && !p->manual && s.speed > 0.0) {
-        double dt = RX_CLAMP((now_us() - s.time_us) * 1e-6, 0.0, 0.050);
+        double dt = RX_CLAMP((now_us() - s.time_us) * 1e-6, 0.0, s.span_us * 1e-6);
         double limit = end;
         double out_frames = o->loop_out * o->audio->rate;
         if (o->loop_enabled && frames < out_frames)

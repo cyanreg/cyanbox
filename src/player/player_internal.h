@@ -185,6 +185,7 @@ typedef struct RxDeckPub {
     _Atomic uint64_t frame_f;       /* double bits */
     _Atomic uint64_t speed;         /* double bits: track frames per second, 0 when stopped */
     _Atomic int64_t  time_us;       /* CLOCK_MONOTONIC at the callback */
+    _Atomic int64_t  span_us;       /* duration of the block it rendered */
     atomic_bool      playing;
     _Atomic uint64_t serial;
     atomic_uint      level_l, level_r;  /* float bits */
@@ -193,7 +194,7 @@ typedef struct RxDeckPub {
 typedef struct RxDeckSnap {
     double   frames;
     double   speed;
-    int64_t  time_us;
+    int64_t  time_us, span_us;
     bool     playing;
     uint64_t serial;
 } RxDeckSnap;

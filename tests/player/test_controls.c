@@ -496,24 +496,38 @@ static void test_beat_jump(void)
 {
     setup(true);
 
+    /* QUANTIZE: snapped to the nearest beat (10.0 s is beat 21.33), then
+     * moved whole beats. */
     rx_ctl_seek(&c, 10.0);
     rx_ctl_beat_jump(&c, 4);
-    CHECK(NEAR(pos(), 10.0 + B(4)) && !playing(), "+4: %f", pos());
+    CHECK(pos() == B(25) && !playing(), "+4 lands on beat 25: %f", pos());
     rx_ctl_beat_jump(&c, -4);
-    CHECK(NEAR(pos(), 10.0), "-4: %f", pos());
+    CHECK(pos() == B(21), "-4: %f", pos());
 
+    rx_ctl_seek(&c, 10.0);
     rx_ctl_play_pause(&c);
     rx_ctl_beat_jump(&c, 4);
-    CHECK(playing() && NEAR(pos(), 10.0 + B(4)), "+4 playing: %f", pos());
+    CHECK(playing() && pos() == B(25), "+4 playing: %f", pos());
     rx_ctl_play_pause(&c);
 
-    /* Across the change to 120 BPM at 30 s (beat 64). With QUANTIZE the
-     * jump counts grid beats: 1.0667 beats of 128 to the change, then
-     * 2.9333 of 120. Without, it is 4 beats of the tempo at the playhead. */
+    /* Without QUANTIZE: 4 beats of the tempo at the playhead, from the
+     * exact position. */
+    rx_ctl_set_quantize(&c, false);
+    rx_ctl_seek(&c, 10.0);
+    rx_ctl_beat_jump(&c, 4);
+    CHECK(NEAR(pos(), 10.0 + B(4)), "unquantised +4: %f", pos());
+    rx_ctl_beat_jump(&c, -4);
+    CHECK(NEAR(pos(), 10.0), "unquantised -4: %f", pos());
+    rx_ctl_set_quantize(&c, true);
+
+    /* Across the change to 120 BPM at 30 s (beat 64). With QUANTIZE 29.5 s
+     * snaps to beat 63 and four grid beats on is the third beat of the
+     * 120 BPM section. Without, it is 4 beats of 128 in seconds. */
     rx_ctl_seek(&c, 29.5);
     rx_ctl_beat_jump(&c, 4);
-    double want = 30.0 + (4.0 - 0.5 / B(1)) * 0.5;
-    CHECK(NEAR(pos(), want), "on the grid: %f, want %f", pos(), want);
+    CHECK(NEAR(pos(), 30.0 + 3 * 0.5), "on the grid: %f", pos());
+    rx_ctl_beat_jump(&c, -4);
+    CHECK(NEAR(pos(), B(63)), "and back: %f", pos());
     rx_ctl_set_quantize(&c, false);
     rx_ctl_seek(&c, 29.5);
     rx_ctl_beat_jump(&c, 4);
@@ -535,7 +549,8 @@ static void test_beat_jump(void)
     rx_ctl_beat_jump(&c, -4);
     CHECK(pos() == 0.0, "start: %f", pos());
 
-    /* During a loop the loop moves with the playhead. */
+    /* During a loop the loop moves with the playhead, which lands on a
+     * beat (B(8) + 0.3 s is beat 8.64, so beat 9, then 13). */
     rx_ctl_seek(&c, B(8));
     rx_ctl_play_pause(&c);
     rx_ctl_auto_loop(&c, 4);
@@ -544,8 +559,22 @@ static void test_beat_jump(void)
     RxDeckState s = st();
     CHECK(c.looping && c.loop_in == B(12) && c.loop_out == B(16), "loop moved: %f %f",
           c.loop_in, c.loop_out);
-    CHECK(s.loop_in == B(12) && NEAR(s.position, B(12) + 0.3), "deck: %f", s.position);
+    CHECK(s.loop_in == B(12) && s.position == B(13), "deck: %f", s.position);
     CHECK(stays_inside(3.0, B(12), B(16)), "loops there");
+
+    /* From the last half beat of the loop the snapped playhead would be
+     * the moved out point: it lands on the moved in point instead. */
+    rx_ctl_seek(&c, B(15) + 0.3);
+    rx_ctl_beat_jump(&c, 4);
+    CHECK(c.loop_in == B(16) && c.loop_out == B(20) && pos() == B(16), "folded to the in point: %f",
+          pos());
+
+    /* Unquantised, the loop and the playhead move by the same seconds. */
+    rx_ctl_set_quantize(&c, false);
+    rx_ctl_seek(&c, B(17) + 0.1);
+    rx_ctl_beat_jump(&c, -4);
+    CHECK(c.loop_in == B(12) && c.loop_out == B(16) && NEAR(pos(), B(13) + 0.1),
+          "unquantised loop move: %f", pos());
     teardown();
 }
 
