@@ -44,7 +44,9 @@ typedef struct RxWaveforms {
 int  rx_waveforms_compute(const float *mono, int64_t nb_samples, int rate, RxWaveforms *out);
 void rx_waveforms_free(RxWaveforms *w);
 /* The packed form stored in the library (and the .rxw file format):
- * "RXWV", version, nb_detail, rate, gains, then the tags. */
+ * "RXWV", version, nb_detail, rate, gains, then the tags. Unpack (and load)
+ * return -EPROTO for a blob of another format version (version 1 held dj's
+ * three-band levels): recompute the waveforms; -EINVAL for damaged data. */
 int  rx_waveforms_pack(const RxWaveforms *w, uint8_t **data, size_t *size);
 int  rx_waveforms_unpack(const uint8_t *data, size_t size, RxWaveforms *w);
 int  rx_waveforms_save(const RxWaveforms *w, const char *path);

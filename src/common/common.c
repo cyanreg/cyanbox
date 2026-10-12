@@ -338,8 +338,25 @@ int rx_file_write_atomic(const char *path, const void *data, size_t size)
         ret = RX_ERROR(errno);
     if (!ret && rename(tmp, path) < 0)
         ret = RX_ERROR(errno);
-    if (ret)
+    if (ret) {
         unlink(tmp);
+    } else {
+        /* The rename is durable only once the directory entry is: fsync
+         * the parent, or a crash can bring back the old name with the
+         * new data already gone. Failing to open the directory (a FAT
+         * stick refuses O_RDONLY on some kernels) is not an error for the
+         * file itself. */
+        char *dir = rx_strdup(path);
+        if (dir) {
+            char *slash = strrchr(dir, '/');
+            int dfd = open(slash && slash != dir ? (*slash = '\0', dir) : ".", O_RDONLY | O_DIRECTORY);
+            if (dfd >= 0) {
+                fsync(dfd);
+                close(dfd);
+            }
+            free(dir);
+        }
+    }
 out:
     free(tmp);
     return ret;

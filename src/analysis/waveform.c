@@ -473,7 +473,7 @@ void rx_waveforms_free(RxWaveforms *w)
  * content of a .rxw file; all integers little-endian:
  *
  *   0   4  "RXWV"
- *   4   4  version (1)
+ *   4   4  version (2)
  *   8   4  nb_detail
  *  12   4  rate
  *  16   6  gains, 3 x u16
@@ -483,10 +483,14 @@ void rx_waveforms_free(RxWaveforms *w)
  *          the stick.
  *
  * It is a cache of what analysis computes, so a version change just makes
- * unpack fail and the caller recompute. Unpack checks the size exactly
- * against the header before reading anything. */
+ * unpack fail with -EPROTO and the caller recompute; damaged data fails
+ * with -EINVAL. Unpack checks the size exactly against the header before
+ * reading anything.
+ *
+ * Version 1 held dj's PWV6/PWV7 levels; version 2 the recalibrated ones
+ * (see "PWV7" above), so version 1 blobs must not be used. */
 #define RXW_MAGIC "RXWV"
-#define RXW_VERSION 1
+#define RXW_VERSION 2
 #define RXW_HEADER 24
 /* 24 hours of columns: anything above is a damaged file, not a track. */
 #define RXW_MAX_DETAIL (COLUMNS_PER_SECOND * 3600 * 24)
@@ -554,9 +558,12 @@ int rx_waveforms_pack(const RxWaveforms *w, uint8_t **data, size_t *size)
 int rx_waveforms_unpack(const uint8_t *data, size_t size, RxWaveforms *w)
 {
     *w = (RxWaveforms) { 0 };
-    if (!data || size < RXW_HEADER || memcmp(data, RXW_MAGIC, 4) ||
-        get_le32(data + 4) != RXW_VERSION)
+    if (!data || size < RXW_HEADER || memcmp(data, RXW_MAGIC, 4))
         return RX_ERROR(EINVAL);
+    /* Another format version (1: dj's three-band levels): not damaged, but
+     * stale, so the caller recomputes */
+    if (get_le32(data + 4) != RXW_VERSION)
+        return RX_ERROR(EPROTO);
     uint32_t n = get_le32(data + 8), rate = get_le32(data + 12);
     if (n == 0 || n > RXW_MAX_DETAIL || rate > INT32_MAX || size != rxw_size((int)n))
         return RX_ERROR(EINVAL);

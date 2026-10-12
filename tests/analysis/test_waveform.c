@@ -387,14 +387,14 @@ static int test_pack(void)
         return fails + 1;
     }
     CHECK(size == 24 + 400 + 100 + 7200 + 3600 + (size_t)w.nb_detail * 6);
-    CHECK(!memcmp(data, "RXWV", 4) && data[4] == 1 && le32(data + 8) == (uint32_t)w.nb_detail &&
+    CHECK(!memcmp(data, "RXWV", 4) && le32(data + 4) == 2 && le32(data + 8) == (uint32_t)w.nb_detail &&
           le32(data + 12) == 44100);
     CHECK(rx_waveforms_unpack(data, size, &r) == 0);
     CHECK(same_waves(&r, &w));
     rx_waveforms_free(&r);
 
     /* Refused, with nothing allocated: truncated, one byte too many, bad
-     * magic, unknown version, a column count that disagrees with the size,
+     * magic, another version, a column count that disagrees with the size,
      * no columns, shorter than the header, no data */
     CHECK(rx_waveforms_unpack(data, size - 1, &r) == RX_ERROR(EINVAL) && !r.pwv3);
     uint8_t *big = malloc(size + 1);
@@ -407,9 +407,13 @@ static int test_pack(void)
     data[0] = 'X';
     CHECK(rx_waveforms_unpack(data, size, &r) == RX_ERROR(EINVAL));
     data[0] = 'R';
-    put32(data + 4, 2);
-    CHECK(rx_waveforms_unpack(data, size, &r) == RX_ERROR(EINVAL));
+    /* Another version is stale, not damaged: -EPROTO, so the app recomputes.
+     * Version 1 blobs hold dj's three-band levels, which rxbox replaced. */
     put32(data + 4, 1);
+    CHECK(rx_waveforms_unpack(data, size, &r) == RX_ERROR(EPROTO) && !r.pwv3);
+    put32(data + 4, 3);
+    CHECK(rx_waveforms_unpack(data, size, &r) == RX_ERROR(EPROTO));
+    put32(data + 4, 2);
     put32(data + 8, (uint32_t)w.nb_detail + 1);
     CHECK(rx_waveforms_unpack(data, size, &r) == RX_ERROR(EINVAL));
     put32(data + 8, 0);
@@ -474,6 +478,11 @@ static int test_cache(void)
     CHECK(rx_file_write_atomic(path, buf, size) == 0);
     CHECK(rx_waveforms_load(path, &r) == RX_ERROR(EINVAL));
     buf[8]--;
+    /* A version 1 file (dj's three-band levels) is stale: -EPROTO */
+    buf[4] = 1;
+    CHECK(rx_file_write_atomic(path, buf, size) == 0);
+    CHECK(rx_waveforms_load(path, &r) == RX_ERROR(EPROTO) && !r.pwv3);
+    buf[4] = 2;
     buf[0] = 'X';
     CHECK(rx_file_write_atomic(path, buf, size) == 0);
     CHECK(rx_waveforms_load(path, &r) == RX_ERROR(EINVAL));
