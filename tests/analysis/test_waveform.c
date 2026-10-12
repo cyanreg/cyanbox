@@ -1,16 +1,25 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
 /* The waveform encoders against dj's: every tag byte of rx_waveforms_compute
- * is compared with what dj.analysis.waveform.compute wrote for the same
- * float32 samples (tests/data/analysis, made by gen_fixtures.py), plus the
- * column count rule, the firmware minimums, and the packed form (the
- * library's blob and the .rxw file): round trip, damaged data refused.
+ * is compared with the reference bytes gen_fixtures.py wrote for the same
+ * float32 samples (tests/data/analysis), plus the column count rule, the
+ * firmware minimums, the three-band level distributions, and the packed
+ * form (the library's blob and the .rxw file): round trip, damaged data
+ * refused.
  *
- * rxbox deliberately differs from dj in two places (docs/OVERVIEW.md
- * section 3, item 2): PWAV heights are never below 2 and PWV2 never below 1,
- * because Nexus firmware rejects a preview with a zero column and rekordbox
- * never writes lower values. The same two clamps are applied to dj's bytes
- * before comparing, and the number of bytes they changed is printed.
+ * PWAV, PWV2, PWV3, PWV4, PWV5 and PWVC are dj.analysis.waveform.compute's
+ * bytes, with two deliberate differences (docs/OVERVIEW.md section 3,
+ * item 2): PWAV heights are never below 2 and PWV2 never below 1, because
+ * Nexus firmware rejects a preview with a zero column and rekordbox never
+ * writes lower values. The same two clamps are applied to dj's bytes before
+ * comparing, and the number of bytes they changed is printed.
+ *
+ * PWV6 and PWV7 in the fixtures are NOT dj's: they are rxbox's
+ * recalibration (levels squared; src/analysis/waveform.c has the
+ * measurements against rekordbox's own files), computed by gen_fixtures.py's
+ * three_band() from dj's envelopes and gains. test_three_band() checks the
+ * property the recalibration is for without fixtures: the high band stays
+ * well below the low band where the music is bass-led.
  *
  * With arguments, `test_waveform SIGNAL.f32 TAGS` compares one pair (the
  * real-track check: gen_fixtures.py --real writes those). */
@@ -187,6 +196,106 @@ static int compare(const char *f32_path, const char *tags_path)
             fails++;                                                    \
         }                                                               \
     } while (0)
+
+/* dj's synthetic kick (tests/synth.py): a 170 -> 50 Hz drop over 0.25 s */
+static double kick(double t)
+{
+    if (t < 0 || t >= 0.25)
+        return 0.0;
+    return sin(2 * M_PI * (50 * t + 120 * (1 - exp(-40 * t)) / 40)) * exp(-12 * t);
+}
+
+/* A loud drum & bass style master in closed form, 174 BPM: a 55 Hz bass,
+ * kicks on 1 and 3, a snare body on 2 and 4, sixteenth hats made of twenty
+ * inharmonic partials from 3 to 15 kHz over a faint wash, all saturated
+ * with tanh to a hot, dense level. Its brightness was chosen so dj's rule
+ * gives it about the band balance it gave the 10 real tracks of the
+ * acceptance list (high/low band means: PWV6 1.37 here, 1.12 there; PWV7
+ * 0.38 and 0.32). */
+static float *loud_master(int rate, double secs, int64_t *nb)
+{
+    static const double snare[5] = { 180, 330, 670, 1230, 1870 };
+    double beat = 60.0 / 174.0, hat[20];
+    for (int k = 0; k < 20; k++)
+        hat[k] = 3000 * pow(1.09, k);
+    int64_t n = (int64_t)(secs * rate);
+    float *x = malloc(sizeof(*x) * n);
+    if (!x)
+        return NULL;
+    for (int64_t i = 0; i < n; i++) {
+        double t = (double)i / rate;
+        double v = 0.45 * sin(2 * M_PI * 55 * t) + 0.15 * sin(2 * M_PI * 110 * t);
+        v += 0.8 * kick(fmod(t, 2 * beat));
+        double hiss = 0.0;
+        for (int k = 0; k < 20; k++)
+            hiss += sin(2 * M_PI * hat[k] * t + 0.7 * k * k);
+        hiss /= sqrt(10);
+        v += 0.2 * hiss * (exp(-60 * fmod(t, beat / 4)) + 0.05);
+        double body = 0.0;
+        for (int k = 0; k < 5; k++)
+            body += sin(2 * M_PI * snare[k] * t + k);
+        v += 0.5 * body / 2 * exp(-25 * fmod(t + beat, 2 * beat));
+        x[i] = (float)(tanh(1.5 * v) / tanh(1.5));
+    }
+    *nb = n;
+    return x;
+}
+
+static void band_means(const uint8_t *v, int64_t n, double mean[3])
+{
+    for (int j = 0; j < 3; j++) {
+        double sum = 0.0;
+        for (int64_t i = 0; i < n; i++)
+            sum += v[i * 3 + j];
+        mean[j] = n ? sum / n : 0.0;
+    }
+}
+
+/* The three-band levels, statistically, without fixtures. rekordbox's own
+ * files (the two demo tracks, see src/analysis/waveform.c) have a high band
+ * whose mean is 0.55..0.66 of the low band's in PWV6 and ~0.13 in PWV7. On
+ * the loud master dj's rule gives 1.37 and 0.38 (an all-cream overview),
+ * rxbox's 0.60 and 0.17; the bounds sit between. The 60 Hz / 5 kHz signal
+ * checks each band stays where it belongs. */
+static int test_three_band(void)
+{
+    int fails = 0;
+    int64_t nb;
+    float *x = loud_master(44100, 20.0, &nb);
+    if (!x)
+        return 1;
+    RxWaveforms w;
+    CHECK(rx_waveforms_compute(x, nb, 44100, &w) == 0);
+    free(x);
+    double m6[3], m7[3];
+    band_means(w.pwv6, RX_WAVE_PWV6_COLUMNS, m6);
+    band_means(w.pwv7, w.nb_detail, m7);
+    printf("three-band means on the loud master: PWV6 %.1f %.1f %.1f (high/low %.2f), "
+           "PWV7 %.1f %.1f %.1f (high/low %.2f)\n", m6[0], m6[1], m6[2], m6[2] / m6[0],
+           m7[0], m7[1], m7[2], m7[2] / m7[0]);
+    CHECK(m6[2] < 0.8 * m6[0]);
+    CHECK(m7[2] < 0.25 * m7[0]);
+    /* rekordbox's PWV6 stays below ~100 on real music (rbxport, 80 tracks) */
+    for (int i = 0; i < RX_WAVE_PWV6_COLUMNS * 3; i++)
+        CHECK(w.pwv6[i] <= 100);
+    rx_waveforms_free(&w);
+
+    /* 60 Hz then 5 kHz: no high band in the first half; in the second, no
+     * low band once its envelope has released (0.97 a column) */
+    if (signal_load(DATA_DIR "cols48k.f32", &x, &nb) < 0)
+        return fails + 1;
+    CHECK(rx_waveforms_compute(x, nb, 48000, &w) == 0);
+    free(x);
+    for (int k = 20; k < 580; k++) {
+        CHECK(w.pwv6[k * 3 + 2] == 0);
+        CHECK(w.pwv6[k * 3 + 0] > 20);
+        CHECK(w.pwv6[(600 + k) * 3 + 2] > 20);
+        if (k >= 200)
+            CHECK(w.pwv6[(600 + k) * 3 + 0] == 0);
+    }
+    rx_waveforms_free(&w);
+    return fails;
+}
 
 /* dj's test_waveform_columns, plus the minimums on silence. */
 static int test_rules(void)
@@ -387,7 +496,8 @@ int main(int argc, char **argv)
         "mix44k", "cols48k", "odd11k", "short44k", "silence44k",
     };
     int fails = 0;
-    printf("dj fixtures (byte differences per tag, after the firmware minimums):\n");
+    printf("fixtures (byte differences per tag; dj's bytes after the firmware minimums,\n"
+           "PWV6/PWV7 rxbox's calibration):\n");
     for (size_t i = 0; i < RX_ARRAY_ELEMS(signals); i++) {
         char f32[256], tags[256];
         snprintf(f32, sizeof(f32), DATA_DIR "%s.f32", signals[i]);
@@ -398,6 +508,7 @@ int main(int argc, char **argv)
         fails += diff != 0;
     }
     fails += test_rules();
+    fails += test_three_band();
     fails += test_pack();
     fails += test_cache();
     if (fails) {

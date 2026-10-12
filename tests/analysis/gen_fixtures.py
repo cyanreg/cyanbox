@@ -8,9 +8,11 @@ Runs under dj's virtualenv, with dj importable:
 
 writes, into tests/data/analysis/, a few deterministic synthetic signals (closed
 form, no random numbers) as raw little-endian float32 mono (`<name>.f32`) and
-dj's waveform tags for each of them (`<name>.tags`), exactly as
-dj.analysis.waveform.compute produced them (without rxbox's firmware minimums;
-the C test applies those to this side before comparing), and keys.txt, the
+the waveform tags for each of them (`<name>.tags`): PWAV, PWV2, PWV3, PWV4,
+PWV5 and PWVC exactly as dj.analysis.waveform.compute produced them (without
+rxbox's firmware minimums; the C test applies those to this side before
+comparing), PWV6 and PWV7 by rxbox's recalibration of dj's rule (three_band()
+below; dj's levels are several times too hot), and keys.txt, the
 expectations of test_key.c: the true key of each tonal() signal, with dj's
 answer for information (rxbox fixes dj's tuning estimate, so they differ).
 
@@ -230,8 +232,47 @@ SIGNALS = {
 
 # ------------------------------------------------------------------- output
 
+def three_band(x: np.ndarray, rate: int, gains: np.ndarray):
+    """rxbox's PWV7 and PWV6, which replace dj's (src/analysis/waveform.c has
+    the measurements): the same band envelopes and gains as dj, but the
+    level written is the square of dj's normalised level, 127 * (u / 127)^2,
+    and PWV6 is dj's range mean of that. Mirrors the C step for step so the
+    bytes agree exactly."""
+    from scipy.signal import lfilter
+
+    W = waveform
+    x = x.astype(np.float64)
+    edges = W.column_edges(len(x), rate)
+    n = len(edges) - 1
+    starts = edges[:-1]
+    full = edges[1:] > starts
+    fs = starts[full]
+
+    def colmax(v):
+        out = np.zeros(n)
+        if len(fs):
+            out[full] = np.maximum.reduceat(np.abs(v), fs)
+        return out
+
+    low = colmax(lfilter(*W._rbj("lp", W.LOW_HZ, rate), x))
+    mid = colmax(lfilter(*W._rbj("lp", W.MID_HIGH_HZ, rate), lfilter(*W._rbj("hp", W.MID_LOW_HZ, rate), x)))
+    high = colmax(lfilter(*W._rbj("hp", W.HIGH_HZ, rate), x))
+    band = np.stack([low, mid, high], axis=1)
+    env = np.empty_like(band)
+    for j in range(3):
+        r, prev, col, out = W.RELEASE[j], 0.0, band[:, j].tolist(), env[:, j]
+        for i, v in enumerate(col):
+            prev = v if v > prev * r else prev * r
+            out[i] = prev
+    u = np.minimum(127, W.BAND_SCALE * gains * env)
+    pwv7 = np.floor(u * u / 127 + 0.5).astype(np.uint8)
+    pwv6 = np.minimum(127, W._round(W.PWV6_SCALE * W._range_mean(pwv7.astype(np.float64), *W._split(n, 1200))))
+    return pwv7, pwv6.astype(np.uint8)
+
+
 def tags_bytes(x: np.ndarray, rate: int) -> bytes:
     wf = waveform.compute(x, rate)
+    wf.pwv7, wf.pwv6 = three_band(x, rate, wf.gains)
     n = len(wf.pwv3)
     head = b"DJWV" + struct.pack("<IIIHHHH", rate, len(x), n, *(int(g) for g in wf.gains), 0)
     body = [
