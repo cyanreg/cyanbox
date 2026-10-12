@@ -24,10 +24,11 @@
 #include <stdio.h>
 
 // The 3-band overview's gain (rx_wave_draw). PWV6 at rekordbox's levels
-// peaks around 27 to 35 of 127 on loud tracks (measured on the acceptance
-// library: house and drum & bass, means 11 to 17), so value/127 would draw
-// a thin strip; rekordbox's overview fills its height, which 127/32 does.
-#define UI_OVERVIEW_GAIN (127.0f / 32.0f)
+// (encoder version 3) has a low band of about 22 on average and 39 at the
+// 95th percentile on loud tracks, so value/127 would draw a thin strip;
+// rekordbox's overview fills its height, which 127/42 does, with only
+// the loudest columns clipped.
+#define UI_OVERVIEW_GAIN (127.0f / 42.0f)
 
 /* ------------------------------------------------------------- grid helpers */
 
