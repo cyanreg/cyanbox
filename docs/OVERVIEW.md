@@ -79,17 +79,27 @@ rxbox analyze [paths]      (re)analyse; only missing sidecar sections are filled
 rxbox show <track>         print the resolved grid, key and cues
 rxbox export <stick>       write a stick (both libraries, ANLZ, artwork, presets)
 rxbox inspect <stick>      re-read and validate a stick
-rxbox pull <stick>         copy cues the player saved on the stick into sidecars
+rxbox sync <stick>         review what the player wrote on the stick (cues, history, presets); --apply
+rxbox pull <stick>         sync and accept everything
 rxbox settings             list the My Settings names and values
 ```
 
-The library is a directory (`$RXBOX_LIBRARY`, `-c DIR`, default
-`~/.local/share/rxbox`) holding `rxbox.toml`, `tracks/` (one sidecar per track,
-mirroring the audio's absolute path), `playlists/` (m3u8 files, folders are
-playlist folders) and `.cache/` (waveforms and decoded analysis products, safe
-to delete). The sidecar format is dj's, plus an `id` that never changes once a
-track is added; that id is the track id on every stick, so players keep their
-cached artwork and waveforms across exports.
+The library is one SQLite database, `library.db`, in a directory
+(`$RXBOX_LIBRARY`, `-c DIR`, default `~/.local/share/rxbox`). It holds
+everything: file facts and tags, the user's overrides, grid, key, cues,
+rating, colour, My Tags, play counts and history, the waveform bytes, the
+artwork thumbnail, playlists and folders, and the settings. A track whose
+file is missing stays in the library, greyed out, until the file returns or
+is relocated. Every track has an id that never changes; that id is the track
+id on every stick, so players keep their cached artwork and waveforms across
+exports. dj's sidecar files are not read or written: nothing was ever
+analysed with dj, and the user does not want the compatibility.
+
+After a gig, `rxbox sync STICK` (and File → Sync from USB in the interface)
+reads back what the player wrote to the stick: hot cues and memory cues it
+saved into the analysis files, the play history it appended, and My
+Settings it saved. The interface shows the differences for review; accepted
+ones go into the library.
 
 ## 3. Fixes carried in from the earlier comparison
 
@@ -101,8 +111,8 @@ All of the items the earlier session listed as worth importing are in scope:
 4. Stable track ids across exports (via the library id).
 5. Checks before writing anything: free space on the stick, no track row too
    long for a DeviceSQL page (named, not a crash).
-6. `rxbox pull`: read player-saved cues from the stick's ANLZ files back into
-   the sidecars, matched by track id.
+6. `rxbox sync` / `pull`: read player-saved cues, play history and presets
+   from the stick back into the library, matched by track id, with review.
 7. More `inspect` checks: ANLZ embedded path matches the audio, folder matches
    the path hash, fixed track-row values, both libraries agree on hot-cue
    auto-load, declared cue counts match parsed ones.
@@ -115,7 +125,7 @@ Plus: an optional "maximum compatibility" transcode (AAC and hi-res FLAC to
 ## 4. Architecture
 
 ```
-src/core      model, sidecars (tomlc17 + a small writer), library, playlists, config, logging, threads
+src/core      model, grid arithmetic, the SQLite library (tracks, cues, waveforms, playlists, settings), notation
 src/audio     libavformat/libavcodec decode to memory on the players' timeline, probe, tags, artwork, MP3/FLAC scanners
 src/analysis  spectral front end (libavutil av_tx), onset, tempo, grid, downbeat, key, waveforms
 src/formats   export.pdb, ANLZ read/write, OneLibrary (sqlite3 + SQLCipher pages through OpenSSL), My Settings, colours
@@ -159,11 +169,11 @@ Decisions and why:
   with `av_tx`. The front end sits behind one interface so a Vulkan compute
   (or VkFFT) version can replace it; the user is happy to go there once the
   CPU version is validated.
-- **Library stays plain text** (sidecars + m3u8), dj's design. SQLite is
-  linked anyway for OneLibrary but is not the library. Two thousand sidecars
-  parse in well under a second at startup; the interface sorts and filters in
-  memory. The user would accept an SQLite library if it were well kept; this
-  can be revisited without changing any interface above `rxbox/library.h`.
+- **The library is SQLite.** One file, WAL mode, foreign keys, every edit a
+  transaction, schema versioned for migrations. The whole track list is
+  also held in memory (a few thousand rows), written through, so the
+  interface sorts and filters without touching the database. Waveform bytes
+  and artwork thumbnails are blobs in it, so a library is one file to back up.
 
 ## 5. Beat grid: what "robust, with sense and logic" means here
 
@@ -262,11 +272,11 @@ Implemented by subagents against the interfaces in `include/rxbox/`:
 
 | Module | Scope |
 | --- | --- |
-| core | model, sidecar read/write, library, playlists, config, logging, thread pool |
+| core | model, grid arithmetic, SQLite library, playlists, settings, notation, thread pool |
 | audio | decode, probe, MP3 timeline rule, FLAC seek table, artwork |
 | analysis/waveforms | byte-faithful port of dj's waveform encoders |
 | analysis/beats+key | the new grid analyser, key detection, evaluation harness over ~/Music |
-| formats+export | pdb, ANLZ, OneLibrary, settings, colours, plan, stick writer, inspect, pull |
+| formats+export | pdb, ANLZ, OneLibrary, settings, colours, plan, stick writer, inspect, stick sync |
 | player | PipeWire, decks, controls, null backend |
 | gpu | window, Vulkan, VMA, frame callback, ImGui glue, waveform shader |
 | ui | the screens |

@@ -107,10 +107,10 @@ then the player auto-cues to the first memory cue (or 0).
 ## Browser
 
 **Playlist tree** (left, 220 default): `Collection` at the top (every
-track), then the folders and playlists from `playlists/`. Click selects the
-view. Right-click: new playlist, new folder, rename, delete (with confirm).
-Drag tracks from the table onto a playlist to add. Drag within the tree is
-not supported in v1 (folders are directories; rename moves files).
+track), then the folders and playlists from the library. Click selects the
+view. Right-click: new playlist, new folder, rename, delete (with confirm),
+import m3u8, export m3u8. Drag tracks from the table onto a playlist to
+add; drag playlists and folders within the tree to move them.
 
 **Search field** above the table: filters the current view on title,
 artist, album, genre, comment, file name with `rx_str_contains_fold`
@@ -122,9 +122,11 @@ virtualised with the clipper): default columns in order: `#`, Preview
 `RX_WAVE_HALF_STACKED`, 1200 columns into 128 px), Artwork (36 px
 thumbnail, textures cached per track with an LRU of ~400), Track Title,
 Key, BPM, Time, Rating (five stars, click sets), Artist, Color (a dot),
-Hot Cue (the letters, coloured), Genre, Year, Date Added. Row height 40 when
+Hot Cue (the letters, coloured), Genre, Year, Date Added; Plays and Last
+Played exist but are hidden by default. Row height 40 when
 artwork is shown, else 22. Selected rows highlighted; the focused row has a
-1 px outline. A row whose file is missing is drawn dim with a warning glyph;
+1 px outline. A row whose file is missing is drawn greyed out with a "missing" glyph,
+cannot be loaded or analysed, and offers Relocate… in its context menu;
 an unanalysed row shows `—` for BPM/key and a thin flat preview; a row being
 analysed shows a small spinner in the Preview cell.
 
@@ -141,7 +143,7 @@ showing the focused track's editable fields: title, artist, album, album
 artist, genre, label, remixer, composer, original artist, comment, year,
 track/disc numbers, rating, colour, My Tags (comma separated), file facts
 (type, size, rate, bit depth, bit rate, duration, path). Edits save on
-focus loss into the sidecar's `[meta]` overrides.
+focus loss as overrides in the library (the file's own tags are kept).
 
 ## Status bar
 
@@ -154,7 +156,8 @@ error in red), the library track count, the GPU name.
 
 A menu bar at the very top: **File** (Add files/folders… (ImGui file
 browser: a simple directory lister with a path field, since there is no
-native dialog), Export to USB…, Inspect USB…, Pull cues from USB…, Quit),
+native dialog), Export to USB…, Sync from USB…, Inspect USB…, Rescan
+missing files, Quit),
 **View** (waveform palette 3Band/Blue/RGB, key notation, show grid tools,
 show info panel, ImGui demo), **Analysis** (analyse selection, analyse all
 unanalysed, re-analyse selection, analysis settings…), **Help** (about,
@@ -167,6 +170,10 @@ keyboard map).
   read from /proc/mounts under /run/media and /media), whole library or
   selected playlists, prune, compatibility transcode, then a progress view
   with the stage, item, bar and a log; cancel; the result summary.
+- **Sync from USB**: pick the mount, read the stick, then a table of the
+  differences the player left (hot cues set/cleared, memory cues added/
+  removed, plays from the history, settings changed), one checkbox per row
+  (all accepted by default), Apply, and a summary.
 - **Keyboard map** (read-only list).
 - **About**.
 

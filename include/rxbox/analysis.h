@@ -43,7 +43,10 @@ typedef struct RxWaveforms {
  * firmware minimums: PWAV height >= 2, PWV2 >= 1. */
 int  rx_waveforms_compute(const float *mono, int64_t nb_samples, int rate, RxWaveforms *out);
 void rx_waveforms_free(RxWaveforms *w);
-/* The cache file format (.rxw): header, then the tags. */
+/* The packed form stored in the library (and the .rxw file format):
+ * "RXWV", version, nb_detail, rate, gains, then the tags. */
+int  rx_waveforms_pack(const RxWaveforms *w, uint8_t **data, size_t *size);
+int  rx_waveforms_unpack(const uint8_t *data, size_t size, RxWaveforms *w);
 int  rx_waveforms_save(const RxWaveforms *w, const char *path);
 int  rx_waveforms_load(const char *path, RxWaveforms *w);
 
@@ -118,8 +121,8 @@ typedef struct RxAnalysis {
 int  rx_analyse(const RxAudio *audio, const RxAnalysisOptions *opt, unsigned what, RxAnalysis *out);
 void rx_analysis_free(RxAnalysis *a);
 
-/* The automatic cues dj added: a memory cue on the first downbeat at or
- * after the first onset. Appends to the track unless cues_explicit. */
+/* The automatic cue: a memory cue on the first downbeat at or after the
+ * first onset, added when the track has no cues yet. */
 int  rx_analysis_auto_cues(RxTrack *t, const RxBeatResult *beats);
 
 #endif /* RXBOX_ANALYSIS_H */

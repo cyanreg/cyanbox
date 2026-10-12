@@ -3,7 +3,7 @@
 #ifndef RXBOX_MODEL_H
 #define RXBOX_MODEL_H
 
-/* The data model shared by analysis, sidecars, the player, the interface and
+/* The data model shared by analysis, the library, the player, the interface and
  * the stick writers: a track, its beat grid and its cues. Pure data plus the
  * arithmetic on grids; nothing here touches files. */
 
@@ -18,7 +18,7 @@
  * beat number (1..beats_per_bar) of the beat at `start`, or 0 to continue
  * counting from the previous section. The first section's `beat` is always
  * 1..beats_per_bar (0 is read as 1), so for a one-section grid `start` is a
- * downbeat, exactly as in dj's sidecars. */
+ * downbeat. */
 typedef struct RxTempoSection {
     double start;        /* seconds */
     double bpm;
@@ -88,10 +88,10 @@ int    rx_grid_merge_at(RxGrid *g, double t);
 
 /* A cue. `time` is always valid. `grid_beat`, when not NAN, says the cue is
  * musical: it sits on that (fractional) beat index of the grid (the
- * convention of rx_grid_time_to_beat) and the sidecar stores it as "bar
- * x.y" or "beat n", so it follows the grid when the grid is corrected.
- * rx_track_resolve_cues() recomputes `time` from it. Loop ends are stored
- * as a beat length in `loop_beats` when musical, in seconds otherwise. */
+ * convention of rx_grid_time_to_beat), so it follows the grid when the grid
+ * is corrected: rx_track_resolve_cues() recomputes `time` from it. Loop
+ * ends are stored as a beat length in `loop_beats` when musical, in seconds
+ * otherwise. */
 typedef struct RxCue {
     double time;                    /* seconds */
     double grid_beat;               /* beat index, or NAN for an absolute position */
@@ -119,9 +119,9 @@ void rx_cue_attach_to_grid(RxCue *c, const RxGrid *grid);
  * Key and back). "" means unknown. */
 #define RX_KEY_MAX 8
 
-/* Tag fields. The sidecar's [meta] holds overrides of what the file says;
- * a track carries both so the sidecar can be written back with only the
- * overrides. */
+/* Tag fields. The library keeps what the file says and the user's
+ * overrides separately (an override column is NULL when the file's value
+ * is used); a track carries both so an edit never loses the file's tag. */
 typedef struct RxMeta {
     char *title, *artist, *album, *album_artist, *genre, *label, *remixer,
          *composer, *original_artist, *comment;
@@ -144,10 +144,9 @@ typedef struct RxTrack {
     /* Identity */
     uint64_t id;                /* library id, > 0 once added; the id on every stick */
     char    *path;              /* absolute path of the audio file */
-    char    *sidecar;           /* absolute path of its sidecar, NULL if not in a library */
 
     /* Metadata */
-    RxMeta meta;                /* effective: file tags with the sidecar overrides applied */
+    RxMeta meta;                /* effective: file tags with the user's overrides applied */
     RxMeta file_meta;           /* as read from the file */
 
     /* Analysis results */
@@ -157,8 +156,8 @@ typedef struct RxTrack {
     double grid_confidence;         /* 0..1 */
     unsigned grid_flags;            /* RX_GRID_FLAG_* from rxbox/analysis.h */
     bool   grid_locked;             /* analysis must not replace it */
+    bool   has_waveforms;           /* the library holds its waveform bytes */
     RxCue *cues; int nb_cues;
-    bool   cues_explicit;           /* sidecar says `cues = []`: never add automatic cues */
 
     /* Stream properties from probing */
     double  duration;               /* seconds, on the players' timeline */
@@ -171,7 +170,10 @@ typedef struct RxTrack {
 
     /* Library bookkeeping */
     int64_t added;                  /* epoch seconds */
-    bool    missing;                /* audio file not found at last scan */
+    int64_t analysed;               /* epoch seconds of the last analysis, 0 never */
+    int     play_count;
+    int64_t last_played;            /* epoch seconds, 0 never */
+    bool    missing;                /* audio file not found at last scan: shown greyed out */
 } RxTrack;
 
 RxTrack *rx_track_new(const char *path);

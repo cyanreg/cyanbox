@@ -3,7 +3,8 @@
 #ifndef RXBOX_PLAYER_H
 #define RXBOX_PLAYER_H
 
-/* Playback: two decks mixed into one PipeWire stream.
+/* Playback: RX_DECKS decks (one: rxbox prepares tracks, it is not a mixer)
+ * mixed into one PipeWire stream.
  *
  * Thread model. The owner thread (the interface's main thread) calls every
  * function here. Commands go to the real-time thread through a lock-free
@@ -39,8 +40,16 @@ typedef struct RxPlayerOptions {
     enum RxAudioBackend backend;
     const char *sink;           /* PipeWire node name to connect to; NULL = default */
     int         rate;           /* 0 = 48000 */
-    int         period;         /* frames per callback; 0 = 256 */
+    int         period;         /* frames per callback; 0 = 256. RX_AUDIO_NULL only:
+                                 * < 0 is manual mode, no thread; callbacks of
+                                 * -period frames run from rx_player_null_advance */
     const char *app_name;       /* "rxbox" */
+    /* Called on the owner thread when the player lets go of a buffer it was
+     * given, once the real-time thread can no longer read it (or at
+     * destroy). NULL: rx_audio_free() and free(), so the RxAudio struct
+     * itself must then come from malloc. */
+    void      (*release)(void *opaque, RxAudio *audio);
+    void       *release_opaque;
 } RxPlayerOptions;
 void rx_player_options_default(RxPlayerOptions *o);
 
@@ -49,17 +58,19 @@ typedef struct RxPlayer RxPlayer;
 int  rx_player_create(RxPlayer **p, const RxPlayerOptions *opt);
 void rx_player_destroy(RxPlayer *p);
 int  rx_player_rate(const RxPlayer *p);
-/* True once the stream is running; the error string when it is not. */
+/* True once the stream is running; the error string when it is not
+ * (NULL while running). */
 bool rx_player_running(const RxPlayer *p);
 const char *rx_player_error(const RxPlayer *p);
 void rx_player_set_master_volume(RxPlayer *p, float gain);   /* 0..1 */
 /* Advances the null backend by `frames` synchronously (tests only; no-op
- * on PipeWire). */
+ * on PipeWire and on a null backend with its own thread, period >= 0). */
 void rx_player_null_advance(RxPlayer *p, int frames);
 
 /* ------------------------------------------------------------------- decks */
 
-/* Takes ownership of `audio`. The grid is copied (NULL = none). */
+/* Takes ownership of `audio` on success (see RxPlayerOptions.release); on
+ * error the caller keeps it. The grid is copied (NULL = none). */
 int  rx_deck_load(RxPlayer *p, int deck, RxAudio *audio, const RxGrid *grid);
 void rx_deck_unload(RxPlayer *p, int deck);
 bool rx_deck_loaded(const RxPlayer *p, int deck);
@@ -112,7 +123,7 @@ void rx_deck_state(const RxPlayer *p, int deck, RxDeckState *out);
 /* CDJ/rekordbox button semantics on top of a deck: the cue point, hot cue
  * pads, memory cues, loops, beat jump and quantize. Owns no audio; edits
  * the track's cue list in place and tells the owner through `changed` so
- * the sidecar can be saved. All calls from the owner thread; call
+ * the library can be saved. All calls from the owner thread; call
  * rx_ctl_tick() once per interface frame.
  *
  * The rules (CDJ-3000 manual, rekordbox Export mode):
@@ -192,7 +203,7 @@ void rx_ctl_loop_half(RxDeckCtl *c);
 void rx_ctl_loop_double(RxDeckCtl *c);
 void rx_ctl_loop_exit(RxDeckCtl *c);
 
-void rx_ctl_beat_jump(RxDeckCtl *c, double beats);         /* +-, 0 = fine nudge of 10 ms */
+void rx_ctl_beat_jump(RxDeckCtl *c, double beats);         /* +-, 0 = fine nudge of 10 ms (-0.0 back) */
 void rx_ctl_nudge(RxDeckCtl *c, double seconds);
 void rx_ctl_set_quantize(RxDeckCtl *c, bool on);
 void rx_ctl_seek(RxDeckCtl *c, double seconds);            /* a click on the waveform */

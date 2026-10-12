@@ -19,7 +19,7 @@ int         rx_track_color_id(const char *name);                  /* 0 unknown/n
 const char *rx_track_color_name(int id);                          /* NULL for 0 */
 uint32_t    rx_track_color_rgb(int id);                           /* 0xRRGGBB, as the interface draws it */
 
-/* Hot cue colours. Names the interface and sidecars use (rekordbox's
+/* Hot cue colours. Names the interface and the CLI use (rekordbox's
  * sixteen, in its pad-menu order), each mapping to a colour code in the
  * 64-entry palette. "#rrggbb" picks the nearest palette entry. */
 #define RX_HOT_CUE_COLORS 16
