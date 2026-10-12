@@ -8,7 +8,13 @@
  * with results handed back to the owner thread through a mailbox. Jobs
  * never touch the owner's library; the owner applies results (library
  * writes, deck load). A stick read, which compares the stick with the
- * library, opens a library handle of its own. */
+ * library, opens a library handle of its own.
+ *
+ * Analyses share a memory budget per queue (40 % of the physical memory,
+ * or RXBOX_ANALYSIS_BUDGET_MB, read by rx_jobs_create): before decoding,
+ * each reserves an estimate from the file's length and waits while it does
+ * not fit; one analysis may always run. A job waiting for memory is still
+ * pending, not running, and can be cancelled. */
 
 #include "rxbox/thread.h"
 #include "rxbox/analysis.h"
@@ -70,7 +76,7 @@ RxJobResult *rx_jobs_wait(RxJobs *j, int timeout_ms);
 void         rx_job_result_free(RxJobResult *r);
 
 /* Queue state for the status bar. */
-int  rx_jobs_pending(const RxJobs *j);      /* queued + running */
+int  rx_jobs_pending(const RxJobs *j);      /* queued (or waiting for memory) + running */
 int  rx_jobs_running(const RxJobs *j);
 /* The track currently being analysed on each worker, 0 when idle. */
 int  rx_jobs_active_tracks(const RxJobs *j, uint64_t *ids, int max);

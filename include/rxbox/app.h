@@ -53,7 +53,7 @@ typedef struct RxApp {
     /* Analysis queue state shown in the status bar */
     int        analysing_total, analysing_done;
     char       status[256];         /* last message */
-    int64_t    status_time;
+    int64_t    status_time;         /* when it was set (rx_time_us) */
     unsigned   last_error_count;
 
     /* Export dialog state. rx_app_start_export() analyses what the
@@ -138,6 +138,11 @@ int  rx_app_start_export(RxApp *app);                /* from export_state */
  * stick_request. -EBUSY while one is in flight. */
 int  rx_app_read_stick(RxApp *app, const char *mount);
 int  rx_app_inspect_stick(RxApp *app, const char *mount);
+/* Gives up the read or inspection `request` (stick_request when it was
+ * asked for), for a dialog closed meanwhile: dropped if it has not
+ * started, else its result is discarded when it comes; a result already
+ * in stick_result for it is freed. Another read may start at once. */
+void rx_app_cancel_stick(RxApp *app, uint64_t request);
 /* Applies a finished analysis to a track: grid (unless locked), key,
  * waveforms, auto cues; saves the track. */
 int  rx_app_apply_analysis(RxApp *app, RxTrack *t, RxAnalysis *a);

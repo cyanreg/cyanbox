@@ -12,7 +12,12 @@
  * rules as the interface (only what is missing, grid locks, waveforms,
  * automatic cues), printed as one line per track. The library (a directory
  * holding library.db) is -c/--library DIR, else $RXBOX_LIBRARY, else
- * ~/.local/share/rxbox (rx_library_default_root). */
+ * ~/.local/share/rxbox (rx_library_default_root).
+ *
+ * Arguments: options and names mix in any order after the command; `--`
+ * ends the options, so every argument after it is a name, even one that
+ * starts with '-'. An option's value is never empty. A usage error names
+ * the problem, prints the command's usage line, and exits 1. */
 
 #include <errno.h>
 #include <limits.h>
@@ -46,6 +51,8 @@ typedef struct Cli {
     bool  validation;
     bool  verbose;
     const char *cmd;
+    const char *usage;          /* the command's usage line, for usage errors */
+    bool  args_only;            /* past the command's `--`: no more options */
     RxApp app;                  /* lib and jobs only, see above */
     bool  lib_open;
 } Cli;
@@ -99,6 +106,8 @@ static const char usage_text[] =
     "  -c, --library DIR        the library (default: $RXBOX_LIBRARY, else\n"
     "                           ~/.local/share/rxbox)\n"
     "  -v, --verbose            more messages\n"
+    "  --                       after a command: the rest are names, even ones starting\n"
+    "                           with -\n"
     "  -h, --help               this text\n"
     "  -V, --version            the version\n"
     "\n"
@@ -123,31 +132,39 @@ static int fail(const char *fmt, ...)
     return EXIT_FAIL;
 }
 
-static int usage_error(const char *fmt, ...) RX_PRINTF(1, 2);
-static int usage_error(const char *fmt, ...)
+/* cli NULL (or no command yet): no usage line, the pointer to --help only. */
+static int usage_error(const Cli *cli, const char *fmt, ...) RX_PRINTF(2, 3);
+static int usage_error(const Cli *cli, const char *fmt, ...)
 {
     va_list args;
     fputs("rxbox: ", stderr);
     va_start(args, fmt);
     vfprintf(stderr, fmt, args);
     va_end(args);
-    fputs("\nTry 'rxbox --help'.\n", stderr);
+    fputc('\n', stderr);
+    if (cli && cli->usage)
+        fprintf(stderr, "usage: rxbox %s\n", cli->usage);
+    fputs("Try 'rxbox --help'.\n", stderr);
     return EXIT_USAGE;
 }
 
 /* Matches `-s VALUE`, `--long VALUE` and `--long=VALUE` at argv[*i].
- * Returns 1 with the value (and *i on it), 0 when it is another option,
- * -1 when the value is missing. */
-static int opt_value(int argc, char **argv, int *i, const char *s, const char *l, const char **val)
+ * Returns 1 with the value (and *i on it), 0 when it is another option or
+ * past `--`, -1 when the value is missing or empty. */
+static int opt_value(const Cli *cli, int argc, char **argv, int *i, const char *s, const char *l,
+                     const char **val)
 {
     const char *a = argv[*i];
+    if (cli->args_only)
+        return 0;
     size_t n = l ? strlen(l) : 0;
     if (l && !strncmp(a, l, n) && a[n] == '=') {
         *val = a + n + 1;
-        return 1;
+        return **val ? 1 : -1;
     }
     if ((s && !strcmp(a, s)) || (l && !strcmp(a, l))) {
-        if (*i + 1 >= argc)
+        /* *i stays on the option for the error message. */
+        if (*i + 1 >= argc || !argv[*i + 1][0])
             return -1;
         *val = argv[++*i];
         return 1;
@@ -155,26 +172,55 @@ static int opt_value(int argc, char **argv, int *i, const char *s, const char *l
     return 0;
 }
 
-static bool opt_flag(const char *a, const char *s, const char *l)
+static bool opt_flag(const Cli *cli, const char *a, const char *s, const char *l)
 {
-    return (s && !strcmp(a, s)) || (l && !strcmp(a, l));
+    return !cli->args_only && ((s && !strcmp(a, s)) || (l && !strcmp(a, l)));
 }
 
-/* Options valid before and after the command. 1 matched, 0 not, -1 error
- * (printed). */
+/* An option this command does not know, unless past `--` ("-" alone is a
+ * name). */
+static bool is_option(const Cli *cli, const char *a)
+{
+    return !cli->args_only && a[0] == '-' && a[1];
+}
+
+/* A count: decimal digits only, at most `max`. */
+static bool parse_count(const char *s, long max, long *out)
+{
+    if (!s[0])
+        return false;
+    long n = 0;
+    for (const char *p = s; *p; p++) {
+        if (*p < '0' || *p > '9' || n > (max - (*p - '0')) / 10)
+            return false;
+        n = n * 10 + (*p - '0');
+    }
+    *out = n;
+    return true;
+}
+
+/* Options valid before and after the command, and the command's `--`.
+ * 1 matched, 0 not, -1 error (printed). */
 static int common_option(Cli *cli, int argc, char **argv, int *i)
 {
+    if (cli->args_only)
+        return 0;
+    if (cli->cmd && !strcmp(argv[*i], "--")) {
+        cli->args_only = true;
+        return 1;
+    }
+
     const char *val;
-    int r = opt_value(argc, argv, i, "-c", "--library", &val);
+    int r = opt_value(cli, argc, argv, i, "-c", "--library", &val);
     if (r < 0) {
-        usage_error("%s needs a directory", argv[*i]);
+        usage_error(cli, "%s needs a directory", argv[*i]);
         return -1;
     }
     if (r > 0) {
         cli->library = val;
         return 1;
     }
-    if (opt_flag(argv[*i], "-v", "--verbose")) {
+    if (opt_flag(cli, argv[*i], "-v", "--verbose")) {
         cli->verbose = true;
         rx_log_set_level(RX_LOG_DEBUG);
         return 1;
@@ -636,7 +682,7 @@ static int playlist_create(Cli *cli, const char *name)
 
     int ret = EXIT_OK;
     if (!*leaf) {
-        ret = usage_error("%s: the playlist needs a name", name);
+        ret = usage_error(cli, "%s: the playlist needs a name", name);
         goto end;
     }
     for (int i = 0; folder && i < folder->nb_playlists; i++) {
@@ -805,10 +851,10 @@ static int cmd_init(Cli *cli, int argc, char **argv)
             return EXIT_USAGE;
         if (r > 0)
             continue;
-        if (argv[i][0] == '-')
-            return usage_error("init: unknown option %s", argv[i]);
+        if (is_option(cli, argv[i]))
+            return usage_error(cli, "init: unknown option %s", argv[i]);
         if (dir)
-            return usage_error("init: one directory only");
+            return usage_error(cli, "init: one directory only");
         dir = argv[i];
     }
 
@@ -888,15 +934,15 @@ static int cmd_add(Cli *cli, int argc, char **argv)
         }
         if (r > 0)
             continue;
-        if (argv[i][0] == '-' && argv[i][1]) {
+        if (is_option(cli, argv[i])) {
             rx_array_free(&paths);
-            return usage_error("add: unknown option %s", argv[i]);
+            return usage_error(cli, "add: unknown option %s", argv[i]);
         }
         rx_array_push(&paths, &argv[i]);
     }
     if (!paths.nb) {
         rx_array_free(&paths);
-        return usage_error("add: which files or folders?");
+        return usage_error(cli, "add: which files or folders?");
     }
 
     int code = open_library(cli, true);
@@ -989,15 +1035,16 @@ static int cmd_analyze(Cli *cli, int argc, char **argv)
         }
         if (r > 0)
             continue;
-        if (opt_flag(argv[i], "-f", "--force")) {
+        if (opt_flag(cli, argv[i], "-f", "--force")) {
             force = true;
-        } else if ((r = opt_value(argc, argv, &i, "-w", "--what", &val))) {
+        } else if ((r = opt_value(cli, argc, argv, &i, "-w", "--what", &val))) {
             if (r < 0 || parse_what(val, &what) < 0) {
-                code = usage_error("analyze: --what takes beats, key and waves, comma separated");
+                code = usage_error(cli, "%s: --what takes beats, key and waves, comma separated",
+                                   cli->cmd);
                 goto end;
             }
-        } else if (argv[i][0] == '-' && argv[i][1]) {
-            code = usage_error("analyze: unknown option %s", argv[i]);
+        } else if (is_option(cli, argv[i])) {
+            code = usage_error(cli, "%s: unknown option %s", cli->cmd, argv[i]);
             goto end;
         } else {
             rx_array_push(&args, &argv[i]);
@@ -1141,14 +1188,14 @@ static int cmd_show(Cli *cli, int argc, char **argv)
         }
         if (r > 0)
             continue;
-        if (argv[i][0] == '-' && argv[i][1]) {
-            code = usage_error("show: unknown option %s", argv[i]);
+        if (is_option(cli, argv[i])) {
+            code = usage_error(cli, "show: unknown option %s", argv[i]);
             goto end;
         }
         rx_array_push(&args, &argv[i]);
     }
     if (!args.nb) {
-        code = usage_error("show: which tracks?");
+        code = usage_error(cli, "show: which tracks?");
         goto end;
     }
 
@@ -1266,38 +1313,38 @@ static int cmd_export(Cli *cli, int argc, char **argv)
         }
         if (r > 0)
             continue;
-        if (opt_flag(argv[i], NULL, "--all")) {
+        if (opt_flag(cli, argv[i], NULL, "--all")) {
             opt.whole_library = true;
-        } else if (opt_flag(argv[i], NULL, "--prune")) {
+        } else if (opt_flag(cli, argv[i], NULL, "--prune")) {
             opt.prune = true;
-        } else if (opt_flag(argv[i], NULL, "--compat")) {
+        } else if (opt_flag(cli, argv[i], NULL, "--compat")) {
             compat = true;
-        } else if (opt_flag(argv[i], NULL, "--ignore-unsynced")) {
+        } else if (opt_flag(cli, argv[i], NULL, "--ignore-unsynced")) {
             opt.ignore_unsynced = true;
-        } else if (opt_flag(argv[i], "-n", "--dry-run")) {
+        } else if (opt_flag(cli, argv[i], "-n", "--dry-run")) {
             opt.dry_run = true;
-        } else if ((r = opt_value(argc, argv, &i, "-p", "--playlist", &val))) {
+        } else if ((r = opt_value(cli, argc, argv, &i, "-p", "--playlist", &val))) {
             if (r < 0) {
-                code = usage_error("export: --playlist needs a name");
+                code = usage_error(cli, "export: --playlist needs a name");
                 goto end;
             }
             rx_array_push(&names, &val);
-        } else if (argv[i][0] == '-' && argv[i][1]) {
-            code = usage_error("export: unknown option %s", argv[i]);
+        } else if (is_option(cli, argv[i])) {
+            code = usage_error(cli, "export: unknown option %s", argv[i]);
             goto end;
         } else if (stick) {
-            code = usage_error("export: one stick at a time");
+            code = usage_error(cli, "export: one stick at a time");
             goto end;
         } else {
             stick = argv[i];
         }
     }
     if (!stick) {
-        code = usage_error("export: where is the stick mounted?");
+        code = usage_error(cli, "export: where is the stick mounted?");
         goto end;
     }
     if (opt.whole_library && names.nb) {
-        code = usage_error("export: --all or --playlist, not both");
+        code = usage_error(cli, "export: --all or --playlist, not both");
         goto end;
     }
     if (!rx_dir_exists(stick)) {
@@ -1407,14 +1454,14 @@ static int stick_arg(Cli *cli, int argc, char **argv, const char **stick)
             return EXIT_USAGE;
         if (r > 0)
             continue;
-        if (argv[i][0] == '-' && argv[i][1])
-            return usage_error("%s: unknown option %s", cli->cmd, argv[i]);
+        if (is_option(cli, argv[i]))
+            return usage_error(cli, "%s: unknown option %s", cli->cmd, argv[i]);
         if (*stick)
-            return usage_error("%s: one stick at a time", cli->cmd);
+            return usage_error(cli, "%s: one stick at a time", cli->cmd);
         *stick = argv[i];
     }
     if (!*stick)
-        return usage_error("%s: where is the stick mounted?", cli->cmd);
+        return usage_error(cli, "%s: where is the stick mounted?", cli->cmd);
     if (!rx_dir_exists(*stick))
         return fail("%s is not a directory (mount the stick first)", *stick);
     return EXIT_OK;
@@ -1523,17 +1570,17 @@ static int cmd_sync(Cli *cli, int argc, char **argv)
             return EXIT_USAGE;
         if (r > 0)
             continue;
-        if (opt_flag(argv[i], NULL, "--apply"))
+        if (opt_flag(cli, argv[i], NULL, "--apply"))
             apply = true;
-        else if (argv[i][0] == '-' && argv[i][1])
-            return usage_error("sync: unknown option %s", argv[i]);
+        else if (is_option(cli, argv[i]))
+            return usage_error(cli, "sync: unknown option %s", argv[i]);
         else if (stick)
-            return usage_error("sync: one stick at a time");
+            return usage_error(cli, "sync: one stick at a time");
         else
             stick = argv[i];
     }
     if (!stick)
-        return usage_error("sync: where is the stick mounted?");
+        return usage_error(cli, "sync: where is the stick mounted?");
     if (!rx_dir_exists(stick))
         return fail("%s is not a directory (mount the stick first)", stick);
 
@@ -1595,7 +1642,7 @@ static int cmd_rescan(Cli *cli, int argc, char **argv)
         if (r < 0)
             return EXIT_USAGE;
         if (!r)
-            return usage_error("rescan: takes no arguments");
+            return usage_error(cli, "rescan: takes no arguments");
     }
     int code = open_library(cli, false);
     if (code)
@@ -1630,7 +1677,7 @@ static int cmd_check(Cli *cli, int argc, char **argv)
         if (r < 0)
             return EXIT_USAGE;
         if (!r)
-            return usage_error("check: takes no arguments");
+            return usage_error(cli, "check: takes no arguments");
     }
     int code = open_library(cli, false);
     if (code)
@@ -1662,14 +1709,14 @@ static int cmd_config(Cli *cli, int argc, char **argv)
             return EXIT_USAGE;
         if (r > 0)
             continue;
-        if (argv[i][0] == '-' && argv[i][1])
-            return usage_error("config: unknown option %s", argv[i]);
+        if (is_option(cli, argv[i]))
+            return usage_error(cli, "config: unknown option %s", argv[i]);
         if (!key)
             key = argv[i];
         else if (!value)
             value = argv[i];
         else
-            return usage_error("config: KEY VALUE");
+            return usage_error(cli, "config: KEY VALUE");
     }
 
     static const char *const sections[] = {
@@ -1680,7 +1727,7 @@ static int cmd_config(Cli *cli, int argc, char **argv)
         for (size_t i = 0; i < RX_ARRAY_ELEMS(sections); i++)
             known |= rx_str_starts(key, sections[i]);
         if (!known)
-            return usage_error("config: keys start with analysis., export., player., mixer., "
+            return usage_error(cli, "config: keys start with analysis., export., player., mixer., "
                                "device., audio. or ui.");
     }
 
@@ -1786,7 +1833,7 @@ static int cmd_settings(Cli *cli, int argc, char **argv)
         if (r < 0)
             return EXIT_USAGE;
         if (!r)
-            return usage_error("settings: takes no arguments");
+            return usage_error(cli, "settings: takes no arguments");
     }
     printf("# set with `rxbox config player.NAME VALUE` (mixer., device. likewise);\n"
            "# players apply them when you LOAD My Settings\n");
@@ -1808,8 +1855,8 @@ static int cmd_playlist(Cli *cli, int argc, char **argv)
         }
         if (r > 0)
             continue;
-        if (argv[i][0] == '-' && argv[i][1]) {
-            code = usage_error("playlist: unknown option %s", argv[i]);
+        if (is_option(cli, argv[i])) {
+            code = usage_error(cli, "playlist: unknown option %s", argv[i]);
             goto end;
         }
         rx_array_push(&args, &argv[i]);
@@ -1830,18 +1877,20 @@ static int cmd_playlist(Cli *cli, int argc, char **argv)
         { "export", 2, 2,       "playlist export NAME FILE.m3u8" },
     };
     if (!nb) {
-        code = usage_error("playlist: list, create, add, remove, delete, import or export");
+        code = usage_error(cli, "playlist: list, create, add, remove, delete, import or export");
         goto end;
     }
     size_t k = 0;
     while (k < RX_ARRAY_ELEMS(subs) && strcmp(subs[k].name, a[0]))
         k++;
     if (k == RX_ARRAY_ELEMS(subs)) {
-        code = usage_error("playlist: unknown command %s", a[0]);
+        code = usage_error(cli, "playlist: unknown command %s", a[0]);
         goto end;
     }
+    cli->usage = subs[k].usage;
     if (nb - 1 < subs[k].min || nb - 1 > subs[k].max) {
-        code = usage_error("usage: rxbox %s", subs[k].usage);
+        code = usage_error(cli, "playlist %s: %s arguments", a[0],
+                           nb - 1 < subs[k].min ? "missing" : "too many");
         goto end;
     }
 
@@ -1911,21 +1960,23 @@ static int run_interface(Cli *cli)
 static const struct {
     const char *name;
     int (*fn)(Cli *cli, int argc, char **argv);
+    const char *usage;
 } commands[] = {
-    { "add",      cmd_add      },
-    { "analyze",  cmd_analyze  },
-    { "analyse",  cmd_analyze  },
-    { "show",     cmd_show     },
-    { "export",   cmd_export   },
-    { "inspect",  cmd_inspect  },
-    { "pull",     cmd_pull     },
-    { "sync",     cmd_sync     },
-    { "rescan",   cmd_rescan   },
-    { "check",    cmd_check    },
-    { "config",   cmd_config   },
-    { "settings", cmd_settings },
-    { "init",     cmd_init     },
-    { "playlist", cmd_playlist },
+    { "add",      cmd_add,      "add PATH..." },
+    { "analyze",  cmd_analyze,  "analyze [-f] [-w beats,key,waves] [TRACK...]" },
+    { "analyse",  cmd_analyze,  "analyse [-f] [-w beats,key,waves] [TRACK...]" },
+    { "show",     cmd_show,     "show TRACK..." },
+    { "export",   cmd_export,   "export [--all | -p NAME...] [--prune] [--compat] "
+                                "[--ignore-unsynced] [-n] STICK" },
+    { "inspect",  cmd_inspect,  "inspect STICK" },
+    { "pull",     cmd_pull,     "pull STICK" },
+    { "sync",     cmd_sync,     "sync [--apply] STICK" },
+    { "rescan",   cmd_rescan,   "rescan" },
+    { "check",    cmd_check,    "check" },
+    { "config",   cmd_config,   "config [KEY [VALUE]]" },
+    { "settings", cmd_settings, "settings" },
+    { "init",     cmd_init,     "init [DIR]" },
+    { "playlist", cmd_playlist, "playlist list|create|add|remove|delete|import|export ..." },
 };
 
 static int cli_run(int argc, char **argv)
@@ -1951,48 +2002,47 @@ static int cli_run(int argc, char **argv)
         if (r > 0)
             continue;
 
-        if (opt_flag(a, "-h", "--help")) {
+        if (opt_flag(&cli, a, "-h", "--help")) {
             fputs(usage_text, stdout);
             return EXIT_OK;
         }
-        if (opt_flag(a, "-V", "--version")) {
+        if (opt_flag(&cli, a, "-V", "--version")) {
             printf("rxbox %s\n", RXBOX_VERSION);
             return EXIT_OK;
         }
-        if (opt_flag(a, NULL, "--validation")) {
+        if (opt_flag(&cli, a, NULL, "--validation")) {
             cli.validation = true;
             continue;
         }
-        if ((r = opt_value(argc, argv, &i, NULL, "--audio", &val))) {
+        if ((r = opt_value(&cli, argc, argv, &i, NULL, "--audio", &val))) {
             if (r > 0 && !strcmp(val, "none"))
                 cli.audio = RX_AUDIO_NULL;
             else if (r > 0 && !strcmp(val, "pipewire"))
                 cli.audio = RX_AUDIO_PIPEWIRE;
             else
-                return usage_error("--audio is pipewire or none");
+                return usage_error(NULL, "--audio is pipewire or none");
             continue;
         }
-        if ((r = opt_value(argc, argv, &i, NULL, "--audio-sink", &val))) {
+        if ((r = opt_value(&cli, argc, argv, &i, NULL, "--audio-sink", &val))) {
             if (r < 0)
-                return usage_error("--audio-sink needs a PipeWire node name");
+                return usage_error(NULL, "--audio-sink needs a PipeWire node name");
             cli.sink = val;
             continue;
         }
-        if ((r = opt_value(argc, argv, &i, NULL, "--device", &val))) {
+        if ((r = opt_value(&cli, argc, argv, &i, NULL, "--device", &val))) {
             if (r < 0)
-                return usage_error("--device needs a GPU name");
+                return usage_error(NULL, "--device needs a GPU name");
             cli.device = val;
             continue;
         }
-        if ((r = opt_value(argc, argv, &i, NULL, "--frames", &val))) {
-            char *end;
-            long n = r > 0 ? strtol(val, &end, 10) : -1;
-            if (r < 0 || *end || n < 0 || n > INT_MAX)
-                return usage_error("--frames needs a number");
+        if ((r = opt_value(&cli, argc, argv, &i, NULL, "--frames", &val))) {
+            long n;
+            if (r < 0 || !parse_count(val, INT_MAX, &n))
+                return usage_error(NULL, "--frames needs a number");
             cli.frames = (int)n;
             continue;
         }
-        return usage_error("unknown option %s", a);
+        return usage_error(NULL, "unknown option %s", a);
     }
 
     if (i >= argc)
@@ -2000,14 +2050,16 @@ static int cli_run(int argc, char **argv)
 
     cli.cmd = argv[i];
     for (size_t k = 0; k < RX_ARRAY_ELEMS(commands); k++) {
-        if (!strcmp(commands[k].name, argv[i]))
+        if (!strcmp(commands[k].name, argv[i])) {
+            cli.usage = commands[k].usage;
             return commands[k].fn(&cli, argc - i, argv + i);
+        }
     }
     if (!strcmp(argv[i], "help")) {
         fputs(usage_text, stdout);
         return EXIT_OK;
     }
-    return usage_error("unknown command %s", argv[i]);
+    return usage_error(NULL, "unknown command %s", argv[i]);
 }
 
 int rx_cli_main(int argc, char **argv)

@@ -74,6 +74,10 @@
 #define IO_THREADS       2
 /* Artwork jobs scale to this; it is also the library thumbnail's size. */
 #define ART_SIZE         240
+/* A failed analysis's message stays in the status bar this long before
+ * the next tracks' "Analysed ..." may replace it: as long as the bar shows
+ * a message as new (src/ui/ui.cpp, status_bar). */
+#define STATUS_HOLD_US   8000000
 
 typedef struct RxAppPriv RxAppPriv;
 
@@ -135,6 +139,8 @@ struct RxAppPriv {
 
     RxJobs  *io_jobs;           /* decodes and artwork */
     RxArray  inflight;          /* Inflight: analyses queued and not yet applied */
+    int      analyses_failed;   /* since the queue was last empty */
+    int64_t  status_held;       /* status_time of a failure's status, kept a while (0 none) */
     RxArray  saves;             /* uint64_t: tracks whose state is due to be written */
 
     int      uploaded_palette[RX_DECKS];    /* palette of the deck's GPU waveforms, -1 none */
@@ -159,7 +165,8 @@ struct RxAppPriv {
     unsigned   export_generation;   /* lib.generation when the snapshot was taken */
     ExportJob *export_job;      /* the run on the thread, NULL between runs */
     bool       export_started;  /* the thread exists and must be joined */
-    bool       export_dry_ok;   /* the last dry run got past the checks */
+    bool       export_probe;    /* the dry run again, past the unsynced check
+                                   (export_after_dry_run) */
     pthread_t  export_thread;
     char       export_last_stage[32];
 };
@@ -206,7 +213,7 @@ void rx_app_set_status(RxApp *app, const char *fmt, ...)
     va_start(args, fmt);
     vsnprintf(app->status, sizeof(app->status), fmt, args);
     va_end(args);
-    app->status_time = rx_time_now();
+    app->status_time = rx_time_us();
     app->dirty = true;
     rx_debug("status: %s", app->status);
 }
@@ -944,6 +951,29 @@ static bool take_inflight(RxAppPriv *priv, uint64_t request, Inflight *out)
     return false;
 }
 
+/* Why an analysis failed, for the status bar. The decoder's errors come
+ * back as errno values (rx_audio_error: damaged data is EINVAL, a file
+ * without audio ENODATA), whose own wording means little there; the log
+ * has strerror's. */
+static const char *analysis_error(int err)
+{
+    switch (err) {
+    case RX_ERROR(ENOENT):  return "the file is missing";
+    case RX_ERROR(EACCES):
+    case RX_ERROR(EPERM):   return "the file cannot be read (permission denied)";
+    case RX_ERROR(EINVAL):
+    case RX_ERROR(ENODATA): return "the file does not decode (damaged, or no audio)";
+    case RX_ERROR(ENOTSUP): return "the file's format is not supported";
+    case RX_ERROR(ENOMEM):  return "out of memory";
+    default:                return strerror(-err);
+    }
+}
+
+/* A failure is said with the track's name and kept in the status bar for a
+ * while: in a batch, the next results (up to RESULTS_PER_TICK in the same
+ * tick) would otherwise replace it before it is drawn. Any other message
+ * set meanwhile ends that. The row's spinner follows the worker
+ * (rx_jobs_active_tracks), which is idle again by now, failed or not. */
 static void handle_analysis(RxApp *app, RxJobResult *r)
 {
     RxAppPriv *priv = app->priv;
@@ -953,12 +983,22 @@ static void handle_analysis(RxApp *app, RxJobResult *r)
 
     RxTrack *t = rx_library_find_id(&app->lib, r->track_id);
     char name[256];
+    bool held = priv->status_held && priv->status_held == app->status_time &&
+                rx_time_us() - app->status_time < STATUS_HOLD_US;
     if (!t) {
         /* Removed from the library while it was analysed. */
     } else if (r->err < 0 || !r->analysis) {
+        int err = r->err < 0 ? r->err : RX_ERROR(EINVAL);
         app->last_error_count++;
-        rx_app_set_status(app, "Analysis failed for %s: %s", track_name(t, name, sizeof(name)),
-                          strerror(r->err < 0 ? -r->err : EINVAL));
+        priv->analyses_failed++;
+        rx_warn("cannot analyse %s: %s", t->path, strerror(-err));
+        track_name(t, name, sizeof(name));
+        if (priv->analyses_failed > 1)
+            rx_app_set_status(app, "Analysis failed for %s: %s (%d failed so far)", name,
+                              analysis_error(err), priv->analyses_failed);
+        else
+            rx_app_set_status(app, "Analysis failed for %s: %s", name, analysis_error(err));
+        priv->status_held = app->status_time;
     } else {
         int ret = apply_analysis(app, t, r->analysis, f.override_lock);
 
@@ -966,6 +1006,9 @@ static void handle_analysis(RxApp *app, RxJobResult *r)
         if (ret < 0) {
             app->last_error_count++;
             rx_app_set_status(app, "Analysed %s, but saving failed: %s", name, strerror(-ret));
+            priv->status_held = app->status_time;
+        } else if (held) {
+            /* The failure before it stays. */
         } else if (rx_grid_valid(&t->grid)) {
             rx_app_set_status(app, "Analysed %s: %.2f BPM%s%s", name, rx_grid_bpm(&t->grid),
                               t->key[0] ? ", " : "", t->key);
@@ -977,6 +1020,7 @@ static void handle_analysis(RxApp *app, RxJobResult *r)
     if (!priv->inflight.nb) {
         app->analysing_total = 0;
         app->analysing_done = 0;
+        priv->analyses_failed = 0;
     }
 }
 
@@ -1162,6 +1206,23 @@ int rx_app_inspect_stick(RxApp *app, const char *mount)
     return stick_job(app, mount, true);
 }
 
+/* A running read cannot be stopped; with stick_request moved on,
+ * handle_stick drops its result when it comes. */
+void rx_app_cancel_stick(RxApp *app, uint64_t request)
+{
+    if (!request)
+        return;
+    if (app->stick_request == request) {
+        if (app->priv && app->priv->io_jobs)
+            rx_jobs_cancel(app->priv->io_jobs, request);
+        app->stick_request = 0;
+    }
+    if (app->stick_result && app->stick_result->request == request) {
+        rx_job_result_free(app->stick_result);
+        app->stick_result = NULL;
+    }
+}
+
 /* ----------------------------------------------------------------- add path */
 
 typedef struct AddCtx {
@@ -1229,7 +1290,11 @@ end:
  * through the jobs; a dry run on the export thread reports what a real run
  * would copy, skip and prune and whether the stick has player changes not
  * synced back; when there is something to ask, the interface confirms
- * (prune or not, export over unsynced changes or not); then the real run. */
+ * (prune or not, export over unsynced changes or not), both questions at
+ * once; then the real run. rx_export's checks stop a dry run at the
+ * unsynced changes before it lists what pruning would delete, so a dry run
+ * stopped there alone is run again past that check (the probe), and the
+ * question waits for both answers. */
 enum ExportPhase {
     EXPORT_IDLE = 0,
     EXPORT_ANALYSING,
@@ -1465,15 +1530,17 @@ static void export_run(RxApp *app, bool dry_run)
     ej->whole_library = es->whole_library;
     /* The dry run lists what pruning would delete, for the question. */
     ej->prune = dry_run || es->prune;
-    ej->ignore_unsynced = es->ignore_unsynced;
+    ej->ignore_unsynced = es->ignore_unsynced || (dry_run && priv->export_probe);
     ej->compat = es->compat;
     ej->dry_run = dry_run;
     ej->mb = priv->export_mb;
     ej->cancel = &priv->export_cancel;
 
+    /* The probe keeps what the first dry run found unsynced. */
     if (dry_run) {
         export_prune_list_free(app);
-        es->unsynced = 0;
+        if (!priv->export_probe)
+            es->unsynced = 0;
     }
     es->done = 0;
     es->total = 0;
@@ -1491,7 +1558,8 @@ static void export_run(RxApp *app, bool dry_run)
         return;
     }
     priv->export_started = true;
-    export_log(app, "%s to %s", dry_run ? "Checking the export" : "Exporting", es->dest);
+    if (!priv->export_probe)
+        export_log(app, "%s to %s", dry_run ? "Checking the export" : "Exporting", es->dest);
     rx_app_set_status(app, "%s to %s", dry_run ? "Checking the export" : "Exporting", es->dest);
 }
 
@@ -1501,6 +1569,17 @@ static bool unsynced_check(const char *item)
 {
     return rx_str_contains_fold(item, "unsynced") || rx_str_contains_fold(item, "not synced") ||
            rx_str_contains_fold(item, "sync first");
+}
+
+/* How many changes that check counts: the first number in its wording
+ * ("stick has 3 unsynced changes ..."), else one. */
+static int unsynced_changes(const char *item)
+{
+    const char *p = item;
+    while (*p && (*p < '0' || *p > '9'))
+        p++;
+    long n = *p ? strtol(p, NULL, 10) : 1;
+    return n > 0 && n < INT32_MAX ? (int)n : 1;
 }
 
 static void export_apply_msg(RxApp *app, const ExportMsg *m)
@@ -1538,10 +1617,14 @@ static void export_apply_msg(RxApp *app, const ExportMsg *m)
     }
 
     if (!strcmp(m->stage, "check")) {
-        /* The checks name their problems in `item`. */
+        /* The checks name their problems in `item`. The probe's are the
+         * first dry run's again, but for the unsynced changes, which it
+         * passes ("overwriting ...") before anyone said so. */
+        if (priv->export_probe)
+            return;
         export_log(app, "  %s", m->item);
         if (dry && unsynced_check(m->item))
-            es->unsynced++;
+            es->unsynced += unsynced_changes(m->item);
     } else if (!strcmp(m->stage, "prune")) {
         /* Stick paths are the files beyond the export; anything else is a
          * message about them. */
@@ -1568,12 +1651,23 @@ static void export_after_dry_run(RxApp *app, int result)
     export_join(priv);
 
     bool blocked = es->unsynced > 0 && !es->ignore_unsynced;
-    if (result < 0 && !blocked) {
+    bool probed = priv->export_probe;
+    priv->export_probe = false;
+    if (blocked && !probed) {
+        /* Stopped at the checks, the unsynced one among them, before the
+         * prune list: again past that one, so the question covers both
+         * (and is not asked at all when another check fails too). */
+        priv->export_probe = true;
+        export_run(app, true);
+        return;
+    }
+    /* Past the unsynced check, the export still cannot run: nothing to
+     * ask. */
+    if (result < 0) {
         export_finish(app, result);
         return;
     }
 
-    priv->export_dry_ok = result >= 0;
     if (blocked || es->nb_prune > 0) {
         priv->export_phase = EXPORT_CONFIRM;
         es->confirm = true;
@@ -1668,11 +1762,11 @@ int rx_app_start_export(RxApp *app)
     if (!priv)
         return RX_ERROR(EINVAL);
 
-    /* The answer to the confirmation: the real run, or the dry run again
-     * when the first one stopped at the unsynced check. */
+    /* The answer to the confirmation: the real run, which the dry run
+     * (and the probe) found nothing else in the way of. */
     if (priv->export_phase == EXPORT_CONFIRM) {
         es->confirm = false;
-        export_run(app, !priv->export_dry_ok);
+        export_run(app, false);
         app->dirty = true;
         return 0;
     }
@@ -1696,7 +1790,7 @@ int rx_app_start_export(RxApp *app)
     es->item[0] = '\0';
     es->log[0] = '\0';
     export_prune_list_free(app);
-    priv->export_dry_ok = false;
+    priv->export_probe = false;
 
     /* The interface owns its selection array: keep the ids. */
     free(priv->export_playlists);

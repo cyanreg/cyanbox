@@ -115,6 +115,40 @@ run show --bogus "$id" > /dev/null 2>&1
 run show "$dir/no-such-track.flac" > /dev/null 2>&1
 [ $? -eq 2 ] || fail "a failure does not exit 2"
 
+# An empty value is no value; a bad argument prints the command's usage.
+"$rxbox" --frames "" > /dev/null 2>&1
+[ $? -eq 1 ] || fail "--frames \"\" does not exit 1"
+"$rxbox" --frames= > /dev/null 2>&1
+[ $? -eq 1 ] || fail "--frames= does not exit 1"
+"$rxbox" --frames " 5" > /dev/null 2>&1
+[ $? -eq 1 ] || fail "--frames \" 5\" does not exit 1"
+"$rxbox" -c "" show "$id" > /dev/null 2>&1
+[ $? -eq 1 ] || fail "-c \"\" does not exit 1"
+for cmd in add analyze analyse show export inspect pull sync rescan check config settings init \
+           playlist; do
+    run $cmd --bogus > /dev/null 2> "$dir/usage.err"
+    [ $? -eq 1 ] || { cat "$dir/usage.err"; fail "$cmd --bogus does not exit 1"; }
+    grep -q "^usage: rxbox $cmd" "$dir/usage.err" ||
+        { cat "$dir/usage.err"; fail "$cmd --bogus prints no usage line"; }
+done
+run analyze --what= > /dev/null 2> "$dir/usage.err"
+[ $? -eq 1 ] && grep -q "^usage: rxbox analyze" "$dir/usage.err" || fail "analyze --what="
+run playlist add Warmup > /dev/null 2> "$dir/usage.err"
+[ $? -eq 1 ] || fail "playlist add without tracks does not exit 1"
+grep -q "^usage: rxbox playlist add NAME TRACK" "$dir/usage.err" ||
+    { cat "$dir/usage.err"; fail "playlist add prints no usage line"; }
+
+# `--` ends a command's options: what follows is a name, even "-f".
+run show -- "$id" | grep -q "click128.flac" || fail "show -- ID"
+run show -- -f > /dev/null 2>&1
+[ $? -eq 2 ] || fail "show -- -f took -f for an option"
+run analyze -- --force > /dev/null 2>&1
+[ $? -eq 2 ] || fail "analyze -- --force took --force for an option"
+run rescan -- > /dev/null || fail "rescan --"
+run rescan -- -v > /dev/null 2>&1
+[ $? -eq 1 ] || fail "rescan -- -v took -v for an option"
+run playlist -- list > /dev/null || fail "playlist -- list"
+
 # Output that cannot be written is a failure.
 if [ -w /dev/full ]; then
     "$rxbox" --help > /dev/full 2> /dev/null

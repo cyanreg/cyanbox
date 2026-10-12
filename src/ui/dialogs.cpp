@@ -7,14 +7,18 @@
 //
 // Export follows the app's flow (rxbox/app.h export_state): Export starts
 // a dry run; when it finds stick files to prune or player changes not yet
-// synced back it stops with `confirm` set, and the dialog asks ("Delete N
-// files from the stick?", "The stick has N changes you have not synced")
-// before starting the real run. Sync from USB reads the stick on a worker
+// synced back it stops with `confirm` set, both known by then, and the
+// dialog asks once ("The stick has N changes you have not synced", the
+// files to delete), each button an answer to both, before the real run.
+// Sync from USB reads the stick on a worker
 // (rx_app_read_stick: rx_stick_read/rx_stick_diff) and lists what the
 // player wrote for review; the accepted rows are applied with
 // rx_stick_apply on this thread, which owns the library. Inspect USB runs
 // rx_inspect on a worker too (rx_app_inspect_stick). Both take their
-// result from app->stick_result when its request is theirs.
+// result from app->stick_result when its request is theirs and drop a
+// result of their kind that is not (a read given up on); closing or
+// reopening either gives up its request in flight (rx_app_cancel_stick),
+// so a later read never shows an earlier one's result.
 
 #include "ui_internal.h"
 
@@ -461,26 +465,19 @@ static void export_dialog(UiState *ui)
             es.open = false;
         }
     } else if (es.running && es.confirm) {
-        // The dry run's questions.
-        if (es.unsynced > 0 && !es.ignore_unsynced) {
+        // The dry run's questions, on one page and answered once: every
+        // export button also says yes to overwriting the unsynced changes
+        // (the text above says so; the four buttons fit the 600 px window).
+        bool unsynced = es.unsynced > 0 && !es.ignore_unsynced;
+        if (unsynced) {
             ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(UI_ACCENT),
                                "The stick has %d change%s you have not synced.", es.unsynced,
                                es.unsynced == 1 ? "" : "s");
             ImGui::TextWrapped("A player saved cues, plays or settings on it since the last export. "
                                "Exporting now overwrites them; Sync from USB first to keep them.");
             ImGui::Spacing();
-            if (ImGui::Button("Sync first", ImVec2(PX(140), PX(28)))) {
-                es.cancel = true;
-                snprintf(ui->stick_path, sizeof(ui->stick_path), "%s", es.dest);
-                ui_open_sync(ui);
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("Export anyway", ImVec2(PX(140), PX(28)))) {
-                es.ignore_unsynced = true;
-                if (es.nb_prune == 0 && rx_app_start_export(app) < 0)
-                    rx_app_set_status(app, "Export could not continue");
-            }
-        } else if (es.nb_prune > 0) {
+        }
+        if (es.nb_prune > 0) {
             ImGui::Text("Delete %d file%s from the stick?", es.nb_prune, es.nb_prune == 1 ? "" : "s");
             ImGui::TextDisabled("Tracks that are no longer in what you export:");
             ImGui::BeginChild("##prune", ImVec2(0, -PX(40)), ImGuiChildFlags_Borders);
@@ -491,15 +488,32 @@ static void export_dialog(UiState *ui)
                     ImGui::TextUnformatted(es.prune_list[i] ? es.prune_list[i] : "");
             }
             ImGui::EndChild();
-            if (ImGui::Button("Delete them", ImVec2(PX(140), PX(28)))) {
-                es.prune = true;
-                rx_app_start_export(app);
+        }
+        auto answer = [&](bool prune) {
+            if (unsynced)
+                es.ignore_unsynced = true;
+            es.prune = prune;
+            if (rx_app_start_export(app) < 0)
+                rx_app_set_status(app, "Export could not continue");
+        };
+        float bw = PX(unsynced ? 160 : 140);
+        if (unsynced) {
+            if (ImGui::Button("Sync first", ImVec2(PX(120), PX(28)))) {
+                es.cancel = true;
+                snprintf(ui->stick_path, sizeof(ui->stick_path), "%s", es.dest);
+                ui_open_sync(ui);
             }
             ImGui::SameLine();
-            if (ImGui::Button("Keep them", ImVec2(PX(140), PX(28)))) {
-                es.prune = false;
-                rx_app_start_export(app);
-            }
+        }
+        if (es.nb_prune > 0) {
+            if (ImGui::Button(unsynced ? "Export, delete them" : "Delete them", ImVec2(bw, PX(28))))
+                answer(true);
+            ImGui::SameLine();
+            if (ImGui::Button(unsynced ? "Export, keep them" : "Keep them", ImVec2(bw, PX(28))))
+                answer(false);
+        } else if (unsynced) {
+            if (ImGui::Button("Export anyway", ImVec2(PX(140), PX(28))))
+                answer(false);
         } else {
             ImGui::TextDisabled("Continuing...");
         }
@@ -560,8 +574,16 @@ static void sync_free(UiState *ui)
     ui->nb_sync_items = 0;
 }
 
+// Gives up the read in flight, if any: the dialog closes or starts afresh.
+static void sync_cancel(UiState *ui)
+{
+    rx_app_cancel_stick(ui->app, ui->sync_request);
+    ui->sync_request = 0;
+}
+
 void ui_open_sync(UiState *ui)
 {
+    sync_cancel(ui);
     ui->dlg_sync = true;
     ui->sync_stage = 0;
     ui->sync_error.clear();
@@ -646,14 +668,19 @@ static void sync_read(UiState *ui)
     rx_app_set_status(app, "Reading %s...", ui->stick_path);
 }
 
-// The read's result, once the worker has posted it.
+// The read's result, once the worker has posted it. A read's result for
+// another request is one given up on: dropped, never shown as this one's.
 static void sync_take(UiState *ui)
 {
     RxApp *app = ui->app;
     RxJobResult *r = app->stick_result;
-    if (!ui->sync_request || !r || r->request != ui->sync_request)
+    if (!r || r->kind != RX_JOB_STICK_READ)
         return;
     app->stick_result = nullptr;
+    if (!ui->sync_request || r->request != ui->sync_request) {
+        rx_job_result_free(r);
+        return;
+    }
     ui->sync_request = 0;
     if (r->stick) {
         ui->sync_state = *r->stick;
@@ -700,6 +727,7 @@ static void sync_dialog(UiState *ui)
     ui_settle_centred();
     if (!open) {
         ui->dlg_sync = false;
+        sync_cancel(ui);
         sync_free(ui);
         ImGui::End();
         return;
@@ -832,6 +860,7 @@ static void sync_dialog(UiState *ui)
             ImGui::TextDisabled("%s", ui->sync_progress.c_str());
         if (ImGui::Button("Done", ImVec2(PX(120), PX(28)))) {
             ui->dlg_sync = false;
+            sync_cancel(ui);
             sync_free(ui);
         }
     }
@@ -842,6 +871,8 @@ static void sync_dialog(UiState *ui)
 
 void ui_open_inspect(UiState *ui)
 {
+    rx_app_cancel_stick(ui->app, ui->inspect_request);
+    ui->inspect_request = 0;
     ui->dlg_inspect = true;
     ui->inspect_done = false;
     ui->inspect_report.clear();
@@ -856,12 +887,14 @@ static void inspect_dialog(UiState *ui)
     if (!ui->dlg_inspect)
         return;
     RxJobResult *r = app->stick_result;
-    if (ui->inspect_request && r && r->request == ui->inspect_request) {
+    if (r && r->kind == RX_JOB_INSPECT) {
         app->stick_result = nullptr;
-        ui->inspect_request = 0;
-        ui->inspect_report = r->report ? r->report : "";
-        ui->inspect_result = r->err < 0 ? r->err : r->problems;
-        ui->inspect_done = true;
+        if (ui->inspect_request && r->request == ui->inspect_request) {
+            ui->inspect_request = 0;
+            ui->inspect_report = r->report ? r->report : "";
+            ui->inspect_result = r->err < 0 ? r->err : r->problems;
+            ui->inspect_done = true;
+        }
         rx_job_result_free(r);
     }
     centre_next(ui, 700, 500);
@@ -871,6 +904,11 @@ static void inspect_dialog(UiState *ui)
         return;
     }
     ui_settle_centred();
+    if (!ui->dlg_inspect) {
+        // Closed: the inspection in flight is given up.
+        rx_app_cancel_stick(app, ui->inspect_request);
+        ui->inspect_request = 0;
+    }
     volume_picker(ui, ui->stick_path, sizeof(ui->stick_path));
     ImGui::BeginDisabled(!ui->stick_path[0] || app->stick_request);
     if (ImGui::Button("Inspect", ImVec2(PX(120), 0))) {

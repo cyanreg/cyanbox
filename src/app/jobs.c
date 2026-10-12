@@ -28,7 +28,19 @@
  * for a deck keeps the native rate and channels, so the player gets the
  * file's own samples on the players' timeline. The artwork job also makes
  * the 240 px JPEG thumbnail the library stores, so the owner thread never
- * encodes. */
+ * encodes.
+ *
+ * The memory guard: an hour-long mix decodes to about 635 MB of mono floats
+ * at 44.1 kHz and the analyser holds about 180 MB more, so a batch of long
+ * mixes on every CPU but one could exhaust the machine. Before it decodes,
+ * an analysis reserves its estimate (analysis_estimate) against a budget
+ * shared by the queue's workers, 40 % of the physical memory unless
+ * RXBOX_ANALYSIS_BUDGET_MB says otherwise, and waits on `budget_cond` while
+ * it does not fit. One analysis may always run, so a file larger than the
+ * whole budget is still analysed, alone. A waiting job has not started:
+ * it is not counted as running, shows no active track, and can be
+ * cancelled. Jobs that fit go ahead of one that does not; the queue is
+ * finite, so that one runs at the latest when the others are done. */
 
 #include "rxbox/jobs.h"
 
@@ -38,6 +50,14 @@
 
 /* The library's artwork thumbnails (rxbox/library.h). */
 #define ARTWORK_THUMB_SIZE 240
+
+/* The memory guard (above): the share of physical memory analyses may hold
+ * at once, what the analyser needs on top of the decoded audio (180 MB for
+ * the 635 MB of an hour at 44.1 kHz, rounded up), and a fixed part for the
+ * rest (the decoder, FFT plans, the waveforms and the result). */
+#define ANALYSIS_BUDGET_SHARE 0.4
+#define ANALYSIS_OVERHEAD     0.3
+#define ANALYSIS_BASE_BYTES   (64LL << 20)
 
 enum JobState {
     JOB_QUEUED = 0,
@@ -69,9 +89,16 @@ struct RxJobs {
     RxThreadPool *pool;
     RxMailbox *results;
 
-    pthread_mutex_t lock;           /* guards the list, the states, the slots' busy flags */
+    pthread_mutex_t lock;           /* guards the list, the states, the slots' busy flags,
+                                       the reservations */
     Job *head;
     uint64_t next_request;
+
+    pthread_cond_t budget_cond;     /* with `lock`: a reservation was released, or a job
+                                       cancelled */
+    int64_t budget;                 /* bytes analyses may reserve at once */
+    int64_t reserved;               /* under lock */
+    int nb_reserved;                /* under lock: analyses holding a reservation */
 
     int pending;                    /* atomic: queued + running, cancelled ones excluded */
     int running;                    /* atomic */
@@ -98,6 +125,64 @@ static void job_unlink(RxJobs *j, Job *job)
     if (job->next)
         job->next->prev = job->prev;
     job->prev = job->next = NULL;
+}
+
+/* What an analysis of `path` holds at its peak: the mono decode, a float per
+ * sample at the file's own rate (the decoder mixes the channels down packet
+ * by packet, so they do not add to it), the analyser's buffers on top, and
+ * the fixed part. A file the probe cannot read gets the fixed part only:
+ * its decode fails as quickly. */
+static int64_t analysis_estimate(const char *path)
+{
+    RxProbe p;
+    int64_t samples = 0;
+    if (rx_probe(path, &p) >= 0) {
+        samples = RX_MAX(p.total_samples, (int64_t)0);
+        rx_probe_free(&p);
+    }
+    double audio = (double)samples * sizeof(float);
+    return ANALYSIS_BASE_BYTES + (int64_t)(audio * (1.0 + ANALYSIS_OVERHEAD));
+}
+
+static int64_t analysis_budget(void)
+{
+    const char *env = getenv("RXBOX_ANALYSIS_BUDGET_MB");
+    if (env && env[0]) {
+        char *end;
+        errno = 0;
+        long long mb = strtoll(env, &end, 10);
+        if (!errno && !*end && mb > 0 && mb <= INT64_MAX >> 20)
+            return (int64_t)mb << 20;
+        rx_warn("jobs: RXBOX_ANALYSIS_BUDGET_MB is \"%s\", not a number of MB above 0; "
+                "using the default", env);
+    }
+    long pages = sysconf(_SC_PHYS_PAGES);
+    long page = sysconf(_SC_PAGE_SIZE);
+    if (pages > 0 && page > 0)
+        return (int64_t)((double)pages * page * ANALYSIS_BUDGET_SHARE);
+    /* Unknown: what the share is of 16 GB. */
+    return (int64_t)((16LL << 30) * ANALYSIS_BUDGET_SHARE);
+}
+
+/* Under j->lock: waits until `bytes` fit the budget, or nothing else holds
+ * a reservation, or the job is cancelled. Returns false when cancelled. */
+static bool reserve(RxJobs *j, Job *job, int64_t bytes)
+{
+    bool said = false;
+    while (job->state != JOB_CANCELLED && j->nb_reserved > 0 && j->reserved + bytes > j->budget) {
+        if (!said) {
+            rx_debug("jobs: %s waits for %lld MB of memory (%lld of %lld MB reserved)", job->path,
+                     (long long)(bytes >> 20), (long long)(j->reserved >> 20),
+                     (long long)(j->budget >> 20));
+            said = true;
+        }
+        pthread_cond_wait(&j->budget_cond, &j->lock);
+    }
+    if (job->state == JOB_CANCELLED)
+        return false;
+    j->reserved += bytes;
+    j->nb_reserved++;
+    return true;
 }
 
 static int run_analyse(Job *job, RxJobResult *r)
@@ -230,8 +315,18 @@ static void run_job(void *arg)
     Job *job = arg;
     RxJobs *j = job->j;
 
+    /* An analysis probes for its estimate before taking the lock, unless
+     * it was cancelled while queued (a destroyed queue drops its backlog
+     * without probing every file in it). */
+    int64_t bytes = 0;
     pthread_mutex_lock(&j->lock);
-    if (job->state == JOB_CANCELLED) {
+    bool cancelled = job->state == JOB_CANCELLED;
+    pthread_mutex_unlock(&j->lock);
+    if (job->kind == RX_JOB_ANALYSE && !cancelled)
+        bytes = analysis_estimate(job->path);
+
+    pthread_mutex_lock(&j->lock);
+    if (job->state == JOB_CANCELLED || (bytes && !reserve(j, job, bytes))) {
         /* rx_jobs_cancel() already took it off the counters. */
         job_unlink(j, job);
         pthread_mutex_unlock(&j->lock);
@@ -302,6 +397,11 @@ static void run_job(void *arg)
         __atomic_store_n(&j->slots[slot].track_id, 0, __ATOMIC_RELAXED);
         j->slots[slot].busy = 0;
     }
+    if (bytes) {
+        j->reserved -= bytes;
+        j->nb_reserved--;
+        pthread_cond_broadcast(&j->budget_cond);
+    }
     __atomic_sub_fetch(&j->running, 1, __ATOMIC_RELAXED);
     __atomic_sub_fetch(&j->pending, 1, __ATOMIC_RELAXED);
     job_unlink(j, job);
@@ -326,6 +426,14 @@ int rx_jobs_create(RxJobs **out, int threads)
         free(j);
         return RX_ERROR(ret);
     }
+    ret = pthread_cond_init(&j->budget_cond, NULL);
+    if (ret) {
+        pthread_mutex_destroy(&j->lock);
+        free(j);
+        return RX_ERROR(ret);
+    }
+    j->budget = analysis_budget();
+    rx_debug("jobs: analyses may hold %lld MB at once", (long long)(j->budget >> 20));
 
     j->nb_slots = threads;
     j->slots = calloc(threads, sizeof(*j->slots));
@@ -349,6 +457,7 @@ fail:
     if (j->results)
         rx_mailbox_destroy(j->results);
     free(j->slots);
+    pthread_cond_destroy(&j->budget_cond);
     pthread_mutex_destroy(&j->lock);
     free(j);
     return ret;
@@ -369,6 +478,7 @@ void rx_jobs_destroy(RxJobs *j)
         rx_job_result_free(r);
     rx_mailbox_destroy(j->results);
 
+    pthread_cond_destroy(&j->budget_cond);
     pthread_mutex_destroy(&j->lock);
     free(j->slots);
     free(j);
@@ -497,6 +607,8 @@ void rx_jobs_cancel(RxJobs *j, uint64_t request)
         if (job->state == JOB_QUEUED) {
             job->state = JOB_CANCELLED;
             __atomic_sub_fetch(&j->pending, 1, __ATOMIC_RELAXED);
+            /* It may be waiting for memory. */
+            pthread_cond_broadcast(&j->budget_cond);
         }
         break;
     }
@@ -515,6 +627,7 @@ void rx_jobs_cancel_all(RxJobs *j)
             __atomic_sub_fetch(&j->pending, 1, __ATOMIC_RELAXED);
         }
     }
+    pthread_cond_broadcast(&j->budget_cond);
     pthread_mutex_unlock(&j->lock);
 }
 
