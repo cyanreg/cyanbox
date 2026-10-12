@@ -252,12 +252,12 @@ static int track_strings(const RxPlan *plan, const RxPlanTrack *t, Strings *st)
         date_added, "", "", "", anlz, plan->date, comment, title, "", rx_path_base(path), path,
     };
     int ret = 0;
-    st->nb = 21;
-    for (int i = 0; i < 21; i++) {
-        st->s[i] = (RxBuf) { 0 };
+    /* All cleared first: a string that fails (longer than a DeviceSQL
+     * length holds) leaves the later ones unwritten but freeable. */
+    *st = (Strings) { .nb = 21 };
+    for (int i = 0; i < 21; i++)
         if ((ret = put_dstr(&st->s[i], vals[i])) < 0)
             break;
-    }
     free(anlz);
     if (ret < 0)
         strings_free(st);
@@ -1191,6 +1191,9 @@ static void names_free(IdName *v, int nb)
 
 static const char *name_of(const IdName *v, int nb, uint32_t id)
 {
+    /* A file without the table: no array to search. */
+    if (!nb)
+        return NULL;
     IdName key = { .id = id };
     const IdName *f = bsearch(&key, v, (size_t)nb, sizeof(*v), cmp_idname);
     return f ? f->name : NULL;

@@ -7,6 +7,9 @@
 
 #include <stdio.h>
 
+#include <openssl/evp.h>
+#include <openssl/hmac.h>
+
 #include "rxbox/formats.h"
 
 #include "src/formats/buf.h"
@@ -272,9 +275,126 @@ static void roundtrip(void)
     free(paths);
 }
 
+/* A WAL frame the way SQLCipher writes one: page `pgno` (zeros), encrypted
+ * and authenticated with the database's keys (docs/onelibrary.md 1.1), so
+ * that only the reader's own checks can refuse it. */
+static void wal_frame(uint8_t *f, const uint8_t salt[16], uint32_t pgno, uint32_t commit,
+                      const uint8_t wal_salt[8])
+{
+    uint8_t key[32], mac[32], mac_salt[16];
+    for (int i = 0; i < 16; i++)
+        mac_salt[i] = salt[i] ^ 0x3A;
+    PKCS5_PBKDF2_HMAC(rx_onelibrary_passphrase, (int)strlen(rx_onelibrary_passphrase), salt, 16, 256000,
+                      EVP_sha512(), 32, key);
+    PKCS5_PBKDF2_HMAC((const char *)key, 32, mac_salt, 16, 2, EVP_sha512(), 32, mac);
+    memset(f, 0, 24 + 4096);
+    rx_wr_be32(f, pgno);
+    rx_wr_be32(f + 4, commit);
+    memcpy(f + 8, wal_salt, 8);
+    uint8_t *page = f + 24, plain[4096 - 80] = { 0 }, iv[16] = { 7 };
+    EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
+    int len = 0, fin = 0;
+    EVP_EncryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, key, iv);
+    EVP_CIPHER_CTX_set_padding(ctx, 0);
+    EVP_EncryptUpdate(ctx, page, &len, plain, sizeof(plain));
+    EVP_EncryptFinal_ex(ctx, page + len, &fin);
+    EVP_CIPHER_CTX_free(ctx);
+    memcpy(page + 4096 - 80, iv, 16);
+    uint8_t buf[4096 - 80 + 16 + 4];
+    memcpy(buf, page, 4096 - 80 + 16);
+    rx_wr_le32(buf + 4096 - 80 + 16, pgno);
+    unsigned ml = 64;
+    HMAC(EVP_sha512(), mac, 32, buf, sizeof(buf), page + 4096 - 80 + 16, &ml);
+}
+
+/* A -wal next to the database is input another program wrote: a frame
+ * naming a page far beyond the file must not make the reader allocate
+ * (and zero) the space up to it, and frames of an older WAL generation
+ * (other salts, docs: sqlite.org/fileformat2.html#walformat) or after a
+ * torn one are not applied, as SQLite would not apply them. */
+static void hostile_wal(void)
+{
+    uint8_t *db_bytes, *wal;
+    size_t db_size, wal_size;
+    if (rx_file_read("tests/data/rekordbox-7.2.18-exportLibrary.db", &db_bytes, &db_size) < 0 ||
+        rx_file_read("tests/data/rekordbox-7.2.18-exportLibrary.db-wal", &wal, &wal_size) < 0) {
+        fprintf(stderr, "cannot read the rekordbox fixtures\n");
+        failures++;
+        return;
+    }
+    uint8_t *plain, *ref;
+    size_t plain_size, ref_size;
+    CHECK_EQ(rx_sqlcipher_decrypt(db_bytes, db_size, rx_onelibrary_passphrase, wal, wal_size, &ref, &ref_size), 0);
+
+    /* The fixture's WAL plus one committed frame for page 2^18 (1 GiB). */
+    size_t n = wal_size + 24 + 4096;
+    uint8_t *w = malloc(n);
+    memcpy(w, wal, wal_size);
+    wal_frame(w + wal_size, db_bytes, 1u << 18, 1u << 18, wal + 16);
+    int ret = rx_sqlcipher_decrypt(db_bytes, db_size, rx_onelibrary_passphrase, w, n, &plain, &plain_size);
+    CHECK(ret < 0 || plain_size == ref_size);
+    if (ret >= 0)
+        free(plain);
+
+    /* A frame of an older generation (salts differ) after the valid ones:
+     * ignored, the database is the fixture's. */
+    uint8_t old_salt[8] = { 1, 2, 3, 4, 5, 6, 7, 8 };
+    wal_frame(w + wal_size, db_bytes, 2, (uint32_t)(db_size / 4096), old_salt);
+    CHECK_EQ(rx_sqlcipher_decrypt(db_bytes, db_size, rx_onelibrary_passphrase, w, n, &plain, &plain_size), 0);
+    CHECK(plain_size == ref_size && !memcmp(plain, ref, ref_size));
+    free(plain);
+
+    /* A torn last frame (its page does not authenticate): the committed
+     * frames before it still count. */
+    memcpy(w, wal, wal_size);
+    wal_frame(w + wal_size, db_bytes, 2, (uint32_t)(db_size / 4096), wal + 16);
+    w[wal_size + 24 + 100] ^= 1;
+    CHECK_EQ(rx_sqlcipher_decrypt(db_bytes, db_size, rx_onelibrary_passphrase, w, n, &plain, &plain_size), 0);
+    CHECK(plain_size == ref_size && !memcmp(plain, ref, ref_size));
+    free(plain);
+
+    free(w);
+    free(ref);
+    free(db_bytes);
+    free(wal);
+}
+
+/* A track without artwork, key, colour, album or year: NULL ids and colour
+ * 0 (docs/onelibrary.md 3.1, "color_id 0 = none"). */
+static void bare_track(void)
+{
+    RxTrack tr = { 0 };
+    RxPlanTrack pt = {
+        .id        = 42,
+        .track     = &tr,
+        .usb_path  = "/Contents/UnknownArtist/UnknownAlbum/x.wav",
+        .anlz_dir  = "/PIONEER/USBANLZ/P000/00000000",
+        .file_type = 11,
+        .duration  = 1.0,
+    };
+    RxPlan plan = { .tracks = &pt, .nb_tracks = 1 };
+    uint8_t *plain;
+    size_t plain_size;
+    CHECK_EQ(rx_onelibrary_build_plain(&plan, &plain, &plain_size), 0);
+    sqlite3 *db;
+    CHECK_EQ(rx_onelibrary_open_plain(plain, plain_size, &db), 0);
+    CHECK_EQ(query_int(db, "select count(*) from content where content_id = 42 and image_id is null and "
+                           "key_id is null and album_id is null and artist_id_artist is null and "
+                           "genre_id is null and releaseYear is null and color_id = 0"), 1);
+    CHECK_EQ(query_int(db, "select count(*) from image"), 0);
+    CHECK_EQ(query_int(db, "select count(*) from cue"), 0);
+    char *title = query_text(db, "select title from content");
+    CHECK_STR(title, "");
+    free(title);
+    sqlite3_close(db);
+    free(plain);
+}
+
 int main(void)
 {
     reads_rekordbox();
     roundtrip();
+    hostile_wal();
+    bare_track();
     return test_result("onelibrary");
 }

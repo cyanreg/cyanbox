@@ -112,25 +112,53 @@ static void strmap_free(StrMap *m)
 
 /* -------------------------------------------------------------- names */
 
+/* The small letter of a capital in the blocks above. Latin Extended-A
+ * pairs capitals on even code points except in U+0139..U+0148 and
+ * U+0179..U+017E, where they are odd (Ł ł, Ń ń, Ž ž); dj's str.lower()
+ * knew that, and a fold that does not makes "Žena" and "žena" two names
+ * on a stick where they are one file. Cyrillic's extensions pair the same
+ * way from U+0460. */
+static uint32_t fold_cp(uint32_t c)
+{
+    if (c < 0x80)
+        return (uint32_t)tolower((int)c);
+    if ((c >= 0xC0 && c <= 0xDE && c != 0xD7) || (c >= 0x391 && c <= 0x3AB && c != 0x3A2) ||
+        (c >= 0x410 && c <= 0x42F))
+        return c + 0x20;
+    if (c == 0x178)
+        return 0xFF;
+    if ((c >= 0x100 && c <= 0x12F) || (c >= 0x132 && c <= 0x137) || (c >= 0x14A && c <= 0x177) ||
+        (c >= 0x460 && c <= 0x481) || (c >= 0x48A && c <= 0x4BF) || (c >= 0x4D0 && c <= 0x52F))
+        return c & 1 ? c : c + 1;
+    if ((c >= 0x139 && c <= 0x148) || (c >= 0x179 && c <= 0x17E) || (c >= 0x4C1 && c <= 0x4CE))
+        return c & 1 ? c + 1 : c;
+    if (c >= 0x400 && c <= 0x40F)
+        return c + 0x50;
+    if (c == 0x4C0)
+        return 0x4CF;
+    /* Greek capitals with tonos, and final sigma (both small sigmas have
+     * the one capital). */
+    if (c == 0x386)
+        return 0x3AC;
+    if (c >= 0x388 && c <= 0x38A)
+        return c + 0x25;
+    if (c == 0x38C)
+        return 0x3CC;
+    if (c == 0x38E || c == 0x38F)
+        return c + 0x3F;
+    if (c == 0x3C2)
+        return 0x3C3;
+    return c;
+}
+
 char *rx_plan_fold_case(const char *s)
 {
     char *out = malloc(4 * strlen(s) + 1);
     if (!out)
         return NULL;
     size_t o = 0;
-    while (*s) {
-        uint32_t c = rx_utf8_next(&s);
-        if (c < 0x80)
-            c = (uint32_t)tolower((int)c);
-        else if ((c >= 0xC0 && c <= 0xDE && c != 0xD7) || (c >= 0x391 && c <= 0x3AB && c != 0x3A2) ||
-                 (c >= 0x410 && c <= 0x42F))
-            c += 0x20;
-        else if (c >= 0x400 && c <= 0x40F)
-            c += 0x50;
-        else if (c >= 0x100 && c <= 0x17F && !(c & 1) && c != 0x130 && c != 0x138)
-            c += 1;
-        o += (size_t)rx_utf8_put(out + o, c);
-    }
+    while (*s)
+        o += (size_t)rx_utf8_put(out + o, fold_cp(rx_utf8_next(&s)));
     out[o] = '\0';
     return out;
 }
@@ -271,10 +299,13 @@ static char *usb_path(const RxTrack *t, const char *source, bool (*taken)(void *
     size_t n;
     const char *suffix;
     split_name(source, &n, &suffix);
+    /* Lower case, and only ASCII letters and digits after the dot (every
+     * audio extension is): FAT refuses " * : < > ? \ | and trailing spaces,
+     * and a cut multi-byte character would not be UTF-8. */
     char ext[16];
     snprintf(ext, sizeof(ext), "%s", suffix);
     for (char *e = ext; *e; e++)
-        *e = (char)tolower((unsigned char)*e);
+        *e = e == ext ? *e : isalnum((unsigned char)*e) ? (char)tolower((unsigned char)*e) : '_';
     if (a && al && stem && head) {
         for (int k = 0; k < 10000 && !out; k++) {
             char *p = k ? rx_asprintf("/Contents/%s/%s/%s-%d%s", a, al, head, k, ext)
@@ -344,8 +375,8 @@ bool rx_plan_codec_playable(const char *codec)
     return false;
 }
 
-int rx_plan_transcode_path(const RxLibrary *lib, const RxTrack *t, bool compat, char **cache_path,
-                           int *max_rate)
+int rx_plan_transcode_path(const RxLibrary *lib, const RxTrack *t, bool compat, bool create,
+                           char **cache_path, int *max_rate)
 {
     *cache_path = NULL;
     bool need = !rx_plan_codec_playable(t->codec);
@@ -356,20 +387,28 @@ int rx_plan_transcode_path(const RxLibrary *lib, const RxTrack *t, bool compat, 
     /* dj kept up to 96 kHz for formats no player reads; compatibility mode
      * goes to 16 bit at 44.1/48 kHz. */
     *max_rate = for_compat ? 48000 : 96000;
-    *cache_path = rx_library_cache_path(lib, "transcode", t->id, for_compat ? "compat.flac" : "flac");
+    const char *ext = for_compat ? "compat.flac" : "flac";
+    /* rx_library_cache_path's name, without creating its directory. */
+    *cache_path = create ? rx_library_cache_path(lib, "transcode", t->id, ext)
+                         : rx_asprintf("%s/cache/transcode/%llu.%s", lib->root, (unsigned long long)t->id, ext);
     return *cache_path ? 1 : RX_ERROR(ENOMEM);
+}
+
+bool rx_plan_transcode_fresh(const RxTrack *t, const char *cache)
+{
+    return rx_file_exists(cache) && rx_file_mtime(cache) >= rx_file_mtime(t->path);
 }
 
 int rx_plan_transcode(const RxLibrary *lib, const RxTrack *t, bool compat, char **source)
 {
     char *cache;
     int max_rate = 0;
-    int ret = rx_plan_transcode_path(lib, t, compat, &cache, &max_rate);
+    int ret = rx_plan_transcode_path(lib, t, compat, true, &cache, &max_rate);
     if (ret <= 0) {
         *source = ret < 0 ? NULL : rx_strdup(t->path);
         return ret < 0 ? ret : *source ? 0 : RX_ERROR(ENOMEM);
     }
-    if (rx_file_exists(cache) && rx_file_mtime(cache) >= rx_file_mtime(t->path)) {
+    if (rx_plan_transcode_fresh(t, cache)) {
         *source = cache;
         return 0;
     }
@@ -802,9 +841,43 @@ static int walk_playlists(const RxPlaylistFolder *f, uint32_t parent, RxPlan *pl
     return 0;
 }
 
+/* A dry run's source for a track whose transcode is not made yet: the
+ * cache file it would be, described from the original as the transcode
+ * would be (16-bit FLAC at most at max_rate, rx_transcode_flac); its size
+ * a typical FLAC's 60 % of PCM, for the free-space check. Nothing is
+ * written. */
+static int dry_source(const RxLibrary *lib, const RxTrack *t, bool compat, RxPlanTrack *pt)
+{
+    char *cache;
+    int max_rate = 0;
+    int ret = rx_plan_transcode_path(lib, t, compat, false, &cache, &max_rate);
+    if (ret <= 0 || rx_plan_transcode_fresh(t, cache)) {
+        free(cache);
+        if (ret < 0)
+            return ret;
+        ret = rx_plan_transcode(lib, t, compat, &pt->source);
+        return ret < 0 ? ret : rx_probe(pt->source, &pt->probe);
+    }
+    pt->source = cache;
+    if ((ret = rx_probe(t->path, &pt->probe)) < 0)
+        return ret;
+    RxProbe *p = &pt->probe;
+    rx_flac_info_free(&p->flac);
+    p->mp3 = (RxMp3Info) { 0 };
+    snprintf(p->codec, sizeof(p->codec), "flac");
+    snprintf(p->container, sizeof(p->container), "flac");
+    if (max_rate > 0 && p->sample_rate > max_rate) {
+        p->total_samples = (int64_t)((double)p->total_samples * max_rate / p->sample_rate);
+        p->sample_rate = max_rate;
+    }
+    p->bit_depth = 16;
+    pt->file_size = (int64_t)(0.6 * p->duration * p->sample_rate * RX_MAX(p->channels, 1) * 2);
+    return 0;
+}
+
 int rx_plan_build_cb(const RxLibrary *lib, RxTrack *const *tracks, int nb_tracks,
                      const RxPlaylist *const *playlists, int nb_playlists,
-                     const char *device_name, bool compat_transcode, RxPlan *out,
+                     const char *device_name, bool compat_transcode, bool dry, RxPlan *out,
                      rx_progress_cb cb, void *opaque)
 {
     *out = (RxPlan) { 0 };
@@ -855,14 +928,25 @@ int rx_plan_build_cb(const RxLibrary *lib, RxTrack *const *tracks, int nb_tracks
         rx_track_display(t, disp, sizeof(disp));
         *pt = (RxPlanTrack) { .id = (uint32_t)t->id, .track = t };
         out->nb_tracks++;
-
-        if ((ret = rx_plan_transcode(lib, t, compat_transcode, &pt->source)) < 0) {
-            report(cb, opaque, "%s: transcoding failed (%s)", disp, strerror(-ret));
+        if (cb && !cb(opaque, "prepare", i + 1, nb_tracks, disp)) {
+            ret = RX_ERROR(ECANCELED);
             goto fail;
         }
-        if ((ret = rx_probe(pt->source, &pt->probe)) < 0) {
-            report(cb, opaque, "%s: cannot read %s (%s)", disp, pt->source, strerror(-ret));
-            goto fail;
+
+        if (dry) {
+            if ((ret = dry_source(lib, t, compat_transcode, pt)) < 0) {
+                report(cb, opaque, "%s: cannot read %s (%s)", disp, t->path, strerror(-ret));
+                goto fail;
+            }
+        } else {
+            if ((ret = rx_plan_transcode(lib, t, compat_transcode, &pt->source)) < 0) {
+                report(cb, opaque, "%s: transcoding failed (%s)", disp, strerror(-ret));
+                goto fail;
+            }
+            if ((ret = rx_probe(pt->source, &pt->probe)) < 0) {
+                report(cb, opaque, "%s: cannot read %s (%s)", disp, pt->source, strerror(-ret));
+                goto fail;
+            }
         }
         pt->file_type = file_type(&pt->probe);
         if (!pt->file_type) {
@@ -870,7 +954,8 @@ int rx_plan_build_cb(const RxLibrary *lib, RxTrack *const *tracks, int nb_tracks
             ret = RX_ERROR(EINVAL);
             goto fail;
         }
-        pt->file_size = rx_file_size(pt->source);
+        if (!dry || !pt->file_size)
+            pt->file_size = rx_file_size(pt->source);
         pt->sample_rate = pt->probe.sample_rate;
         pt->duration = pt->probe.duration;
         pt->total_samples = pt->probe.total_samples;
@@ -1078,5 +1163,5 @@ int rx_plan_build(const RxLibrary *lib, RxTrack *const *tracks, int nb_tracks,
                   const char *device_name, bool compat_transcode, RxPlan *out)
 {
     return rx_plan_build_cb(lib, tracks, nb_tracks, playlists, nb_playlists, device_name,
-                            compat_transcode, out, NULL, NULL);
+                            compat_transcode, false, out, NULL, NULL);
 }

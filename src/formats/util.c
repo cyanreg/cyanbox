@@ -331,14 +331,17 @@ void rx_plan_date_added(const RxPlanTrack *t, char buf[16])
     buf[0] = '\0';
     if (!t->track)
         return;
-    int64_t mtime = t->track->path ? rx_file_mtime(t->track->path) : 0;
-    if (!mtime)
-        mtime = t->track->mtime;
-    if (!mtime)
-        mtime = t->track->added;
-    if (!mtime)
+    /* When the track came into the library, as rekordbox's date added is;
+     * dj used the audio file's modification time, which a retag or a copy
+     * moves. The file's time only for a track without one. */
+    int64_t when = t->track->added;
+    if (!when)
+        when = t->track->path ? rx_file_mtime(t->track->path) : 0;
+    if (!when)
+        when = t->track->mtime;
+    if (!when)
         return;
-    time_t tt = (time_t)mtime;
+    time_t tt = (time_t)when;
     struct tm tm;
     if (localtime_r(&tt, &tm))
         strftime(buf, 16, "%Y-%m-%d", &tm);
@@ -354,6 +357,23 @@ char *rx_plan_artwork_dir(uint32_t art_id)
     return rx_asprintf("/PIONEER/Artwork/%05u", art_id / 20 + 1);
 }
 
+/* A string cut to a buffer ends on a whole UTF-8 sequence: half a
+ * character would reach export.pdb as U+FFFD and exportLibrary.db as an
+ * invalid byte. */
+static void cut_utf8(char *buf, size_t want, size_t size)
+{
+    size_t n = strlen(buf);
+    if (want < size || !n)
+        return;
+    size_t k = n;
+    while (k > 0 && n - k < 3 && ((uint8_t)buf[k - 1] & 0xC0) == 0x80)
+        k--;
+    uint8_t lead = k ? (uint8_t)buf[k - 1] : 0;
+    size_t need = lead >= 0xF0 ? 4 : lead >= 0xE0 ? 3 : lead >= 0xC0 ? 2 : 1;
+    if (lead >= 0xC0 && n - (k - 1) < need)
+        buf[k - 1] = '\0';
+}
+
 const char *rx_plan_title(const RxPlanTrack *t, char *buf, size_t size)
 {
     buf[0] = '\0';
@@ -362,6 +382,7 @@ const char *rx_plan_title(const RxPlanTrack *t, char *buf, size_t size)
     const char *title = t->track->meta.title;
     if (title && *title) {
         snprintf(buf, size, "%s", title);
+        cut_utf8(buf, strlen(title), size);
         return buf;
     }
     if (!t->track->path)
@@ -372,6 +393,7 @@ const char *rx_plan_title(const RxPlanTrack *t, char *buf, size_t size)
     const char *dot = strrchr(base, '.');
     size_t n = dot && dot != base ? (size_t)(dot - base) : strlen(base);
     snprintf(buf, size, "%.*s", (int)n, base);
+    cut_utf8(buf, n, size);
     return buf;
 }
 

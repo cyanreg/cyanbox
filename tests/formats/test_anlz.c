@@ -363,11 +363,137 @@ static void rekordbox_files(void)
         free(b[i]);
 }
 
+/* Beat numbers across tempo sections: a section that restarts the count
+ * (beat 1) and one that continues it (beat 0) (docs/anlz.md 4.3: every
+ * beat carries its section's tempo; rxbox/model.h for the numbering). */
+static void sections(void)
+{
+    for (int restart = 0; restart < 2; restart++) {
+        RxTempoSection sec[2] = {
+            { .start = 0.0, .bpm = 120.0, .beat = 1 },
+            { .start = 10.25, .bpm = 128.0, .beat = restart ? 1 : 0 },
+        };
+        RxPlanTrack t = {
+            .usb_path = "/Contents/A/B/s.wav",
+            .duration = 20.0,
+            .grid     = { .sections = sec, .nb_sections = 2, .beats_per_bar = 4 },
+        };
+        snprintf(t.probe.codec, sizeof(t.probe.codec), "pcm_s16le");
+        RxAnlzFiles f;
+        CHECK_EQ(rx_anlz_build(&t, NULL, &f), 0);
+        RxBeat *b;
+        int nb;
+        CHECK_EQ(rx_anlz_read_beats(f.dat, f.dat_size, &b, &nb), 0);
+        int first = -1;
+        for (int i = 0; i < nb; i++) {
+            CHECK(b[i].number >= 1 && b[i].number <= 4);
+            CHECK(i == 0 || b[i].time > b[i - 1].time);
+            if (first < 0 && b[i].time >= 10.25 - 1e-9)
+                first = i;
+        }
+        CHECK(first > 0);
+        if (first > 0) {
+            /* 10.0 s is beat 21 of the first section, a downbeat. */
+            CHECK(b[first - 1].bpm == 120.0 && b[first - 1].number == 1);
+            CHECK(b[first].bpm == 128.0 && b[first].time == 10.25);
+            CHECK_EQ(b[first].number, restart ? 1 : 2);
+            CHECK_EQ(b[first + 1].number, restart ? 2 : 3);
+        }
+        free(b);
+        rx_anlz_files_free(&f);
+    }
+}
+
+/* Paths beyond the BMP: PPTH counts UTF-16 code units, a surrogate pair
+ * being two (docs/anlz.md 4.1), and reads back unchanged. */
+static void emoji_path(void)
+{
+    const char *path = "/Contents/A/B/\xF0\x9F\x8E\xB5 x.flac";   /* U+1F3B5 */
+    RxPlanTrack t = { .usb_path = (char *)path, .duration = 1.0 };
+    snprintf(t.probe.codec, sizeof(t.probe.codec), "flac");
+    RxAnlzFiles f;
+    CHECK_EQ(rx_anlz_build(&t, NULL, &f), 0);
+    size_t units = strlen("/Contents/A/B/") + 2 + strlen(" x.flac");
+    CHECK_EQ(rx_rd_be32(f.dat + 28 + 12), 2 * (units + 1));
+    CHECK_EQ(rx_rd_be16(f.dat + 28 + 16 + 2 * strlen("/Contents/A/B/")), 0xD83C);
+    char *back = NULL;
+    CHECK_EQ(rx_anlz_read_path(f.dat, f.dat_size, &back), 0);
+    CHECK_STR(back, path);
+    free(back);
+    rx_anlz_files_free(&f);
+}
+
+/* Files a player or another program wrote: a header length that does not
+ * fit is an error, and cue slots beyond H never reach the sync as slots
+ * (a PCO2 hot cue numbered 0x80000000 overflowed the slot arithmetic). */
+static void hostile(void)
+{
+    uint8_t pmai[28] = { 'P', 'M', 'A', 'I', 0xFF, 0xFF, 0xFF, 0xFF, 0, 0, 0, 28 };
+    RxAnlzTag *tags = NULL;
+    int nb = -1;
+    CHECK(rx_anlz_parse(pmai, sizeof(pmai), &tags, &nb) < 0);
+    rx_wr_be32(pmai + 4, 4);
+    CHECK(rx_anlz_parse(pmai, sizeof(pmai), &tags, &nb) < 0);
+    rx_wr_be32(pmai + 4, 28);
+    CHECK_EQ(rx_anlz_parse(pmai, sizeof(pmai), &tags, &nb), 0);
+    CHECK_EQ(nb, 0);
+    free(tags);
+
+    RxTempoSection sec = { .start = 0.0, .bpm = 120.0, .beat = 1 };
+    RxPlanCue cues[3];
+    plan_cue(&cues[0], 1.0, 0, -1, false, "", "red");
+    plan_cue(&cues[1], 2.0, 4, -1, false, "", "");
+    plan_cue(&cues[2], 3.0, -1, -1, false, "", "");
+    RxPlanTrack t = {
+        .usb_path = "/Contents/A/B/h.flac",
+        .duration = 10.0,
+        .grid     = { .sections = &sec, .nb_sections = 1, .beats_per_bar = 4 },
+        .cues     = cues,
+        .nb_cues  = 3,
+    };
+    snprintf(t.probe.codec, sizeof(t.probe.codec), "flac");
+    RxAnlzFiles f;
+    CHECK_EQ(rx_anlz_build(&t, NULL, &f), 0);
+    /* The PCO2 hot list holds A then E: renumber A to 0x80000000 and E
+     * to 9; the .DAT's PCOB hot list (A) to 0xFFFFFFFF. */
+    CHECK_EQ(rx_anlz_parse(f.ext, f.ext_size, &tags, &nb), 0);
+    for (int i = 0; i < nb; i++) {
+        if (!memcmp(tags[i].fourcc, "PCO2", 4) && rx_rd_be32(tags[i].raw + 0x0C) == 1) {
+            uint8_t *e = f.ext + (tags[i].raw - f.ext) + 0x14;
+            rx_wr_be32(e + 0x0C, 0x80000000u);
+            e += rx_rd_be32(e + 8);
+            rx_wr_be32(e + 0x0C, 9);
+        }
+    }
+    free(tags);
+    CHECK_EQ(rx_anlz_parse(f.dat, f.dat_size, &tags, &nb), 0);
+    for (int i = 0; i < nb; i++)
+        if (!memcmp(tags[i].fourcc, "PCOB", 4) && rx_rd_be32(tags[i].raw + 0x0C) == 1)
+            rx_wr_be32(f.dat + (tags[i].raw - f.dat) + 0x18 + 0x0C, 0xFFFFFFFFu);
+    free(tags);
+    const uint8_t *file[2] = { f.ext, f.dat };
+    size_t size[2] = { f.ext_size, f.dat_size };
+    for (int k = 0; k < 2; k++) {
+        RxPlanCue *rc;
+        int n;
+        CHECK_EQ(rx_anlz_read_cues(file[k], size[k], &rc, &n), 0);
+        CHECK_EQ(n, 1);                       /* the memory cue alone */
+        for (int i = 0; i < n; i++)
+            CHECK(rc[i].hot >= -1 && rc[i].hot < RX_HOT_CUE_SLOTS);
+        CHECK(n == 1 && rc[0].hot == -1 && rc[0].time == 3.0);
+        free(rc);
+    }
+    rx_anlz_files_free(&f);
+}
+
 int main(void)
 {
     dir_hash();
     layout();
     flac_seek();
     rekordbox_files();
+    sections();
+    emoji_path();
+    hostile();
     return test_result("anlz");
 }

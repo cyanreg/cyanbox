@@ -13,7 +13,11 @@
  *   page 1 starts with the 16-byte salt in place of "SQLite format 3\0".
  *
  * Decryption applies the committed frames of a -wal file the way dj does
- * (rekordbox leaves a 3-frame WAL next to its database). */
+ * (rekordbox leaves a 3-frame WAL next to its database), with SQLite's own
+ * limits, which dj did not check: only frames carrying the WAL header's
+ * salts and authenticating count, the first that does not ends the log
+ * (a frame of an older generation, or one torn by an unplugged stick), and
+ * a page number must lie within what the file and the log can hold. */
 
 #include "rxbox/formats.h"
 
@@ -124,24 +128,27 @@ int rx_sqlcipher_decrypt(const uint8_t *data, size_t size, const char *passphras
         typedef struct Pending { uint32_t pgno; uint8_t page[PAGE]; } Pending;
         RxArray pending;
         rx_array_init(&pending, sizeof(Pending));
+        /* Every page past the end of the file is in some frame. */
+        size_t max_pgno = nb + (wal_size - 32) / (24 + PAGE);
         size_t pos = 32;
         while (pos + 24 + PAGE <= wal_size) {
             uint32_t pgno = rx_rd_be32(wal + pos), commit = rx_rd_be32(wal + pos + 4);
+            if (!pgno || pgno > max_pgno || memcmp(wal + pos + 8, wal + 16, 8))
+                break;
             Pending *p = NULL;
             for (size_t k = 0; k < pending.nb; k++)
                 if (((Pending *)rx_array_at(&pending, k))->pgno == pgno)
                     p = rx_array_at(&pending, k);
+            uint8_t page[PAGE];
+            if (decrypt_page(wal + pos + 24, pgno, key, mac, page) < 0)
+                break;
             if (!p && !(p = rx_array_push(&pending, NULL))) {
                 ret = RX_ERROR(ENOMEM);
                 rx_array_free(&pending);
                 goto fail;
             }
             p->pgno = pgno;
-            if (!pgno || (ret = decrypt_page(wal + pos + 24, pgno, key, mac, p->page)) < 0) {
-                ret = ret < 0 ? ret : RX_ERROR(EINVAL);
-                rx_array_free(&pending);
-                goto fail;
-            }
+            memcpy(p->page, page, PAGE);
             pos += 24 + PAGE;
             if (!commit)
                 continue;

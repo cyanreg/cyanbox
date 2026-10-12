@@ -478,7 +478,11 @@ int rx_anlz_parse(const uint8_t *data, size_t size, RxAnlzTag **tags, int *nb)
     *nb = 0;
     if (size < 12 || memcmp(data, "PMAI", 4))
         return RX_ERROR(EINVAL);
+    /* len_header is 28 in every file seen (docs/anlz.md 3); one that does
+     * not fit the file is not an empty file but a broken one. */
     size_t pos = rx_rd_be32(data + 4);
+    if (pos < 12 || pos > size)
+        return RX_ERROR(EINVAL);
     RxArray a;
     rx_array_init(&a, sizeof(RxAnlzTag));
     while (pos + 12 <= size) {
@@ -701,6 +705,10 @@ int rx_anlz_read_cues(const uint8_t *data, size_t size, RxPlanCue **cues, int *n
         if ((ret = rx_anlz_tag_cues(&tags[i], &e, &n, &declared)) < 0)
             goto fail;
         for (int k = 0; k < n; k++) {
+            /* Slots are 1..8 (A..H, docs/anlz.md 4.5); anything else is
+             * not a cue the library can hold, and not a memory cue. */
+            if (e[k].hot > RX_HOT_CUE_SLOTS)
+                continue;
             RxPlanCue c = {
                 .time     = e[k].time / 1000.0,
                 .loop_end = e[k].type == 2 && e[k].end != 0xFFFFFFFFu ? e[k].end / 1000.0 : -1.0,

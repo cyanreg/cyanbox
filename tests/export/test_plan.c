@@ -71,6 +71,51 @@ static void usb_paths(void)
     char *fc = rx_plan_fold_case("ÄBC/Ωmega");
     CHECK_STR(fc, "äbc/ωmega");
     free(fc);
+
+    /* FAT and exFAT compare names without case. Latin Extended-A has its
+     * capitals on odd code points in U+0139..U+0148 and U+0179..U+017E
+     * (Ł ł, Ń ń, Ž ž); Ÿ's small letter is U+00FF. Two names that differ
+     * only there are one file on the stick. */
+    static const char *const same[][2] = {
+        { "Łódź", "łódź" }, { "Žena", "žena" }, { "ŃŇĽĹĻĿŹŻŽ", "ńňľĺļŀźżž" }, { "Ÿ", "ÿ" },
+        { "ĀĒĪŌŪ", "āēīōū" }, { "ΆΈΉΊΌΎΏ", "άέήίόύώ" }, { "ЀЁЂ", "ѐёђ" },
+    };
+    for (size_t i = 0; i < RX_ARRAY_ELEMS(same); i++) {
+        char *a = rx_plan_fold_case(same[i][0]), *b = rx_plan_fold_case(same[i][1]);
+        CHECK_STR(a, b);
+        free(a);
+        free(b);
+    }
+    /* And different letters stay different. */
+    char *l = rx_plan_fold_case("ł"), *n = rx_plan_fold_case("Ń");
+    CHECK(l && n && strcmp(l, n));
+    free(l);
+    free(n);
+    t = track("/m/žena.mp3", "A", NULL, "B");
+    const char *used3[] = { "/Contents/A/B/Žena.mp3" };
+    check_path(&t, NULL, used3, 1, "/Contents/A/B/žena-1.mp3");
+
+    /* The extension comes from the file copied: ASCII letters and digits
+     * only, as every audio extension is, so nothing FAT refuses (":", "?",
+     * a trailing space) or a cut UTF-8 sequence reaches the stick. */
+    t = track("/m/a.mp3", "A", NULL, "B");
+    check_path(&t, "/lib/x.Fl:ac?", NULL, 0, "/Contents/A/B/a.fl_ac_");
+    check_path(&t, "/lib/x.w\xC3\xA4v ", NULL, 0, "/Contents/A/B/a.w__v_");
+
+    /* Stick paths read from a stick's databases: absolute, no ".."
+     * component, no empty one (export_priv.h). */
+    CHECK(rx_stick_path_safe("/Contents/A/B/x.mp3"));
+    CHECK(rx_stick_path_safe("/PIONEER/USBANLZ/P016/0000875E/ANLZ0000.DAT"));
+    CHECK(rx_stick_path_safe("/Contents/A/..x/y..mp3"));
+    CHECK(!rx_stick_path_safe("/Contents/../../etc/passwd"));
+    CHECK(!rx_stick_path_safe("/PIONEER/USBANLZ/P016/0000875E/../../../../dev/zero"));
+    CHECK(!rx_stick_path_safe("/.."));
+    CHECK(!rx_stick_path_safe("/Contents/A/.."));
+    CHECK(!rx_stick_path_safe("Contents/x.mp3"));
+    CHECK(!rx_stick_path_safe("/Contents//x.mp3"));
+    CHECK(!rx_stick_path_safe("/Contents/./x.mp3"));
+    CHECK(!rx_stick_path_safe(""));
+    CHECK(!rx_stick_path_safe(NULL));
 }
 
 static void cues(void)
@@ -164,6 +209,33 @@ static void sync_record(void)
     CHECK(!rx_sync_record_track(&back, 8));
     CHECK(back.nb_settings == 1 && back.settings[0].size == 4 && !memcmp(back.settings[0].data, setting, 4));
     rx_sync_record_free(&back);
+
+    /* The record is a file on the stick anyone can edit: cut and damaged
+     * copies read back or fail, never past their end. */
+    char *path = rx_stick_file(dir, RX_SYNC_PATH);
+    uint8_t *text;
+    size_t n;
+    CHECK_EQ(rx_file_read(path, &text, &n), 0);
+    uint32_t x = 12345;
+    for (size_t i = 0; i < 3 * n; i++) {
+        uint8_t *c = malloc(n);
+        memcpy(c, text, n);
+        size_t len = i < n ? i : n;
+        if (i >= n) {
+            x = x * 1103515245 + 12345;
+            c[x % n] = (uint8_t)(i & 1 ? '%' : x >> 16);
+        }
+        CHECK_EQ(rx_file_write_atomic(path, c, len), 0);
+        RxSyncRecord f;
+        if (rx_sync_record_read(dir, &f) >= 0) {
+            for (int k = 0; k < f.nb_tracks; k++)
+                CHECK(f.tracks[k].nb_cues >= 0);
+            rx_sync_record_free(&f);
+        }
+        free(c);
+    }
+    free(text);
+    free(path);
     char *rm = rx_asprintf("rm -rf '%s'", dir);
     if (rm && system(rm))
         fprintf(stderr, "cannot remove %s\n", dir);

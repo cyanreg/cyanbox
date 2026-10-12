@@ -41,7 +41,9 @@ uint32_t rx_plan_library_id(const RxPlan *plan);
 /* Track row 0x14 / OneLibrary masterContentId: crc32 of the stick path, or
  * 1 when that is 0 (dj). */
 uint32_t rx_plan_master_id(const RxPlanTrack *t);
-/* "YYYY-MM-DD" of the audio file's modification time (dj's date_added). */
+/* "YYYY-MM-DD" of when the track was added to the library (RxTrack.added;
+ * dj took the audio file's modification time, used here only for a track
+ * without one). The export's own date is RxPlan.date, today. */
 void     rx_plan_date_added(const RxPlanTrack *t, char buf[16]);
 /* "/PIONEER/USBANLZ/Pxxx/xxxxxxxx/ANLZnnnn.DAT" (or the .EXT/.2EX name). */
 char    *rx_plan_anlz_path(const RxPlanTrack *t, const char *ext);

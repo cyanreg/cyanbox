@@ -23,6 +23,7 @@
 #include "rxbox/export.h"
 
 #include <stdio.h>
+#include <sys/stat.h>
 
 #include "src/export/export_priv.h"
 #include "src/formats/buf.h"
@@ -67,9 +68,12 @@ static void pdb_problem(void *opaque, const char *p)
     problem(opaque, "%s", p);
 }
 
+/* Paths come from the stick's databases: one leaving the stick names
+ * nothing on it, and only regular files are read (a link or FIFO on a
+ * stick with a Unix file system could point at /dev/zero). */
 static bool stick_exists(const char *stick, const char *path)
 {
-    char *p = rx_stick_file(stick, path);
+    char *p = rx_stick_path_safe(path) ? rx_stick_file(stick, path) : NULL;
     bool ok = p && rx_file_exists(p);
     free(p);
     return ok;
@@ -77,10 +81,17 @@ static bool stick_exists(const char *stick, const char *path)
 
 static int read_stick(const char *stick, const char *path, uint8_t **data, size_t *size)
 {
+    *data = NULL;
+    *size = 0;
+    if (!rx_stick_path_safe(path))
+        return RX_ERROR(EINVAL);
     char *p = rx_stick_file(stick, path);
     if (!p)
         return RX_ERROR(ENOMEM);
-    int ret = rx_file_read(p, data, size);
+    struct stat st;
+    int ret = lstat(p, &st) < 0 ? RX_ERROR(errno) : S_ISREG(st.st_mode) ? 0 : RX_ERROR(EINVAL);
+    if (ret >= 0)
+        ret = rx_file_read(p, data, size);
     free(p);
     return ret;
 }
@@ -432,8 +443,9 @@ int rx_inspect(const char *stick, rx_report_cb line, void *opaque)
             r.problems == before ? "OK" : "PROBLEMS");
         free(ext);
     }
+    /* The count is the caller's to report (the CLI prints its own
+     * verdict line). */
     settings_line(&r, stick);
-    say(&r, "%s", r.problems ? "PROBLEMS FOUND" : "OK");
     rx_pdb_raw_tracks_free(t, nb);
     free(b);
     return r.problems;

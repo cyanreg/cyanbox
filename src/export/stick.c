@@ -24,10 +24,16 @@
  * History lists carry no times. A play is recorded when it is applied, and
  * the library remembers per stick and list how many entries were applied
  * (setting "sync.history.<stick>.<list>" = "count:crc"), so a second pull
- * of the same stick adds nothing. */
+ * of the same stick adds nothing.
+ *
+ * Everything on the stick is input another program wrote: paths read from
+ * its databases must stay on the stick and name regular files, a damaged
+ * export.pdb leaves exportLibrary.db to name the tracks, and setting values
+ * the library could not store are not proposed. */
 
 #include "rxbox/export.h"
 
+#include <ctype.h>
 #include <dirent.h>
 #include <math.h>
 #include <stdio.h>
@@ -64,6 +70,20 @@ char *rx_stick_file(const char *mount, const char *stick_path)
     return rx_asprintf("%.*s%s%s", (int)n, mount, stick_path[0] == '/' ? "" : "/", stick_path);
 }
 
+bool rx_stick_path_safe(const char *p)
+{
+    if (!p || p[0] != '/')
+        return false;
+    while (*p == '/') {
+        const char *e = strchr(p + 1, '/');
+        size_t n = e ? (size_t)(e - p - 1) : strlen(p + 1);
+        if (!n || (n == 1 && p[1] == '.') || (n == 2 && p[1] == '.' && p[2] == '.'))
+            return false;
+        p += 1 + n;
+    }
+    return true;
+}
+
 int rx_stick_write(const char *path, const void *data, size_t size)
 {
     char *dir = rx_strdup(path);
@@ -79,12 +99,21 @@ int rx_stick_write(const char *path, const void *data, size_t size)
     return ret < 0 ? ret : rx_file_write_atomic(path, data, size);
 }
 
+/* Only regular files: a link or a FIFO on a stick formatted with a Unix
+ * file system could point the reader at /dev/zero. */
 static int read_stick_file(const char *mount, const char *stick_path, uint8_t **data, size_t *size)
 {
+    *data = NULL;
+    *size = 0;
+    if (!rx_stick_path_safe(stick_path))
+        return RX_ERROR(EINVAL);
     char *p = rx_stick_file(mount, stick_path);
     if (!p)
         return RX_ERROR(ENOMEM);
-    int ret = rx_file_read(p, data, size);
+    struct stat st;
+    int ret = lstat(p, &st) < 0 ? RX_ERROR(errno) : S_ISREG(st.st_mode) ? 0 : RX_ERROR(EINVAL);
+    if (ret >= 0)
+        ret = rx_file_read(p, data, size);
     free(p);
     return ret;
 }
@@ -214,6 +243,8 @@ static int cmp_sync_track(const void *a, const void *b)
 
 const RxSyncTrack *rx_sync_record_track(const RxSyncRecord *r, uint64_t id)
 {
+    if (!r->nb_tracks)
+        return NULL;
     RxSyncTrack key = { .id = id };
     return bsearch(&key, r->tracks, (size_t)r->nb_tracks, sizeof(key), cmp_sync_track);
 }
@@ -248,6 +279,33 @@ int rx_sync_record_from_plan(const RxPlan *plan, RxSyncRecord *r)
     return 0;
 }
 
+int rx_sync_library_key(RxLibrary *lib, char key[33])
+{
+    char *v = NULL;
+    if (rx_library_setting_get(lib, "sync.library", &v) >= 0 && v && strlen(v) == 32) {
+        memcpy(key, v, 33);
+        free(v);
+        return 0;
+    }
+    free(v);
+    uint8_t u[16];
+    if (RAND_bytes(u, sizeof(u)) != 1)
+        return RX_ERROR(EIO);
+    for (int i = 0; i < 16; i++)
+        snprintf(key + 2 * i, 3, "%02x", u[i]);
+    return rx_library_setting_set(lib, "sync.library", key);
+}
+
+/* Whether `lib` wrote the record: its key is in it. */
+static bool record_is_ours(const RxLibrary *lib, const RxSyncRecord *r)
+{
+    char *v = NULL;
+    bool ours = r->library[0] && rx_library_setting_get(lib, "sync.library", &v) >= 0 && v &&
+                !strcmp(v, r->library);
+    free(v);
+    return ours;
+}
+
 int rx_sync_record_add_settings(RxSyncRecord *r, const char *mount)
 {
     for (int i = 0; i < 4; i++) {
@@ -272,7 +330,10 @@ int rx_sync_record_write(const char *mount, const RxSyncRecord *r)
     FILE *f = open_memstream(&buf, &size);
     if (!f)
         return RX_ERROR(ENOMEM);
-    fprintf(f, "rxbox-sync 1\nuuid %s\ndate %s\n", r->uuid, r->date);
+    fprintf(f, "rxbox-sync 1\nuuid %s\n", r->uuid);
+    if (r->library[0])
+        fprintf(f, "library %s\n", r->library);
+    fprintf(f, "date %s\n", r->date);
     for (int i = 0; i < r->nb_tracks; i++) {
         const RxSyncTrack *t = &r->tracks[i];
         fprintf(f, "track %llu\n", (unsigned long long)t->id);
@@ -341,7 +402,8 @@ int rx_sync_record_read(const char *mount, RxSyncRecord *r)
         char name[24];
         int code, active, slot;
         unsigned in, rgb;
-        if (sscanf(line, "uuid %16s", r->uuid) == 1 || sscanf(line, "date %15s", r->date) == 1)
+        if (sscanf(line, "uuid %16s", r->uuid) == 1 || sscanf(line, "date %15s", r->date) == 1 ||
+            sscanf(line, "library %32s", r->library) == 1)
             continue;
         if (sscanf(line, "track %llu", &id) == 1) {
             if (cur && cues.nb) {
@@ -418,7 +480,8 @@ int rx_sync_record_read(const char *mount, RxSyncRecord *r)
         rx_sync_record_free(r);
         return ret;
     }
-    qsort(r->tracks, (size_t)r->nb_tracks, sizeof(*r->tracks), cmp_sync_track);
+    if (r->nb_tracks)
+        qsort(r->tracks, (size_t)r->nb_tracks, sizeof(*r->tracks), cmp_sync_track);
     return 0;
 }
 
@@ -634,6 +697,10 @@ int rx_stick_read(const RxLibrary *lib, const char *mount, RxStickState *out)
     int nb_cues = 0;
 
     p->has_record = rx_sync_record_read(mount, &p->record) >= 0;
+    if (p->has_record && !record_is_ours(lib, &p->record)) {
+        rx_sync_record_free(&p->record);
+        p->has_record = false;
+    }
     if (p->has_record)
         snprintf(p->stick_key, sizeof(p->stick_key), "%s", p->record.uuid);
     else if (rx_stick_label(mount, p->stick_key, sizeof(p->stick_key)) < 0)
@@ -641,6 +708,7 @@ int rx_stick_read(const RxLibrary *lib, const char *mount, RxStickState *out)
 
     uint8_t *data;
     size_t size;
+    size_t pdb_rows = 0;
     if (read_stick_file(mount, "/PIONEER/rekordbox/export.pdb", &data, &size) >= 0) {
         RxPdb pdb;
         out->has_pdb = true;
@@ -659,6 +727,7 @@ int rx_stick_read(const RxLibrary *lib, const char *mount, RxStickState *out)
             }
             rx_pdb_free(&pdb);
         }
+        pdb_rows = rows.nb;
         RxPdbHistoryList *hl;
         int nh;
         if (rx_pdb_history_lists(data, size, &hl, &nh) >= 0) {
@@ -690,9 +759,23 @@ int rx_stick_read(const RxLibrary *lib, const char *mount, RxStickState *out)
                                  &plain_size) >= 0) {
             sqlite3 *db;
             if (rx_onelibrary_open_plain(plain, plain_size, &db) >= 0) {
-                /* Track identity from export.pdb when there is one; the
-                 * OneLibrary only adds its history then. */
-                onelibrary_rows(db, out->has_pdb ? NULL : &rows, &hist);
+                /* Track identity from export.pdb; the OneLibrary adds the
+                 * tracks export.pdb does not have (it may be damaged, or
+                 * be a player's half-written one) and its history. */
+                RxArray more;
+                rx_array_init(&more, sizeof(StickRow));
+                onelibrary_rows(db, &more, &hist);
+                for (size_t i = 0; i < more.nb; i++) {
+                    StickRow *m = rx_array_at(&more, i);
+                    bool known = false;
+                    for (size_t k = 0; k < pdb_rows && !known; k++)
+                        known = !strcmp(((StickRow *)rx_array_at(&rows, k))->path, m->path);
+                    if (known || !rx_array_push(&rows, m)) {
+                        free(m->path);
+                        free(m->anlz);
+                    }
+                }
+                rx_array_free(&more);
                 sqlite3_close(db);
             }
             free(plain);
@@ -718,8 +801,11 @@ int rx_stick_read(const RxLibrary *lib, const char *mount, RxStickState *out)
             out->nb_tracks_unknown++;
             continue;
         }
+        /* An analysis path that leaves the stick is not followed; players
+         * compute the directory from the audio path anyway (docs/pdb.md
+         * 1.3). */
         char dat[128];
-        const char *anlz = r->anlz && r->anlz[0] ? r->anlz : NULL;
+        const char *anlz = r->anlz && rx_stick_path_safe(r->anlz) ? r->anlz : NULL;
         if (!anlz && rx_anlz_dir(r->path, dat, sizeof(dat) - 16) >= 0) {
             strcat(dat, "/ANLZ0000.DAT");
             anlz = dat;
@@ -1090,6 +1176,11 @@ static int setting_items(const RxLibrary *lib, const RxStickState *s, RxArray *i
         for (int k = 0; k < nn; k++) {
             if (was && k < nw && !strcmp(was[k].value, now[k].value))
                 continue;
+            /* A byte the decoder has no name for (it gives "0x99": a newer
+             * firmware, or damage) would make the library's settings
+             * invalid and block every export after it. */
+            if (!strncmp(now[k].value, "0x", 2))
+                continue;
             char lv[32];
             if (library_setting(lib, file, now[k].key, lv, sizeof(lv)) < 0 || !strcmp(lv, now[k].value))
                 continue;
@@ -1341,7 +1432,8 @@ int rx_stick_label(const char *mount, char *buf, size_t size)
                 char *o = buf;
                 for (const char *s = e->d_name; *s && (size_t)(o - buf) + 1 < size; s++) {
                     unsigned v;
-                    if (s[0] == '\\' && s[1] == 'x' && sscanf(s + 2, "%2x", &v) == 1) {
+                    if (s[0] == '\\' && s[1] == 'x' && isxdigit((unsigned char)s[2]) &&
+                        isxdigit((unsigned char)s[3]) && sscanf(s + 2, "%2x", &v) == 1) {
                         *o++ = (char)v;
                         s += 3;
                     } else {

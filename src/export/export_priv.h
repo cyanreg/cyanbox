@@ -13,6 +13,7 @@
  *
  *   rxbox-sync 1
  *   uuid 0123456789abcdef            new on every export: keys the history markers
+ *   library 0123...cdef              the exporting library (setting "sync.library")
  *   date 2026-10-13
  *   track 42
  *   hot <slot> <in ms> <out ms|-1> <code> <rrggbb> <name, %-escaped>
@@ -20,7 +21,10 @@
  *   setting <FILE.DAT> <hex of the whole file>
  *
  * Players ignore unknown files under PIONEER/ (they keep their own CDJ/,
- * LOG/ ... there). */
+ * LOG/ ... there). A record is only believed by the library that wrote it:
+ * another library's track ids are not this one's even when the numbers
+ * are the same, and a record without the line (an older rxbox) is treated
+ * as no record. */
 
 #ifndef RXBOX_EXPORT_PRIV_H
 #define RXBOX_EXPORT_PRIV_H
@@ -34,19 +38,25 @@
 /* Codecs every player decodes (dj's PLAYABLE); anything else goes to the
  * stick as FLAC. */
 bool rx_plan_codec_playable(const char *codec);
-/* Whether a track goes to the stick transcoded, and the cache file it
+/* Whether a track goes to the stick transcoded (1), and the cache file it
  * goes to (NULL when not). Compatibility mode also converts AAC (nobody
- * knows what players do with its priming) and FLAC above 16 bit/48 kHz. */
-int  rx_plan_transcode_path(const RxLibrary *lib, const RxTrack *t, bool compat, char **cache_path,
-                            int *max_rate);
+ * knows what players do with its priming) and FLAC above 16 bit/48 kHz.
+ * `create` makes the cache directory; a dry run passes false. */
+int  rx_plan_transcode_path(const RxLibrary *lib, const RxTrack *t, bool compat, bool create,
+                            char **cache_path, int *max_rate);
+/* The transcode exists and is newer than the track's file. */
+bool rx_plan_transcode_fresh(const RxTrack *t, const char *cache);
 /* Makes sure the transcode exists and is newer than the track's file. */
 int  rx_plan_transcode(const RxLibrary *lib, const RxTrack *t, bool compat, char **source);
 
-/* rx_plan_build with every warning (unknown colour, unreadable artwork,
- * playlist entry not exported) reported through `cb` as a "prepare" item. */
+/* rx_plan_build with a "prepare" item per track (1-based) and every
+ * warning (unknown colour, unreadable artwork, playlist entry not
+ * exported) reported through `cb`; returning false from it cancels. A dry
+ * plan transcodes nothing: a track whose transcode is not made yet is
+ * described from its original as the transcode would be. */
 int  rx_plan_build_cb(const RxLibrary *lib, RxTrack *const *tracks, int nb_tracks,
                       const RxPlaylist *const *playlists, int nb_playlists,
-                      const char *device_name, bool compat_transcode, RxPlan *out,
+                      const char *device_name, bool compat_transcode, bool dry, RxPlan *out,
                       rx_progress_cb cb, void *opaque);
 
 /* dj's _fat(_clean(s), limit): NFC, FAT-illegal characters to '_', trimmed,
@@ -96,6 +106,7 @@ typedef struct RxSyncTrack {
 
 typedef struct RxSyncRecord {
     char         uuid[17];
+    char         library[33];    /* "" when the record has none */
     char         date[16];
     RxSyncTrack *tracks;         /* sorted by id */
     int          nb_tracks;
@@ -111,6 +122,9 @@ const RxSyncTrack *rx_sync_record_track(const RxSyncRecord *r, uint64_t id);
 int  rx_sync_record_from_plan(const RxPlan *plan, RxSyncRecord *r);
 /* Adds the settings files found on the stick now. */
 int  rx_sync_record_add_settings(RxSyncRecord *r, const char *mount);
+/* The library's identity for the record: 32 hex digits made once and kept
+ * in the library (setting "sync.library"). */
+int  rx_sync_library_key(RxLibrary *lib, char key[33]);
 
 /* ----------------------------------------------------------------- files */
 
@@ -119,7 +133,13 @@ int  rx_sync_record_add_settings(RxSyncRecord *r, const char *mount);
 int  rx_stick_fs_type(const char *mount, char *buf, size_t size);
 /* <mount><stick path>, allocating. */
 char *rx_stick_file(const char *mount, const char *stick_path);
+/* A path read from a stick (a database row, an analysis path) that names a
+ * file on the stick: absolute, and no empty, "." or ".." component. */
+bool rx_stick_path_safe(const char *stick_path);
 /* Writes a file atomically, creating its directory. */
 int  rx_stick_write(const char *path, const void *data, size_t size);
+/* Bytes the export of `plan` to `dest` needs free, the files counted in
+ * whole clusters of `cluster` bytes. */
+int64_t rx_export_space_needed(const RxPlan *plan, const char *dest, int64_t cluster);
 
 #endif /* RXBOX_EXPORT_PRIV_H */

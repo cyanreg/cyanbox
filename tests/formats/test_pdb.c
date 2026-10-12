@@ -353,6 +353,77 @@ static void ext_tags(void)
     free(b);
 }
 
+/* Text the builder cannot place: refused with an error the export can
+ * report (never an assertion), whichever row holds it; a string past the
+ * 16-bit DeviceSQL length overflows by definition. Astral characters in
+ * every kind of row keep long strings 4-aligned (docs/pdb.md G1), and a
+ * title cut to the plan's buffer stays valid UTF-8. */
+static void limits(void)
+{
+    RxTrack tr = { 0 };
+    tr.meta.title = "\xF0\x9F\x8E\xB5 title";
+    tr.meta.comment = "";
+    RxPlanTrack pt = {
+        .id = 1, .track = &tr, .usb_path = "/Contents/\xF0\x9F\x8E\xB5/B/x.flac",
+        .anlz_dir = "/PIONEER/USBANLZ/P000/00000000", .file_type = 5, .artist_id = 1, .album_id = 1,
+    };
+    RxPlanName artist = { 1, "\xF0\x9F\x8E\xB5 artist" }, album = { 1, "\xC3\xA4lbum \xF0\x9F\x8E\xB5", 1 };
+    RxPlanPlaylist pl = { .id = 1, .name = "\xF0\x9F\x8E\xB5 list" };
+    RxPlan plan = {
+        .tracks = &pt, .nb_tracks = 1, .artists = &artist, .nb_artists = 1, .albums = &album, .nb_albums = 1,
+        .playlists = &pl, .nb_playlists = 1,
+    };
+    snprintf(plan.date, sizeof(plan.date), "2026-10-13");
+    uint8_t *b;
+    size_t size;
+    CHECK_EQ(rx_pdb_build(&plan, &b, &size), 0);
+    CHECK_EQ(rx_pdb_check(b, size, print_problem, "astral"), 0);
+    RxPdb pdb;
+    CHECK_EQ(rx_pdb_read(b, size, &pdb), 0);
+    CHECK(pdb.nb_tracks == 1 && !strcmp(pdb.tracks[0].title, tr.meta.title) &&
+          !strcmp(pdb.tracks[0].path, pt.usb_path) && !strcmp(pdb.tracks[0].artist, artist.name));
+    CHECK(pdb.nb_playlists == 1 && !strcmp(pdb.playlists[0].name, pl.name));
+    rx_pdb_free(&pdb);
+    free(b);
+
+    size_t big_n = 70000;
+    char *big = malloc(big_n + 1);
+    memset(big, 'z', big_n);
+    big[big_n] = '\0';
+    tr.meta.comment = big;
+    CHECK_EQ(rx_pdb_track_row_overflow(&pt, &plan), 0x10000);
+    CHECK(rx_pdb_build(&plan, &b, &size) < 0);
+    tr.meta.comment = "";
+    big[5000] = '\0';
+    char *keep = artist.name;
+    artist.name = big;
+    CHECK_EQ(rx_pdb_track_row_overflow(&pt, &plan), 0);
+    CHECK(rx_pdb_build(&plan, &b, &size) < 0);
+    artist.name = keep;
+    pl.name = big;
+    CHECK(rx_pdb_build(&plan, &b, &size) < 0);
+    pl.name = "list";
+    album.name = big;
+    CHECK(rx_pdb_build(&plan, &b, &size) < 0);
+    free(big);
+
+    /* 1100 x U+00E9: 2200 bytes, cut by the 1024-byte title buffer. */
+    char *e = malloc(2201);
+    for (int i = 0; i < 1100; i++)
+        memcpy(e + 2 * i, "\xC3\xA9", 2);
+    e[2200] = '\0';
+    tr.meta.title = e;
+    char t[1024];
+    rx_plan_title(&pt, t, sizeof(t));
+    CHECK(strlen(t) == 1022);
+    const char *p = t;
+    bool valid = true;
+    while (*p)
+        valid &= rx_utf8_next(&p) == 0xE9;
+    CHECK(valid);
+    free(e);
+}
+
 int main(void)
 {
     strings();
@@ -360,5 +431,6 @@ int main(void)
     roundtrip();
     artist_row();
     ext_tags();
+    limits();
     return test_result("pdb");
 }
