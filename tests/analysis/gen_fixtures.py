@@ -171,20 +171,14 @@ def tonal(rate, tonic, minor, cents=0.0, bpm=124.0, bars=16):
 
 # The expectations of test_key.c, written to keys.txt: name, rate, tonic,
 # minor, detune in cents, and the key rxbox is known to give instead of the
-# true one (None: it must find the true key).
+# true one (None: it must find the true key). With the key detector of
+# docs/KEY.md every one of these is found, so there are no known misses;
+# the entries dj's Temperley matcher got wrong (g96k as C, e22k as Dbm) are
+# history recorded in that document.
 #
-# The two known misses are major I - V - vi - IV progressions: the true key,
-# its IV and its relative minor correlate within ~0.02 with the Temperley
-# profiles, and the kick tips the balance. Its 170 -> 50 Hz sweep sounds on
-# every beat for 0.25 s of 0.48 s, longer than half of the 9-frame median, so
-# percussion removal keeps it, and it adds a chroma tilt peaking at C/Db/D
-# (C2..D2, where the sweep spends most of its energy). G major reads as C
-# (C 0.757, G 0.737) and E major as its relative Dbm (0.733 vs 0.647).
-# Without the kick both come out right (checked with dj's corrected code).
-#
-# dj itself, with its tuning bug (see src/analysis/key.c), names only 5 of
-# these 9 correctly: bb44k as Eb, g96k as C, e22k as Dbm and am44k+30 as F.
-# Its answers are kept in keys.txt for information only.
+# dj itself, with its tuning bug (see docs/KEY.md), names only 5 of these 9
+# correctly: bb44k as Eb, g96k as C, e22k as Dbm and am44k+30 as F. Its
+# answers are kept in keys.txt for information only.
 KEYS = [
     ("am44k", 44100, 9, True, 0.0, None),
     ("d44k", 44100, 2, False, 0.0, None),
@@ -192,8 +186,8 @@ KEYS = [
     ("dbm44k", 44100, 1, True, 0.0, None),
     ("bb44k", 44100, 10, False, 0.0, None),
     ("fsm48k", 48000, 6, True, 0.0, None),
-    ("g96k", 96000, 7, False, 0.0, "C"),
-    ("e22k", 22050, 4, False, -20.0, "Dbm"),
+    ("g96k", 96000, 7, False, 0.0, None),
+    ("e22k", 22050, 4, False, -20.0, None),
     ("am44k+30", 44100, 9, True, 30.0, None),
 ]
 
