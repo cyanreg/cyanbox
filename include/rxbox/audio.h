@@ -98,13 +98,23 @@ void rx_audio_free(RxAudio *a);
 
 /* ----------------------------------------------------------------- artwork */
 
-/* The embedded cover (attached picture), else a cover image next to the
- * file (cover/folder/front/album .jpg/.png, any case). RGBA8, malloc'd.
- * -ENOENT when there is none. */
+/* The track's cover: the embedded picture (attached picture stream) when
+ * there is one, else an image file in the track's directory, else one in
+ * the parent directory (disc subfolders). Among the files there, in this
+ * order of preference, any case, .jpg/.jpeg/.png/.webp: front, cover,
+ * folder, album, art, then a numbered first one (front1, cover_01, ...),
+ * then, if the directory holds exactly one image, that one. back, obi,
+ * booklet, spine, scan, cd, inlay, inside, disc and tray are never used
+ * (measured on the user's library: 200 of 232 album folders use front.*,
+ * the rest cover.* or folder.*, with back/obi/booklet scans beside them).
+ * RGBA8, malloc'd. -ENOENT when there is none. */
 int  rx_artwork_rgba(const char *path, uint8_t **rgba, int *width, int *height);
-/* The embedded cover's original bytes and their codec name ("mjpeg", "png"),
- * -ENOENT when none. */
+/* The cover's original encoded bytes and their codec name ("mjpeg", "png",
+ * "webp"): the embedded picture, else the same directory lookup as
+ * rx_artwork_rgba (the file's bytes). -ENOENT when none. */
 int  rx_artwork_raw(const char *path, uint8_t **data, size_t *size, char codec[16]);
+/* The directory lookup alone: the chosen image file's path, or -ENOENT. */
+int  rx_artwork_find_file(const char *audio_path, char **image_path);
 /* Decodes an image file in memory (JPEG, PNG, WebP ...) to RGBA8. */
 int  rx_image_decode(const uint8_t *data, size_t size, uint8_t **rgba, int *width, int *height);
 /* Scales (box filter, aspect kept, centred on black) to size x size and
