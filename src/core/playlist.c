@@ -1040,6 +1040,18 @@ int rx_library_playlist_import_m3u(RxLibrary *lib, RxPlaylistFolder *in, const c
         ids[nb++] = t->id;
     }
 
+    /* Entries but none usable: a playlist of nothing would only look like
+     * a successful import. (A file with no entries at all is an empty
+     * playlist, and is imported as one.) */
+    if (!nb && skipped) {
+        rx_err("%s: none of its %d entr%s can be found; nothing imported", abs, skipped,
+               skipped == 1 ? "y" : "ies");
+        ret = RX_ERROR(ENOENT);
+        goto end;
+    }
+    if (!nb)
+        rx_warn("%s has no entries; importing it as an empty playlist", abs);
+
     char *name = display_name(abs);
     RxPlaylist *p = name ? rx_library_playlist_create(lib, in, name) : NULL;
     free(name);
@@ -1067,24 +1079,33 @@ end:
     return ret;
 }
 
-/* `to` relative to the directory `from`, both absolute and normalised. */
+/* `to` relative to the directory `from`, both absolute and normalised
+ * (no trailing '/' except for "/" itself). */
 static char *relative_path(const char *from, const char *to)
 {
+    /* `common`: where the uncommon part of `to` starts; `up`: where the
+     * components of `from` that have to be climbed out of start. */
     size_t i = 0, common = 0;
     while (from[i] && from[i] == to[i]) {
         if (from[i] == '/')
             common = i + 1;
         i++;
     }
-    if (!from[i] && (to[i] == '/' || !to[i]))
-        common = to[i] ? i + 1 : i;
+    size_t up = common;
+    if (!from[i] && to[i] == '/') {
+        /* `from` is an ancestor of `to`: nothing to climb. */
+        common = i + 1;
+        up = i;
+    }
 
     int ups = 0;
-    for (const char *s = from + common; *s; ) {
-        ups++;
-        s = strchrnul(s, '/');
+    for (const char *s = from + up; *s; ) {
         while (*s == '/')
             s++;
+        if (!*s)
+            break;
+        ups++;
+        s = strchrnul(s, '/');
     }
 
     size_t rest = strlen(to + common);

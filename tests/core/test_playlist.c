@@ -4,7 +4,9 @@
  * (add, move, remove, no duplicates), reparenting, deletion with its
  * cascade, positions dense after every edit (checked in SQL), the tree
  * after a reopen, and m3u8 export and import (relative paths, order
- * prefix, BOM, CRLF, file:// URLs, missing and new files). */
+ * prefix, BOM, CRLF, file:// URLs, missing and new files), with export
+ * and re-import round trips from every kind of directory relative to the
+ * audio. */
 
 #include "rxbox/library.h"
 
@@ -208,6 +210,79 @@ static void test_m3u(const char *dir, const char *root, const char *music)
     free(exp_dir);
 }
 
+static int nb_playlists(const RxLibrary *lib)
+{
+    return sql_int(lib, "SELECT count(*) FROM playlist WHERE is_folder = 0");
+}
+
+/* Export wherever the playlist file goes relative to the audio, and read
+ * it back: the same tracks every time. */
+static void test_m3u_roundtrip(const char *dir, const char *root)
+{
+    RxLibrary lib;
+    CHECK(rx_library_open(&lib, root) == 0);
+    RxPlaylist *p = rx_library_playlist_find(&lib, "Warm-up");
+    CHECK(p != NULL);
+    if (!p)
+        return;
+
+    static const struct { const char *file, *line; } places[] = {
+        { "list.m3u8",               "\nmusic/a.wav\n" },          /* above the audio */
+        { "music/here.m3u8",         "\na.wav\n" },                /* next to it */
+        { "export/deep/er/x.m3u8",   "\n../../../music/a.wav\n" }, /* elsewhere, deeper */
+        { "export/side.m3u8",        "\n../music/a.wav\n" },       /* a sibling */
+    };
+    for (size_t i = 0; i < RX_ARRAY_ELEMS(places); i++) {
+        char *m3u = rx_asprintf("%s/%s", dir, places[i].file);
+        char *sub = rx_strdup(m3u);
+        *strrchr(sub, '/') = '\0';
+        rx_mkdir_p(sub);
+        free(sub);
+
+        CHECK(rx_library_playlist_export_m3u(&lib, p, m3u) == 0);
+        uint8_t *text = NULL;
+        size_t size;
+        rx_file_read(m3u, &text, &size);
+        if (!text || !strstr((char *)text, places[i].line)) {
+            fprintf(stderr, "%s: expected a line '%s' in:\n%s\n", places[i].file, places[i].line + 1,
+                    text ? (char *)text : "(unreadable)");
+            test_failures++;
+        }
+        free(text);
+
+        int before = nb_playlists(&lib);
+        RxPlaylist *back = NULL;
+        CHECK(rx_library_playlist_import_m3u(&lib, NULL, m3u, &back) == 3);
+        CHECK(nb_playlists(&lib) == before + 1);
+        CHECK(back && ids_are(back, IDS(1, 2, 3)));
+        free(m3u);
+    }
+
+    /* Nothing in the file can be found: an error, and no playlist. */
+    char *gone = rx_asprintf("%s/export/gone.m3u8", dir);
+    FILE *f = fopen(gone, "w");
+    fputs("#EXTM3U\n../music/none1.wav\n../music/none2.wav\n", f);
+    fclose(f);
+    int before = nb_playlists(&lib);
+    RxPlaylist *back = (RxPlaylist *)1;
+    CHECK(rx_library_playlist_import_m3u(&lib, NULL, gone, &back) == RX_ERROR(ENOENT));
+    CHECK(!back && nb_playlists(&lib) == before && !rx_library_playlist_find(&lib, "gone"));
+    free(gone);
+
+    /* A file with no entries at all is an empty playlist. */
+    char *empty = rx_asprintf("%s/export/empty.m3u8", dir);
+    f = fopen(empty, "w");
+    fputs("#EXTM3U\n", f);
+    fclose(f);
+    CHECK(rx_library_playlist_import_m3u(&lib, NULL, empty, &back) == 0);
+    CHECK(back && back->nb == 0 && !strcmp(back->name, "empty"));
+    free(empty);
+
+    CHECK(dense(&lib));
+    CHECK(rx_library_check(&lib) == 0);
+    rx_library_close(&lib);
+}
+
 int main(void)
 {
     char *dir = test_dir("playlist");
@@ -223,6 +298,7 @@ int main(void)
 
     test_tree(root, music);
     test_m3u(dir, root, music);
+    test_m3u_roundtrip(dir, root);
 
     if (!test_failures)
         test_rm_rf(dir);
