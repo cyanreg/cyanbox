@@ -17,7 +17,7 @@ typedef struct RxJobs RxJobs;
 enum RxJobKind {
     RX_JOB_ANALYSE,     /* decode + analyse: result->analysis */
     RX_JOB_DECODE,      /* decode for a deck: result->audio */
-    RX_JOB_ARTWORK,     /* cover art RGBA: result->rgba */
+    RX_JOB_ARTWORK,     /* cover art RGBA: result->rgba, and result->jpeg */
 };
 
 typedef struct RxJobResult {
@@ -30,6 +30,8 @@ typedef struct RxJobResult {
     RxAnalysis *analysis;       /* owned by the receiver */
     RxAudio    *audio;          /* owned by the receiver */
     uint8_t    *rgba; int width, height;
+    uint8_t    *jpeg; size_t jpeg_size;   /* RX_JOB_ARTWORK: the library's 240 px thumbnail
+                                             (rx_image_jpeg_square), NULL if it failed */
 } RxJobResult;
 
 int  rx_jobs_create(RxJobs **j, int threads);

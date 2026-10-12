@@ -5,8 +5,8 @@
 
 /* The application: everything the interface reads and writes, owned by
  * the main thread. main.c creates it and runs the loop; src/ui builds the
- * ImGui frame from it; src/app.c applies job results, saves sidecars and
- * caches, loads decks. */
+ * ImGui frame from it; src/app/app.c applies job results, saves tracks to
+ * the library, loads decks. */
 
 #include "rxbox/library.h"
 #include "rxbox/player.h"
@@ -19,7 +19,7 @@ typedef struct RxDeckView {
     RxTrack   *track;               /* loaded track (library's), or NULL */
     uint64_t   loading_request;     /* rx_jobs_decode in flight, 0 none */
     uint64_t   loading_track_id;
-    RxWaveforms waves;              /* loaded from the cache; nb_detail == 0 when none */
+    RxWaveforms waves;              /* from the library; nb_detail == 0 when none */
     RxWaveGpu *wave_preview;        /* PWV6 / PWAV / PWV4 per palette */
     RxWaveGpu *wave_detail;         /* PWV7 / PWV3 / PWV5 */
     uint64_t   artwork;             /* texture or 0 */
@@ -56,16 +56,26 @@ typedef struct RxApp {
     int64_t    status_time;
     unsigned   last_error_count;
 
-    /* Export dialog state */
+    /* Export dialog state. rx_app_start_export() analyses what the
+     * selected tracks lack, then dry-runs; when the dry run finds files to
+     * prune or player changes not synced back, it stops with `confirm` set:
+     * the interface shows prune_list / unsynced, sets `prune` /
+     * `ignore_unsynced` from the answer and calls rx_app_start_export()
+     * again for the real run (or sets `cancel`). */
     struct {
         bool   open;
         char   dest[512];
-        bool   running;
+        bool   running;             /* from the start until the end, confirmation included */
         bool   prune, compat;
-        bool   cancel;              /* set by the interface to stop a running export */
-        RxPlaylist **playlists;     /* only these and their tracks; NULL/0 = the whole library.
+        bool   whole_library;       /* every track, not only those in playlists */
+        bool   ignore_unsynced;     /* export although the stick has changes not synced back */
+        bool   cancel;              /* set by the interface to stop the export */
+        RxPlaylist **playlists;     /* only these and their tracks; NULL/0 = every playlist.
                                        The interface owns the array; read at start */
         int    nb_playlists;
+        bool   confirm;             /* waiting for the interface's answer (see above) */
+        char **prune_list; int nb_prune;   /* stick files the export would delete (owned here) */
+        int    unsynced;            /* "check" items about changes not synced back */
         int    done, total;
         char   stage[32];
         char   item[256];
@@ -73,7 +83,7 @@ typedef struct RxApp {
         int    result;
     } export_state;
 
-    /* Interface preferences (persisted in rxbox.toml [ui]) */
+    /* Interface preferences (persisted in the library's ui.* settings) */
     int        wave_palette;        /* 0 3band, 1 blue, 2 rgb */
     bool       show_demo;           /* ImGui demo window (debug) */
     bool       dirty;               /* the next frame must be drawn */
@@ -100,17 +110,28 @@ void rx_app_unload_deck(RxApp *app, int deck);
 int  rx_app_analyse_track(RxApp *app, RxTrack *t, unsigned what, bool force);
 int  rx_app_analyse_all(RxApp *app, bool force);     /* everything not yet analysed */
 /* Which of `what` (RxAnalyseWhat) a track still lacks; everything asked
- * when force. A track without a waveform cache file always needs waves; a
- * locked grid never needs beats unless force. Needs only app->lib. */
+ * when force. A track without waveforms in the library always needs them;
+ * a locked grid never needs beats unless force; a missing file needs
+ * nothing (it cannot be read). Needs only app->lib. */
 unsigned rx_app_analysis_needed(const RxApp *app, const RxTrack *t, unsigned what, bool force);
 int  rx_app_add_path(RxApp *app, const char *path);  /* add + queue analysis */
-void rx_app_save_track(RxApp *app, RxTrack *t);      /* sidecar now */
+void rx_app_save_track(RxApp *app, RxTrack *t);      /* to the library now */
 void rx_app_set_status(RxApp *app, const char *fmt, ...) RX_PRINTF(2, 3);
 void rx_app_rebuild_rows(RxApp *app);
 int  rx_app_start_export(RxApp *app);                /* from export_state */
 /* Applies a finished analysis to a track: grid (unless locked), key,
- * waveform cache, auto cues; saves the sidecar. */
+ * waveforms, auto cues; saves the track. */
 int  rx_app_apply_analysis(RxApp *app, RxTrack *t, RxAnalysis *a);
+/* Re-checks which audio files are missing; returns how many changed. */
+int  rx_app_rescan(RxApp *app);
+/* For the browser: a track's cover thumbnail texture and its PWV6 preview
+ * (3-band, 1200 columns) on the GPU, made on demand from the library (an
+ * artwork job when the library has no thumbnail yet; it is stored there)
+ * and cached, the least recently asked for released beyond a few hundred.
+ * 0 / NULL while being made or when there is none. Window only; valid
+ * until the next rx_app_tick. */
+uint64_t   rx_app_artwork_texture(RxApp *app, const RxTrack *t);
+RxWaveGpu *rx_app_preview_wave(RxApp *app, const RxTrack *t);
 
 /* The interface (src/ui, C++). */
 int  rx_ui_init(RxApp *app);
