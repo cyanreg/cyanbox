@@ -37,10 +37,9 @@
 #include <dirent.h>
 #include <math.h>
 #include <stdio.h>
+#include <sys/random.h>
 #include <sys/stat.h>
 #include <unistd.h>
-
-#include <openssl/rand.h>
 
 #include "rxbox/colors.h"
 #include "src/export/export_priv.h"
@@ -253,7 +252,7 @@ int rx_sync_record_from_plan(const RxPlan *plan, RxSyncRecord *r)
 {
     *r = (RxSyncRecord) { 0 };
     uint8_t u[8];
-    if (RAND_bytes(u, sizeof(u)) != 1)
+    if (getrandom(u, sizeof(u), 0) != (ssize_t)sizeof(u))
         return RX_ERROR(EIO);
     for (int i = 0; i < 8; i++)
         snprintf(r->uuid + 2 * i, 3, "%02x", u[i]);
@@ -289,7 +288,7 @@ int rx_sync_library_key(RxLibrary *lib, char key[33])
     }
     free(v);
     uint8_t u[16];
-    if (RAND_bytes(u, sizeof(u)) != 1)
+    if (getrandom(u, sizeof(u), 0) != (ssize_t)sizeof(u))
         return RX_ERROR(EIO);
     for (int i = 0; i < 16; i++)
         snprintf(key + 2 * i, 3, "%02x", u[i]);

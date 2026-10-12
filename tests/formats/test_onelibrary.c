@@ -7,13 +7,15 @@
 
 #include <stdio.h>
 
-#include <openssl/evp.h>
-#include <openssl/hmac.h>
+#include <libavutil/aes.h>
+#include <libavutil/hmac.h>
+#include <libavutil/mem.h>
 
 #include "rxbox/formats.h"
 
 #include "src/formats/buf.h"
 #include "src/formats/formats_priv.h"
+#include "src/formats/sha512.h"
 #include "tests/formats/test.h"
 
 static int64_t query_int(sqlite3 *db, const char *sql)
@@ -275,36 +277,152 @@ static void roundtrip(void)
     free(paths);
 }
 
-/* A WAL frame the way SQLCipher writes one: page `pgno` (zeros), encrypted
- * and authenticated with the database's keys (docs/onelibrary.md 1.1), so
- * that only the reader's own checks can refuse it. */
-static void wal_frame(uint8_t *f, const uint8_t salt[16], uint32_t pgno, uint32_t commit,
-                      const uint8_t wal_salt[8])
+static void check_hex(const uint8_t *d, size_t n, const char *want, const char *what)
 {
-    uint8_t key[32], mac[32], mac_salt[16];
+    char hex[2 * 128 + 1];
+    for (size_t i = 0; i < n; i++)
+        snprintf(hex + 2 * i, 3, "%02x", d[i]);
+    if (strcmp(hex, want)) {
+        fprintf(stderr, "%s: %s, want %s\n", what, hex, want);
+        failures++;
+    }
+}
+
+/* sha512.h against the published vectors: FIPS 180-4's examples (and the
+ * empty message), RFC 4231's HMAC-SHA-512 cases 1-4 and 6 (a key longer
+ * than a block), and PBKDF2-HMAC-SHA512 of "password"/"salt" as the RFC
+ * 6070 cases give it for SHA-1 (values from Python's hashlib, which match
+ * the commonly published ones). */
+static void crypto_vectors(void)
+{
+    static const char m896[] = "abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmn"
+                               "hijklmnoijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu";
+    static const struct { const char *msg; const char *want; } sha[] = {
+        { "abc", "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a"
+                 "2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f" },
+        { m896,  "8e959b75dae313da8cf4f72814fc143f8f7779c6eb9f7fa17299aeadb6889018"
+                 "501d289e4900f7e4331b99dec4b5433ac7d329eeb6dd26545e96e55b874be909" },
+        { "",    "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce"
+                 "47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e" },
+    };
+    uint8_t out[128];
+    for (size_t i = 0; i < RX_ARRAY_ELEMS(sha); i++) {
+        RxSHA512 s;
+        rx_sha512_init(&s);
+        rx_sha512_update(&s, (const uint8_t *)sha[i].msg, strlen(sha[i].msg));
+        rx_sha512_final(&s, out);
+        check_hex(out, 64, sha[i].want, "sha512");
+    }
+    /* The two-block message in uneven pieces, through the partial-block
+     * paths of update. */
+    RxSHA512 pieces;
+    rx_sha512_init(&pieces);
+    for (size_t pos = 0, step = 1; pos < strlen(m896); pos += step, step = step * 3 % 37 + 1)
+        rx_sha512_update(&pieces, (const uint8_t *)m896 + pos, RX_MIN(step, strlen(m896) - pos));
+    rx_sha512_final(&pieces, out);
+    check_hex(out, 64, sha[1].want, "sha512 in pieces");
+
+    uint8_t key1[20], key3[20], key4[25], key6[131], data3[50], data4[50];
+    memset(key1, 0x0b, sizeof(key1));
+    memset(key3, 0xaa, sizeof(key3));
+    memset(data3, 0xdd, sizeof(data3));
+    for (int i = 0; i < 25; i++)
+        key4[i] = (uint8_t)(i + 1);
+    memset(data4, 0xcd, sizeof(data4));
+    memset(key6, 0xaa, sizeof(key6));
+    static const char *case6 = "Test Using Larger Than Block-Size Key - Hash Key First";
+    const struct {
+        const uint8_t *key, *data;
+        size_t key_len, len;
+        const char *want;
+    } mac[] = {
+        { key1, (const uint8_t *)"Hi There", sizeof(key1), 8,
+          "87aa7cdea5ef619d4ff0b4241a1d6cb02379f4e2ce4ec2787ad0b30545e17cde"
+          "daa833b7d6b8a702038b274eaea3f4e4be9d914eeb61f1702e696c203a126854" },
+        { (const uint8_t *)"Jefe", (const uint8_t *)"what do ya want for nothing?", 4, 28,
+          "164b7a7bfcf819e2e395fbe73b56e0a387bd64222e831fd610270cd7ea250554"
+          "9758bf75c05a994a6d034f65f8f0e6fdcaeab1a34d4a6b4b636e070a38bce737" },
+        { key3, data3, sizeof(key3), sizeof(data3),
+          "fa73b0089d56a284efb0f0756c890be9b1b5dbdd8ee81a3655f83e33b2279d39"
+          "bf3e848279a722c806b485a47e67c807b946a337bee8942674278859e13292fb" },
+        { key4, data4, sizeof(key4), sizeof(data4),
+          "b0ba465637458c6990e5a8c5f61d4af7e576d97ff94b872de76f8050361ee3db"
+          "a91ca5c11aa25eb4d679275cc5788063a5f19741120c4f2de2adebeb10a298dd" },
+        { key6, (const uint8_t *)case6, sizeof(key6), strlen(case6),
+          "80b24263c7c1a3ebb71493c1dd7be8b49b46d1f41b4aeec1121b013783f8f352"
+          "6b56d037e05f2598bd0fd2215d6a1e5295e64f73f63f0aec8b915a985d786598" },
+    };
+    for (size_t i = 0; i < RX_ARRAY_ELEMS(mac); i++) {
+        RxHMACSHA512 h;
+        rx_hmac_sha512_init(&h, mac[i].key, mac[i].key_len);
+        /* Twice: final leaves the context keyed for the next message. */
+        for (int k = 0; k < 2; k++) {
+            rx_hmac_sha512_update(&h, mac[i].data, mac[i].len);
+            rx_hmac_sha512_final(&h, out);
+            check_hex(out, 64, mac[i].want, "hmac-sha512");
+        }
+    }
+
+    static const struct { unsigned iter; size_t len; const char *pass, *salt, *want; } kdf[] = {
+        { 1, 64, "password", "salt",
+          "867f70cf1ade02cff3752599a3a53dc4af34c7a669815ae5d513554e1c8cf252"
+          "c02d470a285a0501bad999bfe943c08f050235d7d68b1da55e63f73b60a57fce" },
+        { 2, 64, "password", "salt",
+          "e1d9c16aa681708a45f5c7c4e215ceb66e011a2e9f0040713f18aefdb866d53c"
+          "f76cab2868a39b9f7840edce4fef5a82be67335c77a6068e04112754f27ccf4e" },
+        { 4096, 64, "password", "salt",
+          "d197b1b33db0143e018b12f3d1d1479e6cdebdcc97c5c0f87f6902e072f457b5"
+          "143f30602641b3d55cd335988cb36b84376060ecd532e039b742a239434af2d5" },
+        /* Two blocks of output, the second cut short. */
+        { 4096, 100, "passwordPASSWORDpassword", "saltSALTsaltSALTsaltSALTsaltSALTsalt",
+          "8c0511f4c6e597c6ac6315d8f0362e225f3c501495ba23b868c005174dc4ee71"
+          "115b59f9e60cd9532fa33e0f75aefe30225c583a186cd82bd4daea9724a3d3b8"
+          "04f75bdd41494fa324cab24bcc680fb3b96a30cf5d21fac3c2875913919f3399"
+          "b1d9ce7e" },
+    };
+    for (size_t i = 0; i < RX_ARRAY_ELEMS(kdf); i++) {
+        rx_pbkdf2_sha512((const uint8_t *)kdf[i].pass, strlen(kdf[i].pass),
+                         (const uint8_t *)kdf[i].salt, strlen(kdf[i].salt), kdf[i].iter,
+                         out, kdf[i].len);
+        check_hex(out, kdf[i].len, kdf[i].want, "pbkdf2-hmac-sha512");
+    }
+}
+
+/* The keys of the database whose page 1 starts with `salt`
+ * (docs/onelibrary.md 1.1). */
+static void frame_keys(const uint8_t salt[16], uint8_t key[32], uint8_t mac[32])
+{
+    uint8_t mac_salt[16];
     for (int i = 0; i < 16; i++)
         mac_salt[i] = salt[i] ^ 0x3A;
-    PKCS5_PBKDF2_HMAC(rx_onelibrary_passphrase, (int)strlen(rx_onelibrary_passphrase), salt, 16, 256000,
-                      EVP_sha512(), 32, key);
-    PKCS5_PBKDF2_HMAC((const char *)key, 32, mac_salt, 16, 2, EVP_sha512(), 32, mac);
+    rx_pbkdf2_sha512((const uint8_t *)rx_onelibrary_passphrase, strlen(rx_onelibrary_passphrase),
+                     salt, 16, 256000, key, 32);
+    rx_pbkdf2_sha512(key, 32, mac_salt, 16, 2, mac, 32);
+}
+
+/* A WAL frame the way SQLCipher writes one: page `pgno` (zeros), encrypted
+ * and authenticated with the database's keys, so that only the reader's
+ * own checks can refuse it. The tag is av_hmac's, apart from the codec's
+ * HMAC. */
+static void wal_frame(uint8_t *f, const uint8_t key[32], const uint8_t mac[32], uint32_t pgno,
+                      uint32_t commit, const uint8_t wal_salt[8])
+{
     memset(f, 0, 24 + 4096);
     rx_wr_be32(f, pgno);
     rx_wr_be32(f + 4, commit);
     memcpy(f + 8, wal_salt, 8);
     uint8_t *page = f + 24, plain[4096 - 80] = { 0 }, iv[16] = { 7 };
-    EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
-    int len = 0, fin = 0;
-    EVP_EncryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, key, iv);
-    EVP_CIPHER_CTX_set_padding(ctx, 0);
-    EVP_EncryptUpdate(ctx, page, &len, plain, sizeof(plain));
-    EVP_EncryptFinal_ex(ctx, page + len, &fin);
-    EVP_CIPHER_CTX_free(ctx);
     memcpy(page + 4096 - 80, iv, 16);
+    struct AVAES *aes = av_aes_alloc();
+    av_aes_init(aes, key, 256, 0);
+    av_aes_crypt(aes, page, plain, sizeof(plain) / 16, iv, 0);
+    av_free(aes);
     uint8_t buf[4096 - 80 + 16 + 4];
     memcpy(buf, page, 4096 - 80 + 16);
     rx_wr_le32(buf + 4096 - 80 + 16, pgno);
-    unsigned ml = 64;
-    HMAC(EVP_sha512(), mac, 32, buf, sizeof(buf), page + 4096 - 80 + 16, &ml);
+    AVHMAC *h = av_hmac_alloc(AV_HMAC_SHA512);
+    av_hmac_calc(h, buf, sizeof(buf), mac, 32, page + 4096 - 80 + 16, 64);
+    av_hmac_free(h);
 }
 
 /* A -wal next to the database is input another program wrote: a frame
@@ -325,12 +443,14 @@ static void hostile_wal(void)
     uint8_t *plain, *ref;
     size_t plain_size, ref_size;
     CHECK_EQ(rx_sqlcipher_decrypt(db_bytes, db_size, rx_onelibrary_passphrase, wal, wal_size, &ref, &ref_size), 0);
+    uint8_t key[32], mac[32];
+    frame_keys(db_bytes, key, mac);
 
     /* The fixture's WAL plus one committed frame for page 2^18 (1 GiB). */
     size_t n = wal_size + 24 + 4096;
     uint8_t *w = malloc(n);
     memcpy(w, wal, wal_size);
-    wal_frame(w + wal_size, db_bytes, 1u << 18, 1u << 18, wal + 16);
+    wal_frame(w + wal_size, key, mac, 1u << 18, 1u << 18, wal + 16);
     int ret = rx_sqlcipher_decrypt(db_bytes, db_size, rx_onelibrary_passphrase, w, n, &plain, &plain_size);
     CHECK(ret < 0 || plain_size == ref_size);
     if (ret >= 0)
@@ -339,7 +459,7 @@ static void hostile_wal(void)
     /* A frame of an older generation (salts differ) after the valid ones:
      * ignored, the database is the fixture's. */
     uint8_t old_salt[8] = { 1, 2, 3, 4, 5, 6, 7, 8 };
-    wal_frame(w + wal_size, db_bytes, 2, (uint32_t)(db_size / 4096), old_salt);
+    wal_frame(w + wal_size, key, mac, 2, (uint32_t)(db_size / 4096), old_salt);
     CHECK_EQ(rx_sqlcipher_decrypt(db_bytes, db_size, rx_onelibrary_passphrase, w, n, &plain, &plain_size), 0);
     CHECK(plain_size == ref_size && !memcmp(plain, ref, ref_size));
     free(plain);
@@ -347,7 +467,7 @@ static void hostile_wal(void)
     /* A torn last frame (its page does not authenticate): the committed
      * frames before it still count. */
     memcpy(w, wal, wal_size);
-    wal_frame(w + wal_size, db_bytes, 2, (uint32_t)(db_size / 4096), wal + 16);
+    wal_frame(w + wal_size, key, mac, 2, (uint32_t)(db_size / 4096), wal + 16);
     w[wal_size + 24 + 100] ^= 1;
     CHECK_EQ(rx_sqlcipher_decrypt(db_bytes, db_size, rx_onelibrary_passphrase, w, n, &plain, &plain_size), 0);
     CHECK(plain_size == ref_size && !memcmp(plain, ref, ref_size));
@@ -392,6 +512,7 @@ static void bare_track(void)
 
 int main(void)
 {
+    crypto_vectors();
     reads_rekordbox();
     roundtrip();
     hostile_wal();

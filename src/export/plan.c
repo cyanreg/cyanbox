@@ -29,7 +29,8 @@
 #include <time.h>
 #include <unistd.h>
 
-#include <openssl/evp.h>
+#include <libavutil/mem.h>
+#include <libavutil/sha.h>
 
 #include "rxbox/colors.h"
 #include "rxbox/notation.h"
@@ -707,14 +708,18 @@ static uint32_t artwork_for(Artwork *aw, const RxTrack *t, rx_progress_cb cb, vo
     char codec[16];
     if (rx_artwork_raw(t->path, &raw, &size, codec) < 0)
         return 0;
-    unsigned char md[EVP_MAX_MD_SIZE];
-    unsigned mdlen = 0;
-    char hex[2 * EVP_MAX_MD_SIZE + 1];
-    if (!EVP_Digest(raw, size, md, &mdlen, EVP_sha1(), NULL)) {
+    uint8_t md[20];
+    char hex[2 * sizeof(md) + 1];
+    struct AVSHA *sha = av_sha_alloc();
+    if (!sha) {
         free(raw);
         return 0;
     }
-    for (unsigned i = 0; i < mdlen; i++)
+    av_sha_init(sha, 160);
+    av_sha_update(sha, raw, size);
+    av_sha_final(sha, md);
+    av_free(sha);
+    for (size_t i = 0; i < sizeof(md); i++)
         snprintf(hex + 2 * i, 3, "%02x", md[i]);
     uint32_t *known = strmap_get(&aw->ids, hex);
     if (known) {

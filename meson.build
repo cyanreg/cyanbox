@@ -54,7 +54,6 @@ libavutil    = dependency('libavutil')
 libswresample = dependency('libswresample')
 libswscale   = dependency('libswscale')
 sqlite3_dep  = dependency('sqlite3')
-openssl_dep  = dependency('openssl')      # SQLCipher pages: AES-256-CBC, HMAC-SHA512, PBKDF2
 vulkan_dep   = dependency('vulkan')
 sdl3_dep     = dependency('sdl3')
 pipewire_dep = dependency('libpipewire-0.3')

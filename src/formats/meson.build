@@ -1,4 +1,4 @@
-# formats: export.pdb, ANLZ, OneLibrary (sqlite3 + SQLCipher via OpenSSL), settings, colours.
+# formats: export.pdb, ANLZ, OneLibrary (sqlite3 + SQLCipher), settings, colours.
 rx_formats_lib = static_library('rx_formats',
     files(
         'anlz.c',
@@ -10,10 +10,10 @@ rx_formats_lib = static_library('rx_formats',
         'util.c',
     ),
     include_directories: rx_inc,
-    dependencies: [ rx_analysis_dep, sqlite3_dep, openssl_dep, m_dep ],
+    dependencies: [ rx_analysis_dep, sqlite3_dep, libavutil, m_dep ],
 )
 rx_formats_dep = declare_dependency(link_with: rx_formats_lib,
-                                    dependencies: [ rx_analysis_dep, sqlite3_dep, openssl_dep, m_dep ])
+                                    dependencies: [ rx_analysis_dep, sqlite3_dep, libavutil, m_dep ])
 
 # Tests run from the source root so they find tests/data.
 foreach t : [ 'colors', 'util', 'pdb', 'anlz', 'settings', 'onelibrary', 'fuzz' ]

@@ -17,17 +17,23 @@
  * limits, which dj did not check: only frames carrying the WAL header's
  * salts and authenticating count, the first that does not ends the log
  * (a frame of an older generation, or one torn by an unplugged stick), and
- * a page number must lie within what the file and the log can hold. */
+ * a page number must lie within what the file and the log can hold.
+ *
+ * Nothing here links a libcrypto of its own; libavformat already brings
+ * in two (its own and libcurl's). AES is libavutil's; SHA-512, HMAC and
+ * PBKDF2 are sha512.h's, which keeps the HMAC pad states so the 256000
+ * rounds of the key derivation cost two compressions each. */
 
 #include "rxbox/formats.h"
 
-#include <openssl/crypto.h>
-#include <openssl/evp.h>
-#include <openssl/hmac.h>
-#include <openssl/rand.h>
+#include <sys/random.h>
+
+#include <libavutil/aes.h>
+#include <libavutil/mem.h>
 
 #include "src/formats/buf.h"
 #include "src/formats/formats_priv.h"
+#include "src/formats/sha512.h"
 
 #define PAGE    RX_SQLCIPHER_PAGE
 #define RESERVE RX_SQLCIPHER_RESERVE
@@ -37,68 +43,114 @@
 
 static const uint8_t sqlite_magic[16] = "SQLite format 3";
 
-static int derive_keys(const char *passphrase, const uint8_t salt[SALT], uint8_t key[32], uint8_t mac[32])
+/* The keys of one database: the AES-256 schedule for one direction and the
+ * HMAC keyed with the page-HMAC key. */
+typedef struct Codec {
+    struct AVAES *aes;
+    RxHMACSHA512 hmac;
+    bool decrypt;
+} Codec;
+
+static void codec_free(Codec *c)
 {
-    uint8_t mac_salt[SALT];
+    if (c->aes)
+        memset_explicit(c->aes, 0, av_aes_size);
+    av_freep(&c->aes);
+    memset_explicit(c, 0, sizeof(*c));
+}
+
+/* key = PBKDF2(passphrase, salt, 256000), HMAC key = PBKDF2(key, salt ^ 0x3A, 2),
+ * both 32 bytes (SQLCipher 4's defaults, docs/onelibrary.md 1.1). */
+static int codec_init(Codec *c, const char *passphrase, const uint8_t salt[SALT], bool decrypt)
+{
+    *c = (Codec) { .decrypt = decrypt };
+    c->aes = av_aes_alloc();
+    if (!c->aes)
+        return RX_ERROR(ENOMEM);
+
+    uint8_t key[32], mac[32], mac_salt[SALT];
     for (int i = 0; i < SALT; i++)
         mac_salt[i] = salt[i] ^ 0x3A;
-    if (!PKCS5_PBKDF2_HMAC(passphrase, (int)strlen(passphrase), salt, SALT, KDF_ITER,
-                           EVP_sha512(), 32, key) ||
-        !PKCS5_PBKDF2_HMAC((const char *)key, 32, mac_salt, SALT, 2, EVP_sha512(), 32, mac))
+    rx_pbkdf2_sha512((const uint8_t *)passphrase, strlen(passphrase), salt, SALT, KDF_ITER,
+                     key, sizeof(key));
+    rx_pbkdf2_sha512(key, sizeof(key), mac_salt, SALT, 2, mac, sizeof(mac));
+    rx_hmac_sha512_init(&c->hmac, mac, sizeof(mac));
+    int ret = av_aes_init(c->aes, key, 256, decrypt);
+    memset_explicit(key, 0, sizeof(key));
+    memset_explicit(mac, 0, sizeof(mac));
+    if (ret < 0) {
+        codec_free(c);
         return RX_ERROR(EIO);
+    }
     return 0;
 }
 
-/* HMAC-SHA512(mac_key, data || pgno LE). */
-static int page_hmac(const uint8_t mac[32], const uint8_t *data, size_t n, uint32_t pgno, uint8_t out[64])
+/* HMAC-SHA512(mac key, data || pgno LE). */
+static void page_hmac(Codec *c, const uint8_t *data, size_t n, uint32_t pgno, uint8_t out[64])
 {
-    uint8_t buf[PAGE + 4];
-    memcpy(buf, data, n);
-    rx_wr_le32(buf + n, pgno);
-    unsigned len = 64;
-    if (!HMAC(EVP_sha512(), mac, 32, buf, n + 4, out, &len) || len != 64)
-        return RX_ERROR(EIO);
-    return 0;
+    uint8_t le[4];
+    rx_wr_le32(le, pgno);
+    rx_hmac_sha512_update(&c->hmac, data, n);
+    rx_hmac_sha512_update(&c->hmac, le, sizeof(le));
+    rx_hmac_sha512_final(&c->hmac, out);
 }
 
-static int aes_cbc(const uint8_t key[32], const uint8_t iv[IV], const uint8_t *in, size_t n,
-                   uint8_t *out, bool encrypt)
+/* AES-256-CBC over whole blocks (a page body is 4016 or 4000 bytes, no
+ * padding). av_aes_crypt advances the IV it is given, so it gets a copy. */
+static void aes_cbc(Codec *c, const uint8_t iv_in[IV], const uint8_t *in, size_t n, uint8_t *out)
 {
-    EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
-    if (!ctx)
-        return RX_ERROR(ENOMEM);
-    int ret = 0, len = 0, fin = 0;
-    if (!EVP_CipherInit_ex(ctx, EVP_aes_256_cbc(), NULL, key, iv, encrypt ? 1 : 0) ||
-        !EVP_CIPHER_CTX_set_padding(ctx, 0) ||
-        !EVP_CipherUpdate(ctx, out, &len, in, (int)n) ||
-        !EVP_CipherFinal_ex(ctx, out + len, &fin) || (size_t)(len + fin) != n)
-        ret = RX_ERROR(EIO);
-    EVP_CIPHER_CTX_free(ctx);
-    return ret;
+    uint8_t iv[IV];
+    memcpy(iv, iv_in, IV);
+    av_aes_crypt(c->aes, out, in, (int)(n / 16), iv, c->decrypt);
+}
+
+/* Constant time, as an HMAC comparison should be: how much of a forged
+ * page's tag matches must not show in how long its refusal takes. */
+static bool differ(const uint8_t *a, const uint8_t *b, size_t n)
+{
+    uint8_t d = 0;
+    for (size_t i = 0; i < n; i++)
+        d |= a[i] ^ b[i];
+    return d;
+}
+
+/* Salts and IVs from the kernel's CSPRNG. getrandom(2) blocks only until
+ * the pool is seeded, a wait a signal can interrupt; after that a request
+ * of up to 256 bytes is never short. */
+static int random_bytes(uint8_t *buf, size_t n)
+{
+    while (n) {
+        ssize_t got = getrandom(buf, n, 0);
+        if (got < 0) {
+            if (errno == EINTR)
+                continue;
+            return RX_ERROR(errno);
+        }
+        buf += got;
+        n -= (size_t)got;
+    }
+    return 0;
 }
 
 /* Decrypts one page into `out` (PAGE bytes): the SQLite magic for page 1,
  * the plaintext, zeros in the reserve. -EBADMSG on an HMAC mismatch
  * (wrong key or a corrupt file). */
-static int decrypt_page(const uint8_t *page, uint32_t pgno, const uint8_t key[32], const uint8_t mac[32],
-                        uint8_t *out)
+static int decrypt_page(Codec *c, const uint8_t *page, uint32_t pgno, uint8_t *out)
 {
     size_t off = pgno == 1 ? SALT : 0;
     const uint8_t *body = page + off;
     size_t n = PAGE - RESERVE - off;
     const uint8_t *iv = page + PAGE - RESERVE;
-    uint8_t want[64], tmp[PAGE];
-    memcpy(tmp, body, n);
-    memcpy(tmp + n, iv, IV);
-    int ret = page_hmac(mac, tmp, n + IV, pgno, want);
-    if (ret < 0)
-        return ret;
-    if (CRYPTO_memcmp(want, page + PAGE - RESERVE + IV, 64))
+    /* The HMAC covers ciphertext and IV, which sit next to each other. */
+    uint8_t want[64];
+    page_hmac(c, body, n + IV, pgno, want);
+    if (differ(want, iv + IV, sizeof(want)))
         return RX_ERROR(EBADMSG);
     memset(out, 0, PAGE);
     if (pgno == 1)
         memcpy(out, sqlite_magic, 16);
-    return aes_cbc(key, iv, body, n, out + off, false);
+    aes_cbc(c, iv, body, n, out + off);
+    return 0;
 }
 
 int rx_sqlcipher_decrypt(const uint8_t *data, size_t size, const char *passphrase,
@@ -108,17 +160,19 @@ int rx_sqlcipher_decrypt(const uint8_t *data, size_t size, const char *passphras
     *out_size = 0;
     if (size < PAGE)
         return RX_ERROR(EINVAL);
-    uint8_t key[32], mac[32];
-    int ret = derive_keys(passphrase, data, key, mac);
+    Codec c;
+    int ret = codec_init(&c, passphrase, data, true);
     if (ret < 0)
         return ret;
 
     size_t nb = size / PAGE;
     uint8_t *pages = malloc(nb * PAGE);
-    if (!pages)
-        return RX_ERROR(ENOMEM);
+    if (!pages) {
+        ret = RX_ERROR(ENOMEM);
+        goto fail;
+    }
     for (size_t i = 0; i < nb; i++)
-        if ((ret = decrypt_page(data + i * PAGE, (uint32_t)i + 1, key, mac, pages + i * PAGE)) < 0)
+        if ((ret = decrypt_page(&c, data + i * PAGE, (uint32_t)i + 1, pages + i * PAGE)) < 0)
             goto fail;
 
     /* WAL: a 32-byte header, then frames of a 24-byte header (page number
@@ -140,7 +194,7 @@ int rx_sqlcipher_decrypt(const uint8_t *data, size_t size, const char *passphras
                 if (((Pending *)rx_array_at(&pending, k))->pgno == pgno)
                     p = rx_array_at(&pending, k);
             uint8_t page[PAGE];
-            if (decrypt_page(wal + pos + 24, pgno, key, mac, page) < 0)
+            if (decrypt_page(&c, wal + pos + 24, pgno, page) < 0)
                 break;
             if (!p && !(p = rx_array_push(&pending, NULL))) {
                 ret = RX_ERROR(ENOMEM);
@@ -175,14 +229,12 @@ int rx_sqlcipher_decrypt(const uint8_t *data, size_t size, const char *passphras
     }
     *out = pages;
     *out_size = nb * PAGE;
-    OPENSSL_cleanse(key, sizeof(key));
-    OPENSSL_cleanse(mac, sizeof(mac));
+    codec_free(&c);
     return 0;
 
 fail:
     free(pages);
-    OPENSSL_cleanse(key, sizeof(key));
-    OPENSSL_cleanse(mac, sizeof(mac));
+    codec_free(&c);
     return ret;
 }
 
@@ -199,38 +251,35 @@ int rx_sqlcipher_encrypt(const uint8_t *plain, size_t size, const char *passphra
         return RX_ERROR(EINVAL);
 
     uint8_t salt[SALT];
+    int ret = 0;
     if (salt_in)
         memcpy(salt, salt_in, SALT);
-    else if (RAND_bytes(salt, SALT) != 1)
-        return RX_ERROR(EIO);
-    uint8_t key[32], mac[32];
-    int ret = derive_keys(passphrase, salt, key, mac);
-    if (ret < 0)
+    else if ((ret = random_bytes(salt, SALT)) < 0)
+        return ret;
+    Codec c;
+    if ((ret = codec_init(&c, passphrase, salt, false)) < 0)
         return ret;
 
     uint8_t *enc = malloc(size);
-    if (!enc)
+    if (!enc) {
+        codec_free(&c);
         return RX_ERROR(ENOMEM);
+    }
     for (size_t i = 0; i < size / PAGE; i++) {
         const uint8_t *page = plain + i * PAGE;
         uint8_t *dst = enc + i * PAGE;
         size_t off = i == 0 ? SALT : 0;
         size_t n = PAGE - RESERVE - off;
         uint8_t *iv = dst + PAGE - RESERVE;
-        if (RAND_bytes(iv, IV) != 1) {
-            ret = RX_ERROR(EIO);
+        if ((ret = random_bytes(iv, IV)) < 0)
             break;
-        }
         if (i == 0)
             memcpy(dst, salt, SALT);
-        if ((ret = aes_cbc(key, iv, page + off, n, dst + off, true)) < 0)
-            break;
+        aes_cbc(&c, iv, page + off, n, dst + off);
         /* The HMAC covers ciphertext and IV, which sit next to each other. */
-        if ((ret = page_hmac(mac, dst + off, n + IV, (uint32_t)i + 1, dst + PAGE - RESERVE + IV)) < 0)
-            break;
+        page_hmac(&c, dst + off, n + IV, (uint32_t)i + 1, dst + PAGE - RESERVE + IV);
     }
-    OPENSSL_cleanse(key, sizeof(key));
-    OPENSSL_cleanse(mac, sizeof(mac));
+    codec_free(&c);
     if (ret < 0) {
         free(enc);
         return ret;

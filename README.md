@@ -19,7 +19,6 @@ for `stdckdint.h`) and a C++17 compiler, `glslangValidator` (glslang) and
 
 - `libavformat`, `libavcodec`, `libavutil`, `libswresample`, `libswscale` (FFmpeg)
 - `sqlite3`
-- `openssl` (the SQLCipher pages of `exportLibrary.db`)
 - `libpipewire-0.3`
 - `vulkan`, `sdl3`, `wayland-client`, `fontconfig` (the interface)
 

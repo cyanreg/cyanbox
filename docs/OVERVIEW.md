@@ -128,7 +128,7 @@ Plus: an optional "maximum compatibility" transcode (AAC and hi-res FLAC to
 src/core      model, grid arithmetic, the SQLite library (tracks, cues, waveforms, playlists, settings), notation
 src/audio     libavformat/libavcodec decode to memory on the players' timeline, probe, tags, artwork, MP3/FLAC scanners
 src/analysis  spectral front end (libavutil av_tx), onset, tempo, grid, downbeat, key, waveforms
-src/formats   export.pdb, ANLZ read/write, OneLibrary (sqlite3 + SQLCipher pages through OpenSSL), My Settings, colours
+src/formats   export.pdb, ANLZ read/write, OneLibrary (sqlite3 + SQLCipher pages), My Settings, colours
 src/export    stick plan, writer, inspect, pull
 src/player    PipeWire stream, the player, lock-free command queue, cue/loop/quantize controls, null backend for tests
 src/gpu       SDL3 window (Wayland), Vulkan device + VMA, swapchain, Wayland frame-callback pacing, ImGui glue, waveform shader
