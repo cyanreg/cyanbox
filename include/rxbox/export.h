@@ -20,14 +20,24 @@
  * handled (may be NULL). Returning false cancels. */
 typedef bool (*rx_progress_cb)(void *opaque, const char *stage, int done, int total, const char *item);
 
+/* The export model (rekordbox's sync manager): one click exports the
+ * settings, every playlist, and the union of the tracks in them; nothing
+ * else. Files already on the stick with the same size and mtime are
+ * skipped; the ANLZ files, artwork, settings files and both databases are
+ * rewritten every time. Tracks no longer in any playlist are pruned (the
+ * interface lists them and asks once; the CLI needs --prune). A stick that
+ * holds player-written cues, history or presets not yet synced into the
+ * library blocks the export (reported as a "check" item) unless
+ * ignore_unsynced is set, so a gig's hot cues are never overwritten. */
 typedef struct RxExportOptions {
-    bool prune;                 /* delete files on the stick that are not in the library */
+    bool whole_library;         /* every track, not only those in playlists */
+    const RxPlaylist *const *playlists; int nb_playlists;   /* NULL: every playlist; else only these */
+    bool prune;                 /* delete files on the stick that are no longer exported */
+    bool ignore_unsynced;       /* export even if the stick has changes not synced back */
     bool compat_transcode;      /* AAC and hi-res FLAC -> 16/44.1 FLAC (overrides the config) */
-    bool dry_run;               /* plan and check, write nothing */
+    bool dry_run;               /* plan and check, report every copy/prune/rewrite, write nothing */
     bool force_analysis;        /* re-analyse everything first */
     const char *device_name;    /* NULL: the config's, else the stick's label */
-    const RxPlaylist *const *playlists; int nb_playlists;   /* NULL: every playlist; else only these (and their tracks) */
-    bool only_playlists;        /* with `playlists`: export only tracks in them, not the whole library */
 } RxExportOptions;
 void rx_export_options_default(RxExportOptions *o);
 
@@ -36,8 +46,14 @@ void rx_export_options_default(RxExportOptions *o);
  *   - the destination is a mounted FAT32/exFAT volume with enough free
  *     space for the audio not yet on it plus 64 MiB for the databases;
  *   - no track has more text than fits one DeviceSQL page (reported by name);
- *   - every track has a grid (analysed first when it lacks one);
- *   - no two tracks map to the same path on the stick. */
+ *   - every track has a grid (the caller analyses first; a track without
+ *     one is reported and skipped);
+ *   - no two tracks map to the same path on the stick;
+ *   - no missing (greyed out) track is selected (reported and skipped);
+ *   - the stick has nothing unsynced (rx_stick_diff is empty), unless
+ *     ignore_unsynced.
+ * A dry run reports, as "copy"/"skip"/"prune"/"rewrite" stages, what a real
+ * run would do, so the interface can show the prune list and ask. */
 int  rx_export(RxLibrary *lib, const char *dest, const RxExportOptions *opt,
                rx_progress_cb cb, void *opaque);
 
