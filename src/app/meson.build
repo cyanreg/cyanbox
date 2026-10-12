@@ -22,6 +22,7 @@ ffmpeg_prog = find_program('ffmpeg', required: false)
 if ffmpeg_prog.found()
     app_click_wav = custom_target('app_click_wav',
         output: 'click128.wav',
+        build_by_default: true,
         command: [ ffmpeg_prog, '-v', 'error', '-nostdin', '-y', '-f', 'lavfi', '-i',
                    'aevalsrc=exprs=\'0.8*sin(2*PI*55*mod(t,0.46875))*exp(-mod(t,0.46875)*25)' +
                    '+0.2*sin(2*PI*2000*t)*exp(-mod(t,0.46875)*200)\':s=48000:d=12',
