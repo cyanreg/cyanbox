@@ -11,7 +11,7 @@
  *  - name-table ids, artwork ids and ANLZ collision numbers are assigned as
  *    dj did: in first-use order over the tracks sorted by path; remixers,
  *    composers and original artists are artists (one table in both
- *    databases), so RxPlan's separate lists for them stay empty;
+ *    databases), so RXPlan's separate lists for them stay empty;
  *  - cue colours come from the measured palette (rxbox/colors.h);
  *  - the cover is the embedded picture or the album folder's image
  *    (rx_artwork_raw), deduplicated by a SHA-1 of its bytes so an album's
@@ -232,7 +232,7 @@ static void split_name(const char *path, size_t *stem_len, const char **suffix)
     }
 }
 
-char *rx_plan_usb_stem(const RxTrack *t)
+char *rx_plan_usb_stem(const RXTrack *t)
 {
     size_t n;
     const char *suffix;
@@ -254,7 +254,7 @@ static char *utf8_prefix(const char *s, size_t n)
     return rx_strndup(s, (size_t)(p - s));
 }
 
-bool rx_plan_usb_name_matches(const RxTrack *t, const char *stick_path)
+bool rx_plan_usb_name_matches(const RXTrack *t, const char *stick_path)
 {
     char *stem = rx_plan_usb_stem(t);
     if (!stem)
@@ -289,7 +289,7 @@ typedef struct UsedPaths {
 
 /* dj's usb_path(): the name from the library file, the extension from what
  * is copied (they differ for transcoded tracks). */
-static char *usb_path(const RxTrack *t, const char *source, bool (*taken)(void *, const char *), void *opaque)
+static char *usb_path(const RXTrack *t, const char *source, bool (*taken)(void *, const char *), void *opaque)
 {
     const char *artist = nonempty(t->meta.album_artist) ? t->meta.album_artist : nonempty(t->meta.artist);
     char *a = artist ? rx_plan_fat_name(artist, 64) : rx_strdup("UnknownArtist");
@@ -345,7 +345,7 @@ static bool list_taken(void *opaque, const char *p)
     return taken;
 }
 
-char *rx_plan_usb_path(const RxTrack *t, const char *source, const char *const *used, int nb_used)
+char *rx_plan_usb_path(const RXTrack *t, const char *source, const char *const *used, int nb_used)
 {
     ListUsed l = { used, nb_used };
     return usb_path(t, source ? source : t->path, list_taken, &l);
@@ -376,7 +376,7 @@ bool rx_plan_codec_playable(const char *codec)
     return false;
 }
 
-int rx_plan_transcode_path(const RxLibrary *lib, const RxTrack *t, bool compat, bool create,
+int rx_plan_transcode_path(const RXLibrary *lib, const RXTrack *t, bool compat, bool create,
                            char **cache_path, int *max_rate)
 {
     *cache_path = NULL;
@@ -395,12 +395,12 @@ int rx_plan_transcode_path(const RxLibrary *lib, const RxTrack *t, bool compat, 
     return *cache_path ? 1 : RX_ERROR(ENOMEM);
 }
 
-bool rx_plan_transcode_fresh(const RxTrack *t, const char *cache)
+bool rx_plan_transcode_fresh(const RXTrack *t, const char *cache)
 {
     return rx_file_exists(cache) && rx_file_mtime(cache) >= rx_file_mtime(t->path);
 }
 
-int rx_plan_transcode(const RxLibrary *lib, const RxTrack *t, bool compat, char **source)
+int rx_plan_transcode(const RXLibrary *lib, const RXTrack *t, bool compat, char **source)
 {
     char *cache;
     int max_rate = 0;
@@ -434,7 +434,7 @@ int rx_plan_transcode(const RxLibrary *lib, const RxTrack *t, bool compat, char 
 /* -------------------------------------------------------------- the plan */
 
 typedef struct Names {
-    RxArray arr;                 /* RxPlanName */
+    RXArray arr;                 /* RXPlanName */
     StrMap  map;
 } Names;
 
@@ -452,7 +452,7 @@ static int intern(Names *n, const char *name, uint32_t artist_id, bool album, ui
         free(key);
         return 0;
     }
-    RxPlanName pn = {
+    RXPlanName pn = {
         .id        = (uint32_t)n->arr.nb + 1,
         .name      = rx_strdup(name),
         .artist_id = artist_id,
@@ -467,7 +467,7 @@ static int intern(Names *n, const char *name, uint32_t artist_id, bool album, ui
     return 0;
 }
 
-static void names_take(Names *n, RxPlanName **out, int *nb)
+static void names_take(Names *n, RXPlanName **out, int *nb)
 {
     *out = n->arr.data;
     *nb = (int)n->arr.nb;
@@ -479,7 +479,7 @@ static void names_take(Names *n, RxPlanName **out, int *nb)
 static void names_free(Names *n)
 {
     for (size_t i = 0; i < n->arr.nb; i++)
-        free(((RxPlanName *)rx_array_at(&n->arr, i))->name);
+        free(((RXPlanName *)rx_array_at(&n->arr, i))->name);
     rx_array_free(&n->arr);
     strmap_free(&n->map);
 }
@@ -500,7 +500,7 @@ static void report(rx_progress_cb cb, void *opaque, const char *fmt, ...)
     free(msg);
 }
 
-int rx_plan_background_color(const RxConfig *cfg)
+int rx_plan_background_color(const RXConfig *cfg)
 {
     for (int i = 0; cfg && i < cfg->nb_device; i++) {
         if (strcmp(cfg->device[i].key, "background_color"))
@@ -553,9 +553,9 @@ static int tag_column(const char *tag, char **name)
 
 /* dj's _bitrate(): kbps and bit depth the way rekordbox fills them
  * (docs/pdb.md track row 0x30). */
-static void bitrate(RxPlanTrack *pt)
+static void bitrate(RXPlanTrack *pt)
 {
-    const RxProbe *p = &pt->probe;
+    const RXProbe *p = &pt->probe;
     if (!strcmp(p->codec, "mp3")) {
         pt->bit_rate = p->mp3.valid && p->mp3.bitrate_kbps ? p->mp3.bitrate_kbps : p->bit_rate / 1000;
         pt->bit_depth = 16;
@@ -571,7 +571,7 @@ static void bitrate(RxPlanTrack *pt)
 
 /* DeviceSQL file types (docs/pdb.md track row 0x5A; must match the codec,
  * G7). */
-static int file_type(const RxProbe *p)
+static int file_type(const RXProbe *p)
 {
     if (!strcmp(p->codec, "mp3"))
         return 1;
@@ -586,9 +586,9 @@ static int file_type(const RxProbe *p)
     return 0;
 }
 
-void rx_stick_cue_from_plan(const RxPlanCue *c, RxStickCue *s)
+void rx_stick_cue_from_plan(const RXPlanCue *c, RXStickCue *s)
 {
-    *s = (RxStickCue) {
+    *s = (RXStickCue) {
         .hot    = c->hot,
         .in     = rx_anlz_ms(c->time),
         .out    = c->loop_end >= 0 ? rx_anlz_ms(c->loop_end) : 0xFFFFFFFFu,
@@ -599,9 +599,9 @@ void rx_stick_cue_from_plan(const RxPlanCue *c, RxStickCue *s)
     snprintf(s->name, sizeof(s->name), "%s", c->name);
 }
 
-static void plan_cue(const RxCue *c, RxPlanCue *p, bool *bad_color)
+static void plan_cue(const RXCue *c, RXPlanCue *p, bool *bad_color)
 {
-    *p = (RxPlanCue) {
+    *p = (RXPlanCue) {
         .time     = c->time,
         .loop_end = c->loop_end >= 0 ? c->loop_end : -1.0,
         .hot      = c->hot >= 0 && c->hot < RX_HOT_CUE_SLOTS ? c->hot : -1,
@@ -627,18 +627,18 @@ static void plan_cue(const RxCue *c, RxPlanCue *p, bool *bad_color)
     }
 }
 
-void rx_stick_cue_from_track(const RxCue *c, RxStickCue *s)
+void rx_stick_cue_from_track(const RXCue *c, RXStickCue *s)
 {
-    RxPlanCue p;
+    RXPlanCue p;
     bool bad;
     plan_cue(c, &p, &bad);
     rx_stick_cue_from_plan(&p, s);
 }
 
-void rx_plan_free(RxPlan *p)
+void rx_plan_free(RXPlan *p)
 {
     for (int i = 0; i < p->nb_tracks; i++) {
-        RxPlanTrack *t = &p->tracks[i];
+        RXPlanTrack *t = &p->tracks[i];
         free(t->source);
         free(t->usb_path);
         free(t->anlz_dir);
@@ -648,7 +648,7 @@ void rx_plan_free(RxPlan *p)
         rx_probe_free(&t->probe);
     }
     free(p->tracks);
-    RxPlanName *tables[] = { p->artists, p->albums, p->genres, p->labels, p->keys, p->remixers,
+    RXPlanName *tables[] = { p->artists, p->albums, p->genres, p->labels, p->keys, p->remixers,
                              p->composers, p->original_artists };
     int counts[] = { p->nb_artists, p->nb_albums, p->nb_genres, p->nb_labels, p->nb_keys,
                      p->nb_remixers, p->nb_composers, p->nb_original_artists };
@@ -674,34 +674,34 @@ void rx_plan_free(RxPlan *p)
     free(p->tags);
     free(p->tag_tracks);
     free(p->device_name);
-    *p = (RxPlan) { 0 };
+    *p = (RXPlan) { 0 };
 }
 
 static int cmp_track_path(const void *a, const void *b)
 {
-    const RxTrack *x = *(RxTrack *const *)a, *y = *(RxTrack *const *)b;
+    const RXTrack *x = *(RXTrack *const *)a, *y = *(RXTrack *const *)b;
     return strcmp(x->path, y->path);
 }
 
 static int cmp_plan_id(const void *a, const void *b)
 {
-    uint32_t x = ((const RxPlanTrack *)a)->id, y = ((const RxPlanTrack *)b)->id;
+    uint32_t x = ((const RXPlanTrack *)a)->id, y = ((const RXPlanTrack *)b)->id;
     return x < y ? -1 : x > y;
 }
 
-static bool plan_has(const RxPlan *p, uint64_t id)
+static bool plan_has(const RXPlan *p, uint64_t id)
 {
-    RxPlanTrack key = { .id = (uint32_t)id };
+    RXPlanTrack key = { .id = (uint32_t)id };
     return id && id <= UINT32_MAX &&
            bsearch(&key, p->tracks, (size_t)p->nb_tracks, sizeof(key), cmp_plan_id);
 }
 
 typedef struct Artwork {
     StrMap   ids;                /* SHA-1 hex -> artwork id */
-    RxArray  arr;                /* RxPlanArtwork */
+    RXArray  arr;                /* RXPlanArtwork */
 } Artwork;
 
-static uint32_t artwork_for(Artwork *aw, const RxTrack *t, rx_progress_cb cb, void *opaque)
+static uint32_t artwork_for(Artwork *aw, const RXTrack *t, rx_progress_cb cb, void *opaque)
 {
     uint8_t *raw;
     size_t size;
@@ -731,7 +731,7 @@ static uint32_t artwork_for(Artwork *aw, const RxTrack *t, rx_progress_cb cb, vo
     int w, h;
     int ret = rx_image_decode(raw, size, &rgba, &w, &h);
     free(raw);
-    RxPlanArtwork a = { .id = (uint32_t)aw->arr.nb + 1 };
+    RXPlanArtwork a = { .id = (uint32_t)aw->arr.nb + 1 };
     if (ret >= 0) {
         /* 80x80 a<id>.jpg and 240x240 a<id>_m.jpg (docs/pdb.md 1.4), JPEG
          * quality 90 as dj. */
@@ -763,9 +763,9 @@ static uint32_t artwork_for(Artwork *aw, const RxTrack *t, rx_progress_cb cb, vo
     return a.id;
 }
 
-/* Folders first, then playlists, as RxPlaylistFolder holds them (the
+/* Folders first, then playlists, as RXPlaylistFolder holds them (the
  * library keeps their interleaving among siblings private). */
-static bool folder_selected(const RxPlaylistFolder *f, const RxPlaylist *const *sel, int nb_sel)
+static bool folder_selected(const RXPlaylistFolder *f, const RXPlaylist *const *sel, int nb_sel)
 {
     if (!sel)
         return true;
@@ -779,7 +779,7 @@ static bool folder_selected(const RxPlaylistFolder *f, const RxPlaylist *const *
     return false;
 }
 
-static bool playlist_selected(const RxPlaylist *p, const RxPlaylist *const *sel, int nb_sel)
+static bool playlist_selected(const RXPlaylist *p, const RXPlaylist *const *sel, int nb_sel)
 {
     if (!sel)
         return true;
@@ -789,15 +789,15 @@ static bool playlist_selected(const RxPlaylist *p, const RxPlaylist *const *sel,
     return false;
 }
 
-static int walk_playlists(const RxPlaylistFolder *f, uint32_t parent, RxPlan *plan, RxArray *out,
-                          const RxPlaylist *const *sel, int nb_sel, rx_progress_cb cb, void *opaque)
+static int walk_playlists(const RXPlaylistFolder *f, uint32_t parent, RXPlan *plan, RXArray *out,
+                          const RXPlaylist *const *sel, int nb_sel, rx_progress_cb cb, void *opaque)
 {
     int order = 0, ret;
     for (int i = 0; i < f->nb_folders; i++) {
-        const RxPlaylistFolder *sub = f->folders[i];
+        const RXPlaylistFolder *sub = f->folders[i];
         if (!folder_selected(sub, sel, nb_sel))
             continue;
-        RxPlanPlaylist p = {
+        RXPlanPlaylist p = {
             .id         = (uint32_t)sub->id,
             .parent_id  = parent,
             .sort_order = order++,
@@ -812,10 +812,10 @@ static int walk_playlists(const RxPlaylistFolder *f, uint32_t parent, RxPlan *pl
             return ret;
     }
     for (int i = 0; i < f->nb_playlists; i++) {
-        const RxPlaylist *pl = f->playlists[i];
+        const RXPlaylist *pl = f->playlists[i];
         if (!playlist_selected(pl, sel, nb_sel))
             continue;
-        RxPlanPlaylist p = {
+        RXPlanPlaylist p = {
             .id         = (uint32_t)pl->id,
             .parent_id  = parent,
             .sort_order = order++,
@@ -851,7 +851,7 @@ static int walk_playlists(const RxPlaylistFolder *f, uint32_t parent, RxPlan *pl
  * would be (16-bit FLAC at most at max_rate, rx_transcode_flac); its size
  * a typical FLAC's 60 % of PCM, for the free-space check. Nothing is
  * written. */
-static int dry_source(const RxLibrary *lib, const RxTrack *t, bool compat, RxPlanTrack *pt)
+static int dry_source(const RXLibrary *lib, const RXTrack *t, bool compat, RXPlanTrack *pt)
 {
     char *cache;
     int max_rate = 0;
@@ -866,9 +866,9 @@ static int dry_source(const RxLibrary *lib, const RxTrack *t, bool compat, RxPla
     pt->source = cache;
     if ((ret = rx_probe(t->path, &pt->probe)) < 0)
         return ret;
-    RxProbe *p = &pt->probe;
+    RXProbe *p = &pt->probe;
     rx_flac_info_free(&p->flac);
-    p->mp3 = (RxMp3Info) { 0 };
+    p->mp3 = (RXMp3Info) { 0 };
     snprintf(p->codec, sizeof(p->codec), "flac");
     snprintf(p->container, sizeof(p->container), "flac");
     if (max_rate > 0 && p->sample_rate > max_rate) {
@@ -880,27 +880,27 @@ static int dry_source(const RxLibrary *lib, const RxTrack *t, bool compat, RxPla
     return 0;
 }
 
-int rx_plan_build_cb(const RxLibrary *lib, RxTrack *const *tracks, int nb_tracks,
-                     const RxPlaylist *const *playlists, int nb_playlists,
-                     const char *device_name, bool compat_transcode, bool dry, RxPlan *out,
+int rx_plan_build_cb(const RXLibrary *lib, RXTrack *const *tracks, int nb_tracks,
+                     const RXPlaylist *const *playlists, int nb_playlists,
+                     const char *device_name, bool compat_transcode, bool dry, RXPlan *out,
                      rx_progress_cb cb, void *opaque)
 {
-    *out = (RxPlan) { 0 };
+    *out = (RXPlan) { 0 };
     int ret = 0;
-    RxTrack **sorted = malloc((size_t)RX_MAX(nb_tracks, 1) * sizeof(*sorted));
+    RXTrack **sorted = malloc((size_t)RX_MAX(nb_tracks, 1) * sizeof(*sorted));
     Names artists = { 0 }, albums = { 0 }, genres = { 0 }, labels = { 0 }, keys = { 0 };
     StrMap used = { 0 }, anlz_dirs = { 0 }, tag_ids = { 0 };
     Artwork aw = { 0 };
-    RxArray tags, tag_tracks, pls;
-    rx_array_init(&artists.arr, sizeof(RxPlanName));
-    rx_array_init(&albums.arr, sizeof(RxPlanName));
-    rx_array_init(&genres.arr, sizeof(RxPlanName));
-    rx_array_init(&labels.arr, sizeof(RxPlanName));
-    rx_array_init(&keys.arr, sizeof(RxPlanName));
-    rx_array_init(&aw.arr, sizeof(RxPlanArtwork));
-    rx_array_init(&tags, sizeof(RxPlanTag));
-    rx_array_init(&tag_tracks, sizeof(RxPlanTagTrack));
-    rx_array_init(&pls, sizeof(RxPlanPlaylist));
+    RXArray tags, tag_tracks, pls;
+    rx_array_init(&artists.arr, sizeof(RXPlanName));
+    rx_array_init(&albums.arr, sizeof(RXPlanName));
+    rx_array_init(&genres.arr, sizeof(RXPlanName));
+    rx_array_init(&labels.arr, sizeof(RXPlanName));
+    rx_array_init(&keys.arr, sizeof(RXPlanName));
+    rx_array_init(&aw.arr, sizeof(RXPlanArtwork));
+    rx_array_init(&tags, sizeof(RXPlanTag));
+    rx_array_init(&tag_tracks, sizeof(RXPlanTagTrack));
+    rx_array_init(&pls, sizeof(RXPlanPlaylist));
     out->tracks = calloc((size_t)RX_MAX(nb_tracks, 1), sizeof(*out->tracks));
     if (!sorted || !out->tracks) {
         ret = RX_ERROR(ENOMEM);
@@ -909,10 +909,10 @@ int rx_plan_build_cb(const RxLibrary *lib, RxTrack *const *tracks, int nb_tracks
     memcpy(sorted, tracks, (size_t)nb_tracks * sizeof(*sorted));
     qsort(sorted, (size_t)nb_tracks, sizeof(*sorted), cmp_track_path);
 
-    const RxConfig *cfg = &lib->cfg;
+    const RXConfig *cfg = &lib->cfg;
     /* The four My Tag columns (ids 1..4) come first; tags follow. */
     for (int i = 0; i < 4; i++) {
-        RxPlanTag c = {
+        RXPlanTag c = {
             .id          = (uint32_t)i + 1,
             .name        = rx_strdup(rx_my_tag_columns[i]),
             .position    = i,
@@ -927,11 +927,11 @@ int rx_plan_build_cb(const RxLibrary *lib, RxTrack *const *tracks, int nb_tracks
     int col_count[5] = { 0 };
 
     for (int i = 0; i < nb_tracks; i++) {
-        const RxTrack *t = sorted[i];
-        RxPlanTrack *pt = &out->tracks[out->nb_tracks];
+        const RXTrack *t = sorted[i];
+        RXPlanTrack *pt = &out->tracks[out->nb_tracks];
         char disp[512];
         rx_track_display(t, disp, sizeof(disp));
-        *pt = (RxPlanTrack) { .id = (uint32_t)t->id, .track = t };
+        *pt = (RXPlanTrack) { .id = (uint32_t)t->id, .track = t };
         out->nb_tracks++;
         if (cb && !cb(opaque, "prepare", i + 1, nb_tracks, disp)) {
             ret = RX_ERROR(ECANCELED);
@@ -987,7 +987,7 @@ int rx_plan_build_cb(const RxLibrary *lib, RxTrack *const *tracks, int nb_tracks
 
         /* dj's interning order: artist, remixer, original artist, composer,
          * album (after its album artist), genre, label, key. */
-        const RxMeta *m = &t->meta;
+        const RXMeta *m = &t->meta;
         if ((ret = intern(&artists, m->artist, 0, false, &pt->artist_id)) < 0 ||
             (ret = intern(&artists, m->remixer, 0, false, &pt->remixer_id)) < 0 ||
             (ret = intern(&artists, m->original_artist, 0, false, &pt->original_artist_id)) < 0 ||
@@ -1036,7 +1036,7 @@ int rx_plan_build_cb(const RxLibrary *lib, RxTrack *const *tracks, int nb_tracks
                 free(name);
             } else {
                 id = (rx_crc32(0, key, strlen(key)) | 0x100) & 0x7FFFFFFF;
-                RxPlanTag tg = {
+                RXPlanTag tg = {
                     .id       = id,
                     .name     = name,
                     .category = col,
@@ -1080,7 +1080,7 @@ int rx_plan_build_cb(const RxLibrary *lib, RxTrack *const *tracks, int nb_tracks
     qsort(out->tracks, (size_t)out->nb_tracks, sizeof(*out->tracks), cmp_plan_id);
     for (int i = 0; i < out->nb_tracks; i++) {
         for (int k = 0; k < out->tracks[i].nb_tag_ids; k++) {
-            RxPlanTagTrack tt = { .track_id = out->tracks[i].id, .tag_id = out->tracks[i].tag_ids[k] };
+            RXPlanTagTrack tt = { .track_id = out->tracks[i].id, .tag_id = out->tracks[i].tag_ids[k] };
             if (!rx_array_push(&tag_tracks, &tt)) {
                 ret = RX_ERROR(ENOMEM);
                 goto fail;
@@ -1142,7 +1142,7 @@ fail:
     strmap_free(&tag_ids);
     strmap_free(&aw.ids);
     for (size_t i = 0; i < aw.arr.nb; i++) {
-        RxPlanArtwork *a = rx_array_at(&aw.arr, i);
+        RXPlanArtwork *a = rx_array_at(&aw.arr, i);
         free(a->path80);
         free(a->path240);
         free(a->jpeg80);
@@ -1150,12 +1150,12 @@ fail:
     }
     rx_array_free(&aw.arr);
     for (size_t i = 0; i < tags.nb; i++)
-        free(((RxPlanTag *)rx_array_at(&tags, i))->name);
+        free(((RXPlanTag *)rx_array_at(&tags, i))->name);
     rx_array_free(&tags);
     rx_array_free(&tag_tracks);
     for (size_t i = 0; i < pls.nb; i++) {
-        free(((RxPlanPlaylist *)rx_array_at(&pls, i))->name);
-        free(((RxPlanPlaylist *)rx_array_at(&pls, i))->track_ids);
+        free(((RXPlanPlaylist *)rx_array_at(&pls, i))->name);
+        free(((RXPlanPlaylist *)rx_array_at(&pls, i))->track_ids);
     }
     rx_array_free(&pls);
     if (ret < 0)
@@ -1163,9 +1163,9 @@ fail:
     return ret;
 }
 
-int rx_plan_build(const RxLibrary *lib, RxTrack *const *tracks, int nb_tracks,
-                  const RxPlaylist *const *playlists, int nb_playlists,
-                  const char *device_name, bool compat_transcode, RxPlan *out)
+int rx_plan_build(const RXLibrary *lib, RXTrack *const *tracks, int nb_tracks,
+                  const RXPlaylist *const *playlists, int nb_playlists,
+                  const char *device_name, bool compat_transcode, RXPlan *out)
 {
     return rx_plan_build_cb(lib, tracks, nb_tracks, playlists, nb_playlists, device_name,
                             compat_transcode, false, out, NULL, NULL);

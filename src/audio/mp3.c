@@ -132,7 +132,7 @@ static int64_t find_first_frame(const uint8_t *data, size_t size, size_t pos, He
  * junk instead. A truncated last frame is passed short; dj counted it as a
  * frame and decoders play it as one. */
 static int walk_frames(const char *path, const uint8_t *d, size_t size, size_t pos,
-                       RxMp3FrameFn fn, void *opaque, size_t *end)
+                       RXMp3FrameFn fn, void *opaque, size_t *end)
 {
     *end = pos;
     while (pos + 4 <= size) {
@@ -170,9 +170,9 @@ static int count_frame(void *opaque, const uint8_t *frame, size_t size, int samp
     return 0;
 }
 
-int rx_mp3_scan_mapped(const char *path, const RxMap *m, RxMp3Info *info)
+int rx_mp3_scan_mapped(const char *path, const RXMap *m, RXMp3Info *info)
 {
-    *info = (RxMp3Info) { 0 };
+    *info = (RXMp3Info) { 0 };
     const uint8_t *d = m->data;
     size_t size = m->size;
 
@@ -214,7 +214,7 @@ int rx_mp3_scan_mapped(const char *path, const RxMap *m, RxMp3Info *info)
     walk_frames(path, d, size, pos, count_frame, &st, &end);
 
     int audio_start = header_frame ? 1 : 0;
-    *info = (RxMp3Info) {
+    *info = (RXMp3Info) {
         .valid              = true,
         .version            = first.version == 3 ? 1 : first.version == 2 ? 2 : 25,
         .sample_rate        = first.rate,
@@ -236,8 +236,8 @@ int rx_mp3_scan_mapped(const char *path, const RxMap *m, RxMp3Info *info)
     return 0;
 }
 
-int rx_mp3_frames(const char *path, const RxMap *m, const RxMp3Info *info,
-                  RxMp3FrameFn fn, void *opaque)
+int rx_mp3_frames(const char *path, const RXMap *m, const RXMp3Info *info,
+                  RXMp3FrameFn fn, void *opaque)
 {
     size_t pos = (size_t)info->first_frame_offset;
     Header first;
@@ -249,10 +249,10 @@ int rx_mp3_frames(const char *path, const RxMap *m, const RxMp3Info *info,
     return walk_frames(path, m->data, m->size, pos, fn, opaque, &end);
 }
 
-int rx_mp3_scan(const char *path, RxMp3Info *info)
+int rx_mp3_scan(const char *path, RXMp3Info *info)
 {
-    *info = (RxMp3Info) { 0 };
-    RxMap m;
+    *info = (RXMp3Info) { 0 };
+    RXMap m;
     int ret = rx_audio_map(path, &m);
     if (ret < 0)
         return ret;

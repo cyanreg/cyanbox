@@ -38,23 +38,23 @@
 
 /* The tag fields in the order of the file_* and override columns. */
 static const size_t tag_str_offsets[10] = {
-    offsetof(RxMeta, title),    offsetof(RxMeta, artist),   offsetof(RxMeta, album),
-    offsetof(RxMeta, album_artist), offsetof(RxMeta, genre), offsetof(RxMeta, label),
-    offsetof(RxMeta, remixer),  offsetof(RxMeta, composer), offsetof(RxMeta, original_artist),
-    offsetof(RxMeta, comment),
+    offsetof(RXMeta, title),    offsetof(RXMeta, artist),   offsetof(RXMeta, album),
+    offsetof(RXMeta, album_artist), offsetof(RXMeta, genre), offsetof(RXMeta, label),
+    offsetof(RXMeta, remixer),  offsetof(RXMeta, composer), offsetof(RXMeta, original_artist),
+    offsetof(RXMeta, comment),
 };
 static const size_t tag_int_offsets[3] = {
-    offsetof(RxMeta, year), offsetof(RxMeta, track_number), offsetof(RxMeta, disc_number),
+    offsetof(RXMeta, year), offsetof(RXMeta, track_number), offsetof(RXMeta, disc_number),
 };
 #define NB_TAG_STR ((int)RX_ARRAY_ELEMS(tag_str_offsets))
 #define NB_TAG_INT ((int)RX_ARRAY_ELEMS(tag_int_offsets))
 
-static char **meta_str(const RxMeta *m, int i)
+static char **meta_str(const RXMeta *m, int i)
 {
     return (char **)((char *)m + tag_str_offsets[i]);
 }
 
-static int *meta_int(const RxMeta *m, int i)
+static int *meta_int(const RXMeta *m, int i)
 {
     return (int *)((char *)m + tag_int_offsets[i]);
 }
@@ -66,7 +66,7 @@ static bool str_eq(const char *a, const char *b)
 
 /* ---------------------------------------------------------------- lookups */
 
-RxTrack *rx_library_find_id(const RxLibrary *lib, uint64_t id)
+RXTrack *rx_library_find_id(const RXLibrary *lib, uint64_t id)
 {
     int lo = 0, hi = lib->nb_tracks - 1;
     while (lo <= hi) {
@@ -82,7 +82,7 @@ RxTrack *rx_library_find_id(const RxLibrary *lib, uint64_t id)
     return NULL;
 }
 
-int rx_library_index_of(const RxLibrary *lib, const RxTrack *t)
+int rx_library_index_of(const RXLibrary *lib, const RXTrack *t)
 {
     if (!t)
         return -1;
@@ -100,7 +100,7 @@ int rx_library_index_of(const RxLibrary *lib, const RxTrack *t)
     return -1;
 }
 
-RxTrack *rx_library_find_path(const RxLibrary *lib, const char *abs_path)
+RXTrack *rx_library_find_path(const RXLibrary *lib, const char *abs_path)
 {
     if (!abs_path)
         return NULL;
@@ -129,12 +129,12 @@ bool rx_is_audio_path(const char *path)
 }
 
 /* The array's capacity is the power of two at or above its size, so it
- * needs no field of its own in RxLibrary. */
-static int tracks_append(RxLibrary *lib, RxTrack *t)
+ * needs no field of its own in RXLibrary. */
+static int tracks_append(RXLibrary *lib, RXTrack *t)
 {
     int n = lib->nb_tracks;
     if (!(n & (n - 1))) {
-        RxTrack **a = realloc(lib->tracks, (size_t)(n ? n * 2 : 64) * sizeof(*a));
+        RXTrack **a = realloc(lib->tracks, (size_t)(n ? n * 2 : 64) * sizeof(*a));
         if (!a)
             return RX_ERROR(ENOMEM);
         lib->tracks = a;
@@ -150,7 +150,7 @@ static double finite_or_zero(double v)
     return isfinite(v) ? v : 0.0;
 }
 
-static void bind_file(RxDb *db, sqlite3_stmt *st, int p, const RxTrack *t, const char *container)
+static void bind_file(RXDb *db, sqlite3_stmt *st, int p, const RXTrack *t, const char *container)
 {
     rx_db_bind_int(db, st, p++, t->mtime);
     rx_db_bind_int(db, st, p++, t->file_size);
@@ -169,7 +169,7 @@ static void bind_file(RxDb *db, sqlite3_stmt *st, int p, const RxTrack *t, const
         rx_db_bind_int(db, st, p++, *meta_int(&t->file_meta, i));
 }
 
-static void bind_edit(RxDb *db, sqlite3_stmt *st, int p, const RxTrack *t)
+static void bind_edit(RXDb *db, sqlite3_stmt *st, int p, const RXTrack *t)
 {
     for (int i = 0; i < NB_TAG_STR; i++) {
         const char *v = *meta_str(&t->meta, i), *f = *meta_str(&t->file_meta, i);
@@ -196,12 +196,12 @@ static void bind_edit(RxDb *db, sqlite3_stmt *st, int p, const RxTrack *t)
 }
 
 /* Sections, cues and My Tags: replaced as a whole. */
-static int write_children(RxLibrary *lib, const RxTrack *t)
+static int write_children(RXLibrary *lib, const RXTrack *t)
 {
-    RxDb *db = lib->db;
+    RXDb *db = lib->db;
     int64_t id = (int64_t)t->id;
 
-    static const enum RxStmtId clears[] = {
+    static const enum RXStmtId clears[] = {
         RX_STMT_SECTION_CLEAR, RX_STMT_CUE_CLEAR, RX_STMT_TAG_CLEAR,
     };
     for (size_t i = 0; i < RX_ARRAY_ELEMS(clears); i++) {
@@ -213,7 +213,7 @@ static int write_children(RxLibrary *lib, const RxTrack *t)
     }
 
     for (int i = 0; i < t->grid.nb_sections; i++) {
-        const RxTempoSection *s = &t->grid.sections[i];
+        const RXTempoSection *s = &t->grid.sections[i];
         sqlite3_stmt *st = rx_db_stmt(db, RX_STMT_SECTION_INSERT);
         rx_db_bind_int(db, st, 1, id);
         rx_db_bind_int(db, st, 2, i);
@@ -226,7 +226,7 @@ static int write_children(RxLibrary *lib, const RxTrack *t)
     }
 
     for (int i = 0; i < t->nb_cues; i++) {
-        const RxCue *c = &t->cues[i];
+        const RXCue *c = &t->cues[i];
         sqlite3_stmt *st = rx_db_stmt(db, RX_STMT_CUE_INSERT);
         rx_db_bind_int(db, st, 1, id);
         rx_db_bind_double(db, st, 2, c->time);
@@ -255,10 +255,10 @@ static int write_children(RxLibrary *lib, const RxTrack *t)
 }
 
 /* What the database refuses with a CHECK, refused here with a reason. */
-static int check_track(const RxTrack *t)
+static int check_track(const RXTrack *t)
 {
     for (int i = 0; i < t->grid.nb_sections; i++) {
-        const RxTempoSection *s = &t->grid.sections[i];
+        const RXTempoSection *s = &t->grid.sections[i];
         if (!isfinite(s->start) || !isfinite(s->bpm) || s->bpm <= 0) {
             rx_err("track %llu: grid section %d is not valid (start %g, bpm %g)",
                    (unsigned long long)t->id, i, s->start, s->bpm);
@@ -266,7 +266,7 @@ static int check_track(const RxTrack *t)
         }
     }
     for (int i = 0; i < t->nb_cues; i++) {
-        const RxCue *c = &t->cues[i];
+        const RXCue *c = &t->cues[i];
         if (!isfinite(c->time) || c->hot < -1 || c->hot >= RX_HOT_CUE_SLOTS) {
             rx_err("track %llu: cue %d is not valid (time %g, slot %d)",
                    (unsigned long long)t->id, i, c->time, c->hot);
@@ -303,10 +303,10 @@ static void column_copy(sqlite3_stmt *st, int col, char *dst, size_t size)
     snprintf(dst, size, "%s", s ? s : "");
 }
 
-static int track_from_row(sqlite3_stmt *st, RxTrack **out)
+static int track_from_row(sqlite3_stmt *st, RXTrack **out)
 {
     int err = 0;
-    RxTrack *t = rx_track_new(NULL);
+    RXTrack *t = rx_track_new(NULL);
     if (!t)
         return RX_ERROR(ENOMEM);
 
@@ -321,7 +321,7 @@ static int track_from_row(sqlite3_stmt *st, RxTrack **out)
     t->mtime = sqlite3_column_int64(st, c++);
     t->file_size = sqlite3_column_int64(st, c++);
     column_copy(st, c++, t->codec, sizeof(t->codec));
-    /* container: kept in the table for the record, not in RxTrack */
+    /* container: kept in the table for the record, not in RXTrack */
     c++;
     t->duration = sqlite3_column_double(st, c++);
     t->total_samples = sqlite3_column_int64(st, c++);
@@ -366,11 +366,11 @@ static int track_from_row(sqlite3_stmt *st, RxTrack **out)
 
 /* Rows of the child tables arrive sorted by track id, as the array is. */
 typedef struct Cursor {
-    RxLibrary *lib;
+    RXLibrary *lib;
     int i;
 } Cursor;
 
-static RxTrack *cursor_find(Cursor *c, uint64_t id)
+static RXTrack *cursor_find(Cursor *c, uint64_t id)
 {
     while (c->i < c->lib->nb_tracks && c->lib->tracks[c->i]->id < id)
         c->i++;
@@ -379,7 +379,7 @@ static RxTrack *cursor_find(Cursor *c, uint64_t id)
     return NULL;
 }
 
-static int load_sections(RxLibrary *lib)
+static int load_sections(RXLibrary *lib)
 {
     sqlite3_stmt *st = rx_db_prepare(lib->db, "SELECT track_id, start, bpm, beat FROM grid_section "
                                               "ORDER BY track_id, idx");
@@ -388,15 +388,15 @@ static int load_sections(RxLibrary *lib)
     Cursor cur = { .lib = lib };
     int ret;
     while ((ret = rx_db_row(lib->db, st, "loading grids")) > 0) {
-        RxTrack *t = cursor_find(&cur, (uint64_t)sqlite3_column_int64(st, 0));
+        RXTrack *t = cursor_find(&cur, (uint64_t)sqlite3_column_int64(st, 0));
         if (!t)
             continue;
-        RxTempoSection *s = realloc(t->grid.sections, (size_t)(t->grid.nb_sections + 1) * sizeof(*s));
+        RXTempoSection *s = realloc(t->grid.sections, (size_t)(t->grid.nb_sections + 1) * sizeof(*s));
         if (!s) {
             ret = RX_ERROR(ENOMEM);
             break;
         }
-        s[t->grid.nb_sections++] = (RxTempoSection) {
+        s[t->grid.nb_sections++] = (RXTempoSection) {
             .start = sqlite3_column_double(st, 1),
             .bpm   = sqlite3_column_double(st, 2),
             .beat  = sqlite3_column_int(st, 3),
@@ -412,7 +412,7 @@ static double column_or_nan(sqlite3_stmt *st, int col)
     return sqlite3_column_type(st, col) == SQLITE_NULL ? NAN : sqlite3_column_double(st, col);
 }
 
-static int load_cues(RxLibrary *lib)
+static int load_cues(RXLibrary *lib)
 {
     sqlite3_stmt *st = rx_db_prepare(lib->db, "SELECT track_id, time, grid_beat, hot, loop_end, "
                                               "loop_beats, active, name, color FROM cue "
@@ -422,16 +422,16 @@ static int load_cues(RxLibrary *lib)
     Cursor cur = { .lib = lib };
     int ret;
     while ((ret = rx_db_row(lib->db, st, "loading cues")) > 0) {
-        RxTrack *t = cursor_find(&cur, (uint64_t)sqlite3_column_int64(st, 0));
+        RXTrack *t = cursor_find(&cur, (uint64_t)sqlite3_column_int64(st, 0));
         if (!t)
             continue;
-        RxCue *cues = realloc(t->cues, (size_t)(t->nb_cues + 1) * sizeof(*cues));
+        RXCue *cues = realloc(t->cues, (size_t)(t->nb_cues + 1) * sizeof(*cues));
         if (!cues) {
             ret = RX_ERROR(ENOMEM);
             break;
         }
         t->cues = cues;
-        RxCue *c = &cues[t->nb_cues++];
+        RXCue *c = &cues[t->nb_cues++];
         rx_cue_init(c, sqlite3_column_double(st, 1));
         c->grid_beat = column_or_nan(st, 2);
         c->hot = sqlite3_column_int(st, 3);
@@ -445,7 +445,7 @@ static int load_cues(RxLibrary *lib)
     return ret;
 }
 
-static int load_tags(RxLibrary *lib)
+static int load_tags(RXLibrary *lib)
 {
     sqlite3_stmt *st = rx_db_prepare(lib->db, "SELECT track_id, tag FROM track_tag "
                                               "ORDER BY track_id, position");
@@ -454,7 +454,7 @@ static int load_tags(RxLibrary *lib)
     Cursor cur = { .lib = lib };
     int ret;
     while ((ret = rx_db_row(lib->db, st, "loading tags")) > 0) {
-        RxTrack *t = cursor_find(&cur, (uint64_t)sqlite3_column_int64(st, 0));
+        RXTrack *t = cursor_find(&cur, (uint64_t)sqlite3_column_int64(st, 0));
         if (t && (ret = rx_meta_add_tag(&t->meta, (const char *)sqlite3_column_text(st, 1))) < 0)
             break;
     }
@@ -462,7 +462,7 @@ static int load_tags(RxLibrary *lib)
     return ret;
 }
 
-static int load_waveform_flags(RxLibrary *lib)
+static int load_waveform_flags(RXLibrary *lib)
 {
     sqlite3_stmt *st = rx_db_prepare(lib->db, "SELECT track_id FROM waveform ORDER BY track_id");
     if (!st)
@@ -470,7 +470,7 @@ static int load_waveform_flags(RxLibrary *lib)
     Cursor cur = { .lib = lib };
     int ret;
     while ((ret = rx_db_row(lib->db, st, "loading waveform flags")) > 0) {
-        RxTrack *t = cursor_find(&cur, (uint64_t)sqlite3_column_int64(st, 0));
+        RXTrack *t = cursor_find(&cur, (uint64_t)sqlite3_column_int64(st, 0));
         if (t)
             t->has_waveforms = true;
     }
@@ -478,7 +478,7 @@ static int load_waveform_flags(RxLibrary *lib)
     return ret;
 }
 
-static int load_tracks(RxLibrary *lib)
+static int load_tracks(RXLibrary *lib)
 {
     char *sql = track_select_sql();
     if (!sql)
@@ -490,7 +490,7 @@ static int load_tracks(RxLibrary *lib)
 
     int ret;
     while ((ret = rx_db_row(lib->db, st, "loading tracks")) > 0) {
-        RxTrack *t = NULL;
+        RXTrack *t = NULL;
         ret = track_from_row(st, &t);
         if (ret >= 0 && (ret = tracks_append(lib, t)) < 0)
             rx_track_free(t);
@@ -509,7 +509,7 @@ static int load_tracks(RxLibrary *lib)
         ret = load_waveform_flags(lib);
 
     for (int i = 0; ret >= 0 && i < lib->nb_tracks; i++) {
-        RxTrack *t = lib->tracks[i];
+        RXTrack *t = lib->tracks[i];
         if (t->grid.nb_sections && !rx_grid_valid(&t->grid))
             rx_warn("track %llu (%s): its grid is not valid (sections out of order or a "
                     "tempo out of range); check the grid", (unsigned long long)t->id, t->path);
@@ -519,9 +519,9 @@ static int load_tracks(RxLibrary *lib)
 
 /* ------------------------------------------------------------ open/close */
 
-int rx_library_open(RxLibrary *lib, const char *root)
+int rx_library_open(RXLibrary *lib, const char *root)
 {
-    *lib = (RxLibrary) { 0 };
+    *lib = (RXLibrary) { 0 };
     rx_config_defaults(&lib->cfg);
 
     char *dir = root ? rx_path_expand(root) : rx_library_default_root();
@@ -578,7 +578,7 @@ fail:
     return ret;
 }
 
-void rx_library_close(RxLibrary *lib)
+void rx_library_close(RXLibrary *lib)
 {
     if (!lib)
         return;
@@ -589,10 +589,10 @@ void rx_library_close(RxLibrary *lib)
     rx_config_free(&lib->cfg);
     rx_db_close(lib->db);
     free(lib->root);
-    *lib = (RxLibrary) { 0 };
+    *lib = (RXLibrary) { 0 };
 }
 
-int rx_library_check(const RxLibrary *lib)
+int rx_library_check(const RXLibrary *lib)
 {
     int problems = 0;
     static const char *const checks[] = { "PRAGMA integrity_check", "PRAGMA foreign_key_check" };
@@ -636,9 +636,9 @@ static int parse_leading_int(const char *s)
 }
 
 /* The tag names of dj's library.track_from_probe, in its order. */
-static int fill_from_probe(RxTrack *t, const RxProbe *p)
+static int fill_from_probe(RXTrack *t, const RXProbe *p)
 {
-    RxMeta m = { 0 };
+    RXMeta m = { 0 };
     int ret = 0;
 
     const char *title = rx_probe_tag(p, "title", NULL);
@@ -695,7 +695,7 @@ static int fill_from_probe(RxTrack *t, const RxProbe *p)
 }
 
 typedef struct Probed {
-    RxTrack *t;
+    RXTrack *t;
     char     container[32];
     int      err;
 } Probed;
@@ -704,7 +704,7 @@ typedef struct Probed {
 static void probe_job(void *arg)
 {
     Probed *pj = arg;
-    RxProbe p;
+    RXProbe p;
     pj->err = rx_probe(pj->t->path, &p);
     if (pj->err < 0)
         return;
@@ -714,7 +714,7 @@ static void probe_job(void *arg)
 }
 
 /* `pool` NULL: on this thread. */
-static void probe_all(RxThreadPool *pool, Probed *items, int nb)
+static void probe_all(RXThreadPool *pool, Probed *items, int nb)
 {
     for (int i = 0; i < nb; i++) {
         if (!pool || nb < 2 || rx_pool_submit(pool, probe_job, &items[i]) < 0)
@@ -725,9 +725,9 @@ static void probe_all(RxThreadPool *pool, Probed *items, int nb)
 
 /* --------------------------------------------------------------- adding */
 
-static int insert_track(RxLibrary *lib, RxTrack *t, const char *container)
+static int insert_track(RXLibrary *lib, RXTrack *t, const char *container)
 {
-    RxDb *db = lib->db;
+    RXDb *db = lib->db;
     sqlite3_stmt *st = rx_db_stmt(db, RX_STMT_TRACK_INSERT);
     rx_db_bind_text(db, st, 1, t->path);
     rx_db_bind_int(db, st, 2, t->added);
@@ -741,7 +741,7 @@ static int insert_track(RxLibrary *lib, RxTrack *t, const char *container)
     return write_children(lib, t);
 }
 
-static int set_missing(RxLibrary *lib, RxTrack *t, bool missing)
+static int set_missing(RXLibrary *lib, RXTrack *t, bool missing)
 {
     sqlite3_stmt *st = rx_db_stmt(lib->db, RX_STMT_TRACK_MISSING);
     rx_db_bind_int(lib->db, st, 1, (int64_t)t->id);
@@ -755,9 +755,9 @@ static int set_missing(RxLibrary *lib, RxTrack *t, bool missing)
 }
 
 /* A known track whose file is back. */
-static RxTrack *known_track(RxLibrary *lib, const char *abs)
+static RXTrack *known_track(RXLibrary *lib, const char *abs)
 {
-    RxTrack *t = rx_library_find_path(lib, abs);
+    RXTrack *t = rx_library_find_path(lib, abs);
     if (t && t->missing && rx_file_exists(abs))
         set_missing(lib, t, false);
     return t;
@@ -765,7 +765,7 @@ static RxTrack *known_track(RxLibrary *lib, const char *abs)
 
 /* Inserts the probed tracks in one transaction, each in a savepoint of its
  * own so one bad row does not cost the others. Reports every one. */
-static int insert_batch(RxLibrary *lib, Probed *items, int nb, rx_add_cb cb, void *opaque)
+static int insert_batch(RXLibrary *lib, Probed *items, int nb, rx_add_cb cb, void *opaque)
 {
     int ret = rx_db_begin(lib->db);
     if (ret < 0)
@@ -813,7 +813,7 @@ static int insert_batch(RxLibrary *lib, Probed *items, int nb, rx_add_cb cb, voi
     return ret < 0 ? ret : added;
 }
 
-RxTrack *rx_library_add_file(RxLibrary *lib, const char *path, int *err)
+RXTrack *rx_library_add_file(RXLibrary *lib, const char *path, int *err)
 {
     int dummy;
     if (!err)
@@ -825,7 +825,7 @@ RxTrack *rx_library_add_file(RxLibrary *lib, const char *path, int *err)
         *err = RX_ERROR(ENOENT);
         return NULL;
     }
-    RxTrack *t = known_track(lib, abs);
+    RXTrack *t = known_track(lib, abs);
     if (t) {
         free(abs);
         return t;
@@ -843,7 +843,7 @@ RxTrack *rx_library_add_file(RxLibrary *lib, const char *path, int *err)
         return NULL;
     }
     probe_job(&p);
-    RxTrack *added = p.err >= 0 ? p.t : NULL;
+    RXTrack *added = p.err >= 0 ? p.t : NULL;
     int ret = insert_batch(lib, &p, 1, NULL, NULL);
     if (ret <= 0) {
         *err = ret < 0 ? ret : p.err < 0 ? p.err : RX_ERROR(EIO);
@@ -927,7 +927,7 @@ static int list_dir(const char *dir, DirList *l)
     return 0;
 }
 
-static int add_dir(RxLibrary *lib, RxThreadPool *pool, const char *dir, rx_add_cb cb, void *opaque)
+static int add_dir(RXLibrary *lib, RXThreadPool *pool, const char *dir, rx_add_cb cb, void *opaque)
 {
     DirList l;
     int ret = list_dir(dir, &l);
@@ -946,7 +946,7 @@ static int add_dir(RxLibrary *lib, RxThreadPool *pool, const char *dir, rx_add_c
             ret = RX_ERROR(ENOMEM);
             break;
         }
-        RxTrack *t = known_track(lib, abs);
+        RXTrack *t = known_track(lib, abs);
         if (t) {
             if (cb)
                 cb(opaque, abs, t, 0);
@@ -984,7 +984,7 @@ static int add_dir(RxLibrary *lib, RxThreadPool *pool, const char *dir, rx_add_c
     return ret < 0 ? ret : added;
 }
 
-int rx_library_add_path(RxLibrary *lib, const char *path, rx_add_cb cb, void *opaque)
+int rx_library_add_path(RXLibrary *lib, const char *path, rx_add_cb cb, void *opaque)
 {
     char *abs = rx_path_abs(path);
     if (!abs)
@@ -993,14 +993,14 @@ int rx_library_add_path(RxLibrary *lib, const char *path, rx_add_cb cb, void *op
     int ret;
     if (rx_dir_exists(abs)) {
         /* Probing is I/O bound: as many threads as CPUs is plenty. */
-        RxThreadPool *pool = NULL;
+        RXThreadPool *pool = NULL;
         if (rx_pool_create(&pool, 0) < 0)
             pool = NULL;
         ret = add_dir(lib, pool, abs, cb, opaque);
         rx_pool_destroy(pool);
     } else if (rx_file_exists(abs)) {
         int before = lib->nb_tracks, err;
-        RxTrack *t = rx_library_add_file(lib, abs, &err);
+        RXTrack *t = rx_library_add_file(lib, abs, &err);
         if (cb)
             cb(opaque, abs, t, t ? 0 : err);
         ret = t ? lib->nb_tracks - before : err;
@@ -1013,7 +1013,7 @@ int rx_library_add_path(RxLibrary *lib, const char *path, rx_add_cb cb, void *op
 
 /* ------------------------------------------------------------------ edits */
 
-static void remove_cache_files(const RxLibrary *lib, uint64_t id)
+static void remove_cache_files(const RXLibrary *lib, uint64_t id)
 {
     char *cache = rx_path_join(lib->root, "cache");
     DIR *d = cache ? opendir(cache) : NULL;
@@ -1046,7 +1046,7 @@ static void remove_cache_files(const RxLibrary *lib, uint64_t id)
     free(cache);
 }
 
-int rx_library_remove(RxLibrary *lib, RxTrack *t)
+int rx_library_remove(RXLibrary *lib, RXTrack *t)
 {
     int idx = rx_library_index_of(lib, t);
     if (idx < 0)
@@ -1080,7 +1080,7 @@ int rx_library_remove(RxLibrary *lib, RxTrack *t)
     return 0;
 }
 
-int rx_library_save_track(RxLibrary *lib, RxTrack *t)
+int rx_library_save_track(RXLibrary *lib, RXTrack *t)
 {
     if (rx_library_index_of(lib, t) < 0)
         return RX_ERROR(ENOENT);
@@ -1111,7 +1111,7 @@ int rx_library_save_track(RxLibrary *lib, RxTrack *t)
     return 0;
 }
 
-int rx_library_refresh_track(RxLibrary *lib, RxTrack *t)
+int rx_library_refresh_track(RXLibrary *lib, RXTrack *t)
 {
     if (rx_library_index_of(lib, t) < 0)
         return RX_ERROR(ENOENT);
@@ -1147,7 +1147,7 @@ int rx_library_refresh_track(RxLibrary *lib, RxTrack *t)
 
     /* The new file tags show wherever the user had not overridden them
      * (the same rule the override columns follow). */
-    RxTrack *n = p.t;
+    RXTrack *n = p.t;
     for (int i = 0; ret >= 0 && i < NB_TAG_STR; i++) {
         char **v = meta_str(&t->meta, i);
         if (str_eq(*v, *meta_str(&t->file_meta, i)))
@@ -1158,7 +1158,7 @@ int rx_library_refresh_track(RxLibrary *lib, RxTrack *t)
         if (*v == *meta_int(&t->file_meta, i))
             *v = *meta_int(&n->file_meta, i);
     }
-    RxMeta old = t->file_meta;
+    RXMeta old = t->file_meta;
     t->file_meta = n->file_meta;
     n->file_meta = old;
     t->duration = n->duration;
@@ -1179,7 +1179,7 @@ end:
     return ret;
 }
 
-int rx_library_record_play(RxLibrary *lib, RxTrack *t)
+int rx_library_record_play(RXLibrary *lib, RXTrack *t)
 {
     if (rx_library_index_of(lib, t) < 0)
         return RX_ERROR(ENOENT);
@@ -1211,7 +1211,7 @@ int rx_library_record_play(RxLibrary *lib, RxTrack *t)
     return 0;
 }
 
-int rx_library_relocate(RxLibrary *lib, RxTrack *t, const char *new_abs_path)
+int rx_library_relocate(RXLibrary *lib, RXTrack *t, const char *new_abs_path)
 {
     if (rx_library_index_of(lib, t) < 0 || !new_abs_path || new_abs_path[0] != '/')
         return RX_ERROR(EINVAL);
@@ -1222,7 +1222,7 @@ int rx_library_relocate(RxLibrary *lib, RxTrack *t, const char *new_abs_path)
                                               : rx_strdup(new_abs_path);
     if (!path)
         return RX_ERROR(ENOMEM);
-    RxTrack *other = rx_library_find_path(lib, path);
+    RXTrack *other = rx_library_find_path(lib, path);
     if (other && other != t) {
         free(path);
         return RX_ERROR(EEXIST);
@@ -1245,7 +1245,7 @@ int rx_library_relocate(RxLibrary *lib, RxTrack *t, const char *new_abs_path)
     return 0;
 }
 
-int rx_library_rescan_missing(RxLibrary *lib)
+int rx_library_rescan_missing(RXLibrary *lib)
 {
     if (!lib->nb_tracks)
         return 0;
@@ -1264,7 +1264,7 @@ int rx_library_rescan_missing(RxLibrary *lib)
 
     int ret = rx_db_begin(lib->db);
     for (int i = 0; ret >= 0 && i < lib->nb_tracks; i++) {
-        RxTrack *t = lib->tracks[i];
+        RXTrack *t = lib->tracks[i];
         if (missing[i] == t->missing)
             continue;
         sqlite3_stmt *st = rx_db_stmt(lib->db, RX_STMT_TRACK_MISSING);
@@ -1287,9 +1287,9 @@ int rx_library_rescan_missing(RxLibrary *lib)
 
 /* ------------------------------------------------------- waveforms, art */
 
-int rx_core_waveform_blob_put(RxLibrary *lib, uint64_t id, const uint8_t *data, size_t size)
+int rx_core_waveform_blob_put(RXLibrary *lib, uint64_t id, const uint8_t *data, size_t size)
 {
-    RxTrack *t = rx_library_find_id(lib, id);
+    RXTrack *t = rx_library_find_id(lib, id);
     if (!t)
         return RX_ERROR(ENOENT);
     sqlite3_stmt *st = rx_db_stmt(lib->db, RX_STMT_WAVE_PUT);
@@ -1303,7 +1303,7 @@ int rx_core_waveform_blob_put(RxLibrary *lib, uint64_t id, const uint8_t *data, 
     return 0;
 }
 
-int rx_core_waveform_blob_get(const RxLibrary *lib, uint64_t id, uint8_t **data, size_t *size)
+int rx_core_waveform_blob_get(const RXLibrary *lib, uint64_t id, uint8_t **data, size_t *size)
 {
     *data = NULL;
     *size = 0;
@@ -1325,13 +1325,13 @@ int rx_core_waveform_blob_get(const RxLibrary *lib, uint64_t id, uint8_t **data,
     return 0;
 }
 
-bool rx_library_has_waveforms(const RxLibrary *lib, uint64_t id)
+bool rx_library_has_waveforms(const RXLibrary *lib, uint64_t id)
 {
-    const RxTrack *t = rx_library_find_id(lib, id);
+    const RXTrack *t = rx_library_find_id(lib, id);
     return t && t->has_waveforms;
 }
 
-int rx_library_artwork_save(RxLibrary *lib, uint64_t id, const uint8_t *jpeg, size_t size,
+int rx_library_artwork_save(RXLibrary *lib, uint64_t id, const uint8_t *jpeg, size_t size,
                             int width, int height)
 {
     if (!rx_library_find_id(lib, id))
@@ -1349,7 +1349,7 @@ int rx_library_artwork_save(RxLibrary *lib, uint64_t id, const uint8_t *jpeg, si
     return ret;
 }
 
-int rx_library_artwork_load(const RxLibrary *lib, uint64_t id, uint8_t **jpeg, size_t *size,
+int rx_library_artwork_load(const RXLibrary *lib, uint64_t id, uint8_t **jpeg, size_t *size,
                             int *width, int *height)
 {
     *jpeg = NULL;
@@ -1375,7 +1375,7 @@ int rx_library_artwork_load(const RxLibrary *lib, uint64_t id, uint8_t **jpeg, s
     return 0;
 }
 
-char *rx_library_cache_path(const RxLibrary *lib, const char *kind, uint64_t id, const char *ext)
+char *rx_library_cache_path(const RXLibrary *lib, const char *kind, uint64_t id, const char *ext)
 {
     char *dir = rx_asprintf("%s/cache/%s", lib->root, kind);
     if (!dir)

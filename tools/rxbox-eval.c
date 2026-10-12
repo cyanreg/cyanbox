@@ -135,7 +135,7 @@ static int decode_ffmpeg(const char *path, float **x, int64_t *n)
 
 static double read_tag_bpm(const char *path)
 {
-    RxProbe p;
+    RXProbe p;
     if (rx_probe(path, &p) < 0)
         return 0.0;
     const char *v = rx_probe_tag(&p, "bpm", "tbpm", "tempo", NULL);
@@ -153,7 +153,7 @@ typedef struct Result {
     bool   ok;
     double duration;
     int    nb_secs;
-    RxTempoSection secs[MAX_SECS];
+    RXTempoSection secs[MAX_SECS];
     double downbeat;            /* first downbeat >= 0 */
     double confidence;
     unsigned flags;
@@ -166,7 +166,7 @@ typedef struct Result {
     double octave_margin, phase_margin, kick_share, jitter, strong_on_grid;
     double full_on_grid, kick_delay, full_delay, scatter;
     double second_bpm;
-    RxOctaveDecision oct;
+    RXOctaveDecision oct;
     int    band;
     bool   shifted;
 } Result;
@@ -188,7 +188,7 @@ static int sec_at(const Result *r, double t)
 /* Beat nearest to t on the grid. */
 static double nearest_beat(const Result *r, double t)
 {
-    const RxTempoSection *s = &r->secs[sec_at(r, t)];
+    const RXTempoSection *s = &r->secs[sec_at(r, t)];
     double p = 60.0 / s->bpm;
     return s->start + round((t - s->start) / p) * p;
 }
@@ -204,7 +204,7 @@ static double nearest_downbeat(const Result *r, double t)
         int beats = (int)lrint((r->secs[i + 1].start - r->secs[i].start) / p);
         num = r->secs[i + 1].beat ? r->secs[i + 1].beat : ((num - 1 + beats) % 4 + 4) % 4 + 1;
     }
-    const RxTempoSection *s = &r->secs[si];
+    const RXTempoSection *s = &r->secs[si];
     double p = 60.0 / s->bpm;
     double first_down = s->start + ((5 - num) % 4) * p;
     double bar = 4 * p;
@@ -217,7 +217,7 @@ static void flags_to_str(unsigned f, char *buf, size_t size)
     for (int i = 0; i < 16; i++) {
         if (!(f & (1u << i)))
             continue;
-        const char *n = rx_grid_flag_name((enum RxGridFlag)(1u << i));
+        const char *n = rx_grid_flag_name((enum RXGridFlag)(1u << i));
         if (!n || !*n)
             continue;
         if (buf[0])
@@ -233,7 +233,7 @@ typedef struct Job {
     int                nb;
     Result            *res;
     atomic_int         next;
-    RxAnalysisOptions  opt;
+    RXAnalysisOptions  opt;
     const char        *dump;
     bool               ffmpeg;
     bool               mem;
@@ -250,9 +250,9 @@ static double cpu_ms(void)
 
 /* The closest two beats of the grid as a player gets it (rx_grid_beats),
  * in periods of the faster side: under a half, two beats are one hit. */
-static double closest_beats(const RxGrid *g, double duration)
+static double closest_beats(const RXGrid *g, double duration)
 {
-    RxBeat *b = NULL;
+    RXBeat *b = NULL;
     int nb = 0;
     if (rx_grid_beats(g, duration, &b, &nb) < 0)
         return NAN;
@@ -274,7 +274,7 @@ static int cmp_dbl(const void *a, const void *b)
  * nearest beat (a band's flux has its own delay; what matters is that the
  * hits keep one distance from the grid). The median offset is returned in
  * *delay: near half a beat means the grid is on that band's off-beat. */
-static double locked_to_grid(const RxOnsets *o, const float *v, const Result *r, double *delay)
+static double locked_to_grid(const RXOnsets *o, const float *v, const Result *r, double *delay)
 {
     int n = o->nb, np = 0;
     double *pk = malloc((size_t)n * sizeof(*pk));
@@ -315,7 +315,7 @@ static double locked_to_grid(const RxOnsets *o, const float *v, const Result *r,
     return frac;
 }
 
-static void dump_files(const char *base, int idx, const RxBeatDebug *d, const Result *r)
+static void dump_files(const char *base, int idx, const RXBeatDebug *d, const Result *r)
 {
     char *fn = rx_asprintf("%s.%d.onsets.csv", base, idx);
     FILE *f = fn ? fopen(fn, "w") : NULL;
@@ -332,7 +332,7 @@ static void dump_files(const char *base, int idx, const RxBeatDebug *d, const Re
     if (f) {
         fprintf(f, "index,tracked,attack,weight,kick,grid,residual_ms\n");
         for (int i = 0; i < d->nb_beats; i++) {
-            const RxBeatObs *b = &d->beats[i];
+            const RXBeatObs *b = &d->beats[i];
             double g = nearest_beat(r, isnan(b->attack) ? b->time : b->attack);
             fprintf(f, "%d,%.5f,%.5f,%.4f,%.3f,%.5f,%.2f\n", b->index, b->time, b->attack,
                     b->weight, b->kick, g, isnan(b->attack) ? NAN : (b->attack - g) * 1e3);
@@ -384,9 +384,9 @@ static void peak_reset(void)
 
 /* --all: the whole rx_analyse, as the app runs it (native channels;
  * waveforms and key too). Fills the beat result only. */
-static int analyse_all(Job *job, Result *r, RxBeatResult *br)
+static int analyse_all(Job *job, Result *r, RXBeatResult *br)
 {
-    RxAudio au = { 0 };
+    RXAudio au = { 0 };
     if (rx_decode(r->path, 0, 0, &au) < 0) {
         fprintf(stderr, "%s: decoding failed\n", r->path);
         return -1;
@@ -395,7 +395,7 @@ static int analyse_all(Job *job, Result *r, RxBeatResult *br)
     double peak0 = peak_mb();
     peak_reset();
     double rss0 = rss_mb();
-    RxAnalysis an;
+    RXAnalysis an;
     double t0 = cpu_ms();
     int ret = rx_analyse(&au, &job->opt, job->what ? job->what : RX_ANALYSE_ALL, &an);
     r->ms = cpu_ms() - t0;
@@ -409,7 +409,7 @@ static int analyse_all(Job *job, Result *r, RxBeatResult *br)
         return -1;
     }
     *br = an.beats;
-    an.beats = (RxBeatResult) { 0 };
+    an.beats = (RXBeatResult) { 0 };
     rx_analysis_free(&an);
     return 0;
 }
@@ -419,7 +419,7 @@ static void analyse_one(Job *job, int i)
     Result *r = &job->res[i];
     r->path = job->paths[i];
     if (job->all) {
-        RxBeatResult br;
+        RXBeatResult br;
         if (analyse_all(job, r, &br) < 0)
             return;
         r->ok = br.grid.nb_sections > 0;
@@ -442,7 +442,7 @@ static void analyse_one(Job *job, int i)
     float *x = NULL;
     int64_t n = 0;
     int rate = 44100;
-    RxAudio au = { 0 };
+    RXAudio au = { 0 };
     if (job->ffmpeg || rx_str_ends(r->path, ".f32")) {
         if (decode_ffmpeg(r->path, &x, &n) < 0) {
             fprintf(stderr, "%s: decoding failed\n", r->path);
@@ -464,8 +464,8 @@ static void analyse_one(Job *job, int i)
     r->duration = (double)n / rate;
     r->tag_bpm = rx_str_ends(r->path, ".f32") ? 0.0 : read_tag_bpm(r->path);
 
-    RxBeatResult br;
-    RxBeatDebug dbg;
+    RXBeatResult br;
+    RXBeatDebug dbg;
     double peak0 = peak_mb();
     peak_reset();
     double rss0 = rss_mb();
@@ -652,7 +652,7 @@ static int read_csv(const char *fn, Result **out)
         r->closest = INFINITY;
         char *sp = fl[3];
         while (*sp && r->nb_secs < MAX_SECS) {
-            RxTempoSection *s = &r->secs[r->nb_secs++];
+            RXTempoSection *s = &r->secs[r->nb_secs++];
             s->start = strtod(sp, &sp);
             if (*sp == ':')
                 sp++;

@@ -37,7 +37,7 @@ static void av_log_line(void *avcl, int level, const char *fmt, va_list args)
     level &= 0xff;                              /* the colour bits */
     if (level > av_log_get_level())
         return;
-    enum RxLogLevel rl = level <= AV_LOG_FATAL ? RX_LOG_ERROR :
+    enum RXLogLevel rl = level <= AV_LOG_FATAL ? RX_LOG_ERROR :
                          level <= AV_LOG_WARNING ? RX_LOG_WARN : RX_LOG_DEBUG;
     if (rl > rx_log_level())
         return;
@@ -93,9 +93,9 @@ int rx_audio_error(int averr)
     }
 }
 
-int rx_audio_map(const char *path, RxMap *m)
+int rx_audio_map(const char *path, RXMap *m)
 {
-    *m = (RxMap) { 0 };
+    *m = (RXMap) { 0 };
     int fd = open(path, O_RDONLY | O_CLOEXEC);
     if (fd < 0)
         return RX_ERROR(errno);
@@ -124,11 +124,11 @@ int rx_audio_map(const char *path, RxMap *m)
     return 0;
 }
 
-void rx_audio_unmap(RxMap *m)
+void rx_audio_unmap(RXMap *m)
 {
     if (m->data)
         munmap((void *)m->data, m->size);
-    *m = (RxMap) { 0 };
+    *m = (RXMap) { 0 };
 }
 
 size_t rx_audio_skip_id3v2(const uint8_t *data, size_t size)
@@ -236,7 +236,7 @@ static char *trim(char *s)
     return s + lo;
 }
 
-static int add_tags(RxProbe *p, const AVDictionary *dict)
+static int add_tags(RXProbe *p, const AVDictionary *dict)
 {
     const AVDictionaryEntry *e = NULL;
     while ((e = av_dict_iterate(dict, e))) {
@@ -265,19 +265,19 @@ static int add_tags(RxProbe *p, const AVDictionary *dict)
             p->tags[i].value = value;
             continue;
         }
-        RxTag *nt = realloc(p->tags, ((size_t)p->nb_tags + 1) * sizeof(*nt));
+        RXTag *nt = realloc(p->tags, ((size_t)p->nb_tags + 1) * sizeof(*nt));
         if (!nt) {
             free(key);
             free(value);
             return RX_ERROR(ENOMEM);
         }
         p->tags = nt;
-        p->tags[p->nb_tags++] = (RxTag) { .key = key, .value = value };
+        p->tags[p->nb_tags++] = (RXTag) { .key = key, .value = value };
     }
     return 0;
 }
 
-const char *rx_probe_tag(const RxProbe *p, const char *name, ...)
+const char *rx_probe_tag(const RXProbe *p, const char *name, ...)
 {
     va_list args;
     va_start(args, name);
@@ -354,10 +354,10 @@ static int64_t container_samples(AVFormatContext *fmt, int idx)
     return RX_MAX(total, (int64_t)0);
 }
 
-int rx_probe(const char *path, RxProbe *p)
+int rx_probe(const char *path, RXProbe *p)
 {
     rx_audio_init_logging();
-    *p = (RxProbe) { 0 };
+    *p = (RXProbe) { 0 };
 
     AVFormatContext *fmt;
     int ret = rx_audio_open(path, &fmt, true);
@@ -450,7 +450,7 @@ fail:
     return ret;
 }
 
-void rx_probe_free(RxProbe *p)
+void rx_probe_free(RXProbe *p)
 {
     for (int i = 0; i < p->nb_tags; i++) {
         free(p->tags[i].key);

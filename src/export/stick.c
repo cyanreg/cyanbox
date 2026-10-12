@@ -122,12 +122,12 @@ static int read_stick_file(const char *mount, const char *stick_path, uint8_t **
 /* A hot cue without a colour: code 0 with no RGB, the slot's default pad
  * colour (rekordbox 7, rbxport), or green 00FF00 (dj, and the most common
  * code-0 RGB on rekordbox 7 sticks; docs/anlz.md 4.6). */
-static bool default_pad(const RxStickCue *c)
+static bool default_pad(const RXStickCue *c)
 {
     return c->hot >= 0 && !c->code && (!c->rgb || c->rgb == 0x00FF00 || c->rgb == rx_hot_cue_default_rgb(c->hot));
 }
 
-bool rx_stick_cue_equal(const RxStickCue *a, const RxStickCue *b)
+bool rx_stick_cue_equal(const RXStickCue *a, const RXStickCue *b)
 {
     if (a->hot != b->hot || (a->out == 0xFFFFFFFFu) != (b->out == 0xFFFFFFFFu))
         return false;
@@ -146,9 +146,9 @@ bool rx_stick_cue_equal(const RxStickCue *a, const RxStickCue *b)
     return !strcmp(a->name, b->name);
 }
 
-void rx_stick_cue_to_track(const RxStickCue *s, const RxGrid *grid, RxCue *c)
+void rx_stick_cue_to_track(const RXStickCue *s, const RXGrid *grid, RXCue *c)
 {
-    *c = (RxCue) {
+    *c = (RXCue) {
         .time       = s->in / 1000.0,
         .grid_beat  = NAN,
         .hot        = s->hot,
@@ -224,33 +224,33 @@ static void unescape(char *s)
     *o = '\0';
 }
 
-void rx_sync_record_free(RxSyncRecord *r)
+void rx_sync_record_free(RXSyncRecord *r)
 {
     for (int i = 0; i < r->nb_tracks; i++)
         free(r->tracks[i].cues);
     free(r->tracks);
     for (int i = 0; i < r->nb_settings; i++)
         free(r->settings[i].data);
-    *r = (RxSyncRecord) { 0 };
+    *r = (RXSyncRecord) { 0 };
 }
 
 static int cmp_sync_track(const void *a, const void *b)
 {
-    uint64_t x = ((const RxSyncTrack *)a)->id, y = ((const RxSyncTrack *)b)->id;
+    uint64_t x = ((const RXSyncTrack *)a)->id, y = ((const RXSyncTrack *)b)->id;
     return x < y ? -1 : x > y;
 }
 
-const RxSyncTrack *rx_sync_record_track(const RxSyncRecord *r, uint64_t id)
+const RXSyncTrack *rx_sync_record_track(const RXSyncRecord *r, uint64_t id)
 {
     if (!r->nb_tracks)
         return NULL;
-    RxSyncTrack key = { .id = id };
+    RXSyncTrack key = { .id = id };
     return bsearch(&key, r->tracks, (size_t)r->nb_tracks, sizeof(key), cmp_sync_track);
 }
 
-int rx_sync_record_from_plan(const RxPlan *plan, RxSyncRecord *r)
+int rx_sync_record_from_plan(const RXPlan *plan, RXSyncRecord *r)
 {
-    *r = (RxSyncRecord) { 0 };
+    *r = (RXSyncRecord) { 0 };
     uint8_t u[8];
     if (getrandom(u, sizeof(u), 0) != (ssize_t)sizeof(u))
         return RX_ERROR(EIO);
@@ -261,8 +261,8 @@ int rx_sync_record_from_plan(const RxPlan *plan, RxSyncRecord *r)
     if (!r->tracks)
         return RX_ERROR(ENOMEM);
     for (int i = 0; i < plan->nb_tracks; i++) {
-        const RxPlanTrack *t = &plan->tracks[i];
-        RxSyncTrack *st = &r->tracks[r->nb_tracks++];
+        const RXPlanTrack *t = &plan->tracks[i];
+        RXSyncTrack *st = &r->tracks[r->nb_tracks++];
         st->id = t->id;
         if (!t->nb_cues)
             continue;
@@ -278,7 +278,7 @@ int rx_sync_record_from_plan(const RxPlan *plan, RxSyncRecord *r)
     return 0;
 }
 
-int rx_sync_library_key(RxLibrary *lib, char key[33])
+int rx_sync_library_key(RXLibrary *lib, char key[33])
 {
     char *v = NULL;
     if (rx_library_setting_get(lib, "sync.library", &v) >= 0 && v && strlen(v) == 32) {
@@ -296,7 +296,7 @@ int rx_sync_library_key(RxLibrary *lib, char key[33])
 }
 
 /* Whether `lib` wrote the record: its key is in it. */
-static bool record_is_ours(const RxLibrary *lib, const RxSyncRecord *r)
+static bool record_is_ours(const RXLibrary *lib, const RXSyncRecord *r)
 {
     char *v = NULL;
     bool ours = r->library[0] && rx_library_setting_get(lib, "sync.library", &v) >= 0 && v &&
@@ -305,7 +305,7 @@ static bool record_is_ours(const RxLibrary *lib, const RxSyncRecord *r)
     return ours;
 }
 
-int rx_sync_record_add_settings(RxSyncRecord *r, const char *mount)
+int rx_sync_record_add_settings(RXSyncRecord *r, const char *mount)
 {
     for (int i = 0; i < 4; i++) {
         char path[64];
@@ -322,7 +322,7 @@ int rx_sync_record_add_settings(RxSyncRecord *r, const char *mount)
     return 0;
 }
 
-int rx_sync_record_write(const char *mount, const RxSyncRecord *r)
+int rx_sync_record_write(const char *mount, const RXSyncRecord *r)
 {
     char *buf = NULL;
     size_t size = 0;
@@ -334,10 +334,10 @@ int rx_sync_record_write(const char *mount, const RxSyncRecord *r)
         fprintf(f, "library %s\n", r->library);
     fprintf(f, "date %s\n", r->date);
     for (int i = 0; i < r->nb_tracks; i++) {
-        const RxSyncTrack *t = &r->tracks[i];
+        const RXSyncTrack *t = &r->tracks[i];
         fprintf(f, "track %llu\n", (unsigned long long)t->id);
         for (int k = 0; k < t->nb_cues; k++) {
-            const RxStickCue *c = &t->cues[k];
+            const RXStickCue *c = &t->cues[k];
             long long out = c->out == 0xFFFFFFFFu ? -1 : (long long)c->out;
             if (c->hot >= 0)
                 fprintf(f, "hot %d %u %lld %d %06x ", c->hot, c->in, out, c->code, c->rgb);
@@ -377,9 +377,9 @@ static char *field_rest(char *line, int skip)
     return p;
 }
 
-int rx_sync_record_read(const char *mount, RxSyncRecord *r)
+int rx_sync_record_read(const char *mount, RXSyncRecord *r)
 {
-    *r = (RxSyncRecord) { 0 };
+    *r = (RXSyncRecord) { 0 };
     uint8_t *data;
     size_t size;
     int ret = read_stick_file(mount, RX_SYNC_PATH, &data, &size);
@@ -389,13 +389,13 @@ int rx_sync_record_read(const char *mount, RxSyncRecord *r)
         free(data);
         return RX_ERROR(EINVAL);
     }
-    RxArray tracks, cues;
-    rx_array_init(&tracks, sizeof(RxSyncTrack));
-    rx_array_init(&cues, sizeof(RxStickCue));
-    RxSyncTrack *cur = NULL;
+    RXArray tracks, cues;
+    rx_array_init(&tracks, sizeof(RXSyncTrack));
+    rx_array_init(&cues, sizeof(RXStickCue));
+    RXSyncTrack *cur = NULL;
     char *save = NULL;
     for (char *line = strtok_r((char *)data, "\n", &save); line; line = strtok_r(NULL, "\n", &save)) {
-        RxStickCue c = { 0 };
+        RXStickCue c = { 0 };
         long long out;
         unsigned long long id;
         char name[24];
@@ -408,9 +408,9 @@ int rx_sync_record_read(const char *mount, RxSyncRecord *r)
             if (cur && cues.nb) {
                 cur->cues = cues.data;
                 cur->nb_cues = (int)cues.nb;
-                rx_array_init(&cues, sizeof(RxStickCue));
+                rx_array_init(&cues, sizeof(RXStickCue));
             }
-            RxSyncTrack t = { .id = id };
+            RXSyncTrack t = { .id = id };
             if (!(cur = rx_array_push(&tracks, &t))) {
                 ret = RX_ERROR(ENOMEM);
                 break;
@@ -418,7 +418,7 @@ int rx_sync_record_read(const char *mount, RxSyncRecord *r)
             continue;
         }
         if (sscanf(line, "hot %d %u %lld %d %x", &slot, &in, &out, &code, &rgb) == 5) {
-            c = (RxStickCue) {
+            c = (RXStickCue) {
                 .hot  = slot,
                 .in   = in,
                 .out  = out < 0 ? 0xFFFFFFFFu : (uint32_t)out,
@@ -428,7 +428,7 @@ int rx_sync_record_read(const char *mount, RxSyncRecord *r)
             char *n = field_rest(line, 6);
             snprintf(c.name, sizeof(c.name), "%s", n ? n : "");
         } else if (sscanf(line, "mem %u %lld %d %d", &in, &out, &code, &active) == 4) {
-            c = (RxStickCue) {
+            c = (RXStickCue) {
                 .hot    = -1,
                 .in     = in,
                 .out    = out < 0 ? 0xFFFFFFFFu : (uint32_t)out,
@@ -469,7 +469,7 @@ int rx_sync_record_read(const char *mount, RxSyncRecord *r)
     if (cur && cues.nb && ret >= 0) {
         cur->cues = cues.data;
         cur->nb_cues = (int)cues.nb;
-        rx_array_init(&cues, sizeof(RxStickCue));
+        rx_array_init(&cues, sizeof(RXStickCue));
     }
     rx_array_free(&cues);
     free(data);
@@ -495,14 +495,14 @@ typedef struct HistList {
 } HistList;
 
 typedef struct StickTrack {
-    RxStickCue *cues;
+    RXStickCue *cues;
     int         nb;
 } StickTrack;
 
-struct RxStickPriv {
-    RxSyncRecord record;
+struct RXStickPriv {
+    RXSyncRecord record;
     bool         has_record;
-    StickTrack  *cues;           /* parallel to RxStickState.tracks */
+    StickTrack  *cues;           /* parallel to RXStickState.tracks */
     HistList    *hist;
     int          nb_hist;
     struct { char name[24]; uint8_t *data; size_t size; } files[4];
@@ -510,7 +510,7 @@ struct RxStickPriv {
     char         stick_key[40];  /* the record's uuid, or the stick's label */
 };
 
-void rx_stick_state_free(RxStickState *s)
+void rx_stick_state_free(RXStickState *s)
 {
     for (int i = 0; i < s->nb_track_states; i++) {
         free(s->tracks[i].cues);
@@ -522,7 +522,7 @@ void rx_stick_state_free(RxStickState *s)
     free(s->plays);
     rx_kv_free(s->settings, s->nb_settings);
     free(s->mount);
-    struct RxStickPriv *p = s->priv;
+    struct RXStickPriv *p = s->priv;
     if (p) {
         rx_sync_record_free(&p->record);
         for (int i = 0; i < s->nb_track_states; i++)
@@ -537,11 +537,11 @@ void rx_stick_state_free(RxStickState *s)
             free(p->files[i].data);
         free(p);
     }
-    *s = (RxStickState) { 0 };
+    *s = (RXStickState) { 0 };
 }
 
 /* The cues of one track as the stick holds them. */
-static int stick_cues(const char *mount, const char *dat_path, RxStickCue **out, int *nb)
+static int stick_cues(const char *mount, const char *dat_path, RXStickCue **out, int *nb)
 {
     *out = NULL;
     *nb = 0;
@@ -560,7 +560,7 @@ static int stick_cues(const char *mount, const char *dat_path, RxStickCue **out,
     if (ret < 0)
         return ret;
 
-    RxPlanCue *dc = NULL, *ec = NULL;
+    RXPlanCue *dc = NULL, *ec = NULL;
     int nd = 0, ne = 0;
     if ((ret = rx_anlz_read_cues(dat, dat_size, &dc, &nd)) < 0)
         goto out;
@@ -568,7 +568,7 @@ static int stick_cues(const char *mount, const char *dat_path, RxStickCue **out,
         ne = 0;
     /* PCO2 present when the .EXT gave names or colours or any memory cue;
      * a .EXT read through its PCOB has only hot cues D-H. */
-    RxAnlzTag *tags = NULL;
+    RXAnlzTag *tags = NULL;
     int nt = 0;
     bool has_pco2 = false;
     if (ext && rx_anlz_parse(ext, ext_size, &tags, &nt) >= 0)
@@ -576,7 +576,7 @@ static int stick_cues(const char *mount, const char *dat_path, RxStickCue **out,
             has_pco2 |= !memcmp(tags[i].fourcc, "PCO2", 4);
     free(tags);
 
-    RxStickCue *c = calloc((size_t)RX_MAX(nd + ne, 1), sizeof(*c));
+    RXStickCue *c = calloc((size_t)RX_MAX(nd + ne, 1), sizeof(*c));
     if (!c) {
         ret = RX_ERROR(ENOMEM);
         goto out;
@@ -618,7 +618,7 @@ typedef struct StickRow {
     char    *path, *anlz;
 } StickRow;
 
-static int onelibrary_rows(sqlite3 *db, RxArray *rows, RxArray *hist)
+static int onelibrary_rows(sqlite3 *db, RXArray *rows, RXArray *hist)
 {
     sqlite3_stmt *st;
     const char *sql = "SELECT content_id, path, analysisDataFilePath FROM content ORDER BY content_id";
@@ -654,7 +654,7 @@ static int onelibrary_rows(sqlite3 *db, RxArray *rows, RxArray *hist)
         if (sqlite3_prepare_v2(db, "SELECT content_id FROM history_content WHERE history_id = ? "
                                "ORDER BY sequenceNo", -1, &e, NULL) == SQLITE_OK) {
             sqlite3_bind_int64(e, 1, h.id);
-            RxArray ids;
+            RXArray ids;
             rx_array_init(&ids, sizeof(uint32_t));
             while (sqlite3_step(e) == SQLITE_ROW) {
                 uint32_t id = (uint32_t)sqlite3_column_int64(e, 0);
@@ -673,10 +673,10 @@ static int onelibrary_rows(sqlite3 *db, RxArray *rows, RxArray *hist)
     return 0;
 }
 
-int rx_stick_read(const RxLibrary *lib, const char *mount, RxStickState *out)
+int rx_stick_read(const RXLibrary *lib, const char *mount, RXStickState *out)
 {
-    *out = (RxStickState) { 0 };
-    struct RxStickPriv *p = calloc(1, sizeof(*p));
+    *out = (RXStickState) { 0 };
+    struct RXStickPriv *p = calloc(1, sizeof(*p));
     out->mount = rx_strdup(mount);
     if (!p || !out->mount) {
         free(p);
@@ -686,12 +686,12 @@ int rx_stick_read(const RxLibrary *lib, const char *mount, RxStickState *out)
     }
     out->priv = p;
     int ret = 0;
-    RxArray rows, hist, states, plays, settings;
+    RXArray rows, hist, states, plays, settings;
     rx_array_init(&rows, sizeof(StickRow));
     rx_array_init(&hist, sizeof(HistList));
     rx_array_init(&states, sizeof(out->tracks[0]));
     rx_array_init(&plays, sizeof(out->plays[0]));
-    rx_array_init(&settings, sizeof(RxKv));
+    rx_array_init(&settings, sizeof(RXKv));
     StickTrack *cues = NULL;
     int nb_cues = 0;
 
@@ -709,7 +709,7 @@ int rx_stick_read(const RxLibrary *lib, const char *mount, RxStickState *out)
     size_t size;
     size_t pdb_rows = 0;
     if (read_stick_file(mount, "/PIONEER/rekordbox/export.pdb", &data, &size) >= 0) {
-        RxPdb pdb;
+        RXPdb pdb;
         out->has_pdb = true;
         if (rx_pdb_read(data, size, &pdb) >= 0) {
             for (int i = 0; i < pdb.nb_tracks; i++) {
@@ -727,7 +727,7 @@ int rx_stick_read(const RxLibrary *lib, const char *mount, RxStickState *out)
             rx_pdb_free(&pdb);
         }
         pdb_rows = rows.nb;
-        RxPdbHistoryList *hl;
+        RXPdbHistoryList *hl;
         int nh;
         if (rx_pdb_history_lists(data, size, &hl, &nh) >= 0) {
             for (int i = 0; i < nh; i++) {
@@ -761,7 +761,7 @@ int rx_stick_read(const RxLibrary *lib, const char *mount, RxStickState *out)
                 /* Track identity from export.pdb; the OneLibrary adds the
                  * tracks export.pdb does not have (it may be damaged, or
                  * be a player's half-written one) and its history. */
-                RxArray more;
+                RXArray more;
                 rx_array_init(&more, sizeof(StickRow));
                 onelibrary_rows(db, &more, &hist);
                 for (size_t i = 0; i < more.nb; i++) {
@@ -791,7 +791,7 @@ int rx_stick_read(const RxLibrary *lib, const char *mount, RxStickState *out)
     }
     for (size_t i = 0; i < rows.nb; i++) {
         StickRow *r = rx_array_at(&rows, i);
-        RxTrack *t = rx_library_find_id(lib, r->id);
+        RXTrack *t = rx_library_find_id(lib, r->id);
         /* Our own stick: the record names the ids. Otherwise the file name
          * must be the one the plan gives the track. */
         bool ours = t && (p->has_record ? rx_sync_record_track(&p->record, r->id) != NULL
@@ -809,11 +809,11 @@ int rx_stick_read(const RxLibrary *lib, const char *mount, RxStickState *out)
             strcat(dat, "/ANLZ0000.DAT");
             anlz = dat;
         }
-        RxStickCue *sc = NULL;
+        RXStickCue *sc = NULL;
         int nsc = 0;
         if (stick_cues(mount, anlz, &sc, &nsc) < 0)
             continue;
-        RxCue *rc = calloc((size_t)RX_MAX(nsc, 1), sizeof(*rc));
+        RXCue *rc = calloc((size_t)RX_MAX(nsc, 1), sizeof(*rc));
         typeof(out->tracks[0]) st = {
             .track_id   = r->id,
             .cues       = rc,
@@ -858,7 +858,7 @@ int rx_stick_read(const RxLibrary *lib, const char *mount, RxStickState *out)
         snprintf(path, sizeof(path), "/PIONEER/%s", settings_files[i]);
         if (read_stick_file(mount, path, &data, &size) < 0)
             continue;
-        RxKv *kv;
+        RXKv *kv;
         int nk;
         if (rx_settings_decode(settings_files[i], data, size, &kv, &nk) < 0) {
             free(data);
@@ -869,7 +869,7 @@ int rx_stick_read(const RxLibrary *lib, const char *mount, RxStickState *out)
         p->files[p->nb_files].size = size;
         p->nb_files++;
         for (int k = 0; k < nk; k++) {
-            RxKv e = { .key = rx_asprintf("%s.%s", settings_section(settings_files[i]), kv[k].key),
+            RXKv e = { .key = rx_asprintf("%s.%s", settings_section(settings_files[i]), kv[k].key),
                        .value = kv[k].value };
             kv[k].value = NULL;
             if (!e.key || !rx_array_push(&settings, &e)) {
@@ -922,7 +922,7 @@ fail:
         free(((typeof(out->plays[0]) *)rx_array_at(&plays, i))->label);
     rx_array_free(&plays);
     for (size_t i = 0; i < settings.nb; i++) {
-        RxKv *e = rx_array_at(&settings, i);
+        RXKv *e = rx_array_at(&settings, i);
         free(e->key);
         free(e->value);
     }
@@ -939,7 +939,7 @@ fail:
 
 /* ------------------------------------------------------------- the diff */
 
-static int push_item(RxArray *items, const RxSyncItem *it)
+static int push_item(RXArray *items, const RXSyncItem *it)
 {
     return rx_array_push(items, it) ? 0 : RX_ERROR(ENOMEM);
 }
@@ -947,21 +947,21 @@ static int push_item(RxArray *items, const RxSyncItem *it)
 /* A stick cue against the library's: equal as stored, or the same once
  * read back into the library's form (a custom pad colour the library can
  * only name by its RGB). */
-static bool same_as_library(const RxStickCue *s, const RxCue *lib, const RxGrid *grid)
+static bool same_as_library(const RXStickCue *s, const RXCue *lib, const RXGrid *grid)
 {
-    RxStickCue l;
+    RXStickCue l;
     rx_stick_cue_from_track(lib, &l);
     if (rx_stick_cue_equal(s, &l))
         return true;
-    RxCue back;
+    RXCue back;
     rx_stick_cue_to_track(s, grid, &back);
-    RxStickCue colourless = *s;
+    RXStickCue colourless = *s;
     colourless.code = l.code;
     colourless.rgb = l.rgb;
     return rx_stick_cue_equal(&colourless, &l) && !strcasecmp(back.color, lib->color);
 }
 
-static const RxStickCue *find_hot(const RxStickCue *c, int n, int slot)
+static const RXStickCue *find_hot(const RXStickCue *c, int n, int slot)
 {
     for (int i = 0; i < n; i++)
         if (c[i].hot == slot)
@@ -970,7 +970,7 @@ static const RxStickCue *find_hot(const RxStickCue *c, int n, int slot)
 }
 
 /* Memory cues match within 20 ms (export.h). */
-static const RxStickCue *find_memory(const RxStickCue *c, int n, uint32_t in)
+static const RXStickCue *find_memory(const RXStickCue *c, int n, uint32_t in)
 {
     for (int i = 0; i < n; i++)
         if (c[i].hot < 0 && llabs((long long)c[i].in - (long long)in) <= 20)
@@ -978,31 +978,31 @@ static const RxStickCue *find_memory(const RxStickCue *c, int n, uint32_t in)
     return NULL;
 }
 
-static int cue_items(const RxLibrary *lib, const RxStickState *s, int k, RxArray *items)
+static int cue_items(const RXLibrary *lib, const RXStickState *s, int k, RXArray *items)
 {
-    const struct RxStickPriv *p = s->priv;
+    const struct RXStickPriv *p = s->priv;
     uint64_t id = s->tracks[k].track_id;
-    const RxTrack *t = rx_library_find_id(lib, id);
+    const RXTrack *t = rx_library_find_id(lib, id);
     if (!t)
         return 0;
-    const RxStickCue *sc = p->cues[k].cues;
+    const RXStickCue *sc = p->cues[k].cues;
     int ns = p->cues[k].nb;
-    const RxSyncTrack *base = p->has_record ? rx_sync_record_track(&p->record, id) : NULL;
+    const RXSyncTrack *base = p->has_record ? rx_sync_record_track(&p->record, id) : NULL;
     int ret = 0;
 
-    RxStickCue *lc = calloc((size_t)RX_MAX(t->nb_cues, 1), sizeof(*lc));
+    RXStickCue *lc = calloc((size_t)RX_MAX(t->nb_cues, 1), sizeof(*lc));
     if (!lc)
         return RX_ERROR(ENOMEM);
     for (int i = 0; i < t->nb_cues; i++)
         rx_stick_cue_from_track(&t->cues[i], &lc[i]);
 
     for (int slot = 0; slot < RX_HOT_CUE_SLOTS && ret >= 0; slot++) {
-        const RxStickCue *sv = find_hot(sc, ns, slot);
-        const RxStickCue *bv = base ? find_hot(base->cues, base->nb_cues, slot) : NULL;
+        const RXStickCue *sv = find_hot(sc, ns, slot);
+        const RXStickCue *bv = base ? find_hot(base->cues, base->nb_cues, slot) : NULL;
         int li = rx_track_hot_cue(t, slot);
         if (base && (sv ? bv && rx_stick_cue_equal(sv, bv) : !bv))
             continue;
-        RxSyncItem it = {
+        RXSyncItem it = {
             .track_id = id,
             .slot     = slot,
             .accepted = true,
@@ -1026,7 +1026,7 @@ static int cue_items(const RxLibrary *lib, const RxStickState *s, int k, RxArray
             continue;
         if (find_memory(lc, t->nb_cues, sc[i].in))
             continue;
-        RxSyncItem it = {
+        RXSyncItem it = {
             .kind     = RX_SYNC_MEMORY_ADDED,
             .track_id = id,
             .slot     = -1,
@@ -1038,13 +1038,13 @@ static int cue_items(const RxLibrary *lib, const RxStickState *s, int k, RxArray
     /* Removals only against the record: a memory cue the export wrote, the
      * stick no longer has and the library still has. */
     for (int i = 0; base && i < base->nb_cues && ret >= 0; i++) {
-        const RxStickCue *b = &base->cues[i];
+        const RXStickCue *b = &base->cues[i];
         if (b->hot >= 0 || find_memory(sc, ns, b->in))
             continue;
         for (int l = 0; l < t->nb_cues; l++) {
             if (lc[l].hot >= 0 || llabs((long long)lc[l].in - (long long)b->in) > 20)
                 continue;
-            RxSyncItem it = {
+            RXSyncItem it = {
                 .kind     = RX_SYNC_MEMORY_REMOVED,
                 .track_id = id,
                 .slot     = -1,
@@ -1070,9 +1070,9 @@ static uint32_t history_crc(const HistList *h, int count)
     return crc;
 }
 
-static int play_items(const RxLibrary *lib, const RxStickState *s, RxArray *items)
+static int play_items(const RXLibrary *lib, const RXStickState *s, RXArray *items)
 {
-    const struct RxStickPriv *p = s->priv;
+    const struct RXStickPriv *p = s->priv;
     for (int i = 0; i < p->nb_hist; i++) {
         const HistList *h = &p->hist[i];
         char key[48];
@@ -1088,13 +1088,13 @@ static int play_items(const RxLibrary *lib, const RxStickState *s, RxArray *item
         }
         free(v);
         for (int k = done; k < h->nb; k++) {
-            const RxTrack *t = rx_library_find_id(lib, h->track_ids[k]);
+            const RXTrack *t = rx_library_find_id(lib, h->track_ids[k]);
             bool known = false;
             for (int n = 0; t && n < s->nb_track_states && !known; n++)
                 known = s->tracks[n].track_id == h->track_ids[k];
             if (!known)
                 continue;
-            RxSyncItem it = {
+            RXSyncItem it = {
                 .kind       = RX_SYNC_PLAY,
                 .track_id   = t->id,
                 .slot       = -1,
@@ -1112,10 +1112,10 @@ static int play_items(const RxLibrary *lib, const RxStickState *s, RxArray *item
 
 /* The canonical (decoded) form of a library value for a setting, or the
  * file's default when the library has none. */
-static int library_setting(const RxLibrary *lib, const char *file, const char *key, char *buf, size_t size)
+static int library_setting(const RXLibrary *lib, const char *file, const char *key, char *buf, size_t size)
 {
     const char *section = settings_section(file);
-    const RxKv *kv = lib->cfg.device;
+    const RXKv *kv = lib->cfg.device;
     int nb = lib->cfg.nb_device;
     if (!strcmp(section, "player")) {
         kv = lib->cfg.player;
@@ -1124,7 +1124,7 @@ static int library_setting(const RxLibrary *lib, const char *file, const char *k
         kv = lib->cfg.mixer;
         nb = lib->cfg.nb_mixer;
     }
-    RxKv one = { 0 };
+    RXKv one = { 0 };
     for (int i = 0; i < nb; i++)
         if (!strcmp(kv[i].key, key))
             one = kv[i];
@@ -1133,7 +1133,7 @@ static int library_setting(const RxLibrary *lib, const char *file, const char *k
     if (rx_settings_encode(file, one.key ? &one : NULL, one.key ? 1 : 0, &data, &n) < 0 &&
         rx_settings_encode(file, NULL, 0, &data, &n) < 0)
         return RX_ERROR(EINVAL);
-    RxKv *dec;
+    RXKv *dec;
     int nd;
     int ret = rx_settings_decode(file, data, n, &dec, &nd);
     free(data);
@@ -1150,9 +1150,9 @@ static int library_setting(const RxLibrary *lib, const char *file, const char *k
     return ret;
 }
 
-static int setting_items(const RxLibrary *lib, const RxStickState *s, RxArray *items)
+static int setting_items(const RXLibrary *lib, const RXStickState *s, RXArray *items)
 {
-    const struct RxStickPriv *p = s->priv;
+    const struct RXStickPriv *p = s->priv;
     for (int i = 0; i < p->nb_files; i++) {
         const char *file = p->files[i].name;
         const uint8_t *base = NULL;
@@ -1166,7 +1166,7 @@ static int setting_items(const RxLibrary *lib, const RxStickState *s, RxArray *i
         /* Untouched since the export. */
         if (base && base_size == p->files[i].size && !memcmp(base, p->files[i].data, base_size))
             continue;
-        RxKv *now = NULL, *was = NULL;
+        RXKv *now = NULL, *was = NULL;
         int nn = 0, nw = 0;
         if (rx_settings_decode(file, p->files[i].data, p->files[i].size, &now, &nn) < 0)
             continue;
@@ -1183,7 +1183,7 @@ static int setting_items(const RxLibrary *lib, const RxStickState *s, RxArray *i
             char lv[32];
             if (library_setting(lib, file, now[k].key, lv, sizeof(lv)) < 0 || !strcmp(lv, now[k].value))
                 continue;
-            RxSyncItem it = {
+            RXSyncItem it = {
                 .kind     = RX_SYNC_SETTING,
                 .slot     = -1,
                 .accepted = true,
@@ -1203,14 +1203,14 @@ static int setting_items(const RxLibrary *lib, const RxStickState *s, RxArray *i
     return 0;
 }
 
-int rx_stick_diff(const RxLibrary *lib, const RxStickState *s, RxSyncItem **items, int *nb)
+int rx_stick_diff(const RXLibrary *lib, const RXStickState *s, RXSyncItem **items, int *nb)
 {
     *items = NULL;
     *nb = 0;
     if (!s->priv)
         return RX_ERROR(EINVAL);
-    RxArray a;
-    rx_array_init(&a, sizeof(RxSyncItem));
+    RXArray a;
+    rx_array_init(&a, sizeof(RXSyncItem));
     int ret = 0;
     for (int k = 0; k < s->nb_track_states && ret >= 0; k++)
         ret = cue_items(lib, s, k, &a);
@@ -1229,7 +1229,7 @@ int rx_stick_diff(const RxLibrary *lib, const RxStickState *s, RxSyncItem **item
 
 /* ------------------------------------------------------------ the apply */
 
-static int set_kv(RxKv **kv, int *nb, const char *key, const char *value)
+static int set_kv(RXKv **kv, int *nb, const char *key, const char *value)
 {
     for (int i = 0; i < *nb; i++) {
         if (!strcmp((*kv)[i].key, key)) {
@@ -1241,11 +1241,11 @@ static int set_kv(RxKv **kv, int *nb, const char *key, const char *value)
             return 0;
         }
     }
-    RxKv *n = realloc(*kv, (size_t)(*nb + 1) * sizeof(*n));
+    RXKv *n = realloc(*kv, (size_t)(*nb + 1) * sizeof(*n));
     if (!n)
         return RX_ERROR(ENOMEM);
     *kv = n;
-    n[*nb] = (RxKv) { .key = rx_strdup(key), .value = rx_strdup(value) };
+    n[*nb] = (RXKv) { .key = rx_strdup(key), .value = rx_strdup(value) };
     if (!n[*nb].key || !n[*nb].value) {
         free(n[*nb].key);
         free(n[*nb].value);
@@ -1255,16 +1255,16 @@ static int set_kv(RxKv **kv, int *nb, const char *key, const char *value)
     return 0;
 }
 
-int rx_stick_apply(RxLibrary *lib, const RxSyncItem *items, int nb, rx_progress_cb cb, void *opaque)
+int rx_stick_apply(RXLibrary *lib, const RXSyncItem *items, int nb, rx_progress_cb cb, void *opaque)
 {
     int applied = 0, ret = 0;
     bool settings = false;
-    RxTrack **dirty = calloc((size_t)RX_MAX(nb, 1), sizeof(*dirty));
+    RXTrack **dirty = calloc((size_t)RX_MAX(nb, 1), sizeof(*dirty));
     int nd = 0;
     if (!dirty)
         return RX_ERROR(ENOMEM);
     for (int i = 0; i < nb && ret >= 0; i++) {
-        const RxSyncItem *it = &items[i];
+        const RXSyncItem *it = &items[i];
         if (!it->accepted)
             continue;
         if (cb && !cb(opaque, "apply", i, nb, it->setting_key[0] ? it->setting_key : NULL)) {
@@ -1276,7 +1276,7 @@ int rx_stick_apply(RxLibrary *lib, const RxSyncItem *items, int nb, rx_progress_
             if (!dot)
                 continue;
             size_t sl = (size_t)(dot - it->setting_key);
-            RxConfig *c = &lib->cfg;
+            RXConfig *c = &lib->cfg;
             if (sl == 6 && !strncmp(it->setting_key, "player", 6))
                 ret = set_kv(&c->player, &c->nb_player, dot + 1, it->setting_value);
             else if (sl == 5 && !strncmp(it->setting_key, "mixer", 5))
@@ -1289,7 +1289,7 @@ int rx_stick_apply(RxLibrary *lib, const RxSyncItem *items, int nb, rx_progress_
             applied++;
             continue;
         }
-        RxTrack *t = rx_library_find_id(lib, it->track_id);
+        RXTrack *t = rx_library_find_id(lib, it->track_id);
         if (!t)
             continue;
         int idx;
@@ -1338,13 +1338,13 @@ int rx_stick_apply(RxLibrary *lib, const RxSyncItem *items, int nb, rx_progress_
     return ret < 0 ? ret : applied;
 }
 
-int rx_pull(RxLibrary *lib, const char *stick, rx_progress_cb cb, void *opaque)
+int rx_pull(RXLibrary *lib, const char *stick, rx_progress_cb cb, void *opaque)
 {
-    RxStickState s;
+    RXStickState s;
     int ret = rx_stick_read(lib, stick, &s);
     if (ret < 0)
         return ret;
-    RxSyncItem *items;
+    RXSyncItem *items;
     int nb;
     if ((ret = rx_stick_diff(lib, &s, &items, &nb)) >= 0) {
         ret = rx_stick_apply(lib, items, nb, cb, opaque);

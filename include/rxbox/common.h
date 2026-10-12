@@ -32,7 +32,7 @@
 
 /* ------------------------------------------------------------------ logging */
 
-enum RxLogLevel {
+enum RXLogLevel {
     RX_LOG_ERROR = 0,
     RX_LOG_WARN,
     RX_LOG_INFO,
@@ -42,11 +42,11 @@ enum RxLogLevel {
 /* Default sink: stderr, at RX_LOG_INFO. `rx_log_set_level` raises or lowers
  * it; `rx_log_set_sink` redirects every line (the interface shows them in
  * the status bar). Thread safe. */
-void rx_log(enum RxLogLevel level, const char *fmt, ...) RX_PRINTF(2, 3);
-void rx_vlog(enum RxLogLevel level, const char *fmt, va_list args);
-void rx_log_set_level(enum RxLogLevel level);
-enum RxLogLevel rx_log_level(void);
-typedef void (*rx_log_sink)(void *opaque, enum RxLogLevel level, const char *line);
+void rx_log(enum RXLogLevel level, const char *fmt, ...) RX_PRINTF(2, 3);
+void rx_vlog(enum RXLogLevel level, const char *fmt, va_list args);
+void rx_log_set_level(enum RXLogLevel level);
+enum RXLogLevel rx_log_level(void);
+typedef void (*rx_log_sink)(void *opaque, enum RXLogLevel level, const char *line);
 void rx_log_set_sink(rx_log_sink sink, void *opaque);
 
 #define rx_err(...)   rx_log(RX_LOG_ERROR, __VA_ARGS__)
@@ -110,21 +110,21 @@ const char *rx_fmt_time(double seconds, char *buf, size_t size);
 
 /* A minimal growable array of fixed-size elements, used throughout for
  * lists that are built then read. Elements are plain memory. */
-typedef struct RxArray {
+typedef struct RXArray {
     void  *data;
     size_t nb;        /* elements in use */
     size_t cap;       /* elements allocated */
     size_t elem;      /* element size in bytes */
-} RxArray;
+} RXArray;
 
-void  rx_array_init(RxArray *a, size_t elem_size);
+void  rx_array_init(RXArray *a, size_t elem_size);
 /* Appends a copy of `elem` (or zeroed storage when NULL); returns the new
  * element or NULL on ENOMEM. */
-void *rx_array_push(RxArray *a, const void *elem);
-void *rx_array_at(const RxArray *a, size_t i);
-int   rx_array_reserve(RxArray *a, size_t cap);
-void  rx_array_remove(RxArray *a, size_t i);        /* keeps order */
-void  rx_array_clear(RxArray *a);                   /* keeps storage */
-void  rx_array_free(RxArray *a);
+void *rx_array_push(RXArray *a, const void *elem);
+void *rx_array_at(const RXArray *a, size_t i);
+int   rx_array_reserve(RXArray *a, size_t cap);
+void  rx_array_remove(RXArray *a, size_t i);        /* keeps order */
+void  rx_array_clear(RXArray *a);                   /* keeps storage */
+void  rx_array_free(RXArray *a);
 
 #endif /* RXBOX_COMMON_H */

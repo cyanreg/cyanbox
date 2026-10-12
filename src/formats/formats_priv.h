@@ -37,21 +37,21 @@ uint32_t rx_crc32(uint32_t crc, const void *data, size_t size);
 
 /* One 32-bit constant per library (track row 0x18, OneLibrary masterDbId);
  * the plan sets it to dj's value, zlib.crc32 of the library root. */
-uint32_t rx_plan_library_id(const RxPlan *plan);
+uint32_t rx_plan_library_id(const RXPlan *plan);
 /* Track row 0x14 / OneLibrary masterContentId: crc32 of the stick path, or
  * 1 when that is 0 (dj). */
-uint32_t rx_plan_master_id(const RxPlanTrack *t);
-/* "YYYY-MM-DD" of when the track was added to the library (RxTrack.added;
+uint32_t rx_plan_master_id(const RXPlanTrack *t);
+/* "YYYY-MM-DD" of when the track was added to the library (RXTrack.added;
  * dj took the audio file's modification time, used here only for a track
- * without one). The export's own date is RxPlan.date, today. */
-void     rx_plan_date_added(const RxPlanTrack *t, char buf[16]);
+ * without one). The export's own date is RXPlan.date, today. */
+void     rx_plan_date_added(const RXPlanTrack *t, char buf[16]);
 /* "/PIONEER/USBANLZ/Pxxx/xxxxxxxx/ANLZnnnn.DAT" (or the .EXT/.2EX name). */
-char    *rx_plan_anlz_path(const RxPlanTrack *t, const char *ext);
+char    *rx_plan_anlz_path(const RXPlanTrack *t, const char *ext);
 /* "/PIONEER/Artwork/00001": folder id / 20 + 1 (docs/pdb.md 1.4). */
 char    *rx_plan_artwork_dir(uint32_t art_id);
 /* The track title as it goes in both databases: the tag, else the file
  * name without its extension (dj's track_from_probe). */
-const char *rx_plan_title(const RxPlanTrack *t, char *buf, size_t size);
+const char *rx_plan_title(const RXPlanTrack *t, char *buf, size_t size);
 /* The device name as the export.pdb property row can hold it: printable
  * ASCII only, other characters replaced by '_', at most 32. */
 void     rx_plan_ascii_label(const char *name, char *buf, size_t size);
@@ -64,26 +64,26 @@ extern const char *const rx_my_tag_columns[4];
 #define RX_PDB_PAGE 4096
 #define RX_PDB_HEAP 0x28
 
-enum RxPdbTable {
+enum RXPdbTable {
     RX_PDB_TRACKS = 0, RX_PDB_GENRES, RX_PDB_ARTISTS, RX_PDB_ALBUMS, RX_PDB_LABELS,
     RX_PDB_KEYS, RX_PDB_COLORS, RX_PDB_PLAYLIST_TREE, RX_PDB_PLAYLIST_ENTRIES,
     RX_PDB_HISTORY_PLAYLISTS = 0x0B, RX_PDB_HISTORY_ENTRIES = 0x0C, RX_PDB_ARTWORK = 0x0D,
     RX_PDB_COLUMNS = 0x10, RX_PDB_MENU = 0x11, RX_PDB_SORT = 0x12, RX_PDB_HISTORY = 0x13,
     RX_PDB_NUM_TABLES = 20,
 };
-enum RxPdbExtTable {
+enum RXPdbExtTable {
     RX_PDB_EXT_TAGS = 3, RX_PDB_EXT_TAG_TRACKS = 4, RX_PDB_EXT_T7 = 7, RX_PDB_EXT_NUM_TABLES = 9,
 };
 
-typedef struct RxPdbTableDir { uint32_t type, empty_candidate, first_page, last_page; } RxPdbTableDir;
-typedef struct RxPdbHeader {
+typedef struct RXPdbTableDir { uint32_t type, empty_candidate, first_page, last_page; } RXPdbTableDir;
+typedef struct RXPdbHeader {
     uint32_t len_page, num_tables, next_unused, unknown, sequence;
-    RxPdbTableDir tables[64];
-} RxPdbHeader;
+    RXPdbTableDir tables[64];
+} RXPdbHeader;
 
-int  rx_pdb_read_header(const uint8_t *b, size_t size, RxPdbHeader *h);
+int  rx_pdb_read_header(const uint8_t *b, size_t size, RXPdbHeader *h);
 /* File offsets of every present row of a table, in page and slot order. */
-int  rx_pdb_table_rows(const uint8_t *b, size_t size, const RxPdbTableDir *t,
+int  rx_pdb_table_rows(const uint8_t *b, size_t size, const RXPdbTableDir *t,
                        uint32_t **pos, int *nb);
 /* Reads a DeviceSQL string at `pos` (bounds-checked against `size`). */
 int  rx_pdb_read_string(const uint8_t *b, size_t size, size_t pos, char **utf8);
@@ -94,21 +94,21 @@ typedef void (*rx_problem_cb)(void *opaque, const char *problem);
 int  rx_pdb_check(const uint8_t *b, size_t size, rx_problem_cb cb, void *opaque);
 
 /* A track row as stored, for inspect's fixed-value checks. */
-typedef struct RxPdbRawTrack {
+typedef struct RXPdbRawTrack {
     uint32_t pos;                /* file offset of the row */
     uint16_t subtype, unk56, magic, file_type, duration, sample_depth;
     uint32_t bitmask, id, tempo, sample_rate, bitrate, artwork_id, artist_id, key_id;
     uint8_t  color_id, rating;
     uint16_t string_offsets[21];
     char    *strings[21];        /* isrc ... file_path, see pdb.c */
-} RxPdbRawTrack;
+} RXPdbRawTrack;
 enum {
     RX_PDB_STR_AUTOLOAD_HOTCUES = 7, RX_PDB_STR_DATE_ADDED = 10, RX_PDB_STR_ANALYZE_PATH = 14,
     RX_PDB_STR_ANALYZE_DATE = 15, RX_PDB_STR_COMMENT = 16, RX_PDB_STR_TITLE = 17,
     RX_PDB_STR_FILENAME = 19, RX_PDB_STR_FILE_PATH = 20,
 };
-int  rx_pdb_raw_tracks(const uint8_t *b, size_t size, RxPdbRawTrack **out, int *nb);
-void rx_pdb_raw_tracks_free(RxPdbRawTrack *t, int nb);
+int  rx_pdb_raw_tracks(const uint8_t *b, size_t size, RXPdbRawTrack **out, int *nb);
+void rx_pdb_raw_tracks_free(RXPdbRawTrack *t, int nb);
 /* The artwork table: id and path, for checking the files exist. */
 int  rx_pdb_artwork(const uint8_t *b, size_t size, uint32_t **ids, char ***paths, int *nb);
 /* The history (0x13) row: track count and date. */
@@ -117,22 +117,22 @@ int  rx_pdb_history(const uint8_t *b, size_t size, uint32_t *num_tracks, char **
  * and a name such as "HISTORY 001") and their entries (0x0C, u32 track id,
  * u32 playlist id, u32 index; crate-digger rekordbox_pdb.ksy, docs/pdb.md).
  * Lists by id, entries in index order. */
-typedef struct RxPdbHistoryList {
+typedef struct RXPdbHistoryList {
     uint32_t  id;
     char     *name;
     uint32_t *track_ids;
     int       nb;
-} RxPdbHistoryList;
-int  rx_pdb_history_lists(const uint8_t *b, size_t size, RxPdbHistoryList **out, int *nb);
-void rx_pdb_history_lists_free(RxPdbHistoryList *l, int nb);
+} RXPdbHistoryList;
+int  rx_pdb_history_lists(const uint8_t *b, size_t size, RXPdbHistoryList **out, int *nb);
+void rx_pdb_history_lists_free(RXPdbHistoryList *l, int nb);
 /* Bytes of a track row's allocation and content (the CDJ-350 crash rule,
  * docs/pdb.md G6), for the tests. */
-int  rx_pdb_track_row_size(const RxPlanTrack *t, const RxPlan *plan, size_t *len, size_t *alloc);
+int  rx_pdb_track_row_size(const RXPlanTrack *t, const RXPlan *plan, size_t *len, size_t *alloc);
 
 /* ------------------------------------------------------------------ anlz */
 
 /* A PCPT or PCP2 entry as stored (dj's read_cues dictionaries). */
-typedef struct RxAnlzCueEntry {
+typedef struct RXAnlzCueEntry {
     uint32_t hot, status;        /* status: PCPT only */
     uint16_t prev, next;         /* PCPT only */
     uint8_t  type;               /* 1 cue, 2 loop */
@@ -142,18 +142,18 @@ typedef struct RxAnlzCueEntry {
     char    *comment;            /* PCP2, UTF-8, NULL when none */
     bool     has_color;          /* PCP2 entry long enough for the colour bytes */
     uint8_t  color[4];           /* code, r, g, b */
-} RxAnlzCueEntry;
+} RXAnlzCueEntry;
 /* Entries of one PCOB or PCO2 tag; `declared` receives the count the
  * header claims. */
-int  rx_anlz_tag_cues(const RxAnlzTag *t, RxAnlzCueEntry **e, int *nb, int *declared);
-void rx_anlz_cue_entries_free(RxAnlzCueEntry *e, int nb);
+int  rx_anlz_tag_cues(const RXAnlzTag *t, RXAnlzCueEntry **e, int *nb, int *declared);
+void rx_anlz_cue_entries_free(RXAnlzCueEntry *e, int nb);
 /* dj's ms(): floor(t * 1000 + 0.5), and its loop quantum (numerator,
  * denominator for loops a power of two beats long); shared with the
  * OneLibrary cue table so both libraries agree. */
 uint32_t rx_anlz_ms(double t);
-void rx_anlz_loop_quantum(const RxPlanCue *c, const RxGrid *grid, uint16_t *num, uint16_t *den);
+void rx_anlz_loop_quantum(const RXPlanCue *c, const RXGrid *grid, uint16_t *num, uint16_t *den);
 /* PCOB list type and the memory_count word (docs/anlz.md 4.5). */
-int  rx_anlz_pcob_header(const RxAnlzTag *t, uint32_t *list_type, uint32_t *count_word);
+int  rx_anlz_pcob_header(const RXAnlzTag *t, uint32_t *list_type, uint32_t *count_word);
 
 /* ------------------------------------------------------------ onelibrary */
 
@@ -164,8 +164,8 @@ int  rx_onelibrary_open_plain(const uint8_t *plain, size_t size, sqlite3 **db);
 extern const char *const rx_onelibrary_schema[];
 extern const int rx_onelibrary_schema_count;
 /* The fixed browse-menu rows (docs/onelibrary.md 3.4). */
-typedef struct RxOneLibMenuItem { int id, kind; const char *name; } RxOneLibMenuItem;
-extern const RxOneLibMenuItem rx_onelibrary_menu_items[27];
+typedef struct RXOneLibMenuItem { int id, kind; const char *name; } RXOneLibMenuItem;
+extern const RXOneLibMenuItem rx_onelibrary_menu_items[27];
 extern const int rx_onelibrary_category[22][4];
 extern const int rx_onelibrary_sort[17][5];
 

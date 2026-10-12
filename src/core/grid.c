@@ -81,7 +81,7 @@ static bool bpm_ok(double bpm)
     return bpm >= BPM_MIN && bpm <= BPM_MAX;
 }
 
-static int bpb_of(const RxGrid *g)
+static int bpb_of(const RXGrid *g)
 {
     return g->beats_per_bar > 0 ? g->beats_per_bar : 4;
 }
@@ -148,7 +148,7 @@ static Beat last_beat(const Sec *s)
     };
 }
 
-static void set_extent(const RxGrid *g, Sec *s)
+static void set_extent(const RXGrid *g, Sec *s)
 {
     s->last = s->index + 1 >= g->nb_sections;
     if (s->last) {
@@ -169,9 +169,9 @@ static void set_extent(const RxGrid *g, Sec *s)
     s->n = n;
 }
 
-static void walk_init(const RxGrid *g, Sec *s)
+static void walk_init(const RXGrid *g, Sec *s)
 {
-    const RxTempoSection *t = &g->sections[0];
+    const RXTempoSection *t = &g->sections[0];
     int bpb = bpb_of(g);
     *s = (Sec) {
         .index  = 0,
@@ -185,14 +185,14 @@ static void walk_init(const RxGrid *g, Sec *s)
     set_extent(g, s);
 }
 
-static bool walk_next(const RxGrid *g, Sec *s)
+static bool walk_next(const RXGrid *g, Sec *s)
 {
     if (s->last)
         return false;
 
     Beat prev = last_beat(s);
     int64_t next_g = s->g + s->n;
-    const RxTempoSection *t = &g->sections[s->index + 1];
+    const RXTempoSection *t = &g->sections[s->index + 1];
 
     s->index++;
     s->start = t->start;
@@ -209,7 +209,7 @@ static bool walk_next(const RxGrid *g, Sec *s)
 }
 
 /* To the section whose time range holds t (the first one for t before it). */
-static void walk_to_time(const RxGrid *g, double t, Sec *s)
+static void walk_to_time(const RXGrid *g, double t, Sec *s)
 {
     walk_init(g, s);
     while (!s->last && g->sections[s->index + 1].start <= t)
@@ -218,7 +218,7 @@ static void walk_to_time(const RxGrid *g, double t, Sec *s)
 
 /* To the section holding running index x (fractional allowed); empty
  * sections are skipped since the next one has the same index. */
-static void walk_to_index(const RxGrid *g, double x, Sec *s)
+static void walk_to_index(const RXGrid *g, double x, Sec *s)
 {
     walk_init(g, s);
     while (!s->last && (double)(s->g + s->n) <= x)
@@ -247,7 +247,7 @@ static int64_t ceil_k(const Sec *s, double t)
 }
 
 /* The first beat of the sections after s (walks s forward). */
-static Beat next_section_beat(const RxGrid *g, Sec *s)
+static Beat next_section_beat(const RXGrid *g, Sec *s)
 {
     while (walk_next(g, s)) {
         if (s->n > 0 || s->last)
@@ -257,7 +257,7 @@ static Beat next_section_beat(const RxGrid *g, Sec *s)
 }
 
 /* The last beat at or before t and the first one after it. */
-static void locate(const RxGrid *g, double t, Beat *before, Beat *after)
+static void locate(const RXGrid *g, double t, Beat *before, Beat *after)
 {
     Sec s;
     walk_to_time(g, t, &s);
@@ -286,7 +286,7 @@ typedef struct Ref {
     int64_t g_down, bar_down;
 } Ref;
 
-static Ref grid_ref(const RxGrid *g)
+static Ref grid_ref(const RXGrid *g)
 {
     Ref r = { 0 };
     Sec s;
@@ -312,7 +312,7 @@ static Ref grid_ref(const RxGrid *g)
 
 /* The fraction is measured from the beat at or before t, so a beat's own
  * time gives exactly its integer index. */
-static double walk_time_to_index(const RxGrid *g, double t)
+static double walk_time_to_index(const RXGrid *g, double t)
 {
     Sec s;
     walk_to_time(g, t, &s);
@@ -326,7 +326,7 @@ static double walk_time_to_index(const RxGrid *g, double t)
     return (double)(s.g + k) + (t - tk) / (beat_time(&s, k + 1) - tk);
 }
 
-static double walk_index_to_time(const RxGrid *g, double x)
+static double walk_index_to_time(const RXGrid *g, double x)
 {
     Sec s;
     walk_to_index(g, x, &s);
@@ -341,7 +341,7 @@ static double walk_index_to_time(const RxGrid *g, double x)
 /* Running index of the beat of (bar, number), bars counted from the first
  * downbeat. A number the bar lacks (a short bar, or > beats_per_bar) counts
  * on from the bar's first beat, as dj's arithmetic did. */
-static int64_t bar_beat_index(const RxGrid *g, const Ref *r, int64_t bar, int64_t beat)
+static int64_t bar_beat_index(const RXGrid *g, const Ref *r, int64_t bar, int64_t beat)
 {
     int64_t target = bar - 1 + r->bar_down;
     bool have_first = false;
@@ -383,15 +383,15 @@ static int64_t bar_beat_index(const RxGrid *g, const Ref *r, int64_t bar, int64_
 
 /* ------------------------------------------------------------ lifecycle */
 
-int rx_grid_init(RxGrid *g, double start, double bpm)
+int rx_grid_init(RXGrid *g, double start, double bpm)
 {
-    *g = (RxGrid) { .beats_per_bar = 4 };
+    *g = (RXGrid) { .beats_per_bar = 4 };
     if (!isfinite(start) || !bpm_ok(bpm))
         return RX_ERROR(EINVAL);
     g->sections = malloc(sizeof(*g->sections));
     if (!g->sections)
         return RX_ERROR(ENOMEM);
-    g->sections[0] = (RxTempoSection) {
+    g->sections[0] = (RXTempoSection) {
         .start = start,
         .bpm   = bpm,
         .beat  = 1,
@@ -401,11 +401,11 @@ int rx_grid_init(RxGrid *g, double start, double bpm)
 }
 
 /* dst may hold a grid (it is freed) or be zeroed; dst == src is fine. */
-int rx_grid_copy(RxGrid *dst, const RxGrid *src)
+int rx_grid_copy(RXGrid *dst, const RXGrid *src)
 {
     if (dst == src)
         return 0;
-    RxTempoSection *secs = NULL;
+    RXTempoSection *secs = NULL;
     if (src->nb_sections > 0) {
         secs = malloc((size_t)src->nb_sections * sizeof(*secs));
         if (!secs)
@@ -419,7 +419,7 @@ int rx_grid_copy(RxGrid *dst, const RxGrid *src)
     return 0;
 }
 
-void rx_grid_free(RxGrid *g)
+void rx_grid_free(RXGrid *g)
 {
     if (!g)
         return;
@@ -428,14 +428,14 @@ void rx_grid_free(RxGrid *g)
     g->nb_sections = 0;
 }
 
-bool rx_grid_valid(const RxGrid *g)
+bool rx_grid_valid(const RXGrid *g)
 {
     if (!g || g->nb_sections < 1 || !g->sections)
         return false;
     if (g->beats_per_bar < 0 || g->beats_per_bar > 64)
         return false;
     for (int i = 0; i < g->nb_sections; i++) {
-        const RxTempoSection *s = &g->sections[i];
+        const RXTempoSection *s = &g->sections[i];
         if (!isfinite(s->start) || !bpm_ok(s->bpm))
             return false;
         if (i > 0 && !(s->start > g->sections[i - 1].start))
@@ -444,12 +444,12 @@ bool rx_grid_valid(const RxGrid *g)
     return true;
 }
 
-double rx_grid_bpm(const RxGrid *g)
+double rx_grid_bpm(const RXGrid *g)
 {
     return g && g->nb_sections > 0 ? g->sections[0].bpm : 0.0;
 }
 
-int rx_grid_section_at(const RxGrid *g, double t)
+int rx_grid_section_at(const RXGrid *g, double t)
 {
     if (!g || g->nb_sections < 1)
         return -1;
@@ -459,7 +459,7 @@ int rx_grid_section_at(const RxGrid *g, double t)
     return i;
 }
 
-double rx_grid_bpm_at(const RxGrid *g, double t)
+double rx_grid_bpm_at(const RXGrid *g, double t)
 {
     int i = rx_grid_section_at(g, t);
     return i < 0 ? 0.0 : g->sections[i].bpm;
@@ -468,13 +468,13 @@ double rx_grid_bpm_at(const RxGrid *g, double t)
 /* Section starts closer than this are the same start. */
 #define SAME_START 1e-4
 
-int rx_grid_add_section(RxGrid *g, double start, double bpm, int beat)
+int rx_grid_add_section(RXGrid *g, double start, double bpm, int beat)
 {
     int bpb = bpb_of(g);
     if (!isfinite(start) || !bpm_ok(bpm) || beat < 0 || beat > bpb)
         return RX_ERROR(EINVAL);
 
-    RxTempoSection sec = {
+    RXTempoSection sec = {
         .start = start,
         .bpm   = bpm,
         .beat  = beat,
@@ -488,7 +488,7 @@ int rx_grid_add_section(RxGrid *g, double start, double bpm, int beat)
         return at;
     }
 
-    RxTempoSection *secs = realloc(g->sections, (size_t)(g->nb_sections + 1) * sizeof(*secs));
+    RXTempoSection *secs = realloc(g->sections, (size_t)(g->nb_sections + 1) * sizeof(*secs));
     if (!secs)
         return RX_ERROR(ENOMEM);
     memmove(&secs[at + 1], &secs[at], (size_t)(g->nb_sections - at) * sizeof(*secs));
@@ -500,7 +500,7 @@ int rx_grid_add_section(RxGrid *g, double start, double bpm, int beat)
     return at;
 }
 
-int rx_grid_remove_section(RxGrid *g, int index)
+int rx_grid_remove_section(RXGrid *g, int index)
 {
     if (!g || index < 0 || index >= g->nb_sections)
         return RX_ERROR(EINVAL);
@@ -516,7 +516,7 @@ int rx_grid_remove_section(RxGrid *g, int index)
 
 /* ----------------------------------------------------------------- beats */
 
-int rx_grid_beats(const RxGrid *g, double duration, RxBeat **beats, int *nb)
+int rx_grid_beats(const RXGrid *g, double duration, RXBeat **beats, int *nb)
 {
     *beats = NULL;
     *nb = 0;
@@ -525,7 +525,7 @@ int rx_grid_beats(const RxGrid *g, double duration, RxBeat **beats, int *nb)
 
     /* Two passes: count, section by section (so a duration no file has is
      * refused at once), then fill. */
-    RxBeat *out = NULL;
+    RXBeat *out = NULL;
     int64_t total = 0;
     for (int pass = 0; pass < 2; pass++) {
         int64_t i = 0;
@@ -544,7 +544,7 @@ int rx_grid_beats(const RxGrid *g, double duration, RxBeat **beats, int *nb)
             }
             for (int64_t k = lo; k < hi; k++) {
                 Beat b = beat_at(&s, k);
-                out[i++] = (RxBeat) {
+                out[i++] = (RXBeat) {
                     .time   = b.time,
                     .number = b.number,
                     .bpm    = g->sections[s.index].bpm,
@@ -569,7 +569,7 @@ int rx_grid_beats(const RxGrid *g, double duration, RxBeat **beats, int *nb)
     return 0;
 }
 
-double rx_grid_nearest_beat(const RxGrid *g, double t, int *number)
+double rx_grid_nearest_beat(const RXGrid *g, double t, int *number)
 {
     /* Not a time on the timeline (NaN, an infinity): given back as it is;
      * the walks would clamp it to some beat 2^50 periods away. */
@@ -586,7 +586,7 @@ double rx_grid_nearest_beat(const RxGrid *g, double t, int *number)
     return b->time;
 }
 
-double rx_grid_quantize(const RxGrid *g, double t)
+double rx_grid_quantize(const RXGrid *g, double t)
 {
     return rx_grid_nearest_beat(g, t, NULL);
 }
@@ -594,7 +594,7 @@ double rx_grid_quantize(const RxGrid *g, double t)
 /* The 1 ms of the header: a beat that close to t counts as "at" t. */
 #define AT_TOLERANCE 0.001
 
-double rx_grid_beat_before(const RxGrid *g, double t)
+double rx_grid_beat_before(const RXGrid *g, double t)
 {
     if (!rx_grid_valid(g) || !isfinite(t))
         return t;
@@ -603,7 +603,7 @@ double rx_grid_beat_before(const RxGrid *g, double t)
     return before.time;
 }
 
-double rx_grid_beat_after(const RxGrid *g, double t)
+double rx_grid_beat_after(const RXGrid *g, double t)
 {
     if (!rx_grid_valid(g) || !isfinite(t))
         return t;
@@ -612,7 +612,7 @@ double rx_grid_beat_after(const RxGrid *g, double t)
     return after.time;
 }
 
-double rx_grid_time_to_beat(const RxGrid *g, double t)
+double rx_grid_time_to_beat(const RXGrid *g, double t)
 {
     if (!rx_grid_valid(g))
         return NAN;
@@ -620,7 +620,7 @@ double rx_grid_time_to_beat(const RxGrid *g, double t)
     return walk_time_to_index(g, t) - (double)r.g_down;
 }
 
-double rx_grid_beat_to_time(const RxGrid *g, double beat)
+double rx_grid_beat_to_time(const RXGrid *g, double beat)
 {
     if (!rx_grid_valid(g))
         return NAN;
@@ -628,14 +628,14 @@ double rx_grid_beat_to_time(const RxGrid *g, double beat)
     return walk_index_to_time(g, beat + (double)r.g_down);
 }
 
-double rx_grid_offset_beats(const RxGrid *g, double t, double beats)
+double rx_grid_offset_beats(const RXGrid *g, double t, double beats)
 {
     if (!rx_grid_valid(g))
         return t;
     return walk_index_to_time(g, walk_time_to_index(g, t) + beats);
 }
 
-double rx_grid_bar_time(const RxGrid *g, int bar, int beat)
+double rx_grid_bar_time(const RXGrid *g, int bar, int beat)
 {
     if (!rx_grid_valid(g))
         return NAN;
@@ -643,7 +643,7 @@ double rx_grid_bar_time(const RxGrid *g, int bar, int beat)
     return walk_index_to_time(g, (double)bar_beat_index(g, &r, bar, beat));
 }
 
-void rx_grid_bar_of(const RxGrid *g, double t, int *bar, int *beat)
+void rx_grid_bar_of(const RXGrid *g, double t, int *bar, int *beat)
 {
     if (!rx_grid_valid(g) || !isfinite(t)) {
         *bar = 0;
@@ -661,13 +661,13 @@ void rx_grid_bar_of(const RxGrid *g, double t, int *bar, int *beat)
 
 /* ----------------------------------------------------------------- edits */
 
-void rx_grid_shift(RxGrid *g, double delta)
+void rx_grid_shift(RXGrid *g, double delta)
 {
     for (int i = 0; i < g->nb_sections; i++)
         g->sections[i].start += delta;
 }
 
-void rx_grid_set_bpm_at(RxGrid *g, double t, double bpm)
+void rx_grid_set_bpm_at(RXGrid *g, double t, double bpm)
 {
     int i = rx_grid_section_at(g, t);
     if (i < 0 || isnan(t) || !bpm_ok(bpm))
@@ -676,7 +676,7 @@ void rx_grid_set_bpm_at(RxGrid *g, double t, double bpm)
 }
 
 /* The section and k of the beat nearest to t. */
-static Beat nearest(const RxGrid *g, double t, Sec *s, int64_t *k)
+static Beat nearest(const RXGrid *g, double t, Sec *s, int64_t *k)
 {
     Beat before, after;
     locate(g, t, &before, &after);
@@ -686,14 +686,14 @@ static Beat nearest(const RxGrid *g, double t, Sec *s, int64_t *k)
     return b;
 }
 
-void rx_grid_set_downbeat(RxGrid *g, double t)
+void rx_grid_set_downbeat(RXGrid *g, double t)
 {
     if (!rx_grid_valid(g) || !isfinite(t))
         return;
     Sec s;
     int64_t k;
     Beat b = nearest(g, t, &s, &k);
-    RxTempoSection *sec = &g->sections[s.index];
+    RXTempoSection *sec = &g->sections[s.index];
     if (s.index == 0) {
         /* The first section extends both ways, so its start may be any of
          * its beats: moving it onto the new downbeat keeps the usual form
@@ -705,7 +705,7 @@ void rx_grid_set_downbeat(RxGrid *g, double t)
     }
 }
 
-int rx_grid_split_at(RxGrid *g, double t)
+int rx_grid_split_at(RXGrid *g, double t)
 {
     if (!rx_grid_valid(g) || !isfinite(t))
         return RX_ERROR(EINVAL);
@@ -721,7 +721,7 @@ int rx_grid_split_at(RxGrid *g, double t)
     return rx_grid_add_section(g, b.time, g->sections[s.index].bpm, beat);
 }
 
-int rx_grid_merge_at(RxGrid *g, double t)
+int rx_grid_merge_at(RXGrid *g, double t)
 {
     if (!g || g->nb_sections < 2)
         return RX_ERROR(ENOENT);
@@ -739,14 +739,14 @@ int rx_grid_merge_at(RxGrid *g, double t)
 /* ------------------------------------------------- positions (core only) */
 
 /* Beat index (rx_grid_time_to_beat units) of "bar N.B". */
-double rx_core_grid_bar_index(const RxGrid *g, int64_t bar, int64_t beat)
+double rx_core_grid_bar_index(const RXGrid *g, int64_t bar, int64_t beat)
 {
     Ref r = grid_ref(g);
     return (double)(bar_beat_index(g, &r, bar, beat) - r.g_down);
 }
 
 /* Bar and number of an integer beat index: the inverse of the above. */
-void rx_core_grid_describe(const RxGrid *g, int64_t grid_beat, int64_t *bar, int *beat)
+void rx_core_grid_describe(const RXGrid *g, int64_t grid_beat, int64_t *bar, int *beat)
 {
     Ref r = grid_ref(g);
     Sec s;

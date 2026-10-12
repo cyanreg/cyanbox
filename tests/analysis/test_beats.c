@@ -339,9 +339,9 @@ static int check(int idx)
     Truth truth;
     if (synth(sp, &t, &truth) < 0)
         return 1;
-    RxAnalysisOptions opt;
+    RXAnalysisOptions opt;
     rx_analysis_options_default(&opt);
-    RxBeatResult r;
+    RXBeatResult r;
     int ret = rx_analyse_beats(t.x, t.n, RATE, &opt, &r);
     free(t.x);
     if (ret < 0) {
@@ -360,7 +360,7 @@ static int check(int idx)
     if (r.grid.nb_sections != truth.nb_secs)
         FAILF(" sections %d (want %d)", r.grid.nb_sections, truth.nb_secs);
     for (int s = 0; s < RX_MIN(r.grid.nb_sections, truth.nb_secs); s++) {
-        const RxTempoSection *g = &r.grid.sections[s];
+        const RXTempoSection *g = &r.grid.sections[s];
         if (fabs(g->bpm - truth.bpm[s]) > 0.05)
             FAILF(" bpm[%d] %.4f (want %g)", s, g->bpm, truth.bpm[s]);
         double p = 60.0 / truth.bpm[s];
@@ -386,7 +386,7 @@ static int check(int idx)
                 FAILF(" boundary at %.4f (want %.4f)", g->start, truth.start[s]);
             int num = g->beat;
             if (!num) {
-                const RxTempoSection *pg = &r.grid.sections[s - 1];
+                const RXTempoSection *pg = &r.grid.sections[s - 1];
                 int pnum = pg->beat ? pg->beat : 1;
                 long beats = lrint((g->start - pg->start) * pg->bpm / 60.0);
                 num = (int)((pnum - 1 + beats) % 4) + 1;
@@ -398,7 +398,7 @@ static int check(int idx)
     /* The grid as the stick gets it (rxbox/model.h's expansion): no two
      * beats closer than half a period, and every section's first downbeat
      * numbered 1. */
-    RxBeat *bt = NULL;
+    RXBeat *bt = NULL;
     int nbt = 0;
     double dur = (double)t.n / RATE;
     if (rx_grid_beats(&r.grid, dur, &bt, &nbt) == 0) {
@@ -442,7 +442,7 @@ static int check_misc(void)
     int fails = 0;
     /* Flag names round-trip. */
     for (unsigned f = 1; f <= RX_GRID_FLAG_PHASE_CUT; f <<= 1) {
-        const char *n = rx_grid_flag_name((enum RxGridFlag)f);
+        const char *n = rx_grid_flag_name((enum RXGridFlag)f);
         if (!n || !*n || rx_grid_flag_parse(n) != f) {
             printf("FAIL flag name 0x%x\n", f);
             fails++;
@@ -455,7 +455,7 @@ static int check_misc(void)
 
     /* Silence and a too-short input give an empty grid, not an error. */
     float *z = calloc(RATE * 20, sizeof(*z));
-    RxBeatResult r;
+    RXBeatResult r;
     if (rx_analyse_beats(z, RATE * 20, RATE, NULL, &r) < 0 || r.grid.nb_sections != 0) {
         printf("FAIL silence: %d sections\n", r.grid.nb_sections);
         fails++;
@@ -474,7 +474,7 @@ static int check_misc(void)
     Truth truth;
     if (synth(&cases[0], &t, &truth) < 0)
         return fails + 1;
-    RxBeatResult a, b;
+    RXBeatResult a, b;
     rx_analyse_beats(t.x, t.n, RATE, NULL, &a);
     rx_analyse_beats(t.x, t.n, RATE, NULL, &b);
     if (a.grid.nb_sections != b.grid.nb_sections || !a.grid.nb_sections ||
@@ -492,7 +492,7 @@ static int check_misc(void)
         double f = pos - j;
         x48[i] = (float)(j + 1 < t.n ? t.x[j] * (1 - f) + t.x[j + 1] * f : 0.0);
     }
-    RxBeatResult c;
+    RXBeatResult c;
     rx_analyse_beats(x48, n48, 48000, NULL, &c);
     if (!c.grid.nb_sections || fabs(c.grid.sections[0].start - a.grid.sections[0].start) > 0.0005 ||
         fabs(c.grid.sections[0].bpm - a.grid.sections[0].bpm) > 0.01) {
@@ -521,11 +521,11 @@ static int check_analyse(void)
     Truth truth;
     if (synth(&cases[0], &t, &truth) < 0)
         return 1;
-    RxBeatResult mono;
+    RXBeatResult mono;
     rx_analyse_beats(t.x, t.n, RATE, NULL, &mono);
 
     int64_t n48 = t.n * 48000 / RATE;
-    RxAudio au = {
+    RXAudio au = {
         .samples   = malloc(n48 * 2 * sizeof(float)),
         .channels  = 2,
         .rate      = 48000,
@@ -542,7 +542,7 @@ static int check_analyse(void)
         float v = (float)(j + 1 < t.n ? t.x[j] * (1 - f) + t.x[j + 1] * f : 0.0);
         au.samples[2 * i] = au.samples[2 * i + 1] = v;
     }
-    RxAnalysis a;
+    RXAnalysis a;
     int ret = rx_analyse(&au, NULL, RX_ANALYSE_ALL, &a);
     if (ret < 0 || a.done != RX_ANALYSE_ALL) {
         printf("FAIL rx_analyse: ret %d done 0x%x\n", ret, a.done);
@@ -563,7 +563,7 @@ static int check_analyse(void)
 
     /* The cue: the first downbeat at or after the music starts, musical,
      * once; nothing for a track that already has cues. */
-    RxTrack *tr = rx_track_new("/test/house124.flac");
+    RXTrack *tr = rx_track_new("/test/house124.flac");
     if (tr && a.beats.grid.nb_sections) {
         tr->duration = a.duration;
         double first = a.beats.first_onset;
@@ -582,10 +582,10 @@ static int check_analyse(void)
             printf("ok   auto cue at the first downbeat (%.3f s)\n", tr->cues[0].time);
         }
         /* A track with a cue of its own gets none. */
-        RxTrack *t2 = rx_track_new("/test/has-cue.flac");
+        RXTrack *t2 = rx_track_new("/test/has-cue.flac");
         if (t2) {
             t2->duration = a.duration;
-            RxCue own;
+            RXCue own;
             rx_cue_init(&own, 30.0);
             rx_track_add_cue(t2, &own);
             rx_analysis_auto_cues(t2, &a.beats);

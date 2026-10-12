@@ -26,7 +26,7 @@
 
 #include "beats_internal.h"
 
-int rx_analyse(const RxAudio *audio, const RxAnalysisOptions *opt, unsigned what, RxAnalysis *out)
+int rx_analyse(const RXAudio *audio, const RXAnalysisOptions *opt, unsigned what, RXAnalysis *out)
 {
     memset(out, 0, sizeof(*out));
     if (!audio || !audio->samples || audio->channels <= 0 || audio->rate <= 0 ||
@@ -34,14 +34,14 @@ int rx_analyse(const RxAudio *audio, const RxAnalysisOptions *opt, unsigned what
         return RX_ERROR(EINVAL);
     out->duration = (double)audio->nb_frames / audio->rate;
 
-    RxAnalysisOptions defopt;
+    RXAnalysisOptions defopt;
     if (!opt) {
         rx_analysis_options_default(&defopt);
         opt = &defopt;
     }
 
     int ret = 0, first_err = 0;
-    RxAudio mono = { 0 };
+    RXAudio mono = { 0 };
     const float *x = audio->samples;
     if (audio->channels != 1) {
         if ((ret = rx_audio_to_mono(audio, &mono)) < 0)
@@ -97,14 +97,14 @@ int rx_analyse(const RxAudio *audio, const RxAnalysisOptions *opt, unsigned what
     return first_err;
 }
 
-void rx_analysis_free(RxAnalysis *a)
+void rx_analysis_free(RXAnalysis *a)
 {
     rx_beat_result_free(&a->beats);
     rx_waveforms_free(&a->waves);
     memset(a, 0, sizeof(*a));
 }
 
-int rx_analysis_auto_cues(RxTrack *t, const RxBeatResult *beats)
+int rx_analysis_auto_cues(RXTrack *t, const RXBeatResult *beats)
 {
     /* dj's export._auto_cues: one memory cue, on the first downbeat at or
      * after the first onset (50 ms of slack, so a downbeat that the onset
@@ -114,12 +114,12 @@ int rx_analysis_auto_cues(RxTrack *t, const RxBeatResult *beats)
      * no cues yet, as dj did it: a cue the DJ set is theirs to keep. */
     if (!t || !beats || t->nb_cues > 0)
         return 0;
-    const RxGrid *g = rx_grid_valid(&t->grid) ? &t->grid : &beats->grid;
+    const RXGrid *g = rx_grid_valid(&t->grid) ? &t->grid : &beats->grid;
     if (!rx_grid_valid(g))
         return 0;
     double duration = t->duration > 0.0 ? t->duration : 1e6;
 
-    RxBeat *b = NULL;
+    RXBeat *b = NULL;
     int nb = 0;
     int ret = rx_grid_beats(g, duration, &b, &nb);
     if (ret < 0)
@@ -135,7 +135,7 @@ int rx_analysis_auto_cues(RxTrack *t, const RxBeatResult *beats)
     if (isnan(at))
         return 0;
 
-    RxCue c;
+    RXCue c;
     rx_cue_init(&c, at);
     rx_cue_attach_to_grid(&c, g);
     ret = rx_track_add_cue(t, &c);

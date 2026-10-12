@@ -14,7 +14,7 @@
 #include "rxbox/analysis.h"
 #include "core.h"
 
-int rx_library_waveforms_save(RxLibrary *lib, uint64_t id, const RxWaveforms *w)
+int rx_library_waveforms_save(RXLibrary *lib, uint64_t id, const RXWaveforms *w)
 {
     uint8_t *data;
     size_t size;
@@ -26,7 +26,7 @@ int rx_library_waveforms_save(RxLibrary *lib, uint64_t id, const RxWaveforms *w)
     return ret;
 }
 
-int rx_library_waveforms_load(const RxLibrary *lib, uint64_t id, RxWaveforms *w)
+int rx_library_waveforms_load(const RXLibrary *lib, uint64_t id, RXWaveforms *w)
 {
     uint8_t *data;
     size_t size;

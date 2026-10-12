@@ -27,7 +27,7 @@
 #include <spa/param/audio/format-utils.h>
 #include <spa/pod/builder.h>
 
-struct RxPwOut {
+struct RXPwOut {
     struct pw_thread_loop *loop;
     struct pw_stream      *stream;
     bool                   inited;
@@ -35,7 +35,7 @@ struct RxPwOut {
 
 static void on_process(void *data)
 {
-    RxPlayer *p = data;
+    RXPlayer *p = data;
     struct pw_stream *stream = p->pw->stream;
     struct pw_buffer *b = pw_stream_dequeue_buffer(stream);
     if (!b)
@@ -64,8 +64,8 @@ static void on_process(void *data)
 static void on_state_changed(void *data, enum pw_stream_state old,
                              enum pw_stream_state state, const char *error)
 {
-    RxPlayer *p = data;
-    enum RxOutState s;
+    RXPlayer *p = data;
+    enum RXOutState s;
 
     switch (state) {
     case PW_STREAM_STATE_STREAMING:
@@ -107,7 +107,7 @@ static void on_state_changed(void *data, enum pw_stream_state old,
  * but the mix reads the rate from here every callback either way. */
 static void on_param_changed(void *data, uint32_t id, const struct spa_pod *param)
 {
-    RxPlayer *p = data;
+    RXPlayer *p = data;
     if (!param || id != SPA_PARAM_Format)
         return;
 
@@ -125,9 +125,9 @@ static const struct pw_stream_events stream_events = {
     .process       = on_process,
 };
 
-int rx_player_pw_open(RxPlayer *p)
+int rx_player_pw_open(RXPlayer *p)
 {
-    RxPwOut *pw = calloc(1, sizeof(*pw));
+    RXPwOut *pw = calloc(1, sizeof(*pw));
     if (!pw)
         return RX_ERROR(ENOMEM);
     p->pw = pw;
@@ -198,9 +198,9 @@ int rx_player_pw_open(RxPlayer *p)
     return 0;
 }
 
-void rx_player_pw_close(RxPlayer *p)
+void rx_player_pw_close(RXPlayer *p)
 {
-    RxPwOut *pw = p->pw;
+    RXPwOut *pw = p->pw;
     if (!pw)
         return;
 

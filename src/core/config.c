@@ -1,6 +1,6 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
-/* The settings (rxbox/library.h RxConfig) and where the library lives.
+/* The settings (rxbox/library.h RXConfig) and where the library lives.
  *
  * Settings are rows of the `setting` table, text keys and text values:
  *
@@ -27,9 +27,9 @@
 
 #include "rxbox/analysis.h"
 
-void rx_config_defaults(RxConfig *c)
+void rx_config_defaults(RXConfig *c)
 {
-    *c = (RxConfig) {
+    *c = (RXConfig) {
         .snap_bpm          = true,
         .auto_cues         = true,
         .allow_sections    = true,
@@ -42,7 +42,7 @@ void rx_config_defaults(RxConfig *c)
     };
 }
 
-static void kv_free(RxKv **kv, int *nb)
+static void kv_free(RXKv **kv, int *nb)
 {
     for (int i = 0; i < *nb; i++) {
         free((*kv)[i].key);
@@ -53,7 +53,7 @@ static void kv_free(RxKv **kv, int *nb)
     *nb = 0;
 }
 
-void rx_config_free(RxConfig *c)
+void rx_config_free(RXConfig *c)
 {
     if (!c)
         return;
@@ -150,9 +150,9 @@ static const char *fmt_what(unsigned what, char *buf, size_t size)
     return buf[0] ? buf : NULL;
 }
 
-static int kv_push(RxKv **kv, int *nb, const char *key, const char *value)
+static int kv_push(RXKv **kv, int *nb, const char *key, const char *value)
 {
-    RxKv *n = realloc(*kv, (size_t)(*nb + 1) * sizeof(*n));
+    RXKv *n = realloc(*kv, (size_t)(*nb + 1) * sizeof(*n));
     if (!n)
         return RX_ERROR(ENOMEM);
     *kv = n;
@@ -162,7 +162,7 @@ static int kv_push(RxKv **kv, int *nb, const char *key, const char *value)
         free(v);
         return RX_ERROR(ENOMEM);
     }
-    n[(*nb)++] = (RxKv) {
+    n[(*nb)++] = (RXKv) {
         .key   = k,
         .value = v,
     };
@@ -184,7 +184,7 @@ static void bad_value(const char *key, const char *value)
     rx_warn("setting %s = \"%s\" is not valid; using the default", key, value);
 }
 
-static int apply_setting(RxConfig *c, const char *key, const char *value)
+static int apply_setting(RXConfig *c, const char *key, const char *value)
 {
     double d;
 
@@ -253,7 +253,7 @@ static int apply_setting(RxConfig *c, const char *key, const char *value)
     return 0;
 }
 
-int rx_core_config_load(RxLibrary *lib)
+int rx_core_config_load(RXLibrary *lib)
 {
     rx_config_free(&lib->cfg);
     rx_config_defaults(&lib->cfg);
@@ -275,7 +275,7 @@ int rx_core_config_load(RxLibrary *lib)
 
 /* ------------------------------------------------------------------ save */
 
-static int put(RxLibrary *lib, const char *key, const char *value)
+static int put(RXLibrary *lib, const char *key, const char *value)
 {
     sqlite3_stmt *st = rx_db_stmt(lib->db, value ? RX_STMT_SETTING_PUT : RX_STMT_SETTING_DELETE);
     rx_db_bind_text(lib->db, st, 1, key);
@@ -284,7 +284,7 @@ static int put(RxLibrary *lib, const char *key, const char *value)
     return rx_db_done(lib->db, st, key);
 }
 
-static int put_group(RxLibrary *lib, const char *prefix, const RxKv *kv, int nb)
+static int put_group(RXLibrary *lib, const char *prefix, const RXKv *kv, int nb)
 {
     /* Every key of the group goes, so a value the user cleared is gone:
      * "player." <= key < "player/" ('/' follows '.'). */
@@ -306,9 +306,9 @@ static int put_group(RxLibrary *lib, const char *prefix, const RxKv *kv, int nb)
     return ret;
 }
 
-int rx_library_config_save(RxLibrary *lib)
+int rx_library_config_save(RXLibrary *lib)
 {
-    const RxConfig *c = &lib->cfg;
+    const RXConfig *c = &lib->cfg;
     char bpm_min[32], bpm_max[32], what[32], bars[32], split_p[32], split_t[32];
     const struct {
         const char *key, *value;
@@ -353,7 +353,7 @@ int rx_library_config_save(RxLibrary *lib)
     return ret;
 }
 
-int rx_library_setting_get(const RxLibrary *lib, const char *key, char **value)
+int rx_library_setting_get(const RXLibrary *lib, const char *key, char **value)
 {
     *value = NULL;
     sqlite3_stmt *st = rx_db_stmt(lib->db, RX_STMT_SETTING_GET);
@@ -369,7 +369,7 @@ int rx_library_setting_get(const RxLibrary *lib, const char *key, char **value)
     return err;
 }
 
-int rx_library_setting_set(RxLibrary *lib, const char *key, const char *value)
+int rx_library_setting_set(RXLibrary *lib, const char *key, const char *value)
 {
     if (!key || !*key)
         return RX_ERROR(EINVAL);

@@ -57,7 +57,7 @@ const char *const rx_onelibrary_schema[] = {
 const int rx_onelibrary_schema_count = (int)RX_ARRAY_ELEMS(rx_onelibrary_schema);
 
 /* Browse menu rows (docs/onelibrary.md 3.4); names get U+FFFA/U+FFFB. */
-const RxOneLibMenuItem rx_onelibrary_menu_items[27] = {
+const RXOneLibMenuItem rx_onelibrary_menu_items[27] = {
     { 1, 128, "GENRE" }, { 2, 129, "ARTIST" }, { 3, 130, "ALBUM" }, { 4, 131, "TRACK" },
     { 5, 133, "BPM" }, { 6, 134, "RATING" }, { 7, 135, "YEAR" }, { 8, 136, "REMIXER" },
     { 9, 137, "LABEL" }, { 10, 138, "ORIGINAL ARTIST" }, { 11, 139, "KEY" }, { 12, 141, "CUE" },
@@ -161,7 +161,7 @@ static int ins_done(Ins *in)
 
 /* ----------------------------------------------------------------- rows */
 
-static int names_rows(sqlite3 *db, const char *table, const RxPlanName *v, int nb, int extra_nulls)
+static int names_rows(sqlite3 *db, const char *table, const RXPlanName *v, int nb, int extra_nulls)
 {
     Ins in;
     int ret = ins_prepare(db, &in, table, 2 + extra_nulls);
@@ -177,7 +177,7 @@ static int names_rows(sqlite3 *db, const char *table, const RxPlanName *v, int n
     return ins_done(&in);
 }
 
-static int content_rows(sqlite3 *db, const RxPlan *plan)
+static int content_rows(sqlite3 *db, const RXPlan *plan)
 {
     Ins in;
     int ret = ins_prepare(db, &in, "content", 46);
@@ -185,8 +185,8 @@ static int content_rows(sqlite3 *db, const RxPlan *plan)
         return ret;
     uint32_t library_id = rx_plan_library_id(plan);
     for (int i = 0; i < plan->nb_tracks && !in.err; i++) {
-        const RxPlanTrack *t = &plan->tracks[i];
-        const RxMeta *m = t->track ? &t->track->meta : NULL;
+        const RXPlanTrack *t = &plan->tracks[i];
+        const RXMeta *m = t->track ? &t->track->meta : NULL;
         char title[1024], date[16];
         rx_plan_title(t, title, sizeof(title));
         rx_plan_date_added(t, date);
@@ -254,7 +254,7 @@ static int content_rows(sqlite3 *db, const RxPlan *plan)
  * 1..8 hot cues A..H; times in microseconds as ms x 1000, a non-loop's out
  * repeating its in; the legacy frame columns NULL. colorTableIndex stays
  * 0 as in every rekordbox row seen (players read colours from the ANLZ). */
-static int cue_rows(sqlite3 *db, const RxPlan *plan)
+static int cue_rows(sqlite3 *db, const RXPlan *plan)
 {
     Ins in;
     int ret = ins_prepare(db, &in, "cue", 22);
@@ -262,9 +262,9 @@ static int cue_rows(sqlite3 *db, const RxPlan *plan)
         return ret;
     int64_t id = 1;
     for (int i = 0; i < plan->nb_tracks && !in.err; i++) {
-        const RxPlanTrack *t = &plan->tracks[i];
+        const RXPlanTrack *t = &plan->tracks[i];
         for (int k = 0; k < t->nb_cues && !in.err; k++) {
-            const RxPlanCue *c = &t->cues[k];
+            const RXPlanCue *c = &t->cues[k];
             uint16_t num, den;
             rx_anlz_loop_quantum(c, &t->grid, &num, &den);
             int64_t t_in = (int64_t)rx_anlz_ms(c->time) * 1000;
@@ -318,7 +318,7 @@ static int fixed_rows(sqlite3 *db)
     return ins_done(&in);
 }
 
-static int plan_rows(sqlite3 *db, const RxPlan *plan)
+static int plan_rows(sqlite3 *db, const RXPlan *plan)
 {
     int ret;
     Ins in;
@@ -360,7 +360,7 @@ static int plan_rows(sqlite3 *db, const RxPlan *plan)
     if ((ret = ins_prepare(db, &in, "playlist", 6)) < 0)
         return ret;
     for (int i = 0; i < plan->nb_playlists; i++) {
-        const RxPlanPlaylist *p = &plan->playlists[i];
+        const RXPlanPlaylist *p = &plan->playlists[i];
         ins_int(&in, p->id);
         ins_int(&in, p->sort_order);
         ins_text(&in, p->name);
@@ -372,7 +372,7 @@ static int plan_rows(sqlite3 *db, const RxPlan *plan)
     if ((ret = ins_done(&in)) < 0 || (ret = ins_prepare(db, &in, "playlist_content", 3)) < 0)
         return ret;
     for (int i = 0; i < plan->nb_playlists; i++) {
-        const RxPlanPlaylist *p = &plan->playlists[i];
+        const RXPlanPlaylist *p = &plan->playlists[i];
         for (int k = 0; k < p->nb; k++) {
             ins_int(&in, p->id);
             ins_int(&in, p->track_ids[k]);
@@ -423,7 +423,7 @@ static int plan_rows(sqlite3 *db, const RxPlan *plan)
         return ret;
     for (int pass = 0; pass < 2; pass++) {
         for (int i = 0; i < plan->nb_tags; i++) {
-            const RxPlanTag *tg = &plan->tags[i];
+            const RXPlanTag *tg = &plan->tags[i];
             if (tg->is_category != (pass == 0))
                 continue;
             ins_int(&in, tg->id);
@@ -455,7 +455,7 @@ static int exec(sqlite3 *db, const char *sql)
     return 0;
 }
 
-int rx_onelibrary_build_plain(const RxPlan *plan, uint8_t **out, size_t *size)
+int rx_onelibrary_build_plain(const RXPlan *plan, uint8_t **out, size_t *size)
 {
     *out = NULL;
     *size = 0;
@@ -513,7 +513,7 @@ fail:
     return ret;
 }
 
-int rx_onelibrary_build(const RxPlan *plan, uint8_t **out, size_t *size)
+int rx_onelibrary_build(const RXPlan *plan, uint8_t **out, size_t *size)
 {
     uint8_t *plain;
     size_t n;
@@ -553,7 +553,7 @@ int rx_onelibrary_open_plain(const uint8_t *plain, size_t size, sqlite3 **db)
     return 0;
 }
 
-int rx_onelibrary_read(const uint8_t *plain, size_t size, RxOneLibTrack **tracks, int *nb)
+int rx_onelibrary_read(const uint8_t *plain, size_t size, RXOneLibTrack **tracks, int *nb)
 {
     *tracks = NULL;
     *nb = 0;
@@ -569,13 +569,13 @@ int rx_onelibrary_read(const uint8_t *plain, size_t size, RxOneLibTrack **tracks
         sqlite3_close(db);
         return RX_ERROR(EINVAL);
     }
-    RxArray a;
-    rx_array_init(&a, sizeof(RxOneLibTrack));
+    RXArray a;
+    rx_array_init(&a, sizeof(RXOneLibTrack));
     int r;
     while ((r = sqlite3_step(st)) == SQLITE_ROW) {
         const char *path = (const char *)sqlite3_column_text(st, 1);
         const char *title = (const char *)sqlite3_column_text(st, 2);
-        RxOneLibTrack t = {
+        RXOneLibTrack t = {
             .id      = (uint32_t)sqlite3_column_int64(st, 0),
             .path    = rx_strdup(path ? path : ""),
             .title   = rx_strdup(title ? title : ""),
@@ -594,7 +594,7 @@ int rx_onelibrary_read(const uint8_t *plain, size_t size, RxOneLibTrack **tracks
     sqlite3_close(db);
     if (ret < 0) {
         for (size_t i = 0; i < a.nb; i++) {
-            RxOneLibTrack *t = rx_array_at(&a, i);
+            RXOneLibTrack *t = rx_array_at(&a, i);
             free(t->path);
             free(t->title);
         }

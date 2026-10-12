@@ -50,9 +50,9 @@ static float click_amp(int k)
     return 0.25f + 0.005f * (k % 100);
 }
 
-static RxAudio *make_track_frames(int channels, int64_t nb_frames)
+static RXAudio *make_track_frames(int channels, int64_t nb_frames)
 {
-    RxAudio *a = calloc(1, sizeof(*a));
+    RXAudio *a = calloc(1, sizeof(*a));
     if (!a)
         abort();
     a->rate = RATE;
@@ -70,16 +70,16 @@ static RxAudio *make_track_frames(int channels, int64_t nb_frames)
     return a;
 }
 
-static RxAudio *make_track(int channels, double seconds)
+static RXAudio *make_track(int channels, double seconds)
 {
     return make_track_frames(channels, (int64_t)(seconds * RATE));
 }
 
 /* Releases are recorded so the tests can see when they happen. */
-static RxAudio *released[16];
+static RXAudio *released[16];
 static int nb_released;
 
-static void on_release(void *opaque, RxAudio *audio)
+static void on_release(void *opaque, RXAudio *audio)
 {
     if (nb_released < (int)RX_ARRAY_ELEMS(released))
         released[nb_released] = audio;
@@ -88,16 +88,16 @@ static void on_release(void *opaque, RxAudio *audio)
     free(audio);
 }
 
-static RxPlayer *make_player(int rate)
+static RXPlayer *make_player(int rate)
 {
-    RxPlayerOptions opt;
+    RXPlayerOptions opt;
     rx_player_options_default(&opt);
     opt.backend = RX_AUDIO_NULL;
     opt.rate = rate;
     opt.period = -PERIOD;
     opt.release = on_release;
 
-    RxPlayer *p = NULL;
+    RXPlayer *p = NULL;
     int ret = rx_player_create(&p, &opt);
     CHECK(ret == 0 && p, "create: %d", ret);
     if (!p)
@@ -108,16 +108,16 @@ static RxPlayer *make_player(int rate)
     return p;
 }
 
-static RxDeckState st(RxPlayer *p)
+static RXDeckState st(RXPlayer *p)
 {
-    RxDeckState s;
+    RXDeckState s;
     rx_deck_state(p, 0, &s);
     return s;
 }
 
 /* Renders `frames` into out (or a scratch buffer) in callback-sized
  * pieces, as the manual null backend does. */
-static void render(RxPlayer *p, float *out, int frames)
+static void render(RXPlayer *p, float *out, int frames)
 {
     static float scratch[2 * PERIOD];
     while (frames > 0) {
@@ -137,11 +137,11 @@ static void test_positions(void)
 
     for (int pass = 0; pass < 2; pass++) {
         double tempo = pass ? 1.08 : 1.0;
-        RxPlayer *p = make_player(48000);
+        RXPlayer *p = make_player(48000);
         CHECK(rx_deck_load(p, 0, make_track(2, SECONDS), NULL) == 0, "load");
         rx_deck_set_tempo(p, 0, tempo);
 
-        RxDeckState s = st(p);
+        RXDeckState s = st(p);
         CHECK(s.loaded && !s.playing && s.position == 0.0, "loaded at 0, paused");
         CHECK(fabs(s.duration - SECONDS) < 1e-9, "duration %f", s.duration);
         CHECK(s.tempo == tempo, "tempo %f", s.tempo);
@@ -163,13 +163,13 @@ static void test_positions(void)
 static void test_seek(void)
 {
     double ratio = (double)RATE / 48000;
-    RxPlayer *p = make_player(48000);
+    RXPlayer *p = make_player(48000);
     rx_deck_load(p, 0, make_track(2, SECONDS), NULL);
     rx_player_null_advance(p, PERIOD);
 
     uint64_t serial = st(p).serial;
     rx_deck_seek(p, 0, 10.0);
-    RxDeckState s = st(p);
+    RXDeckState s = st(p);
     CHECK(s.position == 10.0, "seek reported at once: %f", s.position);
     CHECK(s.serial == serial, "not applied yet");
     rx_player_null_advance(p, PERIOD);
@@ -204,8 +204,8 @@ static void test_seek(void)
  * must be the track frame the loop arithmetic says, wraps included. */
 static void test_loop_exact(void)
 {
-    RxPlayer *p = make_player(RATE);
-    RxAudio *a = make_track(2, SECONDS);
+    RXPlayer *p = make_player(RATE);
+    RXAudio *a = make_track(2, SECONDS);
     rx_deck_load(p, 0, a, NULL);
 
     double in = 8 * 60.0 / BPM, out = 16 * 60.0 / BPM;   /* 3.75 s, 7.5 s */
@@ -214,7 +214,7 @@ static void test_loop_exact(void)
 
     rx_deck_set_loop(p, 0, in, out, true);
     rx_deck_play_from(p, 0, 3.0);
-    RxDeckState s = st(p);
+    RXDeckState s = st(p);
     CHECK(s.loop_enabled && s.loop_in == in && s.loop_out == out, "loop reported");
 
     int64_t t = 3 * RATE;
@@ -268,7 +268,7 @@ static void test_loop_exact(void)
  * position stays inside it and on the arithmetic's track. */
 static void test_loop_fractional(void)
 {
-    RxPlayer *p = make_player(48000);
+    RXPlayer *p = make_player(48000);
     rx_deck_load(p, 0, make_track(2, SECONDS), NULL);
     double in = 8 * 60.0 / BPM, out = 12 * 60.0 / BPM;   /* 165375 .. 248062.5 */
     double inc = (double)RATE / 48000;
@@ -278,7 +278,7 @@ static void test_loop_fractional(void)
     double in_f = in * RATE, len = (out - in) * RATE, start = 4.0 * RATE;
     for (int i = 1; i <= 400; i++) {
         rx_player_null_advance(p, 4 * PERIOD + 17);
-        RxDeckState s = st(p);
+        RXDeckState s = st(p);
         double want = start + (double)i * (4 * PERIOD + 17) * inc;
         want = in_f + fmod(want - in_f, len);
         CHECK(s.position >= in && s.position < out, "inside: %f", s.position);
@@ -293,13 +293,13 @@ static void test_loop_fractional(void)
  * quantised behind the playhead) folds it back at the same phase. */
 static void test_loop_fold(void)
 {
-    RxPlayer *p = make_player(RATE);
+    RXPlayer *p = make_player(RATE);
     rx_deck_load(p, 0, make_track(2, SECONDS), NULL);
     rx_deck_seek(p, 0, 7.6);
     rx_player_null_advance(p, PERIOD);
     rx_deck_set_loop(p, 0, 3.75, 7.5, true);
     rx_player_null_advance(p, PERIOD);
-    RxDeckState s = st(p);
+    RXDeckState s = st(p);
     CHECK(fabs(s.position - 3.85) < 1e-9, "folded to 3.85: %f", s.position);
 
     rx_deck_seek(p, 0, 12.0);
@@ -320,7 +320,7 @@ static void test_loop_at_end(void)
     int64_t n = 10 * RATE;
     while ((double)n / RATE * RATE <= (double)n)
         n++;
-    RxPlayer *p = make_player(RATE);
+    RXPlayer *p = make_player(RATE);
     rx_deck_load(p, 0, make_track_frames(2, n), NULL);
     double dur = (double)n / RATE;
 
@@ -332,7 +332,7 @@ static void test_loop_at_end(void)
     rx_deck_play_from(p, 0, (double)start / RATE);
     for (int i = 0; i < 8; i++) {
         rx_player_null_advance(p, RATE / 4);
-        RxDeckState s = st(p);
+        RXDeckState s = st(p);
         CHECK(s.playing, "%lld frames: still looping after %d/4 s", (long long)n, i + 1);
         CHECK(s.position >= dur - 1.0 && s.position < dur, "inside the loop: %f of %f",
               s.position, dur);
@@ -347,23 +347,23 @@ static void test_loop_at_end(void)
  * rx_pos_cmp would order before the equal whole frame. */
 static void test_pos_arith(void)
 {
-    RxPos a = { .i = 10, .f = 0.3 }, b = { .i = 3, .f = nextafter(0.3, 1.0) };
-    RxPos r = rx_pos_sub(a, b);
+    RXPos a = { .i = 10, .f = 0.3 }, b = { .i = 3, .f = nextafter(0.3, 1.0) };
+    RXPos r = rx_pos_sub(a, b);
     CHECK(r.f >= 0.0 && r.f < 1.0, "fraction %.17g", r.f);
-    CHECK(rx_pos_cmp(r, (RxPos) { .i = 7 }) == 0, "7 - 2^-54 rounds to frame 7: %lld + %.17g",
+    CHECK(rx_pos_cmp(r, (RXPos) { .i = 7 }) == 0, "7 - 2^-54 rounds to frame 7: %lld + %.17g",
           (long long)r.i, r.f);
 
-    RxPos c = { .i = 5, .f = 0.25 };
+    RXPos c = { .i = 5, .f = 0.25 };
     rx_pos_add(&c, 2.75);
     CHECK(c.i == 8 && c.f == 0.0, "add carries: %lld + %f", (long long)c.i, c.f);
-    RxPos d = rx_pos_sub((RxPos) { .i = 8, .f = 0.25 }, (RxPos) { .i = 2, .f = 0.5 });
+    RXPos d = rx_pos_sub((RXPos) { .i = 8, .f = 0.25 }, (RXPos) { .i = 2, .f = 0.5 });
     CHECK(d.i == 5 && d.f == 0.75, "sub borrows: %lld + %f", (long long)d.i, d.f);
 }
 
 static void test_pause_resume(void)
 {
     double ratio = (double)RATE / 48000;
-    RxPlayer *p = make_player(48000);
+    RXPlayer *p = make_player(48000);
     rx_deck_load(p, 0, make_track(2, SECONDS), NULL);
 
     rx_deck_play(p, 0);
@@ -378,7 +378,7 @@ static void test_pause_resume(void)
 
     rx_deck_play(p, 0);
     rx_player_null_advance(p, 30000);
-    RxDeckState s = st(p);
+    RXDeckState s = st(p);
     CHECK(fabs(s.position * RATE - 40000 * ratio) < 1.0, "resumed: %f, want %f",
           s.position * RATE, 40000 * ratio);
     rx_player_destroy(p);
@@ -387,7 +387,7 @@ static void test_pause_resume(void)
 static void test_tempo_change(void)
 {
     double ratio = (double)RATE / 48000;
-    RxPlayer *p = make_player(48000);
+    RXPlayer *p = make_player(48000);
     rx_deck_load(p, 0, make_track(2, SECONDS), NULL);
     rx_deck_play(p, 0);
     rx_player_null_advance(p, 48000);
@@ -412,11 +412,11 @@ static void test_tempo_change(void)
 
 static void test_end(void)
 {
-    RxPlayer *p = make_player(48000);
+    RXPlayer *p = make_player(48000);
     rx_deck_load(p, 0, make_track(2, SECONDS), NULL);
     rx_deck_play_from(p, 0, SECONDS - 0.5);
     rx_player_null_advance(p, 48000);
-    RxDeckState s = st(p);
+    RXDeckState s = st(p);
     CHECK(!s.playing, "stops at the end");
     CHECK(s.position == SECONDS, "at the end: %f", s.position);
     rx_deck_play(p, 0);
@@ -428,8 +428,8 @@ static void test_end(void)
 static void test_release(void)
 {
     nb_released = 0;
-    RxPlayer *p = make_player(48000);
-    RxAudio *a = make_track(2, 10.0), *b = make_track(1, 10.0);
+    RXPlayer *p = make_player(48000);
+    RXAudio *a = make_track(2, 10.0), *b = make_track(1, 10.0);
 
     CHECK(rx_deck_load(p, RX_DECKS, a, NULL) == RX_ERROR(EINVAL), "deck out of range");
     CHECK(rx_deck_load(p, 0, a, NULL) == 0, "load a");
@@ -471,8 +471,8 @@ static void test_release(void)
 static void test_release_voices(void)
 {
     nb_released = 0;
-    RxPlayer *p = make_player(48000);
-    RxAudio *a = make_track(2, 10.0);
+    RXPlayer *p = make_player(48000);
+    RXAudio *a = make_track(2, 10.0);
     rx_deck_load(p, 0, a, NULL);
     rx_deck_play_from(p, 0, 1.0);
     rx_player_null_advance(p, PERIOD);
@@ -481,7 +481,7 @@ static void test_release_voices(void)
     rx_deck_scrub_to(p, 0, 2.0);
     render(p, NULL, 100);
 
-    RxAudio *b = make_track(2, 5.0);
+    RXAudio *b = make_track(2, 5.0);
     for (int64_t i = 0; i < 2 * b->nb_frames; i++)
         b->samples[i] = 0.5f;
     CHECK(rx_deck_load(p, 0, b, NULL) == 0, "load b");
@@ -499,7 +499,7 @@ static void test_release_voices(void)
     rx_player_destroy(p);
 }
 
-static void unmap_release(void *opaque, RxAudio *audio)
+static void unmap_release(void *opaque, RXAudio *audio)
 {
     munmap(audio->samples, (size_t)audio->nb_frames * audio->channels * sizeof(float));
     free(audio);
@@ -518,23 +518,23 @@ static void test_long_track(void)
         printf("skipping the long track: no address space\n");
         return;
     }
-    RxAudio *a = calloc(1, sizeof(*a));
+    RXAudio *a = calloc(1, sizeof(*a));
     if (!a)
         abort();
-    *a = (RxAudio) {
+    *a = (RXAudio) {
         .samples   = samples,
         .channels  = 1,
         .rate      = 48000,
         .nb_frames = n,
     };
 
-    RxPlayerOptions opt;
+    RXPlayerOptions opt;
     rx_player_options_default(&opt);
     opt.backend = RX_AUDIO_NULL;
     opt.rate = 44100;
     opt.period = -PERIOD;
     opt.release = unmap_release;
-    RxPlayer *p = NULL;
+    RXPlayer *p = NULL;
     if (rx_player_create(&p, &opt) < 0)
         abort();
     CHECK(rx_deck_load(p, 0, a, NULL) == 0, "load");
@@ -543,7 +543,7 @@ static void test_long_track(void)
     double inc = 48000.0 / 44100;
     rx_deck_play_from(p, 0, dur - 20.0);
     rx_player_null_advance(p, 44100);
-    RxDeckState s = st(p);
+    RXDeckState s = st(p);
     double want = (dur - 20.0) * 48000 + 44100 * inc;
     CHECK(fabs(s.position * 48000 - want) < 1e-3, "%f frames, want %f", s.position * 48000, want);
     CHECK(s.frame == (int64_t)floor(want) && s.frame > INT32_MAX, "frame %lld",
@@ -575,13 +575,13 @@ static void test_long_track(void)
  * silence when it stops, and on release it resumes as it was. */
 static void test_scrub(void)
 {
-    RxPlayer *p = make_player(48000);
+    RXPlayer *p = make_player(48000);
     rx_deck_load(p, 0, make_track(2, SECONDS), NULL);
     rx_deck_play_from(p, 0, 5.0);
     rx_player_null_advance(p, 4800);
 
     rx_deck_scrub_begin(p, 0);
-    RxDeckState s = st(p);
+    RXDeckState s = st(p);
     CHECK(s.scrubbing && !s.playing, "scrubbing");
 
     static float buf[2 * 48000];
@@ -628,8 +628,8 @@ static void test_scrub(void)
 
 static void test_levels_and_limits(void)
 {
-    RxPlayer *p = make_player(RATE);
-    RxAudio *a = make_track(1, 2.0);
+    RXPlayer *p = make_player(RATE);
+    RXAudio *a = make_track(1, 2.0);
     for (int64_t i = 0; i < a->nb_frames; i++)
         a->samples[i] = (i & 1) ? 1.0f : -1.0f;
     rx_deck_load(p, 0, a, NULL);
@@ -645,7 +645,7 @@ static void test_levels_and_limits(void)
     }
     CHECK(mono, "a mono track plays on both sides");
     CHECK(peak < 1.0f && peak > 0.8f, "limited below full scale: %f", peak);
-    RxDeckState s = st(p);
+    RXDeckState s = st(p);
     CHECK(s.level_l > 0.9f && s.level_r > 0.9f, "meters: %f %f", s.level_l, s.level_r);
 
     rx_deck_set_volume(p, 0, 0.5f);
@@ -678,9 +678,9 @@ static void test_levels_and_limits(void)
  * and the owner's view keeps to what was accepted. */
 static void test_ring_full(void)
 {
-    RxPlayer *p = make_player(48000);
+    RXPlayer *p = make_player(48000);
     rx_deck_load(p, 0, make_track(2, SECONDS), NULL);
-    enum RxLogLevel level = rx_log_level();
+    enum RXLogLevel level = rx_log_level();
     rx_log_set_level(RX_LOG_ERROR);
     for (int i = 0; i < RX_CMD_RING + 10; i++)
         rx_deck_seek(p, 0, 1.0 + i * 0.001);
@@ -704,22 +704,22 @@ static void sleep_ms(int ms)
 static void test_threaded(void)
 {
     nb_released = 0;
-    RxPlayerOptions opt;
+    RXPlayerOptions opt;
     rx_player_options_default(&opt);
     opt.backend = RX_AUDIO_NULL;
     opt.rate = 48000;
     opt.release = on_release;
-    RxPlayer *p = NULL;
+    RXPlayer *p = NULL;
     CHECK(rx_player_create(&p, &opt) == 0 && p, "create");
     if (!p)
         return;
     CHECK(rx_player_running(p), "running");
 
-    RxAudio *a = make_track(2, SECONDS);
+    RXAudio *a = make_track(2, SECONDS);
     rx_deck_load(p, 0, a, NULL);
     rx_deck_play_from(p, 0, 10.0);
     sleep_ms(300);
-    RxDeckState s = st(p);
+    RXDeckState s = st(p);
     CHECK(s.playing && s.position > 10.1 && s.position < 11.0, "plays in real time: %f",
           s.position);
 

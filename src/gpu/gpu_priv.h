@@ -45,60 +45,60 @@ struct wl_callback;
 #define RX_CLEAR_G (0x20 / 255.0f)
 #define RX_CLEAR_B (0x20 / 255.0f)
 
-enum RxMemUsage {
+enum RXMemUsage {
     RX_MEM_DEVICE = 0,  /* device local, never mapped */
     RX_MEM_UPLOAD,      /* host visible, mapped, written sequentially */
     RX_MEM_READBACK,    /* host visible and cached, mapped, read by the CPU */
 };
 
-typedef struct RxVkBuffer {
+typedef struct RXVkBuffer {
     VkBuffer        buf;
     VmaAllocation   alloc;
     VkDeviceSize    size;
     VkDeviceAddress addr;   /* 0 unless created with SHADER_DEVICE_ADDRESS usage */
     void           *map;    /* NULL for RX_MEM_DEVICE */
-} RxVkBuffer;
+} RXVkBuffer;
 
 /* Something the GPU may still be reading: freed once the submission
  * numbered `serial` has completed. Any field may be null. */
-typedef struct RxDeferred {
+typedef struct RXDeferred {
     uint64_t      serial;
     VkBuffer      buf;
     VkImage       img;
     VkImageView   view;
     VmaAllocation alloc;
     uint64_t      tex_id;   /* an ImGui texture descriptor set */
-} RxDeferred;
+} RXDeferred;
 
 /* A copy from a staging buffer into a buffer or an image, recorded at the
  * start of the next frame's command buffer (vk.c). */
-typedef struct RxUpload {
-    RxVkBuffer staging;
+typedef struct RXUpload {
+    RXVkBuffer staging;
     VkBuffer   dst_buf;
     VkImage    dst_img;
     uint32_t   width, height;
-} RxUpload;
+} RXUpload;
 
 /* A texture handed out as an ImTextureID. */
-typedef struct RxTexture {
+typedef struct RXTexture {
     uint64_t      id;
     VkImage       img;
     VkImageView   view;
     VmaAllocation alloc;
-} RxTexture;
+} RXTexture;
 
 /* One frame in flight. The fence says the slot's command buffer and its
  * acquire semaphore are free again. */
-typedef struct RxFrame {
+typedef struct RXFrame {
     VkCommandPool   pool;
     VkCommandBuffer cmd;
     VkFence         fence;
     VkSemaphore     acquired;
     uint64_t        serial;     /* the submission the slot last carried, 0 = none */
-} RxFrame;
+} RXFrame;
 
-struct RxWindow {
-    RxWindowOptions opts;
+struct RXWindow {
+    RXWindowOptions opts;
     char *title, *font, *device;    /* the options' strings, owned */
 
     /* SDL, and SDL's Wayland objects (borrowed, never destroyed here). */
@@ -112,7 +112,7 @@ struct RxWindow {
      * rx_window_poll() and SDL's own dispatch never sees them. */
     struct wl_event_queue *wl_queue;
     struct wl_surface *wl_wrap;
-    RxArray frame_cbs;              /* struct wl_callback *, every outstanding one */
+    RXArray frame_cbs;              /* struct wl_callback *, every outstanding one */
     struct wl_callback *frame_cb;   /* the one asked for with the last present */
     bool     frame_done;            /* ... and it has arrived */
     uint32_t cb_time;               /* compositor time of the last callback, ms */
@@ -143,15 +143,15 @@ struct RxWindow {
     VkQueue queue;
     VmaAllocator vma;
 
-    RxFrame  frames[RX_FRAMES_IN_FLIGHT];
+    RXFrame  frames[RX_FRAMES_IN_FLIGHT];
     uint32_t frame_idx;
     uint64_t serial;                /* submissions made; the next one is serial + 1 */
     uint64_t completed;             /* every submission up to this one has finished */
     int frames_drawn;
 
-    RxArray garbage;                /* RxDeferred */
-    RxArray uploads;                /* RxUpload */
-    RxArray textures;               /* RxTexture */
+    RXArray garbage;                /* RXDeferred */
+    RXArray uploads;                /* RXUpload */
+    RXArray textures;               /* RXTexture */
 
     /* Swapchain (swapchain.c) */
     VkSwapchainKHR swapchain;
@@ -166,7 +166,7 @@ struct RxWindow {
     bool swap_dirty;
 
     /* The screenshot readback: the last captured frame and its submission. */
-    RxVkBuffer cap;
+    RXVkBuffer cap;
     uint32_t cap_width, cap_height;
     uint64_t cap_serial;
     uint64_t last_present_serial;
@@ -189,98 +189,98 @@ struct RxWindow {
 
 /* Asks for wl_surface.frame on the next commit. Called right before
  * vkQueuePresentKHR, whose commit then carries it. */
-void rx_window_want_frame_cb(RxWindow *w);
+void rx_window_want_frame_cb(RXWindow *w);
 /* The present did not happen: nothing will answer the request. */
-void rx_window_frame_skipped(RxWindow *w);
+void rx_window_frame_skipped(RXWindow *w);
 
 /* -------------------------------------------------------------------- vk.c */
 
-int  rx_vk_create(RxWindow *w);
-void rx_vk_destroy(RxWindow *w);
+int  rx_vk_create(RXWindow *w);
+void rx_vk_destroy(RXWindow *w);
 int  rx_vk_ret2err(VkResult res);
 const char *rx_vk_strerror(VkResult res);
 
-int  rx_vk_buffer_create(RxWindow *w, RxVkBuffer *b, VkDeviceSize size,
-                         VkBufferUsageFlags usage, enum RxMemUsage mem);
-void rx_vk_buffer_free(RxWindow *w, RxVkBuffer *b);
-int  rx_vk_buffer_invalidate(RxWindow *w, RxVkBuffer *b);
+int  rx_vk_buffer_create(RXWindow *w, RXVkBuffer *b, VkDeviceSize size,
+                         VkBufferUsageFlags usage, enum RXMemUsage mem);
+void rx_vk_buffer_free(RXWindow *w, RXVkBuffer *b);
+int  rx_vk_buffer_invalidate(RXWindow *w, RXVkBuffer *b);
 
 /* Hands something to the deferred destruction list, to be freed after the
  * next submission (the one that may still use it) has completed. */
-void rx_vk_defer(RxWindow *w, const RxDeferred *d);
+void rx_vk_defer(RXWindow *w, const RXDeferred *d);
 /* Frees what the GPU is done with; everything when `all` (device idle). */
-void rx_vk_collect(RxWindow *w, bool all);
+void rx_vk_collect(RXWindow *w, bool all);
 /* Learns which submissions have finished without waiting. */
-void rx_vk_poll_completed(RxWindow *w);
+void rx_vk_poll_completed(RXWindow *w);
 
 /* Queues a staged copy; takes ownership of up->staging. */
-int  rx_vk_upload(RxWindow *w, const RxUpload *up);
+int  rx_vk_upload(RXWindow *w, const RXUpload *up);
 /* Records every queued copy into `cmd` (the frame about to be submitted
  * as `serial`), with the barriers that make the results visible to the
  * fragment shader, and defers the staging buffers. */
-void rx_vk_record_uploads(RxWindow *w, VkCommandBuffer cmd, uint64_t serial);
+void rx_vk_record_uploads(RXWindow *w, VkCommandBuffer cmd, uint64_t serial);
 
 /* ------------------------------------------------------------- swapchain.c */
 
-int  rx_swapchain_create(RxWindow *w);
-void rx_swapchain_destroy(RxWindow *w);
+int  rx_swapchain_create(RXWindow *w);
+void rx_swapchain_destroy(RXWindow *w);
 /* Records the draw data (an ImDrawData *), submits and presents. With
  * `capture`, the image is also copied into w->cap before it is presented.
  * Returns 0 when presented, 1 when the frame was skipped (the swapchain is
  * out of date or the window has no area), <0 on error. */
-int  rx_swapchain_frame(RxWindow *w, void *draw_data, bool capture);
+int  rx_swapchain_frame(RXWindow *w, void *draw_data, bool capture);
 /* Reads the last captured frame back as tightly packed RGBA. */
-int  rx_swapchain_readback(RxWindow *w, uint8_t **rgba, int *width, int *height);
+int  rx_swapchain_readback(RXWindow *w, uint8_t **rgba, int *width, int *height);
 /* Writes the last presented frame as PNG; -EAGAIN when it was not captured. */
-int  rx_swapchain_save_png(RxWindow *w, const char *png_path);
+int  rx_swapchain_save_png(RXWindow *w, const char *png_path);
 
 /* ------------------------------------------------------------- textures.c */
 
-void rx_textures_destroy_all(RxWindow *w);
+void rx_textures_destroy_all(RXWindow *w);
 
 /* ----------------------------------------------------------------- wave.c */
 
-int  rx_wave_pipeline_create(RxWindow *w);
-void rx_wave_pipeline_destroy(RxWindow *w);
+int  rx_wave_pipeline_create(RXWindow *w);
+void rx_wave_pipeline_destroy(RXWindow *w);
 
 /* What a waveform callback carries in the draw list. */
-typedef struct RxWaveCmd {
-    RxWindow       *w;
+typedef struct RXWaveCmd {
+    RXWindow       *w;
     VkDeviceAddress addr;
     int32_t         nb_columns;
     int32_t         kind;
-    RxWaveDraw      d;
-} RxWaveCmd;
+    RXWaveDraw      d;
+} RXWaveCmd;
 
 /* How the draw data maps ImGui coordinates to the framebuffer, and the
  * callback's clip rectangle already in framebuffer pixels. */
-typedef struct RxWaveView {
+typedef struct RXWaveView {
     float off_x, off_y;         /* ImDrawData::DisplayPos */
     float scale_x, scale_y;     /* ImDrawData::FramebufferScale */
     float fb_width, fb_height;
     float clip[4];              /* x0, y0, x1, y1 */
-} RxWaveView;
+} RXWaveView;
 
-void rx_wave_record(const RxWaveCmd *c, VkCommandBuffer cmd, const RxWaveView *v);
+void rx_wave_record(const RXWaveCmd *c, VkCommandBuffer cmd, const RXWaveView *v);
 
 /* -------------------------------------------------------- imgui_glue.cpp */
 
-int  rx_imgui_init(RxWindow *w);
-void rx_imgui_shutdown(RxWindow *w);
+int  rx_imgui_init(RXWindow *w);
+void rx_imgui_shutdown(RXWindow *w);
 /* Feeds one SDL event to ImGui. */
-void rx_imgui_process_event(RxWindow *w, const union SDL_Event *ev);
-void rx_imgui_set_scale(RxWindow *w);
-void rx_imgui_new_frame(RxWindow *w);
+void rx_imgui_process_event(RXWindow *w, const union SDL_Event *ev);
+void rx_imgui_set_scale(RXWindow *w);
+void rx_imgui_new_frame(RXWindow *w);
 /* ImGui::Render(); returns the ImDrawData *, NULL when there is nothing. */
-void *rx_imgui_render(RxWindow *w);
+void *rx_imgui_render(RXWindow *w);
 /* The draw data of the last rendered frame while it is still valid
  * (until the next new frame), else NULL. */
-void *rx_imgui_last_draw_data(RxWindow *w);
+void *rx_imgui_last_draw_data(RXWindow *w);
 /* Records the draw data inside the current dynamic rendering pass. */
-void rx_imgui_record(RxWindow *w, void *draw_data, VkCommandBuffer cmd);
-uint64_t rx_imgui_add_texture(RxWindow *w, VkImageView view);
-void rx_imgui_remove_texture(RxWindow *w, uint64_t id);
+void rx_imgui_record(RXWindow *w, void *draw_data, VkCommandBuffer cmd);
+uint64_t rx_imgui_add_texture(RXWindow *w, VkImageView view);
+void rx_imgui_remove_texture(RXWindow *w, uint64_t id);
 /* Adds the waveform callback, then ImGui's reset-render-state callback. */
-void rx_imgui_add_wave(void *draw_list, const RxWaveCmd *c);
+void rx_imgui_add_wave(void *draw_list, const RXWaveCmd *c);
 
 #endif /* RXBOX_GPU_PRIV_H */

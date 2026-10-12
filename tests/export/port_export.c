@@ -33,13 +33,13 @@ static bool progress(void *opaque, const char *stage, int done, int total, const
     return true;
 }
 
-static int add_kv(RxKv **kv, int *nb, const char *key, const char *value)
+static int add_kv(RXKv **kv, int *nb, const char *key, const char *value)
 {
-    RxKv *n = realloc(*kv, (size_t)(*nb + 1) * sizeof(*n));
+    RXKv *n = realloc(*kv, (size_t)(*nb + 1) * sizeof(*n));
     if (!n)
         return RX_ERROR(ENOMEM);
     *kv = n;
-    n[*nb] = (RxKv) { .key = rx_strdup(key), .value = rx_strdup(value) };
+    n[*nb] = (RXKv) { .key = rx_strdup(key), .value = rx_strdup(value) };
     (*nb)++;
     return 0;
 }
@@ -64,7 +64,7 @@ int main(int argc, char **argv)
         lines[nl++] = l;
     }
 
-    RxLibrary lib = { 0 };
+    RXLibrary lib = { 0 };
     if (rx_library_open(&lib, argv[2]) < 0) {
         fprintf(stderr, "cannot open the library at %s\n", argv[2]);
         return 1;
@@ -85,15 +85,15 @@ int main(int argc, char **argv)
         if (sscanf(tracks[i], "%1023s %lf %lf %7s", path, &bpm, &downbeat, key) != 4)
             continue;
         int err = 0;
-        RxTrack *t = rx_library_add_file(&lib, path, &err);
+        RXTrack *t = rx_library_add_file(&lib, path, &err);
         if (!t) {
             fprintf(stderr, "%s: %s\n", path, strerror(-err));
             return 1;
         }
         rx_grid_init(&t->grid, downbeat, bpm);
         snprintf(t->key, sizeof(t->key), "%s", key);
-        RxAudio a;
-        RxWaveforms w;
+        RXAudio a;
+        RXWaveforms w;
         if (rx_decode(t->path, 1, 0, &a) >= 0 && rx_waveforms_compute(a.samples, a.nb_frames, a.rate, &w) >= 0) {
             rx_library_waveforms_save(&lib, t->id, &w);
             rx_waveforms_free(&w);
@@ -105,10 +105,10 @@ int main(int argc, char **argv)
         char path[1024], hot[4], name[128];
         double time, loop;
         if (sscanf(lines[i], "cue %1023s %3s %lf %lf %127s", path, hot, &time, &loop, name) == 5) {
-            RxTrack *t = rx_library_find_path(&lib, path);
+            RXTrack *t = rx_library_find_path(&lib, path);
             if (!t)
                 continue;
-            RxCue c;
+            RXCue c;
             rx_cue_init(&c, time);
             c.hot = hot[0] >= 'A' && hot[0] <= 'H' ? hot[0] - 'A' : -1;
             if (loop > 0)
@@ -122,10 +122,10 @@ int main(int argc, char **argv)
             if (!sp)
                 continue;
             *sp = '\0';
-            RxPlaylist *p = rx_library_playlist_create(&lib, lib.root_folder, rest);
+            RXPlaylist *p = rx_library_playlist_create(&lib, lib.root_folder, rest);
             char *s2 = NULL;
             for (char *tp = strtok_r(sp + 1, " ", &s2); p && tp; tp = strtok_r(NULL, " ", &s2)) {
-                RxTrack *t = rx_library_find_path(&lib, tp);
+                RXTrack *t = rx_library_find_path(&lib, tp);
                 if (t)
                     rx_library_playlist_add(&lib, p, t, -1);
             }
@@ -137,7 +137,7 @@ int main(int argc, char **argv)
             if (!dot)
                 continue;
             *dot = '\0';
-            RxConfig *c = &lib.cfg;
+            RXConfig *c = &lib.cfg;
             if (!strcmp(k, "player"))
                 add_kv(&c->player, &c->nb_player, dot + 1, v);
             else if (!strcmp(k, "mixer"))
@@ -148,7 +148,7 @@ int main(int argc, char **argv)
     }
     rx_library_config_save(&lib);
 
-    RxExportOptions opt;
+    RXExportOptions opt;
     rx_export_options_default(&opt);
     opt.device_name = "";
     opt.whole_library = true;          /* dj exported every track */

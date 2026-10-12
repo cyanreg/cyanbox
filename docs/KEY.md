@@ -6,7 +6,7 @@ it works. The code is `src/analysis/key.c`; the tests
 `tests/analysis/gen_key_fixtures.py`; the case lists
 `tests/data/analysis/keys.txt` and `keys_synth.txt`.
 
-The result (`rxbox/analysis.h`, `RxKeyResult`) is a classic key name in dj's
+The result (`rxbox/analysis.h`, `RXKeyResult`) is a classic key name in dj's
 spelling (C Db D Eb E F F# G Ab A Bb B, "m" for minor), a confidence and the
 tuning offset from A440 in cents.
 

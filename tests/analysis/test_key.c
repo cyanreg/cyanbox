@@ -104,7 +104,7 @@ typedef struct Tally {
     double score, conf;
 } Tally;
 
-static void tally(Tally *t, const char *truth, const RxKeyResult *k)
+static void tally(Tally *t, const char *truth, const RXKeyResult *k)
 {
     t->nb++;
     t->right += !strcmp(truth, k->key);
@@ -518,7 +518,7 @@ static int test_tonal(void)
         float *x = tonal(rate, tonic, minor, cents, &nb);
         if (!x)
             return fails + 1;
-        RxKeyResult k;
+        RXKeyResult k;
         int64_t t0 = rx_time_us();
         int ret = rx_analyse_key(x, nb, rate, &k);
         int64_t t1 = rx_time_us();
@@ -580,7 +580,7 @@ static int test_synth(void)
             free(cases);
             return fails + 1;
         }
-        RxKeyResult k;
+        RXKeyResult k;
         int64_t t0 = rx_time_us();
         int ret = rx_analyse_key(x, nb, c->rate, &k);
         us += rx_time_us() - t0;
@@ -623,7 +623,7 @@ static int test_synth(void)
 static int test_edges(void)
 {
     int fails = 0;
-    RxKeyResult k;
+    RXKeyResult k;
 
     /* Silence has no key */
     float *z = calloc(44100 * 5, sizeof(*z));
@@ -692,7 +692,7 @@ static int key_of_file(const char *path, int rate)
     float *x = read_samples(path, &nb);
     if (!x)
         return 1;
-    RxKeyResult k;
+    RXKeyResult k;
     int64_t t0 = rx_time_us();
     int ret = rx_analyse_key(x, nb, rate, &k);
     int64_t t1 = rx_time_us();

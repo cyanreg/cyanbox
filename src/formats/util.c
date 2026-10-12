@@ -315,18 +315,18 @@ uint32_t rx_crc32(uint32_t crc, const void *data, size_t size)
 
 const char *const rx_my_tag_columns[4] = { "Genre", "Components", "Situation", "Tags" };
 
-uint32_t rx_plan_library_id(const RxPlan *plan)
+uint32_t rx_plan_library_id(const RXPlan *plan)
 {
     return plan->library_id;
 }
 
-uint32_t rx_plan_master_id(const RxPlanTrack *t)
+uint32_t rx_plan_master_id(const RXPlanTrack *t)
 {
     uint32_t id = t->usb_path ? rx_crc32(0, t->usb_path, strlen(t->usb_path)) : 0;
     return id ? id : 1;
 }
 
-void rx_plan_date_added(const RxPlanTrack *t, char buf[16])
+void rx_plan_date_added(const RXPlanTrack *t, char buf[16])
 {
     buf[0] = '\0';
     if (!t->track)
@@ -347,7 +347,7 @@ void rx_plan_date_added(const RxPlanTrack *t, char buf[16])
         strftime(buf, 16, "%Y-%m-%d", &tm);
 }
 
-char *rx_plan_anlz_path(const RxPlanTrack *t, const char *ext)
+char *rx_plan_anlz_path(const RXPlanTrack *t, const char *ext)
 {
     return rx_asprintf("%s/ANLZ%04d%s", t->anlz_dir, t->anlz_index, ext);
 }
@@ -374,7 +374,7 @@ static void cut_utf8(char *buf, size_t want, size_t size)
         buf[k - 1] = '\0';
 }
 
-const char *rx_plan_title(const RxPlanTrack *t, char *buf, size_t size)
+const char *rx_plan_title(const RXPlanTrack *t, char *buf, size_t size)
 {
     buf[0] = '\0';
     if (!t->track)

@@ -37,7 +37,7 @@ static void slow_job(void *arg)
 
 static void test_pool(void)
 {
-    RxThreadPool *pool;
+    RXThreadPool *pool;
     CHECK(rx_pool_create(&pool, 4) == 0);
     CHECK(rx_pool_threads(pool) == 4);
     CHECK(rx_pool_pending(pool) == 0);
@@ -80,7 +80,7 @@ static void test_pool(void)
 #define ITEMS 20000
 
 typedef struct Producer {
-    RxMailbox *mb;
+    RXMailbox *mb;
     int index;
 } Producer;
 
@@ -108,7 +108,7 @@ static int64_t now_ms(void)
 
 static void test_mailbox(void)
 {
-    RxMailbox *mb;
+    RXMailbox *mb;
     CHECK(rx_mailbox_create(&mb) == 0);
     CHECK(rx_mailbox_take(mb) == NULL);
     CHECK(rx_mailbox_post(mb, NULL) == RX_ERROR(EINVAL));
@@ -166,7 +166,7 @@ static void test_mailbox(void)
     pthread_join(later, NULL);
     rx_mailbox_destroy(mb);
 
-    RxCancel c = { 0 };
+    RXCancel c = { 0 };
     CHECK(!rx_cancelled(&c));
     rx_cancel(&c);
     CHECK(rx_cancelled(&c) && !rx_cancelled(NULL));

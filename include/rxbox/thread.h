@@ -9,34 +9,34 @@
 
 #include "rxbox/common.h"
 
-typedef struct RxThreadPool RxThreadPool;
+typedef struct RXThreadPool RXThreadPool;
 
 /* nb_threads <= 0: one per online CPU. */
-int  rx_pool_create(RxThreadPool **pool, int nb_threads);
+int  rx_pool_create(RXThreadPool **pool, int nb_threads);
 /* Waits for queued work, then joins. */
-void rx_pool_destroy(RxThreadPool *pool);
-int  rx_pool_submit(RxThreadPool *pool, void (*fn)(void *arg), void *arg);
+void rx_pool_destroy(RXThreadPool *pool);
+int  rx_pool_submit(RXThreadPool *pool, void (*fn)(void *arg), void *arg);
 /* Blocks until every submitted job has run. */
-void rx_pool_wait(RxThreadPool *pool);
-int  rx_pool_threads(const RxThreadPool *pool);
+void rx_pool_wait(RXThreadPool *pool);
+int  rx_pool_threads(const RXThreadPool *pool);
 /* Jobs waiting or running. */
-int  rx_pool_pending(const RxThreadPool *pool);
+int  rx_pool_pending(const RXThreadPool *pool);
 
 /* Multi-producer, single-consumer mailbox of pointers. */
-typedef struct RxMailbox RxMailbox;
-int   rx_mailbox_create(RxMailbox **mb);
-void  rx_mailbox_destroy(RxMailbox *mb);
-int   rx_mailbox_post(RxMailbox *mb, void *item);
+typedef struct RXMailbox RXMailbox;
+int   rx_mailbox_create(RXMailbox **mb);
+void  rx_mailbox_destroy(RXMailbox *mb);
+int   rx_mailbox_post(RXMailbox *mb, void *item);
 /* Non-blocking; NULL when empty. */
-void *rx_mailbox_take(RxMailbox *mb);
+void *rx_mailbox_take(RXMailbox *mb);
 /* Blocks up to timeout_ms (-1: forever) for an item; NULL on timeout. */
-void *rx_mailbox_wait(RxMailbox *mb, int timeout_ms);
+void *rx_mailbox_wait(RXMailbox *mb, int timeout_ms);
 
 /* A cancellation flag shared between the owner and a job. A plain int,
  * read and written only through the __atomic builtins, so the header also
  * parses as C++ (src/ui). */
-typedef struct RxCancel { int flag; } RxCancel;
-static inline bool rx_cancelled(const RxCancel *c) { return c && __atomic_load_n(&c->flag, __ATOMIC_RELAXED); }
-static inline void rx_cancel(RxCancel *c) { __atomic_store_n(&c->flag, 1, __ATOMIC_RELAXED); }
+typedef struct RXCancel { int flag; } RXCancel;
+static inline bool rx_cancelled(const RXCancel *c) { return c && __atomic_load_n(&c->flag, __ATOMIC_RELAXED); }
+static inline void rx_cancel(RXCancel *c) { __atomic_store_n(&c->flag, 1, __ATOMIC_RELAXED); }
 
 #endif /* RXBOX_THREAD_H */

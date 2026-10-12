@@ -24,7 +24,7 @@
  * keep theirs for a frame or two, the font atlas needs a few. */
 #define RX_MAX_TEXTURES 3584
 
-uint64_t rx_texture_create(RxWindow *w, const uint8_t *rgba, int width, int height)
+uint64_t rx_texture_create(RXWindow *w, const uint8_t *rgba, int width, int height)
 {
     if (!w || !rgba || width <= 0 || height <= 0 ||
         (uint32_t)width > w->props.limits.maxImageDimension2D ||
@@ -35,8 +35,8 @@ uint64_t rx_texture_create(RxWindow *w, const uint8_t *rgba, int width, int heig
         return 0;
     }
 
-    RxTexture tex = { 0 };
-    RxUpload up = { 0 };
+    RXTexture tex = { 0 };
+    RXUpload up = { 0 };
     const VkDeviceSize size = (VkDeviceSize)width * height * 4;
 
     VkImageCreateInfo iinfo = {
@@ -111,17 +111,17 @@ fail:
     return 0;
 }
 
-void rx_texture_destroy(RxWindow *w, uint64_t id)
+void rx_texture_destroy(RXWindow *w, uint64_t id)
 {
     if (!w || !id)
         return;
 
     for (size_t i = 0; i < w->textures.nb; i++) {
-        RxTexture *t = rx_array_at(&w->textures, i);
+        RXTexture *t = rx_array_at(&w->textures, i);
         if (t->id != id)
             continue;
 
-        RxDeferred d = {
+        RXDeferred d = {
             .img    = t->img,
             .view   = t->view,
             .alloc  = t->alloc,
@@ -135,10 +135,10 @@ void rx_texture_destroy(RxWindow *w, uint64_t id)
     rx_warn("gpu: destroying a texture that does not exist");
 }
 
-void rx_textures_destroy_all(RxWindow *w)
+void rx_textures_destroy_all(RXWindow *w)
 {
     while (w->textures.nb) {
-        RxTexture *t = rx_array_at(&w->textures, w->textures.nb - 1);
+        RXTexture *t = rx_array_at(&w->textures, w->textures.nb - 1);
         rx_texture_destroy(w, t->id);
     }
 }

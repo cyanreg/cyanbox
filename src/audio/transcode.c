@@ -80,7 +80,7 @@ int rx_transcode_flac(const char *path, const char *out_path, int max_rate)
     if (ret < 0)
         return ret;
 
-    RxAudio a = { 0 };
+    RXAudio a = { 0 };
     Out o = { 0 };
     SwrContext *swr = NULL;
     AVFrame *frame = NULL;
@@ -106,7 +106,7 @@ int rx_transcode_flac(const char *path, const char *out_path, int max_rate)
         goto end;
     int rate = max_rate > 0 && a.rate > max_rate ? max_rate : a.rate;
     if (rate != a.rate) {
-        RxAudio r;
+        RXAudio r;
         ret = rx_audio_resample(&a, rate, &r);
         rx_audio_free(&a);
         if (ret < 0)

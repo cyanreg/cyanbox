@@ -4,14 +4,14 @@
  * ring, published state), deck.c (the real-time side of one deck),
  * pipewire.c and nullout.c (the two backends) and controls.c.
  *
- * Three groups of state live in RxPlayer, and each has one writer:
- *  - RxDeckOwner: written and read only by the owner thread (the thread
+ * Three groups of state live in RXPlayer, and each has one writer:
+ *  - RXDeckOwner: written and read only by the owner thread (the thread
  *    that calls the public functions). It is what the owner has asked for:
  *    the loaded buffer, the loop, the tempo, and the position or playing
  *    state of a command the real-time thread has not applied yet.
- *  - RxDeckRT: written and read only by the real-time thread, which also
+ *  - RXDeckRT: written and read only by the real-time thread, which also
  *    applies the commands. The owner never touches it after creation.
- *  - RxDeckPub: written by the real-time thread, read by the owner through
+ *  - RXDeckPub: written by the real-time thread, read by the owner through
  *    C11 atomics. The only shared mutable memory besides the ring.
  * The command ring is single-producer (owner) / single-consumer (real
  * time). Nothing on the real-time side allocates, locks, logs or does
@@ -51,23 +51,23 @@
  * increment rounds the same way on every step, so the error would add up
  * linearly over an hour-long track. Kept apart, the fraction stays at full
  * precision and a loop wrap (subtracting the loop length) is exact. */
-typedef struct RxPos {
+typedef struct RXPos {
     int64_t i;
     double  f;
-} RxPos;
+} RXPos;
 
-static inline RxPos rx_pos_from(double frames)
+static inline RXPos rx_pos_from(double frames)
 {
     double fl = floor(frames);
-    return (RxPos) { .i = (int64_t)fl, .f = frames - fl };
+    return (RXPos) { .i = (int64_t)fl, .f = frames - fl };
 }
 
-static inline double rx_pos_get(RxPos p)
+static inline double rx_pos_get(RXPos p)
 {
     return (double)p.i + p.f;
 }
 
-static inline void rx_pos_add(RxPos *p, double d)
+static inline void rx_pos_add(RXPos *p, double d)
 {
     double fl = floor(d);
     p->i += (int64_t)fl;
@@ -78,9 +78,9 @@ static inline void rx_pos_add(RxPos *p, double d)
     }
 }
 
-static inline RxPos rx_pos_sub(RxPos a, RxPos b)
+static inline RXPos rx_pos_sub(RXPos a, RXPos b)
 {
-    RxPos r = { .i = a.i - b.i, .f = a.f - b.f };
+    RXPos r = { .i = a.i - b.i, .f = a.f - b.f };
     if (r.f < 0.0) {
         r.f += 1.0;
         r.i--;
@@ -95,7 +95,7 @@ static inline RxPos rx_pos_sub(RxPos a, RxPos b)
     return r;
 }
 
-static inline int rx_pos_cmp(RxPos a, RxPos b)
+static inline int rx_pos_cmp(RXPos a, RXPos b)
 {
     if (a.i != b.i)
         return a.i < b.i ? -1 : 1;
@@ -104,7 +104,7 @@ static inline int rx_pos_cmp(RxPos a, RxPos b)
 
 /* -------------------------------------------------------------- commands */
 
-enum RxCmdType {
+enum RXCmdType {
     RX_CMD_LOAD = 0,
     RX_CMD_UNLOAD,
     RX_CMD_PLAY,
@@ -124,9 +124,9 @@ enum RxCmdType {
 };
 
 /* A command is copied into the ring by value. A load carries the buffer's
- * fields rather than the RxAudio pointer, so the real-time side never reads
+ * fields rather than the RXAudio pointer, so the real-time side never reads
  * the owner's struct. */
-typedef struct RxCmd {
+typedef struct RXCmd {
     uint8_t      type;
     int8_t       deck;
     bool         flag;
@@ -135,34 +135,34 @@ typedef struct RxCmd {
     int          channels;
     int          rate;
     int64_t      nb_frames;
-} RxCmd;
+} RXCmd;
 
 /* ------------------------------------------------------- real-time decks */
 
-typedef struct RxGrain {
-    RxPos pos;
+typedef struct RXGrain {
+    RXPos pos;
     int   age, len;         /* len == 0: idle */
-} RxGrain;
+} RXGrain;
 
-typedef struct RxDeckRT {
+typedef struct RXDeckRT {
     /* The buffer: owned by the owner side, read-only here. */
     const float *samples;
     int          channels;
     int          rate;
     int64_t      nb_frames;
 
-    RxPos  pos;
+    RXPos  pos;
     bool   playing;
     double tempo, bend;
     float  gain, gain_prev;     /* volume, ramped over one callback */
 
     bool   loop_set, loop_enabled;
-    RxPos  loop_in, loop_out, loop_len;
+    RXPos  loop_in, loop_out, loop_len;
 
     /* De-click: the main voice fades in after a start or a jump while the
      * tail voice fades out from where the deck was. */
     int    fade_in, fade_len;
-    RxPos  tail_pos;
+    RXPos  tail_pos;
     double tail_inc;
     int    tail_left, tail_len;
 
@@ -170,12 +170,12 @@ typedef struct RxDeckRT {
     bool    scrubbing, scrub_resume;
     double  grain_from;         /* frames: where the last grain started */
     int     hop;                /* output frames until the next grain may start */
-    RxGrain grains[RX_GRAINS];
+    RXGrain grains[RX_GRAINS];
     float   lp_l, lp_r;
 
     float    level_l, level_r;
     uint64_t applied;           /* commands applied to this deck */
-} RxDeckRT;
+} RXDeckRT;
 
 /* ------------------------------------------------------- published state */
 
@@ -186,7 +186,7 @@ typedef struct RxDeckRT {
  * odd, stores, then makes it even with release order; the reader retries
  * until it sees the same even value before and after its loads. The writer
  * never waits. The meters are single values and need no such care. */
-typedef struct RxDeckPub {
+typedef struct RXDeckPub {
     alignas(64) atomic_uint seq;
     _Atomic int64_t  frame_i;
     _Atomic uint64_t frame_f;       /* double bits */
@@ -196,21 +196,21 @@ typedef struct RxDeckPub {
     atomic_bool      playing;
     _Atomic uint64_t serial;
     atomic_uint      level_l, level_r;  /* float bits */
-} RxDeckPub;
+} RXDeckPub;
 
-typedef struct RxDeckSnap {
+typedef struct RXDeckSnap {
     double   frames;
     double   speed;
     int64_t  time_us, span_us;
     bool     playing;
     uint64_t serial;
-} RxDeckSnap;
+} RXDeckSnap;
 
 /* ------------------------------------------------------------ owner side */
 
-typedef struct RxDeckOwner {
-    RxAudio *audio;             /* loaded buffer, NULL when empty */
-    RxGrid   grid;              /* copy of the grid given at load */
+typedef struct RXDeckOwner {
+    RXAudio *audio;             /* loaded buffer, NULL when empty */
+    RXGrid   grid;              /* copy of the grid given at load */
     uint64_t sent;              /* commands pushed for this deck */
     /* The latest position and playing state the owner asked for, valid
      * while the deck's applied serial is below the command's serial. */
@@ -222,17 +222,17 @@ typedef struct RxDeckOwner {
     bool     loop_enabled;
     double   loop_in, loop_out; /* seconds, < 0 none */
     bool     scrubbing, scrub_resume;
-} RxDeckOwner;
+} RXDeckOwner;
 
 /* A buffer the owner let go of, freed once its deck has applied `serial`. */
-typedef struct RxRelease {
-    RxAudio *audio;
+typedef struct RXRelease {
+    RXAudio *audio;
     int      deck;
     uint64_t serial;
-} RxRelease;
+} RXRelease;
 
 /* Backend state. */
-enum RxOutState {
+enum RXOutState {
     RX_OUT_CONNECTING = 0,
     RX_OUT_PAUSED,
     RX_OUT_RUNNING,
@@ -240,40 +240,40 @@ enum RxOutState {
     RX_OUT_ERROR,
 };
 
-typedef struct RxPwOut RxPwOut;
-typedef struct RxNullOut RxNullOut;
+typedef struct RXPwOut RXPwOut;
+typedef struct RXNullOut RXNullOut;
 
-struct RxPlayer {
+struct RXPlayer {
     /* Command ring: head written by the owner, tail by the real-time
      * thread, each on its own cache line. */
     alignas(64) atomic_size_t head;
     alignas(64) atomic_size_t tail;
-    alignas(64) RxCmd ring[RX_CMD_RING];
+    alignas(64) RXCmd ring[RX_CMD_RING];
 
     /* Real-time side. */
-    RxDeckRT rt[RX_DECKS];
+    RXDeckRT rt[RX_DECKS];
     float    master_gain, master_prev;
 
     /* Published. */
-    RxDeckPub   pub[RX_DECKS];
+    RXDeckPub   pub[RX_DECKS];
     atomic_int  device_rate;
-    atomic_int  out_state;          /* enum RxOutState */
+    atomic_int  out_state;          /* enum RXOutState */
     atomic_bool error_set;
     char        error[256];         /* written once, before out_state = ERROR */
 
     /* Owner side. */
-    RxPlayerOptions opt;            /* strings below are copies */
+    RXPlayerOptions opt;            /* strings below are copies */
     char           *sink, *app_name;
     int             period;
     bool            manual;         /* null backend driven by rx_player_null_advance */
-    RxDeckOwner     own[RX_DECKS];
+    RXDeckOwner     own[RX_DECKS];
     float           master_volume;
-    RxRelease      *releases;
+    RXRelease      *releases;
     int             nb_releases, releases_cap;
     bool            ring_full_warned;
 
-    RxPwOut   *pw;
-    RxNullOut *null;
+    RXPwOut   *pw;
+    RXNullOut *null;
 };
 
 /* ---------------------------------------------------------------- engine */
@@ -281,30 +281,30 @@ struct RxPlayer {
 /* The mix callback both backends call: applies the queued commands, renders
  * every deck into `out` (interleaved stereo float, `frames` frames at the
  * device rate) and publishes the state. Real-time safe. */
-void rx_player_mix(RxPlayer *p, float *out, int frames);
+void rx_player_mix(RXPlayer *p, float *out, int frames);
 
 /* The grid copy kept for a deck (owner thread). */
-int  rx_player_deck_set_grid(RxPlayer *p, int deck, const RxGrid *grid);
-const RxGrid *rx_player_deck_grid(const RxPlayer *p, int deck);
+int  rx_player_deck_set_grid(RXPlayer *p, int deck, const RXGrid *grid);
+const RXGrid *rx_player_deck_grid(const RXPlayer *p, int deck);
 
 /* ---------------------------------------------------------------- deck.c */
 
-void rx_player_deck_init(RxDeckRT *d);
+void rx_player_deck_init(RXDeckRT *d);
 /* Applies one command for this deck (real-time thread). */
-void rx_player_deck_apply(RxDeckRT *d, const RxCmd *cmd, int rate);
+void rx_player_deck_apply(RXDeckRT *d, const RXCmd *cmd, int rate);
 /* Adds the deck's output to `out` with its gain and updates its meters. */
-void rx_player_deck_render(RxDeckRT *d, float *out, int frames, int rate);
+void rx_player_deck_render(RXDeckRT *d, float *out, int frames, int rate);
 /* Track frames per second of output the deck advances by. */
-double rx_player_deck_speed(const RxDeckRT *d);
+double rx_player_deck_speed(const RXDeckRT *d);
 
 /* -------------------------------------------------------------- backends */
 
-int  rx_player_pw_open(RxPlayer *p);
-void rx_player_pw_close(RxPlayer *p);
+int  rx_player_pw_open(RXPlayer *p);
+void rx_player_pw_close(RXPlayer *p);
 
-int  rx_player_null_open(RxPlayer *p);
-void rx_player_null_close(RxPlayer *p);
+int  rx_player_null_open(RXPlayer *p);
+void rx_player_null_close(RXPlayer *p);
 /* Manual mode only: runs the mix for `frames` frames on the calling thread. */
-void rx_player_null_run(RxPlayer *p, int frames);
+void rx_player_null_run(RXPlayer *p, int frames);
 
 #endif /* RXBOX_PLAYER_INTERNAL_H */

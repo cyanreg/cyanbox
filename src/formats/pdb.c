@@ -43,7 +43,7 @@ static uint32_t align4(uint32_t n)
 /* DeviceSQL strings the way rekordbox writes them (docs/pdb.md 2.9): short
  * ASCII up to 126 bytes, long ASCII (0x40) beyond, UTF-16LE (0x90) for
  * anything non-ASCII; no terminator. */
-static int put_dstr(RxBuf *b, const char *s)
+static int put_dstr(RXBuf *b, const char *s)
 {
     if (!s)
         s = "";
@@ -91,7 +91,7 @@ static bool is_long(const uint8_t *enc)
 
 int rx_pdb_string_encode(const char *utf8, uint8_t **out, size_t *size)
 {
-    RxBuf b = { 0 };
+    RXBuf b = { 0 };
     int ret = put_dstr(&b, utf8);
     if (ret < 0) {
         rx_buf_free(&b);
@@ -186,7 +186,7 @@ static void tables_free(Table *t, int nb)
 }
 
 /* Takes the buffer's bytes. alloc 0 means align4(len). */
-static int add_row(Table *t, RxBuf *b, uint32_t alloc, bool shift)
+static int add_row(Table *t, RXBuf *b, uint32_t alloc, bool shift)
 {
     if (b->err) {
         int err = b->err;
@@ -210,13 +210,13 @@ static int add_row(Table *t, RxBuf *b, uint32_t alloc, bool shift)
         .alloc = alloc ? alloc : align4(len),
         .shift = shift,
     };
-    *b = (RxBuf) { 0 };
+    *b = (RXBuf) { 0 };
     return 0;
 }
 
 static int add_bytes_row(Table *t, const uint8_t *p, size_t n, uint32_t alloc)
 {
-    RxBuf b = { 0 };
+    RXBuf b = { 0 };
     rx_buf_put(&b, p, n);
     return add_row(t, &b, alloc, false);
 }
@@ -224,7 +224,7 @@ static int add_bytes_row(Table *t, const uint8_t *p, size_t n, uint32_t alloc)
 /* Strings laid out after a fixed part: long strings start 4-aligned
  * relative to the row (docs/pdb.md 2.9, G1). */
 typedef struct Strings {
-    RxBuf s[21];
+    RXBuf s[21];
     int   nb;
 } Strings;
 
@@ -234,7 +234,7 @@ static void strings_free(Strings *st)
         rx_buf_free(&st->s[i]);
 }
 
-static int track_strings(const RxPlan *plan, const RxPlanTrack *t, Strings *st)
+static int track_strings(const RXPlan *plan, const RXPlanTrack *t, Strings *st)
 {
     char title[1024], date_added[16];
     rx_plan_title(t, title, sizeof(title));
@@ -265,15 +265,15 @@ static int track_strings(const RxPlan *plan, const RxPlanTrack *t, Strings *st)
 }
 
 /* The fixed part, the 21 offsets and the strings (docs/pdb.md 2.11). */
-static int track_row(const RxPlan *plan, const RxPlanTrack *t, RxBuf *row, uint32_t *alloc)
+static int track_row(const RXPlan *plan, const RXPlanTrack *t, RXBuf *row, uint32_t *alloc)
 {
     Strings st;
     int ret = track_strings(plan, t, &st);
     if (ret < 0)
         return ret;
 
-    const RxTrack *tr = t->track;
-    const RxMeta *m = tr ? &tr->meta : NULL;
+    const RXTrack *tr = t->track;
+    const RXMeta *m = tr ? &tr->meta : NULL;
     double bpm = t->grid.nb_sections ? t->grid.sections[0].bpm : 0.0;
     /* Python's round(): half to even, which nearbyint does by default. */
     uint32_t tempo = (uint32_t)nearbyint(bpm * 100.0);
@@ -337,9 +337,9 @@ static int track_row(const RxPlan *plan, const RxPlanTrack *t, RxBuf *row, uint3
     return row->err;
 }
 
-int rx_pdb_track_row_size(const RxPlanTrack *t, const RxPlan *plan, size_t *len, size_t *alloc)
+int rx_pdb_track_row_size(const RXPlanTrack *t, const RXPlan *plan, size_t *len, size_t *alloc)
 {
-    RxBuf row = { 0 };
+    RXBuf row = { 0 };
     uint32_t a;
     int ret = track_row(plan, t, &row, &a);
     if (ret >= 0) {
@@ -355,7 +355,7 @@ static uint32_t dir_bytes(uint32_t n)
     return 2 * n + 4 * ((n + 15) / 16);
 }
 
-int rx_pdb_track_row_overflow(const RxPlanTrack *t, const RxPlan *plan)
+int rx_pdb_track_row_overflow(const RXPlanTrack *t, const RXPlan *plan)
 {
     size_t len, alloc;
     int ret = rx_pdb_track_row_size(t, plan, &len, &alloc);
@@ -371,7 +371,7 @@ int rx_pdb_track_row_overflow(const RxPlanTrack *t, const RxPlan *plan)
 /* genres, labels, artwork: u32 id, name at +4. */
 static int id_name_row(Table *t, uint32_t id, const char *name)
 {
-    RxBuf b = { 0 };
+    RXBuf b = { 0 };
     rx_buf_le32(&b, id);
     int ret = put_dstr(&b, name);
     if (ret < 0) {
@@ -383,7 +383,7 @@ static int id_name_row(Table *t, uint32_t id, const char *name)
 
 static int key_row(Table *t, uint32_t id, const char *name)
 {
-    RxBuf b = { 0 };
+    RXBuf b = { 0 };
     rx_buf_le32(&b, id);
     rx_buf_le32(&b, id);
     int ret = put_dstr(&b, name);
@@ -398,14 +398,14 @@ static int key_row(Table *t, uint32_t id, const char *name)
  * 0x0C long with two pad bytes (docs/pdb.md artists, G22). */
 static int artist_row(Table *t, uint32_t id, const char *name)
 {
-    RxBuf s = { 0 };
+    RXBuf s = { 0 };
     int ret = put_dstr(&s, name);
     if (ret < 0) {
         rx_buf_free(&s);
         return ret;
     }
     bool lng = is_long(s.data);
-    RxBuf b = { 0 };
+    RXBuf b = { 0 };
     rx_buf_le16(&b, 0x0060);
     rx_buf_le16(&b, 0);
     rx_buf_le32(&b, id);
@@ -421,14 +421,14 @@ static int artist_row(Table *t, uint32_t id, const char *name)
 
 static int album_row(Table *t, uint32_t id, const char *name, uint32_t artist_id)
 {
-    RxBuf s = { 0 };
+    RXBuf s = { 0 };
     int ret = put_dstr(&s, name);
     if (ret < 0) {
         rx_buf_free(&s);
         return ret;
     }
     bool lng = is_long(s.data);
-    RxBuf b = { 0 };
+    RXBuf b = { 0 };
     rx_buf_le16(&b, 0x0080);
     rx_buf_le16(&b, 0);
     rx_buf_le32(&b, 0);
@@ -445,9 +445,9 @@ static int album_row(Table *t, uint32_t id, const char *name, uint32_t artist_id
     return add_row(t, &b, alloc, true);
 }
 
-static int playlist_tree_row(Table *t, const RxPlanPlaylist *p)
+static int playlist_tree_row(Table *t, const RXPlanPlaylist *p)
 {
-    RxBuf b = { 0 };
+    RXBuf b = { 0 };
     rx_buf_le32(&b, p->parent_id);
     rx_buf_le32(&b, 0);
     rx_buf_le32(&b, (uint32_t)p->sort_order);
@@ -463,7 +463,7 @@ static int playlist_tree_row(Table *t, const RxPlanPlaylist *p)
 
 static int playlist_entry_row(Table *t, uint32_t index, uint32_t track_id, uint32_t playlist_id)
 {
-    RxBuf b = { 0 };
+    RXBuf b = { 0 };
     rx_buf_le32(&b, index);
     rx_buf_le32(&b, track_id);
     rx_buf_le32(&b, playlist_id);
@@ -478,13 +478,13 @@ static int playlist_entry_row(Table *t, uint32_t index, uint32_t track_id, uint3
 static int history_row(Table *t, uint32_t num_tracks, const char *date, const char *label,
                        int background)
 {
-    RxBuf lab = { 0 };
+    RXBuf lab = { 0 };
     int ret = put_dstr(&lab, label);
     if (ret < 0) {
         rx_buf_free(&lab);
         return ret;
     }
-    RxBuf b = { 0 };
+    RXBuf b = { 0 };
     rx_buf_le16(&b, 0x0280);
     rx_buf_le16(&b, 0);
     rx_buf_le32(&b, num_tracks);
@@ -561,7 +561,7 @@ static int fixed_tables(Table *tables)
 {
     int ret;
     for (int i = 0; i < 8; i++) {
-        RxBuf b = { 0 };
+        RXBuf b = { 0 };
         rx_buf_le32(&b, 0);
         rx_buf_u8(&b, (unsigned)(i + 1));
         rx_buf_le16(&b, (unsigned)(i + 1));
@@ -572,7 +572,7 @@ static int fixed_tables(Table *tables)
     }
     /* Column names are UTF-16 wrapped in U+FFFA ... U+FFFB (Appendix A). */
     for (int i = 0; i < 27; i++) {
-        RxBuf b = { 0 };
+        RXBuf b = { 0 };
         size_t n = strlen(columns[i].name);
         rx_buf_le16(&b, columns[i].id);
         rx_buf_le16(&b, columns[i].code);
@@ -795,13 +795,13 @@ fail:
 
 /* ------------------------------------------------------------ the files */
 
-int rx_pdb_build(const RxPlan *plan, uint8_t **out, size_t *size)
+int rx_pdb_build(const RXPlan *plan, uint8_t **out, size_t *size)
 {
     Table tables[RX_PDB_NUM_TABLES] = { 0 };
     int ret = 0;
 
     for (int i = 0; i < plan->nb_tracks; i++) {
-        RxBuf row = { 0 };
+        RXBuf row = { 0 };
         uint32_t alloc;
         if ((ret = track_row(plan, &plan->tracks[i], &row, &alloc)) < 0) {
             rx_buf_free(&row);
@@ -830,14 +830,14 @@ int rx_pdb_build(const RxPlan *plan, uint8_t **out, size_t *size)
         if ((ret = playlist_tree_row(&tables[RX_PDB_PLAYLIST_TREE], &plan->playlists[i])) < 0)
             goto fail;
     for (int i = 0; i < plan->nb_playlists; i++) {
-        const RxPlanPlaylist *p = &plan->playlists[i];
+        const RXPlanPlaylist *p = &plan->playlists[i];
         for (int k = 0; k < p->nb; k++)
             if ((ret = playlist_entry_row(&tables[RX_PDB_PLAYLIST_ENTRIES], (uint32_t)k + 1,
                                           p->track_ids[k], p->id)) < 0)
                 goto fail;
     }
     for (int i = 0; i < plan->nb_artworks; i++) {
-        const RxPlanArtwork *a = &plan->artworks[i];
+        const RXPlanArtwork *a = &plan->artworks[i];
         char *path = a->path80 ? rx_strdup(a->path80) : NULL;
         if (!path) {
             char *dir = rx_plan_artwork_dir(a->id);
@@ -875,7 +875,7 @@ fail:
 static int tag_row(Table *t, uint32_t id, const char *name, uint32_t category, uint32_t position,
                    bool is_category)
 {
-    RxBuf s = { 0 };
+    RXBuf s = { 0 };
     int ret = put_dstr(&s, name);
     if (ret < 0) {
         rx_buf_free(&s);
@@ -883,7 +883,7 @@ static int tag_row(Table *t, uint32_t id, const char *name, uint32_t category, u
     }
     bool lng = is_long(s.data);
     unsigned name_at = lng ? 0x20 : 0x1F;
-    RxBuf b = { 0 };
+    RXBuf b = { 0 };
     rx_buf_le16(&b, 0x0680);
     rx_buf_le16(&b, 0);
     rx_buf_le32(&b, 0);
@@ -903,7 +903,7 @@ static int tag_row(Table *t, uint32_t id, const char *name, uint32_t category, u
     return add_row(t, &b, alloc, true);
 }
 
-int rx_pdb_ext_build(const RxPlan *plan, uint8_t **out, size_t *size)
+int rx_pdb_ext_build(const RXPlan *plan, uint8_t **out, size_t *size)
 {
     Table tables[RX_PDB_EXT_NUM_TABLES] = { 0 };
     int ret = 0;
@@ -911,14 +911,14 @@ int rx_pdb_ext_build(const RxPlan *plan, uint8_t **out, size_t *size)
     /* Each category row followed by its tags, in plan order (dj's
      * build_pdb_ext). */
     for (int c = 0; c < plan->nb_tags; c++) {
-        const RxPlanTag *cat = &plan->tags[c];
+        const RXPlanTag *cat = &plan->tags[c];
         if (!cat->is_category)
             continue;
         if ((ret = tag_row(&tables[RX_PDB_EXT_TAGS], cat->id, cat->name, 0,
                            (uint32_t)cat->position, true)) < 0)
             goto fail;
         for (int i = 0; i < plan->nb_tags; i++) {
-            const RxPlanTag *tg = &plan->tags[i];
+            const RXPlanTag *tg = &plan->tags[i];
             if (tg->is_category || (uint32_t)tg->category != cat->id)
                 continue;
             if ((ret = tag_row(&tables[RX_PDB_EXT_TAGS], tg->id, tg->name, (uint32_t)tg->category,
@@ -927,7 +927,7 @@ int rx_pdb_ext_build(const RxPlan *plan, uint8_t **out, size_t *size)
         }
     }
     for (int i = 0; i < plan->nb_tag_tracks; i++) {
-        RxBuf b = { 0 };
+        RXBuf b = { 0 };
         rx_buf_le32(&b, 0);
         rx_buf_le32(&b, plan->tag_tracks[i].track_id);
         rx_buf_le32(&b, plan->tag_tracks[i].tag_id);
@@ -937,7 +937,7 @@ int rx_pdb_ext_build(const RxPlan *plan, uint8_t **out, size_t *size)
     }
     /* Table 7's one row (docs/pdb.md 3): the u32 at 0x18 was the track-row
      * library constant + 1 in rekordbox's files. */
-    RxBuf b = { 0 };
+    RXBuf b = { 0 };
     static const uint8_t t7_head[4] = { 0x00, 0x07, 0x00, 0x00 };
     static const uint8_t t7_tail[11] = { 0x03, 0x22, 0x23, 0x24, 0x25, 0x26, 0x03, 0x03, 0x03, 0x03, 0x03 };
     rx_buf_put(&b, t7_head, 4);
@@ -956,9 +956,9 @@ fail:
 
 /* ------------------------------------------------------------- reading */
 
-int rx_pdb_read_header(const uint8_t *b, size_t size, RxPdbHeader *h)
+int rx_pdb_read_header(const uint8_t *b, size_t size, RXPdbHeader *h)
 {
-    *h = (RxPdbHeader) { 0 };
+    *h = (RXPdbHeader) { 0 };
     if (size < RX_PDB_PAGE)
         return RX_ERROR(EINVAL);
     h->len_page = rx_rd_le32(b + 0x04);
@@ -970,7 +970,7 @@ int rx_pdb_read_header(const uint8_t *b, size_t size, RxPdbHeader *h)
         return RX_ERROR(EINVAL);
     for (uint32_t i = 0; i < h->num_tables; i++) {
         const uint8_t *e = b + 0x1C + 16 * i;
-        h->tables[i] = (RxPdbTableDir) {
+        h->tables[i] = (RXPdbTableDir) {
             .type            = rx_rd_le32(e),
             .empty_candidate = rx_rd_le32(e + 4),
             .first_page      = rx_rd_le32(e + 8),
@@ -980,7 +980,7 @@ int rx_pdb_read_header(const uint8_t *b, size_t size, RxPdbHeader *h)
     return 0;
 }
 
-int rx_pdb_table_rows(const uint8_t *b, size_t size, const RxPdbTableDir *t, uint32_t **pos, int *nb)
+int rx_pdb_table_rows(const uint8_t *b, size_t size, const RXPdbTableDir *t, uint32_t **pos, int *nb)
 {
     *pos = NULL;
     *nb = 0;
@@ -988,7 +988,7 @@ int rx_pdb_table_rows(const uint8_t *b, size_t size, const RxPdbTableDir *t, uin
     uint8_t *seen = calloc(nb_pages + 1, 1);
     if (!seen)
         return RX_ERROR(ENOMEM);
-    RxArray rows;
+    RXArray rows;
     rx_array_init(&rows, sizeof(uint32_t));
     int ret = 0;
     uint32_t page = t->first_page;
@@ -1031,7 +1031,7 @@ out:
     return ret;
 }
 
-static const RxPdbTableDir *table_of(const RxPdbHeader *h, uint32_t type)
+static const RXPdbTableDir *table_of(const RXPdbHeader *h, uint32_t type)
 {
     for (uint32_t i = 0; i < h->num_tables; i++)
         if (h->tables[i].type == type)
@@ -1039,7 +1039,7 @@ static const RxPdbTableDir *table_of(const RxPdbHeader *h, uint32_t type)
     return NULL;
 }
 
-void rx_pdb_raw_tracks_free(RxPdbRawTrack *t, int nb)
+void rx_pdb_raw_tracks_free(RXPdbRawTrack *t, int nb)
 {
     if (!t)
         return;
@@ -1049,22 +1049,22 @@ void rx_pdb_raw_tracks_free(RxPdbRawTrack *t, int nb)
     free(t);
 }
 
-int rx_pdb_raw_tracks(const uint8_t *b, size_t size, RxPdbRawTrack **out, int *nb)
+int rx_pdb_raw_tracks(const uint8_t *b, size_t size, RXPdbRawTrack **out, int *nb)
 {
     *out = NULL;
     *nb = 0;
-    RxPdbHeader h;
+    RXPdbHeader h;
     int ret = rx_pdb_read_header(b, size, &h);
     if (ret < 0)
         return ret;
-    const RxPdbTableDir *td = table_of(&h, RX_PDB_TRACKS);
+    const RXPdbTableDir *td = table_of(&h, RX_PDB_TRACKS);
     if (!td)
         return 0;
     uint32_t *pos;
     int n;
     if ((ret = rx_pdb_table_rows(b, size, td, &pos, &n)) < 0)
         return ret;
-    RxPdbRawTrack *t = calloc((size_t)RX_MAX(n, 1), sizeof(*t));
+    RXPdbRawTrack *t = calloc((size_t)RX_MAX(n, 1), sizeof(*t));
     if (!t) {
         free(pos);
         return RX_ERROR(ENOMEM);
@@ -1075,8 +1075,8 @@ int rx_pdb_raw_tracks(const uint8_t *b, size_t size, RxPdbRawTrack **out, int *n
         if (p + 0x88 > size)
             continue;
         const uint8_t *r = b + p;
-        RxPdbRawTrack *x = &t[k++];
-        *x = (RxPdbRawTrack) {
+        RXPdbRawTrack *x = &t[k++];
+        *x = (RXPdbRawTrack) {
             .pos          = (uint32_t)p,
             .subtype      = rx_rd_le16(r),
             .bitmask      = rx_rd_le32(r + 0x04),
@@ -1126,12 +1126,12 @@ static int cmp_idname(const void *a, const void *b)
     return x < y ? -1 : x > y;
 }
 
-static int read_names(const uint8_t *b, size_t size, const RxPdbHeader *h, uint32_t type,
+static int read_names(const uint8_t *b, size_t size, const RXPdbHeader *h, uint32_t type,
                       IdName **out, int *nb)
 {
     *out = NULL;
     *nb = 0;
-    const RxPdbTableDir *td = table_of(h, type);
+    const RXPdbTableDir *td = table_of(h, type);
     if (!td)
         return 0;
     uint32_t *pos;
@@ -1204,7 +1204,7 @@ int rx_pdb_artwork(const uint8_t *b, size_t size, uint32_t **ids, char ***paths,
     *ids = NULL;
     *paths = NULL;
     *nb = 0;
-    RxPdbHeader h;
+    RXPdbHeader h;
     int ret = rx_pdb_read_header(b, size, &h);
     if (ret < 0)
         return ret;
@@ -1235,11 +1235,11 @@ int rx_pdb_history(const uint8_t *b, size_t size, uint32_t *num_tracks, char **d
 {
     *num_tracks = 0;
     *date = NULL;
-    RxPdbHeader h;
+    RXPdbHeader h;
     int ret = rx_pdb_read_header(b, size, &h);
     if (ret < 0)
         return ret;
-    const RxPdbTableDir *td = table_of(&h, RX_PDB_HISTORY);
+    const RXPdbTableDir *td = table_of(&h, RX_PDB_HISTORY);
     if (!td)
         return RX_ERROR(ENOENT);
     uint32_t *pos;
@@ -1255,7 +1255,7 @@ int rx_pdb_history(const uint8_t *b, size_t size, uint32_t *num_tracks, char **d
     return ret;
 }
 
-void rx_pdb_history_lists_free(RxPdbHistoryList *l, int nb)
+void rx_pdb_history_lists_free(RXPdbHistoryList *l, int nb)
 {
     for (int i = 0; l && i < nb; i++) {
         free(l[i].name);
@@ -1270,11 +1270,11 @@ typedef struct Entry {
 
 static int cmp_entry(const void *a, const void *b);
 
-int rx_pdb_history_lists(const uint8_t *b, size_t size, RxPdbHistoryList **out, int *nb)
+int rx_pdb_history_lists(const uint8_t *b, size_t size, RXPdbHistoryList **out, int *nb)
 {
     *out = NULL;
     *nb = 0;
-    RxPdbHeader h;
+    RXPdbHeader h;
     int ret = rx_pdb_read_header(b, size, &h);
     if (ret < 0)
         return ret;
@@ -1283,11 +1283,11 @@ int rx_pdb_history_lists(const uint8_t *b, size_t size, RxPdbHistoryList **out, 
     uint32_t *pos = NULL;
     int nb_pos = 0;
     Entry *ent = NULL;
-    RxPdbHistoryList *l = NULL;
+    RXPdbHistoryList *l = NULL;
 
     if ((ret = read_names(b, size, &h, RX_PDB_HISTORY_PLAYLISTS, &lists, &nb_lists)) < 0)
         goto fail;
-    const RxPdbTableDir *te = table_of(&h, RX_PDB_HISTORY_ENTRIES);
+    const RXPdbTableDir *te = table_of(&h, RX_PDB_HISTORY_ENTRIES);
     if (te && (ret = rx_pdb_table_rows(b, size, te, &pos, &nb_pos)) < 0)
         goto fail;
     ent = malloc((size_t)RX_MAX(nb_pos, 1) * sizeof(*ent));
@@ -1339,7 +1339,7 @@ fail:
     return ret;
 }
 
-void rx_pdb_free(RxPdb *p)
+void rx_pdb_free(RXPdb *p)
 {
     for (int i = 0; i < p->nb_tracks; i++) {
         free(p->tracks[i].path);
@@ -1353,7 +1353,7 @@ void rx_pdb_free(RxPdb *p)
         free(p->playlists[i].track_ids);
     }
     free(p->playlists);
-    *p = (RxPdb) { 0 };
+    *p = (RXPdb) { 0 };
 }
 
 static int cmp_entry(const void *a, const void *b)
@@ -1364,10 +1364,10 @@ static int cmp_entry(const void *a, const void *b)
     return x->index < y->index ? -1 : x->index > y->index;
 }
 
-int rx_pdb_read(const uint8_t *data, size_t size, RxPdb *out)
+int rx_pdb_read(const uint8_t *data, size_t size, RXPdb *out)
 {
-    *out = (RxPdb) { 0 };
-    RxPdbHeader h;
+    *out = (RXPdb) { 0 };
+    RXPdbHeader h;
     int ret = rx_pdb_read_header(data, size, &h);
     if (ret < 0)
         return ret;
@@ -1375,7 +1375,7 @@ int rx_pdb_read(const uint8_t *data, size_t size, RxPdb *out)
     out->next_unused_page = h.next_unused;
     out->sequence = h.sequence;
 
-    RxPdbRawTrack *raw = NULL;
+    RXPdbRawTrack *raw = NULL;
     int nb_raw = 0;
     IdName *artists = NULL;
     int nb_artists = 0;
@@ -1393,9 +1393,9 @@ int rx_pdb_read(const uint8_t *data, size_t size, RxPdb *out)
         goto fail;
     }
     for (int i = 0; i < nb_raw; i++) {
-        RxPdbRawTrack *r = &raw[i];
+        RXPdbRawTrack *r = &raw[i];
         const char *artist = name_of(artists, nb_artists, r->artist_id);
-        out->tracks[i] = (RxPdbTrack) {
+        out->tracks[i] = (RXPdbTrack) {
             .id         = r->id,
             .path       = r->strings[RX_PDB_STR_FILE_PATH],
             .anlz_path  = r->strings[RX_PDB_STR_ANALYZE_PATH],
@@ -1417,8 +1417,8 @@ int rx_pdb_read(const uint8_t *data, size_t size, RxPdb *out)
         }
     }
 
-    const RxPdbTableDir *tt = table_of(&h, RX_PDB_PLAYLIST_TREE);
-    const RxPdbTableDir *te = table_of(&h, RX_PDB_PLAYLIST_ENTRIES);
+    const RXPdbTableDir *tt = table_of(&h, RX_PDB_PLAYLIST_TREE);
+    const RXPdbTableDir *te = table_of(&h, RX_PDB_PLAYLIST_ENTRIES);
     if (tt && (ret = rx_pdb_table_rows(data, size, tt, &tree, &nb_tree)) < 0)
         goto fail;
     if (te && (ret = rx_pdb_table_rows(data, size, te, &entries, &nb_entries)) < 0)
@@ -1441,11 +1441,11 @@ int rx_pdb_read(const uint8_t *data, size_t size, RxPdb *out)
         if (tree[i] + 21 > size)
             continue;
         const uint8_t *p = data + tree[i];
-        RxPdbPlaylist *pl = &out->playlists[out->nb_playlists];
+        RXPdbPlaylist *pl = &out->playlists[out->nb_playlists];
         char *name;
         if (read_dstr(data, size, tree[i] + 20, false, &name) < 0)
             continue;
-        *pl = (RxPdbPlaylist) {
+        *pl = (RXPdbPlaylist) {
             .parent_id = rx_rd_le32(p),
             .id        = rx_rd_le32(p + 12),
             .is_folder = rx_rd_le32(p + 16) != 0,
@@ -1499,7 +1499,7 @@ int rx_pdb_check(const uint8_t *b, size_t size, rx_problem_cb cb, void *opaque)
     int count = 0;
     if (size % RX_PDB_PAGE)
         problem(&count, cb, opaque, "file size is not a multiple of 4096");
-    RxPdbHeader h;
+    RXPdbHeader h;
     if (rx_pdb_read_header(b, size, &h) < 0) {
         problem(&count, cb, opaque, "unreadable file header");
         return count;
@@ -1512,7 +1512,7 @@ int rx_pdb_check(const uint8_t *b, size_t size, rx_problem_cb cb, void *opaque)
     }
     uint32_t max_seq = 0;
     for (uint32_t i = 0; i < h.num_tables; i++) {
-        const RxPdbTableDir *t = &h.tables[i];
+        const RXPdbTableDir *t = &h.tables[i];
         uint32_t page = t->first_page;
         int chain = 0;
         while (1) {
@@ -1573,7 +1573,7 @@ int rx_pdb_check(const uint8_t *b, size_t size, rx_problem_cb cb, void *opaque)
 
     /* Long strings must be 4-aligned within their rows (docs/pdb.md G1). */
     for (uint32_t i = 0; i < h.num_tables; i++) {
-        const RxPdbTableDir *t = &h.tables[i];
+        const RXPdbTableDir *t = &h.tables[i];
         /* Table types mean other things in exportExt.pdb (9 tables), where
          * 3 is the tags table with its name offset at 0x1D. */
         bool ext = h.num_tables == RX_PDB_EXT_NUM_TABLES;

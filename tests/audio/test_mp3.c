@@ -71,14 +71,14 @@ static void tag_frame(Buf *b, int mode, const char *tag)
     frame(b, 0xFB, 14, 0, mode, body, sizeof(body));
 }
 
-static RxMp3Info scan(const char *dir, const char *name, Buf *b)
+static RXMp3Info scan(const char *dir, const char *name, Buf *b)
 {
     char *path = test_path(dir, name);
     FILE *f = fopen(path, "wb");
     if (!f || fwrite(b->d, 1, b->n, f) != b->n)
         exit(1);
     fclose(f);
-    RxMp3Info info;
+    RXMp3Info info;
     int ret = rx_mp3_scan(path, &info);
     CHECK(ret >= 0, "%s: rx_mp3_scan %d", name, ret);
     free(path);
@@ -91,7 +91,7 @@ int main(void)
 {
     char *dir = test_dir("mp3");
     Buf b = { 0 };
-    RxMp3Info i;
+    RXMp3Info i;
 
     /* LAME 3.99, joint stereo throughout: the Info frame is a frame of
      * silence on the timeline */

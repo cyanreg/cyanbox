@@ -47,7 +47,7 @@ static const uint8_t sqlite_magic[16] = "SQLite format 3";
  * HMAC keyed with the page-HMAC key. */
 typedef struct Codec {
     struct AVAES *aes;
-    RxHMACSHA512 hmac;
+    RXHMACSHA512 hmac;
     bool decrypt;
 } Codec;
 
@@ -180,7 +180,7 @@ int rx_sqlcipher_decrypt(const uint8_t *data, size_t size, const char *passphras
      * a page. Frames apply when their transaction commits. */
     if (wal && wal_size > 32) {
         typedef struct Pending { uint32_t pgno; uint8_t page[PAGE]; } Pending;
-        RxArray pending;
+        RXArray pending;
         rx_array_init(&pending, sizeof(Pending));
         /* Every page past the end of the file is in some frame. */
         size_t max_pgno = nb + (wal_size - 32) / (24 + PAGE);

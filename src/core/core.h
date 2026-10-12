@@ -26,7 +26,7 @@ extern const char *const rx_track_file_cols[RX_TRACK_FILE_COLS];
 extern const char *const rx_track_edit_cols[RX_TRACK_EDIT_COLS];
 
 /* Cached statements. Parameters are listed as ?N. */
-enum RxStmtId {
+enum RXStmtId {
     RX_STMT_TRACK_INSERT,       /* ?1 path ?2 added ?3 missing, file cols, edit cols */
     RX_STMT_TRACK_FILE,         /* ?1 id, file cols; clears missing */
     RX_STMT_TRACK_EDIT,         /* ?1 id, edit cols */
@@ -59,7 +59,7 @@ enum RxStmtId {
     RX_STMT_NB,
 };
 
-struct RxDb {
+struct RXDb {
     sqlite3      *db;
     char         *path;
     int           depth;        /* transaction nesting */
@@ -69,29 +69,29 @@ struct RxDb {
 
 /* Opens or creates the database and brings its schema to the current
  * version. */
-int  rx_db_open(RxDb **db, const char *path);
-void rx_db_close(RxDb *db);
+int  rx_db_open(RXDb **db, const char *path);
+void rx_db_close(RXDb *db);
 
 /* Maps an sqlite3 result code to a negative errno and logs it with
  * sqlite3_errmsg() and `what`. */
-int  rx_db_error(RxDb *db, int rc, const char *what);
-int  rx_db_exec(RxDb *db, const char *sql);
+int  rx_db_error(RXDb *db, int rc, const char *what);
+int  rx_db_exec(RXDb *db, const char *sql);
 
 /* A cached statement, reset and with its bindings cleared. */
-sqlite3_stmt *rx_db_stmt(RxDb *db, enum RxStmtId id);
+sqlite3_stmt *rx_db_stmt(RXDb *db, enum RXStmtId id);
 /* A one-off statement (loading); finalize it when done. NULL on error. */
-sqlite3_stmt *rx_db_prepare(RxDb *db, const char *sql);
+sqlite3_stmt *rx_db_prepare(RXDb *db, const char *sql);
 /* Binders: NULL text and NAN doubles bind NULL. A failure is kept in
  * db->bind_rc and reported by the next rx_db_done()/rx_db_row(). */
-void rx_db_bind_int(RxDb *db, sqlite3_stmt *st, int i, int64_t v);
-void rx_db_bind_double(RxDb *db, sqlite3_stmt *st, int i, double v);
-void rx_db_bind_text(RxDb *db, sqlite3_stmt *st, int i, const char *s);
-void rx_db_bind_blob(RxDb *db, sqlite3_stmt *st, int i, const void *data, size_t size);
-void rx_db_bind_null(RxDb *db, sqlite3_stmt *st, int i);
+void rx_db_bind_int(RXDb *db, sqlite3_stmt *st, int i, int64_t v);
+void rx_db_bind_double(RXDb *db, sqlite3_stmt *st, int i, double v);
+void rx_db_bind_text(RXDb *db, sqlite3_stmt *st, int i, const char *s);
+void rx_db_bind_blob(RXDb *db, sqlite3_stmt *st, int i, const void *data, size_t size);
+void rx_db_bind_null(RXDb *db, sqlite3_stmt *st, int i);
 /* Runs a statement that returns no rows, then resets it. */
-int  rx_db_done(RxDb *db, sqlite3_stmt *st, const char *what);
+int  rx_db_done(RXDb *db, sqlite3_stmt *st, const char *what);
 /* Steps a query: 1 with a row, 0 at the end (reset), or an error (reset). */
-int  rx_db_row(RxDb *db, sqlite3_stmt *st, const char *what);
+int  rx_db_row(RXDb *db, sqlite3_stmt *st, const char *what);
 /* A column as a malloc'd string, NULL for SQL NULL; *err set on ENOMEM. */
 char *rx_db_column_text(sqlite3_stmt *st, int col, int *err);
 
@@ -101,33 +101,33 @@ char *rx_db_column_text(sqlite3_stmt *st, int col, int *err);
  * outermost one as a plain BEGIN: one snapshot for several queries
  * without holding the write lock (writes inside it may then fail with
  * -EBUSY when another connection committed since it began). */
-int  rx_db_begin(RxDb *db);
-int  rx_db_begin_read(RxDb *db);
-int  rx_db_commit(RxDb *db);
-void rx_db_rollback(RxDb *db);
+int  rx_db_begin(RXDb *db);
+int  rx_db_begin_read(RXDb *db);
+int  rx_db_commit(RXDb *db);
+void rx_db_rollback(RXDb *db);
 
 /* -------------------------------------------------------------- library */
 
-/* Settings <-> RxConfig (config.c), called by open. */
-int  rx_core_config_load(RxLibrary *lib);
+/* Settings <-> RXConfig (config.c), called by open. */
+int  rx_core_config_load(RXLibrary *lib);
 /* The playlist tree (playlist.c): load at open, free at close. When a
  * track is removed, drop_track renumbers the entries of the playlists that
  * held it, inside the caller's transaction, and forget_track removes it
  * from memory once that transaction has committed. */
-int  rx_core_playlists_load(RxLibrary *lib);
-void rx_core_playlists_free(RxLibrary *lib);
-int  rx_core_playlists_drop_track(RxLibrary *lib, uint64_t id);
-void rx_core_playlists_forget_track(RxLibrary *lib, uint64_t id);
+int  rx_core_playlists_load(RXLibrary *lib);
+void rx_core_playlists_free(RXLibrary *lib);
+int  rx_core_playlists_drop_track(RXLibrary *lib, uint64_t id);
+void rx_core_playlists_forget_track(RXLibrary *lib, uint64_t id);
 
 /* The waveform table as raw bytes (library.c); wavestore.c packs. */
-int  rx_core_waveform_blob_put(RxLibrary *lib, uint64_t id, const uint8_t *data, size_t size);
-int  rx_core_waveform_blob_get(const RxLibrary *lib, uint64_t id, uint8_t **data, size_t *size);
+int  rx_core_waveform_blob_put(RXLibrary *lib, uint64_t id, const uint8_t *data, size_t size);
+int  rx_core_waveform_blob_get(const RXLibrary *lib, uint64_t id, uint8_t **data, size_t *size);
 
 /* Grid positions for notation.c: the beat index (rx_grid_time_to_beat
  * units) of "bar N.B", and the bar and number of an integer beat index.
  * The grid must be valid. */
-double rx_core_grid_bar_index(const RxGrid *g, int64_t bar, int64_t beat);
-void   rx_core_grid_describe(const RxGrid *g, int64_t grid_beat, int64_t *bar, int *beat);
+double rx_core_grid_bar_index(const RXGrid *g, int64_t bar, int64_t beat);
+void   rx_core_grid_describe(const RXGrid *g, int64_t grid_beat, int64_t *bar, int *beat);
 
 /* The shortest "%.Ng" that strtod() reads back as exactly v. */
 const char *rx_core_fmt_double(double v, char *buf, size_t size);

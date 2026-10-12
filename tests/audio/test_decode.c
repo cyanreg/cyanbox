@@ -31,7 +31,7 @@ static float s16f(int16_t v)
 }
 
 /* The index of the largest |x| of channel c within +-radius of centre. */
-static int64_t peak(const RxAudio *a, int c, int64_t centre, int64_t radius)
+static int64_t peak(const RXAudio *a, int c, int64_t centre, int64_t radius)
 {
     int64_t best = -1;
     float max = -1.0f;
@@ -47,7 +47,7 @@ static int64_t peak(const RxAudio *a, int c, int64_t centre, int64_t radius)
 }
 
 /* Every click of the signal at k * click * scale + offset, +-tol */
-static void check_clicks(const char *what, const RxAudio *a, double scale, int64_t offset, int tol)
+static void check_clicks(const char *what, const RXAudio *a, double scale, int64_t offset, int tol)
 {
     int bad = 0;
     for (int64_t k = 1; k < SIG_SECONDS * 2; k++) {
@@ -81,11 +81,11 @@ static void write_bytes(const char *path, const uint8_t *d, size_t n)
 /* Lines a log sink was given */
 typedef struct LogCatch {
     int n;
-    enum RxLogLevel level[4];
+    enum RXLogLevel level[4];
     char line[4][256];
 } LogCatch;
 
-static void catch_line(void *opaque, enum RxLogLevel level, const char *line)
+static void catch_line(void *opaque, enum RXLogLevel level, const char *line)
 {
     LogCatch *c = opaque;
     if (c->n < 4) {
@@ -103,7 +103,7 @@ static void test_logging(void)
 {
     rx_audio_init_logging();
     LogCatch lc = { 0 };
-    enum RxLogLevel was = rx_log_level();
+    enum RXLogLevel was = rx_log_level();
     int av_was = av_log_get_level();
     rx_log_set_level(RX_LOG_DEBUG);
     av_log_set_level(AV_LOG_INFO);
@@ -137,11 +137,11 @@ static void test_mp3(const char *dir, const char *wav)
     char *mp3 = test_path(dir, "sig.mp3");
     CHECK(!ffmpeg("-i", wav, "-c:a", "libmp3lame", "-b:a", "320k", mp3, NULL), "mp3 encode");
 
-    RxProbe p;
+    RXProbe p;
     CHECK(rx_probe(mp3, &p) >= 0, "probe mp3");
     CHECK(!strcmp(p.codec, "mp3") && !strcmp(p.container, "mp3") && p.bit_depth == 0,
           "mp3 probe: %s %s %d", p.codec, p.container, p.bit_depth);
-    RxMp3Info mi = p.mp3;
+    RXMp3Info mi = p.mp3;
     CHECK(mi.valid && mi.header_frame && !mi.vbr && mi.bitrate_kbps == 320,
           "mp3: valid %d header %d vbr %d %d kbps", mi.valid, mi.header_frame, mi.vbr,
           mi.bitrate_kbps);
@@ -162,7 +162,7 @@ static void test_mp3(const char *dir, const char *wav)
     CHECK(mi.header_counts == (info_mode == audio_mode), "Info mode %d, audio %d, counts %d",
           info_mode, audio_mode, mi.header_counts);
 
-    RxAudio a;
+    RXAudio a;
     CHECK(rx_decode(mp3, 0, 0, &a) >= 0, "decode mp3");
     CHECK(a.nb_frames == p.total_samples && a.channels == 2 && a.rate == 44100,
           "mp3 decoded %" PRId64 " frames, probe %" PRId64, a.nb_frames, p.total_samples);
@@ -180,14 +180,14 @@ static void test_mp3(const char *dir, const char *wav)
     char *lame = test_path(dir, "lame-style.mp3");
     write_bytes(lame, d, n);
 
-    RxProbe pf, pl;
+    RXProbe pf, pl;
     CHECK(rx_probe(lavf, &pf) >= 0 && rx_probe(lame, &pl) >= 0, "probe variants");
     CHECK(!pf.mp3.header_counts && pf.total_samples == mi.nb_frames * 1152,
           "lavf-style: counts %d total %" PRId64, pf.mp3.header_counts, pf.total_samples);
     CHECK(pl.mp3.header_counts && pl.total_samples == (mi.nb_frames + 1) * 1152,
           "lame-style: counts %d total %" PRId64, pl.mp3.header_counts, pl.total_samples);
 
-    RxAudio al;
+    RXAudio al;
     CHECK(rx_decode(lavf, 0, 0, &a) >= 0 && rx_decode(lame, 0, 0, &al) >= 0, "decode variants");
     CHECK(a.nb_frames == mi.nb_frames * 1152, "lavf-style decoded %" PRId64, a.nb_frames);
     CHECK(al.nb_frames == a.nb_frames + 1152, "lame-style decoded %" PRId64, al.nb_frames);
@@ -214,7 +214,7 @@ static void test_mp3(const char *dir, const char *wav)
     d[at + 9] |= 0x80;
     char *damaged = test_path(dir, "damaged.mp3");
     write_bytes(damaged, d, n);
-    RxAudio ad;
+    RXAudio ad;
     CHECK(rx_decode(damaged, 0, 0, &ad) >= 0, "decode damaged");
     CHECK(ad.nb_frames == a.nb_frames, "damaged: %" PRId64 " frames, intact %" PRId64,
           ad.nb_frames, a.nb_frames);
@@ -238,19 +238,19 @@ static void test_mp3(const char *dir, const char *wav)
     char *plain = test_path(dir, "noxing.mp3");
     CHECK(!ffmpeg("-i", wav, "-c:a", "libmp3lame", "-b:a", "320k", "-write_xing", "0", plain, NULL),
           "mp3 encode");
-    RxProbe pp;
+    RXProbe pp;
     CHECK(rx_probe(plain, &pp) >= 0, "probe noxing");
     CHECK(!pp.mp3.header_frame && !pp.mp3.header_counts && pp.mp3.nb_frames == mi.nb_frames,
           "noxing: header %d counts %d frames %" PRId64, pp.mp3.header_frame,
           pp.mp3.header_counts, pp.mp3.nb_frames);
-    RxAudio ap;
+    RXAudio ap;
     CHECK(rx_decode(plain, 1, 0, &ap) >= 0 && ap.nb_frames == pp.total_samples,
           "noxing decoded %" PRId64 " of %" PRId64, ap.nb_frames, pp.total_samples);
     rx_audio_free(&ap);
     rx_probe_free(&pp);
 
     /* Mono mix of a lossy decode is still the mean */
-    RxAudio m, m2;
+    RXAudio m, m2;
     CHECK(rx_decode(lavf, 1, 0, &m) >= 0 && rx_audio_to_mono(&a, &m2) >= 0, "mp3 mono");
     CHECK(m.nb_frames == a.nb_frames &&
           !memcmp(m.samples, m2.samples, (size_t)m.nb_frames * sizeof(float)),
@@ -283,7 +283,7 @@ int main(void)
     /* WAV and FLAC decode to the exact samples */
     const char *lossless[] = { wav, flac };
     for (int f = 0; f < 2; f++) {
-        RxAudio a;
+        RXAudio a;
         int ret = rx_decode(lossless[f], 0, 0, &a);
         CHECK(ret >= 0, "decode %s: %d", lossless[f], ret);
         if (ret < 0)
@@ -299,7 +299,7 @@ int main(void)
 
     /* Mono: the mean of the channels, the same from the decoder and from
      * rx_audio_to_mono; clicks where they were written */
-    RxAudio st, mono, mono2;
+    RXAudio st, mono, mono2;
     CHECK(rx_decode(flac, 0, 0, &st) >= 0, "decode flac");
     CHECK(rx_decode(flac, 1, 0, &mono) >= 0 && mono.channels == 1 && mono.nb_frames == n, "mono");
     CHECK(rx_audio_to_mono(&st, &mono2) >= 0 && mono2.nb_frames == n, "to_mono");
@@ -315,7 +315,7 @@ int main(void)
     int16_t *pcm1 = make_signal(SIG_RATE, 1, 2, &nm);
     char *wav1 = test_path(dir, "mono.wav");
     CHECK(write_wav(wav1, SIG_RATE, 1, pcm1, nm) >= 0, "write mono wav");
-    RxAudio dup;
+    RXAudio dup;
     CHECK(rx_decode(wav1, 2, 0, &dup) >= 0 && dup.channels == 2 && dup.nb_frames == nm, "dup");
     bool same = true;
     for (int64_t i = 0; i < nm; i++)
@@ -327,7 +327,7 @@ int main(void)
      * decoder and from a buffer */
     const int rates[] = { 48000, 22050, 96000 };
     for (int r = 0; r < 3; r++) {
-        RxAudio rs, rb;
+        RXAudio rs, rb;
         CHECK(rx_decode(flac, 1, rates[r], &rs) >= 0, "decode at %d", rates[r]);
         CHECK(rx_audio_resample(&mono, rates[r], &rb) >= 0, "resample to %d", rates[r]);
         int64_t want = n * rates[r] / SIG_RATE;
@@ -345,7 +345,7 @@ int main(void)
     }
 
     /* Probe */
-    RxProbe p;
+    RXProbe p;
     CHECK(rx_probe(wav, &p) >= 0, "probe wav");
     CHECK(!strcmp(p.codec, "pcm_s16le") && !strcmp(p.container, "wav") && p.bit_depth == 16 &&
           p.total_samples == n && p.duration == SIG_SECONDS && p.sample_rate == SIG_RATE &&
@@ -374,7 +374,7 @@ int main(void)
     CHECK(lower, "tag keys not lower-cased");
 
     /* The FLAC frame table against STREAMINFO */
-    RxFlacInfo fi;
+    RXFlacInfo fi;
     CHECK(rx_flac_scan(flac, &fi) >= 0 && fi.valid, "flac scan");
     CHECK(fi.total_samples == n && fi.sample_rate == SIG_RATE && fi.channels == 2 &&
           fi.bit_depth == 16 && fi.max_block > 0 && fi.first_frame_offset > 42,
@@ -410,7 +410,7 @@ int main(void)
     CHECK(copy_file(flac, weird) >= 0, "copy weird");
     CHECK(rx_probe(weird, &p) >= 0 && p.total_samples == n && p.flac.valid, "probe weird name");
     rx_probe_free(&p);
-    RxAudio aw;
+    RXAudio aw;
     CHECK(rx_decode(weird, 1, 0, &aw) >= 0 && aw.nb_frames == n, "decode weird name");
     rx_audio_free(&aw);
 
@@ -424,8 +424,8 @@ int main(void)
         const int64_t keep = 30000;
         CHECK(write_wav(cut, SIG_RATE, 2, pcm, n) >= 0 && !truncate(cut, 44 + keep * 4 + 3),
               "write cut wav");
-        RxProbe pc;
-        RxAudio ac;
+        RXProbe pc;
+        RXAudio ac;
         CHECK(rx_probe(cut, &pc) >= 0 && rx_decode(cut, 0, 0, &ac) >= 0, "cut wav");
         CHECK(ac.nb_frames == keep && pc.total_samples == keep,
               "cut wav: decoded %" PRId64 ", probe %" PRId64 ", want %" PRId64, ac.nb_frames,
@@ -459,8 +459,8 @@ int main(void)
     if (have_encoder("libopus")) {
         char *opus = test_path(dir, "sig.opus");
         CHECK(!ffmpeg("-i", wav, "-c:a", "libopus", "-b:a", "192k", opus, NULL), "opus encode");
-        RxProbe po;
-        RxAudio ao;
+        RXProbe po;
+        RXAudio ao;
         CHECK(rx_probe(opus, &po) >= 0 && !strcmp(po.codec, "opus") && !strcmp(po.container, "ogg"),
               "opus probe %s %s", po.codec, po.container);
         CHECK(rx_decode(opus, 1, 0, &ao) >= 0 && ao.rate == 48000, "opus decode");
@@ -475,7 +475,7 @@ int main(void)
     {
         char *m4a = test_path(dir, "sig.m4a");
         CHECK(!ffmpeg("-i", wav, "-c:a", "aac", "-b:a", "256k", m4a, NULL), "aac encode");
-        RxAudio aa;
+        RXAudio aa;
         CHECK(rx_decode(m4a, 1, 0, &aa) >= 0, "aac decode");
         CHECK(llabs(aa.nb_frames - n) <= 1024, "aac: %" PRId64 " frames", aa.nb_frames);
         check_clicks("aac", &aa, 1.0, 0, 2);
@@ -511,8 +511,8 @@ int main(void)
             const char *const *a = kinds[k].args;
             const char *a2 = a[2] ? a[2] : "-hide_banner", *a3 = a[3] ? a[3] : "-hide_banner";
             CHECK(!ffmpeg("-i", wav, a[0], a[1], a2, a3, file, NULL), "encode %s", kinds[k].name);
-            RxProbe pk;
-            RxAudio ak;
+            RXProbe pk;
+            RXAudio ak;
             CHECK(rx_probe(file, &pk) >= 0 && rx_decode(file, 0, 0, &ak) >= 0, "%s", kinds[k].name);
             CHECK(pk.total_samples == ak.nb_frames, "%s (%s in %s): probe %" PRId64
                   " samples, decoder %" PRId64, kinds[k].name, pk.codec, pk.container,
@@ -533,7 +533,7 @@ int main(void)
         CHECK(!ffmpeg("-f", "lavfi", "-i", "sine=frequency=1000:sample_rate=96000:duration=630",
                       "-ac", "2", "-c:a", "flac", "-compression_level", "0", big, NULL), "long flac");
         int64_t t0 = rx_time_us();
-        RxAudio al;
+        RXAudio al;
         int ret = rx_decode(big, 1, 0, &al);
         CHECK(ret >= 0 && al.nb_frames == 630 * 96000 && al.rate == 96000,
               "long decode %d: %" PRId64 " frames", ret, al.nb_frames);

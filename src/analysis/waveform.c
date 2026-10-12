@@ -264,7 +264,7 @@ static void pwv6_rxbox(const uint8_t *pwv7, int64_t n, double *acc, uint8_t *pwv
     }
 }
 
-static int alloc_detail(RxWaveforms *w, int n)
+static int alloc_detail(RXWaveforms *w, int n)
 {
     w->nb_detail = n;
     w->pwv3 = malloc((size_t)n);
@@ -277,9 +277,9 @@ static int alloc_detail(RxWaveforms *w, int n)
     return 0;
 }
 
-int rx_waveforms_compute(const float *mono, int64_t nb_samples, int rate, RxWaveforms *out)
+int rx_waveforms_compute(const float *mono, int64_t nb_samples, int rate, RXWaveforms *out)
 {
-    *out = (RxWaveforms) { 0 };
+    *out = (RXWaveforms) { 0 };
     if (rate <= 0 || nb_samples < 0 || (nb_samples && !mono))
         return RX_ERROR(EINVAL);
     int64_t scaled;
@@ -500,14 +500,14 @@ fail:
     return ret;
 }
 
-void rx_waveforms_free(RxWaveforms *w)
+void rx_waveforms_free(RXWaveforms *w)
 {
     if (!w)
         return;
     free(w->pwv3);
     free(w->pwv5);
     free(w->pwv7);
-    *w = (RxWaveforms) { 0 };
+    *w = (RXWaveforms) { 0 };
 }
 
 /* ---------------------------------------------------------------- packing */
@@ -558,7 +558,7 @@ static size_t rxw_size(int n)
            RX_WAVE_PWV4_COLUMNS * 6 + RX_WAVE_PWV6_COLUMNS * 3 + (size_t)n * 6;
 }
 
-int rx_waveforms_pack(const RxWaveforms *w, uint8_t **data, size_t *size)
+int rx_waveforms_pack(const RXWaveforms *w, uint8_t **data, size_t *size)
 {
     *data = NULL;
     *size = 0;
@@ -599,9 +599,9 @@ int rx_waveforms_pack(const RxWaveforms *w, uint8_t **data, size_t *size)
     return 0;
 }
 
-int rx_waveforms_unpack(const uint8_t *data, size_t size, RxWaveforms *w)
+int rx_waveforms_unpack(const uint8_t *data, size_t size, RXWaveforms *w)
 {
-    *w = (RxWaveforms) { 0 };
+    *w = (RXWaveforms) { 0 };
     if (!data || size < RXW_HEADER || memcmp(data, RXW_MAGIC, 4))
         return RX_ERROR(EINVAL);
     /* Another format version (1, 2: older three-band levels): not damaged,
@@ -635,7 +635,7 @@ int rx_waveforms_unpack(const uint8_t *data, size_t size, RxWaveforms *w)
     return 0;
 }
 
-int rx_waveforms_save(const RxWaveforms *w, const char *path)
+int rx_waveforms_save(const RXWaveforms *w, const char *path)
 {
     if (!path)
         return RX_ERROR(EINVAL);
@@ -649,9 +649,9 @@ int rx_waveforms_save(const RxWaveforms *w, const char *path)
     return ret;
 }
 
-int rx_waveforms_load(const char *path, RxWaveforms *w)
+int rx_waveforms_load(const char *path, RXWaveforms *w)
 {
-    *w = (RxWaveforms) { 0 };
+    *w = (RXWaveforms) { 0 };
     uint8_t *buf;
     size_t size;
     int ret = rx_file_read(path, &buf, &size);

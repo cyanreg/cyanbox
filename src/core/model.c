@@ -18,9 +18,9 @@
 
 /* ------------------------------------------------------------------- cues */
 
-void rx_cue_init(RxCue *c, double time)
+void rx_cue_init(RXCue *c, double time)
 {
-    *c = (RxCue) {
+    *c = (RXCue) {
         .time       = time,
         .grid_beat  = NAN,
         .hot        = -1,
@@ -37,7 +37,7 @@ static double snap(double x, double step)
     return fabs(x - r) < 1e-6 ? r : x;
 }
 
-void rx_cue_attach_to_grid(RxCue *c, const RxGrid *grid)
+void rx_cue_attach_to_grid(RXCue *c, const RXGrid *grid)
 {
     if (!rx_grid_valid(grid)) {
         c->grid_beat = NAN;
@@ -61,18 +61,18 @@ void rx_cue_attach_to_grid(RxCue *c, const RxGrid *grid)
 
 /* The string fields, by offset, so they can be walked in one loop. */
 static const size_t meta_string_offsets[] = {
-    offsetof(RxMeta, title),    offsetof(RxMeta, artist),   offsetof(RxMeta, album),
-    offsetof(RxMeta, album_artist), offsetof(RxMeta, genre), offsetof(RxMeta, label),
-    offsetof(RxMeta, remixer),  offsetof(RxMeta, composer), offsetof(RxMeta, original_artist),
-    offsetof(RxMeta, comment),
+    offsetof(RXMeta, title),    offsetof(RXMeta, artist),   offsetof(RXMeta, album),
+    offsetof(RXMeta, album_artist), offsetof(RXMeta, genre), offsetof(RXMeta, label),
+    offsetof(RXMeta, remixer),  offsetof(RXMeta, composer), offsetof(RXMeta, original_artist),
+    offsetof(RXMeta, comment),
 };
 
-static char **meta_string(RxMeta *m, int i)
+static char **meta_string(RXMeta *m, int i)
 {
     return (char **)((char *)m + meta_string_offsets[i]);
 }
 
-void rx_meta_free(RxMeta *m)
+void rx_meta_free(RXMeta *m)
 {
     if (!m)
         return;
@@ -81,7 +81,7 @@ void rx_meta_free(RxMeta *m)
     for (int i = 0; i < m->nb_tags; i++)
         free(m->tags[i]);
     free(m->tags);
-    *m = (RxMeta) { 0 };
+    *m = (RXMeta) { 0 };
 }
 
 int rx_meta_set(char **field, const char *value)
@@ -97,12 +97,12 @@ int rx_meta_set(char **field, const char *value)
     return 0;
 }
 
-int rx_meta_copy(RxMeta *dst, const RxMeta *src)
+int rx_meta_copy(RXMeta *dst, const RXMeta *src)
 {
     if (dst == src)
         return 0;
 
-    RxMeta tmp = *src;
+    RXMeta tmp = *src;
     for (size_t i = 0; i < RX_ARRAY_ELEMS(meta_string_offsets); i++)
         *meta_string(&tmp, (int)i) = NULL;
     tmp.tags = NULL;
@@ -110,7 +110,7 @@ int rx_meta_copy(RxMeta *dst, const RxMeta *src)
 
     int ret = 0;
     for (size_t i = 0; i < RX_ARRAY_ELEMS(meta_string_offsets); i++) {
-        ret = rx_meta_set(meta_string(&tmp, (int)i), *meta_string((RxMeta *)src, (int)i));
+        ret = rx_meta_set(meta_string(&tmp, (int)i), *meta_string((RXMeta *)src, (int)i));
         if (ret < 0)
             goto fail;
     }
@@ -129,7 +129,7 @@ fail:
     return ret;
 }
 
-bool rx_meta_has_tag(const RxMeta *m, const char *tag)
+bool rx_meta_has_tag(const RXMeta *m, const char *tag)
 {
     for (int i = 0; i < m->nb_tags; i++) {
         if (!strcmp(m->tags[i], tag))
@@ -138,7 +138,7 @@ bool rx_meta_has_tag(const RxMeta *m, const char *tag)
     return false;
 }
 
-int rx_meta_add_tag(RxMeta *m, const char *tag)
+int rx_meta_add_tag(RXMeta *m, const char *tag)
 {
     if (!tag || !*tag)
         return RX_ERROR(EINVAL);
@@ -157,7 +157,7 @@ int rx_meta_add_tag(RxMeta *m, const char *tag)
     return 0;
 }
 
-void rx_meta_clear_tags(RxMeta *m)
+void rx_meta_clear_tags(RXMeta *m)
 {
     for (int i = 0; i < m->nb_tags; i++)
         free(m->tags[i]);
@@ -168,9 +168,9 @@ void rx_meta_clear_tags(RxMeta *m)
 
 /* ------------------------------------------------------------------ track */
 
-RxTrack *rx_track_new(const char *path)
+RXTrack *rx_track_new(const char *path)
 {
-    RxTrack *t = calloc(1, sizeof(*t));
+    RXTrack *t = calloc(1, sizeof(*t));
     if (!t)
         return NULL;
     t->grid.beats_per_bar = 4;
@@ -184,7 +184,7 @@ RxTrack *rx_track_new(const char *path)
     return t;
 }
 
-void rx_track_free(RxTrack *t)
+void rx_track_free(RXTrack *t)
 {
     if (!t)
         return;
@@ -196,16 +196,16 @@ void rx_track_free(RxTrack *t)
     free(t);
 }
 
-RxTrack *rx_track_dup(const RxTrack *src)
+RXTrack *rx_track_dup(const RXTrack *src)
 {
-    RxTrack *t = calloc(1, sizeof(*t));
+    RXTrack *t = calloc(1, sizeof(*t));
     if (!t)
         return NULL;
     *t = *src;
     t->path = NULL;
-    t->meta = (RxMeta) { 0 };
-    t->file_meta = (RxMeta) { 0 };
-    t->grid = (RxGrid) { .beats_per_bar = src->grid.beats_per_bar };
+    t->meta = (RXMeta) { 0 };
+    t->file_meta = (RXMeta) { 0 };
+    t->grid = (RXGrid) { .beats_per_bar = src->grid.beats_per_bar };
     t->cues = NULL;
     t->nb_cues = 0;
 
@@ -231,13 +231,13 @@ fail:
 
 /* ------------------------------------------------------------- cue lists */
 
-int rx_track_add_cue(RxTrack *t, const RxCue *cue)
+int rx_track_add_cue(RXTrack *t, const RXCue *cue)
 {
     if (cue->hot < -1 || cue->hot >= RX_HOT_CUE_SLOTS || !isfinite(cue->time))
         return RX_ERROR(EINVAL);
 
     /* Grow first so a failure leaves the list as it was. */
-    RxCue *cues = realloc(t->cues, (size_t)(t->nb_cues + 1) * sizeof(*cues));
+    RXCue *cues = realloc(t->cues, (size_t)(t->nb_cues + 1) * sizeof(*cues));
     if (!cues)
         return RX_ERROR(ENOMEM);
     t->cues = cues;
@@ -259,7 +259,7 @@ int rx_track_add_cue(RxTrack *t, const RxCue *cue)
     return at;
 }
 
-int rx_track_remove_cue(RxTrack *t, int index)
+int rx_track_remove_cue(RXTrack *t, int index)
 {
     if (index < 0 || index >= t->nb_cues)
         return RX_ERROR(EINVAL);
@@ -269,7 +269,7 @@ int rx_track_remove_cue(RxTrack *t, int index)
     return 0;
 }
 
-int rx_track_hot_cue(const RxTrack *t, int slot)
+int rx_track_hot_cue(const RXTrack *t, int slot)
 {
     for (int i = 0; i < t->nb_cues; i++) {
         if (t->cues[i].hot == slot && slot >= 0)
@@ -278,11 +278,11 @@ int rx_track_hot_cue(const RxTrack *t, int slot)
     return -1;
 }
 
-int rx_track_memory_cue_at(const RxTrack *t, double time, double tolerance)
+int rx_track_memory_cue_at(const RXTrack *t, double time, double tolerance)
 {
     int best = -1;
     for (int i = 0; i < t->nb_cues; i++) {
-        const RxCue *c = &t->cues[i];
+        const RXCue *c = &t->cues[i];
         if (rx_cue_is_hot(c) || fabs(c->time - time) > tolerance)
             continue;
         if (best < 0 || fabs(c->time - time) < fabs(t->cues[best].time - time))
@@ -291,28 +291,28 @@ int rx_track_memory_cue_at(const RxTrack *t, double time, double tolerance)
     return best;
 }
 
-int rx_track_memory_cue_before(const RxTrack *t, double time, double tolerance)
+int rx_track_memory_cue_before(const RXTrack *t, double time, double tolerance)
 {
     int best = -1;
     for (int i = 0; i < t->nb_cues; i++) {
-        const RxCue *c = &t->cues[i];
+        const RXCue *c = &t->cues[i];
         if (!rx_cue_is_hot(c) && c->time < time - tolerance)
             best = i;
     }
     return best;
 }
 
-int rx_track_memory_cue_after(const RxTrack *t, double time, double tolerance)
+int rx_track_memory_cue_after(const RXTrack *t, double time, double tolerance)
 {
     for (int i = 0; i < t->nb_cues; i++) {
-        const RxCue *c = &t->cues[i];
+        const RXCue *c = &t->cues[i];
         if (!rx_cue_is_hot(c) && c->time > time + tolerance)
             return i;
     }
     return -1;
 }
 
-int rx_track_memory_cue_nth(const RxTrack *t, int n)
+int rx_track_memory_cue_nth(const RXTrack *t, int n)
 {
     for (int i = 0; i < t->nb_cues; i++) {
         if (!rx_cue_is_hot(&t->cues[i]) && --n == 0)
@@ -321,14 +321,14 @@ int rx_track_memory_cue_nth(const RxTrack *t, int n)
     return -1;
 }
 
-void rx_track_resolve_cues(RxTrack *t)
+void rx_track_resolve_cues(RXTrack *t)
 {
-    const RxGrid *g = &t->grid;
+    const RXGrid *g = &t->grid;
     if (!rx_grid_valid(g))
         return;
 
     for (int i = 0; i < t->nb_cues; i++) {
-        RxCue *c = &t->cues[i];
+        RXCue *c = &t->cues[i];
         if (rx_cue_is_musical(c))
             c->time = rx_grid_beat_to_time(g, c->grid_beat);
         if (isnan(c->loop_beats))
@@ -346,7 +346,7 @@ void rx_track_resolve_cues(RxTrack *t)
     /* Musical and absolute cues can trade places after a grid edit:
      * insertion sort keeps equal times in their order. */
     for (int i = 1; i < t->nb_cues; i++) {
-        RxCue c = t->cues[i];
+        RXCue c = t->cues[i];
         int j = i;
         while (j > 0 && t->cues[j - 1].time > c.time) {
             t->cues[j] = t->cues[j - 1];
@@ -356,7 +356,7 @@ void rx_track_resolve_cues(RxTrack *t)
     }
 }
 
-const char *rx_track_display(const RxTrack *t, char *buf, size_t size)
+const char *rx_track_display(const RXTrack *t, char *buf, size_t size)
 {
     if (!size)
         return buf;

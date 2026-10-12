@@ -45,11 +45,11 @@ static bool pressed(ImGuiKey k)
 
 void ui_keys(UiState *ui)
 {
-    RxApp *app = ui->app;
+    RXApp *app = ui->app;
     ImGuiIO &io = ImGui::GetIO();
-    RxDeckView *dv = &app->decks[0];
+    RXDeckView *dv = &app->decks[0];
     UiDeck *ud = &ui->decks[0];
-    RxDeckCtl *c = &dv->ctl;
+    RXDeckCtl *c = &dv->ctl;
 
     // A held key is released even if the focus moved meanwhile. Up, not
     // "released": when the window loses the keyboard ImGui clears every key

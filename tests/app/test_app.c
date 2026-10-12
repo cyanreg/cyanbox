@@ -68,7 +68,7 @@ static int copy_file(const char *from, const char *to)
 }
 
 /* Ticks (and plays 10 ms) until `done` says so, up to `seconds`. */
-static bool tick_until(RxApp *app, bool (*done)(RxApp *app), int seconds)
+static bool tick_until(RXApp *app, bool (*done)(RXApp *app), int seconds)
 {
     int64_t t0 = rx_time_us();
     while (rx_time_us() - t0 < seconds * 1000000LL) {
@@ -84,14 +84,14 @@ static bool tick_until(RxApp *app, bool (*done)(RxApp *app), int seconds)
 /* Plays `seconds` of the deck in steps of `step`, ticking after each,
  * with `pace_us` of wall time per step; `back_from`/`back_to` (when > 0)
  * seek back whenever the playhead passes `back_from`. */
-static void play_for(RxApp *app, double seconds, double step, int pace_us, double back_from,
+static void play_for(RXApp *app, double seconds, double step, int pace_us, double back_from,
                      double back_to)
 {
     int frames = (int)lround(step * 48000);
     for (double done = 0; done < seconds; done += step) {
         rx_player_null_advance(app->player, frames);
         rx_app_tick(app);
-        RxDeckState st;
+        RXDeckState st;
         rx_deck_state(app->player, 0, &st);
         if (back_from > 0 && st.position >= back_from)
             rx_ctl_seek(&app->decks[0].ctl, back_to);
@@ -149,7 +149,7 @@ static int stick_setting(const char *stick, const char *key, const char *value)
     char *path = rx_path_join(stick, "PIONEER/MYSETTING.DAT");
     uint8_t *data = NULL, *out = NULL;
     size_t size = 0, out_size = 0;
-    RxKv *kv = NULL;
+    RXKv *kv = NULL;
     int nb = 0;
     int ret = path ? rx_file_read(path, &data, &size) : RX_ERROR(ENOMEM);
     if (ret >= 0)
@@ -175,7 +175,7 @@ static int stick_setting(const char *stick, const char *key, const char *value)
     return ret;
 }
 
-static bool deck_idle(RxApp *app)
+static bool deck_idle(RXApp *app)
 {
     return !app->decks[0].loading_request;
 }
@@ -201,32 +201,32 @@ static char *find_file(const char *dir, const char *base)
     return found_path;
 }
 
-static bool analysis_done(RxApp *app)
+static bool analysis_done(RXApp *app)
 {
     return !app->analysing_total && !rx_jobs_pending(app->jobs);
 }
 
-static bool deck_loaded(RxApp *app)
+static bool deck_loaded(RXApp *app)
 {
     return app->decks[0].track && !app->decks[0].loading_request;
 }
 
-static bool export_done(RxApp *app)
+static bool export_done(RXApp *app)
 {
     return !app->export_state.running || app->export_state.confirm;
 }
 
-static bool stick_done(RxApp *app)
+static bool stick_done(RXApp *app)
 {
     return !app->stick_request;
 }
 
-static bool export_cancel_done(RxApp *app)
+static bool export_cancel_done(RXApp *app)
 {
     return !app->export_state.running;
 }
 
-static RxTrack *track_named(RxApp *app, const char *base)
+static RXTrack *track_named(RXApp *app, const char *base)
 {
     for (int i = 0; i < app->lib.nb_tracks; i++) {
         if (!strcmp(rx_path_base(app->lib.tracks[i]->path), base))
@@ -261,13 +261,13 @@ int main(int argc, char **argv)
     }
 
     /* Manual: nothing plays unless the test advances it. */
-    RxPlayerOptions po;
+    RXPlayerOptions po;
     rx_player_options_default(&po);
     po.backend = RX_AUDIO_NULL;
     po.period = -480;
 
     char *a_on_stick = NULL;
-    RxApp app;
+    RXApp app;
     int ret = rx_app_create(&app, root, &po, NULL);
     CHECK(ret == 0, "rx_app_create: %s", strerror(-ret));
     if (ret < 0)
@@ -284,13 +284,13 @@ int main(int argc, char **argv)
     CHECK(tick_until(&app, analysis_done, 300), "the analysis did not finish");
     printf("status: %s\n", app.status);
 
-    RxTrack *a = track_named(&app, "a.wav");
-    RxTrack *b = track_named(&app, "b.wav");
+    RXTrack *a = track_named(&app, "a.wav");
+    RXTrack *b = track_named(&app, "b.wav");
     CHECK(a && b, "tracks a %p b %p", (void *)a, (void *)b);
     if (!a || !b)
         goto end;
     for (int i = 0; i < 2; i++) {
-        RxTrack *t = i ? b : a;
+        RXTrack *t = i ? b : a;
         CHECK(t->has_waveforms, "%s has no waveforms", t->path);
         CHECK(t->analysed > 0, "%s not marked analysed", t->path);
         CHECK(fabs(t->duration - 12.0) < 1e-6, "%s lasts %f s", t->path, t->duration);
@@ -347,7 +347,7 @@ int main(int argc, char **argv)
     CHECK(app.nb_rows == 2 && app.lib.tracks[app.rows[0]] == a, "sort by path");
 
     /* A playlist shows its own tracks in its order. */
-    RxPlaylist *p = rx_library_playlist_create(&app.lib, app.lib.root_folder, "Test");
+    RXPlaylist *p = rx_library_playlist_create(&app.lib, app.lib.root_folder, "Test");
     CHECK(p, "playlist");
     if (p) {
         CHECK(rx_library_playlist_add(&app.lib, p, b, -1) >= 0, "playlist add");
@@ -418,7 +418,7 @@ int main(int argc, char **argv)
      * A player changed a setting on the stick meanwhile: the one question
      * covers that change and the files to delete, and one answer to both
      * runs the export. */
-    RxPlaylist *other = rx_library_playlist_create(&app.lib, app.lib.root_folder, "Other");
+    RXPlaylist *other = rx_library_playlist_create(&app.lib, app.lib.root_folder, "Other");
     if (app.export_state.result >= 0 && other && rx_library_playlist_add(&app.lib, other, a, -1) >= 0) {
         char *pdb = rx_path_join(stick, "PIONEER/rekordbox/export.pdb");
         CHECK(pdb && rx_file_exists(pdb), "no export.pdb on the stick");
@@ -427,7 +427,7 @@ int main(int argc, char **argv)
         ret = stick_setting(stick, "quantize", "false");
         CHECK(ret >= 0, "change the stick's quantize setting: %s", strerror(-ret));
 
-        RxPlaylist *only[1] = { other };
+        RXPlaylist *only[1] = { other };
         app.export_state.playlists = only;
         app.export_state.nb_playlists = 1;
         app.export_state.prune = false;
@@ -475,7 +475,7 @@ int main(int argc, char **argv)
     CHECK(ret == 0, "read the stick: %s", strerror(-ret));
     CHECK(rx_app_read_stick(&app, stick) == RX_ERROR(EBUSY), "a second read while one runs");
     CHECK(tick_until(&app, stick_done, 60), "the stick read did not finish");
-    RxJobResult *r = app.stick_result;
+    RXJobResult *r = app.stick_result;
     app.stick_result = NULL;
     CHECK(r && r->kind == RX_JOB_STICK_READ && !r->err && r->stick, "stick read: %s",
           r ? strerror(-r->err) : "no result");
@@ -558,7 +558,7 @@ int main(int argc, char **argv)
     ret = rx_app_add_path(&app, more);
     CHECK(ret == 1, "added %d", ret);
     CHECK(tick_until(&app, analysis_done, 300), "the analysis of the long track did not finish");
-    RxTrack *c = track_named(&app, "long.wav");
+    RXTrack *c = track_named(&app, "long.wav");
     CHECK(c && c->duration > 39, "long.wav: %f s", c ? c->duration : 0.0);
     if (c) {
         ret = rx_app_load_deck(&app, 0, c);
@@ -583,7 +583,7 @@ int main(int argc, char **argv)
     char *gone_wav = gone_dir ? rx_path_join(gone_dir, "gone.wav") : NULL;
     if (gone_wav && rx_mkdir_p(gone_dir) >= 0 && copy_file(wav, gone_wav) >= 0 &&
         rx_app_add_path(&app, gone_dir) == 1 && tick_until(&app, analysis_done, 300)) {
-        RxTrack *g = track_named(&app, "gone.wav");
+        RXTrack *g = track_named(&app, "gone.wav");
         unsigned errors = app.last_error_count;
         CHECK(g && remove(gone_wav) == 0, "remove gone.wav");
         CHECK(g && rx_app_analyse_track(&app, g, RX_ANALYSE_ALL, true) == 1, "analyse gone.wav");

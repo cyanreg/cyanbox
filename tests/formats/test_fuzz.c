@@ -40,18 +40,18 @@ static void problem_cb(void *opaque, const char *p)
 
 static void read_pdb(const uint8_t *b, size_t n)
 {
-    RxPdb pdb;
+    RXPdb pdb;
     if (rx_pdb_read(b, n, &pdb) >= 0) {
         for (int i = 0; i < pdb.nb_tracks; i++)
             CHECK(pdb.tracks[i].path && pdb.tracks[i].title && pdb.tracks[i].artist);
         rx_pdb_free(&pdb);
     }
-    RxPdbRawTrack *raw;
+    RXPdbRawTrack *raw;
     int nr;
     if (rx_pdb_raw_tracks(b, n, &raw, &nr) >= 0)
         rx_pdb_raw_tracks_free(raw, nr);
     rx_pdb_check(b, n, problem_cb, NULL);
-    RxPdbHistoryList *hl;
+    RXPdbHistoryList *hl;
     int nh;
     if (rx_pdb_history_lists(b, n, &hl, &nh) >= 0)
         rx_pdb_history_lists_free(hl, nh);
@@ -76,12 +76,12 @@ static void read_pdb(const uint8_t *b, size_t n)
 
 static void read_anlz(const uint8_t *b, size_t n)
 {
-    RxAnlzTag *tags;
+    RXAnlzTag *tags;
     int nt;
     if (rx_anlz_parse(b, n, &tags, &nt) >= 0) {
         for (int i = 0; i < nt; i++) {
             CHECK(tags[i].raw >= b && tags[i].raw + tags[i].raw_size <= b + n);
-            RxAnlzCueEntry *e;
+            RXAnlzCueEntry *e;
             int ne, declared;
             if ((!memcmp(tags[i].fourcc, "PCOB", 4) || !memcmp(tags[i].fourcc, "PCO2", 4)) &&
                 rx_anlz_tag_cues(&tags[i], &e, &ne, &declared) >= 0)
@@ -94,18 +94,18 @@ static void read_anlz(const uint8_t *b, size_t n)
     char *path;
     if (rx_anlz_read_path(b, n, &path) >= 0)
         free(path);
-    RxBeat *beats;
+    RXBeat *beats;
     int nb;
     if (rx_anlz_read_beats(b, n, &beats, &nb) >= 0)
         free(beats);
-    RxPlanCue *cues;
+    RXPlanCue *cues;
     int nc;
     if (rx_anlz_read_cues(b, n, &cues, &nc) >= 0) {
         for (int i = 0; i < nc; i++)
             CHECK(cues[i].hot >= -1 && cues[i].hot < RX_HOT_CUE_SLOTS);
         free(cues);
     }
-    RxWaveforms w = { 0 };
+    RXWaveforms w = { 0 };
     rx_anlz_read_waveforms(b, n, &w);
     free(w.pwv3);
     free(w.pwv5);
@@ -117,7 +117,7 @@ static const char *settings_name;
 
 static void read_settings(const uint8_t *b, size_t n)
 {
-    RxKv *kv;
+    RXKv *kv;
     int nk;
     if (rx_settings_decode(settings_name, b, n, &kv, &nk) >= 0)
         rx_kv_free(kv, nk);
@@ -126,7 +126,7 @@ static void read_settings(const uint8_t *b, size_t n)
 
 static void read_plain_db(const uint8_t *b, size_t n)
 {
-    RxOneLibTrack *t;
+    RXOneLibTrack *t;
     int nt;
     if (rx_onelibrary_read(b, n, &t, &nt) >= 0) {
         for (int i = 0; i < nt; i++) {
@@ -223,10 +223,10 @@ static void pdb_mutations(const uint8_t *in, size_t n, int random)
 static void our_pdb(uint8_t **pdb, size_t *pdb_size, uint8_t **ext, size_t *ext_size)
 {
     enum { NT = 40 };
-    static RxTrack tr[NT];
-    static RxPlanTrack pt[NT];
+    static RXTrack tr[NT];
+    static RXPlanTrack pt[NT];
     static char titles[NT][200], paths[NT][256];
-    static RxTempoSection sec = { .start = 0.1, .bpm = 128.0, .beat = 1 };
+    static RXTempoSection sec = { .start = 0.1, .bpm = 128.0, .beat = 1 };
     for (int i = 0; i < NT; i++) {
         /* Short, long ASCII, non-ASCII and astral titles. */
         if (i % 4 == 0)
@@ -240,7 +240,7 @@ static void our_pdb(uint8_t **pdb, size_t *pdb_size, uint8_t **ext, size_t *ext_
         snprintf(paths[i], sizeof(paths[i]), "/Contents/A/B/%.199s.flac", titles[i]);
         tr[i].meta.title = titles[i];
         tr[i].meta.comment = i % 3 ? "" : "a comment";
-        pt[i] = (RxPlanTrack) {
+        pt[i] = (RXPlanTrack) {
             .id          = (uint32_t)i + 1,
             .track       = &tr[i],
             .usb_path    = paths[i],
@@ -254,27 +254,27 @@ static void our_pdb(uint8_t **pdb, size_t *pdb_size, uint8_t **ext, size_t *ext_
             .grid        = { .sections = &sec, .nb_sections = 1, .beats_per_bar = 4 },
         };
     }
-    static RxPlanName artists[3] = {
+    static RXPlanName artists[3] = {
         { 1, "Artist" }, { 2, "R\xC3\xB8" "dh\xC3\xA5" "d" }, { 3, "An artist with a long name, longer "
         "than the hundred and twenty six bytes a short DeviceSQL string holds, so it is a long one" },
     };
-    static RxPlanName albums[1] = { { 1, "Album", 1 } };
-    static RxPlanName keys[2] = { { 1, "Am" }, { 2, "F#" } };
-    static RxPlanArtwork art[1] = { { .id = 1 } };
+    static RXPlanName albums[1] = { { 1, "Album", 1 } };
+    static RXPlanName keys[2] = { { 1, "Am" }, { 2, "F#" } };
+    static RXPlanArtwork art[1] = { { .id = 1 } };
     static uint32_t list[4] = { 3, 1, 2, 40 };
-    static RxPlanPlaylist pl[2] = {
+    static RXPlanPlaylist pl[2] = {
         { .id = 1, .parent_id = 0, .is_folder = true, .name = "Folder" },
         { .id = 2, .parent_id = 1, .name = "List", .track_ids = list, .nb = 4 },
     };
-    static RxPlanTag tags[5] = {
+    static RXPlanTag tags[5] = {
         { .id = 1, .name = "Genre", .position = 0, .is_category = true },
         { .id = 2, .name = "Components", .position = 1, .is_category = true },
         { .id = 3, .name = "Situation", .position = 2, .is_category = true },
         { .id = 4, .name = "Tags", .position = 3, .is_category = true },
         { .id = 999, .name = "vocal", .category = 4, .position = 0 },
     };
-    static RxPlanTagTrack tt[2] = { { 1, 999 }, { 2, 999 } };
-    RxPlan plan = {
+    static RXPlanTagTrack tt[2] = { { 1, 999 }, { 2, 999 } };
+    RXPlan plan = {
         .tracks        = pt,     .nb_tracks     = NT,
         .artists       = artists, .nb_artists   = 3,
         .albums        = albums, .nb_albums     = 1,
@@ -291,17 +291,17 @@ static void our_pdb(uint8_t **pdb, size_t *pdb_size, uint8_t **ext, size_t *ext_
     CHECK_EQ(rx_pdb_ext_build(&plan, ext, ext_size), 0);
 }
 
-static void our_anlz(RxAnlzFiles *f)
+static void our_anlz(RXAnlzFiles *f)
 {
-    static RxTempoSection sec[2] = { { 0.2, 120.0, 1 }, { 30.0, 126.0, 0 } };
-    RxPlanCue cues[5] = {
+    static RXTempoSection sec[2] = { { 0.2, 120.0, 1 }, { 30.0, 126.0, 0 } };
+    RXPlanCue cues[5] = {
         { .time = 0.5, .hot = 0, .loop_end = -1, .color_code = 0x2A, .rgb = 0xFF0000, .name = "intro" },
         { .time = 1.0, .hot = 5, .loop_end = 3.0 },
         { .time = 2.0, .hot = -1, .loop_end = 4.0, .active = true, .color_code = 3 },
         { .time = 3.0, .hot = -1, .loop_end = -1, .name = "\xF0\x9F\x8E\xB5" },
         { .time = 4.0, .hot = 2, .loop_end = -1 },
     };
-    RxPlanTrack t = {
+    RXPlanTrack t = {
         .usb_path = "/Contents/A/B/x.flac",
         .duration = 60.0,
         .grid     = { .sections = sec, .nb_sections = 2, .beats_per_bar = 4 },
@@ -309,7 +309,7 @@ static void our_anlz(RxAnlzFiles *f)
         .nb_cues  = 5,
     };
     snprintf(t.probe.codec, sizeof(t.probe.codec), "flac");
-    t.probe.flac = (RxFlacInfo) { .valid = true, .total_samples = 16384, .nb_frames = 4 };
+    t.probe.flac = (RXFlacInfo) { .valid = true, .total_samples = 16384, .nb_frames = 4 };
     t.probe.flac.frames = calloc(4, sizeof(*t.probe.flac.frames));
     for (int i = 0; i < 4; i++) {
         t.probe.flac.frames[i].sample = 4096 * i;
@@ -317,7 +317,7 @@ static void our_anlz(RxAnlzFiles *f)
         t.probe.flac.frames[i].block = 4096;
     }
     int nd = 300;
-    RxWaveforms w = { .nb_detail = nd };
+    RXWaveforms w = { .nb_detail = nd };
     w.pwv3 = calloc((size_t)nd, 1);
     w.pwv5 = calloc((size_t)nd, 2);
     w.pwv7 = calloc((size_t)nd, 3);
@@ -373,7 +373,7 @@ static void fuzz_anlz(void)
         mutations(read_anlz, b, n, 1 << 16, 2000);
         free(b);
     }
-    RxAnlzFiles f;
+    RXAnlzFiles f;
     our_anlz(&f);
     const uint8_t *files[3] = { f.dat, f.ext, f.ex2 };
     size_t sizes[3] = { f.dat_size, f.ext_size, f.ex2_size };

@@ -12,13 +12,13 @@
 
 /* A whole file mapped read-only. The scanners walk MP3 and FLAC frames over
  * it, which is faster than reading and needs no copy. */
-typedef struct RxMap {
+typedef struct RXMap {
     const uint8_t *data;
     size_t size;
-} RxMap;
+} RXMap;
 
-int  rx_audio_map(const char *path, RxMap *m);
-void rx_audio_unmap(RxMap *m);
+int  rx_audio_map(const char *path, RXMap *m);
+void rx_audio_unmap(RXMap *m);
 
 /* avformat_open_input on "file:" + path, so that a name such as
  * "AD:HOUSE 11/x.flac" is not taken for a protocol (the file protocol does
@@ -39,13 +39,13 @@ size_t rx_audio_skip_id3v2(const uint8_t *data, size_t size);
 bool rx_audio_is_container(const AVFormatContext *fmt, const char *name);
 
 /* rx_mp3_scan over a mapped file. */
-int  rx_mp3_scan_mapped(const char *path, const RxMap *m, RxMp3Info *info);
+int  rx_mp3_scan_mapped(const char *path, const RXMap *m, RXMp3Info *info);
 /* Calls fn for every audio frame rx_mp3_scan_mapped counted, in order (the
  * header frame excluded), with its bytes (short for a truncated last frame),
  * samples and bitrate. The decoder feeds these to libavcodec itself, so its
  * timeline is the scanner's by construction. */
-typedef int (*RxMp3FrameFn)(void *opaque, const uint8_t *frame, size_t size, int samples, int kbps);
-int  rx_mp3_frames(const char *path, const RxMap *m, const RxMp3Info *info,
-                   RxMp3FrameFn fn, void *opaque);
+typedef int (*RXMp3FrameFn)(void *opaque, const uint8_t *frame, size_t size, int samples, int kbps);
+int  rx_mp3_frames(const char *path, const RXMap *m, const RXMp3Info *info,
+                   RXMp3FrameFn fn, void *opaque);
 
 #endif /* RXBOX_AUDIO_INTERNAL_H */

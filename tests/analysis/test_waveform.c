@@ -138,7 +138,7 @@ static int compare(const char *f32_path, const char *tags_path)
         return 1;
     }
 
-    RxWaveforms w;
+    RXWaveforms w;
     int64_t t0 = rx_time_us();
     ret = rx_waveforms_compute(x, nb, fx.rate, &w);
     int64_t t1 = rx_time_us();
@@ -282,7 +282,7 @@ static int test_three_band(void)
     float *x = loud_master(44100, 20.0, &nb);
     if (!x)
         return 1;
-    RxWaveforms w;
+    RXWaveforms w;
     CHECK(rx_waveforms_compute(x, nb, 44100, &w) == 0);
     free(x);
     double m6[3], m7[3];
@@ -325,7 +325,7 @@ static int test_three_band(void)
 static int test_rules(void)
 {
     int fails = 0;
-    RxWaveforms w;
+    RXWaveforms w;
 
     /* 150 columns per second, ceil(samples * 150 / rate) of them */
     float *z = calloc(44101, sizeof(*z));
@@ -370,7 +370,7 @@ static int test_rules(void)
     return fails;
 }
 
-static bool same_waves(const RxWaveforms *a, const RxWaveforms *b)
+static bool same_waves(const RXWaveforms *a, const RXWaveforms *b)
 {
     if (a->nb_detail != b->nb_detail || a->rate != b->rate)
         return false;
@@ -399,7 +399,7 @@ static int test_pack(void)
         printf("FAIL: cannot read short44k.f32\n");
         return 1;
     }
-    RxWaveforms w, r;
+    RXWaveforms w, r;
     CHECK(rx_waveforms_compute(x, nb, 44100, &w) == 0);
     free(x);
 
@@ -452,7 +452,7 @@ static int test_pack(void)
     free(data);
 
     /* Nothing to pack */
-    RxWaveforms empty = { 0 };
+    RXWaveforms empty = { 0 };
     CHECK(rx_waveforms_pack(&empty, &data, &size) == RX_ERROR(EINVAL) && !data && !size);
 
     rx_waveforms_free(&w);
@@ -469,7 +469,7 @@ static int test_cache(void)
         printf("FAIL: cannot read odd11k.f32\n");
         return 1;
     }
-    RxWaveforms w, r;
+    RXWaveforms w, r;
     CHECK(rx_waveforms_compute(x, nb, 11025, &w) == 0);
     free(x);
 

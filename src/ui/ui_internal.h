@@ -4,7 +4,7 @@
 #define RXBOX_UI_INTERNAL_H
 
 // The interface's private state and the helpers its screens share. One
-// UiState hangs off RxApp.ui; every screen function takes it. Nothing here
+// UiState hangs off RXApp.ui; every screen function takes it. Nothing here
 // is global: the ImGui context is the only process-wide state and it is
 // the window module's.
 //
@@ -99,7 +99,7 @@ enum UiPadMode { UI_PADS_HOT_CUE = 0, UI_PADS_BEAT_LOOP, UI_PADS_BEAT_JUMP, UI_P
 struct UiDeck {
     // Beats of the loaded grid, rebuilt when the grid changes.
     uint64_t beats_sig;
-    RxBeat  *beats;
+    RXBeat  *beats;
     int      nb_beats;
 
     bool     time_remaining;   // time readout shows remaining (T)
@@ -151,12 +151,12 @@ struct UiTestEvent {
 };
 
 struct UiState {
-    RxApp *app;
+    RXApp *app;
     float  s;                  // layout scale (see top of file)
     ImFont *font_bold;         // NULL: the regular font
     float  font_base;          // style.FontSizeBase at init
 
-    // Layout: the splits are RxConfig's (split_player, split_tree); the rest
+    // Layout: the splits are RXConfig's (split_player, split_tree); the rest
 // is ImGui's ini text kept in the library's "ui.layout" setting (ui.cpp).
     float  deck_split;         // fraction of the height for the player, < 0: natural height
     float  tree_width;         // logical pixels
@@ -187,10 +187,10 @@ struct UiState {
     bool      want_delete_popup;
     // Edits that change the tree's arrays wait until it has been drawn.
     bool      create_pending, create_folder;
-    RxPlaylistFolder *create_in;
+    RXPlaylistFolder *create_in;
     bool      move_pending, move_folder;
     void     *move_ptr;
-    RxPlaylistFolder *move_to;
+    RXPlaylistFolder *move_to;
     int       move_pos;
 
     // Load confirmation (a playing track is never replaced unasked).
@@ -217,7 +217,7 @@ struct UiState {
     std::vector<std::string> volumes;
     bool      export_seen_running;
     int       export_scope;    // 0 all playlists, 1 selected playlists, 2 entire library
-    std::vector<RxPlaylist *> export_playlists;
+    std::vector<RXPlaylist *> export_playlists;
     char      stick_path[512];
     std::string inspect_report;
     int       inspect_result;
@@ -226,14 +226,14 @@ struct UiState {
     // Sync from USB: read + diff (on a worker), review, apply.
     int       sync_stage;      // 0 pick, 1 review, 2 applied
     uint64_t  sync_request;    // the read running on a worker, 0 none
-    RxStickState sync_state;
+    RXStickState sync_state;
     bool      sync_state_valid;
-    RxSyncItem *sync_items;
+    RXSyncItem *sync_items;
     int       nb_sync_items;
     int       sync_applied;
     std::string sync_progress;
     std::string sync_error;
-    int       sync_filter;     // -1 all, else an RxSyncKind
+    int       sync_filter;     // -1 all, else an RXSyncKind
 
     // Frame pacing and the headless test hooks.
     int       frames_wanted;
@@ -250,18 +250,18 @@ struct UiState {
     double    saved_zoom;
 };
 
-static inline UiState *ui_of(RxApp *app) { return (UiState *)app->ui; }
+static inline UiState *ui_of(RXApp *app) { return (UiState *)app->ui; }
 
 /* ------------------------------------------------------------------ ui.cpp */
 
 // Texts and formatting.
 const char *ui_fmt_time(double seconds, char *buf, size_t size, bool tenths);
 const char *ui_key_text(const UiState *ui, const char *classic, char *buf, size_t size);
-const char *ui_title(const RxTrack *t);
-const char *ui_artist(const RxTrack *t);
-uint32_t    ui_hot_cue_rgb(const RxCue *c);
-uint32_t    ui_memory_cue_rgb(const RxCue *c);
-uint32_t    ui_track_rgb(const RxTrack *t);
+const char *ui_title(const RXTrack *t);
+const char *ui_artist(const RXTrack *t);
+uint32_t    ui_hot_cue_rgb(const RXCue *c);
+uint32_t    ui_memory_cue_rgb(const RXCue *c);
+uint32_t    ui_track_rgb(const RXTrack *t);
 ImU32       ui_text_on(uint32_t rgb);
 
 // Draw-list text: size in logical pixels; clipped to max_w with "..." when > 0.
@@ -305,7 +305,7 @@ bool ui_track_colour_menu(UiState *ui, const char *current, char out[RX_COLOR_MA
 
 // Track loading with the rekordbox rule: a playing track is never replaced
 // without asking.
-void ui_load(UiState *ui, RxTrack *t);
+void ui_load(UiState *ui, RXTrack *t);
 void ui_load_confirmed(UiState *ui);
 void ui_want_frames(UiState *ui, int n);
 void ui_save_config(UiState *ui);
@@ -314,7 +314,7 @@ void ui_save_config(UiState *ui);
 
 void ui_deck_panel(UiState *ui, int deck, ImVec2 size);
 void ui_deck_shutdown(UiState *ui);
-double ui_deck_position(UiState *ui, int deck, RxDeckState *st);
+double ui_deck_position(UiState *ui, int deck, RXDeckState *st);
 void ui_grid_edited(UiState *ui, int deck);
 void ui_jump(UiState *ui, int deck, int dir);
 void ui_shift_grid(UiState *ui, int deck, double seconds);
@@ -323,8 +323,8 @@ void ui_shift_grid(UiState *ui, int deck, double seconds);
 
 void ui_overview(UiState *ui, int deck, ImVec2 a, ImVec2 b);
 void ui_detail(UiState *ui, int deck, ImVec2 a, ImVec2 b);
-void ui_row_preview(UiState *ui, const RxTrack *t, ImVec2 a, ImVec2 b, bool analysing);
-const RxBeat *ui_deck_beats(UiState *ui, int deck, int *nb);
+void ui_row_preview(UiState *ui, const RXTrack *t, ImVec2 a, ImVec2 b, bool analysing);
+const RXBeat *ui_deck_beats(UiState *ui, int deck, int *nb);
 double ui_zoom_step(double bars, int dir);
 
 /* ------------------------------------------------------------ browser.cpp */
@@ -335,7 +335,7 @@ void ui_select_only(UiState *ui, uint64_t id);
 bool ui_is_selected(const UiState *ui, uint64_t id);
 void ui_remove_from_playlist(UiState *ui);
 void ui_move_focus(UiState *ui, int delta);
-RxTrack *ui_focus_track(UiState *ui);
+RXTrack *ui_focus_track(UiState *ui);
 
 // Drag and drop: a payload of track ids.
 #define UI_DND_TRACKS "RX_TRACKS"
@@ -352,7 +352,7 @@ void ui_open_add(UiState *ui);
 void ui_open_export(UiState *ui);
 void ui_open_inspect(UiState *ui);
 void ui_open_sync(UiState *ui);
-void ui_open_relocate(UiState *ui, RxTrack *t);
+void ui_open_relocate(UiState *ui, RXTrack *t);
 void ui_dialogs_shutdown(UiState *ui);
 void ui_scan_volumes(UiState *ui);
 // Keeps a self-sizing dialog centred over its first frames (call after Begin).

@@ -7,7 +7,7 @@
 // one player: rxbox prepares a stick, it does not mix.
 //
 // Preferences live in the library: the palette, the detail zoom and the two
-// splits in RxConfig (ui.* settings); the rest of the layout (the table's
+// splits in RXConfig (ui.* settings); the rest of the layout (the table's
 // columns, the info panel, pad mode, jump size...) is ImGui's ini text,
 // stored whole in the "ui.layout" setting instead of a file.
 //
@@ -66,21 +66,21 @@ const char *ui_key_text(const UiState *ui, const char *classic, char *buf, size_
     return k ? k : classic;
 }
 
-const char *ui_title(const RxTrack *t)
+const char *ui_title(const RXTrack *t)
 {
     if (t->meta.title && t->meta.title[0])
         return t->meta.title;
     return t->path ? rx_path_base(t->path) : "";
 }
 
-const char *ui_artist(const RxTrack *t)
+const char *ui_artist(const RXTrack *t)
 {
     return t->meta.artist ? t->meta.artist : "";
 }
 
 // A hot cue's pad colour: its stored colour through rekordbox's 64-entry
 // palette, else the slot's default pad colour (rxbox/colors.h).
-uint32_t ui_hot_cue_rgb(const RxCue *c)
+uint32_t ui_hot_cue_rgb(const RXCue *c)
 {
     int code = 0;
     uint32_t rgb = 0;
@@ -90,7 +90,7 @@ uint32_t ui_hot_cue_rgb(const RxCue *c)
 }
 
 // Memory cues are rekordbox's red unless given one of the track colours.
-uint32_t ui_memory_cue_rgb(const RxCue *c)
+uint32_t ui_memory_cue_rgb(const RXCue *c)
 {
     if (c->color[0]) {
         int id = rx_memory_cue_color_id(c->color);
@@ -103,7 +103,7 @@ uint32_t ui_memory_cue_rgb(const RxCue *c)
     return 0xEA3323;
 }
 
-uint32_t ui_track_rgb(const RxTrack *t)
+uint32_t ui_track_rgb(const RXTrack *t)
 {
     int id = rx_track_color_id(t->meta.color);
     return id > 0 ? rx_track_color_rgb(id) : 0;
@@ -418,7 +418,7 @@ void ui_save_config(UiState *ui)
 
 /* -------------------------------------------------------------- deck loading */
 
-static void load_now(UiState *ui, int deck, RxTrack *t)
+static void load_now(UiState *ui, int deck, RXTrack *t)
 {
     char name[256];
     int ret = rx_app_load_deck(ui->app, deck, t);
@@ -432,13 +432,13 @@ static bool deck_playing(UiState *ui, int deck)
 {
     if (!ui->app->player)
         return false;
-    RxDeckState st;
+    RXDeckState st;
     rx_deck_state(ui->app->player, deck, &st);
     return st.loaded && st.playing;
 }
 
 // rekordbox never replaces a playing track without asking.
-void ui_load(UiState *ui, RxTrack *t)
+void ui_load(UiState *ui, RXTrack *t)
 {
     if (!t)
         return;
@@ -458,8 +458,8 @@ void ui_load(UiState *ui, RxTrack *t)
 // (rx_app_load_deck says EBUSY), so the player stops first.
 void ui_load_confirmed(UiState *ui)
 {
-    RxApp *app = ui->app;
-    RxTrack *t = rx_library_find_id(&app->lib, ui->confirm_track);
+    RXApp *app = ui->app;
+    RXTrack *t = rx_library_find_id(&app->lib, ui->confirm_track);
     if (!t)
         return;
     if (deck_playing(ui, 0))
@@ -608,7 +608,7 @@ static void *ini_open(ImGuiContext *, ImGuiSettingsHandler *, const char *name)
 static void ini_line(ImGuiContext *, ImGuiSettingsHandler *h, void *, const char *line)
 {
     UiState *ui = (UiState *)h->UserData;
-    RxDeckView *dv = &ui->app->decks[0];
+    RXDeckView *dv = &ui->app->decks[0];
     UiDeck *ud = &ui->decks[0];
     int i;
     if (sscanf(line, "ShowInfo=%d", &i) == 1)
@@ -630,7 +630,7 @@ static void ini_line(ImGuiContext *, ImGuiSettingsHandler *h, void *, const char
 static void ini_write(ImGuiContext *, ImGuiSettingsHandler *h, ImGuiTextBuffer *out)
 {
     UiState *ui = (UiState *)h->UserData;
-    RxDeckView *dv = &ui->app->decks[0];
+    RXDeckView *dv = &ui->app->decks[0];
     UiDeck *ud = &ui->decks[0];
     out->appendf("[rxbox][ui]\n");
     out->appendf("ShowInfo=%d\nDetailHalf=%d\n", ui->show_info, ui->detail_half);
@@ -657,8 +657,8 @@ static void save_layout(UiState *ui)
 
 static void menu_bar(UiState *ui)
 {
-    RxApp *app = ui->app;
-    RxConfig *cfg = &app->lib.cfg;
+    RXApp *app = ui->app;
+    RXConfig *cfg = &app->lib.cfg;
     if (!ImGui::BeginMenuBar())
         return;
 
@@ -745,7 +745,7 @@ static void menu_bar(UiState *ui)
         bool any = app->nb_selection > 0;
         if (ImGui::MenuItem("Analyse selection", nullptr, false, any)) {
             for (int i = 0; i < app->nb_selection; i++) {
-                RxTrack *t = rx_library_find_id(&app->lib, app->selection[i]);
+                RXTrack *t = rx_library_find_id(&app->lib, app->selection[i]);
                 if (t)
                     rx_app_analyse_track(app, t, app->lib.cfg.analyse_what, false);
             }
@@ -754,7 +754,7 @@ static void menu_bar(UiState *ui)
             rx_app_analyse_all(app, false);
         if (ImGui::MenuItem("Re-analyse selection", nullptr, false, any)) {
             for (int i = 0; i < app->nb_selection; i++) {
-                RxTrack *t = rx_library_find_id(&app->lib, app->selection[i]);
+                RXTrack *t = rx_library_find_id(&app->lib, app->selection[i]);
                 if (t)
                     rx_app_analyse_track(app, t, app->lib.cfg.analyse_what, true);
             }
@@ -779,7 +779,7 @@ static void menu_bar(UiState *ui)
 
 static void status_bar(UiState *ui, ImVec2 a, ImVec2 b)
 {
-    RxApp *app = ui->app;
+    RXApp *app = ui->app;
     ImDrawList *dl = ImGui::GetWindowDrawList();
     dl->AddRectFilled(a, b, IM_COL32(0x1A, 0x1A, 0x1A, 0xFF));
     dl->AddLine(a, ImVec2(b.x, a.y), IM_COL32(0x2E, 0x2E, 0x2E, 0xFF));
@@ -829,7 +829,7 @@ static void status_bar(UiState *ui, ImVec2 a, ImVec2 b)
         uint64_t ids[16];
         int n = app->jobs ? rx_jobs_active_tracks(app->jobs, ids, 16) : 0;
         for (int i = 0; i < n; i++) {
-            RxTrack *t = ids[i] ? rx_library_find_id(&app->lib, ids[i]) : nullptr;
+            RXTrack *t = ids[i] ? rx_library_find_id(&app->lib, ids[i]) : nullptr;
             if (t) {
                 rx_track_display(t, name, sizeof(name));
                 break;
@@ -943,8 +943,8 @@ static void test_events(UiState *ui)
 
 static void log_test_state(UiState *ui)
 {
-    RxApp *app = ui->app;
-    RxDeckState st;
+    RXApp *app = ui->app;
+    RXDeckState st;
     ui_deck_position(ui, 0, &st);
     bool popup = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
     rx_info("ui test: frame %d track %llu playing %d position %.2f popup %d", ui->frame_no,
@@ -954,7 +954,7 @@ static void log_test_state(UiState *ui)
 
 /* ------------------------------------------------------------- entry points */
 
-int rx_ui_init(RxApp *app)
+int rx_ui_init(RXApp *app)
 {
     UiState *ui = new (std::nothrow) UiState();
     if (!ui)
@@ -974,8 +974,8 @@ int rx_ui_init(RxApp *app)
     }
     app->ui = ui;
 
-    // Preferences from the library's settings (RxConfig ui.*).
-    RxConfig *cfg = &app->lib.cfg;
+    // Preferences from the library's settings (RXConfig ui.*).
+    RXConfig *cfg = &app->lib.cfg;
     if (cfg->split_player > 0)
         ui->deck_split = ImClamp(cfg->split_player, 0.2f, 0.8f);
     if (cfg->split_tree > 0)
@@ -1046,7 +1046,7 @@ int rx_ui_init(RxApp *app)
     return 0;
 }
 
-void rx_ui_shutdown(RxApp *app)
+void rx_ui_shutdown(RXApp *app)
 {
     UiState *ui = ui_of(app);
     if (!ui)
@@ -1090,7 +1090,7 @@ static bool shown(const UiState *ui, const char *what)
 
 static void autoshow(UiState *ui)
 {
-    RxApp *app = ui->app;
+    RXApp *app = ui->app;
     if (ui->autoshow.empty())
         return;
     if (shown(ui, "grid"))
@@ -1127,9 +1127,9 @@ static void autoshow(UiState *ui)
 
 static void autoload_tick(UiState *ui)
 {
-    RxApp *app = ui->app;
+    RXApp *app = ui->app;
     UiDeck *ud = &ui->decks[0];
-    RxDeckView *dv = &app->decks[0];
+    RXDeckView *dv = &app->decks[0];
     if (!ui->autoload_done) {
         ui->autoload_done = true;
         autoshow(ui);
@@ -1137,7 +1137,7 @@ static void autoload_tick(UiState *ui)
             return;
         app->focus_track = ui->autoload;
         ui_select_only(ui, ui->autoload);
-        RxTrack *t = rx_library_find_id(&app->lib, ui->autoload);
+        RXTrack *t = rx_library_find_id(&app->lib, ui->autoload);
         if (!t) {
             rx_app_set_status(app, "RXBOX_UI_AUTOLOAD: no track %llu",
                               (unsigned long long)ui->autoload);
@@ -1153,13 +1153,13 @@ static void autoload_tick(UiState *ui)
     ud->autoplay = false;
     if (ui->autoload_at >= 0)
         rx_ctl_seek(&dv->ctl, ui->autoload_at);
-    RxDeckState st;
+    RXDeckState st;
     rx_deck_state(app->player, 0, &st);
     if (!st.playing)
         rx_ctl_play_pause(&dv->ctl);
 }
 
-bool rx_ui_frame(RxApp *app)
+bool rx_ui_frame(RXApp *app)
 {
     UiState *ui = ui_of(app);
     if (!ui || !app->window)
@@ -1271,7 +1271,7 @@ bool rx_ui_frame(RxApp *app)
     // Another frame is wanted while anything moves.
     bool more = false;
     for (int i = 0; i < RX_DECKS && app->player; i++) {
-        RxDeckState st;
+        RXDeckState st;
         rx_deck_state(app->player, i, &st);
         if (st.playing || st.scrubbing || app->decks[i].loading_request || app->decks[i].ctl.cue_held)
             more = true;

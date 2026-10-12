@@ -7,9 +7,9 @@
 
 #include "util.h"
 
-static RxCue cue(double time, int hot)
+static RXCue cue(double time, int hot)
 {
-    RxCue c;
+    RXCue c;
     rx_cue_init(&c, time);
     c.hot = hot;
     return c;
@@ -17,10 +17,10 @@ static RxCue cue(double time, int hot)
 
 static void test_cue_list(void)
 {
-    RxTrack *t = rx_track_new("/music/x.flac");
+    RXTrack *t = rx_track_new("/music/x.flac");
     CHECK(t && t->grid.beats_per_bar == 4 && !t->nb_cues);
 
-    RxCue c = cue(10.0, -1);
+    RXCue c = cue(10.0, -1);
     CHECK(!rx_cue_is_loop(&c) && !rx_cue_is_hot(&c) && !rx_cue_is_musical(&c));
     CHECK(rx_cue_letter(&c) == ' ');
 
@@ -68,7 +68,7 @@ static void test_cue_list(void)
     CHECK(rx_track_remove_cue(t, 3) == RX_ERROR(EINVAL));
 
     /* Deep copies. */
-    RxTrack *d = rx_track_dup(t);
+    RXTrack *d = rx_track_dup(t);
     CHECK(d && d != t && d->cues != t->cues && d->path != t->path);
     CHECK(d->nb_cues == 3 && !strcmp(d->path, t->path) && !strcmp(d->cues[2].name, "drop"));
     rx_track_free(d);
@@ -77,20 +77,20 @@ static void test_cue_list(void)
 
 static void test_musical(void)
 {
-    RxTrack *t = rx_track_new("/music/y.flac");
+    RXTrack *t = rx_track_new("/music/y.flac");
     rx_grid_init(&t->grid, 0.5, 120.0);
 
     /* A cue a hair off bar 2 snaps onto it; a 4-beat loop measured on the grid. */
-    RxCue c = cue(2.5 + 1e-9, -1);
+    RXCue c = cue(2.5 + 1e-9, -1);
     c.loop_end = 4.5;
     rx_cue_attach_to_grid(&c, &t->grid);
     CHECK(rx_cue_is_musical(&c) && c.grid_beat == 4.0 && c.time == 2.5);
     CHECK(c.loop_beats == 4.0 && c.loop_end == 4.5);
     rx_track_add_cue(t, &c);
 
-    RxCue a = cue(3.0, 1);
+    RXCue a = cue(3.0, 1);
     rx_track_add_cue(t, &a);        /* absolute */
-    RxCue h = cue(1.0, 0);
+    RXCue h = cue(1.0, 0);
     rx_cue_attach_to_grid(&h, &t->grid);
     rx_track_add_cue(t, &h);
     CHECK(h.grid_beat == 1.0 && !rx_cue_is_loop(&h) && isnan(h.loop_beats));
@@ -110,7 +110,7 @@ static void test_musical(void)
     CHECK(t->cues[0].time == 1.75 && t->cues[2].time == 4.75 && t->cues[2].loop_end == 8.75);
 
     /* An absolute cue with a loop length in beats follows the tempo too. */
-    RxCue l = cue(10.0, -1);
+    RXCue l = cue(10.0, -1);
     l.loop_end = 12.0;
     l.loop_beats = 2.0;
     rx_track_add_cue(t, &l);
@@ -120,8 +120,8 @@ static void test_musical(void)
     CHECK(t->cues[i].time == 10.0 && t->cues[i].loop_end == 11.0);
 
     /* No grid: attach leaves the cue absolute. */
-    RxGrid none = { 0 };
-    RxCue n = cue(7.0, -1);
+    RXGrid none = { 0 };
+    RXCue n = cue(7.0, -1);
     rx_cue_attach_to_grid(&n, &none);
     CHECK(!rx_cue_is_musical(&n));
     rx_track_free(t);
@@ -129,7 +129,7 @@ static void test_musical(void)
 
 static void test_meta(void)
 {
-    RxMeta m = { 0 };
+    RXMeta m = { 0 };
     CHECK(rx_meta_set(&m.title, "Track") == 0 && !strcmp(m.title, "Track"));
     CHECK(rx_meta_set(&m.artist, "") == 0 && !m.artist);
     CHECK(rx_meta_set(&m.title, NULL) == 0 && !m.title);
@@ -143,7 +143,7 @@ static void test_meta(void)
     CHECK(rx_meta_add_tag(&m, "") == RX_ERROR(EINVAL));
     CHECK(rx_meta_has_tag(&m, "vocal") && !rx_meta_has_tag(&m, "Vocal"));
 
-    RxMeta c = { 0 };
+    RXMeta c = { 0 };
     CHECK(rx_meta_copy(&c, &m) == 0);
     CHECK(c.title != m.title && !strcmp(c.title, m.title) && c.year == 2024 && c.rating == 4);
     CHECK(c.nb_tags == 2 && c.tags != m.tags && !strcmp(c.tags[1], "vocal"));
@@ -156,7 +156,7 @@ static void test_meta(void)
     rx_meta_free(&m);
     CHECK(!m.title && !m.nb_tags);
 
-    RxTrack *t = rx_track_new("/music/Album/01 Track.flac");
+    RXTrack *t = rx_track_new("/music/Album/01 Track.flac");
     char buf[64];
     CHECK_STR(rx_track_display(t, buf, sizeof(buf)), "01 Track.flac");
     rx_meta_set(&t->meta.title, "Title");
@@ -172,9 +172,9 @@ static void test_meta(void)
  * from the first downbeat after 0, so only cues before it can go there. */
 static void test_loop_before_zero(void)
 {
-    RxTrack *t = rx_track_new("/music/z.flac");
+    RXTrack *t = rx_track_new("/music/z.flac");
     rx_grid_init(&t->grid, 0.5, 120.0);
-    RxCue c = cue(0.0, -1);                 /* the pickup beat, half a beat long */
+    RXCue c = cue(0.0, -1);                 /* the pickup beat, half a beat long */
     c.loop_end = 0.25;
     rx_cue_attach_to_grid(&c, &t->grid);
     CHECK(c.grid_beat == -1.0 && c.loop_beats == 0.5);

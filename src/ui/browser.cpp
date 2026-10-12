@@ -32,7 +32,7 @@ enum UiCol {
 struct UiColSpec {
     const char *name;
     float width;            // fixed width, or the stretch weight
-    int   sort;             // RxColumn, -1 = the view's order, NO_SORT
+    int   sort;             // RXColumn, -1 = the view's order, NO_SORT
     ImGuiTableColumnFlags flags;
     bool  right;            // right-aligned (numbers)
 };
@@ -73,7 +73,7 @@ static const char DASH[] = "\xE2\x80\x94";
 
 bool ui_is_selected(const UiState *ui, uint64_t id)
 {
-    const RxApp *app = ui->app;
+    const RXApp *app = ui->app;
     for (int i = 0; i < app->nb_selection; i++) {
         if (app->selection[i] == id)
             return true;
@@ -81,7 +81,7 @@ bool ui_is_selected(const UiState *ui, uint64_t id)
     return false;
 }
 
-static bool selection_reserve(RxApp *app, int n)
+static bool selection_reserve(RXApp *app, int n)
 {
     uint64_t *s = (uint64_t *)realloc(app->selection, sizeof(uint64_t) * (size_t)ImMax(n, 1));
     if (!s)
@@ -92,7 +92,7 @@ static bool selection_reserve(RxApp *app, int n)
 
 void ui_select_only(UiState *ui, uint64_t id)
 {
-    RxApp *app = ui->app;
+    RXApp *app = ui->app;
     if (!selection_reserve(app, 1))
         return;
     app->selection[0] = id;
@@ -101,7 +101,7 @@ void ui_select_only(UiState *ui, uint64_t id)
 
 static void select_toggle(UiState *ui, uint64_t id)
 {
-    RxApp *app = ui->app;
+    RXApp *app = ui->app;
     for (int i = 0; i < app->nb_selection; i++) {
         if (app->selection[i] == id) {
             memmove(app->selection + i, app->selection + i + 1,
@@ -115,7 +115,7 @@ static void select_toggle(UiState *ui, uint64_t id)
     app->selection[app->nb_selection++] = id;
 }
 
-static RxTrack *row_track(const RxApp *app, int row)
+static RXTrack *row_track(const RXApp *app, int row)
 {
     if (row < 0 || row >= app->nb_rows)
         return nullptr;
@@ -125,7 +125,7 @@ static RxTrack *row_track(const RxApp *app, int row)
 
 static void select_range(UiState *ui, int from, int to)
 {
-    RxApp *app = ui->app;
+    RXApp *app = ui->app;
     if (from > to)
         ImSwap(from, to);
     from = ImMax(from, 0);
@@ -134,7 +134,7 @@ static void select_range(UiState *ui, int from, int to)
         return;
     app->nb_selection = 0;
     for (int r = from; r <= to; r++) {
-        RxTrack *t = row_track(app, r);
+        RXTrack *t = row_track(app, r);
         if (t)
             app->selection[app->nb_selection++] = t->id;
     }
@@ -146,10 +146,10 @@ static void select_all(UiState *ui)
         select_range(ui, 0, ui->app->nb_rows - 1);
 }
 
-static int focus_row(const RxApp *app)
+static int focus_row(const RXApp *app)
 {
     for (int r = 0; r < app->nb_rows; r++) {
-        RxTrack *t = row_track(app, r);
+        RXTrack *t = row_track(app, r);
         if (t && t->id == app->focus_track)
             return r;
     }
@@ -159,12 +159,12 @@ static int focus_row(const RxApp *app)
 // Up/down move the focus and the selection with it, as rekordbox's list does.
 void ui_move_focus(UiState *ui, int delta)
 {
-    RxApp *app = ui->app;
+    RXApp *app = ui->app;
     if (app->nb_rows <= 0)
         return;
     int r = focus_row(app);
     r = r < 0 ? 0 : ImClamp(r + delta, 0, app->nb_rows - 1);
-    RxTrack *t = row_track(app, r);
+    RXTrack *t = row_track(app, r);
     if (!t)
         return;
     app->focus_track = t->id;
@@ -173,7 +173,7 @@ void ui_move_focus(UiState *ui, int delta)
     ui->scroll_to_focus = true;
 }
 
-RxTrack *ui_focus_track(UiState *ui)
+RXTrack *ui_focus_track(UiState *ui)
 {
     return ui->app->focus_track ? rx_library_find_id(&ui->app->lib, ui->app->focus_track) : nullptr;
 }
@@ -181,8 +181,8 @@ RxTrack *ui_focus_track(UiState *ui)
 // Delete: the selected tracks leave the playlist shown (never the library).
 void ui_remove_from_playlist(UiState *ui)
 {
-    RxApp *app = ui->app;
-    RxPlaylist *p = app->current_playlist;
+    RXApp *app = ui->app;
+    RXPlaylist *p = app->current_playlist;
     if (!p || app->nb_selection == 0)
         return;
     int removed = 0;
@@ -216,10 +216,10 @@ bool ui_accept_tracks(UiState *ui, std::vector<uint64_t> &ids)
 
 static void analyse_selection(UiState *ui, unsigned what, bool force)
 {
-    RxApp *app = ui->app;
+    RXApp *app = ui->app;
     int queued = 0;
     for (int i = 0; i < app->nb_selection; i++) {
-        RxTrack *t = rx_library_find_id(&app->lib, app->selection[i]);
+        RXTrack *t = rx_library_find_id(&app->lib, app->selection[i]);
         if (t && !t->missing && rx_app_analyse_track(app, t, what, force) >= 0)
             queued++;
     }
@@ -229,8 +229,8 @@ static void analyse_selection(UiState *ui, unsigned what, bool force)
 
 static void track_menu(UiState *ui)
 {
-    RxApp *app = ui->app;
-    RxTrack *t = ui_focus_track(ui);
+    RXApp *app = ui->app;
+    RXTrack *t = ui_focus_track(ui);
     if (!t)
         return;
     int n = app->nb_selection;
@@ -261,7 +261,7 @@ static void track_menu(UiState *ui)
         char col[RX_COLOR_MAX];
         if (ui_track_colour_menu(ui, t->meta.color, col)) {
             for (int i = 0; i < app->nb_selection; i++) {
-                RxTrack *s = rx_library_find_id(&app->lib, app->selection[i]);
+                RXTrack *s = rx_library_find_id(&app->lib, app->selection[i]);
                 if (!s)
                     continue;
                 snprintf(s->meta.color, sizeof(s->meta.color), "%s", col);
@@ -278,7 +278,7 @@ static void track_menu(UiState *ui)
                 snprintf(label, sizeof(label), "%d star%s", r, r == 1 ? "" : "s");
             if (ImGui::MenuItem(label, nullptr, n == 1 && t->meta.rating == r)) {
                 for (int i = 0; i < app->nb_selection; i++) {
-                    RxTrack *s = rx_library_find_id(&app->lib, app->selection[i]);
+                    RXTrack *s = rx_library_find_id(&app->lib, app->selection[i]);
                     if (!s)
                         continue;
                     s->meta.rating = r;
@@ -349,7 +349,7 @@ static void warning_glyph(ImDrawList *dl, ImVec2 c, float r, ImU32 col)
 }
 
 // Five stars; a click sets the rating, the same star again clears it.
-static void rating_cell(UiState *ui, RxTrack *t, ImVec2 p, float w, float row_h, bool dim)
+static void rating_cell(UiState *ui, RXTrack *t, ImVec2 p, float w, float row_h, bool dim)
 {
     ImDrawList *dl = ImGui::GetWindowDrawList();
     float r = PX(5.5f), step = PX(13.5f);
@@ -372,10 +372,10 @@ static void rating_cell(UiState *ui, RxTrack *t, ImVec2 p, float w, float row_h,
     }
 }
 
-static void row_cells(UiState *ui, RxTrack *t, int row, float row_h, const uint64_t *active,
+static void row_cells(UiState *ui, RXTrack *t, int row, float row_h, const uint64_t *active,
                       int nb_active)
 {
-    RxApp *app = ui->app;
+    RXApp *app = ui->app;
     ImDrawList *dl = ImGui::GetWindowDrawList();
     bool dim = t->missing;
     ImU32 text = dim ? UI_FAINT : UI_TEXT;
@@ -512,7 +512,7 @@ static void row_cells(UiState *ui, RxTrack *t, int row, float row_h, const uint6
 
 static void table(UiState *ui, ImVec2 size)
 {
-    RxApp *app = ui->app;
+    RXApp *app = ui->app;
     ImGuiIO &io = ImGui::GetIO();
     ImGuiTableFlags flags = ImGuiTableFlags_Resizable | ImGuiTableFlags_Reorderable |
                             ImGuiTableFlags_Hideable | ImGuiTableFlags_Sortable |
@@ -567,7 +567,7 @@ static void table(UiState *ui, ImVec2 size)
     bool double_clicked = false;
     while (clipper.Step()) {
         for (int r = clipper.DisplayStart; r < clipper.DisplayEnd; r++) {
-            RxTrack *t = row_track(app, r);
+            RXTrack *t = row_track(app, r);
             if (!t)
                 continue;
             ImGui::TableNextRow(ImGuiTableRowFlags_None, row_h);
@@ -626,7 +626,7 @@ static void table(UiState *ui, ImVec2 size)
         ui->scroll_to_focus = false;
 
     if (clicked_row >= 0) {
-        RxTrack *t = row_track(app, clicked_row);
+        RXTrack *t = row_track(app, clicked_row);
         if (t) {
             if (double_clicked) {
                 ui_load(ui, t);
@@ -658,7 +658,7 @@ static void table(UiState *ui, ImVec2 size)
 
 void ui_browser(UiState *ui, ImVec2 size)
 {
-    RxApp *app = ui->app;
+    RXApp *app = ui->app;
     ImGui::BeginChild("##browser", size, ImGuiChildFlags_None, ImGuiWindowFlags_NoScrollbar);
     ImDrawList *dl = ImGui::GetWindowDrawList();
     ImVec2 a = ImGui::GetWindowPos();
@@ -742,7 +742,7 @@ static const char *const FIELD_NAMES[F_NB] = {
     "Original artist", "Comment", "Year", "Track", "Disc",
 };
 
-static char **meta_field(RxMeta *m, int f)
+static char **meta_field(RXMeta *m, int f)
 {
     switch (f) {
     case F_TITLE:           return &m->title;
@@ -759,7 +759,7 @@ static char **meta_field(RxMeta *m, int f)
     }
 }
 
-static int *meta_int(RxMeta *m, int f)
+static int *meta_int(RXMeta *m, int f)
 {
     switch (f) {
     case F_YEAR:            return &m->year;
@@ -769,7 +769,7 @@ static int *meta_int(RxMeta *m, int f)
     }
 }
 
-static void info_load(UiState *ui, RxTrack *t)
+static void info_load(UiState *ui, RXTrack *t)
 {
     ui->info_track = t->id;
     ui->info_generation = ui->app->lib.generation;
@@ -792,7 +792,7 @@ static void info_load(UiState *ui, RxTrack *t)
     snprintf(ui->info_tags, sizeof(ui->info_tags), "%s", tags.c_str());
 }
 
-static void info_commit(UiState *ui, RxTrack *t, int f)
+static void info_commit(UiState *ui, RXTrack *t, int f)
 {
     char **s = meta_field(&t->meta, f);
     int *n = meta_int(&t->meta, f);
@@ -803,7 +803,7 @@ static void info_commit(UiState *ui, RxTrack *t, int f)
     rx_app_save_track(ui->app, t);
 }
 
-static void info_commit_tags(UiState *ui, RxTrack *t)
+static void info_commit_tags(UiState *ui, RXTrack *t)
 {
     rx_meta_clear_tags(&t->meta);
     const char *p = ui->info_tags;
@@ -862,7 +862,7 @@ static void path_fact(const char *name, const char *path)
 
 void ui_info_panel(UiState *ui, ImVec2 size)
 {
-    RxApp *app = ui->app;
+    RXApp *app = ui->app;
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(PX(10), PX(8)));
     ImGui::PushStyleColor(ImGuiCol_ChildBg, UI_PANEL);
     ImGui::BeginChild("##info", size, ImGuiChildFlags_AlwaysUseWindowPadding, 0);
@@ -871,8 +871,8 @@ void ui_info_panel(UiState *ui, ImVec2 size)
     // The fields edit the track they were loaded from; a new focus is
     // taken only when no field is being edited, so a commit can never land
     // on the wrong track.
-    RxTrack *focus = ui_focus_track(ui);
-    RxTrack *t = ui->info_track ? rx_library_find_id(&app->lib, ui->info_track) : nullptr;
+    RXTrack *focus = ui_focus_track(ui);
+    RXTrack *t = ui->info_track ? rx_library_find_id(&app->lib, ui->info_track) : nullptr;
     bool editing = ImGui::IsAnyItemActive() && t;
     if (focus && !editing && (t != focus || ui->info_generation != app->lib.generation)) {
         info_load(ui, focus);

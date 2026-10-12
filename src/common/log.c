@@ -12,20 +12,20 @@
 #include "rxbox/common.h"
 
 static pthread_mutex_t log_lock = PTHREAD_MUTEX_INITIALIZER;
-static enum RxLogLevel log_max = RX_LOG_INFO;
+static enum RXLogLevel log_max = RX_LOG_INFO;
 static rx_log_sink log_sink;
 static void *log_sink_opaque;
 
 static const char *const level_names[] = { "error", "warn", "info", "debug" };
 
-void rx_log_set_level(enum RxLogLevel level)
+void rx_log_set_level(enum RXLogLevel level)
 {
     pthread_mutex_lock(&log_lock);
     log_max = level;
     pthread_mutex_unlock(&log_lock);
 }
 
-enum RxLogLevel rx_log_level(void)
+enum RXLogLevel rx_log_level(void)
 {
     return log_max;
 }
@@ -38,7 +38,7 @@ void rx_log_set_sink(rx_log_sink sink, void *opaque)
     pthread_mutex_unlock(&log_lock);
 }
 
-void rx_vlog(enum RxLogLevel level, const char *fmt, va_list args)
+void rx_vlog(enum RXLogLevel level, const char *fmt, va_list args)
 {
     char line[2048];
 
@@ -61,7 +61,7 @@ void rx_vlog(enum RxLogLevel level, const char *fmt, va_list args)
     pthread_mutex_unlock(&log_lock);
 }
 
-void rx_log(enum RxLogLevel level, const char *fmt, ...)
+void rx_log(enum RXLogLevel level, const char *fmt, ...)
 {
     va_list args;
 

@@ -30,9 +30,9 @@
  * elsewhere. */
 void rx_audio_init_logging(void);
 
-typedef struct RxTag { char *key; char *value; } RxTag;   /* key lower-cased */
+typedef struct RXTag { char *key; char *value; } RXTag;   /* key lower-cased */
 
-typedef struct RxMp3Info {
+typedef struct RXMp3Info {
     bool    valid;
     int     version;            /* 1, 2 or 25 (2.5) */
     int     sample_rate;
@@ -47,9 +47,9 @@ typedef struct RxMp3Info {
     int64_t audio_bytes;        /* from the first frame to the end of the last */
     int     skip_frames;        /* audio frames before the map restarts past the first
                                  * audio frame (rare): not on the timeline */
-} RxMp3Info;
+} RXMp3Info;
 
-typedef struct RxFlacInfo {
+typedef struct RXFlacInfo {
     bool    valid;
     int     sample_rate, channels, bit_depth;
     int64_t total_samples;
@@ -61,50 +61,50 @@ typedef struct RxFlacInfo {
      * frame whose sample <= i * (total_samples / 400). */
     struct { int64_t sample; int64_t offset; int block; } *frames;
     int     nb_frames;
-} RxFlacInfo;
+} RXFlacInfo;
 
-typedef struct RxProbe {
+typedef struct RXProbe {
     char     codec[16];         /* libavcodec name */
     char     container[32];     /* libavformat short name (first of the list) */
     double   duration;          /* seconds, players' timeline */
     int64_t  total_samples;     /* players' timeline, at sample_rate */
     int      sample_rate, channels, bit_rate, bit_depth;   /* bit_depth 0 for lossy */
-    RxTag   *tags; int nb_tags;
+    RXTag   *tags; int nb_tags;
     bool     has_artwork;       /* an attached picture stream, or else a cover file beside it
                                  * (rx_artwork_find_file): a cover rx_artwork_rgba finds unless
                                  * the picture does not decode; looked for at probe time */
-    RxMp3Info  mp3;             /* valid for MP3 only */
-    RxFlacInfo flac;            /* valid for FLAC only */
-} RxProbe;
+    RXMp3Info  mp3;             /* valid for MP3 only */
+    RXFlacInfo flac;            /* valid for FLAC only */
+} RXProbe;
 
-int  rx_probe(const char *path, RxProbe *p);
-void rx_probe_free(RxProbe *p);
+int  rx_probe(const char *path, RXProbe *p);
+void rx_probe_free(RXProbe *p);
 /* The first non-empty tag among the names given (NULL-terminated list),
  * trimmed, or NULL. Names are matched case-insensitively. */
-const char *rx_probe_tag(const RxProbe *p, const char *name, ...);
+const char *rx_probe_tag(const RXProbe *p, const char *name, ...);
 /* Reads the frame headers directly (no decoding). Both are also called by
  * rx_probe. */
-int  rx_mp3_scan(const char *path, RxMp3Info *info);
-int  rx_flac_scan(const char *path, RxFlacInfo *info);
-void rx_flac_info_free(RxFlacInfo *info);
+int  rx_mp3_scan(const char *path, RXMp3Info *info);
+int  rx_flac_scan(const char *path, RXFlacInfo *info);
+void rx_flac_info_free(RXFlacInfo *info);
 
 /* Decoded audio: interleaved float, [-1, 1]. */
-typedef struct RxAudio {
+typedef struct RXAudio {
     float   *samples;           /* nb_frames * channels */
     int      channels;
     int      rate;
     int64_t  nb_frames;
-} RxAudio;
+} RXAudio;
 
 /* Decodes the first audio stream on the players' timeline.
  *   channels: 0 native, 1 mono (mean of the channels), 2 stereo (mono doubled)
  *   rate:     0 native, else resampled with libswresample (soxr when built in)
  * Damaged frames are decoded as silence rather than dropped. */
-int  rx_decode(const char *path, int channels, int rate, RxAudio *out);
+int  rx_decode(const char *path, int channels, int rate, RXAudio *out);
 /* Derived buffers from one already decoded (no file access). */
-int  rx_audio_to_mono(const RxAudio *in, RxAudio *out);
-int  rx_audio_resample(const RxAudio *in, int rate, RxAudio *out);
-void rx_audio_free(RxAudio *a);
+int  rx_audio_to_mono(const RXAudio *in, RXAudio *out);
+int  rx_audio_resample(const RXAudio *in, int rate, RXAudio *out);
+void rx_audio_free(RXAudio *a);
 
 /* ----------------------------------------------------------------- artwork */
 

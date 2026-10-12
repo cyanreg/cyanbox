@@ -38,12 +38,12 @@
 #define NB_REF     8
 
 typedef struct Demo {
-    RxWindow  *w;
+    RXWindow  *w;
     uint8_t    blue_cols[NB_COLUMNS];
-    RxWaveGpu *band, *blue, *rgb;
-    RxWaveGpu *ref[NB_REF];
-    RxWaveGpu *empty;               /* uploaded with no columns */
-    RxWaveGpu *quiet;               /* one column, low band at 32 */
+    RXWaveGpu *band, *blue, *rgb;
+    RXWaveGpu *ref[NB_REF];
+    RXWaveGpu *empty;               /* uploaded with no columns */
+    RXWaveGpu *quiet;               /* one column, low band at 32 */
     uint64_t   tex;
     bool       check;
     double     playhead;
@@ -131,10 +131,10 @@ static const uint8_t ref_lowmid[] = { 127, 64, 0 };
 static const uint8_t ref_interp[] = { 40, 0, 0, 60, 0, 0, 0, 0, 0, 100, 0, 0 };
 
 typedef struct RefStrip {
-    enum RxWaveKind kind;
+    enum RXWaveKind kind;
     const uint8_t *cols;
     int nb;
-    enum RxWaveMode mode;
+    enum RXWaveMode mode;
     float dim;
     bool detail;
 } RefStrip;
@@ -159,7 +159,7 @@ static const RefStrip ref_strips[NB_REF] = {
 #define REF_H      100.0f
 #define REF_GAP    12.0f
 
-static float ref_y(RxWindow *w)
+static float ref_y(RXWindow *w)
 {
     int ww, wh;
     rx_window_size(w, &ww, &wh);
@@ -211,14 +211,14 @@ static void draw_edges(Demo *d)
 
     for (int i = 0; i < NB_EDGES; i++) {
         float x = edge_x(i);
-        RxWaveDraw wd = {
+        RXWaveDraw wd = {
             .x0 = x,  .y0 = y,
             .x1 = x + EDGE_W,  .y1 = y + REF_H,
             .col0 = 0, .col1 = 1,
             .mode  = RX_WAVE_CENTRED,
             .alpha = 1.0f,
         };
-        const RxWaveGpu *g = d->ref[6];             /* one loud low column */
+        const RXWaveGpu *g = d->ref[6];             /* one loud low column */
         switch (i) {
         case 0: g = d->empty; break;                /* no columns */
         case 1: wd.col0 = 1; wd.col1 = 0; break;    /* reversed */
@@ -274,7 +274,7 @@ static void draw_reference(Demo *d)
     float x = REF_X;
     for (int i = 0; i < NB_REF; i++) {
         const RefStrip *r = &ref_strips[i];
-        RxWaveDraw wd = {
+        RXWaveDraw wd = {
             .x0 = x,  .y0 = y,
             .x1 = x + r->nb * REF_COL,  .y1 = y + REF_H,
             .col0 = 0, .col1 = r->nb,
@@ -394,7 +394,7 @@ static int run_checks(Demo *d)
 
 /* ------------------------------------------------------------------ frame */
 
-static uint64_t make_texture(RxWindow *w, int phase)
+static uint64_t make_texture(RXWindow *w, int phase)
 {
     uint8_t pixels[64 * 64 * 4];
     for (int y = 0; y < 64; y++) {
@@ -424,14 +424,14 @@ static void churn(Demo *d)
         d->tex = tex;
     }
 
-    RxWaveGpu *blue = rx_wave_upload(d->w, RX_WAVE_BLUE, d->blue_cols, NB_COLUMNS);
+    RXWaveGpu *blue = rx_wave_upload(d->w, RX_WAVE_BLUE, d->blue_cols, NB_COLUMNS);
     if (blue) {
         rx_wave_release(d->w, d->blue);
         d->blue = blue;
     }
 }
 
-static void wave_row(Demo *d, const char *label, RxWaveGpu *g, enum RxWaveMode mode,
+static void wave_row(Demo *d, const char *label, RXWaveGpu *g, enum RXWaveMode mode,
                      double col0, double col1, bool detail, float height, bool fixed_head)
 {
     rx_demo_text("%s", label);
@@ -442,7 +442,7 @@ static void wave_row(Demo *d, const char *label, RxWaveGpu *g, enum RxWaveMode m
     void *dl = rx_demo_window_draw_list();
 
     rx_demo_rect(dl, x, y, x + width, y + height, 0x101010FF);
-    RxWaveDraw wd = {
+    RXWaveDraw wd = {
         .x0 = x,  .y0 = y,
         .x1 = x + width,  .y1 = y + height,
         .col0 = col0,  .col1 = col1,
@@ -464,7 +464,7 @@ static void wave_row(Demo *d, const char *label, RxWaveGpu *g, enum RxWaveMode m
 
 static void frame(Demo *d)
 {
-    RxWindow *w = d->w;
+    RXWindow *w = d->w;
     int ww, wh;
     rx_window_size(w, &ww, &wh);
 
@@ -529,7 +529,7 @@ int main(int argc, char **argv)
         { NULL, 0, NULL, 0 },
     };
 
-    RxWindowOptions opts;
+    RXWindowOptions opts;
     rx_window_options_default(&opts);
     opts.title = "rxbox gpu demo";
     opts.max_frames = 120;

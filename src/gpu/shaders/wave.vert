@@ -3,7 +3,7 @@
 // The waveform quad: four vertices of a triangle strip, generated from the
 // destination rectangle in the push constants. No vertex buffer; the
 // fragment shader does all the work. The push constant block is shared
-// with wave.frag and must match RxWavePush in wave.c.
+// with wave.frag and must match RXWavePush in wave.c.
 
 #version 460
 #extension GL_EXT_buffer_reference : require

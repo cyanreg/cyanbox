@@ -90,7 +90,7 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debug_cb(VkDebugUtilsMessageSeverityFlagBi
                                                const VkDebugUtilsMessengerCallbackDataEXT *data,
                                                void *opaque)
 {
-    RxWindow *w = opaque;
+    RXWindow *w = opaque;
 
     if (sev & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
         w->validation_errors++;
@@ -146,7 +146,7 @@ static bool have_instance_ext(const char *layer, const char *name)
 
 /* ---------------------------------------------------------------- instance */
 
-static int create_instance(RxWindow *w)
+static int create_instance(RXWindow *w)
 {
     Uint32 nb_sdl = 0;
     const char *const *sdl_exts = SDL_Vulkan_GetInstanceExtensions(&nb_sdl);
@@ -246,7 +246,7 @@ static int create_instance(RxWindow *w)
 
 /* Why a device cannot run the interface, or NULL if it can; `qfam` gets a
  * queue family that draws and presents to the window's surface. */
-static const char *device_unusable(RxWindow *w, VkPhysicalDevice pd,
+static const char *device_unusable(RXWindow *w, VkPhysicalDevice pd,
                                    const VkPhysicalDeviceProperties *props, uint32_t *qfam)
 {
     if (props->apiVersion < VK_API_VERSION_1_3)
@@ -336,7 +336,7 @@ static int type_score(VkPhysicalDeviceType type)
  * before software. A device named by options.device (a case-insensitive
  * substring) wins over all of them; when none matches, the choice falls
  * back to the usual order with a warning rather than failing. */
-static int pick_device(RxWindow *w)
+static int pick_device(RXWindow *w)
 {
     uint32_t nb = 0;
     VkResult res = vkEnumeratePhysicalDevices(w->inst, &nb, NULL);
@@ -389,7 +389,7 @@ static int pick_device(RxWindow *w)
     return 0;
 }
 
-static int create_device(RxWindow *w)
+static int create_device(RXWindow *w)
 {
     VkPhysicalDeviceVulkan13Features f13 = {
         .sType            = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
@@ -451,10 +451,10 @@ static int create_device(RxWindow *w)
     return 0;
 }
 
-static int create_frames(RxWindow *w)
+static int create_frames(RXWindow *w)
 {
     for (int i = 0; i < RX_FRAMES_IN_FLIGHT; i++) {
-        RxFrame *f = &w->frames[i];
+        RXFrame *f = &w->frames[i];
 
         /* The pool is reset as a whole each time the slot comes round. */
         VkCommandPoolCreateInfo pinfo = {
@@ -496,11 +496,11 @@ static int create_frames(RxWindow *w)
     return 0;
 }
 
-int rx_vk_create(RxWindow *w)
+int rx_vk_create(RXWindow *w)
 {
-    rx_array_init(&w->garbage, sizeof(RxDeferred));
-    rx_array_init(&w->uploads, sizeof(RxUpload));
-    rx_array_init(&w->textures, sizeof(RxTexture));
+    rx_array_init(&w->garbage, sizeof(RXDeferred));
+    rx_array_init(&w->uploads, sizeof(RXUpload));
+    rx_array_init(&w->textures, sizeof(RXTexture));
 
     int ret = create_instance(w);
     if (ret < 0)
@@ -532,17 +532,17 @@ int rx_vk_create(RxWindow *w)
     return 0;
 }
 
-const char *rx_window_gpu_name(const RxWindow *w)
+const char *rx_window_gpu_name(const RXWindow *w)
 {
     return w->props.deviceName;
 }
 
-static void free_upload(RxWindow *w, RxUpload *up)
+static void free_upload(RXWindow *w, RXUpload *up)
 {
     rx_vk_buffer_free(w, &up->staging);
 }
 
-void rx_vk_destroy(RxWindow *w)
+void rx_vk_destroy(RXWindow *w)
 {
     if (w->dev) {
         vkDeviceWaitIdle(w->dev);
@@ -553,14 +553,14 @@ void rx_vk_destroy(RxWindow *w)
         rx_array_clear(&w->uploads);
 
         for (int i = 0; i < RX_FRAMES_IN_FLIGHT; i++) {
-            RxFrame *f = &w->frames[i];
+            RXFrame *f = &w->frames[i];
             if (f->acquired)
                 vkDestroySemaphore(w->dev, f->acquired, NULL);
             if (f->fence)
                 vkDestroyFence(w->dev, f->fence, NULL);
             if (f->pool)
                 vkDestroyCommandPool(w->dev, f->pool, NULL);
-            *f = (RxFrame) { 0 };
+            *f = (RXFrame) { 0 };
         }
 
         if (w->vma)
@@ -595,10 +595,10 @@ void rx_vk_destroy(RxWindow *w)
 
 /* ----------------------------------------------------------------- buffers */
 
-int rx_vk_buffer_create(RxWindow *w, RxVkBuffer *b, VkDeviceSize size,
-                        VkBufferUsageFlags usage, enum RxMemUsage mem)
+int rx_vk_buffer_create(RXWindow *w, RXVkBuffer *b, VkDeviceSize size,
+                        VkBufferUsageFlags usage, enum RXMemUsage mem)
 {
-    *b = (RxVkBuffer) { 0 };
+    *b = (RXVkBuffer) { 0 };
     if (!size)
         return RX_ERROR(EINVAL);
 
@@ -634,7 +634,7 @@ int rx_vk_buffer_create(RxWindow *w, RxVkBuffer *b, VkDeviceSize size,
     if (res != VK_SUCCESS) {
         rx_err("gpu: unable to allocate a %llu byte buffer: %s", (unsigned long long)size,
                rx_vk_strerror(res));
-        *b = (RxVkBuffer) { 0 };
+        *b = (RXVkBuffer) { 0 };
         return rx_vk_ret2err(res);
     }
 
@@ -652,15 +652,15 @@ int rx_vk_buffer_create(RxWindow *w, RxVkBuffer *b, VkDeviceSize size,
     return 0;
 }
 
-void rx_vk_buffer_free(RxWindow *w, RxVkBuffer *b)
+void rx_vk_buffer_free(RXWindow *w, RXVkBuffer *b)
 {
     if (!b || !b->buf)
         return;
     vmaDestroyBuffer(w->vma, b->buf, b->alloc);
-    *b = (RxVkBuffer) { 0 };
+    *b = (RXVkBuffer) { 0 };
 }
 
-int rx_vk_buffer_invalidate(RxWindow *w, RxVkBuffer *b)
+int rx_vk_buffer_invalidate(RXWindow *w, RXVkBuffer *b)
 {
     if (!b->map)
         return 0;
@@ -669,7 +669,7 @@ int rx_vk_buffer_invalidate(RxWindow *w, RxVkBuffer *b)
 
 /* ------------------------------------------------------ deferred destruction */
 
-static void free_deferred(RxWindow *w, const RxDeferred *d)
+static void free_deferred(RXWindow *w, const RXDeferred *d)
 {
     if (d->tex_id)
         rx_imgui_remove_texture(w, d->tex_id);
@@ -683,9 +683,9 @@ static void free_deferred(RxWindow *w, const RxDeferred *d)
         vmaFreeMemory(w->vma, d->alloc);
 }
 
-static void defer_at(RxWindow *w, const RxDeferred *d, uint64_t serial)
+static void defer_at(RXWindow *w, const RXDeferred *d, uint64_t serial)
 {
-    RxDeferred *item = rx_array_push(&w->garbage, d);
+    RXDeferred *item = rx_array_push(&w->garbage, d);
     if (item) {
         item->serial = serial;
         return;
@@ -698,26 +698,26 @@ static void defer_at(RxWindow *w, const RxDeferred *d, uint64_t serial)
     free_deferred(w, d);
 }
 
-void rx_vk_defer(RxWindow *w, const RxDeferred *d)
+void rx_vk_defer(RXWindow *w, const RXDeferred *d)
 {
     defer_at(w, d, w->serial + 1);
 }
 
-void rx_vk_poll_completed(RxWindow *w)
+void rx_vk_poll_completed(RXWindow *w)
 {
     for (int i = 0; i < RX_FRAMES_IN_FLIGHT; i++) {
-        RxFrame *f = &w->frames[i];
+        RXFrame *f = &w->frames[i];
         if (f->serial > w->completed && vkGetFenceStatus(w->dev, f->fence) == VK_SUCCESS)
             w->completed = f->serial;
     }
 }
 
-void rx_vk_collect(RxWindow *w, bool all)
+void rx_vk_collect(RXWindow *w, bool all)
 {
     size_t kept = 0;
 
     for (size_t i = 0; i < w->garbage.nb; i++) {
-        RxDeferred *d = rx_array_at(&w->garbage, i);
+        RXDeferred *d = rx_array_at(&w->garbage, i);
         if (all || d->serial <= w->completed) {
             free_deferred(w, d);
             continue;
@@ -732,20 +732,20 @@ void rx_vk_collect(RxWindow *w, bool all)
 
 /* ----------------------------------------------------------------- uploads */
 
-int rx_vk_upload(RxWindow *w, const RxUpload *up)
+int rx_vk_upload(RXWindow *w, const RXUpload *up)
 {
     if (!rx_array_push(&w->uploads, up))
         return RX_ERROR(ENOMEM);
     return 0;
 }
 
-void rx_vk_record_uploads(RxWindow *w, VkCommandBuffer cmd, uint64_t serial)
+void rx_vk_record_uploads(RXWindow *w, VkCommandBuffer cmd, uint64_t serial)
 {
     if (!w->uploads.nb)
         return;
 
     for (size_t i = 0; i < w->uploads.nb; i++) {
-        RxUpload *up = rx_array_at(&w->uploads, i);
+        RXUpload *up = rx_array_at(&w->uploads, i);
 
         /* The staging memory was written and flushed on the host before
          * this submission; vkQueueSubmit makes host writes visible to the
@@ -826,7 +826,7 @@ void rx_vk_record_uploads(RxWindow *w, VkCommandBuffer cmd, uint64_t serial)
         }
 
         /* The staging buffer goes once this submission is done with it. */
-        RxDeferred d = {
+        RXDeferred d = {
             .buf   = up->staging.buf,
             .alloc = up->staging.alloc,
         };

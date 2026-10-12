@@ -15,14 +15,14 @@
 
 #include "rxbox/common.h"
 
-typedef struct RxBuf {
+typedef struct RXBuf {
     uint8_t *data;
     size_t   len;
     size_t   cap;
     int      err;
-} RxBuf;
+} RXBuf;
 
-static inline int rx_buf_reserve(RxBuf *b, size_t extra)
+static inline int rx_buf_reserve(RXBuf *b, size_t extra)
 {
     if (b->err)
         return b->err;
@@ -41,7 +41,7 @@ static inline int rx_buf_reserve(RxBuf *b, size_t extra)
     return 0;
 }
 
-static inline void rx_buf_put(RxBuf *b, const void *p, size_t n)
+static inline void rx_buf_put(RXBuf *b, const void *p, size_t n)
 {
     if (!n || rx_buf_reserve(b, n) < 0)
         return;
@@ -49,7 +49,7 @@ static inline void rx_buf_put(RxBuf *b, const void *p, size_t n)
     b->len += n;
 }
 
-static inline void rx_buf_zeros(RxBuf *b, size_t n)
+static inline void rx_buf_zeros(RXBuf *b, size_t n)
 {
     if (!n || rx_buf_reserve(b, n) < 0)
         return;
@@ -57,50 +57,50 @@ static inline void rx_buf_zeros(RxBuf *b, size_t n)
     b->len += n;
 }
 
-static inline void rx_buf_u8(RxBuf *b, unsigned v)
+static inline void rx_buf_u8(RXBuf *b, unsigned v)
 {
     uint8_t c = (uint8_t)v;
     rx_buf_put(b, &c, 1);
 }
 
-static inline void rx_buf_le16(RxBuf *b, unsigned v)
+static inline void rx_buf_le16(RXBuf *b, unsigned v)
 {
     uint8_t c[2] = { (uint8_t)v, (uint8_t)(v >> 8) };
     rx_buf_put(b, c, 2);
 }
 
-static inline void rx_buf_le32(RxBuf *b, uint32_t v)
+static inline void rx_buf_le32(RXBuf *b, uint32_t v)
 {
     uint8_t c[4] = { (uint8_t)v, (uint8_t)(v >> 8), (uint8_t)(v >> 16), (uint8_t)(v >> 24) };
     rx_buf_put(b, c, 4);
 }
 
-static inline void rx_buf_be16(RxBuf *b, unsigned v)
+static inline void rx_buf_be16(RXBuf *b, unsigned v)
 {
     uint8_t c[2] = { (uint8_t)(v >> 8), (uint8_t)v };
     rx_buf_put(b, c, 2);
 }
 
-static inline void rx_buf_be32(RxBuf *b, uint32_t v)
+static inline void rx_buf_be32(RXBuf *b, uint32_t v)
 {
     uint8_t c[4] = { (uint8_t)(v >> 24), (uint8_t)(v >> 16), (uint8_t)(v >> 8), (uint8_t)v };
     rx_buf_put(b, c, 4);
 }
 
-static inline void rx_buf_be64(RxBuf *b, uint64_t v)
+static inline void rx_buf_be64(RXBuf *b, uint64_t v)
 {
     rx_buf_be32(b, (uint32_t)(v >> 32));
     rx_buf_be32(b, (uint32_t)v);
 }
 
-static inline void rx_buf_free(RxBuf *b)
+static inline void rx_buf_free(RXBuf *b)
 {
     free(b->data);
-    *b = (RxBuf) { 0 };
+    *b = (RXBuf) { 0 };
 }
 
 /* Hands the bytes over (NULL when empty or after an error). */
-static inline int rx_buf_finish(RxBuf *b, uint8_t **out, size_t *size)
+static inline int rx_buf_finish(RXBuf *b, uint8_t **out, size_t *size)
 {
     if (b->err) {
         int err = b->err;
@@ -109,7 +109,7 @@ static inline int rx_buf_finish(RxBuf *b, uint8_t **out, size_t *size)
     }
     *out = b->data;
     *size = b->len;
-    *b = (RxBuf) { 0 };
+    *b = (RXBuf) { 0 };
     return 0;
 }
 

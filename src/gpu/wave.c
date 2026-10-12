@@ -28,15 +28,15 @@
 #include "src/gpu/wave_frag.spv.h"
 #include "src/gpu/wave_vert.spv.h"
 
-struct RxWaveGpu {
-    enum RxWaveKind kind;
+struct RXWaveGpu {
+    enum RXWaveKind kind;
     int        nb_columns;
     int        stride;
-    RxVkBuffer buf;
+    RXVkBuffer buf;
 };
 
 /* The push constants of shaders/wave.vert and wave.frag (std430). */
-typedef struct RxWavePush {
+typedef struct RXWavePush {
     VkDeviceAddress addr;
     uint32_t pad[2];
     float    rect[4];
@@ -55,19 +55,19 @@ typedef struct RxWavePush {
     float    dim_off;
     uint32_t flags;
     float    gain;
-} RxWavePush;
+} RXWavePush;
 
-static_assert(offsetof(RxWavePush, rect) == 16, "push constant layout");
-static_assert(offsetof(RxWavePush, fb_size) == 32, "push constant layout");
-static_assert(offsetof(RxWavePush, col_base) == 48, "push constant layout");
-static_assert(offsetof(RxWavePush, inset_top) == 64, "push constant layout");
-static_assert(offsetof(RxWavePush, flags) == 88, "push constant layout");
-static_assert(offsetof(RxWavePush, gain) == 92, "push constant layout");
-static_assert(sizeof(RxWavePush) <= 128, "push constants beyond the guaranteed 128 bytes");
+static_assert(offsetof(RXWavePush, rect) == 16, "push constant layout");
+static_assert(offsetof(RXWavePush, fb_size) == 32, "push constant layout");
+static_assert(offsetof(RXWavePush, col_base) == 48, "push constant layout");
+static_assert(offsetof(RXWavePush, inset_top) == 64, "push constant layout");
+static_assert(offsetof(RXWavePush, flags) == 88, "push constant layout");
+static_assert(offsetof(RXWavePush, gain) == 92, "push constant layout");
+static_assert(sizeof(RXWavePush) <= 128, "push constants beyond the guaranteed 128 bytes");
 
 #define RX_WAVE_FLAG_DETAIL 1u
 
-static int kind_stride(enum RxWaveKind kind)
+static int kind_stride(enum RXWaveKind kind)
 {
     switch (kind) {
     case RX_WAVE_3BAND:       return 3;
@@ -80,7 +80,7 @@ static int kind_stride(enum RxWaveKind kind)
 
 /* ---------------------------------------------------------------- pipeline */
 
-static int shader_module(RxWindow *w, const uint8_t *code, size_t size, VkShaderModule *out)
+static int shader_module(RXWindow *w, const uint8_t *code, size_t size, VkShaderModule *out)
 {
     VkShaderModuleCreateInfo info = {
         .sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
@@ -90,7 +90,7 @@ static int shader_module(RxWindow *w, const uint8_t *code, size_t size, VkShader
     return rx_vk_ret2err(vkCreateShaderModule(w->dev, &info, NULL, out));
 }
 
-int rx_wave_pipeline_create(RxWindow *w)
+int rx_wave_pipeline_create(RXWindow *w)
 {
     VkShaderModule vert = VK_NULL_HANDLE, frag = VK_NULL_HANDLE;
     int ret = shader_module(w, rx_wave_vert_spv, rx_wave_vert_spv_size, &vert);
@@ -102,7 +102,7 @@ int rx_wave_pipeline_create(RxWindow *w)
 
     VkPushConstantRange range = {
         .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-        .size       = sizeof(RxWavePush),
+        .size       = sizeof(RXWavePush),
     };
     VkPipelineLayoutCreateInfo linfo = {
         .sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
@@ -212,7 +212,7 @@ fail:
     return ret;
 }
 
-void rx_wave_pipeline_destroy(RxWindow *w)
+void rx_wave_pipeline_destroy(RXWindow *w)
 {
     if (w->wave_pipe)
         vkDestroyPipeline(w->dev, w->wave_pipe, NULL);
@@ -224,14 +224,14 @@ void rx_wave_pipeline_destroy(RxWindow *w)
 
 /* ------------------------------------------------------------------ upload */
 
-RxWaveGpu *rx_wave_upload(RxWindow *w, enum RxWaveKind kind, const uint8_t *columns,
+RXWaveGpu *rx_wave_upload(RXWindow *w, enum RXWaveKind kind, const uint8_t *columns,
                           int nb_columns)
 {
     int stride = kind_stride(kind);
     if (!w || !stride || nb_columns < 0 || (nb_columns && !columns))
         return NULL;
 
-    RxWaveGpu *g = calloc(1, sizeof(*g));
+    RXWaveGpu *g = calloc(1, sizeof(*g));
     if (!g)
         return NULL;
     g->kind = kind;
@@ -242,7 +242,7 @@ RxWaveGpu *rx_wave_upload(RxWindow *w, enum RxWaveKind kind, const uint8_t *colu
 
     const size_t bytes = (size_t)nb_columns * stride;
     const VkDeviceSize size = RX_ALIGN(bytes, 4);
-    RxUpload up = { 0 };
+    RXUpload up = { 0 };
 
     int ret = rx_vk_buffer_create(w, &g->buf, size,
                                   VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
@@ -274,13 +274,13 @@ fail:
     return NULL;
 }
 
-void rx_wave_release(RxWindow *w, RxWaveGpu *g)
+void rx_wave_release(RXWindow *w, RXWaveGpu *g)
 {
     if (!g)
         return;
 
     if (w && g->buf.buf) {
-        RxDeferred d = {
+        RXDeferred d = {
             .buf   = g->buf.buf,
             .alloc = g->buf.alloc,
         };
@@ -289,14 +289,14 @@ void rx_wave_release(RxWindow *w, RxWaveGpu *g)
     free(g);
 }
 
-int rx_wave_columns(const RxWaveGpu *g)
+int rx_wave_columns(const RXWaveGpu *g)
 {
     return g ? g->nb_columns : 0;
 }
 
 /* -------------------------------------------------------------------- draw */
 
-void rx_wave_draw(RxWindow *w, void *im_draw_list, const RxWaveGpu *g, const RxWaveDraw *d)
+void rx_wave_draw(RXWindow *w, void *im_draw_list, const RXWaveGpu *g, const RXWaveDraw *d)
 {
     if (!w || !im_draw_list || !g || !d || !g->buf.buf || g->nb_columns <= 0)
         return;
@@ -309,7 +309,7 @@ void rx_wave_draw(RxWindow *w, void *im_draw_list, const RxWaveGpu *g, const RxW
         !isfinite(d->y0) || !isfinite(d->y1))
         return;
 
-    RxWaveCmd c = {
+    RXWaveCmd c = {
         .w          = w,
         .addr       = g->buf.addr,
         .nb_columns = g->nb_columns,
@@ -319,10 +319,10 @@ void rx_wave_draw(RxWindow *w, void *im_draw_list, const RxWaveGpu *g, const RxW
     rx_imgui_add_wave(im_draw_list, &c);
 }
 
-void rx_wave_record(const RxWaveCmd *c, VkCommandBuffer cmd, const RxWaveView *v)
+void rx_wave_record(const RXWaveCmd *c, VkCommandBuffer cmd, const RXWaveView *v)
 {
-    RxWindow *w = c->w;
-    const RxWaveDraw *d = &c->d;
+    RXWindow *w = c->w;
+    const RXWaveDraw *d = &c->d;
 
     /* The rectangle in framebuffer pixels. */
     float x0 = (d->x0 - v->off_x) * v->scale_x;
@@ -359,7 +359,7 @@ void rx_wave_record(const RxWaveCmd *c, VkCommandBuffer cmd, const RxWaveView *v
      * tens of thousands of columns, more than a float resolves to a
      * fraction of a pixel. */
     double base = floor(d->col0);
-    RxWavePush push = {
+    RXWavePush push = {
         .addr         = c->addr,
         .rect         = { x0, y0, x1, y1 },
         .fb_size      = { v->fb_width, v->fb_height },

@@ -106,7 +106,7 @@ static void reads_rekordbox(void)
     CHECK_EQ(i, 17);
     sqlite3_close(db);
 
-    RxOneLibTrack *tracks;
+    RXOneLibTrack *tracks;
     int nb;
     CHECK_EQ(rx_onelibrary_read(plain, plain_size, &tracks, &nb), 0);
     CHECK_EQ(nb, 34);
@@ -128,12 +128,12 @@ static void reads_rekordbox(void)
 static void roundtrip(void)
 {
     enum { NT = 300 };
-    RxTrack *tr = calloc(NT, sizeof(*tr));
-    RxPlanTrack *pt = calloc(NT, sizeof(*pt));
+    RXTrack *tr = calloc(NT, sizeof(*tr));
+    RXPlanTrack *pt = calloc(NT, sizeof(*pt));
     char (*titles)[32] = calloc(NT, 32);
     char (*paths)[64] = calloc(NT, 64);
-    RxTempoSection sec = { .start = 0.1, .bpm = 128.0, .beat = 1 };
-    RxPlanCue cues[2] = {
+    RXTempoSection sec = { .start = 0.1, .bpm = 128.0, .beat = 1 };
+    RXPlanCue cues[2] = {
         { .time = 1.0, .hot = 0, .loop_end = -1 },
         { .time = 2.0, .hot = -1, .loop_end = 2.0 + 15.0 / 8.0 },
     };
@@ -142,7 +142,7 @@ static void roundtrip(void)
         snprintf(titles[i - 1], 32, "Träck %d", i);
         snprintf(paths[i - 1], 64, "/Contents/A/B/%d.flac", i);
         tr[i - 1].meta.title = titles[i - 1];
-        pt[i - 1] = (RxPlanTrack) {
+        pt[i - 1] = (RXPlanTrack) {
             .id          = (uint32_t)i,
             .track       = &tr[i - 1],
             .usb_path    = paths[i - 1],
@@ -160,21 +160,21 @@ static void roundtrip(void)
         };
     }
     uint32_t list[3] = { 3, 1, 2 };
-    RxPlanPlaylist pl[2] = {
+    RXPlanPlaylist pl[2] = {
         { .id = 1, .parent_id = 0, .sort_order = 0, .is_folder = true, .name = "Folder" },
         { .id = 2, .parent_id = 1, .sort_order = 0, .name = "List", .track_ids = list, .nb = 3 },
     };
-    RxPlanTag tags[5] = {
+    RXPlanTag tags[5] = {
         { .id = 1, .name = "Genre", .position = 0, .is_category = true },
         { .id = 2, .name = "Components", .position = 1, .is_category = true },
         { .id = 3, .name = "Situation", .position = 2, .is_category = true },
         { .id = 4, .name = "Tags", .position = 3, .is_category = true },
         { .id = 999, .name = "vocal", .category = 4, .position = 0 },
     };
-    RxPlanTagTrack tt[NT];
+    RXPlanTagTrack tt[NT];
     for (int i = 0; i < NT; i++)
-        tt[i] = (RxPlanTagTrack) { .track_id = (uint32_t)i + 1, .tag_id = 999 };
-    RxPlan plan = {
+        tt[i] = (RXPlanTagTrack) { .track_id = (uint32_t)i + 1, .tag_id = 999 };
+    RXPlan plan = {
         .tracks            = pt,
         .nb_tracks         = NT,
         .playlists         = pl,
@@ -243,7 +243,7 @@ static void roundtrip(void)
     free(title);
     sqlite3_close(db);
 
-    RxOneLibTrack *tracks;
+    RXOneLibTrack *tracks;
     int nb;
     CHECK_EQ(rx_onelibrary_read(plain, plain_size, &tracks, &nb), 0);
     CHECK_EQ(nb, NT);
@@ -307,7 +307,7 @@ static void crypto_vectors(void)
     };
     uint8_t out[128];
     for (size_t i = 0; i < RX_ARRAY_ELEMS(sha); i++) {
-        RxSHA512 s;
+        RXSHA512 s;
         rx_sha512_init(&s);
         rx_sha512_update(&s, (const uint8_t *)sha[i].msg, strlen(sha[i].msg));
         rx_sha512_final(&s, out);
@@ -315,7 +315,7 @@ static void crypto_vectors(void)
     }
     /* The two-block message in uneven pieces, through the partial-block
      * paths of update. */
-    RxSHA512 pieces;
+    RXSHA512 pieces;
     rx_sha512_init(&pieces);
     for (size_t pos = 0, step = 1; pos < strlen(m896); pos += step, step = step * 3 % 37 + 1)
         rx_sha512_update(&pieces, (const uint8_t *)m896 + pos, RX_MIN(step, strlen(m896) - pos));
@@ -353,7 +353,7 @@ static void crypto_vectors(void)
           "6b56d037e05f2598bd0fd2215d6a1e5295e64f73f63f0aec8b915a985d786598" },
     };
     for (size_t i = 0; i < RX_ARRAY_ELEMS(mac); i++) {
-        RxHMACSHA512 h;
+        RXHMACSHA512 h;
         rx_hmac_sha512_init(&h, mac[i].key, mac[i].key_len);
         /* Twice: final leaves the context keyed for the next message. */
         for (int k = 0; k < 2; k++) {
@@ -483,8 +483,8 @@ static void hostile_wal(void)
  * 0 (docs/onelibrary.md 3.1, "color_id 0 = none"). */
 static void bare_track(void)
 {
-    RxTrack tr = { 0 };
-    RxPlanTrack pt = {
+    RXTrack tr = { 0 };
+    RXPlanTrack pt = {
         .id        = 42,
         .track     = &tr,
         .usb_path  = "/Contents/UnknownArtist/UnknownAlbum/x.wav",
@@ -492,7 +492,7 @@ static void bare_track(void)
         .file_type = 11,
         .duration  = 1.0,
     };
-    RxPlan plan = { .tracks = &pt, .nb_tracks = 1 };
+    RXPlan plan = { .tracks = &pt, .nb_tracks = 1 };
     uint8_t *plain;
     size_t plain_size;
     CHECK_EQ(rx_onelibrary_build_plain(&plan, &plain, &plain_size), 0);

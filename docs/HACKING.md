@@ -42,9 +42,9 @@ The style is the one of the user's libcraw and avtransport, exactly:
   line, `} else {` on one line, and no braces around a single statement:
 
   ```c
-  int rx_thing_open(RxThing **out, const char *path)
+  int rx_thing_open(RXThing **out, const char *path)
   {
-      RxThing *t = calloc(1, sizeof(*t));
+      RXThing *t = calloc(1, sizeof(*t));
       if (!t)
           return RX_ERROR(ENOMEM);
 
@@ -66,7 +66,7 @@ The style is the one of the user's libcraw and avtransport, exactly:
   two, aligned values where a block of assignments reads better that way:
 
   ```c
-  *out = (RxWaveDraw) {
+  *out = (RXWaveDraw) {
       .x0 = r.x,  .y0 = r.y,
       .mode  = RX_WAVE_CENTRED,
       .alpha = 1.0f,
@@ -80,10 +80,7 @@ The style is the one of the user's libcraw and avtransport, exactly:
 - Names: `rx_module_verb()` functions, `RXThing` types (typedef'd structs and
   enums; the prefix is a contraction, so it is all caps, as `FFPacket` or
   `AVTConnection`), `RX_THING` macros and enum values, `static` helpers
-  without prefix. Note for the first implementation round: the headers were
-  written as `RxThing`; keep using the names exactly as the headers spell
-  them, and a single mechanical rename to `RXThing` is applied to the whole
-  tree at integration.
+  without prefix.
   Variables are short and lower case: `nb_tracks`, `out`, `ret`, `err`.
 - `int ret = 0;` and `goto fail;` cleanup at the end of a function that
   allocates several things; return the first error.

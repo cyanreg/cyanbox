@@ -39,7 +39,7 @@ int main(void)
                   "-sample_fmt", "s32", "-bits_per_raw_sample", "24", "-ar", "48000", "-c:v", "copy",
                   "-disposition:v", "attached_pic", "-metadata", "title=Hi Res",
                   "-metadata", "artist=Somebody", "-metadata", "album=Album", hi, NULL), "hires");
-    RxProbe ph;
+    RXProbe ph;
     CHECK(rx_probe(hi, &ph) >= 0 && ph.bit_depth == 24 && ph.sample_rate == 48000 && ph.has_artwork,
           "hires source: %d bits %d Hz", ph.bit_depth, ph.sample_rate);
 
@@ -51,7 +51,7 @@ int main(void)
     remove(out);
     int ret = rx_transcode_flac(hi, out, 44100);
     CHECK(ret >= 0, "transcode hires: %d", ret);
-    RxProbe po;
+    RXProbe po;
     CHECK(rx_probe(out, &po) >= 0, "probe transcode");
     CHECK(!strcmp(po.codec, "flac") && po.bit_depth == 16 && po.sample_rate == 44100 &&
           po.channels == 2 && llabs(po.total_samples - n) <= 1 && po.flac.valid,
@@ -70,7 +70,7 @@ int main(void)
     free(a1);
     free(a2);
     /* Clicks still in place after 48k -> 44.1k */
-    RxAudio ao;
+    RXAudio ao;
     CHECK(rx_decode(out, 1, 0, &ao) >= 0, "decode transcode");
     for (int k = 1; k < 8; k++) {
         int64_t at = (int64_t)k * SIG_CLICK, best = at;
@@ -89,7 +89,7 @@ int main(void)
     /* 16-bit at its own rate: untouched */
     char *out16 = test_path(dir, "wav.flac");
     CHECK(rx_transcode_flac(wav, out16, 48000) >= 0, "transcode wav");
-    RxAudio aw, at;
+    RXAudio aw, at;
     CHECK(rx_decode(wav, 0, 0, &aw) >= 0 && rx_decode(out16, 0, 0, &at) >= 0, "decode wav pair");
     CHECK(aw.nb_frames == at.nb_frames && !memcmp(aw.samples, at.samples,
           (size_t)aw.nb_frames * 2 * sizeof(float)), "16-bit transcode not exact");
@@ -100,13 +100,13 @@ int main(void)
         char *mp3 = test_path(dir, "sig.mp3");
         char *outm = test_path(dir, "mp3.flac");
         CHECK(!ffmpeg("-i", wav, "-c:a", "libmp3lame", "-b:a", "256k", mp3, NULL), "mp3");
-        RxProbe pm, pt;
+        RXProbe pm, pt;
         CHECK(rx_probe(mp3, &pm) >= 0 && rx_transcode_flac(mp3, outm, 0) >= 0 &&
               rx_probe(outm, &pt) >= 0, "transcode mp3");
         CHECK(pt.total_samples == pm.total_samples && pt.bit_depth == 16,
               "mp3 transcode %" PRId64 " samples, players' timeline %" PRId64, pt.total_samples,
               pm.total_samples);
-        RxAudio am, af;
+        RXAudio am, af;
         CHECK(rx_decode(mp3, 0, 0, &am) >= 0 && rx_decode(outm, 0, 0, &af) >= 0, "decode mp3 pair");
         /* Rounding plus triangular dither: within 1.5 steps of 16 bits,
          * except where the MP3 overshoots full scale and is clipped */

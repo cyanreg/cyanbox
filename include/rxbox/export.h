@@ -29,17 +29,17 @@ typedef bool (*rx_progress_cb)(void *opaque, const char *stage, int done, int to
  * holds player-written cues, history or presets not yet synced into the
  * library blocks the export (reported as a "check" item) unless
  * ignore_unsynced is set, so a gig's hot cues are never overwritten. */
-typedef struct RxExportOptions {
+typedef struct RXExportOptions {
     bool whole_library;         /* every track, not only those in playlists */
-    const RxPlaylist *const *playlists; int nb_playlists;   /* NULL: every playlist; else only these */
+    const RXPlaylist *const *playlists; int nb_playlists;   /* NULL: every playlist; else only these */
     bool prune;                 /* delete files on the stick that are no longer exported */
     bool ignore_unsynced;       /* export even if the stick has changes not synced back */
     bool compat_transcode;      /* AAC and hi-res FLAC -> 16/44.1 FLAC (overrides the config) */
     bool dry_run;               /* plan and check, report every copy/prune/rewrite, write nothing */
     bool force_analysis;        /* re-analyse everything first */
     const char *device_name;    /* NULL: the config's, else the stick's label */
-} RxExportOptions;
-void rx_export_options_default(RxExportOptions *o);
+} RXExportOptions;
+void rx_export_options_default(RXExportOptions *o);
 
 /* The pre-write checks, each reported through the callback as "check" with
  * the problem in `item`; the export refuses to start when any fails:
@@ -54,7 +54,7 @@ void rx_export_options_default(RxExportOptions *o);
  *     ignore_unsynced.
  * A dry run reports, as "copy"/"skip"/"prune"/"rewrite" stages, what a real
  * run would do, so the interface can show the prune list and ask. */
-int  rx_export(RxLibrary *lib, const char *dest, const RxExportOptions *opt,
+int  rx_export(RXLibrary *lib, const char *dest, const RXExportOptions *opt,
                rx_progress_cb cb, void *opaque);
 
 /* Reads back a stick and validates what dj's `inspect` did plus the rbxport
@@ -81,7 +81,7 @@ int  rx_inspect(const char *stick, rx_report_cb line, void *opaque);
  * be accepted or rejected); rx_stick_apply writes the accepted ones to the
  * library. rx_pull is the CLI's "accept everything". */
 
-enum RxSyncKind {
+enum RXSyncKind {
     RX_SYNC_HOT_CUE_SET,      /* a hot cue slot the player set or changed */
     RX_SYNC_HOT_CUE_CLEARED,  /* a slot the player cleared */
     RX_SYNC_MEMORY_ADDED,     /* a memory cue/loop not in the library (20 ms tolerance) */
@@ -90,10 +90,10 @@ enum RxSyncKind {
     RX_SYNC_SETTING,          /* a My Settings value changed on the player */
 };
 
-typedef struct RxSyncItem {
-    enum RxSyncKind kind;
+typedef struct RXSyncItem {
+    enum RXSyncKind kind;
     uint64_t  track_id;       /* cues and plays; 0 for settings */
-    RxCue     cue;            /* the stick's cue (SET/ADDED) or the library's (CLEARED/REMOVED) */
+    RXCue     cue;            /* the stick's cue (SET/ADDED) or the library's (CLEARED/REMOVED) */
     int       slot;           /* hot cue slot for the hot cue kinds */
     int64_t   played_at;      /* RX_SYNC_PLAY: epoch seconds, 0 when the player gave no time */
     int       play_index;     /* position in the history list */
@@ -101,29 +101,29 @@ typedef struct RxSyncItem {
     char      setting_value[32];
     char      setting_old[32];
     bool      accepted;       /* the interface's choice; default true */
-} RxSyncItem;
+} RXSyncItem;
 
-typedef struct RxStickState {
+typedef struct RXStickState {
     char     *mount;
     int       nb_tracks;              /* tracks on the stick */
     int       nb_tracks_unknown;      /* not matched to the library */
-    struct { uint64_t track_id; RxCue *cues; int nb_cues; char *stick_path; } *tracks; int nb_track_states;
+    struct { uint64_t track_id; RXCue *cues; int nb_cues; char *stick_path; } *tracks; int nb_track_states;
     struct { uint64_t track_id; int64_t played_at; char *label; } *plays; int nb_plays;
-    RxKv     *settings; int nb_settings;  /* every value in the settings files found */
+    RXKv     *settings; int nb_settings;  /* every value in the settings files found */
     bool      has_pdb, has_onelibrary;
-    struct RxStickPriv *priv;         /* the reader's own state for the diff (the export's sync record, history lists) */
-} RxStickState;
+    struct RXStickPriv *priv;         /* the reader's own state for the diff (the export's sync record, history lists) */
+} RXStickState;
 
-int  rx_stick_read(const RxLibrary *lib, const char *mount, RxStickState *out);
-void rx_stick_state_free(RxStickState *s);
-int  rx_stick_diff(const RxLibrary *lib, const RxStickState *s, RxSyncItem **items, int *nb);
+int  rx_stick_read(const RXLibrary *lib, const char *mount, RXStickState *out);
+void rx_stick_state_free(RXStickState *s);
+int  rx_stick_diff(const RXLibrary *lib, const RXStickState *s, RXSyncItem **items, int *nb);
 /* Applies every item with accepted == true: cues into the tracks (saved),
  * plays into the history (deduplicated against existing plays of the same
  * track within a minute), settings into lib->cfg (saved). Returns the
  * number applied. */
-int  rx_stick_apply(RxLibrary *lib, const RxSyncItem *items, int nb, rx_progress_cb cb, void *opaque);
+int  rx_stick_apply(RXLibrary *lib, const RXSyncItem *items, int nb, rx_progress_cb cb, void *opaque);
 /* read + diff + apply everything. Returns the number applied. */
-int  rx_pull(RxLibrary *lib, const char *stick, rx_progress_cb cb, void *opaque);
+int  rx_pull(RXLibrary *lib, const char *stick, rx_progress_cb cb, void *opaque);
 
 /* The stick's label (FAT volume label, or the mount point's base name). */
 int  rx_stick_label(const char *mount, char *buf, size_t size);

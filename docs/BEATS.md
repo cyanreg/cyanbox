@@ -6,7 +6,7 @@ well it works. The code is in `src/analysis/` (`spectrum.c`, `onset.c`,
 interface `beats_internal.h`); the tests in `tests/analysis/test_beats.c`; the
 evaluation tool in `tools/rxbox-eval.c` and `tests/analysis/py_beats.py`.
 
-The result (`rxbox/analysis.h`, `RxBeatResult`) is what a DJ player wants: a
+The result (`rxbox/analysis.h`, `RXBeatResult`) is what a DJ player wants: a
 piecewise-constant grid (one section per tempo or phase, each a start beat, a
 BPM and a beat number), a confidence, and flags saying what is uncertain.
 
@@ -362,7 +362,7 @@ cut again at the grid's own beats wherever a tracked beat strayed more than
 25 ms from it, so the confidence reads the grid as written rather than
 where the tracker happened to be (empty windows had given one track 0.00).
 
-Flags (`RxGridFlag`), and what they should mean to the DJ in the interface:
+Flags (`RXGridFlag`), and what they should mean to the DJ in the interface:
 
 | Flag | Set when | Meaning for the user |
 | --- | --- | --- |

@@ -264,7 +264,7 @@ static void options_text(const Field *f, char *buf, size_t size)
         o += (size_t)snprintf(buf + o, size - o, "%s%s", i ? ", " : "", f->opts[i].name);
 }
 
-int rx_settings_encode(const char *file_name, const RxKv *kv, int nb, uint8_t **out, size_t *size)
+int rx_settings_encode(const char *file_name, const RXKv *kv, int nb, uint8_t **out, size_t *size)
 {
     const File *f = find_file(file_name);
     if (!f)
@@ -326,7 +326,7 @@ static void byte_name(const Field *f, uint8_t byte, char *buf, size_t size)
     snprintf(buf, size, "0x%02x", byte);
 }
 
-void rx_kv_free(RxKv *kv, int nb)
+void rx_kv_free(RXKv *kv, int nb)
 {
     if (!kv)
         return;
@@ -337,14 +337,14 @@ void rx_kv_free(RxKv *kv, int nb)
     free(kv);
 }
 
-int rx_settings_decode(const char *file_name, const uint8_t *data, size_t size, RxKv **kv, int *nb)
+int rx_settings_decode(const char *file_name, const uint8_t *data, size_t size, RXKv **kv, int *nb)
 {
     *kv = NULL;
     *nb = 0;
     const File *f = find_file(file_name);
     if (!f || size < 0x68 + (size_t)f->len)
         return RX_ERROR(EINVAL);
-    RxKv *out = calloc((size_t)f->nb_fields, sizeof(*out));
+    RXKv *out = calloc((size_t)f->nb_fields, sizeof(*out));
     if (!out)
         return RX_ERROR(ENOMEM);
     for (int i = 0; i < f->nb_fields; i++) {
@@ -362,7 +362,7 @@ int rx_settings_decode(const char *file_name, const uint8_t *data, size_t size, 
     return 0;
 }
 
-static int add_file(RxSettingsFile files_out[4], int *nb, const char *name, const RxKv *kv, int nb_kv)
+static int add_file(RXSettingsFile files_out[4], int *nb, const char *name, const RXKv *kv, int nb_kv)
 {
     const File *f = find_file(name);
     uint8_t *data;
@@ -370,7 +370,7 @@ static int add_file(RxSettingsFile files_out[4], int *nb, const char *name, cons
     int ret = rx_settings_encode(name, kv, nb_kv, &data, &size);
     if (ret < 0)
         return ret;
-    files_out[*nb] = (RxSettingsFile) {
+    files_out[*nb] = (RXSettingsFile) {
         .name = f->name,
         .data = data,
         .size = size,
@@ -379,11 +379,11 @@ static int add_file(RxSettingsFile files_out[4], int *nb, const char *name, cons
     return 0;
 }
 
-int rx_settings_from_config(const RxConfig *cfg, RxSettingsFile files_out[4], int *nb)
+int rx_settings_from_config(const RXConfig *cfg, RXSettingsFile files_out[4], int *nb)
 {
     int ret = 0;
     *nb = 0;
-    RxKv *p1 = NULL, *p2 = NULL, *dev = NULL;
+    RXKv *p1 = NULL, *p2 = NULL, *dev = NULL;
     int n1 = 0, n2 = 0, nd = 0;
 
     /* [player] covers MYSETTING.DAT and MYSETTING2.DAT (dj's

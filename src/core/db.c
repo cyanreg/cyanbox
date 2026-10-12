@@ -245,7 +245,7 @@ static const char *const fixed_sql[RX_STMT_NB] = {
 
 /* The track statements are generated from the column lists so the order
  * library.c binds in can never drift from the SQL. */
-static char *track_sql(enum RxStmtId id)
+static char *track_sql(enum RXStmtId id)
 {
     char sql[4096];
     size_t n = 0;
@@ -276,7 +276,7 @@ static char *track_sql(enum RxStmtId id)
 
 /* ---------------------------------------------------------------- errors */
 
-int rx_db_error(RxDb *db, int rc, const char *what)
+int rx_db_error(RXDb *db, int rc, const char *what)
 {
     int err;
     switch (rc & 0xff) {
@@ -301,7 +301,7 @@ int rx_db_error(RxDb *db, int rc, const char *what)
     return RX_ERROR(err);
 }
 
-int rx_db_exec(RxDb *db, const char *sql)
+int rx_db_exec(RXDb *db, const char *sql)
 {
     char *msg = NULL;
     int rc = sqlite3_exec(db->db, sql, NULL, NULL, &msg);
@@ -311,7 +311,7 @@ int rx_db_exec(RxDb *db, const char *sql)
 
 /* -------------------------------------------------------------- binding */
 
-sqlite3_stmt *rx_db_stmt(RxDb *db, enum RxStmtId id)
+sqlite3_stmt *rx_db_stmt(RXDb *db, enum RXStmtId id)
 {
     sqlite3_stmt *st = db->stmt[id];
     sqlite3_reset(st);
@@ -320,7 +320,7 @@ sqlite3_stmt *rx_db_stmt(RxDb *db, enum RxStmtId id)
     return st;
 }
 
-sqlite3_stmt *rx_db_prepare(RxDb *db, const char *sql)
+sqlite3_stmt *rx_db_prepare(RXDb *db, const char *sql)
 {
     sqlite3_stmt *st = NULL;
     int rc = sqlite3_prepare_v2(db->db, sql, -1, &st, NULL);
@@ -332,39 +332,39 @@ sqlite3_stmt *rx_db_prepare(RxDb *db, const char *sql)
     return st;
 }
 
-static void bind_check(RxDb *db, int rc)
+static void bind_check(RXDb *db, int rc)
 {
     if (rc != SQLITE_OK && db->bind_rc == SQLITE_OK)
         db->bind_rc = rc;
 }
 
-void rx_db_bind_int(RxDb *db, sqlite3_stmt *st, int i, int64_t v)
+void rx_db_bind_int(RXDb *db, sqlite3_stmt *st, int i, int64_t v)
 {
     bind_check(db, sqlite3_bind_int64(st, i, v));
 }
 
-void rx_db_bind_double(RxDb *db, sqlite3_stmt *st, int i, double v)
+void rx_db_bind_double(RXDb *db, sqlite3_stmt *st, int i, double v)
 {
     bind_check(db, isnan(v) ? sqlite3_bind_null(st, i) : sqlite3_bind_double(st, i, v));
 }
 
-void rx_db_bind_text(RxDb *db, sqlite3_stmt *st, int i, const char *s)
+void rx_db_bind_text(RXDb *db, sqlite3_stmt *st, int i, const char *s)
 {
     /* SQLITE_STATIC: every string outlives the step that reads it. */
     bind_check(db, s ? sqlite3_bind_text(st, i, s, -1, SQLITE_STATIC) : sqlite3_bind_null(st, i));
 }
 
-void rx_db_bind_blob(RxDb *db, sqlite3_stmt *st, int i, const void *data, size_t size)
+void rx_db_bind_blob(RXDb *db, sqlite3_stmt *st, int i, const void *data, size_t size)
 {
     bind_check(db, sqlite3_bind_blob64(st, i, data ? data : "", size, SQLITE_STATIC));
 }
 
-void rx_db_bind_null(RxDb *db, sqlite3_stmt *st, int i)
+void rx_db_bind_null(RXDb *db, sqlite3_stmt *st, int i)
 {
     bind_check(db, sqlite3_bind_null(st, i));
 }
 
-int rx_db_done(RxDb *db, sqlite3_stmt *st, const char *what)
+int rx_db_done(RXDb *db, sqlite3_stmt *st, const char *what)
 {
     int rc = db->bind_rc;
     if (rc == SQLITE_OK) {
@@ -376,7 +376,7 @@ int rx_db_done(RxDb *db, sqlite3_stmt *st, const char *what)
     return rc == SQLITE_DONE ? 0 : rx_db_error(db, rc, what);
 }
 
-int rx_db_row(RxDb *db, sqlite3_stmt *st, const char *what)
+int rx_db_row(RXDb *db, sqlite3_stmt *st, const char *what)
 {
     int rc = db->bind_rc;
     if (rc == SQLITE_OK)
@@ -408,12 +408,12 @@ char *rx_db_column_text(sqlite3_stmt *st, int col, int *err)
  * the rest of a batch would be written behind the caller, who is about to
  * report the whole batch as failed. So nothing nests in a lost
  * transaction, and its commit fails (and says why, once). */
-static bool transaction_lost(const RxDb *db)
+static bool transaction_lost(const RXDb *db)
 {
     return db->depth > 0 && sqlite3_get_autocommit(db->db);
 }
 
-int rx_db_begin(RxDb *db)
+int rx_db_begin(RXDb *db)
 {
     if (transaction_lost(db))
         return RX_ERROR(EIO);
@@ -423,7 +423,7 @@ int rx_db_begin(RxDb *db)
     return ret;
 }
 
-int rx_db_begin_read(RxDb *db)
+int rx_db_begin_read(RXDb *db)
 {
     if (db->depth)
         return rx_db_begin(db);
@@ -433,7 +433,7 @@ int rx_db_begin_read(RxDb *db)
     return ret;
 }
 
-void rx_db_rollback(RxDb *db)
+void rx_db_rollback(RXDb *db)
 {
     if (db->depth <= 0)
         return;
@@ -448,7 +448,7 @@ void rx_db_rollback(RxDb *db)
     db->depth--;
 }
 
-int rx_db_commit(RxDb *db)
+int rx_db_commit(RXDb *db)
 {
     if (db->depth <= 0)
         return RX_ERROR(EINVAL);
@@ -470,7 +470,7 @@ int rx_db_commit(RxDb *db)
 
 /* ------------------------------------------------------------- open/close */
 
-static int pragma_int(RxDb *db, const char *sql, int64_t *out)
+static int pragma_int(RXDb *db, const char *sql, int64_t *out)
 {
     sqlite3_stmt *st = rx_db_prepare(db, sql);
     if (!st)
@@ -487,7 +487,7 @@ static int pragma_int(RxDb *db, const char *sql, int64_t *out)
  * an application id, and one from a newer rxbox. One statement, so one
  * snapshot: a library another process is creating right now is either
  * empty or whole here. *version: its schema. */
-static int check_identity(RxDb *db, int64_t *version)
+static int check_identity(RXDb *db, int64_t *version)
 {
     static const char sql[] =
         "SELECT (SELECT application_id FROM pragma_application_id), "
@@ -520,7 +520,7 @@ static int check_identity(RxDb *db, int64_t *version)
     return 0;
 }
 
-static int migrate(RxDb *db, int64_t version)
+static int migrate(RXDb *db, int64_t version)
 {
     int64_t current = (int64_t)RX_ARRAY_ELEMS(migrations);
     while (version < current) {
@@ -563,7 +563,7 @@ static int migrate(RxDb *db, int64_t version)
  * locks and SQLite answers one of them SQLITE_BUSY at once, without
  * waiting. The other one switches it, and SQLite moves every connection
  * to WAL when it sees the file is, so that one goes on as it is. */
-static int set_wal(RxDb *db)
+static int set_wal(RXDb *db)
 {
     sqlite3_stmt *st = rx_db_prepare(db, "PRAGMA journal_mode = WAL");
     if (!st)
@@ -582,10 +582,10 @@ static int set_wal(RxDb *db)
     return rx_db_error(db, rc, "journal_mode");
 }
 
-int rx_db_open(RxDb **out, const char *path)
+int rx_db_open(RXDb **out, const char *path)
 {
     *out = NULL;
-    RxDb *db = calloc(1, sizeof(*db));
+    RXDb *db = calloc(1, sizeof(*db));
     if (!db)
         return RX_ERROR(ENOMEM);
     db->path = rx_strdup(path);
@@ -620,7 +620,7 @@ int rx_db_open(RxDb **out, const char *path)
         char *gen = NULL;
         const char *sql = fixed_sql[i];
         if (!sql) {
-            gen = track_sql((enum RxStmtId)i);
+            gen = track_sql((enum RXStmtId)i);
             if (!gen) {
                 ret = RX_ERROR(ENOMEM);
                 goto fail;
@@ -643,7 +643,7 @@ fail:
     return ret;
 }
 
-void rx_db_close(RxDb *db)
+void rx_db_close(RXDb *db)
 {
     if (!db)
         return;

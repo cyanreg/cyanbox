@@ -535,9 +535,9 @@ static int best_key(const double x[NB_FEAT], const double score[24])
 
 /* ------------------------------------------------------------------- key */
 
-int rx_analyse_key(const float *mono, int64_t nb_samples, int rate, RxKeyResult *out)
+int rx_analyse_key(const float *mono, int64_t nb_samples, int rate, RXKeyResult *out)
 {
-    *out = (RxKeyResult) { 0 };
+    *out = (RXKeyResult) { 0 };
     if (rate <= 0 || nb_samples < 0 || (nb_samples && !mono))
         return RX_ERROR(EINVAL);
     if (!nb_samples)

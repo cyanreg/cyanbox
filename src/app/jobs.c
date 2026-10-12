@@ -2,17 +2,17 @@
 
 /* Background jobs (rxbox/jobs.h): decoding and analysing tracks, decoding
  * them for a deck, scaling their cover art, and reading and inspecting
- * sticks, on an RxThreadPool, with the results handed back to the owner
- * thread through an RxMailbox.
+ * sticks, on an RXThreadPool, with the results handed back to the owner
+ * thread through an RXMailbox.
  *
  * Ownership and threads:
  *  - A Job is allocated by the owner when it submits, then belongs to the
  *    pool until a worker has run (or dropped) it; the worker frees it. It
- *    stays on the RxJobs list, under `lock`, from submission until the
+ *    stays on the RXJobs list, under `lock`, from submission until the
  *    worker is done with it, which is what lets the owner cancel a job that
  *    has not started: it only flips the state, and the worker that later
  *    pops it frees it without running it.
- *  - A worker allocates the RxJobResult and its payload and posts it; from
+ *  - A worker allocates the RXJobResult and its payload and posts it; from
  *    then on it belongs to whoever takes it from the mailbox (the owner),
  *    who releases it with rx_job_result_free().
  *  - Workers never see the owner's library: a job carries copies of the
@@ -20,7 +20,7 @@
  *    compare with, so it opens one of its own from the root path (a second
  *    connection to the database, as the export does) and closes it again.
  *  - The counters and the per-worker active track ids are read without the
- *    lock (atomics), so the status bar can poll them from a const RxJobs.
+ *    lock (atomics), so the status bar can poll them from a const RXJobs.
  *
  * The analyse job decodes mono: every stage of the analysis works on the
  * mean of the channels (dj's decode_player did the same), and a mono buffer
@@ -66,10 +66,10 @@ enum JobState {
 };
 
 typedef struct Job {
-    RxJobs *j;
+    RXJobs *j;
     struct Job *prev, *next;        /* on j->head, under j->lock */
     enum JobState state;            /* under j->lock */
-    enum RxJobKind kind;
+    enum RXJobKind kind;
     uint64_t request;
     uint64_t track_id;
     char *path;                     /* the audio file, or the stick's mount */
@@ -77,7 +77,7 @@ typedef struct Job {
     int deck;
     int max_size;
     unsigned what;
-    RxAnalysisOptions opt;
+    RXAnalysisOptions opt;
 } Job;
 
 typedef struct Slot {
@@ -85,9 +85,9 @@ typedef struct Slot {
     int busy;                       /* under j->lock */
 } Slot;
 
-struct RxJobs {
-    RxThreadPool *pool;
-    RxMailbox *results;
+struct RXJobs {
+    RXThreadPool *pool;
+    RXMailbox *results;
 
     pthread_mutex_t lock;           /* guards the list, the states, the slots' busy flags,
                                        the reservations */
@@ -116,7 +116,7 @@ static void job_free(Job *job)
 }
 
 /* Under j->lock. */
-static void job_unlink(RxJobs *j, Job *job)
+static void job_unlink(RXJobs *j, Job *job)
 {
     if (job->prev)
         job->prev->next = job->next;
@@ -134,7 +134,7 @@ static void job_unlink(RxJobs *j, Job *job)
  * its decode fails as quickly. */
 static int64_t analysis_estimate(const char *path)
 {
-    RxProbe p;
+    RXProbe p;
     int64_t samples = 0;
     if (rx_probe(path, &p) >= 0) {
         samples = RX_MAX(p.total_samples, (int64_t)0);
@@ -166,7 +166,7 @@ static int64_t analysis_budget(void)
 
 /* Under j->lock: waits until `bytes` fit the budget, or nothing else holds
  * a reservation, or the job is cancelled. Returns false when cancelled. */
-static bool reserve(RxJobs *j, Job *job, int64_t bytes)
+static bool reserve(RXJobs *j, Job *job, int64_t bytes)
 {
     bool said = false;
     while (job->state != JOB_CANCELLED && j->nb_reserved > 0 && j->reserved + bytes > j->budget) {
@@ -185,14 +185,14 @@ static bool reserve(RxJobs *j, Job *job, int64_t bytes)
     return true;
 }
 
-static int run_analyse(Job *job, RxJobResult *r)
+static int run_analyse(Job *job, RXJobResult *r)
 {
-    RxAudio audio = { 0 };
+    RXAudio audio = { 0 };
     int ret = rx_decode(job->path, 1, 0, &audio);
     if (ret < 0)
         return ret;
 
-    RxAnalysis *a = calloc(1, sizeof(*a));
+    RXAnalysis *a = calloc(1, sizeof(*a));
     if (!a) {
         rx_audio_free(&audio);
         return RX_ERROR(ENOMEM);
@@ -215,9 +215,9 @@ static int run_analyse(Job *job, RxJobResult *r)
     return 0;
 }
 
-static int run_decode(Job *job, RxJobResult *r)
+static int run_decode(Job *job, RXJobResult *r)
 {
-    RxAudio *audio = calloc(1, sizeof(*audio));
+    RXAudio *audio = calloc(1, sizeof(*audio));
     if (!audio)
         return RX_ERROR(ENOMEM);
 
@@ -231,7 +231,7 @@ static int run_decode(Job *job, RxJobResult *r)
     return 0;
 }
 
-static int run_artwork(Job *job, RxJobResult *r)
+static int run_artwork(Job *job, RXJobResult *r)
 {
     uint8_t *rgba = NULL;
     int w = 0, h = 0;
@@ -266,14 +266,14 @@ static int run_artwork(Job *job, RxJobResult *r)
     return 0;
 }
 
-static int run_stick_read(Job *job, RxJobResult *r)
+static int run_stick_read(Job *job, RXJobResult *r)
 {
-    RxLibrary lib = { 0 };
+    RXLibrary lib = { 0 };
     int ret = rx_library_open(&lib, job->root);
     if (ret < 0)
         return ret;
 
-    RxStickState *s = calloc(1, sizeof(*s));
+    RXStickState *s = calloc(1, sizeof(*s));
     if (!s) {
         rx_library_close(&lib);
         return RX_ERROR(ENOMEM);
@@ -294,7 +294,7 @@ static void report_line(void *opaque, const char *line)
     fprintf(opaque, "%s\n", line);
 }
 
-static int run_inspect(Job *job, RxJobResult *r)
+static int run_inspect(Job *job, RXJobResult *r)
 {
     size_t size = 0;
     FILE *f = open_memstream(&r->report, &size);
@@ -313,7 +313,7 @@ static int run_inspect(Job *job, RxJobResult *r)
 static void run_job(void *arg)
 {
     Job *job = arg;
-    RxJobs *j = job->j;
+    RXJobs *j = job->j;
 
     /* An analysis probes for its estimate before taking the lock, unless
      * it was cancelled while queued (a destroyed queue drops its backlog
@@ -350,9 +350,9 @@ static void run_job(void *arg)
     pthread_mutex_unlock(&j->lock);
 
     int64_t t0 = rx_time_us();
-    RxJobResult *r = calloc(1, sizeof(*r));
+    RXJobResult *r = calloc(1, sizeof(*r));
     if (r) {
-        *r = (RxJobResult) {
+        *r = (RXJobResult) {
             .kind     = job->kind,
             .track_id = job->track_id,
             .deck     = job->deck,
@@ -410,14 +410,14 @@ static void run_job(void *arg)
     job_free(job);
 }
 
-int rx_jobs_create(RxJobs **out, int threads)
+int rx_jobs_create(RXJobs **out, int threads)
 {
     if (threads <= 0) {
         long n = sysconf(_SC_NPROCESSORS_ONLN);
         threads = n > 0 ? (int)n : 1;
     }
 
-    RxJobs *j = calloc(1, sizeof(*j));
+    RXJobs *j = calloc(1, sizeof(*j));
     if (!j)
         return RX_ERROR(ENOMEM);
 
@@ -463,7 +463,7 @@ fail:
     return ret;
 }
 
-void rx_jobs_destroy(RxJobs *j)
+void rx_jobs_destroy(RXJobs *j)
 {
     if (!j)
         return;
@@ -473,7 +473,7 @@ void rx_jobs_destroy(RxJobs *j)
     rx_jobs_cancel_all(j);
     rx_pool_destroy(j->pool);
 
-    RxJobResult *r;
+    RXJobResult *r;
     while ((r = rx_mailbox_take(j->results)))
         rx_job_result_free(r);
     rx_mailbox_destroy(j->results);
@@ -484,7 +484,7 @@ void rx_jobs_destroy(RxJobs *j)
     free(j);
 }
 
-static uint64_t submit(RxJobs *j, Job *job)
+static uint64_t submit(RXJobs *j, Job *job)
 {
     job->j = j;
 
@@ -513,7 +513,7 @@ static uint64_t submit(RxJobs *j, Job *job)
     return request;
 }
 
-static Job *job_new(enum RxJobKind kind, uint64_t track_id, const char *path)
+static Job *job_new(enum RXJobKind kind, uint64_t track_id, const char *path)
 {
     if (!path)
         return NULL;
@@ -531,8 +531,8 @@ static Job *job_new(enum RxJobKind kind, uint64_t track_id, const char *path)
     return job;
 }
 
-uint64_t rx_jobs_analyse(RxJobs *j, uint64_t track_id, const char *path,
-                         const RxAnalysisOptions *opt, unsigned what)
+uint64_t rx_jobs_analyse(RXJobs *j, uint64_t track_id, const char *path,
+                         const RXAnalysisOptions *opt, unsigned what)
 {
     if (!path || !what)
         return (uint64_t)(int64_t)RX_ERROR(EINVAL);
@@ -548,7 +548,7 @@ uint64_t rx_jobs_analyse(RxJobs *j, uint64_t track_id, const char *path,
     return submit(j, job);
 }
 
-uint64_t rx_jobs_decode(RxJobs *j, uint64_t track_id, const char *path, int deck)
+uint64_t rx_jobs_decode(RXJobs *j, uint64_t track_id, const char *path, int deck)
 {
     if (!path)
         return (uint64_t)(int64_t)RX_ERROR(EINVAL);
@@ -559,7 +559,7 @@ uint64_t rx_jobs_decode(RxJobs *j, uint64_t track_id, const char *path, int deck
     return submit(j, job);
 }
 
-uint64_t rx_jobs_artwork(RxJobs *j, uint64_t track_id, const char *path, int max_size)
+uint64_t rx_jobs_artwork(RXJobs *j, uint64_t track_id, const char *path, int max_size)
 {
     if (!path)
         return (uint64_t)(int64_t)RX_ERROR(EINVAL);
@@ -570,7 +570,7 @@ uint64_t rx_jobs_artwork(RxJobs *j, uint64_t track_id, const char *path, int max
     return submit(j, job);
 }
 
-uint64_t rx_jobs_stick_read(RxJobs *j, const char *library_root, const char *mount)
+uint64_t rx_jobs_stick_read(RXJobs *j, const char *library_root, const char *mount)
 {
     if (!library_root || !mount)
         return (uint64_t)(int64_t)RX_ERROR(EINVAL);
@@ -585,7 +585,7 @@ uint64_t rx_jobs_stick_read(RxJobs *j, const char *library_root, const char *mou
     return submit(j, job);
 }
 
-uint64_t rx_jobs_inspect(RxJobs *j, const char *mount)
+uint64_t rx_jobs_inspect(RXJobs *j, const char *mount)
 {
     if (!mount)
         return (uint64_t)(int64_t)RX_ERROR(EINVAL);
@@ -595,7 +595,7 @@ uint64_t rx_jobs_inspect(RxJobs *j, const char *mount)
     return submit(j, job);
 }
 
-void rx_jobs_cancel(RxJobs *j, uint64_t request)
+void rx_jobs_cancel(RXJobs *j, uint64_t request)
 {
     if (!j || !request)
         return;
@@ -615,7 +615,7 @@ void rx_jobs_cancel(RxJobs *j, uint64_t request)
     pthread_mutex_unlock(&j->lock);
 }
 
-void rx_jobs_cancel_all(RxJobs *j)
+void rx_jobs_cancel_all(RXJobs *j)
 {
     if (!j)
         return;
@@ -631,17 +631,17 @@ void rx_jobs_cancel_all(RxJobs *j)
     pthread_mutex_unlock(&j->lock);
 }
 
-RxJobResult *rx_jobs_poll(RxJobs *j)
+RXJobResult *rx_jobs_poll(RXJobs *j)
 {
     return j ? rx_mailbox_take(j->results) : NULL;
 }
 
-RxJobResult *rx_jobs_wait(RxJobs *j, int timeout_ms)
+RXJobResult *rx_jobs_wait(RXJobs *j, int timeout_ms)
 {
     return j ? rx_mailbox_wait(j->results, timeout_ms) : NULL;
 }
 
-void rx_job_result_free(RxJobResult *r)
+void rx_job_result_free(RXJobResult *r)
 {
     if (!r)
         return;
@@ -664,17 +664,17 @@ void rx_job_result_free(RxJobResult *r)
     free(r);
 }
 
-int rx_jobs_pending(const RxJobs *j)
+int rx_jobs_pending(const RXJobs *j)
 {
     return j ? __atomic_load_n(&j->pending, __ATOMIC_RELAXED) : 0;
 }
 
-int rx_jobs_running(const RxJobs *j)
+int rx_jobs_running(const RXJobs *j)
 {
     return j ? __atomic_load_n(&j->running, __ATOMIC_RELAXED) : 0;
 }
 
-int rx_jobs_active_tracks(const RxJobs *j, uint64_t *ids, int max)
+int rx_jobs_active_tracks(const RXJobs *j, uint64_t *ids, int max)
 {
     if (!j)
         return 0;

@@ -58,7 +58,7 @@ static void strings(void)
 
 static int table_rows(const uint8_t *b, size_t size, int type, uint32_t **pos)
 {
-    RxPdbHeader h;
+    RXPdbHeader h;
     int n = 0;
     *pos = NULL;
     if (rx_pdb_read_header(b, size, &h) < 0 || rx_pdb_table_rows(b, size, &h.tables[type], pos, &n) < 0)
@@ -80,7 +80,7 @@ static void fixed_tables(void)
     }
     CHECK_EQ(rx_pdb_check(ref, ref_size, print_problem, "rekordbox"), 0);
 
-    RxPlan plan = { .hot_cue_auto_load = true };
+    RXPlan plan = { .hot_cue_auto_load = true };
     snprintf(plan.date, sizeof(plan.date), "2026-10-13");
     uint8_t *ours;
     size_t size;
@@ -111,9 +111,9 @@ static void fixed_tables(void)
 static void roundtrip(void)
 {
     enum { NT = 400, NA = 299 };
-    RxTrack *tr = calloc(NT, sizeof(*tr));
-    RxPlanTrack *pt = calloc(NT, sizeof(*pt));
-    RxPlanName *artists = calloc(NA, sizeof(*artists));
+    RXTrack *tr = calloc(NT, sizeof(*tr));
+    RXPlanTrack *pt = calloc(NT, sizeof(*pt));
+    RXPlanName *artists = calloc(NA, sizeof(*artists));
     char (*titles)[200] = calloc(NT, 200);
     char (*comments)[200] = calloc(NT, 200);
     char (*paths)[64] = calloc(NT, 64);
@@ -132,7 +132,7 @@ static void roundtrip(void)
         snprintf(paths[i - 1], 64, "/Contents/A/B/%d.flac", i);
         tr[i - 1].meta.title = t;
         tr[i - 1].meta.comment = comments[i - 1];
-        pt[i - 1] = (RxPlanTrack) {
+        pt[i - 1] = (RXPlanTrack) {
             .id          = (uint32_t)i,
             .track       = &tr[i - 1],
             .usb_path    = paths[i - 1],
@@ -147,8 +147,8 @@ static void roundtrip(void)
         };
     }
     for (int i = 1; i <= NA; i++)
-        artists[i - 1] = (RxPlanName) { .id = (uint32_t)i, .name = i % 2 ? "Rødhåd" : "Artist" };
-    RxPlan plan = {
+        artists[i - 1] = (RXPlanName) { .id = (uint32_t)i, .name = i % 2 ? "Rødhåd" : "Artist" };
+    RXPlan plan = {
         .tracks            = pt,
         .nb_tracks         = NT,
         .artists           = artists,
@@ -162,7 +162,7 @@ static void roundtrip(void)
     CHECK_EQ(rx_pdb_build(&plan, &b, &size), 0);
     CHECK_EQ(rx_pdb_check(b, size, print_problem, "ours"), 0);
 
-    RxPdb pdb;
+    RXPdb pdb;
     CHECK_EQ(rx_pdb_read(b, size, &pdb), 0);
     CHECK_EQ(pdb.nb_tracks, NT);
     for (int i = 0; i < pdb.nb_tracks && i < NT; i++) {
@@ -173,7 +173,7 @@ static void roundtrip(void)
     }
     rx_pdb_free(&pdb);
 
-    RxPdbRawTrack *raw;
+    RXPdbRawTrack *raw;
     int nraw;
     CHECK_EQ(rx_pdb_raw_tracks(b, size, &raw, &nraw), 0);
     CHECK_EQ(nraw, NT);
@@ -239,10 +239,10 @@ static void roundtrip(void)
  * long name at 0x0C after two pad bytes, 32 bytes allocated. */
 static void artist_row(void)
 {
-    RxPlanName a[12];
+    RXPlanName a[12];
     for (int i = 0; i < 12; i++)
-        a[i] = (RxPlanName) { .id = (uint32_t)i + 1, .name = i == 10 ? "Rødhåd" : "A" };
-    RxPlan plan = { .artists = a, .nb_artists = 12 };
+        a[i] = (RXPlanName) { .id = (uint32_t)i + 1, .name = i == 10 ? "Rødhåd" : "A" };
+    RXPlan plan = { .artists = a, .nb_artists = 12 };
     uint8_t *b;
     size_t size;
     CHECK_EQ(rx_pdb_build(&plan, &b, &size), 0);
@@ -301,7 +301,7 @@ static int hexval(char c)
 static void ext_tags(void)
 {
     enum { N = RX_ARRAY_ELEMS(ext_rows) };
-    RxPlanTag tags[N];
+    RXPlanTag tags[N];
     char names[N][64];
     uint8_t rows[N][64];
     size_t lens[N];
@@ -313,7 +313,7 @@ static void ext_tags(void)
         size_t nl = (size_t)(r[0x1F] >> 1) - 1;
         memcpy(names[i], r + 0x20, nl);
         names[i][nl] = '\0';
-        tags[i] = (RxPlanTag) {
+        tags[i] = (RXPlanTag) {
             .id          = rx_rd_le32(r + 0x14),
             .name        = names[i],
             .category    = (int)rx_rd_le32(r + 0x0C),
@@ -321,12 +321,12 @@ static void ext_tags(void)
             .is_category = rx_rd_le32(r + 0x18) == 0x01000000,
         };
     }
-    RxPlan plan = { .tags = tags, .nb_tags = N };
+    RXPlan plan = { .tags = tags, .nb_tags = N };
     uint8_t *b;
     size_t size;
     CHECK_EQ(rx_pdb_ext_build(&plan, &b, &size), 0);
     CHECK_EQ(rx_pdb_check(b, size, print_problem, "ours"), 0);
-    RxPdbHeader h;
+    RXPdbHeader h;
     CHECK_EQ(rx_pdb_read_header(b, size, &h), 0);
     CHECK_EQ(h.num_tables, 9);
     CHECK_EQ(h.unknown, 5);
@@ -360,16 +360,16 @@ static void ext_tags(void)
  * title cut to the plan's buffer stays valid UTF-8. */
 static void limits(void)
 {
-    RxTrack tr = { 0 };
+    RXTrack tr = { 0 };
     tr.meta.title = "\xF0\x9F\x8E\xB5 title";
     tr.meta.comment = "";
-    RxPlanTrack pt = {
+    RXPlanTrack pt = {
         .id = 1, .track = &tr, .usb_path = "/Contents/\xF0\x9F\x8E\xB5/B/x.flac",
         .anlz_dir = "/PIONEER/USBANLZ/P000/00000000", .file_type = 5, .artist_id = 1, .album_id = 1,
     };
-    RxPlanName artist = { 1, "\xF0\x9F\x8E\xB5 artist" }, album = { 1, "\xC3\xA4lbum \xF0\x9F\x8E\xB5", 1 };
-    RxPlanPlaylist pl = { .id = 1, .name = "\xF0\x9F\x8E\xB5 list" };
-    RxPlan plan = {
+    RXPlanName artist = { 1, "\xF0\x9F\x8E\xB5 artist" }, album = { 1, "\xC3\xA4lbum \xF0\x9F\x8E\xB5", 1 };
+    RXPlanPlaylist pl = { .id = 1, .name = "\xF0\x9F\x8E\xB5 list" };
+    RXPlan plan = {
         .tracks = &pt, .nb_tracks = 1, .artists = &artist, .nb_artists = 1, .albums = &album, .nb_albums = 1,
         .playlists = &pl, .nb_playlists = 1,
     };
@@ -378,7 +378,7 @@ static void limits(void)
     size_t size;
     CHECK_EQ(rx_pdb_build(&plan, &b, &size), 0);
     CHECK_EQ(rx_pdb_check(b, size, print_problem, "astral"), 0);
-    RxPdb pdb;
+    RXPdb pdb;
     CHECK_EQ(rx_pdb_read(b, size, &pdb), 0);
     CHECK(pdb.nb_tracks == 1 && !strcmp(pdb.tracks[0].title, tr.meta.title) &&
           !strcmp(pdb.tracks[0].path, pt.usb_path) && !strcmp(pdb.tracks[0].artist, artist.name));

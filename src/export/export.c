@@ -62,15 +62,15 @@
 
 #define DB_RESERVE (64ll << 20)
 
-void rx_export_options_default(RxExportOptions *o)
+void rx_export_options_default(RXExportOptions *o)
 {
-    *o = (RxExportOptions) { 0 };
+    *o = (RXExportOptions) { 0 };
 }
 
 typedef struct Ctx {
-    RxLibrary              *lib;
+    RXLibrary              *lib;
     const char             *dest;
-    const RxExportOptions  *opt;
+    const RXExportOptions  *opt;
     rx_progress_cb          cb;
     void                   *opaque;
     bool                    cancelled;
@@ -103,16 +103,16 @@ static void reportf(Ctx *c, const char *stage, const char *fmt, ...)
 
 static int cmp_ptr_id(const void *a, const void *b)
 {
-    uint64_t x = (*(RxTrack *const *)a)->id, y = (*(RxTrack *const *)b)->id;
+    uint64_t x = (*(RXTrack *const *)a)->id, y = (*(RXTrack *const *)b)->id;
     return x < y ? -1 : x > y;
 }
 
 /* The tracks to export: the union of the playlists' tracks, or the whole
  * library; missing files and unanalysed tracks reported and left out. */
-static int select_tracks(Ctx *c, const RxPlaylist *const *pls, int nb_pls, RxTrack ***out, int *nb)
+static int select_tracks(Ctx *c, const RXPlaylist *const *pls, int nb_pls, RXTrack ***out, int *nb)
 {
-    RxLibrary *lib = c->lib;
-    RxTrack **v = malloc((size_t)RX_MAX(lib->nb_tracks, 1) * sizeof(*v));
+    RXLibrary *lib = c->lib;
+    RXTrack **v = malloc((size_t)RX_MAX(lib->nb_tracks, 1) * sizeof(*v));
     if (!v)
         return RX_ERROR(ENOMEM);
     int n = 0;
@@ -127,7 +127,7 @@ static int select_tracks(Ctx *c, const RxPlaylist *const *pls, int nb_pls, RxTra
         }
         for (int p = 0; p < nb_pls; p++) {
             for (int k = 0; k < pls[p]->nb; k++) {
-                RxTrack *t = rx_library_find_id(lib, pls[p]->track_ids[k]);
+                RXTrack *t = rx_library_find_id(lib, pls[p]->track_ids[k]);
                 int idx = t ? rx_library_index_of(lib, t) : -1;
                 if (idx >= 0 && !in[idx]) {
                     in[idx] = 1;
@@ -309,11 +309,11 @@ static void ours_free(Ours *o)
     *o = (Ours) { 0 };
 }
 
-static int collect_ours(const RxPlan *plan, Ours *o)
+static int collect_ours(const RXPlan *plan, Ours *o)
 {
     int ret = 0;
     for (int i = 0; i < plan->nb_tracks && ret >= 0; i++) {
-        const RxPlanTrack *t = &plan->tracks[i];
+        const RXPlanTrack *t = &plan->tracks[i];
         ret = ours_add(o, t->usb_path);
         const char *ext[3] = { ".DAT", ".EXT", ".2EX" };
         for (int k = 0; k < 3 && ret >= 0; k++) {
@@ -348,7 +348,7 @@ typedef struct Keep {
 } Keep;
 
 typedef struct KeepSet {
-    RxArray files;               /* Keep, sorted */
+    RXArray files;               /* Keep, sorted */
     char   *lib_root;            /* the library's root, resolved; NULL if unknown */
 } KeepSet;
 
@@ -383,7 +383,7 @@ static void keep_free(KeepSet *k)
 
 /* Everything the export writes, every library track's file and the
  * transcodes, as they are on disk now. */
-static int collect_keep(Ctx *c, const RxPlan *plan, const Ours *o, KeepSet *k)
+static int collect_keep(Ctx *c, const RXPlan *plan, const Ours *o, KeepSet *k)
 {
     rx_array_init(&k->files, sizeof(Keep));
     k->lib_root = c->lib->root ? realpath(c->lib->root, NULL) : NULL;
@@ -396,7 +396,7 @@ static int collect_keep(Ctx *c, const RxPlan *plan, const Ours *o, KeepSet *k)
         free(p);
     }
     for (int i = 0; i < plan->nb_tracks && ret >= 0; i++) {
-        const RxPlanTrack *t = &plan->tracks[i];
+        const RXPlanTrack *t = &plan->tracks[i];
         char *p = rx_stick_file(c->dest, t->usb_path);
         ret = p ? keep_add(k, p) : RX_ERROR(ENOMEM);
         free(p);
@@ -412,7 +412,7 @@ static int collect_keep(Ctx *c, const RxPlan *plan, const Ours *o, KeepSet *k)
 
 /* Files under the stick's audio, analysis and artwork trees that this
  * export does not write. */
-static int find_extra(Ctx *c, const Ours *o, const KeepSet *k, const char *stick_dir, RxArray *extra)
+static int find_extra(Ctx *c, const Ours *o, const KeepSet *k, const char *stick_dir, RXArray *extra)
 {
     char *dir = rx_stick_file(c->dest, stick_dir);
     DIR *d = dir ? opendir(dir) : NULL;
@@ -513,12 +513,12 @@ static int64_t stick_size(const char *dest, const char *stick_path)
     return n;
 }
 
-int64_t rx_export_space_needed(const RxPlan *plan, const char *dest, int64_t cluster)
+int64_t rx_export_space_needed(const RXPlan *plan, const char *dest, int64_t cluster)
 {
     cluster = RX_MAX(cluster, 1);
     int64_t need = DB_RESERVE, overlap = 0;
     for (int i = 0; i < plan->nb_tracks; i++) {
-        const RxPlanTrack *t = &plan->tracks[i];
+        const RXPlanTrack *t = &plan->tracks[i];
         char *dst = rx_stick_file(dest, t->usb_path);
         if (dst && !same_file(t->source, dst))
             account(t->file_size, RX_MAX(rx_file_size(dst), 0), cluster, &need, &overlap);
@@ -543,7 +543,7 @@ int64_t rx_export_space_needed(const RxPlan *plan, const char *dest, int64_t clu
         }
     }
     for (int i = 0; i < plan->nb_artworks; i++) {
-        const RxPlanArtwork *a = &plan->artworks[i];
+        const RXPlanArtwork *a = &plan->artworks[i];
         char *dir = rx_plan_artwork_dir(a->id);
         const char *fmt[4] = { "%s/a%u.jpg", "%s/a%u_m.jpg", "%s/b%u.jpg", "%s/b%u_m.jpg" };
         for (int k = 0; dir && k < 4; k++) {
@@ -559,7 +559,7 @@ int64_t rx_export_space_needed(const RxPlan *plan, const char *dest, int64_t clu
 
 /* Names longer than any export.pdb row holds (docs/pdb.md 2.6: a row and
  * its index entry within one page), reported by name. */
-static void report_long_names(Ctx *c, const char *what, const RxPlanName *v, int nb)
+static void report_long_names(Ctx *c, const char *what, const RXPlanName *v, int nb)
 {
     for (int i = 0; i < nb; i++) {
         uint8_t *enc;
@@ -575,9 +575,9 @@ static void report_long_names(Ctx *c, const char *what, const RxPlanName *v, int
 
 /* Both databases built now, so nothing is written for a library they
  * cannot hold; write_databases() puts these bytes on the stick. */
-static int build_databases(Ctx *c, const RxPlan *plan)
+static int build_databases(Ctx *c, const RXPlan *plan)
 {
-    const RxConfig *cfg = &c->lib->cfg;
+    const RXConfig *cfg = &c->lib->cfg;
     int ret = 0;
     if (cfg->export_pdb || !cfg->export_onelibrary) {
         if ((ret = rx_pdb_build(plan, &c->pdb, &c->pdb_size)) < 0) {
@@ -588,11 +588,11 @@ static int build_databases(Ctx *c, const RxPlan *plan)
             report_long_names(c, "label", plan->labels, plan->nb_labels);
             report_long_names(c, "key", plan->keys, plan->nb_keys);
             for (int i = 0; i < plan->nb_playlists; i++) {
-                RxPlanName n = { plan->playlists[i].id, plan->playlists[i].name, 0 };
+                RXPlanName n = { plan->playlists[i].id, plan->playlists[i].name, 0 };
                 report_long_names(c, "playlist", &n, 1);
             }
             for (int i = 0; i < plan->nb_tags; i++) {
-                RxPlanName n = { plan->tags[i].id, plan->tags[i].name, 0 };
+                RXPlanName n = { plan->tags[i].id, plan->tags[i].name, 0 };
                 report_long_names(c, "My Tag", &n, 1);
             }
             return ret;
@@ -610,7 +610,7 @@ static int build_databases(Ctx *c, const RxPlan *plan)
     return ret;
 }
 
-static int checks(Ctx *c, const RxPlan *plan)
+static int checks(Ctx *c, const RXPlan *plan)
 {
     int ret = 0;
     char fs[64];
@@ -667,10 +667,10 @@ static int checks(Ctx *c, const RxPlan *plan)
     /* What a player left on the stick and the library does not have yet
      * would be lost: export.pdb and exportLibrary.db are rebuilt, the ANLZ
      * cue lists rewritten. */
-    RxStickState s;
+    RXStickState s;
     int r = rx_stick_read(c->lib, c->dest, &s);
     if (r >= 0) {
-        RxSyncItem *items;
+        RXSyncItem *items;
         int nb;
         if ((r = rx_stick_diff(c->lib, &s, &items, &nb)) >= 0) {
             if (nb && !c->opt->ignore_unsynced) {
@@ -708,19 +708,19 @@ static int checks(Ctx *c, const RxPlan *plan)
 
 /* ------------------------------------------------------------- writing */
 
-static int write_anlz(Ctx *c, const RxPlan *plan)
+static int write_anlz(Ctx *c, const RXPlan *plan)
 {
     for (int i = 0; i < plan->nb_tracks; i++) {
-        const RxPlanTrack *t = &plan->tracks[i];
+        const RXPlanTrack *t = &plan->tracks[i];
         char name[512];
         rx_track_display(t->track, name, sizeof(name));
         if (!progress(c, "analysis", i + 1, plan->nb_tracks, name))
             return RX_ERROR(ECANCELED);
-        RxWaveforms w = { 0 };
+        RXWaveforms w = { 0 };
         bool have = rx_library_waveforms_load(c->lib, t->id, &w) >= 0;
         if (!have)
             reportf(c, "analysis", "no waveforms for %s (analyse it to add them)", name);
-        RxAnlzFiles f;
+        RXAnlzFiles f;
         int ret = rx_anlz_build(t, have ? &w : NULL, &f);
         if (have)
             rx_waveforms_free(&w);
@@ -743,10 +743,10 @@ static int write_anlz(Ctx *c, const RxPlan *plan)
 
 /* a<id>.jpg (80 px) and a<id>_m.jpg (240 px) for export.pdb, the same as
  * b<id>... for OneLibrary's image paths (docs/onelibrary.md 3.3). */
-static int write_artwork(Ctx *c, const RxPlan *plan)
+static int write_artwork(Ctx *c, const RXPlan *plan)
 {
     for (int i = 0; i < plan->nb_artworks; i++) {
-        const RxPlanArtwork *a = &plan->artworks[i];
+        const RXPlanArtwork *a = &plan->artworks[i];
         if (!progress(c, "artwork", i + 1, plan->nb_artworks, a->path80))
             return RX_ERROR(ECANCELED);
         char *dir = rx_plan_artwork_dir(a->id);
@@ -767,9 +767,9 @@ static int write_artwork(Ctx *c, const RxPlan *plan)
     return 0;
 }
 
-static int write_databases(Ctx *c, const RxPlan *plan)
+static int write_databases(Ctx *c, const RXPlan *plan)
 {
-    const RxConfig *cfg = &c->lib->cfg;
+    const RXConfig *cfg = &c->lib->cfg;
     int ret;
 
     /* The old sync record first: from here on it would describe databases
@@ -785,7 +785,7 @@ static int write_databases(Ctx *c, const RxPlan *plan)
     if (ret < 0)
         return ret;
 
-    RxSettingsFile files[4];
+    RXSettingsFile files[4];
     int nf = 0;
     if ((ret = rx_settings_from_config(cfg, files, &nf)) < 0) {
         reportf(c, "database", "the My Settings in the library are invalid; see `rxbox settings`");
@@ -832,7 +832,7 @@ static int write_databases(Ctx *c, const RxPlan *plan)
 
     /* The sync record: what the stick holds now, so later changes can be
      * told to be a player's, and whose library wrote it. */
-    RxSyncRecord r;
+    RXSyncRecord r;
     if ((ret = rx_sync_record_from_plan(plan, &r)) < 0)
         return ret;
     if ((ret = rx_sync_library_key(c->lib, r.library)) >= 0) {
@@ -843,11 +843,11 @@ static int write_databases(Ctx *c, const RxPlan *plan)
     return ret;
 }
 
-static int prune(Ctx *c, const RxPlan *plan, bool dry)
+static int prune(Ctx *c, const RXPlan *plan, bool dry)
 {
     Ours o = { 0 };
     KeepSet k = { 0 };
-    RxArray extra;
+    RXArray extra;
     rx_array_init(&extra, sizeof(char *));
     int ret = collect_ours(plan, &o);
     if (ret >= 0)
@@ -894,15 +894,15 @@ static int prune(Ctx *c, const RxPlan *plan, bool dry)
 }
 
 /* Every file a real run would write, in the order it would. */
-static void dry_run_report(Ctx *c, const RxPlan *plan)
+static void dry_run_report(Ctx *c, const RXPlan *plan)
 {
     for (int i = 0; i < plan->nb_tracks; i++) {
-        const RxPlanTrack *t = &plan->tracks[i];
+        const RXPlanTrack *t = &plan->tracks[i];
         char *dst = rx_stick_file(c->dest, t->usb_path);
         progress(c, dst && same_file(t->source, dst) ? "skip" : "copy", i + 1, plan->nb_tracks, t->usb_path);
         free(dst);
     }
-    RxSettingsFile files[4];
+    RXSettingsFile files[4];
     int nf = 0;
     if (rx_settings_from_config(&c->lib->cfg, files, &nf) < 0)
         nf = 0;
@@ -945,12 +945,12 @@ static void dry_run_report(Ctx *c, const RxPlan *plan)
 /* ------------------------------------------------------------ transcodes */
 
 typedef struct Transcode {
-    const RxTrack *t;
+    const RXTrack *t;
     char          *cache;
     int            max_rate;
     int            ret;
-    RxMailbox     *done;
-    RxCancel      *cancel;
+    RXMailbox     *done;
+    RXCancel      *cancel;
     int           *finished;
 } Transcode;
 
@@ -975,7 +975,7 @@ static void transcode_job(void *arg)
 
 /* The transcodes the plan needs and the cache lacks: listed in a dry run,
  * made now otherwise, on half the CPUs (each is single-threaded). */
-static int transcodes(Ctx *c, RxTrack **tracks, int nb_tracks, bool compat)
+static int transcodes(Ctx *c, RXTrack **tracks, int nb_tracks, bool compat)
 {
     Transcode *x = calloc((size_t)RX_MAX(nb_tracks, 1), sizeof(*x));
     if (!x)
@@ -1000,9 +1000,9 @@ static int transcodes(Ctx *c, RxTrack **tracks, int nb_tracks, bool compat)
             progress(c, "transcode", i + 1, n, name);
         }
     } else if (ret >= 0 && n) {
-        RxThreadPool *pool = NULL;
-        RxMailbox *mb = NULL;
-        RxCancel cancel = { 0 };
+        RXThreadPool *pool = NULL;
+        RXMailbox *mb = NULL;
+        RXCancel cancel = { 0 };
         int finished = 0;
         long cpus = sysconf(_SC_NPROCESSORS_ONLN);
         int workers = (int)RX_CLAMP(cpus / 2, 1, n);
@@ -1054,12 +1054,12 @@ static int transcodes(Ctx *c, RxTrack **tracks, int nb_tracks, bool compat)
     return ret;
 }
 
-int rx_export(RxLibrary *lib, const char *dest, const RxExportOptions *opt_in, rx_progress_cb cb,
+int rx_export(RXLibrary *lib, const char *dest, const RXExportOptions *opt_in, rx_progress_cb cb,
               void *opaque)
 {
-    RxExportOptions defaults;
+    RXExportOptions defaults;
     rx_export_options_default(&defaults);
-    const RxExportOptions *opt = opt_in ? opt_in : &defaults;
+    const RXExportOptions *opt = opt_in ? opt_in : &defaults;
     Ctx c = {
         .lib    = lib,
         .dest   = dest,
@@ -1073,8 +1073,8 @@ int rx_export(RxLibrary *lib, const char *dest, const RxExportOptions *opt_in, r
     }
 
     /* Every playlist unless some were chosen. */
-    RxPlaylist **all = NULL;
-    const RxPlaylist *const *pls = opt->playlists;
+    RXPlaylist **all = NULL;
+    const RXPlaylist *const *pls = opt->playlists;
     int nb_pls = opt->nb_playlists;
     if (!pls) {
         int n = rx_library_playlists_flat(lib, NULL, 0);
@@ -1084,10 +1084,10 @@ int rx_export(RxLibrary *lib, const char *dest, const RxExportOptions *opt_in, r
         nb_pls = rx_library_playlists_flat(lib, all, RX_MAX(n, 0));
     }
 
-    RxTrack **tracks = NULL;
+    RXTrack **tracks = NULL;
     int nb_tracks = 0;
-    RxPlan plan = { 0 };
-    int ret = select_tracks(&c, all ? (const RxPlaylist *const *)all : pls, nb_pls, &tracks, &nb_tracks);
+    RXPlan plan = { 0 };
+    int ret = select_tracks(&c, all ? (const RXPlaylist *const *)all : pls, nb_pls, &tracks, &nb_tracks);
     if (ret < 0)
         goto out;
 
@@ -1119,7 +1119,7 @@ int rx_export(RxLibrary *lib, const char *dest, const RxExportOptions *opt_in, r
     /* Audio. */
     int copied = 0;
     for (int i = 0; i < plan.nb_tracks; i++) {
-        const RxPlanTrack *t = &plan.tracks[i];
+        const RXPlanTrack *t = &plan.tracks[i];
         char *dst = rx_stick_file(dest, t->usb_path);
         if (!dst) {
             ret = RX_ERROR(ENOMEM);

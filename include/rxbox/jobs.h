@@ -21,9 +21,9 @@
 #include "rxbox/audio.h"
 #include "rxbox/export.h"
 
-typedef struct RxJobs RxJobs;
+typedef struct RXJobs RXJobs;
 
-enum RxJobKind {
+enum RXJobKind {
     RX_JOB_ANALYSE,     /* decode + analyse: result->analysis */
     RX_JOB_DECODE,      /* decode for a deck: result->audio */
     RX_JOB_ARTWORK,     /* cover art RGBA: result->rgba, and result->jpeg */
@@ -31,54 +31,54 @@ enum RxJobKind {
     RX_JOB_INSPECT,     /* rx_inspect: result->report, result->problems */
 };
 
-typedef struct RxJobResult {
-    enum RxJobKind kind;
+typedef struct RXJobResult {
+    enum RXJobKind kind;
     uint64_t   track_id;
     int        deck;            /* RX_JOB_DECODE */
     uint64_t   request;         /* the id rx_jobs_* returned */
     int        err;             /* 0 or a negative errno */
     double     seconds;         /* wall time the job took */
-    RxAnalysis *analysis;       /* owned by the receiver */
-    RxAudio    *audio;          /* owned by the receiver */
+    RXAnalysis *analysis;       /* owned by the receiver */
+    RXAudio    *audio;          /* owned by the receiver */
     uint8_t    *rgba; int width, height;
     uint8_t    *jpeg; size_t jpeg_size;   /* RX_JOB_ARTWORK: the library's 240 px thumbnail
                                              (rx_image_jpeg_square), NULL if it failed */
-    RxStickState *stick;        /* RX_JOB_STICK_READ: owned by the receiver (rx_stick_state_free,
+    RXStickState *stick;        /* RX_JOB_STICK_READ: owned by the receiver (rx_stick_state_free,
                                    then free); set once the read worked, even if the diff failed */
-    RxSyncItem *sync_items; int nb_sync_items;  /* RX_JOB_STICK_READ: owned by the receiver */
+    RXSyncItem *sync_items; int nb_sync_items;  /* RX_JOB_STICK_READ: owned by the receiver */
     char       *report;         /* RX_JOB_INSPECT: the report's lines, also on error; owned by
                                    the receiver */
     int         problems;       /* RX_JOB_INSPECT: rx_inspect's count */
-} RxJobResult;
+} RXJobResult;
 
-int  rx_jobs_create(RxJobs **j, int threads);
-void rx_jobs_destroy(RxJobs *j);      /* cancels pending, waits for running */
+int  rx_jobs_create(RXJobs **j, int threads);
+void rx_jobs_destroy(RXJobs *j);      /* cancels pending, waits for running */
 
 /* Each returns a request id > 0 or a negative errno. */
-uint64_t rx_jobs_analyse(RxJobs *j, uint64_t track_id, const char *path,
-                         const RxAnalysisOptions *opt, unsigned what);
-uint64_t rx_jobs_decode(RxJobs *j, uint64_t track_id, const char *path, int deck);
-uint64_t rx_jobs_artwork(RxJobs *j, uint64_t track_id, const char *path, int max_size);
+uint64_t rx_jobs_analyse(RXJobs *j, uint64_t track_id, const char *path,
+                         const RXAnalysisOptions *opt, unsigned what);
+uint64_t rx_jobs_decode(RXJobs *j, uint64_t track_id, const char *path, int deck);
+uint64_t rx_jobs_artwork(RXJobs *j, uint64_t track_id, const char *path, int max_size);
 /* Reads the stick mounted at `mount` and compares it with the library at
  * `library_root`, which the worker opens as a second connection to the
  * same database (so the owner saves pending edits first). */
-uint64_t rx_jobs_stick_read(RxJobs *j, const char *library_root, const char *mount);
-uint64_t rx_jobs_inspect(RxJobs *j, const char *mount);
+uint64_t rx_jobs_stick_read(RXJobs *j, const char *library_root, const char *mount);
+uint64_t rx_jobs_inspect(RXJobs *j, const char *mount);
 /* Drops a request not yet started; a running one finishes and is reported. */
-void     rx_jobs_cancel(RxJobs *j, uint64_t request);
-void     rx_jobs_cancel_all(RxJobs *j);
+void     rx_jobs_cancel(RXJobs *j, uint64_t request);
+void     rx_jobs_cancel_all(RXJobs *j);
 
 /* Owner thread: takes the next finished job (NULL when none). The result
  * and its payload belong to the caller; rx_job_result_free releases what
  * was not taken over. */
-RxJobResult *rx_jobs_poll(RxJobs *j);
-RxJobResult *rx_jobs_wait(RxJobs *j, int timeout_ms);
-void         rx_job_result_free(RxJobResult *r);
+RXJobResult *rx_jobs_poll(RXJobs *j);
+RXJobResult *rx_jobs_wait(RXJobs *j, int timeout_ms);
+void         rx_job_result_free(RXJobResult *r);
 
 /* Queue state for the status bar. */
-int  rx_jobs_pending(const RxJobs *j);      /* queued (or waiting for memory) + running */
-int  rx_jobs_running(const RxJobs *j);
+int  rx_jobs_pending(const RXJobs *j);      /* queued (or waiting for memory) + running */
+int  rx_jobs_running(const RXJobs *j);
 /* The track currently being analysed on each worker, 0 when idle. */
-int  rx_jobs_active_tracks(const RxJobs *j, uint64_t *ids, int max);
+int  rx_jobs_active_tracks(const RXJobs *j, uint64_t *ids, int max);
 
 #endif /* RXBOX_JOBS_H */

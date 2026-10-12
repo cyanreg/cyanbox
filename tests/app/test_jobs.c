@@ -29,20 +29,20 @@ static int failures;
         }                                                                     \
     } while (0)
 
-static RxJobResult *wait_result(RxJobs *j, int timeout_s)
+static RXJobResult *wait_result(RXJobs *j, int timeout_s)
 {
     return rx_jobs_wait(j, timeout_s * 1000);
 }
 
 static void test_analyse(const char *wav)
 {
-    RxJobs *j = NULL;
+    RXJobs *j = NULL;
     int ret = rx_jobs_create(&j, 2);
     CHECK(ret == 0, "rx_jobs_create: %s", strerror(-ret));
     if (ret < 0)
         return;
 
-    RxAnalysisOptions opt;
+    RXAnalysisOptions opt;
     rx_analysis_options_default(&opt);
     uint64_t req = rx_jobs_analyse(j, 42, wav, &opt, RX_ANALYSE_ALL);
     CHECK((int64_t)req > 0, "request %lld", (long long)req);
@@ -50,7 +50,7 @@ static void test_analyse(const char *wav)
 
     /* While it runs, worker reports the track it analyses. */
     bool seen_active = false;
-    RxJobResult *r = NULL;
+    RXJobResult *r = NULL;
     int64_t t0 = rx_time_us();
     while (!(r = rx_jobs_poll(j)) && rx_time_us() - t0 < 300 * 1000000LL) {
         uint64_t ids[4];
@@ -71,7 +71,7 @@ static void test_analyse(const char *wav)
     CHECK(r->seconds > 0, "seconds %f", r->seconds);
     CHECK(r->analysis, "no analysis");
     if (r->analysis) {
-        const RxAnalysis *a = r->analysis;
+        const RXAnalysis *a = r->analysis;
         CHECK(fabs(a->duration - 12.0) < 1e-6, "duration %f", a->duration);
         CHECK(a->done & RX_ANALYSE_WAVES, "done %#x", a->done);
         CHECK(abs(a->waves.nb_detail - 12 * RX_WAVE_COLUMNS_PER_SECOND) <= 2,
@@ -96,7 +96,7 @@ end:
 
 static void test_decode_and_artwork(const char *wav)
 {
-    RxJobs *j = NULL;
+    RXJobs *j = NULL;
     int ret = rx_jobs_create(&j, 2);
     CHECK(ret == 0, "rx_jobs_create: %s", strerror(-ret));
     if (ret < 0)
@@ -104,7 +104,7 @@ static void test_decode_and_artwork(const char *wav)
 
     uint64_t dec = rx_jobs_decode(j, 7, wav, 0);
     CHECK((int64_t)dec > 0, "decode request %lld", (long long)dec);
-    RxJobResult *r = wait_result(j, 60);
+    RXJobResult *r = wait_result(j, 60);
     CHECK(r, "no decode result");
     if (r) {
         CHECK(r->kind == RX_JOB_DECODE && r->request == dec && r->track_id == 7 && r->deck == 0,
@@ -112,7 +112,7 @@ static void test_decode_and_artwork(const char *wav)
         CHECK(r->err == 0 && r->audio, "err %s", strerror(-r->err));
         if (r->audio) {
             /* The file's own samples: no resampling, no downmix. */
-            const RxAudio *a = r->audio;
+            const RXAudio *a = r->audio;
             CHECK(a->rate == 48000, "rate %d", a->rate);
             CHECK(a->channels == 2, "channels %d", a->channels);
             CHECK(a->nb_frames == 12 * 48000, "%lld frames", (long long)a->nb_frames);
@@ -148,7 +148,7 @@ static void test_decode_and_artwork(const char *wav)
 
 static void test_cancel(const char *wav)
 {
-    RxJobs *j = NULL;
+    RXJobs *j = NULL;
     int ret = rx_jobs_create(&j, 1);
     CHECK(ret == 0, "rx_jobs_create: %s", strerror(-ret));
     if (ret < 0)
@@ -171,7 +171,7 @@ static void test_cancel(const char *wav)
     bool got_first = false, got_r4 = false;
     t0 = rx_time_us();
     while (rx_time_us() - t0 < 300 * 1000000LL) {
-        RxJobResult *r = rx_jobs_wait(j, 100);
+        RXJobResult *r = rx_jobs_wait(j, 100);
         if (!r) {
             if (!rx_jobs_pending(j))
                 break;
@@ -218,7 +218,7 @@ static bool budget_round(const char *wav, const char *budget_mb)
         setenv("RXBOX_ANALYSIS_BUDGET_MB", budget_mb, 1);
     else
         unsetenv("RXBOX_ANALYSIS_BUDGET_MB");
-    RxJobs *j = NULL;
+    RXJobs *j = NULL;
     int ret = rx_jobs_create(&j, 2);
     unsetenv("RXBOX_ANALYSIS_BUDGET_MB");
     CHECK(ret == 0, "rx_jobs_create: %s", strerror(-ret));
@@ -234,7 +234,7 @@ static bool budget_round(const char *wav, const char *budget_mb)
     int64_t first[2] = { 0 }, last[2] = { 0 };
     int64_t t0 = rx_time_us();
     while (got < 2 && rx_time_us() - t0 < 300 * 1000000LL) {
-        RxJobResult *r = rx_jobs_poll(j);
+        RXJobResult *r = rx_jobs_poll(j);
         if (r) {
             CHECK(r->err == 0 && r->analysis, "track %llu: %s", (unsigned long long)r->track_id,
                   strerror(-r->err));
@@ -294,7 +294,7 @@ static void test_budget(const char *wav)
     /* An analysis waiting for memory has not started: cancelling it drops
      * it, and only the running one is reported. */
     setenv("RXBOX_ANALYSIS_BUDGET_MB", "1", 1);
-    RxJobs *j = NULL;
+    RXJobs *j = NULL;
     int ret = rx_jobs_create(&j, 2);
     unsetenv("RXBOX_ANALYSIS_BUDGET_MB");
     CHECK(ret == 0, "rx_jobs_create: %s", strerror(-ret));
@@ -322,7 +322,7 @@ static void test_budget(const char *wav)
     int got = 0;
     t0 = rx_time_us();
     while (rx_time_us() - t0 < 300 * 1000000LL) {
-        RxJobResult *r = rx_jobs_wait(j, 100);
+        RXJobResult *r = rx_jobs_wait(j, 100);
         if (!r) {
             if (!rx_jobs_pending(j))
                 break;

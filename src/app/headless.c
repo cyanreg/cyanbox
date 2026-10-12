@@ -10,111 +10,111 @@
 #include "rxbox/app.h"
 #include "rxbox/gpu.h"
 
-void rx_window_options_default(RxWindowOptions *o)
+void rx_window_options_default(RXWindowOptions *o)
 {
-    *o = (RxWindowOptions) {
+    *o = (RXWindowOptions) {
         .title  = "rxbox",
         .width  = 1600,
         .height = 900,
     };
 }
 
-int rx_window_create(RxWindow **w, const RxWindowOptions *o)
+int rx_window_create(RXWindow **w, const RXWindowOptions *o)
 {
     rx_err("this build of rxbox has no interface (rxbox-cli); use a subcommand");
     *w = NULL;
     return RX_ERROR(ENOSYS);
 }
 
-void rx_window_destroy(RxWindow *w)
+void rx_window_destroy(RXWindow *w)
 {
 }
 
-bool rx_window_poll(RxWindow *w, bool want_redraw, int timeout_ms)
+bool rx_window_poll(RXWindow *w, bool want_redraw, int timeout_ms)
 {
     return false;
 }
 
-bool rx_window_should_close(const RxWindow *w)
+bool rx_window_should_close(const RXWindow *w)
 {
     return true;
 }
 
-void rx_window_request_close(RxWindow *w)
+void rx_window_request_close(RXWindow *w)
 {
 }
 
-void rx_window_begin_frame(RxWindow *w)
+void rx_window_begin_frame(RXWindow *w)
 {
 }
 
-void rx_window_end_frame(RxWindow *w)
+void rx_window_end_frame(RXWindow *w)
 {
 }
 
-void rx_window_size(const RxWindow *w, int *width, int *height)
+void rx_window_size(const RXWindow *w, int *width, int *height)
 {
     *width = 0;
     *height = 0;
 }
 
-float rx_window_scale(const RxWindow *w)
+float rx_window_scale(const RXWindow *w)
 {
     return 1.0f;
 }
 
-int rx_window_frames_drawn(const RxWindow *w)
+int rx_window_frames_drawn(const RXWindow *w)
 {
     return 0;
 }
 
-double rx_window_frame_interval_ms(const RxWindow *w)
+double rx_window_frame_interval_ms(const RXWindow *w)
 {
     return 0.0;
 }
 
-int rx_window_screenshot(RxWindow *w, const char *png_path)
+int rx_window_screenshot(RXWindow *w, const char *png_path)
 {
     return RX_ERROR(ENOSYS);
 }
 
-uint64_t rx_texture_create(RxWindow *w, const uint8_t *rgba, int width, int height)
+uint64_t rx_texture_create(RXWindow *w, const uint8_t *rgba, int width, int height)
 {
     return 0;
 }
 
-void rx_texture_destroy(RxWindow *w, uint64_t tex)
+void rx_texture_destroy(RXWindow *w, uint64_t tex)
 {
 }
 
-RxWaveGpu *rx_wave_upload(RxWindow *w, enum RxWaveKind kind, const uint8_t *columns, int nb_columns)
+RXWaveGpu *rx_wave_upload(RXWindow *w, enum RXWaveKind kind, const uint8_t *columns, int nb_columns)
 {
     return NULL;
 }
 
-void rx_wave_release(RxWindow *w, RxWaveGpu *g)
+void rx_wave_release(RXWindow *w, RXWaveGpu *g)
 {
 }
 
-int rx_wave_columns(const RxWaveGpu *g)
+int rx_wave_columns(const RXWaveGpu *g)
 {
     return 0;
 }
 
-void rx_wave_draw(RxWindow *w, void *im_draw_list, const RxWaveGpu *g, const RxWaveDraw *d)
+void rx_wave_draw(RXWindow *w, void *im_draw_list, const RXWaveGpu *g, const RXWaveDraw *d)
 {
 }
 
-int rx_ui_init(RxApp *app)
+int rx_ui_init(RXApp *app)
 {
     return RX_ERROR(ENOSYS);
 }
 
-void rx_ui_shutdown(RxApp *app)
+void rx_ui_shutdown(RXApp *app)
 {
 }
 
-bool rx_ui_frame(RxApp *app)
+bool rx_ui_frame(RXApp *app)
 {
     return false;
 }

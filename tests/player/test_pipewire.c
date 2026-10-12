@@ -32,16 +32,16 @@ static void sleep_ms(int ms)
 
 static int released;
 
-static void on_release(void *opaque, RxAudio *audio)
+static void on_release(void *opaque, RXAudio *audio)
 {
     released++;
     free(audio->samples);
     free(audio);
 }
 
-static RxAudio *silence(void)
+static RXAudio *silence(void)
 {
-    RxAudio *a = calloc(1, sizeof(*a));
+    RXAudio *a = calloc(1, sizeof(*a));
     if (!a)
         return NULL;
     a->rate = 44100;
@@ -65,14 +65,14 @@ int main(void)
     }
     setenv("PIPEWIRE_NODE", sink, 1);
 
-    RxPlayerOptions opt;
+    RXPlayerOptions opt;
     rx_player_options_default(&opt);
     opt.backend = RX_AUDIO_PIPEWIRE;
     opt.sink = sink;
     opt.release = on_release;
 
     /* Torn down before the stream has had time to connect. */
-    RxPlayer *p = NULL;
+    RXPlayer *p = NULL;
     int ret = rx_player_create(&p, &opt);
     if (ret < 0) {
         fprintf(stderr, "create: %s\n", strerror(-ret));
@@ -100,14 +100,14 @@ int main(void)
     }
     printf("running on %s at %d Hz\n", sink, rx_player_rate(p));
 
-    RxAudio *a = silence();
+    RXAudio *a = silence();
     if (!a || rx_deck_load(p, 0, a, NULL) < 0)
         return 1;
 
     rx_deck_play(p, 0);
     sleep_ms(1000);
 
-    RxDeckState s;
+    RXDeckState s;
     rx_deck_state(p, 0, &s);
     bool ok = rx_player_running(p) && s.playing && s.position > 0.5 && s.position < 2.0 &&
               s.serial >= 2;

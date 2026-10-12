@@ -88,9 +88,9 @@ end:
     return ret;
 }
 
-int rx_downbeat_vote(const RxSpectrum *s, const float *x, int64_t n,
+int rx_downbeat_vote(const RXSpectrum *s, const float *x, int64_t n,
                      double t0, double period, double start, double end, double first_onset,
-                     RxDownbeat *out)
+                     RXDownbeat *out)
 {
     memset(out, 0, sizeof(*out));
     out->margin = 1.0;

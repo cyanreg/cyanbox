@@ -78,7 +78,7 @@ static int make_track(const char *name, double bpm, double downbeat, const char 
               downbeat, p, p, downbeat, p, p, name, codec_args, music, name);
 }
 
-static RxTrack *track_named(RxLibrary *lib, const char *file)
+static RXTrack *track_named(RXLibrary *lib, const char *file)
 {
     for (int i = 0; i < lib->nb_tracks; i++)
         if (!strcmp(rx_path_base(lib->tracks[i]->path), file))
@@ -86,13 +86,13 @@ static RxTrack *track_named(RxLibrary *lib, const char *file)
     return NULL;
 }
 
-static int kv_add(RxKv **kv, int *nb, const char *key, const char *value)
+static int kv_add(RXKv **kv, int *nb, const char *key, const char *value)
 {
-    RxKv *n = realloc(*kv, (size_t)(*nb + 1) * sizeof(*n));
+    RXKv *n = realloc(*kv, (size_t)(*nb + 1) * sizeof(*n));
     if (!n)
         return RX_ERROR(ENOMEM);
     *kv = n;
-    n[*nb] = (RxKv) { .key = rx_strdup(key), .value = rx_strdup(value) };
+    n[*nb] = (RXKv) { .key = rx_strdup(key), .value = rx_strdup(value) };
     (*nb)++;
     return 0;
 }
@@ -105,12 +105,12 @@ static int read_stick(const char *path, uint8_t **b, size_t *n)
     return ret;
 }
 
-static int count_items(RxLibrary *lib, enum RxSyncKind kind, RxSyncItem **out, int *nb_out)
+static int count_items(RXLibrary *lib, enum RXSyncKind kind, RXSyncItem **out, int *nb_out)
 {
-    RxStickState s;
+    RXStickState s;
     if (rx_stick_read(lib, stick, &s) < 0)
         return -1;
-    RxSyncItem *items;
+    RXSyncItem *items;
     int nb, n = 0;
     if (rx_stick_diff(lib, &s, &items, &nb) < 0) {
         rx_stick_state_free(&s);
@@ -128,7 +128,7 @@ static int count_items(RxLibrary *lib, enum RxSyncKind kind, RxSyncItem **out, i
     return n;
 }
 
-static int setup_library(RxLibrary *lib)
+static int setup_library(RXLibrary *lib)
 {
     static const struct { const char *name; double bpm, downbeat; const char *args; } files[] = {
         { "one.flac", 126.0, 0.25, "-c:a flac" },
@@ -148,14 +148,14 @@ static int setup_library(RxLibrary *lib)
     for (size_t i = 0; i < RX_ARRAY_ELEMS(files); i++) {
         char *path = rx_asprintf("%s/%s", music, files[i].name);
         int err = 0;
-        RxTrack *t = rx_library_add_file(lib, path, &err);
+        RXTrack *t = rx_library_add_file(lib, path, &err);
         free(path);
         CHECK(t);
         if (!t)
             return 1;
         CHECK_EQ(rx_grid_init(&t->grid, files[i].downbeat, files[i].bpm), 0);
         snprintf(t->key, sizeof(t->key), "%s", i % 2 ? "Am" : "F#");
-        RxCue c;
+        RXCue c;
         rx_cue_init(&c, files[i].downbeat);
         rx_track_add_cue(t, &c);
         if (i == 0) {
@@ -170,18 +170,18 @@ static int setup_library(RxLibrary *lib)
         }
         CHECK_EQ(rx_library_save_track(lib, t), 0);
 
-        RxAudio a;
+        RXAudio a;
         CHECK_EQ(rx_decode(t->path, 1, 0, &a), 0);
-        RxWaveforms w;
+        RXWaveforms w;
         CHECK_EQ(rx_waveforms_compute(a.samples, a.nb_frames, a.rate, &w), 0);
         CHECK_EQ(rx_library_waveforms_save(lib, t->id, &w), 0);
         rx_waveforms_free(&w);
         rx_audio_free(&a);
     }
 
-    RxPlaylist *set = rx_library_playlist_create(lib, lib->root_folder, "Set");
-    RxPlaylistFolder *f = rx_library_folder_create(lib, lib->root_folder, "Peak");
-    RxPlaylist *peak = f ? rx_library_playlist_create(lib, f, "Peak time") : NULL;
+    RXPlaylist *set = rx_library_playlist_create(lib, lib->root_folder, "Set");
+    RXPlaylistFolder *f = rx_library_folder_create(lib, lib->root_folder, "Peak");
+    RXPlaylist *peak = f ? rx_library_playlist_create(lib, f, "Peak time") : NULL;
     CHECK(set && f && peak);
     if (!set || !peak)
         return 1;
@@ -197,15 +197,15 @@ static int setup_library(RxLibrary *lib)
     return 0;
 }
 
-static void check_stick(RxLibrary *lib)
+static void check_stick(RXLibrary *lib)
 {
     uint8_t *b;
     size_t n;
     CHECK_EQ(read_stick("/PIONEER/rekordbox/export.pdb", &b, &n), 0);
-    RxPdb pdb;
+    RXPdb pdb;
     CHECK_EQ(rx_pdb_read(b, n, &pdb), 0);
     CHECK_EQ(pdb.nb_tracks, 5);
-    RxPdbRawTrack *raw;
+    RXPdbRawTrack *raw;
     int nr;
     CHECK_EQ(rx_pdb_raw_tracks(b, n, &raw, &nr), 0);
     static const struct { const char *file; int type; int tempo; const char *ext; } want[] = {
@@ -213,7 +213,7 @@ static void check_stick(RxLibrary *lib)
         { "four.m4a", 4, 12200, ".m4a" }, { "five.opus", 5, 13000, ".flac" },
     };
     for (size_t i = 0; i < RX_ARRAY_ELEMS(want); i++) {
-        RxTrack *t = track_named(lib, want[i].file);
+        RXTrack *t = track_named(lib, want[i].file);
         bool found = false;
         for (int k = 0; t && k < nr; k++) {
             if (raw[k].id != t->id)
@@ -238,19 +238,19 @@ static void check_stick(RxLibrary *lib)
     CHECK(set);
 
     /* one.flac: the grid from 0.25 s, the hot cue loop in the .DAT. */
-    RxTrack *one = track_named(lib, "one.flac");
+    RXTrack *one = track_named(lib, "one.flac");
     for (int k = 0; one && k < pdb.nb_tracks; k++) {
         if (pdb.tracks[k].id != one->id)
             continue;
         uint8_t *dat;
         size_t dn;
         CHECK_EQ(read_stick(pdb.tracks[k].anlz_path, &dat, &dn), 0);
-        RxBeat *beats;
+        RXBeat *beats;
         int nb;
         CHECK_EQ(rx_anlz_read_beats(dat, dn, &beats, &nb), 0);
         CHECK(nb > 10 && beats[0].number == 1 && fabs(beats[0].time - 0.25) < 0.0015);
         free(beats);
-        RxPlanCue *cues;
+        RXPlanCue *cues;
         int nc;
         CHECK_EQ(rx_anlz_read_cues(dat, dn, &cues, &nc), 0);
         bool hot = false;
@@ -268,7 +268,7 @@ static void check_stick(RxLibrary *lib)
     uint8_t *plain;
     size_t pn;
     CHECK_EQ(rx_sqlcipher_decrypt(b, n, rx_onelibrary_passphrase, NULL, 0, &plain, &pn), 0);
-    RxOneLibTrack *ol;
+    RXOneLibTrack *ol;
     int no;
     CHECK_EQ(rx_onelibrary_read(plain, pn, &ol, &no), 0);
     CHECK_EQ(no, 5);
@@ -298,14 +298,14 @@ static void check_stick(RxLibrary *lib)
 /* What a player does at a gig: moves hot cue A by a second and makes it
  * blue, adds a memory cue at 10 s (written to the ANLZ files as rekordbox
  * would); appends a history list to exportLibrary.db; saves a preset. */
-static void play_a_gig(RxLibrary *lib)
+static void play_a_gig(RXLibrary *lib)
 {
-    RxTrack *one = track_named(lib, "one.flac");
-    RxTrack *tr[1] = { one };
-    RxPlan plan;
+    RXTrack *one = track_named(lib, "one.flac");
+    RXTrack *tr[1] = { one };
+    RXPlan plan;
     CHECK_EQ(rx_plan_build(lib, tr, 1, NULL, 0, NULL, false, &plan), 0);
-    RxPlanTrack *pt = &plan.tracks[0];
-    RxPlanCue *cues = calloc((size_t)pt->nb_cues + 1, sizeof(*cues));
+    RXPlanTrack *pt = &plan.tracks[0];
+    RXPlanCue *cues = calloc((size_t)pt->nb_cues + 1, sizeof(*cues));
     memcpy(cues, pt->cues, (size_t)pt->nb_cues * sizeof(*cues));
     for (int i = 0; i < pt->nb_cues; i++) {
         if (cues[i].hot == 0) {
@@ -314,11 +314,11 @@ static void play_a_gig(RxLibrary *lib)
             rx_hot_cue_color("blue", &cues[i].color_code, &cues[i].rgb);
         }
     }
-    cues[pt->nb_cues] = (RxPlanCue) { .time = 10.0, .hot = -1, .loop_end = -1 };
+    cues[pt->nb_cues] = (RXPlanCue) { .time = 10.0, .hot = -1, .loop_end = -1 };
     free(pt->cues);
     pt->cues = cues;
     pt->nb_cues++;
-    RxAnlzFiles f;
+    RXAnlzFiles f;
     CHECK_EQ(rx_anlz_build(pt, NULL, &f), 0);
     char *dat = rx_plan_anlz_path(pt, ".DAT"), *ext = rx_plan_anlz_path(pt, ".EXT");
     char *pd = rx_stick_file(stick, dat), *pe = rx_stick_file(stick, ext);
@@ -360,7 +360,7 @@ static void play_a_gig(RxLibrary *lib)
     free(enc);
 
     /* The player saves My Settings with a ±6 % tempo range. */
-    RxKv kv[2] = { { "quantize", "true" }, { "tempo_range", "6" } };
+    RXKv kv[2] = { { "quantize", "true" }, { "tempo_range", "6" } };
     CHECK_EQ(rx_settings_encode("MYSETTING.DAT", kv, 2, &b, &n), 0);
     p = rx_stick_file(stick, "/PIONEER/MYSETTING.DAT");
     CHECK_EQ(rx_file_write_atomic(p, b, n), 0);
@@ -384,12 +384,12 @@ int main(void)
     rx_mkdir_p(music);
     rx_mkdir_p(stick);
 
-    RxLibrary lib = { 0 };
+    RXLibrary lib = { 0 };
     int r = setup_library(&lib);
     if (r)
         return r == 77 ? 77 : test_result("export");
 
-    RxExportOptions opt;
+    RXExportOptions opt;
     rx_export_options_default(&opt);
     Stages st = { 0 };
     CHECK_EQ(rx_export(&lib, stick, &opt, on_progress, &st), 0);
@@ -409,13 +409,13 @@ int main(void)
     CHECK_EQ(count_items(&lib, RX_SYNC_HOT_CUE_SET, NULL, NULL), 0);
 
     /* Library edits since the export are not unsynced changes. */
-    RxTrack *three = track_named(&lib, "three.wav");
-    RxCue extra;
+    RXTrack *three = track_named(&lib, "three.wav");
+    RXCue extra;
     rx_cue_init(&extra, 5.0);
     extra.hot = 2;
     rx_track_add_cue(three, &extra);
     rx_library_save_track(&lib, three);
-    RxSyncItem *items;
+    RXSyncItem *items;
     int nb;
     CHECK_EQ(count_items(&lib, RX_SYNC_HOT_CUE_CLEARED, &items, &nb), 0);
     CHECK_EQ(nb, 0);
@@ -446,7 +446,7 @@ int main(void)
     st = (Stages) { .quiet = true };
     CHECK_EQ(rx_export(&lib, stick, &opt, on_progress, &st), RX_ERROR(EBUSY));
 
-    RxTrack *one = track_named(&lib, "one.flac");
+    RXTrack *one = track_named(&lib, "one.flac");
     int idx = rx_track_hot_cue(one, 0);
     double before = idx >= 0 ? one->cues[idx].time : 0;
     int two_plays = track_named(&lib, "two.mp3")->play_count;
@@ -472,7 +472,7 @@ int main(void)
 
     /* four leaves the playlists: a dry run lists its files for pruning,
      * the export with prune removes them. */
-    RxPlaylist *pl[8];
+    RXPlaylist *pl[8];
     int npl = rx_library_playlists_flat(&lib, pl, 8);
     for (int i = 0; i < npl; i++)
         for (int k = 0; k < pl[i]->nb; k++)

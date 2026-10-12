@@ -39,19 +39,19 @@
 
 /* A My Settings preset as the settings hold it: name/value pairs, names as
  * `rxbox settings` lists them. */
-typedef struct RxKv { char *key; char *value; } RxKv;
+typedef struct RXKv { char *key; char *value; } RXKv;
 
 /* The settings, read from the `setting` table at open and written back by
  * rx_library_config_save. Keys in the table are "analysis.bpm_min",
  * "export.key_notation", "player.quantize" (a My Settings name), "ui.wave_palette"... */
-typedef struct RxConfig {
+typedef struct RXConfig {
     /* analysis.* */
     double bpm_min, bpm_max;    /* 0 = unset */
     bool   snap_bpm;            /* default true */
     bool   auto_cues;           /* memory cue on the first downbeat, default true */
     bool   allow_sections;      /* tempo sections where the tempo or phase really changes,
-                                   default true (RxAnalysisOptions.allow_sections) */
-    unsigned analyse_what;      /* RxAnalyseWhat the interface's Analyse asks for,
+                                   default true (RXAnalysisOptions.allow_sections) */
+    unsigned analyse_what;      /* RXAnalyseWhat the interface's Analyse asks for,
                                    default RX_ANALYSE_ALL */
 
     /* export.* */
@@ -61,9 +61,9 @@ typedef struct RxConfig {
     char  *device_name;         /* NULL = stick's label */
 
     /* player.* mixer.* device.*: My Settings values the user set */
-    RxKv *player; int nb_player;
-    RxKv *mixer;  int nb_mixer;
-    RxKv *device; int nb_device;
+    RXKv *player; int nb_player;
+    RXKv *mixer;  int nb_mixer;
+    RXKv *device; int nb_device;
 
     /* audio.* */
     char *audio_sink;           /* PipeWire node name, NULL = default */
@@ -72,122 +72,122 @@ typedef struct RxConfig {
     char  wave_palette[8];      /* 3band (default), blue, rgb */
     int   detail_bars;          /* 12 */
     float split_player, split_tree;   /* remembered splitter positions, 0 = default */
-} RxConfig;
+} RXConfig;
 
-void rx_config_free(RxConfig *c);
-void rx_config_defaults(RxConfig *c);
+void rx_config_free(RXConfig *c);
+void rx_config_defaults(RXConfig *c);
 /* Where the library is: $RXBOX_LIBRARY, else ~/.local/share/rxbox. Allocating. */
 char *rx_library_default_root(void);
 
 /* ---------------------------------------------------------------- playlists */
 
-typedef struct RxPlaylist {
+typedef struct RXPlaylist {
     int64_t   id;
     char     *name;
     uint64_t *track_ids;        /* in order */
     int       nb;
-} RxPlaylist;
+} RXPlaylist;
 
-typedef struct RxPlaylistFolder {
+typedef struct RXPlaylistFolder {
     int64_t id;                 /* 0 for the root */
     char   *name;               /* "" for the root */
-    struct RxPlaylistFolder **folders; int nb_folders;   /* in position order */
-    RxPlaylist **playlists;              int nb_playlists;
-} RxPlaylistFolder;
+    struct RXPlaylistFolder **folders; int nb_folders;   /* in position order */
+    RXPlaylist **playlists;              int nb_playlists;
+} RXPlaylistFolder;
 
 /* ------------------------------------------------------------------ library */
 
-typedef struct RxDb RxDb;       /* src/core/db.c: the sqlite3 handle and statements */
+typedef struct RXDb RXDb;       /* src/core/db.c: the sqlite3 handle and statements */
 
-typedef struct RxLibrary {
+typedef struct RXLibrary {
     char     *root;
-    RxConfig  cfg;
-    RxDb     *db;
-    RxTrack **tracks;           /* owned; sorted by id */
+    RXConfig  cfg;
+    RXDb     *db;
+    RXTrack **tracks;           /* owned; sorted by id */
     int       nb_tracks;
-    RxPlaylistFolder *root_folder;   /* playlist tree, owned */
+    RXPlaylistFolder *root_folder;   /* playlist tree, owned */
     unsigned  generation;       /* bumped on every change; the interface watches it */
-} RxLibrary;
+} RXLibrary;
 
 /* Opens (creating when absent) the library at `root` (NULL = default),
  * migrates the schema if needed, loads every track and playlist, checks
  * which audio files are missing (stat; such tracks are kept, flagged
  * `missing` and shown greyed out; they come back when the file does). */
-int  rx_library_open(RxLibrary *lib, const char *root);
-void rx_library_close(RxLibrary *lib);
+int  rx_library_open(RXLibrary *lib, const char *root);
+void rx_library_close(RXLibrary *lib);
 /* Re-checks `missing` on every track (also called by open). Returns how
  * many changed state. */
-int  rx_library_rescan_missing(RxLibrary *lib);
+int  rx_library_rescan_missing(RXLibrary *lib);
 /* Runs SQLite's integrity_check and foreign_key_check: 0 when both pass,
  * -EIO with every problem logged otherwise. */
-int  rx_library_check(const RxLibrary *lib);
+int  rx_library_check(const RXLibrary *lib);
 
-RxTrack *rx_library_find_id(const RxLibrary *lib, uint64_t id);
-RxTrack *rx_library_find_path(const RxLibrary *lib, const char *abs_path);
-int      rx_library_index_of(const RxLibrary *lib, const RxTrack *t);
+RXTrack *rx_library_find_id(const RXLibrary *lib, uint64_t id);
+RXTrack *rx_library_find_path(const RXLibrary *lib, const char *abs_path);
+int      rx_library_index_of(const RXLibrary *lib, const RXTrack *t);
 
 /* Adds one audio file: probes it, fills file_meta from its tags (the tag
  * names dj's library.track_from_probe used), inserts it. Returns the track
  * (the existing one if the path is already in the library; its `missing`
  * flag is cleared when the file is back), or NULL with *err set. */
-RxTrack *rx_library_add_file(RxLibrary *lib, const char *path, int *err);
+RXTrack *rx_library_add_file(RXLibrary *lib, const char *path, int *err);
 /* Adds a file or everything under a directory with a known audio extension
  * (rx_is_audio_path), in one transaction per directory. Calls `cb` per file
  * added or skipped. Returns the number added or a negative errno. */
-typedef void (*rx_add_cb)(void *opaque, const char *path, RxTrack *added, int err);
-int      rx_library_add_path(RxLibrary *lib, const char *path, rx_add_cb cb, void *opaque);
+typedef void (*rx_add_cb)(void *opaque, const char *path, RXTrack *added, int err);
+int      rx_library_add_path(RXLibrary *lib, const char *path, rx_add_cb cb, void *opaque);
 bool     rx_is_audio_path(const char *path);
 /* Removes a track and everything that refers to it (cues, waveform,
  * artwork, plays, playlist entries). */
-int      rx_library_remove(RxLibrary *lib, RxTrack *t);
+int      rx_library_remove(RXLibrary *lib, RXTrack *t);
 /* Writes a track's editable state (meta overrides, rating, colour, tags,
  * key, grid, cues, locked) in one transaction. Call after any edit. */
-int      rx_library_save_track(RxLibrary *lib, RxTrack *t);
+int      rx_library_save_track(RXLibrary *lib, RXTrack *t);
 /* Re-probes a track whose file changed (mtime); keeps grid/key/cues. */
-int      rx_library_refresh_track(RxLibrary *lib, RxTrack *t);
+int      rx_library_refresh_track(RXLibrary *lib, RXTrack *t);
 /* Records a play now (play_count, last_played, the play table). */
-int      rx_library_record_play(RxLibrary *lib, RxTrack *t);
+int      rx_library_record_play(RXLibrary *lib, RXTrack *t);
 /* Moves a track to a new path (the file was moved by the user). */
-int      rx_library_relocate(RxLibrary *lib, RxTrack *t, const char *new_abs_path);
+int      rx_library_relocate(RXLibrary *lib, RXTrack *t, const char *new_abs_path);
 
 /* Waveforms and artwork, by track id. Load returns -ENOENT when absent. */
-struct RxWaveforms;
-int  rx_library_waveforms_save(RxLibrary *lib, uint64_t id, const struct RxWaveforms *w);
-int  rx_library_waveforms_load(const RxLibrary *lib, uint64_t id, struct RxWaveforms *w);
-bool rx_library_has_waveforms(const RxLibrary *lib, uint64_t id);
-int  rx_library_artwork_save(RxLibrary *lib, uint64_t id, const uint8_t *jpeg, size_t size, int width, int height);
-int  rx_library_artwork_load(const RxLibrary *lib, uint64_t id, uint8_t **jpeg, size_t *size, int *width, int *height);
+struct RXWaveforms;
+int  rx_library_waveforms_save(RXLibrary *lib, uint64_t id, const struct RXWaveforms *w);
+int  rx_library_waveforms_load(const RXLibrary *lib, uint64_t id, struct RXWaveforms *w);
+bool rx_library_has_waveforms(const RXLibrary *lib, uint64_t id);
+int  rx_library_artwork_save(RXLibrary *lib, uint64_t id, const uint8_t *jpeg, size_t size, int width, int height);
+int  rx_library_artwork_load(const RXLibrary *lib, uint64_t id, uint8_t **jpeg, size_t *size, int *width, int *height);
 
 /* Settings. */
-int  rx_library_config_save(RxLibrary *lib);          /* writes lib->cfg to the setting table */
-/* Raw access for anything not in RxConfig (the interface's column layout...). */
-int  rx_library_setting_get(const RxLibrary *lib, const char *key, char **value);   /* -ENOENT when absent */
-int  rx_library_setting_set(RxLibrary *lib, const char *key, const char *value);
+int  rx_library_config_save(RXLibrary *lib);          /* writes lib->cfg to the setting table */
+/* Raw access for anything not in RXConfig (the interface's column layout...). */
+int  rx_library_setting_get(const RXLibrary *lib, const char *key, char **value);   /* -ENOENT when absent */
+int  rx_library_setting_set(RXLibrary *lib, const char *key, const char *value);
 
 /* Disposable files (transcodes): <root>/cache/<kind>/<id>.<ext>, directories created. */
-char *rx_library_cache_path(const RxLibrary *lib, const char *kind, uint64_t id, const char *ext);
+char *rx_library_cache_path(const RXLibrary *lib, const char *kind, uint64_t id, const char *ext);
 
 /* Playlists. Every edit is a transaction and bumps generation. Positions
  * among siblings are kept dense. */
-RxPlaylist       *rx_library_playlist_create(RxLibrary *lib, RxPlaylistFolder *in, const char *name);
-RxPlaylistFolder *rx_library_folder_create(RxLibrary *lib, RxPlaylistFolder *in, const char *name);
-int   rx_library_playlist_rename(RxLibrary *lib, RxPlaylist *p, const char *name);
-int   rx_library_folder_rename(RxLibrary *lib, RxPlaylistFolder *f, const char *name);
-int   rx_library_playlist_delete(RxLibrary *lib, RxPlaylist *p);
-int   rx_library_folder_delete(RxLibrary *lib, RxPlaylistFolder *f);     /* and everything in it */
-int   rx_library_playlist_add(RxLibrary *lib, RxPlaylist *p, const RxTrack *t, int at);   /* at = -1: append; a track may appear once per playlist */
-int   rx_library_playlist_remove_at(RxLibrary *lib, RxPlaylist *p, int index);
-int   rx_library_playlist_move(RxLibrary *lib, RxPlaylist *p, int from, int to);
+RXPlaylist       *rx_library_playlist_create(RXLibrary *lib, RXPlaylistFolder *in, const char *name);
+RXPlaylistFolder *rx_library_folder_create(RXLibrary *lib, RXPlaylistFolder *in, const char *name);
+int   rx_library_playlist_rename(RXLibrary *lib, RXPlaylist *p, const char *name);
+int   rx_library_folder_rename(RXLibrary *lib, RXPlaylistFolder *f, const char *name);
+int   rx_library_playlist_delete(RXLibrary *lib, RXPlaylist *p);
+int   rx_library_folder_delete(RXLibrary *lib, RXPlaylistFolder *f);     /* and everything in it */
+int   rx_library_playlist_add(RXLibrary *lib, RXPlaylist *p, const RXTrack *t, int at);   /* at = -1: append; a track may appear once per playlist */
+int   rx_library_playlist_remove_at(RXLibrary *lib, RXPlaylist *p, int index);
+int   rx_library_playlist_move(RXLibrary *lib, RXPlaylist *p, int from, int to);
 /* Moves a playlist or folder under another folder, at `position` (-1: last). */
-int   rx_library_playlist_reparent(RxLibrary *lib, RxPlaylist *p, RxPlaylistFolder *to, int position);
-int   rx_library_folder_reparent(RxLibrary *lib, RxPlaylistFolder *f, RxPlaylistFolder *to, int position);
+int   rx_library_playlist_reparent(RXLibrary *lib, RXPlaylist *p, RXPlaylistFolder *to, int position);
+int   rx_library_folder_reparent(RXLibrary *lib, RXPlaylistFolder *f, RXPlaylistFolder *to, int position);
 /* Every playlist, depth first: returns the count, fills up to max. */
-int   rx_library_playlists_flat(const RxLibrary *lib, RxPlaylist **out, int max);
-RxPlaylistFolder *rx_library_folder_of(const RxLibrary *lib, const RxPlaylist *p);
-RxPlaylist       *rx_library_playlist_find(const RxLibrary *lib, const char *name);   /* first by name, depth first */
+int   rx_library_playlists_flat(const RXLibrary *lib, RXPlaylist **out, int max);
+RXPlaylistFolder *rx_library_folder_of(const RXLibrary *lib, const RXPlaylist *p);
+RXPlaylist       *rx_library_playlist_find(const RXLibrary *lib, const char *name);   /* first by name, depth first */
 
 /* m3u8 import/export (paths relative to the file, resolved on read). */
-int   rx_library_playlist_import_m3u(RxLibrary *lib, RxPlaylistFolder *in, const char *m3u_path, RxPlaylist **out);
-int   rx_library_playlist_export_m3u(const RxLibrary *lib, const RxPlaylist *p, const char *m3u_path);
+int   rx_library_playlist_import_m3u(RXLibrary *lib, RXPlaylistFolder *in, const char *m3u_path, RXPlaylist **out);
+int   rx_library_playlist_export_m3u(const RXLibrary *lib, const RXPlaylist *p, const char *m3u_path);
 
 #endif /* RXBOX_LIBRARY_H */

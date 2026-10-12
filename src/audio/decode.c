@@ -401,7 +401,7 @@ static int sink_frame(Sink *s, const AVFrame *f)
     return sink_push(s, m, n);
 }
 
-static int sink_finish(Sink *s, RxAudio *out)
+static int sink_finish(Sink *s, RXAudio *out)
 {
     if (s->swr) {
         while (1) {
@@ -428,7 +428,7 @@ static int sink_finish(Sink *s, RxAudio *out)
     float *shrunk = realloc(s->buf, (size_t)s->nb * s->out_ch * sizeof(float));
     if (shrunk)
         s->buf = shrunk;
-    *out = (RxAudio) {
+    *out = (RXAudio) {
         .samples   = s->buf,
         .channels  = s->out_ch,
         .rate      = s->out_rate,
@@ -528,12 +528,12 @@ static int mp3_frame(void *opaque, const uint8_t *data, size_t size, int samples
 
 /* 1 when this is not an MP3 file the scanner reads (the caller then uses
  * libavformat), 0 when decoded, < 0 on error. */
-static int decode_mp3(const char *path, int channels, int rate, RxAudio *out)
+static int decode_mp3(const char *path, int channels, int rate, RXAudio *out)
 {
-    RxMap map;
+    RXMap map;
     if (rx_audio_map(path, &map) < 0)
         return 1;
-    RxMp3Info info;
+    RXMp3Info info;
     if (rx_mp3_scan_mapped(path, &map, &info) < 0 || !info.nb_frames) {
         rx_audio_unmap(&map);
         return 1;
@@ -604,7 +604,7 @@ static int64_t packet_samples(const AVCodecContext *dec, const AVStream *st, con
     return s->last_frames;
 }
 
-static int decode_av(const char *path, int channels, int rate, RxAudio *out)
+static int decode_av(const char *path, int channels, int rate, RXAudio *out)
 {
     AVFormatContext *fmt;
     int ret = rx_audio_open(path, &fmt, true);
@@ -679,10 +679,10 @@ end:
     return ret;
 }
 
-int rx_decode(const char *path, int channels, int rate, RxAudio *out)
+int rx_decode(const char *path, int channels, int rate, RXAudio *out)
 {
     rx_audio_init_logging();
-    *out = (RxAudio) { 0 };
+    *out = (RXAudio) { 0 };
     if (channels < 0 || channels > 2 || rate < 0)
         return RX_ERROR(EINVAL);
 
@@ -705,9 +705,9 @@ int rx_decode(const char *path, int channels, int rate, RxAudio *out)
 
 /* ---------------------------------------------------------- derived buffers */
 
-int rx_audio_to_mono(const RxAudio *in, RxAudio *out)
+int rx_audio_to_mono(const RXAudio *in, RXAudio *out)
 {
-    *out = (RxAudio) { 0 };
+    *out = (RXAudio) { 0 };
     if (in->channels <= 0 || in->nb_frames < 0)
         return RX_ERROR(EINVAL);
     float *x = malloc((size_t)RX_MAX(in->nb_frames, (int64_t)1) * sizeof(float));
@@ -720,7 +720,7 @@ int rx_audio_to_mono(const RxAudio *in, RxAudio *out)
             sum += in->samples[i * ch + c];
         x[i] = ch == 1 ? sum : sum / (float)ch;
     }
-    *out = (RxAudio) {
+    *out = (RXAudio) {
         .samples   = x,
         .channels  = 1,
         .rate      = in->rate,
@@ -729,14 +729,14 @@ int rx_audio_to_mono(const RxAudio *in, RxAudio *out)
     return 0;
 }
 
-int rx_audio_resample(const RxAudio *in, int rate, RxAudio *out)
+int rx_audio_resample(const RXAudio *in, int rate, RXAudio *out)
 {
     rx_audio_init_logging();
-    *out = (RxAudio) { 0 };
+    *out = (RXAudio) { 0 };
     if (in->channels <= 0 || in->rate <= 0 || rate <= 0 || in->nb_frames < 0)
         return RX_ERROR(EINVAL);
     if (!in->nb_frames) {
-        *out = (RxAudio) { .channels = in->channels, .rate = rate };
+        *out = (RXAudio) { .channels = in->channels, .rate = rate };
         return 0;
     }
 
@@ -751,8 +751,8 @@ int rx_audio_resample(const RxAudio *in, int rate, RxAudio *out)
     return ret;
 }
 
-void rx_audio_free(RxAudio *a)
+void rx_audio_free(RXAudio *a)
 {
     free(a->samples);
-    *a = (RxAudio) { 0 };
+    *a = (RXAudio) { 0 };
 }

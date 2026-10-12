@@ -59,46 +59,46 @@
 
 /* --------------------------------------------------------------- helpers */
 
-static bool ready(const RxDeckCtl *c)
+static bool ready(const RXDeckCtl *c)
 {
     return c && c->track && rx_deck_loaded(c->player, c->deck);
 }
 
-static RxDeckState state(const RxDeckCtl *c)
+static RXDeckState state(const RXDeckCtl *c)
 {
-    RxDeckState s;
+    RXDeckState s;
     rx_deck_state(c->player, c->deck, &s);
     return s;
 }
 
-static const RxGrid *grid(const RxDeckCtl *c)
+static const RXGrid *grid(const RXDeckCtl *c)
 {
     return c->track && rx_grid_valid(&c->track->grid) ? &c->track->grid : NULL;
 }
 
 /* QUANTIZE: the nearest beat, when it is on and the track has a grid
  * (manual p.61: no quantize without an analysed grid). */
-static double snap(const RxDeckCtl *c, double t, double duration)
+static double snap(const RXDeckCtl *c, double t, double duration)
 {
-    const RxGrid *g = grid(c);
+    const RXGrid *g = grid(c);
     if (c->quantize && g)
         t = rx_grid_quantize(g, t);
     return RX_CLAMP(t, 0.0, duration);
 }
 
-static void notify(RxDeckCtl *c)
+static void notify(RXDeckCtl *c)
 {
     if (c->changed)
         c->changed(c->opaque, c->deck);
 }
 
-static bool inside_loop(const RxDeckCtl *c, double t)
+static bool inside_loop(const RXDeckCtl *c, double t)
 {
     return c->loop_out > c->loop_in && t >= c->loop_in && t < c->loop_out;
 }
 
 /* Leaves the loop, keeping it for RELOOP. */
-static void leave_loop(RxDeckCtl *c)
+static void leave_loop(RXDeckCtl *c)
 {
     if (!c->looping)
         return;
@@ -109,7 +109,7 @@ static void leave_loop(RxDeckCtl *c)
 
 /* Moves the playhead, keeping the playing state. A target outside the
  * loop leaves it; inside it, the deck keeps looping. */
-static void move_to(RxDeckCtl *c, double t)
+static void move_to(RXDeckCtl *c, double t)
 {
     if (c->looping && !inside_loop(c, t))
         leave_loop(c);
@@ -118,7 +118,7 @@ static void move_to(RxDeckCtl *c, double t)
 }
 
 /* Engages [in, out) on the deck and remembers it as the current loop. */
-static void engage_loop(RxDeckCtl *c, double in, double out)
+static void engage_loop(RXDeckCtl *c, double in, double out)
 {
     c->loop_in = in;
     c->loop_out = out;
@@ -126,21 +126,21 @@ static void engage_loop(RxDeckCtl *c, double in, double out)
     rx_deck_set_loop(c->player, c->deck, in, out, true);
 }
 
-static double loop_beats(const RxDeckCtl *c, double in, double out)
+static double loop_beats(const RXDeckCtl *c, double in, double out)
 {
-    const RxGrid *g = grid(c);
+    const RXGrid *g = grid(c);
     if (!g)
         return 0.0;
     return rx_grid_time_to_beat(g, out) - rx_grid_time_to_beat(g, in);
 }
 
 /* The memory loop with these points, or -1. */
-static int find_memory_loop(const RxDeckCtl *c, double in, double out, bool active_only)
+static int find_memory_loop(const RXDeckCtl *c, double in, double out, bool active_only)
 {
     if (!c->track || in < 0.0)
         return -1;
     for (int i = 0; i < c->track->nb_cues; i++) {
-        const RxCue *cue = &c->track->cues[i];
+        const RXCue *cue = &c->track->cues[i];
         if (rx_cue_is_hot(cue) || !rx_cue_is_loop(cue) || (active_only && !cue->active))
             continue;
         if (fabs(cue->time - in) < 1e-6 && fabs(cue->loop_end - out) < 1e-6)
@@ -151,7 +151,7 @@ static int find_memory_loop(const RxDeckCtl *c, double in, double out, bool acti
 
 /* After a cue list edit: indices move (the list is sorted by time), so
  * the engaged memory loop is looked up again by its points. */
-static void edited(RxDeckCtl *c)
+static void edited(RXDeckCtl *c)
 {
     if (c->active_memory_loop >= 0)
         c->active_memory_loop = find_memory_loop(c, c->loop_in, c->loop_out, false);
@@ -161,12 +161,12 @@ static void edited(RxDeckCtl *c)
 /* New cues follow grid corrections when they were placed by QUANTIZE
  * (musical: a beat index, and a loop length in beats), and stay where
  * they are otherwise. */
-static void attach(const RxDeckCtl *c, RxCue *cue)
+static void attach(const RXDeckCtl *c, RXCue *cue)
 {
     rx_cue_attach_to_grid(cue, c->quantize ? grid(c) : NULL);
 }
 
-static int nb_memory_cues(const RxTrack *t)
+static int nb_memory_cues(const RXTrack *t)
 {
     int n = 0;
     for (int i = 0; i < t->nb_cues; i++)
@@ -176,9 +176,9 @@ static int nb_memory_cues(const RxTrack *t)
 
 /* --------------------------------------------------------------- binding */
 
-void rx_ctl_init(RxDeckCtl *c, RxPlayer *p, int deck, rx_ctl_changed_cb changed, void *opaque)
+void rx_ctl_init(RXDeckCtl *c, RXPlayer *p, int deck, rx_ctl_changed_cb changed, void *opaque)
 {
-    *c = (RxDeckCtl) {
+    *c = (RXDeckCtl) {
         .player              = p,
         .deck                = deck,
         .quantize            = true,
@@ -194,7 +194,7 @@ void rx_ctl_init(RxDeckCtl *c, RxPlayer *p, int deck, rx_ctl_changed_cb changed,
     };
 }
 
-static void reset(RxDeckCtl *c)
+static void reset(RXDeckCtl *c)
 {
     c->cue_point          = -1.0;
     c->cue_held           = false;
@@ -210,7 +210,7 @@ static void reset(RxDeckCtl *c)
 /* Auto cue: the cue point goes to the memory cue nearest the start, or the
  * start (manual p.74, AUTO CUE LEVEL "MEMORY", the factory setting), and
  * the deck waits there. */
-void rx_ctl_load(RxDeckCtl *c, RxTrack *track)
+void rx_ctl_load(RXDeckCtl *c, RXTrack *track)
 {
     reset(c);
     c->track = track;
@@ -224,7 +224,7 @@ void rx_ctl_load(RxDeckCtl *c, RxTrack *track)
     c->_last_position = c->cue_point;
 }
 
-void rx_ctl_unload(RxDeckCtl *c)
+void rx_ctl_unload(RXDeckCtl *c)
 {
     reset(c);
     c->track = NULL;
@@ -236,14 +236,14 @@ void rx_ctl_unload(RxDeckCtl *c)
  * here reset the reference to their target, so landing exactly on an in
  * point and playing on counts as reaching it; a playhead that was put
  * past the in point does not. Not while another loop plays. */
-static void engage_active_loops(RxDeckCtl *c, const RxDeckState *s)
+static void engage_active_loops(RXDeckCtl *c, const RXDeckState *s)
 {
     double last = c->_last_position, pos = s->position;
     if (c->looping || !s->playing || s->scrubbing || pos <= last || pos - last > TICK_MAX_STEP)
         return;
 
     for (int i = 0; i < c->track->nb_cues; i++) {
-        const RxCue *cue = &c->track->cues[i];
+        const RXCue *cue = &c->track->cues[i];
         if (rx_cue_is_hot(cue) || !rx_cue_is_loop(cue) || !cue->active)
             continue;
         if (last <= cue->time && pos >= cue->time && pos < cue->loop_end) {
@@ -254,18 +254,18 @@ static void engage_active_loops(RxDeckCtl *c, const RxDeckState *s)
     }
 }
 
-void rx_ctl_tick(RxDeckCtl *c)
+void rx_ctl_tick(RXDeckCtl *c)
 {
     if (!ready(c))
         return;
-    RxDeckState s = state(c);
+    RXDeckState s = state(c);
     engage_active_loops(c, &s);
     c->_last_position = s.position;
 }
 
 /* ------------------------------------------------------------- transport */
 
-void rx_ctl_play_pause(RxDeckCtl *c)
+void rx_ctl_play_pause(RXDeckCtl *c)
 {
     if (!ready(c))
         return;
@@ -281,11 +281,11 @@ void rx_ctl_play_pause(RxDeckCtl *c)
         rx_deck_play(c->player, c->deck);
 }
 
-void rx_ctl_cue_press(RxDeckCtl *c)
+void rx_ctl_cue_press(RXDeckCtl *c)
 {
     if (!ready(c))
         return;
-    RxDeckState s = state(c);
+    RXDeckState s = state(c);
 
     /* Playing: back to the cue point and pause (manual p.51, "Jumping to
      * a cue point"). */
@@ -313,7 +313,7 @@ void rx_ctl_cue_press(RxDeckCtl *c)
         move_to(c, c->cue_point);
 }
 
-void rx_ctl_cue_release(RxDeckCtl *c)
+void rx_ctl_cue_release(RXDeckCtl *c)
 {
     if (!c || !c->cue_held)
         return;
@@ -331,11 +331,11 @@ void rx_ctl_cue_release(RxDeckCtl *c)
 
 /* LOOP IN/CUE during playback sets the cue point (manual p.51); this is
  * the same without the loop, for a "set cue" key. */
-void rx_ctl_set_cue_here(RxDeckCtl *c)
+void rx_ctl_set_cue_here(RXDeckCtl *c)
 {
     if (!ready(c))
         return;
-    RxDeckState s = state(c);
+    RXDeckState s = state(c);
     c->cue_point = snap(c, s.position, s.duration);
     if (!s.playing && c->cue_point != s.position)
         move_to(c, c->cue_point);
@@ -343,7 +343,7 @@ void rx_ctl_set_cue_here(RxDeckCtl *c)
 
 /* -------------------------------------------------------------- hot cues */
 
-static void call_hot_cue(RxDeckCtl *c, const RxCue *cue)
+static void call_hot_cue(RXDeckCtl *c, const RXCue *cue)
 {
     /* A pad pressed during a CUE preview takes over: playback continues
      * after CUE is released (ours). */
@@ -373,7 +373,7 @@ static void call_hot_cue(RxDeckCtl *c, const RxCue *cue)
     c->_last_position = t;
 }
 
-void rx_ctl_hot_cue_press(RxDeckCtl *c, int slot)
+void rx_ctl_hot_cue_press(RXDeckCtl *c, int slot)
 {
     if (!ready(c) || slot < 0 || slot >= RX_HOT_CUE_SLOTS)
         return;
@@ -388,8 +388,8 @@ void rx_ctl_hot_cue_press(RxDeckCtl *c, int slot)
     /* An empty pad stores the playhead, or the playing loop as a hot loop
      * (manual p.58, "If you do this during loop playback, a loop is set
      * instead"). Setting leaves the transport alone. */
-    RxDeckState s = state(c);
-    RxCue cue;
+    RXDeckState s = state(c);
+    RXCue cue;
     if (c->looping && c->loop_out > c->loop_in) {
         rx_cue_init(&cue, c->loop_in);
         cue.loop_end = c->loop_out;
@@ -407,7 +407,7 @@ void rx_ctl_hot_cue_press(RxDeckCtl *c, int slot)
     edited(c);
 }
 
-void rx_ctl_hot_cue_release(RxDeckCtl *c, int slot)
+void rx_ctl_hot_cue_release(RXDeckCtl *c, int slot)
 {
     /* Pads are not gates in Export mode (rbxport useHotCues.ts: rekordbox's
      * "Gate Cue" preference is off by default), so a release only ends
@@ -416,7 +416,7 @@ void rx_ctl_hot_cue_release(RxDeckCtl *c, int slot)
         c->_hot_held = -1;
 }
 
-void rx_ctl_hot_cue_delete(RxDeckCtl *c, int slot)
+void rx_ctl_hot_cue_delete(RXDeckCtl *c, int slot)
 {
     if (!c || !c->track || slot < 0 || slot >= RX_HOT_CUE_SLOTS)
         return;
@@ -428,7 +428,7 @@ void rx_ctl_hot_cue_delete(RxDeckCtl *c, int slot)
     edited(c);
 }
 
-void rx_ctl_hot_cue_set(RxDeckCtl *c, int slot, const char *name, const char *color)
+void rx_ctl_hot_cue_set(RXDeckCtl *c, int slot, const char *name, const char *color)
 {
     if (!c || !c->track || slot < 0 || slot >= RX_HOT_CUE_SLOTS)
         return;
@@ -438,7 +438,7 @@ void rx_ctl_hot_cue_set(RxDeckCtl *c, int slot, const char *name, const char *co
 
     /* Adding into an occupied slot replaces it (model.h), which keeps the
      * edit inside the cue list functions. */
-    RxCue cue = c->track->cues[idx];
+    RXCue cue = c->track->cues[idx];
     if (name)
         snprintf(cue.name, sizeof(cue.name), "%s", name);
     if (color)
@@ -454,12 +454,12 @@ void rx_ctl_hot_cue_set(RxDeckCtl *c, int slot, const char *name, const char *co
  * (manual p.52 and p.57; rbxport useMemoryCues.ts: rekordbox reads the
  * deck's cue time). Nothing is stored when the same point is already
  * there or the list is full. */
-void rx_ctl_memory_set(RxDeckCtl *c)
+void rx_ctl_memory_set(RXDeckCtl *c)
 {
     if (!ready(c))
         return;
 
-    RxCue cue;
+    RXCue cue;
     if (c->looping && c->loop_out > c->loop_in) {
         rx_cue_init(&cue, c->loop_in);
         cue.loop_end = c->loop_out;
@@ -472,7 +472,7 @@ void rx_ctl_memory_set(RxDeckCtl *c)
 
     int at = rx_track_memory_cue_at(c->track, cue.time, MEMORY_TOLERANCE);
     if (at >= 0) {
-        const RxCue *old = &c->track->cues[at];
+        const RXCue *old = &c->track->cues[at];
         bool loop = rx_cue_is_loop(&cue);
         bool same = rx_cue_is_loop(old) == loop &&
                     (!loop || fabs(old->loop_end - cue.loop_end) < MEMORY_TOLERANCE);
@@ -496,9 +496,9 @@ void rx_ctl_memory_set(RxDeckCtl *c)
 /* Calling a memory cue moves there and makes it the cue point, keeping
  * the playing state (manual p.52; rbxport useMemoryCues.ts). A memory
  * loop is called as the loop (manual p.57). */
-static void call_memory_cue(RxDeckCtl *c, int idx)
+static void call_memory_cue(RXDeckCtl *c, int idx)
 {
-    const RxCue *cue = &c->track->cues[idx];
+    const RXCue *cue = &c->track->cues[idx];
     double t = cue->time;
     c->cue_point = t;
 
@@ -512,7 +512,7 @@ static void call_memory_cue(RxDeckCtl *c, int idx)
     move_to(c, t);
 }
 
-void rx_ctl_memory_prev(RxDeckCtl *c)
+void rx_ctl_memory_prev(RXDeckCtl *c)
 {
     if (!ready(c))
         return;
@@ -521,7 +521,7 @@ void rx_ctl_memory_prev(RxDeckCtl *c)
         call_memory_cue(c, idx);
 }
 
-void rx_ctl_memory_next(RxDeckCtl *c)
+void rx_ctl_memory_next(RXDeckCtl *c)
 {
     if (!ready(c))
         return;
@@ -532,7 +532,7 @@ void rx_ctl_memory_next(RxDeckCtl *c)
 
 /* DELETE removes the memory cue the playhead stands on, and nothing away
  * from one (manual p.53; rbxport cues.ts memoryCueAt). */
-void rx_ctl_memory_delete(RxDeckCtl *c)
+void rx_ctl_memory_delete(RXDeckCtl *c)
 {
     if (!ready(c))
         return;
@@ -546,18 +546,18 @@ void rx_ctl_memory_delete(RxDeckCtl *c)
     edited(c);
 }
 
-void rx_ctl_memory_call(RxDeckCtl *c, int cue_index)
+void rx_ctl_memory_call(RXDeckCtl *c, int cue_index)
 {
     if (!ready(c) || cue_index < 0 || cue_index >= c->track->nb_cues)
         return;
     call_memory_cue(c, cue_index);
 }
 
-void rx_ctl_memory_set_active(RxDeckCtl *c, int cue_index, bool active)
+void rx_ctl_memory_set_active(RXDeckCtl *c, int cue_index, bool active)
 {
     if (!c || !c->track || cue_index < 0 || cue_index >= c->track->nb_cues)
         return;
-    RxCue cue = c->track->cues[cue_index];
+    RXCue cue = c->track->cues[cue_index];
     if (rx_cue_is_hot(&cue) || !rx_cue_is_loop(&cue) || cue.active == active)
         return;
 
@@ -578,11 +578,11 @@ void rx_ctl_memory_set_active(RxDeckCtl *c, int cue_index, bool active)
 /* LOOP IN: a new in point at the playhead, on the beat with QUANTIZE; it
  * is also the cue point (the button is LOOP IN/CUE, manual p.51). A loop
  * that was playing is left: the next OUT closes the new one. */
-void rx_ctl_loop_in(RxDeckCtl *c)
+void rx_ctl_loop_in(RXDeckCtl *c)
 {
     if (!ready(c))
         return;
-    RxDeckState s = state(c);
+    RXDeckState s = state(c);
     double t = snap(c, s.position, s.duration);
 
     if (c->looping || c->loop_out >= 0.0)
@@ -602,11 +602,11 @@ void rx_ctl_loop_in(RxDeckCtl *c)
  * half. During a loop, OUT moves the out point to the playhead (a
  * simplified OUT ADJUST, manual p.55). An out point quantised onto the
  * in point becomes the next beat. */
-void rx_ctl_loop_out(RxDeckCtl *c)
+void rx_ctl_loop_out(RXDeckCtl *c)
 {
     if (!ready(c))
         return;
-    RxDeckState s = state(c);
+    RXDeckState s = state(c);
 
     double in;
     if (c->looping || (c->loop_in >= 0.0 && c->loop_out < 0.0))
@@ -618,7 +618,7 @@ void rx_ctl_loop_out(RxDeckCtl *c)
 
     double out = snap(c, s.position, s.duration);
     if (out - in < LOOP_MIN) {
-        const RxGrid *g = grid(c);
+        const RXGrid *g = grid(c);
         if (!c->quantize || !g)
             return;
         out = RX_MIN(rx_grid_beat_after(g, in), s.duration);
@@ -630,7 +630,7 @@ void rx_ctl_loop_out(RxDeckCtl *c)
     engage_loop(c, in, out);
 }
 
-void rx_ctl_loop_exit(RxDeckCtl *c)
+void rx_ctl_loop_exit(RXDeckCtl *c)
 {
     if (ready(c))
         leave_loop(c);
@@ -639,7 +639,7 @@ void rx_ctl_loop_exit(RxDeckCtl *c)
 /* RELOOP/EXIT: leaves a playing loop; otherwise goes back to the last
  * loop's in point and loops again (manual p.56), keeping the playing
  * state. */
-void rx_ctl_exit_reloop(RxDeckCtl *c)
+void rx_ctl_exit_reloop(RXDeckCtl *c)
 {
     if (!ready(c))
         return;
@@ -660,18 +660,18 @@ void rx_ctl_exit_reloop(RxDeckCtl *c)
  * and another size resizes it from its in point (rekordbox's beat loop
  * buttons; ours where the manual is silent). Needs a grid: without one
  * there is no beat to measure. */
-void rx_ctl_auto_loop(RxDeckCtl *c, double beats)
+void rx_ctl_auto_loop(RXDeckCtl *c, double beats)
 {
     if (!ready(c) || !(beats > 0.0))
         return;
-    const RxGrid *g = grid(c);
+    const RXGrid *g = grid(c);
     if (!g) {
         rx_debug("player: beat loop needs a beat grid");
         return;
     }
     beats = RX_CLAMP(beats, LOOP_BEATS_MIN, LOOP_BEATS_MAX);
 
-    RxDeckState s = state(c);
+    RXDeckState s = state(c);
     double in;
     if (c->looping) {
         if (fabs(loop_beats(c, c->loop_in, c->loop_out) - beats) < 1e-6) {
@@ -693,12 +693,12 @@ void rx_ctl_auto_loop(RxDeckCtl *c, double beats)
 
 /* /2 and x2 keep the in point (manual p.56). On the grid when there is
  * one, so a loop over a tempo change still halves into whole beats. */
-static void resize_loop(RxDeckCtl *c, double factor)
+static void resize_loop(RXDeckCtl *c, double factor)
 {
     if (!ready(c) || c->loop_in < 0.0 || c->loop_out <= c->loop_in)
         return;
-    RxDeckState s = state(c);
-    const RxGrid *g = grid(c);
+    RXDeckState s = state(c);
+    const RXGrid *g = grid(c);
     double out;
     if (g) {
         double beats = loop_beats(c, c->loop_in, c->loop_out) * factor;
@@ -718,12 +718,12 @@ static void resize_loop(RxDeckCtl *c, double factor)
     rx_deck_set_loop(c->player, c->deck, c->loop_in, out, c->looping);
 }
 
-void rx_ctl_loop_half(RxDeckCtl *c)
+void rx_ctl_loop_half(RXDeckCtl *c)
 {
     resize_loop(c, 0.5);
 }
 
-void rx_ctl_loop_double(RxDeckCtl *c)
+void rx_ctl_loop_double(RXDeckCtl *c)
 {
     resize_loop(c, 2.0);
 }
@@ -738,7 +738,7 @@ void rx_ctl_loop_double(RxDeckCtl *c)
  * player.ts jumpSeconds). During a loop the loop moves N beats with the
  * playhead (manual p.62, Loop Move). 0 is the 10 ms fine jump, forward,
  * or back for -0.0. */
-void rx_ctl_beat_jump(RxDeckCtl *c, double beats)
+void rx_ctl_beat_jump(RXDeckCtl *c, double beats)
 {
     if (!ready(c) || !isfinite(beats))
         return;
@@ -747,10 +747,10 @@ void rx_ctl_beat_jump(RxDeckCtl *c, double beats)
         return;
     }
 
-    const RxGrid *g = grid(c);
+    const RXGrid *g = grid(c);
     if (!g)
         return;
-    RxDeckState s = state(c);
+    RXDeckState s = state(c);
     bool on_grid = c->quantize;
     double step = beats * 60.0 / rx_grid_bpm_at(g, s.position);
     double target = s.position + step;
@@ -777,32 +777,32 @@ void rx_ctl_beat_jump(RxDeckCtl *c, double beats)
     move_to(c, RX_CLAMP(target, 0.0, s.duration));
 }
 
-void rx_ctl_nudge(RxDeckCtl *c, double seconds)
+void rx_ctl_nudge(RXDeckCtl *c, double seconds)
 {
     if (!ready(c) || !isfinite(seconds))
         return;
-    RxDeckState s = state(c);
+    RXDeckState s = state(c);
     move_to(c, RX_CLAMP(s.position + seconds, 0.0, s.duration));
 }
 
-void rx_ctl_set_quantize(RxDeckCtl *c, bool on)
+void rx_ctl_set_quantize(RXDeckCtl *c, bool on)
 {
     if (c)
         c->quantize = on;
 }
 
-void rx_ctl_seek(RxDeckCtl *c, double seconds)
+void rx_ctl_seek(RXDeckCtl *c, double seconds)
 {
     if (!ready(c) || !isfinite(seconds))
         return;
-    RxDeckState s = state(c);
+    RXDeckState s = state(c);
     move_to(c, RX_CLAMP(seconds, 0.0, s.duration));
 }
 
 /* After a grid edit on the track: musical cues move with the grid, the
  * deck gets the new grid, and the owner saves. The cue point and the
  * current loop are positions, not cues, and stay where they are. */
-void rx_ctl_grid_changed(RxDeckCtl *c)
+void rx_ctl_grid_changed(RXDeckCtl *c)
 {
     if (!c || !c->track)
         return;

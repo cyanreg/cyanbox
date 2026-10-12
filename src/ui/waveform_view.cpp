@@ -50,7 +50,7 @@ double ui_zoom_step(double bars, int dir)
     return UI_ZOOM_STEPS[ImClamp(at + dir, 0, UI_NB_ZOOM - 1)];
 }
 
-static uint64_t grid_sig(const RxTrack *t)
+static uint64_t grid_sig(const RXTrack *t)
 {
     uint64_t h = 1469598103934665603ull;
     auto mix = [&h](const void *p, size_t n) {
@@ -73,10 +73,10 @@ static uint64_t grid_sig(const RxTrack *t)
 }
 
 // Every beat of the loaded track's grid, rebuilt when the grid changes.
-const RxBeat *ui_deck_beats(UiState *ui, int deck, int *nb)
+const RXBeat *ui_deck_beats(UiState *ui, int deck, int *nb)
 {
     UiDeck *ud = &ui->decks[deck];
-    RxTrack *t = ui->app->decks[deck].track;
+    RXTrack *t = ui->app->decks[deck].track;
     *nb = 0;
     if (!t || !rx_track_analysed(t) || !(t->duration > 0))
         return nullptr;
@@ -95,7 +95,7 @@ const RxBeat *ui_deck_beats(UiState *ui, int deck, int *nb)
     return ud->beats;
 }
 
-static int first_beat_at(const RxBeat *beats, int nb, double t)
+static int first_beat_at(const RXBeat *beats, int nb, double t)
 {
     int lo = 0, hi = nb;
     while (lo < hi) {
@@ -108,13 +108,13 @@ static int first_beat_at(const RxBeat *beats, int nb, double t)
     return lo;
 }
 
-static int beats_per_bar(const RxTrack *t)
+static int beats_per_bar(const RXTrack *t)
 {
     return t && t->grid.beats_per_bar > 0 ? t->grid.beats_per_bar : 4;
 }
 
 // Half the detail window in seconds: zoom/2 bars each side of the playhead.
-static double detail_half_seconds(const RxTrack *t, double pos, double bars)
+static double detail_half_seconds(const RXTrack *t, double pos, double bars)
 {
     double half_beats = bars * beats_per_bar(t) * 0.5;
     if (t && rx_track_analysed(t)) {
@@ -135,7 +135,7 @@ static double detail_half_seconds(const RxTrack *t, double pos, double bars)
 // A hot cue badge: a square in the cue's colour, the letter in it, its left
 // edge on the cue (pulled inside the strip at the far end).
 static void hot_badge(UiState *ui, ImDrawList *dl, float x, float y, float size, float x_max,
-                      const RxCue *c)
+                      const RXCue *c)
 {
     uint32_t rgb = ui_hot_cue_rgb(c);
     float bx = ImMin(x, x_max - size);
@@ -169,9 +169,9 @@ static void loop_band(ImDrawList *dl, float x0, float x1, float y0, float y1, fl
 // scrubs, the engine playing grains at the drag position.
 static void scrub(UiState *ui, int deck, int area, double click_time, double drag_time, bool loaded)
 {
-    RxApp *app = ui->app;
+    RXApp *app = ui->app;
     UiDeck *ud = &ui->decks[deck];
-    RxDeckCtl *c = &app->decks[deck].ctl;
+    RXDeckCtl *c = &app->decks[deck].ctl;
     ImGuiIO &io = ImGui::GetIO();
     if (!loaded || !app->player)
         return;
@@ -204,11 +204,11 @@ static void scrub(UiState *ui, int deck, int area, double click_time, double dra
 
 void ui_overview(UiState *ui, int deck, ImVec2 a, ImVec2 b)
 {
-    RxApp *app = ui->app;
-    RxDeckView *dv = &app->decks[deck];
-    RxTrack *t = dv->track;
+    RXApp *app = ui->app;
+    RXDeckView *dv = &app->decks[deck];
+    RXTrack *t = dv->track;
     ImDrawList *dl = ImGui::GetWindowDrawList();
-    RxDeckState st;
+    RXDeckState st;
     double pos = ui_deck_position(ui, deck, &st);
     bool loaded = st.loaded && t && !dv->loading_request;
     double dur = st.duration > 0 ? st.duration : t ? t->duration : 0;
@@ -228,14 +228,14 @@ void ui_overview(UiState *ui, int deck, ImVec2 a, ImVec2 b)
     // Loop bands under the waveform's markers: memory loops, then the
     // deck's current loop, brighter while it plays.
     for (int i = 0; i < t->nb_cues; i++) {
-        const RxCue *c = &t->cues[i];
+        const RXCue *c = &t->cues[i];
         if (rx_cue_is_loop(c))
             loop_band(dl, xof(c->time), xof(c->loop_end), a.y, b.y, 0.22f);
     }
 
     if (dv->wave_preview) {
         double cols = rx_wave_columns(dv->wave_preview);
-        RxWaveDraw d = {};
+        RXWaveDraw d = {};
         d.x0 = a.x;
         d.y0 = a.y;
         d.x1 = b.x;
@@ -269,7 +269,7 @@ void ui_overview(UiState *ui, int deck, ImVec2 a, ImVec2 b)
 
     // Memory cues: a red head and a 1 px line; hot cues: their badge on top.
     for (int i = 0; i < t->nb_cues; i++) {
-        const RxCue *c = &t->cues[i];
+        const RXCue *c = &t->cues[i];
         if (rx_cue_is_hot(c))
             continue;
         float x = floorf(xof(c->time)) + 0.5f;
@@ -278,7 +278,7 @@ void ui_overview(UiState *ui, int deck, ImVec2 a, ImVec2 b)
         memory_head(dl, x, a.y, PX(4), PX(6), col);
     }
     for (int i = 0; i < t->nb_cues; i++) {
-        const RxCue *c = &t->cues[i];
+        const RXCue *c = &t->cues[i];
         if (!rx_cue_is_hot(c))
             continue;
         float x = floorf(xof(c->time));
@@ -311,10 +311,10 @@ void ui_overview(UiState *ui, int deck, ImVec2 a, ImVec2 b)
 
 static void detail_menu(UiState *ui, int deck)
 {
-    RxApp *app = ui->app;
-    RxDeckView *dv = &app->decks[deck];
+    RXApp *app = ui->app;
+    RXDeckView *dv = &app->decks[deck];
     UiDeck *ud = &ui->decks[deck];
-    RxTrack *t = dv->ctl.track;
+    RXTrack *t = dv->ctl.track;
     if (!ImGui::BeginPopup("##cuemenu"))
         return;
     if (!t) {
@@ -325,7 +325,7 @@ static void detail_menu(UiState *ui, int deck)
     ImGui::TextDisabled("At %s", ui_fmt_time(ud->ctx_time, buf, sizeof(buf), true));
     ImGui::Separator();
     if (ImGui::MenuItem("Set memory cue here")) {
-        RxCue c;
+        RXCue c;
         rx_cue_init(&c, ud->ctx_time);
         rx_cue_attach_to_grid(&c, rx_track_analysed(t) ? &t->grid : nullptr);
         if (rx_track_add_cue(t, &c) >= 0)
@@ -340,7 +340,7 @@ static void detail_menu(UiState *ui, int deck)
                          ui_fmt_time(t->cues[idx].time, buf, sizeof(buf), true));
             snprintf(label, sizeof(label), "%c", 'A' + slot);
             if (ImGui::MenuItem(label, at)) {
-                RxCue c;
+                RXCue c;
                 rx_cue_init(&c, ud->ctx_time);
                 c.hot = slot;
                 rx_cue_attach_to_grid(&c, rx_track_analysed(t) ? &t->grid : nullptr);
@@ -352,7 +352,7 @@ static void detail_menu(UiState *ui, int deck)
     }
     int ci = ud->ctx_cue;
     if (ci >= 0 && ci < t->nb_cues) {
-        RxCue *c = &t->cues[ci];
+        RXCue *c = &t->cues[ci];
         ImGui::Separator();
         if (rx_cue_is_hot(c))
             ImGui::TextDisabled("Hot cue %c", rx_cue_letter(c));
@@ -398,13 +398,13 @@ static void detail_menu(UiState *ui, int deck)
 
 void ui_detail(UiState *ui, int deck, ImVec2 a, ImVec2 b)
 {
-    RxApp *app = ui->app;
-    RxDeckView *dv = &app->decks[deck];
+    RXApp *app = ui->app;
+    RXDeckView *dv = &app->decks[deck];
     UiDeck *ud = &ui->decks[deck];
-    RxTrack *t = dv->track;
+    RXTrack *t = dv->track;
     ImDrawList *dl = ImGui::GetWindowDrawList();
     ImGuiIO &io = ImGui::GetIO();
-    RxDeckState st;
+    RXDeckState st;
     double pos = ui_deck_position(ui, deck, &st);
     bool loaded = st.loaded && t && !dv->loading_request;
     float w = b.x - a.x, h = b.y - a.y;
@@ -455,11 +455,11 @@ void ui_detail(UiState *ui, int deck, ImVec2 a, ImVec2 b)
     if (loaded) {
         int bpb = beats_per_bar(t);
         int nb = 0;
-        const RxBeat *beats = ui_deck_beats(ui, deck, &nb);
+        const RXBeat *beats = ui_deck_beats(ui, deck, &nb);
 
         // Loop bands behind the markers.
         for (int i = 0; i < t->nb_cues; i++) {
-            const RxCue *c = &t->cues[i];
+            const RXCue *c = &t->cues[i];
             if (rx_cue_is_loop(c) && c->loop_end > w0 && c->time < w1)
                 loop_band(dl, xof(c->time), xof(c->loop_end), top, b.y, 0.18f);
         }
@@ -467,7 +467,7 @@ void ui_detail(UiState *ui, int deck, ImVec2 a, ImVec2 b)
             loop_band(dl, xof(st.loop_in), xof(st.loop_out), top, b.y, st.loop_enabled ? 0.30f : 0.15f);
 
         if (dv->wave_detail) {
-            RxWaveDraw d = {};
+            RXWaveDraw d = {};
             d.x0 = a.x;
             d.y0 = a.y;
             d.x1 = b.x;
@@ -528,7 +528,7 @@ void ui_detail(UiState *ui, int deck, ImVec2 a, ImVec2 b)
 
         // Cue markers, taller than on the overview.
         for (int i = 0; i < t->nb_cues; i++) {
-            const RxCue *c = &t->cues[i];
+            const RXCue *c = &t->cues[i];
             if (rx_cue_is_hot(c) || c->time < w0 - 1 || c->time > w1 + 1)
                 continue;
             float x = floorf(xof(c->time)) + 0.5f;
@@ -537,7 +537,7 @@ void ui_detail(UiState *ui, int deck, ImVec2 a, ImVec2 b)
             memory_head(dl, x, a.y + PX(2), PX(6), PX(10), col);
         }
         for (int i = 0; i < t->nb_cues; i++) {
-            const RxCue *c = &t->cues[i];
+            const RXCue *c = &t->cues[i];
             if (!rx_cue_is_hot(c) || c->time < w0 - 1 || c->time > w1 + 1)
                 continue;
             float x = floorf(xof(c->time));
@@ -603,16 +603,16 @@ void ui_detail(UiState *ui, int deck, ImVec2 a, ImVec2 b)
 // waveform, rekordbox's row preview (the shader holds rbxport's measured
 // 128/256/128 scales), with hot cue badges and memory cue heads over it.
 // The upload and its cache are app.c's (rx_app_preview_wave).
-void ui_row_preview(UiState *ui, const RxTrack *t, ImVec2 a, ImVec2 b, bool analysing)
+void ui_row_preview(UiState *ui, const RXTrack *t, ImVec2 a, ImVec2 b, bool analysing)
 {
-    RxApp *app = ui->app;
+    RXApp *app = ui->app;
     ImDrawList *dl = ImGui::GetWindowDrawList();
-    RxWaveGpu *g = t->has_waveforms ? rx_app_preview_wave(app, t) : nullptr;
+    RXWaveGpu *g = t->has_waveforms ? rx_app_preview_wave(app, t) : nullptr;
     if (!g && t->has_waveforms)
         ui->previews_pending = true;
     float w = b.x - a.x;
     if (g) {
-        RxWaveDraw d = {};
+        RXWaveDraw d = {};
         d.x0 = a.x;
         d.y0 = a.y;
         d.x1 = b.x;
@@ -631,13 +631,13 @@ void ui_row_preview(UiState *ui, const RxTrack *t, ImVec2 a, ImVec2 b, bool anal
     if (t->duration > 0 && !t->missing) {
         float bsz = PX(7);
         for (int i = 0; i < t->nb_cues; i++) {
-            const RxCue *c = &t->cues[i];
+            const RXCue *c = &t->cues[i];
             float x = a.x + (float)(c->time / t->duration) * w;
             if (!rx_cue_is_hot(c))
                 memory_head(dl, floorf(x) + 0.5f, a.y, PX(3), PX(4), ui_rgb(ui_memory_cue_rgb(c)));
         }
         for (int i = 0; i < t->nb_cues; i++) {
-            const RxCue *c = &t->cues[i];
+            const RXCue *c = &t->cues[i];
             if (!rx_cue_is_hot(c))
                 continue;
             float x = floorf(ImMin(a.x + (float)(c->time / t->duration) * w, b.x - bsz));

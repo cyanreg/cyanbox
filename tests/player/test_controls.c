@@ -1,6 +1,6 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
-/* The deck's buttons (RxDeckCtl) on the null backend in manual mode: CUE
+/* The deck's buttons (RXDeckCtl) on the null backend in manual mode: CUE
  * (set, back cue, preview, preview held into PLAY), hot cues (set, call,
  * hot loop, rename, delete), the MEMORY cluster with its 20 ms tolerance,
  * loops (IN, OUT, EXIT, RELOOP, auto loops, /2, x2), beat jump with and
@@ -41,9 +41,9 @@ static double B(double k)
     return k * 60.0 / BPM;
 }
 
-static RxPlayer *p;
-static RxDeckCtl c;
-static RxTrack *track;
+static RXPlayer *p;
+static RXDeckCtl c;
+static RXTrack *track;
 static int changes;
 
 static void on_changed(void *opaque, int deck)
@@ -51,9 +51,9 @@ static void on_changed(void *opaque, int deck)
     changes++;
 }
 
-static RxAudio *make_track(void)
+static RXAudio *make_track(void)
 {
-    RxAudio *a = calloc(1, sizeof(*a));
+    RXAudio *a = calloc(1, sizeof(*a));
     if (!a)
         abort();
     a->rate = RATE;
@@ -71,7 +71,7 @@ static RxAudio *make_track(void)
     return a;
 }
 
-static void on_release(void *opaque, RxAudio *audio)
+static void on_release(void *opaque, RXAudio *audio)
 {
     free(audio->samples);
     free(audio);
@@ -80,7 +80,7 @@ static void on_release(void *opaque, RxAudio *audio)
 /* A second section at 30 s (beat 64) at 120 BPM when asked. */
 static void setup(bool tempo_change)
 {
-    RxPlayerOptions opt;
+    RXPlayerOptions opt;
     rx_player_options_default(&opt);
     opt.backend = RX_AUDIO_NULL;
     opt.rate = RATE;
@@ -112,9 +112,9 @@ static void teardown(void)
     rx_track_free(track);
 }
 
-static RxDeckState st(void)
+static RXDeckState st(void)
 {
-    RxDeckState s;
+    RXDeckState s;
     rx_deck_state(p, 0, &s);
     return s;
 }
@@ -236,7 +236,7 @@ static void test_hot_cues(void)
     int a = rx_track_hot_cue(track, 0);
     CHECK(a >= 0, "pad A set");
     if (a >= 0) {
-        const RxCue *cue = &track->cues[a];
+        const RXCue *cue = &track->cues[a];
         CHECK(cue->time == B(4) && !rx_cue_is_loop(cue), "at %f", cue->time);
         CHECK(rx_cue_is_musical(cue) && cue->grid_beat == 4.0, "musical, beat %f", cue->grid_beat);
     }
@@ -289,7 +289,7 @@ static void test_hot_cues(void)
     rx_ctl_seek(&c, 40.0);
     run(0.1);
     rx_ctl_hot_cue_press(&c, 2);
-    RxDeckState s = st();
+    RXDeckState s = st();
     CHECK(c.looping && s.playing && s.position == B(20), "hot loop called");
     CHECK(s.loop_enabled && s.loop_in == B(20) && s.loop_out == B(24), "deck loop %f %f",
           s.loop_in, s.loop_out);
@@ -395,7 +395,7 @@ static void test_loops(void)
      * playhead folds back into the loop at the same phase. */
     run(1.9);
     rx_ctl_loop_out(&c);
-    RxDeckState s = st();
+    RXDeckState s = st();
     CHECK(c.looping && c.loop_out == B(12), "OUT at %f", c.loop_out);
     CHECK(s.loop_enabled && s.loop_in == B(8) && s.loop_out == B(12), "deck loop");
     run(0.0);
@@ -444,7 +444,7 @@ static void test_auto_loop(void)
     rx_ctl_seek(&c, 10.0);
     rx_ctl_play_pause(&c);
     rx_ctl_auto_loop(&c, 4);
-    RxDeckState s = st();
+    RXDeckState s = st();
     CHECK(c.looping && c.loop_in == B(21) && c.loop_out == B(25), "4 beats: %f %f",
           c.loop_in, c.loop_out);
     CHECK(s.loop_enabled && s.loop_out == B(25) && c.last_hot_loop_beats == 4.0, "on the deck");
@@ -484,8 +484,8 @@ static void test_auto_loop(void)
     rx_ctl_loop_exit(&c);
 
     /* No grid, no beat loop. */
-    RxGrid saved = track->grid;
-    track->grid = (RxGrid) { 0 };
+    RXGrid saved = track->grid;
+    track->grid = (RXGrid) { 0 };
     rx_ctl_auto_loop(&c, 4);
     CHECK(!c.looping, "no grid");
     track->grid = saved;
@@ -556,7 +556,7 @@ static void test_beat_jump(void)
     rx_ctl_auto_loop(&c, 4);
     run(0.3);
     rx_ctl_beat_jump(&c, 4);
-    RxDeckState s = st();
+    RXDeckState s = st();
     CHECK(c.looping && c.loop_in == B(12) && c.loop_out == B(16), "loop moved: %f %f",
           c.loop_in, c.loop_out);
     CHECK(s.loop_in == B(12) && s.position == B(13), "deck: %f", s.position);
@@ -600,7 +600,7 @@ static void test_active_loop(void)
     run(0.9);
     CHECK(!c.looping, "not yet");
     run(0.2);
-    RxDeckState s = st();
+    RXDeckState s = st();
     CHECK(c.looping && c.active_memory_loop == m, "engaged");
     CHECK(s.loop_enabled && s.loop_in == B(32) && s.loop_out == B(36), "on the deck");
     CHECK(stays_inside(5.0, B(32), B(36)), "loops");
@@ -664,7 +664,7 @@ static void test_edges(void)
     setup(true);
 
     /* Ten memory cues; the eleventh is refused and nothing changes. */
-    enum RxLogLevel level = rx_log_level();
+    enum RXLogLevel level = rx_log_level();
     rx_log_set_level(RX_LOG_WARN);
     rx_ctl_set_quantize(&c, false);
     for (int k = 0; k < 11; k++) {
@@ -749,14 +749,14 @@ static void test_edges(void)
 static void test_degenerate_hot_loop(void)
 {
     setup(false);
-    RxCue cue;
+    RXCue cue;
     rx_cue_init(&cue, B(8));
     cue.hot = 0;
     cue.loop_end = 0.0;
     CHECK(rx_track_add_cue(track, &cue) >= 0, "added");
 
     rx_ctl_hot_cue_press(&c, 0);
-    RxDeckState s = st();
+    RXDeckState s = st();
     CHECK(s.playing && s.position == B(8), "called: %f", s.position);
     CHECK(!c.looping && !s.loop_enabled, "not looping: controls %d, deck %d", c.looping,
           s.loop_enabled);

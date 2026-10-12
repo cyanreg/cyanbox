@@ -125,7 +125,7 @@ static void check_anlz(Report *r, const char *stick, const char *path, const cha
         problem(r, "missing %s (for %s)", path, audio);
         return;
     }
-    RxAnlzTag *tags;
+    RXAnlzTag *tags;
     int nt;
     if (rx_anlz_parse(b, n, &tags, &nt) < 0) {
         problem(r, "%s does not parse", path);
@@ -137,9 +137,9 @@ static void check_anlz(Report *r, const char *stick, const char *path, const cha
         problem(r, "%s: PPTH is \"%s\", not %s", path, pp ? pp : "(none)", audio);
     free(pp);
     for (int i = 0; i < nt; i++) {
-        const RxAnlzTag *t = &tags[i];
+        const RXAnlzTag *t = &tags[i];
         if (!memcmp(t->fourcc, "PCOB", 4) || !memcmp(t->fourcc, "PCO2", 4)) {
-            RxAnlzCueEntry *e;
+            RXAnlzCueEntry *e;
             int ne, declared;
             if (rx_anlz_tag_cues(t, &e, &ne, &declared) < 0) {
                 problem(r, "%s: unreadable %s", path, t->fourcc);
@@ -178,10 +178,10 @@ static int cmp_u32(const void *a, const void *b)
     return x < y ? -1 : x > y;
 }
 
-static void check_tracks(Report *r, const char *stick, const RxPdbRawTrack *t, int nb, bool verbose)
+static void check_tracks(Report *r, const char *stick, const RXPdbRawTrack *t, int nb, bool verbose)
 {
     for (int i = 0; i < nb; i++) {
-        const RxPdbRawTrack *x = &t[i];
+        const RXPdbRawTrack *x = &t[i];
         const char *path = x->strings[RX_PDB_STR_FILE_PATH];
         const char *anlz = x->strings[RX_PDB_STR_ANALYZE_PATH];
         if (x->subtype != 0x24 || x->unk56 != 0x29 || x->magic != 3 ||
@@ -235,7 +235,7 @@ static void check_tracks(Report *r, const char *stick, const RxPdbRawTrack *t, i
 }
 
 static void check_pdb_refs(Report *r, const char *stick, const uint8_t *b, size_t size,
-                           const RxPdbRawTrack *t, int nb)
+                           const RXPdbRawTrack *t, int nb)
 {
     uint32_t *art_ids;
     char **art_paths;
@@ -271,7 +271,7 @@ static void check_pdb_refs(Report *r, const char *stick, const uint8_t *b, size_
         free(art_ids);
     }
 
-    RxPdb pdb;
+    RXPdb pdb;
     if (rx_pdb_read(b, size, &pdb) >= 0) {
         int nl = 0;
         for (int i = 0; i < pdb.nb_playlists; i++) {
@@ -313,7 +313,7 @@ static char *query_text(sqlite3 *db, const char *sql)
     return v;
 }
 
-static void check_onelibrary(Report *r, const char *stick, const RxPdbRawTrack *t, int nb, bool have_pdb)
+static void check_onelibrary(Report *r, const char *stick, const RXPdbRawTrack *t, int nb, bool have_pdb)
 {
     uint8_t *data, *wal = NULL, *plain;
     size_t size, wal_size = 0, plain_size;
@@ -390,7 +390,7 @@ static void settings_line(Report *r, const char *stick)
         size_t n;
         if (read_stick(stick, path, &b, &n) < 0)
             continue;
-        RxKv *kv;
+        RXKv *kv;
         int nk;
         if (rx_settings_decode(files[i], b, n, &kv, &nk) < 0) {
             problem(r, "%s does not decode", files[i]);
@@ -417,7 +417,7 @@ int rx_inspect(const char *stick, rx_report_cb line, void *opaque)
     uint8_t *b = NULL;
     size_t size = 0;
     bool have_pdb = read_stick(stick, "/PIONEER/rekordbox/export.pdb", &b, &size) >= 0;
-    RxPdbRawTrack *t = NULL;
+    RXPdbRawTrack *t = NULL;
     int nb = 0;
     if (have_pdb) {
         int before = r.problems;

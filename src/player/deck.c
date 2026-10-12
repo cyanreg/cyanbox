@@ -41,16 +41,16 @@
 
 #include <math.h>
 
-void rx_player_deck_init(RxDeckRT *d)
+void rx_player_deck_init(RXDeckRT *d)
 {
-    *d = (RxDeckRT) {
+    *d = (RXDeckRT) {
         .tempo     = 1.0,
         .gain      = 1.0f,
         .gain_prev = 1.0f,
     };
 }
 
-double rx_player_deck_speed(const RxDeckRT *d)
+double rx_player_deck_speed(const RXDeckRT *d)
 {
     double speed = d->tempo + d->bend;
     return speed > 0.0 ? speed * d->rate : 0.0;
@@ -62,7 +62,7 @@ static int fade_frames(int rate)
     return n > 0 ? n : 1;
 }
 
-static double increment(const RxDeckRT *d, int rate)
+static double increment(const RXDeckRT *d, int rate)
 {
     return rx_player_deck_speed(d) / rate;
 }
@@ -79,7 +79,7 @@ static inline float hermite(float xm1, float x0, float x1, float x2, float t)
 }
 
 /* A sample, silence outside the track. */
-static inline float at(const RxDeckRT *d, int64_t i, int ch)
+static inline float at(const RXDeckRT *d, int64_t i, int ch)
 {
     if (i < 0 || i >= d->nb_frames)
         return 0.0f;
@@ -88,7 +88,7 @@ static inline float at(const RxDeckRT *d, int64_t i, int ch)
 
 /* The track at position p; a mono track plays on both sides, and channels
  * past the second are ignored. */
-static void fetch(const RxDeckRT *d, RxPos p, float *l, float *r)
+static void fetch(const RXDeckRT *d, RXPos p, float *l, float *r)
 {
     int64_t i = p.i;
     float t = (float)p.f;
@@ -113,7 +113,7 @@ static void fetch(const RxDeckRT *d, RxPos p, float *l, float *r)
 
 /* ---------------------------------------------------------------- voices */
 
-static void silence_voices(RxDeckRT *d)
+static void silence_voices(RXDeckRT *d)
 {
     d->tail_left = 0;
     d->fade_in = 0;
@@ -123,7 +123,7 @@ static void silence_voices(RxDeckRT *d)
 }
 
 /* Something is about to jump or stop: let the current sound fade out. */
-static void start_tail(RxDeckRT *d, int rate)
+static void start_tail(RXDeckRT *d, int rate)
 {
     if (!d->playing)
         return;
@@ -133,13 +133,13 @@ static void start_tail(RxDeckRT *d, int rate)
     d->tail_left = d->tail_len;
 }
 
-static void start_fade_in(RxDeckRT *d, int rate)
+static void start_fade_in(RXDeckRT *d, int rate)
 {
     d->fade_len = fade_frames(rate);
     d->fade_in  = d->fade_len;
 }
 
-static RxPos clamp_frames(const RxDeckRT *d, double frames)
+static RXPos clamp_frames(const RXDeckRT *d, double frames)
 {
     if (!(frames > 0.0))
         frames = 0.0;
@@ -153,7 +153,7 @@ static RxPos clamp_frames(const RxDeckRT *d, double frames)
  * halved around it, an active loop the interface noticed late): fold the
  * playhead back into the loop at the same phase, as if it had wrapped on
  * time. A playhead further on has left the loop behind and plays on. */
-static void fold_into_loop(RxDeckRT *d)
+static void fold_into_loop(RXDeckRT *d)
 {
     if (!d->loop_enabled || d->scrubbing || rx_pos_cmp(d->pos, d->loop_out) < 0)
         return;
@@ -165,7 +165,7 @@ static void fold_into_loop(RxDeckRT *d)
     rx_pos_add(&d->pos, over);
 }
 
-static void seek(RxDeckRT *d, double frames, int rate)
+static void seek(RXDeckRT *d, double frames, int rate)
 {
     start_tail(d, rate);
     if (d->playing)
@@ -175,7 +175,7 @@ static void seek(RxDeckRT *d, double frames, int rate)
         d->playing = false;
 }
 
-static void play(RxDeckRT *d, int rate)
+static void play(RXDeckRT *d, int rate)
 {
     if (d->playing || !d->samples || d->pos.i >= d->nb_frames)
         return;
@@ -185,7 +185,7 @@ static void play(RxDeckRT *d, int rate)
 
 /* -------------------------------------------------------------- commands */
 
-void rx_player_deck_apply(RxDeckRT *d, const RxCmd *cmd, int rate)
+void rx_player_deck_apply(RXDeckRT *d, const RXCmd *cmd, int rate)
 {
     switch (cmd->type) {
     case RX_CMD_LOAD:
@@ -200,7 +200,7 @@ void rx_player_deck_apply(RxDeckRT *d, const RxCmd *cmd, int rate)
         d->channels     = cmd->type == RX_CMD_LOAD ? cmd->channels : 0;
         d->rate         = cmd->type == RX_CMD_LOAD ? cmd->rate : 0;
         d->nb_frames    = cmd->type == RX_CMD_LOAD ? cmd->nb_frames : 0;
-        d->pos          = (RxPos) { 0 };
+        d->pos          = (RXPos) { 0 };
         d->playing      = false;
         d->bend         = 0.0;
         d->loop_set     = false;
@@ -296,9 +296,9 @@ void rx_player_deck_apply(RxDeckRT *d, const RxCmd *cmd, int rate)
 /* ---------------------------------------------------------------- render */
 
 /* One output frame of the main voice: advance, wrap, stop at the end. */
-static void advance(RxDeckRT *d, double inc)
+static void advance(RXDeckRT *d, double inc)
 {
-    RxPos prev = d->pos;
+    RXPos prev = d->pos;
     rx_pos_add(&d->pos, inc);
 
     if (d->loop_enabled && rx_pos_cmp(prev, d->loop_out) < 0 &&
@@ -311,14 +311,14 @@ static void advance(RxDeckRT *d, double inc)
     /* The end of the track pauses the deck there (PLAY MODE SINGLE, the
      * CDJ-3000's factory setting, manual p.75). */
     if (d->pos.i >= d->nb_frames) {
-        d->pos = (RxPos) { .i = d->nb_frames };
+        d->pos = (RXPos) { .i = d->nb_frames };
         d->playing = false;
     }
 }
 
-static void spawn_grain(RxDeckRT *d, int glen)
+static void spawn_grain(RXDeckRT *d, int glen)
 {
-    RxGrain *g = &d->grains[0];
+    RXGrain *g = &d->grains[0];
     for (int i = 0; i < RX_GRAINS; i++) {
         if (!d->grains[i].len) {
             g = &d->grains[i];
@@ -327,12 +327,12 @@ static void spawn_grain(RxDeckRT *d, int glen)
         if (d->grains[i].age > g->age)
             g = &d->grains[i];
     }
-    *g = (RxGrain) { .pos = d->pos, .len = glen };
+    *g = (RXGrain) { .pos = d->pos, .len = glen };
     d->grain_from = rx_pos_get(d->pos);
 }
 
 /* The grains' contribution for one output frame. */
-static void grains(RxDeckRT *d, float *l, float *r, int glen, double ratio, float lp)
+static void grains(RXDeckRT *d, float *l, float *r, int glen, double ratio, float lp)
 {
     if (d->scrubbing && --d->hop <= 0) {
         d->hop = glen / 2;
@@ -345,7 +345,7 @@ static void grains(RxDeckRT *d, float *l, float *r, int glen, double ratio, floa
     float gl = 0.0f, gr = 0.0f;
     bool any = false;
     for (int i = 0; i < RX_GRAINS; i++) {
-        RxGrain *g = &d->grains[i];
+        RXGrain *g = &d->grains[i];
         if (!g->len)
             continue;
         float w = 0.5f - 0.5f * cosf(2.0f * (float)M_PI * g->age / g->len);
@@ -369,7 +369,7 @@ static void grains(RxDeckRT *d, float *l, float *r, int glen, double ratio, floa
     *r += d->lp_r * RX_GRAIN_GAIN;
 }
 
-void rx_player_deck_render(RxDeckRT *d, float *out, int frames, int rate)
+void rx_player_deck_render(RXDeckRT *d, float *out, int frames, int rate)
 {
     if (frames <= 0)
         return;

@@ -432,13 +432,13 @@ const char *rx_fmt_time(double seconds, char *buf, size_t size)
 
 /* ------------------------------------------------------------- dynamic array */
 
-void rx_array_init(RxArray *a, size_t elem_size)
+void rx_array_init(RXArray *a, size_t elem_size)
 {
     memset(a, 0, sizeof(*a));
     a->elem = elem_size;
 }
 
-int rx_array_reserve(RxArray *a, size_t cap)
+int rx_array_reserve(RXArray *a, size_t cap)
 {
     if (cap <= a->cap)
         return 0;
@@ -453,7 +453,7 @@ int rx_array_reserve(RxArray *a, size_t cap)
     return 0;
 }
 
-void *rx_array_push(RxArray *a, const void *elem)
+void *rx_array_push(RXArray *a, const void *elem)
 {
     if (a->nb == a->cap && rx_array_reserve(a, a->cap ? a->cap * 2 : 16) < 0)
         return NULL;
@@ -466,12 +466,12 @@ void *rx_array_push(RxArray *a, const void *elem)
     return slot;
 }
 
-void *rx_array_at(const RxArray *a, size_t i)
+void *rx_array_at(const RXArray *a, size_t i)
 {
     return i < a->nb ? (uint8_t *)a->data + i * a->elem : NULL;
 }
 
-void rx_array_remove(RxArray *a, size_t i)
+void rx_array_remove(RXArray *a, size_t i)
 {
     if (i >= a->nb)
         return;
@@ -480,12 +480,12 @@ void rx_array_remove(RxArray *a, size_t i)
     a->nb--;
 }
 
-void rx_array_clear(RxArray *a)
+void rx_array_clear(RXArray *a)
 {
     a->nb = 0;
 }
 
-void rx_array_free(RxArray *a)
+void rx_array_free(RXArray *a)
 {
     free(a->data);
     a->data = NULL;

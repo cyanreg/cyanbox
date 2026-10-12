@@ -14,16 +14,16 @@
 #include "src/export/export_priv.h"
 #include "tests/formats/test.h"
 
-static RxTrack track(const char *path, const char *artist, const char *album_artist, const char *album)
+static RXTrack track(const char *path, const char *artist, const char *album_artist, const char *album)
 {
-    RxTrack t = { .path = (char *)path };
+    RXTrack t = { .path = (char *)path };
     t.meta.artist = (char *)artist;
     t.meta.album_artist = (char *)album_artist;
     t.meta.album = (char *)album;
     return t;
 }
 
-static void check_path(const RxTrack *t, const char *source, const char *const *used, int nb, const char *want)
+static void check_path(const RXTrack *t, const char *source, const char *const *used, int nb, const char *want)
 {
     char *p = rx_plan_usb_path(t, source, used, nb);
     CHECK_STR(p, want);
@@ -32,7 +32,7 @@ static void check_path(const RxTrack *t, const char *source, const char *const *
 
 static void usb_paths(void)
 {
-    RxTrack t = track("/music/One.flac", "Synth", NULL, NULL);
+    RXTrack t = track("/music/One.flac", "Synth", NULL, NULL);
     check_path(&t, NULL, NULL, 0, "/Contents/Synth/UnknownAlbum/One.flac");
     t = track("/music/x/Track.FLAC", NULL, NULL, NULL);
     check_path(&t, NULL, NULL, 0, "/Contents/UnknownArtist/UnknownAlbum/Track.flac");
@@ -120,16 +120,16 @@ static void usb_paths(void)
 
 static void cues(void)
 {
-    RxTempoSection sec = { .start = 0.25, .bpm = 120.0, .beat = 1 };
-    RxGrid grid = { .sections = &sec, .nb_sections = 1, .beats_per_bar = 4 };
-    RxCue c = {
+    RXTempoSection sec = { .start = 0.25, .bpm = 120.0, .beat = 1 };
+    RXGrid grid = { .sections = &sec, .nb_sections = 1, .beats_per_bar = 4 };
+    RXCue c = {
         .time = 2.25, .grid_beat = NAN, .hot = 0, .loop_end = 4.25, .loop_beats = NAN,
         .name = "drop", .color = "red",
     };
-    RxStickCue s;
+    RXStickCue s;
     rx_stick_cue_from_track(&c, &s);
     CHECK(s.hot == 0 && s.in == 2250 && s.out == 4250 && s.code == 0x2A && s.rgb == 0xFF0000);
-    RxCue back;
+    RXCue back;
     rx_stick_cue_to_track(&s, &grid, &back);
     /* On a beat: musical again, the loop 4 beats long. */
     CHECK(back.hot == 0 && fabs(back.time - 2.25) < 1e-9 && back.grid_beat == 4.0 && back.loop_beats == 4.0);
@@ -137,7 +137,7 @@ static void cues(void)
     CHECK_STR(back.name, "drop");
 
     /* No colour: code 0 and the slot's default pad colour, read back as "". */
-    RxCue plain = { .time = 1.0, .grid_beat = NAN, .hot = 1, .loop_end = -1, .loop_beats = NAN };
+    RXCue plain = { .time = 1.0, .grid_beat = NAN, .hot = 1, .loop_end = -1, .loop_beats = NAN };
     rx_stick_cue_from_track(&plain, &s);
     CHECK(s.code == 0 && s.rgb == 0x00C4FF && s.out == 0xFFFFFFFFu);
     rx_stick_cue_to_track(&s, &grid, &back);
@@ -145,14 +145,14 @@ static void cues(void)
 
     /* A custom pad colour (code 0 with an RGB, as rekordbox writes them)
      * becomes "#rrggbb"; an off-beat time stays absolute. */
-    s = (RxStickCue) { .hot = 2, .in = 1234, .out = 0xFFFFFFFFu, .code = 0, .rgb = 0xF4D338 };
+    s = (RXStickCue) { .hot = 2, .in = 1234, .out = 0xFFFFFFFFu, .code = 0, .rgb = 0xF4D338 };
     rx_stick_cue_to_track(&s, &grid, &back);
     CHECK_STR(back.color, "#f4d338");
     CHECK(isnan(back.grid_beat) && back.time == 1.234);
 
     /* dj's green and rekordbox's per-slot default both mean no colour. */
-    RxStickCue g1 = { .hot = 0, .in = 1000, .out = 0xFFFFFFFFu, .rgb = 0x00FF00 };
-    RxStickCue g2 = { .hot = 0, .in = 1000, .out = 0xFFFFFFFFu, .rgb = 0xFF0017 };
+    RXStickCue g1 = { .hot = 0, .in = 1000, .out = 0xFFFFFFFFu, .rgb = 0x00FF00 };
+    RXStickCue g2 = { .hot = 0, .in = 1000, .out = 0xFFFFFFFFu, .rgb = 0xFF0017 };
     CHECK(rx_stick_cue_equal(&g1, &g2));
     rx_stick_cue_to_track(&g1, &grid, &back);
     CHECK_STR(back.color, "");
@@ -160,7 +160,7 @@ static void cues(void)
     g2.rgb = 0xFF0000;
     CHECK(!rx_stick_cue_equal(&g1, &g2));
 
-    RxStickCue a = { .hot = -1, .in = 1000, .out = 0xFFFFFFFFu, .code = 3 }, b = a;
+    RXStickCue a = { .hot = -1, .in = 1000, .out = 0xFFFFFFFFu, .code = 3 }, b = a;
     b.in = 1001;
     CHECK(rx_stick_cue_equal(&a, &b));
     b.in = 1003;
@@ -179,25 +179,25 @@ static void sync_record(void)
     rx_mkdir_p(pio);
     free(pio);
 
-    RxStickCue c1[2] = {
+    RXStickCue c1[2] = {
         { .hot = 0, .in = 500, .out = 0xFFFFFFFFu, .code = 0x2A, .rgb = 0xFF0000, .name = "100% intro\nx" },
         { .hot = -1, .in = 2000, .out = 4000, .code = 2, .active = true },
     };
-    RxSyncTrack tracks[2] = { { .id = 7, .cues = c1, .nb_cues = 2 }, { .id = 9 } };
+    RXSyncTrack tracks[2] = { { .id = 7, .cues = c1, .nb_cues = 2 }, { .id = 9 } };
     uint8_t setting[4] = { 1, 2, 0xAB, 0xFF };
-    RxSyncRecord r = { .uuid = "0123456789abcdef", .date = "2026-10-13", .tracks = tracks, .nb_tracks = 2 };
+    RXSyncRecord r = { .uuid = "0123456789abcdef", .date = "2026-10-13", .tracks = tracks, .nb_tracks = 2 };
     snprintf(r.settings[0].name, sizeof(r.settings[0].name), "DEVSETTING.DAT");
     r.settings[0].data = setting;
     r.settings[0].size = 4;
     r.nb_settings = 1;
     CHECK_EQ(rx_sync_record_write(dir, &r), 0);
 
-    RxSyncRecord back;
+    RXSyncRecord back;
     CHECK_EQ(rx_sync_record_read(dir, &back), 0);
     CHECK_STR(back.uuid, "0123456789abcdef");
     CHECK_STR(back.date, "2026-10-13");
     CHECK_EQ(back.nb_tracks, 2);
-    const RxSyncTrack *t = rx_sync_record_track(&back, 7);
+    const RXSyncTrack *t = rx_sync_record_track(&back, 7);
     CHECK(t && t->nb_cues == 2);
     if (t && t->nb_cues == 2) {
         CHECK(rx_stick_cue_equal(&t->cues[0], &c1[0]));
@@ -226,7 +226,7 @@ static void sync_record(void)
             c[x % n] = (uint8_t)(i & 1 ? '%' : x >> 16);
         }
         CHECK_EQ(rx_file_write_atomic(path, c, len), 0);
-        RxSyncRecord f;
+        RXSyncRecord f;
         if (rx_sync_record_read(dir, &f) >= 0) {
             for (int k = 0; k < f.nb_tracks; k++)
                 CHECK(f.tracks[k].nb_cues >= 0);

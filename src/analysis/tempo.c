@@ -287,8 +287,8 @@ static bool octave_related(double a, double b, double tol)
     return fabs(r - round(r)) < tol / M_LN2;
 }
 
-int rx_tempo_estimate(const RxOnsets *o, double lo, double hi, double prior,
-                      RxTempoEstimate *out)
+int rx_tempo_estimate(const RXOnsets *o, double lo, double hi, double prior,
+                      RXTempoEstimate *out)
 {
     memset(out, 0, sizeof(*out));
     const int n = o->nb;
@@ -484,8 +484,8 @@ int rx_tempo_estimate(const RxOnsets *o, double lo, double hi, double prior,
 
 /* Mid-band (snare, clap) balance and subdivision of the beats
  * t0 + k * P in [from, to). */
-static void level_evidence(const RxOnsets *o, double t0, double P, double from, double to,
-                           RxOctaveEvidence *ev)
+static void level_evidence(const RXOnsets *o, double t0, double P, double from, double to,
+                           RXOctaveEvidence *ev)
 {
     const double fps = o->fps;
     const int n = o->nb;
@@ -516,7 +516,7 @@ static void level_evidence(const RxOnsets *o, double t0, double P, double from, 
 
 /* Of the beats t0 + k * P and those moved by `alt`, the set whose beats
  * carry more of a (+ b) in [from, to). */
-static double level_phase(const RxOnsets *o, const float *a, const float *b, double t0, double P,
+static double level_phase(const RXOnsets *o, const float *a, const float *b, double t0, double P,
                           double alt, double from, double to)
 {
     double sum[2] = { 0 };
@@ -546,8 +546,8 @@ static double level_phase(const RxOnsets *o, const float *a, const float *b, dou
  * Measured on the 81 tracks of the evaluation sample whose octave is
  * certain (house, techno, garage at 100-160; drum & bass at 150-200): the
  * prior alone is right on 78, this rule on all 81 (docs/BEATS.md). */
-void rx_tempo_octave_decide(const RxOnsets *o, double t0, double period, double from, double to,
-                            double lo, double hi, double prior, RxOctaveDecision *out)
+void rx_tempo_octave_decide(const RXOnsets *o, double t0, double period, double from, double to,
+                            double lo, double hi, double prior, RXOctaveDecision *out)
 {
     memset(out, 0, sizeof(*out));
     out->factor = 1.0;
@@ -634,8 +634,8 @@ void rx_tempo_octave_decide(const RxOnsets *o, double t0, double period, double 
 #define TG_RUN   4         /* windows a different tempo must hold: 21 s */
 #define TG_STEP  0.005     /* log2 step of the tempo states: 0.35 % */
 
-int rx_tempo_regions(const RxOnsets *o, double bpm, double lo, double hi,
-                     RxTempoRegion **regions, int *nb)
+int rx_tempo_regions(const RXOnsets *o, double bpm, double lo, double hi,
+                     RXTempoRegion **regions, int *nb)
 {
     *regions = NULL;
     *nb = 0;
@@ -744,14 +744,14 @@ int rx_tempo_regions(const RxOnsets *o, double bpm, double lo, double hi,
      * rhythmic (comb above 0.3), with the main tempo doing clearly worse
      * there (below 0.7 of the best). Anything shorter is a fill, a riser or
      * a triplet passage, and the tracker's own slack covers small drifts. */
-    RxTempoRegion *r = malloc(sizeof(*r) * (size_t)(nw + 1));
+    RXTempoRegion *r = malloc(sizeof(*r) * (size_t)(nw + 1));
     if (!r) {
         ret = RX_ERROR(ENOMEM);
         goto end;
     }
     int nr = 0;
     int w = 0;
-    r[nr++] = (RxTempoRegion) { .start = 0.0, .end = dur, .bpm = bpm };
+    r[nr++] = (RXTempoRegion) { .start = 0.0, .end = dur, .bpm = bpm };
     while (w < nw) {
         /* Not a tempo a rhythm makes on its own at the main tempo: a
          * triplet or dotted passage reads at 3:2, 2:3, 4:3 or 3:4 of it
@@ -790,8 +790,8 @@ int rx_tempo_regions(const RxOnsets *o, double bpm, double lo, double hi,
             double t0 = (w * H + W / 2.0) / fps - TG_HOP / 2.0;
             double t1 = ((e - 1) * H + W / 2.0) / fps + TG_HOP / 2.0;
             r[nr - 1].end = t0;
-            r[nr++] = (RxTempoRegion) { .start = t0, .end = t1, .bpm = tmp[m / 2] };
-            r[nr++] = (RxTempoRegion) { .start = t1, .end = dur, .bpm = bpm };
+            r[nr++] = (RXTempoRegion) { .start = t0, .end = t1, .bpm = tmp[m / 2] };
+            r[nr++] = (RXTempoRegion) { .start = t1, .end = dur, .bpm = bpm };
             rx_debug("tempo: region %.1f-%.1f s at %.2f BPM\n", t0, t1, tmp[m / 2]);
         }
         w = e;

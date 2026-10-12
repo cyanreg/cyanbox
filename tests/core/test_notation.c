@@ -9,7 +9,7 @@
 
 #include "util.h"
 
-static double pos(const char *spec, const RxGrid *g, double *gb)
+static double pos(const char *spec, const RXGrid *g, double *gb)
 {
     double t = NAN, b = NAN;
     if (rx_parse_position(spec, g, &t, &b) < 0)
@@ -23,7 +23,7 @@ static void test_positions(void)
 {
     /* dj's tests/test_sidecar.py test_positions: beats every 0.5 s,
      * downbeats at 0.5, 2.5, 4.5 ... */
-    RxGrid g;
+    RXGrid g;
     rx_grid_init(&g, 0.5, 120.0);
     double gb;
     CHECK(pos("12.25", &g, &gb) == 12.25 && isnan(gb));
@@ -55,7 +55,7 @@ static void test_positions(void)
         }
     }
     /* Bars and beats need a grid; seconds do not. */
-    RxGrid none = { 0 };
+    RXGrid none = { 0 };
     double t;
     CHECK(rx_parse_position("bar 2", &none, &t, NULL) == RX_ERROR(EINVAL));
     CHECK(rx_parse_position("beat 2", NULL, &t, NULL) == RX_ERROR(EINVAL));
@@ -86,7 +86,7 @@ static void test_positions(void)
  * a restarting count (where bars are short). */
 static void test_roundtrip(void)
 {
-    RxGrid grids[3] = { { .beats_per_bar = 4 }, { .beats_per_bar = 4 }, { .beats_per_bar = 4 } };
+    RXGrid grids[3] = { { .beats_per_bar = 4 }, { .beats_per_bar = 4 }, { .beats_per_bar = 4 } };
     rx_grid_add_section(&grids[0], 0.3125, 128.0, 1);
     rx_grid_add_section(&grids[1], 0.3125, 128.0, 1);
     rx_grid_add_section(&grids[1], 61.0, 130.0, 0);

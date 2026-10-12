@@ -32,9 +32,9 @@ static const unsigned GRID_WARN_FLAGS = RX_GRID_FLAG_OCTAVE_UNCERTAIN | RX_GRID_
 
 /* ------------------------------------------------------------------ helpers */
 
-double ui_deck_position(UiState *ui, int deck, RxDeckState *st)
+double ui_deck_position(UiState *ui, int deck, RXDeckState *st)
 {
-    RxDeckState tmp;
+    RXDeckState tmp;
     if (!st)
         st = &tmp;
     memset(st, 0, sizeof(*st));
@@ -58,7 +58,7 @@ void ui_grid_edited(UiState *ui, int deck)
 // SHIFT GRID (rekordbox: Ctrl+cursor, the grid strip's nudge).
 void ui_shift_grid(UiState *ui, int deck, double seconds)
 {
-    RxTrack *t = ui->app->decks[deck].ctl.track;
+    RXTrack *t = ui->app->decks[deck].ctl.track;
     if (!t || !rx_track_analysed(t) || t->grid_locked)
         return;
     rx_grid_shift(&t->grid, seconds);
@@ -68,7 +68,7 @@ void ui_shift_grid(UiState *ui, int deck, double seconds)
 // Beat jump by the selected size; Fine moves 10 ms, a CDJ's fine search.
 void ui_jump(UiState *ui, int deck, int dir)
 {
-    RxDeckCtl *c = &ui->app->decks[deck].ctl;
+    RXDeckCtl *c = &ui->app->decks[deck].ctl;
     double beats = UI_JUMP_SIZES[ui->decks[deck].jump_size].beats;
     if (!c->track)
         return;
@@ -84,18 +84,18 @@ static void set_tempo(UiState *ui, int deck, double pct)
         rx_deck_set_tempo(ui->app->player, deck, 1.0 + pct / 100.0);
 }
 
-static RxTrack *shown_track(UiState *ui, int deck)
+static RXTrack *shown_track(UiState *ui, int deck)
 {
-    RxDeckView *dv = &ui->app->decks[deck];
+    RXDeckView *dv = &ui->app->decks[deck];
     if (dv->loading_request && dv->loading_track_id) {
-        RxTrack *t = rx_library_find_id(&ui->app->lib, dv->loading_track_id);
+        RXTrack *t = rx_library_find_id(&ui->app->lib, dv->loading_track_id);
         if (t)
             return t;
     }
     return dv->track;
 }
 
-static void bar_beat_text(const RxTrack *t, double pos, char *buf, size_t size)
+static void bar_beat_text(const RXTrack *t, double pos, char *buf, size_t size)
 {
     if (!t || !rx_track_analysed(t)) {
         snprintf(buf, size, "-");
@@ -117,7 +117,7 @@ static void loop_beats_text(double beats, char *buf, size_t size)
         snprintf(buf, size, "%.2f", beats);
 }
 
-static double cue_loop_beats(const RxTrack *t, const RxCue *c)
+static double cue_loop_beats(const RXTrack *t, const RXCue *c)
 {
     if (!rx_cue_is_loop(c))
         return 0;
@@ -141,12 +141,12 @@ static void readout(UiState *ui, ImDrawList *dl, float right, float y, const cha
     ui_text_right(ui, dl, ui->font_bold, 21.0f, ImVec2(right, y + PX(14)), col, value);
 }
 
-static void title_row(UiState *ui, int deck, ImVec2 a, ImVec2 b, const RxDeckState &st)
+static void title_row(UiState *ui, int deck, ImVec2 a, ImVec2 b, const RXDeckState &st)
 {
-    RxApp *app = ui->app;
-    RxDeckView *dv = &app->decks[deck];
+    RXApp *app = ui->app;
+    RXDeckView *dv = &app->decks[deck];
     UiDeck *ud = &ui->decks[deck];
-    RxTrack *t = shown_track(ui, deck);
+    RXTrack *t = shown_track(ui, deck);
     bool loaded = st.loaded && dv->track && !dv->loading_request;
     ImDrawList *dl = ImGui::GetWindowDrawList();
 
@@ -241,7 +241,7 @@ static void title_row(UiState *ui, int deck, ImVec2 a, ImVec2 b, const RxDeckSta
             tip += conf;
             for (unsigned bit = 1; bit <= RX_GRID_FLAG_UNSTEADY; bit <<= 1) {
                 if (t->grid_flags & bit) {
-                    const char *n = rx_grid_flag_name((RxGridFlag)bit);
+                    const char *n = rx_grid_flag_name((RXGridFlag)bit);
                     tip += "  ";
                     tip += n ? n : "?";
                     tip += "\n";
@@ -299,11 +299,11 @@ static void round_button(UiState *ui, ImVec2 c, float r, ImU32 ring, bool lit, b
                 ImVec2(c.x + r * 0.62f, c.y + r * 0.62f), glyph);
 }
 
-static void transport(UiState *ui, int deck, ImVec2 a, ImVec2 b, const RxDeckState &st)
+static void transport(UiState *ui, int deck, ImVec2 a, ImVec2 b, const RXDeckState &st)
 {
-    RxDeckView *dv = &ui->app->decks[deck];
+    RXDeckView *dv = &ui->app->decks[deck];
     UiDeck *ud = &ui->decks[deck];
-    RxDeckCtl *c = &dv->ctl;
+    RXDeckCtl *c = &dv->ctl;
     bool has = c->track && st.loaded;
     float w = b.x - a.x;
     float d = ImMin((w - PX(8)) * 0.5f, PX(56));
@@ -407,21 +407,21 @@ static void transport(UiState *ui, int deck, ImVec2 a, ImVec2 b, const RxDeckSta
 
 static void pad_popup(UiState *ui, int deck, int slot)
 {
-    RxDeckView *dv = &ui->app->decks[deck];
+    RXDeckView *dv = &ui->app->decks[deck];
     UiDeck *ud = &ui->decks[deck];
-    RxDeckCtl *c = &dv->ctl;
+    RXDeckCtl *c = &dv->ctl;
     char pid[32];
     snprintf(pid, sizeof(pid), "##padmenu%d", slot);
     if (!ImGui::BeginPopup(pid))
         return;
-    RxTrack *t = c->track;
+    RXTrack *t = c->track;
     int idx = t ? rx_track_hot_cue(t, slot) : -1;
     if (idx < 0) {
         ImGui::TextDisabled("Hot cue %c is empty", 'A' + slot);
         ImGui::EndPopup();
         return;
     }
-    RxCue *cue = &t->cues[idx];
+    RXCue *cue = &t->cues[idx];
     char pos[32];
     ImGui::Text("Hot cue %c  %s", 'A' + slot, ui_fmt_time(cue->time, pos, sizeof(pos), true));
     ImGui::Separator();
@@ -453,13 +453,13 @@ static void pad_popup(UiState *ui, int deck, int slot)
 // the corner x deletes; right-click edits colour and name.
 static void hot_cue_pad(UiState *ui, int deck, int slot, ImVec2 p, ImVec2 size)
 {
-    RxApp *app = ui->app;
-    RxDeckView *dv = &app->decks[deck];
+    RXApp *app = ui->app;
+    RXDeckView *dv = &app->decks[deck];
     UiDeck *ud = &ui->decks[deck];
-    RxDeckCtl *c = &dv->ctl;
-    RxTrack *t = c->track;
+    RXDeckCtl *c = &dv->ctl;
+    RXTrack *t = c->track;
     int idx = t ? rx_track_hot_cue(t, slot) : -1;
-    const RxCue *cue = idx >= 0 ? &t->cues[idx] : nullptr;
+    const RXCue *cue = idx >= 0 ? &t->cues[idx] : nullptr;
     ImDrawList *dl = ImGui::GetWindowDrawList();
     ImGuiIO &io = ImGui::GetIO();
     char id[16];
@@ -580,10 +580,10 @@ static bool mode_pad(UiState *ui, const char *id, ImVec2 p, ImVec2 size, const c
     return pressed && enabled;
 }
 
-static void pads(UiState *ui, int deck, ImVec2 a, float pad_w, float pad_h, const RxDeckState &st)
+static void pads(UiState *ui, int deck, ImVec2 a, float pad_w, float pad_h, const RXDeckState &st)
 {
-    RxDeckView *dv = &ui->app->decks[deck];
-    RxDeckCtl *c = &dv->ctl;
+    RXDeckView *dv = &ui->app->decks[deck];
+    RXDeckCtl *c = &dv->ctl;
     bool has = c->track && st.loaded;
     float gap = PX(4);
     float w = pad_w * 4 + gap * 3;
@@ -624,7 +624,7 @@ static void pads(UiState *ui, int deck, ImVec2 a, float pad_w, float pad_h, cons
                                             py + (i / 4) * (pad_h + gap)), ps);
         break;
     case UI_PADS_BEAT_LOOP: {
-        // The pad of the running auto loop is lit (RxDeckCtl.last_hot_loop_beats).
+        // The pad of the running auto loop is lit (RXDeckCtl.last_hot_loop_beats).
         for (int i = 0; i < 8; i++) {
             bool lit = c->looping && fabs(c->last_hot_loop_beats - LOOP_PADS[i]) < 1e-6;
             char id[16];
@@ -706,8 +706,8 @@ static void pads(UiState *ui, int deck, ImVec2 a, float pad_w, float pad_h, cons
 
 static void delete_cue(UiState *ui, int deck, int index)
 {
-    RxDeckView *dv = &ui->app->decks[deck];
-    RxTrack *t = dv->ctl.track;
+    RXDeckView *dv = &ui->app->decks[deck];
+    RXTrack *t = dv->ctl.track;
     if (!t || index < 0 || index >= t->nb_cues)
         return;
     if (rx_cue_is_hot(&t->cues[index])) {
@@ -726,12 +726,12 @@ static void delete_cue(UiState *ui, int deck, int index)
 
 static void cue_row_menu(UiState *ui, int deck, int index)
 {
-    RxDeckView *dv = &ui->app->decks[deck];
+    RXDeckView *dv = &ui->app->decks[deck];
     UiDeck *ud = &ui->decks[deck];
-    RxTrack *t = dv->ctl.track;
+    RXTrack *t = dv->ctl.track;
     if (!t || index >= t->nb_cues)
         return;
-    RxCue *cue = &t->cues[index];
+    RXCue *cue = &t->cues[index];
     if (ImGui::MenuItem("Rename")) {
         ud->edit_memory = index;
         ud->edit_focus = true;
@@ -751,11 +751,11 @@ static void cue_row_menu(UiState *ui, int deck, int index)
 
 static void cue_list(UiState *ui, int deck, ImVec2 a, ImVec2 b, double pos)
 {
-    RxApp *app = ui->app;
-    RxDeckView *dv = &app->decks[deck];
+    RXApp *app = ui->app;
+    RXDeckView *dv = &app->decks[deck];
     UiDeck *ud = &ui->decks[deck];
-    RxDeckCtl *c = &dv->ctl;
-    RxTrack *t = c->track;
+    RXDeckCtl *c = &dv->ctl;
+    RXTrack *t = c->track;
     ImDrawList *dl = ImGui::GetWindowDrawList();
     float th = PX(18);
 
@@ -809,7 +809,7 @@ static void cue_list(UiState *ui, int deck, ImVec2 a, ImVec2 b, double pos)
 
     if (t) {
         for (int i = 0; i < t->nb_cues; i++) {
-            RxCue *cue = &t->cues[i];
+            RXCue *cue = &t->cues[i];
             bool hot = rx_cue_is_hot(cue);
             if ((dv->panel == 0) == hot)
                 continue;
@@ -954,7 +954,7 @@ static void cue_list(UiState *ui, int deck, ImVec2 a, ImVec2 b, double pos)
 // The tempo slider: down is faster, as on a CDJ; a detent at 0; ranges
 // +-6/10/16 % and WIDE. Dragging is relative to the grab so a click does
 // not jump the tempo.
-static void tempo(UiState *ui, int deck, ImVec2 a, ImVec2 b, const RxDeckState &st)
+static void tempo(UiState *ui, int deck, ImVec2 a, ImVec2 b, const RXDeckState &st)
 {
     UiDeck *ud = &ui->decks[deck];
     ImDrawList *dl = ImGui::GetWindowDrawList();
@@ -1059,7 +1059,7 @@ static void tempo(UiState *ui, int deck, ImVec2 a, ImVec2 b, const RxDeckState &
 
 static void apply_bpm(UiState *ui, int deck, double bpm, double pos)
 {
-    RxTrack *t = ui->app->decks[deck].ctl.track;
+    RXTrack *t = ui->app->decks[deck].ctl.track;
     if (!t || t->grid_locked || !(bpm >= 20 && bpm <= 400))
         return;
     if (rx_track_analysed(t))
@@ -1073,7 +1073,7 @@ static void apply_bpm(UiState *ui, int deck, double bpm, double pos)
 // playhead; SET then puts beat 1 at the first tap.
 static void tap(UiState *ui, int deck, double pos)
 {
-    RxDeckView *dv = &ui->app->decks[deck];
+    RXDeckView *dv = &ui->app->decks[deck];
     UiDeck *ud = &ui->decks[deck];
     int64_t now = rx_time_us();
     if (dv->nb_taps == 0 || now - ud->tap_last_us > 2000000) {
@@ -1097,9 +1097,9 @@ static void tap(UiState *ui, int deck, double pos)
 
 static void tap_set_downbeat(UiState *ui, int deck)
 {
-    RxDeckView *dv = &ui->app->decks[deck];
+    RXDeckView *dv = &ui->app->decks[deck];
     UiDeck *ud = &ui->decks[deck];
-    RxTrack *t = dv->ctl.track;
+    RXTrack *t = dv->ctl.track;
     if (!t || !rx_track_analysed(t) || t->grid_locked)
         return;
     // Move the grid so a beat lies on the first tap, then make it beat 1.
@@ -1111,12 +1111,12 @@ static void tap_set_downbeat(UiState *ui, int deck)
     ui_grid_edited(ui, deck);
 }
 
-static void grid_strip(UiState *ui, int deck, ImVec2 a, ImVec2 b, const RxDeckState &st)
+static void grid_strip(UiState *ui, int deck, ImVec2 a, ImVec2 b, const RXDeckState &st)
 {
-    RxApp *app = ui->app;
-    RxDeckView *dv = &app->decks[deck];
+    RXApp *app = ui->app;
+    RXDeckView *dv = &app->decks[deck];
     UiDeck *ud = &ui->decks[deck];
-    RxTrack *t = dv->ctl.track;
+    RXTrack *t = dv->ctl.track;
     ImDrawList *dl = ImGui::GetWindowDrawList();
     bool has = t && st.loaded;
     bool grid = has && rx_track_analysed(t);
@@ -1254,9 +1254,9 @@ static void grid_strip(UiState *ui, int deck, ImVec2 a, ImVec2 b, const RxDeckSt
 
 void ui_deck_panel(UiState *ui, int deck, ImVec2 size)
 {
-    RxApp *app = ui->app;
-    RxDeckView *dv = &app->decks[deck];
-    RxDeckState st;
+    RXApp *app = ui->app;
+    RXDeckView *dv = &app->decks[deck];
+    RXDeckState st;
     ui_deck_position(ui, deck, &st);
     st.loaded = st.loaded && dv->track;
 

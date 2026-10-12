@@ -11,13 +11,13 @@
 #include "rxbox/gpu.h"
 
 /* Errors the validation layer reported (opts.validation). */
-int  rx_window_validation_errors(const RxWindow *w);
+int  rx_window_validation_errors(const RXWindow *w);
 /* A frame was presented and the compositor has not answered it yet. */
-bool rx_window_frame_pending(const RxWindow *w);
+bool rx_window_frame_pending(const RXWindow *w);
 /* Captures the next presented frame for rx_window_readback(). */
-void rx_window_capture_next(RxWindow *w);
+void rx_window_capture_next(RXWindow *w);
 /* The last presented frame as RGBA, if it was captured; -EAGAIN if not. */
-int  rx_window_readback(RxWindow *w, uint8_t **rgba, int *width, int *height);
+int  rx_window_readback(RXWindow *w, uint8_t **rgba, int *width, int *height);
 
 /* ImGui, from C. Colours are 0xRRGGBBAA. Draw lists are ImDrawList *. */
 void  rx_demo_show_demo_window(void);

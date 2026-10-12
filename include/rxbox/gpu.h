@@ -26,9 +26,9 @@
 
 #include "rxbox/common.h"
 
-typedef struct RxWindow RxWindow;
+typedef struct RXWindow RXWindow;
 
-typedef struct RxWindowOptions {
+typedef struct RXWindowOptions {
     const char *title;
     int   width, height;        /* logical; 1600x900 default */
     bool  validation;           /* enable VK_LAYER_KHRONOS_validation */
@@ -37,73 +37,73 @@ typedef struct RxWindowOptions {
     const char *font;           /* a font file, NULL = system sans-serif via fontconfig
                                    plus a CJK fallback (Noto Sans CJK) when found */
     float font_size;            /* 0 = 15 */
-} RxWindowOptions;
-void rx_window_options_default(RxWindowOptions *o);
+} RXWindowOptions;
+void rx_window_options_default(RXWindowOptions *o);
 
-int  rx_window_create(RxWindow **w, const RxWindowOptions *o);
-void rx_window_destroy(RxWindow *w);
+int  rx_window_create(RXWindow **w, const RXWindowOptions *o);
+void rx_window_destroy(RXWindow *w);
 
 /* Processes events (feeding ImGui), then returns true when a frame should
  * be built now: the compositor wants one and (`want_redraw` or input
  * arrived or the window needs its first/resized frame). Otherwise it has
  * waited up to `timeout_ms` for events and returns false. */
-bool rx_window_poll(RxWindow *w, bool want_redraw, int timeout_ms);
-bool rx_window_should_close(const RxWindow *w);
-void rx_window_request_close(RxWindow *w);
+bool rx_window_poll(RXWindow *w, bool want_redraw, int timeout_ms);
+bool rx_window_should_close(const RXWindow *w);
+void rx_window_request_close(RXWindow *w);
 /* Begins an ImGui frame (NewFrame). */
-void rx_window_begin_frame(RxWindow *w);
+void rx_window_begin_frame(RXWindow *w);
 /* Renders the ImGui draw data, submits, presents, and asks the compositor
  * for the next frame callback. */
-void rx_window_end_frame(RxWindow *w);
+void rx_window_end_frame(RXWindow *w);
 /* Logical size and the pixel scale (HiDPI). */
-void  rx_window_size(const RxWindow *w, int *width, int *height);
-float rx_window_scale(const RxWindow *w);
-int   rx_window_frames_drawn(const RxWindow *w);
+void  rx_window_size(const RXWindow *w, int *width, int *height);
+float rx_window_scale(const RXWindow *w);
+int   rx_window_frames_drawn(const RXWindow *w);
 /* Milliseconds the compositor's last frame interval suggests (16.7 at 60 Hz). */
-double rx_window_frame_interval_ms(const RxWindow *w);
+double rx_window_frame_interval_ms(const RXWindow *w);
 /* Saves the last presented frame as PNG (reads the swapchain image back;
  * for the headless tests). Not from inside a frame. */
-int   rx_window_screenshot(RxWindow *w, const char *png_path);
+int   rx_window_screenshot(RXWindow *w, const char *png_path);
 /* Saves the next presented frame as PNG: rx_window_end_frame captures it,
  * presents it, then reads it back and writes the file. Callable from inside
  * a frame (that frame is the one saved); a second call before then
  * replaces the path. */
-void  rx_window_screenshot_next(RxWindow *w, const char *png_path);
+void  rx_window_screenshot_next(RXWindow *w, const char *png_path);
 /* The GPU's name (VkPhysicalDeviceProperties.deviceName). */
-const char *rx_window_gpu_name(const RxWindow *w);
+const char *rx_window_gpu_name(const RXWindow *w);
 
 /* ----------------------------------------------------------------- textures */
 
 /* RGBA8 texture usable as ImTextureID (ImGui::Image). 0 on failure.
  * Destruction is deferred until frames in flight are done. */
-uint64_t rx_texture_create(RxWindow *w, const uint8_t *rgba, int width, int height);
-void     rx_texture_destroy(RxWindow *w, uint64_t tex);
+uint64_t rx_texture_create(RXWindow *w, const uint8_t *rgba, int width, int height);
+void     rx_texture_destroy(RXWindow *w, uint64_t tex);
 
 /* ---------------------------------------------------------------- waveforms */
 
-enum RxWaveKind {
+enum RXWaveKind {
     RX_WAVE_3BAND,      /* 3 bytes per column: low, mid, high 0..127 (PWV6, PWV7) */
     RX_WAVE_BLUE,       /* 1 byte: height 5 bits | whiteness 3 bits << 5 (PWAV, PWV3) */
     RX_WAVE_RGB_DETAIL, /* 2 bytes big-endian rrrgggbbbhhhhh00 (PWV5) */
     RX_WAVE_RGB_PREVIEW,/* 6 bytes: height, ?, ?, r, g, b (PWV4) */
 };
 
-enum RxWaveMode {
+enum RXWaveMode {
     RX_WAVE_CENTRED = 0,    /* each band from the centre line out, outer envelope first, core last */
     RX_WAVE_HALF_STACKED,   /* from the bottom: low, then mid on it, then high (row preview) */
     RX_WAVE_HALF_OVERLAID,  /* from the bottom, each band over the last (2-player detail) */
 };
 
 /* Column bytes uploaded to a storage buffer. */
-typedef struct RxWaveGpu RxWaveGpu;
-RxWaveGpu *rx_wave_upload(RxWindow *w, enum RxWaveKind kind, const uint8_t *columns, int nb_columns);
-void       rx_wave_release(RxWindow *w, RxWaveGpu *g);
-int        rx_wave_columns(const RxWaveGpu *g);
+typedef struct RXWaveGpu RXWaveGpu;
+RXWaveGpu *rx_wave_upload(RXWindow *w, enum RXWaveKind kind, const uint8_t *columns, int nb_columns);
+void       rx_wave_release(RXWindow *w, RXWaveGpu *g);
+int        rx_wave_columns(const RXWaveGpu *g);
 
-typedef struct RxWaveDraw {
+typedef struct RXWaveDraw {
     float  x0, y0, x1, y1;      /* destination rectangle in ImGui screen pixels */
     double col0, col1;          /* columns mapped onto x0..x1 (fractional; may run past the data: drawn empty) */
-    enum RxWaveMode mode;
+    enum RXWaveMode mode;
     float  inset_top, inset_bottom;  /* pixels left clear (rekordbox: 8 above, 2 below) */
     bool   detail;              /* detail interpolation rule when columns are wider than a pixel */
     float  alpha;               /* 1 */
@@ -112,7 +112,7 @@ typedef struct RxWaveDraw {
     float  gain;                /* every band's level is multiplied by it before the full
                                    scale clamps it (an overview of PWV6 at rekordbox's
                                    levels needs about 4 to fill its height); 0 = 1 */
-} RxWaveDraw;
+} RXWaveDraw;
 
 /* Adds the draw to an ImDrawList (passed as void* from C++) as a render
  * callback. Colours are rekordbox's as measured by rbxport:
@@ -123,6 +123,6 @@ typedef struct RxWaveDraw {
  *   rgb:    the strongest channel at full, the others in proportion.
  * The 3-band centred draw uses the reach rule: each pixel in the colour of
  * exactly the bands that reach it. */
-void rx_wave_draw(RxWindow *w, void *im_draw_list, const RxWaveGpu *g, const RxWaveDraw *d);
+void rx_wave_draw(RXWindow *w, void *im_draw_list, const RXWaveGpu *g, const RXWaveDraw *d);
 
 #endif /* RXBOX_GPU_H */

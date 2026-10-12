@@ -52,9 +52,9 @@
  * widget that changes the layout shows it one frame later still. */
 #define RX_SETTLE_FRAMES 3
 
-void rx_window_options_default(RxWindowOptions *o)
+void rx_window_options_default(RXWindowOptions *o)
 {
-    *o = (RxWindowOptions) {
+    *o = (RXWindowOptions) {
         .title     = "rxbox",
         .width     = 1600,
         .height    = 900,
@@ -64,7 +64,7 @@ void rx_window_options_default(RxWindowOptions *o)
 
 /* -------------------------------------------------------- frame callbacks */
 
-static void forget_cb(RxWindow *w, struct wl_callback *cb)
+static void forget_cb(RXWindow *w, struct wl_callback *cb)
 {
     for (size_t i = 0; i < w->frame_cbs.nb; i++) {
         struct wl_callback **p = rx_array_at(&w->frame_cbs, i);
@@ -77,7 +77,7 @@ static void forget_cb(RxWindow *w, struct wl_callback *cb)
 
 static void frame_done(void *opaque, struct wl_callback *cb, uint32_t time)
 {
-    RxWindow *w = opaque;
+    RXWindow *w = opaque;
 
     /* Only the callback asked for with the last present says the
      * compositor wants the next frame; an older one (from a present that
@@ -110,7 +110,7 @@ static const struct wl_callback_listener frame_listener = {
     .done = frame_done,
 };
 
-void rx_window_want_frame_cb(RxWindow *w)
+void rx_window_want_frame_cb(RXWindow *w)
 {
     struct wl_callback *cb = wl_surface_frame(w->wl_wrap);
     if (!cb || !rx_array_push(&w->frame_cbs, &cb)) {
@@ -128,7 +128,7 @@ void rx_window_want_frame_cb(RxWindow *w)
     w->req_wall = rx_time_us();
 }
 
-void rx_window_frame_skipped(RxWindow *w)
+void rx_window_frame_skipped(RXWindow *w)
 {
     w->frame_cb = NULL;
     w->frame_done = true;
@@ -136,7 +136,7 @@ void rx_window_frame_skipped(RxWindow *w)
 
 /* ------------------------------------------------------------------ events */
 
-static void update_size(RxWindow *w)
+static void update_size(RXWindow *w)
 {
     SDL_GetWindowSize(w->win, &w->width, &w->height);
     SDL_GetWindowSizeInPixels(w->win, &w->px_width, &w->px_height);
@@ -151,7 +151,7 @@ static void update_size(RxWindow *w)
     w->content_scale = display > 0.0f ? display / w->scale : 1.0f;
 }
 
-static void handle_event(RxWindow *w, const SDL_Event *ev)
+static void handle_event(RXWindow *w, const SDL_Event *ev)
 {
     if (w->imgui)
         rx_imgui_process_event(w, ev);
@@ -200,7 +200,7 @@ static void handle_event(RxWindow *w, const SDL_Event *ev)
     }
 }
 
-static void dispatch_queue(RxWindow *w)
+static void dispatch_queue(RXWindow *w)
 {
     if (wl_display_dispatch_queue_pending(w->wl_dpy, w->wl_queue) < 0) {
         int err = wl_display_get_error(w->wl_dpy);
@@ -210,7 +210,7 @@ static void dispatch_queue(RxWindow *w)
 }
 
 /* SDL's events (SDL_PollEvent reads the socket), then ours. */
-static void pump(RxWindow *w)
+static void pump(RXWindow *w)
 {
     SDL_Event ev;
     while (SDL_PollEvent(&ev))
@@ -218,7 +218,7 @@ static void pump(RxWindow *w)
     dispatch_queue(w);
 }
 
-static void wait_event(RxWindow *w, int timeout_ms)
+static void wait_event(RXWindow *w, int timeout_ms)
 {
     SDL_Event ev;
     if (SDL_WaitEventTimeout(&ev, timeout_ms))
@@ -227,7 +227,7 @@ static void wait_event(RxWindow *w, int timeout_ms)
 
 /* Sleeps until something arrives on the Wayland socket or the timeout
  * passes (see the top of the file for why not SDL's wait). */
-static void wait_frame(RxWindow *w, int timeout_ms)
+static void wait_frame(RXWindow *w, int timeout_ms)
 {
     while (wl_display_prepare_read_queue(w->wl_dpy, w->wl_queue) != 0) {
         dispatch_queue(w);
@@ -254,17 +254,17 @@ static void wait_frame(RxWindow *w, int timeout_ms)
     dispatch_queue(w);
 }
 
-static bool wanted(const RxWindow *w, bool want_redraw)
+static bool wanted(const RXWindow *w, bool want_redraw)
 {
     return want_redraw || w->need_redraw || w->settle > 0;
 }
 
-static bool ready(const RxWindow *w)
+static bool ready(const RXWindow *w)
 {
     return w->frame_done && !w->stalled;
 }
 
-bool rx_window_poll(RxWindow *w, bool want_redraw, int timeout_ms)
+bool rx_window_poll(RXWindow *w, bool want_redraw, int timeout_ms)
 {
     if (w->opts.max_frames > 0 && w->frames_drawn >= w->opts.max_frames)
         w->should_close = true;
@@ -288,21 +288,21 @@ bool rx_window_poll(RxWindow *w, bool want_redraw, int timeout_ms)
     return !w->should_close && wanted(w, want_redraw) && ready(w);
 }
 
-bool rx_window_should_close(const RxWindow *w)
+bool rx_window_should_close(const RXWindow *w)
 {
     if (w->opts.max_frames > 0 && w->frames_drawn >= w->opts.max_frames)
         return true;
     return w->should_close;
 }
 
-void rx_window_request_close(RxWindow *w)
+void rx_window_request_close(RXWindow *w)
 {
     w->should_close = true;
 }
 
 /* ------------------------------------------------------------------ frames */
 
-void rx_window_begin_frame(RxWindow *w)
+void rx_window_begin_frame(RXWindow *w)
 {
     if (w->in_frame)
         return;
@@ -310,7 +310,7 @@ void rx_window_begin_frame(RxWindow *w)
     w->in_frame = true;
 }
 
-void rx_window_end_frame(RxWindow *w)
+void rx_window_end_frame(RXWindow *w)
 {
     if (!w->in_frame)
         return;
@@ -352,7 +352,7 @@ void rx_window_end_frame(RxWindow *w)
 
 /* ----------------------------------------------------------------- getters */
 
-void rx_window_size(const RxWindow *w, int *width, int *height)
+void rx_window_size(const RXWindow *w, int *width, int *height)
 {
     if (width)
         *width = w->width;
@@ -360,37 +360,37 @@ void rx_window_size(const RxWindow *w, int *width, int *height)
         *height = w->height;
 }
 
-float rx_window_scale(const RxWindow *w)
+float rx_window_scale(const RXWindow *w)
 {
     return w->scale;
 }
 
-int rx_window_frames_drawn(const RxWindow *w)
+int rx_window_frames_drawn(const RXWindow *w)
 {
     return w->frames_drawn;
 }
 
-double rx_window_frame_interval_ms(const RxWindow *w)
+double rx_window_frame_interval_ms(const RXWindow *w)
 {
     return w->interval_ms;
 }
 
-int rx_window_validation_errors(const RxWindow *w)
+int rx_window_validation_errors(const RXWindow *w)
 {
     return w->validation_errors;
 }
 
-bool rx_window_frame_pending(const RxWindow *w)
+bool rx_window_frame_pending(const RXWindow *w)
 {
     return !w->frame_done;
 }
 
-void rx_window_capture_next(RxWindow *w)
+void rx_window_capture_next(RXWindow *w)
 {
     w->capture_next = true;
 }
 
-int rx_window_readback(RxWindow *w, uint8_t **rgba, int *width, int *height)
+int rx_window_readback(RXWindow *w, uint8_t **rgba, int *width, int *height)
 {
     if (!w->cap_serial || w->cap_serial != w->last_present_serial)
         return RX_ERROR(EAGAIN);
@@ -399,7 +399,7 @@ int rx_window_readback(RxWindow *w, uint8_t **rgba, int *width, int *height)
 
 /* ----------------------------------------------------------- create/destroy */
 
-static int open_wayland(RxWindow *w)
+static int open_wayland(RXWindow *w)
 {
     SDL_PropertiesID props = SDL_GetWindowProperties(w->win);
     w->wl_dpy  = SDL_GetPointerProperty(props, SDL_PROP_WINDOW_WAYLAND_DISPLAY_POINTER, NULL);
@@ -427,15 +427,15 @@ static char *dup_opt(const char *s)
     return s ? rx_strdup(s) : NULL;
 }
 
-int rx_window_create(RxWindow **out, const RxWindowOptions *o)
+int rx_window_create(RXWindow **out, const RXWindowOptions *o)
 {
-    RxWindowOptions def;
+    RXWindowOptions def;
     if (!o) {
         rx_window_options_default(&def);
         o = &def;
     }
 
-    RxWindow *w = calloc(1, sizeof(*w));
+    RXWindow *w = calloc(1, sizeof(*w));
     if (!w)
         return RX_ERROR(ENOMEM);
 
@@ -516,7 +516,7 @@ fail:
     return ret;
 }
 
-void rx_window_destroy(RxWindow *w)
+void rx_window_destroy(RXWindow *w)
 {
     if (!w)
         return;

@@ -19,17 +19,17 @@
 
 #include "src/formats/buf.h"
 
-typedef struct RxSHA512 {
+typedef struct RXSHA512 {
     uint64_t state[8];
     uint64_t count;      /* bytes hashed */
     uint8_t  buf[128];   /* a partial block, count % 128 bytes */
-} RxSHA512;
+} RXSHA512;
 
 /* HMAC-SHA512 keyed once: `inner` and `outer` are the states after the
  * ipad and opad blocks, `ctx` the message in progress. */
-typedef struct RxHMACSHA512 {
-    RxSHA512 inner, outer, ctx;
-} RxHMACSHA512;
+typedef struct RXHMACSHA512 {
+    RXSHA512 inner, outer, ctx;
+} RXHMACSHA512;
 
 static const uint64_t rx_sha512_k[80] = {
     0x428a2f98d728ae22, 0x7137449123ef65cd, 0xb5c0fbcfec4d3b2f, 0xe9b5dba58189dbbc,
@@ -117,9 +117,9 @@ static inline void rx_sha512_block(uint64_t st[8], const uint8_t *p)
     rx_sha512_compress(st, m);
 }
 
-static inline void rx_sha512_init(RxSHA512 *s)
+static inline void rx_sha512_init(RXSHA512 *s)
 {
-    *s = (RxSHA512) {
+    *s = (RXSHA512) {
         .state = {
             0x6a09e667f3bcc908, 0xbb67ae8584caa73b, 0x3c6ef372fe94f82b, 0xa54ff53a5f1d36f1,
             0x510e527fade682d1, 0x9b05688c2b3e6c1f, 0x1f83d9abfb41bd6b, 0x5be0cd19137e2179,
@@ -127,7 +127,7 @@ static inline void rx_sha512_init(RxSHA512 *s)
     };
 }
 
-static inline void rx_sha512_update(RxSHA512 *s, const uint8_t *p, size_t n)
+static inline void rx_sha512_update(RXSHA512 *s, const uint8_t *p, size_t n)
 {
     size_t have = s->count % 128;
     s->count += n;
@@ -146,7 +146,7 @@ static inline void rx_sha512_update(RxSHA512 *s, const uint8_t *p, size_t n)
 }
 
 /* The padding: 0x80, zeros, the length in bits as 128 bits big-endian. */
-static inline void rx_sha512_final(RxSHA512 *s, uint8_t out[64])
+static inline void rx_sha512_final(RXSHA512 *s, uint8_t out[64])
 {
     size_t have = s->count % 128;
     s->buf[have++] = 0x80;
@@ -165,7 +165,7 @@ static inline void rx_sha512_final(RxSHA512 *s, uint8_t out[64])
 
 /* Keys longer than a block are hashed first (RFC 2104 2). Ready for a
  * message after this and after every final. */
-static inline void rx_hmac_sha512_init(RxHMACSHA512 *h, const uint8_t *key, size_t len)
+static inline void rx_hmac_sha512_init(RXHMACSHA512 *h, const uint8_t *key, size_t len)
 {
     uint8_t k[128] = { 0 }, pad[128];
     if (len > 128) {
@@ -188,12 +188,12 @@ static inline void rx_hmac_sha512_init(RxHMACSHA512 *h, const uint8_t *key, size
     memset_explicit(pad, 0, sizeof(pad));
 }
 
-static inline void rx_hmac_sha512_update(RxHMACSHA512 *h, const uint8_t *p, size_t n)
+static inline void rx_hmac_sha512_update(RXHMACSHA512 *h, const uint8_t *p, size_t n)
 {
     rx_sha512_update(&h->ctx, p, n);
 }
 
-static inline void rx_hmac_sha512_final(RxHMACSHA512 *h, uint8_t out[64])
+static inline void rx_hmac_sha512_final(RXHMACSHA512 *h, uint8_t out[64])
 {
     uint8_t in[64];
     rx_sha512_final(&h->ctx, in);
@@ -212,7 +212,7 @@ static inline void rx_pbkdf2_sha512(const uint8_t *pass, size_t pass_len,
                                     const uint8_t *salt, size_t salt_len, unsigned iter,
                                     uint8_t *dk, size_t dk_len)
 {
-    RxHMACSHA512 h;
+    RXHMACSHA512 h;
     rx_hmac_sha512_init(&h, pass, pass_len);
     uint64_t m[16] = { [8] = 1ull << 63, [15] = (128 + 64) * 8 };
     for (uint32_t i = 1; dk_len; i++) {

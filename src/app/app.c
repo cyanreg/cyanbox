@@ -9,7 +9,7 @@
  * Threads and ownership:
  *  - Everything here runs on the owner (main) thread, which alone touches
  *    the library, the deck and the window. Background work goes through
- *    RxJobs (rxbox/jobs.h), whose results come back in rx_app_tick(), which
+ *    RXJobs (rxbox/jobs.h), whose results come back in rx_app_tick(), which
  *    applies and frees them.
  *  - Two job queues: app->jobs (every CPU but one) analyses; a private
  *    two-thread queue decodes for the deck, makes artwork and reads sticks,
@@ -17,7 +17,7 @@
  *    behind a library-wide analysis.
  *    Request ids are per queue; each kind of request only ever goes to one
  *    of them.
- *  - A decode result's RxAudio is handed to the player: rx_deck_load takes
+ *  - A decode result's RXAudio is handed to the player: rx_deck_load takes
  *    it over on success (and releases the buffer it replaces only once the
  *    real-time thread has let go of it); on failure it stays ours to free.
  *  - The deck view's waveforms are its own copy, read from the library;
@@ -79,7 +79,7 @@
  * a message as new (src/ui/ui.cpp, status_bar). */
 #define STATUS_HOLD_US   8000000
 
-typedef struct RxAppPriv RxAppPriv;
+typedef struct RXAppPriv RXAppPriv;
 
 typedef struct Inflight {
     uint64_t request;
@@ -97,7 +97,7 @@ enum GpuState {
 typedef struct GpuEntry {
     uint64_t   track_id;
     uint64_t   texture;
-    RxWaveGpu *preview;
+    RXWaveGpu *preview;
     uint64_t   art_request;     /* io job in flight */
     uint8_t    art_state;
     uint8_t    wave_state;
@@ -118,30 +118,30 @@ typedef struct ExportMsg {
 
 /* Owned by the main thread; the export thread reads the inputs, writes
  * `result`, then sets `finished` last. The library is the export's
- * snapshot (RxAppPriv.export_lib), the thread's alone while it runs. */
+ * snapshot (RXAppPriv.export_lib), the thread's alone while it runs. */
 typedef struct ExportJob {
-    RxLibrary *lib;
+    RXLibrary *lib;
     char    *dest;
     int64_t *playlists;         /* ids of the selected playlists */
     int      nb_playlists;
     bool     whole_library, prune, ignore_unsynced, compat, dry_run;
-    RxMailbox *mb;
-    RxCancel  *cancel;
+    RXMailbox *mb;
+    RXCancel  *cancel;
     int      result;
     int      finished;          /* atomic */
 } ExportJob;
 
-struct RxAppPriv {
+struct RXAppPriv {
     bool     lib_open;
     bool     ui_ready;
     int      max_frames;
     uint64_t tick;
 
-    RxJobs  *io_jobs;           /* decodes and artwork */
-    RxArray  inflight;          /* Inflight: analyses queued and not yet applied */
+    RXJobs  *io_jobs;           /* decodes and artwork */
+    RXArray  inflight;          /* Inflight: analyses queued and not yet applied */
     int      analyses_failed;   /* since the queue was last empty */
     int64_t  status_held;       /* status_time of a failure's status, kept a while (0 none) */
-    RxArray  saves;             /* uint64_t: tracks whose state is due to be written */
+    RXArray  saves;             /* uint64_t: tracks whose state is due to be written */
 
     int      uploaded_palette[RX_DECKS];    /* palette of the deck's GPU waveforms, -1 none */
     uint64_t deck_track_id[RX_DECKS];
@@ -151,16 +151,16 @@ struct RxAppPriv {
     int64_t  play_last_us[RX_DECKS];
     bool     play_recorded[RX_DECKS];
 
-    RxArray  gpu;               /* GpuEntry, the browser's cache */
+    RXArray  gpu;               /* GpuEntry, the browser's cache */
     int      gpu_budget;
-    RxArray  wave_checks;       /* WaveCheck: the stored waveforms looked at */
+    RXArray  wave_checks;       /* WaveCheck: the stored waveforms looked at */
 
-    RxMailbox *export_mb;
-    RxCancel   export_cancel;
+    RXMailbox *export_mb;
+    RXCancel   export_cancel;
     int        export_phase;    /* enum ExportPhase */
     int64_t   *export_playlists;    /* ids of the selected playlists, taken at start */
     int        nb_export_playlists;
-    RxLibrary  export_lib;      /* the snapshot the dry run and the real run export */
+    RXLibrary  export_lib;      /* the snapshot the dry run and the real run export */
     bool       export_lib_open;
     unsigned   export_generation;   /* lib.generation when the snapshot was taken */
     ExportJob *export_job;      /* the run on the thread, NULL between runs */
@@ -191,7 +191,7 @@ static const char *palette_name(int palette)
     }
 }
 
-static void analysis_options(const RxConfig *cfg, RxAnalysisOptions *opt)
+static void analysis_options(const RXConfig *cfg, RXAnalysisOptions *opt)
 {
     rx_analysis_options_default(opt);
     if (cfg->bpm_min > 0 && cfg->bpm_max > cfg->bpm_min) {
@@ -202,12 +202,12 @@ static void analysis_options(const RxConfig *cfg, RxAnalysisOptions *opt)
     opt->allow_sections = cfg->allow_sections;
 }
 
-static const char *track_name(const RxTrack *t, char *buf, size_t size)
+static const char *track_name(const RXTrack *t, char *buf, size_t size)
 {
     return rx_track_display(t, buf, size);
 }
 
-void rx_app_set_status(RxApp *app, const char *fmt, ...)
+void rx_app_set_status(RXApp *app, const char *fmt, ...)
 {
     va_list args;
     va_start(args, fmt);
@@ -219,7 +219,7 @@ void rx_app_set_status(RxApp *app, const char *fmt, ...)
 }
 
 /* Decodes the library's thumbnail of a track (owner thread). */
-static int artwork_from_library(RxApp *app, uint64_t id, uint8_t **rgba, int *w, int *h)
+static int artwork_from_library(RXApp *app, uint64_t id, uint8_t **rgba, int *w, int *h)
 {
     uint8_t *jpeg = NULL;
     size_t size = 0;
@@ -234,11 +234,11 @@ static int artwork_from_library(RxApp *app, uint64_t id, uint8_t **rgba, int *w,
 
 /* ---------------------------------------------------------------- waveforms */
 
-static int queue_analysis(RxApp *app, RxTrack *t, unsigned what, bool force, bool override_lock);
+static int queue_analysis(RXApp *app, RXTrack *t, unsigned what, bool force, bool override_lock);
 
-static void waves_seen(const RxApp *app, uint64_t id, bool stale)
+static void waves_seen(const RXApp *app, uint64_t id, bool stale)
 {
-    RxAppPriv *priv = app->priv;
+    RXAppPriv *priv = app->priv;
     if (!priv)
         return;
     for (size_t i = 0; i < priv->wave_checks.nb; i++) {
@@ -259,17 +259,17 @@ static void waves_seen(const RxApp *app, uint64_t id, bool stale)
  * again when it is next needed. A track's are looked at once: the deck
  * and the table's preview record what their loads find, the rest is a
  * load here. */
-static bool waves_stale(const RxApp *app, const RxTrack *t)
+static bool waves_stale(const RXApp *app, const RXTrack *t)
 {
     if (!t->has_waveforms)
         return false;
-    RxAppPriv *priv = app->priv;
+    RXAppPriv *priv = app->priv;
     for (size_t i = 0; priv && i < priv->wave_checks.nb; i++) {
         const WaveCheck *c = rx_array_at(&priv->wave_checks, i);
         if (c->track_id == t->id)
             return c->stale;
     }
-    RxWaveforms w = { 0 };
+    RXWaveforms w = { 0 };
     int ret = rx_library_waveforms_load(&app->lib, t->id, &w);
     rx_waveforms_free(&w);
     bool stale = ret == RX_ERROR(EPROTO);
@@ -279,7 +279,7 @@ static bool waves_stale(const RxApp *app, const RxTrack *t)
 
 /* -------------------------------------------------------------------- saves */
 
-void rx_app_save_track(RxApp *app, RxTrack *t)
+void rx_app_save_track(RXApp *app, RXTrack *t)
 {
     if (!t)
         return;
@@ -293,9 +293,9 @@ void rx_app_save_track(RxApp *app, RxTrack *t)
     app->rows_dirty = true;
 }
 
-static void queue_save(RxApp *app, RxTrack *t)
+static void queue_save(RXApp *app, RXTrack *t)
 {
-    RxAppPriv *priv = app->priv;
+    RXAppPriv *priv = app->priv;
     if (!priv) {
         rx_app_save_track(app, t);
         return;
@@ -308,13 +308,13 @@ static void queue_save(RxApp *app, RxTrack *t)
         rx_app_save_track(app, t);
 }
 
-static bool flush_saves(RxApp *app)
+static bool flush_saves(RXApp *app)
 {
-    RxAppPriv *priv = app->priv;
+    RXAppPriv *priv = app->priv;
     if (!priv || !priv->saves.nb)
         return false;
     for (size_t i = 0; i < priv->saves.nb; i++) {
-        RxTrack *t = rx_library_find_id(&app->lib, *(uint64_t *)rx_array_at(&priv->saves, i));
+        RXTrack *t = rx_library_find_id(&app->lib, *(uint64_t *)rx_array_at(&priv->saves, i));
         if (t)
             rx_app_save_track(app, t);
     }
@@ -325,8 +325,8 @@ static bool flush_saves(RxApp *app)
 /* The deck controls edited a track's cues or grid (owner thread). */
 static void deck_changed(void *opaque, int deck)
 {
-    RxApp *app = opaque;
-    RxTrack *t = app->decks[deck].ctl.track;
+    RXApp *app = opaque;
+    RXTrack *t = app->decks[deck].ctl.track;
     if (t)
         queue_save(app, t);
     app->dirty = true;
@@ -334,7 +334,7 @@ static void deck_changed(void *opaque, int deck)
 
 /* -------------------------------------------------------- browser GPU cache */
 
-static void gpu_entry_release(RxApp *app, GpuEntry *e)
+static void gpu_entry_release(RXApp *app, GpuEntry *e)
 {
     if (app->window) {
         if (e->texture)
@@ -349,7 +349,7 @@ static void gpu_entry_release(RxApp *app, GpuEntry *e)
     e->art_request = 0;
 }
 
-static GpuEntry *gpu_find(RxAppPriv *priv, uint64_t id)
+static GpuEntry *gpu_find(RXAppPriv *priv, uint64_t id)
 {
     for (size_t i = 0; i < priv->gpu.nb; i++) {
         GpuEntry *e = rx_array_at(&priv->gpu, i);
@@ -361,9 +361,9 @@ static GpuEntry *gpu_find(RxAppPriv *priv, uint64_t id)
 
 /* The entry for a track, made when absent; beyond GPU_CACHE_MAX the one
  * asked for least recently (and not this tick) is recycled. */
-static GpuEntry *gpu_entry(RxApp *app, uint64_t id)
+static GpuEntry *gpu_entry(RXApp *app, uint64_t id)
 {
-    RxAppPriv *priv = app->priv;
+    RXAppPriv *priv = app->priv;
     GpuEntry *e = gpu_find(priv, id);
     if (e)
         return e;
@@ -391,9 +391,9 @@ static GpuEntry *gpu_entry(RxApp *app, uint64_t id)
     return e;
 }
 
-uint64_t rx_app_artwork_texture(RxApp *app, const RxTrack *t)
+uint64_t rx_app_artwork_texture(RXApp *app, const RXTrack *t)
 {
-    RxAppPriv *priv = app->priv;
+    RXAppPriv *priv = app->priv;
     if (!priv || !app->window || !t)
         return 0;
     GpuEntry *e = gpu_entry(app, t->id);
@@ -424,18 +424,18 @@ uint64_t rx_app_artwork_texture(RxApp *app, const RxTrack *t)
     return e->texture;
 }
 
-bool rx_app_artwork_pending(RxApp *app, const RxTrack *t)
+bool rx_app_artwork_pending(RXApp *app, const RXTrack *t)
 {
-    RxAppPriv *priv = app->priv;
+    RXAppPriv *priv = app->priv;
     if (!priv || !app->window || !t)
         return false;
     const GpuEntry *e = gpu_find(priv, t->id);
     return !e || e->art_state != GPU_DONE;
 }
 
-RxWaveGpu *rx_app_preview_wave(RxApp *app, const RxTrack *t)
+RXWaveGpu *rx_app_preview_wave(RXApp *app, const RXTrack *t)
 {
-    RxAppPriv *priv = app->priv;
+    RXAppPriv *priv = app->priv;
     if (!priv || !app->window || !t)
         return NULL;
     GpuEntry *e = gpu_entry(app, t->id);
@@ -447,7 +447,7 @@ RxWaveGpu *rx_app_preview_wave(RxApp *app, const RxTrack *t)
      * state when they land. */
     if (e->wave_state == GPU_UNKNOWN && t->has_waveforms && priv->gpu_budget > 0) {
         priv->gpu_budget--;
-        RxWaveforms w = { 0 };
+        RXWaveforms w = { 0 };
         int ret = rx_library_waveforms_load(&app->lib, t->id, &w);
         if (ret >= 0)
             e->preview = rx_wave_upload(app->window, RX_WAVE_3BAND, w.pwv6, RX_WAVE_PWV6_COLUMNS);
@@ -455,7 +455,7 @@ RxWaveGpu *rx_app_preview_wave(RxApp *app, const RxTrack *t)
         e->wave_state = GPU_DONE;
         /* Stale ones are made again; the preview follows (gpu_forget_waves). */
         waves_seen(app, t->id, ret == RX_ERROR(EPROTO));
-        RxTrack *lt = ret == RX_ERROR(EPROTO) ? rx_library_find_id(&app->lib, t->id) : NULL;
+        RXTrack *lt = ret == RX_ERROR(EPROTO) ? rx_library_find_id(&app->lib, t->id) : NULL;
         if (lt)
             queue_analysis(app, lt, RX_ANALYSE_WAVES, false, false);
     }
@@ -463,7 +463,7 @@ RxWaveGpu *rx_app_preview_wave(RxApp *app, const RxTrack *t)
 }
 
 /* The waveforms of a track changed: its preview is made again on demand. */
-static void gpu_forget_waves(RxApp *app, uint64_t id)
+static void gpu_forget_waves(RXApp *app, uint64_t id)
 {
     if (!app->priv)
         return;
@@ -476,9 +476,9 @@ static void gpu_forget_waves(RxApp *app, uint64_t id)
     e->wave_state = GPU_UNKNOWN;
 }
 
-static void gpu_cache_free(RxApp *app)
+static void gpu_cache_free(RXApp *app)
 {
-    RxAppPriv *priv = app->priv;
+    RXAppPriv *priv = app->priv;
     for (size_t i = 0; i < priv->gpu.nb; i++)
         gpu_entry_release(app, rx_array_at(&priv->gpu, i));
     rx_array_free(&priv->gpu);
@@ -486,7 +486,7 @@ static void gpu_cache_free(RxApp *app)
 
 /* --------------------------------------------------------------------- deck */
 
-static void release_waves_gpu(RxApp *app, RxDeckView *dv)
+static void release_waves_gpu(RXApp *app, RXDeckView *dv)
 {
     if (app->window) {
         if (dv->wave_preview)
@@ -498,7 +498,7 @@ static void release_waves_gpu(RxApp *app, RxDeckView *dv)
     dv->wave_detail = NULL;
 }
 
-static void release_artwork(RxApp *app, RxDeckView *dv)
+static void release_artwork(RXApp *app, RXDeckView *dv)
 {
     if (app->window && dv->artwork)
         rx_texture_destroy(app->window, dv->artwork);
@@ -507,14 +507,14 @@ static void release_artwork(RxApp *app, RxDeckView *dv)
 
 /* Uploads the deck's waveforms in the current palette (or releases them
  * when there are none). */
-static void deck_upload_waves(RxApp *app, int deck)
+static void deck_upload_waves(RXApp *app, int deck)
 {
-    RxDeckView *dv = &app->decks[deck];
+    RXDeckView *dv = &app->decks[deck];
     release_waves_gpu(app, dv);
     if (app->priv)
         app->priv->uploaded_palette[deck] = app->wave_palette;
 
-    const RxWaveforms *w = &dv->waves;
+    const RXWaveforms *w = &dv->waves;
     if (!app->window || w->nb_detail <= 0)
         return;
 
@@ -542,9 +542,9 @@ static void deck_upload_waves(RxApp *app, int deck)
 
 /* Reads the deck track's waveforms from the library into the deck view;
  * the GPU copy follows on the next tick. */
-static void deck_load_waves(RxApp *app, int deck)
+static void deck_load_waves(RXApp *app, int deck)
 {
-    RxDeckView *dv = &app->decks[deck];
+    RXDeckView *dv = &app->decks[deck];
     rx_waveforms_free(&dv->waves);
     memset(&dv->waves, 0, sizeof(dv->waves));
     if (app->priv)
@@ -565,7 +565,7 @@ static void deck_load_waves(RxApp *app, int deck)
     }
 }
 
-static void deck_set_artwork(RxApp *app, RxDeckView *dv, const uint8_t *rgba, int w, int h)
+static void deck_set_artwork(RXApp *app, RXDeckView *dv, const uint8_t *rgba, int w, int h)
 {
     release_artwork(app, dv);
     if (app->window && rgba)
@@ -575,10 +575,10 @@ static void deck_set_artwork(RxApp *app, RxDeckView *dv, const uint8_t *rgba, in
 /* Drops what the deck view holds for its track: the artwork request, the
  * waveforms and their uploads, the artwork, the play count. The player is
  * left alone. */
-static void deck_view_reset(RxApp *app, int deck)
+static void deck_view_reset(RXApp *app, int deck)
 {
-    RxDeckView *dv = &app->decks[deck];
-    RxAppPriv *priv = app->priv;
+    RXDeckView *dv = &app->decks[deck];
+    RXAppPriv *priv = app->priv;
 
     if (priv && priv->io_jobs && dv->artwork_request)
         rx_jobs_cancel(priv->io_jobs, dv->artwork_request);
@@ -603,10 +603,10 @@ static void deck_view_reset(RxApp *app, int deck)
 
 /* Empties the deck: cancels its loads, unloads the player, drops the
  * waveforms and the artwork. */
-static void deck_clear(RxApp *app, int deck)
+static void deck_clear(RXApp *app, int deck)
 {
-    RxDeckView *dv = &app->decks[deck];
-    RxAppPriv *priv = app->priv;
+    RXDeckView *dv = &app->decks[deck];
+    RXAppPriv *priv = app->priv;
 
     if (priv && priv->io_jobs && dv->loading_request)
         rx_jobs_cancel(priv->io_jobs, dv->loading_request);
@@ -620,7 +620,7 @@ static void deck_clear(RxApp *app, int deck)
     deck_view_reset(app, deck);
 }
 
-int rx_app_load_deck(RxApp *app, int deck, RxTrack *t)
+int rx_app_load_deck(RXApp *app, int deck, RXTrack *t)
 {
     if (deck < 0 || deck >= RX_DECKS || !t)
         return RX_ERROR(EINVAL);
@@ -636,13 +636,13 @@ int rx_app_load_deck(RxApp *app, int deck, RxTrack *t)
 
     /* Replacing a playing track is the interface's decision (it asks, then
      * pauses and calls again). */
-    RxDeckState st;
+    RXDeckState st;
     rx_deck_state(app->player, deck, &st);
     if (st.playing)
         return RX_ERROR(EBUSY);
 
-    RxDeckView *dv = &app->decks[deck];
-    RxJobs *io = app->priv->io_jobs;
+    RXDeckView *dv = &app->decks[deck];
+    RXJobs *io = app->priv->io_jobs;
     if (dv->loading_request)
         rx_jobs_cancel(io, dv->loading_request);
     dv->loading_request = 0;
@@ -660,7 +660,7 @@ int rx_app_load_deck(RxApp *app, int deck, RxTrack *t)
     return 0;
 }
 
-void rx_app_unload_deck(RxApp *app, int deck)
+void rx_app_unload_deck(RXApp *app, int deck)
 {
     if (deck < 0 || deck >= RX_DECKS)
         return;
@@ -673,14 +673,14 @@ void rx_app_unload_deck(RxApp *app, int deck)
  * audio that really played forward: a seek, a jump, a loop wrapping or a
  * scrub adds nothing, and what a loop or a repeated hot cue plays again
  * counts once (PLAY_BIN). */
-static void track_plays(RxApp *app, int deck)
+static void track_plays(RXApp *app, int deck)
 {
-    RxAppPriv *priv = app->priv;
-    RxDeckView *dv = &app->decks[deck];
+    RXAppPriv *priv = app->priv;
+    RXDeckView *dv = &app->decks[deck];
     if (!app->player || !dv->track || priv->play_recorded[deck])
         return;
 
-    RxDeckState st;
+    RXDeckState st;
     rx_deck_state(app->player, deck, &st);
     int64_t now = rx_time_us();
     double last = priv->play_last_pos[deck];
@@ -720,7 +720,7 @@ static void track_plays(RxApp *app, int deck)
 
 /* ----------------------------------------------------------------- analysis */
 
-unsigned rx_app_analysis_needed(const RxApp *app, const RxTrack *t, unsigned what, bool force)
+unsigned rx_app_analysis_needed(const RXApp *app, const RXTrack *t, unsigned what, bool force)
 {
     if (!t || t->missing)
         return 0;
@@ -748,7 +748,7 @@ unsigned rx_app_analysis_needed(const RxApp *app, const RxTrack *t, unsigned wha
 
 /* Queues what a track lacks. Returns 1 when queued, 0 when there was
  * nothing to do (or the same work is already queued), or an error. */
-static int queue_analysis(RxApp *app, RxTrack *t, unsigned what, bool force, bool override_lock)
+static int queue_analysis(RXApp *app, RXTrack *t, unsigned what, bool force, bool override_lock)
 {
     if (!app->jobs || !t)
         return RX_ERROR(EINVAL);
@@ -761,7 +761,7 @@ static int queue_analysis(RxApp *app, RxTrack *t, unsigned what, bool force, boo
     if (!need)
         return 0;
 
-    RxAppPriv *priv = app->priv;
+    RXAppPriv *priv = app->priv;
     if (priv) {
         for (size_t i = 0; i < priv->inflight.nb; i++) {
             const Inflight *f = rx_array_at(&priv->inflight, i);
@@ -770,7 +770,7 @@ static int queue_analysis(RxApp *app, RxTrack *t, unsigned what, bool force, boo
         }
     }
 
-    RxAnalysisOptions opt;
+    RXAnalysisOptions opt;
     analysis_options(&app->lib.cfg, &opt);
     /* With other work queued the pool is the parallelism; a single
      * analysis on its own may use threads inside. */
@@ -795,7 +795,7 @@ static int queue_analysis(RxApp *app, RxTrack *t, unsigned what, bool force, boo
     return 1;
 }
 
-int rx_app_analyse_track(RxApp *app, RxTrack *t, unsigned what, bool force)
+int rx_app_analyse_track(RXApp *app, RXTrack *t, unsigned what, bool force)
 {
     if (!t)
         return RX_ERROR(EINVAL);
@@ -810,13 +810,13 @@ int rx_app_analyse_track(RxApp *app, RxTrack *t, unsigned what, bool force)
     return queue_analysis(app, t, what, force, force);
 }
 
-int rx_app_analyse_all(RxApp *app, bool force)
+int rx_app_analyse_all(RXApp *app, bool force)
 {
     /* Library-wide, locked grids are kept even when forced: a bulk
      * re-analysis must not undo grids fixed by hand. */
     int queued = 0;
     for (int i = 0; i < app->lib.nb_tracks; i++) {
-        RxTrack *t = app->lib.tracks[i];
+        RXTrack *t = app->lib.tracks[i];
         if (!t->missing && queue_analysis(app, t, RX_ANALYSE_ALL, force, false) > 0)
             queued++;
     }
@@ -829,18 +829,18 @@ int rx_app_analyse_all(RxApp *app, bool force)
 
 /* override_lock: a forced analysis of one track replaces its locked grid
  * (the lock stays). */
-static int apply_analysis(RxApp *app, RxTrack *t, RxAnalysis *a, bool override_lock)
+static int apply_analysis(RXApp *app, RXTrack *t, RXAnalysis *a, bool override_lock)
 {
     if (!t || !a)
         return RX_ERROR(EINVAL);
 
-    RxLibrary *lib = &app->lib;
+    RXLibrary *lib = &app->lib;
     int err = 0;
 
     bool grid_changed = false;
     if ((a->done & RX_ANALYSE_BEATS) && (!t->grid_locked || override_lock) &&
         rx_grid_valid(&a->beats.grid)) {
-        RxGrid g = { 0 };
+        RXGrid g = { 0 };
         int ret = rx_grid_copy(&g, &a->beats.grid);
         if (ret < 0)
             return ret;
@@ -872,7 +872,7 @@ static int apply_analysis(RxApp *app, RxTrack *t, RxAnalysis *a, bool override_l
      * that grid. */
     if ((a->done & RX_ANALYSE_BEATS) && lib->cfg.auto_cues && !t->nb_cues &&
         rx_grid_valid(&t->grid)) {
-        RxBeatResult b = a->beats;
+        RXBeatResult b = a->beats;
         b.grid = t->grid;
         int ret = rx_analysis_auto_cues(t, &b);
         if (ret < 0)
@@ -900,7 +900,7 @@ static int apply_analysis(RxApp *app, RxTrack *t, RxAnalysis *a, bool override_l
         err = ret;
 
     for (int d = 0; d < RX_DECKS; d++) {
-        RxDeckView *dv = &app->decks[d];
+        RXDeckView *dv = &app->decks[d];
         if (dv->track != t)
             continue;
         if (grid_changed && app->player)
@@ -914,12 +914,12 @@ static int apply_analysis(RxApp *app, RxTrack *t, RxAnalysis *a, bool override_l
     return err;
 }
 
-int rx_app_apply_analysis(RxApp *app, RxTrack *t, RxAnalysis *a)
+int rx_app_apply_analysis(RXApp *app, RXTrack *t, RXAnalysis *a)
 {
     return apply_analysis(app, t, a, false);
 }
 
-int rx_app_rescan(RxApp *app)
+int rx_app_rescan(RXApp *app)
 {
     int ret = rx_library_rescan_missing(&app->lib);
     if (ret < 0) {
@@ -938,7 +938,7 @@ int rx_app_rescan(RxApp *app)
 
 /* -------------------------------------------------------------- job results */
 
-static bool take_inflight(RxAppPriv *priv, uint64_t request, Inflight *out)
+static bool take_inflight(RXAppPriv *priv, uint64_t request, Inflight *out)
 {
     for (size_t i = 0; i < priv->inflight.nb; i++) {
         Inflight *f = rx_array_at(&priv->inflight, i);
@@ -974,14 +974,14 @@ static const char *analysis_error(int err)
  * tick) would otherwise replace it before it is drawn. Any other message
  * set meanwhile ends that. The row's spinner follows the worker
  * (rx_jobs_active_tracks), which is idle again by now, failed or not. */
-static void handle_analysis(RxApp *app, RxJobResult *r)
+static void handle_analysis(RXApp *app, RXJobResult *r)
 {
-    RxAppPriv *priv = app->priv;
+    RXAppPriv *priv = app->priv;
     Inflight f = { 0 };
     take_inflight(priv, r->request, &f);
     app->analysing_done++;
 
-    RxTrack *t = rx_library_find_id(&app->lib, r->track_id);
+    RXTrack *t = rx_library_find_id(&app->lib, r->track_id);
     char name[256];
     bool held = priv->status_held && priv->status_held == app->status_time &&
                 rx_time_us() - app->status_time < STATUS_HOLD_US;
@@ -1024,12 +1024,12 @@ static void handle_analysis(RxApp *app, RxJobResult *r)
     }
 }
 
-static void handle_decode(RxApp *app, RxJobResult *r)
+static void handle_decode(RXApp *app, RXJobResult *r)
 {
     int deck = r->deck;
     if (deck < 0 || deck >= RX_DECKS)
         return;
-    RxDeckView *dv = &app->decks[deck];
+    RXDeckView *dv = &app->decks[deck];
 
     /* A result for a request the deck has moved on from is dropped. */
     if (!r->request || r->request != dv->loading_request)
@@ -1038,7 +1038,7 @@ static void handle_decode(RxApp *app, RxJobResult *r)
     dv->loading_request = 0;
     dv->loading_track_id = 0;
 
-    RxTrack *t = rx_library_find_id(&app->lib, id);
+    RXTrack *t = rx_library_find_id(&app->lib, id);
     if (!t) {
         rx_app_set_status(app, "Not loaded: the track left the library meanwhile");
         return;
@@ -1060,7 +1060,7 @@ static void handle_decode(RxApp *app, RxJobResult *r)
      * replaces what the deck plays, so the old track goes only once the
      * new one is in: a player that cannot take it (its command queue full
      * while the output stalls) keeps the track it has. */
-    RxAudio *audio = r->audio;
+    RXAudio *audio = r->audio;
     r->audio = NULL;
     int ret = rx_deck_load(app->player, deck, audio, rx_grid_valid(&t->grid) ? &t->grid : NULL);
     if (ret < 0) {
@@ -1097,10 +1097,10 @@ static void handle_decode(RxApp *app, RxJobResult *r)
     rx_app_set_status(app, "Loaded %s", name);
 }
 
-static void handle_artwork(RxApp *app, RxJobResult *r)
+static void handle_artwork(RXApp *app, RXJobResult *r)
 {
-    RxAppPriv *priv = app->priv;
-    RxTrack *t = rx_library_find_id(&app->lib, r->track_id);
+    RXAppPriv *priv = app->priv;
+    RXTrack *t = rx_library_find_id(&app->lib, r->track_id);
 
     /* The thumbnail goes into the library whoever asked. */
     if (t && r->err >= 0 && r->jpeg) {
@@ -1113,7 +1113,7 @@ static void handle_artwork(RxApp *app, RxJobResult *r)
     bool ok = r->err >= 0 && r->rgba;
 
     for (int d = 0; d < RX_DECKS; d++) {
-        RxDeckView *dv = &app->decks[d];
+        RXDeckView *dv = &app->decks[d];
         if (!dv->artwork_request || dv->artwork_request != r->request)
             continue;
         dv->artwork_request = 0;
@@ -1134,12 +1134,12 @@ static void handle_artwork(RxApp *app, RxJobResult *r)
 
 /* A stick read or inspection is kept whole until the interface takes it.
  * drain_jobs frees the result it hands in, so the payload moves to a copy. */
-static void handle_stick(RxApp *app, RxJobResult *r)
+static void handle_stick(RXApp *app, RXJobResult *r)
 {
     if (r->request != app->stick_request)
         return;
     app->stick_request = 0;
-    RxJobResult *keep = malloc(sizeof(*keep));
+    RXJobResult *keep = malloc(sizeof(*keep));
     if (!keep) {
         rx_app_set_status(app, "Out of memory reading the stick");
         return;
@@ -1153,7 +1153,7 @@ static void handle_stick(RxApp *app, RxJobResult *r)
     app->stick_result = keep;
 }
 
-static void handle_result(RxApp *app, RxJobResult *r)
+static void handle_result(RXApp *app, RXJobResult *r)
 {
     switch (r->kind) {
     case RX_JOB_ANALYSE:
@@ -1174,9 +1174,9 @@ static void handle_result(RxApp *app, RxJobResult *r)
 
 /* On the io queue: a read is mostly waiting on the stick, and must not
  * queue behind a library-wide analysis. */
-static int stick_job(RxApp *app, const char *mount, bool inspect)
+static int stick_job(RXApp *app, const char *mount, bool inspect)
 {
-    RxAppPriv *priv = app->priv;
+    RXAppPriv *priv = app->priv;
     if (!priv || !priv->io_jobs || !mount || !mount[0])
         return RX_ERROR(EINVAL);
     if (app->stick_request)
@@ -1196,19 +1196,19 @@ static int stick_job(RxApp *app, const char *mount, bool inspect)
     return 0;
 }
 
-int rx_app_read_stick(RxApp *app, const char *mount)
+int rx_app_read_stick(RXApp *app, const char *mount)
 {
     return stick_job(app, mount, false);
 }
 
-int rx_app_inspect_stick(RxApp *app, const char *mount)
+int rx_app_inspect_stick(RXApp *app, const char *mount)
 {
     return stick_job(app, mount, true);
 }
 
 /* A running read cannot be stopped; with stick_request moved on,
  * handle_stick drops its result when it comes. */
-void rx_app_cancel_stick(RxApp *app, uint64_t request)
+void rx_app_cancel_stick(RXApp *app, uint64_t request)
 {
     if (!request)
         return;
@@ -1226,11 +1226,11 @@ void rx_app_cancel_stick(RxApp *app, uint64_t request)
 /* ----------------------------------------------------------------- add path */
 
 typedef struct AddCtx {
-    RxArray ids;
+    RXArray ids;
     int     failed;
 } AddCtx;
 
-static void add_cb(void *opaque, const char *path, RxTrack *added, int err)
+static void add_cb(void *opaque, const char *path, RXTrack *added, int err)
 {
     AddCtx *ctx = opaque;
     if (err < 0) {
@@ -1242,7 +1242,7 @@ static void add_cb(void *opaque, const char *path, RxTrack *added, int err)
         ctx->failed++;
 }
 
-int rx_app_add_path(RxApp *app, const char *path)
+int rx_app_add_path(RXApp *app, const char *path)
 {
     char *abs = rx_path_abs(path);
     if (!abs) {
@@ -1264,7 +1264,7 @@ int rx_app_add_path(RxApp *app, const char *path)
      * still lack something. */
     int queued = 0;
     for (size_t i = 0; i < ctx.ids.nb; i++) {
-        RxTrack *t = rx_library_find_id(&app->lib, *(uint64_t *)rx_array_at(&ctx.ids, i));
+        RXTrack *t = rx_library_find_id(&app->lib, *(uint64_t *)rx_array_at(&ctx.ids, i));
         if (t && queue_analysis(app, t, RX_ANALYSE_ALL, false, false) > 0)
             queued++;
     }
@@ -1320,7 +1320,7 @@ static void export_msg_free(ExportMsg *m)
     free(m);
 }
 
-static void export_drain(RxAppPriv *priv)
+static void export_drain(RXAppPriv *priv)
 {
     if (!priv->export_mb)
         return;
@@ -1329,7 +1329,7 @@ static void export_drain(RxAppPriv *priv)
         export_msg_free(m);
 }
 
-static void export_prune_list_free(RxApp *app)
+static void export_prune_list_free(RXApp *app)
 {
     typeof(app->export_state) *es = &app->export_state;
     for (int i = 0; i < es->nb_prune; i++)
@@ -1340,8 +1340,8 @@ static void export_prune_list_free(RxApp *app)
 }
 
 /* Appends a line to the dialog's log, dropping the oldest lines when full. */
-static void export_log(RxApp *app, const char *fmt, ...) RX_PRINTF(2, 3);
-static void export_log(RxApp *app, const char *fmt, ...)
+static void export_log(RXApp *app, const char *fmt, ...) RX_PRINTF(2, 3);
+static void export_log(RXApp *app, const char *fmt, ...)
 {
     char line[512];
     va_list args;
@@ -1379,11 +1379,11 @@ static bool export_progress(void *opaque, const char *stage, int done, int total
 }
 
 /* Export thread: the selected playlists in its own library handle. */
-static int resolve_playlists(RxLibrary *lib, const ExportJob *ej, RxPlaylist ***out)
+static int resolve_playlists(RXLibrary *lib, const ExportJob *ej, RXPlaylist ***out)
 {
     int nb_all = rx_library_playlists_flat(lib, NULL, 0);
-    RxPlaylist **all = calloc(RX_MAX(nb_all, 1), sizeof(*all));
-    RxPlaylist **sel = calloc(ej->nb_playlists, sizeof(*sel));
+    RXPlaylist **all = calloc(RX_MAX(nb_all, 1), sizeof(*all));
+    RXPlaylist **sel = calloc(ej->nb_playlists, sizeof(*sel));
     if (!all || !sel) {
         free(all);
         free(sel);
@@ -1414,16 +1414,16 @@ static int resolve_playlists(RxLibrary *lib, const ExportJob *ej, RxPlaylist ***
 static void *export_main(void *arg)
 {
     ExportJob *ej = arg;
-    RxPlaylist **playlists = NULL;
+    RXPlaylist **playlists = NULL;
 
     int ret = 0;
     if (ej->nb_playlists)
         ret = resolve_playlists(ej->lib, ej, &playlists);
     if (ret >= 0) {
-        RxExportOptions opt;
+        RXExportOptions opt;
         rx_export_options_default(&opt);
         opt.whole_library = ej->whole_library;
-        opt.playlists = (const RxPlaylist *const *)playlists;
+        opt.playlists = (const RXPlaylist *const *)playlists;
         opt.nb_playlists = ej->nb_playlists;
         opt.prune = ej->prune;
         opt.ignore_unsynced = ej->ignore_unsynced;
@@ -1439,7 +1439,7 @@ static void *export_main(void *arg)
 }
 
 /* Joins the export thread and drops its job. */
-static void export_join(RxAppPriv *priv)
+static void export_join(RXAppPriv *priv)
 {
     if (priv->export_started) {
         pthread_join(priv->export_thread, NULL);
@@ -1451,16 +1451,16 @@ static void export_join(RxAppPriv *priv)
 }
 
 /* The export is over: its snapshot goes (after export_join). */
-static void export_snapshot_close(RxAppPriv *priv)
+static void export_snapshot_close(RXAppPriv *priv)
 {
     if (priv->export_lib_open)
         rx_library_close(&priv->export_lib);
     priv->export_lib_open = false;
 }
 
-static void export_finish(RxApp *app, int result)
+static void export_finish(RXApp *app, int result)
 {
-    RxAppPriv *priv = app->priv;
+    RXAppPriv *priv = app->priv;
     export_join(priv);
     export_snapshot_close(priv);
     priv->export_phase = EXPORT_IDLE;
@@ -1488,9 +1488,9 @@ static void export_finish(RxApp *app, int result)
 }
 
 /* Starts a dry or a real run on the export thread, from the dialog state. */
-static void export_run(RxApp *app, bool dry_run)
+static void export_run(RXApp *app, bool dry_run)
 {
-    RxAppPriv *priv = app->priv;
+    RXAppPriv *priv = app->priv;
     typeof(app->export_state) *es = &app->export_state;
 
     /* The snapshot both runs export, taken once pending saves are written
@@ -1582,9 +1582,9 @@ static int unsynced_changes(const char *item)
     return n > 0 && n < INT32_MAX ? (int)n : 1;
 }
 
-static void export_apply_msg(RxApp *app, const ExportMsg *m)
+static void export_apply_msg(RXApp *app, const ExportMsg *m)
 {
-    RxAppPriv *priv = app->priv;
+    RXAppPriv *priv = app->priv;
     typeof(app->export_state) *es = &app->export_state;
     bool dry = priv->export_phase == EXPORT_DRY_RUN;
 
@@ -1644,9 +1644,9 @@ static void export_apply_msg(RxApp *app, const ExportMsg *m)
 }
 
 /* A dry run ended: ask, run for real, or stop. */
-static void export_after_dry_run(RxApp *app, int result)
+static void export_after_dry_run(RXApp *app, int result)
 {
-    RxAppPriv *priv = app->priv;
+    RXAppPriv *priv = app->priv;
     typeof(app->export_state) *es = &app->export_state;
     export_join(priv);
 
@@ -1684,9 +1684,9 @@ static void export_after_dry_run(RxApp *app, int result)
     export_run(app, false);
 }
 
-static bool export_tick(RxApp *app)
+static bool export_tick(RXApp *app)
 {
-    RxAppPriv *priv = app->priv;
+    RXAppPriv *priv = app->priv;
     typeof(app->export_state) *es = &app->export_state;
     if (priv->export_phase == EXPORT_IDLE)
         return false;
@@ -1743,9 +1743,9 @@ static bool export_tick(RxApp *app)
 }
 
 /* Stops a running export for good (rx_app_destroy). */
-static void export_stop(RxApp *app)
+static void export_stop(RXApp *app)
 {
-    RxAppPriv *priv = app->priv;
+    RXAppPriv *priv = app->priv;
     rx_cancel(&priv->export_cancel);
     export_join(priv);
     export_snapshot_close(priv);
@@ -1755,9 +1755,9 @@ static void export_stop(RxApp *app)
     export_prune_list_free(app);
 }
 
-int rx_app_start_export(RxApp *app)
+int rx_app_start_export(RXApp *app)
 {
-    RxAppPriv *priv = app->priv;
+    RXAppPriv *priv = app->priv;
     typeof(app->export_state) *es = &app->export_state;
     if (!priv)
         return RX_ERROR(EINVAL);
@@ -1814,14 +1814,14 @@ int rx_app_start_export(RxApp *app)
     int queued = 0;
     if (es->whole_library) {
         for (int i = 0; i < app->lib.nb_tracks; i++) {
-            RxTrack *t = app->lib.tracks[i];
+            RXTrack *t = app->lib.tracks[i];
             if (!t->missing && queue_analysis(app, t, RX_ANALYSE_ALL, false, false) > 0)
                 queued++;
         }
     } else {
         int nb = es->nb_playlists;
-        RxPlaylist **pls = es->playlists;
-        RxPlaylist **all = NULL;
+        RXPlaylist **pls = es->playlists;
+        RXPlaylist **all = NULL;
         if (!nb || !pls) {
             nb = rx_library_playlists_flat(&app->lib, NULL, 0);
             all = calloc(RX_MAX(nb, 1), sizeof(*all));
@@ -1829,9 +1829,9 @@ int rx_app_start_export(RxApp *app)
             pls = all;
         }
         for (int i = 0; i < nb; i++) {
-            const RxPlaylist *p = pls[i];
+            const RXPlaylist *p = pls[i];
             for (int k = 0; p && k < p->nb; k++) {
-                RxTrack *t = rx_library_find_id(&app->lib, p->track_ids[k]);
+                RXTrack *t = rx_library_find_id(&app->lib, p->track_ids[k]);
                 if (t && !t->missing && queue_analysis(app, t, RX_ANALYSE_ALL, false, false) > 0)
                     queued++;
             }
@@ -1861,7 +1861,7 @@ typedef struct RowKey {
 } RowKey;
 
 typedef struct SortCtx {
-    const RxLibrary *lib;
+    const RXLibrary *lib;
     int  column;
     bool descending;
 } SortCtx;
@@ -1872,13 +1872,13 @@ typedef struct SortVal {
     const char *str;
 } SortVal;
 
-static const char *title_of(const RxTrack *t)
+static const char *title_of(const RXTrack *t)
 {
     return t->meta.title && t->meta.title[0] ? t->meta.title : rx_path_base(t->path);
 }
 
 /* Camelot order: 1A 1B 2A 2B ... 12B, which keeps compatible keys together. */
-static int key_rank(const RxTrack *t)
+static int key_rank(const RXTrack *t)
 {
     if (!t->key[0])
         return -1;
@@ -1893,7 +1893,7 @@ static int key_rank(const RxTrack *t)
     return (int)n * 2 + (*end == 'B' || *end == 'b');
 }
 
-static SortVal sort_value(const RxTrack *t, int column)
+static SortVal sort_value(const RXTrack *t, int column)
 {
     SortVal v = { 0 };
     switch (column) {
@@ -2011,7 +2011,7 @@ static bool field_matches(const char *field, const char *word)
 }
 
 /* Every word must be found in one of the fields the table shows. */
-static bool track_matches(const RxTrack *t, char **words, int nb_words)
+static bool track_matches(const RXTrack *t, char **words, int nb_words)
 {
     for (int i = 0; i < nb_words; i++) {
         const char *w = words[i];
@@ -2023,12 +2023,12 @@ static bool track_matches(const RxTrack *t, char **words, int nb_words)
     return true;
 }
 
-static bool playlist_exists(const RxLibrary *lib, const RxPlaylist *p)
+static bool playlist_exists(const RXLibrary *lib, const RXPlaylist *p)
 {
     int nb = rx_library_playlists_flat(lib, NULL, 0);
     if (nb <= 0)
         return false;
-    RxPlaylist **all = calloc(nb, sizeof(*all));
+    RXPlaylist **all = calloc(nb, sizeof(*all));
     if (!all)
         return true;
     nb = rx_library_playlists_flat(lib, all, nb);
@@ -2039,15 +2039,15 @@ static bool playlist_exists(const RxLibrary *lib, const RxPlaylist *p)
     return found;
 }
 
-void rx_app_rebuild_rows(RxApp *app)
+void rx_app_rebuild_rows(RXApp *app)
 {
-    RxLibrary *lib = &app->lib;
+    RXLibrary *lib = &app->lib;
 
     /* The interface may have deleted the playlist it was showing. */
     if (app->current_playlist && !playlist_exists(lib, app->current_playlist))
         app->current_playlist = NULL;
 
-    const RxPlaylist *pl = app->current_playlist;
+    const RXPlaylist *pl = app->current_playlist;
     int cap = pl ? pl->nb : lib->nb_tracks;
     RowKey *keys = calloc(RX_MAX(cap, 1), sizeof(*keys));
     if (!keys) {
@@ -2061,7 +2061,7 @@ void rx_app_rebuild_rows(RxApp *app)
 
     int nb = 0;
     for (int i = 0; i < cap; i++) {
-        const RxTrack *t = pl ? rx_library_find_id(lib, pl->track_ids[i]) : lib->tracks[i];
+        const RXTrack *t = pl ? rx_library_find_id(lib, pl->track_ids[i]) : lib->tracks[i];
         if (!t)
             continue;
         if (nb_words && !track_matches(t, words, nb_words))
@@ -2106,11 +2106,11 @@ void rx_app_rebuild_rows(RxApp *app)
 
 /* ---------------------------------------------------------------- lifecycle */
 
-int rx_app_create(RxApp *app, const char *library_root, const RxPlayerOptions *player_opt,
-                  const RxWindowOptions *window_opt)
+int rx_app_create(RXApp *app, const char *library_root, const RXPlayerOptions *player_opt,
+                  const RXWindowOptions *window_opt)
 {
     memset(app, 0, sizeof(*app));
-    RxAppPriv *priv = calloc(1, sizeof(*priv));
+    RXAppPriv *priv = calloc(1, sizeof(*priv));
     if (!priv)
         return RX_ERROR(ENOMEM);
     app->priv = priv;
@@ -2135,7 +2135,7 @@ int rx_app_create(RxApp *app, const char *library_root, const RxPlayerOptions *p
         goto fail;
     }
     priv->lib_open = true;
-    const RxConfig *cfg = &app->lib.cfg;
+    const RXConfig *cfg = &app->lib.cfg;
 
     /* One core stays with the interface and the audio. */
     long cpus = sysconf(_SC_NPROCESSORS_ONLN);
@@ -2146,7 +2146,7 @@ int rx_app_create(RxApp *app, const char *library_root, const RxPlayerOptions *p
     if (ret < 0)
         goto fail;
 
-    RxPlayerOptions po;
+    RXPlayerOptions po;
     if (player_opt) {
         po = *player_opt;
     } else {
@@ -2167,7 +2167,7 @@ int rx_app_create(RxApp *app, const char *library_root, const RxPlayerOptions *p
         goto fail;
 
     for (int d = 0; d < RX_DECKS; d++) {
-        RxDeckView *dv = &app->decks[d];
+        RXDeckView *dv = &app->decks[d];
         rx_ctl_init(&dv->ctl, app->player, d, deck_changed, app);
         dv->zoom_bars = cfg->detail_bars > 0 ? cfg->detail_bars : 12;
     }
@@ -2204,9 +2204,9 @@ fail:
     return ret;
 }
 
-void rx_app_destroy(RxApp *app)
+void rx_app_destroy(RXApp *app)
 {
-    RxAppPriv *priv = app->priv;
+    RXAppPriv *priv = app->priv;
     if (!priv)
         return;
 
@@ -2267,10 +2267,10 @@ void rx_app_destroy(RxApp *app)
     app->priv = NULL;
 }
 
-static int drain_jobs(RxApp *app, RxJobs *jobs, int max)
+static int drain_jobs(RXApp *app, RXJobs *jobs, int max)
 {
     int n = 0;
-    RxJobResult *r;
+    RXJobResult *r;
     while (n < max && (r = rx_jobs_poll(jobs))) {
         handle_result(app, r);
         rx_job_result_free(r);
@@ -2279,9 +2279,9 @@ static int drain_jobs(RxApp *app, RxJobs *jobs, int max)
     return n;
 }
 
-bool rx_app_tick(RxApp *app)
+bool rx_app_tick(RXApp *app)
 {
-    RxAppPriv *priv = app->priv;
+    RXAppPriv *priv = app->priv;
     if (!priv)
         return false;
 
@@ -2292,7 +2292,7 @@ bool rx_app_tick(RxApp *app)
     /* A track removed from the library while loaded: the deck lets go of
      * it before anything (a job result among them) looks at it. */
     for (int d = 0; d < RX_DECKS; d++) {
-        RxDeckView *dv = &app->decks[d];
+        RXDeckView *dv = &app->decks[d];
         if (dv->track && rx_library_find_id(&app->lib, priv->deck_track_id[d]) != dv->track) {
             dv->track = NULL;
             deck_clear(app, d);
@@ -2310,7 +2310,7 @@ bool rx_app_tick(RxApp *app)
         changed = true;
 
     for (int d = 0; d < RX_DECKS; d++) {
-        RxDeckView *dv = &app->decks[d];
+        RXDeckView *dv = &app->decks[d];
         if (app->player)
             rx_ctl_tick(&dv->ctl);
         track_plays(app, d);
@@ -2334,12 +2334,12 @@ bool rx_app_tick(RxApp *app)
     return changed;
 }
 
-static bool deck_moving(const RxApp *app)
+static bool deck_moving(const RXApp *app)
 {
     if (!app->player)
         return false;
     for (int d = 0; d < RX_DECKS; d++) {
-        RxDeckState st;
+        RXDeckState st;
         rx_deck_state(app->player, d, &st);
         if (st.playing || st.scrubbing)
             return true;
@@ -2349,9 +2349,9 @@ static bool deck_moving(const RxApp *app)
 
 /* Remembers the waveform palette in the library's settings, only when it
  * changed. */
-static void save_ui_prefs(RxApp *app)
+static void save_ui_prefs(RXApp *app)
 {
-    RxConfig *cfg = &app->lib.cfg;
+    RXConfig *cfg = &app->lib.cfg;
     const char *palette = palette_name(app->wave_palette);
     if (!strcmp(cfg->wave_palette, palette))
         return;
@@ -2361,12 +2361,12 @@ static void save_ui_prefs(RxApp *app)
         rx_warn("cannot save the interface settings: %s", strerror(-ret));
 }
 
-int rx_app_run(RxApp *app)
+int rx_app_run(RXApp *app)
 {
     if (!app->window || !app->priv)
         return RX_ERROR(EINVAL);
 
-    RxAppPriv *priv = app->priv;
+    RXAppPriv *priv = app->priv;
     bool ui_wants = true;
     app->dirty = true;
 

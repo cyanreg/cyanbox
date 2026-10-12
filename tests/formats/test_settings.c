@@ -28,7 +28,7 @@ static int read_fixture(const char *name, uint8_t **b, size_t *n)
 
 static void match_rekordbox(void)
 {
-    RxKv changes[4][1] = {
+    RXKv changes[4][1] = {
         { { "tempo_range", "6" } }, { { 0 } }, { { 0 } }, { { "waveform_color", "rgb" } },
     };
     int nb[4] = { 1, 0, 0, 1 };
@@ -42,7 +42,7 @@ static void match_rekordbox(void)
         free(ours);
 
         /* Decoding and encoding every value gives the file back. */
-        RxKv *kv;
+        RXKv *kv;
         int n;
         CHECK_EQ(rx_settings_decode(files[i], ref, rn, &kv, &n), 0);
         CHECK(n > 0);
@@ -66,25 +66,25 @@ static void errors(void)
 {
     uint8_t *b;
     size_t n;
-    RxKv bad_value = { "tempo_range", "12" };
+    RXKv bad_value = { "tempo_range", "12" };
     CHECK_EQ(rx_settings_encode("MYSETTING.DAT", &bad_value, 1, &b, &n), RX_ERROR(EINVAL));
-    RxKv not_bool = { "tempo_range", "true" };
+    RXKv not_bool = { "tempo_range", "true" };
     CHECK_EQ(rx_settings_encode("MYSETTING.DAT", &not_bool, 1, &b, &n), RX_ERROR(EINVAL));
-    RxKv unknown = { "bogus", "1" };
+    RXKv unknown = { "bogus", "1" };
     CHECK_EQ(rx_settings_encode("MYSETTING.DAT", &unknown, 1, &b, &n), RX_ERROR(EINVAL));
 
-    RxConfig cfg = { .player = &unknown, .nb_player = 1 };
-    RxSettingsFile out[4];
+    RXConfig cfg = { .player = &unknown, .nb_player = 1 };
+    RXSettingsFile out[4];
     int nf;
     CHECK_EQ(rx_settings_from_config(&cfg, out, &nf), RX_ERROR(EINVAL));
     CHECK_EQ(nf, 0);
 
     /* dj's normalisation: case, spaces, '&' and '%' do not matter. */
-    RxKv loose[2] = { { "vinyl_speed_adjust", "Touch & Release" }, { "beat_jump_beats", "16" } };
+    RXKv loose[2] = { { "vinyl_speed_adjust", "Touch & Release" }, { "beat_jump_beats", "16" } };
     CHECK_EQ(rx_settings_encode("MYSETTING2.DAT", loose, 2, &b, &n), 0);
     CHECK(n == 148 && b[0x68] == 0x80 && b[0x68 + 12] == 0x85);
     free(b);
-    RxKv onoff[3] = { { "quantize", "off" }, { "sync", "1" }, { "quantize_beat_value", "1/2" } };
+    RXKv onoff[3] = { { "quantize", "off" }, { "sync", "1" }, { "quantize_beat_value", "1/2" } };
     CHECK_EQ(rx_settings_encode("MYSETTING.DAT", onoff, 3, &b, &n), 0);
     CHECK(b[0x68 + 10] == 0x80 && b[0x68 + 22] == 0x81 && b[0x68 + 24] == 0x81);
     free(b);
@@ -92,10 +92,10 @@ static void errors(void)
 
 static void from_config(void)
 {
-    RxKv player[2] = { { "quantize", "true" }, { "jog_display_mode", "artwork" } };
-    RxKv device[2] = { { "background_color", "blue" }, { "waveform_color", "3band" } };
-    RxConfig cfg = { .player = player, .nb_player = 2, .device = device, .nb_device = 2 };
-    RxSettingsFile out[4];
+    RXKv player[2] = { { "quantize", "true" }, { "jog_display_mode", "artwork" } };
+    RXKv device[2] = { { "background_color", "blue" }, { "waveform_color", "3band" } };
+    RXConfig cfg = { .player = player, .nb_player = 2, .device = device, .nb_device = 2 };
+    RXSettingsFile out[4];
     int nf;
     CHECK_EQ(rx_settings_from_config(&cfg, out, &nf), 0);
     CHECK_EQ(nf, 3);
@@ -111,7 +111,7 @@ static void from_config(void)
 
     /* The background colour alone writes no DEVSETTING.DAT: it lives in
      * the databases. */
-    cfg = (RxConfig) { .device = device, .nb_device = 1 };
+    cfg = (RXConfig) { .device = device, .nb_device = 1 };
     CHECK_EQ(rx_settings_from_config(&cfg, out, &nf), 0);
     CHECK_EQ(nf, 0);
 }

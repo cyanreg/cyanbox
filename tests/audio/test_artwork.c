@@ -82,7 +82,7 @@ static void expect_cover(const char *root, const char *name, const Place *files,
     char *found = NULL;
     int ret = rx_artwork_find_file(track, &found);
     /* What the probe says is what the deck and the stick will show */
-    RxProbe p;
+    RXProbe p;
     CHECK(rx_probe(track, &p) >= 0 && p.has_artwork == (want != NULL), "%s: probe has_artwork %d",
           name, p.has_artwork);
     rx_probe_free(&p);
@@ -223,7 +223,7 @@ int main(void)
           "bare file: folder cover %s", codec);
     free(rawb);
 
-    RxProbe p;
+    RXProbe p;
     CHECK(rx_probe(art, &p) >= 0 && p.has_artwork, "probe: no artwork");
     rx_probe_free(&p);
     /* Nothing embedded, but the folder's cover is its cover all the same */

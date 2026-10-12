@@ -115,7 +115,7 @@ static void align_band(const float *ref, float *v, int n)
     }
 }
 
-int rx_onsets_compute(RxSpectrum *s, RxOnsets *o)
+int rx_onsets_compute(RXSpectrum *s, RXOnsets *o)
 {
     memset(o, 0, sizeof(*o));
     const int n = s->nb_frames;
@@ -161,7 +161,7 @@ int rx_onsets_compute(RxSpectrum *s, RxOnsets *o)
     return 0;
 }
 
-void rx_onsets_free(RxOnsets *o)
+void rx_onsets_free(RXOnsets *o)
 {
     free(o->full);
     free(o->low);
@@ -177,7 +177,7 @@ static int cmp_float(const void *a, const void *b)
     return (x > y) - (x < y);
 }
 
-double rx_onsets_first(const RxOnsets *o)
+double rx_onsets_first(const RXOnsets *o)
 {
     /* dj's rule: the first frame above a quarter of the 99th percentile,
      * i.e. the first onset that is loud for this track. */

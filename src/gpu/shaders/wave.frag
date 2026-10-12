@@ -57,8 +57,8 @@ layout(push_constant, std430) uniform Push {
     float   col_per_px;     // columns per framebuffer pixel
     int     col_base;       // integer part of the first column, for precision
     int     nb_columns;
-    int     kind;           // enum RxWaveKind
-    int     mode;           // enum RxWaveMode
+    int     kind;           // enum RXWaveKind
+    int     mode;           // enum RXWaveMode
     float   inset_top;      // framebuffer pixels
     float   inset_bottom;
     float   unit;           // framebuffer pixels per logical pixel

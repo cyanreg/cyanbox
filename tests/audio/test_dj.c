@@ -79,7 +79,7 @@ static void compare_mp3(const char *dir, const char *name, int extra_frames, con
     }
     int64_t nd;
     float *x = read_f32(f32, &nd);
-    RxAudio a;
+    RXAudio a;
     CHECK(rx_decode(mp3, 1, 0, &a) >= 0, "decode %s", name);
     int64_t lead = (int64_t)extra_frames * 1152;
     CHECK(a.nb_frames == nd + lead, "%s: rxbox %" PRId64 " samples, dj %" PRId64 " (want +%" PRId64 ")",
@@ -99,7 +99,7 @@ static void exact_mp3(const char *dir, const char *name, int64_t lead, const cha
     dj("decode", mp3, f32, NULL);
     int64_t nd;
     float *x = read_f32(f32, &nd);
-    RxAudio a;
+    RXAudio a;
     CHECK(rx_decode(mp3, 1, 0, &a) >= 0, "decode %s", name);
     if (x && a.nb_frames == nd + lead) {
         bool silent = true;
@@ -120,7 +120,7 @@ static void test_mp3(const char *dir, const char *wav)
     CHECK(!ffmpeg("-i", wav, "-c:a", "libmp3lame", "-b:a", "192k", mp3, NULL), "mp3");
     uint8_t *d;
     size_t n;
-    RxMp3Info mi;
+    RXMp3Info mi;
     CHECK(rx_file_read(mp3, &d, &n) >= 0 && rx_mp3_scan(mp3, &mi) >= 0, "scan");
 
     /* Info frame mode vs the audio's (joint stereo from libmp3lame) */
@@ -166,7 +166,7 @@ static void test_mp3(const char *dir, const char *wav)
         rx_file_read(txt, &t, &tn);
         long long frames = 0, spf = 0, vbr = 0, kbps = 0;
         sscanf((char *)t, "%lld %lld %lld %lld", &frames, &spf, &vbr, &kbps);
-        RxMp3Info li;
+        RXMp3Info li;
         rx_mp3_scan(lame, &li);
         CHECK(li.nb_frames == frames && li.frame_samples == spf && li.vbr == vbr &&
               li.bitrate_kbps == kbps, "mp3.scan: dj %lld %lld %lld %lld, rxbox %" PRId64 " %d %d %d",
@@ -197,7 +197,7 @@ static void test_flac(const char *dir, const char *wav)
         FILE *f = fopen(txt, "r");
         long long start, block, total, nb;
         CHECK(fscanf(f, "%lld %lld %lld %lld", &start, &block, &total, &nb) == 4, "dj output");
-        RxFlacInfo fi;
+        RXFlacInfo fi;
         CHECK(rx_flac_scan(fl, &fi) >= 0, "rx_flac_scan");
         CHECK(fi.first_frame_offset == start && fi.max_block == block && fi.total_samples == total &&
               fi.nb_frames == nb, "flac: dj %lld %lld %lld %lld, rxbox %" PRId64 " %d %" PRId64 " %d",

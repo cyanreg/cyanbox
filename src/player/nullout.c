@@ -16,7 +16,7 @@
 #include <stdatomic.h>
 #include <time.h>
 
-struct RxNullOut {
+struct RXNullOut {
     pthread_t   thread;
     bool        started;
     atomic_bool stop;
@@ -26,8 +26,8 @@ struct RxNullOut {
 
 static void *null_thread(void *arg)
 {
-    RxPlayer *p = arg;
-    RxNullOut *n = p->null;
+    RXPlayer *p = arg;
+    RXNullOut *n = p->null;
     struct timespec next;
     clock_gettime(CLOCK_MONOTONIC, &next);
     int64_t rem = 0;
@@ -58,9 +58,9 @@ static void *null_thread(void *arg)
     return NULL;
 }
 
-int rx_player_null_open(RxPlayer *p)
+int rx_player_null_open(RXPlayer *p)
 {
-    RxNullOut *n = calloc(1, sizeof(*n));
+    RXNullOut *n = calloc(1, sizeof(*n));
     if (!n)
         return RX_ERROR(ENOMEM);
     p->null = n;
@@ -81,9 +81,9 @@ int rx_player_null_open(RxPlayer *p)
     return 0;
 }
 
-void rx_player_null_close(RxPlayer *p)
+void rx_player_null_close(RXPlayer *p)
 {
-    RxNullOut *n = p->null;
+    RXNullOut *n = p->null;
     if (!n)
         return;
     if (n->started) {
@@ -95,9 +95,9 @@ void rx_player_null_close(RxPlayer *p)
     p->null = NULL;
 }
 
-void rx_player_null_run(RxPlayer *p, int frames)
+void rx_player_null_run(RXPlayer *p, int frames)
 {
-    RxNullOut *n = p->null;
+    RXNullOut *n = p->null;
     if (!n)
         return;
     while (frames > 0) {

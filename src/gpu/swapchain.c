@@ -48,7 +48,7 @@
 
 /* --------------------------------------------------------------- swapchain */
 
-static void destroy_images(RxWindow *w)
+static void destroy_images(RXWindow *w)
 {
     for (uint32_t i = 0; i < w->nb_images; i++) {
         if (w->views && w->views[i])
@@ -65,7 +65,7 @@ static void destroy_images(RxWindow *w)
     w->nb_images = 0;
 }
 
-static int pick_format(RxWindow *w, VkSurfaceFormatKHR *out)
+static int pick_format(RXWindow *w, VkSurfaceFormatKHR *out)
 {
     uint32_t nb = 0;
     VkResult res = vkGetPhysicalDeviceSurfaceFormatsKHR(w->phys, w->surface, &nb, NULL);
@@ -118,7 +118,7 @@ static int pick_format(RxWindow *w, VkSurfaceFormatKHR *out)
     return 0;
 }
 
-static VkPresentModeKHR pick_present_mode(RxWindow *w)
+static VkPresentModeKHR pick_present_mode(RXWindow *w)
 {
     uint32_t nb = 0;
     vkGetPhysicalDeviceSurfacePresentModesKHR(w->phys, w->surface, &nb, NULL);
@@ -136,7 +136,7 @@ static VkPresentModeKHR pick_present_mode(RxWindow *w)
 }
 
 /* Returns 1 when the window has no area (nothing to create yet). */
-int rx_swapchain_create(RxWindow *w)
+int rx_swapchain_create(RXWindow *w)
 {
     VkSurfaceCapabilitiesKHR caps;
     VkResult res = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(w->phys, w->surface, &caps);
@@ -276,7 +276,7 @@ int rx_swapchain_create(RxWindow *w)
     return 0;
 }
 
-void rx_swapchain_destroy(RxWindow *w)
+void rx_swapchain_destroy(RXWindow *w)
 {
     if (!w->dev)
         return;
@@ -323,15 +323,15 @@ static void image_barrier(VkCommandBuffer cmd, VkImage img,
 }
 
 /* The readback buffer for a capture, sized for the current extent. */
-static int ensure_capture(RxWindow *w)
+static int ensure_capture(RXWindow *w)
 {
     if (w->cap.buf && w->cap_width == w->extent.width && w->cap_height == w->extent.height)
         return 0;
 
     if (w->cap.buf) {
-        RxDeferred d = { .buf = w->cap.buf, .alloc = w->cap.alloc };
+        RXDeferred d = { .buf = w->cap.buf, .alloc = w->cap.alloc };
         rx_vk_defer(w, &d);
-        w->cap = (RxVkBuffer) { 0 };
+        w->cap = (RXVkBuffer) { 0 };
     }
 
     VkDeviceSize size = (VkDeviceSize)w->extent.width * w->extent.height * 4;
@@ -349,7 +349,7 @@ static int ensure_capture(RxWindow *w)
 /* Records the copy of the rendered image into the readback buffer. The
  * image comes from the pass in COLOR_ATTACHMENT_OPTIMAL and leaves in
  * PRESENT_SRC. */
-static void record_capture(RxWindow *w, VkCommandBuffer cmd, VkImage img)
+static void record_capture(RXWindow *w, VkCommandBuffer cmd, VkImage img)
 {
     image_barrier(cmd, img,
                   VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
@@ -397,7 +397,7 @@ static void record_capture(RxWindow *w, VkCommandBuffer cmd, VkImage img)
                   VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
 }
 
-static VkResult acquire(RxWindow *w, RxFrame *f, uint32_t *idx)
+static VkResult acquire(RXWindow *w, RXFrame *f, uint32_t *idx)
 {
     /* A finite timeout: a compositor holding every buffer must not hang
      * the loop. The semaphore is left unsignalled on a timeout. */
@@ -405,7 +405,7 @@ static VkResult acquire(RxWindow *w, RxFrame *f, uint32_t *idx)
                                  VK_NULL_HANDLE, idx);
 }
 
-int rx_swapchain_frame(RxWindow *w, void *draw_data, bool capture)
+int rx_swapchain_frame(RXWindow *w, void *draw_data, bool capture)
 {
     int pw = 0, ph = 0;
     SDL_GetWindowSizeInPixels(w->win, &pw, &ph);
@@ -420,7 +420,7 @@ int rx_swapchain_frame(RxWindow *w, void *draw_data, bool capture)
             return ret;
     }
 
-    RxFrame *f = &w->frames[w->frame_idx];
+    RXFrame *f = &w->frames[w->frame_idx];
 
     /* The slot's last submission must be done before its command buffer,
      * its acquire semaphore and ImGui's vertex buffers for it are reused. */
@@ -590,7 +590,7 @@ int rx_swapchain_frame(RxWindow *w, void *draw_data, bool capture)
 
 /* -------------------------------------------------------------- screenshot */
 
-int rx_swapchain_readback(RxWindow *w, uint8_t **rgba, int *width, int *height)
+int rx_swapchain_readback(RXWindow *w, uint8_t **rgba, int *width, int *height)
 {
     if (!w->cap.buf || !w->cap_serial)
         return RX_ERROR(EAGAIN);
@@ -598,7 +598,7 @@ int rx_swapchain_readback(RxWindow *w, uint8_t **rgba, int *width, int *height)
     /* The capture's submission, if a slot still holds it; otherwise it is
      * long done. */
     for (int i = 0; i < RX_FRAMES_IN_FLIGHT; i++) {
-        RxFrame *f = &w->frames[i];
+        RXFrame *f = &w->frames[i];
         if (f->serial == w->cap_serial)
             vkWaitForFences(w->dev, 1, &f->fence, VK_TRUE, UINT64_MAX);
     }
@@ -692,7 +692,7 @@ fail:
     return ret;
 }
 
-int rx_window_screenshot(RxWindow *w, const char *png_path)
+int rx_window_screenshot(RXWindow *w, const char *png_path)
 {
     if (!w || !png_path)
         return RX_ERROR(EINVAL);
@@ -718,7 +718,7 @@ int rx_window_screenshot(RxWindow *w, const char *png_path)
     return rx_swapchain_save_png(w, png_path);
 }
 
-void rx_window_screenshot_next(RxWindow *w, const char *png_path)
+void rx_window_screenshot_next(RXWindow *w, const char *png_path)
 {
     if (!w || !png_path)
         return;
@@ -734,7 +734,7 @@ void rx_window_screenshot_next(RxWindow *w, const char *png_path)
     w->capture_next = true;
 }
 
-int rx_swapchain_save_png(RxWindow *w, const char *png_path)
+int rx_swapchain_save_png(RXWindow *w, const char *png_path)
 {
     if (!w->cap_serial || w->cap_serial != w->last_present_serial)
         return RX_ERROR(EAGAIN);

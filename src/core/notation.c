@@ -144,7 +144,7 @@ static bool parse_beat(const char *s, double *n)
     return true;
 }
 
-int rx_parse_position(const char *spec, const RxGrid *grid, double *time, double *grid_beat)
+int rx_parse_position(const char *spec, const RXGrid *grid, double *time, double *grid_beat)
 {
     char s[64];
     if (!spec || !normalise_spec(spec, s, sizeof(s)) || !s[0])
@@ -178,7 +178,7 @@ int rx_parse_position(const char *spec, const RxGrid *grid, double *time, double
     return 0;
 }
 
-const char *rx_format_grid_position(const RxGrid *grid, double grid_beat, char *buf, size_t size)
+const char *rx_format_grid_position(const RXGrid *grid, double grid_beat, char *buf, size_t size)
 {
     if (!size)
         return NULL;

@@ -134,7 +134,7 @@ typedef struct MelBand {
     float *w;                       /* k1 - k0 weights */
 } MelBand;
 
-int rx_spectrum_compute(const float *x, int64_t n, RxSpectrum *s)
+int rx_spectrum_compute(const float *x, int64_t n, RXSpectrum *s)
 {
     memset(s, 0, sizeof(*s));
     const int N = RX_BEAT_NFFT, hop = RX_BEAT_HOP, nbins = N / 2 + 1;
@@ -292,7 +292,7 @@ fail:
     return ret;
 }
 
-void rx_spectrum_free(RxSpectrum *s)
+void rx_spectrum_free(RXSpectrum *s)
 {
     free(s->prof);
     free(s->kick);
@@ -315,7 +315,7 @@ void rx_spectrum_free(RxSpectrum *s)
  * 10 ms to be one bump, a click 2 ms. */
 static const double env_smooth[RX_NB_BANDS] = { 0.010, 0.004, 0.002 };
 
-struct RxEnvCtx {
+struct RXEnvCtx {
     const float    *x;
     int64_t         n;
     AVTXContext    *fwd, *inv;
@@ -347,9 +347,9 @@ static void make_mask(float *m, double lo, double hi, double tw)
     }
 }
 
-int rx_env_alloc(RxEnvCtx **out, const float *x, int64_t n)
+int rx_env_alloc(RXEnvCtx **out, const float *x, int64_t n)
 {
-    RxEnvCtx *c = calloc(1, sizeof(*c));
+    RXEnvCtx *c = calloc(1, sizeof(*c));
     if (!c)
         return RX_ERROR(ENOMEM);
     c->x = x;
@@ -392,9 +392,9 @@ fail:
     return ret;
 }
 
-void rx_env_free(RxEnvCtx **pc)
+void rx_env_free(RXEnvCtx **pc)
 {
-    RxEnvCtx *c = *pc;
+    RXEnvCtx *c = *pc;
     if (!c)
         return;
     av_tx_uninit(&c->fwd);
@@ -410,7 +410,7 @@ void rx_env_free(RxEnvCtx **pc)
     *pc = NULL;
 }
 
-int rx_env_window(RxEnvCtx *c, double t, float *env, double *centre)
+int rx_env_window(RXEnvCtx *c, double t, float *env, double *centre)
 {
     /* The centre on the envelope's own sample grid, so that windows taken
      * around different beats share one time base and can be folded. */

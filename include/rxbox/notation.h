@@ -16,9 +16,9 @@
  * Bars and beats need a grid. Returns 0 and the time, or -EINVAL.
  * `grid_beat` receives the beat index for musical positions (the
  * convention of rx_grid_time_to_beat), NAN otherwise. */
-int  rx_parse_position(const char *spec, const RxGrid *grid, double *time, double *grid_beat);
+int  rx_parse_position(const char *spec, const RXGrid *grid, double *time, double *grid_beat);
 /* "bar 17.3" for integer beats, "beat 66.5" for fractional ones. */
-const char *rx_format_grid_position(const RxGrid *grid, double grid_beat, char *buf, size_t size);
+const char *rx_format_grid_position(const RXGrid *grid, double grid_beat, char *buf, size_t size);
 
 /* Keys are stored as classic names with dj's spellings: C Db D Eb E F F# G
  * Ab A Bb B, and Cm Dbm ... for minor. rx_key_normalise accepts "Am",

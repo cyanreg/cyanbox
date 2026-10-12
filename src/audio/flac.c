@@ -125,7 +125,7 @@ static uint64_t rb(const uint8_t *b, int n)
     return v;
 }
 
-static int push_frame(RxFlacInfo *info, int *cap, int64_t sample, int64_t offset, int block)
+static int push_frame(RXFlacInfo *info, int *cap, int64_t sample, int64_t offset, int block)
 {
     if (info->nb_frames == *cap) {
         int ncap = *cap ? *cap * 2 : 1024;
@@ -142,11 +142,11 @@ static int push_frame(RxFlacInfo *info, int *cap, int64_t sample, int64_t offset
     return 0;
 }
 
-int rx_flac_scan(const char *path, RxFlacInfo *info)
+int rx_flac_scan(const char *path, RXFlacInfo *info)
 {
-    *info = (RxFlacInfo) { 0 };
+    *info = (RXFlacInfo) { 0 };
 
-    RxMap m;
+    RXMap m;
     int ret = rx_audio_map(path, &m);
     if (ret < 0)
         return ret;
@@ -247,7 +247,7 @@ end:
     return ret;
 }
 
-void rx_flac_info_free(RxFlacInfo *info)
+void rx_flac_info_free(RXFlacInfo *info)
 {
     free(info->frames);
     info->frames = NULL;

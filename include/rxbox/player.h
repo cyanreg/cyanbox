@@ -11,12 +11,12 @@
  * single-producer/single-consumer ring; the real-time thread never
  * allocates, locks, or touches files, and publishes positions through
  * atomics that rx_deck_state() reads. A deck plays a whole track decoded
- * in memory (RxAudio, native rate, interleaved float); the real-time
+ * in memory (RXAudio, native rate, interleaved float); the real-time
  * thread resamples to the device rate with a cubic interpolator, which is
  * also how tempo changes play (pitch follows tempo, as a CDJ without
  * master tempo). Loops wrap sample-exactly inside the callback.
  *
- * Loading hands an RxAudio to the player, which owns it until the deck is
+ * Loading hands an RXAudio to the player, which owns it until the deck is
  * unloaded or loaded again; the old buffer is released only after the
  * real-time thread has acknowledged the swap, so freeing is always safe.
  *
@@ -31,13 +31,13 @@
 
 #define RX_DECKS 1
 
-enum RxAudioBackend {
+enum RXAudioBackend {
     RX_AUDIO_PIPEWIRE = 0,
     RX_AUDIO_NULL,
 };
 
-typedef struct RxPlayerOptions {
-    enum RxAudioBackend backend;
+typedef struct RXPlayerOptions {
+    enum RXAudioBackend backend;
     const char *sink;           /* PipeWire node name to connect to; NULL = default */
     int         rate;           /* 0 = 48000 */
     int         period;         /* frames per callback; 0 = 256. RX_AUDIO_NULL only:
@@ -46,66 +46,66 @@ typedef struct RxPlayerOptions {
     const char *app_name;       /* "rxbox" */
     /* Called on the owner thread when the player lets go of a buffer it was
      * given, once the real-time thread can no longer read it (or at
-     * destroy). NULL: rx_audio_free() and free(), so the RxAudio struct
+     * destroy). NULL: rx_audio_free() and free(), so the RXAudio struct
      * itself must then come from malloc. */
-    void      (*release)(void *opaque, RxAudio *audio);
+    void      (*release)(void *opaque, RXAudio *audio);
     void       *release_opaque;
-} RxPlayerOptions;
-void rx_player_options_default(RxPlayerOptions *o);
+} RXPlayerOptions;
+void rx_player_options_default(RXPlayerOptions *o);
 
-typedef struct RxPlayer RxPlayer;
+typedef struct RXPlayer RXPlayer;
 
-int  rx_player_create(RxPlayer **p, const RxPlayerOptions *opt);
-void rx_player_destroy(RxPlayer *p);
-int  rx_player_rate(const RxPlayer *p);
-enum RxAudioBackend rx_player_backend(const RxPlayer *p);
+int  rx_player_create(RXPlayer **p, const RXPlayerOptions *opt);
+void rx_player_destroy(RXPlayer *p);
+int  rx_player_rate(const RXPlayer *p);
+enum RXAudioBackend rx_player_backend(const RXPlayer *p);
 /* The PipeWire node the stream was told to connect to; NULL = the default. */
-const char *rx_player_sink(const RxPlayer *p);
+const char *rx_player_sink(const RXPlayer *p);
 /* True once the stream is running; the error string when it is not
  * (NULL while running). */
-bool rx_player_running(const RxPlayer *p);
-const char *rx_player_error(const RxPlayer *p);
-void rx_player_set_master_volume(RxPlayer *p, float gain);   /* 0..1 */
+bool rx_player_running(const RXPlayer *p);
+const char *rx_player_error(const RXPlayer *p);
+void rx_player_set_master_volume(RXPlayer *p, float gain);   /* 0..1 */
 /* Advances the null backend by `frames` synchronously (tests only; no-op
  * on PipeWire and on a null backend with its own thread, period >= 0). */
-void rx_player_null_advance(RxPlayer *p, int frames);
+void rx_player_null_advance(RXPlayer *p, int frames);
 
 /* ------------------------------------------------------------------- decks */
 
-/* Takes ownership of `audio` on success (see RxPlayerOptions.release); on
+/* Takes ownership of `audio` on success (see RXPlayerOptions.release); on
  * error the caller keeps it. The grid is copied (NULL = none). */
-int  rx_deck_load(RxPlayer *p, int deck, RxAudio *audio, const RxGrid *grid);
-void rx_deck_unload(RxPlayer *p, int deck);
-bool rx_deck_loaded(const RxPlayer *p, int deck);
+int  rx_deck_load(RXPlayer *p, int deck, RXAudio *audio, const RXGrid *grid);
+void rx_deck_unload(RXPlayer *p, int deck);
+bool rx_deck_loaded(const RXPlayer *p, int deck);
 /* The buffer a deck plays (valid until unload; read-only). */
-const RxAudio *rx_deck_audio(const RxPlayer *p, int deck);
+const RXAudio *rx_deck_audio(const RXPlayer *p, int deck);
 
-void rx_deck_play(RxPlayer *p, int deck);
-void rx_deck_pause(RxPlayer *p, int deck);
+void rx_deck_play(RXPlayer *p, int deck);
+void rx_deck_pause(RXPlayer *p, int deck);
 /* Seeks to `seconds` (clamped to the track). Takes effect at the next
  * callback; rx_deck_state reports the new position immediately. */
-void rx_deck_seek(RxPlayer *p, int deck, double seconds);
+void rx_deck_seek(RXPlayer *p, int deck, double seconds);
 /* Plays from `seconds` (seek + play in one command, for cue/hot cue). */
-void rx_deck_play_from(RxPlayer *p, int deck, double seconds);
+void rx_deck_play_from(RXPlayer *p, int deck, double seconds);
 /* 1.0 = original speed; the tempo slider's ratio. */
-void rx_deck_set_tempo(RxPlayer *p, int deck, double ratio);
+void rx_deck_set_tempo(RXPlayer *p, int deck, double ratio);
 /* Reserved: pitch-preserving tempo. v1 ignores it and reports false. */
-bool rx_deck_set_master_tempo(RxPlayer *p, int deck, bool on);
+bool rx_deck_set_master_tempo(RXPlayer *p, int deck, bool on);
 /* Loop between in and out seconds. `enabled` starts looping right away. */
-void rx_deck_set_loop(RxPlayer *p, int deck, double in, double out, bool enabled);
-void rx_deck_loop_enable(RxPlayer *p, int deck, bool enabled);
-void rx_deck_clear_loop(RxPlayer *p, int deck);
-void rx_deck_set_volume(RxPlayer *p, int deck, float gain);     /* 0..1 */
+void rx_deck_set_loop(RXPlayer *p, int deck, double in, double out, bool enabled);
+void rx_deck_loop_enable(RXPlayer *p, int deck, bool enabled);
+void rx_deck_clear_loop(RXPlayer *p, int deck);
+void rx_deck_set_volume(RXPlayer *p, int deck, float gain);     /* 0..1 */
 /* Pitch bend: a temporary speed offset (+-, e.g. 0.02) while held. */
-void rx_deck_set_bend(RxPlayer *p, int deck, double ratio_offset);
+void rx_deck_set_bend(RXPlayer *p, int deck, double ratio_offset);
 /* Scrubbing: while a drag is in progress the deck follows the pointer and
  * plays short grains at the drag position (quiet, filtered) so the ear can
  * find a beat; on end it stays paused there, or resumes if it was playing. */
-void rx_deck_scrub_begin(RxPlayer *p, int deck);
-void rx_deck_scrub_to(RxPlayer *p, int deck, double seconds);
-void rx_deck_scrub_end(RxPlayer *p, int deck);
+void rx_deck_scrub_begin(RXPlayer *p, int deck);
+void rx_deck_scrub_to(RXPlayer *p, int deck, double seconds);
+void rx_deck_scrub_end(RXPlayer *p, int deck);
 
-typedef struct RxDeckState {
+typedef struct RXDeckState {
     bool   loaded;
     bool   playing;
     bool   scrubbing;
@@ -117,9 +117,9 @@ typedef struct RxDeckState {
     float  level_l, level_r;    /* recent peak, 0..1 */
     int64_t frame;          /* position in track frames */
     uint64_t serial;        /* bumps on every command the RT thread applied */
-} RxDeckState;
+} RXDeckState;
 
-void rx_deck_state(const RxPlayer *p, int deck, RxDeckState *out);
+void rx_deck_state(const RXPlayer *p, int deck, RXDeckState *out);
 
 /* ---------------------------------------------------------------- controls */
 
@@ -153,10 +153,10 @@ void rx_deck_state(const RxPlayer *p, int deck, RxDeckState *out);
 
 typedef void (*rx_ctl_changed_cb)(void *opaque, int deck);
 
-typedef struct RxDeckCtl {
-    RxPlayer *player;
+typedef struct RXDeckCtl {
+    RXPlayer *player;
     int       deck;
-    RxTrack  *track;            /* the library's track; NULL when empty */
+    RXTrack  *track;            /* the library's track; NULL when empty */
     bool      quantize;
     double    cue_point;        /* seconds; < 0 none */
     bool      cue_held;         /* CUE is being held for a preview */
@@ -171,48 +171,48 @@ typedef struct RxDeckCtl {
     double    _last_position;
     int       _hot_held;        /* slot held during a paused pad press, or -1 */
     bool      _resume_after_hold;
-} RxDeckCtl;
+} RXDeckCtl;
 
-void rx_ctl_init(RxDeckCtl *c, RxPlayer *p, int deck, rx_ctl_changed_cb changed, void *opaque);
+void rx_ctl_init(RXDeckCtl *c, RXPlayer *p, int deck, rx_ctl_changed_cb changed, void *opaque);
 /* After rx_deck_load: binds the track and applies auto-cue (position at
  * the first memory cue when there is one, else the start). */
-void rx_ctl_load(RxDeckCtl *c, RxTrack *track);
-void rx_ctl_unload(RxDeckCtl *c);
-void rx_ctl_tick(RxDeckCtl *c);
+void rx_ctl_load(RXDeckCtl *c, RXTrack *track);
+void rx_ctl_unload(RXDeckCtl *c);
+void rx_ctl_tick(RXDeckCtl *c);
 
-void rx_ctl_play_pause(RxDeckCtl *c);
-void rx_ctl_cue_press(RxDeckCtl *c);
-void rx_ctl_cue_release(RxDeckCtl *c);
-void rx_ctl_set_cue_here(RxDeckCtl *c);
+void rx_ctl_play_pause(RXDeckCtl *c);
+void rx_ctl_cue_press(RXDeckCtl *c);
+void rx_ctl_cue_release(RXDeckCtl *c);
+void rx_ctl_set_cue_here(RXDeckCtl *c);
 
-void rx_ctl_hot_cue_press(RxDeckCtl *c, int slot);
-void rx_ctl_hot_cue_release(RxDeckCtl *c, int slot);
-void rx_ctl_hot_cue_delete(RxDeckCtl *c, int slot);
+void rx_ctl_hot_cue_press(RXDeckCtl *c, int slot);
+void rx_ctl_hot_cue_release(RXDeckCtl *c, int slot);
+void rx_ctl_hot_cue_delete(RXDeckCtl *c, int slot);
 /* Edits the stored hot cue (name/colour) without moving it. */
-void rx_ctl_hot_cue_set(RxDeckCtl *c, int slot, const char *name, const char *color);
+void rx_ctl_hot_cue_set(RXDeckCtl *c, int slot, const char *name, const char *color);
 
-void rx_ctl_memory_set(RxDeckCtl *c);
-void rx_ctl_memory_prev(RxDeckCtl *c);
-void rx_ctl_memory_next(RxDeckCtl *c);
-void rx_ctl_memory_delete(RxDeckCtl *c);
-void rx_ctl_memory_call(RxDeckCtl *c, int cue_index);      /* a specific memory cue */
-void rx_ctl_memory_set_active(RxDeckCtl *c, int cue_index, bool active);
+void rx_ctl_memory_set(RXDeckCtl *c);
+void rx_ctl_memory_prev(RXDeckCtl *c);
+void rx_ctl_memory_next(RXDeckCtl *c);
+void rx_ctl_memory_delete(RXDeckCtl *c);
+void rx_ctl_memory_call(RXDeckCtl *c, int cue_index);      /* a specific memory cue */
+void rx_ctl_memory_set_active(RXDeckCtl *c, int cue_index, bool active);
 
-void rx_ctl_loop_in(RxDeckCtl *c);
-void rx_ctl_loop_out(RxDeckCtl *c);
-void rx_ctl_exit_reloop(RxDeckCtl *c);
-void rx_ctl_auto_loop(RxDeckCtl *c, double beats);          /* 0.25 .. 64 */
-void rx_ctl_loop_half(RxDeckCtl *c);
-void rx_ctl_loop_double(RxDeckCtl *c);
-void rx_ctl_loop_exit(RxDeckCtl *c);
+void rx_ctl_loop_in(RXDeckCtl *c);
+void rx_ctl_loop_out(RXDeckCtl *c);
+void rx_ctl_exit_reloop(RXDeckCtl *c);
+void rx_ctl_auto_loop(RXDeckCtl *c, double beats);          /* 0.25 .. 64 */
+void rx_ctl_loop_half(RXDeckCtl *c);
+void rx_ctl_loop_double(RXDeckCtl *c);
+void rx_ctl_loop_exit(RXDeckCtl *c);
 
-void rx_ctl_beat_jump(RxDeckCtl *c, double beats);         /* +-, 0 = fine nudge of 10 ms (-0.0 back) */
-void rx_ctl_nudge(RxDeckCtl *c, double seconds);
-void rx_ctl_set_quantize(RxDeckCtl *c, bool on);
-void rx_ctl_seek(RxDeckCtl *c, double seconds);            /* a click on the waveform */
+void rx_ctl_beat_jump(RXDeckCtl *c, double beats);         /* +-, 0 = fine nudge of 10 ms (-0.0 back) */
+void rx_ctl_nudge(RXDeckCtl *c, double seconds);
+void rx_ctl_set_quantize(RXDeckCtl *c, bool on);
+void rx_ctl_seek(RXDeckCtl *c, double seconds);            /* a click on the waveform */
 /* Grid edits go through here so the deck and the cues stay in step:
  * applies to the track, resolves musical cues, pushes the grid to the deck
  * and reports `changed`. */
-void rx_ctl_grid_changed(RxDeckCtl *c);
+void rx_ctl_grid_changed(RXDeckCtl *c);
 
 #endif /* RXBOX_PLAYER_H */

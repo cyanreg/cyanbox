@@ -24,7 +24,7 @@
 #define RX_WAVE_PWV4_COLUMNS 1200    /* colour preview, 6 bytes: height, ?, ?, r, g, b */
 #define RX_WAVE_PWV6_COLUMNS 1200    /* 3-band preview, 3 bytes: low, mid, high (0..127) */
 
-typedef struct RxWaveforms {
+typedef struct RXWaveforms {
     int      nb_detail;              /* columns of the detail tags */
     uint8_t *pwv3;                   /* nb_detail * 1: blue detail */
     uint8_t *pwv5;                   /* nb_detail * 2: colour detail, big-endian rrrgggbbbhhhhh00 */
@@ -35,27 +35,27 @@ typedef struct RxWaveforms {
     uint8_t  pwv6[RX_WAVE_PWV6_COLUMNS * 3];
     uint16_t gains[3];               /* PWVC: the low, mid, high gains PWV7 was scaled by */
     int      rate;                   /* sample rate the columns were cut at (0 if unknown) */
-} RxWaveforms;
+} RXWaveforms;
 
 /* From mono audio at the file's native rate on the players' timeline. A
  * byte-faithful port of dj's waveform.py (PWAV reproduces rekordbox on
  * 99.5 % of columns; the others are fitted approximations). Applies the
  * firmware minimums: PWAV height >= 2, PWV2 >= 1. */
-int  rx_waveforms_compute(const float *mono, int64_t nb_samples, int rate, RxWaveforms *out);
-void rx_waveforms_free(RxWaveforms *w);
+int  rx_waveforms_compute(const float *mono, int64_t nb_samples, int rate, RXWaveforms *out);
+void rx_waveforms_free(RXWaveforms *w);
 /* The packed form stored in the library (and the .rxw file format):
  * "RXWV", version, nb_detail, rate, gains, then the tags. Unpack (and load)
  * return -EPROTO for a blob of another format version (versions 1 and 2
  * held older three-band levels): recompute the waveforms; -EINVAL for
  * damaged data. */
-int  rx_waveforms_pack(const RxWaveforms *w, uint8_t **data, size_t *size);
-int  rx_waveforms_unpack(const uint8_t *data, size_t size, RxWaveforms *w);
-int  rx_waveforms_save(const RxWaveforms *w, const char *path);
-int  rx_waveforms_load(const char *path, RxWaveforms *w);
+int  rx_waveforms_pack(const RXWaveforms *w, uint8_t **data, size_t *size);
+int  rx_waveforms_unpack(const uint8_t *data, size_t size, RXWaveforms *w);
+int  rx_waveforms_save(const RXWaveforms *w, const char *path);
+int  rx_waveforms_load(const char *path, RXWaveforms *w);
 
 /* ------------------------------------------------------------------- beats */
 
-enum RxGridFlag {
+enum RXGridFlag {
     RX_GRID_FLAG_TEMPO_CHANGE     = 1 << 0,   /* a section at another tempo was needed */
     RX_GRID_FLAG_OCTAVE_UNCERTAIN = 1 << 1,   /* half or double tempo scored close */
     RX_GRID_FLAG_PHASE_UNCERTAIN  = 1 << 2,   /* off-beat phase scored close */
@@ -65,20 +65,20 @@ enum RxGridFlag {
     RX_GRID_FLAG_UNSTEADY         = 1 << 6,   /* onsets jitter around the line: live drums? */
     RX_GRID_FLAG_PHASE_CUT        = 1 << 7,   /* a section re-enters at the same tempo, shifted */
 };
-const char *rx_grid_flag_name(enum RxGridFlag f);      /* "tempo-change" ... */
+const char *rx_grid_flag_name(enum RXGridFlag f);      /* "tempo-change" ... */
 unsigned    rx_grid_flag_parse(const char *name);     /* 0 if unknown */
 
-typedef struct RxAnalysisOptions {
+typedef struct RXAnalysisOptions {
     double bpm_min, bpm_max;     /* 0, 0 = default search range with octave by evidence */
     double prior_bpm;            /* tie-breaker only; 0 = default */
     bool   snap_bpm;             /* snap to integer/half BPM when the drift allows */
     bool   allow_sections;       /* split on real tempo/phase changes (default true) */
     bool   deterministic_threads;/* run single-threaded inside the call (default false) */
-} RxAnalysisOptions;
-void rx_analysis_options_default(RxAnalysisOptions *o);
+} RXAnalysisOptions;
+void rx_analysis_options_default(RXAnalysisOptions *o);
 
-typedef struct RxBeatResult {
-    RxGrid   grid;
+typedef struct RXBeatResult {
+    RXGrid   grid;
     double   confidence;         /* 0..1 */
     unsigned flags;              /* RX_GRID_FLAG_* */
     double   first_onset;        /* seconds: where the music starts */
@@ -86,47 +86,47 @@ typedef struct RxBeatResult {
     double   bpm_second_best;    /* the runner-up tempo, 0 if none */
     double   octave_margin;      /* score ratio of the chosen octave to the other */
     double   phase_margin;
-} RxBeatResult;
+} RXBeatResult;
 
 /* Mono audio at `rate` (any; 44.1 kHz is what it works at internally). */
 int  rx_analyse_beats(const float *mono, int64_t nb_samples, int rate,
-                      const RxAnalysisOptions *opt, RxBeatResult *out);
-void rx_beat_result_free(RxBeatResult *r);
+                      const RXAnalysisOptions *opt, RXBeatResult *out);
+void rx_beat_result_free(RXBeatResult *r);
 
 /* --------------------------------------------------------------------- key */
 
-typedef struct RxKeyResult {
+typedef struct RXKeyResult {
     char   key[RX_KEY_MAX];      /* classic name, "" if undecidable */
-    double confidence;           /* 0..1 */
+    double confidence;           /* 0..1: calibrated, about the probability the key is right (docs/KEY.md) */
     double tuning_cents;         /* detected tuning offset from A440 */
-} RxKeyResult;
+} RXKeyResult;
 
-int  rx_analyse_key(const float *mono, int64_t nb_samples, int rate, RxKeyResult *out);
+int  rx_analyse_key(const float *mono, int64_t nb_samples, int rate, RXKeyResult *out);
 
 /* --------------------------------------------------------------- the whole */
 
-enum RxAnalyseWhat {
+enum RXAnalyseWhat {
     RX_ANALYSE_BEATS = 1 << 0,
     RX_ANALYSE_KEY   = 1 << 1,
     RX_ANALYSE_WAVES = 1 << 2,
     RX_ANALYSE_ALL   = 7,
 };
 
-typedef struct RxAnalysis {
-    unsigned     done;           /* which of RxAnalyseWhat succeeded */
+typedef struct RXAnalysis {
+    unsigned     done;           /* which of RXAnalyseWhat succeeded */
     double       duration;
-    RxBeatResult beats;
-    RxKeyResult  key;
-    RxWaveforms  waves;
-} RxAnalysis;
+    RXBeatResult beats;
+    RXKeyResult  key;
+    RXWaveforms  waves;
+} RXAnalysis;
 
 /* `audio` is the decoded file on the players' timeline, native rate, any
  * channel count. */
-int  rx_analyse(const RxAudio *audio, const RxAnalysisOptions *opt, unsigned what, RxAnalysis *out);
-void rx_analysis_free(RxAnalysis *a);
+int  rx_analyse(const RXAudio *audio, const RXAnalysisOptions *opt, unsigned what, RXAnalysis *out);
+void rx_analysis_free(RXAnalysis *a);
 
 /* The automatic cue: a memory cue on the first downbeat at or after the
  * first onset, added when the track has no cues yet. */
-int  rx_analysis_auto_cues(RxTrack *t, const RxBeatResult *beats);
+int  rx_analysis_auto_cues(RXTrack *t, const RXBeatResult *beats);
 
 #endif /* RXBOX_ANALYSIS_H */

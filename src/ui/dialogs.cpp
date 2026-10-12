@@ -127,7 +127,7 @@ static void confirm_load(UiState *ui)
                                 ImGuiWindowFlags_AlwaysAutoResize))
         return;
     ui_settle_centred();
-    RxTrack *t = rx_library_find_id(&ui->app->lib, ui->confirm_track);
+    RXTrack *t = rx_library_find_id(&ui->app->lib, ui->confirm_track);
     char name[256] = "";
     if (t)
         rx_track_display(t, name, sizeof(name));
@@ -150,7 +150,7 @@ static void confirm_load(UiState *ui)
 
 static void confirm_remove(UiState *ui)
 {
-    RxApp *app = ui->app;
+    RXApp *app = ui->app;
     if (ui->want_confirm_remove) {
         ImGui::OpenPopup("Remove from library?");
         ui->want_confirm_remove = false;
@@ -166,7 +166,7 @@ static void confirm_remove(UiState *ui)
     if (ImGui::Button("Remove", ImVec2(PX(110), 0))) {
         int removed = 0;
         for (uint64_t id : ui->remove_ids) {
-            RxTrack *t = rx_library_find_id(&app->lib, id);
+            RXTrack *t = rx_library_find_id(&app->lib, id);
             if (!t)
                 continue;
             for (int d = 0; d < RX_DECKS; d++) {
@@ -193,7 +193,7 @@ static void confirm_remove(UiState *ui)
 
 /* ----------------------------------------------------------------- relocate */
 
-void ui_open_relocate(UiState *ui, RxTrack *t)
+void ui_open_relocate(UiState *ui, RXTrack *t)
 {
     ui->relocate_id = t->id;
     snprintf(ui->relocate_buf, sizeof(ui->relocate_buf), "%s", t->path);
@@ -202,7 +202,7 @@ void ui_open_relocate(UiState *ui, RxTrack *t)
 
 static void relocate(UiState *ui)
 {
-    RxApp *app = ui->app;
+    RXApp *app = ui->app;
     if (ui->want_relocate) {
         ImGui::OpenPopup("Relocate");
         ui->want_relocate = false;
@@ -211,7 +211,7 @@ static void relocate(UiState *ui)
     if (!ImGui::BeginPopupModal("Relocate", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
         return;
     ui_settle_centred();
-    RxTrack *t = rx_library_find_id(&app->lib, ui->relocate_id);
+    RXTrack *t = rx_library_find_id(&app->lib, ui->relocate_id);
     if (!t) {
         ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
@@ -267,7 +267,7 @@ static void analysis_settings(UiState *ui)
 {
     if (!ui->dlg_analysis)
         return;
-    RxConfig *cfg = &ui->app->lib.cfg;
+    RXConfig *cfg = &ui->app->lib.cfg;
     centre_next(ui, 380, 0);
     if (!ImGui::Begin("Analysis settings", &ui->dlg_analysis, ImGuiWindowFlags_NoCollapse |
                       ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings)) {
@@ -319,7 +319,7 @@ static void analysis_settings(UiState *ui)
 
 void ui_open_export(UiState *ui)
 {
-    RxApp *app = ui->app;
+    RXApp *app = ui->app;
     ui->dlg_export = true;
     app->export_state.open = true;
     // Closed on its summary with the title bar's x: the choices again.
@@ -330,7 +330,7 @@ void ui_open_export(UiState *ui)
         snprintf(app->export_state.dest, sizeof(app->export_state.dest), "%s", ui->volumes[0].c_str());
 }
 
-static bool playlist_in(const RxPlaylistFolder *f, const RxPlaylist *p)
+static bool playlist_in(const RXPlaylistFolder *f, const RXPlaylist *p)
 {
     for (int i = 0; i < f->nb_playlists; i++) {
         if (f->playlists[i] == p)
@@ -347,14 +347,14 @@ static bool playlist_in(const RxPlaylistFolder *f, const RxPlaylist *p)
 // dialog is open, and the pointer must not reach rx_app_start_export().
 static void playlists_prune(UiState *ui)
 {
-    const RxPlaylistFolder *root = ui->app->lib.root_folder;
+    const RXPlaylistFolder *root = ui->app->lib.root_folder;
     auto &sel = ui->export_playlists;
-    sel.erase(std::remove_if(sel.begin(), sel.end(), [root](RxPlaylist *p) {
+    sel.erase(std::remove_if(sel.begin(), sel.end(), [root](RXPlaylist *p) {
         return !root || !playlist_in(root, p);
     }), sel.end());
 }
 
-static void playlist_checks(UiState *ui, RxPlaylistFolder *f)
+static void playlist_checks(UiState *ui, RXPlaylistFolder *f)
 {
     for (int i = 0; i < f->nb_folders; i++) {
         ImGui::PushID(f->folders[i]);
@@ -365,7 +365,7 @@ static void playlist_checks(UiState *ui, RxPlaylistFolder *f)
         ImGui::PopID();
     }
     for (int i = 0; i < f->nb_playlists; i++) {
-        RxPlaylist *p = f->playlists[i];
+        RXPlaylist *p = f->playlists[i];
         auto &sel = ui->export_playlists;
         auto it = std::find(sel.begin(), sel.end(), p);
         bool on = it != sel.end();
@@ -382,7 +382,7 @@ static void playlist_checks(UiState *ui, RxPlaylistFolder *f)
 
 static void export_start(UiState *ui)
 {
-    RxApp *app = ui->app;
+    RXApp *app = ui->app;
     auto &es = app->export_state;
     playlists_prune(ui);
     if (ui->export_scope == 1 && ui->export_playlists.empty())
@@ -411,7 +411,7 @@ static void export_start(UiState *ui)
 
 static void export_dialog(UiState *ui)
 {
-    RxApp *app = ui->app;
+    RXApp *app = ui->app;
     auto &es = app->export_state;
     if (!ui->dlg_export)
         return;
@@ -607,7 +607,7 @@ static const char *sync_kind_name(int k)
     }
 }
 
-static void sync_detail(const RxSyncItem *it, char *buf, size_t size)
+static void sync_detail(const RXSyncItem *it, char *buf, size_t size)
 {
     char t[32], len[32] = "";
     switch (it->kind) {
@@ -656,7 +656,7 @@ static bool sync_progress(void *opaque, const char *stage, int done, int total, 
 
 static void sync_read(UiState *ui)
 {
-    RxApp *app = ui->app;
+    RXApp *app = ui->app;
     sync_free(ui);
     ui->sync_error.clear();
     int ret = rx_app_read_stick(app, ui->stick_path);
@@ -672,8 +672,8 @@ static void sync_read(UiState *ui)
 // another request is one given up on: dropped, never shown as this one's.
 static void sync_take(UiState *ui)
 {
-    RxApp *app = ui->app;
-    RxJobResult *r = app->stick_result;
+    RXApp *app = ui->app;
+    RXJobResult *r = app->stick_result;
     if (!r || r->kind != RX_JOB_STICK_READ)
         return;
     app->stick_result = nullptr;
@@ -708,7 +708,7 @@ static void sync_take(UiState *ui)
 
 static void sync_dialog(UiState *ui)
 {
-    RxApp *app = ui->app;
+    RXApp *app = ui->app;
     if (!ui->dlg_sync)
         return;
     sync_take(ui);
@@ -753,7 +753,7 @@ static void sync_dialog(UiState *ui)
             ImGui::TextDisabled("Reading the stick...");
         }
     } else if (ui->sync_stage == 1) {
-        RxStickState &s = ui->sync_state;
+        RXStickState &s = ui->sync_state;
         ImGui::Text("%d track%s on the stick", s.nb_tracks, s.nb_tracks == 1 ? "" : "s");
         if (s.nb_tracks_unknown > 0) {
             ImGui::SameLine();
@@ -799,7 +799,7 @@ static void sync_dialog(UiState *ui)
                 ImGui::TableSetupScrollFreeze(0, 1);
                 ImGui::TableHeadersRow();
                 for (int i = 0; i < ui->nb_sync_items; i++) {
-                    RxSyncItem *it = &ui->sync_items[i];
+                    RXSyncItem *it = &ui->sync_items[i];
                     if (ui->sync_filter >= 0 && (int)it->kind != ui->sync_filter)
                         continue;
                     ImGui::TableNextRow();
@@ -809,7 +809,7 @@ static void sync_dialog(UiState *ui)
                     ImGui::TableSetColumnIndex(1);
                     ImGui::TextUnformatted(sync_kind_name(it->kind));
                     ImGui::TableSetColumnIndex(2);
-                    RxTrack *t = it->track_id ? rx_library_find_id(&app->lib, it->track_id) : nullptr;
+                    RXTrack *t = it->track_id ? rx_library_find_id(&app->lib, it->track_id) : nullptr;
                     char name[200] = "-";
                     if (t)
                         rx_track_display(t, name, sizeof(name));
@@ -883,10 +883,10 @@ void ui_open_inspect(UiState *ui)
 
 static void inspect_dialog(UiState *ui)
 {
-    RxApp *app = ui->app;
+    RXApp *app = ui->app;
     if (!ui->dlg_inspect)
         return;
-    RxJobResult *r = app->stick_result;
+    RXJobResult *r = app->stick_result;
     if (r && r->kind == RX_JOB_INSPECT) {
         app->stick_result = nullptr;
         if (ui->inspect_request && r->request == ui->inspect_request) {
@@ -1012,7 +1012,7 @@ void ui_open_add(UiState *ui)
 
 static void add_dialog(UiState *ui)
 {
-    RxApp *app = ui->app;
+    RXApp *app = ui->app;
     if (!ui->dlg_add)
         return;
     centre_next(ui, 640, 520);

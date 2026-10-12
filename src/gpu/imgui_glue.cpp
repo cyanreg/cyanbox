@@ -50,7 +50,7 @@ extern "C" {
  * texture. textures.c refuses new textures before it runs out. */
 #define RX_IMGUI_POOL_SIZE 4096
 
-static ImGuiContext *ctx_of(RxWindow *w)
+static ImGuiContext *ctx_of(RXWindow *w)
 {
     return static_cast<ImGuiContext *>(w->imgui);
 }
@@ -112,7 +112,7 @@ static bool fc_find(const char *pattern, const FcChar32 *need, int nb_need,
     return ok;
 }
 
-static void load_fonts(RxWindow *w)
+static void load_fonts(RXWindow *w)
 {
     ImGuiIO &io = ImGui::GetIO();
     const float size = w->opts.font_size;
@@ -175,7 +175,7 @@ static void load_fonts(RxWindow *w)
 
 /* -------------------------------------------------------------------- init */
 
-extern "C" void rx_imgui_set_scale(RxWindow *w)
+extern "C" void rx_imgui_set_scale(RXWindow *w)
 {
     ImGui::SetCurrentContext(ctx_of(w));
     ImGuiStyle &style = ImGui::GetStyle();
@@ -191,7 +191,7 @@ extern "C" void rx_imgui_set_scale(RxWindow *w)
     w->imgui_scale = s;
 }
 
-extern "C" int rx_imgui_init(RxWindow *w)
+extern "C" int rx_imgui_init(RXWindow *w)
 {
     IMGUI_CHECKVERSION();
     ImGuiContext *ctx = ImGui::CreateContext();
@@ -244,7 +244,7 @@ extern "C" int rx_imgui_init(RxWindow *w)
     return 0;
 }
 
-extern "C" void rx_imgui_shutdown(RxWindow *w)
+extern "C" void rx_imgui_shutdown(RXWindow *w)
 {
     if (!w->imgui)
         return;
@@ -262,13 +262,13 @@ extern "C" void rx_imgui_shutdown(RxWindow *w)
 
 /* ------------------------------------------------------------------ frames */
 
-extern "C" void rx_imgui_process_event(RxWindow *w, const union SDL_Event *ev)
+extern "C" void rx_imgui_process_event(RXWindow *w, const union SDL_Event *ev)
 {
     ImGui::SetCurrentContext(ctx_of(w));
     ImGui_ImplSDL3_ProcessEvent(ev);
 }
 
-extern "C" void rx_imgui_new_frame(RxWindow *w)
+extern "C" void rx_imgui_new_frame(RXWindow *w)
 {
     ImGui::SetCurrentContext(ctx_of(w));
     ImGui_ImplVulkan_NewFrame();
@@ -276,14 +276,14 @@ extern "C" void rx_imgui_new_frame(RxWindow *w)
     ImGui::NewFrame();
 }
 
-extern "C" void *rx_imgui_render(RxWindow *w)
+extern "C" void *rx_imgui_render(RXWindow *w)
 {
     ImGui::SetCurrentContext(ctx_of(w));
     ImGui::Render();
     return ImGui::GetDrawData();
 }
 
-extern "C" void *rx_imgui_last_draw_data(RxWindow *w)
+extern "C" void *rx_imgui_last_draw_data(RXWindow *w)
 {
     if (!w->imgui || w->in_frame)
         return nullptr;
@@ -291,7 +291,7 @@ extern "C" void *rx_imgui_last_draw_data(RxWindow *w)
     return ImGui::GetDrawData();
 }
 
-extern "C" void rx_imgui_record(RxWindow *w, void *draw_data, VkCommandBuffer cmd)
+extern "C" void rx_imgui_record(RXWindow *w, void *draw_data, VkCommandBuffer cmd)
 {
     ImGui::SetCurrentContext(ctx_of(w));
     ImGui_ImplVulkan_RenderDrawData(static_cast<ImDrawData *>(draw_data), cmd);
@@ -299,7 +299,7 @@ extern "C" void rx_imgui_record(RxWindow *w, void *draw_data, VkCommandBuffer cm
 
 /* ---------------------------------------------------------------- textures */
 
-extern "C" uint64_t rx_imgui_add_texture(RxWindow *w, VkImageView view)
+extern "C" uint64_t rx_imgui_add_texture(RXWindow *w, VkImageView view)
 {
     ImGui::SetCurrentContext(ctx_of(w));
     VkDescriptorSet set = ImGui_ImplVulkan_AddTexture(view,
@@ -307,7 +307,7 @@ extern "C" uint64_t rx_imgui_add_texture(RxWindow *w, VkImageView view)
     return (uint64_t)(uintptr_t)set;
 }
 
-extern "C" void rx_imgui_remove_texture(RxWindow *w, uint64_t id)
+extern "C" void rx_imgui_remove_texture(RXWindow *w, uint64_t id)
 {
     if (!w->imgui_vk || !id)
         return;
@@ -323,7 +323,7 @@ extern "C" void rx_imgui_remove_texture(RxWindow *w, uint64_t id)
  * draw list, with no promise of alignment. */
 static void wave_callback(const ImDrawList *, const ImDrawCmd *pcmd)
 {
-    RxWaveCmd c;
+    RXWaveCmd c;
     if (!pcmd->UserCallbackData || pcmd->UserCallbackDataSize != (int)sizeof(c))
         return;
     memcpy(&c, pcmd->UserCallbackData, sizeof(c));
@@ -334,7 +334,7 @@ static void wave_callback(const ImDrawList *, const ImDrawCmd *pcmd)
         return;
 
     /* The same projection the backend uses for its own clip rectangles. */
-    RxWaveView v;
+    RXWaveView v;
     v.off_x     = dd->DisplayPos.x;
     v.off_y     = dd->DisplayPos.y;
     v.scale_x   = dd->FramebufferScale.x;
@@ -351,14 +351,14 @@ static void wave_callback(const ImDrawList *, const ImDrawCmd *pcmd)
     rx_wave_record(&c, rs->CommandBuffer, &v);
 }
 
-extern "C" void rx_imgui_add_wave(void *draw_list, const RxWaveCmd *c)
+extern "C" void rx_imgui_add_wave(void *draw_list, const RXWaveCmd *c)
 {
     ImDrawList *dl = static_cast<ImDrawList *>(draw_list);
     ImDrawCallback reset = ImGui::GetPlatformIO().DrawCallback_ResetRenderState;
     if (!reset)
         return;
 
-    dl->AddCallback(wave_callback, const_cast<RxWaveCmd *>(c), sizeof(*c));
+    dl->AddCallback(wave_callback, const_cast<RXWaveCmd *>(c), sizeof(*c));
     dl->AddCallback(reset, nullptr);
 }
 

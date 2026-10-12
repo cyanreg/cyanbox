@@ -27,7 +27,7 @@ typedef struct AddLog {
     int reported, failed;
 } AddLog;
 
-static void add_cb(void *opaque, const char *path, RxTrack *t, int err)
+static void add_cb(void *opaque, const char *path, RXTrack *t, int err)
 {
     AddLog *log = opaque;
     if (err < 0)
@@ -37,7 +37,7 @@ static void add_cb(void *opaque, const char *path, RxTrack *t, int err)
 }
 
 /* Rows of a table for one track, straight from SQLite. */
-static int count_rows(const RxLibrary *lib, const char *table, uint64_t id)
+static int count_rows(const RXLibrary *lib, const char *table, uint64_t id)
 {
     char *sql = rx_asprintf("SELECT count(*) FROM %s WHERE track_id = %llu", table, (unsigned long long)id);
     sqlite3_stmt *st;
@@ -72,7 +72,7 @@ static void make_music(void)
 
 static void test_create_and_add(void)
 {
-    RxLibrary lib;
+    RXLibrary lib;
     CHECK(rx_library_open(&lib, root) == 0);
     char *db = path_in(root, "library.db");
     CHECK(rx_file_exists(db));
@@ -95,7 +95,7 @@ static void test_create_and_add(void)
     CHECK(n == 3 && log.reported == 3 && !log.failed);
     CHECK(lib.nb_tracks == 3);
     if (lib.nb_tracks == 3) {
-        RxTrack *a = lib.tracks[0], *b = lib.tracks[1], *c = lib.tracks[2];
+        RXTrack *a = lib.tracks[0], *b = lib.tracks[1], *c = lib.tracks[2];
         /* Ids in name order, within a directory before its subdirectories. */
         CHECK(a->id == 1 && b->id == 2 && c->id == 3);
         CHECK(rx_str_ends(a->path, "/a.wav") && rx_str_ends(b->path, "/b.wav") && rx_str_ends(c->path, "/sub/c.wav"));
@@ -138,10 +138,10 @@ static const uint8_t jpeg[] = { 0xff, 0xd8, 0xff, 0xe0, 'J', 'P', 'E', 'G', 0xff
 
 static void test_edit_and_reopen(void)
 {
-    RxLibrary lib;
+    RXLibrary lib;
     CHECK(rx_library_open(&lib, root) == 0);
     CHECK(lib.nb_tracks == 3);
-    RxTrack *a = rx_library_find_id(&lib, 1);
+    RXTrack *a = rx_library_find_id(&lib, 1);
     CHECK(a && rx_library_index_of(&lib, a) == 0);
     CHECK(rx_library_find_path(&lib, a->path) == a);
     if (!a)
@@ -163,7 +163,7 @@ static void test_edit_and_reopen(void)
     a->grid_locked = true;
     a->analysed = 1760000000;
 
-    RxCue c;
+    RXCue c;
     rx_cue_init(&c, 0.3125);
     rx_cue_attach_to_grid(&c, &a->grid);
     rx_track_add_cue(a, &c);
@@ -194,12 +194,12 @@ static void test_edit_and_reopen(void)
     lib.cfg.detail_bars = 16;
     lib.cfg.split_tree = 0.25f;
     snprintf(lib.cfg.wave_palette, sizeof(lib.cfg.wave_palette), "rgb");
-    lib.cfg.player = calloc(2, sizeof(RxKv));
-    lib.cfg.player[0] = (RxKv) { rx_strdup("quantize"), rx_strdup("true") };
-    lib.cfg.player[1] = (RxKv) { rx_strdup("tempo_range"), rx_strdup("10") };
+    lib.cfg.player = calloc(2, sizeof(RXKv));
+    lib.cfg.player[0] = (RXKv) { rx_strdup("quantize"), rx_strdup("true") };
+    lib.cfg.player[1] = (RXKv) { rx_strdup("tempo_range"), rx_strdup("10") };
     lib.cfg.nb_player = 2;
-    lib.cfg.device = calloc(1, sizeof(RxKv));
-    lib.cfg.device[0] = (RxKv) { rx_strdup("waveform_color"), rx_strdup("3band") };
+    lib.cfg.device = calloc(1, sizeof(RXKv));
+    lib.cfg.device[0] = (RXKv) { rx_strdup("waveform_color"), rx_strdup("3band") };
     lib.cfg.nb_device = 1;
     CHECK(rx_library_config_save(&lib) == 0);
     CHECK(rx_library_setting_set(&lib, "ui.columns", "title,artist,bpm") == 0);
@@ -214,7 +214,7 @@ static void test_edit_and_reopen(void)
     CHECK(rx_library_has_waveforms(&lib, 1) && !rx_library_has_waveforms(&lib, 2));
 
     unsigned gen = lib.generation;
-    RxTrack *b = rx_library_find_id(&lib, 2);
+    RXTrack *b = rx_library_find_id(&lib, 2);
     b->meta.rating = 2;
     CHECK(rx_library_save_track(&lib, b) == 0 && lib.generation != gen);
     rx_library_close(&lib);
@@ -256,7 +256,7 @@ static void test_edit_and_reopen(void)
     CHECK(a->has_waveforms && rx_library_has_waveforms(&lib, 1));
     CHECK(rx_library_find_id(&lib, 2)->meta.rating == 2);
 
-    const RxConfig *cfg = &lib.cfg;
+    const RXConfig *cfg = &lib.cfg;
     CHECK_STR(cfg->key_notation, "camelot");
     CHECK(cfg->bpm_min == 70 && cfg->bpm_max == 180.5 && !cfg->snap_bpm && cfg->auto_cues);
     CHECK(cfg->compat_transcode && cfg->export_pdb && cfg->detail_bars == 16 && cfg->split_tree == 0.25f);
@@ -300,9 +300,9 @@ static void test_edit_and_reopen(void)
 /* The file is retagged: fields the user did not change follow it. */
 static void test_refresh(void)
 {
-    RxLibrary lib;
+    RXLibrary lib;
     CHECK(rx_library_open(&lib, root) == 0);
-    RxTrack *a = rx_library_find_id(&lib, 1);
+    RXTrack *a = rx_library_find_id(&lib, 1);
     char *p = path_in(music, "a.wav");
     sleep(1);       /* a new mtime */
     test_write_wav(p, 2.0, 44100, 2, "Alpha 2", "Artist B", "2025");
@@ -330,11 +330,11 @@ static void test_refresh(void)
 
 static void test_missing_relocate_remove(void)
 {
-    RxLibrary lib;
+    RXLibrary lib;
     char *b_path = path_in(music, "b.wav");
     CHECK(unlink(b_path) == 0);
     CHECK(rx_library_open(&lib, root) == 0);
-    RxTrack *b = rx_library_find_id(&lib, 2);
+    RXTrack *b = rx_library_find_id(&lib, 2);
     CHECK(b && b->missing && b->meta.rating == 2);
     CHECK(rx_library_rescan_missing(&lib) == 0);
     rx_library_close(&lib);
@@ -354,7 +354,7 @@ static void test_missing_relocate_remove(void)
     CHECK(rx_library_add_file(&lib, b_path, &err) == b && !b->missing);
 
     /* The user moved a file. */
-    RxTrack *c = rx_library_find_id(&lib, 3);
+    RXTrack *c = rx_library_find_id(&lib, 3);
     char *c_old = rx_strdup(c->path), *c_new = path_in(music, "sub/c moved.wav");
     CHECK(rename(c_old, c_new) == 0);
     CHECK(rx_library_rescan_missing(&lib) == 1 && c->missing);
@@ -378,8 +378,8 @@ static void test_missing_relocate_remove(void)
     CHECK(c && !strcmp(c->path, c_new) && !c->missing);
 
     /* Removing takes everything that refers to the track. */
-    RxTrack *a = rx_library_find_id(&lib, 1);
-    RxPlaylist *pl = rx_library_playlist_create(&lib, NULL, "Set");
+    RXTrack *a = rx_library_find_id(&lib, 1);
+    RXPlaylist *pl = rx_library_playlist_create(&lib, NULL, "Set");
     CHECK(pl && rx_library_playlist_add(&lib, pl, a, -1) == 0);
     CHECK(rx_library_playlist_add(&lib, pl, c, -1) == 0);
     char *cache = rx_library_cache_path(&lib, "transcode", 1, "flac");
@@ -397,7 +397,7 @@ static void test_missing_relocate_remove(void)
             test_failures++;
         }
     }
-    RxTrack *stranger = rx_track_new("/not/in/the/library.wav");
+    RXTrack *stranger = rx_track_new("/not/in/the/library.wav");
     stranger->id = 1;
     CHECK(rx_library_remove(&lib, stranger) == RX_ERROR(ENOENT));
     CHECK(rx_library_save_track(&lib, stranger) == RX_ERROR(ENOENT));
@@ -414,7 +414,7 @@ static void test_missing_relocate_remove(void)
     CHECK(rx_library_remove(&lib, c) == 0);
     char *d = path_in(music, "d.wav");
     test_write_wav(d, 0.25, 44100, 2, NULL, NULL, NULL);
-    RxTrack *t = rx_library_add_file(&lib, d, &err);
+    RXTrack *t = rx_library_add_file(&lib, d, &err);
     CHECK(t && t->id == 4);
     CHECK(rx_library_check(&lib) == 0);
     rx_library_close(&lib);
@@ -436,7 +436,7 @@ static void test_refusals(void)
     snprintf(sql, sizeof(sql), "PRAGMA application_id = %d; PRAGMA user_version = 99", 0x52584258);
     sqlite3_exec(s, sql, NULL, NULL, NULL);
     sqlite3_close(s);
-    RxLibrary lib;
+    RXLibrary lib;
     CHECK(rx_library_open(&lib, dir) == RX_ERROR(EPROTO));
     free(db);
     test_rm_rf(dir);
@@ -512,7 +512,7 @@ static int interrupt_once(void *opaque)
     return 1;
 }
 
-static int track_rows(const RxLibrary *lib)
+static int track_rows(const RXLibrary *lib)
 {
     sqlite3_stmt *st;
     int n = -1;
@@ -535,7 +535,7 @@ static void test_lost_transaction(void)
         free(p);
     }
 
-    RxLibrary lib;
+    RXLibrary lib;
     CHECK(rx_library_open(&lib, lroot) == 0);
     Interrupt in = { 0 };
     sqlite3_update_hook(lib.db->db, count_inserts, &in);
@@ -574,10 +574,10 @@ static void test_byte_paths(void)
     char *p = path_in(files, "\xff\xfe caf\xe9 \x80.wav");
     test_write_wav(p, 0.1, 44100, 1, NULL, NULL, NULL);
 
-    RxLibrary lib;
+    RXLibrary lib;
     CHECK(rx_library_open(&lib, lroot) == 0);
     int err;
-    RxTrack *t = rx_library_add_file(&lib, p, &err);
+    RXTrack *t = rx_library_add_file(&lib, p, &err);
     CHECK(t && !strcmp(t->path, p) && !strcmp(t->meta.title, "\xff\xfe caf\xe9 \x80"));
     rx_library_close(&lib);
     CHECK(rx_library_open(&lib, lroot) == 0 && lib.nb_tracks == 1);
@@ -600,7 +600,7 @@ static void test_byte_paths(void)
  * just as the job starts reading the playlists, after it read the tracks.
  * (An auto extension hooks the job's connection as it is opened.) */
 typedef struct Meddle {
-    RxLibrary *ui;
+    RXLibrary *ui;
     const char *path;
     bool done;
 } Meddle;
@@ -614,8 +614,8 @@ static int meddle_at_playlists(unsigned type, void *opaque, void *stmt, void *sq
         return 0;
     meddle.done = true;
     int err;
-    RxTrack *t = rx_library_add_file(meddle.ui, meddle.path, &err);
-    RxPlaylist *p = rx_library_playlist_find(meddle.ui, "Set");
+    RXTrack *t = rx_library_add_file(meddle.ui, meddle.path, &err);
+    RXPlaylist *p = rx_library_playlist_find(meddle.ui, "Set");
     if (t && p)
         rx_library_playlist_add(meddle.ui, p, t, -1);
     return 0;
@@ -635,11 +635,11 @@ static void test_open_snapshot(void)
     test_write_wav(a, 0.1, 44100, 1, NULL, NULL, NULL);
     test_write_wav(b, 0.1, 44100, 1, NULL, NULL, NULL);
 
-    RxLibrary ui, job;
+    RXLibrary ui, job;
     CHECK(rx_library_open(&ui, lroot) == 0);
     int err;
-    RxTrack *t = rx_library_add_file(&ui, a, &err);
-    RxPlaylist *p = rx_library_playlist_create(&ui, NULL, "Set");
+    RXTrack *t = rx_library_add_file(&ui, a, &err);
+    RXPlaylist *p = rx_library_playlist_create(&ui, NULL, "Set");
     CHECK(t && p && rx_library_playlist_add(&ui, p, t, -1) == 0);
 
     meddle = (Meddle) { .ui = &ui, .path = b };
@@ -648,7 +648,7 @@ static void test_open_snapshot(void)
     sqlite3_cancel_auto_extension((void (*)(void))hook_connection);
     CHECK(meddle.done && ui.nb_tracks == 2 && p->nb == 2);
 
-    RxPlaylist *jp = rx_library_playlist_find(&job, "Set");
+    RXPlaylist *jp = rx_library_playlist_find(&job, "Set");
     CHECK(jp != NULL);
     for (int i = 0; jp && i < jp->nb; i++) {
         if (!rx_library_find_id(&job, jp->track_ids[i])) {
@@ -679,7 +679,7 @@ typedef struct Opener {
 static void *open_thread(void *arg)
 {
     Opener *o = arg;
-    RxLibrary lib;
+    RXLibrary lib;
     pthread_barrier_wait(o->go);
     o->ret = rx_library_open(&lib, o->root);
     if (o->ret >= 0)

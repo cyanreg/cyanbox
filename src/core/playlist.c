@@ -31,9 +31,9 @@
 
 /* ----------------------------------------------------------------- nodes */
 
-static RxPlaylist *playlist_new(int64_t id, const char *name)
+static RXPlaylist *playlist_new(int64_t id, const char *name)
 {
-    RxPlaylist *p = calloc(1, sizeof(*p));
+    RXPlaylist *p = calloc(1, sizeof(*p));
     if (!p)
         return NULL;
     p->id = id;
@@ -45,7 +45,7 @@ static RxPlaylist *playlist_new(int64_t id, const char *name)
     return p;
 }
 
-static void playlist_free(RxPlaylist *p)
+static void playlist_free(RXPlaylist *p)
 {
     if (!p)
         return;
@@ -54,9 +54,9 @@ static void playlist_free(RxPlaylist *p)
     free(p);
 }
 
-static RxPlaylistFolder *folder_new(int64_t id, const char *name)
+static RXPlaylistFolder *folder_new(int64_t id, const char *name)
 {
-    RxPlaylistFolder *f = calloc(1, sizeof(*f));
+    RXPlaylistFolder *f = calloc(1, sizeof(*f));
     if (!f)
         return NULL;
     f->id = id;
@@ -68,7 +68,7 @@ static RxPlaylistFolder *folder_new(int64_t id, const char *name)
     return f;
 }
 
-static void folder_free(RxPlaylistFolder *f)
+static void folder_free(RXPlaylistFolder *f)
 {
     if (!f)
         return;
@@ -103,7 +103,7 @@ static void remove_ptr(void *array, int *nb, int at)
     (*nb)--;
 }
 
-static RxPlaylistFolder *parent_of_folder(RxPlaylistFolder *in, const RxPlaylistFolder *f,
+static RXPlaylistFolder *parent_of_folder(RXPlaylistFolder *in, const RXPlaylistFolder *f,
                                           int *index)
 {
     for (int i = 0; i < in->nb_folders; i++) {
@@ -111,14 +111,14 @@ static RxPlaylistFolder *parent_of_folder(RxPlaylistFolder *in, const RxPlaylist
             *index = i;
             return in;
         }
-        RxPlaylistFolder *r = parent_of_folder(in->folders[i], f, index);
+        RXPlaylistFolder *r = parent_of_folder(in->folders[i], f, index);
         if (r)
             return r;
     }
     return NULL;
 }
 
-static RxPlaylistFolder *parent_of_playlist(RxPlaylistFolder *in, const RxPlaylist *p, int *index)
+static RXPlaylistFolder *parent_of_playlist(RXPlaylistFolder *in, const RXPlaylist *p, int *index)
 {
     for (int i = 0; i < in->nb_playlists; i++) {
         if (in->playlists[i] == p) {
@@ -127,7 +127,7 @@ static RxPlaylistFolder *parent_of_playlist(RxPlaylistFolder *in, const RxPlayli
         }
     }
     for (int i = 0; i < in->nb_folders; i++) {
-        RxPlaylistFolder *r = parent_of_playlist(in->folders[i], p, index);
+        RXPlaylistFolder *r = parent_of_playlist(in->folders[i], p, index);
         if (r)
             return r;
     }
@@ -136,17 +136,17 @@ static RxPlaylistFolder *parent_of_playlist(RxPlaylistFolder *in, const RxPlayli
 
 /* The folder holding a playlist / a folder (and the index there), or NULL
  * when it is not in the library's tree. */
-static RxPlaylistFolder *holder_of_playlist(const RxLibrary *lib, const RxPlaylist *p, int *index)
+static RXPlaylistFolder *holder_of_playlist(const RXLibrary *lib, const RXPlaylist *p, int *index)
 {
     return p && lib->root_folder ? parent_of_playlist(lib->root_folder, p, index) : NULL;
 }
 
-static RxPlaylistFolder *holder_of_folder(const RxLibrary *lib, const RxPlaylistFolder *f, int *index)
+static RXPlaylistFolder *holder_of_folder(const RXLibrary *lib, const RXPlaylistFolder *f, int *index)
 {
     return f && lib->root_folder ? parent_of_folder(lib->root_folder, f, index) : NULL;
 }
 
-static bool folder_contains(const RxPlaylistFolder *f, const RxPlaylistFolder *x)
+static bool folder_contains(const RXPlaylistFolder *f, const RXPlaylistFolder *x)
 {
     if (f == x)
         return true;
@@ -157,16 +157,16 @@ static bool folder_contains(const RxPlaylistFolder *f, const RxPlaylistFolder *x
     return false;
 }
 
-static bool in_tree(const RxLibrary *lib, const RxPlaylistFolder *f)
+static bool in_tree(const RXLibrary *lib, const RXPlaylistFolder *f)
 {
     return f && lib->root_folder && folder_contains(lib->root_folder, f);
 }
 
 /* ------------------------------------------------------------ db writes */
 
-static int write_entries(RxLibrary *lib, int64_t playlist_id, const uint64_t *ids, int nb)
+static int write_entries(RXLibrary *lib, int64_t playlist_id, const uint64_t *ids, int nb)
 {
-    RxDb *db = lib->db;
+    RXDb *db = lib->db;
     sqlite3_stmt *st = rx_db_stmt(db, RX_STMT_ENTRY_CLEAR);
     rx_db_bind_int(db, st, 1, playlist_id);
     int ret = rx_db_done(db, st, "clearing a playlist");
@@ -180,7 +180,7 @@ static int write_entries(RxLibrary *lib, int64_t playlist_id, const uint64_t *id
     return ret;
 }
 
-static int place(RxLibrary *lib, int64_t id, int64_t parent, int position)
+static int place(RXLibrary *lib, int64_t id, int64_t parent, int position)
 {
     sqlite3_stmt *st = rx_db_stmt(lib->db, RX_STMT_PLAYLIST_PLACE);
     rx_db_bind_int(lib->db, st, 1, id);
@@ -193,8 +193,8 @@ static int place(RxLibrary *lib, int64_t id, int64_t parent, int position)
 }
 
 /* Positions of the children as given, skipping `skip`. */
-static int place_folders(RxLibrary *lib, int64_t parent, RxPlaylistFolder *const *f, int nb,
-                         const RxPlaylistFolder *skip)
+static int place_folders(RXLibrary *lib, int64_t parent, RXPlaylistFolder *const *f, int nb,
+                         const RXPlaylistFolder *skip)
 {
     int ret = 0;
     for (int i = 0, pos = 0; ret >= 0 && i < nb; i++) {
@@ -204,8 +204,8 @@ static int place_folders(RxLibrary *lib, int64_t parent, RxPlaylistFolder *const
     return ret;
 }
 
-static int place_playlists(RxLibrary *lib, int64_t parent, RxPlaylist *const *p, int nb,
-                           const RxPlaylist *skip)
+static int place_playlists(RXLibrary *lib, int64_t parent, RXPlaylist *const *p, int nb,
+                           const RXPlaylist *skip)
 {
     int ret = 0;
     for (int i = 0, pos = 0; ret >= 0 && i < nb; i++) {
@@ -216,7 +216,7 @@ static int place_playlists(RxLibrary *lib, int64_t parent, RxPlaylist *const *p,
 }
 
 /* Runs `ret` = write in a transaction: commit, or roll back on error. */
-static int finish(RxLibrary *lib, int ret)
+static int finish(RXLibrary *lib, int ret)
 {
     if (ret < 0) {
         rx_db_rollback(lib->db);
@@ -257,7 +257,7 @@ static int cmp_sibling(const void *a, const void *b)
     return (x->id > y->id) - (x->id < y->id);
 }
 
-static int load_entries(RxLibrary *lib, Node *nodes, int nb)
+static int load_entries(RXLibrary *lib, Node *nodes, int nb)
 {
     sqlite3_stmt *st = rx_db_prepare(lib->db, "SELECT playlist_id, position, track_id "
                                               "FROM playlist_entry ORDER BY playlist_id, position");
@@ -268,7 +268,7 @@ static int load_entries(RxLibrary *lib, Node *nodes, int nb)
         Node *n = node_find(nodes, nb, sqlite3_column_int64(st, 0));
         if (!n || n->is_folder)
             continue;
-        RxPlaylist *p = n->obj;
+        RXPlaylist *p = n->obj;
         uint64_t *ids = realloc(p->track_ids, (size_t)(p->nb + 1) * sizeof(*ids));
         if (!ids) {
             ret = RX_ERROR(ENOMEM);
@@ -284,7 +284,7 @@ static int load_entries(RxLibrary *lib, Node *nodes, int nb)
 }
 
 /* True when every stored position is the index the tree has. */
-static bool tree_clean(const RxPlaylistFolder *f, Node *nodes, int nb)
+static bool tree_clean(const RXPlaylistFolder *f, Node *nodes, int nb)
 {
     for (int i = 0; i < f->nb_folders; i++) {
         Node *n = node_find(nodes, nb, f->folders[i]->id);
@@ -299,13 +299,13 @@ static bool tree_clean(const RxPlaylistFolder *f, Node *nodes, int nb)
     return true;
 }
 
-static int renumber_tree(RxLibrary *lib, const RxPlaylistFolder *f, Node *nodes, int nb)
+static int renumber_tree(RXLibrary *lib, const RXPlaylistFolder *f, Node *nodes, int nb)
 {
     int ret = place_folders(lib, f->id, f->folders, f->nb_folders, NULL);
     if (ret >= 0)
         ret = place_playlists(lib, f->id, f->playlists, f->nb_playlists, NULL);
     for (int i = 0; ret >= 0 && i < f->nb_playlists; i++) {
-        const RxPlaylist *p = f->playlists[i];
+        const RXPlaylist *p = f->playlists[i];
         Node *n = node_find(nodes, nb, p->id);
         if (n && n->dirty)
             ret = write_entries(lib, p->id, p->track_ids, p->nb);
@@ -330,7 +330,7 @@ static int64_t valid_parent(Node *nodes, int nb, const Node *n)
     return up->id;
 }
 
-int rx_core_playlists_load(RxLibrary *lib)
+int rx_core_playlists_load(RXLibrary *lib)
 {
     lib->root_folder = folder_new(0, "");
     if (!lib->root_folder)
@@ -394,7 +394,7 @@ int rx_core_playlists_load(RxLibrary *lib)
                 n->parent = 0;
                 n->dirty = true;
             }
-            RxPlaylistFolder *up = parent_id ? node_find(nodes, nb, parent_id)->obj : lib->root_folder;
+            RXPlaylistFolder *up = parent_id ? node_find(nodes, nb, parent_id)->obj : lib->root_folder;
             if (n->is_folder)
                 ret = insert_ptr(&up->folders, &up->nb_folders, up->nb_folders, n->obj);
             else
@@ -423,7 +423,7 @@ int rx_core_playlists_load(RxLibrary *lib)
     return ret;
 }
 
-void rx_core_playlists_free(RxLibrary *lib)
+void rx_core_playlists_free(RXLibrary *lib)
 {
     folder_free(lib->root_folder);
     lib->root_folder = NULL;
@@ -431,7 +431,7 @@ void rx_core_playlists_free(RxLibrary *lib)
 
 /* ---------------------------------------------------------------- lookups */
 
-static void flat(RxPlaylistFolder *f, RxPlaylist **out, int max, int *n)
+static void flat(RXPlaylistFolder *f, RXPlaylist **out, int max, int *n)
 {
     for (int i = 0; i < f->nb_folders; i++)
         flat(f->folders[i], out, max, n);
@@ -442,7 +442,7 @@ static void flat(RxPlaylistFolder *f, RxPlaylist **out, int max, int *n)
     }
 }
 
-int rx_library_playlists_flat(const RxLibrary *lib, RxPlaylist **out, int max)
+int rx_library_playlists_flat(const RXLibrary *lib, RXPlaylist **out, int max)
 {
     int n = 0;
     if (lib->root_folder)
@@ -450,16 +450,16 @@ int rx_library_playlists_flat(const RxLibrary *lib, RxPlaylist **out, int max)
     return n;
 }
 
-RxPlaylistFolder *rx_library_folder_of(const RxLibrary *lib, const RxPlaylist *p)
+RXPlaylistFolder *rx_library_folder_of(const RXLibrary *lib, const RXPlaylist *p)
 {
     int index;
     return holder_of_playlist(lib, p, &index);
 }
 
-static RxPlaylist *find_name(RxPlaylistFolder *f, const char *name)
+static RXPlaylist *find_name(RXPlaylistFolder *f, const char *name)
 {
     for (int i = 0; i < f->nb_folders; i++) {
-        RxPlaylist *p = find_name(f->folders[i], name);
+        RXPlaylist *p = find_name(f->folders[i], name);
         if (p)
             return p;
     }
@@ -470,7 +470,7 @@ static RxPlaylist *find_name(RxPlaylistFolder *f, const char *name)
     return NULL;
 }
 
-RxPlaylist *rx_library_playlist_find(const RxLibrary *lib, const char *name)
+RXPlaylist *rx_library_playlist_find(const RXLibrary *lib, const char *name)
 {
     return lib->root_folder && name ? find_name(lib->root_folder, name) : NULL;
 }
@@ -482,7 +482,7 @@ static bool name_ok(const char *name)
     return name && name[strspn(name, " \t\r\n")];
 }
 
-static int64_t insert_row(RxLibrary *lib, int64_t parent, const char *name, bool folder, int position)
+static int64_t insert_row(RXLibrary *lib, int64_t parent, const char *name, bool folder, int position)
 {
     sqlite3_stmt *st = rx_db_stmt(lib->db, RX_STMT_PLAYLIST_INSERT);
     if (parent)
@@ -496,15 +496,15 @@ static int64_t insert_row(RxLibrary *lib, int64_t parent, const char *name, bool
     return ret < 0 ? ret : sqlite3_last_insert_rowid(lib->db->db);
 }
 
-RxPlaylist *rx_library_playlist_create(RxLibrary *lib, RxPlaylistFolder *in, const char *name)
+RXPlaylist *rx_library_playlist_create(RXLibrary *lib, RXPlaylistFolder *in, const char *name)
 {
     if (!in)
         in = lib->root_folder;
     if (!name_ok(name) || !in_tree(lib, in))
         return NULL;
-    RxPlaylist *p = playlist_new(0, name);
+    RXPlaylist *p = playlist_new(0, name);
     size_t n = (size_t)in->nb_playlists + 1;
-    RxPlaylist **grown = p ? realloc(in->playlists, n * sizeof(*grown)) : NULL;
+    RXPlaylist **grown = p ? realloc(in->playlists, n * sizeof(*grown)) : NULL;
     if (!grown) {
         playlist_free(p);
         return NULL;
@@ -526,15 +526,15 @@ RxPlaylist *rx_library_playlist_create(RxLibrary *lib, RxPlaylistFolder *in, con
     return p;
 }
 
-RxPlaylistFolder *rx_library_folder_create(RxLibrary *lib, RxPlaylistFolder *in, const char *name)
+RXPlaylistFolder *rx_library_folder_create(RXLibrary *lib, RXPlaylistFolder *in, const char *name)
 {
     if (!in)
         in = lib->root_folder;
     if (!name_ok(name) || !in_tree(lib, in))
         return NULL;
-    RxPlaylistFolder *f = folder_new(0, name);
+    RXPlaylistFolder *f = folder_new(0, name);
     size_t n = (size_t)in->nb_folders + 1;
-    RxPlaylistFolder **grown = f ? realloc(in->folders, n * sizeof(*grown)) : NULL;
+    RXPlaylistFolder **grown = f ? realloc(in->folders, n * sizeof(*grown)) : NULL;
     if (!grown) {
         folder_free(f);
         return NULL;
@@ -556,7 +556,7 @@ RxPlaylistFolder *rx_library_folder_create(RxLibrary *lib, RxPlaylistFolder *in,
     return f;
 }
 
-static int rename_row(RxLibrary *lib, int64_t id, char **field, const char *name)
+static int rename_row(RXLibrary *lib, int64_t id, char **field, const char *name)
 {
     if (!name_ok(name))
         return RX_ERROR(EINVAL);
@@ -577,31 +577,31 @@ static int rename_row(RxLibrary *lib, int64_t id, char **field, const char *name
     return 0;
 }
 
-int rx_library_playlist_rename(RxLibrary *lib, RxPlaylist *p, const char *name)
+int rx_library_playlist_rename(RXLibrary *lib, RXPlaylist *p, const char *name)
 {
     if (!rx_library_folder_of(lib, p))
         return RX_ERROR(ENOENT);
     return rename_row(lib, p->id, &p->name, name);
 }
 
-int rx_library_folder_rename(RxLibrary *lib, RxPlaylistFolder *f, const char *name)
+int rx_library_folder_rename(RXLibrary *lib, RXPlaylistFolder *f, const char *name)
 {
     if (!in_tree(lib, f) || f == lib->root_folder)
         return RX_ERROR(EINVAL);
     return rename_row(lib, f->id, &f->name, name);
 }
 
-static int delete_row(RxLibrary *lib, int64_t id)
+static int delete_row(RXLibrary *lib, int64_t id)
 {
     sqlite3_stmt *st = rx_db_stmt(lib->db, RX_STMT_PLAYLIST_DELETE);
     rx_db_bind_int(lib->db, st, 1, id);
     return rx_db_done(lib->db, st, "deleting a playlist");
 }
 
-int rx_library_playlist_delete(RxLibrary *lib, RxPlaylist *p)
+int rx_library_playlist_delete(RXLibrary *lib, RXPlaylist *p)
 {
     int index;
-    RxPlaylistFolder *in = holder_of_playlist(lib, p, &index);
+    RXPlaylistFolder *in = holder_of_playlist(lib, p, &index);
     if (!in)
         return RX_ERROR(ENOENT);
 
@@ -621,10 +621,10 @@ int rx_library_playlist_delete(RxLibrary *lib, RxPlaylist *p)
     return 0;
 }
 
-int rx_library_folder_delete(RxLibrary *lib, RxPlaylistFolder *f)
+int rx_library_folder_delete(RXLibrary *lib, RXPlaylistFolder *f)
 {
     int index;
-    RxPlaylistFolder *in = holder_of_folder(lib, f, &index);
+    RXPlaylistFolder *in = holder_of_folder(lib, f, &index);
     if (!in)
         return RX_ERROR(f == lib->root_folder ? EINVAL : ENOENT);
 
@@ -645,12 +645,12 @@ int rx_library_folder_delete(RxLibrary *lib, RxPlaylistFolder *f)
     return 0;
 }
 
-int rx_library_playlist_reparent(RxLibrary *lib, RxPlaylist *p, RxPlaylistFolder *to, int position)
+int rx_library_playlist_reparent(RXLibrary *lib, RXPlaylist *p, RXPlaylistFolder *to, int position)
 {
     int index;
     if (!to)
         to = lib->root_folder;
-    RxPlaylistFolder *from = holder_of_playlist(lib, p, &index);
+    RXPlaylistFolder *from = holder_of_playlist(lib, p, &index);
     if (!from || !in_tree(lib, to))
         return RX_ERROR(ENOENT);
 
@@ -660,7 +660,7 @@ int rx_library_playlist_reparent(RxLibrary *lib, RxPlaylist *p, RxPlaylistFolder
 
     /* The destination list as it will be, built first so nothing is
      * touched if memory runs out. */
-    RxPlaylist **list = malloc((size_t)nb_after * sizeof(*list));
+    RXPlaylist **list = malloc((size_t)nb_after * sizeof(*list));
     if (!list)
         return RX_ERROR(ENOMEM);
     for (int i = 0, n = 0; i < to->nb_playlists; i++) {
@@ -694,12 +694,12 @@ int rx_library_playlist_reparent(RxLibrary *lib, RxPlaylist *p, RxPlaylistFolder
     return 0;
 }
 
-int rx_library_folder_reparent(RxLibrary *lib, RxPlaylistFolder *f, RxPlaylistFolder *to, int position)
+int rx_library_folder_reparent(RXLibrary *lib, RXPlaylistFolder *f, RXPlaylistFolder *to, int position)
 {
     int index;
     if (!to)
         to = lib->root_folder;
-    RxPlaylistFolder *from = holder_of_folder(lib, f, &index);
+    RXPlaylistFolder *from = holder_of_folder(lib, f, &index);
     if (!from || !in_tree(lib, to))
         return RX_ERROR(ENOENT);
     /* Into itself or its own subtree would cut it off the tree. */
@@ -710,7 +710,7 @@ int rx_library_folder_reparent(RxLibrary *lib, RxPlaylistFolder *f, RxPlaylistFo
     if (position < 0 || position >= nb_after)
         position = nb_after - 1;
 
-    RxPlaylistFolder **list = malloc((size_t)nb_after * sizeof(*list));
+    RXPlaylistFolder **list = malloc((size_t)nb_after * sizeof(*list));
     if (!list)
         return RX_ERROR(ENOMEM);
     for (int i = 0, n = 0; i < to->nb_folders; i++) {
@@ -747,7 +747,7 @@ int rx_library_folder_reparent(RxLibrary *lib, RxPlaylistFolder *f, RxPlaylistFo
 /* --------------------------------------------------------------- entries */
 
 /* Writes `ids` as the playlist's entries and adopts the array. */
-static int set_entries(RxLibrary *lib, RxPlaylist *p, uint64_t *ids, int nb)
+static int set_entries(RXLibrary *lib, RXPlaylist *p, uint64_t *ids, int nb)
 {
     int ret = rx_db_begin(lib->db);
     if (ret >= 0)
@@ -763,7 +763,7 @@ static int set_entries(RxLibrary *lib, RxPlaylist *p, uint64_t *ids, int nb)
     return 0;
 }
 
-static uint64_t *copy_ids(const RxPlaylist *p, int extra)
+static uint64_t *copy_ids(const RXPlaylist *p, int extra)
 {
     uint64_t *ids = malloc((size_t)RX_MAX(p->nb + extra, 1) * sizeof(*ids));
     if (ids && p->nb)
@@ -771,7 +771,7 @@ static uint64_t *copy_ids(const RxPlaylist *p, int extra)
     return ids;
 }
 
-int rx_library_playlist_add(RxLibrary *lib, RxPlaylist *p, const RxTrack *t, int at)
+int rx_library_playlist_add(RXLibrary *lib, RXPlaylist *p, const RXTrack *t, int at)
 {
     if (!rx_library_folder_of(lib, p) || !t || rx_library_find_id(lib, t->id) != t)
         return RX_ERROR(ENOENT);
@@ -789,7 +789,7 @@ int rx_library_playlist_add(RxLibrary *lib, RxPlaylist *p, const RxTrack *t, int
     return set_entries(lib, p, ids, p->nb + 1);
 }
 
-int rx_library_playlist_remove_at(RxLibrary *lib, RxPlaylist *p, int index)
+int rx_library_playlist_remove_at(RXLibrary *lib, RXPlaylist *p, int index)
 {
     if (!rx_library_folder_of(lib, p))
         return RX_ERROR(ENOENT);
@@ -802,7 +802,7 @@ int rx_library_playlist_remove_at(RxLibrary *lib, RxPlaylist *p, int index)
     return set_entries(lib, p, ids, p->nb - 1);
 }
 
-int rx_library_playlist_move(RxLibrary *lib, RxPlaylist *p, int from, int to)
+int rx_library_playlist_move(RXLibrary *lib, RXPlaylist *p, int from, int to)
 {
     if (!rx_library_folder_of(lib, p))
         return RX_ERROR(ENOENT);
@@ -826,13 +826,13 @@ int rx_library_playlist_move(RxLibrary *lib, RxPlaylist *p, int from, int to)
 
 /* `write`: the playlists holding `id` are written without it (memory left
  * alone, the caller may still roll back); otherwise memory drops it. */
-static int drop_in(RxLibrary *lib, RxPlaylistFolder *f, uint64_t id, bool write)
+static int drop_in(RXLibrary *lib, RXPlaylistFolder *f, uint64_t id, bool write)
 {
     int ret = 0;
     for (int i = 0; ret >= 0 && i < f->nb_folders; i++)
         ret = drop_in(lib, f->folders[i], id, write);
     for (int i = 0; ret >= 0 && i < f->nb_playlists; i++) {
-        RxPlaylist *p = f->playlists[i];
+        RXPlaylist *p = f->playlists[i];
         int k = 0;
         while (k < p->nb && p->track_ids[k] != id)
             k++;
@@ -854,12 +854,12 @@ static int drop_in(RxLibrary *lib, RxPlaylistFolder *f, uint64_t id, bool write)
     return ret;
 }
 
-int rx_core_playlists_drop_track(RxLibrary *lib, uint64_t id)
+int rx_core_playlists_drop_track(RXLibrary *lib, uint64_t id)
 {
     return lib->root_folder ? drop_in(lib, lib->root_folder, id, true) : 0;
 }
 
-void rx_core_playlists_forget_track(RxLibrary *lib, uint64_t id)
+void rx_core_playlists_forget_track(RXLibrary *lib, uint64_t id)
 {
     if (lib->root_folder)
         drop_in(lib, lib->root_folder, id, false);
@@ -967,8 +967,8 @@ static char *display_name(const char *path)
     return stem;
 }
 
-int rx_library_playlist_import_m3u(RxLibrary *lib, RxPlaylistFolder *in, const char *m3u_path,
-                                   RxPlaylist **out)
+int rx_library_playlist_import_m3u(RXLibrary *lib, RXPlaylistFolder *in, const char *m3u_path,
+                                   RXPlaylist **out)
 {
     if (out)
         *out = NULL;
@@ -1013,7 +1013,7 @@ int rx_library_playlist_import_m3u(RxLibrary *lib, RxPlaylistFolder *in, const c
             ret = RX_ERROR(ENOMEM);
             goto end;
         }
-        RxTrack *t = rx_library_find_path(lib, path);
+        RXTrack *t = rx_library_find_path(lib, path);
         int err = 0;
         if (!t && rx_file_exists(path))
             t = rx_library_add_file(lib, path, &err);
@@ -1053,7 +1053,7 @@ int rx_library_playlist_import_m3u(RxLibrary *lib, RxPlaylistFolder *in, const c
         rx_warn("%s has no entries; importing it as an empty playlist", abs);
 
     char *name = display_name(abs);
-    RxPlaylist *p = name ? rx_library_playlist_create(lib, in, name) : NULL;
+    RXPlaylist *p = name ? rx_library_playlist_create(lib, in, name) : NULL;
     free(name);
     if (!p) {
         ret = RX_ERROR(EIO);
@@ -1119,7 +1119,7 @@ static char *relative_path(const char *from, const char *to)
     return out;
 }
 
-int rx_library_playlist_export_m3u(const RxLibrary *lib, const RxPlaylist *p, const char *m3u_path)
+int rx_library_playlist_export_m3u(const RXLibrary *lib, const RXPlaylist *p, const char *m3u_path)
 {
     char *abs = rx_path_abs(m3u_path);
     if (!abs)
@@ -1140,7 +1140,7 @@ int rx_library_playlist_export_m3u(const RxLibrary *lib, const RxPlaylist *p, co
     if (f) {
         fputs("#EXTM3U\n", f);
         for (int i = 0; ret >= 0 && i < p->nb; i++) {
-            const RxTrack *t = rx_library_find_id(lib, p->track_ids[i]);
+            const RXTrack *t = rx_library_find_id(lib, p->track_ids[i]);
             if (!t)
                 continue;
             char display[512];

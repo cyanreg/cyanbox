@@ -15,7 +15,7 @@
 #include "src/core/core.h"
 #include "util.h"
 
-static int sql_int(const RxLibrary *lib, const char *sql)
+static int sql_int(const RXLibrary *lib, const char *sql)
 {
     sqlite3_stmt *st;
     int n = -1;
@@ -28,7 +28,7 @@ static int sql_int(const RxLibrary *lib, const char *sql)
 }
 
 /* n distinct positions in [0, n) among each set of siblings are 0..n-1. */
-static bool dense(const RxLibrary *lib)
+static bool dense(const RXLibrary *lib)
 {
     return sql_int(lib, "SELECT count(*) FROM playlist p WHERE position < 0 OR position >= "
                         "(SELECT count(*) FROM playlist q WHERE q.parent_id IS p.parent_id "
@@ -39,7 +39,7 @@ static bool dense(const RxLibrary *lib)
                         "(SELECT count(*) FROM playlist_entry f WHERE f.playlist_id = e.playlist_id)") == 0;
 }
 
-static bool ids_are(const RxPlaylist *p, int nb, const uint64_t *ids)
+static bool ids_are(const RXPlaylist *p, int nb, const uint64_t *ids)
 {
     if (!p || p->nb != nb)
         return false;
@@ -54,21 +54,21 @@ static bool ids_are(const RxPlaylist *p, int nb, const uint64_t *ids)
 
 static void test_tree(const char *root, const char *music)
 {
-    RxLibrary lib;
+    RXLibrary lib;
     CHECK(rx_library_open(&lib, root) == 0);
     CHECK(rx_library_add_path(&lib, music, NULL, NULL) == 4);
-    RxTrack *t[5] = { NULL };
+    RXTrack *t[5] = { NULL };
     for (int i = 1; i <= 4; i++)
         t[i] = rx_library_find_id(&lib, (uint64_t)i);
     CHECK(t[1] && t[4]);
     if (!t[1] || !t[4])
         return;
 
-    RxPlaylistFolder *genres = rx_library_folder_create(&lib, NULL, "Genres");
-    RxPlaylistFolder *house = rx_library_folder_create(&lib, genres, "House");
-    RxPlaylist *warmup = rx_library_playlist_create(&lib, NULL, "Warmup");
-    RxPlaylist *peak = rx_library_playlist_create(&lib, NULL, "Peak");
-    RxPlaylist *deep = rx_library_playlist_create(&lib, house, "Deep");
+    RXPlaylistFolder *genres = rx_library_folder_create(&lib, NULL, "Genres");
+    RXPlaylistFolder *house = rx_library_folder_create(&lib, genres, "House");
+    RXPlaylist *warmup = rx_library_playlist_create(&lib, NULL, "Warmup");
+    RXPlaylist *peak = rx_library_playlist_create(&lib, NULL, "Peak");
+    RXPlaylist *deep = rx_library_playlist_create(&lib, house, "Deep");
     CHECK(genres && house && warmup && peak && deep);
     CHECK(!rx_library_playlist_create(&lib, NULL, "  "));
     CHECK(lib.root_folder->nb_folders == 1 && lib.root_folder->nb_playlists == 2);
@@ -103,7 +103,7 @@ static void test_tree(const char *root, const char *music)
     CHECK(lib.root_folder->nb_playlists == 1 && lib.root_folder->playlists[0] == warmup);
     CHECK(rx_library_folder_reparent(&lib, genres, house, -1) == RX_ERROR(EINVAL));
     CHECK(rx_library_folder_reparent(&lib, genres, genres, -1) == RX_ERROR(EINVAL));
-    RxPlaylistFolder *other = rx_library_folder_create(&lib, NULL, "Other");
+    RXPlaylistFolder *other = rx_library_folder_create(&lib, NULL, "Other");
     CHECK(rx_library_folder_reparent(&lib, house, other, -1) == 0);
     CHECK(!genres->nb_folders && other->nb_folders == 1 && other->folders[0] == house);
     CHECK(rx_library_folder_reparent(&lib, other, NULL, 0) == 0);
@@ -111,7 +111,7 @@ static void test_tree(const char *root, const char *music)
     CHECK(rx_library_playlist_reparent(&lib, warmup, NULL, 5) == 0);   /* same place */
     CHECK(dense(&lib));
 
-    RxPlaylist *all[8];
+    RXPlaylist *all[8];
     CHECK(rx_library_playlists_flat(&lib, NULL, 0) == 3);
     CHECK(rx_library_playlists_flat(&lib, all, 8) == 3);
     CHECK(all[0] == peak && all[1] == deep && all[2] == warmup);
@@ -127,13 +127,13 @@ static void test_tree(const char *root, const char *music)
 
     /* The same tree after a reopen. */
     CHECK(rx_library_open(&lib, root) == 0);
-    RxPlaylistFolder *r = lib.root_folder;
+    RXPlaylistFolder *r = lib.root_folder;
     CHECK(r->nb_folders == 2 && r->nb_playlists == 1);
     if (r->nb_folders == 2 && r->nb_playlists == 1) {
         CHECK_STR(r->folders[0]->name, "Other");
         CHECK_STR(r->folders[1]->name, "Styles");
         CHECK(r->folders[0]->nb_folders == 1 && !strcmp(r->folders[0]->folders[0]->name, "House"));
-        RxPlaylistFolder *h = r->folders[0]->folders[0];
+        RXPlaylistFolder *h = r->folders[0]->folders[0];
         CHECK(h->nb_playlists == 1 && !strcmp(h->playlists[0]->name, "Deep"));
         CHECK(ids_are(h->playlists[0], IDS(4)));
         CHECK_STR(r->playlists[0]->name, "Warm-up");
@@ -161,9 +161,9 @@ static void test_tree(const char *root, const char *music)
 
 static void test_m3u(const char *dir, const char *root, const char *music)
 {
-    RxLibrary lib;
+    RXLibrary lib;
     CHECK(rx_library_open(&lib, root) == 0);
-    RxPlaylist *p = rx_library_playlist_find(&lib, "Warm-up");
+    RXPlaylist *p = rx_library_playlist_find(&lib, "Warm-up");
     CHECK(p != NULL);
     if (!p)
         return;
@@ -180,7 +180,7 @@ static void test_m3u(const char *dir, const char *root, const char *music)
     free(text);
 
     /* Import: the order prefix only orders, the tracks are the same. */
-    RxPlaylist *in;
+    RXPlaylist *in;
     CHECK(rx_library_playlist_import_m3u(&lib, NULL, m3u, &in) == 3);
     CHECK(in && !strcmp(in->name, "Warm") && ids_are(in, IDS(1, 2, 3)));
 
@@ -197,7 +197,7 @@ static void test_m3u(const char *dir, const char *root, const char *music)
     int before = lib.nb_tracks;
     CHECK(rx_library_playlist_import_m3u(&lib, NULL, hand, &in) == 3);
     CHECK(lib.nb_tracks == before + 1);
-    RxTrack *t = rx_library_find_path(&lib, fresh);
+    RXTrack *t = rx_library_find_path(&lib, fresh);
     CHECK(t && !strcmp(t->meta.title, "Fresh"));
     CHECK(in && !strcmp(in->name, "hand") && t && ids_are(in, IDS(2, 1, t->id)));
     CHECK(dense(&lib));
@@ -210,7 +210,7 @@ static void test_m3u(const char *dir, const char *root, const char *music)
     free(exp_dir);
 }
 
-static int nb_playlists(const RxLibrary *lib)
+static int nb_playlists(const RXLibrary *lib)
 {
     return sql_int(lib, "SELECT count(*) FROM playlist WHERE is_folder = 0");
 }
@@ -219,9 +219,9 @@ static int nb_playlists(const RxLibrary *lib)
  * it back: the same tracks every time. */
 static void test_m3u_roundtrip(const char *dir, const char *root)
 {
-    RxLibrary lib;
+    RXLibrary lib;
     CHECK(rx_library_open(&lib, root) == 0);
-    RxPlaylist *p = rx_library_playlist_find(&lib, "Warm-up");
+    RXPlaylist *p = rx_library_playlist_find(&lib, "Warm-up");
     CHECK(p != NULL);
     if (!p)
         return;
@@ -251,7 +251,7 @@ static void test_m3u_roundtrip(const char *dir, const char *root)
         free(text);
 
         int before = nb_playlists(&lib);
-        RxPlaylist *back = NULL;
+        RXPlaylist *back = NULL;
         CHECK(rx_library_playlist_import_m3u(&lib, NULL, m3u, &back) == 3);
         CHECK(nb_playlists(&lib) == before + 1);
         CHECK(back && ids_are(back, IDS(1, 2, 3)));
@@ -264,7 +264,7 @@ static void test_m3u_roundtrip(const char *dir, const char *root)
     fputs("#EXTM3U\n../music/none1.wav\n../music/none2.wav\n", f);
     fclose(f);
     int before = nb_playlists(&lib);
-    RxPlaylist *back = (RxPlaylist *)1;
+    RXPlaylist *back = (RXPlaylist *)1;
     CHECK(rx_library_playlist_import_m3u(&lib, NULL, gone, &back) == RX_ERROR(ENOENT));
     CHECK(!back && nb_playlists(&lib) == before && !rx_library_playlist_find(&lib, "gone"));
     free(gone);

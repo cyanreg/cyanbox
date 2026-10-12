@@ -84,7 +84,7 @@ static char *at(const char *fmt, ...)
 static int write_wav_as(const char *path, double freq, bool alaw)
 {
     int rate = 44100, frames = 2 * rate, bytes = alaw ? 1 : 2;
-    RxBuf b = { 0 };
+    RXBuf b = { 0 };
     rx_buf_put(&b, "RIFF", 4);
     rx_buf_le32(&b, (uint32_t)(36 + frames * 2 * bytes));
     rx_buf_put(&b, "WAVEfmt ", 8);
@@ -122,12 +122,12 @@ static int write_wav(const char *path, double freq)
     return write_wav_as(path, freq, false);
 }
 
-static RxTrack *add_track(RxLibrary *lib, const char *path, const char *artist, double hot_at)
+static RXTrack *add_track(RXLibrary *lib, const char *path, const char *artist, double hot_at)
 {
     if (!rx_file_exists(path) && write_wav(path, 440.0) < 0)
         return NULL;
     int err = 0;
-    RxTrack *t = rx_library_add_file(lib, path, &err);
+    RXTrack *t = rx_library_add_file(lib, path, &err);
     CHECK(t);
     if (!t)
         return NULL;
@@ -135,7 +135,7 @@ static RxTrack *add_track(RxLibrary *lib, const char *path, const char *artist, 
     rx_meta_set(&t->meta.artist, artist);
     rx_meta_set(&t->meta.album, "Album");
     if (hot_at >= 0) {
-        RxCue c;
+        RXCue c;
         rx_cue_init(&c, hot_at);
         c.hot = 0;
         rx_track_add_cue(t, &c);
@@ -144,9 +144,9 @@ static RxTrack *add_track(RxLibrary *lib, const char *path, const char *artist, 
     return t;
 }
 
-static int export_to(RxLibrary *lib, const char *stick, bool prune, Stages *st)
+static int export_to(RXLibrary *lib, const char *stick, bool prune, Stages *st)
 {
-    RxExportOptions opt;
+    RXExportOptions opt;
     rx_export_options_default(&opt);
     opt.whole_library = true;
     opt.prune = prune;
@@ -159,12 +159,12 @@ static bool exists(const char *path)
     return lstat(path, &s) == 0;
 }
 
-static int count_kind(const RxLibrary *lib, const char *stick, enum RxSyncKind kind, int *total)
+static int count_kind(const RXLibrary *lib, const char *stick, enum RXSyncKind kind, int *total)
 {
-    RxStickState s;
+    RXStickState s;
     if (rx_stick_read(lib, stick, &s) < 0)
         return -1;
-    RxSyncItem *items;
+    RXSyncItem *items;
     int nb, n = 0;
     if (rx_stick_diff(lib, &s, &items, &nb) < 0) {
         rx_stick_state_free(&s);
@@ -182,21 +182,21 @@ static int count_kind(const RxLibrary *lib, const char *stick, enum RxSyncKind k
 /* A player at a gig: a memory cue at `time` on track `t` (or, with time
  * < 0, every cue cleared), written into the stick's ANLZ files as
  * rekordbox writes them. */
-static void player_adds_cue(RxLibrary *lib, RxTrack *t, const char *stick, double time)
+static void player_adds_cue(RXLibrary *lib, RXTrack *t, const char *stick, double time)
 {
-    RxTrack *tr[1] = { t };
-    RxPlan plan;
+    RXTrack *tr[1] = { t };
+    RXPlan plan;
     CHECK_EQ(rx_plan_build(lib, tr, 1, NULL, 0, NULL, false, &plan), 0);
     if (plan.nb_tracks != 1)
         return;
-    RxPlanTrack *pt = &plan.tracks[0];
-    RxPlanCue *cues = calloc((size_t)pt->nb_cues + 1, sizeof(*cues));
+    RXPlanTrack *pt = &plan.tracks[0];
+    RXPlanCue *cues = calloc((size_t)pt->nb_cues + 1, sizeof(*cues));
     memcpy(cues, pt->cues, (size_t)pt->nb_cues * sizeof(*cues));
-    cues[pt->nb_cues] = (RxPlanCue) { .time = time, .hot = -1, .loop_end = -1 };
+    cues[pt->nb_cues] = (RXPlanCue) { .time = time, .hot = -1, .loop_end = -1 };
     free(pt->cues);
     pt->cues = cues;
     pt->nb_cues = time < 0 ? 0 : pt->nb_cues + 1;
-    RxAnlzFiles f;
+    RXAnlzFiles f;
     CHECK_EQ(rx_anlz_build(pt, NULL, &f), 0);
     const char *ext[2] = { ".DAT", ".EXT" };
     const uint8_t *data[2] = { f.dat, f.ext };
@@ -218,14 +218,14 @@ static void player_adds_cue(RxLibrary *lib, RxTrack *t, const char *stick, doubl
  * gives it: prune must not delete the library's own files. */
 static void library_on_stick(void)
 {
-    RxLibrary lib = { 0 };
+    RXLibrary lib = { 0 };
     char *libdir = at("lib-on-stick"), *stick = at("stick-own");
     char *own = at("stick-own/Contents/My Music/song.wav");
     /* And one exactly where the plan puts it: skipped, not copied onto
      * itself. */
     char *there = at("stick-own/Contents/Other/Album/there.wav");
     CHECK_EQ(rx_library_open(&lib, libdir), 0);
-    RxTrack *t = add_track(&lib, own, "Artist", -1);
+    RXTrack *t = add_track(&lib, own, "Artist", -1);
     add_track(&lib, there, "Other", -1);
     uint8_t *before = NULL, *after = NULL;
     size_t nb = 0, na = 0;
@@ -254,7 +254,7 @@ static void library_on_stick(void)
  * through it. */
 static void symlinked_contents(void)
 {
-    RxLibrary lib = { 0 };
+    RXLibrary lib = { 0 };
     char *libdir = at("lib-link"), *stick = at("stick-link"), *outside = at("outside");
     char *keep = at("outside/keep.wav"), *song = at("music-link/song.wav");
     char *contents = at("stick-link/Contents");
@@ -284,7 +284,7 @@ static void symlinked_contents(void)
  * any audio is copied. */
 static void name_too_long(void)
 {
-    RxLibrary lib = { 0 };
+    RXLibrary lib = { 0 };
     char *libdir = at("lib-long"), *stick = at("stick-long"), *song = at("music-long/song.wav");
     rx_mkdir_p(stick);
     CHECK_EQ(rx_library_open(&lib, libdir), 0);
@@ -310,14 +310,14 @@ static void name_too_long(void)
  * the other library's track 1 is not the stick's track 1. */
 static void other_library(void)
 {
-    RxLibrary a = { 0 }, b = { 0 };
+    RXLibrary a = { 0 }, b = { 0 };
     char *dir_a = at("lib-a"), *dir_b = at("lib-b"), *stick = at("stick-ab");
     char *song_a = at("music-a/first.wav"), *song_b = at("music-b/second.wav");
     rx_mkdir_p(stick);
     CHECK_EQ(rx_library_open(&a, dir_a), 0);
     CHECK_EQ(rx_library_open(&b, dir_b), 0);
-    RxTrack *ta = add_track(&a, song_a, "Artist", 1.0);
-    RxTrack *tb = add_track(&b, song_b, "Artist", 1.5);
+    RXTrack *ta = add_track(&a, song_a, "Artist", 1.0);
+    RXTrack *tb = add_track(&b, song_b, "Artist", 1.5);
     CHECK(ta && tb && ta->id == tb->id);
     CHECK_EQ(export_to(&a, stick, false, NULL), 0);
     if (ta)
@@ -327,7 +327,7 @@ static void other_library(void)
     int total = -1;
     CHECK_EQ(count_kind(&b, stick, RX_SYNC_MEMORY_ADDED, &total), 0);
     CHECK_EQ(total, 0);
-    RxStickState s;
+    RXStickState s;
     CHECK_EQ(rx_stick_read(&b, stick, &s), 0);
     CHECK_EQ(s.nb_track_states, 0);
     CHECK_EQ(s.nb_tracks_unknown, 1);
@@ -347,11 +347,11 @@ static void other_library(void)
  * value the library cannot store is not proposed. */
 static void damaged_stick(void)
 {
-    RxLibrary lib = { 0 };
+    RXLibrary lib = { 0 };
     char *libdir = at("lib-dmg"), *stick = at("stick-dmg"), *song = at("music-dmg/song.wav");
     rx_mkdir_p(stick);
     CHECK_EQ(rx_library_open(&lib, libdir), 0);
-    RxTrack *t = add_track(&lib, song, "Artist", 0.5);
+    RXTrack *t = add_track(&lib, song, "Artist", 0.5);
     CHECK_EQ(export_to(&lib, stick, false, NULL), 0);
     if (!t)
         goto out;
@@ -383,20 +383,20 @@ static void damaged_stick(void)
 
     /* export.pdb naming an analysis file outside the stick, which holds a
      * cue the stick does not; no exportLibrary.db. */
-    RxTrack *tr[1] = { t };
-    RxPlan plan;
+    RXTrack *tr[1] = { t };
+    RXPlan plan;
     CHECK_EQ(rx_plan_build(&lib, tr, 1, NULL, 0, NULL, false, &plan), 0);
     if (plan.nb_tracks == 1) {
-        RxPlanTrack *pt = &plan.tracks[0];
+        RXPlanTrack *pt = &plan.tracks[0];
         free(pt->anlz_dir);
         pt->anlz_dir = rx_strdup("/PIONEER/USBANLZ/../../../elsewhere");
         CHECK_EQ(rx_pdb_build(&plan, &b, &n), 0);
         CHECK_EQ(rx_file_write_atomic(pdb, b, n), 0);
         free(b);
-        RxPlanCue *c = realloc(pt->cues, (size_t)(pt->nb_cues + 1) * sizeof(*c));
+        RXPlanCue *c = realloc(pt->cues, (size_t)(pt->nb_cues + 1) * sizeof(*c));
         pt->cues = c;
-        c[pt->nb_cues++] = (RxPlanCue) { .time = 1.6, .hot = -1, .loop_end = -1 };
-        RxAnlzFiles f;
+        c[pt->nb_cues++] = (RXPlanCue) { .time = 1.6, .hot = -1, .loop_end = -1 };
+        RXAnlzFiles f;
         CHECK_EQ(rx_anlz_build(pt, NULL, &f), 0);
         char *dat = at("elsewhere/ANLZ0000.DAT");
         char *dir = at("elsewhere");
@@ -410,7 +410,7 @@ static void damaged_stick(void)
     char *db = rx_stick_file(stick, "/PIONEER/rekordbox/exportLibrary.db");
     unlink(db);
     free(db);
-    RxStickState s;
+    RXStickState s;
     CHECK_EQ(rx_stick_read(&lib, stick, &s), 0);
     bool outside = false;
     for (int i = 0; i < s.nb_track_states; i++)
@@ -422,7 +422,7 @@ static void damaged_stick(void)
 
     /* MYSETTING.DAT with quantize stored as a byte no rekordbox writes,
      * and a real change of the tempo range. */
-    RxKv kv[1] = { { "tempo_range", "6" } };
+    RXKv kv[1] = { { "tempo_range", "6" } };
     CHECK_EQ(rx_settings_encode("MYSETTING.DAT", kv, 1, &b, &n), 0);
     b[0x68 + 10] = 0x99;
     char *ms = rx_stick_file(stick, "/PIONEER/MYSETTING.DAT");
@@ -430,7 +430,7 @@ static void damaged_stick(void)
     free(ms);
     free(b);
     CHECK_EQ(rx_stick_read(&lib, stick, &s), 0);
-    RxSyncItem *items;
+    RXSyncItem *items;
     int nb;
     CHECK_EQ(rx_stick_diff(&lib, &s, &items, &nb), 0);
     int tempo = 0, quantize = 0;
@@ -459,11 +459,11 @@ static void record_not_writable(void)
 {
     if (!geteuid())
         return;
-    RxLibrary lib = { 0 };
+    RXLibrary lib = { 0 };
     char *libdir = at("lib-ro"), *stick = at("stick-ro"), *song = at("music-ro/song.wav");
     rx_mkdir_p(stick);
     CHECK_EQ(rx_library_open(&lib, libdir), 0);
-    RxTrack *t = add_track(&lib, song, "Artist", -1);
+    RXTrack *t = add_track(&lib, song, "Artist", -1);
     CHECK_EQ(export_to(&lib, stick, false, NULL), 0);
     /* exportLibrary.db: encrypted with fresh IVs, so any rewrite shows. */
     char *pdb = rx_stick_file(stick, "/PIONEER/rekordbox/exportLibrary.db");
@@ -471,7 +471,7 @@ static void record_not_writable(void)
     size_t nb = 0, na = 0;
     CHECK_EQ(rx_file_read(pdb, &before, &nb), 0);
     if (t) {
-        RxCue c;
+        RXCue c;
         rx_cue_init(&c, 1.0);
         rx_track_add_cue(t, &c);
         rx_library_save_track(&lib, t);
@@ -501,12 +501,12 @@ static void space(void)
     rx_mkdir_p(stick);
     CHECK_EQ(write_wav(src, 330.0), 0);
     int64_t size = rx_file_size(src);
-    RxTrack tr = { .path = src };
-    RxPlanTrack pt = {
+    RXTrack tr = { .path = src };
+    RXPlanTrack pt = {
         .id = 1, .track = &tr, .source = src, .usb_path = "/Contents/A/B/a.wav",
         .anlz_dir = "/PIONEER/USBANLZ/P000/00000000", .file_size = size, .duration = 0,
     };
-    RxPlan plan = { .tracks = &pt, .nb_tracks = 1 };
+    RXPlan plan = { .tracks = &pt, .nb_tracks = 1 };
     int64_t empty = rx_export_space_needed(&plan, stick, 1);
     CHECK(empty >= size);
     /* On the stick already, larger (a different file): the new one is
@@ -574,7 +574,7 @@ static int entries(const char *dir)
  * the pool), counts from 1 and dates the tracks by when they were added. */
 static void dry_run_and_dates(void)
 {
-    RxLibrary lib = { 0 };
+    RXLibrary lib = { 0 };
     char *libdir = at("lib-dry"), *stick = at("stick-dry");
     char *pcm = at("music-dry/one.wav"), *alaw = at("music-dry/two.wav"), *cover = at("music-dry/front.jpg");
     rx_mkdir_p(stick);
@@ -588,8 +588,8 @@ static void dry_run_and_dates(void)
     CHECK_EQ(rx_file_write_atomic(cover, jpeg, jn), 0);
     free(jpeg);
     CHECK_EQ(write_wav_as(alaw, 330.0, true), 0);
-    RxTrack *t1 = add_track(&lib, pcm, "Artist", -1);
-    RxTrack *t2 = add_track(&lib, alaw, "Artist", -1);
+    RXTrack *t1 = add_track(&lib, pcm, "Artist", -1);
+    RXTrack *t2 = add_track(&lib, alaw, "Artist", -1);
     CHECK(t2 && !rx_plan_codec_playable(t2->codec));
     /* 2020-01-02 12:00 local time. */
     struct tm tm = { .tm_year = 120, .tm_mon = 0, .tm_mday = 2, .tm_hour = 12, .tm_isdst = -1 };
@@ -599,7 +599,7 @@ static void dry_run_and_dates(void)
         rx_library_save_track(&lib, t2);
     }
 
-    RxExportOptions opt;
+    RXExportOptions opt;
     rx_export_options_default(&opt);
     opt.whole_library = true;
     opt.dry_run = true;
@@ -639,7 +639,7 @@ static void dry_run_and_dates(void)
     uint8_t *b;
     size_t n;
     CHECK_EQ(rx_file_read(pdb, &b, &n), 0);
-    RxPdbRawTrack *raw;
+    RXPdbRawTrack *raw;
     int nr;
     CHECK_EQ(rx_pdb_raw_tracks(b, n, &raw, &nr), 0);
     CHECK_EQ(nr, 2);

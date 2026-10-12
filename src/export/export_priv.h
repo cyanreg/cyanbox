@@ -42,21 +42,21 @@ bool rx_plan_codec_playable(const char *codec);
  * goes to (NULL when not). Compatibility mode also converts AAC (nobody
  * knows what players do with its priming) and FLAC above 16 bit/48 kHz.
  * `create` makes the cache directory; a dry run passes false. */
-int  rx_plan_transcode_path(const RxLibrary *lib, const RxTrack *t, bool compat, bool create,
+int  rx_plan_transcode_path(const RXLibrary *lib, const RXTrack *t, bool compat, bool create,
                             char **cache_path, int *max_rate);
 /* The transcode exists and is newer than the track's file. */
-bool rx_plan_transcode_fresh(const RxTrack *t, const char *cache);
+bool rx_plan_transcode_fresh(const RXTrack *t, const char *cache);
 /* Makes sure the transcode exists and is newer than the track's file. */
-int  rx_plan_transcode(const RxLibrary *lib, const RxTrack *t, bool compat, char **source);
+int  rx_plan_transcode(const RXLibrary *lib, const RXTrack *t, bool compat, char **source);
 
 /* rx_plan_build with a "prepare" item per track (1-based) and every
  * warning (unknown colour, unreadable artwork, playlist entry not
  * exported) reported through `cb`; returning false from it cancels. A dry
  * plan transcodes nothing: a track whose transcode is not made yet is
  * described from its original as the transcode would be. */
-int  rx_plan_build_cb(const RxLibrary *lib, RxTrack *const *tracks, int nb_tracks,
-                      const RxPlaylist *const *playlists, int nb_playlists,
-                      const char *device_name, bool compat_transcode, bool dry, RxPlan *out,
+int  rx_plan_build_cb(const RXLibrary *lib, RXTrack *const *tracks, int nb_tracks,
+                      const RXPlaylist *const *playlists, int nb_playlists,
+                      const char *device_name, bool compat_transcode, bool dry, RXPlan *out,
                       rx_progress_cb cb, void *opaque);
 
 /* dj's _fat(_clean(s), limit): NFC, FAT-illegal characters to '_', trimmed,
@@ -64,67 +64,67 @@ int  rx_plan_build_cb(const RxLibrary *lib, RxTrack *const *tracks, int nb_track
  * nothing is left. */
 char *rx_plan_fat_name(const char *s, size_t limit);
 /* The file name stem a track gets on the stick before collision suffixes. */
-char *rx_plan_usb_stem(const RxTrack *t);
+char *rx_plan_usb_stem(const RXTrack *t);
 /* Whether a stick path's file name is what the plan gives this track (the
  * stem, or its first 40 characters with a "-N" collision suffix): a guard
  * when a stick's track ids may not be ours. */
-bool rx_plan_usb_name_matches(const RxTrack *t, const char *stick_path);
+bool rx_plan_usb_name_matches(const RXTrack *t, const char *stick_path);
 /* Lower-cases ASCII and the common Latin, Greek and Cyrillic capitals, for
  * FAT's case-insensitive names (dj compared with str.lower()). */
 char *rx_plan_fold_case(const char *s);
 /* The background colour setting ([device] background_color): 0 default,
  * 1..8 pink..purple. */
-int  rx_plan_background_color(const RxConfig *cfg);
+int  rx_plan_background_color(const RXConfig *cfg);
 
 /* ----------------------------------------------------------- stick cues */
 
 /* A cue as the stick stores it. */
-typedef struct RxStickCue {
+typedef struct RXStickCue {
     int      hot;                /* -1 memory, 0..7 */
     uint32_t in, out;            /* ms; out 0xFFFFFFFF when not a loop */
     int      code;               /* hot: palette code; memory: colour id */
     uint32_t rgb;                /* hot cues: the pad RGB */
     bool     active;
     char     name[RX_CUE_NAME_MAX];
-} RxStickCue;
+} RXStickCue;
 
-void rx_stick_cue_from_plan(const RxPlanCue *c, RxStickCue *s);
+void rx_stick_cue_from_plan(const RXPlanCue *c, RXStickCue *s);
 /* A library cue as the export would write it. */
-void rx_stick_cue_from_track(const RxCue *c, RxStickCue *s);
+void rx_stick_cue_from_track(const RXCue *c, RXStickCue *s);
 /* Back to a library cue on `grid` (musical when it sits on a beat). */
-void rx_stick_cue_to_track(const RxStickCue *s, const RxGrid *grid, RxCue *c);
+void rx_stick_cue_to_track(const RXStickCue *s, const RXGrid *grid, RXCue *c);
 /* Same position, loop, name and colour (1 ms tolerance for rounding). */
-bool rx_stick_cue_equal(const RxStickCue *a, const RxStickCue *b);
+bool rx_stick_cue_equal(const RXStickCue *a, const RXStickCue *b);
 
 /* ----------------------------------------------------------- sync record */
 
-typedef struct RxSyncTrack {
+typedef struct RXSyncTrack {
     uint64_t    id;
-    RxStickCue *cues;
+    RXStickCue *cues;
     int         nb_cues;
-} RxSyncTrack;
+} RXSyncTrack;
 
-typedef struct RxSyncRecord {
+typedef struct RXSyncRecord {
     char         uuid[17];
     char         library[33];    /* "" when the record has none */
     char         date[16];
-    RxSyncTrack *tracks;         /* sorted by id */
+    RXSyncTrack *tracks;         /* sorted by id */
     int          nb_tracks;
     struct { char name[24]; uint8_t *data; size_t size; } settings[4];
     int          nb_settings;
-} RxSyncRecord;
+} RXSyncRecord;
 
-int  rx_sync_record_read(const char *mount, RxSyncRecord *r);   /* -ENOENT when absent */
-int  rx_sync_record_write(const char *mount, const RxSyncRecord *r);
-void rx_sync_record_free(RxSyncRecord *r);
-const RxSyncTrack *rx_sync_record_track(const RxSyncRecord *r, uint64_t id);
+int  rx_sync_record_read(const char *mount, RXSyncRecord *r);   /* -ENOENT when absent */
+int  rx_sync_record_write(const char *mount, const RXSyncRecord *r);
+void rx_sync_record_free(RXSyncRecord *r);
+const RXSyncTrack *rx_sync_record_track(const RXSyncRecord *r, uint64_t id);
 /* A fresh record for a plan: new uuid, every track's cues as written. */
-int  rx_sync_record_from_plan(const RxPlan *plan, RxSyncRecord *r);
+int  rx_sync_record_from_plan(const RXPlan *plan, RXSyncRecord *r);
 /* Adds the settings files found on the stick now. */
-int  rx_sync_record_add_settings(RxSyncRecord *r, const char *mount);
+int  rx_sync_record_add_settings(RXSyncRecord *r, const char *mount);
 /* The library's identity for the record: 32 hex digits made once and kept
  * in the library (setting "sync.library"). */
-int  rx_sync_library_key(RxLibrary *lib, char key[33]);
+int  rx_sync_library_key(RXLibrary *lib, char key[33]);
 
 /* ----------------------------------------------------------------- files */
 
@@ -140,6 +140,6 @@ bool rx_stick_path_safe(const char *stick_path);
 int  rx_stick_write(const char *path, const void *data, size_t size);
 /* Bytes the export of `plan` to `dest` needs free, the files counted in
  * whole clusters of `cluster` bytes. */
-int64_t rx_export_space_needed(const RxPlan *plan, const char *dest, int64_t cluster);
+int64_t rx_export_space_needed(const RXPlan *plan, const char *dest, int64_t cluster);
 
 #endif /* RXBOX_EXPORT_PRIV_H */
