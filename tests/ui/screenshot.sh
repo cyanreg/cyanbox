@@ -19,8 +19,8 @@
 # Then the variants, each a run with input given at set frames
 # (RXBOX_UI_EVENTS) and the state the interface logs with the screenshot
 # checked: CUE held while the window loses the keyboard is let go; Enter on
-# another track while one plays loads it at once (the playing one pauses,
-# the new one waits at its auto-cue, no question asked); the Add browser on
+# another track while one plays loads it at once (the playing one pauses
+# for the swap, the new one plays on, no question asked); the Add browser on
 # a folder it cannot read says so; Delete after a click on a cue in the
 # player's cue list deletes that cue and nothing else (with
 # RXBOX_UI_SWAYSOCK only: the click needs a known size). Last, the Player
@@ -168,12 +168,12 @@ fi
 variant cue-focus "70:down:C,72:up:C,80:down:C,88:up:C,88:focus-out" \
     "track $ID playing 0 position 0\.00 "
 
-# Enter on the next row while the deck plays: the deck pauses and the other
-# track loads, paused at its auto-cue; nothing asks.
+# Enter on the next row while the deck plays: the deck pauses for the swap
+# and the other track loads and plays on; nothing asks.
 FRAMES=160
 export RXBOX_UI_SCREENSHOT_FRAME=140
 variant enter-loads "70:down:DownArrow,71:up:DownArrow,75:down:Enter,76:up:Enter" \
-    "track $ID2 playing 0 .*popup 0"
+    "track $ID2 playing 1 .*popup 0"
 unset FRAMES RXBOX_UI_SCREENSHOT_FRAME
 
 # The Add browser on a folder it cannot read ($HOME/Music) says why.
