@@ -160,6 +160,11 @@ struct RXWaveforms;
 int  rx_library_waveforms_save(RXLibrary *lib, uint64_t id, const struct RXWaveforms *w);
 int  rx_library_waveforms_load(const RXLibrary *lib, uint64_t id, struct RXWaveforms *w);
 bool rx_library_has_waveforms(const RXLibrary *lib, uint64_t id);
+/* Whether the stored waveforms are of the format version this build reads,
+ * from their header alone (cheap enough for the whole library): 0 when
+ * they are, -EPROTO when another version (load would refuse them: make
+ * them again), -EINVAL when not waveforms at all, -ENOENT when none. */
+int  rx_library_waveforms_check(const RXLibrary *lib, uint64_t id);
 int  rx_library_artwork_save(RXLibrary *lib, uint64_t id, const uint8_t *jpeg, size_t size, int width, int height);
 int  rx_library_artwork_load(const RXLibrary *lib, uint64_t id, uint8_t **jpeg, size_t *size, int *width, int *height);
 

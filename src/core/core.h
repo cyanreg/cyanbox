@@ -119,9 +119,12 @@ void rx_core_playlists_free(RXLibrary *lib);
 int  rx_core_playlists_drop_track(RXLibrary *lib, uint64_t id);
 void rx_core_playlists_forget_track(RXLibrary *lib, uint64_t id);
 
-/* The waveform table as raw bytes (library.c); wavestore.c packs. */
+/* The waveform table as raw bytes (library.c); wavestore.c packs. _head
+ * reads only the first `size` bytes, without loading the rest: -ENOENT
+ * when the track has none, -EINVAL when the blob is shorter. */
 int  rx_core_waveform_blob_put(RXLibrary *lib, uint64_t id, const uint8_t *data, size_t size);
 int  rx_core_waveform_blob_get(const RXLibrary *lib, uint64_t id, uint8_t **data, size_t *size);
+int  rx_core_waveform_blob_head(const RXLibrary *lib, uint64_t id, uint8_t *head, size_t size);
 
 /* Grid positions for notation.c: the beat index (rx_grid_time_to_beat
  * units) of "bar N.B", and the bar and number of an integer beat index.
