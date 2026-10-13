@@ -5,9 +5,12 @@
  * Opens the window and draws, every frame, ImGui's demo window and a panel
  * of synthetic waveforms: 600 columns of a made-up kick/snare pattern as a
  * 3-band detail (whole, and zoomed around a scrolling playhead so that the
- * columns are wider than the pixels), the same stacked and overlaid as half
+ * columns are wider than the pixels), a longer pattern with one-column
+ * spikes at 1.6 columns a pixel scrolling as the player's detail view does
+ * (12 bars at 128-175 BPM), the 600 columns stacked and overlaid as half
  * waveforms, a blue one and an RGB one, plus a texture. After N frames it
- * writes a screenshot of the last frame.
+ * writes a screenshot of the last frame. The last line it prints has the
+ * mean GPU time of a frame's rendering (timestamps).
  *
  *   --check       also draw a reference strip of known columns and check
  *                 pixels of the last frame against the colour rules, and
@@ -15,6 +18,15 @@
  *                 reversed or NaN columns, an infinite rectangle) or stay
  *                 inside it (insets larger than the rectangle), and the
  *                 gain (a quiet column drawn up to full height, or not)
+ *   --scroll      draw the zoomed detail rows (about 120 columns,
+ *                 interpolated; 1.6 columns a pixel) of the spike pattern
+ *                 over black and over white, moving 0.07 columns a
+ *                 frame for 40 frames, read every frame back, and check
+ *                 that the picture moves smoothly: the row's total
+ *                 coverage stays constant and consecutive frames differ
+ *                 little and steadily (see scroll_check)
+ *   --bench COLS  draw four full-window detail waveforms at COLS columns
+ *                 a pixel behind everything, for the shader's cost
  *   --idle        stop asking for redraws after the first frames (the
  *                 loop should then sleep: watch it with top)
  *   --validation  Vulkan validation layer; any error fails the run
@@ -37,16 +49,58 @@
 #define NB_COLUMNS 600
 #define NB_REF     8
 
+/* The spike pattern repeats every SPIKE_PERIOD columns; the long waveform
+ * has enough of them for a full window at 40 columns a pixel. */
+#define SPIKE_PERIOD  41
+#define SPIKE_COLUMNS (1 << 17)
+
+/* --scroll: rows of SCROLL_W logical pixels, each drawn twice (over black
+ * and over white, which together give the alpha), stepped SCROLL_STEP
+ * columns a frame for SCROLL_FRAMES frames from frame SCROLL_START.
+ * 1.6 columns a pixel over SCROLL_W is 40 whole periods, and a period is
+ * 25.625 pixels, so the pixels meet the spikes at every phase rather than
+ * all at the same one: what the row shows is the average over phases. */
+#define NB_SCROLL     2
+#define SCROLL_FRAMES 40
+#define SCROLL_START  5
+#define SCROLL_STEP   0.07
+#define SCROLL_X      20.0f
+#define SCROLL_Y      40.0f
+#define SCROLL_W      1025.0f
+#define SCROLL_H      90.0f
+#define SCROLL_GAP    10.0f
+
+/* --bench: full-window layers a frame. */
+#define BENCH_LAYERS  4
+/* Frames left out of the GPU time: the first ones compile, upload and
+ * resize. */
+#define GPU_WARMUP    10
+
+typedef struct ScrollRow {
+    double   cov[SCROLL_FRAMES];    /* sum of alpha over the row */
+    double   mad[SCROLL_FRAMES];    /* mean |difference| from the frame before, of 255 */
+    uint8_t *prev;                  /* the frame before, over black, RGB */
+    int      nb_frames;
+} ScrollRow;
+
 typedef struct Demo {
     RXWindow  *w;
     uint8_t    blue_cols[NB_COLUMNS];
     RXWaveGpu *band, *blue, *rgb;
+    RXWaveGpu *spikes;              /* SPIKE_COLUMNS of the spike pattern */
     RXWaveGpu *ref[NB_REF];
     RXWaveGpu *empty;               /* uploaded with no columns */
     RXWaveGpu *quiet;               /* one column, low band at 32 */
     uint64_t   tex;
     bool       check;
+    bool       scroll;
+    double     bench;               /* columns a pixel, 0 = off */
     double     playhead;
+    double     spike_head;
+    ScrollRow  rows[NB_SCROLL];
+    bool       scroll_lost;         /* a frame of the scroll could not be read back */
+    double     gpu_ms;              /* sum over gpu_frames frames */
+    int        gpu_frames;
 } Demo;
 
 /* ---------------------------------------------------------------- synthesis */
@@ -103,6 +157,32 @@ static void synth(uint8_t *band, uint8_t *blue, uint8_t *rgb)
         unsigned word = r << 13 | g << 10 | b << 7 | (unsigned)RX_CLAMP(h, 0, 31) << 2;
         rgb[2 * i + 0] = (uint8_t)(word >> 8);
         rgb[2 * i + 1] = (uint8_t)word;
+    }
+}
+
+/* A period of SPIKE_PERIOD columns: a kick (a sharp attack from its own
+ * tail, then a decay), two hats, a one-column spike in the mid and high
+ * bands, and three silent columns that the next column attacks from. The
+ * spike is what shimmered when a pixel took the maximum over one column or
+ * two; whole periods in a row keep the row's total coverage constant while
+ * it scrolls, which is what --scroll checks. */
+static void synth_spikes(uint8_t *band, int nb)
+{
+    for (int i = 0; i < nb; i++) {
+        int p = i % SPIKE_PERIOD;
+        double low  = fmax(120.0 * exp(-p / 9.0), 18.0);
+        double mid  = 8.0 + 30.0 * exp(-p / 4.0);
+        double high = 40.0 * exp(-(p % 20) / 2.0);
+        if (p == 27) {
+            low  = 30.0;
+            mid  = 110.0;
+            high = 127.0;
+        } else if (p >= 34 && p < 37) {
+            low = mid = high = 0.0;
+        }
+        band[3 * i + 0] = level(low);
+        band[3 * i + 1] = level(mid);
+        band[3 * i + 2] = level(high);
     }
 }
 
@@ -329,6 +409,23 @@ static const Probe probes[] = {
     { "attack column",            20, 12.0f, -30.0f, 0x0055E1 },
 };
 
+/* One pixel of the frame against its colour, within 2 a channel. */
+static bool probe(const uint8_t *rgba, int width, int height, const char *what, int x, int y,
+                  uint32_t want)
+{
+    if (x < 0 || y < 0 || x >= width || y >= height) {
+        rx_err("demo: probe %s is outside the frame", what);
+        return false;
+    }
+
+    const uint8_t *px = rgba + ((size_t)y * width + x) * 4;
+    bool ok = abs(px[0] - (int)(want >> 16 & 0xFF)) <= 2 &&
+              abs(px[1] - (int)(want >> 8 & 0xFF)) <= 2 && abs(px[2] - (int)(want & 0xFF)) <= 2;
+    rx_log(ok ? RX_LOG_INFO : RX_LOG_ERROR, "demo: %-28s at %4d,%4d: %02X%02X%02X, want %06X %s",
+           what, x, y, px[0], px[1], px[2], want, ok ? "ok" : "WRONG");
+    return ok;
+}
+
 static int run_checks(Demo *d)
 {
     uint8_t *rgba = NULL;
@@ -344,43 +441,15 @@ static int run_checks(Demo *d)
     int failed = 0;
     for (size_t i = 0; i < RX_ARRAY_ELEMS(probes); i++) {
         const Probe *p = &probes[i];
-        float lx = ref_col_x(p->col) + p->dx;
-        float ly = centre + p->dy;
-        int x = (int)floorf(lx * scale), y = (int)floorf(ly * scale);
-        if (x < 0 || y < 0 || x >= width || y >= height) {
-            rx_err("demo: probe %s is outside the frame", p->what);
-            failed++;
-            continue;
-        }
-
-        const uint8_t *px = rgba + ((size_t)y * width + x) * 4;
-        int er = p->rgb >> 16 & 0xFF, eg = p->rgb >> 8 & 0xFF, eb = p->rgb & 0xFF;
-        bool ok = abs(px[0] - er) <= 2 && abs(px[1] - eg) <= 2 && abs(px[2] - eb) <= 2;
-        if (!ok)
-            failed++;
-        rx_log(ok ? RX_LOG_INFO : RX_LOG_ERROR,
-               "demo: %-26s at %4d,%4d: %02X%02X%02X, want %06X %s", p->what, x, y,
-               px[0], px[1], px[2], p->rgb, ok ? "ok" : "WRONG");
+        int x = (int)floorf((ref_col_x(p->col) + p->dx) * scale);
+        int y = (int)floorf((centre + p->dy) * scale);
+        failed += !probe(rgba, width, height, p->what, x, y, p->rgb);
     }
 
     for (size_t i = 0; i < RX_ARRAY_ELEMS(edge_probes); i++) {
-        float lx = edge_x(edge_probes[i].box) + EDGE_W * 0.5f;
-        float ly = centre + edge_probes[i].dy;
-        int x = (int)floorf(lx * scale), y = (int)floorf(ly * scale);
-        if (x < 0 || y < 0 || x >= width || y >= height) {
-            rx_err("demo: probe %s is outside the frame", edge_probes[i].what);
-            failed++;
-            continue;
-        }
-        const uint8_t *px = rgba + ((size_t)y * width + x) * 4;
-        uint32_t want = edge_probes[i].rgb;
-        bool ok = abs(px[0] - (int)(want >> 16 & 0xFF)) <= 2 &&
-                  abs(px[1] - (int)(want >> 8 & 0xFF)) <= 2 && abs(px[2] - (int)(want & 0xFF)) <= 2;
-        if (!ok)
-            failed++;
-        rx_log(ok ? RX_LOG_INFO : RX_LOG_ERROR,
-               "demo: %-26s at %4d,%4d: %02X%02X%02X, want %06X %s", edge_probes[i].what, x, y,
-               px[0], px[1], px[2], want, ok ? "ok" : "WRONG");
+        int x = (int)floorf((edge_x(edge_probes[i].box) + EDGE_W * 0.5f) * scale);
+        int y = (int)floorf((centre + edge_probes[i].dy) * scale);
+        failed += !probe(rgba, width, height, edge_probes[i].what, x, y, edge_probes[i].rgb);
     }
 
     free(rgba);
@@ -390,6 +459,170 @@ static int run_checks(Demo *d)
     else
         rx_info("demo: all %zu pixel checks pass", total);
     return failed ? RX_ERROR(EINVAL) : 0;
+}
+
+/* ----------------------------------------------------------------- scroll */
+
+/* What a smooth scroll leaves: the row's total coverage moves only by
+ * rounding (the picture over whole periods is the same picture shifted),
+ * and consecutive frames differ by about as much every time. */
+#define SCROLL_MAX_COV    0.001     /* (max - min) / mean of the coverage */
+#define SCROLL_MAX_UNEVEN 0.05      /* standard deviation / mean of the frame differences */
+
+static const char *const scroll_names[NB_SCROLL] = {
+    "123 columns, interpolated",
+    "1.6 columns a pixel",
+};
+
+static float scroll_y(int row, bool white)
+{
+    return SCROLL_Y + row * 2 * (SCROLL_H + SCROLL_GAP) + (white ? SCROLL_H + SCROLL_GAP : 0.0f);
+}
+
+/* The two zoomed detail rows at step k, on the spike pattern: the panel's
+ * interpolated zoom (its 120 columns made three whole periods, 123) and the
+ * player's usual one (1.6 columns a pixel, 40 periods). */
+static void scroll_draw(Demo *d, int k)
+{
+    void *dl = rx_demo_foreground_draw_list();
+    float scale = rx_window_scale(d->w);
+    for (int r = 0; r < NB_SCROLL; r++) {
+        double span = r == 0 ? 3 * SPIKE_PERIOD : 1.6 * SCROLL_W * scale;
+        double col0 = 1000.0 + k * SCROLL_STEP;
+        for (int white = 0; white < 2; white++) {
+            float y = scroll_y(r, white);
+            rx_demo_rect(dl, SCROLL_X - 2, y - 2, SCROLL_X + SCROLL_W + 2, y + SCROLL_H + 2,
+                         white ? 0xFFFFFFFF : 0x000000FF);
+            RXWaveDraw wd = {
+                .x0 = SCROLL_X,  .y0 = y,
+                .x1 = SCROLL_X + SCROLL_W,  .y1 = y + SCROLL_H,
+                .col0 = col0,  .col1 = col0 + span,
+                .mode         = RX_WAVE_CENTRED,
+                .inset_top    = 8.0f,
+                .inset_bottom = 2.0f,
+                .detail       = true,
+                .alpha        = 1.0f,
+            };
+            rx_wave_draw(d->w, dl, d->spikes, &wd);
+        }
+    }
+}
+
+/* Reads the frame of step k back: each row's total coverage, with the
+ * alpha recovered from its two copies (a premultiplied draw leaves rgb
+ * over black and rgb + 1 - alpha over white), and how much its pixels over
+ * black changed since step k - 1. */
+static void scroll_measure(Demo *d, int k)
+{
+    uint8_t *rgba = NULL;
+    int width = 0, height = 0;
+    if (rx_window_readback(d->w, &rgba, &width, &height) < 0) {
+        d->scroll_lost = true;
+        return;
+    }
+
+    float scale = rx_window_scale(d->w);
+    int x0 = (int)lroundf(SCROLL_X * scale), x1 = (int)lroundf((SCROLL_X + SCROLL_W) * scale);
+    int h = (int)lroundf(SCROLL_H * scale);
+    for (int r = 0; r < NB_SCROLL; r++) {
+        ScrollRow *s = &d->rows[r];
+        int yb = (int)lroundf(scroll_y(r, false) * scale);
+        int yw = (int)lroundf(scroll_y(r, true) * scale);
+        size_t n = (size_t)(x1 - x0) * h * 3;
+        if (x1 > width || yw + h > height || (!s->prev && !(s->prev = calloc(n, 1)))) {
+            d->scroll_lost = true;
+            break;
+        }
+
+        double cov = 0.0, diff = 0.0;
+        uint8_t *prev = s->prev;
+        for (int y = 0; y < h; y++) {
+            const uint8_t *b = rgba + ((size_t)(yb + y) * width + x0) * 4;
+            const uint8_t *wh = rgba + ((size_t)(yw + y) * width + x0) * 4;
+            for (int x = x0; x < x1; x++, b += 4, wh += 4) {
+                for (int c = 0; c < 3; c++) {
+                    cov += 1.0 - (wh[c] - b[c]) / 255.0;
+                    diff += abs(b[c] - *prev);
+                    *prev++ = b[c];
+                }
+            }
+        }
+        s->cov[k] = cov / 3.0;
+        s->mad[k] = k > 0 ? diff / (double)n : 0.0;
+        s->nb_frames = k + 1;
+    }
+    free(rgba);
+}
+
+static int scroll_check(Demo *d)
+{
+    int failed = 0;
+    for (int r = 0; r < NB_SCROLL; r++) {
+        const ScrollRow *s = &d->rows[r];
+        if (d->scroll_lost || s->nb_frames < SCROLL_FRAMES) {
+            rx_err("demo: scroll, %s: only %d of %d frames read back", scroll_names[r],
+                   s->nb_frames, SCROLL_FRAMES);
+            failed++;
+            continue;
+        }
+
+        double lo = s->cov[0], hi = s->cov[0], sum = 0.0;
+        for (int k = 0; k < SCROLL_FRAMES; k++) {
+            lo = fmin(lo, s->cov[k]);
+            hi = fmax(hi, s->cov[k]);
+            sum += s->cov[k];
+        }
+        double mean = sum / SCROLL_FRAMES;
+        double cov_var = mean > 0.0 ? (hi - lo) / mean : 1.0;
+
+        double dlo = s->mad[1], dhi = s->mad[1], dsum = 0.0, dsq = 0.0;
+        for (int k = 1; k < SCROLL_FRAMES; k++) {
+            dlo = fmin(dlo, s->mad[k]);
+            dhi = fmax(dhi, s->mad[k]);
+            dsum += s->mad[k];
+        }
+        double dmean = dsum / (SCROLL_FRAMES - 1);
+        for (int k = 1; k < SCROLL_FRAMES; k++)
+            dsq += (s->mad[k] - dmean) * (s->mad[k] - dmean);
+        double dsd = sqrt(dsq / (SCROLL_FRAMES - 1));
+        double uneven = dmean > 0.0 ? dsd / dmean : 0.0;
+
+        bool ok = cov_var <= SCROLL_MAX_COV && uneven <= SCROLL_MAX_UNEVEN;
+        if (!ok)
+            failed++;
+        rx_log(ok ? RX_LOG_INFO : RX_LOG_ERROR,
+               "demo: scroll, %s: coverage %.1f px, varies by %.3f %%; frame difference "
+               "%.4f of 255 (%.4f to %.4f, sd %.4f, %.0f %% of the mean) %s", scroll_names[r],
+               mean, 100.0 * cov_var, dmean, dlo, dhi, dsd, 100.0 * uneven, ok ? "ok" : "WRONG");
+    }
+    return failed ? RX_ERROR(EINVAL) : 0;
+}
+
+/* ------------------------------------------------------------------ bench */
+
+/* BENCH_LAYERS full-window detail draws of the spike pattern behind
+ * everything at d->bench columns a pixel, scrolling as the player does, so
+ * that the frame's GPU time is mostly the waveform shader's. */
+static void draw_bench(Demo *d)
+{
+    int ww, wh;
+    rx_window_size(d->w, &ww, &wh);
+    void *dl = rx_demo_background_draw_list();
+    double span = d->bench * ww * rx_window_scale(d->w);
+    for (int i = 0; i < BENCH_LAYERS; i++) {
+        double col0 = 1000.0 + rx_window_frames_drawn(d->w) * 2.5 + i * 0.37;
+        RXWaveDraw wd = {
+            .x0 = 0.0f,  .y0 = 0.0f,
+            .x1 = (float)ww,  .y1 = (float)wh,
+            .col0 = col0,  .col1 = col0 + span,
+            .mode         = RX_WAVE_CENTRED,
+            .inset_top    = 8.0f,
+            .inset_bottom = 2.0f,
+            .detail       = true,
+            .alpha        = 1.0f,
+        };
+        rx_wave_draw(d->w, dl, d->spikes, &wd);
+    }
 }
 
 /* ------------------------------------------------------------------ frame */
@@ -432,7 +665,8 @@ static void churn(Demo *d)
 }
 
 static void wave_row(Demo *d, const char *label, RXWaveGpu *g, enum RXWaveMode mode,
-                     double col0, double col1, bool detail, float height, bool fixed_head)
+                     double col0, double col1, double head_col, bool detail, float height,
+                     bool fixed_head)
 {
     rx_demo_text("%s", label);
 
@@ -452,12 +686,12 @@ static void wave_row(Demo *d, const char *label, RXWaveGpu *g, enum RXWaveMode m
         .detail       = detail,
         .alpha        = 1.0f,
         .dim          = 0.45f,
-        .dim_until    = d->playhead,
+        .dim_until    = head_col,
     };
     rx_wave_draw(d->w, dl, g, &wd);
 
     float head = fixed_head ? x + width / 2
-                            : x + (float)((d->playhead - col0) / (col1 - col0)) * width;
+                            : x + (float)((head_col - col0) / (col1 - col0)) * width;
     rx_demo_line(dl, head, y, head, y + height, 0xFF3030FF, 2.0f);
     rx_demo_dummy(width, height);
 }
@@ -468,8 +702,11 @@ static void frame(Demo *d)
     int ww, wh;
     rx_window_size(w, &ww, &wh);
 
-    /* The playhead moves by frame, not by clock, so a run is repeatable. */
+    /* The playheads move by frame, not by clock, so a run is repeatable.
+     * The spike row's moves as the player's does at 60 frames a second
+     * (150 columns a second). */
     d->playhead = fmod(rx_window_frames_drawn(w) * 1.5, NB_COLUMNS);
+    d->spike_head = 2000.0 + fmod(rx_window_frames_drawn(w) * 2.5, 100000.0);
 
     rx_window_begin_frame(w);
     rx_demo_show_demo_window();
@@ -481,15 +718,22 @@ static void frame(Demo *d)
         rx_demo_text("日本語のタイトル: CJK fallback");
 
         wave_row(d, "3-band detail, centred, whole track", d->band, RX_WAVE_CENTRED,
-                 0, NB_COLUMNS, false, 90.0f, false);
+                 0, NB_COLUMNS, d->playhead, false, 90.0f, false);
         wave_row(d, "3-band detail, zoomed (120 columns), interpolated", d->band,
-                 RX_WAVE_CENTRED, d->playhead - 60, d->playhead + 60, true, 90.0f, true);
+                 RX_WAVE_CENTRED, d->playhead - 60, d->playhead + 60, d->playhead, true, 90.0f,
+                 true);
+        double span = 1.6 * rx_demo_avail_width() * rx_window_scale(w);
+        wave_row(d, "3-band detail, 1.6 columns a pixel, one-column spikes", d->spikes,
+                 RX_WAVE_CENTRED, d->spike_head - span / 2, d->spike_head + span / 2,
+                 d->spike_head, true, 90.0f, true);
         wave_row(d, "3-band, stacked half (row preview)", d->band, RX_WAVE_HALF_STACKED,
-                 0, NB_COLUMNS, false, 45.0f, false);
+                 0, NB_COLUMNS, d->playhead, false, 45.0f, false);
         wave_row(d, "3-band, overlaid half (2-player detail)", d->band, RX_WAVE_HALF_OVERLAID,
-                 0, NB_COLUMNS, false, 45.0f, false);
-        wave_row(d, "blue", d->blue, RX_WAVE_CENTRED, 0, NB_COLUMNS, false, 70.0f, false);
-        wave_row(d, "rgb", d->rgb, RX_WAVE_CENTRED, 0, NB_COLUMNS, false, 70.0f, false);
+                 0, NB_COLUMNS, d->playhead, false, 45.0f, false);
+        wave_row(d, "blue", d->blue, RX_WAVE_CENTRED, 0, NB_COLUMNS, d->playhead, false, 70.0f,
+                 false);
+        wave_row(d, "rgb", d->rgb, RX_WAVE_CENTRED, 0, NB_COLUMNS, d->playhead, false, 70.0f,
+                 false);
 
         rx_demo_text("texture");
         rx_demo_image(d->tex, 64.0f, 64.0f);
@@ -500,9 +744,30 @@ static void frame(Demo *d)
         draw_reference(d);
         draw_edges(d);
     }
+    if (d->bench > 0.0)
+        draw_bench(d);
+
+    /* A frame that is not drawn (the swapchain was out of date) is built
+     * again with the same step. */
+    int drawn = rx_window_frames_drawn(w);
+    int step = drawn - SCROLL_START;
+    bool scrolling = d->scroll && step >= 0 && step < SCROLL_FRAMES;
+    if (scrolling) {
+        scroll_draw(d, step);
+        rx_window_capture_next(w);
+    }
 
     churn(d);
     rx_window_end_frame(w);
+
+    if (rx_window_frames_drawn(w) == drawn + 1) {
+        if (scrolling)
+            scroll_measure(d, step);
+        if (drawn >= GPU_WARMUP && rx_window_gpu_ms(w) > 0.0) {
+            d->gpu_ms += rx_window_gpu_ms(w);
+            d->gpu_frames++;
+        }
+    }
 }
 
 /* ------------------------------------------------------------------- main */
@@ -511,7 +776,8 @@ static void usage(void)
 {
     fprintf(stderr,
             "usage: rxbox-gpu-demo [--frames N] [--screenshot out.png] [--validation]\n"
-            "                      [--device NAME] [--check] [--idle] [--stats] [--verbose]\n");
+            "                      [--device NAME] [--check] [--scroll] [--bench COLS]\n"
+            "                      [--idle] [--stats] [--verbose]\n");
 }
 
 int main(int argc, char **argv)
@@ -522,6 +788,8 @@ int main(int argc, char **argv)
         { "validation", no_argument,       NULL, 'V' },
         { "device",     required_argument, NULL, 'd' },
         { "check",      no_argument,       NULL, 'c' },
+        { "scroll",     no_argument,       NULL, 'r' },
+        { "bench",      required_argument, NULL, 'b' },
         { "idle",       no_argument,       NULL, 'i' },
         { "stats",      no_argument,       NULL, 'S' },
         { "verbose",    no_argument,       NULL, 'v' },
@@ -538,13 +806,15 @@ int main(int argc, char **argv)
     Demo d = { 0 };
 
     int c;
-    while ((c = getopt_long(argc, argv, "n:s:Vd:ciSvh", longopts, NULL)) != -1) {
+    while ((c = getopt_long(argc, argv, "n:s:Vd:crb:iSvh", longopts, NULL)) != -1) {
         switch (c) {
         case 'n': opts.max_frames = atoi(optarg); break;
         case 's': shot = optarg; break;
         case 'V': opts.validation = true; break;
         case 'd': opts.device = optarg; break;
         case 'c': d.check = true; break;
+        case 'r': d.scroll = true; break;
+        case 'b': d.bench = atof(optarg); break;
         case 'i': idle = true; break;
         case 'S': stats = true; break;
         case 'v': rx_log_set_level(RX_LOG_DEBUG); break;
@@ -552,6 +822,9 @@ int main(int argc, char **argv)
         default:  usage(); return 2;
         }
     }
+
+    if (d.scroll)
+        opts.max_frames = RX_MAX(opts.max_frames, SCROLL_START + SCROLL_FRAMES + 2);
 
     int ret = rx_window_create(&d.w, &opts);
     if (ret < 0) {
@@ -565,11 +838,18 @@ int main(int argc, char **argv)
     d.blue      = rx_wave_upload(d.w, RX_WAVE_BLUE, d.blue_cols, NB_COLUMNS);
     d.rgb       = rx_wave_upload(d.w, RX_WAVE_RGB_DETAIL, rgb, NB_COLUMNS);
 
+    uint8_t *spikes = malloc(3 * SPIKE_COLUMNS);
+    if (spikes) {
+        synth_spikes(spikes, SPIKE_COLUMNS);
+        d.spikes = rx_wave_upload(d.w, RX_WAVE_3BAND, spikes, SPIKE_COLUMNS);
+        free(spikes);
+    }
+
     d.tex = make_texture(d.w, 0);
     d.empty = rx_wave_upload(d.w, RX_WAVE_3BAND, NULL, 0);
     d.quiet = rx_wave_upload(d.w, RX_WAVE_3BAND, ref_quiet, 1);
 
-    if (!d.band || !d.blue || !d.rgb || !d.tex || ref_upload(&d) < 0 || !d.empty ||
+    if (!d.band || !d.blue || !d.rgb || !d.spikes || !d.tex || ref_upload(&d) < 0 || !d.empty ||
         rx_wave_columns(d.empty) != 0 || !d.quiet) {
         rx_err("demo: could not create the resources");
         ret = RX_ERROR(ENOMEM);
@@ -604,11 +884,20 @@ int main(int argc, char **argv)
         if (ret < 0)
             rx_err("demo: screenshot failed (%d)", ret);
     }
-    if (ret >= 0 && d.check)
-        ret = run_checks(&d);
+    if (ret >= 0 && (d.check || d.scroll)) {
+        /* Both, whatever the first says: the scroll numbers are worth
+         * seeing either way. */
+        int err = d.check ? run_checks(&d) : 0;
+        if (d.scroll && scroll_check(&d) < 0)
+            err = RX_ERROR(EINVAL);
+        ret = err;
+    }
 
 end:;
     int errors = rx_window_validation_errors(d.w);
+    if (d.gpu_frames)
+        rx_info("demo: GPU %.3f ms a frame (mean of %d frames, after the first %d)",
+                d.gpu_ms / d.gpu_frames, d.gpu_frames, GPU_WARMUP);
     rx_info("demo: %d frames drawn, %.2f ms frame interval, %d validation errors",
             rx_window_frames_drawn(d.w), rx_window_frame_interval_ms(d.w), errors);
 
@@ -616,11 +905,14 @@ end:;
     rx_wave_release(d.w, d.band);
     rx_wave_release(d.w, d.blue);
     rx_wave_release(d.w, d.rgb);
+    rx_wave_release(d.w, d.spikes);
     for (int i = 0; i < NB_REF; i++)
         rx_wave_release(d.w, d.ref[i]);
     rx_wave_release(d.w, d.empty);
     rx_wave_release(d.w, d.quiet);
     rx_window_destroy(d.w);
+    for (int i = 0; i < NB_SCROLL; i++)
+        free(d.rows[i].prev);
 
     return ret < 0 || errors ? 1 : 0;
 }
