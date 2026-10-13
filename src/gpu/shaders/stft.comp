@@ -1,0 +1,89 @@
+// Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md.
+
+// Band energies of a short-time Fourier transform (rxbox/compute.h,
+// RXComputeSTFT): one workgroup per frame. The frame's 2M samples are
+// windowed into shared memory as M complex points, transformed, split into
+// the real spectrum's power |X_k|^2 (k in [0, M]), and each band sums the
+// power under its weights, compressed as log(1 + scale * sqrt(sum)).
+//
+// The band sums keep four accumulators and add them as (a0 + a1) + (a2 +
+// a3), as spectrum.c's CPU loop does, so that the order of the additions is
+// not one more difference between the two paths.
+
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+layout(local_size_x = 256) in;
+
+#include "fft.glsl"
+
+layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer Floats {
+    float v[];
+};
+
+layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer Ints {
+    int v[];
+};
+
+layout(buffer_reference, std430, buffer_reference_align = 4) writeonly buffer Out {
+    float v[];
+};
+
+layout(push_constant, std430) uniform Push {
+    Twiddles tw;
+    Floats   window;        // 2M
+    Ints     bands;         // [nb_bands][3]: first bin, end bin, first weight
+    Floats   weights;
+    Floats   samples;       // frame f starts at samples[f * hop]
+    Out      dst;           // [nb_frames][nb_bands]
+    uint     hop;
+    uint     nb_bands;
+    uint     nb_frames;
+    float    scale;
+} pc;
+
+shared float pw[M + 1u];
+
+void main()
+{
+    uint tid = gl_LocalInvocationIndex;
+    uint f = gl_WorkGroupID.x;
+    if (f >= pc.nb_frames)
+        return;
+    uint base = f * pc.hop;
+
+    for (uint m = tid; m < M; m += THREADS) {
+        buf[m] = vec2(pc.samples.v[base + 2u * m] * pc.window.v[2u * m],
+                      pc.samples.v[base + 2u * m + 1u] * pc.window.v[2u * m + 1u]);
+    }
+    memoryBarrierShared();
+    barrier();
+
+    fft_forward(pc.tw);
+
+    for (uint k = tid; k <= M / 2u; k += THREADS) {
+        vec2 xk, xmk;
+        real_split(pc.tw, k, xk, xmk);
+        pw[k] = xk.x * xk.x + xk.y * xk.y;
+        pw[M - k] = xmk.x * xmk.x + xmk.y * xmk.y;
+    }
+    memoryBarrierShared();
+    barrier();
+
+    for (uint b = tid; b < pc.nb_bands; b += THREADS) {
+        int k0 = pc.bands.v[3u * b], k1 = pc.bands.v[3u * b + 1u];
+        int w = pc.bands.v[3u * b + 2u] - k0;
+        float a0 = 0.0, a1 = 0.0, a2 = 0.0, a3 = 0.0;
+        int k = k0;
+        for (; k + 4 <= k1; k += 4) {
+            a0 += pc.weights.v[w + k] * pw[k];
+            a1 += pc.weights.v[w + k + 1] * pw[k + 1];
+            a2 += pc.weights.v[w + k + 2] * pw[k + 2];
+            a3 += pc.weights.v[w + k + 3] * pw[k + 3];
+        }
+        for (; k < k1; k++)
+            a0 += pc.weights.v[w + k] * pw[k];
+        float s = (a0 + a1) + (a2 + a3);
+        pc.dst.v[f * pc.nb_bands + b] = pc.scale > 0.0 ? log(1.0 + pc.scale * sqrt(s)) : s;
+    }
+}
