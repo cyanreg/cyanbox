@@ -33,17 +33,17 @@
 
 #define FLUX_DELAY 2
 
-void rx_onset_normalise(float *o, int n, double fps)
+int rx_onset_normalise(float *o, int n, double fps)
 {
     if (n <= 0)
-        return;
+        return 0;
     /* Local mean over one second (dj's box_smooth with width fps | 1),
      * removed so that a loud passage does not outweigh a quiet one, then
      * clipped: only rises above the local level are onsets. */
     int w = (int)fps | 1, h = w / 2;
     double *cum = malloc((size_t)(n + 1) * sizeof(*cum));
     if (!cum)
-        return;
+        return RX_ERROR(ENOMEM);
     cum[0] = 0.0;
     for (int i = 0; i < n; i++)
         cum[i + 1] = cum[i] + o[i];
@@ -61,6 +61,7 @@ void rx_onset_normalise(float *o, int n, double fps)
     float g = (float)(1.0 / (sd + 1e-9));
     for (int i = 0; i < n; i++)
         o[i] *= g;
+    return 0;
 }
 
 void rx_superflux_frame(const float *ref, const float *cur, int mid0, int mid1, int high0,
@@ -88,11 +89,14 @@ void rx_superflux_frame(const float *ref, const float *cur, int mid0, int mid1, 
     *high = h;
 }
 
-/* Shifts v by the lag that best aligns it with ref. */
+/* Shifts v by the lag that best aligns it with ref. Where no lag gives
+ * the two anything in common (a silent band, or a silent reference), v
+ * stays where it is: the first lag tried, 8 frames back, used to win
+ * there, and on fewer than 8 frames its shift wrote outside v. */
 static void align_band(const float *ref, float *v, int n)
 {
-    const int L = 8;
-    double best = -INFINITY;
+    const int L = RX_MIN(8, n - 1);
+    double best = 0.0;
     int lag = 0;
     for (int l = -L; l <= L; l++) {
         double acc = 0.0;
@@ -142,10 +146,13 @@ int rx_onsets_compute(RXSpectrum *s, RXOnsets *o)
             sig[k][t] = 0.0f;
     }
 
-    rx_onset_normalise(o->full, n, o->fps);
-    rx_onset_normalise(o->low, n, o->fps);
-    rx_onset_normalise(o->mid, n, o->fps);
-    rx_onset_normalise(o->high, n, o->fps);
+    for (size_t k = 0; k < RX_ARRAY_ELEMS(sig); k++) {
+        int ret = rx_onset_normalise(sig[k], n, o->fps);
+        if (ret < 0) {
+            rx_onsets_free(o);
+            return ret;
+        }
+    }
 
     /* Each band's flux has its own delay. The kick band's is the largest:
      * between sidechained kicks the band is nearly empty, so its log rises
@@ -171,25 +178,50 @@ void rx_onsets_free(RXOnsets *o)
     memset(o, 0, sizeof(*o));
 }
 
-static int cmp_float(const void *a, const void *b)
+/* A float's bits as an unsigned key in the floats' order (negative ones
+ * reversed), and back. */
+static uint32_t float_key(float x)
 {
-    float x = *(const float *)a, y = *(const float *)b;
-    return (x > y) - (x < y);
+    uint32_t u;
+    memcpy(&u, &x, sizeof(u));
+    return u & 0x80000000u ? ~u : u | 0x80000000u;
+}
+
+static float key_float(uint32_t k)
+{
+    uint32_t u = k & 0x80000000u ? k & 0x7fffffffu : ~k;
+    float x;
+    memcpy(&x, &u, sizeof(x));
+    return x;
+}
+
+/* The k-th smallest of x[0, n) (from 0), the value sorting would put
+ * there, without a copy to sort: the smallest key with more than k of
+ * them at or below it, found bit by bit (32 passes). */
+static float kth_smallest(const float *x, int n, int k)
+{
+    uint32_t key = 0;
+    for (int bit = 31; bit >= 0; bit--) {
+        uint32_t below = key | ((1u << bit) - 1);
+        int at_or_below = 0;
+        for (int i = 0; i < n; i++)
+            at_or_below += float_key(x[i]) <= below;
+        if (at_or_below <= k)
+            key |= 1u << bit;
+    }
+    return key_float(key);
 }
 
 double rx_onsets_first(const RXOnsets *o)
 {
     /* dj's rule: the first frame above a quarter of the 99th percentile,
-     * i.e. the first onset that is loud for this track. */
+     * i.e. the first onset that is loud for this track. The percentile is
+     * selected in place, so nothing can fail here: a sorted copy whose
+     * allocation failed gave 0, a loud onset at the very start. */
     if (o->nb <= 0)
         return 0.0;
-    float *tmp = malloc((size_t)o->nb * sizeof(*tmp));
-    if (!tmp)
-        return 0.0;
-    memcpy(tmp, o->full, (size_t)o->nb * sizeof(*tmp));
-    qsort(tmp, o->nb, sizeof(*tmp), cmp_float);
-    double p99 = tmp[(int)RX_MIN((int64_t)(0.99 * (o->nb - 1) + 0.5), o->nb - 1)];
-    free(tmp);
+    double p99 = kth_smallest(o->full, o->nb,
+                              (int)RX_MIN((int64_t)(0.99 * (o->nb - 1) + 0.5), o->nb - 1));
     double thr = 0.25 * p99;
     for (int i = 0; i < o->nb; i++) {
         if (o->full[i] > thr)

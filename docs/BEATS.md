@@ -168,7 +168,8 @@ BPM, with confidence 0.999 instead of 0.988.
   band's on sidechained house and techno: between kicks the band is nearly
   empty, so its log rises almost fully when a sliver of the kick enters the
   window. Each band is shifted onto the full band's time base by the lag of
-  their cross-correlation (within ±8 frames, far short of an off-beat).
+  their cross-correlation (within ±8 frames, far short of an off-beat); a
+  band with nothing in common with it at any lag (a silent one) stays.
   After this the kick and full bands agree on where the hits are on 79 % of
   the evaluation tracks (64 % before).
 

@@ -330,20 +330,21 @@ static bool wls(const RXBeatObs *beats, int first, int last, int k0, const doubl
 
 /* Theil-Sen: the median slope over pairs of supported beats half the
  * range apart, then the median intercept. Up to half the attacks can be
- * wrong (a stretch tracked on the off-beat) without moving it. */
-static bool theil_sen(const RXBeatObs *beats, int first, int last, int k0, double *a, double *b)
+ * wrong (a stretch tracked on the off-beat) without moving it. 1 when
+ * there is a line, 0 when the attacks give none, or an error. */
+static int theil_sen(const RXBeatObs *beats, int first, int last, int k0, double *a, double *b)
 {
     int m = 0;
     for (int i = first; i <= last; i++)
         m += supported(&beats[i]);
     if (m < 2)
-        return false;
+        return 0;
     int *sup = malloc(m * sizeof(*sup));
     double *v = malloc(m * sizeof(*v));
     if (!sup || !v) {
         free(sup);
         free(v);
-        return false;
+        return RX_ERROR(ENOMEM);
     }
     m = 0;
     for (int i = first; i <= last; i++) {
@@ -420,7 +421,7 @@ int rx_fit_line(const RXBeatObs *beats, int first, int last, const RXFitSection 
     s->supported = sup;
 
     double a = 0.0, b = 0.0, sigma = 0.0;
-    bool ok;
+    int ok;
     if (init) {
         a = init->t0 + (s->index0 - init->index0) * init->period;
         b = init->period;
@@ -428,10 +429,10 @@ int rx_fit_line(const RXBeatObs *beats, int first, int last, const RXFitSection 
     } else {
         ok = theil_sen(beats, first, last, s->index0, &a, &b);
     }
-    if (!ok) {
+    if (ok <= 0) {
         free(w);
         free(r);
-        return RX_ERROR(EINVAL);
+        return ok < 0 ? ok : RX_ERROR(EINVAL);
     }
 
     /* Tukey biweight IRLS: residuals beyond 4.685 robust sigmas get no
@@ -656,12 +657,12 @@ bool rx_snap_section(const RXBeatObs *beats, RXFitSection *s, double tol)
 /* The largest running median (9 attacks) of the residuals from the line:
  * how far the line sits from the music anywhere along it. A median, so a
  * single ghost hit cannot hold a boundary in place. */
-static double max_deviation(const RXBeatObs *beats, const RXFitSection *s)
+static int max_deviation(const RXBeatObs *beats, const RXFitSection *s, double *dev)
 {
     int n = s->last - s->first + 1, m = 0;
     double *r = malloc((size_t)RX_MAX(n, 1) * sizeof(*r));
     if (!r)
-        return INFINITY;
+        return RX_ERROR(ENOMEM);
     for (int i = s->first; i <= s->last; i++) {
         if (supported(&beats[i]))
             r[m++] = beats[i].attack - rx_beat_predict(beats, i, s);
@@ -673,7 +674,8 @@ static double max_deviation(const RXBeatObs *beats, const RXFitSection *s)
         worst = fmax(worst, fabs(win[4]));
     }
     free(r);
-    return worst;
+    *dev = worst;
+    return 0;
 }
 
 /* Mean of the support onset at the beats of line s inside [t0, t1]. */
@@ -739,10 +741,11 @@ static int seg_dominant(const Seg *g, int i, int j)
     return g->s[i].supported >= g->s[j].supported ? i : j;
 }
 
-/* Deviation of the line one would get by merging [i, j] on dom's line.
- * The beats' counts are restored afterwards. `hide` (or -1): a section
- * whose attacks do not take part (the breakdown between two sections). */
-static double merged_deviation(Seg *g, int i, int j, int dom, int hide)
+/* Deviation of the line one would get by merging [i, j] on dom's line
+ * (INFINITY when the attacks give no line). The beats' counts are restored
+ * afterwards. `hide` (or -1): a section whose attacks do not take part
+ * (the breakdown between two sections). */
+static int merged_deviation(Seg *g, int i, int j, int dom, int hide, double *dev)
 {
     int first = g->s[i].first, last = g->s[j].last;
     int nb = last - first + 1;
@@ -751,7 +754,7 @@ static double merged_deviation(Seg *g, int i, int j, int dom, int hide)
     if (!save || !hw) {
         free(save);
         free(hw);
-        return INFINITY;
+        return RX_ERROR(ENOMEM);
     }
     for (int k = first; k <= last; k++) {
         save[k - first] = g->beats[k].index;
@@ -763,16 +766,19 @@ static double merged_deviation(Seg *g, int i, int j, int dom, int hide)
     }
     seg_recount(g, i, j, dom);
     RXFitSection init = g->s[dom], out = { 0 };
-    double dev = INFINITY;
-    if (rx_fit_line(g->beats, first, last, &init, &out) == 0)
-        dev = max_deviation(g->beats, &out);
+    *dev = INFINITY;
+    int ret = rx_fit_line(g->beats, first, last, &init, &out);
+    if (ret == 0)
+        ret = max_deviation(g->beats, &out, dev);
+    else if (ret == RX_ERROR(EINVAL))
+        ret = 0;
     for (int k = first; k <= last; k++) {
         g->beats[k].index = save[k - first];
         g->beats[k].weight = hw[k - first];
     }
     free(save);
     free(hw);
-    return dev;
+    return ret;
 }
 
 /* Section start and end times (the first and last beat on its line). */
@@ -835,7 +841,7 @@ int rx_segment(RXBeatObs *beats, int nb, const RXOnsets *o, const float *support
 
     /* One line through everything first: the reference for the change
      * points, and the answer when sections are not allowed. */
-    RXFitSection g;
+    RXFitSection g = { 0 };
     if ((ret = rx_fit_line(beats, 0, nb - 1, NULL, &g)) < 0)
         goto end;
     if (!allow || m < 2 * SEG_MIN_SUPPORTED) {
@@ -960,7 +966,7 @@ int rx_segment(RXBeatObs *beats, int nb, const RXOnsets *o, const float *support
         int last = c == 0 ? nb - 1 : sup[cuts[c - 1]] - 1;
         if ((ret = rx_fit_line(beats, first, last, NULL, &s[sg.nb])) < 0) {
             /* A segment too odd to fit on its own joins the previous one. */
-            if (sg.nb > 0) {
+            if (sg.nb > 0 && ret == RX_ERROR(EINVAL)) {
                 s[sg.nb - 1].last = last;
                 ret = 0;
                 continue;
@@ -986,7 +992,9 @@ int rx_segment(RXBeatObs *beats, int nb, const RXOnsets *o, const float *support
         int bi = -1;
         double bd = SEG_MAX_DEV;
         for (int i = 0; i + 1 < sg.nb; i++) {
-            double d = merged_deviation(&sg, i, i + 1, seg_dominant(&sg, i, i + 1), -1);
+            double d;
+            if ((ret = merged_deviation(&sg, i, i + 1, seg_dominant(&sg, i, i + 1), -1, &d)) < 0)
+                goto end;
             if (d <= bd) {
                 bd = d;
                 bi = i;
@@ -1009,7 +1017,10 @@ int rx_segment(RXBeatObs *beats, int nb, const RXOnsets *o, const float *support
             if (sg.s[i].supported >= RX_MIN(sg.s[i - 1].supported, sg.s[i + 1].supported))
                 continue;
             int dom = seg_dominant(&sg, i - 1, i + 1);
-            if (merged_deviation(&sg, i - 1, i + 1, dom, i) <= SEG_MAX_DEV) {
+            double d;
+            if ((ret = merged_deviation(&sg, i - 1, i + 1, dom, i, &d)) < 0)
+                goto end;
+            if (d <= SEG_MAX_DEV) {
                 if ((ret = seg_merge(&sg, i - 1, i + 1, dom)) < 0)
                     goto end;
                 changed = true;
@@ -1089,8 +1100,10 @@ int rx_segment(RXBeatObs *beats, int nb, const RXOnsets *o, const float *support
             int need = !same ? SEG_MIN_BEATS : half ? SEG_MIN_HALF_BEATS : SEG_MIN_PHASE_BEATS;
             if (X->supported >= SEG_MIN_SUPPORTED && len >= need)
                 continue;
-            double dl = i > 0 ? merged_deviation(&sg, i - 1, i, i - 1, -1) : INFINITY;
-            double dr = i + 1 < sg.nb ? merged_deviation(&sg, i, i + 1, i + 1, -1) : INFINITY;
+            double dl = INFINITY, dr = INFINITY;
+            if ((i > 0 && (ret = merged_deviation(&sg, i - 1, i, i - 1, -1, &dl)) < 0) ||
+                (i + 1 < sg.nb && (ret = merged_deviation(&sg, i, i + 1, i + 1, -1, &dr)) < 0))
+                goto end;
             if (dl <= dr && i > 0)
                 ret = seg_merge(&sg, i - 1, i, i - 1);
             else if (i + 1 < sg.nb)
