@@ -63,16 +63,17 @@ all again. A locked grid is never replaced unless you name the track:
 
 The library keeps the version of the analyser that made each track's grid,
 key and waveforms. When a new rxbox improves one of them, that version goes
-up, and a result an older version made counts as missing: the interface
-analyses those tracks again in the background when it opens the library,
-without being asked, and `rxbox analyze` does the same. Only the stale
-parts are redone, and locked grids are kept. A grid you edit by hand keeps
-the version of the grid it was edited from, so it is replaced like any
-other at the next upgrade of the grid analyser: lock a grid you corrected
-to keep it. `rxbox check` counts the stale tracks and `rxbox show` prints a
-track's versions. A library from before versions were kept counts all its
-results as stale, so the first start after that upgrade analyses the whole
-library again.
+up, and a result an older version made counts as missing, as do waveforms
+stored in a format the new rxbox no longer reads: the interface analyses
+those tracks again in the background when it opens the library, without
+being asked, and `rxbox analyze`, adding a track and an export (before it
+writes) do the same. Only the stale parts are redone, and locked grids are
+kept. A grid you edit by hand keeps the version of the grid it was edited
+from, so it is replaced like any other at the next upgrade of the grid
+analyser: lock a grid you corrected to keep it. `rxbox check` counts the
+stale tracks and `rxbox show` prints a track's versions. A library from
+before versions were kept counts all its results as stale, so the first
+start after that upgrade analyses the whole library again.
 
 ## Command line
 
