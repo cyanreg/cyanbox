@@ -11,7 +11,9 @@ deck, no sync and no mixer.
 
 ## Window
 
-Dark theme, no title bar decorations beyond the compositor's. Default
+Dark theme, no decorations at all: the window is borderless, which on
+Wayland asks for client-side decoration and draws none, so sway and the
+like draw no title bar either. Default
 1600×900, everything resizes. Three bands, top to bottom:
 
 ```

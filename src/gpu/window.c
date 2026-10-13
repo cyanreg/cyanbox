@@ -474,9 +474,13 @@ int rx_window_create(RXWindow **out, const RXWindowOptions *o)
     }
     w->sdl_init = true;
 
+    /* Borderless: no title bar. On Wayland SDL then asks the compositor
+     * for client-side decoration (xdg-decoration) and draws none, so a
+     * tiling compositor such as sway marks the window csd and draws no
+     * title bar of its own either; the whole surface is the interface. */
     w->win = SDL_CreateWindow(w->title, w->opts.width, w->opts.height,
                               SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE |
-                              SDL_WINDOW_HIGH_PIXEL_DENSITY);
+                              SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_BORDERLESS);
     if (!w->win) {
         rx_err("gpu: SDL_CreateWindow: %s", SDL_GetError());
         ret = RX_ERROR(ENODEV);
