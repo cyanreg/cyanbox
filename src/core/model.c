@@ -81,7 +81,7 @@ void rx_meta_free(RXMeta *m)
     for (int i = 0; i < m->nb_tags; i++)
         free(m->tags[i]);
     free(m->tags);
-    *m = (RXMeta) { 0 };
+    *m = (RXMeta) { .hue = RX_HUE_NONE };
 }
 
 int rx_meta_set(char **field, const char *value)
@@ -174,6 +174,8 @@ RXTrack *rx_track_new(const char *path)
     if (!t)
         return NULL;
     t->grid.beats_per_bar = 4;
+    t->meta.hue = RX_HUE_NONE;
+    t->file_meta.hue = RX_HUE_NONE;
     if (path) {
         t->path = rx_strdup(path);
         if (!t->path) {

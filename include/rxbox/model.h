@@ -131,18 +131,38 @@ void rx_cue_attach_to_grid(RXCue *c, const RXGrid *grid);
  * Key and back). "" means unknown. */
 #define RX_KEY_MAX 8
 
+/* A track's colour is a hue: the HSV/HSL hue angle in degrees,
+ * 0 <= hue < 360, with 0 red, 60 yellow, 120 green, 180 cyan (rekordbox's
+ * aqua is near it), 240 blue, 300 magenta (rekordbox's pink is near it);
+ * RX_HUE_NONE (-1) for no colour. The interface draws it at full
+ * saturation and its usual value (rx_track_hue_rgb, rxbox/colors.h). The
+ * stick carries one of rekordbox's eight colours: the export writes the
+ * one whose hue (the HSV hue of its RGB) is nearest by circular distance
+ * (rx_track_color_nearest_hue). A zeroed RXMeta has the hue 0, red:
+ * rx_meta_free and rx_track_new set it to none. */
+#define RX_HUE_NONE (-1.0)
+static inline bool rx_hue_valid(double hue) { return hue >= 0.0 && hue < 360.0; }
+/* Into [0, 360) (360 is 0 again); none for a hue below 0 or not a number. */
+static inline double rx_hue_wrap(double hue)
+{
+    return isfinite(hue) && hue >= 0.0 ? fmod(hue, 360.0) : RX_HUE_NONE;
+}
+
 /* Tag fields. The library keeps what the file says and the user's
  * overrides separately (an override column is NULL when the file's value
- * is used); a track carries both so an edit never loses the file's tag. */
+ * is used); a track carries both so an edit never loses the file's tag.
+ * Rating, hue and My Tags are the library's only: file_meta leaves them
+ * at none. */
 typedef struct RXMeta {
     char *title, *artist, *album, *album_artist, *genre, *label, *remixer,
          *composer, *original_artist, *comment;
     int   year, track_number, disc_number;
     int   rating;                   /* 0..5 */
-    char  color[RX_COLOR_MAX];      /* pink red orange yellow green aqua blue purple, or "" */
+    double hue;                     /* the track colour, degrees 0 <= hue < 360, or RX_HUE_NONE */
     char **tags; int nb_tags;       /* My Tags: "Situation/Peak Time", "vocal" ... */
 } RXMeta;
 
+/* Frees the strings and tags and leaves an empty RXMeta with no hue. */
 void rx_meta_free(RXMeta *m);
 int  rx_meta_copy(RXMeta *dst, const RXMeta *src);
 int  rx_meta_set(char **field, const char *value);     /* takes a copy; NULL clears */

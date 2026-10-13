@@ -2,9 +2,11 @@
 # Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md.
 #
 # The command line end to end, in a scratch directory: init a library, add a
-# generated 128 BPM FLAC, show its grid, make a playlist, a dry-run export,
-# a real export to a directory and inspect it, settings, results of an
-# older analyser counted and analysed again, and the exit codes.
+# generated 128 BPM FLAC, show its grid, give it a colour (a hue, by degrees
+# and by name), make a playlist, a dry-run export that says which colour
+# the stick gets, a real export to a directory and inspect it, settings,
+# results of an older analyser counted and analysed again, and the exit
+# codes.
 # Then the edges: init over a library, a relative --library, an id that
 # also names a directory, an unreadable file, output that cannot be
 # written. No audio device and no window are used.
@@ -57,6 +59,16 @@ awk -v b="$bpm" 'BEGIN { exit !(b > 127.5 && b < 128.5) }' || fail "the grid is 
 id=$(sed -n 's/^  id \([0-9]*\).*/\1/p' "$dir/show.out")
 run show "$id" | grep -q "click128.flac" || fail "show by id"
 
+# The colour is a hue in degrees; show prints it with the colour the stick
+# gets. A name stands for that colour's hue, none clears it.
+grep -q "^  colour: none$" "$dir/show.out" || fail "a new track has a colour"
+run color 200 "$id" | grep -q "click128.flac: 200° (aqua)$" || fail "color 200"
+run show "$id" | grep -q "^  colour: 200° (aqua)$" || fail "show does not print the hue"
+run color none "$track" | grep -q ": none$" || fail "color none"
+run color purple "$track" | grep -q ": 276° (purple)$" || fail "color purple"
+run color 400 "$track" > /dev/null 2>&1 && fail "color took 400"
+run colour aqua "$track" | grep -q ": 193.5° (aqua)$" || fail "colour aqua"
+
 # Analysing again finds nothing to do.
 run analyze | grep -q "nothing to analyse" || fail "analyze redid finished work"
 
@@ -70,6 +82,7 @@ run export --dry-run "$dir/dry" > "$dir/dry.out" || { cat "$dir/dry.out"; fail "
 cat "$dir/dry.out"
 [ -z "$(ls -A "$dir/dry")" ] || fail "the dry run wrote to the stick"
 grep -q "is not a mount point" "$dir/dry.out" || fail "no warning about a stick that is not mounted"
+grep -q "Click 128 \[colour 193.5° (aqua)\]$" "$dir/dry.out" || fail "the dry run does not say the colour"
 
 run export "$dir/stick" > "$dir/export.out" || { cat "$dir/export.out"; fail "export"; }
 cat "$dir/export.out"
@@ -195,8 +208,8 @@ run show "$dir/no-such-track.flac" > /dev/null 2>&1
 [ $? -eq 1 ] || fail "--frames \" 5\" does not exit 1"
 "$rxbox" -c "" show "$id" > /dev/null 2>&1
 [ $? -eq 1 ] || fail "-c \"\" does not exit 1"
-for cmd in add analyze analyse show export inspect pull sync rescan check config settings init \
-           playlist; do
+for cmd in add analyze analyse show color colour export inspect pull sync rescan check config \
+           settings init playlist; do
     run $cmd --bogus > /dev/null 2> "$dir/usage.err"
     [ $? -eq 1 ] || { cat "$dir/usage.err"; fail "$cmd --bogus does not exit 1"; }
     grep -q "^usage: rxbox $cmd" "$dir/usage.err" ||

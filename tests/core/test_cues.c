@@ -138,7 +138,7 @@ static void test_meta(void)
     rx_meta_set(&m.title, "日本語のタイトル");
     m.year = 2024;
     m.rating = 4;
-    snprintf(m.color, sizeof(m.color), "pink");
+    m.hue = 300.0;
     CHECK(rx_meta_add_tag(&m, "Situation/Peak Time") == 0);
     CHECK(rx_meta_add_tag(&m, "vocal") == 0);
     CHECK(rx_meta_add_tag(&m, "vocal") == 0 && m.nb_tags == 2);
@@ -149,16 +149,24 @@ static void test_meta(void)
     CHECK(rx_meta_copy(&c, &m) == 0);
     CHECK(c.title != m.title && !strcmp(c.title, m.title) && c.year == 2024 && c.rating == 4);
     CHECK(c.nb_tags == 2 && c.tags != m.tags && !strcmp(c.tags[1], "vocal"));
-    CHECK(!strcmp(c.color, "pink"));
+    CHECK(c.hue == 300.0);
     /* Copying over a filled struct frees what it held. */
     CHECK(rx_meta_copy(&c, &m) == 0);
     rx_meta_clear_tags(&c);
     CHECK(!c.nb_tags && !c.tags);
     rx_meta_free(&c);
     rx_meta_free(&m);
-    CHECK(!m.title && !m.nb_tags);
+    /* Freed is empty, and has no colour (a zero hue would be red). */
+    CHECK(!m.title && !m.nb_tags && m.hue == RX_HUE_NONE && !rx_hue_valid(m.hue));
+
+    /* Hues wrap into [0, 360); below 0 or not a number is none. */
+    CHECK(rx_hue_wrap(360.0) == 0.0 && rx_hue_wrap(400.0) == 40.0 && rx_hue_wrap(0.0) == 0.0);
+    CHECK(rx_hue_wrap(-1.0) == RX_HUE_NONE && rx_hue_wrap(NAN) == RX_HUE_NONE);
+    CHECK(rx_hue_wrap(INFINITY) == RX_HUE_NONE);
+    CHECK(rx_hue_valid(0.0) && rx_hue_valid(359.9) && !rx_hue_valid(360.0) && !rx_hue_valid(NAN));
 
     RXTrack *t = rx_track_new("/music/Album/01 Track.flac");
+    CHECK(t->meta.hue == RX_HUE_NONE && t->file_meta.hue == RX_HUE_NONE);
     char buf[64];
     CHECK_STR(rx_track_display(t, buf, sizeof(buf)), "01 Track.flac");
     rx_meta_set(&t->meta.title, "Title");

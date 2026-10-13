@@ -3,7 +3,7 @@
 /* The library database: the SQLite connection, the schema and its
  * migrations, the cached statements, transactions and error mapping.
  *
- * Schema version 3 (PRAGMA user_version = 3, application_id = 'RXBX').
+ * Schema version 4 (PRAGMA user_version = 4, application_id = 'RXBX').
  * Tables are STRICT so a wrong type is an error instead of a silent
  * conversion, and every row that belongs to a track or a playlist goes
  * with it (ON DELETE CASCADE, foreign keys on for every connection).
@@ -19,7 +19,8 @@
  *                             year, track_number, disc_number)
  *                   title .. comment, year, track_number, disc_number
  *                             the user's overrides; NULL = use the file's
- *                   rating color          the user's (files have none)
+ *                   rating hue            the user's (files have none); hue in
+ *                             degrees, 0 <= hue < 360, NULL for no colour
  *                   key key_confidence beats_per_bar grid_confidence grid_flags
  *                   grid_locked analysed  analysis results and their state
  *                   beats_version key_version waves_version
@@ -46,11 +47,16 @@
  * build is refused rather than written with a schema we do not know.
  *   1 -> 2  the three analyser version columns of track.
  *
- *   1 -> 2  the tables as they are; a grid's first section stopped
+ *   2 -> 3  the tables as they are; a grid's first section stopped
  *           extending back to the start of the track (src/core/grid.c), so
  *           the first section of every stored grid starts at its first beat
  *           at or after time 0 instead, numbered as that beat was: the
  *           grid keeps every beat it had.
+ *
+ *   3 -> 4  a track's colour became a hue: track.color (one of rekordbox's
+ *           eight names) gives way to track.hue, each name its colour's
+ *           own hue, so the stick gets the same colour as before. Cue
+ *           colours are the players' palette still.
  *
  * Journal: WAL, synchronous = NORMAL (a crash loses at most the last
  * transactions, never consistency), and a busy timeout because the export
@@ -60,6 +66,10 @@
 
 #include <math.h>
 #include <stdio.h>
+
+/* For the track colours' RGB macros only: nothing of the formats module
+ * is linked. */
+#include "rxbox/colors.h"
 
 #define RX_DB_APPLICATION_ID 0x52584258     /* 'RXBX' */
 
@@ -77,7 +87,7 @@ const char *const rx_track_edit_cols[RX_TRACK_EDIT_COLS] = {
     "title", "artist", "album", "album_artist", "genre",
     "label", "remixer", "composer", "original_artist", "comment",
     "year", "track_number", "disc_number",
-    "rating", "color", "key", "key_confidence", "beats_per_bar",
+    "rating", "hue", "key", "key_confidence", "beats_per_bar",
     "grid_confidence", "grid_flags", "grid_locked", "analysed",
     "beats_version", "key_version", "waves_version",
 };
@@ -234,10 +244,39 @@ static const char schema_v3[] =
     "      WHERE s.idx = 0 AND s.start > 0) AS m "
     "WHERE g.track_id = m.id AND g.idx = 0 AND m.k > 0;";
 
+/* Each of rekordbox's eight colour names becomes its colour's hue: the HSV
+ * hue of the RGB the interface drew it in (rxbox/colors.h), by the
+ * standard formula, in the same order of operations as rx_rgb_hue in
+ * src/formats/colors.c, which core does not link; tests/core checks the
+ * two agree. A name the old column should never have held is no colour.
+ * The old column goes. */
+#define SQL_INT_(x) #x
+#define SQL_INT(x) SQL_INT_(x)
+static const char schema_v4[] =
+    "ALTER TABLE track ADD COLUMN hue REAL CHECK (hue >= 0 AND hue < 360);"
+    "WITH palette(name, rgb) AS (VALUES"
+    "  ('pink', "   SQL_INT(RX_TRACK_RGB_PINK)   "), ('red', "    SQL_INT(RX_TRACK_RGB_RED)    "),"
+    "  ('orange', " SQL_INT(RX_TRACK_RGB_ORANGE) "), ('yellow', " SQL_INT(RX_TRACK_RGB_YELLOW) "),"
+    "  ('green', "  SQL_INT(RX_TRACK_RGB_GREEN)  "), ('aqua', "   SQL_INT(RX_TRACK_RGB_AQUA)   "),"
+    "  ('blue', "   SQL_INT(RX_TRACK_RGB_BLUE)   "), ('purple', " SQL_INT(RX_TRACK_RGB_PURPLE) ")),"
+    "rgb(name, r, g, b) AS (SELECT name, (rgb >> 16) & 255, (rgb >> 8) & 255, rgb & 255 FROM palette),"
+    "hsv(name, r, g, b, mx, d) AS (SELECT name, r, g, b, max(r, g, b), max(r, g, b) - min(r, g, b)"
+    "                              FROM rgb),"
+    "angle(name, h) AS (SELECT name, CASE"
+    "                     WHEN d = 0 THEN NULL"
+    "                     WHEN mx = r THEN 60.0 * ((g - b) * 1.0 / d)"
+    "                     WHEN mx = g THEN 60.0 * ((b - r) * 1.0 / d + 2.0)"
+    "                     ELSE 60.0 * ((r - g) * 1.0 / d + 4.0) END FROM hsv) "
+    "UPDATE track SET hue = (SELECT CASE WHEN h < 0 THEN h + 360.0 ELSE h END FROM angle"
+    "                        WHERE angle.name = lower(trim(track.color, ' ' || char(9)))) "
+    "WHERE color != '';"
+    "ALTER TABLE track DROP COLUMN color;";
+
 static const char *const migrations[] = {
     schema_v1,          /* 0 -> 1 */
     schema_v2,          /* 1 -> 2 */
     schema_v3,          /* 2 -> 3 */
+    schema_v4,          /* 3 -> 4 */
 };
 
 /* ------------------------------------------------------------ statements */

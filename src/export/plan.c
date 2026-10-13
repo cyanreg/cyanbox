@@ -12,7 +12,9 @@
  *    dj did: in first-use order over the tracks sorted by path; remixers,
  *    composers and original artists are artists (one table in both
  *    databases), so RXPlan's separate lists for them stay empty;
- *  - cue colours come from the measured palette (rxbox/colors.h);
+ *  - cue colours come from the measured palette (rxbox/colors.h); a
+ *    track's colour is a hue in the library, written as the nearest of
+ *    rekordbox's eight by circular hue distance;
  *  - the cover is the embedded picture or the album folder's image
  *    (rx_artwork_raw), deduplicated by a SHA-1 of its bytes so an album's
  *    tracks share one artwork row (dj hashed the image the same way).
@@ -933,7 +935,15 @@ int rx_plan_build_cb(const RXLibrary *lib, RXTrack *const *tracks, int nb_tracks
         rx_track_display(t, disp, sizeof(disp));
         *pt = (RXPlanTrack) { .id = (uint32_t)t->id, .track = t };
         out->nb_tracks++;
-        if (cb && !cb(opaque, "prepare", i + 1, nb_tracks, disp)) {
+        /* The library's hue goes to the stick as the nearest of
+         * rekordbox's eight colours (rxbox/colors.h); the progress line
+         * (all of them in a dry run) says which. */
+        pt->color_id = (uint32_t)rx_track_color_nearest_hue(t->meta.hue);
+        char item[600], hue[32];
+        if (pt->color_id)
+            snprintf(item, sizeof(item), "%s [colour %s]", disp,
+                     rx_hue_format(t->meta.hue, hue, sizeof(hue)));
+        if (cb && !cb(opaque, "prepare", i + 1, nb_tracks, pt->color_id ? item : disp)) {
             ret = RX_ERROR(ECANCELED);
             goto fail;
         }
@@ -1011,10 +1021,6 @@ int rx_plan_build_cb(const RXLibrary *lib, RXTrack *const *tracks, int nb_tracks
             if ((ret = intern(&keys, pt->key_name, 0, false, &pt->key_id)) < 0)
                 goto fail;
         }
-        pt->color_id = (uint32_t)rx_track_color_id(m->color);
-        if (!pt->color_id && m->color[0])
-            report(cb, opaque, "%s: unknown track colour '%s'", disp, m->color);
-
         for (int k = 0; k < m->nb_tags; k++) {
             char *name;
             int col = tag_column(m->tags[k], &name);

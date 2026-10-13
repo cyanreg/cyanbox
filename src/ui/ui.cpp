@@ -115,10 +115,11 @@ uint32_t ui_memory_cue_rgb(const RXCue *c)
     return 0xEA3323;
 }
 
+// The track's hue at full saturation and the value the track colours are
+// drawn at; 0 for none.
 uint32_t ui_track_rgb(const RXTrack *t)
 {
-    int id = rx_track_color_id(t->meta.color);
-    return id > 0 ? rx_track_color_rgb(id) : 0;
+    return rx_track_hue_rgb(t->meta.hue);
 }
 
 // Black or white text for a filled colour, by its luma.
@@ -371,6 +372,96 @@ bool ui_track_colour_menu(UiState *ui, const char *current, char out[RX_COLOR_MA
     }
     ImGui::PopStyleVar();
     return picked;
+}
+
+// The strip is the spectrum at the value hues are drawn at, in six linear
+// blends between the pure hues: between two of them only one channel
+// moves, so the blend is the HSV sweep itself. Ticks under it mark the
+// eight palette hues; the stick's colour changes halfway between two. The
+// right end is red again, so a drag there stops just short of 360 rather
+// than jump the marker to the left end.
+bool ui_hue_picker(UiState *ui, const char *id, double *hue, float width, bool *commit)
+{
+    *commit = false;
+    bool changed = false;
+    ImGui::PushID(id);
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+
+    // What the stick gets, and "none" at the end of the line.
+    float x0 = ImGui::GetCursorPosX();
+    float w = width > 0 ? PX(width) : ImGui::GetContentRegionAvail().x;
+    float sw = PX(18), fh = ImGui::GetFrameHeight();
+    int entry = rx_track_color_nearest_hue(*hue);
+    ImGui::AlignTextToFramePadding();
+    if (entry) {
+        ImGui::BeginGroup();
+        ImVec2 p = ImGui::GetCursorScreenPos();
+        float s = PX(12);
+        ImVec2 a(p.x, p.y + (fh - s) * 0.5f);
+        dl->AddRectFilled(a, ImVec2(a.x + s, a.y + s), ui_rgb(rx_track_color_rgb(entry)), PX(2));
+        ImGui::Dummy(ImVec2(s, fh));
+        ImGui::SameLine();
+        ImGui::TextUnformatted(rx_track_color_names[entry - 1]);
+        ImGui::SameLine();
+        ImGui::TextDisabled("%.0f\xC2\xB0", fmod(*hue, 360.0));
+        ImGui::EndGroup();
+        ui_tooltip("The stick gets the nearest of rekordbox's eight colours");
+    } else {
+        ImGui::TextDisabled("none");
+    }
+    ImGui::SameLine();
+    if (ImGui::GetCursorPosX() < x0 + w - sw)
+        ImGui::SetCursorPosX(x0 + w - sw);
+    if (ui_swatch(ui, "##none", 0, !entry, 18) && entry) {
+        *hue = RX_HUE_NONE;
+        changed = *commit = true;
+    }
+    ui_tooltip("No colour");
+
+    // The strip, on a line of its own.
+    if (width <= 0)
+        w = ImGui::GetContentRegionAvail().x;
+    w = ImMax(w, PX(60));
+    float bar_h = PX(14), tick_h = PX(4);
+    ImGui::InvisibleButton("##strip", ImVec2(w, bar_h + tick_h));
+    ImVec2 a = ImGui::GetItemRectMin();
+    ImVec2 b(a.x + w, a.y + bar_h);
+    if (ImGui::IsItemActive()) {
+        double h = ImClamp((ImGui::GetIO().MousePos.x - a.x) / w, 0.0f, 1.0f) * 360.0;
+        h = ImMin(h, 359.9);
+        if (h != *hue) {
+            *hue = h;
+            changed = true;
+        }
+    }
+    if (ImGui::IsItemDeactivated())
+        *commit = true;
+    if (ImGui::IsItemHovered())
+        ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+
+    bool set = rx_hue_valid(*hue);
+    float alpha = set ? 1.0f : 0.45f;
+    for (int i = 0; i < 6; i++) {
+        float xa = a.x + w * (float)i / 6.0f, xb = a.x + w * (float)(i + 1) / 6.0f;
+        ImU32 ca = ui_rgb(rx_track_hue_rgb(60.0 * i), alpha);
+        ImU32 cb = ui_rgb(rx_track_hue_rgb(60.0 * (i + 1)), alpha);
+        dl->AddRectFilledMultiColor(ImVec2(xa, a.y), ImVec2(xb, b.y), ca, cb, cb, ca);
+    }
+    dl->AddRect(a, b, UI_FAINT, 0.0f, PX(1));
+    for (int i = 1; i <= RX_TRACK_COLORS; i++) {
+        float x = a.x + w * (float)(rx_track_color_hue(i) / 360.0);
+        dl->AddLine(ImVec2(x, b.y + PX(1)), ImVec2(x, b.y + tick_h), i == entry ? UI_TEXT : UI_FAINT,
+                    PX(1));
+    }
+    if (set) {
+        float x = a.x + w * (float)(*hue / 360.0);
+        ImVec2 ma(x - PX(3), a.y - PX(2)), mb(x + PX(3), b.y + PX(2));
+        dl->AddRectFilled(ma, mb, ui_rgb(rx_track_hue_rgb(*hue)), PX(2));
+        dl->AddRect(ma, mb, UI_BLACK, PX(2), PX(3));
+        dl->AddRect(ma, mb, UI_TEXT, PX(2), PX(1.5f));
+    }
+    ImGui::PopID();
+    return changed;
 }
 
 bool ui_button(UiState *ui, const char *id, ImVec2 size, const UiButton &b)

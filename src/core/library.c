@@ -14,8 +14,8 @@
  * Tags and overrides: file_meta is what the file says, meta what is shown.
  * A field the user changed is stored in its override column; a field equal
  * to the file's is stored as NULL, so a retagged file shows its new tags
- * unless the user had changed that field. Rating, colour and My Tags exist
- * only in the library.
+ * unless the user had changed that field. Rating, colour (a hue) and My
+ * Tags exist only in the library.
  *
  * Adding a directory probes its files in parallel on a thread pool (the
  * probe is a file open and a header parse, I/O bound, a few ms each) and
@@ -185,7 +185,9 @@ static void bind_edit(RXDb *db, sqlite3_stmt *st, int p, const RXTrack *t)
             rx_db_bind_int(db, st, p++, v);
     }
     rx_db_bind_int(db, st, p++, RX_CLAMP(t->meta.rating, 0, 5));
-    rx_db_bind_text(db, st, p++, t->meta.color);
+    /* NAN binds NULL: no colour. */
+    double hue = rx_hue_wrap(t->meta.hue);
+    rx_db_bind_double(db, st, p++, rx_hue_valid(hue) ? hue : NAN);
     rx_db_bind_text(db, st, p++, t->key);
     rx_db_bind_double(db, st, p++, finite_or_zero(t->key_confidence));
     rx_db_bind_int(db, st, p++, t->grid.beats_per_bar >= 1 && t->grid.beats_per_bar <= 64 ?
@@ -351,7 +353,8 @@ static int track_from_row(sqlite3_stmt *st, RXTrack **out)
             *meta_int(&t->meta, i) = sqlite3_column_int(st, c);
     }
     t->meta.rating = sqlite3_column_int(st, c++);
-    column_copy(st, c++, t->meta.color, sizeof(t->meta.color));
+    t->meta.hue = sqlite3_column_type(st, c) == SQLITE_NULL ? RX_HUE_NONE : sqlite3_column_double(st, c);
+    c++;
     column_copy(st, c++, t->key, sizeof(t->key));
     t->key_confidence = sqlite3_column_double(st, c++);
     t->grid.beats_per_bar = sqlite3_column_int(st, c++);
@@ -648,7 +651,7 @@ static int parse_leading_int(const char *s)
 /* The tag names of dj's library.track_from_probe, in its order. */
 static int fill_from_probe(RXTrack *t, const RXProbe *p)
 {
-    RXMeta m = { 0 };
+    RXMeta m = { .hue = RX_HUE_NONE };
     int ret = 0;
 
     const char *title = rx_probe_tag(p, "title", NULL);

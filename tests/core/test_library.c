@@ -4,10 +4,12 @@
  * in a scratch directory from real WAV files, edited, closed and opened
  * again, and checked field by field, then with SQLite's own integrity
  * and foreign key checks; a library of schema 1 migrated, its analysis
- * results then older than the analyser. Waveforms are stored through the
- * raw blob layer because the analysis module (which packs them) is not
- * linked here; rxbox/analysis.h is used for its version constants and
- * inline helper only. */
+ * results then older than the analyser; a library of schema 3 whose
+ * colour names become hues, checked against src/formats/colors.c (built
+ * into this test, as core does not link the formats module). Waveforms
+ * are stored through the raw blob layer because the analysis module
+ * (which packs them) is not linked here; rxbox/analysis.h is used for its
+ * version constants and inline helper only. */
 
 #include "rxbox/library.h"
 
@@ -17,6 +19,7 @@
 #include <sqlite3.h>
 
 #include "rxbox/analysis.h"
+#include "rxbox/colors.h"
 #include "src/core/core.h"
 #include "util.h"
 
@@ -55,6 +58,29 @@ static int count_rows(const RXLibrary *lib, const char *table, uint64_t id)
     return n;
 }
 
+/* A track's hue column straight from SQLite: NAN for NULL or no row. */
+static double hue_column(const RXLibrary *lib, uint64_t id)
+{
+    char *sql = rx_asprintf("SELECT hue FROM track WHERE id = %llu", (unsigned long long)id);
+    sqlite3_stmt *st;
+    double v = NAN;
+    if (sqlite3_prepare_v2(lib->db->db, sql, -1, &st, NULL) == SQLITE_OK) {
+        if (sqlite3_step(st) == SQLITE_ROW && sqlite3_column_type(st, 0) != SQLITE_NULL)
+            v = sqlite3_column_double(st, 0);
+        sqlite3_finalize(st);
+    }
+    free(sql);
+    return v;
+}
+
+/* Takes a library back to schema 3's track table: the colour name column
+ * instead of the hue, for the migrations from older schemas. */
+static int back_to_schema3(sqlite3 *db)
+{
+    return sqlite3_exec(db, "ALTER TABLE track ADD COLUMN color TEXT NOT NULL DEFAULT '';"
+                            "ALTER TABLE track DROP COLUMN hue", NULL, NULL, NULL);
+}
+
 static void make_music(void)
 {
     char *p;
@@ -89,7 +115,7 @@ static void test_create_and_add(void)
 
     sqlite3_stmt *st;
     sqlite3_prepare_v2(lib.db->db, "PRAGMA user_version", -1, &st, NULL);
-    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 3);
+    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 4);
     sqlite3_finalize(st);
     sqlite3_prepare_v2(lib.db->db, "PRAGMA journal_mode", -1, &st, NULL);
     CHECK(sqlite3_step(st) == SQLITE_ROW && !strcmp((const char *)sqlite3_column_text(st, 0), "wal"));
@@ -114,6 +140,8 @@ static void test_create_and_add(void)
         CHECK(a->sample_rate == 44100 && a->channels == 2 && b->sample_rate == 48000 && b->channels == 1);
         CHECK_STR(a->codec, "pcm_s16le");
         CHECK(a->file_size > 0 && a->mtime > 0 && a->added > 0 && !a->missing);
+        /* No colour until the user gives one (a zero hue would be red). */
+        CHECK(a->meta.hue == RX_HUE_NONE && b->meta.hue == RX_HUE_NONE && a->file_meta.hue == RX_HUE_NONE);
     }
 
     /* Again: nothing new, every known file reported with its track. */
@@ -156,7 +184,7 @@ static void test_edit_and_reopen(void)
     rx_meta_set(&a->meta.comment, "hand edited");
     a->meta.track_number = 7;
     a->meta.rating = 4;
-    snprintf(a->meta.color, sizeof(a->meta.color), "pink");
+    a->meta.hue = 193.25;
     rx_meta_add_tag(&a->meta, "Situation/Peak Time");
     rx_meta_add_tag(&a->meta, "vocal");
     snprintf(a->key, sizeof(a->key), "Am");
@@ -238,7 +266,8 @@ static void test_edit_and_reopen(void)
     CHECK_STR(a->meta.comment, "hand edited");
     CHECK(!a->file_meta.comment);
     CHECK(a->meta.track_number == 7 && a->file_meta.track_number == 0);
-    CHECK(a->meta.rating == 4 && !strcmp(a->meta.color, "pink"));
+    CHECK(a->meta.rating == 4 && a->meta.hue == 193.25);
+    CHECK(rx_library_find_id(&lib, 2)->meta.hue == RX_HUE_NONE);
     CHECK(a->meta.nb_tags == 2 && !strcmp(a->meta.tags[0], "Situation/Peak Time") && !strcmp(a->meta.tags[1], "vocal"));
     CHECK_STR(a->key, "Am");
     CHECK(a->key_confidence == 0.8 && a->grid_confidence == 0.97);
@@ -264,6 +293,15 @@ static void test_edit_and_reopen(void)
     CHECK(count_rows(&lib, "play", 1) == 2);
     CHECK(a->has_waveforms && rx_library_has_waveforms(&lib, 1));
     CHECK(rx_library_find_id(&lib, 2)->meta.rating == 2);
+
+    /* The hue column holds degrees, 360 being 0 again, or NULL. */
+    CHECK(hue_column(&lib, 1) == 193.25 && isnan(hue_column(&lib, 2)));
+    b = rx_library_find_id(&lib, 2);
+    b->meta.hue = 360.0;
+    CHECK(rx_library_save_track(&lib, b) == 0 && hue_column(&lib, 2) == 0.0);
+    b->meta.hue = -5.0;
+    CHECK(rx_library_save_track(&lib, b) == 0 && isnan(hue_column(&lib, 2)));
+    b->meta.hue = RX_HUE_NONE;
 
     const RXConfig *cfg = &lib.cfg;
     CHECK_STR(cfg->key_notation, "camelot");
@@ -438,8 +476,14 @@ static void test_grid_migration(void)
     rx_grid_add_section(&c->grid, 61.0, 120.0, 0);
     rx_grid_add_section(&c->grid, 100.0, 125.0, 0);
     CHECK(rx_library_save_track(&lib, b) == 0 && rx_library_save_track(&lib, c) == 0);
-    CHECK(sqlite3_exec(lib.db->db, "PRAGMA user_version = 2", NULL, NULL, NULL) == SQLITE_OK);
     rx_library_close(&lib);
+    char *db = path_in(root, "library.db");
+    sqlite3 *s;
+    CHECK(sqlite3_open(db, &s) == SQLITE_OK);
+    CHECK(back_to_schema3(s) == SQLITE_OK);
+    CHECK(sqlite3_exec(s, "PRAGMA user_version = 2", NULL, NULL, NULL) == SQLITE_OK);
+    sqlite3_close(s);
+    free(db);
 
     CHECK(rx_library_open(&lib, root) == 0);
     b = rx_library_find_id(&lib, 2);
@@ -460,9 +504,65 @@ static void test_grid_migration(void)
     CHECK(a && a->grid.nb_sections == 2 && a->grid.sections[0].start == 0.3125);
     sqlite3_stmt *st;
     sqlite3_prepare_v2(lib.db->db, "PRAGMA user_version", -1, &st, NULL);
-    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 3);
+    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 4);
     sqlite3_finalize(st);
     rx_library_close(&lib);
+}
+
+/* Schema 4: rekordbox's eight colour names become their colours' hues, the
+ * hue colors.c computes from the same RGB, so each comes back as its own
+ * entry on the stick; a name the column should not have held, and no
+ * name, become no colour. */
+static void test_colour_migration(void)
+{
+    char *dir = test_dir("library-v3");
+    char *db = path_in(dir, "library.db");
+    RXLibrary lib;
+    CHECK(rx_library_open(&lib, dir) == 0);
+    rx_library_close(&lib);
+
+    sqlite3 *s;
+    CHECK(sqlite3_open(db, &s) == SQLITE_OK);
+    CHECK(back_to_schema3(s) == SQLITE_OK);
+    static const char *const names[] = {
+        "pink", "red", "orange", "yellow", "green", "aqua", "blue", "purple",
+        " Aqua ", "mauve", "",
+    };
+    for (size_t i = 0; i < RX_ARRAY_ELEMS(names); i++) {
+        char *sql = rx_asprintf("INSERT INTO track (path, color) VALUES ('/gone/%zu.wav', '%s')",
+                                i, names[i]);
+        CHECK(sqlite3_exec(s, sql, NULL, NULL, NULL) == SQLITE_OK);
+        free(sql);
+    }
+    CHECK(sqlite3_exec(s, "PRAGMA user_version = 3", NULL, NULL, NULL) == SQLITE_OK);
+    sqlite3_close(s);
+
+    CHECK(rx_library_open(&lib, dir) == 0);
+    CHECK(lib.nb_tracks == (int)RX_ARRAY_ELEMS(names));
+    for (int i = 0; i < lib.nb_tracks && i < RX_TRACK_COLORS; i++) {
+        double hue = lib.tracks[i]->meta.hue;
+        CHECK_NEAR(hue, rx_track_color_hue(i + 1), 1e-9);
+        CHECK(rx_track_color_nearest_hue(hue) == i + 1);
+    }
+    if (lib.nb_tracks == (int)RX_ARRAY_ELEMS(names)) {
+        CHECK_NEAR(lib.tracks[8]->meta.hue, rx_track_color_hue(6), 1e-9);
+        CHECK(lib.tracks[9]->meta.hue == RX_HUE_NONE && lib.tracks[10]->meta.hue == RX_HUE_NONE);
+        /* The scale: 0 red, pink near 300 (magenta), aqua near 180 (cyan). */
+        CHECK_NEAR(lib.tracks[0]->meta.hue, 300.0, 1e-9);
+        CHECK_NEAR(lib.tracks[1]->meta.hue, 0.0, 1e-9);
+        CHECK(lib.tracks[5]->meta.hue > 180.0 && lib.tracks[5]->meta.hue < 200.0);
+    }
+    sqlite3_stmt *st;
+    sqlite3_prepare_v2(lib.db->db, "SELECT count(*) FROM pragma_table_info('track') WHERE name = 'color'",
+                       -1, &st, NULL);
+    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 0);
+    sqlite3_finalize(st);
+    CHECK(rx_library_check(&lib) == 0);
+    rx_library_close(&lib);
+
+    free(db);
+    test_rm_rf(dir);
+    free(dir);
 }
 
 static void test_missing_relocate_remove(void)
@@ -590,6 +690,7 @@ static void test_migrate_v1(void)
 
     sqlite3 *s;
     CHECK(sqlite3_open(db, &s) == SQLITE_OK);
+    CHECK(back_to_schema3(s) == SQLITE_OK);
     CHECK(sqlite3_exec(s, "ALTER TABLE track DROP COLUMN beats_version;"
                           "ALTER TABLE track DROP COLUMN key_version;"
                           "ALTER TABLE track DROP COLUMN waves_version;"
@@ -599,7 +700,7 @@ static void test_migrate_v1(void)
     CHECK(rx_library_open(&lib, dir) == 0);
     sqlite3_stmt *st;
     sqlite3_prepare_v2(lib.db->db, "PRAGMA user_version", -1, &st, NULL);
-    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 3);
+    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 4);
     sqlite3_finalize(st);
     CHECK(lib.nb_tracks == 2);
     a = rx_library_find_path(&lib, a_path);
@@ -936,6 +1037,7 @@ int main(void)
     test_settings_migration();
     test_refresh();
     test_grid_migration();
+    test_colour_migration();
     test_missing_relocate_remove();
     test_migrate_v1();
     test_refusals();

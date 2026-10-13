@@ -23,11 +23,15 @@ rx_core_dep = declare_dependency(link_with: rx_core_lib,
 core_test_env = environment()
 core_test_env.set('RX_TEST_DIR', meson.current_build_dir() / 'test-tmp')
 
+# The library test checks the schema 4 migration's hues against the
+# formats module's colour table, which core does not link: colors.c (plain
+# arithmetic on its tables) is built into that test alone.
 foreach t : [ 'grid', 'cues', 'notation', 'library', 'playlist' ]
     test('core_' + t,
         executable('test_core_' + t,
             '../../tests/core/test_' + t + '.c',
             '../../tests/core/util.c',
+            t == 'library' ? [ '../formats/colors.c' ] : [],
             include_directories: rx_inc,
             dependencies: [ rx_core_dep, m_dep ],
         ),

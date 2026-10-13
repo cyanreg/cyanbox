@@ -74,7 +74,12 @@ static const char usage_text[] =
     "      -f, --force          re-analyse what is there too (a locked grid only when\n"
     "                           the track is named)\n"
     "      -w, --what LIST      any of beats,key,waves (default: all)\n"
-    "  show TRACK...            print the resolved grid, key, cues and analyser versions\n"
+    "  show TRACK...            print the colour, the resolved grid, key, cues and\n"
+    "                           analyser versions\n"
+    "  color HUE TRACK...       set the tracks' colour: a hue in degrees (0-360: 0 red,\n"
+    "                           120 green, 240 blue), one of pink red orange yellow\n"
+    "                           green aqua blue purple (its hue), or none; the stick\n"
+    "                           gets the nearest of those eight\n"
     "  export STICK             write the settings, every playlist and their tracks to a\n"
     "                           mounted stick (files already there are not copied again)\n"
     "      --all                every track in the library, not only those in playlists\n"
@@ -1142,6 +1147,8 @@ static void show_track(const RXApp *app, const RXTrack *t)
     if (t->meta.album && t->meta.album[0])
         printf("  [%s]", t->meta.album);
     printf("  %s\n", rx_fmt_time(t->duration, a, sizeof(a)));
+    char hue[32];
+    printf("  colour: %s\n", rx_hue_format(t->meta.hue, hue, sizeof(hue)));
     printf("  %s, %d Hz, %d channel%s", t->codec[0] ? t->codec : "?", t->sample_rate,
            t->channels, t->channels == 1 ? "" : "s");
     if (t->bit_depth)
@@ -1259,6 +1266,71 @@ static int cmd_show(Cli *cli, int argc, char **argv)
     }
     for (size_t i = 0; i < tracks.nb; i++)
         show_track(&cli->app, *(RXTrack **)rx_array_at(&tracks, i));
+    rx_array_free(&tracks);
+
+end:
+    rx_array_free(&args);
+    cli_close(cli);
+    return code;
+}
+
+/* A track's colour is a hue (rxbox/model.h); a palette name stands for its
+ * entry's hue, so `rxbox color aqua` puts aqua on the stick. */
+static int cmd_color(Cli *cli, int argc, char **argv)
+{
+    RXArray args;
+    rx_array_init(&args, sizeof(char *));
+    int code = EXIT_OK;
+    for (int i = 1; i < argc; i++) {
+        int r = common_option(cli, argc, argv, &i);
+        if (r < 0) {
+            code = EXIT_USAGE;
+            goto end;
+        }
+        if (r > 0)
+            continue;
+        if (is_option(cli, argv[i])) {
+            code = usage_error(cli, "color: unknown option %s", argv[i]);
+            goto end;
+        }
+        rx_array_push(&args, &argv[i]);
+    }
+    if (args.nb < 2) {
+        code = usage_error(cli, "color: a hue and the tracks");
+        goto end;
+    }
+    const char *arg = *(char **)rx_array_at(&args, 0);
+    double hue;
+    if (rx_parse_hue(arg, &hue) < 0) {
+        code = usage_error(cli, "color: %s is not a hue in degrees (0-360), a colour name "
+                           "(pink red orange yellow green aqua blue purple) or none", arg);
+        goto end;
+    }
+
+    code = open_library(cli, false);
+    if (code)
+        goto end;
+    RXLibrary *lib = &cli->app.lib;
+
+    RXArray tracks;
+    rx_array_init(&tracks, sizeof(RXTrack *));
+    for (size_t i = 1; i < args.nb; i++) {
+        if (resolve_tracks(lib, *(char **)rx_array_at(&args, i), &tracks) < 0)
+            code = EXIT_FAIL;
+    }
+    char buf[32];
+    for (size_t i = 0; i < tracks.nb; i++) {
+        RXTrack *t = *(RXTrack **)rx_array_at(&tracks, i);
+        double old = t->meta.hue;
+        t->meta.hue = hue;
+        int ret = rx_library_save_track(lib, t);
+        if (ret < 0) {
+            t->meta.hue = old;
+            code = fail("cannot set the colour of %s: %s", t->path, strerror(-ret));
+            continue;
+        }
+        printf("%s: %s\n", t->path, rx_hue_format(t->meta.hue, buf, sizeof(buf)));
+    }
     rx_array_free(&tracks);
 
 end:
@@ -2039,6 +2111,8 @@ static const struct {
     { "analyze",  cmd_analyze,  "analyze [-f] [-w beats,key,waves] [TRACK...]" },
     { "analyse",  cmd_analyze,  "analyse [-f] [-w beats,key,waves] [TRACK...]" },
     { "show",     cmd_show,     "show TRACK..." },
+    { "color",    cmd_color,    "color HUE|NAME|none TRACK..." },
+    { "colour",   cmd_color,    "colour HUE|NAME|none TRACK..." },
     { "export",   cmd_export,   "export [--all | -p NAME...] [--prune] [--compat] "
                                 "[--ignore-unsynced] [-n] STICK" },
     { "inspect",  cmd_inspect,  "inspect STICK" },

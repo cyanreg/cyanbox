@@ -51,7 +51,6 @@
 #include <unistd.h>
 
 #include "rxbox/analysis.h"
-#include "rxbox/colors.h"
 #include "rxbox/export.h"
 #include "rxbox/formats.h"
 #include "rxbox/notation.h"
@@ -2100,8 +2099,9 @@ static SortVal sort_value(const RXTrack *t, int column)
         v.known = true;
         return v;
     case RX_COL_COLOR:
-        v.num = t->meta.color[0] ? rx_track_color_id(t->meta.color) : 0;
-        v.known = v.num > 0;
+        /* Around the colour wheel from red; no colour last. */
+        v.num = t->meta.hue;
+        v.known = rx_hue_valid(t->meta.hue);
         return v;
     case RX_COL_CUES: {
         int hot = 0;

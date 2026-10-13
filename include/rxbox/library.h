@@ -18,8 +18,12 @@
  *                  duration, total_samples, sample_rate, channels, bit_rate, bit_depth,
  *                  has_artwork, file_* (the tags as read from the file), the override
  *                  columns (NULL = use the file's), year, track_number, disc_number,
- *                  rating, color, key, key_confidence, grid_confidence, grid_flags,
- *                  grid_locked, added, analysed, play_count, last_played, missing,
+ *                  rating, hue (REAL, the track colour: the HSV/HSL hue angle in
+ *                  degrees, 0 <= hue < 360, 0 red, 60 yellow, 120 green, 180 cyan,
+ *                  240 blue, 300 magenta; NULL = none; RXMeta.hue, rxbox/model.h.
+ *                  Schema 4 replaced the colour name with it), key, key_confidence,
+ *                  grid_confidence, grid_flags, grid_locked, added, analysed,
+ *                  play_count, last_played, missing,
  *                  beats_version, key_version, waves_version (the analyser that made
  *                  the grid, key and waveforms: RX_*_VERSION, 0 before schema 2)
  *   grid_section   track_id, idx, start, bpm, beat
@@ -148,7 +152,7 @@ bool     rx_is_audio_path(const char *path);
 /* Removes a track and everything that refers to it (cues, waveform,
  * artwork, plays, playlist entries). */
 int      rx_library_remove(RXLibrary *lib, RXTrack *t);
-/* Writes a track's editable state (meta overrides, rating, colour, tags,
+/* Writes a track's editable state (meta overrides, rating, hue, tags,
  * key, grid, cues, locked, the analyser versions) in one transaction.
  * Call after any edit. */
 int      rx_library_save_track(RXLibrary *lib, RXTrack *t);

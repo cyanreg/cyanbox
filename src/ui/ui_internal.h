@@ -376,10 +376,17 @@ void ui_tooltip(const char *text);
 // A colour square for the colour menus; true when clicked.
 bool ui_swatch(UiState *ui, const char *id, uint32_t rgb, bool selected, float size);
 // The colour menus: hot cue colours (rekordbox's sixteen) and the eight
-// track colours (also memory cue colours). Return true when one was picked
-// into `out` ("" = none).
+// track colours, which memory cues take (a track's own colour is a hue:
+// ui_hue_picker). Return true when one was picked into `out` ("" = none).
 bool ui_hot_cue_colour_menu(UiState *ui, const char *current, char out[RX_COLOR_MAX]);
 bool ui_track_colour_menu(UiState *ui, const char *current, char out[RX_COLOR_MAX]);
+// A track's hue (rxbox/model.h), `width` logical pixels wide (0: what is
+// left of the line): the colour the stick gets (the nearest of rekordbox's
+// eight) and a "none" button, then a strip of the spectrum under it with a
+// marker at `*hue`. A click or drag on the strip sets `*hue`; true on every
+// frame it changes. `*commit` is set when an edit is finished (the strip
+// let go, or "none" clicked): the caller saves then.
+bool ui_hue_picker(UiState *ui, const char *id, double *hue, float width, bool *commit);
 
 // My Settings as people read them, for the Player settings dialog and the
 // Sync dialog's rows alike: "lcd_brightness" is "LCD Brightness",

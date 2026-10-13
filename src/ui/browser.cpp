@@ -251,13 +251,18 @@ static void track_menu(UiState *ui)
     }
     ImGui::Separator();
     if (ImGui::BeginMenu("Set colour")) {
-        char col[RX_COLOR_MAX];
-        if (ui_track_colour_menu(ui, t->meta.color, col)) {
+        // The info panel's hue strip. The focused track follows a drag;
+        // every selected one takes the hue when the strip is let go.
+        double hue = t->meta.hue;
+        bool commit;
+        if (ui_hue_picker(ui, "##menuhue", &hue, 240, &commit))
+            t->meta.hue = hue;
+        if (commit) {
             for (int i = 0; i < app->nb_selection; i++) {
                 RXTrack *s = rx_library_find_id(&app->lib, app->selection[i]);
                 if (!s)
                     continue;
-                snprintf(s->meta.color, sizeof(s->meta.color), "%s", col);
+                s->meta.hue = hue;
                 rx_app_save_track(app, s);
             }
             ImGui::CloseCurrentPopup();
@@ -911,13 +916,18 @@ void ui_info_panel(UiState *ui, ImVec2 size)
     ImGui::PushID("inforating");
     rating_cell(ui, t, rp, PX(80), ImGui::GetFrameHeight(), false);
     ImGui::PopID();
-    // The nine swatches are wider than what is left beside a label.
+    // The colour is a hue: beside the label the colour the stick gets,
+    // under it the strip across the panel. A drag shows on the track at
+    // once and is saved when it is let go.
+    ImGui::AlignTextToFramePadding();
     ImGui::TextDisabled("Colour");
-    char col[RX_COLOR_MAX];
-    if (ui_track_colour_menu(ui, t->meta.color, col)) {
-        snprintf(t->meta.color, sizeof(t->meta.color), "%s", col);
+    ImGui::SameLine(label_w);
+    double hue = t->meta.hue;
+    bool commit;
+    if (ui_hue_picker(ui, "##infohue", &hue, 0, &commit))
+        t->meta.hue = hue;
+    if (commit)
         rx_app_save_track(app, t);
-    }
 
     ImGui::Spacing();
     ImGui::Separator();
