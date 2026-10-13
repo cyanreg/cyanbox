@@ -51,12 +51,6 @@
  * 1441 bytes with padding. */
 #define MP3_MAX_FRAME 2048
 
-enum MixKind {
-    MIX_COPY,
-    MIX_MEAN,
-    MIX_MATRIX,
-};
-
 /* Where decoded frames go: conversion to float, channel mix, the timeline's
  * drop, resampling, and the output buffer. */
 typedef struct Sink {
@@ -66,14 +60,7 @@ typedef struct Sink {
     SwrContext *swr;
     bool rate_warned;
 
-    int mix_in;             /* input channels the mixer is set up for, 0 for none */
-    enum MixKind mix_kind;
-    float *matrix;          /* out_ch x mix_in */
-
-    float *planar;          /* converted input, channel after channel */
-    size_t planar_cap;
-    float *mixed;           /* mixed, interleaved */
-    size_t mixed_cap;
+    RXMixer mixer;
     float *zeros;           /* SILENCE_CHUNK * out_ch */
 
     int64_t drop;           /* native-rate frames still to drop */
@@ -115,18 +102,6 @@ static int resampler_open(SwrContext **out, int channels, int in_rate, int out_r
 
 /* -------------------------------------------------------------------- sink */
 
-static int grow(void **buf, size_t *cap, size_t need)
-{
-    if (need <= *cap)
-        return 0;
-    void *nb = realloc(*buf, need);
-    if (!nb)
-        return RX_ERROR(ENOMEM);
-    *buf = nb;
-    *cap = need;
-    return 0;
-}
-
 static int reserve(Sink *s, int64_t frames)
 {
     int64_t need;
@@ -159,6 +134,7 @@ static int sink_init(Sink *s, const char *path, int in_ch, int in_rate, int chan
         .out_ch   = channels ? channels : in_ch,
         .out_rate = rate ? rate : in_rate,
     };
+    s->mixer.out_ch = s->out_ch;
     s->zeros = calloc((size_t)SILENCE_CHUNK * s->out_ch, sizeof(float));
     if (!s->zeros)
         return RX_ERROR(ENOMEM);
@@ -176,9 +152,7 @@ static int sink_init(Sink *s, const char *path, int in_ch, int in_rate, int chan
 static void sink_free(Sink *s)
 {
     swr_free(&s->swr);
-    free(s->matrix);
-    free(s->planar);
-    free(s->mixed);
+    rx_mixer_free(&s->mixer);
     free(s->zeros);
     free(s->buf);
     *s = (Sink) { 0 };
@@ -237,7 +211,76 @@ static int sink_silence(Sink *s, int64_t n)
     return 0;
 }
 
-static int mixer_setup(Sink *s, const AVChannelLayout *layout)
+static int sink_frame(Sink *s, const AVFrame *f)
+{
+    if (f->nb_samples <= 0 || f->ch_layout.nb_channels <= 0)
+        return 0;
+    if (f->sample_rate != s->in_rate && !s->rate_warned) {
+        rx_warn("%s: sample rate changes from %d to %d Hz; kept as %d Hz", s->path,
+                s->in_rate, f->sample_rate, s->in_rate);
+        s->rate_warned = true;
+    }
+    s->last_frames = f->nb_samples;
+
+    const float *m;
+    int n = rx_mixer_frame(&s->mixer, f, &m);
+    if (n < 0)
+        return n;
+    return sink_push(s, m, n);
+}
+
+static int sink_finish(Sink *s, RXAudio *out)
+{
+    if (s->swr) {
+        while (1) {
+            int max = swr_get_out_samples(s->swr, 0);
+            if (max <= 0)
+                break;
+            int ret = reserve(s, max);
+            if (ret < 0)
+                return ret;
+            uint8_t *dst[1] = { (uint8_t *)(s->buf + s->nb * s->out_ch) };
+            int got = swr_convert(s->swr, dst, max, NULL, 0);
+            if (got < 0)
+                return rx_audio_error(got);
+            if (!got)
+                break;
+            s->nb += got;
+        }
+    }
+    if (!s->nb) {
+        rx_debug("%s: no audio decoded", s->path);
+        return RX_ERROR(ENODATA);
+    }
+
+    float *shrunk = realloc(s->buf, (size_t)s->nb * s->out_ch * sizeof(float));
+    if (shrunk)
+        s->buf = shrunk;
+    *out = (RXAudio) {
+        .samples   = s->buf,
+        .channels  = s->out_ch,
+        .rate      = s->out_rate,
+        .nb_frames = s->nb,
+    };
+    s->buf = NULL;
+    return 0;
+}
+
+/* ------------------------------------------------------------------- mixer */
+
+static int grow(void **buf, size_t *cap, size_t need)
+{
+    if (need <= *cap)
+        return 0;
+    void *nb = realloc(*buf, need);
+    if (!nb)
+        return RX_ERROR(ENOMEM);
+    *buf = nb;
+    *cap = need;
+    return 0;
+}
+
+static int mixer_setup(RXMixer *s, const AVChannelLayout *layout)
 {
     int in = layout->nb_channels;
     if (in == s->mix_in)
@@ -247,15 +290,15 @@ static int mixer_setup(Sink *s, const AVChannelLayout *layout)
     s->mix_in = in;
 
     if (in == s->out_ch) {
-        s->mix_kind = MIX_COPY;
+        s->mix_kind = RX_MIX_COPY;
         return 0;
     }
     if (s->out_ch == 1) {
-        s->mix_kind = MIX_MEAN;
+        s->mix_kind = RX_MIX_MEAN;
         return 0;
     }
 
-    s->mix_kind = MIX_MATRIX;
+    s->mix_kind = RX_MIX_MATRIX;
     s->matrix = calloc((size_t)s->out_ch * in, sizeof(float));
     if (!s->matrix)
         return RX_ERROR(ENOMEM);
@@ -346,17 +389,12 @@ static void to_float(const AVFrame *f, int c, float *dst)
     }
 }
 
-static int sink_frame(Sink *s, const AVFrame *f)
+int rx_mixer_frame(RXMixer *s, const AVFrame *f, const float **out)
 {
     int n = f->nb_samples, in = f->ch_layout.nb_channels;
+    *out = NULL;
     if (n <= 0 || in <= 0)
         return 0;
-    if (f->sample_rate != s->in_rate && !s->rate_warned) {
-        rx_warn("%s: sample rate changes from %d to %d Hz; kept as %d Hz", s->path,
-                s->in_rate, f->sample_rate, s->in_rate);
-        s->rate_warned = true;
-    }
-    s->last_frames = n;
 
     int ret = mixer_setup(s, &f->ch_layout);
     if (ret < 0)
@@ -374,12 +412,12 @@ static int sink_frame(Sink *s, const AVFrame *f)
     float *m = s->mixed;
     int oc = s->out_ch;
     switch (s->mix_kind) {
-    case MIX_COPY:
+    case RX_MIX_COPY:
         for (int i = 0; i < n; i++)
             for (int c = 0; c < in; c++)
                 m[(size_t)i * oc + c] = p[(size_t)c * n + i];
         break;
-    case MIX_MEAN:
+    case RX_MIX_MEAN:
         for (int i = 0; i < n; i++) {
             float sum = 0.0f;
             for (int c = 0; c < in; c++)
@@ -387,7 +425,7 @@ static int sink_frame(Sink *s, const AVFrame *f)
             m[i] = sum / (float)in;
         }
         break;
-    case MIX_MATRIX:
+    case RX_MIX_MATRIX:
         for (int i = 0; i < n; i++) {
             for (int o = 0; o < oc; o++) {
                 float acc = 0.0f;
@@ -398,50 +436,20 @@ static int sink_frame(Sink *s, const AVFrame *f)
         }
         break;
     }
-    return sink_push(s, m, n);
+    *out = m;
+    return n;
 }
 
-static int sink_finish(Sink *s, RXAudio *out)
+void rx_mixer_free(RXMixer *s)
 {
-    if (s->swr) {
-        while (1) {
-            int max = swr_get_out_samples(s->swr, 0);
-            if (max <= 0)
-                break;
-            int ret = reserve(s, max);
-            if (ret < 0)
-                return ret;
-            uint8_t *dst[1] = { (uint8_t *)(s->buf + s->nb * s->out_ch) };
-            int got = swr_convert(s->swr, dst, max, NULL, 0);
-            if (got < 0)
-                return rx_audio_error(got);
-            if (!got)
-                break;
-            s->nb += got;
-        }
-    }
-    if (!s->nb) {
-        rx_debug("%s: no audio decoded", s->path);
-        return RX_ERROR(ENODATA);
-    }
-
-    float *shrunk = realloc(s->buf, (size_t)s->nb * s->out_ch * sizeof(float));
-    if (shrunk)
-        s->buf = shrunk;
-    *out = (RXAudio) {
-        .samples   = s->buf,
-        .channels  = s->out_ch,
-        .rate      = s->out_rate,
-        .nb_frames = s->nb,
-    };
-    s->buf = NULL;
-    return 0;
+    free(s->matrix);
+    free(s->planar);
+    free(s->mixed);
+    *s = (RXMixer) { .out_ch = s->out_ch };
 }
 
-/* ------------------------------------------------------------------ decoder */
-
-static int open_decoder(AVCodecContext **out, const AVCodecParameters *par, AVRational tb,
-                        bool skip_manual)
+int rx_audio_open_decoder(AVCodecContext **out, const AVCodecParameters *par, AVRational tb,
+                          bool skip_manual, int delay)
 {
     *out = NULL;
     const AVCodec *codec = avcodec_find_decoder(par->codec_id);
@@ -456,6 +464,10 @@ static int open_decoder(AVCodecContext **out, const AVCodecParameters *par, AVRa
     dec->pkt_timebase = tb;
     if (skip_manual)
         dec->flags2 |= AV_CODEC_FLAG2_SKIP_MANUAL;
+    /* avcodec_parameters_to_context() made it the stream's initial padding,
+     * which the decoder drops from its first output */
+    if (delay >= 0)
+        dec->delay = delay;
     ret = avcodec_open2(dec, codec, NULL);
     if (ret < 0)
         goto fail;
@@ -466,6 +478,8 @@ fail:
     avcodec_free_context(&dec);
     return rx_audio_error(ret);
 }
+
+/* ------------------------------------------------------------------ decoder */
 
 /* Sends one packet (NULL to flush) and takes every frame it gives. A packet
  * that does not decode becomes `silence` frames of silence, less what it
@@ -549,7 +563,7 @@ static int decode_mp3(const char *path, int channels, int rate, RXAudio *out)
     par->codec_id = AV_CODEC_ID_MP3;
     par->sample_rate = info.sample_rate;
     av_channel_layout_default(&par->ch_layout, info.channels);
-    ret = open_decoder(&c->dec, par, (AVRational) { 1, info.sample_rate }, true);
+    ret = rx_audio_open_decoder(&c->dec, par, (AVRational) { 1, info.sample_rate }, true, -1);
     if (ret < 0)
         goto end;
     c->pkt = av_packet_alloc();
@@ -631,7 +645,7 @@ static int decode_av(const char *path, int channels, int rate, RXAudio *out)
     AVStream *st = fmt->streams[idx];
 
     bool mp3 = st->codecpar->codec_id == AV_CODEC_ID_MP3;
-    ret = open_decoder(&dec, st->codecpar, st->time_base, mp3);
+    ret = rx_audio_open_decoder(&dec, st->codecpar, st->time_base, mp3, -1);
     if (ret < 0)
         goto end;
 

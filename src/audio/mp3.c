@@ -130,7 +130,9 @@ static int64_t find_first_frame(const uint8_t *data, size_t size, size_t pos, He
  * silence in rxbox: the same count either way, and rx_decode, which feeds
  * these frames itself, plays the frame. dj stopped counting at the first
  * junk instead. A truncated last frame is passed short; dj counted it as a
- * frame and decoders play it as one. */
+ * frame and decoders play it as one. fn returning 1 stops the walk after
+ * that frame (returns 0, *end is where to go on); 1 is returned at the end
+ * of the file. */
 static int walk_frames(const char *path, const uint8_t *d, size_t size, size_t pos,
                        RXMp3FrameFn fn, void *opaque, size_t *end)
 {
@@ -151,8 +153,10 @@ static int walk_frames(const char *path, const uint8_t *d, size_t size, size_t p
             return ret;
         pos += h.length;
         *end = RX_MIN(pos, size);
+        if (ret > 0)
+            return 0;
     }
-    return 0;
+    return 1;
 }
 
 typedef struct Stats {
@@ -247,6 +251,20 @@ int rx_mp3_frames(const char *path, const RXMap *m, const RXMp3Info *info,
         pos += (size_t)first.length;
     size_t end;
     return walk_frames(path, m->data, m->size, pos, fn, opaque, &end);
+}
+
+int rx_mp3_frames_step(const char *path, const RXMap *m, const RXMp3Info *info, size_t *pos,
+                       RXMp3FrameFn fn, void *opaque)
+{
+    if (!*pos) {
+        Header first;
+        *pos = (size_t)info->first_frame_offset;
+        if (!info->valid || !parse_header(m->data, m->size, *pos, &first))
+            return RX_ERROR(EINVAL);
+        if (info->header_frame)
+            *pos += (size_t)first.length;
+    }
+    return walk_frames(path, m->data, m->size, *pos, fn, opaque, pos);
 }
 
 int rx_mp3_scan(const char *path, RXMp3Info *info)
