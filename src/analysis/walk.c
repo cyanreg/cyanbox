@@ -38,7 +38,10 @@
  * fill, a snare taken for the kick) gets Tukey's weight of nothing and
  * the walk goes through it; a beat the tracker missed, or a breakdown
  * without attacks, is interpolated linearly between the nearest beats
- * that have them, and the ends extrapolated on the last local slope. */
+ * that have them, and the ends extrapolated on the last local slope.
+ * The tempo keeps its continuity (WALK_TEMPO_STEP): attacks that would
+ * make it jump from one beat to the next, as a fill's accents do when
+ * the tracker has followed them for a few beats, are no beats either. */
 
 #include "beats_internal.h"
 
@@ -52,6 +55,15 @@
 #define WALK_REACH    4
 #define STRAIN_REACH  8
 #define STRAIN_MEDIAN 9
+/* The walk's tempo continuity: the local tempo (60 over the interval to
+ * the next beat) changes by at most 4 % from one beat to the next and
+ * stays within a factor 1.2 of the stretch's median. A drummer's rubato
+ * stays well inside both: the random walk of test_beats (0.4 % a beat)
+ * walks at 3.0 % a beat at most, the rubato dip at 2.1 %, the ramp at
+ * 0.3 %. The walk that followed Felicidade's syncopated fill went 128,
+ * 123, 117, 105, 120, 129, 140 BPM from beat to beat, 12.5 % at once. */
+#define WALK_TEMPO_STEP 0.04
+#define WALK_TEMPO_BAND 0.2
 
 static int cmp_double(const void *a, const void *b)
 {
@@ -307,6 +319,80 @@ int rx_line_strain(const RXBeatObs *beats, const RXFitSection *s, double *dev,
     return 0;
 }
 
+/* How far the beat at a[j] (an index into t) lies from where its
+ * neighbours among the anchors a[0 .. na) put it: between them, or on
+ * the line through the next two at an end. */
+static double anchor_offset(const double *t, const int *a, int na, int j)
+{
+    if (na < 3)
+        return 0.0;
+    int p, q;
+    if (j == 0) {
+        p = a[1];
+        q = a[2];
+    } else if (j == na - 1) {
+        p = a[na - 3];
+        q = a[na - 2];
+    } else {
+        p = a[j - 1];
+        q = a[j + 1];
+    }
+    double v = (t[q] - t[p]) / (q - p);
+    return fabs(t[a[j]] - (t[p] + (a[j] - p) * v));
+}
+
+/* The tempo continuity of the walk (WALK_TEMPO_STEP, WALK_TEMPO_BAND).
+ * Between consecutive beats that have their own times t (NAN where they
+ * are to be interpolated), each interval per beat is held against the
+ * one before it and against the stretch's median interval `med`. While
+ * some interval breaks the rules, of the beats that bound it (and the
+ * one before, for a step) the one furthest from where its neighbours
+ * put it is no beat, and goes to NAN: an attack that demands a jump in
+ * tempo, a fill's accent the robust fit could not outvote, is walked
+ * through by interpolation. Stops at three beats with times. */
+static int tempo_continuity(double *t, int n, double med)
+{
+    int *a = malloc((size_t)RX_MAX(n, 1) * sizeof(*a));
+    if (!a)
+        return RX_ERROR(ENOMEM);
+    const double step = log(1.0 + WALK_TEMPO_STEP), band = log(1.0 + WALK_TEMPO_BAND);
+    while (1) {
+        int na = 0;
+        for (int i = 0; i < n; i++) {
+            if (!isnan(t[i]))
+                a[na++] = i;
+        }
+        if (na < 4)
+            break;
+        int drop = -1;
+        double worst = -1.0;
+        for (int j = 0; j + 1 < na; j++) {
+            double v = (t[a[j + 1]] - t[a[j]]) / (a[j + 1] - a[j]);
+            bool bad = !(v > 0.0) || fabs(log(v / med)) > band;
+            int lo = j;
+            if (!bad && j > 0) {
+                double u = (t[a[j]] - t[a[j - 1]]) / (a[j] - a[j - 1]);
+                bad = u > 0.0 && fabs(log(v / u)) > step;
+                lo = j - 1;
+            }
+            if (!bad)
+                continue;
+            for (int k = lo; k <= j + 1; k++) {
+                double d = anchor_offset(t, a, na, k);
+                if (d > worst) {
+                    worst = d;
+                    drop = k;
+                }
+            }
+        }
+        if (drop < 0)
+            break;
+        t[a[drop]] = NAN;
+    }
+    free(a);
+    return 0;
+}
+
 int rx_walk_beats(RXBeatObs *beats, int first, int last, double scatter)
 {
     int n = last - first + 1;
@@ -380,6 +466,13 @@ int rx_walk_beats(RXBeatObs *beats, int first, int last, double scatter)
             if (a >= 0 && !isnan(sm[i]) && sm[i] - sm[a] < med / 3.0)
                 sm[i] = NAN;
         }
+        /* And the tempo keeps its continuity. */
+        if (tempo_continuity(sm, n, med) < 0) {
+            free(iv);
+            free(sm);
+            free(sl);
+            return RX_ERROR(ENOMEM);
+        }
     }
     free(iv);
 
@@ -408,8 +501,13 @@ int rx_walk_beats(RXBeatObs *beats, int first, int last, double scatter)
             sm[k] = sm[i - 1] + (sm[j] - sm[i - 1]) * (k - (i - 1)) / (double)(j - (i - 1));
         i = j;
     }
-    double p_lo = !isnan(sl[lo]) && sl[lo] > 0.0 ? sl[lo] : sm[lo + 1] - sm[lo];
-    double p_hi = !isnan(sl[hi]) && sl[hi] > 0.0 ? sl[hi] : sm[hi] - sm[hi - 1];
+    /* The ends' tempo continues the first and the last interval within
+     * WALK_TEMPO_STEP, as every other does its neighbour's. */
+    double v_lo = sm[lo + 1] - sm[lo], v_hi = sm[hi] - sm[hi - 1];
+    double p_lo = !isnan(sl[lo]) && sl[lo] > 0.0 ? sl[lo] : v_lo;
+    double p_hi = !isnan(sl[hi]) && sl[hi] > 0.0 ? sl[hi] : v_hi;
+    p_lo = RX_CLAMP(p_lo, v_lo / (1.0 + WALK_TEMPO_STEP), v_lo * (1.0 + WALK_TEMPO_STEP));
+    p_hi = RX_CLAMP(p_hi, v_hi / (1.0 + WALK_TEMPO_STEP), v_hi * (1.0 + WALK_TEMPO_STEP));
     for (int i = lo - 1; i >= 0; i--)
         sm[i] = sm[lo] - (lo - i) * p_lo;
     for (int i = hi + 1; i < n; i++)

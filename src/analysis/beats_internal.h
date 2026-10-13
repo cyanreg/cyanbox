@@ -238,6 +238,10 @@ typedef struct RXFitSection {
      * the section's attacks, the segmentation's rule). */
     bool   dynamic;
     double wmin;
+    /* A dynamic section cut from a straight one, handing over to the
+     * straight pieces of that line beside it on the same beat: 1 the
+     * piece before, 2 the piece after. Its half of the beat is theirs. */
+    unsigned joined;
 } RXFitSection;
 
 /* Dynamic-programming beat tracker (Ellis 2007) on the accent onsets,

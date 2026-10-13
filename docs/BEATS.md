@@ -35,8 +35,11 @@ and local tempo, which the players play as they are (docs/anlz.md 4.3).
    what a straight grid can hold, or bend around it, the stretch is
    tracked again at a period that follows the music, put on its attacks
    and walked: a robust local fit a bar either side of every beat gives
-   the beat times a player would follow. Kept only where they follow the
-   hits better than the line.
+   the beat times a player would follow, its tempo moving by at most
+   4 % a beat. Kept, window by window, only where they follow the hits
+   better than the line; on a sequenced section only where it bends (a
+   DAW's ramp), its runs off the line being another element (a fill),
+   not drift.
 7. **Phase.** Each section is put on the start of its hits with searches
    that shrink step by step, and snapped to a whole BPM when that moves no
    beat by more than 5 ms.
@@ -355,14 +358,32 @@ flam), each run of beats off the line by more than 5 ms that reaches
 counts, which the reading rests on, go wrong exactly where the music has
 moved most), unless:
 
-- the section's attacks sit on the line as a sequencer's do (spread under
-  3 ms, `refine_section`'s "steady"). Sequenced music does not drift, and
-  a stretch of its attacks off the line is another element being timed
-  (a breakdown's claps, an element swelling in); the bend reads a DAW's
-  ramp, and a run at the edge of a bent or dynamic neighbour counts all
-  the same (a ramp the change-point search cut where it was still within
-  a line's reach: the ramp case of `test_beats` ends its first section
-  with fifteen beats curving away, 39 ms by the last);
+- the section is sequenced. Sequenced music does not drift, and a
+  stretch of its attacks off the line is another element being timed (a
+  breakdown's claps, an element swelling in, a fill's accents); the bend
+  reads a DAW's ramp, and a run at the edge of a bent or dynamic
+  neighbour counts all the same (a ramp the change-point search cut
+  where it was still within a line's reach: the ramp case of
+  `test_beats` ends its first section with fifteen beats curving away,
+  39 ms by the last). Sequenced is either of two readings. The attacks
+  spread around the line by under 3 ms (`refine_section`'s "steady").
+  Or, whatever that spread, the attacks *on* the line sit there as a
+  sequencer's do (`online_scatter`): over every three consecutive beats
+  whose attacks lie within the merge tolerance of one point of the
+  line's lattice of beats and half beats (the half of the beat is
+  decided later, section 9), the second differences of the attacks,
+  their lower quartile read as a scatter (over 0.3186 √6, which reads
+  white scatter σ as σ, as the median over 0.6745 √6 does) under 1.5 ms,
+  on 32 such triples at least. The spread is no proof of live playing:
+  runs off the line inflate it, the very runs this rule is about
+  ("Felicidade", below). The lower quartile because a fill's accents or
+  a hand drum's slaps land near the beats among the sequencer's hits,
+  and the median reads the mixture: a quarter of the triples spaced
+  evenly within a millisecond is a sequencer, and a drummer's lower
+  quartile is his scatter as his median is. The rubato case of
+  `test_beats` (3 ms of jitter) reads 3.0 ms, the other sections of the
+  acceptance list whose spread says live 2.5 to 16 ms (five have too
+  few such triples to read), Felicidade 0.57 ms (its median 2.0 ms);
 - the run's deviation sits still: its longest stretch within 3 ms (or
   the section's scatter) of one level covers two fifths of the run and
   eight beats. A breakdown tracked on its off-beat sits half a beat from
@@ -403,22 +424,73 @@ player's sync jitter with it). An attack not where its neighbours say
 gets Tukey's weight of nothing; a beat without an attack, or a breakdown
 without any, is interpolated linearly between the nearest beats that
 have them; the ends are extrapolated on the last local slope; no two
-beats closer than a third of the median interval survive. Each beat's
-tempo is 60 over its interval; the last's that of the interval to the
-section after.
+beats closer than a third of the median interval survive. And the tempo
+keeps its continuity: the local tempo (60 over the interval to the next
+beat) changes by at most 4 % from one beat to the next and stays within
+a factor 1.2 of the stretch's median. While some interval breaks that,
+of the beats with attacks around it the one furthest from where its
+neighbours put it is no beat, and the walk goes through it by
+interpolation; the ends continue the first and last interval within
+4 %. A drummer's rubato stays well inside: the random walk of
+`test_beats` walks at 3.0 % a beat at most, the rubato dip at 2.1 %, the
+ramp at 0.3 %, and all three keep their grids; the walk that followed
+Felicidade's fill went 128, 123, 117, 105, 120, 129 and 140 BPM from
+beat to beat. Each beat's tempo is 60 over its interval; the last's that
+of the interval to the section after.
 
-**The judgment.** The walked beats are kept only where they follow the
-hits better than the line they replace: the mean distance of the average
-beat's rise (the confidence's 16-beat windows, every 8 beats) from the
-beats, on envelopes cut at the beats themselves and at the line's beats
-alike (judged on envelopes cut around the tracked beats, a line far from
-the music has no data where it is wrong and scores on the windows where
-it is right), a window whose average beat rises by less than half the
-walked beats' median contrast counted at the search width (`rx_fold`
-reports no rise as an offset of 0). The beats must win by a millisecond;
-the line is the simpler grid and a tie is its, and the tracker's beats
-then come back as they were. The confidence's own yes-or-no at 15 ms is
-too coarse here: a line 20 ms off scores as the beats do.
+The re-tracking runs on the accent, and moves the tracker's frames by the
+fold's delay, of the grid kept. Until these rules came, a runner-up
+family fitted and dropped (section 8) left its own behind: the stretches
+were tracked on its accent weighting and every re-tracked beat moved by
+the difference of the delays (1.2 ms on Felicidade, whose family check
+tries 97.5 BPM).
+
+**The judgment**, window by window. The walked beats are kept only where
+they follow the hits better than the line they replace, read in the
+confidence's 16-beat windows (every 8 beats): in each, the distance of
+the average beat's rise from the beats, on envelopes cut at the beats
+themselves and at the line's beats alike (judged on envelopes cut around
+the tracked beats, a line far from the music has no data where it is
+wrong and scores on the windows where it is right), a window whose
+average beat rises by less than half the walked beats' median contrast
+counted at the search width (`rx_fold` reports no rise as an offset of
+0). The confidence's own yes-or-no at 15 ms is too coarse here: a line
+20 ms off scores as the beats do.
+
+- A window is *lost* where the line holds its hits within the merge
+  tolerance and the walked beats lie further from them than the line
+  by as much again and 3 ms: twice as far, audibly so where the hits
+  are clear. A lost window goes back to the line: the classification
+  loses its beats, the section is split anew from the state before (so
+  the straight remnants share the parent's line and join it as
+  before), the shorter stretches are re-tracked, walked and judged
+  again, until none loses a window; what is left of a stretch shorter
+  than a window goes back too.
+- A stretch hands over to a straight piece of its line beside it on the
+  same beat: its end beat within the merge tolerance of that line's
+  beat of the same count, or the window at that end is lost. A stretch
+  that ended off the line's phase or count put two beats too close at
+  the join, or a gap: on the acceptance list the walked grids of
+  "Taiyo no Kakera", "Chaotic inner world", "明けない夜があったなら"
+  and "Fortune Land E" had intervals of half a period or one and a half
+  at their joins (Taiyo no Kakera at 120 BPM: 742 ms into its stretch,
+  250 ms out of it).
+- A stretch that loses nothing is kept when it brings the hits a
+  millisecond closer than the line on average; the line is the simpler
+  grid and a tie is its, and the tracker's beats then come back as they
+  were.
+
+Why not the stricter rule, every window won? A fold of 16 beats is noisy
+in live playing, and blind to a drift that covers less than half of its
+window: on the random-walk case the line crosses the drifting music and
+five windows tie within 2 ms, and on the rubato case the first window
+ties while the line slips 50 ms behind the music in its second half.
+Given back to the line, such windows cut the stretches into pieces whose
+joins lost beats: the rubato case went from 1.1 to 28 ms RMS and missed
+6 of its 48 downbeats, the random walk from 3.3 to 7.4 ms and 18 of 64.
+With the rule above the three cases keep their grids, and a walk that
+wins on average while it loses a bar by 300 ms, as Felicidade's did, is
+kept nowhere near that bar.
 
 **Phase, downbeat, the rest.** A dynamic stretch is a section like any
 other to what follows, on its beats' own times: the half beats are the
@@ -427,7 +499,12 @@ beats and the midpoints after them, the kicks are weighed on those
 the line version a wrapper that builds the same arrays), a move by half
 a beat puts every beat on the midpoint after it and walks again, and the
 downbeat is counted from the stretch's first beat as from a line's t0.
-The confidence folds a dynamic section on its beats. A boundary between a
+But a stretch cut from a line and handing over to its straight pieces on
+the same beat takes their half of the beat (that of the one with the
+stronger evidence, should the two disagree; the straight sections decide
+first): deciding its own, it moved half a beat on "Taiyo no Kakera" and
+"Chaotic inner world" and put both joins half a beat apart. The
+confidence folds a dynamic section on its beats. A boundary between a
 dynamic stretch and a straight section is no tempo change or phase cut
 (the `dynamic` flag covers it); `unsteady` on a dynamic section is the
 scatter around the walked beats. The grid lists a measured beat per beat,
@@ -439,6 +516,47 @@ beat of a track runs on at its tempo. Nothing of this runs with
 the GPU front end: the decisions stay in C on both paths, and the two
 agree on every synthetic grid, dynamic ones included.
 
+**Felicidade.** AD:HOUSE 11's "Felicidade" (2.01, latin house) is
+sequenced at exactly 130.000 BPM: the segmentation's merges report
+130.000 BPM with 0.6 ms of jitter and 129.998 with 1.0 for many of its
+segments, and the straight fit is one section, beats 0-620 at 129.9935
+BPM (snapped to 130.000 later), confidence 0.50. Percussion is played
+over the sequencer, and at the dynamic pass the line stood on the
+off-beat hats (the half of the beat is decided after it): the tracked
+beats sat half a beat from it for long stretches and followed a
+syncopated fill's accents at 39-47 s, and the attacks spread 6.9 ms
+around the line, 7.3 ms beat to beat, so the section read as live. The
+pass read 375 ms of drift, runs at beats 56-114, 120-170, 173-259 and
+328-592 (scatter 11.1, 14.6, 15.2 and 4.6 ms: none a plateau, none
+ragged), joined them with their margins and the remnant rule into one
+stretch, beats 52-621 (570 measured beats, local tempo 105.3 to 155.3
+BPM), and kept it because the walked beats put the hits 8.7 ms from the
+beats against 9.9 for the line, over the whole track. By ear (the
+user's) it is wrong from 39.3 to 47.2 s, a fill over a steady pulse that
+leaves 4/4, not a tempo change. The strong onsets fall at 44.113,
+44.580, 45.113, 45.733, 46.200, 46.733 and 47.193 s (467, 533, 620, 467,
+533 and 460 ms apart), the last two on the straight line's beats (46.732,
+47.193). The walk went 105 BPM at 39.9 s and 140 at 41.4, put beats 98
+and 99 (45.059, 45.524) 57 and 59 ms before their attacks and beat 102 at
+46.893 against the pulse's 47.193, and sat half a beat off from 50 to
+56 s; before 39 s the walked and straight grids agree within 3 ms.
+
+Now its attacks on the line read 0.57 ms beat to beat from their lower
+quartile (the median reads 2.0), the section is sequenced, no run
+counts, and the grid is the straight one, bit for bit the `--no-dynamic`
+result: 130.000 BPM from 0.578 s, beats at 46.732 and 47.193 s. Without
+that rule the other two bring it back to the same straight grid as
+well, in eight rounds of lost windows and joins (550 ms of decisions
+against 200). `test_beats` has the case: a sequenced 130 BPM click track
+with a two-bar fill at Felicidade's gaps must stay one straight section,
+its beats through the fill within 3 ms of the pulse (1.2 ms); and a walk
+through attacks that leave a 130 BPM pulse for a dozen beats must step
+its tempo by 4 % at most (3.8 %; 5.5 % without the rule). The click
+track does not reproduce the failure itself: its attacks spread 0.8 ms
+and the old rule already called it sequenced; what made Felicidade's
+spread read as live (the hand percussion, the line on the off-beat at
+the time) a synthetic track did not reproduce without wrecking its line.
+
 **What it costs.** On the 58 acceptance tracks from the harness's cache
 (the front end on the RX 6900 XT, `-j 2`, the machine otherwise quiet):
 108 ms of CPU per file with the dynamic pass against 103 without it in
@@ -446,7 +564,12 @@ the same binary (the strain of every section; the re-tracking, attacks,
 envelope cuts and walk of the dynamic stretches only), 126 against 123 ms
 of wall time for the decisions; the baseline binary of the day took 115
 and 133 in the same session. About 5 % on the decisions, well inside the
-doubling the feature was allowed.
+doubling the feature was allowed. The window-by-window judgment walks a
+section again for every round of lost windows (up to five on the
+acceptance list, on "Happy Valley"), only where there is a stretch to
+judge: with the machine busy (load 20 to 30), the 58 tracks took 132 and
+157 ms of CPU per file before these rules and 135 and 143 after, in
+alternating runs, the same within the noise.
 
 ## 7. Phase and snapping (`beats.c`, `grid_fit.c`)
 
@@ -806,14 +929,15 @@ the final version was not finished (see "Known weaknesses").
 | Tempogram | 12 s windows, 3 s hop, 4 windows | 21 s of a new tempo |
 | Family check | runner-up within 25 %, 10 % more support | 3:2 and 4:3 |
 | Unsteady | spread > 6 ms and beat-to-beat scatter > 4 ms | live drums scatter 5-15 ms, sequencers < 1 |
-| Dynamic: drift | deviation > 15 ms (runs from 5 ms, 4 beats of margin); the section's spread > 3 ms, or at a dynamic neighbour | the merge tolerance; sequenced music does not drift |
+| Dynamic: drift | deviation > 15 ms (runs from 5 ms, 4 beats of margin); live (spread > 3 ms and the attacks on the line not sequenced), or at a dynamic neighbour | the merge tolerance; sequenced music does not drift |
+| Dynamic: sequenced | the attacks on the line (triples within 15 ms of a beat or half beat), lower quartile of the second differences as a scatter, < 1.5 ms on 32 triples | runs off the line inflate the spread; Felicidade 0.57, the rubato case 3.0 |
 | Dynamic: bend | > 10 ms and 4× the scatter's, with 8 ms of drift | a ramp's 32-beat pieces bend 20-40 ms |
 | Dynamic: plateau | longest flat stretch (3 ms or the scatter) ≥ 2/5 of the run and 8 beats | an off-beat breakdown is flat at half a beat |
 | Dynamic: ragged | the run's scatter > 3× the section's and 3 ms | attacks jumping between elements |
 | Dynamic: remnants | a straight remnant < 32 beats (64 between two) joins | a section's minimum |
-| Walk | local quadratic ±4 beats; strain ±8, running median of 9 | a bar either side; no bias under a moving tempo |
+| Walk | local quadratic ±4 beats; strain ±8, running median of 9; tempo steps ≤ 4 % a beat, within ×1.2 of the median | a bar either side; no bias under a moving tempo; a drummer walks 3 % a beat at most |
 | Re-track | the local period from attack intervals within 40 % of the line's, ±8 beats; the range from ¼ period before the first beat to ¼ past the last | the tracker inserts beats at one period |
-| Judgment | the walked beats' mean distance to the hits must beat the line's by 1 ms | the line is the simpler grid |
+| Judgment | per 16-beat window: lost where the line is within 15 ms of the hits and the walk twice as far and 3 ms more, or an end beat 15 ms off a straight neighbour's line; lost windows back to the line, then the mean must beat the line's by 1 ms | the line is the simpler grid; a fold is noisy, and blind to half a window |
 | No kicks | kick/full periodicity < 0.5 at 1× and 2× the beat rate, < 1 at ½× | two-step kicks cancel at the beat rate |
 | Low confidence | < 0.5 | |
 | Music start | floor: commonest level before the music is within 45 dB of the loud level (90th percentile); at least 60 dB under it and 60 ms long | dither and hiss are floors; an encoder delay is not |
@@ -877,6 +1001,8 @@ beat, bar or snap lies before it, and the automatic cue.
 | ramp 120 → 132 over bars 8-40, then held (house) | dynamic over 130 beats: beats within 1.2 ms RMS, 1.6 ms worst, 56 of 56 bar lines downbeats; the best straight grid (4 sections) 59 ms RMS, 263 ms worst |
 | a drummer's random walk (0.4 % a beat, within 10 %), 6 ms jitter, 122 | dynamic throughout (262 beats): 3.3 ms RMS, 11.1 ms worst, 64 of 64 downbeats; straight (5 sections) 51 ms RMS, 256 worst |
 | rubato: hip-hop 120 dipping to 100 over bars 16-24, 3 ms jitter | dynamic over the dip (42 beats), straight either side: 1.1 ms RMS, 4.6 worst, 48 of 48 downbeats; straight (one section) 54 ms RMS, 247 worst |
+| sequenced house 130, a two-bar syncopated fill at Felicidade's gaps (467, 533, 620, 467, 533, 460 ms, the last two on the beats) | one straight section, 130.000, not dynamic; the beats through the fill and a bar either side within 1.2 ms of the pulse, none missing or extra |
+| (not a track) a walk through attacks that leave a 130 BPM pulse for a dozen beats, 160 ms off | tempo steps of 3.8 % at most (5.5 % without the continuity), the beats away from it on the pulse |
 
 The three tracks with a tempo that moves are judged beat by beat against
 their true beat times (the RMS and the largest distance of each true
@@ -1109,6 +1235,35 @@ got worse: the judgment keeps the line wherever the walked beats do not
 bring the hits closer, which on this list was every sequenced stretch
 that passed the earlier tests and three live ones.
 
+**The sequencer, the windows and the continuity** (section 6, after
+Felicidade was heard to be wrong), the same 58 tracks from the cache,
+before (the grids of the table above) and after, every column compared
+(`build-fix/acc/` in the worktree they were made in). `--no-dynamic`
+gives the same 58 grids as before to the last digit, and 49 grids are
+before's, bit for bit: every steady track, and Yokokura's "Martin No
+Yakata". Of the ten dynamic grids:
+
+| Track | Before | Now | Straight (`--no-dynamic`) |
+| --- | --- | --- | --- |
+| AD:HOUSE 11 / Felicidade | 570 measured beats, 105-155 BPM, 0.91 | straight 130.000, 0.50, no flag: sequenced (0.57 ms on the line) | the same |
+| Yokokura / Shizuka No Office | 75 beats, 0.77 | 75 beats, 125.2 BPM average, 0.73 (the walk's continuity) | 124.29, 0.31 |
+| Yokokura / Martin No Yakata | 66 beats, 0.47 | the same | 98.0, 0.09 |
+| Yokokura / Saimin De Tonight | 49 beats, 0.51 | 39 beats, then the line from 24.4 s, 0.86 | 98.0, 0.34 |
+| Yokokura / Fortune Land E | 31 beats at the start, 0.62; a beat 252 ms after another at the join | straight, 0.47: the walk does not meet the line at its end | 124.0, 0.47 |
+| AZKi / Chaotic inner world | two stretches, 136 beats, 0.94; joins 1.5 periods apart | straight, 0.93: windows the line holds within 2 ms lost by the walk | 155, 0.93 |
+| Orange Pekoe / Happy Valley | 143 beats, 0.78 | 15 beats at the start, 0.77 | 105.13, 0.77 |
+| Orange Pekoe / Introduction | 78 beats, 0.67 | straight, 0.65: the walk, held to its continuity, follows the hits no better than the line (26 against 17 ms) | 126.63, 0.65 |
+| Orange Pekoe / Taiyo no Kakera | 111 beats, 0.37; joins of 742 and 250 ms | 32 beats at 31-47 s, 0.43, 116-122 BPM, joined on the beat | 120, 0.36 |
+| AZKi / 明けない夜があったなら | 38 + 107 beats, 0.84; a join of 197 ms | straight, 0.84, `phase-cut` at 3:52 again | the same |
+
+No grid on the list has two beats closer than half a period, and none a
+step of its local tempo over 10 % but the straight 71 ms re-entry of
+"明けない夜があったなら" at 3:52, which is flagged. Five grids are
+dynamic now, all on live recordings with `unsteady`; the two AZKi tracks
+went back to their straight grids. Whether AZKi's recordings are played
+or sequenced was not checked by ear; their attacks on the line read 3.5
+and 3.7-5.1 ms beat to beat, live by the rule.
+
 ### What was tried and dropped
 
 - Octave by "balance × subdivision" on kick+snare onsets with a phase from
@@ -1130,20 +1285,30 @@ that passed the earlier tests and three live ones.
   them in a click.
 - **Live recordings** now get dynamic grids where the line does not hold
   (section 6), and the confidence rises with them on the acceptance list
-  (five of the Yokokura recordings from 0.09-0.56 to 0.47-0.77). What a
+  (three of the Yokokura recordings from 0.09-0.34 to 0.47-0.86). What a
   dynamic grid cannot fix is music without a clear beat: Orange Pekoe's
   "Introduction" (36 s, no steady beat) is as meaningless walked as
   straight, and a drummer's scatter stays scatter (`unsteady` is still
   set, now around the walked beats). A drift of under 15 ms, or of a
-  section whose attacks are sequencer-tight, stays straight by design.
+  sequenced section, stays straight by design: a band playing to a click
+  with a loose percussionist on top reads as sequenced where a quarter
+  of its attacks on the line are evenly spaced within a millisecond.
 - **The judgment is by the hits**, the same envelopes the confidence
   reads: where a live recording's attacks are poor (brushes, a soft
   kick), the walked beats and the line are judged on the same poor
-  evidence, and the line, the simpler grid, wins ties. "Happy Valley"
-  keeps a dynamic stretch whose beats the fold prefers while the
-  whole-track confidence fell from 0.77 to 0.52: the two measures do not
-  always agree, and the confidence's 15 ms yes-or-no was not the one to
-  judge by.
+  evidence, and the line, the simpler grid, wins ties. Window by window
+  the fold is noisier still: a window is only lost where the line holds
+  its hits within 15 ms and the walk is twice as far, so a walk a few
+  milliseconds worse than the line on clear hits (or 10 ms on poor ones)
+  is kept there when the stretch wins as a whole. A walk that misses the
+  line at its ends is not kept at all near them: "Fortune Land E" went
+  back to its straight grid (0.62 to 0.47) rather than keep a beat 252
+  ms after another at the join, where the walk and the line are half a
+  beat apart.
+- **Each round of lost windows walks the section again**, and the
+  rounds are not bounded but by the beats (each takes some from the
+  stretch): five on "Happy Valley", eight on Felicidade without the
+  sequencer's rule (550 ms of decisions against 200).
 - **Ramps** are followed beat by beat where the change-point search left
   bent pieces; a ramp slower than about 2 BPM a minute at 125 leaves
   32-beat pieces bent by under 10 ms, a staircase of straight sections
