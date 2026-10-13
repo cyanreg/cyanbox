@@ -1640,6 +1640,10 @@ static bool progress_cb(void *opaque, const char *stage, int done, int total, co
             progress_end_line(ctx);
             printf("  %s\n", item);
             ctx->unsynced += unsynced_check(item);
+        } else if (!strcmp(stage, "flush")) {
+            /* A failed or cancelled export's sync, or the sync failing. */
+            progress_end_line(ctx);
+            printf("  %s\n", item);
         } else if (!strcmp(stage, "prune")) {
             /* Stick paths are the files beyond the export, anything else a
              * message about them. */
