@@ -63,7 +63,7 @@ static const UiColSpec COLS[COL_N] = {
     { "Time",         52, RX_COL_TIME,   FIXED, true },
     { "Rating",       74, RX_COL_RATING, FIXED, false },
     { "Artist",      170, RX_COL_ARTIST, FIXED, false },
-    { "Year",         50, RX_COL_YEAR,   FIXED, true },
+    { "Year",         56, RX_COL_YEAR,   FIXED, false },
     { "Album",       160, RX_COL_ALBUM,  FIXED | HIDDEN, false },
     { "Location",    260, RX_COL_PATH,   FIXED | HIDDEN, false },
     { "Plays",        46, RX_COL_PLAYS,  FIXED | HIDDEN, true },
@@ -486,10 +486,10 @@ static void row_cells(UiState *ui, RXTrack *t, int row, float row_h, const uint6
             cell_text(ui, p, w, row_h, ui_artist(t), text, false);
             break;
         case COL_YEAR:
-            // The year stops short of the column's right edge: air on its right.
+            // Left-aligned under its header, with air to its right.
             if (t->meta.year > 0) {
                 snprintf(buf, sizeof(buf), "%d", t->meta.year);
-                cell_text(ui, p, w - PX(14), row_h, buf, text, true);
+                cell_text(ui, p, w, row_h, buf, text, false);
             }
             break;
         case COL_ALBUM:
@@ -539,7 +539,7 @@ static void table(UiState *ui, ImVec2 size)
     // A new id with the column set (no Date Added; Title and Artist fixed,
     // the preview stretched, the artwork wider): a layout saved for the old
     // one would have kept the 40 px artwork and the old widths.
-    if (!ImGui::BeginTable("##tracklist3", COL_N, flags, size, inner)) {
+    if (!ImGui::BeginTable("##tracklist4", COL_N, flags, size, inner)) {
         ImGui::PopStyleVar();
         return;
     }
