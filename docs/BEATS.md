@@ -477,8 +477,9 @@ transient after the fade's origin (12 dB over four frames, at the music's
 level) that stands at least 10 dB over the loudest of the half second
 before it. It is a beat and beat 1 with the same weight (and once the grid
 is on that half of the beat the structure agrees, +0.93 against -0.18 on
-the other half; the hit's kick was 1.5 times the kick beats', so a hit
-counts from 1.2 times, not 2). A transient at the fade's origin is a fade
+the other half). It needs no kick: after a fade the first loud thing is
+where a DJ expects the track to start, whatever it is made of; after
+silence the kick still tells an opening hit from a pickup. A transient at the fade's origin is a fade
 with the beat under it (drums fading in, the synthetic fades), and a later
 one that is not clearly over what came before is a louder kick in such a
 fade; both stay a fade. The synthetic case: a pad fading in for two
