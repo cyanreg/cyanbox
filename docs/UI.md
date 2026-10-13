@@ -190,7 +190,7 @@ keeps its full width and shows its top part, 80×40 of a square thumbnail
 scaled to 80; without art, rbxport's record the column's width, anchored
 at the top and cut by the row; textures cached per track with an LRU of
 ~400; the player's title-row sleeve stays square), Track Title
-(260 px), Key, BPM, Time, Rating (five stars, click sets), Artist
+(330 px), Key, BPM, Time, Rating (five stars, click sets), Artist
 (170 px), Year; Album, Location, Plays and Last Played exist but are
 hidden by default (the header's context menu shows them). Track Title
 and Artist are fixed widths, resizable by dragging their edges: stretched

@@ -57,13 +57,13 @@ static const UiColSpec COLS[COL_N] = {
     { "#",            40, -1,            FIXED | ALWAYS | ImGuiTableColumnFlags_DefaultSort, true },
     { "Preview",       1, NO_SORT,       STRETCH | UNSORTED, false },
     { "Artwork",      70, NO_SORT,       FIXED | UNSORTED, false },
-    { "Track Title", 260, RX_COL_TITLE,  FIXED | ALWAYS, false },
+    { "Track Title", 330, RX_COL_TITLE,  FIXED | ALWAYS, false },
     { "Key",          52, RX_COL_KEY,    FIXED, false },
     { "BPM",          62, RX_COL_BPM,    FIXED, true },
     { "Time",         52, RX_COL_TIME,   FIXED, true },
     { "Rating",       74, RX_COL_RATING, FIXED, false },
     { "Artist",      170, RX_COL_ARTIST, FIXED, false },
-    { "Year",         44, RX_COL_YEAR,   FIXED, true },
+    { "Year",         52, RX_COL_YEAR,   FIXED, true },
     { "Album",       160, RX_COL_ALBUM,  FIXED | HIDDEN, false },
     { "Location",    260, RX_COL_PATH,   FIXED | HIDDEN, false },
     { "Plays",        46, RX_COL_PLAYS,  FIXED | HIDDEN, true },
@@ -486,9 +486,10 @@ static void row_cells(UiState *ui, RXTrack *t, int row, float row_h, const uint6
             cell_text(ui, p, w, row_h, ui_artist(t), text, false);
             break;
         case COL_YEAR:
+            // A little air between the year and the table's edge.
             if (t->meta.year > 0) {
                 snprintf(buf, sizeof(buf), "%d", t->meta.year);
-                cell_text(ui, p, w, row_h, buf, text, true);
+                cell_text(ui, p, w - PX(8), row_h, buf, text, true);
             }
             break;
         case COL_ALBUM:
@@ -538,7 +539,7 @@ static void table(UiState *ui, ImVec2 size)
     // A new id with the column set (no Date Added; Title and Artist fixed,
     // the preview stretched, the artwork wider): a layout saved for the old
     // one would have kept the 40 px artwork and the old widths.
-    if (!ImGui::BeginTable("##tracklist", COL_N, flags, size, inner)) {
+    if (!ImGui::BeginTable("##tracklist2", COL_N, flags, size, inner)) {
         ImGui::PopStyleVar();
         return;
     }
