@@ -84,6 +84,8 @@ static void create_now(UiState *ui)
         return;
     char name[128];
     unique_name(in, ui->create_folder ? "New Folder" : "New Playlist", name, sizeof(name));
+    // The folder it goes in is opened, so the rename field is seen.
+    ui->reveal = in;
     if (ui->create_folder) {
         RXPlaylistFolder *f = rx_library_folder_create(&app->lib, in, name);
         if (f)
@@ -337,6 +339,8 @@ static void draw_folder(UiState *ui, RXPlaylistFolder *f, RXPlaylistFolder *pare
     ImGui::PushID(f);
     ImGuiTreeNodeFlags fl = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick |
                             ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_FramePadding;
+    if (ui->reveal && folder_contains(f, ui->reveal))
+        ImGui::SetNextItemOpen(true);
     bool open = ImGui::TreeNodeEx("##folder", fl);
     ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
     if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen())
@@ -475,27 +479,33 @@ void ui_tree(UiState *ui, ImVec2 size)
     node_label(ui, ImVec2(a.x + ImGui::GetTreeNodeToLabelSpacing(), a.y), b, 3, "Albums",
                nb_albums, false);
     if (albums_open) {
-        for (int i = 0; i < nb_albums; i++) {
-            ImGui::PushID(i);
-            bool asel = app->current_album && !strcmp(app->current_album, albums[i].name);
-            ImGuiTreeNodeFlags lf = ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen |
-                                    ImGuiTreeNodeFlags_SpanAvailWidth |
-                                    ImGuiTreeNodeFlags_FramePadding;
-            if (asel)
-                lf |= ImGuiTreeNodeFlags_Selected;
-            ImGui::TreeNodeEx("##album", lf);
-            ImVec2 la = ImGui::GetItemRectMin(), lb = ImGui::GetItemRectMax();
-            if (ImGui::IsItemClicked() && !asel) {
-                app->nb_selection = 0;
-                rx_app_show_album(app, albums[i].name);
-                // The list may have been made again: this frame's names
-                // are gone with it.
-                nb_albums = rx_app_albums(app, &albums);
+        // Only the rows in view are drawn: a library has thousands.
+        ImGuiListClipper clip;
+        clip.Begin(nb_albums);
+        while (clip.Step()) {
+            for (int i = clip.DisplayStart; i < clip.DisplayEnd && i < nb_albums; i++) {
+                ImGui::PushID(i);
+                bool asel = app->current_album && !strcmp(app->current_album, albums[i].name);
+                ImGuiTreeNodeFlags lf = ImGuiTreeNodeFlags_Leaf |
+                                        ImGuiTreeNodeFlags_NoTreePushOnOpen |
+                                        ImGuiTreeNodeFlags_SpanAvailWidth |
+                                        ImGuiTreeNodeFlags_FramePadding;
+                if (asel)
+                    lf |= ImGuiTreeNodeFlags_Selected;
+                ImGui::TreeNodeEx("##album", lf);
+                ImVec2 la = ImGui::GetItemRectMin(), lb = ImGui::GetItemRectMax();
+                if (ImGui::IsItemClicked() && !asel) {
+                    app->nb_selection = 0;
+                    rx_app_show_album(app, albums[i].name);
+                    // The list may have been made again: this frame's names
+                    // are gone with it.
+                    nb_albums = rx_app_albums(app, &albums);
+                }
+                float llx = la.x + ImGui::GetTreeNodeToLabelSpacing() - PX(14);
+                if (i < nb_albums)
+                    node_label(ui, ImVec2(llx, la.y), lb, 3, albums[i].name, albums[i].nb, asel);
+                ImGui::PopID();
             }
-            float llx = la.x + ImGui::GetTreeNodeToLabelSpacing() - PX(14);
-            if (i < nb_albums)
-                node_label(ui, ImVec2(llx, la.y), lb, 3, albums[i].name, albums[i].nb, asel);
-            ImGui::PopID();
         }
         if (nb_albums == 0)
             ImGui::TextDisabled("  No album tags yet.");
@@ -532,6 +542,7 @@ void ui_tree(UiState *ui, ImVec2 size)
         }
     }
     delete_popup(ui);
+    ui->reveal = nullptr;
     if (ui->move_pending)
         reparent_now(ui);
     if (ui->create_pending)

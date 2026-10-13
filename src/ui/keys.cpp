@@ -32,6 +32,7 @@ const UiKeyRow ui_key_rows[] = {
     { "1 2 3", "Hot cue A B C (set or call)" },
     { "Ctrl+1 2 3", "Clear hot cue A B C" },
     { "Left / Right", "Beat jump back / forward (hold to repeat)" },
+    { "Shift+Left / Shift+Right", "One beat back / forward, whatever the jump size" },
     { "Ctrl+Left / Ctrl+Right", "Shift the beat grid 5 ms earlier / later, once per press" },
     { "Ctrl+G", "Grid tools" },
     { "Up / Down", "Move the focus in the track list (the selection in the cue list after a "
@@ -41,7 +42,8 @@ const UiKeyRow ui_key_rows[] = {
     { "Ctrl+A", "Select every track in the list" },
     { "Ctrl+F", "Search" },
     { "Ctrl+,", "Player settings (the My Settings the export writes)" },
-    { "Esc", "Clear the search / close a dialog / give Delete back to the track list" },
+    { "Esc", "Clear the search / close the dialog with the focus / give Delete back to the "
+            "track list" },
     { "Ctrl+Q", "Quit" },
 };
 const int ui_nb_key_rows = (int)(sizeof(ui_key_rows) / sizeof(ui_key_rows[0]));

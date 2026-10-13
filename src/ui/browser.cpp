@@ -822,11 +822,11 @@ static void info_load(UiState *ui, RXTrack *t)
         char **s = meta_field(&t->meta, f);
         int *n = meta_int(&t->meta, f);
         if (s)
-            snprintf(ui->info_buf[f], sizeof(ui->info_buf[f]), "%s", *s ? *s : "");
+            ui->info_buf[f] = *s ? *s : "";
         else if (n && *n > 0)
-            snprintf(ui->info_buf[f], sizeof(ui->info_buf[f]), "%d", *n);
+            ui->info_buf[f] = std::to_string(*n);
         else
-            ui->info_buf[f][0] = 0;
+            ui->info_buf[f].clear();
     }
     std::string tags;
     for (int i = 0; i < t->meta.nb_tags; i++) {
@@ -834,7 +834,7 @@ static void info_load(UiState *ui, RXTrack *t)
             tags += ", ";
         tags += t->meta.tags[i];
     }
-    snprintf(ui->info_tags, sizeof(ui->info_tags), "%s", tags.c_str());
+    ui->info_tags = tags;
 }
 
 static void info_commit(UiState *ui, RXTrack *t, int f)
@@ -842,16 +842,16 @@ static void info_commit(UiState *ui, RXTrack *t, int f)
     char **s = meta_field(&t->meta, f);
     int *n = meta_int(&t->meta, f);
     if (s)
-        rx_meta_set(s, ui->info_buf[f]);
+        rx_meta_set(s, ui->info_buf[f].c_str());
     else if (n)
-        *n = atoi(ui->info_buf[f]);
+        *n = atoi(ui->info_buf[f].c_str());
     rx_app_save_track(ui->app, t);
 }
 
 static void info_commit_tags(UiState *ui, RXTrack *t)
 {
     rx_meta_clear_tags(&t->meta);
-    const char *p = ui->info_tags;
+    const char *p = ui->info_tags.c_str();
     while (*p) {
         const char *e = strchr(p, ',');
         size_t len = e ? (size_t)(e - p) : strlen(p);
@@ -984,7 +984,7 @@ void ui_info_panel(UiState *ui, ImVec2 size)
         ImGui::SameLine(label_w);
         ImGui::SetNextItemWidth(-FLT_MIN);
         ImGuiInputTextFlags fl = meta_int(&t->meta, f) ? ImGuiInputTextFlags_CharsDecimal : 0;
-        ImGui::InputText("##f", ui->info_buf[f], sizeof(ui->info_buf[f]), fl);
+        ui_input_string("##f", nullptr, &ui->info_buf[f], fl);
         if (ImGui::IsItemDeactivatedAfterEdit())
             info_commit(ui, t, f);
         ImGui::PopID();
@@ -995,7 +995,7 @@ void ui_info_panel(UiState *ui, ImVec2 size)
     ImGui::TextDisabled("My Tags");
     ImGui::SameLine(label_w);
     ImGui::SetNextItemWidth(-FLT_MIN);
-    ImGui::InputTextWithHint("##tags", "comma separated", ui->info_tags, sizeof(ui->info_tags));
+    ui_input_string("##tags", "comma separated", &ui->info_tags);
     if (ImGui::IsItemDeactivatedAfterEdit())
         info_commit_tags(ui, t);
     ImGui::PopStyleVar();

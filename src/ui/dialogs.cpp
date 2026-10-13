@@ -42,6 +42,16 @@
 
 #include "config.h"
 
+// Esc closes the dialog that has the focus, as its close button does,
+// unless a text field has the keyboard: Esc is the field's then (the Add
+// dialog's finder empties first, and a second Esc closes).
+static void escape_closes(bool *open)
+{
+    if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
+        !ImGui::GetIO().WantTextInput && ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+        *open = false;
+}
+
 static void centre_next(UiState *ui, float w, float h)
 {
     ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing,
@@ -305,6 +315,7 @@ static void analysis_settings(UiState *ui)
         ImGui::End();
         return;
     }
+    escape_closes(&ui->dlg_analysis);
     ui_settle_centred();
     bool changed = false;
     ImGui::SeparatorText("Analyse");
@@ -616,6 +627,7 @@ static void settings_dialog(UiState *ui)
         ImGui::End();
         return;
     }
+    escape_closes(&ui->dlg_settings);
     ui_settle_centred();
 
     // Columns as wide as the widest label and value of any section, room
@@ -770,6 +782,7 @@ static void export_dialog(UiState *ui)
         ImGui::End();
         return;
     }
+    escape_closes(&open);
     ui_settle_centred();
     if (!open && !es.running) {
         ui->dlg_export = false;
@@ -1083,6 +1096,7 @@ static void sync_dialog(UiState *ui)
         ImGui::End();
         return;
     }
+    escape_closes(&open);
     ui_settle_centred();
     if (!open) {
         ui->dlg_sync = false;
@@ -1267,6 +1281,7 @@ static void inspect_dialog(UiState *ui)
         ImGui::End();
         return;
     }
+    escape_closes(&ui->dlg_inspect);
     ui_settle_centred();
     if (!ui->dlg_inspect) {
         // Closed: the inspection in flight is given up.
@@ -1532,6 +1547,7 @@ static void add_dialog(UiState *ui)
         ImGui::End();
         return;
     }
+    escape_closes(&ui->dlg_add);
     ui_settle_centred();
     ui->fb_focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
     if (ImGui::Button("Up")) {
@@ -1686,6 +1702,7 @@ static void keys_dialog(UiState *ui)
         ImGui::End();
         return;
     }
+    escape_closes(&ui->dlg_keys);
     ui_settle_centred();
     ImGui::TextDisabled("rekordbox's Export preset, player 1.");
     ImGuiTableFlags tf = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_ScrollY;
@@ -1716,6 +1733,7 @@ static void about_dialog(UiState *ui)
         ImGui::End();
         return;
     }
+    escape_closes(&ui->dlg_about);
     ui_settle_centred();
     ImGui::PushFont(ui->font_bold, ui->font_base * 1.6f);
     ImGui::TextUnformatted("rxbox");

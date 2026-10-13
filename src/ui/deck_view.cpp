@@ -806,6 +806,45 @@ static int cue_selected_index(UiState *ui, int deck)
     return index;
 }
 
+// Starts editing cue `index`'s name.
+static void cue_edit_start(UiState *ui, int deck, const RXTrack *t, int index)
+{
+    UiDeck *ud = &ui->decks[deck];
+    const RXCue *c = &t->cues[index];
+    ud->editing = true;
+    ud->edit_track = t->id;
+    ud->edit_hot = c->hot;
+    ud->edit_time = c->time;
+    ud->edit_end = c->loop_end;
+    ud->edit_focus = true;
+    snprintf(ud->name_buf, sizeof(ud->name_buf), "%s", c->name);
+}
+
+// The edited cue's index now, -1 when none: the edit ends when its cue
+// is gone (deleted, another track loaded, a grid edit moved it).
+static int cue_edit_index(UiState *ui, int deck)
+{
+    UiDeck *ud = &ui->decks[deck];
+    const RXTrack *t = ui->app->decks[deck].ctl.track;
+    if (!ud->editing)
+        return -1;
+    int index = -1;
+    if (t && t->id == ud->edit_track) {
+        if (ud->edit_hot >= 0) {
+            index = rx_track_hot_cue(t, ud->edit_hot);
+        } else {
+            for (int i = 0; i < t->nb_cues && index < 0; i++) {
+                const RXCue *c = &t->cues[i];
+                if (!rx_cue_is_hot(c) && c->time == ud->edit_time && c->loop_end == ud->edit_end)
+                    index = i;
+            }
+        }
+    }
+    if (index < 0)
+        ud->editing = false;
+    return index;
+}
+
 bool ui_cue_list_has_keys(UiState *ui, int deck)
 {
     cue_selected_index(ui, deck);
@@ -828,8 +867,6 @@ void ui_cue_list_delete(UiState *ui, int deck)
     if (index < 0)
         return;
     ud->cue_selected = false;
-    if (ud->edit_cue >= index)
-        ud->edit_cue = -1;
     delete_cue(ui, deck, index);
     ui_want_frames(ui, 2);
 }
@@ -863,14 +900,10 @@ struct CueEdit {
 static void cue_row_menu(UiState *ui, int deck, int index, CueEdit *edit)
 {
     RXDeckView *dv = &ui->app->decks[deck];
-    UiDeck *ud = &ui->decks[deck];
     RXTrack *t = dv->ctl.track;
     RXCue *cue = &t->cues[index];
-    if (ImGui::MenuItem("Rename")) {
-        ud->edit_cue = index;
-        ud->edit_focus = true;
-        snprintf(ud->name_buf, sizeof(ud->name_buf), "%s", cue->name);
-    }
+    if (ImGui::MenuItem("Rename"))
+        cue_edit_start(ui, deck, t, index);
     ImGui::TextDisabled("Colour");
     char col[RX_COLOR_MAX];
     if (rx_cue_is_hot(cue)) {
@@ -933,6 +966,7 @@ static void cue_list(UiState *ui, int deck, ImVec2 a, ImVec2 b, double pos)
     bool show_bar = lw >= PX(290);
     int nb = t ? t->nb_cues : 0;
     int sel = cue_selected_index(ui, deck);
+    int editing = cue_edit_index(ui, deck);
     CueEdit edit = { -1, -1, -1, "" };
 
     for (int i = 0; i < nb; i++) {
@@ -956,9 +990,7 @@ static void cue_list(UiState *ui, int deck, ImVec2 a, ImVec2 b, double pos)
         if (clicked) {
             cue_select(ui, deck, t, i);
             if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
-                ud->edit_cue = i;
-                ud->edit_focus = true;
-                snprintf(ud->name_buf, sizeof(ud->name_buf), "%s", cue->name);
+                cue_edit_start(ui, deck, t, i);
             } else if (hot) {
                 rx_ctl_hot_cue_press(c, cue->hot);
                 rx_ctl_hot_cue_release(c, cue->hot);
@@ -1046,7 +1078,7 @@ static void cue_list(UiState *ui, int deck, ImVec2 a, ImVec2 b, double pos)
         // goes through the controls (the pad popup's way), once the list is
         // drawn: the edit re-adds the cue.
         float nw = rx - x - PX(4);
-        if (ud->edit_cue == i) {
+        if (editing == i) {
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(PX(4), PX(1)));
             ImGui::SetCursorScreenPos(ImVec2(x, floorf(cy - ImGui::GetFrameHeight() * 0.5f)));
             ImGui::SetNextItemWidth(ImMax(nw, PX(80)));
@@ -1056,7 +1088,11 @@ static void cue_list(UiState *ui, int deck, ImVec2 a, ImVec2 b, double pos)
             }
             ImGuiInputTextFlags nf = ImGuiInputTextFlags_EnterReturnsTrue |
                                      ImGuiInputTextFlags_AutoSelectAll;
+            // An id of the edit's own, not the row's: the field stays the
+            // same while the rows above it change.
+            ImGui::PushOverrideID(ImGui::GetID("##cue-name-edit"));
             bool enter = ImGui::InputText("##name", ud->name_buf, sizeof(ud->name_buf), nf);
+            ImGui::PopID();
             ImGui::PopStyleVar();
             if (enter || ImGui::IsItemDeactivated()) {
                 if (!ImGui::IsKeyPressed(ImGuiKey_Escape) && strcmp(cue->name, ud->name_buf)) {
@@ -1067,7 +1103,7 @@ static void cue_list(UiState *ui, int deck, ImVec2 a, ImVec2 b, double pos)
                         rx_app_save_track(app, t);
                     }
                 }
-                ud->edit_cue = -1;
+                ud->editing = false;
             }
         } else if (cue->name[0] && nw > PX(24)) {
             ui_text(ui, ldl, nullptr, fs, ImVec2(x, fy), UI_TEXT, cue->name, nw);
@@ -1088,11 +1124,8 @@ static void cue_list(UiState *ui, int deck, ImVec2 a, ImVec2 b, double pos)
         rx_ctl_hot_cue_set(c, edit.hot_name, ud->name_buf, nullptr);
     if (edit.hot_colour >= 0)
         rx_ctl_hot_cue_set(c, edit.hot_colour, nullptr, edit.colour);
-    if (edit.del >= 0) {
-        if (ud->edit_cue >= edit.del)
-            ud->edit_cue = -1;
+    if (edit.del >= 0)
         delete_cue(ui, deck, edit.del);
-    }
 }
 
 /* -------------------------------------------------------------------- tempo */

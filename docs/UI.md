@@ -75,7 +75,7 @@ The full width of the window. Rows, top to bottom:
    colour with the players' hot cue colour on, `player.hot_cue_color`;
    with it off, the default, or for a cue without a colour, the slot's
    default pad colour), loop bands (translucent orange
-   `#FF8C00` at 30 %; the active one brighter), the played part dimmed to
+   `#FF8C00` at 25 %, the active one at 45 %), the played part dimmed to
    55 %, the playhead (1 px white line, 2 px when playing). Click seeks;
    drag scrubs. The 1-second ticks are not drawn.
 3. **Detail waveform** (204 at the player's natural height; it takes all
@@ -238,8 +238,9 @@ can be dropped on an album, nothing renames or deletes one, and the
 export does not know them: they are the tags' view of the collection;
 playing one through continues from track to track as a playlist does),
 then the folders and playlists from the library. Click selects the view.
-Right-click: new playlist, new folder, rename, delete (with confirm),
-import m3u8, export m3u8. Drag tracks from the table onto a playlist to
+Right-click: new playlist, new folder (the folder it goes in opens),
+rename, delete (with confirm); m3u8 import and export are on the command
+line (`rxbox playlist import` / `export`). Drag tracks from the table onto a playlist to
 add; drag playlists and folders within the tree to move them.
 
 **Search field** above the table: filters the current view on title,
@@ -491,12 +492,13 @@ rekordbox's Export preset for player 1 (no shifted second-player set):
 | Ctrl+← Ctrl+→ | Shift grid left/right (5 ms), once per press |
 | Ctrl+G | Toggle grid tools |
 | A S D F G H J K L ; | Memory cue 1–10 |
+| Ctrl+A | Select every track in the table |
 | Ctrl+F | Search |
 | Ctrl+, | Player settings (the My Settings the export writes) |
 | ↑ ↓ | Move the focus in the track table; after a click on a cue, move the cue list's selection |
 | Enter | Load the focused track |
 | Delete | Remove the selected tracks from the playlist; after a click on a cue, delete that cue (a hot cue or a memory cue) instead |
-| Esc | Clear the search; give Delete and ↑ ↓ back to the track table |
+| Esc | Clear the search; give Delete and ↑ ↓ back to the track table; close the dialog with the focus (a text field in it takes Esc first) |
 | Ctrl+Q | Quit |
 
 Hot cue pads D–H have no default keys (rekordbox binds none). The keys

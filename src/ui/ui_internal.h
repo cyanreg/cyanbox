@@ -152,7 +152,13 @@ struct UiDeck {
 
     // Hot cue pad popup and name editing.
     char     name_buf[RX_CUE_NAME_MAX];
-    int      edit_cue;         // cue list row whose name is edited, -1
+    // The cue whose name is edited, kept by what it is as the selection
+    // is (a cue set above it mid-edit moves its row): deck_view.cpp,
+    // cue_edit_index.
+    bool     editing;
+    uint64_t edit_track;
+    int      edit_hot;         // its hot cue slot, -1 a memory cue
+    double   edit_time, edit_end;
     bool     edit_focus;
 
     // The cue list's selection. While cue_focus is set the list has the
@@ -258,8 +264,8 @@ struct UiState {
     bool      scroll_to_focus;
     uint64_t  info_track;      // track whose fields are in the info buffers
     unsigned  info_generation;
-    char      info_buf[16][256];
-    char      info_tags[512];
+    std::string info_buf[16];  // the fields as typed: any length (ui_input_string)
+    std::string info_tags;
     bool      row_hovered;
 
     // Tree.
@@ -273,6 +279,9 @@ struct UiState {
     // Edits that change the tree's arrays wait until it has been drawn.
     bool      create_pending, create_folder;
     RXPlaylistFolder *create_in;
+    RXPlaylistFolder *reveal;  // opened, with every folder above it, at the next tree draw
+    unsigned  bytes_generation;    // lib.generation the status bar's size is for, 0 none
+    int64_t   bytes_total;
     bool      move_pending, move_folder;
     void     *move_ptr;
     RXPlaylistFolder *move_to;
@@ -360,6 +369,10 @@ ImU32       ui_text_on(uint32_t rgb);
 void  ui_text(UiState *ui, ImDrawList *dl, ImFont *font, float size, ImVec2 pos, ImU32 col,
               const char *text, float max_w = 0.0f);
 float ui_text_width(UiState *ui, ImFont *font, float size, const char *text);
+// InputText(WithHint) on a std::string that grows with the text (ImGui's
+// resize callback), so nothing stored is cut to a buffer's size.
+bool  ui_input_string(const char *id, const char *hint, std::string *s,
+                      ImGuiInputTextFlags flags = 0);
 void  ui_text_right(UiState *ui, ImDrawList *dl, ImFont *font, float size, ImVec2 right_top,
                     ImU32 col, const char *text);
 void  ui_text_centre(UiState *ui, ImDrawList *dl, ImFont *font, float size, ImVec2 a, ImVec2 b,

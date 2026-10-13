@@ -133,6 +133,22 @@ ImU32 ui_text_on(uint32_t rgb)
     return 0.299f * r + 0.587f * g + 0.114f * b > 0.55f ? UI_BLACK : UI_TEXT;
 }
 
+static int string_resize(ImGuiInputTextCallbackData *d)
+{
+    if (d->EventFlag == ImGuiInputTextFlags_CallbackResize) {
+        std::string *s = (std::string *)d->UserData;
+        s->resize((size_t)d->BufTextLen);
+        d->Buf = s->data();
+    }
+    return 0;
+}
+
+bool ui_input_string(const char *id, const char *hint, std::string *s, ImGuiInputTextFlags flags)
+{
+    return ImGui::InputTextWithHint(id, hint, s->data(), s->capacity() + 1,
+                                    flags | ImGuiInputTextFlags_CallbackResize, string_resize, s);
+}
+
 float ui_text_width(UiState *ui, ImFont *font, float size, const char *text)
 {
     if (!font)
@@ -1043,9 +1059,14 @@ static void status_bar(UiState *ui, ImVec2 a, ImVec2 b)
     }
     // The count and the files' size: what a stick with every track would
     // hold (an export of playlists copies fewer; transcodes change sizes).
-    int64_t bytes = 0;
-    for (int i = 0; i < app->lib.nb_tracks; i++)
-        bytes += app->lib.tracks[i]->file_size;
+    // Summed again only when the library changed, not every frame.
+    if (ui->bytes_generation != app->lib.generation) {
+        ui->bytes_total = 0;
+        for (int i = 0; i < app->lib.nb_tracks; i++)
+            ui->bytes_total += app->lib.tracks[i]->file_size;
+        ui->bytes_generation = app->lib.generation;
+    }
+    int64_t bytes = ui->bytes_total;
     char tracks[64];
     if (bytes >= (int64_t)10 << 30)
         snprintf(tracks, sizeof(tracks), "%d tracks \xC2\xB7 %.0f GB", app->lib.nb_tracks,
@@ -1391,7 +1412,7 @@ int rx_ui_init(RXApp *app)
     for (int i = 0; i < RX_DECKS; i++) {
         UiDeck *ud = &ui->decks[i];
         ud->ctx_cue = -1;
-        ud->edit_cue = -1;
+        ud->editing = false;
     }
     app->ui = ui;
 
