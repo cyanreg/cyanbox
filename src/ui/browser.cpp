@@ -376,6 +376,9 @@ static void row_cells(UiState *ui, RXTrack *t, int row, float row_h, const uint6
     ImU32 text = dim ? UI_FAINT : UI_TEXT;
     ImU32 sub = dim ? UI_FAINT : UI_DIM;
     char buf[160];
+    // The Traffic Light's reference: the loaded track's key.
+    const RXTrack *loaded = app->decks[0].track;
+    const char *ref = loaded && loaded->key[0] ? loaded->key : nullptr;
 
     for (int c = 0; c < COL_N; c++) {
         if (!ImGui::TableSetColumnIndex(c))
@@ -426,8 +429,13 @@ static void row_cells(UiState *ui, RXTrack *t, int row, float row_h, const uint6
             break;
         }
         case COL_KEY: {
+            // rekordbox's Traffic Light: a key that mixes with the loaded
+            // track's is green (rbxport's colour), its own row's too.
             const char *k = ui_key_text(ui, t->key, buf, sizeof(buf));
-            cell_text(ui, p, w, row_h, k[0] ? k : DASH, k[0] ? text : UI_FAINT, false);
+            ImU32 col = k[0] ? text : UI_FAINT;
+            if (k[0] && ref && !dim && rx_key_traffic_light(t->key, ref, (RXKeyReach)ui->traffic_light))
+                col = UI_QUANTIZE;
+            cell_text(ui, p, w, row_h, k[0] ? k : DASH, col, false);
             break;
         }
         case COL_BPM: {

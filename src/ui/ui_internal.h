@@ -165,6 +165,7 @@ struct UiState {
     float  tree_width;         // logical pixels
     bool   detail_half;        // rekordbox 2 PLAYER half-height detail instead of CDJ centred
     int    key_notation;       // 0 classic, 1 Camelot, 2 Open Key
+    int    traffic_light;      // RXKeyReach of the table's key highlight
     bool   layout_dirty;
 
     UiDeck decks[RX_DECKS];

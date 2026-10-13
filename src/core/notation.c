@@ -14,7 +14,11 @@
  *
  * Keys follow dj's analysis/key.py: its spellings (C Db D Eb E F F# G Ab A
  * Bb B, minor with "m", as rekordbox displays them) and its Camelot and
- * Open Key tables. */
+ * Open Key tables. The Traffic Light's reaches are rekordbox's, as its
+ * Preferences tooltip spells them out for a track in 2A (Same Key 2A;
+ * Related Key 1 2A/2B; Related Key 2 2A/2B/1A/3A; Related Key 3
+ * 2A/2B/1A/3A/1B/3B), the rule rbxport's src/lib/camelot.ts
+ * (trafficLightCodes, trafficLightLit) applies. */
 
 #include "rxbox/notation.h"
 
@@ -369,4 +373,56 @@ const char *rx_key_display(const char *classic, const char *notation, char *buf,
     if (size && rx_key_normalise(classic, buf, size) < 0)
         buf[0] = '\0';
     return buf;
+}
+
+/* ---------------------------------------------------------- traffic light */
+
+static const char *const reach_names[] = { "off", "same", "related1", "related2", "related3" };
+
+const char *rx_key_reach_name(RXKeyReach reach)
+{
+    if ((int)reach < 0 || (int)reach >= (int)RX_ARRAY_ELEMS(reach_names))
+        return NULL;
+    return reach_names[reach];
+}
+
+int rx_key_reach_parse(const char *name)
+{
+    for (int i = 0; name && i < (int)RX_ARRAY_ELEMS(reach_names); i++) {
+        if (!strcmp(name, reach_names[i]))
+            return i;
+    }
+    return -1;
+}
+
+/* A key's place on the Camelot wheel: its number and its letter (A minor,
+ * B major). */
+static bool wheel_of(const char *key, int *num, bool *minor)
+{
+    char code[8];
+    if (!key || !rx_key_to_camelot(key, code, sizeof(code))[0])
+        return false;
+    char *letter;
+    *num = (int)strtol(code, &letter, 10);
+    *minor = *letter == 'A';
+    return true;
+}
+
+bool rx_key_traffic_light(const char *key, const char *reference, RXKeyReach reach)
+{
+    int n, k;
+    bool ref_minor, key_minor;
+    if (reach <= RX_KEY_REACH_OFF || !wheel_of(reference, &n, &ref_minor) ||
+        !wheel_of(key, &k, &key_minor))
+        return false;
+
+    /* Steps clockwise from the reference, 0..11: 1 and 11 are the
+     * neighbours either side, 12 and 1 included. */
+    int step = ((k - n) % 12 + 12) % 12;
+    bool same_letter = key_minor == ref_minor;
+    if (step == 0)
+        return same_letter || reach >= RX_KEY_REACH_RELATED1;
+    if (step == 1 || step == 11)
+        return reach >= (same_letter ? RX_KEY_REACH_RELATED2 : RX_KEY_REACH_RELATED3);
+    return false;
 }

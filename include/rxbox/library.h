@@ -70,6 +70,8 @@ typedef struct RXConfig {
 
     /* ui.* */
     char  wave_palette[8];      /* 3band (default), blue, rgb */
+    char  traffic_light[12];    /* the browser's key highlight (rx_key_reach_name): off,
+                                   same, related1, related2, related3 (default) */
     int   detail_bars;          /* 12 */
     float split_player, split_tree;   /* remembered splitter positions, 0 = default */
 } RXConfig;

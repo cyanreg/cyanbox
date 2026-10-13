@@ -1788,6 +1788,7 @@ static int cmd_config(Cli *cli, int argc, char **argv)
         print_kv("device", c->device, c->nb_device);
         printf("audio.sink = %s\n", c->audio_sink ? c->audio_sink : "(the default)");
         printf("ui.wave_palette = %s\n", c->wave_palette);
+        printf("ui.traffic_light = %s\n", c->traffic_light);
         printf("ui.detail_bars = %d\n", c->detail_bars);
     }
     cli_close(cli);

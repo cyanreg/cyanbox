@@ -30,4 +30,25 @@ const char *rx_key_to_open(const char *classic, char *buf, size_t size);
 /* In the notation named "classic", "camelot" or "open". */
 const char *rx_key_display(const char *classic, const char *notation, char *buf, size_t size);
 
+/* rekordbox's Traffic Light: a key lights up when it mixes with the loaded
+ * track's, within a reach around it on the Camelot wheel. For a reference
+ * in nL, L its letter and M the other one: SAME lights nL; RELATED1 adds
+ * nM, the relative major or minor; RELATED2 adds (n-1)L and (n+1)L;
+ * RELATED3 adds (n-1)M and (n+1)M. The wheel wraps from 12 to 1. */
+typedef enum RXKeyReach {
+    RX_KEY_REACH_OFF = 0,
+    RX_KEY_REACH_SAME,
+    RX_KEY_REACH_RELATED1,
+    RX_KEY_REACH_RELATED2,
+    RX_KEY_REACH_RELATED3,
+} RXKeyReach;
+/* Whether `key` lights up against `reference`, both in any notation
+ * rx_key_normalise reads; false when either is empty or not a key, and
+ * always at RX_KEY_REACH_OFF. */
+bool rx_key_traffic_light(const char *key, const char *reference, RXKeyReach reach);
+/* The setting's names: "off", "same", "related1", "related2", "related3".
+ * rx_key_reach_parse returns the reach, or -1 for any other name. */
+const char *rx_key_reach_name(RXKeyReach reach);
+int  rx_key_reach_parse(const char *name);
+
 #endif /* RXBOX_NOTATION_H */

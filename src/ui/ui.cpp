@@ -729,6 +729,22 @@ static void menu_bar(UiState *ui)
             }
             ImGui::EndMenu();
         }
+        // rekordbox's Traffic Light: the keys in the table that mix with
+        // the loaded track's light green, within this reach.
+        static const char *const reaches[] = { "Off", "Same key", "Related 1", "Related 2",
+                                                "Related 3" };
+        if (ImGui::BeginMenu("Traffic Light")) {
+            for (int i = 0; i < 5; i++) {
+                bool on = ui->traffic_light == i;
+                if (ImGui::MenuItem(reaches[i], nullptr, on) && !on) {
+                    ui->traffic_light = i;
+                    snprintf(cfg->traffic_light, sizeof(cfg->traffic_light), "%s",
+                             rx_key_reach_name((RXKeyReach)i));
+                    ui_save_config(ui);
+                }
+            }
+            ImGui::EndMenu();
+        }
         if (ImGui::BeginMenu("Detail waveform")) {
             if (ImGui::MenuItem("Centred (CDJ-3000)", nullptr, !ui->detail_half)) {
                 ui->detail_half = false;
@@ -996,6 +1012,8 @@ int rx_ui_init(RXApp *app)
         ui->key_notation = 1;
     else if (!strcmp(cfg->key_notation, "open"))
         ui->key_notation = 2;
+    int reach = rx_key_reach_parse(cfg->traffic_light);
+    ui->traffic_light = reach >= 0 ? reach : RX_KEY_REACH_RELATED3;
     double bars = cfg->detail_bars > 0 ? cfg->detail_bars : 12;
     for (int i = 0; i < RX_DECKS; i++)
         app->decks[i].zoom_bars = bars;

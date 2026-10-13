@@ -156,7 +156,15 @@ Album, Location, Plays and Last Played exist but are hidden by default
 (the header's context menu shows them). There are no Color, Genre or Hot
 Cue columns: the info panel shows and edits a track's colour and genre,
 the player's cue list a loaded track's cues. Cell text is 14 px, the
-title 15 px, `#` and the dates 12.5 px. Below about 960 px the table
+title 15 px, `#` and the dates 12.5 px. The Key column has rekordbox's
+Traffic Light: while a track is loaded, every key that mixes with its key
+is drawn green (`#3CEB50`), the loaded track's own row included. The
+reach is set in View > Traffic Light (setting `ui.traffic_light`): for a
+loaded track in nL on the Camelot wheel (L its letter, M the other),
+Same key lights nL, Related 1 adds nM, Related 2 adds (n−1)L and (n+1)L,
+Related 3 (the default) adds (n−1)M and (n+1)M; the wheel wraps from 12
+to 1. Playing A (11B) lights A, F♯m, D, E, Bm and D♭m, not A♭m. Off
+turns it off. Below about 960 px the table
 scrolls sideways rather than squeeze Track Title and Artist. Row height
 40 when artwork is shown, else 22. Selected rows highlighted; the focused row has a
 1 px outline. A row whose file is missing is drawn greyed out with a "missing" glyph,
@@ -194,8 +202,9 @@ A menu bar at the very top: **File** (Add files/folders… (ImGui file
 browser: a simple directory lister with a path field, since there is no
 native dialog), Export to USB…, Sync from USB…, Inspect USB…, Rescan
 missing files, Quit),
-**View** (waveform colour 3Band/Blue/RGB, key notation, detail waveform
-centred/half, grid tools), **Analysis** (analyse selection, analyse all
+**View** (waveform colour 3Band/Blue/RGB, key notation, Traffic Light
+off/same key/related 1–3, detail waveform centred/half, grid tools),
+**Analysis** (analyse selection, analyse all
 unanalysed, re-analyse selection, analysis settings…), **Help** (about,
 keyboard map).
 

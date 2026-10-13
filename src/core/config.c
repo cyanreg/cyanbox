@@ -12,6 +12,7 @@
  *                                                  `rxbox settings` lists them
  *   audio.sink
  *   ui.wave_palette  ui.detail_bars  ui.split_player  ui.split_tree
+ *   ui.traffic_light
  *
  * Booleans are "true"/"false", numbers their shortest exact decimal form,
  * analysis.what the names `rxbox analyze --what` takes ("beats,key,waves").
@@ -26,6 +27,7 @@
 #include <stdio.h>
 
 #include "rxbox/analysis.h"
+#include "rxbox/notation.h"
 
 void rx_config_defaults(RXConfig *c)
 {
@@ -38,6 +40,7 @@ void rx_config_defaults(RXConfig *c)
         .export_pdb        = true,
         .export_onelibrary = true,
         .wave_palette      = "3band",
+        .traffic_light     = "related3",
         .detail_bars       = 12,
     };
 }
@@ -237,6 +240,11 @@ static int apply_setting(RXConfig *c, const char *key, const char *value)
             bad_value(key, value);
         else
             snprintf(c->wave_palette, sizeof(c->wave_palette), "%s", value);
+    } else if (!strcmp(key, "ui.traffic_light")) {
+        if (rx_key_reach_parse(value) < 0)
+            bad_value(key, value);
+        else
+            snprintf(c->traffic_light, sizeof(c->traffic_light), "%s", value);
     } else if (!strcmp(key, "ui.detail_bars")) {
         if (!parse_double(value, &d) || d < 1 || d > 1024 || d != trunc(d))
             bad_value(key, value);
@@ -326,6 +334,7 @@ int rx_library_config_save(RXLibrary *lib)
         { "export.device_name",      c->device_name },
         { "audio.sink",              c->audio_sink },
         { "ui.wave_palette",         c->wave_palette },
+        { "ui.traffic_light",        c->traffic_light },
         { "ui.detail_bars",          rx_core_fmt_double(c->detail_bars, bars, sizeof(bars)) },
         { "ui.split_player",         rx_core_fmt_double(c->split_player, split_p, sizeof(split_p)) },
         { "ui.split_tree",           rx_core_fmt_double(c->split_tree, split_t, sizeof(split_t)) },

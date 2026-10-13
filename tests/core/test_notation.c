@@ -176,10 +176,56 @@ static void test_keys(void)
     }
 }
 
+/* The Traffic Light (rbxport src/lib/camelot.ts's rule, rekordbox's 2A
+ * example), every reach and the wrap from 12 to 1. */
+static void test_traffic_light(void)
+{
+    /* Playing a track in A (11B): F#m (11A), D and E (10B, 12B), Bm and Dbm
+     * (10A, 12A) light at Related Key 3; Abm (1A) is two steps away. */
+    static const char *const lit[] = { "A", "F#m", "D", "E", "Bm", "Dbm", "11B", "C#m" };
+    for (size_t i = 0; i < RX_ARRAY_ELEMS(lit); i++) {
+        if (!rx_key_traffic_light(lit[i], "A", RX_KEY_REACH_RELATED3))
+            fprintf(stderr, "%s does not light against A\n", lit[i]);
+        CHECK(rx_key_traffic_light(lit[i], "A", RX_KEY_REACH_RELATED3));
+    }
+    static const char *const dark[] = { "Abm", "B", "C", "Am", "G", "Ebm", "", "junk" };
+    for (size_t i = 0; i < RX_ARRAY_ELEMS(dark); i++) {
+        if (rx_key_traffic_light(dark[i], "A", RX_KEY_REACH_RELATED3))
+            fprintf(stderr, "%s lights against A\n", dark[i]);
+        CHECK(!rx_key_traffic_light(dark[i], "A", RX_KEY_REACH_RELATED3));
+    }
+
+    /* rekordbox's tooltip for 2A (Ebm): 2B is F#, 1A Abm, 3A Bbm, 1B B, 3B Db. */
+    CHECK(rx_key_traffic_light("Ebm", "Ebm", RX_KEY_REACH_SAME));
+    CHECK(!rx_key_traffic_light("F#", "Ebm", RX_KEY_REACH_SAME));
+    CHECK(rx_key_traffic_light("F#", "Ebm", RX_KEY_REACH_RELATED1));
+    CHECK(!rx_key_traffic_light("Abm", "Ebm", RX_KEY_REACH_RELATED1));
+    CHECK(rx_key_traffic_light("Abm", "Ebm", RX_KEY_REACH_RELATED2));
+    CHECK(rx_key_traffic_light("Bbm", "Ebm", RX_KEY_REACH_RELATED2));
+    CHECK(!rx_key_traffic_light("B", "Ebm", RX_KEY_REACH_RELATED2));
+    CHECK(rx_key_traffic_light("B", "Ebm", RX_KEY_REACH_RELATED3));
+    CHECK(rx_key_traffic_light("Db", "Ebm", RX_KEY_REACH_RELATED3));
+    CHECK(!rx_key_traffic_light("Fm", "Ebm", RX_KEY_REACH_RELATED3));
+
+    /* 12A (Dbm) and 1A (Abm) are neighbours; any notation reads. */
+    CHECK(rx_key_traffic_light("Abm", "Dbm", RX_KEY_REACH_RELATED2));
+    CHECK(rx_key_traffic_light("12A", "1A", RX_KEY_REACH_RELATED2));
+    CHECK(rx_key_traffic_light("1m", "C", RX_KEY_REACH_RELATED1));
+    CHECK(!rx_key_traffic_light("Am", "Am", RX_KEY_REACH_OFF));
+    CHECK(!rx_key_traffic_light("Am", "", RX_KEY_REACH_RELATED3));
+    CHECK(!rx_key_traffic_light("Am", NULL, RX_KEY_REACH_RELATED3));
+
+    CHECK_STR(rx_key_reach_name(RX_KEY_REACH_RELATED3), "related3");
+    CHECK_STR(rx_key_reach_name(RX_KEY_REACH_OFF), "off");
+    CHECK(rx_key_reach_parse("same") == RX_KEY_REACH_SAME);
+    CHECK(rx_key_reach_parse("related4") == -1 && rx_key_reach_parse(NULL) == -1);
+}
+
 int main(void)
 {
     test_positions();
     test_roundtrip();
     test_keys();
+    test_traffic_light();
     return test_done("core_notation");
 }

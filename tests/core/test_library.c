@@ -81,6 +81,7 @@ static void test_create_and_add(void)
     CHECK(lib.cfg.snap_bpm && lib.cfg.auto_cues && !strcmp(lib.cfg.key_notation, "classic"));
     CHECK(lib.cfg.export_pdb && lib.cfg.export_onelibrary && lib.cfg.detail_bars == 12);
     CHECK(!strcmp(lib.cfg.wave_palette, "3band"));
+    CHECK(!strcmp(lib.cfg.traffic_light, "related3"));
 
     sqlite3_stmt *st;
     sqlite3_prepare_v2(lib.db->db, "PRAGMA user_version", -1, &st, NULL);
@@ -194,6 +195,7 @@ static void test_edit_and_reopen(void)
     lib.cfg.detail_bars = 16;
     lib.cfg.split_tree = 0.25f;
     snprintf(lib.cfg.wave_palette, sizeof(lib.cfg.wave_palette), "rgb");
+    snprintf(lib.cfg.traffic_light, sizeof(lib.cfg.traffic_light), "related1");
     lib.cfg.player = calloc(2, sizeof(RXKv));
     lib.cfg.player[0] = (RXKv) { rx_strdup("quantize"), rx_strdup("true") };
     lib.cfg.player[1] = (RXKv) { rx_strdup("tempo_range"), rx_strdup("10") };
@@ -263,6 +265,7 @@ static void test_edit_and_reopen(void)
     CHECK_STR(cfg->device_name, "MY STICK");
     CHECK_STR(cfg->audio_sink, "rxbox-null");
     CHECK_STR(cfg->wave_palette, "rgb");
+    CHECK_STR(cfg->traffic_light, "related1");
     CHECK(cfg->nb_player == 2 && cfg->nb_device == 1 && cfg->nb_mixer == 0);
     if (cfg->nb_player == 2) {
         CHECK_STR(cfg->player[0].key, "quantize");
