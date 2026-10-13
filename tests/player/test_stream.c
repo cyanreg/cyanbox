@@ -51,10 +51,11 @@ static int failures;
 /* ------------------------------------------------- counting allocations */
 
 /* The mix runs on the test's thread; the feed's allocations, on its own,
- * are not counted. */
+ * are not counted. AddressSanitizer has its own malloc: no counting there. */
 static _Thread_local bool counting;
 static int allocations;
 
+#ifndef __SANITIZE_ADDRESS__
 extern void *__libc_malloc(size_t size);
 extern void *__libc_calloc(size_t n, size_t size);
 extern void *__libc_realloc(void *p, size_t size);
@@ -87,6 +88,7 @@ void *aligned_alloc(size_t align, size_t size)
         allocations++;
     return __libc_memalign(align, size);
 }
+#endif
 
 /* ---------------------------------------------------------------- media */
 
@@ -363,7 +365,9 @@ static void test_no_allocation(const char *path)
     counting = true;
     char *a = rx_strdup("x"), *b = rx_asprintf("%d", 2);
     counting = false;
+#ifndef __SANITIZE_ADDRESS__
     CHECK(allocations >= 2, "the counting malloc saw %d of 2", allocations);
+#endif
     free(a);
     free(b);
     allocations = 0;
