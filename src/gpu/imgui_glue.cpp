@@ -291,6 +291,16 @@ extern "C" void *rx_imgui_last_draw_data(RXWindow *w)
     return ImGui::GetDrawData();
 }
 
+/* What ImGui_ImplVulkan_RenderDrawData tests before it draws anything (and
+ * moves on to its next vertex buffers). */
+extern "C" bool rx_imgui_drawable(const void *draw_data)
+{
+    const ImDrawData *dd = static_cast<const ImDrawData *>(draw_data);
+    int fb_width = (int)(dd->DisplaySize.x * dd->FramebufferScale.x + 0.5f);
+    int fb_height = (int)(dd->DisplaySize.y * dd->FramebufferScale.y + 0.5f);
+    return fb_width > 0 && fb_height > 0;
+}
+
 extern "C" void rx_imgui_record(RXWindow *w, void *draw_data, VkCommandBuffer cmd)
 {
     ImGui::SetCurrentContext(ctx_of(w));

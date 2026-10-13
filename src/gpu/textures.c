@@ -35,6 +35,12 @@ uint64_t rx_texture_create(RXWindow *w, const uint8_t *rgba, int width, int heig
         return 0;
     }
 
+    /* Room to defer the texture and its staging buffer (vk.c). */
+    if (rx_vk_defer_reserve(w, 2) < 0) {
+        rx_err("gpu: out of memory for a %dx%d texture", width, height);
+        return 0;
+    }
+
     RXTexture tex = { 0 };
     RXUpload up = { 0 };
     const VkDeviceSize size = (VkDeviceSize)width * height * 4;
@@ -59,6 +65,7 @@ uint64_t rx_texture_create(RXWindow *w, const uint8_t *rgba, int width, int heig
     if (res != VK_SUCCESS) {
         rx_err("gpu: unable to create a %dx%d texture: %s", width, height,
                rx_vk_strerror(res));
+        rx_vk_defer_unreserve(w, 2);
         return 0;
     }
 
@@ -102,6 +109,7 @@ uint64_t rx_texture_create(RXWindow *w, const uint8_t *rgba, int width, int heig
 fail:
     /* Nothing of it was ever submitted: it can all go at once. */
     rx_err("gpu: unable to create a %dx%d texture", width, height);
+    rx_vk_defer_unreserve(w, 2);
     if (tex.id)
         rx_imgui_remove_texture(w, tex.id);
     rx_vk_buffer_free(w, &up.staging);

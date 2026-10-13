@@ -244,7 +244,13 @@ RXWaveGpu *rx_wave_upload(RXWindow *w, enum RXWaveKind kind, const uint8_t *colu
     const VkDeviceSize size = RX_ALIGN(bytes, 4);
     RXUpload up = { 0 };
 
-    int ret = rx_vk_buffer_create(w, &g->buf, size,
+    /* Room to defer the buffer and its staging buffer (vk.c). */
+    int ret = rx_vk_defer_reserve(w, 2);
+    if (ret < 0) {
+        free(g);
+        return NULL;
+    }
+    ret = rx_vk_buffer_create(w, &g->buf, size,
                                   VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                   VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
                                   VK_BUFFER_USAGE_TRANSFER_DST_BIT, RX_MEM_DEVICE);
@@ -268,6 +274,7 @@ RXWaveGpu *rx_wave_upload(RXWindow *w, enum RXWaveKind kind, const uint8_t *colu
 
 fail:
     rx_err("gpu: unable to upload a waveform of %d columns (%d)", nb_columns, ret);
+    rx_vk_defer_unreserve(w, 2);
     rx_vk_buffer_free(w, &up.staging);
     rx_vk_buffer_free(w, &g->buf);
     free(g);

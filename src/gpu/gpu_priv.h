@@ -154,6 +154,7 @@ struct RXWindow {
     double gpu_ms;                  /* the rendering of the last finished frame, 0 = unknown */
 
     RXArray garbage;                /* RXDeferred */
+    size_t defer_room;              /* room in `garbage` taken for later deferrals (vk.c) */
     RXArray uploads;                /* RXUpload */
     RXArray textures;               /* RXTexture */
 
@@ -209,9 +210,18 @@ int  rx_vk_buffer_create(RXWindow *w, RXVkBuffer *b, VkDeviceSize size,
 void rx_vk_buffer_free(RXWindow *w, RXVkBuffer *b);
 int  rx_vk_buffer_invalidate(RXWindow *w, RXVkBuffer *b);
 
+/* Takes room in the deferred destruction list for `n` things to be deferred
+ * later, so that rx_vk_defer never needs memory; called when they are made
+ * (-ENOMEM fails the making). rx_vk_defer_unreserve gives it back when one
+ * of them is freed at once instead (it never reached the GPU). */
+int  rx_vk_defer_reserve(RXWindow *w, size_t n);
+void rx_vk_defer_unreserve(RXWindow *w, size_t n);
 /* Hands something to the deferred destruction list, to be freed after the
  * next submission (the one that may still use it) has completed. */
 void rx_vk_defer(RXWindow *w, const RXDeferred *d);
+/* What was deferred to submissions from `from` on is kept until `until`
+ * has completed: the draw data of frame `from` is drawn again in it. */
+void rx_vk_defer_hold(RXWindow *w, uint64_t from, uint64_t until);
 /* Frees what the GPU is done with; everything when `all` (device idle). */
 void rx_vk_collect(RXWindow *w, bool all);
 /* Learns which submissions have finished without waiting. */
@@ -231,7 +241,7 @@ void rx_swapchain_destroy(RXWindow *w);
 /* Records the draw data (an ImDrawData *), submits and presents. With
  * `capture`, the image is also copied into w->cap before it is presented.
  * Returns 0 when presented, 1 when the frame was skipped (the swapchain is
- * out of date or the window has no area), <0 on error. */
+ * out of date, or the window or the draw data has no area), <0 on error. */
 int  rx_swapchain_frame(RXWindow *w, void *draw_data, bool capture);
 /* Reads the last captured frame back as tightly packed RGBA. */
 int  rx_swapchain_readback(RXWindow *w, uint8_t **rgba, int *width, int *height);
@@ -280,6 +290,10 @@ void *rx_imgui_render(RXWindow *w);
 /* The draw data of the last rendered frame while it is still valid
  * (until the next new frame), else NULL. */
 void *rx_imgui_last_draw_data(RXWindow *w);
+/* Whether ImGui would draw the draw data at all: false when it has no
+ * area (a minimised window), and then ImGui does not move on to its next
+ * vertex buffers either. */
+bool rx_imgui_drawable(const void *draw_data);
 /* Records the draw data inside the current dynamic rendering pass. */
 void rx_imgui_record(RXWindow *w, void *draw_data, VkCommandBuffer cmd);
 uint64_t rx_imgui_add_texture(RXWindow *w, VkImageView view);
