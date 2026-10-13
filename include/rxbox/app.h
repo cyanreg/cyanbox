@@ -25,8 +25,6 @@ typedef struct RXDeckView {
     uint64_t   artwork;             /* texture or 0 */
     uint64_t   artwork_request;
     double     zoom_bars;           /* 12 */
-    int        pad_mode;            /* 0 hot cues, 1 beat loops, 2 beat jump */
-    int        panel;               /* 0 memory list, 1 hot cue list, 2 grid tools */
     bool       grid_edit;           /* grid editing mode shown */
     double     tap_times[8]; int nb_taps;   /* tap tempo */
 } RXDeckView;

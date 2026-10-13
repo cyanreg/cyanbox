@@ -8,6 +8,9 @@
 //
 // CUE and the hot cue keys hold like the buttons: press on key down,
 // release on key up, so holding C at the cue point previews as on a CDJ.
+// The beat jump arrows repeat while held at their own rate (UI_REPEAT_*,
+// the strip's buttons share it), not ImGui's text-editing one; the grid
+// shift on Ctrl+arrows moves once per press.
 
 #include "ui_internal.h"
 
@@ -25,8 +28,8 @@ const UiKeyRow ui_key_rows[] = {
     { "/  and  \\", "Loop half / double" },
     { "1 2 3", "Hot cue A B C (set or call)" },
     { "Ctrl+1 2 3", "Clear hot cue A B C" },
-    { "Left / Right", "Beat jump back / forward" },
-    { "Ctrl+Left / Ctrl+Right", "Shift the beat grid 5 ms earlier / later" },
+    { "Left / Right", "Beat jump back / forward (hold to repeat)" },
+    { "Ctrl+Left / Ctrl+Right", "Shift the beat grid 5 ms earlier / later, once per press" },
     { "Ctrl+G", "Grid tools" },
     { "Up / Down", "Move the focus in the track list" },
     { "Enter", "Load the focused track" },
@@ -111,9 +114,9 @@ void ui_keys(UiState *ui)
             if (pressed(hot_keys[i]))
                 rx_ctl_hot_cue_delete(c, i);
         }
-        if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow))
+        if (pressed(ImGuiKey_LeftArrow))
             ui_shift_grid(ui, 0, -0.005);
-        if (ImGui::IsKeyPressed(ImGuiKey_RightArrow))
+        if (pressed(ImGuiKey_RightArrow))
             ui_shift_grid(ui, 0, 0.005);
         return;
     }
@@ -148,10 +151,17 @@ void ui_keys(UiState *ui)
         rx_ctl_loop_half(c);
     if (pressed(ImGuiKey_Backslash))
         rx_ctl_loop_double(c);
-    if (pressed(ImGuiKey_LeftArrow))
+    // Beat jump: once on the press, then again every UI_REPEAT_RATE once
+    // held for UI_REPEAT_DELAY. A paused interface draws only on input, so
+    // a held arrow keeps the frames coming.
+    int back = ImGui::GetKeyPressedAmount(ImGuiKey_LeftArrow, UI_REPEAT_DELAY, UI_REPEAT_RATE);
+    int fwd = ImGui::GetKeyPressedAmount(ImGuiKey_RightArrow, UI_REPEAT_DELAY, UI_REPEAT_RATE);
+    for (int i = 0; i < back; i++)
         ui_jump(ui, 0, -1);
-    if (pressed(ImGuiKey_RightArrow))
+    for (int i = 0; i < fwd; i++)
         ui_jump(ui, 0, 1);
+    if (ImGui::IsKeyDown(ImGuiKey_LeftArrow) || ImGui::IsKeyDown(ImGuiKey_RightArrow))
+        ui_want_frames(ui, 2);
 
     // 4..9: 1 2 4 8 16 32 beat loops.
     static const ImGuiKey loop_keys[6] = { ImGuiKey_4, ImGuiKey_5, ImGuiKey_6, ImGuiKey_7, ImGuiKey_8,

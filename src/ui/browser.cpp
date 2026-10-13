@@ -311,7 +311,7 @@ static void track_menu(UiState *ui)
 /* -------------------------------------------------------------------- cells */
 
 static void cell_text(UiState *ui, ImVec2 p, float w, float row_h, const char *text, ImU32 col,
-                      bool right, ImFont *font = nullptr, float size = 13.0f)
+                      bool right, ImFont *font = nullptr, float size = 14.0f)
 {
     if (!text || !text[0])
         return;
@@ -390,7 +390,7 @@ static void row_cells(UiState *ui, RXTrack *t, int row, float row_h, const uint6
         case COL_IDX:
             // The row's Selectable is submitted here by the caller.
             snprintf(buf, sizeof(buf), "%d", row + 1);
-            cell_text(ui, p, w, row_h, buf, sub, true, nullptr, 12.0f);
+            cell_text(ui, p, w, row_h, buf, sub, true, nullptr, 12.5f);
             break;
         case COL_PREVIEW: {
             bool analysing = false;
@@ -425,7 +425,8 @@ static void row_cells(UiState *ui, RXTrack *t, int row, float row_h, const uint6
                 if (ImGui::IsMouseHoveringRect(p, ImVec2(p.x + PX(14), p.y + row_h)))
                     ImGui::SetTooltip("File missing: %s\nRelocate it from the context menu.", t->path);
             }
-            cell_text(ui, ImVec2(x, p.y), w - (x - p.x), row_h, ui_title(t), text, false);
+            cell_text(ui, ImVec2(x, p.y), w - (x - p.x), row_h, ui_title(t), text, false, nullptr,
+                      15.0f);
             break;
         }
         case COL_KEY: {
@@ -468,13 +469,13 @@ static void row_cells(UiState *ui, RXTrack *t, int row, float row_h, const uint6
             break;
         case COL_ADDED:
             fmt_date(t->added, buf, sizeof(buf));
-            cell_text(ui, p, w, row_h, buf, sub, true, nullptr, 12.0f);
+            cell_text(ui, p, w, row_h, buf, sub, true, nullptr, 12.5f);
             break;
         case COL_ALBUM:
             cell_text(ui, p, w, row_h, t->meta.album, text, false);
             break;
         case COL_PATH:
-            cell_text(ui, p, w, row_h, t->path, sub, false, nullptr, 12.0f);
+            cell_text(ui, p, w, row_h, t->path, sub, false, nullptr, 12.5f);
             break;
         case COL_PLAYS:
             if (t->play_count > 0) {
@@ -484,7 +485,7 @@ static void row_cells(UiState *ui, RXTrack *t, int row, float row_h, const uint6
             break;
         case COL_LAST_PLAYED:
             fmt_date(t->last_played, buf, sizeof(buf));
-            cell_text(ui, p, w, row_h, buf, sub, true, nullptr, 12.0f);
+            cell_text(ui, p, w, row_h, buf, sub, true, nullptr, 12.5f);
             break;
         }
     }
@@ -691,7 +692,6 @@ void ui_browser(UiState *ui, ImVec2 size)
     UiButton ib = {};
     ib.label = "INFO";
     ib.lit = ui->show_info;
-    ib.font = 10.0f;
     if (ui_button(ui, "info", ImVec2(info_w, hh - PX(8)), ib)) {
         ui->show_info = !ui->show_info;
         ImGui::MarkIniSettingsDirty();

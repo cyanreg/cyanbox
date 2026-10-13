@@ -561,7 +561,7 @@ void ui_detail(UiState *ui, int deck, ImVec2 a, ImVec2 b)
     }
 
     // Zoom: + / - / RST at the right edge, and the zoom in bars.
-    float bw = PX(24), bh = PX(18);
+    float bw = PX(28), bh = PX(20);
     float zx = b.x - bw - PX(4);
     float zy = a.y + PX(16);
     struct { const char *id; UiIcon icon; const char *label; const char *tip; } zb[3] = {
@@ -574,7 +574,7 @@ void ui_detail(UiState *ui, int deck, ImVec2 a, ImVec2 b)
         UiButton btn = {};
         btn.icon = zb[i].icon;
         btn.label = zb[i].label;
-        btn.font = 8.5f;
+        btn.font = 10.0f;
         btn.fill = IM_COL32(0x20, 0x20, 0x20, 0xD0);
         btn.rounding = -1;
         if (ui_button(ui, zb[i].id, ImVec2(bw, bh), btn)) {
@@ -592,7 +592,7 @@ void ui_detail(UiState *ui, int deck, ImVec2 a, ImVec2 b)
         snprintf(zoom, sizeof(zoom), "1/%d BAR", (int)lround(1.0 / dv->zoom_bars));
     else
         snprintf(zoom, sizeof(zoom), "%g BARS", dv->zoom_bars);
-    ui_text_right(ui, dl, nullptr, 9.0f, ImVec2(b.x - PX(6), b.y - PX(15)), UI_DIM, zoom);
+    ui_text_right(ui, dl, nullptr, 10.5f, ImVec2(b.x - PX(6), b.y - PX(16)), UI_DIM, zoom);
 
     detail_menu(ui, deck);
 }

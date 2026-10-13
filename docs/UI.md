@@ -37,12 +37,14 @@ low alpha), as rekordbox's deck 1 is.
 
 The full width of the window. Rows, top to bottom:
 
-1. **Title row** (height 56): the artwork (48×48, placeholder record icon
-   when none), then title (bold) over artist, then the readouts right-aligned:
-   key (classic by default, Camelot/Open Key per config), BPM as
-   `128.00` with the tempo-adjusted value in orange when the slider is not at
-   0, the time (elapsed / remaining, toggled by clicking or `T`), bar.beat
-   counter (`17.3`).
+1. **Title row** (height 64): the artwork (56×56, placeholder record icon
+   when none; clicking it ejects a stopped track), then the title (26 px
+   bold) over the artist (15 px), then the readouts right-aligned, each a
+   10.5 px caps label over a 24 px value, centred on the row: key (classic
+   by default, Camelot/Open Key per config), BPM as `128.00` with the
+   tempo-adjusted value in orange when the slider is not at 0, the time
+   (elapsed / remaining, toggled by clicking or `T`), the bar.beat counter
+   (`17.3`), and the `GRID` button.
 2. **Overview waveform** (height 64): the whole track. The preview tag of the
    selected palette (PWV6 3-band by default; PWAV blue; PWV4 RGB) drawn
    centred with `rx_wave_draw` (inset 8 above, 2 below as rekordbox). Over
@@ -63,35 +65,56 @@ The full width of the window. Rows, top to bottom:
    edges in solid orange. Dragging scrubs (the engine plays grains); the wheel
    zooms. Right-click opens the cue context menu (set memory cue here, set hot
    cue A–H here, delete, colour, name).
-4. **Control row** (height 120), three groups left to right:
-   - **Transport** (left, 120 wide): `CUE` (round, orange ring, lit while a
-     cue point exists; pressed = down), `PLAY/PAUSE` (round, green ring, lit
-     when playing), under them `Q` quantize toggle (green when on) and the
-     beat jump pair `◄ ►` with the size button between (`4Beats` default;
-     click cycles Fine/4Beats/8Beats/16Beats/8Bars/16Bars/32Bars; right-click
-     picks from a menu).
-   - **Pads** (centre, 2×4 grid of 56×36 pads): mode tabs above: `HOT CUE`,
-     `BEAT LOOP`, `BEAT JUMP`, `MEMORY`.
-     - HOT CUE: pads A–H. Empty: dark with the dim letter. Set: filled in the
-       cue's colour (default per slot, `rx_hot_cue_default_rgb`) with the
-       letter and the position (`1:02.5`) small; a hot loop shows a loop
-       glyph. Press = set/call per the engine rules; shift-click or the pad's
-       `×` (top-right corner on hover) deletes; right-click = colour and name.
-     - BEAT LOOP: 1/4 1/2 1 2 4 8 16 32 (and /2, ×2 as the last two pads of
-       the second row? no: `LOOP IN`, `LOOP OUT`, `EXIT/RELOOP`, `/2`, `×2`,
-       `MEMORY LOOP` as a button strip under the pads in this mode). The pad
-       of the running loop length is lit orange.
-     - BEAT JUMP: −32 −16 −8 −4 +4 +8 +16 +32 bars/beats (beats).
-     - MEMORY: `MEMORY` (store cue point / active loop), `◄ CUE`, `CUE ►`,
-       `DELETE`, and the memory cue list to the right (scrolling): each row
-       with its colour dot, type (cue/loop with length in beats), position,
-       name (editable on double-click), an `ACTIVE` toggle for loops, a `×`.
-       Clicking a row calls it.
-   - **Tempo** (right, 90 wide): vertical slider ±6/±10/±16/WIDE (range
-     button cycles), 0 detent, the percentage readout (`+0.00%`), `RESET`.
-     No master tempo and no sync: this is a preparation tool.
-5. **Grid tools** (collapsible strip, height 28, toggled by the `GRID` button
-   in the title row): BPM field (editable, Enter applies to the section under
+4. **Control row** (height 140). There are no modes or tabs: every group
+   is shown at once, left to right, 16 px apart. Each group but transport
+   and tempo has a small dim caps label at its top (10.5 px bold); the pads
+   sit under the labels, and the 24 px strips, the transport row, the last
+   MEMORY button and `MT` share the bottom line.
+   - **Transport** (120 wide): `CUE` (round, orange ring, lit while a cue
+     point exists; pressed = down) and `PLAY/PAUSE` (round, green ring, lit
+     when playing) level with the pads; under them `Q` quantize toggle
+     (green when on) and the beat jump pair `◄ ►` with the size button
+     between (`4Beats` default; click cycles Fine/4Beats/8Beats/16Beats/
+     8Bars/16Bars/32Bars; right-click picks from a menu). The arrows jump
+     on the press and, held, again every 120 ms after 300 ms.
+   - **HOT CUE**: pads A–H in two rows of four, 40 tall. Empty: dark with
+     the dim letter. Set: filled in the cue's colour (default per slot,
+     `rx_hot_cue_default_rgb`) with the letter (16 px) and the name or
+     position (`1:02.5`, 11 px); a hot loop shows a loop glyph. Press =
+     set/call per the engine rules; shift-click or the pad's `×` (top-right
+     corner on hover) deletes; right-click = colour and name. Under them
+     the beat jump strip: `−32 −16 −8 −4 +4 +8 +16 +32` beats (with
+     `◄`/`►` when they fit), repeating while held like the arrows.
+   - **BEAT LOOP**: `1/4 1/2 1 2 4 8 16 32` beat loops in two rows of four,
+     the pad of the running loop lit orange; under them the loop strip
+     `IN`, `OUT`, `EXIT`/`RELOOP`, `÷2`, `×2`.
+   - **MEMORY**: a column of four buttons 96 wide: `MEMORY` (store the cue
+     point or the active loop, `M`), `◄ CUE` and `CUE ►` (call the
+     previous / next memory cue, `B` / `N`), `DELETE` (the one at the
+     playhead, `X`).
+   - **CUES**: every cue of the track in one list sorted by time, rows 24
+     tall in 13 px: memory cues with their colour dot, hot cues with their
+     lettered badge, then the type (`CUE`, `LOOP 4`), position, bar.beat,
+     the name (a double-click or the row menu's Rename edits it in place;
+     a hot cue's goes through the controls as the pad popup's does), an
+     `ACTIVE` toggle for memory loops, a `×`. Clicking a row calls the cue
+     (a hot cue as its pad: press and release; a memory cue with
+     `rx_ctl_memory_call`); right-click: rename, colour, delete. The count
+     at the top right reads `3/10 memory · 2/8 hot`. The list takes the
+     width the other groups leave, at least 240: the pads are
+     `clamp((room − 16·3 − 96 − 240) / 8 − 4, 60, 84)` wide, where room is
+     the space between transport and tempo. Narrower than that the list
+     shrinks, and the groups are clipped short of tempo, never drawn over
+     it.
+   - **Tempo** (96 wide): vertical slider ±6/±10/±16/WIDE (range button
+     cycles), 0 detent, the percentage readout (`+0.00%`), `RESET`, and
+     `MT` (MASTER TEMPO, key lock: the pitch stays while the tempo
+     changes), lit orange while the deck reports `master_tempo`. Its wish
+     is kept in the layout (`MasterTempo=`) and given to the player on the
+     first frame; a player that cannot keep the pitch refuses and the
+     button stays off. No sync: this is a preparation tool.
+5. **Grid tools** (collapsible strip, height 32 with 11 px legends, toggled
+   by the `GRID` button in the title row): BPM field (editable, Enter applies to the section under
    the playhead), `TAP` (tap tempo: ≥ 4 taps set the BPM, the first tap the
    downbeat if `SET` is then pressed), `◄ ►` nudge the grid ±5 ms (shift:
    ±1 ms), `SET DOWNBEAT` (the nearest beat becomes beat 1), `SPLIT` (a new
@@ -124,8 +147,9 @@ thumbnail, textures cached per track with an LRU of ~400), Track Title,
 Key, BPM, Time, Rating (five stars, click sets), Artist, Color (a dot),
 Genre, Year, Date Added; Album, Location, Plays and Last Played exist but
 are hidden by default (the header's context menu shows them). There is no
-hot cue column: the player's cue list shows a loaded track's cues. Row height 40 when
-artwork is shown, else 22. Selected rows highlighted; the focused row has a
+hot cue column: the player's cue list shows a loaded track's cues. Cell
+text is 14 px, the title 15 px, `#` and the dates 12.5 px. Row height 40
+when artwork is shown, else 22. Selected rows highlighted; the focused row has a
 1 px outline. A row whose file is missing is drawn greyed out with a "missing" glyph,
 cannot be loaded or analysed, and offers Relocate… in its context menu;
 an unanalysed row shows `—` for BPM/key and a thin flat preview; a row being
@@ -197,8 +221,8 @@ rekordbox's Export preset for player 1 (no shifted second-player set):
 | / and \ | Loop ÷2 / ×2 |
 | 1 2 3 (and Ctrl+1..3) | Hot cue A B C set/call (clear) |
 | F1–F8 … | not bound in v1 |
-| ← → | Beat jump reverse / forward |
-| Ctrl+← Ctrl+→ | Shift grid left/right (5 ms) |
+| ← → | Beat jump reverse / forward; held, again every 120 ms after 300 ms |
+| Ctrl+← Ctrl+→ | Shift grid left/right (5 ms), once per press |
 | Ctrl+G | Toggle grid tools |
 | A S D F G H J K L ; | Memory cue 1–10 |
 | Ctrl+F | Search |

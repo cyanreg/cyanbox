@@ -8,7 +8,7 @@
 //
 // Preferences live in the library: the palette, the detail zoom and the two
 // splits in RXConfig (ui.* settings); the rest of the layout (the table's
-// columns, the info panel, pad mode, jump size...) is ImGui's ini text,
+// columns, the info panel, jump size, master tempo...) is ImGui's ini text,
 // stored whole in the "ui.layout" setting instead of a file.
 //
 // The headless test hooks are environment variables read here:
@@ -227,6 +227,15 @@ void ui_icon(ImDrawList *dl, UiIcon icon, ImVec2 a, ImVec2 b, ImU32 col)
         dl->AddLine(ImVec2(c.x - k, c.y + k), ImVec2(c.x + k, c.y - k), col, t);
         break;
     }
+    case UI_ICON_DIVIDE: {
+        // Drawn rather than set: the font's obelus at button sizes reads
+        // as a plus.
+        float k = r * 0.55f, t = ImMax(1.0f, r * 0.18f), d = ImMax(1.0f, r * 0.15f);
+        dl->AddLine(ImVec2(c.x - k, c.y), ImVec2(c.x + k, c.y), col, t);
+        dl->AddCircleFilled(ImVec2(c.x, c.y - k * 0.8f), d, col, 8);
+        dl->AddCircleFilled(ImVec2(c.x, c.y + k * 0.8f), d, col, 8);
+        break;
+    }
     case UI_ICON_PLUS:
     case UI_ICON_MINUS: {
         float k = r * 0.55f, t = ImMax(1.0f, r * 0.18f);
@@ -361,6 +370,17 @@ bool ui_button(UiState *ui, const char *id, ImVec2 size, const UiButton &b)
     if (b.disabled)
         ImGui::EndDisabled();
     ImGui::PopID();
+    if (b.repeat) {
+        // Held: once on the press (the duration is 0 on that frame), then
+        // at the beat jump keys' rate; letting go does nothing more.
+        pressed = false;
+        if (ImGui::IsItemActive() && !b.disabled) {
+            ImGuiIO &io = ImGui::GetIO();
+            float t = io.MouseDownDuration[ImGuiMouseButton_Left];
+            pressed = t >= 0 && ImGui::CalcTypematicRepeatAmount(t - io.DeltaTime, t, UI_REPEAT_DELAY,
+                                                                 UI_REPEAT_RATE) > 0;
+        }
+    }
 
     ImDrawList *dl = ImGui::GetWindowDrawList();
     ImVec2 p0 = ImGui::GetItemRectMin(), p1 = ImGui::GetItemRectMax();
@@ -386,14 +406,22 @@ bool ui_button(UiState *ui, const char *id, ImVec2 size, const UiButton &b)
         dl->AddRect(p0, p1, IM_COL32(0x60, 0x60, 0x60, 0xFF), rounding);
 
     float fs = b.font > 0 ? b.font : 11.0f;
+    if (b.label) {
+        // A label that would spill over the edges is set smaller instead.
+        float room = p1.x - p0.x - PX(6) - (b.icon != UI_ICON_NONE ? PX(fs + 3) : 0);
+        float tw = ui_text_width(ui, ui->font_bold, fs, b.label);
+        if (tw > room && room > 0)
+            fs = ImMax(fs * room / tw, 7.5f);
+    }
     if (b.icon != UI_ICON_NONE && b.label) {
         float isz = PX(fs);
-        float tw = ui_text_width(ui, nullptr, fs, b.label);
+        float tw = ui_text_width(ui, ui->font_bold, fs, b.label);
         float x = (p0.x + p1.x - isz - PX(3) - tw) * 0.5f;
         float cy = (p0.y + p1.y) * 0.5f;
-        ui_icon(dl, b.icon, ImVec2(x, cy - isz * 0.5f), ImVec2(x + isz, cy + isz * 0.5f), text);
-        ui_text(ui, dl, nullptr, fs, ImVec2(x + isz + PX(3), cy - PX(fs) * 0.5f - PX(1)), text,
-                b.label);
+        float ix = b.icon_after ? x + tw + PX(3) : x;
+        float tx = b.icon_after ? x : x + isz + PX(3);
+        ui_icon(dl, b.icon, ImVec2(ix, cy - isz * 0.5f), ImVec2(ix + isz, cy + isz * 0.5f), text);
+        ui_text(ui, dl, ui->font_bold, fs, ImVec2(tx, cy - PX(fs) * 0.5f - PX(1)), text, b.label);
     } else if (b.icon != UI_ICON_NONE) {
         float m = ImMin(p1.x - p0.x, p1.y - p0.y) * 0.18f;
         ui_icon(dl, b.icon, ImVec2(p0.x + m, p0.y + m), ImVec2(p1.x - m, p1.y - m), text);
@@ -607,10 +635,10 @@ static void ini_line(ImGuiContext *, ImGuiSettingsHandler *h, void *, const char
         ud->jump_size = ImClamp(i, 0, UI_NB_JUMP - 1);
     else if (sscanf(line, "TempoRange=%d", &i) == 1)
         ud->tempo_range = ImClamp(i, 0, UI_NB_TEMPO_RANGES - 1);
-    else if (sscanf(line, "Pads=%d", &i) == 1)
-        dv->pad_mode = ImClamp(i, 0, 3);
-    else if (sscanf(line, "CueList=%d", &i) == 1)
-        dv->panel = ImClamp(i, 0, 1);
+    else if (sscanf(line, "MasterTempo=%d", &i) == 1)
+        ud->master_tempo = i != 0;
+    // Older layouts' Pads= and CueList= (the pad mode and cue list tabs,
+    // gone since every group is shown at once) fall through, ignored.
 }
 
 static void ini_write(ImGuiContext *, ImGuiSettingsHandler *h, ImGuiTextBuffer *out)
@@ -620,8 +648,8 @@ static void ini_write(ImGuiContext *, ImGuiSettingsHandler *h, ImGuiTextBuffer *
     UiDeck *ud = &ui->decks[0];
     out->appendf("[rxbox][ui]\n");
     out->appendf("ShowInfo=%d\nDetailHalf=%d\n", ui->show_info, ui->detail_half);
-    out->appendf("GridTools=%d\nJump=%d\nTempoRange=%d\nPads=%d\nCueList=%d\n\n",
-                 dv->grid_edit, ud->jump_size, ud->tempo_range, dv->pad_mode, dv->panel);
+    out->appendf("GridTools=%d\nJump=%d\nTempoRange=%d\nMasterTempo=%d\n\n", dv->grid_edit,
+                 ud->jump_size, ud->tempo_range, ud->master_tempo);
 }
 
 static void layout_changed(UiState *ui)
@@ -955,8 +983,7 @@ int rx_ui_init(RXApp *app)
         ud->jump_size = 1;
         ud->tempo_range = 0;
         ud->ctx_cue = -1;
-        ud->pad_popup_slot = -1;
-        ud->edit_memory = -1;
+        ud->edit_cue = -1;
     }
     app->ui = ui;
 
@@ -995,7 +1022,7 @@ int rx_ui_init(RXApp *app)
     ui->font_base = ImGui::GetStyle().FontSizeBase > 0 ? ImGui::GetStyle().FontSizeBase : 15.0f;
     load_bold_font(ui);
 
-    // The rest of the layout (table columns, pad mode...) is ImGui's ini
+    // The rest of the layout (table columns, jump size...) is ImGui's ini
     // text, kept in the library rather than in a file next to the binary.
     ImGuiSettingsHandler h;
     h.TypeName = "rxbox";
@@ -1101,14 +1128,6 @@ static void autoshow(UiState *ui)
         ui->dlg_about = true;
     if (shown(ui, "demo"))
         app->show_demo = true;
-    if (shown(ui, "memory"))
-        app->decks[0].pad_mode = UI_PADS_MEMORY;
-    if (shown(ui, "loop"))
-        app->decks[0].pad_mode = UI_PADS_BEAT_LOOP;
-    if (shown(ui, "jump"))
-        app->decks[0].pad_mode = UI_PADS_BEAT_JUMP;
-    if (shown(ui, "hotlist"))
-        app->decks[0].panel = 1;
 }
 
 static void autoload_tick(UiState *ui)
@@ -1160,6 +1179,14 @@ bool rx_ui_frame(RXApp *app)
         ui->s = 1.0f;
 
     autoload_tick(ui);
+    // MASTER TEMPO as the layout remembers it, once there is a player. A
+    // player that cannot keep the pitch refuses and the deck stays off;
+    // the wish is kept for a run where it can.
+    if (!ui->master_tempo_applied && app->player) {
+        ui->master_tempo_applied = true;
+        if (ui->decks[0].master_tempo && !rx_deck_set_master_tempo(app->player, 0, true))
+            rx_info("ui: master tempo is not available, the deck plays without it");
+    }
     if (!ui->test_events.empty())
         test_events(ui);
     // The screenshot hook: this is the frame to keep; the window saves it
@@ -1203,7 +1230,7 @@ bool rx_ui_frame(RXApp *app)
     // row, the grid strip when shown) and a detail of at least 80 px; its
     // natural height has the full 160 px detail. The browser keeps at least
     // a few rows.
-    float fixed = PX(56 + 64 + 120 + 5 * 4 + 12) + (app->decks[0].grid_edit ? PX(32) : 0);
+    float fixed = PX(64 + 64 + 140 + 5 * 4 + 12) + (app->decks[0].grid_edit ? PX(32 + 4) : 0);
     float natural = fixed + PX(160), smallest = fixed + PX(80);
     float max_deck = ImMax(body_h - PX(200), smallest);
     float want = ui->deck_split < 0 ? natural : floorf(ui->deck_split * body_h);

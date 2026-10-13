@@ -92,7 +92,10 @@ static const UiJumpSize UI_JUMP_SIZES[] = {
 static const double UI_TEMPO_RANGES[] = { 6, 10, 16, 100 };
 #define UI_NB_TEMPO_RANGES 4
 
-enum UiPadMode { UI_PADS_HOT_CUE = 0, UI_PADS_BEAT_LOOP, UI_PADS_BEAT_JUMP, UI_PADS_MEMORY };
+// Beat jump repeats while held, from the keys and the buttons alike: the
+// first jump on the press, then one every 120 ms once held for 300 ms.
+#define UI_REPEAT_DELAY 0.300f
+#define UI_REPEAT_RATE  0.120f
 
 /* -------------------------------------------------------------------- state */
 
@@ -105,6 +108,7 @@ struct UiDeck {
     bool     time_remaining;   // time readout shows remaining (T)
     int      tempo_range;      // index into UI_TEMPO_RANGES
     int      jump_size;        // index into UI_JUMP_SIZES
+    bool     master_tempo;     // MASTER TEMPO as last asked for (the layout keeps it)
 
     // Waveform drag state (overview and detail share one deck scrub).
     int      drag_area;        // 0 none, 1 overview, 2 detail
@@ -118,9 +122,8 @@ struct UiDeck {
     int      ctx_cue;          // cue index under the pointer, -1
 
     // Hot cue pad popup and name editing.
-    int      pad_popup_slot;
     char     name_buf[RX_CUE_NAME_MAX];
-    int      edit_memory;      // memory list row whose name is edited, -1
+    int      edit_cue;         // cue list row whose name is edited, -1
     bool     edit_focus;
 
     // Grid tools.
@@ -243,6 +246,7 @@ struct UiState {
     std::string autoshow;      // panels and dialogs to open (test hook)
     std::vector<UiTestEvent> test_events;   // input to give ImGui (test hook)
     bool      autoload_done;
+    bool      master_tempo_applied;    // the remembered MASTER TEMPO went to the player
     double    saved_zoom;
 };
 
@@ -272,7 +276,8 @@ void  ui_text_centre(UiState *ui, ImDrawList *dl, ImFont *font, float size, ImVe
 // Buttons drawn on the draw list; an InvisibleButton underneath so
 // IsItemActivated/IsItemDeactivated give press and release.
 enum UiIcon { UI_ICON_NONE = 0, UI_ICON_LEFT, UI_ICON_RIGHT, UI_ICON_PLAY, UI_ICON_PAUSE,
-             UI_ICON_PLAYPAUSE, UI_ICON_LOOP, UI_ICON_CROSS, UI_ICON_PLUS, UI_ICON_MINUS };
+             UI_ICON_PLAYPAUSE, UI_ICON_LOOP, UI_ICON_CROSS, UI_ICON_PLUS, UI_ICON_MINUS,
+             UI_ICON_DIVIDE };
 struct UiButton {
     const char *label;         // shown text (may be NULL)
     UiIcon icon;
@@ -282,7 +287,9 @@ struct UiButton {
     bool   lit;                // drawn in `lit_col`
     ImU32  lit_col;            // 0: accent
     bool   disabled;
-    float  font;               // 0: 11
+    bool   repeat;             // held: true on the press, then at UI_REPEAT_RATE
+    bool   icon_after;         // the icon right of the label ("CUE >")
+    float  font;               // 0: 11; a label too wide for the button shrinks
     float  rounding;           // -1: 3
 };
 bool ui_button(UiState *ui, const char *id, ImVec2 size, const UiButton &b);
