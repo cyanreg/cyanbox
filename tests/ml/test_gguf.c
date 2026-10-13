@@ -127,7 +127,8 @@ static int write_gguf(const KV *kv, int nb_kv, const Tensor *t, int nb, uint64_t
         *data_offset = start;
 
     int fd = memfd_create("gguf", MFD_CLOEXEC);
-    if (fd < 0 || write(fd, b.p, b.n) != (ssize_t)b.n || ftruncate(fd, (off_t)(start + data_size))) {
+    if (fd < 0 || write(fd, b.p, b.n) != (ssize_t)b.n ||
+        ftruncate(fd, (off_t)(start + data_size))) {
         perror("memfd");
         exit(1);
     }
@@ -357,16 +358,26 @@ static int try_model(const char *name, void (*edit)(Tensor *), Log *log)
     uint64_t need = lay_out(t, nb, 32);
 
     static const struct { const char *key; uint64_t v; } shape[] = {
-        { "moss_audio.enc.num_mel_bins", 128 },     { "moss_audio.enc.encoder_layers", 32 },
-        { "moss_audio.enc.d_model", 1280 },         { "moss_audio.enc.encoder_attention_heads", 20 },
-        { "moss_audio.enc.encoder_ffn_dim", 5120 }, { "moss_audio.enc.downsample_hidden_size", 480 },
-        { "moss_audio.adapter.hidden_size", 8192 }, { "moss_audio.llm.hidden_size", 2560 },
-        { "moss_audio.llm.num_layers", 36 },        { "moss_audio.llm.num_heads", 32 },
-        { "moss_audio.llm.num_kv_heads", 8 },       { "moss_audio.llm.head_dim", 128 },
-        { "moss_audio.llm.intermediate_size", 9728 }, { "moss_audio.llm.vocab_size", 151936 },
-        { "moss_audio.deepstack.num_taps", 3 },     { "moss_audio.deepstack.tap.0", 8 },
-        { "moss_audio.deepstack.tap.1", 16 },       { "moss_audio.deepstack.tap.2", 24 },
-        { "moss_audio.audio_token_id", 151654 },    { "moss_audio.audio_start_id", 151669 },
+        { "moss_audio.enc.num_mel_bins", 128 },
+        { "moss_audio.enc.encoder_layers", 32 },
+        { "moss_audio.enc.d_model", 1280 },
+        { "moss_audio.enc.encoder_attention_heads", 20 },
+        { "moss_audio.enc.encoder_ffn_dim", 5120 },
+        { "moss_audio.enc.downsample_hidden_size", 480 },
+        { "moss_audio.adapter.hidden_size", 8192 },
+        { "moss_audio.llm.hidden_size", 2560 },
+        { "moss_audio.llm.num_layers", 36 },
+        { "moss_audio.llm.num_heads", 32 },
+        { "moss_audio.llm.num_kv_heads", 8 },
+        { "moss_audio.llm.head_dim", 128 },
+        { "moss_audio.llm.intermediate_size", 9728 },
+        { "moss_audio.llm.vocab_size", 151936 },
+        { "moss_audio.deepstack.num_taps", 3 },
+        { "moss_audio.deepstack.tap.0", 8 },
+        { "moss_audio.deepstack.tap.1", 16 },
+        { "moss_audio.deepstack.tap.2", 24 },
+        { "moss_audio.audio_token_id", 151654 },
+        { "moss_audio.audio_start_id", 151669 },
         { "moss_audio.audio_end_id", 151670 },
     };
     KV kv[RX_ARRAY_ELEMS(shape) + 1];
