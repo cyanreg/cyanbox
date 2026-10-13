@@ -54,6 +54,16 @@ typedef struct RXJobResult {
 int  rx_jobs_create(RXJobs **j, int threads);
 void rx_jobs_destroy(RXJobs *j);      /* cancels pending, waits for running */
 
+/* The GPU the analyses' spectral front end runs on (rxbox/compute.h). The
+ * pool makes one compute context, when its first analysis starts, on the
+ * device whose name contains `device` (NULL: $RXBOX_GPU_DEVICE, else the
+ * best one), shares it between its workers, and destroys it in
+ * rx_jobs_destroy after the last of them. `enable` false, or
+ * RXBOX_ANALYSIS_GPU=0, or no usable device, and the analyses run on the
+ * CPU. An analysis whose options carry a context of their own uses that.
+ * Default: enabled, no name. Call before the first rx_jobs_analyse. */
+void rx_jobs_set_gpu(RXJobs *j, bool enable, const char *device);
+
 /* Each returns a request id > 0 or a negative errno. */
 uint64_t rx_jobs_analyse(RXJobs *j, uint64_t track_id, const char *path,
                          const RXAnalysisOptions *opt, unsigned what);

@@ -13,6 +13,10 @@
  * grid locks, waveforms, automatic cues), printed as one line per track.
  * The library (a directory holding library.db) is -c/--library DIR, else
  * $RXBOX_LIBRARY, else ~/.local/share/rxbox (rx_library_default_root).
+ * The analysis' spectral front end runs on a GPU when there is one
+ * (rxbox/compute.h, through the jobs pool): --device NAME picks it, as it
+ * picks the window's, and --no-gpu keeps the analysis on the CPU. Neither
+ * needs a display.
  *
  * Arguments: options and names mix in any order after the command; `--`
  * ends the options, so every argument after it is a name, even one that
@@ -46,7 +50,8 @@ typedef struct Cli {
     const char *library;        /* -c/--library, NULL: the default */
     enum RXAudioBackend audio;
     const char *sink;
-    const char *device;
+    const char *device;         /* --device: the window's GPU and the analysis' */
+    bool  no_gpu;               /* --no-gpu: analyse on the CPU only */
     int   frames;
     bool  validation;
     bool  verbose;
@@ -108,6 +113,9 @@ static const char usage_text[] =
     "  -c, --library DIR        the library (default: $RXBOX_LIBRARY, else\n"
     "                           ~/.local/share/rxbox)\n"
     "  -v, --verbose            more messages\n"
+    "  --device NAME            the GPU whose name contains NAME, for the analysis and the\n"
+    "                           interface (default: $RXBOX_GPU_DEVICE, else the best one)\n"
+    "  --no-gpu                 analyse on the CPU only (as RXBOX_ANALYSIS_GPU=0)\n"
     "  --                       after a command: the rest are names, even ones starting\n"
     "                           with -\n"
     "  -h, --help               this text\n"
@@ -116,7 +124,6 @@ static const char usage_text[] =
     "Interface options:\n"
     "  --audio pipewire|none    audio output; none plays to no device at all\n"
     "  --audio-sink NAME        the PipeWire node to play to\n"
-    "  --device NAME            prefer the GPU whose name contains NAME\n"
     "  --validation             enable the Vulkan validation layer\n"
     "  --frames N               draw N frames, then exit (tests)\n";
 
@@ -225,6 +232,19 @@ static int common_option(Cli *cli, int argc, char **argv, int *i)
     if (opt_flag(cli, argv[*i], "-v", "--verbose")) {
         cli->verbose = true;
         rx_log_set_level(RX_LOG_DEBUG);
+        return 1;
+    }
+    r = opt_value(cli, argc, argv, i, NULL, "--device", &val);
+    if (r < 0) {
+        usage_error(cli, "--device needs a GPU name");
+        return -1;
+    }
+    if (r > 0) {
+        cli->device = val;
+        return 1;
+    }
+    if (opt_flag(cli, argv[*i], NULL, "--no-gpu")) {
+        cli->no_gpu = true;
         return 1;
     }
     return 0;
@@ -495,6 +515,7 @@ static int analyse_tracks(Cli *cli, RXTrack **tracks, int nb, unsigned what, boo
             fail("cannot start the analysis threads: %s", strerror(-ret));
             return todo;
         }
+        rx_jobs_set_gpu(app->jobs, !cli->no_gpu, cli->device);
     }
 
     RXAnalysisOptions opt;
@@ -1984,6 +2005,7 @@ static int run_interface(Cli *cli)
     wo.title = "rxbox";
     wo.validation = cli->validation;
     wo.device = cli->device;
+    wo.cpu_analysis = cli->no_gpu;
     wo.max_frames = cli->frames;
 
     char *root = cli->library ? abs_path(cli->library) : NULL;
@@ -2079,12 +2101,6 @@ static int cli_run(int argc, char **argv)
             if (r < 0)
                 return usage_error(NULL, "--audio-sink needs a PipeWire node name");
             cli.sink = val;
-            continue;
-        }
-        if ((r = opt_value(&cli, argc, argv, &i, NULL, "--device", &val))) {
-            if (r < 0)
-                return usage_error(NULL, "--device needs a GPU name");
-            cli.device = val;
             continue;
         }
         if ((r = opt_value(&cli, argc, argv, &i, NULL, "--frames", &val))) {

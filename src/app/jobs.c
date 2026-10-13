@@ -40,7 +40,16 @@
  * whole budget is still analysed, alone. A waiting job has not started:
  * it is not counted as running, shows no active track, and can be
  * cancelled. Jobs that fit go ahead of one that does not; the queue is
- * finite, so that one runs at the latest when the others are done. */
+ * finite, so that one runs at the latest when the others are done.
+ *
+ * The GPU: the analyses' spectral front end runs on one compute context
+ * (rxbox/compute.h) that all the workers share. It is made when the first
+ * analysis starts, not with the pool, so a pool that never analyses (the
+ * interface's I/O pool, a CLI command that only reads) never touches
+ * Vulkan; it goes in rx_jobs_destroy, once the pool has joined its last
+ * worker. The context serialises its own queue submissions and each
+ * analysis has its own command pools, so workers never wait for each
+ * other's transforms. */
 
 #include "rxbox/jobs.h"
 
@@ -104,6 +113,15 @@ struct RXJobs {
     int running;                    /* atomic */
     Slot *slots;
     int nb_slots;
+
+    /* The analyses' GPU (rx_jobs_set_gpu), made by the first analysis
+     * under its own lock: making it takes a moment, and `lock` is the
+     * owner thread's too. */
+    pthread_mutex_t gpu_lock;       /* guards the four below */
+    bool gpu_enable;
+    bool gpu_tried;
+    char *gpu_device;
+    RXCompute *gpu;
 };
 
 static void job_free(Job *job)
@@ -185,12 +203,37 @@ static bool reserve(RXJobs *j, Job *job, int64_t bytes)
     return true;
 }
 
+/* The pool's compute context, made by the first analysis that asks; NULL
+ * when there is none (the analyses then run on the CPU). Workers that ask
+ * while it is being made wait for it rather than each make their own. */
+static RXCompute *jobs_gpu(RXJobs *j)
+{
+    pthread_mutex_lock(&j->gpu_lock);
+    if (!j->gpu_tried && j->gpu_enable) {
+        j->gpu_tried = true;
+        RXComputeOptions o;
+        rx_compute_options_default(&o);
+        o.device = j->gpu_device;
+        int ret = rx_compute_create(&j->gpu, &o);
+        if (ret < 0 && rx_compute_mode() == RX_COMPUTE_REQUIRED)
+            rx_err("jobs: RXBOX_ANALYSIS_GPU=1, but there is no GPU (%s); analysing on the CPU",
+                   strerror(-ret));
+        else if (ret < 0 && rx_compute_mode() != RX_COMPUTE_OFF)
+            rx_info("jobs: no GPU for the analyses (%s); they run on the CPU", strerror(-ret));
+    }
+    RXCompute *gpu = j->gpu;
+    pthread_mutex_unlock(&j->gpu_lock);
+    return gpu;
+}
+
 static int run_analyse(Job *job, RXJobResult *r)
 {
     RXAudio audio = { 0 };
     int ret = rx_decode(job->path, 1, 0, &audio);
     if (ret < 0)
         return ret;
+    if (!job->opt.compute)
+        job->opt.compute = jobs_gpu(job->j);
 
     RXAnalysis *a = calloc(1, sizeof(*a));
     if (!a) {
@@ -432,6 +475,14 @@ int rx_jobs_create(RXJobs **out, int threads)
         free(j);
         return RX_ERROR(ret);
     }
+    ret = pthread_mutex_init(&j->gpu_lock, NULL);
+    if (ret) {
+        pthread_cond_destroy(&j->budget_cond);
+        pthread_mutex_destroy(&j->lock);
+        free(j);
+        return RX_ERROR(ret);
+    }
+    j->gpu_enable = true;
     j->budget = analysis_budget();
     rx_debug("jobs: analyses may hold %lld MB at once", (long long)(j->budget >> 20));
 
@@ -457,6 +508,7 @@ fail:
     if (j->results)
         rx_mailbox_destroy(j->results);
     free(j->slots);
+    pthread_mutex_destroy(&j->gpu_lock);
     pthread_cond_destroy(&j->budget_cond);
     pthread_mutex_destroy(&j->lock);
     free(j);
@@ -478,10 +530,26 @@ void rx_jobs_destroy(RXJobs *j)
         rx_job_result_free(r);
     rx_mailbox_destroy(j->results);
 
+    /* No worker is left to use the GPU. */
+    rx_compute_destroy(&j->gpu);
+    free(j->gpu_device);
+    pthread_mutex_destroy(&j->gpu_lock);
+
     pthread_cond_destroy(&j->budget_cond);
     pthread_mutex_destroy(&j->lock);
     free(j->slots);
     free(j);
+}
+
+void rx_jobs_set_gpu(RXJobs *j, bool enable, const char *device)
+{
+    pthread_mutex_lock(&j->gpu_lock);
+    if (!j->gpu_tried) {
+        j->gpu_enable = enable;
+        free(j->gpu_device);
+        j->gpu_device = device && device[0] ? rx_strdup(device) : NULL;
+    }
+    pthread_mutex_unlock(&j->gpu_lock);
 }
 
 static uint64_t submit(RXJobs *j, Job *job)

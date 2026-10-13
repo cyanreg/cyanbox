@@ -517,7 +517,7 @@ int rx_compute_create(RXCompute **out, const RXComputeOptions *opt)
     if ((ret = create_device(c)) < 0)
         goto fail;
 
-    rx_info("compute: %s, Vulkan %u.%u, queue family %u%s", c->props.deviceName,
+    rx_debug("compute: %s, Vulkan %u.%u, queue family %u%s", c->props.deviceName,
             VK_API_VERSION_MAJOR(c->props.apiVersion), VK_API_VERSION_MINOR(c->props.apiVersion),
             c->qfam, c->ts_mask ? "" : " (no timestamps)");
     *out = c;

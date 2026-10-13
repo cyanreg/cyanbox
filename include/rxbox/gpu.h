@@ -32,7 +32,9 @@ typedef struct RXWindowOptions {
     const char *title;
     int   width, height;        /* logical; 1600x900 default */
     bool  validation;           /* enable VK_LAYER_KHRONOS_validation */
-    const char *device;         /* substring of the GPU name to prefer, NULL = first suitable */
+    const char *device;         /* substring of the GPU name to prefer, NULL = first suitable;
+                                   the analyses' compute context picks it too (rxbox/jobs.h) */
+    bool  cpu_analysis;         /* the analyses' spectral front end on the CPU only (--no-gpu) */
     int   max_frames;           /* exit after this many drawn frames (tests), 0 = never */
     const char *font;           /* a font file, NULL = system sans-serif via fontconfig
                                    plus a CJK fallback (Noto Sans CJK) when found */
