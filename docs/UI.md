@@ -16,16 +16,22 @@ Dark theme, no title bar decorations beyond the compositor's. Default
 
 ```
 ┌───────────────────────────────────────────────────────────────┐
-│ PLAYER (full width)                                           │  ~40 %
-├───────────┬───────────────────────────────────────────────────┤
-│ playlists │ track table (search above it)                     │  rest
-├───────────┴───────────────────────────────────────────────────┤
+│ PLAYER (full width)                                           │  ~50 %
+├───────────┬─────────────────────────────────────────┬─────────┤
+│ playlists │ track table (search above it)           │  INFO   │  rest
+├───────────┴─────────────────────────────────────────┴─────────┤
 │ status bar                                                    │  22 px
 └───────────────────────────────────────────────────────────────┘
 ```
 
-The deck band / browser split and the tree / table split are draggable
-(ImGui splitters) and remembered in `rxbox.toml` `[ui]`.
+The player takes half the body by default, or its natural height (every
+row with a 160 px detail waveform) when that is more, so at 1600×900 it
+keeps its natural height and at 1920×1080 the detail grows. Whatever the
+player has beyond its fixed rows goes to the detail waveform. The deck
+band / browser split and the tree / table split are draggable (ImGui
+splitters) and remembered in the library's `ui.split_player` and
+`ui.split_tree` settings. The info panel is always shown, 260 wide, right
+of the table.
 
 Colours (ImGui style): window background `#121212`, panels `#1E1E1E`,
 raised buttons `#2B2B2B`, text `#E6E6E6`, dim text `#8A8A8A`, accent (the
@@ -54,8 +60,9 @@ The full width of the window. Rows, top to bottom:
    `#FF8C00` at 30 %; the active one brighter), the played part dimmed to
    55 %, the playhead (1 px white line, 2 px when playing). Click seeks;
    drag scrubs. The 1-second ticks are not drawn.
-3. **Detail waveform** (height 160): the detail tag (PWV7/PWV3/PWV5) scrolling
-   under a fixed centre playhead (2 px, white, with a small triangle at the
+3. **Detail waveform** (160 at the player's natural height; it takes all
+   the height the player has beyond its other rows): the detail tag
+   (PWV7/PWV3/PWV5) scrolling under a fixed centre playhead (2 px, white, with a small triangle at the
    top and bottom). Shows `zoom_bars` bars (default 12; steps 0.25 0.5 1 2 4 8
    12 16 32 64 via mouse wheel over it or the `+`/`−` buttons at its right
    edge; `RST` resets to 12). Grid: beat lines in `#4C4C4C`, downbeats in
@@ -144,12 +151,14 @@ virtualised with the clipper): default columns in order: `#`, Preview
 (128 px: the PWV6 stacked-half waveform via `rx_wave_draw` in
 `RX_WAVE_HALF_STACKED`, 1200 columns into 128 px), Artwork (36 px
 thumbnail, textures cached per track with an LRU of ~400), Track Title,
-Key, BPM, Time, Rating (five stars, click sets), Artist, Color (a dot),
-Genre, Year, Date Added; Album, Location, Plays and Last Played exist but
-are hidden by default (the header's context menu shows them). There is no
-hot cue column: the player's cue list shows a loaded track's cues. Cell
-text is 14 px, the title 15 px, `#` and the dates 12.5 px. Row height 40
-when artwork is shown, else 22. Selected rows highlighted; the focused row has a
+Key, BPM, Time, Rating (five stars, click sets), Artist, Year, Date Added;
+Album, Location, Plays and Last Played exist but are hidden by default
+(the header's context menu shows them). There are no Color, Genre or Hot
+Cue columns: the info panel shows and edits a track's colour and genre,
+the player's cue list a loaded track's cues. Cell text is 14 px, the
+title 15 px, `#` and the dates 12.5 px. Below about 960 px the table
+scrolls sideways rather than squeeze Track Title and Artist. Row height
+40 when artwork is shown, else 22. Selected rows highlighted; the focused row has a
 1 px outline. A row whose file is missing is drawn greyed out with a "missing" glyph,
 cannot be loaded or analysed, and offers Relocate… in its context menu;
 an unanalysed row shows `—` for BPM/key and a thin flat preview; a row being
@@ -158,17 +167,18 @@ analysed shows a small spinner in the Preview cell.
 Actions: double-click loads the track into the player at once (a playing
 track is paused and replaced; the new one waits at its auto-cue); drag
 onto the player panel loads it; context menu: Load, Analyse (BPM/grid, key, both; force),
-Remove from playlist, Remove from library, Edit info, Show in folder
+Remove from playlist, Remove from library, Show in folder
 (prints the path to the status bar and copies it), Set colour, Set rating.
 Keyboard: up/down move the focus, Enter loads the focused track, Delete
 removes it from the playlist.
 
-**Info panel**: an "INFO" tab on the right of the table (toggle, 260 wide)
-showing the focused track's editable fields: title, artist, album, album
-artist, genre, label, remixer, composer, original artist, comment, year,
-track/disc numbers, rating, colour, My Tags (comma separated), file facts
-(type, size, rate, bit depth, bit rate, duration, path). Edits save on
-focus loss as overrides in the library (the file's own tags are kept).
+**Info panel**: always shown right of the table (260 wide, at most 40 %
+of the browser's width), the focused track's editable fields: title,
+artist, album, album artist, genre, label, remixer, composer, original
+artist, comment, year, track/disc numbers, rating, colour, My Tags (comma
+separated), file facts (type, size, rate, bit depth, bit rate, duration,
+path). Edits save on focus loss as overrides in the library (the file's
+own tags are kept).
 
 ## Status bar
 
@@ -184,8 +194,8 @@ A menu bar at the very top: **File** (Add files/folders… (ImGui file
 browser: a simple directory lister with a path field, since there is no
 native dialog), Export to USB…, Sync from USB…, Inspect USB…, Rescan
 missing files, Quit),
-**View** (waveform palette 3Band/Blue/RGB, key notation, show grid tools,
-show info panel, ImGui demo), **Analysis** (analyse selection, analyse all
+**View** (waveform colour 3Band/Blue/RGB, key notation, detail waveform
+centred/half, grid tools, ImGui demo), **Analysis** (analyse selection, analyse all
 unanalysed, re-analyse selection, analysis settings…), **Help** (about,
 keyboard map).
 

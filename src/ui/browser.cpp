@@ -1,9 +1,10 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
 // The browser's right side: the search field, the track table and the
-// INFO panel. The table is one ImGui table over app->rows (the view's
-// library indices, filtered and sorted by app.c), virtualised with the
-// clipper so a few thousand tracks cost only the visible rows. Columns
+// INFO panel, always shown beside the table. The table is one ImGui table
+// over app->rows (the view's library indices, filtered and sorted by
+// app.c), virtualised with the clipper so a few thousand tracks cost only
+// the visible rows. Columns
 // follow rekordbox's (rbxport src/lib/columns.ts: widths, the fixed `#`),
 // and their order, widths and visibility persist with the rest of the
 // layout. Sorting writes app->sort_column and lets app.c rebuild the rows;
@@ -23,8 +24,7 @@
 
 enum UiCol {
     COL_IDX = 0, COL_PREVIEW, COL_ART, COL_TITLE, COL_KEY, COL_BPM, COL_TIME, COL_RATING,
-    COL_ARTIST, COL_COLOR, COL_GENRE, COL_YEAR, COL_ADDED, COL_ALBUM, COL_PATH, COL_PLAYS,
-    COL_LAST_PLAYED, COL_N,
+    COL_ARTIST, COL_YEAR, COL_ADDED, COL_ALBUM, COL_PATH, COL_PLAYS, COL_LAST_PLAYED, COL_N,
 };
 
 #define NO_SORT (-2)
@@ -46,6 +46,8 @@ static const ImGuiTableColumnFlags ALWAYS = ImGuiTableColumnFlags_NoHide;
 // rekordbox's widths where rbxport measured them (Preview 128, Key 73,
 // BPM 80, Time 80, Rating 101); Track Title and Artist share the rest.
 // `#` is the view's own order and cannot be hidden, nor can the title.
+// There is no colour, genre or hot cue column: the info panel beside the
+// table shows and edits colour and genre, the player's cue list the cues.
 static const UiColSpec COLS[COL_N] = {
     { "#",            40, -1,            FIXED | ALWAYS | ImGuiTableColumnFlags_DefaultSort, true },
     { "Preview",     128, NO_SORT,       FIXED | UNSORTED, false },
@@ -56,8 +58,6 @@ static const UiColSpec COLS[COL_N] = {
     { "Time",         52, RX_COL_TIME,   FIXED, true },
     { "Rating",       74, RX_COL_RATING, FIXED, false },
     { "Artist",        2, RX_COL_ARTIST, STRETCH, false },
-    { "Color",        44, RX_COL_COLOR,  FIXED, false },
-    { "Genre",       110, RX_COL_GENRE,  FIXED, false },
     { "Year",         44, RX_COL_YEAR,   FIXED, true },
     { "Date Added",   84, RX_COL_ADDED,  FIXED, true },
     { "Album",       160, RX_COL_ALBUM,  FIXED | HIDDEN, false },
@@ -287,10 +287,6 @@ static void track_menu(UiState *ui)
         }
         ImGui::EndMenu();
     }
-    if (ImGui::MenuItem("Edit info", nullptr, false, n == 1)) {
-        ui->show_info = true;
-        ImGui::MarkIniSettingsDirty();
-    }
     if (ImGui::MenuItem("Show in folder")) {
         // No file manager is assumed: the path goes to the status bar and
         // the clipboard.
@@ -451,16 +447,6 @@ static void row_cells(UiState *ui, RXTrack *t, int row, float row_h, const uint6
         case COL_ARTIST:
             cell_text(ui, p, w, row_h, ui_artist(t), text, false);
             break;
-        case COL_COLOR: {
-            uint32_t rgb = ui_track_rgb(t);
-            if (rgb)
-                dl->AddCircleFilled(ImVec2(p.x + PX(10), p.y + row_h * 0.5f), PX(5),
-                                    ui_rgb(rgb, dim ? 0.4f : 1.0f), 16);
-            break;
-        }
-        case COL_GENRE:
-            cell_text(ui, p, w, row_h, t->meta.genre, text, false);
-            break;
         case COL_YEAR:
             if (t->meta.year > 0) {
                 snprintf(buf, sizeof(buf), "%d", t->meta.year);
@@ -505,8 +491,9 @@ static void table(UiState *ui, ImVec2 size)
     ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(PX(5), 0));
     // Title and Artist stretch over what the fixed columns leave; below a
     // width where they would be squeezed unreadable the table scrolls
-    // sideways instead, as rekordbox's does.
-    float inner = ImMax(size.x - ImGui::GetStyle().ScrollbarSize, PX(1320));
+    // sideways instead, as rekordbox's does: the fixed columns take about
+    // 690 px, which leaves the two at least 270.
+    float inner = ImMax(size.x - ImGui::GetStyle().ScrollbarSize, PX(960));
     if (!ImGui::BeginTable("##tracks", COL_N, flags, size, inner)) {
         ImGui::PopStyleVar();
         return;
@@ -647,7 +634,7 @@ void ui_browser(UiState *ui, ImVec2 size)
     ImVec2 a = ImGui::GetWindowPos();
     dl->AddRectFilled(a, ImVec2(a.x + size.x, a.y + size.y), UI_PANEL, PX(4));
 
-    // Header: the view and its count, the search field, INFO.
+    // Header: the view and its count, the search field.
     float hh = PX(30);
     ImGui::SetCursorScreenPos(ImVec2(a.x + PX(8), a.y));
     const char *view = app->current_playlist ? app->current_playlist->name : "Collection";
@@ -658,9 +645,8 @@ void ui_browser(UiState *ui, ImVec2 size)
     float vw = ImMin(ui_text_width(ui, ui->font_bold, 13.5f, view), size.x * 0.3f);
     ui_text(ui, dl, nullptr, 12.0f, ImVec2(a.x + PX(18) + vw, ty + PX(1)), UI_DIM, count);
 
-    float info_w = PX(48);
     float sw = ImClamp(size.x * 0.32f, PX(160), PX(360));
-    float sx = a.x + size.x - PX(8) - info_w - PX(6) - sw;
+    float sx = a.x + size.x - PX(8) - sw;
     ImGui::SetCursorScreenPos(ImVec2(sx, a.y + PX(4)));
     ImGui::SetNextItemWidth(sw);
     if (ui->focus_search) {
@@ -688,15 +674,6 @@ void ui_browser(UiState *ui, ImVec2 size)
             rx_app_rebuild_rows(app);
         }
     }
-    ImGui::SetCursorScreenPos(ImVec2(a.x + size.x - PX(8) - info_w, a.y + PX(4)));
-    UiButton ib = {};
-    ib.label = "INFO";
-    ib.lit = ui->show_info;
-    if (ui_button(ui, "info", ImVec2(info_w, hh - PX(8)), ib)) {
-        ui->show_info = !ui->show_info;
-        ImGui::MarkIniSettingsDirty();
-    }
-    ui_tooltip("Track information panel");
 
     ImGui::SetCursorScreenPos(ImVec2(a.x, a.y + hh));
     table(ui, ImVec2(size.x, size.y - hh));

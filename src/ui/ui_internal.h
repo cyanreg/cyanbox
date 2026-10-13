@@ -161,9 +161,8 @@ struct UiState {
 
     // Layout: the splits are RXConfig's (split_player, split_tree); the rest
 // is ImGui's ini text kept in the library's "ui.layout" setting (ui.cpp).
-    float  deck_split;         // fraction of the height for the player, < 0: natural height
+    float  deck_split;         // fraction of the height for the player, < 0: the default
     float  tree_width;         // logical pixels
-    bool   show_info;
     bool   detail_half;        // rekordbox 2 PLAYER half-height detail instead of CDJ centred
     int    key_notation;       // 0 classic, 1 Camelot, 2 Open Key
     bool   layout_dirty;

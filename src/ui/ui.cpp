@@ -15,7 +15,7 @@
 // RXBOX_UI_AUTOLOAD=<id> loads that track on the first frame and starts it
 // once it is loaded (RXBOX_UI_AUTOLOAD_AT=<seconds>: from there);
 // RXBOX_UI_SHOW=<list> opens panels and dialogs on the first frame (grid,
-// info, half, export, sync, inspect, analysis, add, keys, about, demo);
+// half, export, sync, inspect, analysis, add, keys, about, demo);
 // RXBOX_UI_SCREENSHOT=<png> saves frame 100 (RXBOX_UI_SCREENSHOT_FRAME=<n>:
 // frame n) through rx_window_screenshot_next(), which writes it once it is
 // presented, and the run goes on; a run that ends before that frame
@@ -625,9 +625,7 @@ static void ini_line(ImGuiContext *, ImGuiSettingsHandler *h, void *, const char
     RXDeckView *dv = &ui->app->decks[0];
     UiDeck *ud = &ui->decks[0];
     int i;
-    if (sscanf(line, "ShowInfo=%d", &i) == 1)
-        ui->show_info = i != 0;
-    else if (sscanf(line, "DetailHalf=%d", &i) == 1)
+    if (sscanf(line, "DetailHalf=%d", &i) == 1)
         ui->detail_half = i != 0;
     else if (sscanf(line, "GridTools=%d", &i) == 1)
         dv->grid_edit = i != 0;
@@ -637,8 +635,9 @@ static void ini_line(ImGuiContext *, ImGuiSettingsHandler *h, void *, const char
         ud->tempo_range = ImClamp(i, 0, UI_NB_TEMPO_RANGES - 1);
     else if (sscanf(line, "MasterTempo=%d", &i) == 1)
         ud->master_tempo = i != 0;
-    // Older layouts' Pads= and CueList= (the pad mode and cue list tabs,
-    // gone since every group is shown at once) fall through, ignored.
+    // Older layouts' ShowInfo= (the info panel is always shown now), Pads=
+    // and CueList= (the pad mode and cue list tabs, gone since every group
+    // is shown at once) fall through, ignored.
 }
 
 static void ini_write(ImGuiContext *, ImGuiSettingsHandler *h, ImGuiTextBuffer *out)
@@ -647,7 +646,7 @@ static void ini_write(ImGuiContext *, ImGuiSettingsHandler *h, ImGuiTextBuffer *
     RXDeckView *dv = &ui->app->decks[0];
     UiDeck *ud = &ui->decks[0];
     out->appendf("[rxbox][ui]\n");
-    out->appendf("ShowInfo=%d\nDetailHalf=%d\n", ui->show_info, ui->detail_half);
+    out->appendf("DetailHalf=%d\n", ui->detail_half);
     out->appendf("GridTools=%d\nJump=%d\nTempoRange=%d\nMasterTempo=%d\n\n", dv->grid_edit,
                  ud->jump_size, ud->tempo_range, ud->master_tempo);
 }
@@ -744,10 +743,6 @@ static void menu_bar(UiState *ui)
         ImGui::Separator();
         if (ImGui::MenuItem("Grid tools", "Ctrl+G", app->decks[0].grid_edit)) {
             app->decks[0].grid_edit = !app->decks[0].grid_edit;
-            layout_changed(ui);
-        }
-        if (ImGui::MenuItem("Info panel", nullptr, ui->show_info)) {
-            ui->show_info = !ui->show_info;
             layout_changed(ui);
         }
         ImGui::Separator();
@@ -1108,8 +1103,6 @@ static void autoshow(UiState *ui)
         return;
     if (shown(ui, "grid"))
         app->decks[0].grid_edit = true;
-    if (shown(ui, "info"))
-        ui->show_info = true;
     if (shown(ui, "half"))
         ui->detail_half = true;
     if (shown(ui, "export"))
@@ -1227,13 +1220,16 @@ bool rx_ui_frame(RXApp *app)
     float body_h = avail.y - status_h;
 
     // The player keeps room for every row (title, overview, the control
-    // row, the grid strip when shown) and a detail of at least 80 px; its
-    // natural height has the full 160 px detail. The browser keeps at least
-    // a few rows.
+    // row, the grid strip when shown) and a detail of at least 80 px. By
+    // default it takes half the body, or its natural height with a 160 px
+    // detail when that is more; whatever it has beyond its fixed rows goes
+    // to the detail waveform (ui_deck_panel). The browser keeps at least a
+    // few rows.
     float fixed = PX(64 + 64 + 140 + 5 * 4 + 12) + (app->decks[0].grid_edit ? PX(32 + 4) : 0);
     float natural = fixed + PX(160), smallest = fixed + PX(80);
     float max_deck = ImMax(body_h - PX(200), smallest);
-    float want = ui->deck_split < 0 ? natural : floorf(ui->deck_split * body_h);
+    float want = ui->deck_split < 0 ? ImMax(natural, floorf(0.5f * body_h))
+                                    : floorf(ui->deck_split * body_h);
     float deck_h = ImClamp(want, smallest, max_deck);
 
     ImGui::SetCursorScreenPos(ImVec2(origin.x + gap, origin.y + gap));
@@ -1262,15 +1258,14 @@ bool rx_ui_frame(RXApp *app)
         app->lib.cfg.split_tree = ui->tree_width;
         ui_save_config(ui);
     }
+    // Tree | table | info, the info panel always there.
     float tx = origin.x + gap + tree_w + split_h;
     float tw = origin.x + avail.x - gap - tx;
-    float info_w = ui->show_info ? ImMin(PX(260), tw * 0.4f) : 0;
+    float info_w = ImMin(PX(260), tw * 0.4f);
     ImGui::SetCursorScreenPos(ImVec2(tx, by));
-    ui_browser(ui, ImVec2(tw - (info_w > 0 ? info_w + gap : 0), bh - gap));
-    if (info_w > 0) {
-        ImGui::SetCursorScreenPos(ImVec2(tx + tw - info_w, by));
-        ui_info_panel(ui, ImVec2(info_w, bh - gap));
-    }
+    ui_browser(ui, ImVec2(tw - info_w - gap, bh - gap));
+    ImGui::SetCursorScreenPos(ImVec2(tx + tw - info_w, by));
+    ui_info_panel(ui, ImVec2(info_w, bh - gap));
 
     status_bar(ui, ImVec2(origin.x, origin.y + body_h), ImVec2(origin.x + avail.x, origin.y + avail.y));
     ImGui::End();
