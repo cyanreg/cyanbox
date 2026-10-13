@@ -33,19 +33,20 @@ typedef struct RXWaveforms {
     uint8_t  pwv2[RX_WAVE_PWV2_COLUMNS];
     uint8_t  pwv4[RX_WAVE_PWV4_COLUMNS * 6];
     uint8_t  pwv6[RX_WAVE_PWV6_COLUMNS * 3];
-    uint16_t gains[3];               /* PWVC: the low, mid, high gains PWV7 was scaled by */
+    uint16_t gains[3];               /* PWVC: dj's low, mid, high gains (docs/anlz.md 4.14) */
     int      rate;                   /* sample rate the columns were cut at (0 if unknown) */
 } RXWaveforms;
 
 /* From mono audio at the file's native rate on the players' timeline. A
  * byte-faithful port of dj's waveform.py (PWAV reproduces rekordbox on
- * 99.5 % of columns; the others are fitted approximations). Applies the
- * firmware minimums: PWAV height >= 2, PWV2 >= 1. */
+ * 99.5 % of columns; the others are fitted approximations), except PWV6
+ * and PWV7, which follow rbxport's analyser. Applies the firmware
+ * minimums: PWAV height >= 2, PWV2 >= 1. */
 int  rx_waveforms_compute(const float *mono, int64_t nb_samples, int rate, RXWaveforms *out);
 void rx_waveforms_free(RXWaveforms *w);
 /* The packed form stored in the library (and the .rxw file format):
  * "RXWV", version, nb_detail, rate, gains, then the tags. Unpack (and load)
- * return -EPROTO for a blob of another format version (versions 1 and 2
+ * return -EPROTO for a blob of another format version (versions 1 to 3
  * held older three-band levels): recompute the waveforms; -EINVAL for
  * damaged data. */
 int  rx_waveforms_pack(const RXWaveforms *w, uint8_t **data, size_t *size);

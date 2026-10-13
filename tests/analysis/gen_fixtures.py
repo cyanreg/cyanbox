@@ -11,9 +11,8 @@ form, no random numbers) as raw little-endian float32 mono (`<name>.f32`) and
 the waveform tags for each of them (`<name>.tags`): PWAV, PWV2, PWV3, PWV4,
 PWV5 and PWVC exactly as dj.analysis.waveform.compute produced them (without
 rxbox's firmware minimums; the C test applies those to this side before
-comparing), PWV6 and PWV7 by rxbox's per-band recalibration of dj's rule
-(three_band() below; dj's mid and high levels are several times too hot),
-and keys.txt, the
+comparing), PWV6 and PWV7 by rbxport's rules, which rxbox writes instead of
+dj's (three_band() below), and keys.txt, the
 expectations of test_key.c: the true key of each tonal() signal, with dj's
 answer for information (rxbox fixes dj's tuning estimate, so they differ).
 
@@ -227,18 +226,31 @@ SIGNALS = {
 
 # ------------------------------------------------------------------- output
 
-def three_band(x: np.ndarray, rate: int, gains: np.ndarray):
-    """rxbox's PWV7 and PWV6, which replace dj's (src/analysis/waveform.c has
-    the measurements against rekordbox's own bytes): the same band envelopes
-    and gains as dj, x = min(1, u / (GAIN_TARGET * BAND_SCALE)) of dj's
-    level u, PWV7 = 127 * x^1.5 (low, mid) and 127 * x^2.5 (high), PWV6 =
-    half the range mean of that (low, mid) and 0.5 * sqrt(127 * range mean)
-    (high). Mirrors the C step for step so the bytes agree exactly."""
+def _seqsum(v: np.ndarray) -> float:
+    """A sum added up in order, as the C does (np.sum adds pairwise)."""
+    return float(np.cumsum(v)[-1]) if len(v) else 0.0
+
+
+def three_band(x: np.ndarray, rate: int):
+    """rxbox's PWV7 and PWV6, which replace dj's: rbxport's analyser
+    (src/analysis/waveform.c, "PWV7" and "PWV6"), written here on whole
+    arrays as an independent check of the C, which streams. Every sum is
+    added in the C's order so the bytes agree exactly.
+
+    PWV7: one-pole low-passes at 200 Hz and 2 kHz split the samples into
+    low, mid (between the two) and high (above 2 kHz); each band's peak over
+    the column, to 0..255 truncated, halved. PWV6: over 1200 columns of
+    samples, the 200 Hz low-pass's mean square ** 0.45, and the mean
+    rectified mid (Butterworth high-pass 200 Hz, low-pass 2 kHz) and high
+    (high-pass 2 kHz); a two-column trailing average; each band scaled to a
+    mean of 92 times the mean column RMS, rounded half away from zero,
+    clamped to 127."""
     from scipy.signal import lfilter
 
     W = waveform
     x = x.astype(np.float64)
-    edges = W.column_edges(len(x), rate)
+    ns = len(x)
+    edges = W.column_edges(ns, rate)
     n = len(edges) - 1
     starts = edges[:-1]
     full = edges[1:] > starts
@@ -250,35 +262,42 @@ def three_band(x: np.ndarray, rate: int, gains: np.ndarray):
             out[full] = np.maximum.reduceat(np.abs(v), fs)
         return out
 
-    low = colmax(lfilter(*W._rbj("lp", W.LOW_HZ, rate), x))
-    mid = colmax(lfilter(*W._rbj("lp", W.MID_HIGH_HZ, rate), lfilter(*W._rbj("hp", W.MID_LOW_HZ, rate), x)))
-    high = colmax(lfilter(*W._rbj("hp", W.HIGH_HZ, rate), x))
-    band = np.stack([low, mid, high], axis=1)
-    env = np.empty_like(band)
-    for j in range(3):
-        r, prev, col, out = W.RELEASE[j], 0.0, band[:, j].tolist(), env[:, j]
-        for i, v in enumerate(col):
-            prev = v if v > prev * r else prev * r
-            out[i] = prev
-    u = np.minimum(127, W.BAND_SCALE * gains * env)
-    full = W.GAIN_TARGET * W.BAND_SCALE
-    x = np.minimum(1.0, u / full)
-    sx = np.sqrt(x)
-    v = np.empty_like(x)
-    v[:, :2] = x[:, :2] * sx[:, :2]
-    v[:, 2] = x[:, 2] * x[:, 2] * sx[:, 2]
-    pwv7 = np.floor(127 * v + 0.5).astype(np.uint8)
-    mean = W._range_mean(pwv7.astype(np.float64), *W._split(n, 1200))
-    p6 = np.empty_like(mean)
-    p6[:, :2] = 0.5 * mean[:, :2]
-    p6[:, 2] = 0.5 * np.sqrt(127 * mean[:, 2])
-    pwv6 = np.minimum(127, np.floor(p6 + 0.5))
-    return pwv7, pwv6.astype(np.uint8)
+    def onepole(fc):
+        c = math.exp(-2 * math.pi * fc / rate)
+        return lfilter([1 - c], [1, -c], x)
+
+    low = onepole(200.0)
+    below = onepole(2000.0)
+    split = np.stack([colmax(low), colmax(below - low), colmax(x - below)], axis=1)
+    pwv7 = (np.floor(255 * np.minimum(split, 1.0)).astype(np.int64) >> 1).astype(np.uint8)
+
+    mid = lfilter(*W._rbj("lp", min(2000.0, 0.45 * rate), rate),
+                  lfilter(*W._rbj("hp", min(200.0, 0.45 * rate), rate), x))
+    high = lfilter(*W._rbj("hp", min(2000.0, 0.45 * rate), rate), x)
+    sq, am, ah = low * low, np.abs(mid), np.abs(high)
+    v = np.zeros((1200, 3))
+    for b in range(1200):
+        a, e = b * ns // 1200, (b + 1) * ns // 1200
+        cnt = max(e - a, 1)
+        v[b] = [(_seqsum(sq[a:e]) / cnt) ** 0.45, _seqsum(am[a:e]) / cnt, _seqsum(ah[a:e]) / cnt]
+    mean = np.array([_seqsum(v[:, j]) for j in range(3)]) / 1200
+
+    count = np.diff(edges)
+    sumsq = W._colsum(x * x, edges)
+    held = count > 0
+    frames = int(held.sum())
+    target = _seqsum(np.sqrt(sumsq[held] / count[held])) / frames * 92.0 if frames else 0.0
+
+    v = (v + np.concatenate((v[:1], v[:-1]))) / 2
+    u = np.where(mean < 1e-6, 0.0, v * target / np.where(mean < 1e-6, 1.0, mean))
+    u = np.where(u - np.floor(u) >= 0.5, np.ceil(u), np.floor(u))
+    pwv6 = np.clip(u, 0, 127).astype(np.uint8)
+    return pwv7, pwv6
 
 
 def tags_bytes(x: np.ndarray, rate: int) -> bytes:
     wf = waveform.compute(x, rate)
-    wf.pwv7, wf.pwv6 = three_band(x, rate, wf.gains)
+    wf.pwv7, wf.pwv6 = three_band(x, rate)
     n = len(wf.pwv3)
     head = b"DJWV" + struct.pack("<IIIHHHH", rate, len(x), n, *(int(g) for g in wf.gains), 0)
     body = [

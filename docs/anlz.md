@@ -25,6 +25,7 @@ are given along with any evidence that decides between them.
 | [BK] | baken `crates/baken-export/src/anlz/**`, <https://github.com/M-Igashi/baken> (194ef79) | MIT | **Byte-exact writer rules** checked against rekordbox 7 exports, waveform derivation measured on 1070 tracks, ANLZ directory hash, PVB2 |
 | [SB] | Seabass `docs/onelibrary-format.md`, `src/infrastructure/rekordbox/anlz_*codec*`, <https://github.com/sebasje/seabass> (397bb6e) | code: GPL-2.0-only OR GPL-3.0-only OR LicenseRef-KDE-Accepted-GPL; docs CC-BY-SA-4.0; test fixtures CC0-1.0 | Survey of 7968 real PCOB sections, hardware results (XDJ-RX2, CDJ-3000X, OMNIS-DUO) |
 | [FF] | fourfour `pioneer-usb-writer/reference-code/PIONEER.md`, <https://github.com/morizkraemer/fourfour> (64091d3) | **no licence file** (all rights reserved). Facts only, no code copied | CDJ-3000 (fw 3.19) behaviour: PPTH NUL, directory hash, re-analysis triggers |
+| [RBX] | rbxport `crates/rbl-analysis/src/waveform.rs`, `crates/rbl-anlz/src/encode.rs`, `src/canvas/waveform.ts` (`~/projects/rbxport`, 1.6.0) | GPL-2.0-or-later. Facts only, no code copied | The three-band analysis rxbox writes to PWV6/PWV7 (§4.12, §4.13), preview minimums, how its interface draws the three bands |
 | [ME] | My own measurements, made by parsing the real rekordbox-written fixtures above (rekordcrate sweep + demo export: rekordbox 6.6.1; Seabass `anonymized_library`: a rekordbox 7.x stick with 1992 analysis sets) with throwaway scripts | n/a | Verification of constants, band order, value ranges |
 
 ---
@@ -611,6 +612,30 @@ byte[i][j]      = min(127, round(scale[j] * gain[j] * env[i][j])),  scale = {1.2
 The rekordbox sweep (assuming a logarithmic sweep) puts the effective crossovers near ~300 Hz and
 ~2.5 kHz, and the high band falls off again above ~10 kHz (`[0,0,2]` at ~16 kHz) [ME]. **UNCERTAIN**.
 
+**What rxbox writes: [RBX]'s rule**, not [BK]'s (since packed waveform format version 4,
+`src/analysis/waveform.c`). [BK]'s levels drew a loud master's overview almost all cream (format
+version 1); refitted to rekordbox's own PWV7 (versions 2 and 3) they gave, as rekordbox's files
+have, a high band whose mean is 0.13 of the low band's: drawn, a blue waveform with a thin cream
+core. [RBX]'s draws the lows, mids and highs all visibly, which is the picture wanted:
+
+```
+one-pole low-passes on the mono mix, continuous over the track, in double:
+  lp_f(x)[i] = x[i] * (1 - c) + lp_f(x)[i-1] * c,   c = exp(-2 pi f / rate)
+  low  = lp_200(x)
+  mid  = lp_2000(x) - lp_200(x)
+  high = x - lp_2000(x)
+band_peak[i][j] = max |band_j| over column i                (columns as in §4.9)
+byte[i][j]      = floor(255 * min(1, band_peak[i][j])) >> 1  (0..127)
+```
+
+So a full-scale peak is 127 and every track is drawn at its own level (a quiet track is a small
+waveform), where rekordbox's PWV7 reaches 126..127 in every band of its two demo tracks [ME] and
+127 on all 80 tracks [RBX] measured.
+The one-pole filters overlap widely: a steady 1 kHz tone at 0.5 writes `[12, 50, 24]`, 100 Hz
+`[57, 25, 2]`, 8 kHz `[1, 14, 53]` at 44.1 kHz. rbxport cuts columns of `floor(rate / 150)`
+samples in float; rxbox keeps the grid of §4.9 in double, and on the same samples its bytes
+equal rbxport's on all but 0..3 in 100k (the float rounding) at 44.1 and 48 kHz.
+
 ### 4.13 `PWV6`: 3-band preview, 1200 columns (`.2EX`)
 
 Sources: [DS] §3-Band Preview, [DJL], [BK], [ME].
@@ -630,6 +655,28 @@ track 2 `{0.47, 0.48, 2.10}`, sweep `{0.82, 0.97, 1.29}`. So PWV6 is not a fixed
 probably computed with its own per-track normalisation; the [BK] factors are a reasonable music average.
 **UNCERTAIN**. [DS]: the preview draws the three bands *stacked*.
 [BL] heights: low×0.49, +mid×0.32, +high×0.25 on a 0..~31 pixel scale.
+
+**What rxbox writes: [RBX]'s overview**, measured on the samples rather than taken from PWV7
+("measured against nine rekordbox references" there; an approximation, not rekordbox's algorithm):
+
+```
+1200 columns of samples: column b holds samples [b * N / 1200, (b + 1) * N / 1200)  (N samples)
+  low  = (mean of lp_200(x)^2 over the column) ^ 0.45     (lp_200 as in §4.12)
+  mid  = mean |LP_2000(HP_200(x))| over the column        (RBJ biquads, Q = 1/sqrt(2))
+  high = mean |HP_2000(x)| over the column
+  (corners at most 0.45 * rate; an empty column is 0)
+v[b] = (raw[b] + raw[b-1]) / 2,  raw[-1] = raw[0]         (two-column trailing average)
+target  = 92 * mean over the detail columns (§4.9) of the column's RMS
+byte[b][j] = clamp(round_half_away(v[b][j] * target / mean_b(raw[b][j])), 0, 127)
+             (0 if that band's mean is below 1e-6)
+```
+
+Every band therefore has the same mean over the track (92 times its mean RMS: 20..35 on the
+dance tracks of rxbox's acceptance library, about 3 on a track at -26 dB RMS), and the overview
+shows where each band is loud, whatever the mix's balance. rxbox's bytes equal rbxport's exactly
+on the same samples. rbxport's interface draws the deck overview stacked from the baseline, as
+its row preview (low/128, then mid/256, then high/128: its default "half" Full/Preview Waveform
+setting); drawn centred, the three equal bands overlap into a mostly cream core.
 
 ### 4.14 `PWVC`: 3-band gain calibration (`.2EX`)
 
@@ -652,6 +699,11 @@ Sources: [DJL] §vocal config, [RC] (`Waveform3BandCalibration`), [BK], [PRB], [
   demo: `5B 8A 18C`, `91 F9 1F4`; sweep: `50 58 77`). These ranges exceed the thresholds [DJL] observed,
   which supports the "gain" reading.
 * Writers: emit the gains you used to scale PWV7 (the [BK] rule), or `80, 100, 100` when unsure.
+* rxbox writes [BK]'s gains, computed as [BK] does, although its PWV7 is [RBX]'s and not scaled by
+  them (§4.12). [RBX] authors no PWVC (only PWV6 and PWV7 in `.2EX`) and carries a rekordbox-written
+  one through unchanged next to its own PWV7, so its sticks pair rekordbox's per-track gains with a
+  fixed-scale PWV7 too. [BK]'s gains are in rekordbox's range (seabass's ~2100 `.2EX`, median
+  80/108/109), and no reader is known to scale PWV7 by them.
 
 ### 4.15 `PVB2`: FLAC seek table (`.EXT`, FLAC only)
 
