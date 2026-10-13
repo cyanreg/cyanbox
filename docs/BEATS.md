@@ -125,7 +125,9 @@ an fp32 FFT of 2^11 points is accurate to about eleven float epsilons of a
 frame's largest bin, and the log compression turns a relative error of an
 amplitude into an absolute error no larger, so the bands, and the fluxes
 summed from them, differ by about 1e-6 of their largest values; both GPUs
-stay under 1e-6 (envelopes under 2e-7). `RXBOX_ANALYSIS_GPU=0` or `1`
+stay under 1e-6 (envelopes under 2e-7). Most of that is the CPU's: against
+av_tx in double precision the GPU kernels are within 2e-7 at every size
+from 64 to 8192 points (`tests/gpu/test_compute.c`). `RXBOX_ANALYSIS_GPU=0` or `1`
 forces either path in the test, the tools and the app;
 `RXBOX_GPU_VALIDATION=1` runs the GPU half under the Khronos validation
 layer (with synchronisation checks; it reports nothing).
