@@ -1133,8 +1133,10 @@ static void status_bar(UiState *ui, ImVec2 a, ImVec2 b)
                  name[0] ? ": " : "", name);
         frac = (float)app->analysing_done / app->analysing_total;
     } else if (rx_app_tag_progress(app, &tag_done, &tag_total, &tag_current)) {
-        // The track being tagged; none while the model loads.
-        char name[200] = "loading the model";
+        // The track being tagged; none while the model loads, or unloads
+        // after the last.
+        char name[200];
+        snprintf(name, sizeof(name), "%s the model", tag_done < tag_total ? "loading" : "unloading");
         RXTrack *t = tag_current ? rx_library_find_id(&app->lib, tag_current) : nullptr;
         if (t)
             rx_track_display(t, name, sizeof(name));
