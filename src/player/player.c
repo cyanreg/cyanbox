@@ -246,14 +246,12 @@ static void defer_release(RXPlayer *p, int deck, RXAudio *audio, RXStream *strea
  * old buffer goes to the pending list, a stream becomes the feed's. The
  * real-time side moves on at most once per queued track, and only this
  * side queues one, so the generations differ by one at most. */
-static void sync_next(RXPlayer *p, int deck)
+static void sync_next(RXPlayer *p, int deck, const RXDeckSnap *s)
 {
     RXDeckOwner *o = &p->own[deck];
-    RXDeckSnap s;
-    snapshot(&p->pub[deck], &s);
-    if (s.track_gen == o->track_gen)
+    if (s->track_gen == o->track_gen)
         return;
-    o->track_gen = s.track_gen;
+    o->track_gen = s->track_gen;
     if (!o->next_audio && !o->next_stream)
         return;
 
@@ -279,8 +277,11 @@ static void sync_next(RXPlayer *p, int deck)
 
 static void drain_releases(RXPlayer *p)
 {
-    for (int d = 0; d < RX_DECKS; d++)
-        sync_next(p, d);
+    for (int d = 0; d < RX_DECKS; d++) {
+        RXDeckSnap s;
+        snapshot(&p->pub[d], &s);
+        sync_next(p, d, &s);
+    }
     for (int i = 0; i < p->nb_releases;) {
         RXRelease *r = &p->releases[i];
         RXDeckSnap s;
@@ -1104,6 +1105,10 @@ void rx_deck_state(const RXPlayer *cp, int deck, RXDeckState *out)
     const RXDeckPub *pub = &p->pub[deck];
     RXDeckSnap s;
     snapshot(pub, &s);
+    /* The same snapshot for the owner's fields and the report: a change
+     * of track between the two would put the new track's position
+     * against the old one's length. */
+    sync_next(p, deck, &s);
 
     out->tempo        = o->tempo;
     out->master_tempo = o->master_tempo;

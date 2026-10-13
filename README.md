@@ -206,6 +206,12 @@ The status bar shows the audio output (`PipeWire 48 kHz · <sink>`, or
 `Audio: none`), the number of tracks and the GPU. The layout and every
 control are described in `docs/UI.md`.
 
+Playing through a playlist: with a playlist in view, a track in it that
+plays to its end is followed by the row after it with no gap (the next
+track is queued on the player half a minute ahead and taken over at the
+last sample), and the deck stops after the playlist's last track. The
+title row shows what follows as NEXT.
+
 ## Exporting
 
 One export writes the settings, the playlists and the tracks in them;
