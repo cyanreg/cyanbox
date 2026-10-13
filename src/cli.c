@@ -2470,7 +2470,7 @@ static const struct {
     { "tag",      cmd_tag,      "tag TRACK..." },
     { "color",    cmd_color,    "color HUE|NAME|none TRACK..." },
     { "colour",   cmd_color,    "colour HUE|NAME|none TRACK..." },
-    { "export",   cmd_export,   "export [--all | -p NAME...] [--prune] [--compat] "
+    { "export",   cmd_export,   "export [--all | -p NAME...] [--prune] [--compat | --no-compat] "
                                 "[--ignore-unsynced] [-n] STICK" },
     { "inspect",  cmd_inspect,  "inspect STICK" },
     { "pull",     cmd_pull,     "pull STICK" },

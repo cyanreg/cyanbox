@@ -1060,6 +1060,13 @@ static void sync_take(UiState *ui)
         free(r->stick);
         r->stick = nullptr;
     }
+    if (r->err == RX_ERROR(ENOENT) && !ui->sync_state_valid) {
+        // rx_stick_read: no export.pdb, no exportLibrary.db, no My Settings.
+        ui->sync_error = std::string(ui->stick_path) + " is not a stick: it holds no rekordbox "
+                         "database or player settings.";
+        rx_job_result_free(r);
+        return;
+    }
     if (r->err < 0) {
         ui->sync_error = std::string(ui->sync_state_valid ?
                                      "Could not compare the stick with the library: " :
