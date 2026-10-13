@@ -329,8 +329,13 @@ static void play_a_gig(RXLibrary *lib)
     free(pt->cues);
     pt->cues = cues;
     pt->nb_cues++;
+    /* With the waveforms, as a player leaves them: the .EXT's cues sit
+     * between PWV3 and the other waveforms, which the sync skips. */
+    RXWaveforms w;
+    CHECK_EQ(rx_library_waveforms_load(lib, one->id, &w), 0);
     RXAnlzFiles f;
-    CHECK_EQ(rx_anlz_build(pt, NULL, &f), 0);
+    CHECK_EQ(rx_anlz_build(pt, &w, &f), 0);
+    rx_waveforms_free(&w);
     char *dat = rx_plan_anlz_path(pt, ".DAT"), *ext = rx_plan_anlz_path(pt, ".EXT");
     char *pd = rx_stick_file(stick, dat), *pe = rx_stick_file(stick, ext);
     CHECK_EQ(rx_file_write_atomic(pd, f.dat, f.dat_size), 0);
@@ -500,9 +505,10 @@ int main(void)
     CHECK_EQ(rx_pull(&lib, stick, NULL, NULL), 0);
     st = (Stages) { .quiet = true };
     CHECK_EQ(rx_export(&lib, stick, &opt, on_progress, &st), 0);
-    /* Only the tracks whose cues changed (one from the player, three in
-     * the library) get their analysis files written again. */
-    CHECK_EQ(st.anlz, 2);
+    /* Only three, whose cues the library changed, gets its analysis files
+     * written again: one's on the stick hold the player's change, pulled
+     * since, byte for byte what the export writes. */
+    CHECK_EQ(st.anlz, 1);
     CHECK_EQ(rx_inspect(stick, on_line, NULL), 0);
 
     /* four leaves the playlists: a dry run lists its files for pruning,

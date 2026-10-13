@@ -747,8 +747,83 @@ void rx_stick_state_free(RXStickState *s)
     *s = (RXStickState) { 0 };
 }
 
+/* pread(2) of exactly `n` bytes at `off`; a file shorter than that is
+ * damaged. */
+static int pread_all(int fd, void *buf, size_t n, off_t off)
+{
+    size_t done = 0;
+    while (done < n) {
+        ssize_t r = pread(fd, (uint8_t *)buf + done, n - done, off + (off_t)done);
+        if (r < 0 && errno == EINTR)
+            continue;
+        if (r < 0)
+            return RX_ERROR(errno);
+        if (!r)
+            return RX_ERROR(EINVAL);
+        done += (size_t)r;
+    }
+    return 0;
+}
+
+/* An analysis file's header and cue tags (PCOB, PCO2), as an analysis file
+ * of their own for rx_anlz_read_cues: a sync, and every export's check,
+ * reads the cues of a stick of five thousand tracks, not the gigabyte of
+ * waveforms around them. Of the other tags only the headers are read, up
+ * to the waveforms after the cues (rekordbox's order, docs/anlz.md 1.2:
+ * the .DAT ends with the cues; the .EXT has PWV3 before them, PQT2 and
+ * the other waveforms after); a file that puts its cues anywhere else is
+ * still read, header by header. */
+static int read_cue_tags(int root, const char *stick_path, uint8_t **out, size_t *size)
+{
+    *out = NULL;
+    *size = 0;
+    int fd = rx_stick_open(root, stick_path, O_RDONLY, 0);
+    if (fd < 0)
+        return fd;
+    struct stat st;
+    int ret = fstat(fd, &st) < 0 ? RX_ERROR(errno) : S_ISREG(st.st_mode) ? 0 : RX_ERROR(EINVAL);
+    /* The pages asked for, no read-ahead into the waveforms. */
+    if (ret >= 0)
+        posix_fadvise(fd, 0, 0, POSIX_FADV_RANDOM);
+    uint64_t end = ret >= 0 ? (uint64_t)st.st_size : 0;
+    uint8_t h[12];
+    if (ret >= 0)
+        ret = pread_all(fd, h, sizeof(h), 0);
+    uint64_t len = ret >= 0 ? rx_rd_be32(h + 4) : 0;
+    if (ret >= 0 && (memcmp(h, "PMAI", 4) || len < 12 || len > end))
+        ret = RX_ERROR(EINVAL);
+    RXBuf b = { 0 };
+    if (ret >= 0 && (ret = rx_buf_reserve(&b, len)) >= 0 && (ret = pread_all(fd, b.data, len, 0)) >= 0)
+        b.len = len;
+    bool cues = false;
+    for (uint64_t off = len; ret >= 0 && off + 12 <= end; off += len) {
+        if ((ret = pread_all(fd, h, sizeof(h), (off_t)off)) < 0)
+            break;
+        len = rx_rd_be32(h + 8);
+        if (len < 12 || off + len > end) {
+            ret = RX_ERROR(EINVAL);
+            break;
+        }
+        bool cue = !memcmp(h, "PCOB", 4) || !memcmp(h, "PCO2", 4);
+        if (cues && !cue && !memcmp(h, "PWV", 3))
+            break;
+        if (!cue)
+            continue;
+        cues = true;
+        if ((ret = rx_buf_reserve(&b, len)) < 0 || (ret = pread_all(fd, b.data + b.len, len, (off_t)off)) < 0)
+            break;
+        b.len += len;
+    }
+    close(fd);
+    if (ret < 0) {
+        rx_buf_free(&b);
+        return ret;
+    }
+    return rx_buf_finish(&b, out, size);
+}
+
 /* The cues of one track as the stick holds them. */
-static int stick_cues(const char *mount, const char *dat_path, RXStickCue **out, int *nb)
+static int stick_cues(int root, const char *dat_path, RXStickCue **out, int *nb)
 {
     *out = NULL;
     *nb = 0;
@@ -760,9 +835,9 @@ static int stick_cues(const char *mount, const char *dat_path, RXStickCue **out,
     memcpy(ext_path + strlen(ext_path) - 4, ".EXT", 4);
     uint8_t *dat = NULL, *ext = NULL;
     size_t dat_size = 0, ext_size = 0;
-    int ret = read_stick_file(mount, dat_path, &dat, &dat_size);
+    int ret = read_cue_tags(root, dat_path, &dat, &dat_size);
     if (ret >= 0)
-        read_stick_file(mount, ext_path, &ext, &ext_size);
+        read_cue_tags(root, ext_path, &ext, &ext_size);
     free(ext_path);
     if (ret < 0)
         return ret;
@@ -880,6 +955,17 @@ static int onelibrary_rows(sqlite3 *db, RXArray *rows, RXArray *hist)
     return 0;
 }
 
+static int cmp_path(const void *a, const void *b)
+{
+    return strcmp(*(char *const *)a, *(char *const *)b);
+}
+
+static int cmp_u64(const void *a, const void *b)
+{
+    uint64_t x = *(const uint64_t *)a, y = *(const uint64_t *)b;
+    return x < y ? -1 : x > y;
+}
+
 int rx_stick_read(const RXLibrary *lib, const char *mount, RXStickState *out)
 {
     *out = (RXStickState) { 0 };
@@ -901,6 +987,13 @@ int rx_stick_read(const RXLibrary *lib, const char *mount, RXStickState *out)
     rx_array_init(&settings, sizeof(RXKv));
     StickTrack *cues = NULL;
     int nb_cues = 0;
+    char **pdb_paths = NULL;
+    uint64_t *ids = NULL;
+    int root = rx_stick_root(mount);
+    if (root < 0) {
+        ret = root;
+        goto fail;
+    }
 
     p->has_record = rx_sync_record_read(mount, &p->record) >= 0;
     if (p->has_record && !record_is_ours(lib, &p->record)) {
@@ -915,7 +1008,7 @@ int rx_stick_read(const RXLibrary *lib, const char *mount, RXStickState *out)
     uint8_t *data;
     size_t size;
     size_t pdb_rows = 0;
-    if (read_stick_file(mount, "/PIONEER/rekordbox/export.pdb", &data, &size) >= 0) {
+    if (rx_stick_read_file(root, "/PIONEER/rekordbox/export.pdb", &data, &size) >= 0) {
         RXPdb pdb;
         out->has_pdb = true;
         if (rx_pdb_read(data, size, &pdb) >= 0) {
@@ -956,31 +1049,40 @@ int rx_stick_read(const RXLibrary *lib, const char *mount, RXStickState *out)
         }
         free(data);
     }
-    if (read_stick_file(mount, "/PIONEER/rekordbox/exportLibrary.db", &data, &size) >= 0) {
+    if (rx_stick_read_file(root, "/PIONEER/rekordbox/exportLibrary.db", &data, &size) >= 0) {
         out->has_onelibrary = true;
         uint8_t *wal = NULL, *plain;
         size_t wal_size = 0, plain_size;
-        read_stick_file(mount, "/PIONEER/rekordbox/exportLibrary.db-wal", &wal, &wal_size);
+        rx_stick_read_file(root, "/PIONEER/rekordbox/exportLibrary.db-wal", &wal, &wal_size);
         if (rx_sqlcipher_decrypt(data, size, rx_onelibrary_passphrase, wal, wal_size, &plain,
                                  &plain_size) >= 0) {
             sqlite3 *db;
             if (rx_onelibrary_open_plain(plain, plain_size, &db) >= 0) {
                 /* Track identity from export.pdb; the OneLibrary adds the
                  * tracks export.pdb does not have (it may be damaged, or
-                 * be a player's half-written one) and its history. */
+                 * be a player's half-written one) and its history. Its
+                 * rows are looked up among export.pdb's by path, sorted. */
                 RXArray more;
                 rx_array_init(&more, sizeof(StickRow));
                 onelibrary_rows(db, &more, &hist);
+                pdb_paths = malloc(RX_MAX(pdb_rows, 1) * sizeof(*pdb_paths));
+                if (!pdb_paths)
+                    ret = RX_ERROR(ENOMEM);
+                for (size_t k = 0; pdb_paths && k < pdb_rows; k++)
+                    pdb_paths[k] = ((StickRow *)rx_array_at(&rows, k))->path;
+                if (pdb_paths && pdb_rows)
+                    qsort(pdb_paths, pdb_rows, sizeof(*pdb_paths), cmp_path);
                 for (size_t i = 0; i < more.nb; i++) {
                     StickRow *m = rx_array_at(&more, i);
-                    bool known = false;
-                    for (size_t k = 0; k < pdb_rows && !known; k++)
-                        known = !strcmp(((StickRow *)rx_array_at(&rows, k))->path, m->path);
-                    if (known || !rx_array_push(&rows, m)) {
+                    bool dup = !pdb_paths ||
+                               (pdb_rows && bsearch(&m->path, pdb_paths, pdb_rows, sizeof(*pdb_paths), cmp_path));
+                    if (dup || !rx_array_push(&rows, m)) {
                         free(m->path);
                         free(m->anlz);
                     }
                 }
+                free(pdb_paths);
+                pdb_paths = NULL;
                 rx_array_free(&more);
                 sqlite3_close(db);
             }
@@ -989,6 +1091,8 @@ int rx_stick_read(const RXLibrary *lib, const char *mount, RXStickState *out)
         free(wal);
         free(data);
     }
+    if (ret < 0)
+        goto fail;
     out->nb_tracks = (int)rows.nb;
 
     cues = calloc(RX_MAX(rows.nb, 1), sizeof(*cues));
@@ -1018,7 +1122,7 @@ int rx_stick_read(const RXLibrary *lib, const char *mount, RXStickState *out)
         }
         RXStickCue *sc = NULL;
         int nsc = 0;
-        if (stick_cues(mount, anlz, &sc, &nsc) < 0)
+        if (stick_cues(root, anlz, &sc, &nsc) < 0)
             continue;
         RXCue *rc = calloc((size_t)RX_MAX(nsc, 1), sizeof(*rc));
         typeof(out->tracks[0]) st = {
@@ -1039,13 +1143,21 @@ int rx_stick_read(const RXLibrary *lib, const char *mount, RXStickState *out)
         cues[nb_cues++] = (StickTrack) { .cues = sc, .nb = nsc };
     }
 
+    /* The plays of the tracks read, looked up by id, sorted. */
+    ids = malloc(RX_MAX(states.nb, 1) * sizeof(*ids));
+    if (!ids) {
+        ret = RX_ERROR(ENOMEM);
+        goto fail;
+    }
+    for (size_t i = 0; i < states.nb; i++)
+        ids[i] = ((typeof(out->tracks[0]) *)rx_array_at(&states, i))->track_id;
+    if (states.nb)
+        qsort(ids, states.nb, sizeof(*ids), cmp_u64);
     for (size_t i = 0; i < hist.nb; i++) {
         HistList *h = rx_array_at(&hist, i);
         for (int k = 0; k < h->nb; k++) {
-            bool known = false;
-            for (size_t s = 0; s < states.nb && !known; s++)
-                known = ((typeof(out->tracks[0]) *)rx_array_at(&states, s))->track_id == h->track_ids[k];
-            if (!known)
+            uint64_t id = h->track_ids[k];
+            if (!states.nb || !bsearch(&id, ids, states.nb, sizeof(*ids), cmp_u64))
                 continue;
             typeof(out->plays[0]) pl = {
                 .track_id  = h->track_ids[k],
@@ -1063,7 +1175,7 @@ int rx_stick_read(const RXLibrary *lib, const char *mount, RXStickState *out)
     for (int i = 0; i < 4; i++) {
         char path[64];
         snprintf(path, sizeof(path), "/PIONEER/%s", settings_files[i]);
-        if (read_stick_file(mount, path, &data, &size) < 0)
+        if (rx_stick_read_file(root, path, &data, &size) < 0)
             continue;
         RXKv *kv;
         int nk;
@@ -1139,6 +1251,9 @@ fail:
             free(cues[i].cues);
         free(cues);
     }
+    free(ids);
+    if (root >= 0)
+        close(root);
     if (ret < 0)
         rx_stick_state_free(out);
     return ret;
