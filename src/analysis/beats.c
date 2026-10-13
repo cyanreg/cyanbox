@@ -2041,9 +2041,9 @@ static int longest_section(const Ctx *c)
     return m;
 }
 
-/* How well a grid's beats land on hits: the mean of the arbiter onset
- * around every beat of every section. */
-static double grid_support(const Ctx *c)
+/* How well a grid's beats land on hits: the mean of the onset v (the
+ * kick band, or the full band) around every beat of every section. */
+static double grid_support(const Ctx *c, const float *v)
 {
     double acc = 0.0;
     int n = 0;
@@ -2056,7 +2056,7 @@ static double grid_support(const Ctx *c)
             int f1 = (int)lrint((t + 0.010) * c->ons.fps);
             double m = 0.0;
             for (int f = RX_MAX(f0, 0); f <= RX_MIN(f1, c->ons.nb - 1); f++)
-                m = fmax(m, c->arbiter[f]);
+                m = fmax(m, v[f]);
             acc += m;
             n++;
         }
@@ -2419,7 +2419,12 @@ static int analyse(const float *mono, int64_t nb_samples, int rate, RXSpectrum *
     /* A close runner-up family (3:2, 4:3: harmonic strength within 25 %)
      * is fitted too, and the grid whose beats land on hits wins: an
      * impostor at three halves of the beat puts every third beat where
-     * nothing happens. It must beat the first by 10 %. */
+     * nothing happens. It must beat the first by 10 %, both read on one
+     * band: the kick band when either grid's tempo has kicks carrying it
+     * (its arbiter), else the full band. Each fit's own arbiter compared
+     * unlike quantities where the kick share crosses a half between the
+     * two tempos; the kicks mark the beat where there are any, and the
+     * full band, hats on every subdivision, favours neither grid. */
     double alt = c.tempo.second_bpm;
     const double rlo = lo > 0.0 ? lo : RX_TEMPO_MIN, rhi = hi > 0.0 ? hi : RX_TEMPO_MAX;
     if (alt > 0.0) {
@@ -2435,7 +2440,7 @@ static int analyse(const float *mono, int64_t nb_samples, int rate, RXSpectrum *
             alt *= 2.0;
     }
     if (alt > 0.0 && alt <= rhi && c.tempo.second_ratio >= 0.75) {
-        double s1 = grid_support(&c);
+        double s1_low = grid_support(&c, c.ons.low), s1_full = grid_support(&c, c.ons.full);
         Fit first = fit_take(&c);
         /* Its envelopes go while the other is tried (an hour of them is
          * 30 MB); their centres are enough to cut them again. */
@@ -2447,8 +2452,13 @@ static int analyse(const float *mono, int64_t nb_samples, int rate, RXSpectrum *
             ret = r2;
             goto fail;
         }
-        double s2 = r2 == 0 ? grid_support(&c) : 0.0;
-        rx_debug("beats: family %.3f support %.3f vs %.3f support %.3f\n", bpm0, s1, alt, s2);
+        bool kicks = first.arbiter == c.ons.low || (r2 == 0 && c.arbiter == c.ons.low);
+        const float *band = kicks ? c.ons.low : c.ons.full;
+        double s1 = kicks ? s1_low : s1_full;
+        double s2 = r2 == 0 ? grid_support(&c, band) : 0.0;
+        rx_debug("beats: family %.3f support %.3f vs %.3f support %.3f (the %s band; kick "
+                 "shares %.2f, %.2f)\n", bpm0, s1, alt, s2, kicks ? "kick" : "full",
+                 first.kick_share, r2 == 0 ? c.kick_share : 0.0);
         /* And it must be as clean a grid: no more sections, no more
          * scatter (a syncopated two-step at 3/4 of its tempo can collect
          * hits, but only with a ragged grid). */

@@ -595,7 +595,17 @@ end of a six-minute track by 280 ms if the track really is at 128.1.
 it replaces the first only if its beats collect at least 10 % more of the
 arbiter onset *and* it is as clean a grid (no more sections, no more
 jitter): a 2-step garage track at 3/4 of its tempo collects hits, but only
-with a ragged grid.
+with a ragged grid. Both grids are read on one band: the kick band when
+either fit has it as its arbiter (kicks carrying the beat at its tempo),
+the full band otherwise. Each grid used to be read on its own fit's
+arbiter, and the kick share can cross a half between two tempos a 3:2 or
+4:3 apart: one grid was then scored on the kicks and the other on the
+full band, unlike quantities. The kicks mark the beat where a track has
+them, while the full band, hats on every subdivision, favours neither
+grid. On the 58 acceptance tracks the check runs on three, each with
+kicks at both tempos, and on 18 synthetic cases, two of them with a kick
+share under a half at the runner-up (0.44, 0.21) whose decision stands
+either way: no grid changed.
 
 **The octave** is decided on the fitted grid, whose beats sit on the hits
 (rhythm evidence needs that; a whole-track estimate does not have it). Half,
@@ -949,7 +959,7 @@ the final version was not finished (see "Known weaknesses").
 | Support ratio | 1.25 on the kick band; 1.5 for a phase cut | rbxport: 1.5 for the new phase |
 | Min section | 16 attacks, 32 beats; 64 for a phase, 128 half a beat away | rbxport's outro rule; off-beat basses |
 | Tempogram | 12 s windows, 3 s hop, 4 windows | 21 s of a new tempo |
-| Family check | runner-up within 25 %, 10 % more support | 3:2 and 4:3 |
+| Family check | runner-up within 25 %, 10 % more support, both on the kick band if either fit's arbiter is it | 3:2 and 4:3; like with like |
 | Unsteady | spread > 6 ms and beat-to-beat scatter > 4 ms | live drums scatter 5-15 ms, sequencers < 1 |
 | Dynamic: drift | deviation > 15 ms (runs from 5 ms, 4 beats of margin); live (spread > 3 ms and the attacks on the line not sequenced), or at a dynamic neighbour | the merge tolerance; sequenced music does not drift |
 | Dynamic: sequenced | the attacks on the line (triples within 15 ms of a beat or half beat), lower quartile of the second differences as a scatter, < 1.5 ms on 32 triples | runs off the line inflate the spread; Felicidade 0.57, the rubato case 3.0 |
