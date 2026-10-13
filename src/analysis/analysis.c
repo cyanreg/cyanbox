@@ -16,7 +16,13 @@
  * Inside one call everything runs on the calling thread: the library
  * analyses many tracks at once on its pool, and a call that spawned its
  * own threads would only compete with its siblings. The result does not
- * depend on it either way. */
+ * depend on it either way.
+ *
+ * Each stage stands on its own: one that fails (no memory for an hour's
+ * waveforms, say) leaves the others to run, and the first error is
+ * returned with what was done in `done`. The samples are taken to be
+ * finite: rx_decode decodes NaN and infinities as silence (src/audio/
+ * decode.c), since one of them takes the key and the waveforms with it. */
 
 #include "rxbox/analysis.h"
 
@@ -25,6 +31,15 @@
 #include <string.h>
 
 #include "beats_internal.h"
+
+/* A stage's result: done, or the call's error if it is the first. */
+static void stage_done(RXAnalysis *out, unsigned stage, int ret, int *first_err)
+{
+    if (ret >= 0)
+        out->done |= stage;
+    else if (!*first_err)
+        *first_err = ret;
+}
 
 int rx_analyse(const RXAudio *audio, const RXAnalysisOptions *opt, unsigned what, RXAnalysis *out)
 {
@@ -40,23 +55,20 @@ int rx_analyse(const RXAudio *audio, const RXAnalysisOptions *opt, unsigned what
         opt = &defopt;
     }
 
-    int ret = 0, first_err = 0;
+    int first_err = 0;
     RXAudio mono = { 0 };
     const float *x = audio->samples;
     if (audio->channels != 1) {
-        if ((ret = rx_audio_to_mono(audio, &mono)) < 0)
+        int ret = rx_audio_to_mono(audio, &mono);
+        if (ret < 0)
             return ret;
         x = mono.samples;
     }
     const int64_t n = audio->nb_frames;
 
-    if (what & RX_ANALYSE_WAVES) {
-        ret = rx_waveforms_compute(x, n, audio->rate, &out->waves);
-        if (ret >= 0)
-            out->done |= RX_ANALYSE_WAVES;
-        else if (!first_err)
-            first_err = ret;
-    }
+    if (what & RX_ANALYSE_WAVES)
+        stage_done(out, RX_ANALYSE_WAVES, rx_waveforms_compute(x, n, audio->rate, &out->waves),
+                   &first_err);
 
     if (what & (RX_ANALYSE_BEATS | RX_ANALYSE_KEY)) {
         /* At 44.1 kHz beats and key read the mono signal itself. Otherwise
@@ -66,6 +78,7 @@ int rx_analyse(const RXAudio *audio, const RXAnalysisOptions *opt, unsigned what
         const float *x44 = x;
         float *own44 = NULL;
         int64_t n44 = n;
+        int ret = 0;
         if (audio->rate != RX_BEAT_RATE) {
             ret = rx_resample_mono(x, n, audio->rate, RX_BEAT_RATE, &own44, &n44);
             x44 = own44;
@@ -75,20 +88,12 @@ int rx_analyse(const RXAudio *audio, const RXAnalysisOptions *opt, unsigned what
             if (!first_err)
                 first_err = ret;
         } else {
-            if (what & RX_ANALYSE_BEATS) {
-                ret = rx_analyse_beats(x44, n44, RX_BEAT_RATE, opt, &out->beats);
-                if (ret >= 0)
-                    out->done |= RX_ANALYSE_BEATS;
-                else if (!first_err)
-                    first_err = ret;
-            }
-            if (what & RX_ANALYSE_KEY) {
-                ret = rx_analyse_key(x44, n44, RX_BEAT_RATE, &out->key);
-                if (ret >= 0)
-                    out->done |= RX_ANALYSE_KEY;
-                else if (!first_err)
-                    first_err = ret;
-            }
+            if (what & RX_ANALYSE_BEATS)
+                stage_done(out, RX_ANALYSE_BEATS,
+                           rx_analyse_beats(x44, n44, RX_BEAT_RATE, opt, &out->beats), &first_err);
+            if (what & RX_ANALYSE_KEY)
+                stage_done(out, RX_ANALYSE_KEY, rx_analyse_key(x44, n44, RX_BEAT_RATE, &out->key),
+                           &first_err);
         }
         free(own44);
     }
@@ -119,7 +124,19 @@ int rx_analysis_auto_cues(RXTrack *t, const RXBeatResult *beats)
     const RXGrid *g = rx_grid_valid(&t->grid) ? &t->grid : &beats->grid;
     if (!rx_grid_valid(g))
         return 0;
-    double duration = t->duration > 0.0 ? t->duration : 1e6;
+
+    /* The beats up to the end of the track. With its length not known yet
+     * (0), up to a bar and a beat past the start or past the last section,
+     * whichever is later: the last section's count runs on, so the
+     * downbeat is within that bar. (It was a million seconds: 2.1 M beats
+     * and 50 MB at 128 BPM.) */
+    const double from = beats->music_start - 0.05;
+    double duration = t->duration;
+    if (!(duration > 0.0)) {
+        const RXTempoSection *last = &g->sections[g->nb_sections - 1];
+        int bpb = g->beats_per_bar > 0 ? g->beats_per_bar : 4;      /* 0 is 4, as in grid.c */
+        duration = fmax(from, last->start) + (bpb + 1) * 60.0 / last->bpm;
+    }
 
     RXBeat *b = NULL;
     int nb = 0;
@@ -128,7 +145,7 @@ int rx_analysis_auto_cues(RXTrack *t, const RXBeatResult *beats)
         return ret;
     double at = NAN;
     for (int i = 0; i < nb; i++) {
-        if (b[i].number == 1 && b[i].time >= beats->music_start - 0.05) {
+        if (b[i].number == 1 && b[i].time >= from) {
             at = b[i].time;
             break;
         }
