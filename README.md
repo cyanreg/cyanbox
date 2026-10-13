@@ -149,8 +149,9 @@ line.
 
 Tracks asked for join one batch: the model is loaded once (3.5 s, 4 GB
 of the GPU's memory, up to 7 GB while it listens), tags them one at a
-time, about 4.5 s a track on an RX 6900 XT, takes tracks asked for
-meanwhile into the same batch, and is unloaded after the last one or
+time, about 4.5 s a track on an RX 6900 XT and the colour's eight
+questions on top (2.5 s with the GPU shared, docs/ML.md), takes tracks
+asked for meanwhile into the same batch, and is unloaded after the last one or
 when you stop it (Analysis → Stop tagging). `docs/ML.md` says what the
 model can tell and how it runs.
 

@@ -1,8 +1,9 @@
-# The model: genre, hue and comment
+# The model: genre, colour and comment
 
-How rxbox tags a track with a genre, a colour (a hue) and a comment, what
-the model behind it can and cannot tell, and how it runs. The model is
-MOSS-Audio-4B-Instruct (OpenMOSS, Apache-2.0) from a GGUF file: its audio
+How rxbox tags a track with a genre, a colour (one of rekordbox's eight,
+picked from a legend) and a comment, what the model behind it can and
+cannot tell, and how it runs. The model is MOSS-Audio-4B-Instruct
+(OpenMOSS, Apache-2.0) from a GGUF file: its audio
 encoder in F16, its decoder (Qwen3-4B) in Q4_K. The code is `src/ml/`
 (`rxbox/ml.h`), the shaders `src/ml/shaders/`, the kernel tests
 `tests/ml/test_kernels.c`, the check against the reference implementation
@@ -11,8 +12,8 @@ encoder in F16, its decoder (Qwen3-4B) in Q4_K. The code is `src/ml/`
 In rxbox it runs only when asked: the track menu's Analyse tags, Analysis →
 Analyse tags of selection, or `rxbox tag TRACK...`. The tracks join one
 batch that loads the model once and unloads it after the last
-(`src/app/jobs.c`); a result writes the hue and the comment, and the genre
-unless the user typed one (README.md, Tags).
+(`src/app/jobs.c`); a result writes the colour and the comment, and the
+genre unless the user typed one (README.md, Tags).
 
 ## In short
 
@@ -20,7 +21,8 @@ unless the user typed one (README.md, Tags).
 | --- | --- |
 | Loading the model, once | 3.5 s; 4.1 GB of weights onto the GPU, none kept in RAM |
 | Listening (the whole track) | ~4 s on a 6900 XT, ~70x real time |
-| The ten questions of `rx_ml_tag` | ~1.1 s |
+| The other questions of `rx_ml_tag` (seven yes/no, three in words) | ~1.1 s |
+| The colour question, in eight orders | 2.5 s with three renders sharing the GPU (not measured alone) |
 | Memory | 174 MB of RAM at most (64 MB of it a read buffer while loading); 7 GB of VRAM at the peak (4.1 GB weights, 1.2 GB cache, the encoder's scratch for a 6-minute track) |
 
 What it gives, measured on the author's library (some 150 tracks: house,
@@ -53,6 +55,10 @@ ambient, orchestral):
   yes/no question's.
 - **Where in a set: no, if asked.** "Opener, warm-up, peak time or closing?"
   is "peak time" for every track, a bossa nova included.
+- **Multiple choice: yes, in every order.** Which of eight descriptions
+  fits a track it answers with a letter, but with a strong pull towards
+  the letters D and E: one order of the list alone picks what all eight
+  orders together pick a third of the time (The colour, below).
 
 ## The tags
 
@@ -61,49 +67,121 @@ about ten and a half minutes; longer tracks are cut at the end) and asks:
 
 1. Seven yes/no questions, each read as the log-odds of "Yes", centred and
    scaled by its mean and spread over the library above (each question has
-   a bias of its own; the scaling cancels it):
+   a bias of its own; the scaling cancels it): the measures the library
+   keeps.
    - intensity: "intense, high-energy?", minus "calm?", minus "chill-out?"
    - mood: "happy and uplifting?", minus "dark?", minus "melancholic?"
    - club: "made for dancing in a club?"
-2. The genre, "with the genre name only, as specific as possible", cut at
+2. The colour: which of the legend's eight descriptions fits best, asked
+   in eight orders (below).
+3. The genre, "with the genre name only, as specific as possible", cut at
    the first comma or line and capitalised ("Progressive House", "J-Pop").
-3. The vocals, in a few words: "Female vocals, Japanese", "Instrumental".
-4. The mood, in at most three words.
+4. The vocals, in a few words: "Female vocals, Japanese", "Instrumental".
+5. The mood, in at most three words.
 
 The comment is the vocals and the mood: "Female vocals, English.
 Melancholic, introspective, atmospheric."
 
-### The hue
+### The colour
 
-The hue is the direction of the track on the plane of mood and intensity
-(Russell's circumplex of affect), laid on the colour wheel with its usual
-associations:
+The colour is one of rekordbox's eight, the one whose words in the legend
+fit the track best (README.md, Tags; the settings `color.pink` ...
+`color.purple`). After the yes/no questions the model is asked, against
+the same audio in its cache, with the default legend:
 
-| hue | | example |
-| --- | --- | --- |
-| 0 red | intense | Get On The Floor, Somebody Like Me (AD:HOUSE) |
-| 45 orange | intense and bright | Soleil, Best wishes, (AD:HOUSE), スイングバイ |
-| 90 yellow | bright | Blue Horizon, 夏恋 |
-| 135 green | bright and relaxed | Summer Twilight, Love Light (Yutaka Yokokura), TOHO BOSSA NOVA |
-| 180 cyan | calm | A Guiding Star, Glide High |
-| 225 blue | calm and sad | Flow (Calm Time), 風舞う春に, Imagination (AD:Garage) |
-| 270 violet | dark | Awakening, nakanoshima (AD:TECHNO 4) |
-| 315 magenta | dark and intense | Hyperspark, 荊の城, Blood Sugar (Voodoo remix) |
+```
+Which of these descriptions fits this music best?
+A. dark and intense, hard
+B. intense, peak time
+C. energetic and bright, driving
+D. bright, uplifting
+E. groovy and relaxed, warm
+F. calm, smooth
+G. deep, melancholic
+H. dark, moody, hypnotic
+Answer with the letter only.
+```
 
-It is continuous, so similar tracks get similar hues. Within 0.6 standard
-deviations of the middle of the plane, where the direction is undefined
-and would turn round on a small change, it fades into orange, the hue of
-the average track of that library. Between a whole track and 150 s of its
-middle, half of the hues are within 15 degrees and nine in ten within 40;
-the rest are tracks whose middle is more intense than their intro and
-outro, which is why the whole track is used. Whether a track is club music
-is measured and kept (`RXMLTags.club`) but left out of the hue.
+The answer is scored, not sampled (`rx_ml_pick`, on `rx_ml_choose`): one
+forward pass over the question, then the logits of the eight letters, each
+a single token, at the answer's first token, softmaxed over the eight. The
+letters hold 99.9 % of the whole distribution there (99.7 % at least, on
+every ask below), so the model does answer with a letter; its probability
+for each is how well it hears that description in the track. The colour is
+the most probable, so the division into eight is the model's; the eight
+probabilities are kept with the track, with a hash of the legend's words
+(`rx_ml_legend_hash`), so a track tagged under other words shows as such.
 
-A first mapping placed tracks by the DJ's set roles (pink an opener, orange
-a warm-up, red a banger, cyan chill-out, green the rest). The model cannot
-tell set roles apart when asked, and the roles do not lie on a line of the
-colour wheel (orange, between an opener and a banger, is on the far side
-of red from pink), so that mapping had to jump; it was dropped for this one.
+**The order of the list matters, a lot.** Asked in one order, the model
+pulls towards the letters D and E whatever stands there. Over the 58
+tracks of the acceptance library and the eight rotations of the list, in
+which every description stands under every letter once, the letters drew
+on average
+
+| A | B | C | D | E | F | G | H |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 0.022 | 0.015 | 0.096 | 0.276 | 0.267 | 0.123 | 0.113 | 0.087 |
+
+of the probability, where an unbiased model would give each 0.125. In the
+order above it names yellow (D) for 57 of the 58 tracks, drum'n bass and
+jazz alike; the same list reversed names orange (F there) for 52, and the
+two orders agree on none. One order alone picks the colour all eight
+together pick for 34 % of the asks.
+
+So the question is asked in all eight rotations (rotation r lists the
+description r + k under the k-th letter) and the eight answers are combined
+by their geometric mean, renormalised (`rx_ml_color`). A letter's pull
+multiplies the probability of whatever stands under it, and each
+description has stood under each letter once, so in the product the pulls
+cancel and what is left is the model's preference among the words. The
+plain mean of the eight leaves the pull of the favoured letters in, and
+picks less steadily: the colour from the even rotations (0, 2, 4, 6) and
+from the odd ones agree for 49 tracks in 58 with the geometric mean, 29
+with the plain mean, and the geometric mean's top probability is higher
+(0.50 on average against 0.35). Four rotations would pick what eight pick
+for 53 tracks in 58, for half the time; rxbox asks all eight.
+
+Other wordings did not help (on 11 of the tracks): digits for labels move
+the pull to 5 and 6 and pick less steadily (9 in 11 even against odd,
+against 11 in 11 with letters); "(A) ..." labels let the letters' share of
+the answer fall to 0.92; "Which of these describes this track best?" gives
+the same picks.
+
+**Without audio** the model still prefers some descriptions: the eight
+orders' geometric mean, asked of no audio, is purple 0.30, red 0.21, orange
+0.19, pink 0.16, yellow 0.08, green 0.05, blue 0.013, aqua 0.011. Aqua and
+blue need a track the model hears as plainly calm or sad. This is not
+divided out: that would be rxbox's hand on the scale rather than the
+model's choice, and the user's words can move it.
+
+**On the acceptance library** (58 tracks: AD:HOUSE 7 and 11, AD:Drum'n
+Bass 5, Orange Pekoe's jazz pop, AZKi's J-pop, a film soundtrack, ag's
+J-core, D4DJ remixes), with the default legend: orange 26, yellow 20, red
+7, purple 3, green 2, and no pink, aqua or blue. The top probability is
+0.50 on average (0.26 to 0.88); for 20 tracks the runner-up is within 0.1
+of it, for 17 of those a neighbour in the same warm family (orange with red
+or yellow). Drum'n bass is red for five of its eight tracks, the brighter
+rest orange or yellow; the house albums orange and yellow; Orange Pekoe's
+"Adagio" and two pieces of the soundtrack ("Saimin De Tonight", "Martin
+No Yakata") purple, the soundtrack's "Fortune Land E" and Orange Pekoe's
+"Introduction" green. "Best wishes," (AD:HOUSE 11), orange in the hue's
+table of the first tagging (intense and bright), is orange (0.61, then red
+0.17). With three Blender renders sharing the 6900 XT, a track took 9.9 s
+on average (4.4 to 14.3) from decoding to the last answer, the colour's
+eight asks 2.5 s of it; alone on the GPU, listening and the other
+questions take about 5 s (In short, above).
+
+Before tagging version 2 the colour was a hue computed from the measures:
+the direction of the track on the plane of mood and intensity (Russell's
+circumplex of affect) laid on the colour wheel, red intense, yellow
+bright, cyan calm, violet dark, continuous so that similar tracks got
+similar hues, and the stick took the nearest of its eight. The model had
+no say in where the eight were cut; now it has all of it, and the user
+says what each colour means. A track tagged then keeps its hue until it
+is tagged again. A first mapping before that placed tracks by the DJ's set
+roles (pink an opener, red a banger); the model cannot tell set roles
+apart when asked (above), which is why the legend's words are about what
+can be heard.
 
 ## How it runs
 
@@ -167,7 +245,9 @@ one alone ran over 250 tracks without fault.
 ## Trying prompts
 
 ```sh
-rxbox-ml -m MODEL -t FILE...                       # the tags
+rxbox-ml -m MODEL -t FILE...                       # the tags and the colours
+rxbox-ml -m MODEL -t -L "a|b|c|d|e|f|g|h" FILE     # another legend, pink to purple
+rxbox-ml -m MODEL -b FILE...                       # the colour in each order
 rxbox-ml -m MODEL -q "Describe this music." FILE   # an answer in words
 rxbox-ml -m MODEL -y "Is this track dark? Answer yes or no." FILE
 rxbox-ml -m MODEL -c "... Answer with one digit." FILE
