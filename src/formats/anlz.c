@@ -438,9 +438,10 @@ int rx_anlz_build(const RXPlanTrack *t, const RXWaveforms *waves, RXAnlzFiles *o
         rx_buf_be32(&b, RX_WAVE_PWV6_COLUMNS);
         rx_buf_put(&b, waves->pwv6, sizeof(waves->pwv6));
         tag(&ex2, "PWV6", 0x14, &b);
-        /* PWVC: the low, mid and high gains PWV7 was scaled by (4.14, dj's
-         * encoder); without them (all zero) the neutral values the
-         * document gives for that case. */
+        /* PWVC: the low, mid and high gains in rekordbox's range (4.14):
+         * dj's values, kept since PWV7 moved to rbxport's levels, which
+         * rbxport itself writes without a PWVC; without them (all zero) the
+         * neutral values the document gives for that case. */
         bool have = waves->gains[0] || waves->gains[1] || waves->gains[2];
         b = (RXBuf) { 0 };
         rx_buf_be16(&b, 0);
