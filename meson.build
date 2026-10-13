@@ -108,6 +108,9 @@ subdir('src/common')
 # The compute context first (a library the analysis uses); the window's
 # sources from the same directory go into the executables below.
 subdir('src/gpu')
+# The model that tags tracks on request (rxbox/ml.h): a Vulkan device of its
+# own, only for as long as a batch of tracks is being tagged.
+subdir('src/ml')
 subdir('src/audio')
 subdir('src/core')
 subdir('src/analysis')

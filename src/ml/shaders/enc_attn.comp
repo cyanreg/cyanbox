@@ -1,0 +1,68 @@
+// Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md.
+
+// The encoder's self-attention: within each chunk of 50 tokens (4 s of
+// audio) only, as MOSS-Audio's encoder runs its chunks as a batch, with
+// 20 heads of 64. The last chunk may be shorter: its padding is masked
+// out as keys. A workgroup is one head of one chunk; an invocation, one
+// query, with an online softmax over the keys in shared memory.
+
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#include "common.glsl"
+
+layout(local_size_x = 64) in;
+
+#define T 50
+#define D 64
+#define WIDTH 1280
+
+layout(push_constant, std430) uniform Push {
+    uint64_t q, k, v, o;    // [nb_chunks * 50][1280]
+    uint nb_chunks;
+    uint tail;              // valid tokens in the last chunk
+    float scale;
+} pc;
+
+shared float ks[T][D];
+shared float vs[T][D];
+
+void main()
+{
+    uint tid = gl_LocalInvocationIndex;
+    uint c = gl_WorkGroupID.x, h = gl_WorkGroupID.y;
+    uint len = c + 1u == pc.nb_chunks ? pc.tail : T;
+    F32 kb = F32(pc.k);
+    F32 vb = F32(pc.v);
+    for (uint e = tid; e < T * D; e += 64u) {
+        uint t = e / D, d = e % D;
+        uint idx = (c * T + t) * WIDTH + h * D + d;
+        ks[t][d] = kb.v[idx];
+        vs[t][d] = vb.v[idx];
+    }
+    barrier();
+    if (tid >= T)
+        return;
+
+    F32 qb = F32(pc.q);
+    uint qo = (c * T + tid) * WIDTH + h * D;
+    float q[D], acc[D];
+    for (uint d = 0u; d < D; d++) {
+        q[d] = qb.v[qo + d] * pc.scale;
+        acc[d] = 0.0;
+    }
+    float mx = -1e30, l = 0.0;
+    for (uint j = 0u; j < len; j++) {
+        float s = 0.0;
+        for (uint d = 0u; d < D; d++)
+            s += q[d] * ks[j][d];
+        float mn = max(mx, s);
+        float corr = exp(mx - mn), p = exp(s - mn);
+        l = l * corr + p;
+        for (uint d = 0u; d < D; d++)
+            acc[d] = acc[d] * corr + p * vs[j][d];
+        mx = mn;
+    }
+    F32 ob = F32(pc.o);
+    for (uint d = 0u; d < D; d++)
+        ob.v[qo + d] = acc[d] / l;
+}

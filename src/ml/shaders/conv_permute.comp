@@ -1,0 +1,29 @@
+// Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md.
+
+// A 3x3 convolution's weights from PyTorch's [out][in][kh][kw] to
+// [out][kh][kw][in], once, when the model is loaded: the GEMM's gather then
+// reads four consecutive input channels at once from the channel-last
+// activations.
+
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#include "common.glsl"
+
+layout(local_size_x = 256) in;
+
+layout(push_constant, std430) uniform Push {
+    uint64_t src;
+    uint64_t dst;
+    uint cout, cin;
+} pc;
+
+void main()
+{
+    uint i = gl_GlobalInvocationID.x + gl_GlobalInvocationID.y * gl_NumWorkGroups.x * 256u;
+    if (i >= pc.cout * pc.cin * 9u)
+        return;
+    uint ci = i % pc.cin;
+    uint k = (i / pc.cin) % 9u;
+    uint o = i / (pc.cin * 9u);
+    F16(pc.dst).v[i] = F16(pc.src).v[(o * pc.cin + ci) * 9u + k];
+}

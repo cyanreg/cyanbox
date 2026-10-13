@@ -1,0 +1,50 @@
+// Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md.
+
+// The decoder's input rows: a text token's row of the embedding table
+// (Q4_K, dequantised), or, at an audio token, the adapter's row for it
+// (MOSS-Audio's masked_scatter of the audio features into the
+// embeddings). A workgroup a token.
+
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#include "common.glsl"
+
+layout(local_size_x = 256) in;
+
+layout(push_constant, std430) uniform Push {
+    uint64_t table;         // Q4_K [vocab][n]
+    uint64_t ids;           // [nb] int
+    uint64_t audio_idx;     // [nb] int, the audio row, or -1
+    uint64_t audio;         // [nb_audio][n]
+    uint64_t dst;           // [nb][n]
+    uint n;
+} pc;
+
+void main()
+{
+    uint t = gl_WorkGroupID.x;
+    int a = I32(pc.audio_idx).v[t];
+    F32 dst = F32(pc.dst);
+    if (a >= 0) {
+        F32 au = F32(pc.audio);
+        for (uint i = gl_LocalInvocationIndex; i < pc.n; i += 256u)
+            dst.v[t * pc.n + i] = au.v[uint(a) * pc.n + i];
+        return;
+    }
+
+    uint id = uint(I32(pc.ids).v[t]);
+    uint nb = pc.n / 256u;
+    U32x4 tab = U32x4(pc.table);
+    U8 bytes = U8(pc.table);
+    for (uint i = gl_LocalInvocationIndex; i < pc.n; i += 256u) {
+        uint kb = i / 256u, e = i % 256u;
+        uint j = e / 64u, w = e % 64u;
+        uint s = 2u * j + (w >= 32u ? 1u : 0u);
+        uint blk = id * nb + kb;
+        uvec4 hd = tab.v[blk * 9u];
+        vec2 dm = q4k_scale_min(hd, s);
+        uint b = uint(bytes.v[blk * 144u + 16u + 32u * j + w % 32u]);
+        uint q = w >= 32u ? b >> 4 : b & 15u;
+        dst.v[t * pc.n + i] = dm.x * float(q) - dm.y;
+    }
+}

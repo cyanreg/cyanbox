@@ -1,0 +1,115 @@
+// Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md.
+
+// Whisper's log-mel spectrogram (WhisperFeatureExtractor, numpy path, as
+// MOSS-Audio's processor runs it): frames of 400 samples every 160, centred
+// (reflected at the ends), times the window, the power of their 201-bin
+// DFT, the 128 mel filters, log10 of at least 1e-10. The largest value goes
+// into *maxbits, as an order-preserving unsigned integer, for mel_norm.
+//
+// A workgroup does FRAMES frames, so each value of the DFT's basis (read
+// from a table the CPU made in double precision, [400][201] (cos, sin)) is
+// loaded once for all of them.
+
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#include "common.glsl"
+
+layout(local_size_x = 256) in;
+
+#define NFFT   400
+#define HOP    160
+#define BINS   201
+#define MELS   128
+#define FRAMES 8
+
+layout(push_constant, std430) uniform Push {
+    uint64_t pcm;           // nb_samples floats
+    uint64_t window;        // 400
+    uint64_t basis;         // [400][201] vec2 (cos, sin)
+    uint64_t filters;       // [201][128]
+    uint64_t dst;           // [nb_frames][128]
+    uint64_t maxbits;       // one uint
+    uint nb_samples;
+    uint nb_frames;
+    uint frame0;            // the first frame of this dispatch
+} pc;
+
+shared float xs[FRAMES][NFFT];
+shared float pw[FRAMES][BINS];
+shared uint wg_max;
+
+uint order_bits(float v)
+{
+    uint u = floatBitsToUint(v);
+    return (u & 0x80000000u) != 0u ? ~u : u | 0x80000000u;
+}
+
+void main()
+{
+    uint tid = gl_LocalInvocationIndex;
+    uint f0 = pc.frame0 + gl_WorkGroupID.x * FRAMES;
+    F32 pcm = F32(pc.pcm);
+    F32 win = F32(pc.window);
+    int n = int(pc.nb_samples);
+
+    if (tid == 0u)
+        wg_max = 0u;
+    for (uint e = tid; e < FRAMES * NFFT; e += 256u) {
+        uint fr = e / NFFT, j = e % NFFT;
+        int idx = int((f0 + fr) * HOP + j) - NFFT / 2;
+        if (idx < 0)
+            idx = -idx;
+        if (idx >= n)
+            idx = 2 * (n - 1) - idx;
+        idx = clamp(idx, 0, n - 1);
+        xs[fr][j] = pcm.v[idx] * win.v[j];
+    }
+    barrier();
+
+    if (tid < BINS) {
+        float re[FRAMES], im[FRAMES];
+        for (int fr = 0; fr < FRAMES; fr++) {
+            re[fr] = 0.0;
+            im[fr] = 0.0;
+        }
+        F32 basis = F32(pc.basis);
+        for (uint j = 0u; j < NFFT; j++) {
+            float c = basis.v[2u * (j * BINS + tid)];
+            float s = basis.v[2u * (j * BINS + tid) + 1u];
+            for (int fr = 0; fr < FRAMES; fr++) {
+                re[fr] += xs[fr][j] * c;
+                im[fr] += xs[fr][j] * s;
+            }
+        }
+        for (int fr = 0; fr < FRAMES; fr++)
+            pw[fr][tid] = re[fr] * re[fr] + im[fr] * im[fr];
+    }
+    barrier();
+
+    float mx = -1e30;
+    if (tid < MELS) {
+        F32 filt = F32(pc.filters);
+        F32 dst = F32(pc.dst);
+        float acc[FRAMES];
+        for (int fr = 0; fr < FRAMES; fr++)
+            acc[fr] = 0.0;
+        for (uint k = 0u; k < BINS; k++) {
+            float w = filt.v[k * MELS + tid];
+            for (int fr = 0; fr < FRAMES; fr++)
+                acc[fr] += w * pw[fr][k];
+        }
+        for (uint fr = 0u; fr < FRAMES; fr++) {
+            if (f0 + fr >= pc.nb_frames)
+                break;
+            float v = log(max(acc[fr], 1e-10)) * 0.43429448190325182;
+            dst.v[(f0 + fr) * MELS + tid] = v;
+            mx = max(mx, v);
+        }
+    }
+    mx = subgroupMax(mx);
+    if (subgroupElect() && tid < MELS)
+        atomicMax(wg_max, order_bits(mx));
+    barrier();
+    if (tid == 0u)
+        atomicMax(U32(pc.maxbits).v[0], wg_max);
+}

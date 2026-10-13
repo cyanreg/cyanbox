@@ -1,0 +1,31 @@
+// Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md.
+
+// The end of Whisper's features: every value clamped to at least the
+// largest less 8, then (x + 4) / 4.
+
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#include "common.glsl"
+
+layout(local_size_x = 256) in;
+
+layout(push_constant, std430) uniform Push {
+    uint64_t mel;
+    uint64_t maxbits;
+    uint count;
+} pc;
+
+float unorder_bits(uint u)
+{
+    return uintBitsToFloat((u & 0x80000000u) != 0u ? u & 0x7fffffffu : ~u);
+}
+
+void main()
+{
+    uint i = gl_GlobalInvocationID.x + gl_GlobalInvocationID.y * gl_NumWorkGroups.x * 256u;
+    if (i >= pc.count)
+        return;
+    float mx = unorder_bits(U32(pc.maxbits).v[0]);
+    F32 mel = F32(pc.mel);
+    mel.v[i] = (max(mel.v[i], mx - 8.0) + 4.0) * 0.25;
+}

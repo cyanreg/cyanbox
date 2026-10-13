@@ -1,0 +1,215 @@
+// Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md.
+
+// Y = X W^T (+ bias) (then GELU) (+ Y): X is [M][K] f32 activations, a row
+// a token; W is [N][K] weights, a row an output (PyTorch's Linear), F16 or
+// Q4_K. Every matrix product of the model runs through here, but for the
+// decoder's single-token steps (gemv.comp).
+//
+// A workgroup computes a 128 x 128 tile of Y, its 256 invocations 8 x 8
+// each (SMALL_M: 32 x 128, 2 x 8 each, for the questions' few tokens),
+// from tiles of 32 columns of K that go through shared memory as f32 (the
+// weights dequantised on the way in). The products are f32 FMAs:
+// no cooperative matrices. The next tiles are loaded from memory into
+// registers while the current ones are multiplied.
+//
+// Variants (compile-time):
+//   W_Q4K   W is Q4_K, row after row of blocks (ggml's block_q4_K)
+//   A_CONV  X is the im2col gather of a 3x3, stride 2, padding 1
+//           convolution of channel-last activations [b][fin][tin][cin],
+//           W [cout][3][3][cin] (conv_permute.comp); a row of Y is an
+//           output position (b, fo, to), so Y is channel-last again
+//
+// Dispatch: (ceil(N / 128), ceil(M / BM)). K is a multiple of 32 (of 256
+// for Q4_K), N of 4, ldx of 4; with A_CONV, cin is a multiple of 32.
+
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#include "common.glsl"
+
+layout(local_size_x = 256) in;
+
+#ifdef SMALL_M
+#define BM 32
+#else
+#define BM 128
+#endif
+#define BN 128
+#define TM (BM / 16)            // rows an invocation computes
+#define NA (BM / 32)            // vec4 of A an invocation loads
+#define BK 32
+#define KQ (BK / 4)
+
+#define FLAG_GELU 1u
+#define FLAG_ADD  2u
+#define FLAG_BIAS 4u
+
+layout(push_constant, std430) uniform Push {
+    uint64_t x, w, bias, y;
+    uint M, N, K;
+    uint ldx, ldy;
+    uint flags;
+    uint fin, tin, fout, tout, cin;
+} pc;
+
+// A row of 32 floats as 8 vec4, 128 bytes: every row would start on the
+// same bank, and the 16 rows of B a wave reads at once would all conflict.
+// Column kq of row r is stored at kq ^ (r & 7) instead, which spreads
+// eight neighbouring rows over all the banks. (A padding column would do
+// the same, but the compiler drops it as unused.)
+shared vec4 As[BM][KQ];
+shared vec4 Bs[BN][KQ];
+
+#define SWZ(r, q) ((q) ^ ((r) & 7u))
+
+vec4 ra[NA];
+vec4 rb[4];
+
+void load_a(uint k0)
+{
+    uint tid = gl_LocalInvocationIndex;
+    uint q = tid % 8u;
+    for (uint i = 0u; i < NA; i++) {
+        uint r = tid / 8u + 32u * i;
+        uint m = gl_WorkGroupID.y * BM + r;
+        ra[i] = vec4(0.0);
+        if (m >= pc.M)
+            continue;
+#ifdef A_CONV
+        uint to = m % pc.tout;
+        uint fo = (m / pc.tout) % pc.fout;
+        uint b = m / (pc.tout * pc.fout);
+        uint kk = k0 / pc.cin;
+        int fi = int(2u * fo + kk / 3u) - 1;
+        int ti = int(2u * to + kk % 3u) - 1;
+        if (fi < 0 || fi >= int(pc.fin) || ti < 0 || ti >= int(pc.tin))
+            continue;
+        uint ci = k0 % pc.cin + 4u * q;
+        ra[i] = F32x4(pc.x).v[(((b * pc.fin + uint(fi)) * pc.tin + uint(ti)) * pc.cin + ci) / 4u];
+#else
+        ra[i] = F32x4(pc.x).v[(m * pc.ldx + k0) / 4u + q];
+#endif
+    }
+}
+
+void load_b(uint k0)
+{
+    uint tid = gl_LocalInvocationIndex;
+#ifdef W_Q4K
+    // A thread takes 16 weights of one row: half of a 32-weight sub-block.
+    uint r = tid / 2u, h = tid % 2u;
+    uint n = gl_WorkGroupID.x * BN + r;
+    for (uint i = 0u; i < 4u; i++)
+        rb[i] = vec4(0.0);
+    if (n >= pc.N)
+        return;
+    uint nb = pc.K / 256u;
+    uint kb = k0 / 256u;
+    uint s = (k0 % 256u) / 32u;
+    uint blk = (n * nb + kb) * 9u;
+    U32x4 wq = U32x4(pc.w);
+    uvec4 hd = wq.v[blk];
+    uvec4 qs = wq.v[blk + 1u + 2u * (s / 2u) + h];
+    vec2 dm = q4k_scale_min(hd, s);
+    uint shift = 4u * (s & 1u);
+    for (uint i = 0u; i < 4u; i++) {
+        uint word = qs[i];
+        rb[i] = vec4(float((word >> shift) & 15u), float((word >> (8u + shift)) & 15u),
+                     float((word >> (16u + shift)) & 15u), float((word >> (24u + shift)) & 15u))
+                * dm.x - dm.y;
+    }
+#else
+    uint q = tid % 8u;
+    for (uint i = 0u; i < 4u; i++) {
+        uint r = tid / 8u + 32u * i;
+        uint n = gl_WorkGroupID.x * BN + r;
+        rb[i] = n < pc.N ? vec4(F16x4(pc.w).v[(n * pc.K + k0) / 4u + q]) : vec4(0.0);
+    }
+#endif
+}
+
+void store_tiles()
+{
+    uint tid = gl_LocalInvocationIndex;
+    for (uint i = 0u; i < NA; i++) {
+        uint r = tid / 8u + 32u * i;
+        As[r][SWZ(r, tid % 8u)] = ra[i];
+    }
+#ifdef W_Q4K
+    uint r = tid / 2u;
+    for (uint i = 0u; i < 4u; i++)
+        Bs[r][SWZ(r, 4u * (tid % 2u) + i)] = rb[i];
+#else
+    for (uint i = 0u; i < 4u; i++) {
+        uint r = tid / 8u + 32u * i;
+        Bs[r][SWZ(r, tid % 8u)] = rb[i];
+    }
+#endif
+}
+
+void main()
+{
+    uint tid = gl_LocalInvocationIndex;
+    uint tx = tid % 16u, ty = tid / 16u;
+
+    float acc[TM][8];
+    for (int i = 0; i < TM; i++) {
+        for (int j = 0; j < 8; j++)
+            acc[i][j] = 0.0;
+    }
+
+    load_a(0u);
+    load_b(0u);
+    store_tiles();
+    barrier();
+
+    for (uint k0 = 0u; k0 < pc.K; k0 += BK) {
+        bool more = k0 + BK < pc.K;
+        if (more) {
+            load_a(k0 + BK);
+            load_b(k0 + BK);
+        }
+
+        for (uint kq = 0u; kq < KQ; kq++) {
+            vec4 b[8];
+            for (uint j = 0u; j < 8u; j++)
+                b[j] = Bs[tx + 16u * j][SWZ(tx, kq)];
+            for (uint i = 0u; i < TM; i++) {
+                vec4 a = As[ty + 16u * i][SWZ(ty, kq)];
+                for (uint j = 0u; j < 8u; j++) {
+                    acc[i][j] = fma(a.x, b[j].x, acc[i][j]);
+                    acc[i][j] = fma(a.y, b[j].y, acc[i][j]);
+                    acc[i][j] = fma(a.z, b[j].z, acc[i][j]);
+                    acc[i][j] = fma(a.w, b[j].w, acc[i][j]);
+                }
+            }
+        }
+        barrier();
+
+        if (more) {
+            store_tiles();
+            barrier();
+        }
+    }
+
+    F32 y = F32(pc.y);
+    F32 bias = F32(pc.bias);
+    for (uint i = 0u; i < TM; i++) {
+        uint m = gl_WorkGroupID.y * BM + ty + 16u * i;
+        if (m >= pc.M)
+            break;
+        for (uint j = 0u; j < 8u; j++) {
+            uint n = gl_WorkGroupID.x * BN + tx + 16u * j;
+            if (n >= pc.N)
+                break;
+            float v = acc[i][j];
+            if ((pc.flags & FLAG_BIAS) != 0u)
+                v += bias.v[n];
+            if ((pc.flags & FLAG_GELU) != 0u)
+                v = gelu(v);
+            uint idx = m * pc.ldy + n;
+            if ((pc.flags & FLAG_ADD) != 0u)
+                v += y.v[idx];
+            y.v[idx] = v;
+        }
+    }
+}

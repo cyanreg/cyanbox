@@ -1,0 +1,87 @@
+// Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md.
+
+// Qwen3's queries and keys before attention: each head RMS-normed (q_norm,
+// k_norm), then rotated (RoPE, the "rotate half" form: dimension i pairs
+// with i + 64). The queries are written back in place; the keys, and the
+// values as they are, go into this layer's cache as f16 at their
+// positions. The rotation's cos and sin come from a table the CPU made in
+// double precision ([position][64] (cos, sin)): the GPU's own sin and cos
+// lose digits on angles in the thousands of radians.
+//
+// A workgroup a token, an invocation a dimension.
+
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#include "common.glsl"
+
+layout(local_size_x = 128) in;
+
+#define D 128
+
+layout(push_constant, std430) uniform Push {
+    uint64_t q, k, v;       // [nb][32 * 128], [nb][8 * 128], [nb][8 * 128]
+    uint64_t qw, kw;        // [128]
+    uint64_t rope;          // [max_ctx][64] vec2
+    uint64_t kc, vc;        // F16 [8][max_ctx][128]
+    uint pos0;
+    uint max_ctx;
+    uint nb_q, nb_kv;       // heads
+    float eps;
+} pc;
+
+shared float part[D];
+shared float xs[D];
+
+float rotate(float x, uint d, vec2 cs)
+{
+    xs[d] = x;
+    barrier();
+    float y = d < 64u ? x * cs.x - xs[d + 64u] * cs.y : x * cs.x + xs[d - 64u] * cs.y;
+    barrier();
+    return y;
+}
+
+float rms_scale(float x)
+{
+    float s = subgroupAdd(x * x);
+    if (subgroupElect())
+        part[gl_SubgroupID] = s;
+    barrier();
+    float t = 0.0;
+    for (uint i = 0u; i < gl_NumSubgroups; i++)
+        t += part[i];
+    barrier();
+    return inversesqrt(t / float(D) + pc.eps);
+}
+
+void main()
+{
+    uint d = gl_LocalInvocationIndex;
+    uint t = gl_WorkGroupID.x;
+    uint pos = pc.pos0 + t;
+    vec2 cs = vec2(F32(pc.rope).v[2u * (pos * 64u + d % 64u)],
+                   F32(pc.rope).v[2u * (pos * 64u + d % 64u) + 1u]);
+
+    F32 q = F32(pc.q);
+    float qw = F32(pc.qw).v[d];
+    for (uint h = 0u; h < pc.nb_q; h++) {
+        uint idx = (t * pc.nb_q + h) * D + d;
+        float x = q.v[idx];
+        x *= rms_scale(x) * qw;
+        q.v[idx] = rotate(x, d, cs);
+    }
+
+    F32 k = F32(pc.k);
+    F32 v = F32(pc.v);
+    F16 kc = F16(pc.kc);
+    F16 vc = F16(pc.vc);
+    float kw = F32(pc.kw).v[d];
+    for (uint h = 0u; h < pc.nb_kv; h++) {
+        uint idx = (t * pc.nb_kv + h) * D + d;
+        float x = k.v[idx];
+        x *= rms_scale(x) * kw;
+        uint c = (h * pc.max_ctx + pos) * D + d;
+        kc.v[c] = float16_t(rotate(x, d, cs));
+        vc.v[c] = float16_t(v.v[idx]);
+    }
+}
