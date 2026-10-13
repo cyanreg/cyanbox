@@ -36,8 +36,12 @@
  * the list whatever they say (docs/ML.md measures how much), so the
  * question is asked in every rotation of the list, each description once
  * under each letter, and the answers combined by their geometric mean:
- * what is left is the descriptions' own pull. This replaced a continuous
- * hue computed from the measures (intensity and mood as an angle on the
+ * what is left is the descriptions' own pull. That pull (with no audio
+ * the model leans to purple, red and orange, away from aqua and blue) is
+ * left in: divided out, it tipped the bright tracks from orange to yellow
+ * without the colours agreeing better with the model's own measures and
+ * words (docs/ML.md has the numbers). This replaced a continuous hue
+ * computed from the measures (intensity and mood as an angle on the
  * colour wheel), which the stick then quantised to the nearest of its
  * eight without the model's say.
  */

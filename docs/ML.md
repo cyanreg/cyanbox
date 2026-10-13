@@ -22,7 +22,7 @@ genre unless the user typed one (README.md, Tags).
 | Loading the model, once | 3.5 s; 4.1 GB of weights onto the GPU, none kept in RAM |
 | Listening (the whole track) | ~4 s on a 6900 XT, ~70x real time |
 | The other questions of `rx_ml_tag` (seven yes/no, three in words) | ~1.1 s |
-| The colour question, in eight orders | 2.5 s with three renders sharing the GPU (not measured alone) |
+| The colour question, in eight orders | ~1.7 s (1.3–2.1; 2.5 s with three renders sharing the GPU) |
 | Memory | 174 MB of RAM at most (64 MB of it a read buffer while loading); 7 GB of VRAM at the peak (4.1 GB weights, 1.2 GB cache, the encoder's scratch for a 6-minute track) |
 
 What it gives, measured on the author's library (some 150 tracks: house,
@@ -147,12 +147,54 @@ against 11 in 11 with letters); "(A) ..." labels let the letters' share of
 the answer fall to 0.92; "Which of these describes this track best?" gives
 the same picks.
 
-**Without audio** the model still prefers some descriptions: the eight
-orders' geometric mean, asked of no audio, is purple 0.30, red 0.21, orange
-0.19, pink 0.16, yellow 0.08, green 0.05, blue 0.013, aqua 0.011. Aqua and
-blue need a track the model hears as plainly calm or sad. This is not
-divided out: that would be rxbox's hand on the scale rather than the
-model's choice, and the user's words can move it.
+**The words' own pull, and why it stays in.** The rotations cancel the
+letters' pull, not the model's taste for some of the words. Asked of no
+audio at all (the prompt without its audio block, which is the nearest to
+an input with no content: silence is not one, the model hears 10 s of it
+as pink 0.39 and purple 0.16, dark and hard), the eight rotations'
+geometric mean is purple 0.30, red 0.21, orange 0.19, pink 0.16, yellow
+0.08, green 0.05, blue 0.013, aqua 0.011. Dividing a track's colour
+probabilities by this prior and renormalising (a contextual calibration)
+was tried on the 58 tracks and held against what the model itself says of
+them: the rank correlation of the colour's intensity (aqua, blue, green,
+purple, yellow, orange, red, pink, calm to hard) with its intensity
+measure and of the colour's mood (pink, purple, blue, red, aqua, green,
+orange, yellow, dark to bright) with its mood measure; the picks its mood
+words contradict (an intense colour for "calm, peaceful", a dark one for
+"uplifting, joyful"); and whether the six tracks its mood words call calm
+("Calm, reflective, peaceful", "Melancholic, introspective, tender") get
+green, aqua, blue or purple.
+
+| | as asked | divided by the prior |
+| --- | --- | --- |
+| colours | orange 26, yellow 20, red 7, purple 3, green 2 | yellow 34, orange 12, red 6, green 3, purple 2, blue 1 |
+| spread (entropy; the largest colour) | 1.81 bits; 26 | 1.75 bits; 34 |
+| top probability; runner-up within 0.1 | 0.50; 20 | 0.51; 17 |
+| colour against the intensity measure | 0.65 | 0.64 |
+| colour against the mood measure | 0.61 | 0.67 |
+| picks the mood words contradict | 0 | 0 |
+| calm tracks with a cool colour | 5 of 6 | 6 of 6 |
+
+The calibration does not spread the colours. The audio splits the bright
+tracks between orange and yellow, and the prior is lower for yellow (0.08
+against 0.19), so dividing it out tips most of them to yellow. It moves
+"Adagio" (melancholic, introspective) from purple to blue and "Shizuka No
+Office" (calm, peaceful) from yellow to green, and its colours follow the
+mood measure a little better, but the intensity measure no better. The
+prior measured with silence instead spreads them less still (yellow 36 and
+38 of 58 for 10 and 240 s). So rxbox keeps the probabilities as the model
+gives them. The pull is the words' as much as the model's: a description
+the model favours wins the close calls, and the user can reword it.
+
+One other wording was tried for the cool colours: "Which of these
+describes the mood of this music best?". It gives two more tracks purple,
+its colours follow the intensity measure better (0.76), and its spread is
+a little wider (1.87 bits), but it gives no track aqua or blue, and it
+puts purple on a track the model calls "uplifting, energetic, euphoric".
+Divided by its own prior it uses all eight colours but its colours follow
+the intensity measure much worse (0.51), and still a yellow 35 of 58. On
+58 tracks of mostly bright dance music neither is a clear gain; the
+question stays as it is.
 
 **On the acceptance library** (58 tracks: AD:HOUSE 7 and 11, AD:Drum'n
 Bass 5, Orange Pekoe's jazz pop, AZKi's J-pop, a film soundtrack, ag's
@@ -168,8 +210,8 @@ No Yakata") purple, the soundtrack's "Fortune Land E" and Orange Pekoe's
 table of the first tagging (intense and bright), is orange (0.61, then red
 0.17). With three Blender renders sharing the 6900 XT, a track took 9.9 s
 on average (4.4 to 14.3) from decoding to the last answer, the colour's
-eight asks 2.5 s of it; alone on the GPU, listening and the other
-questions take about 5 s (In short, above).
+eight asks 2.5 s of it. Alone on the GPU, the eight asks take 1.7 s (1.3
+to 2.1, the longer tracks' cache the slower) and listening 3.3 s.
 
 Before tagging version 2 the colour was a hue computed from the measures:
 the direction of the track on the plane of mood and intensity (Russell's
@@ -248,6 +290,7 @@ one alone ran over 250 tracks without fault.
 rxbox-ml -m MODEL -t FILE...                       # the tags and the colours
 rxbox-ml -m MODEL -t -L "a|b|c|d|e|f|g|h" FILE     # another legend, pink to purple
 rxbox-ml -m MODEL -b FILE...                       # the colour in each order
+rxbox-ml -m MODEL -b                               # the same of no audio: the words' prior
 rxbox-ml -m MODEL -q "Describe this music." FILE   # an answer in words
 rxbox-ml -m MODEL -y "Is this track dark? Answer yes or no." FILE
 rxbox-ml -m MODEL -c "... Answer with one digit." FILE
