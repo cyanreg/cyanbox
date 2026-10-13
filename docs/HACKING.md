@@ -98,7 +98,7 @@ The style is the one of the user's libcraw and avtransport, exactly:
 include/rxbox/    module interfaces (owned by the architecture, edit with care)
 src/common        common.c log.c thread.c                             -> rx_common_dep
 src/audio         decode.c probe.c mp3.c flac.c artwork.c             -> rx_audio_dep (common)
-                  transcode.c internal.h
+                  transcode.c packets.c internal.h
 src/core          model.c grid.c db.c library.c playlist.c config.c   -> rx_core_dep (common, audio)
                   notation.c wavestore.c core.h
 src/analysis      spectrum.c onset.c tempo.c grid_fit.c downbeat.c    -> rx_analysis_dep
@@ -107,8 +107,8 @@ src/analysis      spectrum.c onset.c tempo.c grid_fit.c downbeat.c    -> rx_anal
 src/formats       pdb.c anlz.c onelibrary.c sqlcipher.c sha512.h settings.c colors.c util.c (+ buf.h formats_priv.h nfc_tables.h) -> rx_formats_dep
                   colors.c util.c buf.h formats_priv.h nfc_tables.h
 src/export        plan.c export.c inspect.c stick.c export_priv.h     -> rx_export_dep
-src/player        player.c pipewire.c nullout.c deck.c controls.c     -> rx_player_dep (core)
-                  stretch.cpp stretch.h player_internal.h
+src/player        player.c pipewire.c nullout.c deck.c feed.c         -> rx_player_dep (core)
+                  controls.c stretch.cpp stretch.h player_internal.h
 src/app           jobs.c app.c                                        -> rx_app_dep (everything above)
                   headless.c (src/gpu and src/ui stand-ins for rxbox-cli and test_app)
 src/gpu           window.c vk.c swapchain.c textures.c wave.c         (executable only)
