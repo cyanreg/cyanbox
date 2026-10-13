@@ -453,12 +453,18 @@ static void row_cells(UiState *ui, RXTrack *t, int row, float row_h, const uint6
             break;
         }
         case COL_KEY: {
-            // rekordbox's Traffic Light: a key that mixes with the loaded
-            // track's is green (rbxport's colour), its own row's too.
+            // rekordbox's Traffic Light: the cell of a key that mixes with
+            // the loaded track's is filled green with black text, its own
+            // row's too, selected or not (rbxport's colour and rule,
+            // src/views/browser/TrackTable.module.css, .cell[data-lit]).
+            // The fill covers the padding: the cell, not its text, is lit.
             const char *k = ui_key_text(ui, t->key, buf, sizeof(buf));
             ImU32 col = k[0] ? text : UI_FAINT;
-            if (k[0] && ref && !dim && rx_key_traffic_light(t->key, ref, (RXKeyReach)ui->traffic_light))
-                col = UI_QUANTIZE;
+            if (k[0] && ref && !dim && rx_key_traffic_light(t->key, ref, (RXKeyReach)ui->traffic_light)) {
+                float pad = ImGui::GetStyle().CellPadding.x;
+                dl->AddRectFilled(ImVec2(p.x - pad, p.y), ImVec2(p.x + w + pad, p.y + row_h), UI_QUANTIZE);
+                col = UI_BLACK;
+            }
             cell_text(ui, p, w, row_h, k[0] ? k : DASH, col, false);
             break;
         }

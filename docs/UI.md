@@ -175,8 +175,10 @@ library keeps the date). There are no Color, Genre or Hot
 Cue columns: the info panel shows and edits a track's colour and genre,
 the player's cue list a loaded track's cues. Cell text is 14 px, the
 title 15 px, `#` and the dates 12.5 px. The Key column has rekordbox's
-Traffic Light: while a track is loaded, every key that mixes with its key
-is drawn green (`#3CEB50`), the loaded track's own row included. The
+Traffic Light: while a track is loaded, the Key cell of every key that
+mixes with its key is filled green (`#3CEB50`, the whole cell, padding
+included) with the key in black, the loaded track's own row included and
+selected rows too (rbxport's `.cell[data-lit]`). The
 reach is set in View > Traffic Light (setting `ui.traffic_light`): for a
 loaded track in nL on the Camelot wheel (L its letter, M the other),
 Same key lights nL, Related 1 adds nM, Related 2 adds (n−1)L and (n+1)L,
