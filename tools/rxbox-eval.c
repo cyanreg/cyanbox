@@ -34,12 +34,12 @@
  * has one, is read with rx_probe and printed.
  *
  * Where the music starts (docs/BEATS.md): the CSV and -v give its time and
- * kind (hit, fade, at once), a fade's origin, and the grid's first beat,
- * its number, its first downbeat and the automatic cue (the first downbeat
- * at or after the start), so that the start of the music can be checked
- * against beat 1. The CSV's last columns are the evidence the start's
- * section had before its on/off-beat decision, for tuning the witnesses
- * without analysing again. */
+ * kind (hit, fade, swell, at once), and the grid's first beat, its number,
+ * its first downbeat and the automatic cue (the first downbeat at or after
+ * the start), so that the start of the music can be checked against beat
+ * 1. The CSV's last columns are the evidence the start's section had
+ * before its on/off-beat decision, for tuning the witnesses without
+ * analysing again. */
 
 #include "rxbox/analysis.h"
 
@@ -1003,7 +1003,8 @@ int main(int argc, char **argv)
     }
 
     if (job.starts) {
-        /* One line per file: kind, start, origin, floor, loud level, rise. */
+        /* One line per file: kind, start, threshold crossing, floor, loud
+         * level, jump, rise (tab-separated), path. */
         for (int i = 0; i < nb; i++) {
             const Result *r = &res[i];
             if (!r->ok) {

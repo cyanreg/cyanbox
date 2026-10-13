@@ -141,6 +141,8 @@ enum {
     STYLE_DNB,          /* kick on 1 and 3-and, snare on 2 and 4, hats in eighths */
     STYLE_HIPHOP,       /* kick 1 and 3, snare 2 and 4, eighth hats; slow */
     STYLE_TECHHOUSE,    /* four-on-the-floor, but loud open hats and bass on the off-beats */
+    STYLE_TWOSTEP,      /* UK garage: kick on 1, the "and" of 2 and the "and" of 3, snare on 2
+                         * and 4, hats on the "and"s: the kicks lean to the off-beat */
 };
 
 typedef struct Spec {
@@ -286,6 +288,15 @@ static int synth(const Spec *sp, Track *t, Truth *truth)
                 add_hat(t, tq, 0.5, &l);
                 add_hat(t, th, 0.5, &l);
                 break;
+            case STYLE_TWOSTEP:
+                if (q == 0)
+                    add_kick(t, tq, 1.0);
+                if (q == 1 || q == 2)
+                    add_kick(t, th, 1.0);
+                if (q == 1 || q == 3)
+                    add_snare(t, tq, 0.6, &l);
+                add_hat(t, th, 0.5, &l);
+                break;
             case STYLE_HIPHOP:
                 if (q == 0 || q == 2)
                     add_kick(t, tq, 1.0);
@@ -372,6 +383,8 @@ static const Spec cases[] = {
     { .name = "a click in the silence, then a hit on beat 1", .style = STYLE_HOUSE,
       .bpm = 126.0, .first_downbeat = 1.1, .bars = 40, .seed = 21, .click = 0.3,
       .start_checks = true },
+    { .name = "two-step garage 134 after 0.72 s of silence", .style = STYLE_TWOSTEP,
+      .bpm = 134.0, .first_downbeat = 0.72, .bars = 48, .seed = 22, .start_checks = true },
     { .name = "a stab on the \"and\" before bar 1", .style = STYLE_HOUSE, .bpm = 124.0,
       .first_downbeat = 0.9, .bars = 40, .seed = 19, .pickup = PICKUP_STAB, .start_checks = true },
     { .name = "a snare pickup on beat 4 before bar 1", .style = STYLE_HOUSE, .bpm = 128.0,
@@ -398,6 +411,7 @@ static const Want wants[] = {
     { RX_GRID_FLAG_TEMPO_CHANGE, RX_GRID_FLAG_UNSTEADY | RX_GRID_FLAG_PHASE_CUT },
     { RX_GRID_FLAG_PHASE_CUT, RX_GRID_FLAG_UNSTEADY | RX_GRID_FLAG_TEMPO_CHANGE },
     { RX_GRID_FLAG_TEMPO_CHANGE, RX_GRID_FLAG_UNSTEADY | RX_GRID_FLAG_PHASE_CUT },
+    { 0, CUTS | RX_GRID_FLAG_UNSTEADY },
     { 0, CUTS | RX_GRID_FLAG_UNSTEADY },
     { 0, CUTS | RX_GRID_FLAG_UNSTEADY },
     { 0, CUTS | RX_GRID_FLAG_UNSTEADY },

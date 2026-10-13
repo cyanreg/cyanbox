@@ -93,17 +93,18 @@ void rx_beat_result_free(RXBeatResult *r)
 /* The music's start as a witness (docs/BEATS.md, section 10). A hit or a
  * fade's origin within a tenth of a beat (at most 40 ms) of a beat or a
  * half beat of the line is on it. A hit counts when the kick band rises at
- * it at least as much as on the beats that carry the kicks, and only while
- * the kicks themselves do not mark one half of the beat by a factor e.
- * Each has a log evidence for its half of the beat and a vote for beat 1
- * (in structure scales, as downbeat.c's votes). */
+ * it at least twice as much as on the beats that carry the kicks (an
+ * opening downbeat, not one more kick), and only while the kicks
+ * themselves do not mark one half of the beat by a factor e. It is log
+ * evidence for its half of the beat and a vote for beat 1 (in structure
+ * scales, as downbeat.c's votes); a fade's origin only breaks a tie for
+ * beat 1. */
 #define START_ON_BEAT     0.10
 #define START_ON_BEAT_MAX 0.040
-#define HIT_KICK          1.0
+#define HIT_KICK          2.0
 #define HIT_KICKS_CLEAR   1.0
 #define HIT_PHASE         2.5
 #define HIT_DOWNBEAT      2.0
-#define FADE_PHASE        1.0
 #define FADE_DOWNBEAT     0.25
 /* The grid's first beat may lie this much before the music's start (a
  * line a few ms early on the hit; a fade's start is a frame's estimate). */
@@ -412,13 +413,13 @@ static StartWitness start_witness(const Ctx *c, const RXFitSection *s, const Sec
     half_beat(s, w.at, &off);
     if (fabs(off) > fmin(START_ON_BEAT * P, START_ON_BEAT_MAX))
         return w;
-    /* A fade begins on a beat, not between two; whether on beat 1 the first
-     * loud onset knows better (where the drums come in after the fade),
-     * so it keeps its vote and the origin only breaks a tie. */
+    /* Whether a fade is on beat 1 the first loud onset knows better
+     * (where the drums come in after it), so it keeps its vote and the
+     * origin only breaks a tie. Nor does the origin say much about the
+     * half of the beat (docs/BEATS.md): it has no say there. */
     if (ms->kind == RX_START_FADE) {
         w.counts = true;
         w.onset_too = true;
-        w.phase = FADE_PHASE;
         w.down = FADE_DOWNBEAT;
         return w;
     }
@@ -462,10 +463,10 @@ static StartWitness start_witness(const Ctx *c, const RXFitSection *s, const Sec
  * after silence that carries a kick, where the kicks leave the half of the
  * beat open, is on the beat (tracks made for DJs start on a bar line) and
  * is beat 1 unless the structure clearly says otherwise. A fade's origin
- * is on the beat too, and breaks a tie for beat 1. Everywhere else (the
- * music starts at once, a swell, any other hit, a start between the
- * line's half beats), and for beat 1 after a fade, dj's first loud onset
- * votes in the structure as one scale, as it always did. */
+ * breaks a tie for beat 1. Everywhere else (the music starts at once, a
+ * swell, any other hit, a start between the line's half beats), and after
+ * a fade, dj's first loud onset votes in the structure as one scale, as it
+ * always did. */
 static int decide_phase(Ctx *c, int i, SecInfo *si, const float *arbiter, const RXMusicStart *ms,
                         double first_onset, int *band, RXBeatDebug *dbg)
 {
