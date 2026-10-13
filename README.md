@@ -2,8 +2,10 @@
 
 rxbox prepares USB sticks for Pioneer/AlphaTheta CDJs and XDJs without
 rekordbox. It keeps a library of your audio files in one SQLite database,
-analyses them (beat grid, key, waveforms), lets you set cues, loops and the
-grid in a rekordbox-style interface with one player, and writes a stick the
+analyses them (beat grid, key, waveforms), tags them with an audio model
+on the GPU when you ask (a genre, a colour and a comment), lets you set
+cues, loops and the grid in a rekordbox-style interface with one player,
+and writes a stick the
 players read: both device libraries (`export.pdb` and the OneLibrary
 `exportLibrary.db`), the analysis files, artwork and My Settings. After a gig
 it reads back what the player saved on the stick (cues, play history,
@@ -23,7 +25,9 @@ and these libraries, by pkg-config name:
 - `libpipewire-0.3`
 - `vulkan` (the interface, and the analysis, whose spectral front end runs
   on a GPU when there is one: Vulkan 1.3 with buffer device addresses; with
-  no device the analysis runs on the CPU and gives the same results)
+  no device the analysis runs on the CPU and gives the same results; the
+  tagging model needs a GPU with 16- and 8-bit storage and about 7 GB of
+  memory)
 - `sdl3`, `wayland-client`, `fontconfig` (the interface)
 
 Dear ImGui, the Vulkan Memory Allocator and tomlc17 are vendored in
@@ -64,11 +68,12 @@ aqua 193.5°, blue 220.6°, purple 276° (the hues of the colours rekordbox
 draws). A library from before hues keeps its colours: each name became its
 colour's hue.
 
-The comment field is yours. rxbox reads a file's tags when it adds the
-track but leaves the comment tag out, so the comment starts empty, for your
-notes and for tagging later; the `import.comment` setting takes the file's
-comment again. A library that imported comments before keeps them. rxbox
-never writes to the audio files.
+The comment field is the tagging's. rxbox reads a file's tags when it adds
+the track but leaves the comment tag out, so the comment starts empty, and
+Analyse tags writes the model's comment there (Tags below); the
+`import.comment` setting takes the file's comment again. A library that
+imported comments before keeps them until a track is tagged. rxbox never
+writes to the audio files.
 
 ## Analysis
 
@@ -92,6 +97,38 @@ stale tracks and `rxbox show` prints a track's versions. A library from
 before versions were kept counts all its results as stale, so the first
 start after that upgrade analyses the whole library again.
 
+## Tags
+
+rxbox can listen to a track with MOSS-Audio-4B (OpenMOSS, Apache-2.0), an
+audio-language model, on the GPU, and tag it: a colour (a hue placing the
+track by mood and intensity: red intense, yellow bright, green bright and
+relaxed, cyan calm, blue calm and sad, violet dark, magenta dark and
+intense), a comment (who sings, in what language, and the mood in three
+words: "Male vocals, English. Uplifting, energetic, anthemic.") and a
+genre ("Hardstyle"; the family more often than the subgenre). It only
+ever runs when you ask: the track menu's Analyse tags (the selection, or
+the track clicked), Analysis → Analyse tags of selection, or
+`rxbox tag TRACK...`; never when a track is added, at startup, in Analyse
+all or before an export. A result always writes the colour and the
+comment; the genre goes in only when you have not typed one (the file's
+own genre tag is kept apart, as all its tags are). The model's measures
+behind the colour (intensity, club, mood, vocals, 0 to 1) and the version
+of the tagging are kept too: `rxbox show` prints them, the info panel has
+them on its Tags line.
+
+Tracks asked for join one batch: the model is loaded once (3.5 s, 4 GB
+of the GPU's memory, up to 7 GB while it listens), tags them one at a
+time, about 4.5 s a track on an RX 6900 XT, takes tracks asked for
+meanwhile into the same batch, and is unloaded after the last one or
+when you stop it (Analysis → Stop tagging). `docs/ML.md` says what the
+model can tell and how it runs.
+
+The model's file, `moss-audio-4b-instruct-q4_k.gguf` (4.1 GB, not in
+git), goes in `models/` at the top of the source tree: rxbox looks there
+beside its executable, beside the executable's directory (so a build
+directory finds it) and in the current directory. The setting `ml.model`
+(`rxbox config ml.model PATH`) or `$RXBOX_ML_MODEL` names another file.
+
 ## Command line
 
 `rxbox [OPTIONS] COMMAND [ARGS]`. A TRACK is an audio file in the library
@@ -101,7 +138,8 @@ start after that upgrade analyses the whole library again.
 | --- | --- |
 | `add PATH...` | add audio files or folders to the library and analyse them |
 | `analyze [TRACK...]` | analyse what is missing or was made by an older analyser (the whole library by default); `-f` re-analyses, `-w beats,key,waves` limits it |
-| `show TRACK...` | print the colour (the hue and what the stick gets), the resolved grid, key, cues and analyser versions |
+| `show TRACK...` | print the colour (the hue and what the stick gets), the resolved grid, key, cues, analyser versions, genre, comment and tags |
+| `tag TRACK...` | tag the tracks with the model (Tags above): colour, comment and, unless you typed one, genre; one line per track |
 | `color HUE TRACK...` | set the tracks' colour: degrees (0-360), a colour name (`aqua`: its hue) or `none` |
 | `export STICK` | write the settings, every playlist and their tracks to a mounted stick (`--all`, `-p NAME`, `--prune`, `--compat`, `--ignore-unsynced`, `-n`) |
 | `inspect STICK` | re-read and validate a stick |
@@ -144,6 +182,7 @@ The settings live in the library. `rxbox config` lists them and
 | `export.compat_transcode` | `false` | transcode AAC and hi-res files, as `--compat` |
 | `export.device_name` | the stick's label | the name the players show for the stick |
 | `audio.sink` | the default output | the PipeWire node to play to |
+| `ml.model` | `models/moss-audio-4b-instruct-q4_k.gguf` | the tagging model's file (also `$RXBOX_ML_MODEL`) |
 | `ui.traffic_light` | `related3` | the browser's key highlight (View → Traffic Light) |
 | `ui.detail_bars` | `12` | how many bars the detail waveform shows (the deck's zoom, remembered) |
 
@@ -268,6 +307,7 @@ These are checks of the files; the test suite does not run a player.
   developing
 - `docs/UI.md`: the interface, control by control
 - `docs/BEATS.md`: the beat-grid analyser
+- `docs/ML.md`: the tagging model, what it can tell and how it runs
 - `docs/pdb.md`, `docs/anlz.md`, `docs/onelibrary.md`, `docs/settings.md`:
   the stick formats
 

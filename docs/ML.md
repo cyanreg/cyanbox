@@ -8,6 +8,12 @@ encoder in F16, its decoder (Qwen3-4B) in Q4_K. The code is `src/ml/`
 `tests/ml/test_kernels.c`, the check against the reference implementation
 `tools/ml_check.py`, and the tool for trying prompts `tools/rxbox-ml.c`.
 
+In rxbox it runs only when asked: the track menu's Analyse tags, Analysis →
+Analyse tags of selection, or `rxbox tag TRACK...`. The tracks join one
+batch that loads the model once and unloads it after the last
+(`src/app/jobs.c`); a result writes the hue and the comment, and the genre
+unless the user typed one (README.md, Tags).
+
 ## In short
 
 | | per track (4–5 min) |
