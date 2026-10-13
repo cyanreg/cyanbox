@@ -211,7 +211,8 @@ CREATE INDEX index_playlist_content_playlist_id on playlist_content(playlist_id)
   with `attribute = 1`, `myTag_id_parent = 0`, sequenceNo 0..3. Tags are children (`attribute 0`,
   parent = column id) with large 32-bit ids taken from master.db.
 * **color**: fixed 8 rows: `1 Pink, 2 Red, 3 Orange, 4 Yellow, 5 Green, 6 Aqua, 7 Blue, 8 Purple`
-  (same ids as the ANLZ PCP2 `color_id` and the PDB colour table).
+  (same ids as the ANLZ PCP2 `color_id` and the PDB colour table). rxbox keeps a track's
+  colour as a hue and writes the id nearest to it, as in `export.pdb` (docs/pdb.md, colors).
 * **key**: `(key_id, name)`, only keys in use. Names are as rekordbox displays them (`'Am'`, `'F#m'`, `'Ebm'`, …).
 * **image**: `path` like `/PIONEER/Artwork/00001/b1.jpg` (OneLibrary uses the **`b`** prefix, while `export.pdb`
   artwork rows use `a…` [FF]).

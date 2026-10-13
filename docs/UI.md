@@ -271,6 +271,24 @@ separated), file facts (type, size, rate, bit depth, bit rate, duration,
 grid, key in the players' key display, plays, path). Edits save on focus
 loss as overrides in the library (the file's own tags are kept).
 
+The colour is a hue (`RXMeta.hue`): the HSV hue angle in degrees, 0 to
+360 (0 red, 60 yellow, 120 green, 180 cyan, 240 blue, 300 magenta), or
+none. The Colour row names the colour the stick will get, the nearest of
+rekordbox's eight by hue (pink 300°, red 0°, orange 33.6°, yellow 53.7°,
+green 120°, aqua 193.5°, blue 220.6°, purple 276°, the hues of the RGB
+rekordbox draws them in), as a swatch of that colour, its name and the
+hue in degrees, with a "none" button at the end of the line. Under it a
+strip across the panel shows the whole spectrum with a marker at the
+track's hue and ticks at the eight palette hues (the stick's colour
+changes halfway between two): a click or a drag sets the hue, the track
+follows the drag and the library saves it when the strip is let go;
+without a hue the strip is dimmed. The row menu's Set colour opens the
+same strip and gives the hue to every selected track. A track's colour is
+drawn as its hue at full saturation and the palette's value (`0xF8`).
+The comment starts empty: rxbox leaves a file's comment tag out when it
+adds the track (setting `import.comment` takes it), so the field is the
+DJ's own.
+
 ## Status bar
 
 Left: the last message (`rx_app_set_status`). Middle: analysis progress

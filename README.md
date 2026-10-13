@@ -56,6 +56,20 @@ the library, greyed out, until the file comes back or is relocated. A
 track's library id is also its id on every stick, so players keep their
 cached data across exports.
 
+A track's colour is a hue: the HSV hue angle in degrees, 0 to 360 (0 red,
+60 yellow, 120 green, 180 cyan, 240 blue, 300 magenta), or none. The stick
+only knows rekordbox's eight colours, so an export writes the one nearest
+to the hue: pink 300°, red 0°, orange 33.6°, yellow 53.7°, green 120°,
+aqua 193.5°, blue 220.6°, purple 276° (the hues of the colours rekordbox
+draws). A library from before hues keeps its colours: each name became its
+colour's hue.
+
+The comment field is yours. rxbox reads a file's tags when it adds the
+track but leaves the comment tag out, so the comment starts empty, for your
+notes and for tagging later; the `import.comment` setting takes the file's
+comment again. A library that imported comments before keeps them. rxbox
+never writes to the audio files.
+
 ## Analysis
 
 Adding a track analyses its beat grid, key and waveforms. After that,
@@ -87,7 +101,8 @@ start after that upgrade analyses the whole library again.
 | --- | --- |
 | `add PATH...` | add audio files or folders to the library and analyse them |
 | `analyze [TRACK...]` | analyse what is missing or was made by an older analyser (the whole library by default); `-f` re-analyses, `-w beats,key,waves` limits it |
-| `show TRACK...` | print the resolved grid, key, cues and analyser versions |
+| `show TRACK...` | print the colour (the hue and what the stick gets), the resolved grid, key, cues and analyser versions |
+| `color HUE TRACK...` | set the tracks' colour: degrees (0-360), a colour name (`aqua`: its hue) or `none` |
 | `export STICK` | write the settings, every playlist and their tracks to a mounted stick (`--all`, `-p NAME`, `--prune`, `--compat`, `--ignore-unsynced`, `-n`) |
 | `inspect STICK` | re-read and validate a stick |
 | `sync STICK [--apply]` | list the cues, plays and settings a player saved on the stick that the library lacks; `--apply` takes them |
@@ -95,7 +110,7 @@ start after that upgrade analyses the whole library again.
 | `rescan` | check which audio files are missing (or back) |
 | `check` | check the library database's integrity and count the tracks an older analyser analysed |
 | `settings` | list the My Settings names and values |
-| `config [KEY [VALUE]]` | show or change a setting (`analysis.bpm_min`, `export.key_notation`, `player.quantize` ...) |
+| `config [KEY [VALUE]]` | show or change a setting (see Settings below, and `player.quantize` ...) |
 | `init [DIR]` | create a library |
 | `playlist list` | list the playlists |
 | `playlist create NAME` | create a playlist (`Folder/Name` creates the folders) |
@@ -109,6 +124,28 @@ beat analyser's transforms on the GPU when there is one, without a window:
 `--device NAME` picks the GPU whose name contains NAME (or
 `RXBOX_GPU_DEVICE`), `--no-gpu` (or `RXBOX_ANALYSIS_GPU=0`) keeps everything
 on the CPU, with the same results.
+
+## Settings
+
+The settings live in the library. `rxbox config` lists them and
+`rxbox config KEY VALUE` changes one. Besides the players' My Settings
+(`player.*`, `mixer.*`, `device.*`; see Exporting):
+
+| Key | Default | What it does |
+| --- | --- | --- |
+| `analysis.bpm_min`, `analysis.bpm_max` | none | the tempo range the beat analyser keeps to |
+| `analysis.snap_bpm` | `true` | snap to a whole BPM when the track allows |
+| `analysis.allow_sections` | `true` | tempo sections where the tempo or phase really changes |
+| `analysis.auto_cues` | `true` | a memory cue at the first downbeat |
+| `analysis.what` | `beats,key,waves` | what the interface's Analyse does |
+| `import.comment` | `false` | take the file's comment tag when a track is added; `false` leaves the comment empty for you |
+| `export.key_notation` | `classic` | how export.pdb names keys: `classic`, `camelot` or `open` |
+| `export.pdb`, `export.onelibrary` | `true` | which device libraries an export writes |
+| `export.compat_transcode` | `false` | transcode AAC and hi-res files, as `--compat` |
+| `export.device_name` | the stick's label | the name the players show for the stick |
+| `audio.sink` | the default output | the PipeWire node to play to |
+| `ui.traffic_light` | `related3` | the browser's key highlight (View → Traffic Light) |
+| `ui.detail_bars` | `12` | how many bars the detail waveform shows (the deck's zoom, remembered) |
 
 ## The interface
 

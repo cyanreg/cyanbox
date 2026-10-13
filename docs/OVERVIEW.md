@@ -96,6 +96,13 @@ id on every stick, so players keep their cached artwork and waveforms across
 exports. dj's sidecar files are not read or written: nothing was ever
 analysed with dj, and the user does not want the compatibility.
 
+A track's colour is a hue in degrees (the HSV hue angle, 0 red, 120 green,
+240 blue), not one of rekordbox's eight names; the stick gets the palette
+colour nearest to it (`rxbox/colors.h`). The comment is the user's: a
+file's comment tag is left out on import unless the `import.comment`
+setting asks for it, so the field starts empty for the DJ and for tagging
+later. rxbox never writes to the audio files.
+
 After a gig, `rxbox sync STICK` (and File → Sync from USB in the interface)
 reads back what the player wrote to the stick: hot cues and memory cues it
 saved into the analysis files, the play history it appended, and My
