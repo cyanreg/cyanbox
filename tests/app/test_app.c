@@ -636,8 +636,9 @@ int main(int argc, char **argv)
           !rx_library_find_id(&app.lib, a_id), "the deck still holds a removed track");
 
     /* A library analysed before the waveform recalibration: b's stored
-     * waveforms are format version 1. They are as good as none, so b is
-     * analysed for them again, and the deck that loads it gets new ones. */
+     * waveforms are format version 1. They are as good as none, so opening
+     * the library queues b for them, and the deck that loads it meanwhile
+     * gets the new ones. */
     uint64_t b_id = b->id;
     rx_app_destroy(&app);
     CHECK(stale_waveforms(root, b_id) == 0, "cannot make b's waveforms stale");
@@ -651,6 +652,9 @@ int main(int argc, char **argv)
         goto end;
     CHECK(rx_app_analysis_needed(&app, b, RX_ANALYSE_ALL, false) & RX_ANALYSE_WAVES,
           "stale waveforms need no analysis");
+    CHECK(rx_app_analysis_stale(&app, b) == RX_ANALYSE_WAVES && app.analysing_total == 1,
+          "opening did not queue waveforms of an older format (stale %#x, %d queued)",
+          rx_app_analysis_stale(&app, b), app.analysing_total);
     ret = rx_app_load_deck(&app, 0, b);
     CHECK(ret == 0 && tick_until(&app, deck_loaded, 60), "load b with stale waveforms");
     CHECK(tick_until(&app, analysis_done, 300), "the stale waveforms were not made again");
@@ -725,6 +729,33 @@ int main(int argc, char **argv)
           c->beats_version, c->key_version, c->waves_version);
     CHECK(b->grid_locked && b->beats_version == 0 && hand_grid(b),
           "the locked grid was analysed on opening (version %d)", b->beats_version);
+
+    /* The export analyses what is stale before it writes: long.wav's
+     * waveforms, now of an older analyser, are made again first, to a
+     * fresh destination (nothing to prune, nothing unsynced). */
+    c->waves_version = 0;
+    rx_app_save_track(&app, c);
+    char *stick2 = rx_path_join(dir, "stick2");
+    if (!stick2 || rx_mkdir_p(stick2) < 0) {
+        CHECK(0, "cannot make the second stick's directory");
+    } else {
+        snprintf(app.export_state.dest, sizeof(app.export_state.dest), "%s", stick2);
+        app.export_state.whole_library = true;
+        app.export_state.prune = false;
+        app.export_state.ignore_unsynced = false;
+        CHECK(rx_app_start_export(&app) == 0, "export with a stale track");
+        CHECK(strstr(app.export_state.log, "Analysing 1 track first"),
+              "the export did not analyse the stale track first:\n%s", app.export_state.log);
+        CHECK(tick_until(&app, export_done, 300), "the export with a stale track did not finish");
+        CHECK(!app.export_state.confirm && app.export_state.result >= 0,
+              "export with a stale track: %s (confirm %d)\n%s",
+              strerror(-app.export_state.result), app.export_state.confirm,
+              app.export_state.log);
+        CHECK(c->waves_version == RX_WAVES_VERSION && !rx_app_analysis_stale(&app, c),
+              "the export left long.wav's waveforms at version %d", c->waves_version);
+        app.export_state.whole_library = false;
+    }
+    free(stick2);
 
     /* Torn down with an analysis and a decode in flight, and a decode the
      * deck moved on from. */

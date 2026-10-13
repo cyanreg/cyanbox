@@ -103,9 +103,9 @@ typedef struct RXApp {
 } RXApp;
 
 /* Lifecycle (src/app.c). player_opt NULL: the null audio backend. Creating
- * queues, in the background, the analysis of every result an older
- * analyser made (rx_analysis_stale; locked grids stay), so an upgrade
- * analyses again what it improved without being asked. */
+ * queues, in the background, the analysis of every stale result
+ * (rx_app_analysis_stale; locked grids stay), so an upgrade analyses again
+ * what it improved without being asked. */
 int  rx_app_create(RXApp *app, const char *library_root, const RXPlayerOptions *player_opt,
                    const RXWindowOptions *window_opt /* NULL: no window */);
 void rx_app_destroy(RXApp *app);
@@ -121,14 +121,20 @@ int  rx_app_load_deck(RXApp *app, int deck, RXTrack *t);
 void rx_app_unload_deck(RXApp *app, int deck);
 int  rx_app_analyse_track(RXApp *app, RXTrack *t, unsigned what, bool force);
 int  rx_app_analyse_all(RXApp *app, bool force);     /* everything not yet analysed, or stale */
+/* Which stages (RXAnalyseWhat) of a track are stale: made by an older
+ * analyser (rx_analysis_stale: the version is below the current one), or,
+ * for waveforms, stored in a format version the library no longer reads
+ * (rx_library_waveforms_check's -EPROTO: made before a recalibration;
+ * looked at once per track). The one notion of stale every path uses: the
+ * add path, a deck load, analyse all, the export's analysis, the startup
+ * queue, `rxbox analyze` and `rxbox check`. Says nothing of locks or
+ * missing files. Needs only app->lib. */
+unsigned rx_app_analysis_stale(const RXApp *app, const RXTrack *t);
 /* Which of `what` (RXAnalyseWhat) a track still lacks; everything asked
- * when force. A result an older analyser made (rx_analysis_stale: its
- * version is below the current one) is lacking. A track without waveforms
- * in the library always needs them, and so does one whose waveforms are
- * stale or stored in a format version the library no longer reads
- * (-EPROTO: made before a recalibration; they are loaded once to see); a
- * locked grid never needs beats unless force, stale or not; a missing
- * file needs nothing (it cannot be read). Needs only app->lib. */
+ * when force. A stale result (rx_app_analysis_stale) is lacking. A track
+ * whose waveforms are missing or stale always needs them, whatever was
+ * asked; a locked grid never needs beats unless force, stale or not; a
+ * missing file needs nothing (it cannot be read). Needs only app->lib. */
 unsigned rx_app_analysis_needed(const RXApp *app, const RXTrack *t, unsigned what, bool force);
 int  rx_app_add_path(RXApp *app, const char *path);  /* add + queue analysis */
 void rx_app_save_track(RXApp *app, RXTrack *t);      /* to the library now */

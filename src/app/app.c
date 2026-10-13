@@ -256,9 +256,9 @@ static void waves_seen(const RXApp *app, uint64_t id, bool stale)
 /* Waveforms stored in a format version the library no longer reads
  * (rx_waveforms_unpack's -EPROTO: made before the PWV6/PWV7
  * recalibration) are as good as none, and the track is analysed for them
- * again when it is next needed. A track's are looked at once: the deck
- * and the table's preview record what their loads find, the rest is a
- * load here. */
+ * again. A track's are looked at once: the deck and the table's preview
+ * record what their loads find, the rest is a look at the stored header
+ * here, cheap enough for the whole library at start. */
 static bool waves_stale(const RXApp *app, const RXTrack *t)
 {
     if (!t->has_waveforms)
@@ -269,9 +269,10 @@ static bool waves_stale(const RXApp *app, const RXTrack *t)
         if (c->track_id == t->id)
             return c->stale;
     }
-    RXWaveforms w = { 0 };
-    int ret = rx_library_waveforms_load(&app->lib, t->id, &w);
-    rx_waveforms_free(&w);
+    int ret = rx_library_waveforms_check(&app->lib, t->id);
+    if (ret == RX_ERROR(EPROTO))
+        rx_debug("track %llu: stored waveforms are an older format; recomputing",
+                 (unsigned long long)t->id);
     bool stale = ret == RX_ERROR(EPROTO);
     waves_seen(app, t->id, stale);
     return stale;
@@ -720,15 +721,24 @@ static void track_plays(RXApp *app, int deck)
 
 /* ----------------------------------------------------------------- analysis */
 
+unsigned rx_app_analysis_stale(const RXApp *app, const RXTrack *t)
+{
+    /* The version first: it costs nothing, the format is a read. */
+    unsigned stale = rx_analysis_stale(t);
+    if (!(stale & RX_ANALYSE_WAVES) && waves_stale(app, t))
+        stale |= RX_ANALYSE_WAVES;
+    return stale;
+}
+
 unsigned rx_app_analysis_needed(const RXApp *app, const RXTrack *t, unsigned what, bool force)
 {
     if (!t || t->missing)
         return 0;
 
-    /* A result an older analyser made is as good as none: the upgrade
-     * that bumped its version is there to replace it. A locked grid is
-     * kept all the same. */
-    unsigned stale = rx_analysis_stale(t);
+    /* A stale result is as good as none: the upgrade that bumped its
+     * version is there to replace it. A locked grid is kept all the
+     * same. */
+    unsigned stale = rx_app_analysis_stale(app, t);
     unsigned need = what & RX_ANALYSE_ALL;
     if (!force) {
         if (rx_track_analysed(t) && !(stale & RX_ANALYSE_BEATS))
@@ -739,12 +749,9 @@ unsigned rx_app_analysis_needed(const RXApp *app, const RXTrack *t, unsigned wha
     if (t->grid_locked && !force)
         need &= ~RX_ANALYSE_BEATS;
 
-    /* The deck, the table preview and the stick all need the waveforms;
-     * those of an older analyser or format (waves_stale) are none. Forced,
-     * they are made anyway. The version is looked at first: it costs
-     * nothing, the format check loads them. */
-    bool forced_waves = force && (need & RX_ANALYSE_WAVES);
-    if (!t->has_waveforms || (stale & RX_ANALYSE_WAVES) || (!forced_waves && waves_stale(app, t)))
+    /* The deck, the table preview and the stick all need the waveforms,
+     * so missing or stale ones are made whatever was asked. */
+    if (!t->has_waveforms || (stale & RX_ANALYSE_WAVES))
         need |= RX_ANALYSE_WAVES;
     else if (!force)
         need &= ~RX_ANALYSE_WAVES;
@@ -834,17 +841,19 @@ int rx_app_analyse_all(RXApp *app, bool force)
 }
 
 /* What an older analyser made, after an upgrade that bumped a stage's
- * version (rx_analysis_stale): those stages of every track are queued,
- * and only those (and waveforms the track lacks, which always count).
- * Locked grids stay, as in any analysis that was not asked for by name.
- * Returns how many tracks were queued. */
+ * version or the waveform format (rx_app_analysis_stale): those stages of
+ * every track are queued, and only those (and waveforms the track lacks,
+ * which always count). Locked grids stay, as in any analysis that was not
+ * asked for by name. Returns how many tracks were queued. */
 static int queue_stale(RXApp *app)
 {
     int queued = 0;
     for (int i = 0; i < app->lib.nb_tracks; i++) {
         RXTrack *t = app->lib.tracks[i];
-        unsigned stale = rx_analysis_stale(t);
-        if (stale && !t->missing && queue_analysis(app, t, stale, false, false) > 0)
+        if (t->missing)
+            continue;
+        unsigned stale = rx_app_analysis_stale(app, t);
+        if (stale && queue_analysis(app, t, stale, false, false) > 0)
             queued++;
     }
     return queued;
