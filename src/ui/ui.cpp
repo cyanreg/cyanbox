@@ -6,10 +6,15 @@
 // the style, and the small drawing helpers every screen shares. There is
 // one player: rxbox prepares a stick, it does not mix.
 //
-// Preferences live in the library: the palette, the detail zoom and the two
-// splits in RXConfig (ui.* settings); the rest of the layout (the table's
-// columns, the info panel, jump size, master tempo...) is ImGui's ini text,
-// stored whole in the "ui.layout" setting instead of a file.
+// Preferences live in the library: the detail zoom, the Traffic Light and
+// the two splits in RXConfig (ui.* settings); the rest of the layout (the
+// table's columns, the detail's style, the grid tools) is ImGui's ini text,
+// stored whole in the "ui.layout" setting instead of a file. What the
+// players' My Settings also say (the waveform colour, the overview type,
+// the key notation, the playhead's place, hot cue colours, and the deck's
+// state at startup: quantize, beat jump, tempo range, master tempo, time
+// mode) comes from them alone (follow_settings), so rxbox shows and
+// starts as the players will.
 //
 // The headless test hooks are environment variables read here:
 // RXBOX_UI_AUTOLOAD=<id> loads that track on the first frame and starts it
@@ -20,8 +25,9 @@
 // frame n) through rx_window_screenshot_next(), which writes it once it is
 // presented, and the run goes on; a run that ends before that frame
 // (--frames below it) saves its last frame at shutdown instead. The state
-// the tests look at (the loaded track, playing, a popup open) is logged
-// with it. RXBOX_UI_EVENTS=<frame>:<event>,... gives ImGui input at those
+// the tests look at (the loaded track, playing, a popup open, how the
+// overview and the row previews were drawn, the deck's KEY readout) is
+// logged with it. RXBOX_UI_EVENTS=<frame>:<event>,... gives ImGui input at those
 // frames: down:<key> and up:<key> (ImGui's key names: C, Enter,
 // DownArrow...), focus-out and focus-in, click:<x>:<y> (the pointer moved
 // there, in logical pixels, and the left button pressed and let go two
@@ -81,13 +87,16 @@ const char *ui_artist(const RXTrack *t)
     return t->meta.artist ? t->meta.artist : "";
 }
 
-// A hot cue's pad colour: its stored colour through rekordbox's 64-entry
-// palette, else the slot's default pad colour (rxbox/colors.h).
-uint32_t ui_hot_cue_rgb(const RXCue *c)
+// A hot cue's pad colour: with the players' HOT CUE COLOR on, its stored
+// colour through rekordbox's 64-entry palette; with it off, or with no
+// colour, the slot's default pad colour (rxbox/colors.h). The pads, the
+// badges on the waveforms and in the cue list and the row previews all
+// draw through here.
+uint32_t ui_hot_cue_rgb(const UiState *ui, const RXCue *c)
 {
     int code = 0;
     uint32_t rgb = 0;
-    if (c->color[0] && rx_hot_cue_color(c->color, &code, &rgb) == 0 && rgb)
+    if (ui->hot_cue_colour && c->color[0] && rx_hot_cue_color(c->color, &code, &rgb) == 0 && rgb)
         return rgb;
     return rx_hot_cue_default_rgb(c->hot >= 0 ? c->hot : 0);
 }
@@ -780,32 +789,26 @@ static void ini_line(ImGuiContext *, ImGuiSettingsHandler *h, void *, const char
 {
     UiState *ui = (UiState *)h->UserData;
     RXDeckView *dv = &ui->app->decks[0];
-    UiDeck *ud = &ui->decks[0];
     int i;
     if (sscanf(line, "DetailHalf=%d", &i) == 1)
         ui->detail_half = i != 0;
     else if (sscanf(line, "GridTools=%d", &i) == 1)
         dv->grid_edit = i != 0;
-    else if (sscanf(line, "Jump=%d", &i) == 1)
-        ud->jump_size = ImClamp(i, 0, UI_NB_JUMP - 1);
-    else if (sscanf(line, "MasterTempo=%d", &i) == 1)
-        ud->master_tempo = i != 0;
     // Older layouts' ShowInfo= (the info panel is always shown now), Pads=
     // and CueList= (the pad mode and cue list tabs, gone since every group
-    // is shown at once) fall through, ignored. So does TempoRange=: every
-    // start selects +-6 %, as a CDJ does when switched on, so a range once
-    // cycled to WIDE does not stay there for good.
+    // is shown at once) fall through, ignored. So do TempoRange=, Jump= and
+    // MasterTempo=: the deck starts with the players' tempo range, beat
+    // jump size and MASTER TEMPO (follow_settings), and the buttons change
+    // only the running deck.
 }
 
 static void ini_write(ImGuiContext *, ImGuiSettingsHandler *h, ImGuiTextBuffer *out)
 {
     UiState *ui = (UiState *)h->UserData;
     RXDeckView *dv = &ui->app->decks[0];
-    UiDeck *ud = &ui->decks[0];
     out->appendf("[rxbox][ui]\n");
     out->appendf("DetailHalf=%d\n", ui->detail_half);
-    out->appendf("GridTools=%d\nJump=%d\nMasterTempo=%d\n\n", dv->grid_edit, ud->jump_size,
-                 ud->master_tempo);
+    out->appendf("GridTools=%d\n\n", dv->grid_edit);
 }
 
 static void layout_changed(UiState *ui)
@@ -1142,6 +1145,17 @@ static void test_events(UiState *ui)
     }
 }
 
+// How the last frame drew a waveform, for the log.
+static const char *mode_drawn(int mode)
+{
+    switch (mode) {
+    case RX_WAVE_CENTRED:       return "centred";
+    case RX_WAVE_HALF_STACKED:  return "half";
+    case RX_WAVE_HALF_OVERLAID: return "overlaid";
+    default:                    return "none";
+    }
+}
+
 static void log_test_state(UiState *ui)
 {
     RXApp *app = ui->app;
@@ -1149,9 +1163,11 @@ static void log_test_state(UiState *ui)
     ui_deck_position(ui, 0, &st);
     bool popup = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
     const RXTrack *t = app->decks[0].track;
-    rx_info("ui test: frame %d track %llu playing %d position %.2f popup %d cues %d cue-keys %d",
+    rx_info("ui test: frame %d track %llu playing %d position %.2f popup %d cues %d cue-keys %d "
+            "overview %s previews %s key %s",
             ui->frame_no, (unsigned long long)(t ? t->id : 0), st.playing, st.position, popup,
-            t ? t->nb_cues : 0, ui_cue_list_has_keys(ui, 0));
+            t ? t->nb_cues : 0, ui_cue_list_has_keys(ui, 0), mode_drawn(ui->overview_mode_drawn),
+            mode_drawn(ui->preview_mode_drawn), ui->key_drawn[0] ? ui->key_drawn : "-");
 }
 
 /* -------------------------------------------------------------- My Settings */
@@ -1160,11 +1176,95 @@ static void log_test_state(UiState *ui)
 // players (docs/UI.md, Player settings): one setting for both, so rxbox
 // shows what the stick will. They are read from RXConfig at every frame;
 // the Player settings dialog, the View menu and Sync from USB write it,
-// and the next frame shows the change. The waveform palette is app.c's,
-// which uploads the waveforms (rx_app_tick).
+// and the next frame shows the change. The waveform palette, auto cue,
+// the quantize beat value and play mode are app.c's, which owns what they
+// act on (the uploads, the loads, the deck controls).
+//
+// The deck's state at startup comes from the settings a CDJ starts with
+// (and a LOAD of My Settings sets): QUANTIZE, the beat jump size, the
+// tempo range, MASTER TEMPO and the time mode. Each is applied to the live
+// state at the first frame and again whenever the setting changes; the
+// deck's buttons and keys change the live state only, never the setting,
+// as a CDJ's buttons leave its stored preferences alone.
+static const char *const STARTUP_KEYS[UI_NB_STARTUP] = {
+    "player.quantize", "player.beat_jump_beats", "player.tempo_range", "player.master_tempo",
+    "player.time_mode",
+};
+
+// The beat jump size for the setting's beats: 1/2 is Fine (there is no
+// half beat jump in the menu), the others the size of as many beats.
+static int jump_index(const char *beats)
+{
+    double b = strchr(beats, '/') ? 0.0 : atof(beats);
+    for (int i = 0; i < UI_NB_JUMP; i++) {
+        if (UI_JUMP_SIZES[i].beats == b)
+            return i;
+    }
+    return 0;
+}
+
+// Applies one startup setting to every deck; false when it cannot be yet
+// (MASTER TEMPO needs the player), to be tried again on the next frame.
+static bool apply_startup(UiState *ui, int which, const char *v)
+{
+    RXApp *app = ui->app;
+    for (int d = 0; d < RX_DECKS; d++) {
+        UiDeck *ud = &ui->decks[d];
+        RXDeckCtl *c = &app->decks[d].ctl;
+        switch (which) {
+        case 0:
+            rx_ctl_set_quantize(c, !strcmp(v, "true"));
+            break;
+        case 1:
+            ud->jump_size = jump_index(v);
+            c->jump_beats = UI_JUMP_SIZES[ud->jump_size].beats;
+            break;
+        case 2: {
+            int r = !strcmp(v, "wide") ? 3 : !strcmp(v, "16") ? 2 : !strcmp(v, "10") ? 1 : 0;
+            ud->tempo_range = r;
+            // A tempo past the new range is brought to its edge, as the
+            // range button does.
+            RXDeckState st;
+            ui_deck_position(ui, d, &st);
+            double pct = (st.tempo - 1.0) * 100.0;
+            if (app->player && fabs(pct) > UI_TEMPO_RANGES[r])
+                rx_deck_set_tempo(app->player, d, 1.0 + copysign(UI_TEMPO_RANGES[r], pct) / 100.0);
+            break;
+        }
+        case 3: {
+            // A player that cannot keep the pitch refuses, and the deck
+            // plays without it.
+            if (!app->player)
+                return false;
+            bool on = !strcmp(v, "true");
+            bool ok = rx_deck_set_master_tempo(app->player, d, on);
+            ud->master_tempo = on && ok;
+            if (on && !ok)
+                rx_info("ui: master tempo is not available, the deck plays without it");
+            break;
+        }
+        default:
+            ud->time_remaining = !strcmp(v, "remain");
+            break;
+        }
+    }
+    return true;
+}
+
 static void follow_settings(UiState *ui)
 {
     ui->key_camelot = !strcmp(ui_my_setting(ui, "device.key_display"), "alphanumeric");
+    ui->overview_full = !strcmp(ui_my_setting(ui, "device.overview_waveform"), "full");
+    ui->playhead_left = !strcmp(ui_my_setting(ui, "device.waveform_position"), "left");
+    ui->hot_cue_colour = !strcmp(ui_my_setting(ui, "player.hot_cue_color"), "true");
+
+    for (int k = 0; k < UI_NB_STARTUP; k++) {
+        const char *v = ui_my_setting(ui, STARTUP_KEYS[k]);
+        if (ui->startup_applied[k] && !strcmp(ui->startup_applied[k], v))
+            continue;
+        if (apply_startup(ui, k, v))
+            ui->startup_applied[k] = v;
+    }
 }
 
 /* ------------------------------------------------------------- entry points */
@@ -1179,10 +1279,11 @@ int rx_ui_init(RXApp *app)
     ui->deck_split = -1.0f;
     ui->tree_width = 220.0f;
     ui->anchor_row = -1;
+    ui->overview_mode_drawn = ui->preview_mode_drawn = -1;
+    // The jump size, tempo range, time mode and MASTER TEMPO come from the
+    // players' settings at the first frame (follow_settings).
     for (int i = 0; i < RX_DECKS; i++) {
         UiDeck *ud = &ui->decks[i];
-        ud->jump_size = 1;
-        ud->tempo_range = 0;
         ud->ctx_cue = -1;
         ud->edit_cue = -1;
     }
@@ -1371,14 +1472,6 @@ bool rx_ui_frame(RXApp *app)
 
     follow_settings(ui);
     autoload_tick(ui);
-    // MASTER TEMPO as the layout remembers it, once there is a player. A
-    // player that cannot keep the pitch refuses and the deck stays off;
-    // the wish is kept for a run where it can.
-    if (!ui->master_tempo_applied && app->player) {
-        ui->master_tempo_applied = true;
-        if (ui->decks[0].master_tempo && !rx_deck_set_master_tempo(app->player, 0, true))
-            rx_info("ui: master tempo is not available, the deck plays without it");
-    }
     if (!ui->test_events.empty())
         test_events(ui);
     // The screenshot hook: this is the frame to keep; the window saves it
@@ -1392,6 +1485,8 @@ bool rx_ui_frame(RXApp *app)
     // The rows follow the library (app.c may have rebuilt them already).
     if (app->rows_dirty || app->rows_generation != app->lib.generation || !app->rows)
         rx_app_rebuild_rows(app);
+    ui->overview_mode_drawn = ui->preview_mode_drawn = -1;
+    ui->key_drawn[0] = '\0';
 
     ui->previews_pending = false;
     ui_keys(ui);

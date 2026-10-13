@@ -946,6 +946,9 @@ void ui_info_panel(UiState *ui, ImVec2 size)
                  t->grid.nb_sections == 1 ? "" : "s", t->grid_confidence);
         fact("Grid", buf);
     }
+    // In the players' key display, as the table and the deck show it.
+    if (t->key[0])
+        fact("Key", ui_key_text(ui, t->key, buf, sizeof(buf)));
     if (t->play_count > 0) {
         char date[32];
         fmt_date(t->last_played, date, sizeof(date));

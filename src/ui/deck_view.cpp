@@ -281,6 +281,7 @@ static void title_row(UiState *ui, int deck, ImVec2 a, ImVec2 b, const RXDeckSta
     char key[16] = "";
     const char *kt = loaded ? ui_key_text(ui, t->key, key, sizeof(key)) : "";
     readout(ui, dl, x, y, "KEY", kt[0] ? kt : "-", UI_TEXT);
+    snprintf(ui->key_drawn, sizeof(ui->key_drawn), "%s", kt);
     x -= PX(76);
 
     // Title and artist, clipped before the readouts; like the readouts the
@@ -406,10 +407,11 @@ static void transport(UiState *ui, int deck, ImVec2 a, ImVec2 b, const RXDeckSta
     sb.fill = IM_COL32(0x18, 0x18, 0x18, 0xFF);
     sb.border = IM_COL32(0x3A, 0x3A, 0x3A, 0xFF);
     sb.rounding = -1;
+    // The size the deck started with is the players' BEAT JUMP BEAT VALUE;
+    // these change the running deck's only.
     if (ui_button(ui, "jsize", ImVec2(sw, rh), sb)) {
         ud->jump_size = (ud->jump_size + 1) % UI_NB_JUMP;
         c->jump_beats = UI_JUMP_SIZES[ud->jump_size].beats;
-        ImGui::MarkIniSettingsDirty();
     }
     if (ImGui::IsItemClicked(ImGuiMouseButton_Right))
         ImGui::OpenPopup("##jumpsizes");
@@ -419,7 +421,6 @@ static void transport(UiState *ui, int deck, ImVec2 a, ImVec2 b, const RXDeckSta
             if (ImGui::MenuItem(UI_JUMP_SIZES[i].label, nullptr, ud->jump_size == i)) {
                 ud->jump_size = i;
                 c->jump_beats = UI_JUMP_SIZES[i].beats;
-                ImGui::MarkIniSettingsDirty();
             }
         }
         ImGui::EndPopup();
@@ -540,7 +541,7 @@ static void hot_cue_pad(UiState *ui, int deck, int slot, ImVec2 p, ImVec2 size)
     // the 36 px pad at 15 and 10.5 px.
     ImVec2 lp(p.x + PX(6), p.y + PX(2));
     if (cue) {
-        uint32_t rgb = ui_hot_cue_rgb(cue);
+        uint32_t rgb = ui_hot_cue_rgb(ui, cue);
         ImU32 fill = ui_rgb(rgb, down ? 1.0f : hovered ? 0.92f : 0.82f);
         ImU32 ink = ui_text_on(rgb);
         dl->AddRectFilled(p, q, fill, r);
@@ -970,7 +971,7 @@ static void cue_list(UiState *ui, int deck, ImVec2 a, ImVec2 b, double pos)
         float fy = floorf(cy - PX(fs) * 0.5f - PX(1));
         float x = p.x + PX(7);
         if (hot) {
-            uint32_t rgb = ui_hot_cue_rgb(cue);
+            uint32_t rgb = ui_hot_cue_rgb(ui, cue);
             ImVec2 b0(x, floorf(cy - PX(7.5f))), b1(b0.x + PX(15), b0.y + PX(15));
             ldl->AddRectFilled(b0, b1, ui_rgb(rgb), PX(2));
             char letter[2] = { rx_cue_letter(cue), 0 };
@@ -1092,8 +1093,10 @@ static void cue_list(UiState *ui, int deck, ImVec2 a, ImVec2 b, double pos)
 // TEMPO, which asks the player to keep the pitch (rx_deck_set_master_tempo
 // may refuse: the button then stays off, and lights only from the deck's
 // state). With no caps label of its own the group takes the row's whole
-// height, MT on the strips' line. The range is not kept: every start is at
-// +-6 %, as a CDJ switched on is.
+// height, MT on the strips' line. The range and MASTER TEMPO start as the
+// players' TEMPO RANGE (+-6 % by default, as a CDJ switched on) and MASTER
+// TEMPO say (ui.cpp, follow_settings); the buttons change the running
+// deck's only.
 static void tempo(UiState *ui, int deck, ImVec2 a, ImVec2 b, const RXDeckState &st)
 {
     RXApp *app = ui->app;
@@ -1175,7 +1178,7 @@ static void tempo(UiState *ui, int deck, ImVec2 a, ImVec2 b, const RXDeckState &
         if (fabs(pct) > nr)
             set_tempo(ui, deck, pct > 0 ? nr : -nr);
     }
-    ui_tooltip("Tempo range (every start at \xC2\xB1" "6%)");
+    ui_tooltip("Tempo range (each start at the Player settings' Tempo Range)");
 
     char val[24];
     snprintf(val, sizeof(val), "%+.2f%%", fabs(pct) < 0.005 ? 0.0 : pct);
@@ -1193,8 +1196,8 @@ static void tempo(UiState *ui, int deck, ImVec2 a, ImVec2 b, const RXDeckState &
         set_tempo(ui, deck, 0);
     ui_tooltip("Tempo back to 0");
 
-    // The wish is kept in the layout and given to the player at start
-    // (ui.cpp); a refusal leaves it off.
+    // The deck starts as the players' MASTER TEMPO says (ui.cpp); a
+    // refusal leaves it off.
     ImGui::SetCursorScreenPos(ImVec2(cx, bottom - mh));
     UiButton mb = {};
     mb.label = "MT";
@@ -1209,7 +1212,6 @@ static void tempo(UiState *ui, int deck, ImVec2 a, ImVec2 b, const RXDeckState &
         ud->master_tempo = want && ok;
         if (want && !ok)
             rx_app_set_status(app, "Master tempo is not available: the player cannot keep the pitch");
-        ImGui::MarkIniSettingsDirty();
     }
     ui_tooltip("Master tempo (key lock): the pitch stays while the tempo changes");
 }
