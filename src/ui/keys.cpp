@@ -147,8 +147,19 @@ void ui_keys(UiState *ui)
             ui_shift_grid(ui, 0, 0.005);
         return;
     }
-    if (shift)
+    if (shift) {
+        // Shift+arrows: one beat at a time whatever the jump size, repeating
+        // while held as the plain arrows do.
+        int back = ImGui::GetKeyPressedAmount(ImGuiKey_LeftArrow, UI_REPEAT_DELAY, UI_REPEAT_RATE);
+        int fwd = ImGui::GetKeyPressedAmount(ImGuiKey_RightArrow, UI_REPEAT_DELAY, UI_REPEAT_RATE);
+        for (int i = 0; i < back; i++)
+            rx_ctl_beat_jump(c, -1);
+        for (int i = 0; i < fwd; i++)
+            rx_ctl_beat_jump(c, 1);
+        if (ImGui::IsKeyDown(ImGuiKey_LeftArrow) || ImGui::IsKeyDown(ImGuiKey_RightArrow))
+            ui_want_frames(ui, 2);
         return;
+    }
 
     if (pressed(ImGuiKey_Space))
         rx_ctl_play_pause(c);

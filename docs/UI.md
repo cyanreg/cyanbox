@@ -397,6 +397,7 @@ rekordbox's Export preset for player 1 (no shifted second-player set):
 | 1 2 3 (and Ctrl+1..3) | Hot cue A B C set/call (clear) |
 | F1–F8 … | not bound in v1 |
 | ← → | Beat jump reverse / forward; held, again every 120 ms after 300 ms |
+| Shift+← Shift+→ | One beat back / forward, whatever the jump size |
 | Ctrl+← Ctrl+→ | Shift grid left/right (5 ms), once per press |
 | Ctrl+G | Toggle grid tools |
 | A S D F G H J K L ; | Memory cue 1–10 |
