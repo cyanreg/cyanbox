@@ -5,7 +5,8 @@
  * hot loop, rename, delete), the MEMORY cluster with its 20 ms tolerance,
  * loops (IN, OUT, EXIT, RELOOP, auto loops, /2, x2), beat jump with and
  * without QUANTIZE (across a tempo change too), active memory loops
- * engaging from rx_ctl_tick, and grid edits moving musical cues.
+ * engaging from rx_ctl_tick, grid edits moving musical cues, QUANTIZE to
+ * halves and quarters of a beat, and the three ways a load auto-cues.
  *
  * The track is 60 s of 44.1 kHz clicks at 128 BPM with a grid built by
  * rx_grid_init; the output runs at the track's rate so every position is
@@ -785,6 +786,110 @@ static void test_grid_changed(void)
     teardown();
 }
 
+/* QUANTIZE BEAT VALUE: QUANTIZE snaps to halves and quarters of the beat
+ * the playhead is in, for cues, hot cues, loops and jumps alike. B(2.3) is
+ * beat 2 to a whole beat, 2.5 to a half and 2.25 to a quarter. */
+static void test_quantize_fraction(void)
+{
+    setup(false);
+    c.quantize_beats = 0.5;
+    rx_ctl_seek(&c, B(2.3));
+    rx_ctl_cue_press(&c);
+    rx_ctl_cue_release(&c);
+    CHECK(NEAR(c.cue_point, B(2.5)) && NEAR(pos(), B(2.5)), "half: cue point %f, want %f",
+          c.cue_point, B(2.5));
+
+    c.quantize_beats = 0.25;
+    rx_ctl_seek(&c, B(2.3));
+    rx_ctl_cue_press(&c);
+    rx_ctl_cue_release(&c);
+    CHECK(NEAR(c.cue_point, B(2.25)), "quarter: cue point %f, want %f", c.cue_point, B(2.25));
+    CHECK(NEAR(rx_ctl_quantized(&c, B(7.9)), B(8.0)), "quarter: %f", rx_ctl_quantized(&c, B(7.9)));
+
+    /* A hot cue on a quarter, musical on the grid at beat 5.25. */
+    rx_ctl_seek(&c, B(5.2));
+    rx_ctl_hot_cue_press(&c, 0);
+    rx_ctl_hot_cue_release(&c, 0);
+    int a = rx_track_hot_cue(track, 0);
+    CHECK(a >= 0 && NEAR(track->cues[a].time, B(5.25)), "hot cue %f, want %f",
+          a >= 0 ? track->cues[a].time : -1.0, B(5.25));
+    CHECK(a >= 0 && NEAR(track->cues[a].grid_beat, 5.25), "on beat %f",
+          a >= 0 ? track->cues[a].grid_beat : -1.0);
+
+    /* A jump from the nearest quarter: 12.2 is 12.25, four beats on 16.25. */
+    rx_ctl_seek(&c, B(12.2));
+    rx_ctl_beat_jump(&c, 4);
+    CHECK(NEAR(pos(), B(16.25)), "quarter jump: %f, want %f", pos(), B(16.25));
+
+    /* Halves: LOOP IN at 8.5, OUT at 10.5; an OUT that snaps onto the in
+     * point closes the loop half a beat on, the next point of the grid. */
+    c.quantize_beats = 0.5;
+    rx_ctl_seek(&c, B(8.3));
+    rx_ctl_loop_in(&c);
+    CHECK(NEAR(c.loop_in, B(8.5)), "loop in %f, want %f", c.loop_in, B(8.5));
+    rx_ctl_seek(&c, B(10.6));
+    rx_ctl_loop_out(&c);
+    CHECK(c.looping && NEAR(c.loop_out, B(10.5)), "loop out %f, want %f", c.loop_out, B(10.5));
+    rx_ctl_exit_reloop(&c);
+    rx_ctl_seek(&c, B(8.3));
+    rx_ctl_loop_in(&c);
+    rx_ctl_seek(&c, B(8.6));
+    rx_ctl_loop_out(&c);
+    CHECK(c.looping && NEAR(c.loop_in, B(8.5)) && NEAR(c.loop_out, B(9.0)),
+          "loop out on the in point: %f %f", c.loop_in, c.loop_out);
+    rx_ctl_loop_exit(&c);
+
+    /* An auto loop starts on the nearest half. */
+    rx_ctl_seek(&c, B(20.4));
+    rx_ctl_auto_loop(&c, 1);
+    CHECK(c.looping && NEAR(c.loop_in, B(20.5)) && NEAR(c.loop_out, B(21.5)), "auto loop %f %f",
+          c.loop_in, c.loop_out);
+    rx_ctl_loop_exit(&c);
+
+    /* Back to the whole beat; and a value that is no fraction is one. */
+    c.quantize_beats = 1.0;
+    rx_ctl_seek(&c, B(2.3));
+    rx_ctl_set_cue_here(&c);
+    CHECK(c.cue_point == B(2), "whole: %f", c.cue_point);
+    c.quantize_beats = 0.0;
+    CHECK(rx_ctl_quantized(&c, B(2.3)) == B(2), "no fraction: %f", rx_ctl_quantized(&c, B(2.3)));
+    rx_ctl_set_quantize(&c, false);
+    c.quantize_beats = 0.25;
+    CHECK(rx_ctl_quantized(&c, B(2.3)) == B(2.3), "off: %f", rx_ctl_quantized(&c, B(2.3)));
+    teardown();
+
+    /* The parts are of the beat the playhead is in: a quarter of a
+     * 120 BPM beat after the change at 30 s. */
+    setup(true);
+    c.quantize_beats = 0.25;
+    rx_ctl_seek(&c, 30.0 + 0.5 * 1.3);
+    rx_ctl_set_cue_here(&c);
+    CHECK(NEAR(c.cue_point, 30.0 + 0.5 * 1.25), "120 BPM quarter: %f", c.cue_point);
+    teardown();
+}
+
+/* AUTO CUE: the first memory cue (level MEMORY), the start (off), or the
+ * grid's first beat (a level in dB). */
+static void test_auto_cue(void)
+{
+    setup(false);
+    RXCue m;
+    rx_cue_init(&m, B(4));
+    CHECK(rx_track_add_cue(track, &m) >= 0, "memory cue");
+    if (rx_grid_start_at(&track->grid, 1.0) < 0)
+        abort();
+
+    rx_ctl_load(&c, track);
+    CHECK(c.cue_point == B(4) && pos() == B(4), "memory: %f %f", c.cue_point, pos());
+    c.auto_cue = RX_AUTO_CUE_LEVEL;
+    rx_ctl_load(&c, track);
+    CHECK(c.cue_point == B(3) && pos() == B(3), "level: the first beat, %f %f", c.cue_point, pos());
+    c.auto_cue = RX_AUTO_CUE_OFF;
+    rx_ctl_load(&c, track);
+    CHECK(c.cue_point == 0.0 && pos() == 0.0, "off: %f %f", c.cue_point, pos());
+    teardown();
+}
+
 int main(void)
 {
     test_cue();
@@ -797,6 +902,8 @@ int main(void)
     test_edges();
     test_degenerate_hot_loop();
     test_grid_changed();
+    test_quantize_fraction();
+    test_auto_cue();
 
     if (failures) {
         fprintf(stderr, "%d failures\n", failures);

@@ -76,13 +76,42 @@ static const RXGrid *grid(const RXDeckCtl *c)
     return c->track && rx_grid_valid(&c->track->grid) ? &c->track->grid : NULL;
 }
 
-/* QUANTIZE: the nearest beat, when it is on and the track has a grid
- * (manual p.61: no quantize without an analysed grid). */
+/* How many parts QUANTIZE divides a beat into: 1, or 2, 4 or 8 for a
+ * QUANTIZE BEAT VALUE of 1/2, 1/4 or 1/8 (docs/settings.md 3, MYSETTING
+ * byte 24). */
+static int beat_parts(const RXDeckCtl *c)
+{
+    double q = c->quantize_beats;
+    if (!(q > 0.0 && q < 1.0))
+        return 1;
+    return (int)RX_CLAMP(lround(1.0 / q), 1, 64);
+}
+
+/* The QUANTIZE grid's point nearest t: the nearest beat, or with a beat
+ * value below 1 the nearest of the equal parts the beat t is in is cut
+ * into, between it and the next beat (in a section's gap, between its
+ * last beat and the next section's first). Before the grid's first beat
+ * there is no beat to cut: the first beat it is, as a whole beat would. */
+static double grid_point(const RXDeckCtl *c, const RXGrid *g, double t)
+{
+    int parts = beat_parts(c);
+    if (parts <= 1 || t < g->sections[0].start)
+        return rx_grid_quantize(g, t);
+    double b0 = rx_grid_beat_before(g, t);
+    double b1 = rx_grid_beat_after(g, b0);
+    if (!(b1 > b0))
+        return rx_grid_quantize(g, t);
+    double step = (b1 - b0) / parts;
+    return b0 + RX_CLAMP(round((t - b0) / step), 0.0, (double)parts) * step;
+}
+
+/* QUANTIZE: the nearest point of the grid, when it is on and the track
+ * has a grid (manual p.61: no quantize without an analysed grid). */
 static double snap(const RXDeckCtl *c, double t, double duration)
 {
     const RXGrid *g = grid(c);
     if (c->quantize && g)
-        t = rx_grid_quantize(g, t);
+        t = grid_point(c, g, t);
     return RX_CLAMP(t, 0.0, duration);
 }
 
@@ -182,6 +211,8 @@ void rx_ctl_init(RXDeckCtl *c, RXPlayer *p, int deck, rx_ctl_changed_cb changed,
         .player              = p,
         .deck                = deck,
         .quantize            = true,
+        .quantize_beats      = 1.0,     /* docs/settings.md 3: QUANTIZE BEAT VALUE 1 */
+        .auto_cue            = RX_AUTO_CUE_MEMORY,
         .cue_point           = -1.0,
         .loop_in             = -1.0,
         .loop_out            = -1.0,
@@ -207,9 +238,6 @@ static void reset(RXDeckCtl *c)
     c->_resume_after_hold = false;
 }
 
-/* Auto cue: the cue point goes to the memory cue nearest the start, or the
- * start (manual p.74, AUTO CUE LEVEL "MEMORY", the factory setting), and
- * the deck waits there. */
 /* Where the buttons here can jump to: the deck keeps those places decoded,
  * so CUE, a hot cue, CALL, RELOOP or a loop wrapping back play at once
  * (rx_deck_set_cue_points). In order of how often a DJ goes there, should
@@ -232,6 +260,13 @@ static void send_cue_points(RXDeckCtl *c)
     rx_deck_set_cue_points(c->player, c->deck, points, n);
 }
 
+/* Auto cue: the cue point goes where c->auto_cue says and the deck waits
+ * there. MEMORY (manual p.74, AUTO CUE LEVEL "MEMORY", the factory
+ * setting): the memory cue nearest the start, or the start. A level in dB:
+ * a CDJ cues where the sound first rises above it, which is where the
+ * music starts, and the analyser starts the grid there (rxbox/model.h,
+ * RXTempoSection; docs/BEATS.md), so the grid's first beat stands for it:
+ * the dB value itself is not evaluated. AUTO CUE off: the start. */
 void rx_ctl_load(RXDeckCtl *c, RXTrack *track)
 {
     reset(c);
@@ -239,8 +274,17 @@ void rx_ctl_load(RXDeckCtl *c, RXTrack *track)
     if (!track)
         return;
 
-    int first = rx_track_memory_cue_nth(track, 1);
-    c->cue_point = first >= 0 ? track->cues[first].time : 0.0;
+    c->cue_point = 0.0;
+    const RXGrid *g = grid(c);
+    if (c->auto_cue == RX_AUTO_CUE_LEVEL && g) {
+        c->cue_point = RX_MAX(g->sections[0].start, 0.0);
+        if (track->duration > 0.0)
+            c->cue_point = RX_MIN(c->cue_point, track->duration);
+    } else if (c->auto_cue == RX_AUTO_CUE_MEMORY) {
+        int first = rx_track_memory_cue_nth(track, 1);
+        if (first >= 0)
+            c->cue_point = track->cues[first].time;
+    }
     rx_deck_clear_loop(c->player, c->deck);
     rx_deck_seek(c->player, c->deck, c->cue_point);
     c->_last_position = c->cue_point;
@@ -625,7 +669,8 @@ void rx_ctl_loop_in(RXDeckCtl *c)
  * pending, else the cue point, which on a CDJ is the same button's other
  * half. During a loop, OUT moves the out point to the playhead (a
  * simplified OUT ADJUST, manual p.55). An out point quantised onto the
- * in point becomes the next beat. */
+ * in point becomes the next point of the grid: the next beat, or the
+ * next part of one with a QUANTIZE BEAT VALUE below 1. */
 void rx_ctl_loop_out(RXDeckCtl *c)
 {
     if (!ready(c))
@@ -645,7 +690,9 @@ void rx_ctl_loop_out(RXDeckCtl *c)
         const RXGrid *g = grid(c);
         if (!c->quantize || !g)
             return;
-        out = RX_MIN(rx_grid_beat_after(g, in), s.duration);
+        int parts = beat_parts(c);
+        out = parts > 1 ? rx_grid_offset_beats(g, in, 1.0 / parts) : rx_grid_beat_after(g, in);
+        out = RX_MIN(out, s.duration);
         if (out - in < LOOP_MIN)
             return;
     }
@@ -756,8 +803,9 @@ void rx_ctl_loop_double(RXDeckCtl *c)
 
 /* Beat jump: +-N beats, keeping the playing state (manual p.62). With
  * QUANTIZE the jump lands on the grid, as rekordbox's does: the playhead
- * is snapped to the nearest beat, then moved N whole grid beats, beat by
- * beat through every section crossed. Without it the jump is N beats of
+ * is snapped to the nearest beat (or part of one, by the QUANTIZE BEAT
+ * VALUE), then moved N whole grid beats, beat by beat through every
+ * section crossed. Without it the jump is N beats of
  * the tempo at the playhead, in seconds, from the exact position (rbxport
  * player.ts jumpSeconds). During a loop the loop moves N beats with the
  * playhead (manual p.62, Loop Move). 0 is the 10 ms fine jump, forward,
@@ -779,7 +827,7 @@ void rx_ctl_beat_jump(RXDeckCtl *c, double beats)
     double step = beats * 60.0 / rx_grid_bpm_at(g, s.position);
     double target = s.position + step;
     if (on_grid)
-        target = rx_grid_offset_beats(g, rx_grid_quantize(g, s.position), beats);
+        target = rx_grid_offset_beats(g, grid_point(c, g, s.position), beats);
 
     if (c->looping) {
         double in  = on_grid ? rx_grid_offset_beats(g, c->loop_in, beats) : c->loop_in + step;
@@ -813,6 +861,16 @@ void rx_ctl_set_quantize(RXDeckCtl *c, bool on)
 {
     if (c)
         c->quantize = on;
+}
+
+double rx_ctl_quantized(const RXDeckCtl *c, double seconds)
+{
+    if (!c || !isfinite(seconds))
+        return seconds;
+    double duration = ready(c) ? state(c).duration : c->track ? c->track->duration : 0.0;
+    if (!(duration > 0.0))
+        duration = INFINITY;
+    return snap(c, seconds, duration);
 }
 
 void rx_ctl_seek(RXDeckCtl *c, double seconds)

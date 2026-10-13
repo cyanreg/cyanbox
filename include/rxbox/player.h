@@ -185,15 +185,30 @@ void rx_deck_state(const RXPlayer *p, int deck, RXDeckState *out);
  *    its in point.
  *  - Beat jump moves +-N beats on the grid (quantised when QUANTIZE is on),
  *    keeping the playing state.
- *  - QUANTIZE snaps cue, hot cue and loop points to the nearest beat. */
+ *  - QUANTIZE snaps cue, hot cue and loop points to the nearest beat, or to
+ *    the nearest fraction of a beat the QUANTIZE BEAT VALUE gives
+ *    (quantize_beats: 1/2, 1/4, 1/8).
+ *  - A load cues by AUTO CUE (auto_cue): at the first memory cue, at the
+ *    start, or at the grid's first beat. */
 
 typedef void (*rx_ctl_changed_cb)(void *opaque, int deck);
+
+/* Where a load leaves the deck (My Settings' AUTO CUE and AUTO CUE LEVEL). */
+typedef enum RXAutoCue {
+    RX_AUTO_CUE_MEMORY = 0,     /* the first memory cue, else the start (level MEMORY,
+                                   the factory setting) */
+    RX_AUTO_CUE_OFF,            /* the start */
+    RX_AUTO_CUE_LEVEL,          /* a level in dB: the grid's first beat, else the start */
+} RXAutoCue;
 
 typedef struct RXDeckCtl {
     RXPlayer *player;
     int       deck;
     RXTrack  *track;            /* the library's track; NULL when empty */
     bool      quantize;
+    double    quantize_beats;   /* what QUANTIZE snaps to, in beats: 1 (default), 0.5,
+                                   0.25 or 0.125; anything else is a whole beat */
+    RXAutoCue auto_cue;         /* applied by rx_ctl_load; RX_AUTO_CUE_MEMORY by default */
     double    cue_point;        /* seconds; < 0 none */
     bool      cue_held;         /* CUE is being held for a preview */
     double    loop_in, loop_out;/* the current/last loop; < 0 none */
@@ -210,8 +225,9 @@ typedef struct RXDeckCtl {
 } RXDeckCtl;
 
 void rx_ctl_init(RXDeckCtl *c, RXPlayer *p, int deck, rx_ctl_changed_cb changed, void *opaque);
-/* After rx_deck_load: binds the track and applies auto-cue (position at
- * the first memory cue when there is one, else the start). */
+/* After rx_deck_load: binds the track and applies auto-cue (c->auto_cue:
+ * the cue point and the paused playhead at the first memory cue, the
+ * start, or the grid's first beat). */
 void rx_ctl_load(RXDeckCtl *c, RXTrack *track);
 void rx_ctl_unload(RXDeckCtl *c);
 void rx_ctl_tick(RXDeckCtl *c);
@@ -245,6 +261,10 @@ void rx_ctl_loop_exit(RXDeckCtl *c);
 void rx_ctl_beat_jump(RXDeckCtl *c, double beats);         /* +-, 0 = fine nudge of 10 ms (-0.0 back) */
 void rx_ctl_nudge(RXDeckCtl *c, double seconds);
 void rx_ctl_set_quantize(RXDeckCtl *c, bool on);
+/* `seconds` where a cue set there lands: on the QUANTIZE grid (the nearest
+ * beat or fraction of one) when it is on and the track has a grid, else as
+ * it is; clamped to the track. */
+double rx_ctl_quantized(const RXDeckCtl *c, double seconds);
 void rx_ctl_seek(RXDeckCtl *c, double seconds);            /* a click on the waveform */
 /* Grid edits go through here so the deck and the cues stay in step:
  * applies to the track, resolves musical cues, pushes the grid to the deck
