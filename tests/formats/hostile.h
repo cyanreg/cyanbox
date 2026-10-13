@@ -21,8 +21,8 @@
 
 /* A data page whose row index lists `slots` rows, all present, the row of
  * slot s at heap offset `stride * s`; the heap is `fill` bytes. */
-static void hostile_page(uint8_t *p, uint32_t index, uint32_t type, uint32_t next, int slots,
-                         int stride, uint8_t fill)
+static inline void hostile_page(uint8_t *p, uint32_t index, uint32_t type, uint32_t next, int slots,
+                                int stride, uint8_t fill)
 {
     memset(p, 0, RX_PDB_PAGE);
     memset(p + RX_PDB_HEAP, fill, RX_PDB_PAGE - RX_PDB_HEAP);
@@ -47,7 +47,7 @@ static void hostile_page(uint8_t *p, uint32_t index, uint32_t type, uint32_t nex
  * 0x03030303 and empty names (0x03 is the empty short string), so every
  * tree row is the same playlist and every entry belongs to it. stride 0:
  * one row listed again and again; stride 1: rows a byte apart. */
-static uint8_t *hostile_pdb_rows(int pages, int slots, int stride, size_t *size)
+static inline uint8_t *hostile_pdb_rows(int pages, int slots, int stride, size_t *size)
 {
     static const uint32_t types[] = {
         RX_PDB_TRACKS, RX_PDB_ARTISTS, RX_PDB_PLAYLIST_TREE, RX_PDB_PLAYLIST_ENTRIES,
@@ -81,7 +81,7 @@ static uint8_t *hostile_pdb_rows(int pages, int slots, int stride, size_t *size)
  * long ASCII string at the end of the heap, of bytes above 0x7F (each read
  * as U+FFFD, three bytes): every row would decode the whole string 21
  * times. */
-static uint8_t *hostile_pdb_strings(int pages, size_t *size)
+static inline uint8_t *hostile_pdb_strings(int pages, size_t *size)
 {
     size_t n = (size_t)(1 + pages);
     uint8_t *b = calloc(n, RX_PDB_PAGE);
@@ -124,7 +124,7 @@ static uint8_t *hostile_pdb_strings(int pages, size_t *size)
 /* One page: a header whose 64 tables all start at page 0 and end at a page
  * the chain never reaches, page 0's own "next" (next_unused_page) being 0:
  * every chain loops on the header page. */
-static uint8_t *hostile_pdb_loop(size_t *size)
+static inline uint8_t *hostile_pdb_loop(size_t *size)
 {
     uint8_t *b = calloc(1, RX_PDB_PAGE);
     if (!b)
@@ -140,5 +140,57 @@ static uint8_t *hostile_pdb_loop(size_t *size)
     *size = RX_PDB_PAGE;
     return b;
 }
+
+/* ------------------------------------------------------------ OneLibrary */
+
+/* A plain (decrypted) exportLibrary.db made by `sql`: what a stick's
+ * database decrypts to when its schema is someone else's. */
+static inline uint8_t *hostile_onelibrary(const char *sql, size_t *size)
+{
+    sqlite3 *db;
+    if (sqlite3_open_v2(":memory:", &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, NULL) != SQLITE_OK) {
+        sqlite3_close(db);
+        return NULL;
+    }
+    uint8_t *out = NULL;
+    if (sqlite3_exec(db, sql, NULL, NULL, NULL) == SQLITE_OK) {
+        sqlite3_int64 n = 0;
+        unsigned char *img = sqlite3_serialize(db, "main", &n, 0);
+        if (img && n > 0 && (out = malloc((size_t)n))) {
+            memcpy(out, img, (size_t)n);
+            *size = (size_t)n;
+        }
+        sqlite3_free(img);
+    }
+    sqlite3_close(db);
+    return out;
+}
+
+/* `content` a view over an endless recursive query: every read of the
+ * table the players' tracks are in runs forever (8 KB). */
+#define HOSTILE_OL_VIEW                                                                         \
+    "CREATE TABLE cue(cue_id integer primary key, content_id integer);"                         \
+    "CREATE TABLE image(image_id integer primary key, path varchar);"                          \
+    "CREATE VIEW content AS WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r) "  \
+    "SELECT n AS content_id, 'x' AS path, 'y' AS title, 'z' AS analysisDataFilePath, "         \
+    "0 AS isHotCueAutoLoadOn FROM r;"
+/* The same view, its schema row claiming to be a table. */
+#define HOSTILE_OL_VIEW_AS_TABLE                                                                \
+    HOSTILE_OL_VIEW                                                                             \
+    "PRAGMA writable_schema = ON;"                                                              \
+    "UPDATE sqlite_schema SET type = 'table' WHERE name = 'content';"                           \
+    "PRAGMA writable_schema = OFF;"
+/* A trigger: code a write would run. */
+#define HOSTILE_OL_TRIGGER                                                                      \
+    "CREATE TABLE content(content_id integer primary key, path varchar, title varchar);"       \
+    "CREATE TABLE cue(cue_id integer primary key, content_id integer);"                         \
+    "CREATE TRIGGER t AFTER INSERT ON cue BEGIN DELETE FROM content; END;"
+/* A generated column: a megabyte title a row from a few bytes of file. */
+#define HOSTILE_OL_GENERATED                                                                    \
+    "CREATE TABLE content(content_id integer primary key, path varchar, "                      \
+    "title varchar GENERATED ALWAYS AS (hex(zeroblob(500000))) VIRTUAL);"                       \
+    "CREATE TABLE cue(cue_id integer primary key, content_id integer);"                         \
+    "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r LIMIT 1000) "               \
+    "INSERT INTO content (content_id, path) SELECT n, 'p' FROM r;"
 
 #endif /* RXBOX_TESTS_FORMATS_HOSTILE_H */

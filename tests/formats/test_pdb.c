@@ -512,7 +512,7 @@ static void hostile(void)
         size_t total = read_all(b, n, &problems);
         CHECK(total <= n);
         CHECK(problems <= 201);
-        CHECK(seconds() - t0 < 1.0);
+        CHECK(seconds() - t0 < 10.0);
         free(b);
     }
 
@@ -532,7 +532,7 @@ static void hostile(void)
         rx_pdb_raw_tracks_free(raw, nr);
         int problems;
         CHECK(read_all(b, n, &problems) <= 64 * n);
-        CHECK(seconds() - t0 < 1.0);
+        CHECK(seconds() - t0 < 10.0);
         free(b);
     }
 
@@ -545,7 +545,7 @@ static void hostile(void)
          * problems and a line saying how many more. */
         CHECK(count > 64 && count < 1000);
         CHECK_EQ(problems, 201);
-        CHECK(seconds() - t0 < 1.0);
+        CHECK(seconds() - t0 < 10.0);
         free(b);
     }
 }

@@ -469,6 +469,22 @@ static void fuzz_onelibrary(void)
     }
     free(db);
     free(wal);
+
+    /* The crafted schemas of test_onelibrary (hostile.h) and their
+     * neighbours: a view, one dressed as a table, a trigger, a generated
+     * column. */
+    static const char *const schemas[] = {
+        HOSTILE_OL_VIEW, HOSTILE_OL_VIEW_AS_TABLE, HOSTILE_OL_TRIGGER, HOSTILE_OL_GENERATED,
+    };
+    for (size_t i = 0; i < RX_ARRAY_ELEMS(schemas); i++) {
+        size_t n;
+        uint8_t *b = hostile_onelibrary(schemas[i], &n);
+        if (!b)
+            continue;
+        truncations(read_plain_db, b, n, 4093);
+        mutations(read_plain_db, b, n, 0, 300);
+        free(b);
+    }
 }
 
 int main(void)
