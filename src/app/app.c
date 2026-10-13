@@ -174,7 +174,8 @@ struct RXAppPriv {
     int64_t  play_last_us[RX_DECKS];
     bool     play_recorded[RX_DECKS];
     bool     was_playing[RX_DECKS];         /* at the last tick (continue_play) */
-    bool     ended[RX_DECKS];               /* played to its end and stands stopped there */
+    uint64_t ended_for[RX_DECKS];           /* stopped at its end waiting for this next (the
+                                               candidate then); 0 none */
     uint64_t next_request[RX_DECKS];        /* the decode of the track queued to follow, in
                                                flight on io_jobs; 0 none */
     uint64_t next_failed_id[RX_DECKS];      /* a track whose decode or queueing failed: not
@@ -712,7 +713,7 @@ static void deck_clear(RXApp *app, int deck)
     dv->loading_track_id = 0;
     cancel_next(app, deck);
     if (priv)
-        priv->ended[deck] = false;
+        priv->ended_for[deck] = 0;
 
     if (app->player) {
         rx_ctl_unload(&dv->ctl);
@@ -767,7 +768,7 @@ int rx_app_load_deck(RXApp *app, int deck, RXTrack *t)
     dv->loading_track_id = 0;
     /* A new start: what was to follow the old track goes. */
     cancel_next(app, deck);
-    app->priv->ended[deck] = false;
+    app->priv->ended_for[deck] = 0;
 
     uint64_t req = rx_jobs_decode(io, t->id, t->path, deck);
     if ((int64_t)req < 0) {
@@ -938,7 +939,7 @@ static bool continue_play(RXApp *app, int deck)
         if (dv->next_track_id) {
             RXTrack *t = rx_library_find_id(&app->lib, dv->next_track_id);
             dv->next_track_id = 0;
-            priv->ended[deck] = false;
+            priv->ended_for[deck] = 0;
             take_over(app, deck, t);
             rx_deck_state(app->player, deck, &st);
             changed = true;
@@ -949,10 +950,6 @@ static bool continue_play(RXApp *app, int deck)
     priv->was_playing[deck] = st.loaded && st.playing;
     bool loaded = st.loaded && dv->track && !dv->loading_request;
     bool at_end = loaded && st.duration > 0 && st.position >= st.duration - END_SLACK;
-    if (was && !st.playing && at_end && !st.scrubbing)
-        priv->ended[deck] = true;
-    else if (!loaded || st.playing || !at_end)
-        priv->ended[deck] = false;
 
     RXTrack *want = loaded ? next_candidate(app, dv->track) : NULL;
     /* One that failed is not asked for again until the candidate changes. */
@@ -961,19 +958,30 @@ static bool continue_play(RXApp *app, int deck)
     else
         priv->next_failed_id[deck] = 0;
     uint64_t want_id = want ? want->id : 0;
+
+    /* The end reached before the next was in (a seek into the last
+     * seconds, its decode in flight): the deck plays on when that next
+     * comes, and only that one. A deck that stopped with nothing to follow
+     * stays stopped whatever the view does after, and one whose candidate
+     * changes meanwhile (another view) stays stopped too. */
+    if (was && !st.playing && at_end && !st.scrubbing)
+        priv->ended_for[deck] = want_id;
+    else if (!loaded || st.playing || !at_end || want_id != priv->ended_for[deck])
+        priv->ended_for[deck] = 0;
+
     if (dv->next_track_id && dv->next_track_id != want_id) {
         cancel_next(app, deck);
         changed = true;
     }
     bool near = loaded && st.duration > 0 && st.position >= st.duration - NEXT_LEAD_SECONDS;
-    if (want && !dv->next_track_id && (near || priv->ended[deck])) {
+    if (want && !dv->next_track_id && (near || priv->ended_for[deck])) {
         queue_next_track(app, deck, want);
         changed = true;
     }
-    if (priv->ended[deck] && st.has_next) {
+    if (priv->ended_for[deck] && st.has_next && dv->next_track_id == priv->ended_for[deck]) {
         /* PLAY on a deck stopped at its end takes the next. */
         rx_deck_play(app->player, deck);
-        priv->ended[deck] = false;
+        priv->ended_for[deck] = 0;
         changed = true;
     }
     return changed;
@@ -1617,9 +1625,9 @@ static void handle_next(RXApp *app, RXJobResult *r, int deck)
         rx_app_set_status(app, "Cannot queue %s to follow: %s", name, strerror(-ret));
         return;
     }
-    if (priv->ended[deck]) {
+    if (priv->ended_for[deck] && priv->ended_for[deck] == dv->next_track_id) {
         rx_deck_play(app->player, deck);
-        priv->ended[deck] = false;
+        priv->ended_for[deck] = 0;
     }
 }
 
@@ -2701,7 +2709,7 @@ static int compare_album_rows(const void *pa, const void *pb, void *opaque)
 
 static bool in_album(const RXTrack *t, const char *album)
 {
-    return t->meta.album && !strcmp(t->meta.album, album);
+    return t->meta.album && !rx_strcasecmp(t->meta.album, album);
 }
 
 void rx_app_rebuild_rows(RXApp *app)
@@ -2782,9 +2790,15 @@ void rx_app_rebuild_rows(RXApp *app)
     app->dirty = true;
 }
 
+/* Albums whose names differ only in case are one album (a tag typed
+ * "Greatest Hits" on one track and "greatest hits" on another): sorted
+ * without case, the exact spellings in a fixed order within, so a run of
+ * one album is contiguous and named by its first spelling. */
 static int compare_album_names(const void *pa, const void *pb)
 {
-    return rx_strcasecmp(*(const char *const *)pa, *(const char *const *)pb);
+    const char *a = *(const char *const *)pa, *b = *(const char *const *)pb;
+    int c = rx_strcasecmp(a, b);
+    return c ? c : strcmp(a, b);
 }
 
 static void albums_free(RXAppPriv *priv)
@@ -2817,7 +2831,7 @@ int rx_app_albums(RXApp *app, const RXAlbum **albums)
         qsort(names, n, sizeof(*names), compare_album_names);
         for (int i = 0; i < n;) {
             int j = i + 1;
-            while (j < n && !strcmp(names[j], names[i]))
+            while (j < n && !rx_strcasecmp(names[j], names[i]))
                 j++;
             RXAlbum al = { .name = rx_strdup(names[i]), .nb = j - i };
             if (!al.name || !rx_array_push(&priv->albums, &al)) {

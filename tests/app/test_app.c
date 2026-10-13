@@ -539,6 +539,14 @@ int main(int argc, char **argv)
               "albums alphabetically: %d", n);
         rx_app_tick(&app);
         CHECK(app.nb_rows == 1 && app.lib.tracks[app.rows[0]] == a, "the album view follows the tags");
+        /* One album whatever the case of its tag. */
+        free(b->meta.album);
+        b->meta.album = rx_strdup("zeta");
+        CHECK(rx_library_save_track(&app.lib, b) == 0, "saving b's album");
+        n = rx_app_albums(&app, &albums);
+        CHECK(n == 1 && albums[0].nb == 2, "Zeta and zeta are one album: %d", n);
+        rx_app_tick(&app);
+        CHECK(app.nb_rows == 2, "both in the album view: %d", app.nb_rows);
         rx_app_show_album(&app, NULL);
         CHECK(!app.current_album && app.nb_rows == 2, "back to the collection: %d rows", app.nb_rows);
     }
@@ -782,6 +790,13 @@ int main(int argc, char **argv)
         app.rows_dirty = true;
         rx_app_tick(&app);
         CHECK(app.nb_rows == 2 && app.lib.tracks[app.rows[0]] == c, "Run rows %d", app.nb_rows);
+        /* The deck stopped at its end with nothing to follow: showing a
+         * playlist that has a track after it does not start it. */
+        play_for(&app, 1.0, 0.01, 0, 0, 0);
+        rx_deck_state(app.player, 0, &st);
+        CHECK(app.decks[0].track == c && !st.playing,
+              "a deck stopped at its end started when the view changed: track %p, playing %d",
+              (void *)app.decks[0].track, st.playing);
         unsigned adv = st.advanced;
         rx_ctl_seek(&app.decks[0].ctl, c->duration - 0.5);
         rx_ctl_play_pause(&app.decks[0].ctl);
