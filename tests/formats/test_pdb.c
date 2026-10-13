@@ -5,14 +5,18 @@
  * structural check, DeviceSQL strings) plus vectors from docs/pdb.md:
  * baken's "Rødhåd" artist row taken from a rekordbox 7 export, the history
  * row, and the whole exportExt.pdb tag page of a rekordbox export
- * (Appendix B, from rekordcrate's complete_export/empty). */
+ * (Appendix B, from rekordcrate's complete_export/empty). Then crafted
+ * files (hostile.h), which the readers and the check get through in
+ * memory and time linear in their size. */
 
 #include <stdio.h>
+#include <time.h>
 
 #include "rxbox/formats.h"
 
 #include "src/formats/buf.h"
 #include "src/formats/formats_priv.h"
+#include "tests/formats/hostile.h"
 #include "tests/formats/test.h"
 
 static void print_problem(void *opaque, const char *problem)
@@ -56,14 +60,20 @@ static void strings(void)
     free(enc);
 }
 
+/* The file offsets of a table's rows. */
 static int table_rows(const uint8_t *b, size_t size, int type, uint32_t **pos)
 {
     RXPdbHeader h;
+    RXPdbRow *rows;
     int n = 0;
     *pos = NULL;
-    if (rx_pdb_read_header(b, size, &h) < 0 || rx_pdb_table_rows(b, size, &h.tables[type], pos, &n) < 0)
+    if (rx_pdb_read_header(b, size, &h) < 0 || rx_pdb_table_rows(b, size, &h.tables[type], &rows, &n) < 0)
         return 0;
-    return n;
+    *pos = malloc((size_t)RX_MAX(n, 1) * sizeof(**pos));
+    for (int i = 0; *pos && i < n; i++)
+        (*pos)[i] = rows[i].pos;
+    free(rows);
+    return *pos ? n : 0;
 }
 
 /* dj's test_pdb_fixed_tables_match_rekordbox: the colour, column, menu and
@@ -424,6 +434,122 @@ static void limits(void)
     free(e);
 }
 
+static double seconds(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec + 1e-9 * (double)ts.tv_nsec;
+}
+
+static void count_problem(void *opaque, const char *problem)
+{
+    (void)problem;
+    (*(int *)opaque)++;
+}
+
+/* Everything the readers return from one file: rows, playlist entries,
+ * history entries and string bytes, for the bounds below. */
+static size_t read_all(const uint8_t *b, size_t n, int *problems)
+{
+    size_t total = 0;
+    RXPdb pdb;
+    if (rx_pdb_read(b, n, &pdb) >= 0) {
+        total += (size_t)pdb.nb_tracks + (size_t)pdb.nb_playlists;
+        for (int i = 0; i < pdb.nb_playlists; i++)
+            total += (size_t)pdb.playlists[i].nb + strlen(pdb.playlists[i].name);
+        rx_pdb_free(&pdb);
+    }
+    RXPdbRawTrack *raw;
+    int nr;
+    if (rx_pdb_raw_tracks(b, n, &raw, &nr) >= 0) {
+        for (int i = 0; i < nr; i++)
+            for (int s = 0; s < 21; s++)
+                total += strlen(raw[i].strings[s]) + 1;
+        rx_pdb_raw_tracks_free(raw, nr);
+    }
+    RXPdbHistoryList *hl;
+    int nh;
+    if (rx_pdb_history_lists(b, n, &hl, &nh) >= 0) {
+        for (int i = 0; i < nh; i++)
+            total += 1 + (size_t)hl[i].nb;
+        rx_pdb_history_lists_free(hl, nh);
+    }
+    *problems = 0;
+    int count = rx_pdb_check(b, n, count_problem, problems);
+    CHECK(count >= *problems);
+    return total;
+}
+
+/* Crafted files (tests/formats/hostile.h) are read in memory and time
+ * linear in their size. Before: an index listing one row 1792 times a page
+ * made every tree row of a 172 KB file the same playlist with every entry
+ * (450 MB), every track row decoded one shared string 21 times, and a
+ * looping chain made the check report 19.2 million problems from 4 KB. */
+static void hostile(void)
+{
+    static const struct {
+        int slots, stride;
+    } kinds[] = { { HOSTILE_SLOTS, 0 }, { 1000, 1 } };
+    for (size_t k = 0; k < RX_ARRAY_ELEMS(kinds); k++) {
+        size_t n;
+        uint8_t *b = hostile_pdb_rows(6, kinds[k].slots, kinds[k].stride, &n);
+        if (!b)
+            continue;
+        double t0 = seconds();
+        RXPdb pdb;
+        CHECK_EQ(rx_pdb_read(b, n, &pdb), 0);
+        /* At most one row a page has room: every tree row is playlist
+         * 0x03030303, listed once, with at most an entry a page. */
+        CHECK(pdb.nb_tracks <= 6 && pdb.nb_playlists <= 1);
+        CHECK(pdb.nb_playlists == 0 || pdb.playlists[0].nb <= 6);
+        rx_pdb_free(&pdb);
+        RXPdbHistoryList *hl;
+        int nh;
+        CHECK_EQ(rx_pdb_history_lists(b, n, &hl, &nh), 0);
+        CHECK(nh <= 1 && (nh == 0 || hl[0].nb <= 6));
+        rx_pdb_history_lists_free(hl, nh);
+        int problems;
+        size_t total = read_all(b, n, &problems);
+        CHECK(total <= n);
+        CHECK(problems <= 201);
+        CHECK(seconds() - t0 < 1.0);
+        free(b);
+    }
+
+    size_t n;
+    uint8_t *b = hostile_pdb_strings(4, &n);
+    if (b) {
+        double t0 = seconds();
+        RXPdbRawTrack *raw;
+        int nr;
+        CHECK_EQ(rx_pdb_raw_tracks(b, n, &raw, &nr), 0);
+        CHECK_EQ(nr, 4 * 16);
+        /* Only the last row of a page has the string in its room. */
+        int with = 0;
+        for (int i = 0; i < nr; i++)
+            with += strlen(raw[i].strings[17]) > 0;
+        CHECK_EQ(with, 4);
+        rx_pdb_raw_tracks_free(raw, nr);
+        int problems;
+        CHECK(read_all(b, n, &problems) <= 64 * n);
+        CHECK(seconds() - t0 < 1.0);
+        free(b);
+    }
+
+    b = hostile_pdb_loop(&n);
+    if (b) {
+        double t0 = seconds();
+        int problems = 0;
+        int count = rx_pdb_check(b, n, count_problem, &problems);
+        /* Each of the 64 chains stops where it loops; the first 200
+         * problems and a line saying how many more. */
+        CHECK(count > 64 && count < 1000);
+        CHECK_EQ(problems, 201);
+        CHECK(seconds() - t0 < 1.0);
+        free(b);
+    }
+}
+
 int main(void)
 {
     strings();
@@ -432,5 +558,6 @@ int main(void)
     artist_row();
     ext_tags();
     limits();
+    hostile();
     return test_result("pdb");
 }

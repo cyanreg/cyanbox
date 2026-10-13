@@ -82,9 +82,14 @@ typedef struct RXPdbHeader {
 } RXPdbHeader;
 
 int  rx_pdb_read_header(const uint8_t *b, size_t size, RXPdbHeader *h);
-/* File offsets of every present row of a table, in page and slot order. */
+/* Every present row of a table, in page and slot order, each once (slots
+ * of a page listing the same offset are one row): its file offset and the
+ * end of its room, the next row of its page in the heap or, for the last,
+ * the page's row index. What a row holds (its strings) lies in its room;
+ * the readers read nothing of a row beyond it. */
+typedef struct RXPdbRow { uint32_t pos, end; } RXPdbRow;
 int  rx_pdb_table_rows(const uint8_t *b, size_t size, const RXPdbTableDir *t,
-                       uint32_t **pos, int *nb);
+                       RXPdbRow **rows, int *nb);
 /* Reads a DeviceSQL string at `pos` (bounds-checked against `size`). */
 int  rx_pdb_read_string(const uint8_t *b, size_t size, size_t pos, char **utf8);
 
