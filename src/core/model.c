@@ -176,6 +176,7 @@ RXTrack *rx_track_new(const char *path)
     t->grid.beats_per_bar = 4;
     t->meta.hue = RX_HUE_NONE;
     t->file_meta.hue = RX_HUE_NONE;
+    t->ml_club = t->ml_intensity = t->ml_valence = t->ml_vocals = NAN;
     if (path) {
         t->path = rx_strdup(path);
         if (!t->path) {

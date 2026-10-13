@@ -14,6 +14,9 @@
  *   player.<name>  mixer.<name>  device.<name>     My Settings, names as
  *                                                  `rxbox settings` lists them
  *   audio.sink
+ *   ml.model                       the model's GGUF file for tagging tracks
+ *                                  (rxbox/ml.h; unset: $RXBOX_ML_MODEL, else
+ *                                  models/ beside the executable)
  *   ui.detail_bars  ui.split_player  ui.split_tree  ui.traffic_light
  *
  * Booleans are "true"/"false", numbers their shortest exact decimal form,
@@ -69,6 +72,7 @@ void rx_config_free(RXConfig *c)
         return;
     free(c->device_name);
     free(c->audio_sink);
+    free(c->ml_model);
     kv_free(&c->player, &c->nb_player);
     kv_free(&c->mixer, &c->nb_mixer);
     kv_free(&c->device, &c->nb_device);
@@ -245,6 +249,8 @@ static int apply_setting(RXConfig *c, const char *key, const char *value)
         return set_string(&c->device_name, value);
     } else if (!strcmp(key, "audio.sink")) {
         return set_string(&c->audio_sink, value);
+    } else if (!strcmp(key, "ml.model")) {
+        return set_string(&c->ml_model, value);
     } else if (!strcmp(key, "ui.traffic_light")) {
         if (rx_key_reach_parse(value) < 0)
             bad_value(key, value);
@@ -339,6 +345,7 @@ int rx_library_config_save(RXLibrary *lib)
         { "export.compat_transcode", c->compat_transcode ? "true" : "false" },
         { "export.device_name",      c->device_name },
         { "audio.sink",              c->audio_sink },
+        { "ml.model",                c->ml_model },
         { "ui.traffic_light",        c->traffic_light },
         { "ui.detail_bars",          rx_core_fmt_double(c->detail_bars, bars, sizeof(bars)) },
         { "ui.split_player",         rx_core_fmt_double(c->split_player, split_p, sizeof(split_p)) },

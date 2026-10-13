@@ -25,7 +25,10 @@
  *                  grid_confidence, grid_flags, grid_locked, added, analysed,
  *                  play_count, last_played, missing,
  *                  beats_version, key_version, waves_version (the analyser that made
- *                  the grid, key and waveforms: RX_*_VERSION, 0 before schema 2)
+ *                  the grid, key and waveforms: RX_*_VERSION, 0 before schema 2),
+ *                  tags_version, ml_club, ml_intensity, ml_valence, ml_vocals (the
+ *                  model's tagging, rxbox/ml.h: RX_ML_TAGS_VERSION, 0 never, and its
+ *                  measures, NULL never; schema 5)
  *   grid_section   track_id, idx, start, bpm, beat
  *   cue            id, track_id, time, grid_beat, hot, loop_end, loop_beats, active, name, color
  *   track_tag      track_id, tag
@@ -81,6 +84,10 @@ typedef struct RXConfig {
 
     /* audio.* */
     char *audio_sink;           /* PipeWire node name, NULL = default */
+
+    /* ml.* */
+    char *ml_model;             /* the model's GGUF file for tagging (rxbox/ml.h), NULL:
+                                   $RXBOX_ML_MODEL, else models/ (rx_app_ml_model) */
 
     /* ui.* */
     char  traffic_light[12];    /* the browser's key highlight (rx_key_reach_name): off,
@@ -160,7 +167,8 @@ bool     rx_is_audio_path(const char *path);
  * artwork, plays, playlist entries). */
 int      rx_library_remove(RXLibrary *lib, RXTrack *t);
 /* Writes a track's editable state (meta overrides, rating, hue, tags,
- * key, grid, cues, locked, the analyser versions) in one transaction.
+ * key, grid, cues, locked, the analyser versions, the model's tagging) in
+ * one transaction.
  * Call after any edit. */
 int      rx_library_save_track(RXLibrary *lib, RXTrack *t);
 /* Re-probes a track whose file changed (mtime); keeps grid/key/cues.

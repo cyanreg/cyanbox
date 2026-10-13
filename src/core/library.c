@@ -206,6 +206,17 @@ static void bind_edit(RXDb *db, sqlite3_stmt *st, int p, const RXTrack *t)
     rx_db_bind_int(db, st, p++, t->beats_version);
     rx_db_bind_int(db, st, p++, t->key_version);
     rx_db_bind_int(db, st, p++, t->waves_version);
+    rx_db_bind_int(db, st, p++, t->tags_version);
+    /* NAN binds NULL: never tagged. */
+    rx_db_bind_double(db, st, p++, t->ml_club);
+    rx_db_bind_double(db, st, p++, t->ml_intensity);
+    rx_db_bind_double(db, st, p++, t->ml_valence);
+    rx_db_bind_double(db, st, p++, t->ml_vocals);
+}
+
+static float column_measure(sqlite3_stmt *st, int col)
+{
+    return sqlite3_column_type(st, col) == SQLITE_NULL ? NAN : (float)sqlite3_column_double(st, col);
 }
 
 /* Sections, cues and My Tags: replaced as a whole. */
@@ -372,6 +383,11 @@ static int track_from_row(sqlite3_stmt *st, RXTrack **out)
     t->beats_version = sqlite3_column_int(st, c++);
     t->key_version = sqlite3_column_int(st, c++);
     t->waves_version = sqlite3_column_int(st, c++);
+    t->tags_version = sqlite3_column_int(st, c++);
+    t->ml_club = column_measure(st, c++);
+    t->ml_intensity = column_measure(st, c++);
+    t->ml_valence = column_measure(st, c++);
+    t->ml_vocals = column_measure(st, c++);
 
     if (err || !t->path) {
         rx_track_free(t);

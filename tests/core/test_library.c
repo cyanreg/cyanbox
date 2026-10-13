@@ -74,11 +74,17 @@ static double hue_column(const RXLibrary *lib, uint64_t id)
     return v;
 }
 
-/* Takes a library back to schema 3's track table: the colour name column
- * instead of the hue, for the migrations from older schemas. */
+/* Takes a library back to schema 3's track table: without schema 5's
+ * tagging columns, and the colour name column instead of the hue, for the
+ * migrations from older schemas. */
 static int back_to_schema3(sqlite3 *db)
 {
-    return sqlite3_exec(db, "ALTER TABLE track ADD COLUMN color TEXT NOT NULL DEFAULT '';"
+    return sqlite3_exec(db, "ALTER TABLE track DROP COLUMN tags_version;"
+                            "ALTER TABLE track DROP COLUMN ml_club;"
+                            "ALTER TABLE track DROP COLUMN ml_intensity;"
+                            "ALTER TABLE track DROP COLUMN ml_valence;"
+                            "ALTER TABLE track DROP COLUMN ml_vocals;"
+                            "ALTER TABLE track ADD COLUMN color TEXT NOT NULL DEFAULT '';"
                             "ALTER TABLE track DROP COLUMN hue", NULL, NULL, NULL);
 }
 
@@ -117,7 +123,7 @@ static void test_create_and_add(void)
 
     sqlite3_stmt *st;
     sqlite3_prepare_v2(lib.db->db, "PRAGMA user_version", -1, &st, NULL);
-    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 4);
+    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 5);
     sqlite3_finalize(st);
     sqlite3_prepare_v2(lib.db->db, "PRAGMA journal_mode", -1, &st, NULL);
     CHECK(sqlite3_step(st) == SQLITE_ROW && !strcmp((const char *)sqlite3_column_text(st, 0), "wal"));
@@ -506,7 +512,7 @@ static void test_grid_migration(void)
     CHECK(a && a->grid.nb_sections == 2 && a->grid.sections[0].start == 0.3125);
     sqlite3_stmt *st;
     sqlite3_prepare_v2(lib.db->db, "PRAGMA user_version", -1, &st, NULL);
-    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 4);
+    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 5);
     sqlite3_finalize(st);
     rx_library_close(&lib);
 }
@@ -766,7 +772,7 @@ static void test_migrate_v1(void)
     CHECK(rx_library_open(&lib, dir) == 0);
     sqlite3_stmt *st;
     sqlite3_prepare_v2(lib.db->db, "PRAGMA user_version", -1, &st, NULL);
-    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 4);
+    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 5);
     sqlite3_finalize(st);
     CHECK(lib.nb_tracks == 2);
     a = rx_library_find_path(&lib, a_path);
