@@ -70,6 +70,8 @@
 
 #include <inttypes.h>
 #include <stdatomic.h>
+#include <sys/mman.h>
+#include <unistd.h>
 
 #include <libavutil/intreadwrite.h>
 
@@ -125,6 +127,7 @@ struct RXPackets {
     atomic_bool     exact;
 
     RXMap      map;         /* MP3, FLAC: while indexing */
+    size_t     released;    /* its pages before this are out of the process */
     RXMp3Info  mp3;
     size_t     mp3_pos;
     int64_t    mp3_left;    /* frames still to come, for the step's count */
@@ -218,10 +221,25 @@ static int mp3_frame(void *opaque, const uint8_t *data, size_t size, int samples
     return --pk->mp3_left > 0 ? 0 : 1;
 }
 
+/* The mapped file's pages before `upto` have been copied: they leave the
+ * process (MADV_DONTNEED on a read-only file mapping drops them from the
+ * page tables, the page cache keeps them), or a long file would count
+ * twice while it is indexed, mapped and copied. */
+static void release_map(RXPackets *pk, size_t upto)
+{
+    size_t page = (size_t)sysconf(_SC_PAGESIZE);
+    size_t end = upto / page * page;
+    if (end > pk->released && end <= pk->map.size) {
+        madvise((void *)(pk->map.data + pk->released), end - pk->released, MADV_DONTNEED);
+        pk->released = end;
+    }
+}
+
 static int index_mp3(RXPackets *pk, int max)
 {
     pk->mp3_left = max;
     int ret = rx_mp3_frames_step(pk->path, &pk->map, &pk->mp3, &pk->mp3_pos, mp3_frame, pk);
+    release_map(pk, pk->mp3_pos);
     return ret < 0 ? ret : ret == 1;
 }
 
@@ -273,6 +291,7 @@ static int index_flac(RXPackets *pk, int max)
         pk->flac_block = block;
         pk->flac_pending = true;
     }
+    release_map(pk, pk->flac_at);
     return 0;
 }
 
@@ -368,6 +387,10 @@ static int open_mp3(RXPackets *pk)
         rx_audio_unmap(&pk->map);
         return 1;
     }
+    /* The scan touched every page; indexing touches them again in order
+     * (release_map) */
+    if (pk->map.size)
+        madvise((void *)pk->map.data, pk->map.size, MADV_DONTNEED);
     const RXMp3Info *mi = &pk->mp3;
     pk->src = SRC_MP3;
     pk->par->codec_type = AVMEDIA_TYPE_AUDIO;
