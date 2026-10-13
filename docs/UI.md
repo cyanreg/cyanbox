@@ -156,12 +156,17 @@ artist, album, genre, comment, file name with `rx_str_contains_fold`
 
 **Track table** (ImGui table, resizable/reorderable/sortable columns,
 virtualised with the clipper): default columns in order: `#`, Preview
-(128 px: the PWV6 stacked-half waveform via `rx_wave_draw` in
-`RX_WAVE_HALF_STACKED`, 1200 columns into 128 px), Artwork (36 px
-thumbnail, textures cached per track with an LRU of ~400), Track Title,
-Key, BPM, Time, Rating (five stars, click sets), Artist, Year, Date Added;
-Album, Location, Plays and Last Played exist but are hidden by default
-(the header's context menu shows them). There are no Color, Genre or Hot
+(the PWV6 stacked-half waveform via `rx_wave_draw` in
+`RX_WAVE_HALF_STACKED`, its 1200 columns scaled to the cell; the one
+column that stretches, taking the width the others leave: about 170 px at
+1600×900, 490 at 1920×1080), Artwork (36 px
+thumbnail, textures cached per track with an LRU of ~400), Track Title
+(260 px), Key, BPM, Time, Rating (five stars, click sets), Artist
+(170 px), Year; Album, Location, Plays and Last Played exist but are
+hidden by default (the header's context menu shows them). Track Title
+and Artist are fixed widths, resizable by dragging their edges: stretched
+they ran far wider than any title. There is no Date Added column (the
+library keeps the date). There are no Color, Genre or Hot
 Cue columns: the info panel shows and edits a track's colour and genre,
 the player's cue list a loaded track's cues. Cell text is 14 px, the
 title 15 px, `#` and the dates 12.5 px. The Key column has rekordbox's
@@ -172,8 +177,11 @@ loaded track in nL on the Camelot wheel (L its letter, M the other),
 Same key lights nL, Related 1 adds nM, Related 2 adds (n−1)L and (n+1)L,
 Related 3 (the default) adds (n−1)M and (n+1)M; the wheel wraps from 12
 to 1. Playing A (11B) lights A, F♯m, D, E, Bm and D♭m, not A♭m. Off
-turns it off. Below about 960 px the table
-scrolls sideways rather than squeeze Track Title and Artist. Row height
+turns it off. Narrower than the fixed columns and 100 px of preview
+(about 1030 px) the table scrolls sideways rather than squeeze the
+preview; at 1600×900 with the tree and the info panel nothing scrolls.
+The table's saved column layout is kept under a new id since this column
+set, so a layout saved for the old one starts from these defaults. Row height
 40 when artwork is shown, else 22. Selected rows highlighted; the focused row has a
 1 px outline. A row whose file is missing is drawn greyed out with a "missing" glyph,
 cannot be loaded or analysed, and offers Relocate… in its context menu;

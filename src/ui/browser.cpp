@@ -24,7 +24,7 @@
 
 enum UiCol {
     COL_IDX = 0, COL_PREVIEW, COL_ART, COL_TITLE, COL_KEY, COL_BPM, COL_TIME, COL_RATING,
-    COL_ARTIST, COL_YEAR, COL_ADDED, COL_ALBUM, COL_PATH, COL_PLAYS, COL_LAST_PLAYED, COL_N,
+    COL_ARTIST, COL_YEAR, COL_ALBUM, COL_PATH, COL_PLAYS, COL_LAST_PLAYED, COL_N,
 };
 
 #define NO_SORT (-2)
@@ -43,23 +43,26 @@ static const ImGuiTableColumnFlags HIDDEN = ImGuiTableColumnFlags_DefaultHide;
 static const ImGuiTableColumnFlags UNSORTED = ImGuiTableColumnFlags_NoSort;
 static const ImGuiTableColumnFlags ALWAYS = ImGuiTableColumnFlags_NoHide;
 
-// rekordbox's widths where rbxport measured them (Preview 128, Key 73,
-// BPM 80, Time 80, Rating 101); Track Title and Artist share the rest.
-// `#` is the view's own order and cannot be hidden, nor can the title.
-// There is no colour, genre or hot cue column: the info panel beside the
-// table shows and edits colour and genre, the player's cue list the cues.
+// Widths are the cells' content, 5 px of cell padding either side. Track
+// Title and Artist are fixed (260 and 170, resizable): stretched they ran
+// far wider than their text. The row preview stretches over what the
+// others leave instead, at least about 100 px (table()), so a wider window
+// shows a wider waveform. `#` is the view's own order and cannot be
+// hidden, nor can the title. There is no colour, genre or hot cue column:
+// the info panel beside the table shows and edits colour and genre, the
+// player's cue list the cues. Nor is there a Date Added column (the
+// library still keeps the date).
 static const UiColSpec COLS[COL_N] = {
     { "#",            40, -1,            FIXED | ALWAYS | ImGuiTableColumnFlags_DefaultSort, true },
-    { "Preview",     128, NO_SORT,       FIXED | UNSORTED, false },
+    { "Preview",       1, NO_SORT,       STRETCH | UNSORTED, false },
     { "Artwork",      40, NO_SORT,       FIXED | UNSORTED, false },
-    { "Track Title",   3, RX_COL_TITLE,  STRETCH | ALWAYS, false },
+    { "Track Title", 260, RX_COL_TITLE,  FIXED | ALWAYS, false },
     { "Key",          52, RX_COL_KEY,    FIXED, false },
     { "BPM",          62, RX_COL_BPM,    FIXED, true },
     { "Time",         52, RX_COL_TIME,   FIXED, true },
     { "Rating",       74, RX_COL_RATING, FIXED, false },
-    { "Artist",        2, RX_COL_ARTIST, STRETCH, false },
+    { "Artist",      170, RX_COL_ARTIST, FIXED, false },
     { "Year",         44, RX_COL_YEAR,   FIXED, true },
-    { "Date Added",   84, RX_COL_ADDED,  FIXED, true },
     { "Album",       160, RX_COL_ALBUM,  FIXED | HIDDEN, false },
     { "Location",    260, RX_COL_PATH,   FIXED | HIDDEN, false },
     { "Plays",        46, RX_COL_PLAYS,  FIXED | HIDDEN, true },
@@ -461,10 +464,6 @@ static void row_cells(UiState *ui, RXTrack *t, int row, float row_h, const uint6
                 cell_text(ui, p, w, row_h, buf, text, true);
             }
             break;
-        case COL_ADDED:
-            fmt_date(t->added, buf, sizeof(buf));
-            cell_text(ui, p, w, row_h, buf, sub, true, nullptr, 12.5f);
-            break;
         case COL_ALBUM:
             cell_text(ui, p, w, row_h, t->meta.album, text, false);
             break;
@@ -497,12 +496,22 @@ static void table(UiState *ui, ImVec2 size)
                             ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingFixedFit;
     ImGuiID menu_id = ImGui::GetID("##trackmenu");
     ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(PX(5), 0));
-    // Title and Artist stretch over what the fixed columns leave; below a
-    // width where they would be squeezed unreadable the table scrolls
-    // sideways instead, as rekordbox's does: the fixed columns take about
-    // 690 px, which leaves the two at least 270.
-    float inner = ImMax(size.x - ImGui::GetStyle().ScrollbarSize, PX(960));
-    if (!ImGui::BeginTable("##tracks", COL_N, flags, size, inner)) {
+    // The preview stretches over what the fixed columns leave; below the
+    // width where it would keep less than 100 px the table scrolls sideways
+    // instead, as rekordbox's does. The default columns take about 930 px,
+    // so at 1600 wide, info panel and all, nothing scrolls.
+    float fixed_w = 100;
+    for (int c = 0; c < COL_N; c++) {
+        if (!(COLS[c].flags & (HIDDEN | STRETCH)))
+            fixed_w += COLS[c].width;
+        if (!(COLS[c].flags & HIDDEN))
+            fixed_w += 5 * 2 + 1;
+    }
+    float inner = ImMax(size.x - ImGui::GetStyle().ScrollbarSize, PX(fixed_w));
+    // A new id with the column set (no Date Added; Title and Artist fixed,
+    // the preview stretched): a layout saved for the old one would have
+    // kept the old widths.
+    if (!ImGui::BeginTable("##tracklist", COL_N, flags, size, inner)) {
         ImGui::PopStyleVar();
         return;
     }
