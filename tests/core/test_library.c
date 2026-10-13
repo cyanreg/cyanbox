@@ -84,7 +84,7 @@ static void test_create_and_add(void)
 
     sqlite3_stmt *st;
     sqlite3_prepare_v2(lib.db->db, "PRAGMA user_version", -1, &st, NULL);
-    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 1);
+    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 2);
     sqlite3_finalize(st);
     sqlite3_prepare_v2(lib.db->db, "PRAGMA journal_mode", -1, &st, NULL);
     CHECK(sqlite3_step(st) == SQLITE_ROW && !strcmp((const char *)sqlite3_column_text(st, 0), "wal"));
@@ -325,6 +325,52 @@ static void test_refresh(void)
     CHECK_STR(a->meta.title, "Alpha 2");
     CHECK_STR(a->meta.artist, "Artist B");
     CHECK(count_rows(&lib, "cue", 1) == 3);
+    rx_library_close(&lib);
+}
+
+/* Schema 2: a grid stored by schema 1, whose first section extended back to
+ * the start of the track, has that section start at its first beat at or
+ * after 0, numbered as that beat was, so it keeps the beats it had. */
+static void test_grid_migration(void)
+{
+    RXLibrary lib;
+    CHECK(rx_library_open(&lib, root) == 0);
+    RXTrack *b = rx_library_find_id(&lib, 2), *c = rx_library_find_id(&lib, 3);
+    CHECK(b && c);
+    if (!b || !c) {
+        rx_library_close(&lib);
+        return;
+    }
+    rx_grid_free(&b->grid);
+    rx_grid_add_section(&b->grid, 1.5, 120.0, 1);
+    rx_grid_free(&c->grid);
+    rx_grid_add_section(&c->grid, 61.0, 120.0, 0);
+    rx_grid_add_section(&c->grid, 100.0, 125.0, 0);
+    CHECK(rx_library_save_track(&lib, b) == 0 && rx_library_save_track(&lib, c) == 0);
+    CHECK(sqlite3_exec(lib.db->db, "PRAGMA user_version = 1", NULL, NULL, NULL) == SQLITE_OK);
+    rx_library_close(&lib);
+
+    CHECK(rx_library_open(&lib, root) == 0);
+    b = rx_library_find_id(&lib, 2);
+    c = rx_library_find_id(&lib, 3);
+    RXTrack *a = rx_library_find_id(&lib, 1);
+    CHECK(b && b->grid.nb_sections == 1);
+    if (b && b->grid.nb_sections == 1)
+        CHECK(b->grid.sections[0].start == 0.0 && b->grid.sections[0].beat == 2);
+    CHECK(c && c->grid.nb_sections == 2);
+    if (c && c->grid.nb_sections == 2) {
+        CHECK(c->grid.sections[0].start == 0.0 && c->grid.sections[0].beat == 3);
+        CHECK(c->grid.sections[1].start == 100.0 && c->grid.sections[1].beat == 0);
+        int bar, beat;
+        rx_grid_bar_of(&c->grid, 61.0, &bar, &beat);
+        CHECK(beat == 1);
+    }
+    /* A first beat within a period of 0 is where it was. */
+    CHECK(a && a->grid.nb_sections == 2 && a->grid.sections[0].start == 0.3125);
+    sqlite3_stmt *st;
+    sqlite3_prepare_v2(lib.db->db, "PRAGMA user_version", -1, &st, NULL);
+    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 2);
+    sqlite3_finalize(st);
     rx_library_close(&lib);
 }
 
@@ -726,6 +772,7 @@ int main(void)
     test_create_and_add();
     test_edit_and_reopen();
     test_refresh();
+    test_grid_migration();
     test_missing_relocate_remove();
     test_refusals();
     test_lost_transaction();

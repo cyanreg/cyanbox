@@ -944,11 +944,14 @@ int rx_analyse_beats_dbg(const float *mono, int64_t nb_samples, int rate,
         g->bpm = 60.0 / P;
         double own = si->has_vote ? s->t0 + si->pos / 2 * P : NAN;
         if (i == 0) {
+            /* From its first beat at or after 0 (rxbox/model.h: nothing
+             * before the first section's start), numbered from the
+             * downbeat. */
             double d = isnan(own) ? s->t0 : own;
-            double bar = 4.0 * P;
-            g->start = d - floor(d / bar) * bar;
-            g->beat = 1;
-            prev_down = g->start;
+            long k = (long)floor(d / P);
+            g->start = d - k * P;
+            g->beat = (int)((-k % 4 + 4) % 4) + 1;
+            prev_down = d;
             continue;
         }
         const RXFitSection *a = &c.secs[i - 1];

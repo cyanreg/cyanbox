@@ -3,7 +3,7 @@
 /* The library database: the SQLite connection, the schema and its
  * migrations, the cached statements, transactions and error mapping.
  *
- * Schema version 1 (PRAGMA user_version = 1, application_id = 'RXBX').
+ * Schema version 2 (PRAGMA user_version = 2, application_id = 'RXBX').
  * Tables are STRICT so a wrong type is an error instead of a silent
  * conversion, and every row that belongs to a track or a playlist goes
  * with it (ON DELETE CASCADE, foreign keys on for every connection).
@@ -40,6 +40,12 @@
  * Migrations: `migrations[v]` takes a database from version v to v + 1, in
  * one transaction with the user_version bump. A database newer than this
  * build is refused rather than written with a schema we do not know.
+ *
+ *   1 -> 2  the tables as they are; a grid's first section stopped
+ *           extending back to the start of the track (src/core/grid.c), so
+ *           the first section of every stored grid starts at its first beat
+ *           at or after time 0 instead, numbered as that beat was: the
+ *           grid keeps every beat it had.
  *
  * Journal: WAL, synchronous = NORMAL (a crash loses at most the last
  * transactions, never consistency), and a busy timeout because the export
@@ -199,8 +205,24 @@ static const char schema_v1[] =
     "  value TEXT NOT NULL"
     ") STRICT, WITHOUT ROWID;";
 
+/* The first section's start goes back by k = floor(start / period) whole
+ * periods (start - k * period, as grid.c computes a beat), and its beat
+ * number (0 or out of range is read as 1) back by k. SQLite's % keeps the
+ * dividend's sign, hence the + bpb. */
+static const char schema_v2[] =
+    "UPDATE grid_section AS g SET"
+    "  start = g.start - m.k * (60.0 / g.bpm),"
+    "  beat = (((CASE WHEN g.beat BETWEEN 1 AND m.bpb THEN g.beat ELSE 1 END) - 1 - m.k)"
+    "          % m.bpb + m.bpb) % m.bpb + 1 "
+    "FROM (SELECT s.track_id AS id, CAST(s.start / (60.0 / s.bpm) AS INTEGER) AS k,"
+    "             t.beats_per_bar AS bpb"
+    "      FROM grid_section AS s JOIN track AS t ON t.id = s.track_id"
+    "      WHERE s.idx = 0 AND s.start > 0) AS m "
+    "WHERE g.track_id = m.id AND g.idx = 0 AND m.k > 0;";
+
 static const char *const migrations[] = {
     schema_v1,          /* 0 -> 1 */
+    schema_v2,          /* 1 -> 2 */
 };
 
 /* ------------------------------------------------------------ statements */
@@ -523,6 +545,7 @@ static int check_identity(RXDb *db, int64_t *version)
 static int migrate(RXDb *db, int64_t version)
 {
     int64_t current = (int64_t)RX_ARRAY_ELEMS(migrations);
+    bool created = version == 0;
     while (version < current) {
         int ret = rx_db_begin(db);
         if (ret < 0)
@@ -551,7 +574,7 @@ static int migrate(RXDb *db, int64_t version)
             version = now;
             continue;
         }
-        if (version > 0)
+        if (!created)
             rx_info("%s: library upgraded to schema %lld", db->path, (long long)(version + 1));
         version++;
     }

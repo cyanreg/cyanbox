@@ -372,10 +372,14 @@ static int check(int idx)
             d += p;
         if (fabs(d) > 0.003)
             FAILF(" phase[%d] off by %.2f ms", s, d * 1e3);
-        /* Downbeat: the first section's start is a downbeat; a later
-         * section's start must be its own first downbeat when it numbers
-         * itself (beat 1), or continue the count onto it (beat 0). */
-        double bars = (g->start - truth.start[s]) / (4.0 * p);
+        /* Downbeat: the first section's first downbeat (its start is its
+         * first beat, numbered) is on a bar line; a later section's start
+         * must be its own first downbeat when it numbers itself (beat 1),
+         * or continue the count onto it (beat 0). */
+        double down = g->start;
+        if (s == 0)
+            down += ((5 - (g->beat ? g->beat : 1)) % 4) * p;
+        double bars = (down - truth.start[s]) / (4.0 * p);
         bool on_bar = fabs(bars - round(bars)) * 4.0 * p < 0.010;
         if (s == 0 && !on_bar)
             FAILF(" downbeat off by %.2f beats", (bars - round(bars)) * 4.0);

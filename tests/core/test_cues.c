@@ -78,7 +78,9 @@ static void test_cue_list(void)
 static void test_musical(void)
 {
     RXTrack *t = rx_track_new("/music/y.flac");
-    rx_grid_init(&t->grid, 0.5, 120.0);
+    /* A grid whose first beat is its downbeat at 0.5: a tempo edit pivots
+     * on the first section's start (rx_grid_init would start it at 0.0). */
+    rx_grid_add_section(&t->grid, 0.5, 120.0, 1);
 
     /* A cue a hair off bar 2 snaps onto it; a 4-beat loop measured on the grid. */
     RXCue c = cue(2.5 + 1e-9, -1);

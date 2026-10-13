@@ -19,12 +19,13 @@ static RXGrid grid(int nb, const RXTempoSection *s)
     return g;
 }
 
-/* One section, downbeat 0.5 s, 120 BPM: a pickup beat at 0.0 (beat 4). */
+/* One section, downbeat 0.5 s, 120 BPM: rx_grid_init starts it at its
+ * first beat at or after 0, a pickup at 0.0 (beat 4). */
 static void test_single(void)
 {
     RXGrid g;
     CHECK(rx_grid_init(&g, 0.5, 120.0) == 0);
-    CHECK(rx_grid_valid(&g));
+    CHECK(rx_grid_valid(&g) && g.sections[0].start == 0.0 && g.sections[0].beat == 4);
     CHECK(rx_grid_bpm(&g) == 120.0);
     CHECK(rx_grid_bpm_at(&g, 100.0) == 120.0);
     CHECK(rx_grid_section_at(&g, -1.0) == 0);
@@ -66,7 +67,7 @@ static void test_single(void)
     CHECK(rx_grid_quantize(&g, 0.249) == 0.0);
     CHECK(rx_grid_quantize(&g, 0.25) == 0.0);       /* a tie goes back */
     CHECK(rx_grid_quantize(&g, 100.26) == 100.5);
-    CHECK(rx_grid_quantize(&g, -0.3) == -0.5);      /* the grid extends back */
+    CHECK(rx_grid_quantize(&g, -0.3) == 0.0);       /* nothing before the first beat */
 
     /* Before/after with the 1 ms "at" tolerance. */
     CHECK(rx_grid_beat_before(&g, 1.0005) == 1.0);
@@ -194,6 +195,90 @@ static void test_first_section_beat(void)
     rx_grid_free(&b);
 }
 
+/* The first section's start is the grid's first beat: a track whose music
+ * starts at 0.72 s has no beat, no bar and nothing to snap to before it,
+ * while the index arithmetic runs on (a cue in the silence has an index). */
+static void test_grid_start(void)
+{
+    const double P = 60.0 / 134.0;
+    RXGrid g = grid(1, (const RXTempoSection[]) { { 0.72, 134.0, 1 } });
+    RXBeat *b;
+    int nb;
+    CHECK(rx_grid_beats(&g, 10.0, &b, &nb) == 0 && nb > 0);
+    CHECK(nb > 0 && b[0].time == 0.72 && b[0].number == 1);
+    free(b);
+
+    int bar = 7, beat = 7, number = 0;
+    rx_grid_bar_of(&g, 0.3, &bar, &beat);
+    CHECK(bar == 0 && beat == 0);
+    rx_grid_bar_of(&g, 0.72, &bar, &beat);
+    CHECK(bar == 1 && beat == 1);
+    CHECK(rx_grid_nearest_beat(&g, 0.3, &number) == 0.72 && number == 1);
+    CHECK(rx_grid_quantize(&g, 0.0) == 0.72);
+    CHECK(rx_grid_beat_before(&g, 0.3) == 0.3);
+    CHECK(rx_grid_beat_after(&g, 0.3) == 0.72);
+    CHECK(rx_grid_time_to_beat(&g, 0.72) == 0.0);
+    CHECK_NEAR(rx_grid_time_to_beat(&g, 0.72 - P), -1.0, 1e-12);
+    CHECK_NEAR(rx_grid_beat_to_time(&g, -1.0), 0.72 - P, 1e-12);
+    CHECK_NEAR(rx_grid_offset_beats(&g, 0.1, 2.0), 0.1 + 2.0 * P, 1e-12);
+    CHECK(rx_grid_bar_time(&g, 1, 1) == 0.72);
+
+    /* A first beat that is beat 3: a pickup bar 0, bar 1 two beats on. */
+    rx_grid_free(&g);
+    g = grid(1, (const RXTempoSection[]) { { 1.0, 120.0, 3 } });
+    CHECK(rx_grid_beats(&g, 4.0, &b, &nb) == 0 && nb == 6);
+    static const int numbers[] = { 3, 4, 1, 2, 3, 4 };
+    for (int i = 0; i < nb && i < 6; i++)
+        CHECK(b[i].time == 1.0 + 0.5 * i && b[i].number == numbers[i]);
+    free(b);
+    rx_grid_bar_of(&g, 1.2, &bar, &beat);
+    CHECK(bar == 0 && beat == 3);
+    rx_grid_bar_of(&g, 2.0, &bar, &beat);
+    CHECK(bar == 1 && beat == 1);
+    CHECK(rx_grid_time_to_beat(&g, 2.0) == 0.0 && rx_grid_time_to_beat(&g, 1.0) == -2.0);
+    rx_grid_free(&g);
+}
+
+/* rx_grid_start_at moves the first beat forward by whole beats: every beat
+ * from there on keeps its time and number, a later section its count. */
+static void test_start_at(void)
+{
+    const RXTempoSection secs[] = { { 0.0, 120.0, 1 }, { 8.0, 125.0, 0 } };
+    RXGrid ref = grid(2, secs);
+    RXBeat *rb;
+    int nr;
+    rx_grid_beats(&ref, 20.0, &rb, &nr);
+
+    static const double at[] = { -1.0, 0.0, 1.7, 2.6, 7.9, 9.0 };
+    static const double first[] = { 0.0, 0.0, 2.0, 3.0, 8.0, 9.44 };
+    static const int number[] = { 1, 1, 1, 3, 1, 4 };
+    for (size_t i = 0; i < RX_ARRAY_ELEMS(at); i++) {
+        RXGrid g = grid(2, secs);
+        CHECK(rx_grid_start_at(&g, at[i]) == 0);
+        CHECK(rx_grid_valid(&g));
+        CHECK_NEAR(g.sections[0].start, first[i], 1e-12);
+        CHECK(g.sections[0].beat == number[i]);
+        CHECK(g.nb_sections == (first[i] < 8.0 ? 2 : 1));
+        RXBeat *b;
+        int nb;
+        rx_grid_beats(&g, 20.0, &b, &nb);
+        int j = 0;
+        while (j < nr && rb[j].time < first[i] - 1e-9)
+            j++;
+        CHECK(nb == nr - j);
+        for (int k = 0; k < nb && j + k < nr; k++)
+            CHECK(fabs(b[k].time - rb[j + k].time) < 1e-12 && b[k].number == rb[j + k].number);
+        free(b);
+        /* Bar 1 is the first downbeat at or after the new start. */
+        int bar, beat;
+        rx_grid_bar_of(&g, first[i], &bar, &beat);
+        CHECK(beat == number[i] && bar == (number[i] == 1 ? 1 : 0));
+        rx_grid_free(&g);
+    }
+    free(rb);
+    rx_grid_free(&ref);
+}
+
 static void test_edits(void)
 {
     RXGrid g;
@@ -202,9 +287,10 @@ static void test_edits(void)
     int nb0, nb1;
     rx_grid_beats(&g, 20.0, &before, &nb0);
 
-    /* Set downbeat on the first section moves its start onto the beat. */
+    /* Set downbeat on the first section moves its count, not its start
+     * (the grid's first beat): 0.0 becomes the beat three before 1.5. */
     rx_grid_set_downbeat(&g, 1.4);
-    CHECK(g.nb_sections == 1 && g.sections[0].start == 1.5 && g.sections[0].beat == 1);
+    CHECK(g.nb_sections == 1 && g.sections[0].start == 0.0 && g.sections[0].beat == 2);
     int bar, beat;
     rx_grid_bar_of(&g, 1.5, &bar, &beat);
     CHECK(bar == 1 && beat == 1);
@@ -236,11 +322,14 @@ static void test_edits(void)
     CHECK(g.nb_sections == 1);
     CHECK(rx_grid_merge_at(&g, 5.0) == RX_ERROR(ENOENT));
 
-    /* A split before the first section's start becomes the first. */
+    /* A split before the grid's first beat is at that beat: the first
+     * section, nothing to split. One inside it changes nothing either. */
     free(before);
     rx_grid_beats(&g, 20.0, &before, &nb0);
     idx = rx_grid_split_at(&g, -1.0);
-    CHECK(idx == 0 && g.nb_sections == 2);
+    CHECK(idx == 0 && g.nb_sections == 1);
+    idx = rx_grid_split_at(&g, 3.1);
+    CHECK(idx == 1 && g.nb_sections == 2 && g.sections[1].start == 3.0);
     rx_grid_beats(&g, 20.0, &after, &nb1);
     CHECK(nb0 == nb1);
     for (int i = 0; i < nb0 && i < nb1; i++)
@@ -368,7 +457,7 @@ static void test_same_hit(void)
     RXBeat *b;
     int nb;
     CHECK(rx_grid_beats(&g, 12.0, &b, &nb) == 0);
-    CHECK(nb == 25);
+    CHECK(nb == 24);
     int close = 0, at = -1;
     for (int i = 0; i < nb; i++) {
         if (i && b[i].time - b[i - 1].time < 0.25)
@@ -376,8 +465,8 @@ static void test_same_hit(void)
         if (b[i].time == 10.502)
             at = i;
     }
-    CHECK(!close && at == 21);
-    if (at == 21) {
+    CHECK(!close && at == 20);
+    if (at == 20) {
         CHECK(b[at - 1].time == 10.0 && b[at - 1].number == 4 && b[at - 1].bpm == 120.0);
         CHECK(b[at].number == 1 && b[at].bpm == 125.0);
     }
@@ -397,8 +486,8 @@ static void test_same_hit(void)
     /* Half a period after the beat: two hits, both kept. */
     rx_grid_free(&g);
     g = grid(2, (const RXTempoSection[]) { { 0.5, 120.0, 1 }, { 10.75, 125.0, 0 } });
-    CHECK(rx_grid_beats(&g, 12.0, &b, &nb) == 0 && nb == 25);
-    CHECK(nb == 25 && b[21].time == 10.5 && b[22].time == 10.75);
+    CHECK(rx_grid_beats(&g, 12.0, &b, &nb) == 0 && nb == 24);
+    CHECK(nb == 24 && b[20].time == 10.5 && b[21].time == 10.75);
     free(b);
     rx_grid_free(&g);
 }
@@ -409,6 +498,8 @@ int main(void)
     test_sections();
     test_restart();
     test_first_section_beat();
+    test_grid_start();
+    test_start_at();
     test_edits();
     test_exact();
     test_absurd_tempo();
