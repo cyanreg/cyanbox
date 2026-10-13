@@ -510,7 +510,9 @@ static void row_cells(UiState *ui, RXTrack *t, int row, float row_h, const uint6
             break;
         }
         case COL_BPM: {
-            double bpm = rx_grid_bpm(&t->grid);
+            // A dynamic grid's typical tempo (the stick's), else the first section's.
+            double bpm = rx_grid_dynamic(&t->grid) ? rx_grid_bpm_median(&t->grid, t->duration)
+                                                   : rx_grid_bpm(&t->grid);
             if (bpm > 0)
                 snprintf(buf, sizeof(buf), "%.2f", bpm);
             cell_text(ui, p, w, row_h, bpm > 0 ? buf : DASH, bpm > 0 ? text : UI_FAINT, true);
@@ -1023,7 +1025,14 @@ void ui_info_panel(UiState *ui, ImVec2 size)
         fact("Bit rate", buf);
     }
     fact("Duration", ui_fmt_time(t->duration, buf, sizeof(buf), true));
-    if (rx_track_analysed(t)) {
+    if (rx_track_analysed(t) && rx_grid_dynamic(&t->grid)) {
+        int nm = 0;
+        for (int i = 0; i < t->grid.nb_sections; i++)
+            nm += t->grid.sections[i].measured;
+        snprintf(buf, sizeof(buf), "%.2f BPM, dynamic (%d beats), %.2f",
+                 rx_grid_bpm_median(&t->grid, t->duration), nm, t->grid_confidence);
+        fact("Grid", buf);
+    } else if (rx_track_analysed(t)) {
         snprintf(buf, sizeof(buf), "%.2f BPM, %d section%s, %.2f", rx_grid_bpm(&t->grid),
                  t->grid.nb_sections,
                  t->grid.nb_sections == 1 ? "" : "s", t->grid_confidence);

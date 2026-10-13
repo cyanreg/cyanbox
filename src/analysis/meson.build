@@ -11,6 +11,7 @@ rx_analysis_sources = files(
     'downbeat.c',
     'beats.c',
     'start.c',
+    'walk.c',
     'analysis.c',
     # waveforms and key
     'waveform.c',

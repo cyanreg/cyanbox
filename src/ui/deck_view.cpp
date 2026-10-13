@@ -1368,7 +1368,9 @@ static void grid_strip(UiState *ui, int deck, ImVec2 a, ImVec2 b, const RXDeckSt
         apply_bpm(ui, deck, atof(ud->bpm_buf), pos);
         ud->bpm_active = false;
     }
-    ui_tooltip("BPM of the section under the playhead (Enter applies)");
+    ui_tooltip(grid && rx_grid_dynamic(&t->grid)
+                   ? "Local BPM at the playhead; Enter straightens the dynamic grid from here at this tempo"
+                   : "BPM of the section under the playhead (Enter applies)");
     x += PX(76) + PX(6);
 
     struct Tool { const char *label; const char *tip; float w; bool enabled; bool lit; UiIcon icon; };
@@ -1385,10 +1387,13 @@ static void grid_strip(UiState *ui, int deck, ImVec2 a, ImVec2 b, const RXDeckSt
          UI_ICON_NONE },
         { "SPLIT", "A new tempo section at the nearest beat", 58, grid && !locked, false,
          UI_ICON_NONE },
-        { "MERGE", "Remove the section boundary nearest the playhead", 62,
-          grid && !locked && t->grid.nb_sections > 1, false, UI_ICON_NONE },
-        { "2", "Double the BPM of this section", 36, grid && !locked, false, UI_ICON_CROSS },
-        { "2", "Halve the BPM of this section", 36, grid && !locked, false, UI_ICON_DIVIDE },
+        { "MERGE", "Remove the section boundary nearest the playhead (in a dynamic passage: "
+                   "straighten it)", 62, grid && !locked && t->grid.nb_sections > 1, false,
+          UI_ICON_NONE },
+        { "2", "Double the BPM of this section (a dynamic passage: a beat at every midpoint)", 36,
+          grid && !locked, false, UI_ICON_CROSS },
+        { "2", "Halve the BPM of this section (a dynamic passage: every other beat)", 36,
+          grid && !locked, false, UI_ICON_DIVIDE },
         { "LOCK", "Lock the grid: analysis will not replace it", 54, has, locked, UI_ICON_NONE },
         { "RE-ANALYSE", "Analyse this track again (a locked grid is kept)", 96, has, false,
          UI_ICON_NONE },
@@ -1435,8 +1440,14 @@ static void grid_strip(UiState *ui, int deck, ImVec2 a, ImVec2 b, const RXDeckSt
         if (rx_grid_merge_at(&t->grid, pos) >= 0)
             ui_grid_edited(ui, deck);
         break;
-    case 7: apply_bpm(ui, deck, rx_grid_bpm_at(&t->grid, pos) * 2, pos); break;
-    case 8: apply_bpm(ui, deck, rx_grid_bpm_at(&t->grid, pos) / 2, pos); break;
+    case 7:
+        if (rx_track_analysed(t) && rx_grid_double_at(&t->grid, pos) >= 0)
+            ui_grid_edited(ui, deck);
+        break;
+    case 8:
+        if (rx_track_analysed(t) && rx_grid_halve_at(&t->grid, pos) >= 0)
+            ui_grid_edited(ui, deck);
+        break;
     case 9:
         t->grid_locked = !t->grid_locked;
         rx_app_save_track(app, t);
@@ -1449,12 +1460,21 @@ static void grid_strip(UiState *ui, int deck, ImVec2 a, ImVec2 b, const RXDeckSt
         break;
     }
 
-    // What the analyser said, at the right end.
+    // What the analyser said, at the right end: the sections, or the
+    // measured beats of a dynamic grid.
     if (grid && x < b.x - PX(160)) {
         char info[96];
         int ns = t->grid.nb_sections;
-        snprintf(info, sizeof(info), "%d section%s \xC2\xB7 confidence %.2f%s", ns, ns == 1 ? "" : "s",
-                 t->grid_confidence, dv->nb_taps > 0 ? "" : "");
+        if (rx_grid_dynamic(&t->grid)) {
+            int nm = 0;
+            for (int i = 0; i < ns; i++)
+                nm += t->grid.sections[i].measured;
+            snprintf(info, sizeof(info), "dynamic grid, %d beats \xC2\xB7 confidence %.2f", nm,
+                     t->grid_confidence);
+        } else {
+            snprintf(info, sizeof(info), "%d section%s \xC2\xB7 confidence %.2f", ns,
+                     ns == 1 ? "" : "s", t->grid_confidence);
+        }
         if (dv->nb_taps > 0 && rx_time_us() - ud->tap_last_us < 10000000)
             snprintf(info, sizeof(info), "%d tap%s", dv->nb_taps, dv->nb_taps == 1 ? "" : "s");
         ui_text_right(ui, dl, nullptr, 11.5f, ImVec2(b.x - PX(8), y + (bh - PX(11.5f)) * 0.5f - PX(1)),

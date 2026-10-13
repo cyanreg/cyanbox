@@ -43,24 +43,20 @@
 #define NPROF RX_BEAT_NPROF
 
 /* The bass-note vote: where the bass's pitch class changes between the two
- * beats before and the two beats after, peaks only, normalised to sum 1. */
-static int bass_vote(const float *x, int64_t n, double t0, double period, double start,
-                     double end, double *score)
+ * beats before and the two beats after, peaks only, normalised to sum 1.
+ * The K beats are `times`, the first at position bpos0 of the bar. */
+static int bass_vote(const float *x, int64_t n, const double *times, int K, int bpos0,
+                     double *score)
 {
-    int k0 = (int)ceil((start - t0) / period), k1 = (int)floor((end - t0) / period);
-    int K = k1 - k0;
     if (K < 16)
         return 0;
-    double *times = malloc((size_t)K * sizeof(*times));
     float *c = malloc((size_t)K * 12 * sizeof(*c));
     double *nov = calloc(K, sizeof(*nov));
     int ret = 0;
-    if (!times || !c || !nov) {
+    if (!c || !nov) {
         ret = RX_ERROR(ENOMEM);
         goto end;
     }
-    for (int k = 0; k < K; k++)
-        times[k] = t0 + (k0 + k) * period;
     if ((ret = rx_bass_chroma(x, n, times, K, c)) < 0)
         goto end;
     for (int k = 2; k + 2 <= K; k++) {
@@ -79,11 +75,10 @@ static int bass_vote(const float *x, int64_t n, double t0, double period, double
     }
     for (int k = 3; k + 3 <= K && tot > 0.0; k++) {
         if (nov[k] > nov[k - 1] && nov[k] >= nov[k + 1])
-            score[((2 * (k0 + k)) % 8 + 8) % 8] += BASS_WEIGHT * nov[k] / tot;
+            score[((bpos0 + 2 * k) % 8 + 8) % 8] += BASS_WEIGHT * nov[k] / tot;
     }
 
 end:
-    free(times);
     free(c);
     free(nov);
     return ret;
@@ -95,11 +90,57 @@ int rx_downbeat_vote(const RXSpectrum *s, const float *x, int64_t n,
 {
     memset(out, 0, sizeof(*out));
     out->margin = 1.0;
-    const double fps = s->fps, hp = period / 2.0;
+    const double hp = period / 2.0;
 
     /* Half beats j0..j1 relative to t0, so that position = j mod 8. */
     int j0 = (int)ceil((start - t0) / hp), j1 = (int)floor((end - t0) / hp);
     int J = j1 - j0;
+    if (J < 32)
+        return 0;
+    /* The beats the bass vote reads: k0..k1 on the line. */
+    int k0 = (int)ceil((start - t0) / period), k1 = (int)floor((end - t0) / period);
+    int K = RX_MAX(k1 - k0, 0);
+
+    double *from = malloc((size_t)J * sizeof(*from));
+    double *to = malloc((size_t)J * sizeof(*to));
+    double *beat = malloc((size_t)RX_MAX(K, 1) * sizeof(*beat));
+    if (!from || !to || !beat) {
+        free(from);
+        free(to);
+        free(beat);
+        return RX_ERROR(ENOMEM);
+    }
+    for (int j = 0; j < J; j++) {
+        from[j] = t0 + (j0 + j) * hp;
+        to[j] = from[j] + hp;
+    }
+    for (int k = 0; k < K; k++)
+        beat[k] = t0 + (k0 + k) * period;
+
+    /* The beat where the music starts, if a beat is there. */
+    int start_pos = -1;
+    if (!isnan(start_vote)) {
+        double k = (start_vote - t0) / hp;
+        int kj = (int)lrint(k);
+        if (fabs(k - kj) < 0.2 && start_vote >= start - period && start_vote < end)
+            start_pos = ((kj % 8) + 8) % 8;
+    }
+    int ret = rx_downbeat_vote_times(s, x, n, from, to, J, ((j0 % 8) + 8) % 8, beat, K,
+                                     ((2 * k0) % 8 + 8) % 8, start_pos, out);
+    free(from);
+    free(to);
+    free(beat);
+    return ret;
+}
+
+int rx_downbeat_vote_times(const RXSpectrum *s, const float *x, int64_t n,
+                           const double *from, const double *to, int J, int pos0,
+                           const double *beat, int K, int bpos0, int start_pos,
+                           RXDownbeat *out)
+{
+    memset(out, 0, sizeof(*out));
+    out->margin = 1.0;
+    const double fps = s->fps;
     if (J < 32)
         return 0;
 
@@ -115,7 +156,7 @@ int rx_downbeat_vote(const RXSpectrum *s, const float *x, int64_t n,
 
     /* Profiles: mean log-mel per band group over each half beat. */
     for (int j = 0; j < J; j++) {
-        double a = t0 + (j0 + j) * hp, b = a + hp;
+        double a = from[j], b = to[j];
         int f0 = RX_MAX((int)ceil(a * fps), 0), f1 = RX_MIN((int)ceil(b * fps), s->nb_frames);
         float *p = prof + (size_t)j * NPROF;
         for (int f = f0; f < f1; f++) {
@@ -163,7 +204,7 @@ int rx_downbeat_vote(const RXSpectrum *s, const float *x, int64_t n,
             continue;
         for (int j = sc + 1; j + sc < J; j++) {
             if (nov[j] > nov[j - 1] && nov[j] >= nov[j + 1]) {
-                int pos = ((j0 + j) % 8 + 8) % 8;
+                int pos = ((pos0 + j) % 8 + 8) % 8;
                 score[pos] += nov[j] / tot;
             }
         }
@@ -171,7 +212,7 @@ int rx_downbeat_vote(const RXSpectrum *s, const float *x, int64_t n,
 
     /* The bass notes: a weaker vote, half a scale's worth (a bass riff
      * also moves inside the bar). */
-    int ret = bass_vote(x, n, t0, period, start, end, score);
+    int ret = bass_vote(x, n, beat, K, bpos0, score);
     if (ret < 0) {
         free(prof);
         free(cum);
@@ -180,12 +221,8 @@ int rx_downbeat_vote(const RXSpectrum *s, const float *x, int64_t n,
     }
 
     /* The beat where the music starts, if a beat is there. */
-    if (!isnan(start_vote)) {
-        double k = (start_vote - t0) / hp;
-        int kj = (int)lrint(k);
-        if (fabs(k - kj) < 0.2 && start_vote >= start - period && start_vote < end)
-            score[((kj % 8) + 8) % 8] += START_WEIGHT;
-    }
+    if (start_pos >= 0)
+        score[start_pos % 8] += START_WEIGHT;
 
     memcpy(out->scores, score, sizeof(score));
     int best = 0;

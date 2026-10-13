@@ -54,7 +54,9 @@ The full width of the window. Rows, top to bottom:
    10.5 px caps label over a 24 px value, centred on the row: key (in the
    players' key display, `device.key_display`: the classic name, or the
    Camelot code for alphanumeric), BPM as `128.00` with the
-   tempo-adjusted value in orange when the slider is not at 0, the time
+   tempo-adjusted value in orange when the slider is not at 0 (on a
+   dynamic grid, docs/BEATS.md section 6, the local tempo at the
+   playhead: the beat's own, so it moves with the music), the time
    (elapsed / remaining, starting as the players' time mode says,
    remaining by default; clicking or `T` toggles the running deck's), the
    bar.beat counter (`17.3`), and the `GRID` button.
@@ -86,7 +88,10 @@ The full width of the window. Rows, top to bottom:
    12 16 32 64 via mouse wheel over it or the `+`/`−` buttons at its right
    edge; `RST` resets to 12). Grid: beat lines in `#4C4C4C`, downbeats in
    `#9A9A9A` 1 px, with the bar number printed small above every downbeat
-   when ≥ 4 px apart; at 64 bars only downbeats are drawn. Cue markers as on
+   when ≥ 4 px apart; at 64 bars only downbeats are drawn. The lines are
+   the grid's beats as the stick gets them (`rx_grid_beats`), so a dynamic
+   grid's measured beats are drawn where they are, each interval its
+   own; the window's span in bars follows the local tempo. Cue markers as on
    the overview but taller; loop bands likewise; the current loop's in/out
    edges in solid orange. Dragging scrubs (the engine plays grains); the wheel
    zooms. Right-click opens the cue context menu (set memory cue here, set hot
@@ -181,6 +186,26 @@ The full width of the window. Rows, top to bottom:
    playhead), `×2`, `÷2` (double/halve the BPM of the section), `LOCK`
    (grid_locked toggle), `RE-ANALYSE`. Every change goes through
    `rx_ctl_grid_changed` and is saved at once. Cues set in bars follow.
+   The note at the strip's right end says `N sections · confidence` or,
+   for a dynamic grid, `dynamic grid, N beats · confidence`.
+
+   **On a dynamic grid** (a passage of measured beats, docs/BEATS.md
+   section 6) the tools do what they say of the beats themselves
+   (`rxbox/model.h`): the BPM field shows the local tempo at the
+   playhead, and Enter (or four taps) straightens the passage from the
+   beat at the playhead to its end at that tempo, "straight at this tempo
+   from here", the beats before it staying as measured; the nudges move
+   every beat; `SET DOWNBEAT` renumbers from the nearest measured beat;
+   `SPLIT` on a measured beat changes nothing (every beat of a passage is
+   its own section already); `MERGE` straightens the whole passage
+   through the least-squares line of its beats, held on its first beat
+   (what to do when the analyser bent a grid that should be straight);
+   `×2` puts a beat at every midpoint, each at twice its local tempo,
+   `÷2` keeps every other beat from the passage's first, the count going
+   on over the ones kept; `LOCK` keeps it from the analyser like any
+   grid. Quantize, beat jump, beat loops and cues set in bars follow the
+   measured beats one by one (the index is linear between two of them,
+   `rx_grid_time_to_beat`).
 
 The frame of the panel glows orange while playing. Loading a track: the
 panel shows "LOADING" over a dimmed waveform until the decode job returns,

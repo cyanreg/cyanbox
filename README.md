@@ -77,7 +77,11 @@ writes to the audio files.
 
 ## Analysis
 
-Adding a track analyses its beat grid, key and waveforms. After that,
+Adding a track analyses its beat grid, key and waveforms. Where the
+tempo moves (a live drummer, rubato, a ramp) the grid follows the music
+beat by beat, a dynamic grid as rekordbox's "dynamic" analysis makes, with
+the deck showing the local tempo; sequenced tracks get the usual straight
+sections (`docs/BEATS.md`, "Dynamic grids"). After that,
 `rxbox analyze` and Analysis → Analyse all unanalysed in the interface
 analyse only what a track lacks; `-f` (Re-analyse in the interface) does it
 all again. A locked grid is never replaced unless you name the track:

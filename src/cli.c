@@ -469,9 +469,14 @@ static void print_analysed(int n, int total, const RXTrack *t, const RXJobResult
     printf("[%d/%d] %s:", n, total, name);
     if (rx_grid_valid(&t->grid)) {
         char bpm[32];
-        printf(" %s BPM (confidence %.2f%s)", fmt_bpm(rx_grid_bpm(&t->grid), bpm, sizeof(bpm)),
+        bool dynamic = rx_grid_dynamic(&t->grid);
+        printf(" %s BPM (confidence %.2f%s)",
+               fmt_bpm(dynamic ? rx_grid_bpm_median(&t->grid, t->duration) : rx_grid_bpm(&t->grid),
+                       bpm, sizeof(bpm)),
                t->grid_confidence, t->grid_locked ? ", locked" : "");
-        if (t->grid.nb_sections > 1)
+        if (dynamic)
+            printf(", dynamic");
+        else if (t->grid.nb_sections > 1)
             printf(", %d sections", t->grid.nb_sections);
     } else {
         printf(" no grid");
@@ -1173,8 +1178,24 @@ static void show_track(const RXApp *app, const RXTrack *t)
             const RXTempoSection *s = &g->sections[i];
             int bar = 0, beat = 0;
             rx_grid_bar_of(g, s->start + 1e-6, &bar, &beat);
-            printf("  grid: %s BPM from %s (bar %d.%d)\n", fmt_bpm(s->bpm, bpm, sizeof(bpm)),
-                   rx_fmt_time(s->start, a, sizeof(a)), bar, beat);
+            if (!s->measured) {
+                printf("  grid: %s BPM from %s (bar %d.%d)\n", fmt_bpm(s->bpm, bpm, sizeof(bpm)),
+                       rx_fmt_time(s->start, a, sizeof(a)), bar, beat);
+                continue;
+            }
+            /* A dynamic passage: its beats, where they run, their tempos. */
+            int j = i;
+            double lo = s->bpm, hi = s->bpm;
+            while (j + 1 < g->nb_sections && g->sections[j + 1].measured) {
+                j++;
+                lo = fmin(lo, g->sections[j].bpm);
+                hi = fmax(hi, g->sections[j].bpm);
+            }
+            printf("  grid: dynamic, %d beats from %s (bar %d.%d) to %s, %s", j - i + 1,
+                   rx_fmt_time(s->start, a, sizeof(a)), bar, beat,
+                   rx_fmt_time(g->sections[j].start, b, sizeof(b)), fmt_bpm(lo, bpm, sizeof(bpm)));
+            printf("-%s BPM\n", fmt_bpm(hi, bpm, sizeof(bpm)));
+            i = j;
         }
         printf("  grid confidence %.2f%s\n", t->grid_confidence, t->grid_locked ? ", locked" : "");
         if (t->grid_flags) {

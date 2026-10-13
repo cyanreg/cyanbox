@@ -17,6 +17,8 @@
  *                             one line per file, for scanning a library
  *     --bpm-range LO HI       restrict the tempo range
  *     --no-sections           one section only
+ *     --no-dynamic            the best straight sections everywhere (no
+ *                             beat-by-beat grid)
  *     -v                      the analyser's diagnostics per file
  *
  *     --ffmpeg                decode with the ffmpeg command line instead of rx_decode
@@ -395,7 +397,11 @@ typedef struct Result {
     bool   ok;
     double duration;
     int    nb_secs;
-    RXTempoSection secs[MAX_SECS];
+    RXTempoSection secs[MAX_SECS];  /* the straight sections, and one entry per
+                                     * dynamic passage (measured, its first beat) */
+    RXGrid grid;                    /* the grid itself (empty when read from a CSV) */
+    int    nb_dynamic;              /* measured beats of the grid */
+    double bpm_lo, bpm_hi;          /* their local tempos' range */
     double downbeat;            /* first downbeat >= 0 */
     double confidence;
     unsigned flags;
@@ -458,6 +464,8 @@ static void grid_start(Result *r, const RXGrid *g)
 
 static double grid_bpm(const Result *r)
 {
+    if (r->grid.nb_sections)
+        return rx_grid_bpm_median(&r->grid, r->duration);
     return r->nb_secs ? r->secs[0].bpm : 0.0;
 }
 
@@ -473,6 +481,8 @@ static int sec_at(const Result *r, double t)
 /* Beat nearest to t on the grid. */
 static double nearest_beat(const Result *r, double t)
 {
+    if (r->grid.nb_sections)
+        return rx_grid_nearest_beat(&r->grid, t, NULL);
     const RXTempoSection *s = &r->secs[sec_at(r, t)];
     double p = 60.0 / s->bpm;
     return s->start + round((t - s->start) / p) * p;
@@ -482,6 +492,18 @@ static double nearest_beat(const Result *r, double t)
  * through sections with beat 0 and restarts at explicit beat numbers. */
 static double nearest_downbeat(const Result *r, double t)
 {
+    if (r->grid.nb_sections) {
+        /* The downbeat nearest t: a bar either side of t's bar. */
+        int bar, beat;
+        rx_grid_bar_of(&r->grid, t, &bar, &beat);
+        double best = NAN;
+        for (int b = RX_MAX(bar - 1, 1); b <= bar + 1; b++) {
+            double d = rx_grid_bar_time(&r->grid, b, 1);
+            if (isnan(best) || fabs(d - t) < fabs(best - t))
+                best = d;
+        }
+        return best;
+    }
     int si = sec_at(r, t);
     int num = r->secs[0].beat ? r->secs[0].beat : 1;
     for (int i = 0; i < si; i++) {
@@ -671,6 +693,33 @@ static void peak_reset(void)
 
 /* --all: the whole rx_analyse, as the app runs it (native channels;
  * waveforms and key too). Fills the beat result only. */
+/* The grid into the result: the straight sections as they are, a dynamic
+ * passage as one measured entry (its first beat) with the count and the
+ * tempo range of the measured beats kept beside. */
+static void take_grid(Result *r, const RXGrid *g)
+{
+    r->ok = g->nb_sections > 0;
+    r->nb_secs = 0;
+    r->nb_dynamic = 0;
+    r->bpm_lo = INFINITY;
+    r->bpm_hi = 0.0;
+    for (int i = 0; i < g->nb_sections; i++) {
+        const RXTempoSection *s = &g->sections[i];
+        if (s->measured) {
+            r->nb_dynamic++;
+            r->bpm_lo = fmin(r->bpm_lo, s->bpm);
+            r->bpm_hi = fmax(r->bpm_hi, s->bpm);
+            if (i > 0 && g->sections[i - 1].measured)
+                continue;
+        }
+        if (r->nb_secs < MAX_SECS)
+            r->secs[r->nb_secs++] = *s;
+    }
+    if (!r->nb_dynamic)
+        r->bpm_lo = r->bpm_hi = 0.0;
+    rx_grid_copy(&r->grid, g);
+}
+
 static int analyse_all(Job *job, Result *r, RXBeatResult *br)
 {
     RXAudio au = { 0 };
@@ -737,9 +786,7 @@ static void analyse_one(Job *job, int i)
         RXBeatResult br;
         if (analyse_all(job, r, &br) < 0)
             return;
-        r->ok = br.grid.nb_sections > 0;
-        r->nb_secs = RX_MIN(br.grid.nb_sections, MAX_SECS);
-        memcpy(r->secs, br.grid.sections, r->nb_secs * sizeof(*r->secs));
+        take_grid(r, &br.grid);
         r->closest = closest_beats(&br.grid, r->duration);
         r->confidence = br.confidence;
         r->flags = br.flags;
@@ -843,9 +890,7 @@ static void analyse_one(Job *job, int i)
         fprintf(stderr, "%s: analysis failed (%d)\n", r->path, ret);
         return;
     }
-    r->ok = br.grid.nb_sections > 0;
-    r->nb_secs = RX_MIN(br.grid.nb_sections, MAX_SECS);
-    memcpy(r->secs, br.grid.sections, r->nb_secs * sizeof(*r->secs));
+    take_grid(r, &br.grid);
     r->closest = closest_beats(&br.grid, r->duration);
     r->confidence = br.confidence;
     r->flags = br.flags;
@@ -909,13 +954,17 @@ static void *worker(void *arg)
 
 /* ----------------------------------------------------------------- CSV */
 
+/* A straight section as start:bpm:beat; a dynamic passage as
+ * D:start:bpm:beat (its first beat), and the count and tempo range of
+ * all measured beats go in their own columns. */
 static void sections_str(const Result *r, char *buf, size_t size)
 {
     buf[0] = 0;
     for (int i = 0; i < r->nb_secs; i++) {
         char tmp[64];
-        snprintf(tmp, sizeof(tmp), "%s%.5f:%.4f:%d", i ? "|" : "", r->secs[i].start,
-                 r->secs[i].bpm, r->secs[i].beat);
+        snprintf(tmp, sizeof(tmp), "%s%s%.5f:%.4f:%d", i ? "|" : "",
+                 r->secs[i].measured ? "D:" : "", r->secs[i].start, r->secs[i].bpm,
+                 r->secs[i].beat);
         strncat(buf, tmp, size - strlen(buf) - 1);
     }
 }
@@ -945,7 +994,8 @@ static void write_csv(const char *fn, const Result *res, int nb)
     fprintf(f, "path,duration,bpm,sections,downbeat,confidence,flags,music_start,ms,tag_bpm,"
                "start_kind,audible,floor_db,loud_db,rise,first_beat,first_number,first_down,"
                "cue,start_section,start_kick,start_struct,start_hit,start_half_beat,start_off,"
-               "start_t0,start_period,start_scores,jump_db,start_kick_ratio\n");
+               "start_t0,start_period,start_scores,jump_db,start_kick_ratio,dynamic_beats,"
+               "dynamic_bpm_lo,dynamic_bpm_hi\n");
     for (int i = 0; i < nb; i++) {
         const Result *r = &res[i];
         if (!r->ok)
@@ -964,7 +1014,8 @@ static void write_csv(const char *fn, const Result *res, int nb)
                 r->start_t0, r->start_period);
         for (int k = 0; k < 8; k++)
             fprintf(f, "%s%.4f", k ? ";" : "", r->start_scores[k]);
-        fprintf(f, ",%.1f,%.3f\n", r->jump_db, r->start_kick_ratio);
+        fprintf(f, ",%.1f,%.3f,%d,%.3f,%.3f\n", r->jump_db, r->start_kick_ratio, r->nb_dynamic,
+                r->bpm_lo, r->bpm_hi);
     }
     fclose(f);
 }
@@ -1042,6 +1093,10 @@ static int read_csv(const char *fn, Result **out)
         char *sp = fl[3];
         while (*sp && r->nb_secs < MAX_SECS) {
             RXTempoSection *s = &r->secs[r->nb_secs++];
+            if (sp[0] == 'D' && sp[1] == ':') {
+                s->measured = true;
+                sp += 2;
+            }
             s->start = strtod(sp, &sp);
             if (*sp == ':')
                 sp++;
@@ -1169,6 +1224,7 @@ static void usage(void)
     fprintf(stderr, "usage: rxbox-eval [-j N] [-l LIST] [--csv OUT] [--from CSV]\n"
                     "                  [--compare REF.csv]\n"
                     "                  [--dump-onsets BASE] [--bpm-range LO HI] [--no-sections]\n"
+                    "                  [--no-dynamic]\n"
                     "                  [--ffmpeg] [--all] [--what MASK] [--mem] [--starts]\n"
                     "                  [--cache DIR] [--device NAME] [--no-gpu]\n"
                     "                  [-v|-vv] FILE...\n");
@@ -1215,6 +1271,8 @@ int main(int argc, char **argv)
             job.what = (unsigned)atoi(argv[++i]);
         } else if (!strcmp(a, "--no-sections")) {
             job.opt.allow_sections = false;
+        } else if (!strcmp(a, "--no-dynamic")) {
+            job.opt.allow_dynamic = false;
         } else if (!strcmp(a, "--cache") && i + 1 < argc) {
             job.cache = argv[++i];
         } else if (!strcmp(a, "--device") && i + 1 < argc) {
@@ -1333,13 +1391,20 @@ int main(int argc, char **argv)
         tot_ms += r->ms;
         tot_dur += r->duration;
         char secs[256] = "";
-        if (r->nb_secs > 1) {
+        if (r->nb_secs > 1 || r->nb_dynamic) {
             for (int s = 0; s < r->nb_secs && strlen(secs) < 200; s++) {
                 char tmp[48];
-                snprintf(tmp, sizeof(tmp), " %.2f@%.2f/%d", r->secs[s].start, r->secs[s].bpm,
-                         r->secs[s].beat);
+                snprintf(tmp, sizeof(tmp), " %s%.2f@%.2f/%d", r->secs[s].measured ? "D" : "",
+                         r->secs[s].start, r->secs[s].bpm, r->secs[s].beat);
                 strcat(secs, tmp);
             }
+        }
+        if (r->nb_dynamic) {
+            char tmp[64];
+            snprintf(tmp, sizeof(tmp), "  [%d measured beats, %.1f-%.1f]", r->nb_dynamic,
+                     r->bpm_lo, r->bpm_hi);
+            if (strlen(secs) + strlen(tmp) < sizeof(secs))
+                strcat(secs, tmp);
         }
         printf("%8.3f  db %7.3f  conf %.2f  %5.0f ms  %-30s", grid_bpm(r), r->downbeat,
                r->confidence, r->ms, r->flagstr);
@@ -1393,7 +1458,11 @@ int main(int argc, char **argv)
                "full band %.1f %%; kick and full band agree on %d (%.0f %%)\n",
                ok, tot_ms / ok, tot_ms / (tot_dur / 60.0), conf / ok, 100.0 * sog / ok,
                100.0 * sfg / ok, agree, 100.0 * agree / ok);
-        printf("grids with two beats closer than half a period: %d\n", dups);
+        int dyn = 0;
+        for (int i = 0; i < nb; i++)
+            dyn += res[i].ok && res[i].nb_dynamic > 0;
+        printf("grids with two beats closer than half a period: %d; dynamic grids: %d\n", dups,
+               dyn);
         double dec = 0.0, fe = 0.0, dm = 0.0;
         int hits = 0;
         for (int i = 0; i < nb; i++) {
