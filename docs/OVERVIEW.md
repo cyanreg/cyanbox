@@ -57,7 +57,8 @@ What is worth taking from it (facts, not code; it is GPL):
   Nexus firmware rejects a preview with a zero column.
 - rekordbox's complete 64-entry hot-cue colour palette
   (`crates/rbl-anlz/src/cues.rs`, `DEVICE_PALETTE`), and the default pad colours.
-- The measured 3-band waveform colours and stacking scales (section 6).
+- The measured 3-band waveform colours and stacking scales (section 6), and
+  its three-band analysis, which rxbox writes as PWV7/PWV6 (section 3).
 - The rekordbox keyboard map and the deck's control semantics (memory cue
   tolerance, beat-jump sizes, zoom steps in bars).
 - Its beat-grid *rules* (kicks establish tempo, cuts need support, structure
@@ -66,7 +67,7 @@ What is worth taking from it (facts, not code; it is GPL):
 
 Where dj is right and rbxport is wrong, and rxbox follows dj: OneLibrary hot-cue
 `kind` numbering (A–H are 1–8), loop end for non-loops (repeat the start),
-colour waveform byte fits.
+the RGB and blue waveform byte fits (PWAV, PWV2, PWV3, PWV4, PWV5).
 
 ## 2. What rxbox is
 
@@ -118,6 +119,15 @@ All of the items the earlier session listed as worth importing are in scope:
    auto-load, declared cue counts match parsed ones.
 8. Optional background colour in `[device]`.
 9. Damaged MP3 frames play and analyse as silence rather than being dropped.
+10. The three-band waveform levels are rbxport's analysis
+    (`crates/rbl-analysis/src/waveform.rs`), not dj's fit: PWV7 is each band's
+    peak over the column through one-pole crossovers at 200 Hz and 2 kHz, at
+    the track's own level; PWV6 measures energy per band and normalises every
+    band to the same mean, 92 times the track's mean RMS. dj's levels drew
+    loud masters all cream, and fits to rekordbox's own bytes a blue waveform
+    with a thin cream core; rbxport's shows the blue lows, amber mids and
+    white highs on every kind of track, which is the picture the user wants
+    (docs/anlz.md 4.12, 4.13; `src/analysis/waveform.c`).
 
 Plus: an optional "maximum compatibility" transcode (AAC and hi-res FLAC to
 16/44.1 FLAC) at export, since nobody knows what players do with AAC priming.
@@ -245,8 +255,10 @@ palette is blue `#0055E1`, amber `#FFA600`, white, and the combination colours
 `#B4690A` (low+mid), `#D2DCFA` (low+high), `#FFF0D7` (mid+high), `#F5EBD7` (all);
 the stacked row preview uses the measured 128/256/128 scales; the BLUE palette
 shades a column from blue to cream by its whiteness bits; RGB columns are
-drawn saturated by their strongest channel. The 3-band detail is the default,
-as on a CDJ-3000; BLUE and RGB are selectable, since all three are on the stick.
+drawn saturated by their strongest channel. The 3-band levels drawn are
+rbxport's as well (section 3, item 10), so the same rules on the same bytes
+give rbxport's picture. The 3-band detail is the default, as on a CDJ-3000;
+BLUE and RGB are selectable, since all three are on the stick.
 
 Keyboard follows rekordbox's Export preset (space, C, M, I/O/R, 1–3 hot cues,
 4–9 beat loops, N/B/X memory cues, cursor jumps, Q quantize).
@@ -274,7 +286,7 @@ Implemented by subagents against the interfaces in `include/rxbox/`:
 | --- | --- |
 | core | model, grid arithmetic, SQLite library, playlists, settings, notation, thread pool |
 | audio | decode, probe, MP3 timeline rule, FLAC seek table, artwork |
-| analysis/waveforms | byte-faithful port of dj's waveform encoders |
+| analysis/waveforms | byte-faithful port of dj's waveform encoders; PWV6/PWV7 by rbxport's rules |
 | analysis/beats+key | the new grid analyser, key detection, evaluation harness over ~/Music |
 | formats+export | pdb, ANLZ, OneLibrary, settings, colours, plan, stick writer, inspect, stick sync |
 | player | PipeWire, decks, controls, null backend |

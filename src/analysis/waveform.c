@@ -21,7 +21,7 @@
  * column for the detail, and for the overview energy measures normalised
  * per band to the track's loudness. See "PWV7" and "PWV6" below. They
  * replace two rounds of fits to rekordbox's own bytes, whose high band is
- * thin (its mean a seventh of the low band's in PWV7): drawn, that is a blue
+ * thin (its mean 0.13 of the low band's in PWV7): drawn, that is a blue
  * waveform with a thin cream core, and the user prefers rbxport's picture,
  * where the blue lows, amber mids and white highs all show on every kind of
  * track.
@@ -493,9 +493,9 @@ int rx_waveforms_compute(const float *mono, int64_t nb_samples, int rate, RXWave
      * then halved into PWV7's seven bits (encode.rs's pwv7(): "the detail
      * uses the full seven-bit range"). So a full-scale peak is 127 and a
      * track is drawn at its own loudness, where rekordbox's PWV7 reaches
-     * 126..127 in all three bands on every track measured (rekordbox
-     * 6.6.1's two demo tracks in rekordcrate's data/complete_export; 80
-     * tracks in rbxport's src/canvas/waveform.ts).
+     * 126..127 in every band of rekordbox 6.6.1's two demo tracks
+     * (rekordcrate's data/complete_export) and 127 on all 80 tracks rbxport
+     * measured (src/canvas/waveform.ts).
      *
      * Band means over the track, PWV7 low | mid | high, format version 3
      * (fitted to rekordbox's bytes) -> this, on lines of
