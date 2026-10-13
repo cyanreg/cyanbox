@@ -17,9 +17,12 @@
  *    behind a library-wide analysis.
  *    Request ids are per queue; each kind of request only ever goes to one
  *    of them.
- *  - A decode result's RXAudio is handed to the player: rx_deck_load takes
- *    it over on success (and releases the buffer it replaces only once the
- *    real-time thread has let go of it); on failure it stays ours to free.
+ *  - A decode result's packet store (or, for a file the store refuses, its
+ *    RXAudio decoded whole) is handed to the player: rx_deck_load_packets
+ *    takes it over on success (and releases what it replaces only once the
+ *    real-time thread and the deck's decoding thread have let go of it); on
+ *    failure it stays ours to free. The job only opens the store, a few
+ *    milliseconds, so LOADING shows for about as long as a frame takes.
  *  - The deck view's waveforms are its own copy, read from the library;
  *    their GPU uploads, the deck's artwork texture and the browser cache's
  *    textures and previews belong to this file and are released through
@@ -1092,24 +1095,37 @@ static void handle_decode(RXApp *app, RXJobResult *r)
 
     char name[256];
     track_name(t, name, sizeof(name));
-    if (r->err < 0 || !r->audio) {
+    if (r->err < 0 || (!r->packets && !r->audio)) {
         app->last_error_count++;
         rx_app_set_status(app, "Cannot load %s: %s", name,
                           strerror(r->err < 0 ? -r->err : EINVAL));
         return;
     }
 
-    /* The player owns the buffer from here (the job malloc'd it, as the
-     * player's default release wants); on failure it stays ours. Loading
-     * replaces what the deck plays, so the old track goes only once the
-     * new one is in: a player that cannot take it (its command queue full
-     * while the output stalls) keeps the track it has. */
-    RXAudio *audio = r->audio;
-    r->audio = NULL;
-    int ret = rx_deck_load(app->player, deck, audio, rx_grid_valid(&t->grid) ? &t->grid : NULL);
+    /* The player owns the packet store, or the buffer decoded whole, from
+     * here (the job malloc'd it, as the player's default release wants); on
+     * failure it stays ours. Loading replaces what the deck plays, so the
+     * old track goes only once the new one is in: a player that cannot
+     * take it (its command queue full while the output stalls) keeps the
+     * track it has. */
+    const RXGrid *grid = rx_grid_valid(&t->grid) ? &t->grid : NULL;
+    int ret;
+    if (r->packets) {
+        RXPackets *pk = r->packets;
+        r->packets = NULL;
+        ret = rx_deck_load_packets(app->player, deck, pk, grid);
+        if (ret < 0)
+            rx_packets_free(pk);
+    } else {
+        RXAudio *audio = r->audio;
+        r->audio = NULL;
+        ret = rx_deck_load(app->player, deck, audio, grid);
+        if (ret < 0) {
+            rx_audio_free(audio);
+            free(audio);
+        }
+    }
     if (ret < 0) {
-        rx_audio_free(audio);
-        free(audio);
         app->last_error_count++;
         rx_app_set_status(app, "Cannot load %s: %s", name, strerror(-ret));
         return;

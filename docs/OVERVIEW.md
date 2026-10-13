@@ -136,11 +136,11 @@ Plus: an optional "maximum compatibility" transcode (AAC and hi-res FLAC to
 
 ```
 src/core      model, grid arithmetic, the SQLite library (tracks, cues, waveforms, playlists, settings), notation
-src/audio     libavformat/libavcodec decode to memory on the players' timeline, probe, tags, artwork, MP3/FLAC scanners
+src/audio     libavformat/libavcodec decode to memory on the players' timeline, packet stores decoded on demand, probe, tags, artwork, MP3/FLAC scanners
 src/analysis  spectral front end (libavutil av_tx), onset, tempo, grid, downbeat, key, waveforms
 src/formats   export.pdb, ANLZ read/write, OneLibrary (sqlite3 + SQLCipher pages), My Settings, colours
 src/export    stick plan, writer, inspect, pull
-src/player    PipeWire stream, the player, lock-free command queue, cue/loop/quantize controls, MASTER TEMPO, null backend for tests
+src/player    PipeWire stream, the player, lock-free command queue, the decks' decoding threads, cue/loop/quantize controls, MASTER TEMPO, null backend for tests
 src/gpu       SDL3 window (Wayland), Vulkan device + VMA, swapchain, Wayland frame-callback pacing, ImGui glue, waveform shader
 src/ui        Dear ImGui screens (C++, as are only vendored code and the player's Signalsmith Stretch interface)
 src/cli.c     the subcommands
@@ -174,10 +174,19 @@ Decisions and why:
   weight as it moves by fractions of a pixel instead of flickering. The
   overview and the row previews, which do not scroll, keep each band's maximum
   over a pixel's columns. ImGui draws everything else.
-- **Whole track decoded into memory** for playback (float, native rate). No
-  seek inaccuracy, sample-exact loops, and the deck plays exactly the samples
-  the analyser saw, so grid and audio agree on MP3s too. Resampling and
-  varispeed are one cubic interpolator in the real-time callback.
+- **The track's packets in memory, decoded around the playhead** for
+  playback. Loading reads the file's audio packets into a packet store
+  (rxbox/audio.h), placed on the players' timeline, in a few milliseconds;
+  a thread of the deck's own decodes a window of 4 s behind and 8 s ahead of
+  the playhead, half a second at every cue point, and the target of every
+  jump as it is asked for, so cues, hot cues and loops play at once and a
+  click anywhere on the waveform a callback or two later. Decoding the whole
+  track first took one to five seconds per load and 450 MB for ten minutes
+  at 96 kHz. A jump decodes from enough packets before its target that the
+  samples are the analyser's (rx_decode's) exactly, for every codec but
+  HE-AAC: no seek inaccuracy, sample-exact loops, and grid and audio agree on
+  MP3s too. Resampling and varispeed are one cubic interpolator in the
+  real-time callback.
 - **MASTER TEMPO with Signalsmith Stretch** (MIT, a git submodule in
   `subprojects/`, read through meson's CMake module): the deck's varispeed
   output is shifted back by 1 / (tempo + bend). The shifter's 120 ms delay

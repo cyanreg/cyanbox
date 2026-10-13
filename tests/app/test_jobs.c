@@ -109,17 +109,29 @@ static void test_decode_and_artwork(const char *wav)
     if (r) {
         CHECK(r->kind == RX_JOB_DECODE && r->request == dec && r->track_id == 7 && r->deck == 0,
               "kind %d request %llu deck %d", r->kind, (unsigned long long)r->request, r->deck);
-        CHECK(r->err == 0 && r->audio, "err %s", strerror(-r->err));
-        if (r->audio) {
-            /* The file's own samples: no resampling, no downmix. */
-            const RXAudio *a = r->audio;
-            CHECK(a->rate == 48000, "rate %d", a->rate);
-            CHECK(a->channels == 2, "channels %d", a->channels);
-            CHECK(a->nb_frames == 12 * 48000, "%lld frames", (long long)a->nb_frames);
+        CHECK(r->err == 0 && r->packets && !r->audio, "err %s", strerror(-r->err));
+        if (r->packets) {
+            /* The file's packets, decoded as the deck plays them, at the
+             * file's own rate and channels: no resampling, no downmix. */
+            RXPackets *pk = r->packets;
+            CHECK(rx_packets_rate(pk) == 48000, "rate %d", rx_packets_rate(pk));
+            CHECK(rx_packets_channels(pk) == 2, "channels %d", rx_packets_channels(pk));
+            CHECK(rx_packets_length(pk, NULL) == 12 * 48000, "%lld frames",
+                  (long long)rx_packets_length(pk, NULL));
+            RXPacketDecoder *d = NULL;
+            float *x = malloc(sizeof(float) * 2 * 48000);
             float peak = 0;
-            for (int64_t i = 0; i < a->nb_frames * a->channels; i++)
-                peak = fmaxf(peak, fabsf(a->samples[i]));
+            if (x && rx_packets_decoder(pk, &d) >= 0) {
+                for (int64_t at = 0; at < 12 * 48000; at += 48000) {
+                    CHECK(rx_packets_decode(d, at, 48000, x, 2) == 48000, "decode at %lld",
+                          (long long)at);
+                    for (int i = 0; i < 2 * 48000; i++)
+                        peak = fmaxf(peak, fabsf(x[i]));
+                }
+            }
             CHECK(peak > 0.5f && peak <= 1.0f, "peak %f", peak);
+            rx_packets_decoder_free(d);
+            free(x);
         }
         rx_job_result_free(r);
     }

@@ -4,13 +4,25 @@
  * and the renderer that adds it to the mix.
  *
  * Everything here runs on the real-time thread and follows its rules: no
- * allocation, no locks, no logging, no system calls. The buffer is read,
+ * allocation, no locks, no logging, no system calls but the sem_post that
+ * wakes the deck's feed thread (it never blocks). The buffer is read,
  * never written; the owner keeps it alive until this deck has applied the
  * command that replaced it (see the release path in player.c). Voices keep
  * positions, never a pointer, so after the swap nothing reads the old
  * buffer; a load or unload still silences the de-click tail and the scrub
  * grains at once, or they would play the old track's positions out of the
  * new one.
+ *
+ * A deck playing a packet store reads its frames from the window its feed
+ * thread decodes (feed.c) instead of a whole buffer, every voice through
+ * fetch(): the interpolator's four frames, the de-click tail, the scrub
+ * grains and MASTER TEMPO's read-ahead. Frames not decoded yet (after a
+ * jump to a place far from the window and from every cue point) make the
+ * main voice hold: silent, its position kept, the fade in of the jump kept
+ * for when they come (a voice cut off by the hold fades in again); the
+ * tail and the grains play silence there. After each callback the deck
+ * tells the feed where it reads, and wakes it when it held or moved to a
+ * new chunk of the window.
  *
  * Varispeed and resampling are one step: the read position advances by
  * (tempo + bend) * track_rate / device_rate per output frame and every
@@ -125,14 +137,32 @@ static inline float at(const RXDeckRT *d, int64_t i, int ch)
     return d->samples[i * d->channels + ch];
 }
 
+static inline bool loaded(const RXDeckRT *d)
+{
+    return d->samples || d->stream;
+}
+
 /* The track at position p; a mono track plays on both sides, and channels
- * past the second are ignored. */
-static void fetch(const RXDeckRT *d, RXPos p, float *l, float *r)
+ * past the second are ignored. False when a stream does not have the frames
+ * decoded (yet): every voice reads through here, so all of them see the
+ * same frames, and the same gaps. */
+static bool fetch(RXDeckRT *d, RXPos p, float *l, float *r)
 {
     int64_t i = p.i;
     float t = (float)p.f;
-    int nc = d->channels;
 
+    if (d->stream) {
+        float x[8];
+        if (!rx_player_stream_read(d->stream, d->nb_frames, i - 1, 4, x)) {
+            d->starved = true;
+            return false;
+        }
+        *l = hermite(x[0], x[2], x[4], x[6], t);
+        *r = hermite(x[1], x[3], x[5], x[7], t);
+        return true;
+    }
+
+    int nc = d->channels;
     if (i >= 1 && i + 2 < d->nb_frames) {
         const float *s = d->samples + (i - 1) * nc;
         *l = hermite(s[0], s[nc], s[2 * nc], s[3 * nc], t);
@@ -140,7 +170,7 @@ static void fetch(const RXDeckRT *d, RXPos p, float *l, float *r)
             *r = hermite(s[1], s[nc + 1], s[2 * nc + 1], s[3 * nc + 1], t);
         else
             *r = *l;
-        return;
+        return true;
     }
 
     *l = hermite(at(d, i - 1, 0), at(d, i, 0), at(d, i + 1, 0), at(d, i + 2, 0), t);
@@ -148,6 +178,7 @@ static void fetch(const RXDeckRT *d, RXPos p, float *l, float *r)
         *r = hermite(at(d, i - 1, 1), at(d, i, 1), at(d, i + 1, 1), at(d, i + 2, 1), t);
     else
         *r = *l;
+    return true;
 }
 
 /* ---------------------------------------------------------------- voices */
@@ -216,7 +247,7 @@ static void seek(RXDeckRT *d, double frames, int rate)
 
 static bool can_play(const RXDeckRT *d)
 {
-    return !d->playing && d->samples && d->pos.i < d->nb_frames;
+    return !d->playing && loaded(d) && d->pos.i < d->nb_frames;
 }
 
 static void play(RXDeckRT *d, int rate)
@@ -366,6 +397,7 @@ static void mt_cut(RXDeckRT *d)
 
 void rx_player_deck_apply(RXDeckRT *d, const RXCmd *cmd, int rate)
 {
+    d->out_rate = rate;
     switch (cmd->type) {
     case RX_CMD_LOAD:
     case RX_CMD_UNLOAD:
@@ -377,9 +409,13 @@ void rx_player_deck_apply(RXDeckRT *d, const RXCmd *cmd, int rate)
         silence_voices(d);
         mt_cut(d);
         d->samples      = cmd->type == RX_CMD_LOAD ? cmd->samples : NULL;
+        d->stream       = cmd->type == RX_CMD_LOAD ? cmd->stream : NULL;
         d->channels     = cmd->type == RX_CMD_LOAD ? cmd->channels : 0;
         d->rate         = cmd->type == RX_CMD_LOAD ? cmd->rate : 0;
         d->nb_frames    = cmd->type == RX_CMD_LOAD ? cmd->nb_frames : 0;
+        d->length_final = !d->stream;
+        d->posted_chunk = -1;
+        d->holding      = false;
         d->pos          = (RXPos) { 0 };
         d->playing      = false;
         d->bend         = 0.0;
@@ -456,7 +492,7 @@ void rx_player_deck_apply(RXDeckRT *d, const RXCmd *cmd, int rate)
         d->loop_enabled = false;
         break;
     case RX_CMD_SCRUB_BEGIN:
-        if (d->scrubbing || !d->samples)
+        if (d->scrubbing || !loaded(d))
             break;
         if (d->playing)
             mt_touch(d);
@@ -521,28 +557,39 @@ static void advance(RXDeckRT *d, double inc)
 }
 
 /* The deck's own sound for one frame: the main voice, faded in after a
- * start or a jump, and the de-click tail. */
+ * start or a jump, and the de-click tail. A main voice whose frames are
+ * not decoded yet holds where it is, silent, its fade in kept for when
+ * they come (a voice cut off by the hold fades in again); the tail plays
+ * silence for frames that are not there. */
 static void voice(RXDeckRT *d, double inc, float *l, float *r)
 {
     *l = 0.0f;
     *r = 0.0f;
 
     if (d->playing) {
-        fetch(d, d->pos, l, r);
-        if (d->fade_in > 0) {
-            float e = 1.0f - (float)d->fade_in / d->fade_len;
-            *l *= e;
-            *r *= e;
-            d->fade_in--;
+        if (fetch(d, d->pos, l, r)) {
+            if (d->holding && !d->fade_in)
+                start_fade_in(d, d->out_rate);
+            d->holding = false;
+            if (d->fade_in > 0) {
+                float e = 1.0f - (float)d->fade_in / d->fade_len;
+                *l *= e;
+                *r *= e;
+                d->fade_in--;
+            }
+            advance(d, inc);
+        } else {
+            *l = *r = 0.0f;
+            d->holding = true;
         }
-        advance(d, inc);
     }
 
     if (d->tail_left > 0) {
         float sl, sr, e = (float)d->tail_left / d->tail_len;
-        fetch(d, d->tail_pos, &sl, &sr);
-        *l += sl * e;
-        *r += sr * e;
+        if (fetch(d, d->tail_pos, &sl, &sr)) {
+            *l += sl * e;
+            *r += sr * e;
+        }
         rx_pos_add(&d->tail_pos, d->tail_inc);
         d->tail_left--;
     }
@@ -582,9 +629,10 @@ static void grains(RXDeckRT *d, float *l, float *r, int glen, double ratio, floa
             continue;
         float w = 0.5f - 0.5f * cosf(2.0f * (float)M_PI * g->age / g->len);
         float sl, sr;
-        fetch(d, g->pos, &sl, &sr);
-        gl += sl * w;
-        gr += sr * w;
+        if (fetch(d, g->pos, &sl, &sr)) {
+            gl += sl * w;
+            gr += sr * w;
+        }
         rx_pos_add(&g->pos, ratio);
         if (++g->age >= g->len)
             g->len = 0;
@@ -693,6 +741,17 @@ void rx_player_deck_render(RXDeckRT *d, float *out, int frames, int rate)
 {
     if (frames <= 0)
         return;
+    d->out_rate = rate;
+
+    /* A stream's length is the container's until its index is complete. */
+    if (d->stream && !d->length_final) {
+        bool exact;
+        int64_t len = rx_packets_length(d->stream->pk, &exact);
+        if (exact) {
+            d->nb_frames = len;
+            d->length_final = true;
+        }
+    }
 
     RXDeckMT *m = &d->mt;
     if (m->restart)
@@ -701,7 +760,7 @@ void rx_player_deck_render(RXDeckRT *d, float *out, int frames, int rate)
     float decay = expf(-frames / (RX_LEVEL_RELEASE_SECONDS * rate));
     float peak_l = 0.0f, peak_r = 0.0f;
 
-    if (d->samples) {
+    if (loaded(d)) {
         double inc   = increment(d, rate);
         double ratio = (double)d->rate / rate;
         int    glen  = (int)(rate * RX_GRAIN_SECONDS);
@@ -760,4 +819,23 @@ void rx_player_deck_render(RXDeckRT *d, float *out, int frames, int rate)
         d->level_l = 0.0f;
     if (d->level_r < 1e-6f)
         d->level_r = 0.0f;
+}
+
+void rx_player_deck_signal(RXDeckRT *d)
+{
+    RXStream *s = d->stream;
+    if (!s)
+        return;
+    int64_t at = d->pos.i;
+    atomic_store_explicit(&s->playhead, at, memory_order_relaxed);
+    atomic_store_explicit(&s->starved, d->starved, memory_order_relaxed);
+    /* sem_post neither blocks nor allocates (it is even async-signal-safe):
+     * a futex wake when the feed sleeps. */
+    int64_t c = at / RX_CHUNK;
+    if (d->starved || c != d->posted_chunk) {
+        if (d->wake)
+            sem_post(d->wake);
+        d->posted_chunk = c;
+    }
+    d->starved = false;
 }

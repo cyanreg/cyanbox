@@ -25,8 +25,11 @@
  * The analyse job decodes mono: every stage of the analysis works on the
  * mean of the channels (dj's decode_player did the same), and a mono buffer
  * halves the memory of the 11 or so decodes running at once. The decode job
- * for a deck keeps the native rate and channels, so the player gets the
- * file's own samples on the players' timeline. The artwork job also makes
+ * for a deck decodes nothing: it opens the track's packet store
+ * (rx_packets_open, a few milliseconds), which the deck decodes as it plays,
+ * at the file's own rate and channels on the players' timeline; only a
+ * file the store refuses (Matroska) is decoded whole, as every track was
+ * before, which took one to five seconds. The artwork job also makes
  * the 240 px JPEG thumbnail the library stores, so the owner thread never
  * encodes.
  *
@@ -217,11 +220,20 @@ static int run_analyse(Job *job, RXJobResult *r)
 
 static int run_decode(Job *job, RXJobResult *r)
 {
+    RXPackets *pk;
+    int ret = rx_packets_open(job->path, &pk);
+    if (ret >= 0) {
+        r->packets = pk;
+        return 0;
+    }
+    if (ret != RX_ERROR(ENOTSUP))
+        return ret;
+
     RXAudio *audio = calloc(1, sizeof(*audio));
     if (!audio)
         return RX_ERROR(ENOMEM);
 
-    int ret = rx_decode(job->path, 0, 0, audio);
+    ret = rx_decode(job->path, 0, 0, audio);
     if (ret < 0) {
         free(audio);
         return ret;
@@ -653,6 +665,7 @@ void rx_job_result_free(RXJobResult *r)
         rx_audio_free(r->audio);
         free(r->audio);
     }
+    rx_packets_free(r->packets);
     free(r->rgba);
     free(r->jpeg);
     if (r->stick) {

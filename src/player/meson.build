@@ -11,9 +11,10 @@ rx_stretch_lib = static_library('rx_stretch',
     override_options: [ 'optimization=2' ],
 )
 
-# player: PipeWire output, the deck, CDJ-style controls, null backend.
+# player: PipeWire output, the deck and its feed thread, CDJ-style controls,
+# null backend.
 rx_player_lib = static_library('rx_player',
-    files('player.c', 'deck.c', 'controls.c', 'nullout.c', 'pipewire.c'),
+    files('player.c', 'deck.c', 'feed.c', 'controls.c', 'nullout.c', 'pipewire.c'),
     include_directories: rx_inc,
     dependencies: [ rx_core_dep, pipewire_dep ],
     link_whole: rx_stretch_lib,
@@ -27,3 +28,12 @@ foreach t : [ 'engine', 'controls', 'pipewire' ]
         include_directories: rx_inc, dependencies: [ rx_player_dep ])
     test(t, exe, suite: 'player', workdir: meson.project_source_root(), timeout: 120)
 endforeach
+
+# Decks playing packet stores, with the feed thread decoding for real: the
+# test writes its WAV (and a FLAC with the ffmpeg CLI) under this directory.
+player_test_env = environment()
+player_test_env.set('RX_TEST_DIR', meson.current_build_dir() / 'test-media')
+test('stream',
+    executable('test_player_stream', files('../../tests/player/test_stream.c'),
+        include_directories: rx_inc, dependencies: [ rx_player_dep ]),
+    env: player_test_env, suite: 'player', workdir: meson.project_source_root(), timeout: 300)

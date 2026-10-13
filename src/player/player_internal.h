@@ -1,8 +1,9 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
 /* The player's private structures, shared by player.c (engine, command
- * ring, published state), deck.c (the real-time side of one deck),
- * pipewire.c and nullout.c (the two backends) and controls.c.
+ * ring, published state), deck.c (the real-time side of one deck), feed.c
+ * (the thread that decodes a deck's packet store), pipewire.c and
+ * nullout.c (the two backends) and controls.c.
  *
  * Three groups of state live in RXPlayer, and each has one writer:
  *  - RXDeckOwner: written and read only by the owner thread (the thread
@@ -12,10 +13,15 @@
  *  - RXDeckRT: written and read only by the real-time thread, which also
  *    applies the commands. The owner never touches it after creation.
  *  - RXDeckPub: written by the real-time thread, read by the owner through
- *    C11 atomics. The only shared mutable memory besides the ring.
- * The command ring is single-producer (owner) / single-consumer (real
- * time). Nothing on the real-time side allocates, locks, logs or does
- * I/O; everything it needs is allocated before it runs. */
+ *    C11 atomics.
+ * A deck playing a packet store adds a fourth party, its feed thread: the
+ * owner hands it the stream and the cue points under the feed's lock (an
+ * RXDeckFeed), the feed writes decoded frames into the stream's slots and
+ * the real-time thread reads them, both under the slots' sequence locks,
+ * and the real-time thread says where it reads through the stream's
+ * atomics. The command ring is single-producer (owner) / single-consumer
+ * (real time). Nothing on the real-time side allocates, locks, logs or
+ * does I/O; everything it needs is allocated before it runs. */
 
 #ifndef RXBOX_PLAYER_INTERNAL_H
 #define RXBOX_PLAYER_INTERNAL_H
@@ -23,6 +29,8 @@
 #include "rxbox/player.h"
 
 #include <math.h>
+#include <pthread.h>
+#include <semaphore.h>
 #include <stdalign.h>
 #include <stdatomic.h>
 
@@ -51,6 +59,17 @@
  * PipeWire hands it as many frames as its buffer has room for (pipewire.c,
  * on_process), so a longer one is cut up rather than refused. */
 #define RX_MT_CHUNK 1024
+
+/* A deck playing from a packet store (feed.c has the why): the window of
+ * decoded frames is cut in chunks of RX_CHUNK frames and spans
+ * RX_WINDOW_BEHIND seconds behind the read position and RX_WINDOW_AHEAD
+ * ahead of it; each cue point keeps RX_CUE_CACHE_SECONDS decoded from
+ * RX_CUE_CACHE_LEAD frames before it. */
+#define RX_CHUNK             4096
+#define RX_WINDOW_BEHIND     4.0
+#define RX_WINDOW_AHEAD      8.0
+#define RX_CUE_CACHE_SECONDS 0.5
+#define RX_CUE_CACHE_LEAD    16
 
 /* ------------------------------------------------------------- positions */
 
@@ -132,19 +151,82 @@ enum RXCmdType {
     RX_CMD_MASTER_TEMPO,    /* flag */
 };
 
+typedef struct RXStream RXStream;
+
 /* A command is copied into the ring by value. A load carries the buffer's
  * fields rather than the RXAudio pointer, so the real-time side never reads
- * the owner's struct. */
+ * the owner's struct; or the stream a packet store plays through. */
 typedef struct RXCmd {
     uint8_t      type;
     int8_t       deck;
     bool         flag;
     double       a, b;
     const float *samples;
+    RXStream    *stream;
     int          channels;
     int          rate;
     int64_t      nb_frames;
 } RXCmd;
+
+/* --------------------------------------------------------------- streams */
+
+/* Decoded frames the feed thread publishes and the real-time thread reads,
+ * under a sequence lock: the writer makes `seq` odd, writes `first` and the
+ * frames, then makes `seq` even with release order; a reader that finds the
+ * same even `seq` before and after copying, and the `first` it wanted,
+ * copied whole frames. Neither ever waits. */
+typedef struct RXSlot {
+    atomic_uint     seq;
+    _Atomic int64_t first;      /* track frame of data[0], -1 when it holds nothing */
+    _Atomic int64_t len;        /* frames it holds from there */
+    float          *data;       /* channels interleaved */
+} RXSlot;
+
+/* A packet store as a deck plays it. Made and freed by the owner; while
+ * loaded, the feed thread alone decodes into it and the real-time thread
+ * alone reads it, and the two talk through the atomics. */
+struct RXStream {
+    RXPackets *pk;              /* the feed thread's while loaded */
+    int        channels;        /* in the window: the track's first one or two */
+    int        rate;
+    int        nb_slots;        /* the window: chunk c in slot c % nb_slots */
+    RXSlot    *slots;
+    int64_t    cache_len;       /* frames a cue cache holds at most */
+    /* The cue caches, and last the jump slot: the target of the jump the
+     * owner sent last (`hint`), outside the window, whose slots the old
+     * window still holds until the real-time side gets there */
+    RXSlot     caches[RX_DECK_CUE_POINTS + 1];
+    float     *mem;
+    /* Real time -> feed */
+    _Atomic int64_t playhead;   /* the read position */
+    atomic_bool     starved;    /* the deck holds for frames the window lacks */
+    /* Owner -> feed: where a jump just sent will read, before the real-time
+     * side gets to it; -1 none */
+    _Atomic int64_t hint;
+};
+
+/* One deck's feed thread (feed.c). The owner hands it the stream to fill and
+ * the cue points under `lock`, and wakes it; it says which stream
+ * generation it has moved to, after which it no longer touches the streams
+ * before. */
+typedef struct RXDeckFeed {
+    pthread_t thread;
+    bool      started;
+    sem_t     wake;
+    bool      sem_ok;
+    pthread_mutex_t lock;
+    bool      lock_ok;
+    /* under lock */
+    RXStream *stream;
+    uint64_t  gen;
+    bool      quit;
+    int64_t   points[RX_DECK_CUE_POINTS];
+    int       nb_points;
+    uint64_t  points_gen;
+    /* published by the feed thread */
+    _Atomic uint64_t acked;     /* the generation it works on */
+    _Atomic int64_t  settled;   /* the read position everything is decoded around, or -1 */
+} RXDeckFeed;
 
 /* ------------------------------------------------------- real-time decks */
 
@@ -179,11 +261,18 @@ typedef struct RXDeckMT {
 } RXDeckMT;
 
 typedef struct RXDeckRT {
-    /* The buffer: owned by the owner side, read-only here. */
+    /* The buffer: owned by the owner side, read-only here. Or the stream. */
     const float *samples;
+    RXStream    *stream;
     int          channels;
     int          rate;
     int64_t      nb_frames;
+    bool         length_final;  /* a stream whose index is complete: nb_frames is its count */
+    sem_t       *wake;          /* the deck's feed thread */
+    int64_t      posted_chunk;  /* the read position's chunk the feed was last woken for */
+    bool         starved;       /* this callback missed frames not decoded yet */
+    bool         holding;       /* the main voice holds for them */
+    int          out_rate;      /* the device's, as of the last callback */
 
     RXPos  pos;
     bool   playing;
@@ -230,6 +319,7 @@ typedef struct RXDeckPub {
     _Atomic int64_t  time_us;       /* CLOCK_MONOTONIC at the callback */
     _Atomic int64_t  span_us;       /* duration of the block it rendered */
     atomic_bool      playing;
+    atomic_bool      waiting;       /* playing, holding for the feed */
     _Atomic uint64_t serial;
     atomic_uint      level_l, level_r;  /* float bits */
 } RXDeckPub;
@@ -239,13 +329,19 @@ typedef struct RXDeckSnap {
     double   speed;
     int64_t  time_us, span_us;
     bool     playing;
+    bool     waiting;
     uint64_t serial;
 } RXDeckSnap;
 
 /* ------------------------------------------------------------ owner side */
 
 typedef struct RXDeckOwner {
-    RXAudio *audio;             /* loaded buffer, NULL when empty */
+    RXAudio  *audio;            /* loaded buffer, NULL when empty */
+    RXStream *stream;           /* or the loaded stream */
+    int       rate;             /* of what is loaded */
+    int64_t   nb_frames;        /* its length (a stream's as last read) */
+    int64_t   points[RX_DECK_CUE_POINTS];   /* the cue points the feed has, in frames */
+    int       nb_points;
     RXGrid   grid;              /* copy of the grid given at load */
     uint64_t sent;              /* commands pushed for this deck */
     /* The latest position and playing state the owner asked for, valid
@@ -261,11 +357,14 @@ typedef struct RXDeckOwner {
     bool     master_tempo;      /* the deck's button: survives loads */
 } RXDeckOwner;
 
-/* A buffer the owner let go of, freed once its deck has applied `serial`. */
+/* A buffer or stream the owner let go of, freed once its deck has applied
+ * `serial` and the deck's feed has moved to generation `gen`. */
 typedef struct RXRelease {
-    RXAudio *audio;
-    int      deck;
-    uint64_t serial;
+    RXAudio  *audio;
+    RXStream *stream;
+    int       deck;
+    uint64_t  serial;
+    uint64_t  gen;
 } RXRelease;
 
 /* Backend state. */
@@ -290,6 +389,9 @@ struct RXPlayer {
     /* Real-time side. */
     RXDeckRT rt[RX_DECKS];
     float    master_gain, master_prev;
+
+    /* The decks' feed threads. */
+    RXDeckFeed feed[RX_DECKS];
 
     /* Published. */
     RXDeckPub   pub[RX_DECKS];
@@ -336,11 +438,34 @@ void rx_player_deck_mt_free(RXDeckRT *d);
 void rx_player_deck_apply(RXDeckRT *d, const RXCmd *cmd, int rate);
 /* Adds the deck's output to `out` with its gain and updates its meters. */
 void rx_player_deck_render(RXDeckRT *d, float *out, int frames, int rate);
+/* After a callback: tells a stream deck's feed where it reads and whether
+ * it went short, waking it when that matters. */
+void rx_player_deck_signal(RXDeckRT *d);
 /* Track frames per second of output the deck advances by. */
 double rx_player_deck_speed(const RXDeckRT *d);
 /* The position the listener hears: the read position, or with master tempo
  * on, the position of what the shifter is putting out now. */
 RXPos rx_player_deck_heard(const RXDeckRT *d);
+
+/* ---------------------------------------------------------------- feed.c */
+
+/* Owner thread: a stream for pk (which it then owns), and its release. */
+int  rx_player_stream_create(RXStream **out, RXPackets *pk);
+void rx_player_stream_free(RXStream *s);
+/* Owner thread: starts and stops a deck's feed thread. */
+int  rx_player_feed_start(RXDeckFeed *f);
+void rx_player_feed_stop(RXDeckFeed *f);
+/* Owner thread: the stream the feed fills (NULL: none), returning its
+ * generation; the cue points it keeps decoded. */
+uint64_t rx_player_feed_set(RXDeckFeed *f, RXStream *s);
+void rx_player_feed_points(RXDeckFeed *f, const int64_t *frames, int nb);
+/* Owner thread, manual mode: waits (up to `timeout_us`) until the feed has
+ * decoded everything around the read position the stream says. */
+bool rx_player_feed_wait(RXDeckFeed *f, const RXStream *s, int64_t timeout_us);
+/* Real-time thread: frames [i, i + n) of the stream as stereo pairs into
+ * out (a mono track on both sides, silence outside [0, nb_frames)); false
+ * when some of them are not decoded. */
+bool rx_player_stream_read(const RXStream *s, int64_t nb_frames, int64_t i, int n, float *out);
 
 /* -------------------------------------------------------------- backends */
 

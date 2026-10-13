@@ -142,32 +142,24 @@ static int push_frame(RXFlacInfo *info, int *cap, int64_t sample, int64_t offset
     return 0;
 }
 
-int rx_flac_scan(const char *path, RXFlacInfo *info)
+int rx_flac_walk_init(RXFlacWalk *w, const char *path, const uint8_t *d, size_t size,
+                      RXFlacInfo *info, const uint8_t **streaminfo)
 {
+    *w = (RXFlacWalk) { 0 };
     *info = (RXFlacInfo) { 0 };
-
-    RXMap m;
-    int ret = rx_audio_map(path, &m);
-    if (ret < 0)
-        return ret;
-    const uint8_t *d = m.data;
-    size_t size = m.size;
+    *streaminfo = NULL;
 
     size_t pos = rx_audio_skip_id3v2(d, size);
     if (size - pos < 4 || memcmp(d + pos, "fLaC", 4)) {
         rx_debug("%s: not a FLAC file", path);
-        ret = RX_ERROR(EINVAL);
-        goto end;
+        return RX_ERROR(EINVAL);
     }
     pos += 4;
 
     /* Metadata blocks up to the one flagged last */
-    bool streaminfo = false;
     while (1) {
-        if (size - pos < 4) {
-            ret = RX_ERROR(EINVAL);
-            goto end;
-        }
+        if (size - pos < 4)
+            return RX_ERROR(EINVAL);
         const uint8_t *hdr = d + pos;
         size_t length = (size_t)rb(hdr + 1, 3);
         if ((hdr[0] & 0x7F) == 0 && length >= 34 && size - pos - 4 >= 34) {
@@ -179,27 +171,73 @@ int rx_flac_scan(const char *path, RXFlacInfo *info)
             info->channels = (int)((packed >> 41) & 7) + 1;
             info->bit_depth = (int)((packed >> 36) & 0x1F) + 1;
             info->total_samples = (int64_t)(packed & ((UINT64_C(1) << 36) - 1));
-            streaminfo = true;
+            *streaminfo = s;
         }
-        if (size - pos - 4 < length) {
-            ret = RX_ERROR(EINVAL);
-            goto end;
-        }
+        if (size - pos - 4 < length)
+            return RX_ERROR(EINVAL);
         pos += 4 + length;
         if (hdr[0] & 0x80)
             break;
     }
-    if (!streaminfo) {
+    if (!*streaminfo) {
         rx_debug("%s: no STREAMINFO", path);
-        ret = RX_ERROR(EINVAL);
-        goto end;
+        return RX_ERROR(EINVAL);
     }
-    size_t start = pos;
-    info->first_frame_offset = (int64_t)start;
+    info->first_frame_offset = (int64_t)pos;
 
-    /* Each frame is the first sync candidate after the previous one whose
-     * header parses with the expected frame number (fixed block size) or
-     * sample number (variable). Candidates only move forward, as in dj. */
+    *w = (RXFlacWalk) {
+        .data  = d,
+        .size  = size,
+        .start = pos,
+        .cand  = pos,
+        .total = info->total_samples,
+    };
+    return 0;
+}
+
+/* Each frame is the first sync candidate after the previous one whose
+ * header parses with the expected frame number (fixed block size) or
+ * sample number (variable). Candidates only move forward, as in dj. */
+int rx_flac_walk_next(RXFlacWalk *w, size_t *offset, int64_t *sample, int *block, bool *complete)
+{
+    const uint8_t *d = w->data;
+    while (w->sample < w->total && w->cand + 1 < w->size) {
+        const uint8_t *p = memchr(d + w->cand, 0xFF, w->size - 1 - w->cand);
+        if (!p)
+            break;
+        size_t at = (size_t)(p - d);
+        w->cand = at + 1;
+        FrameHeader f;
+        if ((d[at + 1] & 0xFE) != 0xF8 || !parse_frame_header(d, w->size, at, &f))
+            continue;
+        if (f.number != (f.variable ? w->sample : w->index))
+            continue;
+        *offset = at;
+        *sample = w->sample;
+        *block = f.block;
+        w->sample += f.block;
+        w->index++;
+        return 1;
+    }
+    *complete = w->sample >= w->total;
+    return 0;
+}
+
+int rx_flac_scan(const char *path, RXFlacInfo *info)
+{
+    *info = (RXFlacInfo) { 0 };
+
+    RXMap m;
+    int ret = rx_audio_map(path, &m);
+    if (ret < 0)
+        return ret;
+
+    RXFlacWalk w;
+    const uint8_t *streaminfo;
+    ret = rx_flac_walk_init(&w, path, m.data, m.size, info, &streaminfo);
+    if (ret < 0)
+        goto end;
+
     int cap = 0;
     if (info->max_block > 0) {
         int64_t est = info->total_samples / info->max_block + 2;
@@ -210,28 +248,18 @@ int rx_flac_scan(const char *path, RXFlacInfo *info)
             goto end;
         }
     }
-    int64_t sample = 0, index = 0;
-    size_t cand = start;
-    while (sample < info->total_samples && cand + 1 < size) {
-        const uint8_t *p = memchr(d + cand, 0xFF, size - 1 - cand);
-        if (!p)
-            break;
-        size_t at = (size_t)(p - d);
-        cand = at + 1;
-        FrameHeader f;
-        if ((d[at + 1] & 0xFE) != 0xF8 || !parse_frame_header(d, size, at, &f))
-            continue;
-        if (f.number != (f.variable ? sample : index))
-            continue;
-        ret = push_frame(info, &cap, sample, (int64_t)(at - start), f.block);
+    size_t at;
+    int64_t sample;
+    int block;
+    bool complete = false;
+    while (rx_flac_walk_next(&w, &at, &sample, &block, &complete) > 0) {
+        ret = push_frame(info, &cap, sample, (int64_t)(at - w.start), block);
         if (ret < 0)
             goto end;
-        sample += f.block;
-        index++;
     }
-    if (sample < info->total_samples) {
+    if (!complete) {
         rx_debug("%s: frames end at sample %" PRId64 ", before the STREAMINFO count %" PRId64,
-                 path, sample, info->total_samples);
+                 path, w.sample, info->total_samples);
         ret = RX_ERROR(EINVAL);
         goto end;
     }

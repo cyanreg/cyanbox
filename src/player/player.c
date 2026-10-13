@@ -28,6 +28,15 @@
  * is needed and nothing can overflow. The pending list is drained by every
  * owner-side call, rx_deck_state() included.
  *
+ * Packet stores: a deck loaded with one plays a stream (feed.c), which the
+ * deck's feed thread decodes into. The owner hands the stream to the feed
+ * with a generation number; a stream let go of waits in the same pending
+ * list for the real-time serial and for the feed to have moved past its
+ * generation. A stream's length is the container's until the store's
+ * index is complete, then the count: both sides read it from the store
+ * (two atomics) rather than being told. Manual mode waits for the feeds
+ * before each callback (rx_player_null_advance).
+ *
  * MASTER TEMPO: each deck's pitch shifter is made here on the owner thread
  * and handed to the real-time side with the rest of RXDeckRT; after that
  * only the real-time thread touches it (deck.c). The position published is
@@ -86,17 +95,21 @@ static int64_t now_us(void)
 static void publish(RXDeckPub *pub, const RXDeckRT *d, int64_t time_us, int64_t span_us)
 {
     RXPos pos = rx_player_deck_heard(d);
+    /* A deck holding for its feed does not move: no speed to extrapolate */
+    bool waiting = d->playing && d->holding;
     unsigned seq = atomic_load_explicit(&pub->seq, memory_order_relaxed);
     atomic_store_explicit(&pub->seq, seq + 1, memory_order_relaxed);
     atomic_thread_fence(memory_order_release);
 
     atomic_store_explicit(&pub->frame_i, pos.i, memory_order_relaxed);
     atomic_store_explicit(&pub->frame_f, dbits(pos.f), memory_order_relaxed);
-    atomic_store_explicit(&pub->speed, dbits(d->playing ? rx_player_deck_speed(d) : 0.0),
+    atomic_store_explicit(&pub->speed,
+                          dbits(d->playing && !waiting ? rx_player_deck_speed(d) : 0.0),
                           memory_order_relaxed);
     atomic_store_explicit(&pub->time_us, time_us, memory_order_relaxed);
     atomic_store_explicit(&pub->span_us, span_us, memory_order_relaxed);
     atomic_store_explicit(&pub->playing, d->playing, memory_order_relaxed);
+    atomic_store_explicit(&pub->waiting, waiting, memory_order_relaxed);
     atomic_store_explicit(&pub->serial, d->applied, memory_order_relaxed);
 
     atomic_store_explicit(&pub->seq, seq + 2, memory_order_release);
@@ -123,6 +136,7 @@ static void snapshot(const RXDeckPub *cpub, RXDeckSnap *s)
                 .time_us = atomic_load_explicit(&pub->time_us, memory_order_relaxed),
                 .span_us = atomic_load_explicit(&pub->span_us, memory_order_relaxed),
                 .playing = atomic_load_explicit(&pub->playing, memory_order_relaxed),
+                .waiting = atomic_load_explicit(&pub->waiting, memory_order_relaxed),
                 .serial  = atomic_load_explicit(&pub->serial, memory_order_relaxed),
             };
             atomic_thread_fence(memory_order_acquire);
@@ -185,8 +199,10 @@ void rx_player_mix(RXPlayer *p, float *out, int frames)
         p->master_prev = p->master_gain;
     }
 
-    for (int i = 0; i < RX_DECKS; i++)
+    for (int i = 0; i < RX_DECKS; i++) {
+        rx_player_deck_signal(&p->rt[i]);
         publish(&p->pub[i], &p->rt[i], time_us, rate > 0 ? (int64_t)frames * 1000000 / rate : 0);
+    }
 }
 
 /* ------------------------------------------------------------ owner side */
@@ -201,24 +217,34 @@ static void release_audio(RXPlayer *p, RXAudio *audio)
     free(audio);
 }
 
+static void release_entry(RXPlayer *p, RXRelease *r)
+{
+    if (r->audio)
+        release_audio(p, r->audio);
+    rx_player_stream_free(r->stream);
+}
+
 static void drain_releases(RXPlayer *p)
 {
     for (int i = 0; i < p->nb_releases;) {
         RXRelease *r = &p->releases[i];
         RXDeckSnap s;
         snapshot(&p->pub[r->deck], &s);
-        if (s.serial < r->serial) {
+        /* A stream also waits for its feed to have moved on */
+        if (s.serial < r->serial ||
+            (r->stream &&
+             atomic_load_explicit(&p->feed[r->deck].acked, memory_order_acquire) < r->gen)) {
             i++;
             continue;
         }
-        release_audio(p, r->audio);
+        release_entry(p, r);
         *r = p->releases[--p->nb_releases];
     }
 }
 
-static void defer_release(RXPlayer *p, int deck, RXAudio *audio)
+static void defer_release(RXPlayer *p, int deck, RXAudio *audio, RXStream *stream, uint64_t gen)
 {
-    if (!audio)
+    if (!audio && !stream)
         return;
     if (p->nb_releases == p->releases_cap) {
         int cap = p->releases_cap ? 2 * p->releases_cap : 8;
@@ -234,8 +260,10 @@ static void defer_release(RXPlayer *p, int deck, RXAudio *audio)
     }
     p->releases[p->nb_releases++] = (RXRelease) {
         .audio  = audio,
+        .stream = stream,
         .deck   = deck,
         .serial = p->own[deck].sent,
+        .gen    = gen,
     };
 }
 
@@ -270,23 +298,44 @@ static int send(RXPlayer *p, enum RXCmdType type, int deck, double a)
     });
 }
 
+/* A stream's length is the container's until its index is complete; the
+ * real-time side takes the count at the same time (deck.c). */
+static void refresh_length(RXDeckOwner *o)
+{
+    if (o->stream)
+        o->nb_frames = rx_packets_length(o->stream->pk, NULL);
+}
+
 static RXDeckOwner *loaded_deck(RXPlayer *p, int deck)
 {
-    if (!p || deck < 0 || deck >= RX_DECKS || !p->own[deck].audio)
+    if (!p || deck < 0 || deck >= RX_DECKS || (!p->own[deck].audio && !p->own[deck].stream))
         return NULL;
+    refresh_length(&p->own[deck]);
     return &p->own[deck];
 }
 
 static double duration_of(const RXDeckOwner *o)
 {
-    return (double)o->audio->nb_frames / o->audio->rate;
+    return (double)o->nb_frames / o->rate;
 }
 
 /* Seconds to frames, clamped to the track. */
 static double to_frames(const RXDeckOwner *o, double seconds)
 {
     double t = RX_CLAMP(seconds, 0.0, duration_of(o));
-    return t * o->audio->rate;
+    return t * o->rate;
+}
+
+/* The deck lets go of what it holds: the buffer, or the stream, which its
+ * feed lets go of too. */
+static void drop_loaded(RXPlayer *p, int deck)
+{
+    RXDeckOwner *o = &p->own[deck];
+    uint64_t gen = o->stream ? rx_player_feed_set(&p->feed[deck], NULL) : 0;
+    defer_release(p, deck, o->audio, o->stream, gen);
+    o->audio = NULL;
+    o->stream = NULL;
+    o->nb_points = 0;
 }
 
 static void owner_reset(RXDeckOwner *o)
@@ -381,6 +430,13 @@ int rx_player_create(RXPlayer **out, const RXPlayerOptions *opt)
             rx_player_deck_mt_free(&p->rt[i]);
     }
 
+    for (int i = 0; i < RX_DECKS; i++) {
+        ret = rx_player_feed_start(&p->feed[i]);
+        if (ret < 0)
+            goto fail;
+        p->rt[i].wake = &p->feed[i].wake;
+    }
+
     if (opt->backend == RX_AUDIO_NULL)
         ret = rx_player_null_open(p);
     else
@@ -401,19 +457,22 @@ void rx_player_destroy(RXPlayer *p)
     if (!p)
         return;
 
-    /* The backend's thread is joined first; after that nothing reads the
-     * buffers and every one of them can go. */
+    /* The backend's thread is joined first, then the feeds; after that
+     * nothing reads the buffers and every one of them can go. */
     if (p->null)
         rx_player_null_close(p);
     if (p->pw)
         rx_player_pw_close(p);
+    for (int i = 0; i < RX_DECKS; i++)
+        rx_player_feed_stop(&p->feed[i]);
 
     for (int i = 0; i < p->nb_releases; i++)
-        release_audio(p, p->releases[i].audio);
+        release_entry(p, &p->releases[i]);
     free(p->releases);
     for (int i = 0; i < RX_DECKS; i++) {
         if (p->own[i].audio)
             release_audio(p, p->own[i].audio);
+        rx_player_stream_free(p->own[i].stream);
         free(p->own[i].grid.sections);
         rx_player_deck_mt_free(&p->rt[i]);
     }
@@ -472,12 +531,35 @@ void rx_player_set_master_volume(RXPlayer *p, float gain)
         p->master_volume = gain;
 }
 
+/* Manual mode: before a callback, each deck playing a stream waits for its
+ * feed to have decoded everything around where it reads (see
+ * rx_player_null_advance). Here, the owner is also the real-time thread. */
+static void feeds_settle(RXPlayer *p)
+{
+    bool any = false;
+    for (int i = 0; i < RX_DECKS; i++)
+        any |= p->rt[i].stream || p->own[i].stream;
+    if (!any)
+        return;
+    /* The commands applied, and the feeds told where the decks are */
+    rx_player_mix(p, NULL, 0);
+    for (int i = 0; i < RX_DECKS; i++) {
+        if (p->rt[i].stream && !rx_player_feed_wait(&p->feed[i], p->rt[i].stream, 10000000))
+            rx_warn("player: deck %d: the feed did not catch up in 10 s", i);
+    }
+}
+
 void rx_player_null_advance(RXPlayer *p, int frames)
 {
     if (!p || !p->manual || frames <= 0)
         return;
     drain_releases(p);
-    rx_player_null_run(p, frames);
+    while (frames > 0) {
+        int len = RX_MIN(frames, p->period);
+        feeds_settle(p);
+        rx_player_null_run(p, len);
+        frames -= len;
+    }
     drain_releases(p);
 }
 
@@ -541,8 +623,10 @@ int rx_deck_load(RXPlayer *p, int deck, RXAudio *audio, const RXGrid *grid)
     }
 
     RXDeckOwner *o = &p->own[deck];
-    defer_release(p, deck, o->audio);
+    drop_loaded(p, deck);
     o->audio = audio;
+    o->rate = audio->rate;
+    o->nb_frames = audio->nb_frames;
     free(o->grid.sections);
     o->grid = copy;
     owner_reset(o);
@@ -550,13 +634,78 @@ int rx_deck_load(RXPlayer *p, int deck, RXAudio *audio, const RXGrid *grid)
     return 0;
 }
 
+int rx_deck_load_packets(RXPlayer *p, int deck, RXPackets *pk, const RXGrid *grid)
+{
+    if (!p || deck < 0 || deck >= RX_DECKS || !pk)
+        return RX_ERROR(EINVAL);
+
+    RXGrid copy = { 0 };
+    copy_grid(&copy, grid);
+    if (grid && grid->nb_sections > 0 && !copy.sections)
+        return RX_ERROR(ENOMEM);
+    RXStream *s;
+    int ret = rx_player_stream_create(&s, pk);
+    if (ret < 0) {
+        free(copy.sections);
+        return ret;
+    }
+
+    int64_t length = rx_packets_length(pk, NULL);
+    ret = push(p, (RXCmd) {
+        .type      = RX_CMD_LOAD,
+        .deck      = deck,
+        .stream    = s,
+        .channels  = s->channels,
+        .rate      = s->rate,
+        .nb_frames = length,
+    });
+    if (ret < 0) {
+        /* The caller keeps the packets. */
+        s->pk = NULL;
+        rx_player_stream_free(s);
+        free(copy.sections);
+        return ret;
+    }
+
+    /* The feed starts decoding at once: the real-time side reads nothing of
+     * the stream before it applies the load. */
+    RXDeckOwner *o = &p->own[deck];
+    drop_loaded(p, deck);
+    rx_player_feed_set(&p->feed[deck], s);
+    o->stream = s;
+    o->rate = s->rate;
+    o->nb_frames = length;
+    free(o->grid.sections);
+    o->grid = copy;
+    owner_reset(o);
+    o->pos_serial = o->play_serial = o->sent;
+    return 0;
+}
+
+void rx_deck_set_cue_points(RXPlayer *p, int deck, const double *seconds, int nb)
+{
+    RXDeckOwner *o = loaded_deck(p, deck);
+    if (!o || !o->stream)
+        return;
+    int64_t frames[RX_DECK_CUE_POINTS];
+    int n = 0;
+    for (int i = 0; i < nb && n < RX_DECK_CUE_POINTS; i++) {
+        if (isfinite(seconds[i]) && seconds[i] >= 0.0)
+            frames[n++] = (int64_t)floor(RX_MIN(seconds[i], duration_of(o)) * o->rate);
+    }
+    if (n == o->nb_points && !memcmp(frames, o->points, sizeof(frames[0]) * n))
+        return;
+    memcpy(o->points, frames, sizeof(frames[0]) * n);
+    o->nb_points = n;
+    rx_player_feed_points(&p->feed[deck], frames, n);
+}
+
 void rx_deck_unload(RXPlayer *p, int deck)
 {
     RXDeckOwner *o = loaded_deck(p, deck);
     if (!o || send(p, RX_CMD_UNLOAD, deck, 0.0) < 0)
         return;
-    defer_release(p, deck, o->audio);
-    o->audio = NULL;
+    drop_loaded(p, deck);
     free(o->grid.sections);
     o->grid = (RXGrid) { .beats_per_bar = 4 };
     owner_reset(o);
@@ -565,7 +714,7 @@ void rx_deck_unload(RXPlayer *p, int deck)
 
 bool rx_deck_loaded(const RXPlayer *p, int deck)
 {
-    return p && deck >= 0 && deck < RX_DECKS && p->own[deck].audio;
+    return p && deck >= 0 && deck < RX_DECKS && (p->own[deck].audio || p->own[deck].stream);
 }
 
 const RXAudio *rx_deck_audio(const RXPlayer *p, int deck)
@@ -617,14 +766,21 @@ static void seek_cmd(RXPlayer *p, int deck, double seconds, enum RXCmdType type)
         return;
     o->pos_frames = frames;
     o->pos_serial = o->sent;
+    /* The feed hears of it now and decodes there while the real-time side
+     * has yet to apply it: a callback's head start, usually enough for
+     * the deck not to wait at all */
+    if (o->stream) {
+        atomic_store_explicit(&o->stream->hint, (int64_t)frames, memory_order_relaxed);
+        sem_post(&p->feed[deck].wake);
+    }
     if (type == RX_CMD_PLAY_FROM) {
         if (o->scrubbing) {
             o->scrub_resume = true;
         } else {
-            o->playing = frames < (double)o->audio->nb_frames;
+            o->playing = frames < (double)o->nb_frames;
             o->play_serial = o->sent;
         }
-    } else if (frames >= (double)o->audio->nb_frames && !o->scrubbing) {
+    } else if (frames >= (double)o->nb_frames && !o->scrubbing) {
         /* A seek to the very end stops the deck there. */
         o->playing = false;
         o->play_serial = o->sent;
@@ -674,13 +830,13 @@ void rx_deck_set_loop(RXPlayer *p, int deck, double in, double out, bool enabled
     in  = RX_CLAMP(in, 0.0, duration_of(o));
     out = RX_CLAMP(out, 0.0, duration_of(o));
     /* At least one frame long, or the loop could never be left. */
-    if ((out - in) * o->audio->rate < 1.0)
+    if ((out - in) * o->rate < 1.0)
         return;
     RXCmd cmd = {
         .type = RX_CMD_LOOP_SET,
         .deck = deck,
-        .a    = in * o->audio->rate,
-        .b    = out * o->audio->rate,
+        .a    = in * o->rate,
+        .b    = out * o->rate,
         .flag = enabled,
     };
     if (push(p, cmd) < 0)
@@ -756,7 +912,7 @@ void rx_deck_scrub_end(RXPlayer *p, int deck)
     if (!o || !o->scrubbing || send(p, RX_CMD_SCRUB_END, deck, 0.0) < 0)
         return;
     o->scrubbing = false;
-    o->playing = o->scrub_resume && o->pos_frames < (double)o->audio->nb_frames;
+    o->playing = o->scrub_resume && o->pos_frames < (double)o->nb_frames;
     o->play_serial = o->sent;
 }
 
@@ -775,7 +931,7 @@ void rx_deck_state(const RXPlayer *cp, int deck, RXDeckState *out)
     RXPlayer *p = (RXPlayer *)cp;
     drain_releases(p);
 
-    const RXDeckOwner *o = &p->own[deck];
+    RXDeckOwner *o = &p->own[deck];
     const RXDeckPub *pub = &p->pub[deck];
     RXDeckSnap s;
     snapshot(pub, &s);
@@ -785,8 +941,9 @@ void rx_deck_state(const RXPlayer *cp, int deck, RXDeckState *out)
     out->serial       = s.serial;
     out->level_l      = bitsf(atomic_load_explicit(&pub->level_l, memory_order_relaxed));
     out->level_r      = bitsf(atomic_load_explicit(&pub->level_r, memory_order_relaxed));
-    if (!o->audio)
+    if (!o->audio && !o->stream)
         return;
+    refresh_length(o);
 
     double frames = s.frames;
     bool playing = s.playing;
@@ -800,7 +957,7 @@ void rx_deck_state(const RXPlayer *cp, int deck, RXDeckState *out)
         pending = true;
     }
 
-    double end = (double)o->audio->nb_frames;
+    double end = (double)o->nb_frames;
     /* Between callbacks the playhead moves on: extrapolate from the
      * callback's time stamp by at most the length of the block it rendered,
      * which is where the next callback will publish. A late callback then
@@ -810,7 +967,7 @@ void rx_deck_state(const RXPlayer *cp, int deck, RXDeckState *out)
     if (!pending && playing && !o->scrubbing && !p->manual && s.speed > 0.0) {
         double dt = RX_CLAMP((now_us() - s.time_us) * 1e-6, 0.0, s.span_us * 1e-6);
         double limit = end;
-        double out_frames = o->loop_out * o->audio->rate;
+        double out_frames = o->loop_out * o->rate;
         if (o->loop_enabled && frames < out_frames)
             limit = out_frames;
         frames = RX_MIN(frames + dt * s.speed, limit);
@@ -819,8 +976,9 @@ void rx_deck_state(const RXPlayer *cp, int deck, RXDeckState *out)
 
     out->loaded       = true;
     out->playing      = playing;
+    out->waiting      = playing && !pending && s.waiting;
     out->scrubbing    = o->scrubbing;
-    out->position     = frames / o->audio->rate;
+    out->position     = frames / o->rate;
     out->duration     = duration_of(o);
     out->frame        = (int64_t)floor(frames);
     out->loop_enabled = o->loop_enabled;
