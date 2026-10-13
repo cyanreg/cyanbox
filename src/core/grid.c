@@ -46,13 +46,29 @@
  *
  * Between the last beat of a section and the next section's start (a gap
  * shorter than a beat and a half) the fractional beat index is interpolated
- * linearly, as dj's beat_time() did. Every query walks the sections from
- * the first: there are rarely more than a handful, and the walk keeps the
- * struct plain data with no cache to invalidate. */
+ * linearly, as dj's beat_time() did.
+ *
+ * A measured section (rxbox/model.h) is one beat, at its start, whatever
+ * its tempo says: the next section begins on the next beat, so a run of
+ * measured beats is a grid that follows the music beat by beat, and the
+ * gap rule above is what puts a fractional index between two of them.
+ * SAME_HIT does not apply to it (its one beat is a beat the analyser
+ * measured, not a line's extrapolation), and as the last section it runs
+ * on at its tempo like any other. Nothing else in the walk knows the
+ * difference, so every query, the beat list and the numbering treat a
+ * dynamic grid exactly as a straight one.
+ *
+ * Every query walks the sections from the first: a straight grid has a
+ * handful, a dynamic one a beat per section (a thousand on a four-minute
+ * track: a few microseconds a query, and the player asks on a press, the
+ * interface a few times a frame), and the walk keeps the struct plain
+ * data with no cache to invalidate. */
 
 #include "rxbox/model.h"
 
 #include <math.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include "core.h"
 
@@ -105,6 +121,7 @@ static int bpb_of(const RXGrid *g)
 typedef struct Sec {
     int     index;
     int     bpb;
+    bool    measured;       /* one beat, at start */
     double  start, period;
     double  end;            /* the next section's start; INFINITY for the last */
     int64_t n;              /* beats in [start, end); K_LIMIT for the last */
@@ -170,6 +187,12 @@ static void set_extent(const RXGrid *g, Sec *s)
         return;
     }
     s->end = g->sections[s->index + 1].start;
+    /* A measured beat is one beat, and the next section begins on the
+     * beat after it. */
+    if (s->measured) {
+        s->n = s->start < s->end ? 1 : 0;
+        return;
+    }
     /* dj: k1 = ceil((end - start) / period - 1e-9), then t < end. */
     int64_t n = clamp_k(ceil((s->end - s->start) / s->period - 1e-9));
     if (n < 0)
@@ -193,6 +216,7 @@ static void walk_init(const RXGrid *g, Sec *s)
     *s = (Sec) {
         .index       = 0,
         .bpb         = bpb,
+        .measured    = t->measured,
         .start       = t->start,
         .period      = 60.0 / t->bpm,
         .g           = 0,
@@ -216,6 +240,7 @@ static bool walk_next(const RXGrid *g, Sec *s)
     const RXTempoSection *t = &g->sections[s->index + 1];
 
     s->index++;
+    s->measured = t->measured;
     s->start = t->start;
     s->period = 60.0 / t->bpm;
     s->g = next_g;
@@ -500,19 +525,63 @@ double rx_grid_bpm_at(const RXGrid *g, double t)
     return i < 0 ? 0.0 : g->sections[i].bpm;
 }
 
+bool rx_grid_dynamic(const RXGrid *g)
+{
+    for (int i = 0; g && i < g->nb_sections; i++) {
+        if (g->sections[i].measured)
+            return true;
+    }
+    return false;
+}
+
+static int cmp_double(const void *a, const void *b)
+{
+    double x = *(const double *)a, y = *(const double *)b;
+    return (x > y) - (x < y);
+}
+
+double rx_grid_bpm_median(const RXGrid *g, double duration)
+{
+    if (!rx_grid_valid(g))
+        return 0.0;
+    if (!rx_grid_dynamic(g))
+        return g->sections[0].bpm;
+    /* The beats as the stick gets them, each with its own tempo; the
+     * median, so that a rubato passage does not pull the figure. */
+    RXBeat *b = NULL;
+    int nb = 0;
+    if (rx_grid_beats(g, duration, &b, &nb) < 0 || nb == 0) {
+        free(b);
+        return g->sections[0].bpm;
+    }
+    double *v = malloc((size_t)nb * sizeof(*v));
+    if (!v) {
+        free(b);
+        return g->sections[0].bpm;
+    }
+    for (int i = 0; i < nb; i++)
+        v[i] = b[i].bpm;
+    qsort(v, (size_t)nb, sizeof(*v), cmp_double);
+    double med = v[nb / 2];
+    free(v);
+    free(b);
+    return med;
+}
+
 /* Section starts closer than this are the same start. */
 #define SAME_START 1e-4
 
-int rx_grid_add_section(RXGrid *g, double start, double bpm, int beat)
+static int add(RXGrid *g, double start, double bpm, int beat, bool measured)
 {
     int bpb = bpb_of(g);
     if (!isfinite(start) || !bpm_ok(bpm) || beat < 0 || beat > bpb)
         return RX_ERROR(EINVAL);
 
     RXTempoSection sec = {
-        .start = start,
-        .bpm   = bpm,
-        .beat  = beat,
+        .start    = start,
+        .bpm      = bpm,
+        .beat     = beat,
+        .measured = measured,
     };
 
     int at = 0;
@@ -533,6 +602,16 @@ int rx_grid_add_section(RXGrid *g, double start, double bpm, int beat)
     if (g->beats_per_bar <= 0)
         g->beats_per_bar = 4;
     return at;
+}
+
+int rx_grid_add_section(RXGrid *g, double start, double bpm, int beat)
+{
+    return add(g, start, bpm, beat, false);
+}
+
+int rx_grid_add_beat(RXGrid *g, double time, double bpm, int beat)
+{
+    return add(g, time, bpm, beat, true);
 }
 
 int rx_grid_remove_section(RXGrid *g, int index)
@@ -706,12 +785,170 @@ void rx_grid_shift(RXGrid *g, double delta)
         g->sections[i].start += delta;
 }
 
+/* The dynamic passage (the maximal run of measured sections) holding
+ * section i, as [*a, *b]; false when section i is straight. */
+static bool passage(const RXGrid *g, int i, int *a, int *b)
+{
+    if (i < 0 || i >= g->nb_sections || !g->sections[i].measured)
+        return false;
+    *a = *b = i;
+    while (*a > 0 && g->sections[*a - 1].measured)
+        (*a)--;
+    while (*b + 1 < g->nb_sections && g->sections[*b + 1].measured)
+        (*b)++;
+    return true;
+}
+
+/* Replaces sections [a, b] by one straight section at `bpm` starting on
+ * section a's beat with its number. */
+static void straight_from(RXGrid *g, int a, int b, double bpm)
+{
+    g->sections[a].bpm = bpm;
+    g->sections[a].measured = false;
+    memmove(&g->sections[a + 1], &g->sections[b + 1],
+            (size_t)(g->nb_sections - b - 1) * sizeof(*g->sections));
+    g->nb_sections -= b - a;
+}
+
 void rx_grid_set_bpm_at(RXGrid *g, double t, double bpm)
 {
     int i = rx_grid_section_at(g, t);
     if (i < 0 || isnan(t) || !bpm_ok(bpm))
         return;
+    int a, b;
+    if (passage(g, i, &a, &b)) {
+        /* From the beat at or before t to the end of the passage: a
+         * tempo typed or tapped means "straight at this tempo from
+         * here"; the beats before it stay as they were measured. */
+        straight_from(g, i, b, bpm);
+        return;
+    }
     g->sections[i].bpm = bpm;
+}
+
+int rx_grid_double_at(RXGrid *g, double t)
+{
+    if (!rx_grid_valid(g) || !isfinite(t))
+        return RX_ERROR(EINVAL);
+    int i = rx_grid_section_at(g, t);
+    int a, b;
+    if (!passage(g, i, &a, &b)) {
+        if (!bpm_ok(2.0 * g->sections[i].bpm))
+            return RX_ERROR(EINVAL);
+        g->sections[i].bpm *= 2.0;
+        return i;
+    }
+    /* A beat at every midpoint of the passage, the last one halfway to
+     * the section after it when there is one; every beat's tempo is 60
+     * over its new interval (the last of a passage that ends the grid
+     * doubles its own). The new beats continue the count. */
+    int n = b - a + 1;
+    bool next = b + 1 < g->nb_sections;
+    int extra = next ? n : n - 1;
+    for (int j = a; j <= b; j++) {
+        bool has_next = j < b || next;
+        double bpm = has_next ? 120.0 / (g->sections[j + 1].start - g->sections[j].start)
+                              : 2.0 * g->sections[j].bpm;
+        if (!bpm_ok(bpm))
+            return RX_ERROR(EINVAL);
+    }
+    RXTempoSection *secs = malloc((size_t)(g->nb_sections + extra) * sizeof(*secs));
+    if (!secs)
+        return RX_ERROR(ENOMEM);
+    int o = 0;
+    for (int j = 0; j < a; j++)
+        secs[o++] = g->sections[j];
+    for (int j = a; j <= b; j++) {
+        RXTempoSection s = g->sections[j];
+        bool has_next = j < b || next;
+        if (has_next) {
+            double t1 = g->sections[j + 1].start;
+            s.bpm = 120.0 / (t1 - s.start);
+            secs[o++] = s;
+            secs[o++] = (RXTempoSection) {
+                .start = s.start + 0.5 * (t1 - s.start),
+                .bpm   = s.bpm,
+                .beat  = 0,
+                .measured = true,
+            };
+        } else {
+            s.bpm *= 2.0;
+            secs[o++] = s;
+        }
+    }
+    for (int j = b + 1; j < g->nb_sections; j++)
+        secs[o++] = g->sections[j];
+    free(g->sections);
+    g->sections = secs;
+    g->nb_sections = o;
+    return rx_grid_section_at(g, t);
+}
+
+int rx_grid_halve_at(RXGrid *g, double t)
+{
+    if (!rx_grid_valid(g) || !isfinite(t))
+        return RX_ERROR(EINVAL);
+    int i = rx_grid_section_at(g, t);
+    int a, b;
+    if (!passage(g, i, &a, &b)) {
+        if (!bpm_ok(0.5 * g->sections[i].bpm))
+            return RX_ERROR(EINVAL);
+        g->sections[i].bpm *= 0.5;
+        return i;
+    }
+    /* Every other beat from the passage's first stays; the count goes
+     * on from the first beat's number over the ones kept. The last beat
+     * goes too when it would leave the section after the passage half
+     * a new beat away (an odd count): the kept beat before it then
+     * spans two old beats to that section, one new one. */
+    bool next = b + 1 < g->nb_sections;
+    int last = b;
+    if (next && (b - a) % 2 == 0)
+        last = b - 1;
+    for (int j = a; j <= last; j += 2) {
+        double t1 = j + 2 <= last ? g->sections[j + 2].start
+                  : next ? g->sections[b + 1].start : NAN;
+        double bpm = isnan(t1) ? 0.5 * g->sections[j].bpm : 60.0 / (t1 - g->sections[j].start);
+        if (!bpm_ok(bpm))
+            return RX_ERROR(EINVAL);
+    }
+    int o = a;
+    for (int j = a; j <= last; j += 2) {
+        RXTempoSection s = g->sections[j];
+        double t1 = j + 2 <= last ? g->sections[j + 2].start
+                  : next ? g->sections[b + 1].start : NAN;
+        s.bpm = isnan(t1) ? 0.5 * s.bpm : 60.0 / (t1 - s.start);
+        if (j > a)
+            s.beat = 0;
+        g->sections[o++] = s;
+    }
+    memmove(&g->sections[o], &g->sections[b + 1],
+            (size_t)(g->nb_sections - b - 1) * sizeof(*g->sections));
+    g->nb_sections = o + g->nb_sections - b - 1;
+    return rx_grid_section_at(g, t);
+}
+
+int rx_grid_straighten_at(RXGrid *g, double t)
+{
+    if (!rx_grid_valid(g) || !isfinite(t))
+        return RX_ERROR(EINVAL);
+    int a, b;
+    if (!passage(g, rx_grid_section_at(g, t), &a, &b))
+        return RX_ERROR(ENOENT);
+    /* The least-squares slope through the passage's beats (and the
+     * section after it, which is the beat after its last) with the first
+     * beat held where it is: the one point a DJ has placed by ear. */
+    double t0 = g->sections[a].start, sk = 0.0, skk = 0.0;
+    int n = b - a + 1 + (b + 1 < g->nb_sections);
+    for (int k = 1; k < n; k++) {
+        sk += (double)k * (g->sections[a + k].start - t0);
+        skk += (double)k * k;
+    }
+    double bpm = n > 1 && sk > 0.0 ? 60.0 * skk / sk : g->sections[a].bpm;
+    if (!bpm_ok(bpm))
+        return RX_ERROR(EINVAL);
+    straight_from(g, a, b, bpm);
+    return a;
 }
 
 /* The section and k of the beat nearest to t. */
@@ -784,6 +1021,11 @@ int rx_grid_merge_at(RXGrid *g, double t)
         return RX_ERROR(ENOENT);
     if (isnan(t))
         return RX_ERROR(EINVAL);
+    /* In a dynamic passage the boundaries are the beats themselves: the
+     * passage is straightened as a whole. */
+    int a, b;
+    if (rx_grid_valid(g) && isfinite(t) && passage(g, rx_grid_section_at(g, t), &a, &b))
+        return rx_grid_straighten_at(g, t);
     int best = 1;
     for (int i = 2; i < g->nb_sections; i++) {
         if (fabs(g->sections[i].start - t) < fabs(g->sections[best].start - t))

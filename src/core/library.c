@@ -244,6 +244,7 @@ static int write_children(RXLibrary *lib, const RXTrack *t)
         rx_db_bind_double(db, st, 3, s->start);
         rx_db_bind_double(db, st, 4, s->bpm);
         rx_db_bind_int(db, st, 5, s->beat);
+        rx_db_bind_int(db, st, 6, s->measured);
         int ret = rx_db_done(db, st, "writing a grid section");
         if (ret < 0)
             return ret;
@@ -414,8 +415,8 @@ static RXTrack *cursor_find(Cursor *c, uint64_t id)
 
 static int load_sections(RXLibrary *lib)
 {
-    sqlite3_stmt *st = rx_db_prepare(lib->db, "SELECT track_id, start, bpm, beat FROM grid_section "
-                                              "ORDER BY track_id, idx");
+    sqlite3_stmt *st = rx_db_prepare(lib->db, "SELECT track_id, start, bpm, beat, measured "
+                                              "FROM grid_section ORDER BY track_id, idx");
     if (!st)
         return RX_ERROR(EIO);
     Cursor cur = { .lib = lib };
@@ -430,9 +431,10 @@ static int load_sections(RXLibrary *lib)
             break;
         }
         s[t->grid.nb_sections++] = (RXTempoSection) {
-            .start = sqlite3_column_double(st, 1),
-            .bpm   = sqlite3_column_double(st, 2),
-            .beat  = sqlite3_column_int(st, 3),
+            .start    = sqlite3_column_double(st, 1),
+            .bpm      = sqlite3_column_double(st, 2),
+            .beat     = sqlite3_column_int(st, 3),
+            .measured = sqlite3_column_int(st, 4) != 0,
         };
         t->grid.sections = s;
     }

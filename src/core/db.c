@@ -3,7 +3,7 @@
 /* The library database: the SQLite connection, the schema and its
  * migrations, the cached statements, transactions and error mapping.
  *
- * Schema version 5 (PRAGMA user_version = 5, application_id = 'RXBX').
+ * Schema version 6 (PRAGMA user_version = 6, application_id = 'RXBX').
  * Tables are STRICT so a wrong type is an error instead of a silent
  * conversion, and every row that belongs to a track or a playlist goes
  * with it (ON DELETE CASCADE, foreign keys on for every connection).
@@ -34,7 +34,9 @@
  *                             the user: RX_ML_TAGS_VERSION (0 never) and its
  *                             measures, 0 to 1, NULL when never tagged
  *                   added play_count last_played missing
- *   grid_section    track_id, idx (0-based order), start, bpm, beat
+ *   grid_section    track_id, idx (0-based order), start, bpm, beat, measured
+ *                   (1: the section is one measured beat of a dynamic grid,
+ *                   rxbox/model.h)
  *   cue             track_id, time, grid_beat (NULL: absolute), hot (-1 memory,
  *                   0..7 = A..H), loop_end (NULL: not a loop), loop_beats (NULL:
  *                   absolute end), active, name, color
@@ -66,6 +68,9 @@
  *           from files before are kept; only new imports leave them out.
  *
  *   4 -> 5  the model's tagging: tags_version and the four ml_* measures.
+ *
+ *   5 -> 6  grid_section.measured, for the beats of a dynamic grid. Every
+ *           stored section is straight (0), so every grid is what it was.
  *
  * Journal: WAL, synchronous = NORMAL (a crash loses at most the last
  * transactions, never consistency), and a busy timeout because the export
@@ -291,12 +296,18 @@ static const char schema_v5[] =
     "ALTER TABLE track ADD COLUMN ml_valence   REAL;"
     "ALTER TABLE track ADD COLUMN ml_vocals    REAL;";
 
+/* A dynamic grid's beats (rxbox/model.h): a section that is one measured
+ * beat. The sections there were are all straight. */
+static const char schema_v6[] =
+    "ALTER TABLE grid_section ADD COLUMN measured INTEGER NOT NULL DEFAULT 0;";
+
 static const char *const migrations[] = {
     schema_v1,          /* 0 -> 1 */
     schema_v2,          /* 1 -> 2 */
     schema_v3,          /* 2 -> 3 */
     schema_v4,          /* 3 -> 4 */
     schema_v5,          /* 4 -> 5 */
+    schema_v6,          /* 5 -> 6 */
 };
 
 /* ------------------------------------------------------------ statements */
@@ -308,8 +319,8 @@ static const char *const fixed_sql[RX_STMT_NB] = {
     [RX_STMT_TRACK_PLAYED]    = "UPDATE track SET play_count = ?2, last_played = ?3 WHERE id = ?1",
     [RX_STMT_PLAY_INSERT]     = "INSERT INTO play (track_id, played_at) VALUES (?1, ?2)",
     [RX_STMT_SECTION_CLEAR]   = "DELETE FROM grid_section WHERE track_id = ?1",
-    [RX_STMT_SECTION_INSERT]  = "INSERT INTO grid_section (track_id, idx, start, bpm, beat) "
-                                "VALUES (?1, ?2, ?3, ?4, ?5)",
+    [RX_STMT_SECTION_INSERT]  = "INSERT INTO grid_section (track_id, idx, start, bpm, beat, "
+                                "measured) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
     [RX_STMT_CUE_CLEAR]       = "DELETE FROM cue WHERE track_id = ?1",
     [RX_STMT_CUE_INSERT]      = "INSERT INTO cue (track_id, time, grid_beat, hot, loop_end, "
                                 "loop_beats, active, name, color) "

@@ -3,7 +3,9 @@
 /* Beat grid arithmetic (src/core/grid.c): one section, tempo changes,
  * phase restarts, pickup beats, the edits, and that every route to a beat
  * time (beat list, index, quantize) lands on the same bits. Times are
- * chosen so the arithmetic is exact in binary where a check uses ==. */
+ * chosen so the arithmetic is exact in binary where a check uses ==. Then
+ * a dynamic grid (measured beats between straight sections) through every
+ * query and every tool. */
 
 #include "rxbox/model.h"
 
@@ -492,6 +494,278 @@ static void test_same_hit(void)
     rx_grid_free(&g);
 }
 
+/* The beats of g in [0, duration) as an array of times; nb in *nb. */
+static RXBeat *beats_of(const RXGrid *g, double duration, int *nb)
+{
+    RXBeat *b = NULL;
+    *nb = 0;
+    CHECK(rx_grid_beats(g, duration, &b, nb) == 0);
+    return b;
+}
+
+/* A straight intro (120 BPM from 0), then five beats as a drummer played
+ * them (intervals 0.50, 0.52, 0.49, 0.51 s), then a straight outro at 118
+ * from the beat after the last measured one. The measured beats are the
+ * grid's beats, the index is linear between them, the count runs through,
+ * and every route to a beat lands on the same bits. */
+static const double TM[] = { 4.0, 4.5, 5.02, 5.51, 6.02 };
+static const double OUTRO = 6.52;
+
+static RXGrid dynamic_grid(void)
+{
+    RXGrid g = { .beats_per_bar = 4 };
+    CHECK(rx_grid_add_section(&g, 0.0, 120.0, 1) == 0);
+    for (size_t i = 0; i < RX_ARRAY_ELEMS(TM); i++) {
+        double next = i + 1 < RX_ARRAY_ELEMS(TM) ? TM[i + 1] : OUTRO;
+        CHECK(rx_grid_add_beat(&g, TM[i], 60.0 / (next - TM[i]), 0) == (int)i + 1);
+    }
+    CHECK(rx_grid_add_section(&g, OUTRO, 118.0, 0) == 6);
+    return g;
+}
+
+static void test_dynamic_queries(void)
+{
+    RXGrid g = dynamic_grid();
+    CHECK(rx_grid_valid(&g) && rx_grid_dynamic(&g) && g.nb_sections == 7);
+    CHECK(!g.sections[0].measured && g.sections[1].measured && g.sections[5].measured);
+    CHECK(!g.sections[6].measured);
+    RXGrid plain;
+    rx_grid_init(&plain, 0.5, 120.0);
+    CHECK(!rx_grid_dynamic(&plain));
+    rx_grid_free(&plain);
+
+    /* The beat list: the intro's eight beats, the five measured ones at
+     * their own times and tempos, the outro's. */
+    int nb;
+    RXBeat *b = beats_of(&g, 10.0, &nb);
+    CHECK(nb == 20);
+    static const int numbers[] = { 1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4 };
+    for (int i = 0; i < nb && i < 20; i++) {
+        CHECK(b[i].number == numbers[i]);
+        if (i < 8)
+            CHECK(b[i].time == 0.5 * i && b[i].bpm == 120.0);
+        else if (i < 13)
+            CHECK(b[i].time == TM[i - 8] && b[i].bpm == g.sections[i - 7].bpm);
+        else
+            CHECK(b[i].time == OUTRO + (double)(i - 13) * (60.0 / 118.0) && b[i].bpm == 118.0);
+    }
+    if (nb == 20) {
+        CHECK_NEAR(b[9].bpm, 60.0 / 0.52, 1e-9);
+        CHECK(b[12].bpm == 120.0);
+    }
+
+    /* Indices: integer on the beats, linear between two measured beats. */
+    CHECK(rx_grid_time_to_beat(&g, 4.5) == 9.0);
+    CHECK_NEAR(rx_grid_time_to_beat(&g, 4.76), 9.5, 1e-12);
+    CHECK_NEAR(rx_grid_beat_to_time(&g, 9.5), 4.76, 1e-12);
+    CHECK_NEAR(rx_grid_time_to_beat(&g, 6.27), 12.5, 1e-12);
+    CHECK(rx_grid_offset_beats(&g, 4.0, 2) == 5.02);
+    CHECK(rx_grid_offset_beats(&g, 5.02, -2) == 4.0);
+    CHECK(rx_grid_offset_beats(&g, 5.51, 2) == OUTRO);
+    CHECK_NEAR(rx_grid_offset_beats(&g, 4.25, 1), 4.76, 1e-12);
+
+    /* The nearest beat, before, after, quantize. */
+    int number;
+    CHECK(rx_grid_nearest_beat(&g, 5.2, &number) == 5.02 && number == 3);
+    CHECK(rx_grid_nearest_beat(&g, 5.3, &number) == 5.51 && number == 4);
+    CHECK(rx_grid_quantize(&g, 5.4) == 5.51);
+    CHECK(rx_grid_beat_after(&g, 5.02) == 5.51);
+    CHECK(rx_grid_beat_before(&g, 5.5) == 5.02);
+    CHECK(rx_grid_beat_after(&g, 6.02) == OUTRO);
+    CHECK(rx_grid_beat_before(&g, 6.6) == OUTRO);
+
+    /* Bars and numbers, the local tempo, the typical tempo. */
+    int bar, beat;
+    rx_grid_bar_of(&g, 5.51, &bar, &beat);
+    CHECK(bar == 3 && beat == 4);
+    rx_grid_bar_of(&g, 6.02, &bar, &beat);
+    CHECK(bar == 4 && beat == 1);
+    rx_grid_bar_of(&g, 6.6, &bar, &beat);
+    CHECK(bar == 4 && beat == 2);
+    CHECK(rx_grid_bar_time(&g, 4, 1) == 6.02);
+    CHECK(rx_grid_bar_time(&g, 3, 3) == 5.02);
+    CHECK_NEAR(rx_grid_bpm_at(&g, 5.1), 60.0 / 0.49, 1e-9);
+    CHECK(rx_grid_bpm_at(&g, 7.0) == 118.0);
+    CHECK(rx_grid_bpm_median(&g, 10.0) == 120.0);
+
+    /* Every route to a beat gives the same bits. */
+    for (int i = 0; i < nb; i++) {
+        double idx = rx_grid_time_to_beat(&g, b[i].time);
+        CHECK(idx == (double)i);
+        CHECK(rx_grid_beat_to_time(&g, idx) == b[i].time);
+        CHECK(rx_grid_quantize(&g, b[i].time + 1e-4) == b[i].time);
+        CHECK(rx_grid_quantize(&g, b[i].time - 1e-4) == b[i].time);
+        if (i + 1 < nb)
+            CHECK(rx_grid_beat_after(&g, b[i].time) == b[i + 1].time);
+    }
+    free(b);
+
+    /* A copy keeps the measured beats; a grid ending in measured beats
+     * runs on from the last at its tempo. */
+    RXGrid c = { 0 };
+    CHECK(rx_grid_copy(&c, &g) == 0 && rx_grid_dynamic(&c) && c.sections[3].measured);
+    rx_grid_free(&c);
+    rx_grid_free(&g);
+    RXGrid e = { .beats_per_bar = 4 };
+    rx_grid_add_beat(&e, 1.0, 120.0, 1);
+    rx_grid_add_beat(&e, 1.5, 120.0, 0);
+    rx_grid_add_beat(&e, 2.0, 100.0, 0);
+    b = beats_of(&e, 5.0, &nb);
+    CHECK(nb == 7);
+    if (nb == 7) {
+        CHECK(b[2].time == 2.0 && b[3].time == 2.6 && b[6].time == 2.0 + 4 * 0.6);
+        CHECK(b[3].number == 4 && b[3].bpm == 100.0);
+    }
+    free(b);
+    CHECK(rx_grid_bpm_at(&e, 10.0) == 100.0);
+    rx_grid_free(&e);
+}
+
+/* The tools on a dynamic grid: shift, set downbeat, a tempo typed or
+ * tapped (straight from here), x2 and /2 on the beats, straighten (what
+ * MERGE does there), split (nothing), start_at. */
+static void test_dynamic_tools(void)
+{
+    RXGrid g = dynamic_grid();
+    int nb0, nb1;
+    RXBeat *before = beats_of(&g, 10.0, &nb0);
+
+    rx_grid_shift(&g, 0.01);
+    RXBeat *after = beats_of(&g, 10.0, &nb1);
+    CHECK(nb0 == nb1);
+    for (int i = 0; i < nb0 && i < nb1; i++)
+        CHECK_NEAR(after[i].time, before[i].time + 0.01, 1e-12);
+    free(after);
+    rx_grid_shift(&g, -0.01);
+
+    /* Set downbeat on a measured beat: its count moves, every time stays. */
+    rx_grid_set_downbeat(&g, 5.5);
+    CHECK(g.sections[4].beat == 1 && g.sections[4].start == 5.51);
+    int bar, beat;
+    rx_grid_bar_of(&g, 5.51, &bar, &beat);
+    CHECK(beat == 1);
+    rx_grid_bar_of(&g, 6.02, &bar, &beat);
+    CHECK(beat == 2);
+    rx_grid_bar_of(&g, OUTRO, &bar, &beat);
+    CHECK(beat == 3);
+    after = beats_of(&g, 10.0, &nb1);
+    CHECK(nb0 == nb1);
+    for (int i = 0; i < nb0 && i < nb1; i++)
+        CHECK(after[i].time == before[i].time);
+    free(after);
+    g.sections[4].beat = 0;
+
+    /* A split on a measured beat changes nothing. */
+    CHECK(rx_grid_split_at(&g, 5.0) == 3 && g.nb_sections == 7);
+
+    /* A tempo set inside the passage: straight at that tempo from the
+     * beat at or before the playhead, the earlier beats as measured. */
+    RXGrid s;
+    rx_grid_copy(&s, &g);
+    rx_grid_set_bpm_at(&s, 5.1, 110.0);
+    CHECK(s.nb_sections == 5 && s.sections[1].measured && s.sections[2].measured);
+    CHECK(!s.sections[3].measured && s.sections[3].start == 5.02 && s.sections[3].bpm == 110.0);
+    CHECK(s.sections[3].beat == 0 && s.sections[4].start == OUTRO);
+    after = beats_of(&s, 10.0, &nb1);
+    CHECK(nb1 == 20);
+    if (nb1 == 20) {
+        CHECK(after[10].time == 5.02);
+        CHECK_NEAR(after[11].time, 5.02 + 60.0 / 110.0, 1e-12);
+        CHECK_NEAR(after[12].time, 5.02 + 120.0 / 110.0, 1e-12);
+        CHECK(after[13].time == OUTRO && after[13].number == 2);
+    }
+    free(after);
+    rx_grid_free(&s);
+
+    /* Straighten (MERGE): the passage becomes one line held on its first
+     * beat, its slope the least squares through its beats and the beat
+     * after them. */
+    rx_grid_copy(&s, &g);
+    CHECK(rx_grid_merge_at(&s, 5.0) == 1);
+    CHECK(s.nb_sections == 3 && !s.sections[1].measured && s.sections[1].start == 4.0);
+    CHECK_NEAR(s.sections[1].bpm, 60.0 * 55.0 / 27.75, 1e-9);
+    CHECK(s.sections[1].beat == 0 && s.sections[2].start == OUTRO);
+    CHECK(rx_grid_straighten_at(&s, 5.0) == RX_ERROR(ENOENT));
+    rx_grid_free(&s);
+
+    /* x2: a beat at every midpoint, each at twice its local tempo. */
+    rx_grid_copy(&s, &g);
+    CHECK(rx_grid_double_at(&s, 5.0) == 4);           /* the new beat at 4.76 holds 5.0 */
+    CHECK(s.nb_sections == 12);
+    after = beats_of(&s, 10.0, &nb1);
+    CHECK(nb1 == 25);
+    if (nb1 == 25) {
+        CHECK(after[8].time == 4.0 && after[9].time == 4.25 && after[10].time == 4.5);
+        CHECK_NEAR(after[11].time, 4.76, 1e-12);
+        CHECK(after[16].time == 6.02 && after[17].time == 6.27 && after[18].time == OUTRO);
+        CHECK(after[8].bpm == 240.0 && after[9].bpm == 240.0 && after[9].number == 2);
+        CHECK_NEAR(after[10].bpm, 120.0 / 0.52, 1e-9);
+        CHECK(after[16].number == 1 && after[18].number == 3);
+    }
+    free(after);
+    /* And x2 on the straight outro doubles its tempo as before. */
+    CHECK(rx_grid_double_at(&s, 7.0) == 11 && s.sections[11].bpm == 236.0);
+    rx_grid_free(&s);
+
+    /* /2: every other beat from the passage's first; with five beats the
+     * last goes too, so the outro is one new beat after the kept one. */
+    rx_grid_copy(&s, &g);
+    CHECK(rx_grid_halve_at(&s, 5.0) == 1);            /* the kept beat at 4.0 holds 5.0 */
+    CHECK(s.nb_sections == 4);
+    after = beats_of(&s, 10.0, &nb1);
+    CHECK(nb1 == 17);
+    if (nb1 == 17) {
+        CHECK(after[8].time == 4.0 && after[9].time == 5.02 && after[10].time == OUTRO);
+        CHECK(after[8].number == 1 && after[9].number == 2 && after[10].number == 3);
+        CHECK_NEAR(after[8].bpm, 60.0 / 1.02, 1e-9);
+        CHECK_NEAR(after[9].bpm, 60.0 / 1.5, 1e-9);
+    }
+    free(after);
+    CHECK(rx_grid_halve_at(&s, 1.0) == 0 && s.sections[0].bpm == 60.0);
+    rx_grid_free(&s);
+
+    /* start_at inside the passage: the beats before go, the first kept
+     * measured beat is the grid's first with its number. */
+    rx_grid_copy(&s, &g);
+    CHECK(rx_grid_start_at(&s, 4.2) == 0);
+    CHECK(s.nb_sections == 5 && s.sections[0].measured && s.sections[0].start == 4.5);
+    CHECK(s.sections[0].beat == 2);
+    after = beats_of(&s, 10.0, &nb1);
+    CHECK(nb1 == nb0 - 9);
+    for (int i = 0; i < nb1 && i + 9 < nb0; i++)
+        CHECK(after[i].time == before[i + 9].time && after[i].number == before[i + 9].number);
+    free(after);
+    rx_grid_free(&s);
+
+    /* A measured beat added at a section's time replaces it. */
+    rx_grid_copy(&s, &g);
+    CHECK(rx_grid_add_beat(&s, OUTRO, 119.0, 0) == 6 && s.sections[6].measured && s.nb_sections == 7);
+    rx_grid_free(&s);
+
+    free(before);
+    rx_grid_free(&g);
+
+    /* A thousand measured beats: the walk is linear, and a query costs a
+     * few microseconds. */
+    RXGrid big = { .beats_per_bar = 4 };
+    for (int i = 0; i < 1000; i++)
+        rx_grid_add_beat(&big, 0.5 + i * 0.48 + (i % 7) * 0.001, 125.0, i ? 0 : 1);
+    clock_t t0 = clock();
+    double sum = 0;
+    for (int i = 0; i < 100000; i++)
+        sum += rx_grid_quantize(&big, i * 0.0048);
+    double secs = (double)(clock() - t0) / CLOCKS_PER_SEC;
+    printf("1e5 quantize on a 1000-beat dynamic grid: %.3f s (%g)\n", secs, sum);
+    CHECK(secs < 2.0);
+    int n;
+    RXBeat *bb = beats_of(&big, 480.03, &n);            /* just past the last measured beat */
+    CHECK(n == 1000);
+    for (int i = 0; i < n; i++)
+        CHECK(rx_grid_beat_to_time(&big, rx_grid_time_to_beat(&big, bb[i].time)) == bb[i].time);
+    free(bb);
+    rx_grid_free(&big);
+}
+
 int main(void)
 {
     test_single();
@@ -505,5 +779,7 @@ int main(void)
     test_absurd_tempo();
     test_not_a_time();
     test_same_hit();
+    test_dynamic_queries();
+    test_dynamic_tools();
     return test_done("core_grid");
 }
