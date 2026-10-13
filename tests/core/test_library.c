@@ -1361,6 +1361,103 @@ static void *open_thread(void *arg)
     return NULL;
 }
 
+/* A batch whose transaction cannot start (another writer holds the
+ * library) reports every file failed and keeps none of them: before,
+ * rx_library_add_file leaked the probed track and a folder's files were
+ * not reported. A folder whose files are all known takes no write lock:
+ * it adds nothing while another writer holds the library. */
+static void test_busy_add(void)
+{
+    char *dir = test_dir("library-busy");
+    char *files = path_in(dir, "music"), *lroot = path_in(dir, "lib");
+    char *a = path_in(files, "a.wav"), *b = path_in(files, "b.wav");
+    CHECK(test_write_wav(a, 0.1, 44100, 1, "A", NULL, NULL) == 0);
+    CHECK(test_write_wav(b, 0.1, 44100, 1, "B", NULL, NULL) == 0);
+    RXLibrary lib;
+    CHECK(rx_library_open(&lib, lroot) == 0);
+    sqlite3_busy_timeout(lib.db->db, 50);
+    char *db = path_in(lroot, "library.db");
+    sqlite3 *s;
+    CHECK(sqlite3_open(db, &s) == SQLITE_OK);
+    CHECK(sqlite3_exec(s, "BEGIN IMMEDIATE", NULL, NULL, NULL) == SQLITE_OK);
+
+    int err = 0;
+    CHECK(!rx_library_add_file(&lib, a, &err) && err == RX_ERROR(EBUSY));
+    AddLog log = { 0 };
+    CHECK(rx_library_add_path(&lib, files, add_cb, &log) == RX_ERROR(EBUSY));
+    CHECK(log.failed == 2 && !log.reported && lib.nb_tracks == 0);
+
+    CHECK(sqlite3_exec(s, "COMMIT", NULL, NULL, NULL) == SQLITE_OK);
+    log = (AddLog) { 0 };
+    CHECK(rx_library_add_path(&lib, files, add_cb, &log) == 2 && log.reported == 2 && lib.nb_tracks == 2);
+    CHECK(sqlite3_exec(s, "BEGIN IMMEDIATE", NULL, NULL, NULL) == SQLITE_OK);
+    log = (AddLog) { 0 };
+    CHECK(rx_library_add_path(&lib, files, add_cb, &log) == 0 && log.reported == 2 && !log.failed);
+    CHECK(sqlite3_exec(s, "COMMIT", NULL, NULL, NULL) == SQLITE_OK);
+    sqlite3_close(s);
+    rx_library_close(&lib);
+
+    test_rm_rf(dir);
+    free(db);
+    free(a);
+    free(b);
+    free(files);
+    free(lroot);
+    free(dir);
+}
+
+/* rx_library_find_path keeps a hash of the paths (re-adding a folder of
+ * 20000 known files took 5 s scanning the list per file): it finds every
+ * track by its path through the index growing, tracks removed and moved,
+ * and the library opened again, and nothing by a path no track has. */
+static void test_find_path(void)
+{
+    char *dir = test_dir("library-paths");
+    char *files = path_in(dir, "music"), *lroot = path_in(dir, "lib");
+    enum { N = 700 };
+    for (int i = 0; i < N; i++) {
+        char *p = rx_asprintf("%s/%04d.wav", files, i);
+        CHECK(test_write_wav(p, 0.01, 8000, 1, NULL, NULL, NULL) == 0);
+        free(p);
+    }
+    RXLibrary lib;
+    CHECK(rx_library_open(&lib, lroot) == 0);
+    CHECK(rx_library_add_path(&lib, files, NULL, NULL) == N);
+    for (int round = 0; round < 2; round++) {
+        /* Every third goes, every fifth of the rest moves. */
+        for (int i = lib.nb_tracks - 1; round == 0 && i >= 0; i--) {
+            RXTrack *t = lib.tracks[i];
+            if (i % 3 == 0) {
+                CHECK(rx_library_remove(&lib, t) == 0);
+            } else if (i % 5 == 0) {
+                char *to = rx_asprintf("%s/moved/%d.wav", dir, i);
+                CHECK(rx_library_relocate(&lib, t, to) == 0);
+                free(to);
+            }
+        }
+        int found = 0, gone = 0;
+        for (int i = 0; i < lib.nb_tracks; i++)
+            found += rx_library_find_path(&lib, lib.tracks[i]->path) == lib.tracks[i];
+        for (int i = 0; i < N; i++) {
+            char *p = rx_asprintf("%s/%04d.wav", files, i);
+            RXTrack *t = rx_library_find_path(&lib, p);
+            gone += !t;
+            CHECK(!t || !strcmp(t->path, p));
+            free(p);
+        }
+        CHECK(found == lib.nb_tracks && lib.nb_tracks == N - (N + 2) / 3);
+        CHECK(gone == N - lib.nb_tracks + 93);
+        CHECK(!rx_library_find_path(&lib, "/nowhere.wav") && !rx_library_find_path(&lib, NULL));
+        rx_library_close(&lib);
+        CHECK(rx_library_open(&lib, lroot) == 0);
+    }
+    rx_library_close(&lib);
+    test_rm_rf(dir);
+    free(files);
+    free(lroot);
+    free(dir);
+}
+
 /* Two branches each made a schema 6, and one became 7 at the merge. A
  * library at either 6 opens at 7 with every column and keeps its data:
  * the measured beats' 6 gains the legend's columns, the legend's 6 (its
@@ -1518,6 +1615,8 @@ int main(void)
     test_concurrent_create();
     test_migrate_v6();
     test_newer_meanwhile();
+    test_busy_add();
+    test_find_path();
 
     if (!test_failures)
         test_rm_rf(dir);

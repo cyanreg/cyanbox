@@ -141,6 +141,7 @@ typedef struct RXPlaylistFolder {
 /* ------------------------------------------------------------------ library */
 
 typedef struct RXDb RXDb;       /* src/core/db.c: the sqlite3 handle and statements */
+typedef struct RXPathIndex RXPathIndex;   /* src/core/library.c: the tracks by path */
 
 typedef struct RXLibrary {
     char     *root;
@@ -150,6 +151,7 @@ typedef struct RXLibrary {
     int       nb_tracks;
     RXPlaylistFolder *root_folder;   /* playlist tree, owned */
     unsigned  generation;       /* bumped on every change; the interface watches it */
+    RXPathIndex *by_path;       /* rx_library_find_path's; kept by the library's own edits */
 } RXLibrary;
 
 /* Opens (creating when absent) the library at `root` (NULL = default),
