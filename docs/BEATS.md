@@ -708,13 +708,39 @@ cut numbers itself.
 
 **Confidence** (dj's): the share of 16-beat windows (every 8 beats) whose
 average beat starts its rise within 15 ms of the grid, weighted by how
-clearly it rises (contrast less half the median contrast). Two changes. The
-weight is capped at twice the median: in a breakdown the average beat's
+clearly it rises (contrast less half the median contrast). Three changes.
+The weight is capped at twice the median: in a breakdown the average beat's
 level is tiny, its contrast explodes, and a few windows whose loudest rise
-is a riser or a crash outweighed thirty bars of kicks. And the envelopes are
+is a riser or a crash outweighed thirty bars of kicks. The envelopes are
 cut again at the grid's own beats wherever a tracked beat strayed more than
 25 ms from it, so the confidence reads the grid as written rather than
 where the tracker happened to be (empty windows had given one track 0.00).
+And the rise must be one: at least half the window's contrast, or half the
+median contrast if that is less, from the lowest level within the search
+(an eighth of a beat, at most 50 ms) before its steepest point to the
+highest within it after. The steepest point of the average beat is taken
+however small, and the contrast spans the whole fold (±50 ms): beats 60 ms
+after their hits fold the hits' decaying tails, a contrast of 13 to 33 on
+a kick and click loop, and find a ripple near the beats, a rise under 0.01,
+which counted as on the grid (0.87 on that loop's mid band, 0.20 on its
+high band; now 0). The less of the two halves, because a quiet window's
+hit rises by half of its own contrast but not of the median's, and a hit
+after something louder in the same window by half the median's but not of
+its own. Read only 10 ms either side (where the attack is timed), the
+rise of a drummer's scattered hits falls short: `test_beats`' live drums
+(8 ms of jitter) would read 0.85 instead of 1.00 on a grid that is right.
+The weight is still the contrast, not the rise: a window whose
+beats sit in a tail has a beat, not where the grid is, and weighted by
+the rise it found it counts for nothing (a grid half on that loop's hits
+and half 60 ms late read 1.0 so; it reads 0.30 to 0.39 now, 0.39 to 0.90
+before). On the 58 acceptance tracks two confidences moved, each by one
+window whose rise at the grid is a third of its contrast and under half
+the median's: "CYBERPROTOCOL" 0.976 to 0.972 and "ag - Weary" 1.000 to
+0.970 (a window at 4:17); no flag changed, so `low-confidence` means what
+it did. Still
+out of its reach: a grid off by more than the fold reaches everywhere,
+whose windows hold no hit at all and so set their own median (one 100 ms
+late on that loop reads up to 0.24, as before).
 
 Flags (`RXGridFlag`), and what they should mean to the DJ in the interface:
 
@@ -971,6 +997,7 @@ the final version was not finished (see "Known weaknesses").
 | Re-track | the local period from attack intervals within 40 % of the line's, ±8 beats; the range from ¼ period before the first beat to ¼ past the last | the tracker inserts beats at one period |
 | Judgment | per 16-beat window: lost where the line is within 15 ms of the hits and the walk twice as far and 3 ms more, or an end beat 15 ms off a straight neighbour's line; lost windows back to the line, then the mean must beat the line's by 1 ms | the line is the simpler grid; a fold is noisy, and blind to half a window |
 | No kicks | kick/full periodicity < 0.5 at 1× and 2× the beat rate, < 1 at ½× | two-step kicks cancel at the beat rate |
+| Confidence | 16-beat windows every 8; on the grid: a rise within 15 ms, at least half the window's contrast or the median's (the less), read over the search either side; weight: contrast less half the median, at most 1.5 medians | dj's; a hit's tail is no rise |
 | Low confidence | < 0.5 | |
 | Music start | floor: commonest level before the music is within 45 dB of the loud level (90th percentile); at least 60 dB under it and 60 ms long | dither and hiss are floors; an encoder delay is not |
 | Start threshold | after digital silence 65 dB under the loud level; over a noise floor 20 dB over it, never lower than 50 dB under the loud level; held for a third of 200 ms | a -60 dB fade counts from its first hit; a fade over dither from where it is heard; no clicks |
@@ -1037,6 +1064,7 @@ beat, bar or snap lies before it, and the automatic cue.
 | a kick and clap loop at 87, 9 and 10 s long | 174.000, `octave-uncertain` (margin 0.33): 87 won the octave, but has too few beats for a grid; no grid before |
 | the same loop, 12 s long | 87.000, −1.3 ms |
 | (not a track) a walk through attacks that leave a 130 BPM pulse for a dozen beats, 160 ms off | tempo steps of 3.8 % at most (5.5 % without the continuity), the beats away from it on the pulse |
+| (not a track) a kick and a click on every beat at 128, sixteen beats folded on their hits and 60 ms after them (the confidence's windows) | on the hits a rise of 7.20, its whole contrast, at −1.3 ms; 60 ms late a contrast of 12.83 from the tails and a rise of 0.002 at +4.6 ms: not on the grid (it counted as on it) |
 
 The three tracks with a tempo that moves are judged beat by beat against
 their true beat times (the RMS and the largest distance of each true

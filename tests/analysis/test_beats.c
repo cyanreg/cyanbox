@@ -1081,6 +1081,55 @@ static int check_misc(RXCompute *gpu)
         }
     }
 
+    /* The confidence's windows (rx_fold's rise; grid_confidence): a kick
+     * and a click on every beat at 128, sixteen beats folded on their
+     * hits rise within 15 ms by at least half their contrast, which is on
+     * the grid. Folded 60 ms after them, on the hits' decaying tails, the
+     * mid band's steepest point is a ripple a few ms from the beats,
+     * which the confidence counted as on the grid; its rise is next to
+     * nothing, which is not. */
+    {
+        const double P = 60.0 / 128.0, search = fmin(0.125 * P, 0.050);
+        enum { NB = 16 };
+        Track t;
+        Lcg l = { .s = 4242 };
+        if (track_alloc(&t, 0.5 + (NB + 4) * P) < 0)
+            return fails + 1;
+        for (int k = 0; k < NB + 4; k++) {
+            add_kick(&t, 0.5 + k * P, 0.8);
+            add_hat(&t, 0.5 + k * P, 0.5, &l);
+        }
+        const size_t len = (size_t)RX_NB_BANDS * RX_ENV_LEN;
+        RXEnvCtx *ec = NULL;
+        RXBeatObs ob[NB];
+        double tm[NB], centre[NB], on[3], late[3];
+        float *env = malloc(NB * len * sizeof(*env));
+        bool ok = env && rx_env_alloc(&ec, t.x, t.n, gpu) >= 0;
+        for (int pass = 0; ok && pass < 2; pass++) {
+            for (int k = 0; k < NB; k++) {
+                tm[k] = 0.5 + (2 + k) * P + (pass ? 0.060 : 0.0);
+                ob[k] = (RXBeatObs) { .time = tm[k], .index = k };
+            }
+            RXBeatEnvs e = { .env = env, .centre = centre, .nb = NB };
+            ok = rx_env_windows(ec, tm, NB, env, centre) >= 0;
+            double *v = pass ? late : on;
+            rx_fold(&e, ob, 0, NB - 1, NULL, RX_BAND_MID, search, &v[0], &v[2], &v[1]);
+        }
+        rx_env_free(&ec);
+        free(env);
+        free(t.x);
+        if (!ok || !(fabs(on[2]) <= 0.015 && on[1] >= 0.5 * on[0]) || !(late[1] < 0.5 * late[0])) {
+            printf("FAIL %sfold: on the hits contrast %.2f, rise %.2f at %+.1f ms; 60 ms late "
+                   "%.2f, %.3f at %+.1f ms\n", path, on[0], on[1], on[2] * 1e3, late[0], late[1],
+                   late[2] * 1e3);
+            fails++;
+        } else {
+            printf("ok   %sfold: on the hits contrast %.2f, rise %.2f at %+.1f ms; 60 ms late "
+                   "%.2f, %.3f at %+.1f ms\n", path, on[0], on[1], on[2] * 1e3, late[0], late[1],
+                   late[2] * 1e3);
+        }
+    }
+
     /* Silence and a too-short input give an empty grid, not an error. */
     float *z = calloc(RATE * 20, sizeof(*z));
     RXBeatResult r;

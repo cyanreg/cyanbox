@@ -353,7 +353,8 @@ static int section_spread(const RXBeatObs *beats, RXFitSection *s)
 static int refine_section(Ctx *c, RXFitSection *s, double *contrast)
 {
     double off = 0.0;
-    int band = rx_fold(&c->envs, c->beats, s->first, s->last, s, -1, 0.030, contrast, &off);
+    int band = rx_fold(&c->envs, c->beats, s->first, s->last, s, -1, 0.030, contrast, &off,
+                       NULL);
     s->t0 += off;
     /* The attack search scales with the section's scatter: a tight window
      * around a line that a drummer's spread has pulled early would cut the
@@ -374,11 +375,11 @@ static int refine_section(Ctx *c, RXFitSection *s, double *contrast)
      * the attacks, their mean, is the phase. */
     bool steady = s->jitter < 0.003;
     if (steady) {
-        rx_fold(&c->envs, c->beats, s->first, s->last, s, band, 0.005, contrast, &off);
+        rx_fold(&c->envs, c->beats, s->first, s->last, s, band, 0.005, contrast, &off, NULL);
         s->t0 += off;
     }
     if (c->opt->snap_bpm && rx_snap_section(c->beats, s, SNAP_TOL) && steady) {
-        rx_fold(&c->envs, c->beats, s->first, s->last, s, band, 0.003, contrast, &off);
+        rx_fold(&c->envs, c->beats, s->first, s->last, s, band, 0.003, contrast, &off, NULL);
         s->t0 += off;
     }
     /* The jitter: the spread of the attacks around the final line, looked
@@ -695,7 +696,7 @@ static int stretch_windows(Ctx *c, const RXFitSection *s, int band, const double
         int b = RX_MIN(a + 15, n - 1);
         if (b - a < 7)
             break;
-        rx_fold(&e, obs, a, b, NULL, band, search, &contrast[nw], &offs[nw]);
+        rx_fold(&e, obs, a, b, NULL, band, search, &contrast[nw], &offs[nw], NULL);
         nw++;
     }
     /* The reference contrast: the median over these windows when none is
@@ -1459,14 +1460,18 @@ static int dynamic_pass(Ctx *c)
     return ret < 0 ? ret : 0;
 }
 
+/* One of the confidence's windows, as rx_fold reads it. */
+typedef struct Window {
+    double contrast, offset, rise;
+} Window;
+
 /* The confidence, as dj's: the share of 16-beat windows (every 8 beats)
- * whose average beat starts its rise within 15 ms of the grid, weighted
- * by how clearly it rises. Into *out; 0 or -ENOMEM (a confidence of 0
- * would flag the grid low-confidence). */
+ * whose average beat starts a clear rise within 15 ms of the grid,
+ * weighted by how much of a beat the window shows. Into *out; 0 or
+ * -ENOMEM (a confidence of 0 would flag the grid low-confidence). */
 static int grid_confidence(const Ctx *c, const int *bands, double *out)
 {
-    double num = 0.0, den = 0.0;
-    double *contrast = NULL, *offs = NULL;
+    Window *win = NULL;
     int nw = 0, cap = 0;
     *out = 0.0;
     for (int si = 0; si < c->nb_secs; si++) {
@@ -1478,59 +1483,74 @@ static int grid_confidence(const Ctx *c, const int *bands, double *out)
                 break;
             if (nw == cap) {
                 cap = cap ? 2 * cap : 64;
-                double *nc = realloc(contrast, cap * sizeof(*nc));
-                double *no = realloc(offs, cap * sizeof(*no));
-                if (!nc || !no) {
-                    free(nc ? nc : contrast);
-                    free(no ? no : offs);
+                Window *nwin = realloc(win, (size_t)cap * sizeof(*nwin));
+                if (!nwin) {
+                    free(win);
                     return RX_ERROR(ENOMEM);
                 }
-                contrast = nc;
-                offs = no;
+                win = nwin;
             }
+            Window *w = &win[nw++];
             rx_fold(&c->envs, c->beats, a, b, s->dynamic ? NULL : s, bands[si], search,
-                    &contrast[nw], &offs[nw]);
-            nw++;
+                    &w->contrast, &w->offset, &w->rise);
         }
     }
-    if (!nw) {
-        free(contrast);
-        free(offs);
-        return 0;
-    }
-    double *tmp = malloc(nw * sizeof(*tmp));
+    double *tmp = malloc((size_t)RX_MAX(nw, 1) * sizeof(*tmp));
     if (!tmp) {
-        free(contrast);
-        free(offs);
+        free(win);
         return RX_ERROR(ENOMEM);
     }
     /* The median over the windows that have an average beat at all. */
     int nt = 0;
     for (int i = 0; i < nw; i++) {
-        if (contrast[i] > 0.0)
-            tmp[nt++] = contrast[i];
+        if (win[i].contrast > 0.0)
+            tmp[nt++] = win[i].contrast;
     }
-    if (!nt) {
-        free(tmp);
-        free(contrast);
-        free(offs);
-        return 0;
+    double med = 0.0;
+    if (nt) {
+        qsort(tmp, (size_t)nt, sizeof(*tmp), cmp_dbl);
+        med = tmp[nt / 2];
     }
-    qsort(tmp, (size_t)nt, sizeof(*tmp), cmp_dbl);
-    double med = tmp[nt / 2];
     free(tmp);
     /* dj weighted a window by its contrast less half the median. Capped
      * here at twice the median: in a breakdown the average beat's level is
      * tiny, its contrast explodes, and a few such windows (whose loudest
-     * rise is a riser or a crash) outweighed thirty bars of kicks. */
+     * rise is a riser or a crash) outweighed thirty bars of kicks.
+     *
+     * On the grid, the window's average beat rises within 15 ms of it, and
+     * clearly: by at least half of its contrast or of the median contrast,
+     * whichever is less. rx_fold takes the steepest point within the
+     * search however small, and the contrast spans the whole fold, +-50
+     * ms: beats 60 ms after their hits fold the hits' decaying tails
+     * (contrast 13 to 33 on a kick and click loop) and find a ripple near
+     * the beats (a rise under 0.01), which counted as on the grid (0.87
+     * on that loop's mid band). Half, as stretch_windows counts a window
+     * whose average beat rises by less than half the reference at the
+     * search width. Of the less of the two: a quiet window's hit rises by
+     * half of its own contrast and less than half the median's, and a hit
+     * after something louder in the same window (a riser's peak, which is
+     * then the contrast) by half the median's and less than half its own;
+     * both are on the grid. The weight stays the contrast: a window whose
+     * beats sit in a tail has a beat, just not where the grid is, and
+     * weighted by the rise it found it would count for nothing (a grid
+     * half on that loop's hits and half 60 ms late read 1.0 so; 0.30 to
+     * 0.39 now, 0.39 to 0.90 before). */
+    double num = 0.0, den = 0.0;
+    int nb_on = 0, nb_flat = 0;
     for (int i = 0; i < nw; i++) {
-        double w = contrast[i] < 0.5 * med ? 0.0 : fmin(contrast[i], 2.0 * med) - 0.5 * med;
-        num += w * (fabs(offs[i]) <= 0.015);
-        den += w;
+        const Window *w = &win[i];
+        double wt = w->contrast < 0.5 * med ? 0.0 : fmin(w->contrast, 2.0 * med) - 0.5 * med;
+        bool near = fabs(w->offset) <= 0.015;
+        bool on = near && w->rise >= 0.5 * fmin(w->contrast, med);
+        num += wt * on;
+        den += wt;
+        nb_on += on && wt > 0.0;
+        nb_flat += near && !on && wt > 0.0;
     }
-    free(contrast);
-    free(offs);
+    free(win);
     *out = den > 0.0 ? num / den : 0.0;
+    rx_debug("beats: confidence %.3f: %d of %d windows on the grid, %d near it without a clear "
+             "rise\n", *out, nb_on, nw, nb_flat);
     return 0;
 }
 
@@ -2260,7 +2280,8 @@ static int fit_grid(Ctx *c, double bpm, double lo, double hi)
      * tracked times move by that much before each beat's attack is
      * measured. */
     double contrast, shift;
-    int band = rx_fold(&c->envs, c->beats, 0, c->nb_beats - 1, NULL, -1, 0.025, &contrast, &shift);
+    int band = rx_fold(&c->envs, c->beats, 0, c->nb_beats - 1, NULL, -1, 0.025, &contrast, &shift,
+                       NULL);
     for (int i = 0; i < c->nb_beats; i++)
         c->beats[i].time += shift;
     c->onset_shift = shift;
