@@ -1,27 +1,43 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
-/* MPRIS 2 for the deck (rxbox/mpris.h), on libdbus' low-level API: the
- * object /org/mpris/MediaPlayer2 under the name
- * org.mpris.MediaPlayer2.rxbox, with the root and Player interfaces of
- * freedesktop.org's Media Player Remote Interfacing Specification 2.2
- * (specifications.freedesktop.org/mpris-spec/latest), Properties and
- * Introspectable. There is no TrackList: the browser's current view stands
- * for one, through Next and Previous.
+/* MPRIS 2 for the deck (rxbox/mpris.h), on sd-bus: the object
+ * /org/mpris/MediaPlayer2 under the name org.mpris.MediaPlayer2.rxbox,
+ * with the root and Player interfaces of freedesktop.org's Media Player
+ * Remote Interfacing Specification 2.2
+ * (specifications.freedesktop.org/mpris-spec/latest). There is no
+ * TrackList: the browser's current view stands for one, through Next and
+ * Previous.
+ *
+ * The two interfaces are vtables: each method with its handler, each
+ * property with its getter (and a setter for Volume and Rate), and the
+ * Seeked signal. sd-bus does the rest of D-Bus from them: Introspectable,
+ * Properties (Get, GetAll, and Set, which it refuses for a property
+ * without a setter as read-only), Peer, a call's arguments checked
+ * against its signature, the errors for what the object does not have,
+ * and PropertiesChanged built from the getters for the names it is given.
  *
  * Decisions:
- *  - A private connection, used on the owner thread only, so libdbus never
- *    calls into the app from a thread of its own. rx_mpris_tick() reads,
- *    dispatches and writes with a timeout of 0; a call is answered from
- *    inside the dispatch and acts on the deck as the interface's buttons
- *    do. Connecting and taking the name, at startup, are the only waits.
+ *  - A connection of our own to the user bus (sd_bus_open_user), used on
+ *    the owner thread only: sd-bus has no threads and calls into the app
+ *    only from sd_bus_process(). rx_mpris_tick() runs that until it has
+ *    nothing left to do (CALLS_PER_TICK steps at most), never waiting (no
+ *    sd_bus_wait, no sd_bus_flush): a call is answered from inside it and
+ *    acts on the deck as the interface's buttons do. sd_bus_send() writes
+ *    a message at once when nothing is queued before it; what the socket
+ *    did not take goes out from sd_bus_process(), which writes before it
+ *    reads. Connecting and taking the name, at startup, are the only
+ *    waits.
+ *  - The getters work from one view of the deck per message (view()): a
+ *    GetAll, or a PropertiesChanged, is one snapshot.
  *  - What the clients see is worked out once per tick and compared with
- *    what they were last told: PropertiesChanged carries the properties
- *    that differ, with their values. Never Position: the specification has
- *    clients read it, and Seeked tells them when it moved other than by
- *    playing, the way track_plays in app.c tells a seek from playing
- *    (further ahead than the time since the last tick allows, or back),
- *    and after a seek asked for here. A loop wrapping is such a jump too;
- *    a scrub is one, when it ends.
+ *    what they were last told: PropertiesChanged names the properties that
+ *    differ, and sd-bus adds their values. Never Position (its vtable
+ *    entry emits nothing): the specification has clients read it, and
+ *    Seeked tells them when it moved other than by playing, the way
+ *    track_plays in app.c tells a seek from playing (further ahead than
+ *    the time since the last tick allows, or back), and after a seek asked
+ *    for here. A loop wrapping is such a jump too; a scrub is one, when it
+ *    ends.
  *  - Rate, MinimumRate and MaximumRate are 1: the tempo slider is the
  *    deck's own, not a client's. With the slider off 0 a client's
  *    extrapolated position drifts until it reads Position again.
@@ -39,21 +55,26 @@
  *    another rxbox or a test's bus never shares a file) and removed at
  *    exit. A track the library has no thumbnail of yet (the deck's artwork
  *    job makes it) is looked at again when the library changes.
- *  - The name is taken with DO_NOT_QUEUE: a second rxbox stays off the bus
+ *  - The name is taken without queueing: a second rxbox stays off the bus
  *    rather than wait for the first to quit.
- *  - libdbus aborts the process on a string that is not UTF-8, so a tag
- *    goes out only once dbus_validate_utf8() passed it, and the file's
- *    path only percent-encoded, as ASCII. */
+ *  - A bus that goes away ends MPRIS, not rxbox: sd-bus only exits on a
+ *    disconnect when told to, and the tick finds the connection closed.
+ *  - sd-bus refuses a string that is not UTF-8 by systemd's rules (which
+ *    also refuse the noncharacters D-Bus allows), and one refused append
+ *    spoils the whole message, a GetAll's or a PropertiesChanged's: a tag
+ *    goes out only once utf8_valid() passed it, and the file's path only
+ *    percent-encoded, as ASCII. */
 
 #include "rxbox/mpris.h"
 
 #include <math.h>
+#include <poll.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <strings.h>
-#include <sys/stat.h>
 #include <unistd.h>
 
-#include <dbus/dbus.h>
+#include <systemd/sd-bus.h>
 
 #define BUS_NAME     "org.mpris.MediaPlayer2.rxbox"
 #define OBJECT_PATH  "/org/mpris/MediaPlayer2"
@@ -65,8 +86,8 @@
 #define NO_TRACK     "/org/mpris/MediaPlayer2/TrackList/NoTrack"
 /* The deck MPRIS shows (RX_DECKS is 1). */
 #define DECK         0
-/* Calls answered per tick at most: a client flooding the bus waits for
- * the next ticks, the frame does not. */
+/* sd_bus_process() steps per tick at most (a call answered is one): a
+ * client flooding the bus waits for the next ticks, the frame does not. */
 #define CALLS_PER_TICK 64
 /* The seek test (jumped): seconds a playing deck may run ahead of what the
  * time since the last tick allows (track_plays' 0.05), step back, or move
@@ -74,6 +95,9 @@
 #define PLAY_SLACK   0.05
 #define BACK_SLACK   0.02
 #define STILL_SLACK  0.001
+/* A property PropertiesChanged may carry: every one but Position and
+ * CanControl, as the specification has them. */
+#define EMITS        SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE
 
 enum Status {
     STATUS_STOPPED = 0,
@@ -83,137 +107,15 @@ enum Status {
 
 static const char *const status_names[] = { "Stopped", "Paused", "Playing" };
 
-/* The properties: the root interface's, then the Player's. Fullscreen,
- * CanSetFullscreen and DesktopEntry are optional and left out. */
-enum Prop {
-    P_CAN_QUIT = 0, P_CAN_RAISE, P_HAS_TRACK_LIST, P_IDENTITY, P_URI_SCHEMES, P_MIME_TYPES,
-    P_STATUS, P_LOOP, P_RATE, P_SHUFFLE, P_METADATA, P_VOLUME, P_POSITION, P_MIN_RATE,
-    P_MAX_RATE, P_CAN_NEXT, P_CAN_PREV, P_CAN_PLAY, P_CAN_PAUSE, P_CAN_SEEK, P_CAN_CONTROL,
-    P_COUNT,
-};
-
-static const struct {
-    const char *iface;
-    const char *name;
-} props[P_COUNT] = {
-    [P_CAN_QUIT]       = { IFACE_ROOT,   "CanQuit" },
-    [P_CAN_RAISE]      = { IFACE_ROOT,   "CanRaise" },
-    [P_HAS_TRACK_LIST] = { IFACE_ROOT,   "HasTrackList" },
-    [P_IDENTITY]       = { IFACE_ROOT,   "Identity" },
-    [P_URI_SCHEMES]    = { IFACE_ROOT,   "SupportedUriSchemes" },
-    [P_MIME_TYPES]     = { IFACE_ROOT,   "SupportedMimeTypes" },
-    [P_STATUS]         = { IFACE_PLAYER, "PlaybackStatus" },
-    [P_LOOP]           = { IFACE_PLAYER, "LoopStatus" },
-    [P_RATE]           = { IFACE_PLAYER, "Rate" },
-    [P_SHUFFLE]        = { IFACE_PLAYER, "Shuffle" },
-    [P_METADATA]       = { IFACE_PLAYER, "Metadata" },
-    [P_VOLUME]         = { IFACE_PLAYER, "Volume" },
-    [P_POSITION]       = { IFACE_PLAYER, "Position" },
-    [P_MIN_RATE]       = { IFACE_PLAYER, "MinimumRate" },
-    [P_MAX_RATE]       = { IFACE_PLAYER, "MaximumRate" },
-    [P_CAN_NEXT]       = { IFACE_PLAYER, "CanGoNext" },
-    [P_CAN_PREV]       = { IFACE_PLAYER, "CanGoPrevious" },
-    [P_CAN_PLAY]       = { IFACE_PLAYER, "CanPlay" },
-    [P_CAN_PAUSE]      = { IFACE_PLAYER, "CanPause" },
-    [P_CAN_SEEK]       = { IFACE_PLAYER, "CanSeek" },
-    [P_CAN_CONTROL]    = { IFACE_PLAYER, "CanControl" },
-};
-
-static const char *const uri_schemes[] = { "file" };
+static const char *const uri_schemes[] = { "file", NULL };
 
 /* What the library adds (rx_is_audio_path: mp3 m4a mp4 aac wav aif aiff
  * flac ogg opus), under the names and the older x- names desktops use. */
 static const char *const mime_types[] = {
     "audio/mpeg", "audio/mp4", "audio/x-m4a", "audio/aac", "audio/wav", "audio/x-wav",
     "audio/aiff", "audio/x-aiff", "audio/flac", "audio/x-flac", "audio/ogg", "audio/opus",
+    NULL,
 };
-
-static const char *const player_methods[] = {
-    "Next", "Previous", "Pause", "PlayPause", "Stop", "Play", "Seek", "SetPosition", "OpenUri",
-};
-
-static const char introspection[] =
-    DBUS_INTROSPECT_1_0_XML_DOCTYPE_DECL_NODE
-    "<node>\n"
-    "  <interface name=\"" DBUS_INTERFACE_INTROSPECTABLE "\">\n"
-    "    <method name=\"Introspect\">\n"
-    "      <arg name=\"xml_data\" type=\"s\" direction=\"out\"/>\n"
-    "    </method>\n"
-    "  </interface>\n"
-    "  <interface name=\"" DBUS_INTERFACE_PROPERTIES "\">\n"
-    "    <method name=\"Get\">\n"
-    "      <arg name=\"interface_name\" type=\"s\" direction=\"in\"/>\n"
-    "      <arg name=\"property_name\" type=\"s\" direction=\"in\"/>\n"
-    "      <arg name=\"value\" type=\"v\" direction=\"out\"/>\n"
-    "    </method>\n"
-    "    <method name=\"GetAll\">\n"
-    "      <arg name=\"interface_name\" type=\"s\" direction=\"in\"/>\n"
-    "      <arg name=\"properties\" type=\"a{sv}\" direction=\"out\"/>\n"
-    "    </method>\n"
-    "    <method name=\"Set\">\n"
-    "      <arg name=\"interface_name\" type=\"s\" direction=\"in\"/>\n"
-    "      <arg name=\"property_name\" type=\"s\" direction=\"in\"/>\n"
-    "      <arg name=\"value\" type=\"v\" direction=\"in\"/>\n"
-    "    </method>\n"
-    "    <signal name=\"PropertiesChanged\">\n"
-    "      <arg name=\"interface_name\" type=\"s\"/>\n"
-    "      <arg name=\"changed_properties\" type=\"a{sv}\"/>\n"
-    "      <arg name=\"invalidated_properties\" type=\"as\"/>\n"
-    "    </signal>\n"
-    "  </interface>\n"
-    "  <interface name=\"" IFACE_ROOT "\">\n"
-    "    <method name=\"Raise\"/>\n"
-    "    <method name=\"Quit\"/>\n"
-    "    <property name=\"CanQuit\" type=\"b\" access=\"read\"/>\n"
-    "    <property name=\"CanRaise\" type=\"b\" access=\"read\"/>\n"
-    "    <property name=\"HasTrackList\" type=\"b\" access=\"read\"/>\n"
-    "    <property name=\"Identity\" type=\"s\" access=\"read\"/>\n"
-    "    <property name=\"SupportedUriSchemes\" type=\"as\" access=\"read\"/>\n"
-    "    <property name=\"SupportedMimeTypes\" type=\"as\" access=\"read\"/>\n"
-    "  </interface>\n"
-    "  <interface name=\"" IFACE_PLAYER "\">\n"
-    "    <method name=\"Next\"/>\n"
-    "    <method name=\"Previous\"/>\n"
-    "    <method name=\"Pause\"/>\n"
-    "    <method name=\"PlayPause\"/>\n"
-    "    <method name=\"Stop\"/>\n"
-    "    <method name=\"Play\"/>\n"
-    "    <method name=\"Seek\">\n"
-    "      <arg name=\"Offset\" type=\"x\" direction=\"in\"/>\n"
-    "    </method>\n"
-    "    <method name=\"SetPosition\">\n"
-    "      <arg name=\"TrackId\" type=\"o\" direction=\"in\"/>\n"
-    "      <arg name=\"Position\" type=\"x\" direction=\"in\"/>\n"
-    "    </method>\n"
-    "    <method name=\"OpenUri\">\n"
-    "      <arg name=\"Uri\" type=\"s\" direction=\"in\"/>\n"
-    "    </method>\n"
-    "    <signal name=\"Seeked\">\n"
-    "      <arg name=\"Position\" type=\"x\"/>\n"
-    "    </signal>\n"
-    "    <property name=\"PlaybackStatus\" type=\"s\" access=\"read\"/>\n"
-    "    <property name=\"LoopStatus\" type=\"s\" access=\"read\"/>\n"
-    "    <property name=\"Rate\" type=\"d\" access=\"readwrite\"/>\n"
-    "    <property name=\"Shuffle\" type=\"b\" access=\"read\"/>\n"
-    "    <property name=\"Metadata\" type=\"a{sv}\" access=\"read\"/>\n"
-    "    <property name=\"Volume\" type=\"d\" access=\"readwrite\"/>\n"
-    "    <property name=\"Position\" type=\"x\" access=\"read\">\n"
-    "      <annotation name=\"org.freedesktop.DBus.Property.EmitsChangedSignal\""
-    " value=\"false\"/>\n"
-    "    </property>\n"
-    "    <property name=\"MinimumRate\" type=\"d\" access=\"read\"/>\n"
-    "    <property name=\"MaximumRate\" type=\"d\" access=\"read\"/>\n"
-    "    <property name=\"CanGoNext\" type=\"b\" access=\"read\"/>\n"
-    "    <property name=\"CanGoPrevious\" type=\"b\" access=\"read\"/>\n"
-    "    <property name=\"CanPlay\" type=\"b\" access=\"read\"/>\n"
-    "    <property name=\"CanPause\" type=\"b\" access=\"read\"/>\n"
-    "    <property name=\"CanSeek\" type=\"b\" access=\"read\"/>\n"
-    "    <property name=\"CanControl\" type=\"b\" access=\"read\">\n"
-    "      <annotation name=\"org.freedesktop.DBus.Property.EmitsChangedSignal\""
-    " value=\"const\"/>\n"
-    "    </property>\n"
-    "  </interface>\n"
-    "</node>\n";
 
 /* The deck as the clients see it now. */
 typedef struct View {
@@ -233,10 +135,15 @@ typedef struct Shown {
 } Shown;
 
 typedef struct RXMpris {
-    DBusConnection *conn;
+    RXApp   *app;
+    sd_bus  *bus;
     double   volume;            /* the player's master volume, 0..1 */
     Shown    shown;
     bool     seeked;            /* a seek asked for here: Seeked at the end of the tick */
+
+    /* The deck as the message being answered or sent sees it (view()). */
+    View     view;
+    bool     view_valid;
 
     /* A track a call loaded, played once its decode is in when want_play. */
     uint64_t want_track;
@@ -259,10 +166,39 @@ typedef struct RXMpris {
 
 /* ------------------------------------------------------------------ helpers */
 
-/* Whether `s` may go out: not empty, and UTF-8 (libdbus aborts otherwise). */
+/* Whether `s` is UTF-8 as sd-bus has it (systemd's utf8_is_valid): the
+ * shortest encoding of a code point up to U+10FFFF that is neither a
+ * surrogate nor a noncharacter (U+FDD0..U+FDEF, U+xxFFFE, U+xxFFFF). */
+static bool utf8_valid(const char *s)
+{
+    const unsigned char *p = (const unsigned char *)s;
+    while (*p) {
+        if (*p < 0x80) {
+            p++;
+            continue;
+        }
+        int len = (*p & 0xe0) == 0xc0 ? 2 : (*p & 0xf0) == 0xe0 ? 3 : (*p & 0xf8) == 0xf0 ? 4 : 0;
+        if (!len)
+            return false;
+        uint32_t c = *p & (0x7f >> len);
+        for (int i = 1; i < len; i++) {
+            if ((p[i] & 0xc0) != 0x80)
+                return false;
+            c = c << 6 | (p[i] & 0x3f);
+        }
+        int shortest = c < 0x80 ? 1 : c < 0x800 ? 2 : c < 0x10000 ? 3 : 4;
+        if (len != shortest || c > 0x10ffff || (c >= 0xd800 && c <= 0xdfff) ||
+            (c >= 0xfdd0 && c <= 0xfdef) || (c & 0xfffe) == 0xfffe)
+            return false;
+        p += len;
+    }
+    return true;
+}
+
+/* Whether `s` may go out: not empty, and UTF-8 (utf8_valid). */
 static bool sendable(const char *s)
 {
-    return s && s[0] && dbus_validate_utf8(s, NULL);
+    return s && s[0] && utf8_valid(s);
 }
 
 static bool unreserved(unsigned char c)
@@ -350,9 +286,9 @@ static void track_path(const RXTrack *t, char *buf, size_t size)
         snprintf(buf, size, "%s", NO_TRACK);
 }
 
-static dbus_int64_t usec(double seconds)
+static int64_t usec(double seconds)
 {
-    return isfinite(seconds) ? (dbus_int64_t)llround(seconds * 1e6) : 0;
+    return isfinite(seconds) ? (int64_t)llround(seconds * 1e6) : 0;
 }
 
 /* The row `dir` (1 or -1) away from `t` in the current view, past missing
@@ -406,6 +342,17 @@ static void view_now(RXApp *app, const RXMpris *m, View *v)
         v->status = STATUS_PLAYING;
     v->can_next = neighbour(app, t, 1) != NULL;
     v->can_prev = neighbour(app, t, -1) != NULL;
+}
+
+/* The deck as the message being answered sees it, worked out on first
+ * use: pump() starts every message without one. */
+static const View *view(RXMpris *m)
+{
+    if (!m->view_valid) {
+        view_now(m->app, m, &m->view);
+        m->view_valid = true;
+    }
+    return &m->view;
 }
 
 /* ---------------------------------------------------------------- the cover */
@@ -499,7 +446,7 @@ static uint64_t fnv_str(uint64_t h, const char *s)
     return s ? fnv(h, s, strlen(s) + 1) : fnv(h, "", 1);
 }
 
-/* Everything add_metadata() sends of a track: when this changes, so did
+/* Everything get_metadata() sends of a track: when this changes, so did
  * the metadata. */
 static uint64_t meta_hash(const RXTrack *t, const char *art_url)
 {
@@ -547,221 +494,232 @@ static Shown shown_now(RXApp *app, RXMpris *m, const View *v)
     };
 }
 
-/* ---------------------------------------------------------------- messages */
-
-/* The appenders return false when libdbus is out of memory; they abandon
- * what they opened, and the caller drops the message. */
-
-static bool add_variant(DBusMessageIter *it, int type, const char *sig, const void *value)
-{
-    DBusMessageIter v = DBUS_MESSAGE_ITER_INIT_CLOSED;
-    bool ok = dbus_message_iter_open_container(it, DBUS_TYPE_VARIANT, sig, &v) &&
-              dbus_message_iter_append_basic(&v, type, value) &&
-              dbus_message_iter_close_container(it, &v);
-    if (!ok)
-        dbus_message_iter_abandon_container_if_open(it, &v);
-    return ok;
-}
-
-static bool add_bool(DBusMessageIter *it, bool b)
-{
-    dbus_bool_t v = b;
-    return add_variant(it, DBUS_TYPE_BOOLEAN, DBUS_TYPE_BOOLEAN_AS_STRING, &v);
-}
-
-static bool add_double(DBusMessageIter *it, double d)
-{
-    return add_variant(it, DBUS_TYPE_DOUBLE, DBUS_TYPE_DOUBLE_AS_STRING, &d);
-}
-
-static bool add_int64(DBusMessageIter *it, dbus_int64_t x)
-{
-    return add_variant(it, DBUS_TYPE_INT64, DBUS_TYPE_INT64_AS_STRING, &x);
-}
-
-static bool add_string(DBusMessageIter *it, const char *s)
-{
-    return add_variant(it, DBUS_TYPE_STRING, DBUS_TYPE_STRING_AS_STRING, &s);
-}
-
-static bool add_strings(DBusMessageIter *it, const char *const *s, size_t n)
-{
-    DBusMessageIter v = DBUS_MESSAGE_ITER_INIT_CLOSED, a = DBUS_MESSAGE_ITER_INIT_CLOSED;
-    bool ok = dbus_message_iter_open_container(it, DBUS_TYPE_VARIANT, "as", &v) &&
-              dbus_message_iter_open_container(&v, DBUS_TYPE_ARRAY, DBUS_TYPE_STRING_AS_STRING,
-                                               &a);
-    for (size_t i = 0; ok && i < n; i++)
-        ok = dbus_message_iter_append_basic(&a, DBUS_TYPE_STRING, &s[i]);
-    ok = ok && dbus_message_iter_close_container(&v, &a) &&
-         dbus_message_iter_close_container(it, &v);
-    if (!ok) {
-        dbus_message_iter_abandon_container_if_open(&v, &a);
-        dbus_message_iter_abandon_container_if_open(it, &v);
-    }
-    return ok;
-}
-
-/* One {sv} entry of a dictionary holding a basic value. */
-static bool add_entry(DBusMessageIter *dict, const char *key, int type, const char *sig,
-                      const void *value)
-{
-    DBusMessageIter e = DBUS_MESSAGE_ITER_INIT_CLOSED;
-    bool ok = dbus_message_iter_open_container(dict, DBUS_TYPE_DICT_ENTRY, NULL, &e) &&
-              dbus_message_iter_append_basic(&e, DBUS_TYPE_STRING, &key) &&
-              add_variant(&e, type, sig, value) &&
-              dbus_message_iter_close_container(dict, &e);
-    if (!ok)
-        dbus_message_iter_abandon_container_if_open(dict, &e);
-    return ok;
-}
-
 /* A text field of the metadata; left out when empty or not UTF-8. */
-static bool add_meta_string(DBusMessageIter *dict, const char *key, const char *s)
+static int add_text(sd_bus_message *reply, const char *key, const char *s)
 {
-    if (!sendable(s))
-        return true;
-    return add_entry(dict, key, DBUS_TYPE_STRING, DBUS_TYPE_STRING_AS_STRING, &s);
+    return sendable(s) ? sd_bus_message_append(reply, "{sv}", key, "s", s) : 0;
 }
 
 /* xesam's lists (artist, genre), holding the one value a track has. */
-static bool add_meta_list(DBusMessageIter *dict, const char *key, const char *s)
+static int add_list(sd_bus_message *reply, const char *key, const char *s)
 {
-    if (!sendable(s))
-        return true;
-    DBusMessageIter e = DBUS_MESSAGE_ITER_INIT_CLOSED;
-    bool ok = dbus_message_iter_open_container(dict, DBUS_TYPE_DICT_ENTRY, NULL, &e) &&
-              dbus_message_iter_append_basic(&e, DBUS_TYPE_STRING, &key) &&
-              add_strings(&e, &s, 1) &&
-              dbus_message_iter_close_container(dict, &e);
-    if (!ok)
-        dbus_message_iter_abandon_container_if_open(dict, &e);
-    return ok;
+    return sendable(s) ? sd_bus_message_append(reply, "{sv}", key, "as", 1, s) : 0;
 }
 
-/* Metadata, a{sv} in a variant (the specification's metadata page): the
- * track id always, the rest for a track. The title falls back to the file
- * name, which the library's title already is for a file without one. */
-static bool add_metadata(RXApp *app, RXMpris *m, const RXTrack *t, DBusMessageIter *it)
+/* The metadata of a track, past its track id. The title falls back to the
+ * file name, which the library's title already is for a file without
+ * one. */
+static int add_track(RXMpris *m, const RXTrack *t, sd_bus_message *reply)
 {
-    char path[64];
-    track_path(t, path, sizeof(path));
-    const char *object = path;
+    meta_refresh(m->app, m, t);
+    int64_t length = usec(t->duration);
+    const char *title = t->meta.title && t->meta.title[0] ? t->meta.title : rx_path_base(t->path);
+    char *url = file_url(t->path);
+    if (!url)
+        return RX_ERROR(ENOMEM);
 
-    DBusMessageIter v = DBUS_MESSAGE_ITER_INIT_CLOSED, d = DBUS_MESSAGE_ITER_INIT_CLOSED;
-    bool ok = dbus_message_iter_open_container(it, DBUS_TYPE_VARIANT, "a{sv}", &v) &&
-              dbus_message_iter_open_container(&v, DBUS_TYPE_ARRAY, "{sv}", &d) &&
-              add_entry(&d, "mpris:trackid", DBUS_TYPE_OBJECT_PATH,
-                        DBUS_TYPE_OBJECT_PATH_AS_STRING, &object);
-    if (ok && t) {
-        meta_refresh(app, m, t);
-        dbus_int64_t length = usec(t->duration);
-        double rating = t->meta.rating / 5.0;
-        const char *title = t->meta.title && t->meta.title[0] ? t->meta.title
-                                                              : rx_path_base(t->path);
-        char *url = file_url(t->path);
-        ok = url &&
-             (length <= 0 || add_entry(&d, "mpris:length", DBUS_TYPE_INT64,
-                                       DBUS_TYPE_INT64_AS_STRING, &length)) &&
-             add_meta_string(&d, "mpris:artUrl", m->art_url) &&
-             add_meta_string(&d, "xesam:url", url) &&
-             add_meta_string(&d, "xesam:title", title) &&
-             add_meta_list(&d, "xesam:artist", t->meta.artist) &&
-             add_meta_string(&d, "xesam:album", t->meta.album) &&
-             add_meta_list(&d, "xesam:genre", t->meta.genre) &&
-             (t->meta.rating <= 0 || add_entry(&d, "xesam:userRating", DBUS_TYPE_DOUBLE,
-                                               DBUS_TYPE_DOUBLE_AS_STRING, &rating));
-        free(url);
-    }
-    ok = ok && dbus_message_iter_close_container(&v, &d) &&
-         dbus_message_iter_close_container(it, &v);
-    if (!ok) {
-        dbus_message_iter_abandon_container_if_open(&v, &d);
-        dbus_message_iter_abandon_container_if_open(it, &v);
-    }
-    return ok;
+    int ret = 0;
+    if (length > 0)
+        ret = sd_bus_message_append(reply, "{sv}", "mpris:length", "x", length);
+    if (ret >= 0)
+        ret = add_text(reply, "mpris:artUrl", m->art_url);
+    if (ret >= 0)
+        ret = add_text(reply, "xesam:url", url);
+    if (ret >= 0)
+        ret = add_text(reply, "xesam:title", title);
+    if (ret >= 0)
+        ret = add_list(reply, "xesam:artist", t->meta.artist);
+    if (ret >= 0)
+        ret = add_text(reply, "xesam:album", t->meta.album);
+    if (ret >= 0)
+        ret = add_list(reply, "xesam:genre", t->meta.genre);
+    if (ret >= 0 && t->meta.rating > 0)
+        ret = sd_bus_message_append(reply, "{sv}", "xesam:userRating", "d",
+                                    t->meta.rating / 5.0);
+    free(url);
+    return ret;
 }
 
-/* A property's value, in a variant. */
-static bool add_prop(RXApp *app, RXMpris *m, const View *v, DBusMessageIter *it, int id)
+/* -------------------------------------------------------------- properties */
+
+/* The getters append the value; sd-bus puts it in its variant. A getter
+ * that fails fails the whole Get, GetAll or PropertiesChanged. */
+
+static int get_true(sd_bus *bus, const char *path, const char *iface, const char *name,
+                    sd_bus_message *reply, void *opaque, sd_bus_error *err)
 {
-    switch (id) {
-    case P_CAN_QUIT:
-    case P_CAN_CONTROL:
-        return add_bool(it, true);
-    case P_CAN_RAISE:
-    case P_HAS_TRACK_LIST:
-    case P_SHUFFLE:
-        return add_bool(it, false);
-    case P_IDENTITY:
-        return add_string(it, "rxbox");
-    case P_URI_SCHEMES:
-        return add_strings(it, uri_schemes, RX_ARRAY_ELEMS(uri_schemes));
-    case P_MIME_TYPES:
-        return add_strings(it, mime_types, RX_ARRAY_ELEMS(mime_types));
-    case P_STATUS:
-        return add_string(it, status_names[v->status]);
-    case P_LOOP:
-        return add_string(it, "None");
-    case P_RATE:
-    case P_MIN_RATE:
-    case P_MAX_RATE:
-        return add_double(it, 1.0);
-    case P_METADATA:
-        return add_metadata(app, m, v->track, it);
-    case P_VOLUME:
-        return add_double(it, m->volume);
-    case P_POSITION:
-        return add_int64(it, v->track ? usec(v->st.position) : 0);
-    case P_CAN_NEXT:
-        return add_bool(it, v->can_next);
-    case P_CAN_PREV:
-        return add_bool(it, v->can_prev);
-    case P_CAN_PLAY:
-    case P_CAN_PAUSE:
-    case P_CAN_SEEK:
-        return add_bool(it, v->track != NULL);
-    }
-    return false;
+    return sd_bus_message_append(reply, "b", true);
 }
 
-static bool add_prop_entry(RXApp *app, RXMpris *m, const View *v, DBusMessageIter *dict, int id)
+/* CanRaise, HasTrackList, Shuffle: the deck neither raises a window nor
+ * shuffles. */
+static int get_false(sd_bus *bus, const char *path, const char *iface, const char *name,
+                     sd_bus_message *reply, void *opaque, sd_bus_error *err)
 {
-    const char *name = props[id].name;
-    DBusMessageIter e = DBUS_MESSAGE_ITER_INIT_CLOSED;
-    bool ok = dbus_message_iter_open_container(dict, DBUS_TYPE_DICT_ENTRY, NULL, &e) &&
-              dbus_message_iter_append_basic(&e, DBUS_TYPE_STRING, &name) &&
-              add_prop(app, m, v, &e, id) &&
-              dbus_message_iter_close_container(dict, &e);
-    if (!ok)
-        dbus_message_iter_abandon_container_if_open(dict, &e);
-    return ok;
+    return sd_bus_message_append(reply, "b", false);
 }
 
-/* An error reply. Its text must be UTF-8 for libdbus: a strerror() in
- * another locale, or a character cut at the end, gives the bare name. */
-static DBusMessage *reply_error(DBusMessage *msg, const char *name, const char *fmt, ...)
-    RX_PRINTF(3, 4);
-static DBusMessage *reply_error(DBusMessage *msg, const char *name, const char *fmt, ...)
+static int get_identity(sd_bus *bus, const char *path, const char *iface, const char *name,
+                        sd_bus_message *reply, void *opaque, sd_bus_error *err)
+{
+    return sd_bus_message_append(reply, "s", "rxbox");
+}
+
+static int get_uri_schemes(sd_bus *bus, const char *path, const char *iface, const char *name,
+                           sd_bus_message *reply, void *opaque, sd_bus_error *err)
+{
+    return sd_bus_message_append_strv(reply, (char **)uri_schemes);
+}
+
+static int get_mime_types(sd_bus *bus, const char *path, const char *iface, const char *name,
+                          sd_bus_message *reply, void *opaque, sd_bus_error *err)
+{
+    return sd_bus_message_append_strv(reply, (char **)mime_types);
+}
+
+static int get_status(sd_bus *bus, const char *path, const char *iface, const char *name,
+                      sd_bus_message *reply, void *opaque, sd_bus_error *err)
+{
+    return sd_bus_message_append(reply, "s", status_names[view(opaque)->status]);
+}
+
+/* The deck loops a part of a track, never a track or a list. */
+static int get_loop(sd_bus *bus, const char *path, const char *iface, const char *name,
+                    sd_bus_message *reply, void *opaque, sd_bus_error *err)
+{
+    return sd_bus_message_append(reply, "s", "None");
+}
+
+/* Rate, MinimumRate, MaximumRate. */
+static int get_rate(sd_bus *bus, const char *path, const char *iface, const char *name,
+                    sd_bus_message *reply, void *opaque, sd_bus_error *err)
+{
+    return sd_bus_message_append(reply, "d", 1.0);
+}
+
+/* Metadata (the specification's metadata page): the track id always, the
+ * rest for a track. */
+static int get_metadata(sd_bus *bus, const char *path, const char *iface, const char *name,
+                        sd_bus_message *reply, void *opaque, sd_bus_error *err)
+{
+    RXMpris *m = opaque;
+    const RXTrack *t = view(m)->track;
+    char id[64];
+    track_path(t, id, sizeof(id));
+
+    int ret = sd_bus_message_open_container(reply, 'a', "{sv}");
+    if (ret >= 0)
+        ret = sd_bus_message_append(reply, "{sv}", "mpris:trackid", "o", id);
+    if (ret >= 0 && t)
+        ret = add_track(m, t, reply);
+    if (ret >= 0)
+        ret = sd_bus_message_close_container(reply);
+    return ret;
+}
+
+static int get_volume(sd_bus *bus, const char *path, const char *iface, const char *name,
+                      sd_bus_message *reply, void *opaque, sd_bus_error *err)
+{
+    RXMpris *m = opaque;
+    return sd_bus_message_append(reply, "d", m->volume);
+}
+
+static int get_position(sd_bus *bus, const char *path, const char *iface, const char *name,
+                        sd_bus_message *reply, void *opaque, sd_bus_error *err)
+{
+    const View *v = view(opaque);
+    return sd_bus_message_append(reply, "x", v->track ? usec(v->st.position) : (int64_t)0);
+}
+
+static int get_can_next(sd_bus *bus, const char *path, const char *iface, const char *name,
+                        sd_bus_message *reply, void *opaque, sd_bus_error *err)
+{
+    return sd_bus_message_append(reply, "b", view(opaque)->can_next);
+}
+
+static int get_can_prev(sd_bus *bus, const char *path, const char *iface, const char *name,
+                        sd_bus_message *reply, void *opaque, sd_bus_error *err)
+{
+    return sd_bus_message_append(reply, "b", view(opaque)->can_prev);
+}
+
+/* CanPlay, CanPause, CanSeek: with a track. */
+static int get_loaded(sd_bus *bus, const char *path, const char *iface, const char *name,
+                      sd_bus_message *reply, void *opaque, sd_bus_error *err)
+{
+    return sd_bus_message_append(reply, "b", view(opaque)->track != NULL);
+}
+
+/* An error for a reply. Its text must be UTF-8, or sd-bus would not send
+ * the reply at all: a strerror() in another locale, or a character cut at
+ * the end, gives the bare name. */
+static int reply_error(sd_bus_error *err, const char *name, const char *fmt, ...) RX_PRINTF(3, 4);
+static int reply_error(sd_bus_error *err, const char *name, const char *fmt, ...)
 {
     char text[256];
     va_list args;
     va_start(args, fmt);
     vsnprintf(text, sizeof(text), fmt, args);
     va_end(args);
-    return dbus_message_new_error(msg, name, sendable(text) ? text : name);
+    return sd_bus_error_set(err, name, sendable(text) ? text : name);
 }
 
-/* The error dbus_message_get_args() found in a call's arguments. */
-static DBusMessage *reply_bad_args(DBusMessage *msg, DBusError *err)
+/* A number for Volume or Rate. */
+static int read_number(sd_bus_message *value, const char *name, double *d, sd_bus_error *err)
 {
-    DBusMessage *reply = dbus_message_new_error(msg, err->name ? err->name
-                                                               : DBUS_ERROR_INVALID_ARGS,
-                                                err->message);
-    dbus_error_free(err);
-    return reply;
+    int ret = sd_bus_message_read(value, "d", d);
+    if (ret < 0)
+        return ret;
+    if (!isfinite(*d))
+        return reply_error(err, SD_BUS_ERROR_INVALID_ARGS, "%s is a number", name);
+    return 0;
+}
+
+static int set_volume(sd_bus *bus, const char *path, const char *iface, const char *name,
+                      sd_bus_message *value, void *opaque, sd_bus_error *err)
+{
+    RXMpris *m = opaque;
+    double d;
+    int ret = read_number(value, name, &d, err);
+    if (ret < 0)
+        return ret;
+    /* Below 0 is 0 (the specification), and the player goes no louder
+     * than 1. */
+    m->volume = RX_CLAMP(d, 0.0, 1.0);
+    rx_player_set_master_volume(m->app->player, (float)m->volume);
+    m->app->dirty = true;
+    return 0;
+}
+
+/* Rate as far as 1 goes. */
+static int set_rate(sd_bus *bus, const char *path, const char *iface, const char *name,
+                    sd_bus_message *value, void *opaque, sd_bus_error *err)
+{
+    RXMpris *m = opaque;
+    double d;
+    int ret = read_number(value, name, &d, err);
+    if (ret < 0)
+        return ret;
+    if (d != 0.0 && d != 1.0)
+        return reply_error(err, SD_BUS_ERROR_INVALID_ARGS, "the rate is 1");
+    /* A rate of 0 is a pause (the specification). */
+    if (d == 0.0) {
+        m->want_play = false;
+        rx_deck_pause(m->app->player, DECK);
+    }
+    m->app->dirty = true;
+    return 0;
 }
 
 /* ------------------------------------------------------------------- calls */
+
+/* Every call to a Player method, before it acts: the frame shows what it
+ * did. */
+static RXApp *player_call(RXMpris *m)
+{
+    m->app->dirty = true;
+    return m->app;
+}
 
 /* Loads `t` for a call, to play once it is in when `play`. A playing deck
  * pauses for the swap (rx_app_load_deck refuses it), and plays on with
@@ -783,66 +741,121 @@ static int load(RXApp *app, RXMpris *m, RXTrack *t, bool play)
     return 0;
 }
 
-/* Stop: paused at the cue point, as CUE does to a playing deck; a paused
- * one goes there too. */
-static void stop(RXApp *app, RXMpris *m, const View *v)
-{
-    RXDeckCtl *ctl = &app->decks[DECK].ctl;
-    m->want_play = false;
-    if (!v->track)
-        return;
-    if (v->st.playing)
-        rx_ctl_cue_press(ctl);
-    else
-        rx_ctl_seek(ctl, ctl->cue_point >= 0.0 ? ctl->cue_point : 0.0);
-    m->seeked = true;
-}
-
 /* Next and Previous: the row after or before the deck's track (or the
  * track a call is loading) in the current view, playing if the deck is.
  * Without one, nothing, as CanGoNext and CanGoPrevious said. */
-static DBusMessage *skip(RXApp *app, RXMpris *m, DBusMessage *msg, const View *v, int dir)
+static int skip(RXMpris *m, sd_bus_message *msg, sd_bus_error *err, int dir)
 {
+    RXApp *app = player_call(m);
+    const View *v = view(m);
     const RXTrack *from = v->track;
     if (swapping(app, m))
         from = rx_library_find_id(&app->lib, m->want_track);
     RXTrack *t = neighbour(app, from, dir);
-    if (!t)
-        return dbus_message_new_method_return(msg);
-    int ret = load(app, m, t, v->status == STATUS_PLAYING);
-    if (ret < 0)
-        return reply_error(msg, DBUS_ERROR_FAILED, "cannot load the track: %s", strerror(-ret));
-    return dbus_message_new_method_return(msg);
+    if (t) {
+        int ret = load(app, m, t, v->status == STATUS_PLAYING);
+        if (ret < 0)
+            return reply_error(err, SD_BUS_ERROR_FAILED, "cannot load the track: %s",
+                               strerror(-ret));
+    }
+    return sd_bus_reply_method_return(msg, NULL);
+}
+
+static int method_next(sd_bus_message *msg, void *opaque, sd_bus_error *err)
+{
+    return skip(opaque, msg, err, 1);
+}
+
+static int method_previous(sd_bus_message *msg, void *opaque, sd_bus_error *err)
+{
+    return skip(opaque, msg, err, -1);
+}
+
+/* While a call's track is being decoded, Play, Pause and PlayPause are
+ * about it, not about the track the deck paused to give up. */
+
+static int method_play(sd_bus_message *msg, void *opaque, sd_bus_error *err)
+{
+    RXMpris *m = opaque;
+    RXApp *app = player_call(m);
+    if (swapping(app, m))
+        m->want_play = true;
+    else if (view(m)->track)
+        rx_deck_play(app->player, DECK);
+    return sd_bus_reply_method_return(msg, NULL);
+}
+
+static int method_pause(sd_bus_message *msg, void *opaque, sd_bus_error *err)
+{
+    RXMpris *m = opaque;
+    RXApp *app = player_call(m);
+    m->want_play = false;
+    if (view(m)->track)
+        rx_deck_pause(app->player, DECK);
+    return sd_bus_reply_method_return(msg, NULL);
+}
+
+static int method_play_pause(sd_bus_message *msg, void *opaque, sd_bus_error *err)
+{
+    RXMpris *m = opaque;
+    RXApp *app = player_call(m);
+    if (swapping(app, m))
+        m->want_play = !m->want_play;
+    else
+        rx_ctl_play_pause(&app->decks[DECK].ctl);
+    return sd_bus_reply_method_return(msg, NULL);
+}
+
+/* Stop: paused at the cue point, as CUE does to a playing deck; a paused
+ * one goes there too. */
+static int method_stop(sd_bus_message *msg, void *opaque, sd_bus_error *err)
+{
+    RXMpris *m = opaque;
+    RXApp *app = player_call(m);
+    RXDeckCtl *ctl = &app->decks[DECK].ctl;
+    const View *v = view(m);
+    m->want_play = false;
+    if (v->track) {
+        if (v->st.playing)
+            rx_ctl_cue_press(ctl);
+        else
+            rx_ctl_seek(ctl, ctl->cue_point >= 0.0 ? ctl->cue_point : 0.0);
+        m->seeked = true;
+    }
+    return sd_bus_reply_method_return(msg, NULL);
 }
 
 /* Seek: by an offset, clamped to the track (the end does not skip to the
  * next track, as the specification would have it: the deck stops there). */
-static DBusMessage *seek(RXApp *app, RXMpris *m, DBusMessage *msg, const View *v)
+static int method_seek(sd_bus_message *msg, void *opaque, sd_bus_error *err)
 {
-    dbus_int64_t offset;
-    DBusError err;
-    dbus_error_init(&err);
-    if (!dbus_message_get_args(msg, &err, DBUS_TYPE_INT64, &offset, DBUS_TYPE_INVALID))
-        return reply_bad_args(msg, &err);
+    RXMpris *m = opaque;
+    RXApp *app = player_call(m);
+    int64_t offset;
+    int ret = sd_bus_message_read(msg, "x", &offset);
+    if (ret < 0)
+        return ret;
+    const View *v = view(m);
     if (v->track) {
         double to = v->st.position + offset * 1e-6;
         rx_ctl_seek(&app->decks[DECK].ctl, RX_CLAMP(to, 0.0, v->st.duration));
         m->seeked = true;
     }
-    return dbus_message_new_method_return(msg);
+    return sd_bus_reply_method_return(msg, NULL);
 }
 
 /* SetPosition: ignored for another track's id (a stale call) or a
  * position off the track, as the specification says. */
-static DBusMessage *set_position(RXApp *app, RXMpris *m, DBusMessage *msg, const View *v)
+static int method_set_position(sd_bus_message *msg, void *opaque, sd_bus_error *err)
 {
+    RXMpris *m = opaque;
+    RXApp *app = player_call(m);
     const char *id;
-    dbus_int64_t pos;
-    DBusError err;
-    dbus_error_init(&err);
-    if (!dbus_message_get_args(msg, &err, DBUS_TYPE_OBJECT_PATH, &id, DBUS_TYPE_INT64, &pos,
-                               DBUS_TYPE_INVALID))
-        return reply_bad_args(msg, &err);
+    int64_t pos;
+    int ret = sd_bus_message_read(msg, "ox", &id, &pos);
+    if (ret < 0)
+        return ret;
+    const View *v = view(m);
     char path[64];
     track_path(v->track, path, sizeof(path));
     if (v->track && !strcmp(id, path) && pos >= 0 &&
@@ -850,22 +863,23 @@ static DBusMessage *set_position(RXApp *app, RXMpris *m, DBusMessage *msg, const
         rx_ctl_seek(&app->decks[DECK].ctl, pos * 1e-6);
         m->seeked = true;
     }
-    return dbus_message_new_method_return(msg);
+    return sd_bus_reply_method_return(msg, NULL);
 }
 
 /* OpenUri: a file URL of a track in the library loads and plays it.
  * Files are never added from here. */
-static DBusMessage *open_uri(RXApp *app, RXMpris *m, DBusMessage *msg)
+static int method_open_uri(sd_bus_message *msg, void *opaque, sd_bus_error *err)
 {
+    RXMpris *m = opaque;
+    RXApp *app = player_call(m);
     const char *uri;
-    DBusError err;
-    dbus_error_init(&err);
-    if (!dbus_message_get_args(msg, &err, DBUS_TYPE_STRING, &uri, DBUS_TYPE_INVALID))
-        return reply_bad_args(msg, &err);
+    int ret = sd_bus_message_read(msg, "s", &uri);
+    if (ret < 0)
+        return ret;
 
     char *path = url_path(uri);
     if (!path)
-        return reply_error(msg, DBUS_ERROR_NOT_SUPPORTED, "rxbox opens file:// URLs only");
+        return reply_error(err, SD_BUS_ERROR_NOT_SUPPORTED, "rxbox opens file:// URLs only");
     RXTrack *t = rx_library_find_path(&app->lib, path);
     if (!t) {
         /* The library keeps resolved paths. */
@@ -875,295 +889,134 @@ static DBusMessage *open_uri(RXApp *app, RXMpris *m, DBusMessage *msg)
     }
     free(path);
     if (!t)
-        return reply_error(msg, DBUS_ERROR_FILE_NOT_FOUND, "not a track in the library");
+        return reply_error(err, SD_BUS_ERROR_FILE_NOT_FOUND, "not a track in the library");
     if (t->missing)
-        return reply_error(msg, DBUS_ERROR_FILE_NOT_FOUND, "the track's file is missing");
+        return reply_error(err, SD_BUS_ERROR_FILE_NOT_FOUND, "the track's file is missing");
 
-    int ret = load(app, m, t, true);
+    ret = load(app, m, t, true);
     if (ret < 0)
-        return reply_error(msg, DBUS_ERROR_FAILED, "cannot load the track: %s", strerror(-ret));
-    return dbus_message_new_method_return(msg);
+        return reply_error(err, SD_BUS_ERROR_FAILED, "cannot load the track: %s",
+                           strerror(-ret));
+    return sd_bus_reply_method_return(msg, NULL);
 }
 
-static DBusMessage *player_call(RXApp *app, RXMpris *m, DBusMessage *msg, const char *member)
+/* CanRaise is false: Raise does nothing. */
+static int method_raise(sd_bus_message *msg, void *opaque, sd_bus_error *err)
 {
-    View v;
-    view_now(app, m, &v);
-    app->dirty = true;
-
-    /* While a call's track is being decoded, play and pause are about it,
-     * not about the track the deck paused to give up. */
-    if (!strcmp(member, "Play")) {
-        if (swapping(app, m))
-            m->want_play = true;
-        else if (v.track)
-            rx_deck_play(app->player, DECK);
-    } else if (!strcmp(member, "Pause")) {
-        m->want_play = false;
-        if (v.track)
-            rx_deck_pause(app->player, DECK);
-    } else if (!strcmp(member, "PlayPause")) {
-        if (swapping(app, m))
-            m->want_play = !m->want_play;
-        else
-            rx_ctl_play_pause(&app->decks[DECK].ctl);
-    } else if (!strcmp(member, "Stop")) {
-        stop(app, m, &v);
-    } else if (!strcmp(member, "Next")) {
-        return skip(app, m, msg, &v, 1);
-    } else if (!strcmp(member, "Previous")) {
-        return skip(app, m, msg, &v, -1);
-    } else if (!strcmp(member, "Seek")) {
-        return seek(app, m, msg, &v);
-    } else if (!strcmp(member, "SetPosition")) {
-        return set_position(app, m, msg, &v);
-    } else if (!strcmp(member, "OpenUri")) {
-        return open_uri(app, m, msg);
-    }
-    return dbus_message_new_method_return(msg);
+    return sd_bus_reply_method_return(msg, NULL);
 }
 
-/* CanRaise is false: Raise does nothing. Quit is closing the window. */
-static DBusMessage *root_call(RXApp *app, DBusMessage *msg, const char *member)
+/* Quit is closing the window. */
+static int method_quit(sd_bus_message *msg, void *opaque, sd_bus_error *err)
 {
-    if (!strcmp(member, "Quit")) {
-        app->quit = true;
-        app->dirty = true;
-    }
-    return dbus_message_new_method_return(msg);
+    RXMpris *m = opaque;
+    m->app->quit = true;
+    m->app->dirty = true;
+    return sd_bus_reply_method_return(msg, NULL);
 }
 
-/* A property by interface and name; an empty interface is any. */
-static int prop_find(const char *iface, const char *name)
-{
-    for (int i = 0; i < P_COUNT; i++) {
-        if ((!iface[0] || !strcmp(iface, props[i].iface)) && !strcmp(name, props[i].name))
-            return i;
-    }
-    return -1;
-}
+/* ------------------------------------------------------------------ vtables */
 
-static DBusMessage *get_all(RXApp *app, RXMpris *m, DBusMessage *msg)
-{
-    const char *iface;
-    DBusError err;
-    dbus_error_init(&err);
-    if (!dbus_message_get_args(msg, &err, DBUS_TYPE_STRING, &iface, DBUS_TYPE_INVALID))
-        return reply_bad_args(msg, &err);
-    /* Introspectable and Properties have no properties: an empty dict. */
-    if (strcmp(iface, IFACE_ROOT) && strcmp(iface, IFACE_PLAYER) &&
-        strcmp(iface, DBUS_INTERFACE_PROPERTIES) && strcmp(iface, DBUS_INTERFACE_INTROSPECTABLE))
-        return reply_error(msg, DBUS_ERROR_UNKNOWN_INTERFACE, "no interface %s here", iface);
+/* The root interface. Fullscreen, CanSetFullscreen and DesktopEntry are
+ * optional and left out. */
+static const sd_bus_vtable root_vtable[] = {
+    SD_BUS_VTABLE_START(0),
+    SD_BUS_METHOD("Raise", "", "", method_raise, 0),
+    SD_BUS_METHOD("Quit", "", "", method_quit, 0),
+    SD_BUS_PROPERTY("CanQuit", "b", get_true, 0, EMITS),
+    SD_BUS_PROPERTY("CanRaise", "b", get_false, 0, EMITS),
+    SD_BUS_PROPERTY("HasTrackList", "b", get_false, 0, EMITS),
+    SD_BUS_PROPERTY("Identity", "s", get_identity, 0, EMITS),
+    SD_BUS_PROPERTY("SupportedUriSchemes", "as", get_uri_schemes, 0, EMITS),
+    SD_BUS_PROPERTY("SupportedMimeTypes", "as", get_mime_types, 0, EMITS),
+    SD_BUS_VTABLE_END,
+};
 
-    View v;
-    view_now(app, m, &v);
-    DBusMessage *reply = dbus_message_new_method_return(msg);
-    if (!reply)
-        return NULL;
-    DBusMessageIter it, d = DBUS_MESSAGE_ITER_INIT_CLOSED;
-    dbus_message_iter_init_append(reply, &it);
-    bool ok = dbus_message_iter_open_container(&it, DBUS_TYPE_ARRAY, "{sv}", &d);
-    for (int i = 0; ok && i < P_COUNT; i++) {
-        if (!strcmp(props[i].iface, iface))
-            ok = add_prop_entry(app, m, &v, &d, i);
-    }
-    ok = ok && dbus_message_iter_close_container(&it, &d);
-    if (!ok) {
-        dbus_message_iter_abandon_container_if_open(&it, &d);
-        dbus_message_unref(reply);
-        return NULL;
-    }
-    return reply;
-}
-
-static DBusMessage *get(RXApp *app, RXMpris *m, DBusMessage *msg)
-{
-    const char *iface, *name;
-    DBusError err;
-    dbus_error_init(&err);
-    if (!dbus_message_get_args(msg, &err, DBUS_TYPE_STRING, &iface, DBUS_TYPE_STRING, &name,
-                               DBUS_TYPE_INVALID))
-        return reply_bad_args(msg, &err);
-    int id = prop_find(iface, name);
-    if (id < 0)
-        return reply_error(msg, DBUS_ERROR_UNKNOWN_PROPERTY, "no property %s here", name);
-
-    View v;
-    view_now(app, m, &v);
-    DBusMessage *reply = dbus_message_new_method_return(msg);
-    DBusMessageIter it;
-    if (!reply)
-        return NULL;
-    dbus_message_iter_init_append(reply, &it);
-    if (!add_prop(app, m, &v, &it, id)) {
-        dbus_message_unref(reply);
-        return NULL;
-    }
-    return reply;
-}
-
-/* Set: Volume, and Rate as far as 1 goes; the rest is read-only here
- * (LoopStatus and Shuffle among them: the deck neither loops tracks nor
- * shuffles). */
-static DBusMessage *set(RXApp *app, RXMpris *m, DBusMessage *msg)
-{
-    if (!dbus_message_has_signature(msg, "ssv"))
-        return reply_error(msg, DBUS_ERROR_INVALID_ARGS, "Set takes an interface, a name, a value");
-    const char *iface, *name;
-    DBusMessageIter it, val;
-    dbus_message_iter_init(msg, &it);
-    dbus_message_iter_get_basic(&it, &iface);
-    dbus_message_iter_next(&it);
-    dbus_message_iter_get_basic(&it, &name);
-    dbus_message_iter_next(&it);
-    dbus_message_iter_recurse(&it, &val);
-
-    int id = prop_find(iface, name);
-    if (id < 0)
-        return reply_error(msg, DBUS_ERROR_UNKNOWN_PROPERTY, "no property %s here", name);
-    if (id != P_VOLUME && id != P_RATE)
-        return reply_error(msg, DBUS_ERROR_PROPERTY_READ_ONLY, "%s is read-only", name);
-    double d = NAN;
-    if (dbus_message_iter_get_arg_type(&val) == DBUS_TYPE_DOUBLE)
-        dbus_message_iter_get_basic(&val, &d);
-    if (!isfinite(d))
-        return reply_error(msg, DBUS_ERROR_INVALID_ARGS, "%s is a number", name);
-
-    if (id == P_VOLUME) {
-        /* Below 0 is 0 (the specification), and the player goes no louder
-         * than 1. */
-        m->volume = RX_CLAMP(d, 0.0, 1.0);
-        rx_player_set_master_volume(app->player, (float)m->volume);
-    } else if (d == 0.0) {
-        /* A rate of 0 is a pause (the specification). */
-        m->want_play = false;
-        rx_deck_pause(app->player, DECK);
-    } else if (d != 1.0) {
-        return reply_error(msg, DBUS_ERROR_INVALID_ARGS, "the rate is 1");
-    }
-    app->dirty = true;
-    return dbus_message_new_method_return(msg);
-}
-
-static bool iface_is(const char *iface, const char *name)
-{
-    /* A call may name no interface: any whose member it is. */
-    return !iface || !strcmp(iface, name);
-}
-
-static bool player_method(const char *member)
-{
-    for (size_t i = 0; i < RX_ARRAY_ELEMS(player_methods); i++) {
-        if (!strcmp(member, player_methods[i]))
-            return true;
-    }
-    return false;
-}
-
-/* Every call to OBJECT_PATH, from inside rx_mpris_tick()'s dispatch. One
- * the object does not have goes back to libdbus, which answers
- * UnknownMethod. A reply that cannot be made (out of memory) is not sent;
- * the call is not run again. */
-static DBusHandlerResult on_message(DBusConnection *conn, DBusMessage *msg, void *opaque)
-{
-    RXApp *app = opaque;
-    RXMpris *m = app->mpris;
-    const char *iface = dbus_message_get_interface(msg);
-    const char *member = dbus_message_get_member(msg);
-    if (!m || dbus_message_get_type(msg) != DBUS_MESSAGE_TYPE_METHOD_CALL || !member)
-        return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
-
-    DBusMessage *reply;
-    if (iface_is(iface, DBUS_INTERFACE_INTROSPECTABLE) && !strcmp(member, "Introspect")) {
-        const char *xml = introspection;
-        reply = dbus_message_new_method_return(msg);
-        if (reply && !dbus_message_append_args(reply, DBUS_TYPE_STRING, &xml, DBUS_TYPE_INVALID)) {
-            dbus_message_unref(reply);
-            reply = NULL;
-        }
-    } else if (iface_is(iface, DBUS_INTERFACE_PROPERTIES) && !strcmp(member, "Get")) {
-        reply = get(app, m, msg);
-    } else if (iface_is(iface, DBUS_INTERFACE_PROPERTIES) && !strcmp(member, "GetAll")) {
-        reply = get_all(app, m, msg);
-    } else if (iface_is(iface, DBUS_INTERFACE_PROPERTIES) && !strcmp(member, "Set")) {
-        reply = set(app, m, msg);
-    } else if (iface_is(iface, IFACE_ROOT) && (!strcmp(member, "Raise") ||
-                                               !strcmp(member, "Quit"))) {
-        reply = root_call(app, msg, member);
-    } else if (iface_is(iface, IFACE_PLAYER) && player_method(member)) {
-        reply = player_call(app, m, msg, member);
-    } else {
-        return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
-    }
-
-    if (reply && !dbus_message_get_no_reply(msg))
-        dbus_connection_send(conn, reply, NULL);
-    if (reply)
-        dbus_message_unref(reply);
-    return DBUS_HANDLER_RESULT_HANDLED;
-}
+/* The Player interface. LoopStatus and Shuffle have no setter: read-only
+ * here (the deck neither loops tracks nor shuffles), where the
+ * specification has them writable. Position emits nothing (clients read
+ * it), CanControl never changes. */
+static const sd_bus_vtable player_vtable[] = {
+    SD_BUS_VTABLE_START(0),
+    SD_BUS_METHOD("Next", "", "", method_next, 0),
+    SD_BUS_METHOD("Previous", "", "", method_previous, 0),
+    SD_BUS_METHOD("Pause", "", "", method_pause, 0),
+    SD_BUS_METHOD("PlayPause", "", "", method_play_pause, 0),
+    SD_BUS_METHOD("Stop", "", "", method_stop, 0),
+    SD_BUS_METHOD("Play", "", "", method_play, 0),
+#ifdef SD_BUS_METHOD_WITH_ARGS
+    SD_BUS_METHOD_WITH_ARGS("Seek", SD_BUS_ARGS("x", Offset), SD_BUS_NO_RESULT, method_seek, 0),
+    SD_BUS_METHOD_WITH_ARGS("SetPosition", SD_BUS_ARGS("o", TrackId, "x", Position),
+                            SD_BUS_NO_RESULT, method_set_position, 0),
+    SD_BUS_METHOD_WITH_ARGS("OpenUri", SD_BUS_ARGS("s", Uri), SD_BUS_NO_RESULT,
+                            method_open_uri, 0),
+    SD_BUS_SIGNAL_WITH_ARGS("Seeked", SD_BUS_ARGS("x", Position), 0),
+#else
+    /* basu, the standalone sd-bus, lacks the macros that name arguments
+     * (systemd 246): its introspection goes without the names. */
+    SD_BUS_METHOD("Seek", "x", "", method_seek, 0),
+    SD_BUS_METHOD("SetPosition", "ox", "", method_set_position, 0),
+    SD_BUS_METHOD("OpenUri", "s", "", method_open_uri, 0),
+    SD_BUS_SIGNAL("Seeked", "x", 0),
+#endif
+    SD_BUS_PROPERTY("PlaybackStatus", "s", get_status, 0, EMITS),
+    SD_BUS_PROPERTY("LoopStatus", "s", get_loop, 0, EMITS),
+    SD_BUS_WRITABLE_PROPERTY("Rate", "d", get_rate, set_rate, 0, EMITS),
+    SD_BUS_PROPERTY("Shuffle", "b", get_false, 0, EMITS),
+    SD_BUS_PROPERTY("Metadata", "a{sv}", get_metadata, 0, EMITS),
+    SD_BUS_WRITABLE_PROPERTY("Volume", "d", get_volume, set_volume, 0, EMITS),
+    SD_BUS_PROPERTY("Position", "x", get_position, 0, 0),
+    SD_BUS_PROPERTY("MinimumRate", "d", get_rate, 0, EMITS),
+    SD_BUS_PROPERTY("MaximumRate", "d", get_rate, 0, EMITS),
+    SD_BUS_PROPERTY("CanGoNext", "b", get_can_next, 0, EMITS),
+    SD_BUS_PROPERTY("CanGoPrevious", "b", get_can_prev, 0, EMITS),
+    SD_BUS_PROPERTY("CanPlay", "b", get_loaded, 0, EMITS),
+    SD_BUS_PROPERTY("CanPause", "b", get_loaded, 0, EMITS),
+    SD_BUS_PROPERTY("CanSeek", "b", get_loaded, 0, EMITS),
+    SD_BUS_PROPERTY("CanControl", "b", get_true, 0, SD_BUS_VTABLE_PROPERTY_CONST),
+    SD_BUS_VTABLE_END,
+};
 
 /* ----------------------------------------------------------------- signals */
 
 /* PropertiesChanged on the Player interface for what differs from what
- * the clients were last told. */
+ * the clients were last told; the values are the getters', from `v`. */
 static void send_changes(RXApp *app, RXMpris *m, const View *v)
 {
     Shown now = shown_now(app, m, v);
-    int ids[P_COUNT];
+    const char *names[16];
     int n = 0;
     if (now.status != m->shown.status)
-        ids[n++] = P_STATUS;
+        names[n++] = "PlaybackStatus";
     if (now.meta != m->shown.meta)
-        ids[n++] = P_METADATA;
+        names[n++] = "Metadata";
     if (now.volume != m->shown.volume)
-        ids[n++] = P_VOLUME;
+        names[n++] = "Volume";
     if (now.can_next != m->shown.can_next)
-        ids[n++] = P_CAN_NEXT;
+        names[n++] = "CanGoNext";
     if (now.can_prev != m->shown.can_prev)
-        ids[n++] = P_CAN_PREV;
+        names[n++] = "CanGoPrevious";
     if (now.loaded != m->shown.loaded) {
-        ids[n++] = P_CAN_PLAY;
-        ids[n++] = P_CAN_PAUSE;
-        ids[n++] = P_CAN_SEEK;
+        names[n++] = "CanPlay";
+        names[n++] = "CanPause";
+        names[n++] = "CanSeek";
     }
+    names[n] = NULL;
     if (!n)
         return;
 
-    DBusMessage *sig = dbus_message_new_signal(OBJECT_PATH, DBUS_INTERFACE_PROPERTIES,
-                                               "PropertiesChanged");
-    if (!sig)
-        return;
-    const char *iface = IFACE_PLAYER;
-    DBusMessageIter it, d = DBUS_MESSAGE_ITER_INIT_CLOSED, none = DBUS_MESSAGE_ITER_INIT_CLOSED;
-    dbus_message_iter_init_append(sig, &it);
-    bool ok = dbus_message_iter_append_basic(&it, DBUS_TYPE_STRING, &iface) &&
-              dbus_message_iter_open_container(&it, DBUS_TYPE_ARRAY, "{sv}", &d);
-    for (int i = 0; ok && i < n; i++)
-        ok = add_prop_entry(app, m, v, &d, ids[i]);
-    ok = ok && dbus_message_iter_close_container(&it, &d) &&
-         dbus_message_iter_open_container(&it, DBUS_TYPE_ARRAY, DBUS_TYPE_STRING_AS_STRING,
-                                          &none) &&
-         dbus_message_iter_close_container(&it, &none);
-    if (!ok) {
-        dbus_message_iter_abandon_container_if_open(&it, &d);
-        dbus_message_iter_abandon_container_if_open(&it, &none);
-    }
+    m->view = *v;
+    m->view_valid = true;
     /* Told only once sent: what could not be goes at the next tick. */
-    if (ok && dbus_connection_send(m->conn, sig, NULL))
+    if (sd_bus_emit_properties_changed_strv(m->bus, OBJECT_PATH, IFACE_PLAYER,
+                                            (char **)names) >= 0)
         m->shown = now;
-    dbus_message_unref(sig);
+    m->view_valid = false;
 }
 
 static void send_seeked(RXMpris *m, const View *v)
 {
-    DBusMessage *sig = dbus_message_new_signal(OBJECT_PATH, IFACE_PLAYER, "Seeked");
-    if (!sig)
-        return;
-    dbus_int64_t us = usec(v->st.position);
-    if (dbus_message_append_args(sig, DBUS_TYPE_INT64, &us, DBUS_TYPE_INVALID))
-        dbus_connection_send(m->conn, sig, NULL);
-    dbus_message_unref(sig);
+    sd_bus_emit_signal(m->bus, OBJECT_PATH, IFACE_PLAYER, "Seeked", "x", usec(v->st.position));
 }
 
 /* Whether the playhead moved other than by playing since the last tick:
@@ -1198,30 +1051,25 @@ static bool jumped(RXMpris *m, const View *v, int64_t now)
 
 /* ---------------------------------------------------------------- lifecycle */
 
-/* The session bus' address: DBUS_SESSION_BUS_ADDRESS, else the socket a
- * systemd session keeps in $XDG_RUNTIME_DIR, as libdbus' own lookup does,
- * without its autolaunch, which could start a bus from here. Allocating;
- * NULL when there is none. */
-static char *session_address(void)
+/* Calls in, replies and signals out, as far as the socket goes without
+ * waiting: sd_bus_process() until it has nothing left to do, each message
+ * with a fresh view of the deck. False once the bus went away. */
+static bool pump(RXMpris *m)
 {
-    const char *env = getenv("DBUS_SESSION_BUS_ADDRESS");
-    if (env && env[0])
-        return rx_strdup(env);
-    const char *runtime = getenv("XDG_RUNTIME_DIR");
-    if (!runtime || runtime[0] != '/')
-        return NULL;
-
-    char *sock = rx_path_join(runtime, "bus");
-    char *address = NULL;
-    struct stat st;
-    if (sock && !stat(sock, &st) && S_ISSOCK(st.st_mode)) {
-        char *escaped = dbus_address_escape_value(sock);
-        if (escaped)
-            address = rx_asprintf("unix:path=%s", escaped);
-        dbus_free(escaped);
+    int ret = 1;
+    for (int n = 0; ret > 0 && n < CALLS_PER_TICK; n++) {
+        m->view_valid = false;
+        ret = sd_bus_process(m->bus, NULL);
     }
-    free(sock);
-    return address;
+    m->view_valid = false;
+    return sd_bus_is_open(m->bus) > 0;
+}
+
+static void bus_close(sd_bus *bus)
+{
+    /* Closing gives up the name. Nothing is flushed: that would wait. */
+    sd_bus_close(bus);
+    sd_bus_unref(bus);
 }
 
 int rx_mpris_create(RXApp *app)
@@ -1231,46 +1079,34 @@ int rx_mpris_create(RXApp *app)
     if (!app->player)
         return RX_ERROR(EINVAL);
 
-    char *address = session_address();
-    if (!address) {
-        rx_warn("mpris: no session bus (DBUS_SESSION_BUS_ADDRESS is not set); "
-                "no media controls");
-        return RX_ERROR(ENOENT);
-    }
-
     RXMpris *m = calloc(1, sizeof(*m));
-    if (!m) {
-        free(address);
+    if (!m)
         return RX_ERROR(ENOMEM);
-    }
+    m->app = app;
     rx_array_init(&m->art_files, sizeof(uint64_t));
     m->volume = 1.0;
     m->meta_generation = app->lib.generation;
 
-    static const DBusObjectPathVTable vtable = {
-        .message_function = on_message,
-    };
-    DBusError err;
-    dbus_error_init(&err);
-    const char *why = NULL;
-    int ret = RX_ERROR(ECONNREFUSED);
-
-    m->conn = dbus_connection_open_private(address, &err);
-    free(address);
-    if (!m->conn)
+    /* DBUS_SESSION_BUS_ADDRESS, else $XDG_RUNTIME_DIR/bus; sd-bus never
+     * starts a bus of its own. Without either, or without a socket there:
+     * ENOENT (ENOMEDIUM without $XDG_RUNTIME_DIR). */
+    int ret = sd_bus_open_user(&m->bus);
+    if (ret == RX_ERROR(ENOMEDIUM))
+        ret = RX_ERROR(ENOENT);
+    if (ret == RX_ERROR(ENOENT)) {
+        rx_warn("mpris: no session bus; no media controls");
         goto fail;
-    /* A bus going away ends MPRIS, not rxbox (libdbus would _exit). */
-    dbus_connection_set_exit_on_disconnect(m->conn, FALSE);
-    if (!dbus_bus_register(m->conn, &err) ||
-        !dbus_connection_try_register_object_path(m->conn, OBJECT_PATH, &vtable, app, &err))
-        goto fail;
-    int owner = dbus_bus_request_name(m->conn, BUS_NAME, DBUS_NAME_FLAG_DO_NOT_QUEUE, &err);
-    if (owner < 0)
-        goto fail;
-    if (owner != DBUS_REQUEST_NAME_REPLY_PRIMARY_OWNER &&
-        owner != DBUS_REQUEST_NAME_REPLY_ALREADY_OWNER) {
-        why = BUS_NAME " has an owner (another rxbox?)";
-        ret = RX_ERROR(EEXIST);
+    }
+    if (ret >= 0)
+        ret = sd_bus_add_object_vtable(m->bus, NULL, OBJECT_PATH, IFACE_ROOT, root_vtable, m);
+    if (ret >= 0)
+        ret = sd_bus_add_object_vtable(m->bus, NULL, OBJECT_PATH, IFACE_PLAYER, player_vtable, m);
+    if (ret >= 0)
+        ret = sd_bus_request_name(m->bus, BUS_NAME, 0);
+    if (ret < 0) {
+        rx_warn("mpris: not on the session bus (%s); no media controls",
+                ret == RX_ERROR(EEXIST) ? BUS_NAME " has an owner (another rxbox?)"
+                                        : strerror(-ret));
         goto fail;
     }
 
@@ -1289,16 +1125,8 @@ int rx_mpris_create(RXApp *app)
     return 0;
 
 fail:
-    if (!why)
-        why = dbus_error_is_set(&err) ? err.message : strerror(ENOMEM);
-    /* libdbus' messages may end in a newline. */
-    rx_warn("mpris: not on the session bus (%.*s); no media controls",
-            (int)strcspn(why, "\n"), why);
-    dbus_error_free(&err);
-    if (m->conn) {
-        dbus_connection_close(m->conn);
-        dbus_connection_unref(m->conn);
-    }
+    if (m->bus)
+        bus_close(m->bus);
     rx_array_free(&m->art_files);
     free(m);
     return ret;
@@ -1310,14 +1138,7 @@ void rx_mpris_tick(RXApp *app)
     if (!m)
         return;
 
-    /* What came in, answered; nothing here waits. */
-    bool alive = dbus_connection_read_write_dispatch(m->conn, 0);
-    for (int n = 0; alive && n < CALLS_PER_TICK &&
-         dbus_connection_get_dispatch_status(m->conn) == DBUS_DISPATCH_DATA_REMAINS; n++) {
-        if (dbus_connection_dispatch(m->conn) == DBUS_DISPATCH_NEED_MEMORY)
-            break;
-    }
-    if (!alive || !dbus_connection_get_is_connected(m->conn)) {
+    if (!pump(m)) {
         rx_warn("mpris: the session bus went away; no media controls");
         rx_mpris_destroy(app);
         return;
@@ -1345,8 +1166,11 @@ void rx_mpris_tick(RXApp *app)
     if (seeked && v.track)
         send_seeked(m, &v);
 
-    /* Out with the replies and signals, as far as the socket takes them. */
-    dbus_connection_read_write(m->conn, 0);
+    /* What the socket did not take of the replies and signals; a bus that
+     * went away meanwhile is found at the next tick. */
+    int events = sd_bus_get_events(m->bus);
+    if (events > 0 && (events & POLLOUT))
+        pump(m);
 }
 
 void rx_mpris_destroy(RXApp *app)
@@ -1356,9 +1180,7 @@ void rx_mpris_destroy(RXApp *app)
         return;
     app->mpris = NULL;
 
-    /* Closing gives up the name. */
-    dbus_connection_close(m->conn);
-    dbus_connection_unref(m->conn);
+    bus_close(m->bus);
     covers_remove(m);
     rx_array_free(&m->art_files);
     free(m->art_url);

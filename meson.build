@@ -59,10 +59,11 @@ sdl3_dep     = dependency('sdl3')
 pipewire_dep = dependency('libpipewire-0.3')
 wayland_client = dependency('wayland-client')
 glslang_prog = find_program('glslangValidator', 'glslang', required: true)
-# MPRIS (src/app/mpris.c): the system's libdbus (AFL-2.1 or GPL-2, dual
-# licensed, linked dynamically), only when it is found (-Dmpris=enabled
-# requires it, disabled leaves it out).
-dbus_dep     = dependency('dbus-1', required: get_option('mpris'))
+# MPRIS (src/app/mpris.c): sd-bus, the D-Bus library in libsystemd, else in
+# libelogind or basu (the standalone sd-bus) on a system without systemd,
+# whichever is found first (LGPL-2.1 or later, linked dynamically); only
+# when one is found (-Dmpris=enabled requires one, disabled leaves it out).
+sdbus_dep    = dependency('libsystemd', 'libelogind', 'basu', required: get_option('mpris'))
 
 # Signalsmith Stretch (MIT), the master tempo pitch shifter: header-only C++,
 # a git submodule in subprojects/ read through its own CMakeLists.txt. That
@@ -97,7 +98,7 @@ stretch_dep = [
 #============================================================================
 conf = configuration_data()
 conf.set_quoted('RXBOX_VERSION', meson.project_version())
-conf.set10('RXBOX_MPRIS', dbus_dep.found())
+conf.set10('RXBOX_MPRIS', sdbus_dep.found())
 configure_file(output: 'config.h', configuration: conf)
 
 rx_inc = include_directories('include', '.')
