@@ -32,7 +32,7 @@
 // frames: down:<key> and up:<key> (ImGui's key names: C, Enter,
 // DownArrow...), focus-out and focus-in, click:<x>:<y> (the pointer moved
 // there, in logical pixels, and the left button pressed and let go two
-// frames later).
+// frames later), text:<characters> (typed, '+' for a space).
 
 #include "ui_internal.h"
 
@@ -41,6 +41,7 @@
 #include <stdio.h>
 #include <time.h>
 
+#include <algorithm>
 #include <new>
 
 #include <fontconfig/fontconfig.h>
@@ -1187,6 +1188,10 @@ static void parse_test_events(UiState *ui, const char *spec)
             continue;
         if (!strcmp(what, "focus-out") || !strcmp(what, "focus-in")) {
             ev.type = what[6] == 'o' ? 2 : 3;
+        } else if (!strcmp(what, "text")) {
+            ev.type = 5;
+            ev.text = key;
+            std::replace(ev.text.begin(), ev.text.end(), '+', ' ');
         } else if (!strcmp(what, "click")) {
             ev.type = 4;
             if (sscanf(key, "%f:%f", &ev.x, &ev.y) != 2) {
@@ -1229,6 +1234,8 @@ static void test_events(UiState *ui)
             continue;
         if (ev.type <= 1)
             io.AddKeyEvent(ev.key, ev.type == 0);
+        else if (ev.type == 5)
+            io.AddInputCharactersUTF8(ev.text.c_str());
         else if (ev.type == 4)
             io.AddMousePosEvent(PX(ev.x), PX(ev.y));
         else
@@ -1259,6 +1266,18 @@ static void log_test_state(UiState *ui)
             ui->frame_no, (unsigned long long)(t ? t->id : 0), st.playing, st.position, popup,
             t ? t->nb_cues : 0, ui_cue_list_has_keys(ui, 0), mode_drawn(ui->overview_mode_drawn),
             mode_drawn(ui->preview_mode_drawn), ui->key_drawn[0] ? ui->key_drawn : "-");
+    // The Add dialog's finder: the query, its matches, the best one, the
+    // row the cursor is on and what is ticked.
+    if (ui->finder && ui->fb_find[0]) {
+        const std::vector<int> &res = ui_finder_results(ui->finder);
+        int c = ui->fb_cursor;
+        rx_info("ui test: find \"%s\" matches %zu of %zu best \"%s\" cursor \"%s\" picked %zu",
+                ui->fb_find, ui_finder_matches(ui->finder), ui_finder_count(ui->finder),
+                res.empty() ? "" : ui_finder_entry(ui->finder, res[0]).rel.c_str(),
+                c >= 0 && (size_t)c < res.size() ? ui_finder_entry(ui->finder, res[(size_t)c]).rel.c_str()
+                                                 : "",
+                ui->fb_picked.size());
+    }
 }
 
 /* -------------------------------------------------------------- My Settings */
@@ -1688,6 +1707,9 @@ bool rx_ui_frame(RXApp *app)
     if (app->analysing_total > 0 && app->analysing_done < app->analysing_total)
         more = true;
     if (rx_app_tag_progress(app, nullptr, nullptr, nullptr))
+        more = true;
+    // The Add dialog's finder walking: its matches come in as it goes.
+    if (ui->finder && ui_finder_walking(ui->finder))
         more = true;
     // Input this frame may have opened or resized something that settles
     // over the next two frames (ImGui sizes new windows on their second).

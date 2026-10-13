@@ -2,8 +2,9 @@
 
 // The dialogs: the confirmation of a removal from the library, Relocate,
 // Analysis settings, Player settings, Export, Sync from USB, Inspect USB,
-// the Add browser (a plain directory lister: there is no native file
-// dialog under a bare Wayland compositor), the keyboard map and About.
+// the Add browser (a plain directory lister, there being no native file
+// dialog under a bare Wayland compositor, with a fuzzy finder over
+// everything under the folder: finder.cpp), the keyboard map and About.
 //
 // Player settings is rekordbox's My Settings, built from rx_settings_list:
 // a field settings.c gains shows up with no change here. Its values are
@@ -1310,6 +1311,12 @@ static void inspect_dialog(UiState *ui)
 
 /* ---------------------------------------------------------------------- add */
 
+// What the Add dialog lists in one folder, and what its finder shows
+// (finder.cpp) when something is typed in its field: every folder and
+// audio file under the folder, best match first. Ticks are kept by
+// absolute path, so they survive moving between folders and between the
+// listing and the finder, and one Add adds them all.
+
 static void fb_scan(UiState *ui)
 {
     ui->fb_entries.clear();
@@ -1335,7 +1342,6 @@ static void fb_scan(UiState *ui)
         fe.name = e->d_name;
         fe.dir = S_ISDIR(stt.st_mode);
         fe.audio = !fe.dir && rx_is_audio_path(full.c_str());
-        fe.selected = false;
         if (fe.dir || fe.audio)
             ui->fb_entries.push_back(fe);
     }
@@ -1358,12 +1364,39 @@ static void fb_go(UiState *ui, const std::string &path)
     ui->fb_path = abs;
     free(abs);
     snprintf(ui->fb_edit, sizeof(ui->fb_edit), "%s", ui->fb_path.c_str());
+    ui->fb_cursor = 0;
     fb_scan(ui);
+}
+
+// `rel` under the folder shown.
+static std::string fb_abs(const UiState *ui, const std::string &rel)
+{
+    return ui->fb_path == "/" ? "/" + rel : ui->fb_path + "/" + rel;
+}
+
+static void fb_toggle(UiState *ui, const std::string &abs)
+{
+    if (!ui->fb_picked.erase(abs))
+        ui->fb_picked.insert(abs);
+}
+
+// The home directory as ~, for the finder's status line.
+static std::string fb_short(const std::string &path)
+{
+    const char *home = getenv("HOME");
+    size_t n = home ? strlen(home) : 0;
+    if (n > 1 && path.compare(0, n, home) == 0 && (path.size() == n || path[n] == '/'))
+        return "~" + path.substr(n);
+    return path;
 }
 
 void ui_open_add(UiState *ui)
 {
     ui->dlg_add = true;
+    ui->fb_picked.clear();
+    ui->fb_find[0] = '\0';
+    ui->fb_find_focus = true;
+    ui->fb_cursor = 0;
     if (ui->fb_path.empty()) {
         const char *home = getenv("HOME");
         std::string music = std::string(home ? home : "/") + "/Music";
@@ -1373,18 +1406,134 @@ void ui_open_add(UiState *ui)
     }
 }
 
+// A finder row's path, the folders it is in dimmed, its name in the
+// listing's colours, the letters the query matched lit.
+static void fb_path_text(UiState *ui, ImVec2 pos, const UiFinderEntry &fe, float max_w)
+{
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    ImFont *font = ImGui::GetFont();
+    float size = ImGui::GetFontSize();
+    std::string text = fe.rel + (fe.dir ? "/" : "");
+    int hits[64], nh = 0;
+    rx_fuzzy_match(fe.rel.c_str(), ui->fb_find, nullptr, hits, 64, &nh);
+    std::vector<bool> lit(text.size(), false);
+    for (int i = 0; i < nh; i++) {
+        if (hits[i] >= 0 && (size_t)hits[i] < lit.size())
+            lit[(size_t)hits[i]] = true;
+    }
+    size_t base = fe.rel.find_last_of('/');
+    base = base == std::string::npos ? 0 : base + 1;
+
+    const char *s = text.c_str();
+    float x = pos.x, right = pos.x + max_w;
+    size_t i = 0;
+    while (i < text.size() && x < right) {
+        // One run of characters of the same colour.
+        auto colour = [&](size_t at) -> ImU32 {
+            if (lit[at])
+                return UI_PLAY;
+            if (at < base)
+                return UI_DIM;
+            return fe.dir ? UI_ACCENT : UI_TEXT;
+        };
+        ImU32 col = colour(i);
+        size_t j = i;
+        while (j < text.size()) {
+            size_t k = j + 1;
+            while (k < text.size() && ((unsigned char)s[k] & 0xC0) == 0x80)
+                k++;
+            if (colour(j) != col)
+                break;
+            j = k;
+        }
+        dl->AddText(font, size, ImVec2(x, pos.y), col, s + i, s + j);
+        x += font->CalcTextSizeA(size, FLT_MAX, 0.0f, s + i, s + j).x;
+        i = j;
+    }
+}
+
+// Adds what is ticked, or `fallback` when nothing is, and closes.
+static void fb_add(UiState *ui, const std::string &fallback)
+{
+    RXApp *app = ui->app;
+    std::vector<std::string> items(ui->fb_picked.begin(), ui->fb_picked.end());
+    if (items.empty() && !fallback.empty())
+        items.push_back(fallback);
+    if (items.empty())
+        return;
+    // One item: its own status says what came of it. Several: a count,
+    // the failures in it (each is in the log).
+    int added = 0, failed = 0;
+    for (const std::string &p : items) {
+        if (rx_app_add_path(app, p.c_str()) >= 0)
+            added++;
+        else
+            failed++;
+    }
+    int n = (int)items.size();
+    if (n > 1 && failed)
+        rx_app_set_status(app, "Added %d of %d items; %d could not be added", added, n, failed);
+    else if (n > 1)
+        rx_app_set_status(app, "Added %d items", added);
+    ui->fb_picked.clear();
+    ui->dlg_add = false;
+}
+
+// The finder's matches in the list's place. Returns the folder to go to
+// (a double click on one), or "".
+static std::string fb_find_rows(UiState *ui)
+{
+    std::string go;
+    const std::vector<int> &res = ui_finder_results(ui->finder);
+    int shown = std::min((int)res.size(), UI_FINDER_SHOWN);
+    ui->fb_cursor = shown ? std::clamp(ui->fb_cursor, 0, shown - 1) : 0;
+    float h = ImGui::GetTextLineHeight();
+    for (int i = 0; i < shown; i++) {
+        const UiFinderEntry &fe = ui_finder_entry(ui->finder, res[(size_t)i]);
+        std::string abs = fb_abs(ui, fe.rel);
+        ImGui::PushID(i);
+        bool picked = ui->fb_picked.count(abs) > 0;
+        if (ImGui::Checkbox("##sel", &picked))
+            fb_toggle(ui, abs);
+        ImGui::SameLine();
+        ImVec2 p = ImGui::GetCursorScreenPos();
+        if (ImGui::Selectable("##row", i == ui->fb_cursor, ImGuiSelectableFlags_AllowDoubleClick,
+                              ImVec2(0, h))) {
+            ui->fb_cursor = i;
+            if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && fe.dir)
+                go = abs;
+            else
+                fb_toggle(ui, abs);
+        }
+        if (i == ui->fb_cursor && ui->fb_cursor_moved) {
+            ImGui::SetScrollHereY();
+            ui->fb_cursor_moved = false;
+        }
+        fb_path_text(ui, p, fe, ImGui::GetItemRectMax().x - p.x);
+        ImGui::PopID();
+    }
+    if (res.empty() && !ui_finder_walking(ui->finder))
+        ImGui::TextDisabled("Nothing here matches.");
+    return go;
+}
+
 static void add_dialog(UiState *ui)
 {
     RXApp *app = ui->app;
-    if (!ui->dlg_add)
+    if (!ui->dlg_add) {
+        // Closed: the walk stops, its list goes.
+        ui_finder_free(&ui->finder);
+        ui->fb_focused = false;
         return;
-    centre_next(ui, 640, 520);
+    }
+    centre_next(ui, 680, 560);
     if (!ImGui::Begin("Add files and folders", &ui->dlg_add,
                       ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings)) {
         ImGui::End();
         return;
     }
     ui_settle_centred();
+    ui->fb_focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
     if (ImGui::Button("Up")) {
         std::string up = ui->fb_path;
         size_t slash = up.find_last_of('/');
@@ -1399,61 +1548,121 @@ static void add_dialog(UiState *ui)
             fb_go(ui, e);
         free(e);
     }
-    int nsel = 0;
-    for (const UiFileEntry &fe : ui->fb_entries)
-        nsel += fe.selected;
-    ImGui::BeginChild("##files", ImVec2(0, -PX(40)), ImGuiChildFlags_Borders);
-    std::string go;
-    for (size_t i = 0; i < ui->fb_entries.size(); i++) {
-        UiFileEntry &fe = ui->fb_entries[i];
-        ImGui::PushID((int)i);
-        ImGui::Checkbox("##sel", &fe.selected);
-        ImGui::SameLine();
-        char label[600];
-        snprintf(label, sizeof(label), "%s%s", fe.name.c_str(), fe.dir ? "/" : "");
-        if (fe.dir)
-            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(UI_ACCENT));
-        if (ImGui::Selectable(label, fe.selected, ImGuiSelectableFlags_AllowDoubleClick)) {
-            if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && fe.dir)
-                go = ui->fb_path + "/" + fe.name;
-            else
-                fe.selected = !fe.selected;
-        }
-        if (fe.dir)
-            ImGui::PopStyleColor();
-        ImGui::PopID();
+
+    // The finder's field: what is typed is looked for under this folder.
+    // Up and Down move through the matches, Enter ticks one, Ctrl+Enter
+    // adds, Escape empties the field.
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    if (ui->fb_find_focus) {
+        ImGui::SetKeyboardFocusHere();
+        ui->fb_find_focus = false;
     }
-    if (!ui->fb_error.empty())
-        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(UI_RED), "%s", ui->fb_error.c_str());
-    else if (ui->fb_entries.empty())
-        ImGui::TextDisabled("No folders or audio files here.");
+    char before[sizeof(ui->fb_find)];
+    memcpy(before, ui->fb_find, sizeof(before));
+    bool enter = ImGui::InputTextWithHint("##find", "Find under this folder (Ctrl+F): any part of a name",
+                                          ui->fb_find, sizeof(ui->fb_find),
+                                          ImGuiInputTextFlags_EnterReturnsTrue |
+                                          ImGuiInputTextFlags_EscapeClearsAll);
+    bool find_active = ImGui::IsItemActive();
+    if (strcmp(before, ui->fb_find)) {
+        ui->fb_cursor = 0;
+        ui->fb_cursor_moved = true;
+    }
+    bool finding = ui->fb_find[0] != '\0';
+    if (finding)
+        ui_finder_update(&ui->finder, ui->fb_path, ui->fb_find);
+    const std::vector<int> *res = finding ? &ui_finder_results(ui->finder) : nullptr;
+    int shown = res ? std::min((int)res->size(), UI_FINDER_SHOWN) : 0;
+    std::string cursor_abs;
+    if (res && ui->fb_cursor >= 0 && ui->fb_cursor < shown)
+        cursor_abs = fb_abs(ui, ui_finder_entry(ui->finder, (*res)[(size_t)ui->fb_cursor]).rel);
+    if (finding && find_active) {
+        int step = ImGui::IsKeyPressed(ImGuiKey_DownArrow) ? 1
+                 : ImGui::IsKeyPressed(ImGuiKey_UpArrow) ? -1
+                 : ImGui::IsKeyPressed(ImGuiKey_PageDown) ? 10
+                 : ImGui::IsKeyPressed(ImGuiKey_PageUp) ? -10 : 0;
+        if (step && shown) {
+            ui->fb_cursor = std::clamp(ui->fb_cursor + step, 0, shown - 1);
+            ui->fb_cursor_moved = true;
+        }
+    }
+    if (enter && finding) {
+        // Enter leaves the field (ImGui's way); it comes back next frame.
+        ui->fb_find_focus = true;
+        if (ImGui::GetIO().KeyCtrl)
+            fb_add(ui, cursor_abs);
+        else if (!cursor_abs.empty())
+            fb_toggle(ui, cursor_abs);
+    }
+    if (!ui->dlg_add) {
+        ImGui::End();
+        return;
+    }
+
+    int nsel = (int)ui->fb_picked.size();
+    ImGui::BeginChild("##files", ImVec2(0, -PX(finding ? 62 : 40)), ImGuiChildFlags_Borders);
+    std::string go;
+    if (finding) {
+        go = fb_find_rows(ui);
+    } else {
+        for (size_t i = 0; i < ui->fb_entries.size(); i++) {
+            const UiFileEntry &fe = ui->fb_entries[i];
+            std::string abs = fb_abs(ui, fe.name);
+            ImGui::PushID((int)i);
+            bool picked = ui->fb_picked.count(abs) > 0;
+            if (ImGui::Checkbox("##sel", &picked))
+                fb_toggle(ui, abs);
+            ImGui::SameLine();
+            char label[600];
+            snprintf(label, sizeof(label), "%s%s", fe.name.c_str(), fe.dir ? "/" : "");
+            if (fe.dir)
+                ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(UI_ACCENT));
+            if (ImGui::Selectable(label, picked, ImGuiSelectableFlags_AllowDoubleClick)) {
+                if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && fe.dir)
+                    go = abs;
+                else
+                    fb_toggle(ui, abs);
+            }
+            if (fe.dir)
+                ImGui::PopStyleColor();
+            ImGui::PopID();
+        }
+        if (!ui->fb_error.empty())
+            ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(UI_RED), "%s", ui->fb_error.c_str());
+        else if (ui->fb_entries.empty())
+            ImGui::TextDisabled("No folders or audio files here.");
+    }
     ImGui::EndChild();
-    if (!go.empty())
+    if (!go.empty()) {
+        // A folder found: the listing of it, the field emptied.
+        ui->fb_find[0] = '\0';
         fb_go(ui, go);
+    }
+
+    if (finding && ui->finder) {
+        size_t n = ui_finder_count(ui->finder), m = ui_finder_matches(ui->finder);
+        std::string where = fb_short(ui->fb_path);
+        char line[512];
+        snprintf(line, sizeof(line), "%zu match%s among %zu folders and files under %s%s%s", m,
+                 m == 1 ? "" : "es", n, where.c_str(),
+                 ui_finder_walking(ui->finder) ? ", still looking..." : "",
+                 ui_finder_truncated(ui->finder) ? " (the search stopped at its limit)" : "");
+        ImGui::TextDisabled("%s", line);
+        if (m > (size_t)UI_FINDER_SHOWN) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("(the best %d shown)", UI_FINDER_SHOWN);
+        }
+    }
 
     // Adding probes the files and queues their analysis (app.c).
     if (nsel > 0) {
         char label[64];
         snprintf(label, sizeof(label), "Add %d selected", nsel);
-        if (ImGui::Button(label, ImVec2(PX(160), PX(28)))) {
-            // One item: its own status says what came of it. Several: a
-            // count, the failures in it (each is in the log).
-            int added = 0, failed = 0;
-            for (const UiFileEntry &fe : ui->fb_entries) {
-                if (!fe.selected)
-                    continue;
-                if (rx_app_add_path(app, (ui->fb_path + "/" + fe.name).c_str()) >= 0)
-                    added++;
-                else
-                    failed++;
-            }
-            if (nsel > 1 && failed)
-                rx_app_set_status(app, "Added %d of %d items; %d could not be added", added, nsel,
-                                  failed);
-            else if (nsel > 1)
-                rx_app_set_status(app, "Added %d items", added);
-            ui->dlg_add = false;
-        }
+        if (ImGui::Button(label, ImVec2(PX(160), PX(28))))
+            fb_add(ui, "");
+        ImGui::SameLine();
+        if (ImGui::Button("Clear", ImVec2(PX(80), PX(28))))
+            ui->fb_picked.clear();
     } else if (ImGui::Button("Add this folder", ImVec2(PX(160), PX(28)))) {
         // rx_app_add_path's status says what came of it.
         rx_app_add_path(app, ui->fb_path.c_str());
@@ -1542,4 +1751,5 @@ void ui_dialogs(UiState *ui)
 void ui_dialogs_shutdown(UiState *ui)
 {
     sync_free(ui);
+    ui_finder_free(&ui->finder);
 }

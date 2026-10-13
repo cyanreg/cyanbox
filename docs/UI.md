@@ -360,7 +360,7 @@ GPU name.
 
 A menu bar at the very top: **File** (Add files/folders… (ImGui file
 browser: a simple directory lister with a path field, since there is no
-native dialog), Export to USB…, Sync from USB…, Inspect USB…, Player
+native dialog, and a finder, below), Export to USB…, Sync from USB…, Inspect USB…, Player
 settings… (`Ctrl+,`), Rescan missing files, Quit),
 **View** (waveform colour 3Band/Blue/RGB, key notation Classic/
 Alphanumeric, Traffic Light off/same key/related 1–3, detail waveform
@@ -445,6 +445,26 @@ it at once.
   settings names them: `Mixer settings`, `Channel Fader Curve: Linear ->
   Steep top`), one checkbox per row
   (all accepted by default), Apply, and a summary.
+- **Add files and folders**: the path field (Up for the parent), the
+  finder's field under it, focused when the dialog opens, and the list.
+  The list shows the folder's subfolders (orange) and audio files; a
+  double click on a folder goes into it. Typing in the finder looks for
+  what is typed under the folder and every folder below it, fuzzily, as
+  fzf does: each word of the query must appear with its letters in order,
+  gaps allowed, case and full-width letters folded; a word at the start of
+  a name, found whole or in the last part of the path ranks higher. The
+  walk runs on a thread of its own, breadth first, so the top folders come
+  in at once and the rest as it goes ("still looking..."); hidden entries
+  and the kernel's file systems are left out, and it stops at 300 000
+  entries or 32 folders down. The best 300 matches are listed with their
+  path under the folder, the folders they are in dimmed and the matched
+  letters lit green; ↑ ↓ (PageUp/PageDown by ten) move the cursor, Enter
+  ticks the row under it, Ctrl+Enter adds what is ticked (or that row),
+  Esc empties the field, a double click on a folder goes into it, Ctrl+F
+  comes back to the field while the dialog has the focus. Ticks are kept
+  by path, in the listing and the finder alike and across folders, until
+  Add (which adds them all, a folder with everything under it) or Clear.
+  With nothing ticked the button adds the folder shown.
 - **Keyboard map** (read-only list).
 - **About**.
 
@@ -479,7 +499,13 @@ rekordbox's Export preset for player 1 (no shifted second-player set):
 | Esc | Clear the search; give Delete and ↑ ↓ back to the track table |
 | Ctrl+Q | Quit |
 
-Hot cue pads D–H have no default keys (rekordbox binds none).
+Hot cue pads D–H have no default keys (rekordbox binds none). The keys
+act on the player and the table only while the main window has the
+focus: with a dialog focused (Add, Export, the settings and the rest) or
+a text field active they do nothing, so Space does not play and Delete
+does not take tracks out of a playlist behind a dialog. Ctrl+Q, Ctrl+F
+(the Add dialog's finder while that dialog has the focus), Ctrl+G and
+Ctrl+, act everywhere but in a text field.
 
 ## Drawing rules worth repeating
 

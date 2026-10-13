@@ -21,7 +21,8 @@
 # checked: CUE held while the window loses the keyboard is let go; Enter on
 # another track while one plays loads it at once (the playing one pauses
 # for the swap, the new one plays on, no question asked); the Add browser on
-# a folder it cannot read says so; Delete after a click on a cue in the
+# a folder it cannot read says so; its finder finds what is typed under
+# the folder and ticks the row Enter is pressed on; Delete after a click on a cue in the
 # player's cue list deletes that cue and nothing else (with
 # RXBOX_UI_SWAYSOCK only: the click needs a known size). Then the Player
 # settings dialog, shot open, and a value picked in it with two clicks,
@@ -192,6 +193,26 @@ if [ "$(id -u)" != 0 ]; then
     ) || { chmod 755 "$OUT/home/Music"; exit 1; }
     chmod 755 "$OUT/home/Music"
 fi
+
+# The Add browser's finder: "felic" typed into its field finds, under
+# $HOME/Music and every folder below, the two Felicidade files and Felix
+# (the folder and the file in it, its letters further apart), not the
+# hidden copy or the text file; the one in a folder of its own ranks
+# first (its name starts a path component), the other Felicidade second
+# (the word whole, ahead of Felix's scattered letters). Down moves the
+# cursor to the second, Enter ticks it.
+rm -rf "$OUT/findhome"
+m="$OUT/findhome/Music"
+mkdir -p "$m/AD:HOUSE 11 [FLAC]" "$m/Bossa" "$m/Felix the Cat" "$m/Notes" "$m/.hidden"
+touch "$m/AD:HOUSE 11 [FLAC]/2.01 - Felicidade.flac" "$m/AD:HOUSE 11 [FLAC]/2.02 - Hot Vacation.flac" \
+      "$m/Bossa/Felicidade (live).mp3" "$m/Felix the Cat/Theme.flac" "$m/Notes/felicidade.txt" \
+      "$m/.hidden/Felicidade.flac"
+(
+    export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}" HOME="$OUT/findhome" RXBOX_UI_SHOW=add
+    variant add-find "40:text:felic,60:down:DownArrow,62:up:DownArrow,70:down:Enter,72:up:Enter" \
+        'find "felic" matches 4 of 8 best "Bossa/Felicidade \(live\)\.mp3" cursor "AD:HOUSE 11 \[FLAC\]/2\.01 - Felicidade\.flac" picked 1'
+)
+rm -rf "$OUT/findhome"
 
 # Delete on a selected cue: a click on the cue list's first row (the
 # memory cue at 0, where the list sits at 1600x900) selects it, Delete

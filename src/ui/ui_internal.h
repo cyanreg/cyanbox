@@ -14,6 +14,7 @@
 // runs ImGui in logical or in device pixels.
 
 #include <stdint.h>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -183,8 +184,15 @@ struct UiFileEntry {
     std::string name;
     bool dir;
     bool audio;
-    bool selected;
 };
+
+// One folder or audio file the Add dialog's finder found: its path under
+// the folder searched.
+struct UiFinderEntry {
+    std::string rel;
+    bool dir;
+};
+struct UiFinder;
 
 // A My Settings field as rx_settings_list gives it, in the section `rxbox
 // settings` prints it under: both MYSETTING files are the player's,
@@ -203,9 +211,10 @@ struct UiSetting {
 // An input event the test hook gives ImGui at a frame (RXBOX_UI_EVENTS).
 struct UiTestEvent {
     int      frame;
-    int      type;             // 0 key down, 1 key up, 2 focus out, 3 focus in, 4 click
+    int      type;             // 0 key down, 1 key up, 2 focus out, 3 focus in, 4 click, 5 text
     ImGuiKey key;
     float    x, y;             // a click's position, logical pixels
+    std::string text;          // typed text ('+' for a space)
 };
 
 struct UiState {
@@ -290,6 +299,13 @@ struct UiState {
     std::vector<UiFileEntry> fb_entries;
     std::string fb_error;      // why fb_path could not be listed
     bool      fb_dirty;
+    std::set<std::string> fb_picked;   // absolute paths ticked, in the listing or the finder
+    char      fb_find[256];    // the finder's query; empty: the listing shows
+    bool      fb_find_focus;   // focus the finder's field next frame
+    bool      fb_focused;      // the Add dialog had the focus last frame (Ctrl+F is its)
+    int       fb_cursor;       // the finder's highlighted row
+    bool      fb_cursor_moved; // scroll it into view
+    UiFinder *finder;          // finder.cpp; NULL until the first search of an opening
     std::vector<std::string> volumes;
     bool      export_seen_running;
     int       export_scope;    // 0 all playlists, 1 selected playlists, 2 entire library
@@ -469,6 +485,24 @@ void ui_open_sync(UiState *ui);
 void ui_open_settings(UiState *ui);
 void ui_open_relocate(UiState *ui, RXTrack *t);
 void ui_dialogs_shutdown(UiState *ui);
+
+/* ------------------------------------------------------------- finder.cpp */
+
+// Searches everything under `root` for `query`: starts the walk of `root`
+// (again, when the root changed) and matches what it has found so far.
+// Cheap to call every frame; *f is made on the first call.
+void ui_finder_update(UiFinder **f, const std::string &root, const char *query);
+// Stops the walk and frees; *f becomes NULL.
+void ui_finder_free(UiFinder **f);
+// The best UI_FINDER_SHOWN matches, best first, as indices for
+// ui_finder_entry; ui_finder_matches counts them all.
+#define UI_FINDER_SHOWN 300
+const std::vector<int> &ui_finder_results(const UiFinder *f);
+size_t ui_finder_matches(const UiFinder *f);
+const UiFinderEntry &ui_finder_entry(const UiFinder *f, int i);
+size_t ui_finder_count(const UiFinder *f);      // folders and files found so far
+bool   ui_finder_walking(const UiFinder *f);
+bool   ui_finder_truncated(const UiFinder *f);  // the walk stopped at its limits
 void ui_scan_volumes(UiState *ui);
 // Keeps a self-sizing dialog centred over its first frames (call after Begin).
 void ui_settle_centred(void);

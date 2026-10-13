@@ -8,6 +8,7 @@ ui_sources = files(
     'browser.cpp',
     'tree.cpp',
     'dialogs.cpp',
+    'finder.cpp',
     'keys.cpp',
 )
 
