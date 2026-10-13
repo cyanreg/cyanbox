@@ -66,6 +66,7 @@ static uint64_t grid_sig(const RXTrack *t)
         mix(&t->grid.sections[i].start, sizeof(double));
         mix(&t->grid.sections[i].bpm, sizeof(double));
         mix(&t->grid.sections[i].beat, sizeof(int));
+        mix(&t->grid.sections[i].measured, sizeof(bool));
     }
     return h;
 }

@@ -7,9 +7,11 @@
  *   onset.c      SuperFlux and band fluxes
  *   tempo.c      whole-track tempo, octave by evidence, tempo regions
  *   grid_fit.c   beat tracking, attacks, robust lines, sections, snapping
+ *   walk.c       whether a line holds its beats; the beat-by-beat grid
  *   downbeat.c   bar position from structure
- *   here         the order, the half-beat and downbeat decisions, the
- *                grid, the confidence and the flags
+ *   here         the order, the dynamic pass (which sections keep their
+ *                measured beats), the half-beat and downbeat decisions,
+ *                the grid, the confidence and the flags
  *
  * Also the small public helpers of the beats part of rxbox/analysis.h
  * (options, flag names), kept here rather than in analysis.c so that a
@@ -33,6 +35,7 @@ static const char *const flag_names[] = {
     "low-confidence",
     "unsteady",
     "phase-cut",
+    "dynamic",
 };
 
 const char *rx_grid_flag_name(enum RXGridFlag f)
@@ -63,6 +66,7 @@ void rx_analysis_options_default(RXAnalysisOptions *o)
         .prior_bpm             = 125.0,
         .snap_bpm              = true,
         .allow_sections        = true,
+        .allow_dynamic         = true,
         .deterministic_threads = false,
         .compute               = NULL,
     };
@@ -83,6 +87,9 @@ void rx_beat_result_free(RXBeatResult *r)
 /* Attack search around a tracked beat: the tracker is on 6.7 ms frames
  * and may sit a frame or two off the hit. */
 #define ATTACK_TOL_TRACK  0.020
+/* Around a walked beat of a dynamic stretch (the same frames, and the
+ * walk's own slack). */
+#define ATTACK_TOL_WALK   0.025
 /* Drift allowed by BPM snapping, at each end of a section. */
 #define SNAP_TOL          0.005
 /* A live drummer's beats scatter by 5-15 ms; a sequencer's by under 1. */
@@ -91,6 +98,61 @@ void rx_beat_result_free(RXBeatResult *r)
 /* Two sections whose lines agree this closely are one (grid_fit.c's
  * SEG_MAX_DEV, the segmentation's test 1). */
 #define SECTION_MERGE_DEV 0.015
+/* The dynamic pass (walk.c; docs/BEATS.md, "Dynamic grids"). A section
+ * keeps its measured beats where the music drifts from its line by more
+ * than the merge tolerance (a straight grid is then audibly off there),
+ * from where the drift leaves 5 ms to where it returns within it; or
+ * everywhere, when the beats bend around the line by more than 10 ms
+ * and four times what the section's own scatter would bend them (a tempo
+ * that moves inside the section), and the line is indeed 8 ms off
+ * somewhere. A straight remnant shorter than a section's minimum (32
+ * beats) joins the dynamic stretch beside it. */
+#define DYN_DRIFT         0.015
+#define DYN_EDGE          0.005
+/* Drift is read only where the attacks' spread around the line says live
+ * playing (over 3 ms, refine_section's "steady"): sequenced music does
+ * not drift, and where its attacks leave the line for a stretch it is
+ * another element being timed (a breakdown's claps, an element swelling
+ * in), which the line is right to ignore. A DAW's tempo ramp is
+ * sequenced and moves: the bend reads it, and its edges come in from the
+ * sections beside it. */
+#define DYN_LIVE_JITTER   0.003
+/* A run of beats off the line whose attacks scatter beat to beat far
+ * more than the section's do (three times, and 3 ms) is not the tempo
+ * moving but the attacks jumping between elements: a breakbeat's kicks
+ * and snares, a breakdown's claps on a sequenced track, where the line
+ * is right. A drummer's rubato scatters no more than the drummer does; a
+ * DAW's ramp not at all. */
+#define DYN_RUN_SCATTER   3.0
+#define DYN_RUN_SCATTER_MIN 0.003
+#define DYN_BEND          0.010
+#define DYN_BEND_DRIFT    0.008
+#define DYN_BEND_NOISE    4.0
+#define DYN_MIN_STRAIGHT  32
+/* A run of beats off the line is another element, not drift, when its
+ * deviation sits still: the longest stretch over which the smoothed
+ * deviation stays within 3 ms (or the section's scatter) of one level
+ * covers at least two fifths of the run, and eight beats. A breakdown
+ * tracked on its off-beat sits half a beat from the line for sixty bars
+ * on AD:HOUSE 11's "Hot Vacation", its deviation flat at -233 ms the
+ * whole way but for the smoothing's eight beats at each end; a drift
+ * keeps moving, and a drummer's 29 ms over 58 beats stands still for no
+ * more than a quarter of them. */
+#define DYN_PLATEAU_TOL   0.003
+#define DYN_PLATEAU_SHARE 0.4
+#define DYN_PLATEAU_MIN   8
+/* A dynamic stretch takes this many beats of the line either side of
+ * where the drift was read: the tracker's counts, which the reading
+ * rests on, go wrong exactly where the music has moved most (an extra
+ * beat on a hat), so the drift's tail can be read a few beats short.
+ * Beats that are on the line walk to the line's times, so the margin
+ * costs nothing where it is not needed. */
+#define DYN_MARGIN        4
+/* A walked stretch is kept when it brings the hits this much closer than
+ * the line it replaces (the mean distance of the average beat's rise from
+ * the beats, over the confidence's windows): the line is the simpler
+ * grid, and a tie is its. */
+#define DYN_KEEP_MARGIN   0.001
 /* The music's start as a witness (docs/BEATS.md, section 10). A hit or a
  * fade's origin within a tenth of a beat (at most 40 ms) of a beat or a
  * half beat of the line is on it. A hit counts when the kick band rises at
@@ -129,6 +191,7 @@ typedef struct Ctx {
     int          *bands;            /* envelope band of each section */
     double        kick_share;
     const float  *arbiter;          /* the kick band, or the full band without kicks */
+    double        onset_shift;      /* from the onset frames to the attacks (fit_grid) */
 } Ctx;
 
 static void ctx_free(Ctx *c)
@@ -186,7 +249,7 @@ static double section_jitter(const RXBeatObs *beats, const RXFitSection *s)
         return 0.0;
     for (int i = s->first; i <= s->last; i++) {
         if (beats[i].weight > 0.0 && !isnan(beats[i].attack))
-            r[n++] = fabs(beats[i].attack - rx_beat_predict(beats, i, s));
+            r[n++] = fabs(beats[i].attack - rx_beat_predict(beats, i, s->dynamic ? NULL : s));
     }
     double j = 0.0;
     if (n >= 8) {
@@ -259,7 +322,7 @@ static int refine_section(Ctx *c, RXFitSection *s, double *contrast)
     double tol = RX_CLAMP(3.0 * s->jitter, 0.010, 0.030);
     for (int it = 0; it < 2; it++) {
         rx_measure_attacks(&c->envs, c->beats, s->first, s->last, band, s, tol);
-        RXFitSection t, init = *s;
+        RXFitSection t = { 0 }, init = *s;
         if (rx_fit_line(c->beats, s->first, s->last, &init, &t) == 0 && t.supported >= 8)
             *s = t;
     }
@@ -283,6 +346,798 @@ static int refine_section(Ctx *c, RXFitSection *s, double *contrast)
     s->jitter = section_jitter(c->beats, s);
     s->scatter = section_scatter(c->beats, s);
     return band;
+}
+
+/* ------------------------------------------------------- dynamic pass */
+
+/* The least-squares line through the times of beats [first, last]: a
+ * dynamic section's straight approximation, for the arithmetic that
+ * wants a period and a count (the flags, the octave's reading). */
+static void line_through_times(const RXBeatObs *beats, RXFitSection *s)
+{
+    double sk = 0, st = 0, skk = 0, skt = 0;
+    int n = 0;
+    s->index0 = beats[s->first].index;
+    for (int i = s->first; i <= s->last; i++) {
+        double k = beats[i].index - s->index0, t = beats[i].time;
+        sk += k;
+        st += t;
+        skk += k * k;
+        skt += k * t;
+        n++;
+    }
+    double det = n * skk - sk * sk;
+    if (n < 2 || det <= 0.0)
+        return;
+    s->period = (n * skt - sk * st) / det;
+    s->t0 = (st - s->period * sk) / n;
+}
+
+/* Replaces the observations of section si by `nb` new beats (times, and
+ * consecutive counts from `index0`; no attacks yet), or by `saved` ones
+ * put back as they were with their envelopes (`saved_env`,
+ * `saved_centre`): the beat array, the envelopes (cut at the beats'
+ * times when not given) and the sections after si, whose observations
+ * and counts move so that the beat after the stretch keeps the count
+ * after its last, and their lines and the numbering across the boundary
+ * stay as they were. */
+static int replace_beats(Ctx *c, int si, const double *t, const RXBeatObs *saved,
+                         const float *saved_env, const double *saved_centre, int nb, int index0)
+{
+    RXFitSection *s = &c->secs[si];
+    int old = s->last - s->first + 1, delta = nb - old;
+    if (saved)
+        index0 = saved[0].index;
+    /* By the last count going in, not the first and the count: the
+     * tracker's beats can skip a count (an interval near two periods),
+     * and a stretch put back as it was must move the sections after it
+     * back by what its re-tracked, gapless beats moved them. */
+    int new_last = saved ? saved[nb - 1].index : index0 + nb - 1;
+    int shift = new_last - c->beats[s->last].index;
+    const size_t len = (size_t)RX_NB_BANDS * RX_ENV_LEN;
+    int total = c->nb_beats + delta;
+    RXBeatObs *b = malloc((size_t)RX_MAX(total, 1) * sizeof(*b));
+    float *env = malloc((size_t)RX_MAX(total, 1) * len * sizeof(*env));
+    double *centre = malloc((size_t)RX_MAX(total, 1) * sizeof(*centre));
+    int *idx = malloc((size_t)RX_MAX(nb, 1) * sizeof(*idx));
+    if (!b || !env || !centre || !idx) {
+        free(b);
+        free(env);
+        free(centre);
+        free(idx);
+        return RX_ERROR(ENOMEM);
+    }
+    int o = 0;
+    for (int i = 0; i < s->first; i++, o++) {
+        b[o] = c->beats[i];
+        memcpy(env + o * len, c->envs.env + i * len, len * sizeof(*env));
+        centre[o] = c->envs.centre[i];
+    }
+    for (int k = 0; k < nb; k++, o++) {
+        if (saved) {
+            b[o] = saved[k];
+        } else {
+            b[o] = (RXBeatObs) {
+                .time   = t[k],
+                .attack = NAN,
+                .weight = 0.0,
+                .kick   = 0.0,
+                .index  = index0 + k,
+            };
+        }
+        centre[o] = b[o].time;
+        if (saved_env) {
+            memcpy(env + o * len, saved_env + (size_t)k * len, len * sizeof(*env));
+            centre[o] = saved_centre[k];
+        }
+        idx[k] = o;
+    }
+    for (int i = s->last + 1; i < c->nb_beats; i++, o++) {
+        b[o] = c->beats[i];
+        b[o].index += shift;
+        memcpy(env + o * len, c->envs.env + i * len, len * sizeof(*env));
+        centre[o] = c->envs.centre[i];
+    }
+    free(c->beats);
+    free(c->envs.env);
+    free(c->envs.centre);
+    c->beats = b;
+    c->nb_beats = total;
+    c->envs.env = env;
+    c->envs.centre = centre;
+    c->envs.nb = total;
+    s->last = s->first + nb - 1;
+    for (int j = si + 1; j < c->nb_secs; j++) {
+        c->secs[j].first += delta;
+        c->secs[j].last += delta;
+        c->secs[j].index0 += shift;
+    }
+    int ret = saved_env ? 0 : cut_envs(c, idx, nb);
+    free(idx);
+    return ret;
+}
+
+/* The beats of a dynamic stretch, tracked again at a period that follows
+ * the music. Ellis's tracker held to one period puts extra beats on the
+ * hats when the music slows by a fifth (the rubato case of test_beats:
+ * two inserted in eight bars, the count wrong from there on), so the
+ * stretch's tempo is read first: at every tracked beat the median of
+ * the intervals between consecutive attacks within eight beats of it,
+ * those within 40 % of the line's period (an inserted beat makes a half
+ * interval, a skipped one a double, and neither counts), and the tracker
+ * runs over the stretch's frames with that period, from half a period
+ * before its first beat to half a period before the beat after it. The
+ * first beat found takes the count its time has on the old beats, so the
+ * numbering across the stretch holds. The times are the tracker's, moved
+ * by the fold's delay as the first ones were; the attacks refine them. */
+static int retrack_stretch(const Ctx *c, const RXFitSection *s, double next,
+                           double **out, int *nb, int *index0)
+{
+    const RXOnsets *o = &c->ons;
+    const double fps = o->fps, P = s->period;
+    int n_old = s->last - s->first + 1;
+    const RXBeatObs *b = c->beats + s->first;
+
+    /* The local period at each old beat. */
+    double *iv = malloc((size_t)n_old * sizeof(*iv));
+    double *lp = malloc((size_t)n_old * sizeof(*lp));
+    double *win = malloc((size_t)n_old * sizeof(*win));
+    if (!iv || !lp || !win) {
+        free(iv);
+        free(lp);
+        free(win);
+        return RX_ERROR(ENOMEM);
+    }
+    int prev = -1;
+    for (int i = 0; i < n_old; i++) {
+        iv[i] = NAN;
+        if (!(b[i].weight > 0.0) || isnan(b[i].attack))
+            continue;
+        if (prev >= 0) {
+            double d = (b[i].attack - b[prev].attack) / (b[i].index - b[prev].index);
+            if (d > 0.6 * P && d < 1.4 * P)
+                iv[i] = d;
+        }
+        prev = i;
+    }
+    for (int i = 0; i < n_old; i++) {
+        int m = 0;
+        for (int j = RX_MAX(i - 8, 0); j <= RX_MIN(i + 8, n_old - 1); j++) {
+            if (!isnan(iv[j]))
+                win[m++] = iv[j];
+        }
+        if (m >= 3) {
+            qsort(win, (size_t)m, sizeof(*win), cmp_dbl);
+            lp[i] = win[m / 2];
+        } else {
+            lp[i] = NAN;
+        }
+    }
+    /* Gaps in the local period are filled from the neighbours, the ends
+     * from the line. */
+    for (int i = 0; i < n_old; i++) {
+        if (!isnan(lp[i]))
+            continue;
+        int a = i - 1, z = i + 1;
+        while (a >= 0 && isnan(lp[a]))
+            a--;
+        while (z < n_old && isnan(lp[z]))
+            z++;
+        if (a >= 0 && z < n_old)
+            lp[i] = lp[a] + (lp[z] - lp[a]) * (i - a) / (double)(z - a);
+        else if (a >= 0)
+            lp[i] = lp[a];
+        else if (z < n_old)
+            lp[i] = lp[z];
+        else
+            lp[i] = P;
+    }
+
+    /* The period per frame over the stretch, and the tracker. */
+    /* From a quarter period before the first beat (the tracker's first
+     * beat may be anywhere within its first two periods: the second beat
+     * then, which the count below absorbs) to a quarter period past where
+     * the last beat belongs, a period before the beat after the stretch:
+     * the tracker ends on the best score within its last period, and a
+     * range reaching further lets a hat there end it half a beat short. */
+    double t_first = b[0].time, t_end = isnan(next) ? b[n_old - 1].time + lp[n_old - 1] : next;
+    int f0 = (int)lrint((t_first - 0.25 * lp[0] - c->onset_shift) * fps);
+    int f1 = (int)lrint((t_end - 0.75 * lp[n_old - 1] - c->onset_shift) * fps);
+    f0 = RX_CLAMP(f0, 0, o->nb - 1);
+    f1 = RX_CLAMP(f1, f0, o->nb - 1);
+    float *period = malloc((size_t)o->nb * sizeof(*period));
+    if (!period) {
+        free(iv);
+        free(lp);
+        free(win);
+        return RX_ERROR(ENOMEM);
+    }
+    for (int f = f0, i = 0; f <= f1; f++) {
+        double t = f / fps + c->onset_shift;
+        while (i + 1 < n_old && b[i + 1].time <= t)
+            i++;
+        double p = lp[i];
+        if (i + 1 < n_old && b[i + 1].time > b[i].time) {
+            double u = RX_CLAMP((t - b[i].time) / (b[i + 1].time - b[i].time), 0.0, 1.0);
+            p = lp[i] + (lp[i + 1] - lp[i]) * u;
+        }
+        period[f] = (float)p;
+    }
+    RXBeatObs *nb_obs = NULL;
+    int n = 0;
+    int ret = rx_track_beats_range(o, period, TRACK_TIGHTNESS, f0, f1, &nb_obs, &n);
+    free(period);
+    free(iv);
+    free(win);
+    if (ret < 0 || n < 2) {
+        free(nb_obs);
+        free(lp);
+        return ret < 0 ? ret : RX_ERROR(EINVAL);
+    }
+    double *tm = malloc((size_t)n * sizeof(*tm));
+    if (!tm) {
+        free(nb_obs);
+        free(lp);
+        return RX_ERROR(ENOMEM);
+    }
+    int m = 0;
+    for (int i = 0; i < n; i++) {
+        double t = nb_obs[i].time + c->onset_shift;
+        /* The first beat kept sits on the old count (within three tenths
+         * of a period of a beat of it): a hat between is no anchor. Two
+         * beats closer than half a period are one hit: the first. And the
+         * stretch ends a beat before the section after it, not on a hat
+         * halfway there. */
+        if (m == 0) {
+            double k = (t - t_first) / lp[0];
+            if (fabs(k - round(k)) > 0.3)
+                continue;
+        }
+        if (m > 0 && t - tm[m - 1] < 0.5 * lp[RX_MIN(i, n_old - 1)])
+            continue;
+        if (!isnan(next) && t > next - 0.6 * lp[n_old - 1])
+            break;
+        tm[m++] = t;
+    }
+    n = m;
+    free(nb_obs);
+    if (n < 2) {
+        free(tm);
+        free(lp);
+        return RX_ERROR(EINVAL);
+    }
+    /* The first beat's count: where its time falls on the old beats. */
+    *index0 = b[0].index + (int)lrint((tm[0] - t_first) / lp[0]);
+    free(lp);
+    *out = tm;
+    *nb = n;
+    return 0;
+}
+
+/* How far the hits of section s lie from the beats given (its walked
+ * beats, or its line's beats): the mean distance of the average beat's
+ * rise from them over grid_confidence's windows, weighted as the
+ * confidence weighs them, on envelopes cut at those very times, as the
+ * whole-track confidence reads the grid as written (judged on envelopes
+ * cut around the tracked beats, a line far from the music has no data
+ * where it is wrong and scores on the windows where it is right). The
+ * confidence's own yes-or-no at 15 ms is too coarse to compare a line a
+ * few beats off the music with the beats themselves. -1 without a
+ * window. */
+static double stretch_offset(Ctx *c, const RXFitSection *s, int band, const double *times,
+                             double *med_ref)
+{
+    int n = s->last - s->first + 1;
+    double conf = -1.0;
+    RXBeatObs *obs = malloc((size_t)n * sizeof(*obs));
+    RXBeatEnvs e = { .nb = n };
+    e.env = malloc((size_t)n * RX_NB_BANDS * RX_ENV_LEN * sizeof(*e.env));
+    e.centre = malloc((size_t)n * sizeof(*e.centre));
+    int cap = n / 8 + 2, nw = 0;
+    double *contrast = malloc((size_t)cap * sizeof(*contrast));
+    double *offs = malloc((size_t)cap * sizeof(*offs));
+    double *tmp = malloc((size_t)cap * sizeof(*tmp));
+    if (!obs || !e.env || !e.centre || !contrast || !offs || !tmp)
+        goto end;
+    for (int i = 0; i < n; i++) {
+        obs[i] = c->beats[s->first + i];
+        obs[i].time = times[i];
+    }
+    if (rx_env_windows(c->envctx, times, n, e.env, e.centre) < 0)
+        goto end;
+    double search = fmin(0.125 * s->period, 0.050);
+    for (int a = 0; a < n && nw < cap; a += 8) {
+        int b = RX_MIN(a + 15, n - 1);
+        if (b - a < 7)
+            break;
+        rx_fold(&e, obs, a, b, NULL, band, search, &contrast[nw], &offs[nw]);
+        nw++;
+    }
+    /* The reference contrast: the median over these windows when none is
+     * given (the walked beats'), which the line is then read against. A
+     * window whose average beat rises by less than half of it has no hit
+     * where the beats are (rx_fold reports no rise as an offset of 0): the
+     * hits are as far as the search goes. */
+    if (*med_ref < 0.0) {
+        int nt = 0;
+        for (int i = 0; i < nw; i++) {
+            if (contrast[i] > 0.0)
+                tmp[nt++] = contrast[i];
+        }
+        if (!nt)
+            goto end;
+        qsort(tmp, (size_t)nt, sizeof(*tmp), cmp_dbl);
+        *med_ref = tmp[nt / 2];
+    }
+    double num = 0.0;
+    for (int i = 0; i < nw; i++)
+        num += contrast[i] < 0.5 * *med_ref ? search : fabs(offs[i]);
+    conf = nw ? num / nw : -1.0;
+end:
+    free(obs);
+    free(e.env);
+    free(e.centre);
+    free(contrast);
+    free(offs);
+    free(tmp);
+    return conf;
+}
+
+/* Puts a dynamic section on its attacks again, where its beats now are:
+ * the attacks within 20 ms of the beats' times (a tracker's frame or
+ * two), then the walk through them, and the line and the spread for the
+ * arithmetic and the flags. */
+static int refine_dynamic(Ctx *c, RXFitSection *s, int band)
+{
+    rx_measure_attacks(&c->envs, c->beats, s->first, s->last, band, NULL, ATTACK_TOL_WALK);
+    for (int i = s->first; i <= s->last; i++) {
+        if (c->beats[i].weight < s->wmin)
+            c->beats[i].weight = 0.0;
+    }
+    int ret = rx_walk_beats(c->beats, s->first, s->last, s->scatter);
+    if (ret < 0)
+        return ret;
+    line_through_times(c->beats, s);
+    s->dynamic = true;
+    s->jitter = section_jitter(c->beats, s);
+    s->scatter = section_scatter(c->beats, s);
+    s->supported = 0;
+    for (int i = s->first; i <= s->last; i++)
+        s->supported += c->beats[i].weight > 0.0 && !isnan(c->beats[i].attack);
+    return 0;
+}
+
+/* What the strain of a section's line says, kept until every section's
+ * is known: a drift run at a section's edge counts when the neighbour
+ * is dynamic there, whatever the section's own kind. */
+typedef struct Strain {
+    RXBeatObs *tr;                  /* the attacks around the tracked beats */
+    double    *dev;                 /* rx_line_strain's smoothed deviation */
+    bool      *dyn;                 /* the beats that keep their measured times */
+    double     drift, bend, bend_noise;
+    bool       bent;
+    bool       live;                /* the attacks' spread says live playing */
+    bool       done;                /* strain read (enough attacks) */
+} Strain;
+
+static void strain_free(Strain *st, int nb)
+{
+    for (int i = 0; i < nb; i++) {
+        free(st[i].tr);
+        free(st[i].dev);
+        free(st[i].dyn);
+    }
+    free(st);
+}
+
+/* The strain of section si: the attacks measured again around its
+ * tracked beats (the line's own attack search, 35 ms wide, loses the
+ * beats a drift has carried furthest from it), lighter than a quarter of
+ * their median dropped as the segmentation drops them (a breakdown's
+ * pads have rises too), and rx_line_strain on them. */
+static int strain_read(Ctx *c, int si, Strain *st)
+{
+    RXFitSection *s = &c->secs[si];
+    int n = s->last - s->first + 1;
+    memset(st, 0, sizeof(*st));
+    if (s->supported < 16 || n < 8)
+        return 0;
+    st->tr = malloc((size_t)n * sizeof(*st->tr));
+    st->dev = malloc((size_t)n * sizeof(*st->dev));
+    st->dyn = calloc((size_t)n, sizeof(*st->dyn));
+    if (!st->tr || !st->dev || !st->dyn)
+        return RX_ERROR(ENOMEM);
+    memcpy(st->tr, c->beats + s->first, (size_t)n * sizeof(*st->tr));
+    RXBeatEnvs e = {
+        .nb     = n,
+        .env    = c->envs.env + (size_t)s->first * RX_NB_BANDS * RX_ENV_LEN,
+        .centre = c->envs.centre + s->first,
+    };
+    rx_measure_attacks(&e, st->tr, 0, n - 1, c->bands[si], NULL, ATTACK_TOL_TRACK);
+    int nw = 0;
+    for (int i = 0; i < n; i++) {
+        if (st->tr[i].weight > 0.0 && !isnan(st->tr[i].attack))
+            st->dev[nw++] = st->tr[i].weight;
+    }
+    double wmin = 0.0;
+    if (nw) {
+        qsort(st->dev, (size_t)nw, sizeof(*st->dev), cmp_dbl);
+        wmin = 0.25 * st->dev[nw / 2];
+    }
+    for (int i = 0; i < n; i++) {
+        if (st->tr[i].weight < wmin)
+            st->tr[i].weight = 0.0;
+    }
+    s->wmin = wmin;
+    RXFitSection ts = *s;
+    ts.first = 0;
+    ts.last = n - 1;
+    int ret = rx_line_strain(st->tr, &ts, st->dev, &st->drift, &st->bend, &st->bend_noise);
+    if (ret < 0)
+        return ret;
+    st->bent = st->bend > fmax(DYN_BEND, DYN_BEND_NOISE * st->bend_noise) &&
+               st->drift > DYN_BEND_DRIFT;
+    st->live = s->jitter > DYN_LIVE_JITTER;
+    st->done = true;
+    rx_debug("beats: section %d: drift %.1f ms, bend %.1f ms (scatter would bend %.1f), "
+             "jitter %.1f ms%s%s\n", si, st->drift * 1e3, st->bend * 1e3, st->bend_noise * 1e3,
+             s->jitter * 1e3, st->bent ? ", bent" : st->drift > DYN_DRIFT ? ", drifts" : "",
+             st->live ? "" : " (sequenced)");
+    return 0;
+}
+
+/* Which beats of section si keep their measured times, from its strain
+ * and its neighbours': everything when bent; otherwise each run of beats
+ * off the line by more than DYN_EDGE that reaches DYN_DRIFT somewhere,
+ * when the section's attacks say live playing or the run meets a dynamic
+ * neighbour (a ramp's edge in a sequenced track), and the run is neither
+ * a plateau nor ragged. Then the straight remnants too short to stand
+ * join. Returns how many beats are dynamic. */
+static int strain_classify(const Ctx *c, int si, Strain *all)
+{
+    const RXFitSection *s = &c->secs[si];
+    Strain *st = &all[si];
+    int n = s->last - s->first + 1;
+    if (!st->done)
+        return 0;
+    const RXBeatObs *tr = st->tr;
+    const double *dev = st->dev;
+    bool *dyn = st->dyn;
+    double *tmp = malloc((size_t)n * sizeof(*tmp));
+    if (!tmp)
+        return 0;
+    memset(dyn, 0, (size_t)n * sizeof(*dyn));
+    bool left = si > 0 && all[si - 1].done && all[si - 1].dyn[c->secs[si - 1].last -
+                                                              c->secs[si - 1].first];
+    bool right = si + 1 < c->nb_secs && all[si + 1].done &&
+                 (all[si + 1].bent || all[si + 1].dyn[0]);
+    if (st->bent) {
+        for (int i = 0; i < n; i++)
+            dyn[i] = true;
+    } else if (st->drift > DYN_DRIFT) {
+        int i = 0;
+        while (i < n) {
+            if (isnan(dev[i]) || fabs(dev[i]) <= DYN_EDGE) {
+                i++;
+                continue;
+            }
+            int j = i;
+            bool far = false;
+            int last_off = i;
+            while (j < n && (isnan(dev[j]) || fabs(dev[j]) > DYN_EDGE)) {
+                if (!isnan(dev[j])) {
+                    far = far || fabs(dev[j]) > DYN_DRIFT;
+                    last_off = j;
+                }
+                j++;
+            }
+            /* A sequenced section's run counts only at a dynamic
+             * neighbour's edge: a ramp the change-point search cut
+             * where it was still within a line's reach. */
+            bool edge = (i == 0 && left) || (j == n && right);
+            if (!far || (!st->live && !edge)) {
+                i = j;
+                continue;
+            }
+            /* Drift, or another element? The run's deviation: its
+             * longest stretch at one level. */
+            int m = 0;
+            for (int k = i; k <= last_off; k++) {
+                if (!isnan(dev[k]))
+                    tmp[m++] = dev[k];
+            }
+            double tol = fmax(DYN_PLATEAU_TOL, s->scatter);
+            int longest = 0;
+            for (int a = 0; a < m; a++) {
+                double lo = tmp[a], hi = tmp[a];
+                int z = a;
+                while (z + 1 < m) {
+                    double nlo = fmin(lo, tmp[z + 1]), nhi = fmax(hi, tmp[z + 1]);
+                    if (nhi - nlo > tol)
+                        break;
+                    lo = nlo;
+                    hi = nhi;
+                    z++;
+                }
+                longest = RX_MAX(longest, z - a + 1);
+            }
+            bool plateau = longest >= RX_MAX(DYN_PLATEAU_MIN, (int)(DYN_PLATEAU_SHARE * m));
+            /* And its attacks' own beat-to-beat scatter. */
+            bool ragged = false;
+            m = 0;
+            for (int k = i + 1; k < last_off; k++) {
+                const RXBeatObs *a = &tr[k - 1], *b = &tr[k], *z = &tr[k + 1];
+                if (!(a->weight > 0.0) || !(b->weight > 0.0) || !(z->weight > 0.0) ||
+                    isnan(a->attack) || isnan(b->attack) || isnan(z->attack))
+                    continue;
+                if (b->index - a->index != 1 || z->index - b->index != 1)
+                    continue;
+                tmp[m++] = fabs(z->attack - 2.0 * b->attack + a->attack);
+            }
+            double sc = 0.0;
+            if (m >= 4) {
+                qsort(tmp, (size_t)m, sizeof(*tmp), cmp_dbl);
+                sc = 1.4826 * tmp[m / 2] / sqrt(6.0);
+                double base = s->scatter >= 0.0 ? s->scatter : s->jitter;
+                ragged = sc > fmax(DYN_RUN_SCATTER_MIN, DYN_RUN_SCATTER * base);
+            }
+            rx_debug("beats:   section %d run %d-%d: scatter %.1f ms%s%s%s\n", si, i, last_off,
+                     sc * 1e3, plateau ? ", a plateau" : "", ragged ? ", ragged" : "",
+                     edge ? ", at a dynamic neighbour" : "");
+            if (!plateau && !ragged) {
+                for (int k = RX_MAX(i - DYN_MARGIN, 0); k <= RX_MIN(last_off + DYN_MARGIN, n - 1);
+                     k++)
+                    dyn[k] = true;
+            }
+            i = j;
+        }
+    }
+    free(tmp);
+
+    /* Straight remnants too short for a section of their own. */
+    int i = 0;
+    while (i < n) {
+        if (dyn[i]) {
+            i++;
+            continue;
+        }
+        int j = i;
+        while (j < n && !dyn[j])
+            j++;
+        int beats_span = tr[j - 1].index - tr[i].index + 1;
+        bool between = i > 0 && j < n;
+        if (beats_span < (between ? 2 * DYN_MIN_STRAIGHT : DYN_MIN_STRAIGHT) && (i > 0 || j < n)) {
+            for (int k = i; k < j; k++)
+                dyn[k] = true;
+        }
+        i = j;
+    }
+    int nb_dyn = 0;
+    for (i = 0; i < n; i++)
+        nb_dyn += dyn[i];
+    return nb_dyn;
+}
+
+/* Splits section si into its straight and dynamic pieces (the strain's
+ * classification), re-tracks each dynamic piece at a period that follows
+ * the music, puts it on its attacks and walks it. A straight remnant
+ * keeps the parent's line, which held it within 5 ms (and is snapped and
+ * on the fold). Returns the number of pieces; the sections after move. */
+static int strain_apply(Ctx *c, int si, Strain *st)
+{
+    RXFitSection *s = &c->secs[si];
+    int n = s->last - s->first + 1;
+    const bool *dyn = st->dyn;
+    int nb_pieces = 1;
+    for (int i = 1; i < n; i++)
+        nb_pieces += dyn[i] != dyn[i - 1];
+    RXFitSection *secs = realloc(c->secs, (size_t)(c->nb_secs + nb_pieces - 1) * sizeof(*secs));
+    if (!secs)
+        return RX_ERROR(ENOMEM);
+    c->secs = secs;
+    s = &c->secs[si];
+    int *bands = realloc(c->bands, (size_t)(c->nb_secs + nb_pieces - 1) * sizeof(*bands));
+    if (!bands)
+        return RX_ERROR(ENOMEM);
+    c->bands = bands;
+    memmove(c->secs + si + nb_pieces, c->secs + si + 1,
+            (size_t)(c->nb_secs - si - 1) * sizeof(*c->secs));
+    memmove(c->bands + si + nb_pieces, c->bands + si + 1,
+            (size_t)(c->nb_secs - si - 1) * sizeof(*c->bands));
+    RXFitSection parent = *s;
+    int band = c->bands[si];
+    c->nb_secs += nb_pieces - 1;
+    /* The parent's observations and envelopes as they were, before any
+     * piece is touched: a stretch the line wins goes back to them, bit
+     * for bit (the attacks its line was put on, the envelopes not cut
+     * again). Each piece remembers its offsets in them. */
+    const size_t len = (size_t)RX_NB_BANDS * RX_ENV_LEN;
+    RXBeatObs *orig = malloc((size_t)n * sizeof(*orig));
+    float *orig_env = malloc((size_t)n * len * sizeof(*orig_env));
+    double *orig_centre = malloc((size_t)n * sizeof(*orig_centre));
+    int *piece_off = malloc((size_t)nb_pieces * sizeof(*piece_off));
+    if (!orig || !orig_env || !orig_centre || !piece_off) {
+        free(orig);
+        free(orig_env);
+        free(orig_centre);
+        free(piece_off);
+        return RX_ERROR(ENOMEM);
+    }
+    memcpy(orig, c->beats + parent.first, (size_t)n * sizeof(*orig));
+    memcpy(orig_env, c->envs.env + (size_t)parent.first * len, (size_t)n * len * sizeof(*orig_env));
+    memcpy(orig_centre, c->envs.centre + parent.first, (size_t)n * sizeof(*orig_centre));
+    int pi = 0, i = 0;
+    while (i < n) {
+        int j = i;
+        while (j < n && dyn[j] == dyn[i])
+            j++;
+        RXFitSection *q = &c->secs[si + pi];
+        *q = parent;
+        q->first = parent.first + i;
+        q->last = parent.first + j - 1;
+        q->dynamic = dyn[i];
+        piece_off[pi] = i;
+        c->bands[si + pi] = band;
+        q->supported = 0;
+        for (int k = i; k < j; k++) {
+            if (dyn[i]) {
+                c->beats[parent.first + k].attack = st->tr[k].attack;
+                c->beats[parent.first + k].weight = st->tr[k].weight;
+            }
+            q->supported += c->beats[parent.first + k].weight > 0.0 &&
+                            !isnan(c->beats[parent.first + k].attack);
+        }
+        pi++;
+        i = j;
+    }
+
+    /* The dynamic pieces: re-tracked at a period that follows the music,
+     * then the attacks, the walk, the line and the spread. A count found
+     * different from the tracker's moves the sections after. Then the
+     * judgment: the walked beats must follow the hits better than the
+     * line (the confidence of the stretch on each), or the tracker's
+     * beats come back and the line stays. */
+    int ret = 0;
+    for (int k = 0; k < nb_pieces; k++) {
+        RXFitSection *q = &c->secs[si + k];
+        if (!q->dynamic)
+            continue;
+        int n_old = q->last - q->first + 1;
+        const RXBeatObs *saved = orig + piece_off[k];
+        const float *saved_env = orig_env + (size_t)piece_off[k] * len;
+        const double *saved_centre = orig_centre + piece_off[k];
+        double *tm = NULL;
+        int nt = 0, idx0 = 0;
+        double next = NAN;
+        if (si + k + 1 < c->nb_secs) {
+            const RXFitSection *z = &c->secs[si + k + 1];
+            next = z->dynamic ? c->beats[z->first].time : rx_beat_predict(c->beats, z->first, z);
+        }
+        ret = retrack_stretch(c, q, next, &tm, &nt, &idx0);
+        if (ret == RX_ERROR(EINVAL)) {
+            q->dynamic = false;
+            ret = 0;
+            continue;
+        }
+        if (ret < 0)
+            goto end;
+        rx_debug("beats: section %d re-tracked: %d beats for %d (count %d for %d)\n", si + k, nt,
+                 n_old, idx0, saved[0].index);
+        ret = replace_beats(c, si + k, tm, NULL, NULL, NULL, nt, idx0);
+        free(tm);
+        if (ret < 0)
+            goto end;
+        q = &c->secs[si + k];
+        RXFitSection line = parent;
+        line.first = q->first;
+        line.last = q->last;
+        bool keep = false;
+        ret = refine_dynamic(c, q, c->bands[si + k]);
+        if (ret == RX_ERROR(ENOMEM))
+            goto end;
+        if (ret >= 0) {
+            int nq = q->last - q->first + 1;
+            double *tl = malloc((size_t)nq * sizeof(*tl)), *tb = malloc((size_t)nq * sizeof(*tb));
+            double on_line = -1.0, on_beats = -1.0, med = -1.0;
+            if (tl && tb) {
+                for (int j = 0; j < nq; j++) {
+                    tl[j] = rx_beat_predict(c->beats, q->first + j, &line);
+                    tb[j] = c->beats[q->first + j].time;
+                }
+                on_beats = stretch_offset(c, q, c->bands[si + k], tb, &med);
+                on_line = stretch_offset(c, &line, c->bands[si + k], tl, &med);
+            }
+            free(tl);
+            free(tb);
+            /* The beats must bring the hits closer by a millisecond, or
+             * the line, the simpler grid, stays. */
+            keep = on_beats >= 0.0 && on_line >= 0.0 && on_beats + DYN_KEEP_MARGIN < on_line;
+            rx_debug("beats: section %d dynamic: beats %d-%d, %.2f BPM on average, jitter %.1f ms, "
+                     "scatter %.1f ms; hits %.1f ms from its beats, %.1f ms from the line%s\n",
+                     si + k, q->first, q->last, 60.0 / q->period, q->jitter * 1e3, q->scatter * 1e3,
+                     on_beats * 1e3, on_line * 1e3, keep ? "" : ": the line stays");
+        }
+        if (!keep) {
+            /* The tracker's beats, their envelopes and the line as they
+             * were. */
+            ret = replace_beats(c, si + k, NULL, saved, saved_env, saved_centre, n_old, 0);
+            if (ret < 0)
+                goto end;
+            q = &c->secs[si + k];
+            *q = line;
+            q->last = q->first + n_old - 1;
+            q->dynamic = false;
+            q->supported = 0;
+            for (int j = q->first; j <= q->last; j++)
+                q->supported += c->beats[j].weight > 0.0 && !isnan(c->beats[j].attack);
+            continue;
+        }
+    }
+    ret = 0;
+
+    /* Straight pieces side by side (a stretch judged for the line between
+     * two remnants, or at one) share the parent's line and are one
+     * section again, as they were: split, they would vote on their
+     * downbeat and their half of the beat apart. */
+    for (int k = 1; k < nb_pieces;) {
+        RXFitSection *a = &c->secs[si + k - 1], *b = &c->secs[si + k];
+        if (a->dynamic || b->dynamic) {
+            k++;
+            continue;
+        }
+        a->last = b->last;
+        a->supported += b->supported;
+        memmove(c->secs + si + k, c->secs + si + k + 1,
+                (size_t)(c->nb_secs - si - k - 1) * sizeof(*c->secs));
+        memmove(c->bands + si + k, c->bands + si + k + 1,
+                (size_t)(c->nb_secs - si - k - 1) * sizeof(*c->bands));
+        c->nb_secs--;
+        nb_pieces--;
+    }
+end:
+    free(orig);
+    free(orig_env);
+    free(orig_centre);
+    free(piece_off);
+    return ret < 0 ? ret : nb_pieces;
+}
+
+/* Which sections keep their measured beats (docs/BEATS.md, "Dynamic
+ * grids"): the strain of every section's line first, then each section
+ * classified with its neighbours known (a ramp's edge continues into the
+ * sequenced section beside it), the edges settled in a second sweep, and
+ * each section split, its dynamic stretches re-tracked and walked. */
+static int dynamic_pass(Ctx *c)
+{
+    if (!c->opt->allow_dynamic)
+        return 0;
+    int nb = c->nb_secs;
+    Strain *st = calloc((size_t)RX_MAX(nb, 1), sizeof(*st));
+    if (!st)
+        return RX_ERROR(ENOMEM);
+    int ret = 0;
+    for (int si = 0; si < nb && ret >= 0; si++)
+        ret = strain_read(c, si, &st[si]);
+    if (ret < 0) {
+        strain_free(st, nb);
+        return ret;
+    }
+    for (int sweep = 0; sweep < 2; sweep++) {
+        for (int si = 0; si < nb; si++)
+            strain_classify(c, si, st);
+    }
+    /* Splitting moves the sections after: from the last backwards, so
+     * that every index still names the section its strain was read on. */
+    for (int si = nb - 1; si >= 0 && ret >= 0; si--) {
+        int nb_dyn = 0;
+        int n = c->secs[si].last - c->secs[si].first + 1;
+        for (int i = 0; st[si].done && i < n; i++)
+            nb_dyn += st[si].dyn[i];
+        if (nb_dyn)
+            ret = strain_apply(c, si, &st[si]);
+    }
+    strain_free(st, nb);
+    return ret < 0 ? ret : 0;
 }
 
 /* The confidence, as dj's: the share of 16-beat windows (every 8 beats)
@@ -312,7 +1167,8 @@ static double grid_confidence(const Ctx *c, const int *bands)
                 contrast = nc;
                 offs = no;
             }
-            rx_fold(&c->envs, c->beats, a, b, s, bands[si], search, &contrast[nw], &offs[nw]);
+            rx_fold(&c->envs, c->beats, a, b, s->dynamic ? NULL : s, bands[si], search,
+                    &contrast[nw], &offs[nw]);
             nw++;
         }
     }
@@ -431,7 +1287,7 @@ typedef struct StartWitness {
 } StartWitness;
 
 static StartWitness start_witness(const Ctx *c, const RXFitSection *s, const SecInfo *si,
-                                  const RXMusicStart *ms)
+                                  const RXMusicStart *ms, double off, double kick_beats)
 {
     StartWitness w = { .at = ms->start };
     if ((ms->kind != RX_START_HIT && ms->kind != RX_START_FADE) || w.at < si->start ||
@@ -448,8 +1304,6 @@ static StartWitness start_witness(const Ctx *c, const RXFitSection *s, const Sec
         return w;
     }
     const double P = s->period;
-    double off;
-    half_beat(s, w.at, &off);
     if (fabs(off) > fmin(START_ON_BEAT * P, START_ON_BEAT_MAX))
         return w;
     /* The kick band from 15 ms before the hit to 60 ms after it (a kick's
@@ -461,9 +1315,7 @@ static StartWitness start_witness(const Ctx *c, const RXFitSection *s, const Sec
     double m = 0.0;
     for (int f = RX_MAX(a, 0); f <= RX_MIN(b, c->ons.nb - 1); f++)
         m = fmax(m, c->ons.low[f]);
-    double beats = fmax(arbiter_support(c, c->ons.low, s, si->start, si->end, 0.0),
-                        arbiter_support(c, c->ons.low, s, si->start, si->end, P / 2));
-    w.kick = beats > 0.0 ? m / beats : 0.0;
+    w.kick = kick_beats > 0.0 ? m / kick_beats : 0.0;
     /* Where the kick band clearly marks one half of the beat, a hit with
      * a kick half a beat from it is a pickup (a kick and a crash on the
      * "and" before bar 1); where it does not (a two-step kick on the "and"s
@@ -512,7 +1364,11 @@ static int decide_phase(Ctx *c, int i, SecInfo *si, const float *arbiter, const 
     double off = arbiter_support(c, arbiter, s, si->start, si->end, P / 2);
     si->kick_ratio = (on + eps) / (off + eps);
 
-    StartWitness w = start_witness(c, s, si, ms);
+    double woff = 0.0;
+    half_beat(s, ms->start, &woff);
+    double kick_beats = fmax(arbiter_support(c, c->ons.low, s, si->start, si->end, 0.0),
+                             arbiter_support(c, c->ons.low, s, si->start, si->end, P / 2));
+    StartWitness w = start_witness(c, s, si, ms, woff, kick_beats);
     si->has_vote = (si->end - si->start) / P >= 32.0;
     double sv = 0.0;
     if (si->has_vote) {
@@ -617,6 +1473,238 @@ static int decide_phase(Ctx *c, int i, SecInfo *si, const float *arbiter, const 
         si->down_margin = second > 0.0 ? si->db.scores[best] / second : 10.0;
     }
     return 0;
+}
+
+/* The same for a dynamic section, on its beats' own times. The half
+ * beats are the beats and the midpoints after them (the last one towards
+ * the next section's first beat, or a beat's length on); position 2j is
+ * beat j of the bar, counted from the section's index0 as on a line, so
+ * the downbeat is read back the same way. A shift by half a beat puts
+ * every beat on the midpoint after it, cuts the envelopes there, measures
+ * the attacks and walks again. */
+
+/* Mean of the arbiter onset over [t - 30 ms, t + 10 ms] at the times t. */
+static double support_at(const Ctx *c, const float *v, const double *t, int n)
+{
+    double acc = 0.0;
+    for (int j = 0; j < n; j++) {
+        int a = (int)lrint((t[j] - 0.030) * c->ons.fps), b = (int)lrint((t[j] + 0.010) * c->ons.fps);
+        double m = 0.0;
+        for (int i = RX_MAX(a, 0); i <= RX_MIN(b, c->ons.nb - 1); i++)
+            m = fmax(m, v[i]);
+        acc += m;
+    }
+    return n ? acc / n : 0.0;
+}
+
+/* The 2n + 1 half-beat edges of dynamic section i: beat, midpoint, beat,
+ * ... up to the beat after its last. */
+static int section_edges(const Ctx *c, int i, double **out)
+{
+    const RXFitSection *s = &c->secs[i];
+    int n = s->last - s->first + 1;
+    double *e = malloc((size_t)(2 * n + 1) * sizeof(*e));
+    if (!e)
+        return RX_ERROR(ENOMEM);
+    double next;
+    if (i + 1 < c->nb_secs) {
+        const RXFitSection *q = &c->secs[i + 1];
+        next = q->dynamic ? c->beats[q->first].time : rx_beat_predict(c->beats, q->first, q);
+    } else {
+        next = c->beats[s->last].time +
+               (n > 1 ? c->beats[s->last].time - c->beats[s->last - 1].time : s->period);
+    }
+    for (int k = 0; k < n; k++) {
+        double t = c->beats[s->first + k].time;
+        double t1 = k + 1 < n ? c->beats[s->first + k + 1].time : next;
+        e[2 * k] = t;
+        e[2 * k + 1] = t + 0.5 * (t1 - t);
+    }
+    e[2 * n] = next;
+    *out = e;
+    return 2 * n + 1;
+}
+
+/* The edge nearest to t (index into edges), and t's distance from it. */
+static int nearest_edge(const double *e, int ne, double t, double *off)
+{
+    int lo = 0, hi = ne - 1;
+    while (lo < hi) {
+        int mid = (lo + hi) / 2;
+        if (e[mid] < t)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    int best = lo;
+    if (lo > 0 && fabs(e[lo - 1] - t) < fabs(e[lo] - t))
+        best = lo - 1;
+    *off = t - e[best];
+    return best;
+}
+
+static int decide_phase_dynamic(Ctx *c, int i, SecInfo *si, const float *arbiter,
+                                const RXMusicStart *ms, double first_onset, int *band,
+                                RXBeatDebug *dbg)
+{
+    RXFitSection *s = &c->secs[i];
+    const double P = s->period;
+    const double eps = 0.1;
+    int n = s->last - s->first + 1;
+    double *e = NULL;
+    int ne = section_edges(c, i, &e);
+    if (ne < 0)
+        return ne;
+    int pos0 = (int)(((2L * (c->beats[s->first].index - s->index0)) % 8 + 8) % 8);
+
+    double *on_t = malloc((size_t)n * sizeof(*on_t)), *off_t = malloc((size_t)n * sizeof(*off_t));
+    if (!on_t || !off_t) {
+        free(e);
+        free(on_t);
+        free(off_t);
+        return RX_ERROR(ENOMEM);
+    }
+    for (int k = 0; k < n; k++) {
+        on_t[k] = e[2 * k];
+        off_t[k] = e[2 * k + 1];
+    }
+    double on = support_at(c, arbiter, on_t, n);
+    double off = support_at(c, arbiter, off_t, n);
+    si->kick_ratio = (on + eps) / (off + eps);
+
+    double woff = 0.0;
+    int wedge = nearest_edge(e, ne, ms->start, &woff);
+    double kick_beats = fmax(support_at(c, c->ons.low, on_t, n), support_at(c, c->ons.low, off_t, n));
+    StartWitness w = start_witness(c, s, si, ms, woff, kick_beats);
+    si->has_vote = n >= 32;
+    double sv = 0.0;
+    int ret = 0;
+    if (si->has_vote) {
+        double onset = w.counts && !w.onset_too ? NAN : first_onset;
+        int start_pos = -1;
+        if (!isnan(onset)) {
+            double o;
+            int k = nearest_edge(e, ne, onset, &o);
+            double hp = k + 1 < ne ? e[k + 1] - e[k] : e[k] - e[k - 1];
+            if (fabs(o) < 0.2 * hp && onset >= si->start - P && onset < si->end)
+                start_pos = (pos0 + k) % 8;
+        }
+        ret = rx_downbeat_vote_times(&c->spec, c->x, c->n, e, e + 1, ne - 1, pos0, on_t, n, pos0,
+                                     start_pos, &si->db);
+        if (ret < 0)
+            goto end;
+        double be = 0.0, bo = 0.0;
+        for (int p = 0; p < 8; p++) {
+            if (p & 1)
+                bo = fmax(bo, si->db.scores[p]);
+            else
+                be = fmax(be, si->db.scores[p]);
+        }
+        sv = log((be + 0.05) / (bo + 0.05));
+    }
+
+    double hoff = woff;
+    long hj = wedge;
+    double hv = w.counts ? (hj & 1 ? -w.phase : w.phase) : 0.0;
+    bool here = (ms->kind == RX_START_HIT || ms->kind == RX_START_FADE) && w.at >= si->start &&
+                w.at < si->end;
+    double ev = log(si->kick_ratio) + 1.5 * sv + hv;
+    si->phase_evidence = ev;
+    rx_debug("beats: section %d (dynamic) phase: arbiter %.3f on, %.3f off (log %.3f); structure "
+             "%.3f; start %+.2f (edge %ld %+.1f ms); evidence %.3f\n", i, on, off,
+             log(si->kick_ratio), sv, hv, hj, hoff * 1e3, ev);
+    if (dbg && here) {
+        dbg->start_section = i;
+        dbg->start_kick = log(si->kick_ratio);
+        dbg->start_struct = sv;
+        dbg->start_hit = hv;
+        dbg->start_half_beat = hj;
+        dbg->start_off = hoff;
+        dbg->start_t0 = s->t0;
+        dbg->start_period = P;
+        memcpy(dbg->start_scores, si->db.scores, sizeof(dbg->start_scores));
+        dbg->start_kick_ratio = w.kick;
+    }
+    if (ev < -log(1.25)) {
+        int *idx = malloc((size_t)n * sizeof(*idx));
+        if (!idx) {
+            ret = RX_ERROR(ENOMEM);
+            goto end;
+        }
+        for (int k = 0; k < n; k++) {
+            c->beats[s->first + k].time = off_t[k];
+            idx[k] = s->first + k;
+        }
+        ret = cut_envs(c, idx, n);
+        free(idx);
+        if (ret < 0)
+            goto end;
+        s->t0 += P / 2;
+        if ((ret = refine_dynamic(c, s, *band)) < 0) {
+            if (ret == RX_ERROR(ENOMEM))
+                goto end;
+            /* Nothing to walk on the other half: back where it was. */
+            for (int k = 0; k < n; k++)
+                c->beats[s->first + k].time = on_t[k];
+            s->t0 -= P / 2;
+            ret = 0;
+        } else {
+            si->shifted = true;
+            si->phase_evidence = -ev;
+            si->kick_ratio = 1.0 / si->kick_ratio;
+            if (si->has_vote) {
+                double rot[8];
+                for (int p = 0; p < 8; p++)
+                    rot[p] = si->db.scores[(p + 1) % 8];
+                memcpy(si->db.scores, rot, sizeof(rot));
+            }
+            free(e);
+            ne = section_edges(c, i, &e);
+            if (ne < 0) {
+                ret = ne;
+                e = NULL;
+                goto end;
+            }
+        }
+    }
+
+    /* The start's vote for beat 1, on the beats as they now are. */
+    bool voted = false;
+    if (w.counts && ms->kind == RX_START_FADE) {
+        int k = 0;
+        while (k + 1 < n && c->beats[s->first + k].time < w.at - START_SLACK)
+            k++;
+        si->db.scores[(pos0 + 2 * k) % 8] += w.down;
+        voted = true;
+    } else if (w.counts) {
+        double o;
+        int k = nearest_edge(e, ne, w.at, &o);
+        if (!(k & 1)) {
+            si->db.scores[(pos0 + k) % 8] += w.down;
+            voted = true;
+        }
+    }
+    si->has_down = si->has_vote || voted;
+    if (si->has_down) {
+        int best = 0;
+        for (int p = 2; p < 8; p += 2) {
+            if (si->db.scores[p] > si->db.scores[best])
+                best = p;
+        }
+        double second = 0.0;
+        for (int p = 0; p < 8; p += 2) {
+            if (p != best)
+                second = fmax(second, si->db.scores[p]);
+        }
+        si->pos = best;
+        si->down_margin = second > 0.0 ? si->db.scores[best] / second : 10.0;
+    }
+
+end:
+    free(e);
+    free(on_t);
+    free(off_t);
+    return ret;
 }
 
 /* ------------------------------------------------------------ the grid */
@@ -838,6 +1926,7 @@ static int fit_grid(Ctx *c, double bpm, double lo, double hi)
     int band = rx_fold(&c->envs, c->beats, 0, c->nb_beats - 1, NULL, -1, 0.025, &contrast, &shift);
     for (int i = 0; i < c->nb_beats; i++)
         c->beats[i].time += shift;
+    c->onset_shift = shift;
     rx_measure_attacks(&c->envs, c->beats, 0, c->nb_beats - 1, band, NULL, ATTACK_TOL_TRACK);
     rx_debug("beats: %.3f BPM: %d tracked, band %d, onset delay %.1f ms\n", bpm, c->nb_beats,
              band, shift * 1e3);
@@ -1067,6 +2156,10 @@ static int analyse(const float *mono, int64_t nb_samples, int rate, RXSpectrum *
                 goto fail;
         }
     }
+    /* Which sections keep their measured beats. */
+    if ((ret = dynamic_pass(&c)) < 0)
+        goto fail;
+    stage(&tm, "dynamic");
     const double kick_share = c.kick_share;
     const float *arbiter = c.arbiter;
     int *bands = c.bands;
@@ -1079,7 +2172,9 @@ static int analyse(const float *mono, int64_t nb_samples, int rate, RXSpectrum *
         goto fail;
     }
     for (int i = 0; i < c.nb_secs; i++) {
-        sinfo[i].start = i ? rx_beat_predict(c.beats, c.secs[i].first, &c.secs[i]) : 0.0;
+        const RXFitSection *s = &c.secs[i];
+        sinfo[i].start = !i ? 0.0 : s->dynamic ? c.beats[s->first].time
+                                               : rx_beat_predict(c.beats, s->first, s);
         sinfo[i].end = c.duration;
         if (i)
             sinfo[i - 1].end = sinfo[i].start;
@@ -1087,7 +2182,10 @@ static int analyse(const float *mono, int64_t nb_samples, int rate, RXSpectrum *
     if (dbg)
         dbg->start = ms;
     for (int i = 0; i < c.nb_secs; i++) {
-        if ((ret = decide_phase(&c, i, &sinfo[i], arbiter, &ms, first_onset, &bands[i], dbg)) < 0)
+        ret = c.secs[i].dynamic
+            ? decide_phase_dynamic(&c, i, &sinfo[i], arbiter, &ms, first_onset, &bands[i], dbg)
+            : decide_phase(&c, i, &sinfo[i], arbiter, &ms, first_onset, &bands[i], dbg);
+        if (ret < 0)
             goto fail;
     }
 
@@ -1100,6 +2198,10 @@ static int analyse(const float *mono, int64_t nb_samples, int rate, RXSpectrum *
      * beat, which the downbeat vote counts from). */
     for (int i = 1; i < c.nb_secs;) {
         RXFitSection *a = &c.secs[i - 1], *b = &c.secs[i];
+        if (a->dynamic || b->dynamic) {
+            i++;
+            continue;
+        }
         const RXFitSection *keep = b->supported > a->supported ? b : a;
         const RXFitSection *other = keep == a ? b : a;
         if (line_distance(c.beats, other, keep) > SECTION_MERGE_DEV) {
@@ -1141,21 +2243,117 @@ static int analyse(const float *mono, int64_t nb_samples, int rate, RXSpectrum *
 
     /* The grid. Each section's downbeat comes from its own vote; a later
      * section that starts on the previous one's grid continues its count
-     * (beat 0) unless its own music says clearly otherwise. */
+     * (beat 0) unless its own music says clearly otherwise. A dynamic
+     * section is one measured beat per beat, the first carrying the
+     * section's number, each with the tempo of its own interval (the
+     * last's that of the interval to the next section's first beat, or
+     * the one before it when nothing follows); a dynamic first section
+     * reaches back to time 0 at its first interval, as a straight one's
+     * line does, before the music's start moves the grid on. */
     out->grid.beats_per_bar = 4;
-    out->grid.sections = calloc(c.nb_secs, sizeof(*out->grid.sections));
+    int cap = 0;
+    for (int i = 0; i < c.nb_secs; i++) {
+        const RXFitSection *s = &c.secs[i];
+        int n = s->last - s->first + 1;
+        cap += s->dynamic ? n : 1;
+        if (i == 0 && s->dynamic && n > 1) {
+            /* The beats reached back to time 0 at the first interval, as
+             * the build below counts them. */
+            double dt = c.beats[s->first + 1].time - c.beats[s->first].time;
+            cap += (dt > 0.0 ? (int)floor(c.beats[s->first].time / dt) : 0) + 2;
+        }
+    }
+    out->grid.sections = calloc((size_t)cap, sizeof(*out->grid.sections));
     if (!out->grid.sections) {
         ret = RX_ERROR(ENOMEM);
         goto fail;
     }
-    double prev_down = 0.0;
+    int ng = 0;
+    double prev_down = 0.0, prev_period = 0.0;
+    int prev_last_number = 0;
+    bool prev_dynamic = false;
     for (int i = 0; i < c.nb_secs; i++) {
         RXFitSection *s = &c.secs[i];
         SecInfo *si = &sinfo[i];
-        RXTempoSection *g = &out->grid.sections[i];
         const double P = s->period;
+        if (s->dynamic) {
+            int n = s->last - s->first + 1;
+            const RXBeatObs *b = c.beats + s->first;
+            /* The first beat's number by its own vote: the downbeat is at
+             * position pos, i.e. index0 + pos / 2 and every four from it. */
+            int mine = si->has_down
+                     ? (int)(((b[0].index - s->index0 - si->pos / 2) % 4 + 4) % 4) + 1 : 0;
+            int number, beat_field;
+            if (i == 0) {
+                number = mine ? mine : 1;
+                beat_field = number;
+            } else {
+                bool continuous;
+                int cont;
+                if (prev_dynamic) {
+                    continuous = true;
+                    cont = prev_last_number % 4 + 1;
+                } else {
+                    double ka = (b[0].time - prev_down) / prev_period;
+                    continuous = fabs(ka - round(ka)) * prev_period <= 0.015;
+                    cont = (int)((lrint(ka) % 4 + 4) % 4) + 1;
+                }
+                if (continuous && (!mine || mine == cont || si->down_margin < 1.5)) {
+                    beat_field = 0;
+                    number = cont;
+                } else {
+                    number = mine ? mine : cont;
+                    beat_field = number;
+                }
+            }
+            double next = i + 1 < c.nb_secs
+                        ? (c.secs[i + 1].dynamic ? c.beats[c.secs[i + 1].first].time
+                                                 : rx_beat_predict(c.beats, c.secs[i + 1].first,
+                                                                   &c.secs[i + 1]))
+                        : NAN;
+            if (i == 0 && n > 1) {
+                /* Back to time 0 at the first interval. */
+                double dt = b[1].time - b[0].time;
+                int back = dt > 0.0 ? (int)floor(b[0].time / dt) : 0;
+                for (int k = back; k >= 1; k--) {
+                    out->grid.sections[ng++] = (RXTempoSection) {
+                        .start    = b[0].time - k * dt,
+                        .bpm      = 60.0 / dt,
+                        .beat     = ((number - 1 - k) % 4 + 4) % 4 + 1,
+                        .measured = true,
+                    };
+                }
+                if (back > 0)
+                    beat_field = 0;
+            }
+            for (int k = 0; k < n; k++) {
+                double t1 = k + 1 < n ? b[k + 1].time : next;
+                double dt = !isnan(t1) ? t1 - b[k].time
+                          : n > 1 ? b[k].time - b[k - 1].time : P;
+                /* A beat not after the one before it (nothing should
+                 * make one; a grid must stay sorted) is dropped. */
+                if (ng > 0 && !(b[k].time > out->grid.sections[ng - 1].start)) {
+                    rx_warn("beats: a measured beat at %.4f s not after %.4f s, dropped", b[k].time,
+                            out->grid.sections[ng - 1].start);
+                    continue;
+                }
+                out->grid.sections[ng++] = (RXTempoSection) {
+                    .start    = b[k].time,
+                    .bpm      = RX_CLAMP(60.0 / fmax(dt, 1e-3), 1.0, 1000.0),
+                    .beat     = k ? 0 : beat_field,
+                    .measured = true,
+                };
+            }
+            prev_dynamic = true;
+            prev_last_number = (number - 1 + n - 1) % 4 + 1;
+            prev_period = P;
+            prev_down = b[0].time - (number - 1) * P;
+            continue;
+        }
+        RXTempoSection *g = &out->grid.sections[ng++];
         g->bpm = 60.0 / P;
         double own = si->has_down ? s->t0 + si->pos / 2 * P : NAN;
+        g->measured = false;
         if (i == 0) {
             /* From its first beat at or after 0 (the music's start moves it
              * on below), numbered from the downbeat. */
@@ -1164,14 +2362,21 @@ static int analyse(const float *mono, int64_t nb_samples, int rate, RXSpectrum *
             g->start = d - k * P;
             g->beat = (int)((-k % 4 + 4) % 4) + 1;
             prev_down = d;
+            prev_period = P;
             continue;
         }
-        const RXFitSection *a = &c.secs[i - 1];
         g->start = rx_beat_predict(c.beats, s->first, s);
         /* The previous section's count at this time. */
-        double ka = (g->start - prev_down) / a->period;
-        bool continuous = fabs(ka - round(ka)) * a->period <= 0.015;
-        int cont = (int)((lrint(ka) % 4 + 4) % 4) + 1;
+        bool continuous;
+        int cont;
+        if (prev_dynamic) {
+            continuous = true;
+            cont = prev_last_number % 4 + 1;
+        } else {
+            double ka = (g->start - prev_down) / prev_period;
+            continuous = fabs(ka - round(ka)) * prev_period <= 0.015;
+            cont = (int)((lrint(ka) % 4 + 4) % 4) + 1;
+        }
         int mine = 0;
         if (!isnan(own)) {
             long kb = lrint((g->start - own) / P);
@@ -1185,8 +2390,17 @@ static int analyse(const float *mono, int64_t nb_samples, int rate, RXSpectrum *
             mine = g->beat;
         }
         prev_down = g->start - (mine - 1) * P;
+        prev_period = P;
+        prev_dynamic = false;
+        /* A straight section's start must follow the beat before it too
+         * (a walked beat can end up past the line's first beat). */
+        if (ng > 1 && !(g->start > out->grid.sections[ng - 2].start)) {
+            rx_warn("beats: a section at %.4f s not after the beat at %.4f s, dropped", g->start,
+                    out->grid.sections[ng - 2].start);
+            ng--;
+        }
     }
-    out->grid.nb_sections = c.nb_secs;
+    out->grid.nb_sections = ng;
     /* No grid in the silence before the music: the first beat is the first
      * at or after its start, every later beat as it was. */
     if (ms.kind != RX_START_AT_ONCE &&
@@ -1210,6 +2424,11 @@ static int analyse(const float *mono, int64_t nb_samples, int rate, RXSpectrum *
         for (int i = 0; i < c.nb_secs; i++) {
             const RXFitSection *s = &c.secs[i];
             for (int k = s->first; k <= s->last; k++) {
+                if (s->dynamic) {
+                    if (fabs(c.envs.centre[k] - c.beats[k].time) > 0.025)
+                        strays[nb_strays++] = k;
+                    continue;
+                }
                 double p = rx_beat_predict(c.beats, k, s);
                 if (fabs(c.beats[k].time - p) <= 0.025)
                     continue;
@@ -1230,10 +2449,16 @@ static int analyse(const float *mono, int64_t nb_samples, int rate, RXSpectrum *
      * music re-enters shifted), any other a tempo change. */
     unsigned flags = 0;
     for (int i = 1; i < c.nb_secs; i++) {
+        if (c.secs[i].dynamic || c.secs[i - 1].dynamic)
+            continue;
         if (fabs(c.secs[i].period / c.secs[i - 1].period - 1.0) < 0.005)
             flags |= RX_GRID_FLAG_PHASE_CUT;
         else
             flags |= RX_GRID_FLAG_TEMPO_CHANGE;
+    }
+    for (int i = 0; i < c.nb_secs; i++) {
+        if (c.secs[i].dynamic)
+            flags |= RX_GRID_FLAG_DYNAMIC;
     }
     if (out->octave_margin < 1.5)
         flags |= RX_GRID_FLAG_OCTAVE_UNCERTAIN;

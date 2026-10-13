@@ -363,6 +363,53 @@ static void rekordbox_files(void)
         free(b[i]);
 }
 
+/* A dynamic grid (rxbox/model.h): every measured beat goes on the stick
+ * at its own time with its own tempo, rekordbox's "dynamic" grids
+ * (docs/anlz.md 4.3), and the straight section after them continues. */
+static void dynamic(void)
+{
+    RXGrid g = { .beats_per_bar = 4 };
+    CHECK(rx_grid_add_section(&g, 0.5, 120.0, 1) == 0);
+    static const double tm[] = { 4.5, 5.0, 5.52, 6.01 };
+    for (size_t i = 0; i < RX_ARRAY_ELEMS(tm); i++) {
+        double next = i + 1 < RX_ARRAY_ELEMS(tm) ? tm[i + 1] : 6.5;
+        CHECK(rx_grid_add_beat(&g, tm[i], 60.0 / (next - tm[i]), 0) == (int)i + 1);
+    }
+    CHECK(rx_grid_add_section(&g, 6.5, 121.0, 0) == 5);
+    RXPlanTrack t = {
+        .usb_path = "/Contents/A/B/d.wav",
+        .duration = 10.0,
+        .grid     = g,
+    };
+    snprintf(t.probe.codec, sizeof(t.probe.codec), "pcm_s16le");
+    RXAnlzFiles f;
+    CHECK_EQ(rx_anlz_build(&t, NULL, &f), 0);
+    RXBeat *b;
+    int nb;
+    CHECK_EQ(rx_anlz_read_beats(f.dat, f.dat_size, &b, &nb), 0);
+    /* 0.5 .. 4.0 straight (8 beats), the four measured, then from 6.5. */
+    CHECK(nb == 8 + 4 + 8);
+    if (nb == 20) {
+        CHECK(b[7].time == 4.0 && b[7].number == 4 && b[7].bpm == 120.0);
+        CHECK(b[8].time == 4.5 && b[8].number == 1 && b[8].bpm == 120.0);
+        CHECK(b[9].time == 5.0 && b[9].number == 2 && fabs(b[9].bpm - 115.38) < 0.01);
+        CHECK(b[10].time == 5.52 && fabs(b[10].bpm - 122.45) < 0.01);
+        CHECK(b[11].time == 6.01 && b[11].number == 4 && fabs(b[11].bpm - 122.45) < 0.01);
+        CHECK(b[12].time == 6.5 && b[12].number == 1 && b[12].bpm == 121.0);
+    }
+    free(b);
+    /* The loop quantum at a cue reads the local tempo there. */
+    RXPlanCue c = { .time = 5.0, .loop_end = 5.52 + 0.49 + 0.49, .hot = -1 };
+    uint16_t num, den;
+    rx_anlz_loop_quantum(&c, &g, &num, &den);
+    CHECK(num == 0 && den == 0);        /* 1.5 s at 115.38 is 2.88 beats: no quantum */
+    c.loop_end = 5.52;
+    rx_anlz_loop_quantum(&c, &g, &num, &den);
+    CHECK(num == 1 && den == 1);        /* one beat at the local tempo */
+    rx_anlz_files_free(&f);
+    rx_grid_free(&g);
+}
+
 /* Beat numbers across tempo sections: a section that restarts the count
  * (beat 1) and one that continues it (beat 0) (docs/anlz.md 4.3: every
  * beat carries its section's tempo; rxbox/model.h for the numbering). */
@@ -493,6 +540,7 @@ int main(void)
     flac_seek();
     rekordbox_files();
     sections();
+    dynamic();
     emoji_path();
     hostile();
     return test_result("anlz");

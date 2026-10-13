@@ -74,11 +74,21 @@ static double hue_column(const RXLibrary *lib, uint64_t id)
     return v;
 }
 
+/* Takes a library back to schema 5: without schema 6's measured-beat
+ * column. */
+static int back_to_schema5(sqlite3 *db)
+{
+    return sqlite3_exec(db, "ALTER TABLE grid_section DROP COLUMN measured", NULL, NULL, NULL);
+}
+
 /* Takes a library back to schema 3's track table: without schema 5's
  * tagging columns, and the colour name column instead of the hue, for the
  * migrations from older schemas. */
 static int back_to_schema3(sqlite3 *db)
 {
+    int rc = back_to_schema5(db);
+    if (rc != SQLITE_OK)
+        return rc;
     return sqlite3_exec(db, "ALTER TABLE track DROP COLUMN tags_version;"
                             "ALTER TABLE track DROP COLUMN ml_club;"
                             "ALTER TABLE track DROP COLUMN ml_intensity;"
@@ -123,7 +133,7 @@ static void test_create_and_add(void)
 
     sqlite3_stmt *st;
     sqlite3_prepare_v2(lib.db->db, "PRAGMA user_version", -1, &st, NULL);
-    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 5);
+    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 6);
     sqlite3_finalize(st);
     sqlite3_prepare_v2(lib.db->db, "PRAGMA journal_mode", -1, &st, NULL);
     CHECK(sqlite3_step(st) == SQLITE_ROW && !strcmp((const char *)sqlite3_column_text(st, 0), "wal"));
@@ -260,6 +270,13 @@ static void test_edit_and_reopen(void)
     unsigned gen = lib.generation;
     RXTrack *b = rx_library_find_id(&lib, 2);
     b->meta.rating = 2;
+    /* A dynamic grid: a straight intro, three measured beats, a straight
+     * outro, stored and read back bit for bit. */
+    rx_grid_add_section(&b->grid, 0.5, 120.0, 1);
+    rx_grid_add_beat(&b->grid, 4.5, 118.0, 0);
+    rx_grid_add_beat(&b->grid, 5.0084745762711864, 116.5, 0);
+    rx_grid_add_beat(&b->grid, 5.5235, 119.0, 3);
+    rx_grid_add_section(&b->grid, 6.0277, 121.0, 0);
     CHECK(rx_library_save_track(&lib, b) == 0 && lib.generation != gen);
     rx_library_close(&lib);
 
@@ -276,6 +293,16 @@ static void test_edit_and_reopen(void)
     CHECK(a->meta.track_number == 7 && a->file_meta.track_number == 0);
     CHECK(a->meta.rating == 4 && a->meta.hue == 193.25);
     CHECK(rx_library_find_id(&lib, 2)->meta.hue == RX_HUE_NONE);
+    {
+        const RXGrid *bg = &rx_library_find_id(&lib, 2)->grid;
+        CHECK(bg->nb_sections == 5 && rx_grid_dynamic(bg) && rx_grid_valid(bg));
+        if (bg->nb_sections == 5) {
+            CHECK(!bg->sections[0].measured && bg->sections[1].measured && bg->sections[3].measured);
+            CHECK(!bg->sections[4].measured && bg->sections[4].start == 6.0277);
+            CHECK(bg->sections[2].start == 5.0084745762711864 && bg->sections[2].bpm == 116.5);
+            CHECK(bg->sections[3].beat == 3 && bg->sections[1].beat == 0);
+        }
+    }
     CHECK(a->meta.nb_tags == 2 && !strcmp(a->meta.tags[0], "Situation/Peak Time") && !strcmp(a->meta.tags[1], "vocal"));
     CHECK_STR(a->key, "Am");
     CHECK(a->key_confidence == 0.8 && a->grid_confidence == 0.97);
@@ -512,9 +539,62 @@ static void test_grid_migration(void)
     CHECK(a && a->grid.nb_sections == 2 && a->grid.sections[0].start == 0.3125);
     sqlite3_stmt *st;
     sqlite3_prepare_v2(lib.db->db, "PRAGMA user_version", -1, &st, NULL);
-    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 5);
+    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 6);
     sqlite3_finalize(st);
     rx_library_close(&lib);
+}
+
+/* Schema 6: a library without the measured-beat column opens with every
+ * grid as it was, straight, and takes a dynamic grid from then on. */
+static void test_measured_migration(void)
+{
+    char *dir = test_dir("library-v5");
+    char *db = path_in(dir, "library.db");
+    char *a_path = path_in(music, "a.wav");
+    RXLibrary lib;
+    int err;
+    CHECK(rx_library_open(&lib, dir) == 0);
+    RXTrack *a = rx_library_add_file(&lib, a_path, &err);
+    CHECK(a != NULL);
+    if (a) {
+        rx_grid_add_section(&a->grid, 0.25, 125.0, 1);
+        rx_grid_add_section(&a->grid, 60.25, 126.0, 0);
+        CHECK(rx_library_save_track(&lib, a) == 0);
+    }
+    rx_library_close(&lib);
+
+    sqlite3 *s;
+    CHECK(sqlite3_open(db, &s) == SQLITE_OK);
+    CHECK(back_to_schema5(s) == SQLITE_OK);
+    CHECK(sqlite3_exec(s, "PRAGMA user_version = 5", NULL, NULL, NULL) == SQLITE_OK);
+    sqlite3_close(s);
+
+    CHECK(rx_library_open(&lib, dir) == 0);
+    sqlite3_stmt *st;
+    sqlite3_prepare_v2(lib.db->db, "PRAGMA user_version", -1, &st, NULL);
+    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 6);
+    sqlite3_finalize(st);
+    a = rx_library_find_path(&lib, a_path);
+    CHECK(a && a->grid.nb_sections == 2 && !rx_grid_dynamic(&a->grid));
+    if (a && a->grid.nb_sections == 2) {
+        CHECK(a->grid.sections[0].start == 0.25 && a->grid.sections[0].bpm == 125.0);
+        CHECK(a->grid.sections[1].start == 60.25 && !a->grid.sections[1].measured);
+        /* And a dynamic grid is kept from now on. */
+        rx_grid_add_beat(&a->grid, 30.25, 124.5, 0);
+        CHECK(rx_library_save_track(&lib, a) == 0);
+    }
+    rx_library_close(&lib);
+    CHECK(rx_library_open(&lib, dir) == 0);
+    a = rx_library_find_path(&lib, a_path);
+    CHECK(a && a->grid.nb_sections == 3 && rx_grid_dynamic(&a->grid));
+    if (a && a->grid.nb_sections == 3)
+        CHECK(a->grid.sections[1].measured && a->grid.sections[1].start == 30.25);
+    rx_library_close(&lib);
+
+    free(a_path);
+    free(db);
+    test_rm_rf(dir);
+    free(dir);
 }
 
 /* Schema 4: rekordbox's eight colour names become their colours' hues, the
@@ -772,7 +852,7 @@ static void test_migrate_v1(void)
     CHECK(rx_library_open(&lib, dir) == 0);
     sqlite3_stmt *st;
     sqlite3_prepare_v2(lib.db->db, "PRAGMA user_version", -1, &st, NULL);
-    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 5);
+    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 6);
     sqlite3_finalize(st);
     CHECK(lib.nb_tracks == 2);
     a = rx_library_find_path(&lib, a_path);
@@ -1109,6 +1189,7 @@ int main(void)
     test_settings_migration();
     test_refresh();
     test_grid_migration();
+    test_measured_migration();
     test_colour_migration();
     test_comment_import();
     test_missing_relocate_remove();

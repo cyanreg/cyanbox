@@ -18,11 +18,28 @@
  * (the analyser starts a grid where the music starts, docs/BEATS.md).
  * `beat` is the beat number (1..beats_per_bar) of the beat at `start`, or
  * 0 to continue counting from the previous section. The first section's
- * `beat` is always 1..beats_per_bar (0 is read as 1). */
+ * `beat` is always 1..beats_per_bar (0 is read as 1).
+ *
+ * A *measured* section is one beat: the beat at `start`, and nothing more
+ * until the next section, which begins on the next beat. A run of
+ * measured beats is a dynamic grid, one that follows a tempo that moves
+ * (a live drummer, rubato, a ramp): the analyser keeps the beats it
+ * measured where a straight line would not hold them (docs/BEATS.md,
+ * "Dynamic grids"), and the players play such grids as they are, every
+ * beat with its own time and tempo (PQTZ, docs/anlz.md 4.3). `bpm` is
+ * then the beat's local tempo, 60 over the interval to the next beat:
+ * what the deck shows and the stick carries for that beat, and the
+ * tempo the last section runs on at past its beat. Between two
+ * measured beats the fractional beat index is linear in time, so a
+ * quantised cue or a beat jump lands where the player would. A
+ * straight section after a measured beat starts on the beat after it;
+ * a straight grid has no measured section and is exactly what it
+ * was. */
 typedef struct RXTempoSection {
     double start;        /* seconds */
     double bpm;
     int    beat;         /* 1..beats_per_bar, or 0 = continue the count */
+    bool   measured;     /* one beat at `start`; the next section begins on the next beat */
 } RXTempoSection;
 
 typedef struct RXGrid {
@@ -35,7 +52,7 @@ typedef struct RXGrid {
 typedef struct RXBeat {
     double time;         /* seconds */
     int    number;       /* 1..beats_per_bar; 1 is the downbeat */
-    double bpm;          /* tempo of the section this beat is in */
+    double bpm;          /* tempo of the section this beat is in: a measured beat's own */
 } RXBeat;
 
 /* One section at `bpm` with a downbeat at `start`, from the first beat of
@@ -45,9 +62,18 @@ int    rx_grid_copy(RXGrid *dst, const RXGrid *src);
 void   rx_grid_free(RXGrid *g);
 bool   rx_grid_valid(const RXGrid *g);                         /* >= 1 section, bpm 1..1000, sorted */
 double rx_grid_bpm(const RXGrid *g);                           /* of the first section; 0 if none */
-double rx_grid_bpm_at(const RXGrid *g, double t);
+double rx_grid_bpm_at(const RXGrid *g, double t);              /* a measured beat's: its local tempo */
+/* True when any section is a measured beat: the grid bends. */
+bool   rx_grid_dynamic(const RXGrid *g);
+/* The tempo that stands for the track (the stick's one tempo, the table):
+ * the first section's for a straight grid; on a dynamic grid the median
+ * of the local tempos of its beats in [0, duration). 0 if none. */
+double rx_grid_bpm_median(const RXGrid *g, double duration);
 /* Adds a section at `start` (sorted in), replacing one at the same time. */
 int    rx_grid_add_section(RXGrid *g, double start, double bpm, int beat);
+/* Adds a measured beat at `time` with the local tempo `bpm` (sorted in,
+ * replacing a section at the same time). */
+int    rx_grid_add_beat(RXGrid *g, double time, double bpm, int beat);
 int    rx_grid_remove_section(RXGrid *g, int index);
 int    rx_grid_section_at(const RXGrid *g, double t);          /* index of the section containing t */
 
@@ -61,7 +87,8 @@ double rx_grid_nearest_beat(const RXGrid *g, double t, int *number);
 double rx_grid_beat_before(const RXGrid *g, double t);
 double rx_grid_beat_after(const RXGrid *g, double t);
 /* t moved by `beats` grid beats (fractional allowed, negative = backwards).
- * The step follows the tempo of each section crossed. */
+ * The step follows the tempo of each section crossed, and the measured
+ * beats of a dynamic grid one by one. */
 double rx_grid_offset_beats(const RXGrid *g, double t, double beats);
 /* Fractional beat index of t counted from the first downbeat of the grid
  * (which is beat 0; the beats before it are negative), and the inverse.
@@ -76,15 +103,36 @@ double rx_grid_bar_time(const RXGrid *g, int bar, int beat);
 void   rx_grid_bar_of(const RXGrid *g, double t, int *bar, int *beat);
 /* Quantise t to the nearest beat (what QUANTIZE does on a CDJ). */
 double rx_grid_quantize(const RXGrid *g, double t);
-/* Moves every section by `delta` seconds (SHIFT GRID). */
+/* Moves every section by `delta` seconds (SHIFT GRID): on a dynamic grid
+ * every measured beat with it. */
 void   rx_grid_shift(RXGrid *g, double delta);
-/* Changes the tempo of the section containing t, keeping its start. */
+/* Changes the tempo of the section containing t, keeping its start. On a
+ * dynamic passage: the beats from the one at or before t to the end of
+ * the passage become one straight section at `bpm` starting on that beat
+ * (the beat keeps its number), as typing a tempo or tapping one means
+ * "from here, straight at this tempo". */
 void   rx_grid_set_bpm_at(RXGrid *g, double t, double bpm);
+/* Double or halve the tempo of the section containing t, keeping its
+ * start (the deck's x2 and /2). On a dynamic passage the beats
+ * themselves double (a beat at every midpoint, each at twice its local
+ * tempo) or halve (every other beat from the passage's first goes, the
+ * downbeats among the kept ones stay downbeats). */
+int    rx_grid_double_at(RXGrid *g, double t);
+int    rx_grid_halve_at(RXGrid *g, double t);
+/* The dynamic passage containing t becomes one straight section through
+ * its beats (the least-squares line through their times, starting on its
+ * first beat with that beat's number). Returns the section's index, or
+ * -ENOENT when t is not in a dynamic passage. */
+int    rx_grid_straighten_at(RXGrid *g, double t);
 /* Makes the nearest beat to t the downbeat (beat 1) of its section: the
  * section's count moves, its start does not. */
 void   rx_grid_set_downbeat(RXGrid *g, double t);
 /* Makes the nearest beat to t the start of a new section at the same tempo
- * (split), or removes the section boundary nearest to t (merge). */
+ * (split), or removes the section boundary nearest to t (merge). A split
+ * on a measured beat changes nothing (every beat of a dynamic passage is
+ * its own section already); a merge in a dynamic passage straightens it
+ * (rx_grid_straighten_at), since the boundaries between its beats are
+ * not the kind a DJ removes one by one. */
 int    rx_grid_split_at(RXGrid *g, double t);
 int    rx_grid_merge_at(RXGrid *g, double t);
 /* Starts the grid at its first beat at or after t: the sections before

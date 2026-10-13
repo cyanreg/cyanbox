@@ -17,6 +17,12 @@
  * before bar 1 and a snare pickup on beat 4. For them the grid's first
  * beat, its number and the automatic cue are checked too.
  *
+ * Three tracks have a tempo that moves (a ramp, a random walk as a drummer
+ * drifts, a rubato dip), each with every beat's true time: for them the
+ * grid is checked beat by beat against the truth (the RMS and the largest
+ * error, and that the downbeats fall on the bar lines), the dynamic grid
+ * against the best straight one (`allow_dynamic` off), which it must beat.
+ *
  * The GPU front end (rxbox/compute.h) must give the same results. When a
  * device is there, every case runs on both paths: each must pass on its
  * own, and the two grids must be the same (sections, their tempo and
@@ -30,6 +36,7 @@
  *
  *   test_beats            run every case
  *   test_beats -v         print the details of every case
+ *   test_beats -c N       run case N alone, on the CPU path
  *   test_beats -w N FILE  write case N as raw 44.1 kHz mono f32 (for
  *                         rxbox-eval --dump-onsets) */
 
@@ -189,6 +196,17 @@ typedef struct Spec {
     int    pickup;                  /* PICKUP_*: what comes before bar 1 */
     double click;                   /* a one-sample click in the silence at this time */
     bool   start_checks;            /* check the grid's first beat and the automatic cue */
+    /* A tempo that moves: a ramp from `bpm` at bar ramp_from to ramp_bpm
+     * at bar ramp_to (then held); a random walk of the tempo, walk_sigma
+     * per beat in log tempo, held within 10 % of `bpm`; a rubato dip by
+     * the fraction `rubato` of the tempo over bars [rubato_from,
+     * rubato_to), a half sine. Any of these gives every beat its own
+     * time, and the truth is the list of them. */
+    double ramp_bpm;
+    int    ramp_from, ramp_to;
+    double walk_sigma;
+    double rubato;
+    int    rubato_from, rubato_to;
 } Spec;
 
 enum {
@@ -203,7 +221,47 @@ typedef struct Truth {
     double bpm[4];
     double first_beat;      /* the grid's first beat: the first sound on a beat */
     int    first_number;    /* and its number */
+    /* A tempo that moves: the true time of every beat (malloc'd), bar
+     * lines every four; nb_secs is 0 and the grid is judged beat by beat. */
+    double *beats;
+    int     nb_beats;
 } Truth;
+
+static bool curved(const Spec *sp)
+{
+    return sp->ramp_bpm > 0.0 || sp->walk_sigma > 0.0 || sp->rubato > 0.0;
+}
+
+/* The beats of a tempo that moves: 4 * bars + 1 times from the first
+ * downbeat, each interval 60 over the tempo at that beat. */
+static double *curve_beats(const Spec *sp)
+{
+    int nb = 4 * sp->bars + 1;
+    double *bt = malloc((size_t)nb * sizeof(*bt));
+    if (!bt)
+        return NULL;
+    Lcg l = { .s = sp->seed * 104729 + 3 };
+    double logt = 0.0, t = sp->first_downbeat;
+    for (int k = 0; k < nb; k++) {
+        bt[k] = t;
+        double x = k / 4.0, bpm = sp->bpm;
+        if (sp->ramp_bpm > 0.0) {
+            if (x >= sp->ramp_to)
+                bpm = sp->ramp_bpm;
+            else if (x > sp->ramp_from)
+                bpm += (sp->ramp_bpm - sp->bpm) * (x - sp->ramp_from) / (sp->ramp_to - sp->ramp_from);
+        }
+        if (sp->rubato > 0.0 && x >= sp->rubato_from && x < sp->rubato_to)
+            bpm *= 1.0 - sp->rubato * sin(M_PI * (x - sp->rubato_from) / (sp->rubato_to - sp->rubato_from));
+        if (sp->walk_sigma > 0.0) {
+            logt += sp->walk_sigma * lcg_gauss(&l);
+            logt = RX_CLAMP(logt, log(0.9), log(1.1));
+            bpm *= exp(logt);
+        }
+        t += 60.0 / bpm;
+    }
+    return bt;
+}
 
 static int synth(const Spec *sp, Track *t, Truth *truth)
 {
@@ -211,13 +269,28 @@ static int synth(const Spec *sp, Track *t, Truth *truth)
     double dur = sp->first_downbeat + 4.0 * p1 * (sp->change_bar ? sp->change_bar : sp->bars) + 2.0;
     if (sp->change_bar)
         dur += sp->change_gap + 4.0 * p2 * (sp->bars - sp->change_bar);
-    if (track_alloc(t, dur) < 0)
+    double *bt = NULL;
+    memset(truth, 0, sizeof(*truth));
+    if (curved(sp)) {
+        bt = curve_beats(sp);
+        if (!bt)
+            return -1;
+        dur = bt[4 * sp->bars] + 2.0;
+    }
+    if (track_alloc(t, dur) < 0) {
+        free(bt);
         return -1;
+    }
     Lcg l = { .s = sp->seed * 7919 + 17 };
     static const int prog[4][3] = { { 0, 3, 7 }, { 5, 8, 12 }, { 7, 11, 14 }, { 0, 3, 7 } };
     const int tonic = 9;
 
     truth->nb_secs = sp->change_bar && !sp->one_line ? 2 : 1;
+    if (bt) {
+        truth->nb_secs = 0;
+        truth->beats = bt;
+        truth->nb_beats = 4 * sp->bars;
+    }
     truth->start[0] = sp->first_downbeat;
     truth->bpm[0] = sp->bpm;
     truth->first_beat = sp->first_downbeat - (sp->pickup == PICKUP_SNARE ? p1 : 0.0);
@@ -241,6 +314,13 @@ static int synth(const Spec *sp, Track *t, Truth *truth)
         double p = second ? p2 : p1;
         double tb = second ? start2 + 4.0 * p * (b - sp->change_bar)
                            : sp->first_downbeat + 4.0 * p * b;
+        double bar_len = 4.0 * p;
+        if (bt) {
+            /* The bar as the tempo curve has it; p is its mean beat. */
+            tb = bt[4 * b];
+            bar_len = bt[4 * b + 4] - tb;
+            p = bar_len / 4.0;
+        }
         int kind = BAR_FULL;
         if (b < sp->intro_bars)
             kind = BAR_INTRO;
@@ -254,13 +334,13 @@ static int synth(const Spec *sp, Track *t, Truth *truth)
         const int *ch = prog[b % 4];
         double pad = ((b / 8) % 2) ? 0.06 : 0.10;
         for (int k = 0; k < 3; k++)
-            add_tone(t, tb, 4.0 * p, midi_hz(48 + tonic + ch[k]), pad / 3.0);
+            add_tone(t, tb, bar_len, midi_hz(48 + tonic + ch[k]), pad / 3.0);
         if (b >= 8 && kind != BAR_INTRO) {
             if (sp->style == STYLE_TECHHOUSE) {
                 for (int q = 0; q < 4; q++)
                     add_tone(t, tb + (q + 0.5) * p, 0.4 * p, midi_hz(36 + tonic + ch[0]), 0.25);
             } else {
-                add_tone(t, tb, 4.0 * p, midi_hz(36 + tonic + ch[0]), 0.10);
+                add_tone(t, tb, bar_len, midi_hz(36 + tonic + ch[0]), 0.10);
             }
         }
 
@@ -271,6 +351,10 @@ static int synth(const Spec *sp, Track *t, Truth *truth)
         for (int q = 0; q < 4; q++) {
             double tq = tb + q * p + (sp->jitter > 0.0 ? sp->jitter * lcg_gauss(&l) : 0.0);
             double th = tq + 0.5 * p;
+            if (bt) {
+                tq = bt[4 * b + q] + (sp->jitter > 0.0 ? sp->jitter * lcg_gauss(&l) : 0.0);
+                th = tq + 0.5 * (bt[4 * b + q + 1] - bt[4 * b + q]);
+            }
             if (kind == BAR_INTRO) {
                 add_hat(t, th, 0.4, &l);
                 continue;
@@ -427,6 +511,16 @@ static const Spec cases[] = {
     { .name = "a snare pickup on beat 4 before bar 1", .style = STYLE_HOUSE, .bpm = 128.0,
       .first_downbeat = 1.2, .bars = 40, .seed = 20, .pickup = PICKUP_SNARE,
       .start_checks = true },
+    /* A tempo that moves. */
+    { .name = "ramp 120 -> 132 over bars 8-40, then held", .style = STYLE_HOUSE, .bpm = 120.0,
+      .first_downbeat = 0.5, .bars = 56, .seed = 24, .ramp_bpm = 132.0, .ramp_from = 8,
+      .ramp_to = 40 },
+    { .name = "a drummer's random walk (0.4 % a beat, within 10 %), 6 ms jitter, 122",
+      .style = STYLE_HOUSE, .bpm = 122.0, .first_downbeat = 0.4, .bars = 64, .seed = 25,
+      .walk_sigma = 0.004, .jitter = 0.006 },
+    { .name = "rubato: 120 dipping to 100 over bars 16-24, steady either side",
+      .style = STYLE_HIPHOP, .bpm = 120.0, .first_downbeat = 0.6, .bars = 48, .seed = 26,
+      .rubato = 0.17, .rubato_from = 16, .rubato_to = 24, .jitter = 0.003 },
 };
 
 typedef struct Want {
@@ -461,9 +555,61 @@ static const Want wants[] = {
     { 0, CUTS | RX_GRID_FLAG_UNSTEADY },
     { 0, CUTS | RX_GRID_FLAG_UNSTEADY },
     { 0, CUTS | RX_GRID_FLAG_UNSTEADY },
+    { RX_GRID_FLAG_DYNAMIC, CUTS },
+    { RX_GRID_FLAG_DYNAMIC, CUTS },
+    { RX_GRID_FLAG_DYNAMIC, CUTS },
 };
 
 /* ----------------------------------------------------------- the checks */
+
+/* The grid against the true beats, from the grid's first beat on: the RMS
+ * and the largest distance of each true beat from the nearest grid beat,
+ * and how many true bar lines have a grid downbeat (number 1) nearest
+ * them. */
+typedef struct BeatError {
+    double rms, max;
+    int    nb, down_ok, down;
+} BeatError;
+
+static BeatError beat_error(const RXGrid *g, double dur, const double *truth, int nb_truth)
+{
+    BeatError e = { 0 };
+    RXBeat *b = NULL;
+    int nb = 0;
+    if (rx_grid_beats(g, dur, &b, &nb) < 0 || nb == 0) {
+        free(b);
+        e.rms = e.max = INFINITY;
+        return e;
+    }
+    double s2 = 0.0;
+    for (int k = 0; k < nb_truth; k++) {
+        double t = truth[k];
+        if (t < b[0].time - 0.001)
+            continue;
+        int lo = 0, hi = nb - 1;
+        while (lo < hi) {
+            int mid = (lo + hi) / 2;
+            if (b[mid].time < t)
+                lo = mid + 1;
+            else
+                hi = mid;
+        }
+        int j = lo;
+        if (lo > 0 && fabs(b[lo - 1].time - t) < fabs(b[lo].time - t))
+            j = lo - 1;
+        double d = fabs(b[j].time - t);
+        s2 += d * d;
+        e.max = fmax(e.max, d);
+        e.nb++;
+        if (k % 4 == 0) {
+            e.down++;
+            e.down_ok += b[j].number == 1;
+        }
+    }
+    free(b);
+    e.rms = e.nb ? sqrt(s2 / e.nb) : INFINITY;
+    return e;
+}
 
 static bool verbose;
 
@@ -482,9 +628,9 @@ static int check(int idx, RXCompute *gpu, RXBeatResult *keep)
     opt.compute = gpu;
     RXBeatResult r;
     int ret = rx_analyse_beats(t.x, t.n, RATE, &opt, &r);
-    free(t.x);
     if (ret < 0) {
         printf("FAIL %s%s: analysis returned %d\n", path, sp->name, ret);
+        free(t.x);
         return 1;
     }
 
@@ -496,7 +642,42 @@ static int check(int idx, RXCompute *gpu, RXBeatResult *keep)
         fails++; \
     } while (0)
 
-    if (r.grid.nb_sections != truth.nb_secs)
+    double dur = (double)t.n / RATE;
+    char curve_note[160] = "";
+    if (truth.beats) {
+        /* Beat by beat: within 15 ms everywhere (RMS under 6), every bar
+         * line a downbeat; and closer than the best straight grid, which
+         * is measured on the CPU path only (it is the same on both). */
+        BeatError d = beat_error(&r.grid, dur, truth.beats, truth.nb_beats);
+        if (!(d.rms <= 0.006))
+            FAILF(" rms %.1f ms", d.rms * 1e3);
+        if (!(d.max <= 0.015))
+            FAILF(" max %.1f ms", d.max * 1e3);
+        if (d.down_ok < d.down)
+            FAILF(" downbeats %d of %d", d.down_ok, d.down);
+        if (!rx_grid_dynamic(&r.grid))
+            FAILF(" not a dynamic grid");
+        snprintf(curve_note, sizeof(curve_note), "      dynamic: rms %.1f ms, max %.1f ms, "
+                 "downbeats %d/%d, %d beats", d.rms * 1e3, d.max * 1e3, d.down_ok, d.down,
+                 r.grid.nb_sections);
+        if (!gpu) {
+            RXAnalysisOptions so = opt;
+            so.allow_dynamic = false;
+            RXBeatResult sr;
+            if (rx_analyse_beats(t.x, t.n, RATE, &so, &sr) == 0) {
+                BeatError e = beat_error(&sr.grid, dur, truth.beats, truth.nb_beats);
+                size_t l = strlen(curve_note);
+                snprintf(curve_note + l, sizeof(curve_note) - l,
+                         "; straight: rms %.1f ms, max %.1f ms, %d section%s", e.rms * 1e3,
+                         e.max * 1e3, sr.grid.nb_sections, sr.grid.nb_sections == 1 ? "" : "s");
+                if (!(d.rms < e.rms))
+                    FAILF(" no better than straight (%.1f ms)", e.rms * 1e3);
+                rx_beat_result_free(&sr);
+            }
+        }
+    }
+    free(t.x);
+    if (!truth.beats && r.grid.nb_sections != truth.nb_secs)
         FAILF(" sections %d (want %d)", r.grid.nb_sections, truth.nb_secs);
     for (int s = 0; s < RX_MIN(r.grid.nb_sections, truth.nb_secs); s++) {
         const RXTempoSection *g = &r.grid.sections[s];
@@ -543,7 +724,6 @@ static int check(int idx, RXCompute *gpu, RXBeatResult *keep)
      * numbered 1. */
     RXBeat *bt = NULL;
     int nbt = 0;
-    double dur = (double)t.n / RATE;
     if (rx_grid_beats(&r.grid, dur, &bt, &nbt) == 0) {
         for (int i = 1; i < nbt; i++) {
             double gap = bt[i].time - bt[i - 1].time;
@@ -597,6 +777,9 @@ static int check(int idx, RXCompute *gpu, RXBeatResult *keep)
         FAILF(" flags 0x%x include 0x%x", r.flags, r.flags & w->flags_clear);
 
     printf("%s %s%s%s\n", fails ? "FAIL" : "ok  ", path, sp->name, why);
+    if (curve_note[0])
+        printf("%s\n", curve_note);
+    free(truth.beats);
     if (verbose || fails) {
         printf("      conf %.2f flags 0x%02x octave %.2f phase %.2f 2nd %.2f start %.4f (%d)\n",
                r.confidence, r.flags, r.octave_margin, r.phase_margin, r.bpm_second_best,
@@ -679,6 +862,7 @@ static int check_frontend(RXCompute *gpu)
         Truth truth;
         if (synth(&cases[which[w]], &t, &truth) < 0)
             return fails + 1;
+        free(truth.beats);
         RXSpectrum a, b;
         if (rx_spectrum_compute(t.x, t.n, NULL, &a) < 0) {
             free(t.x);
@@ -755,7 +939,7 @@ static int check_misc(RXCompute *gpu)
     opt.compute = gpu;
     int fails = 0;
     /* Flag names round-trip. */
-    for (unsigned f = 1; f <= RX_GRID_FLAG_PHASE_CUT; f <<= 1) {
+    for (unsigned f = 1; f <= RX_GRID_FLAG_DYNAMIC; f <<= 1) {
         const char *n = rx_grid_flag_name((enum RXGridFlag)f);
         if (!n || !*n || rx_grid_flag_parse(n) != f) {
             printf("FAIL flag name 0x%x\n", f);
@@ -939,8 +1123,18 @@ int main(int argc, char **argv)
         fclose(f);
         for (int s = 0; s < truth.nb_secs; s++)
             printf("section %d: downbeat %.5f bpm %g\n", s, truth.start[s], truth.bpm[s]);
+        for (int k = 0; k < truth.nb_beats; k++)
+            printf("beat %d: %.5f\n", k, truth.beats[k]);
+        free(truth.beats);
         free(t.x);
         return 0;
+    }
+    if (argc == 3 && !strcmp(argv[1], "-c")) {
+        int i = atoi(argv[2]);
+        if (i < 0 || i >= (int)RX_ARRAY_ELEMS(cases))
+            return 1;
+        verbose = true;
+        return check(i, NULL, NULL);
     }
     verbose = argc > 1 && !strcmp(argv[1], "-v");
 

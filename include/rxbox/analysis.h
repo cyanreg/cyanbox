@@ -66,6 +66,7 @@ enum RXGridFlag {
     RX_GRID_FLAG_LOW_CONFIDENCE   = 1 << 5,   /* confidence below 0.5: check by ear */
     RX_GRID_FLAG_UNSTEADY         = 1 << 6,   /* onsets jitter around the line: live drums? */
     RX_GRID_FLAG_PHASE_CUT        = 1 << 7,   /* a section re-enters at the same tempo, shifted */
+    RX_GRID_FLAG_DYNAMIC          = 1 << 8,   /* the grid follows the beats one by one: the tempo moves */
 };
 const char *rx_grid_flag_name(enum RXGridFlag f);      /* "tempo-change" ... */
 unsigned    rx_grid_flag_parse(const char *name);     /* 0 if unknown */
@@ -75,6 +76,10 @@ typedef struct RXAnalysisOptions {
     double prior_bpm;            /* tie-breaker only; 0 = default */
     bool   snap_bpm;             /* snap to integer/half BPM when the drift allows */
     bool   allow_sections;       /* split on real tempo/phase changes (default true) */
+    /* Keep the measured beats where a straight line does not hold them
+     * (a dynamic grid, docs/BEATS.md); false: the best straight sections
+     * everywhere (default true). */
+    bool   allow_dynamic;
     bool   deterministic_threads;/* run single-threaded inside the call (default false) */
     /* The GPU the beat analyser's spectral front end runs on (its STFT and
      * band envelopes, rxbox/compute.h), NULL: the CPU. The results agree
@@ -141,7 +146,7 @@ enum RXAnalyseWhat {
  * RX_WAVES_VERSION is the algorithm; the packed blob has its own format
  * version (rx_waveforms_pack), a storage matter. The two usually bump
  * together, because new levels are what makes old blobs unreadable. */
-#define RX_BEATS_VERSION 3
+#define RX_BEATS_VERSION 4
 #define RX_KEY_VERSION   1
 #define RX_WAVES_VERSION 1
 

@@ -274,7 +274,9 @@ static int track_row(const RXPlan *plan, const RXPlanTrack *t, RXBuf *row, uint3
 
     const RXTrack *tr = t->track;
     const RXMeta *m = tr ? &tr->meta : NULL;
-    double bpm = t->grid.nb_sections ? t->grid.sections[0].bpm : 0.0;
+    /* The first section's tempo; on a dynamic grid the median of its
+     * beats' (rxbox/model.h): the players show one tempo per track. */
+    double bpm = rx_grid_bpm_median(&t->grid, t->duration);
     /* Python's round(): half to even, which nearbyint does by default. */
     uint32_t tempo = (uint32_t)nearbyint(bpm * 100.0);
     int64_t dur = (int64_t)t->duration;

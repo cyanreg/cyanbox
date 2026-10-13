@@ -2,15 +2,18 @@
 
 How rxbox finds a track's beat grid, why each step is the way it is, and how
 well it works. The code is in `src/analysis/` (`spectrum.c`, `onset.c`,
-`start.c`, `tempo.c`, `grid_fit.c`, `downbeat.c`, `beats.c`, `analysis.c`, the
-private interface `beats_internal.h`); the tests in
+`start.c`, `tempo.c`, `grid_fit.c`, `walk.c`, `downbeat.c`, `beats.c`,
+`analysis.c`, the private interface `beats_internal.h`); the tests in
 `tests/analysis/test_beats.c`; the evaluation tool in `tools/rxbox-eval.c` and
 `tests/analysis/py_beats.py`.
 
 The result (`rxbox/analysis.h`, `RXBeatResult`) is what a DJ player wants: a
 piecewise-constant grid (one section per tempo or phase, each a start beat, a
 BPM and a beat number) that begins where the music begins, a confidence,
-flags saying what is uncertain, and where and how the music starts.
+flags saying what is uncertain, and where and how the music starts. Where
+the tempo moves (a live drummer, rubato, a ramp) the grid follows the
+music beat by beat instead: a *dynamic* grid, every beat with its own time
+and local tempo, which the players play as they are (docs/anlz.md 4.3).
 
 ## What it does, in one page
 
@@ -28,18 +31,24 @@ flags saying what is uncertain, and where and how the music starts.
    attack of each beat is measured to a third of a millisecond.
 5. **Lines.** A robust line through the attacks; a change-point search
    proposes sections; evidence tests keep only the ones a DJ needs.
-6. **Phase.** Each section is put on the start of its hits with searches
+6. **Dynamic grids.** Where the attacks drift from a section's line beyond
+   what a straight grid can hold, or bend around it, the stretch is
+   tracked again at a period that follows the music, put on its attacks
+   and walked: a robust local fit a bar either side of every beat gives
+   the beat times a player would follow. Kept only where they follow the
+   hits better than the line.
+7. **Phase.** Each section is put on the start of its hits with searches
    that shrink step by step, and snapped to a whole BPM when that moves no
    beat by more than 5 ms.
-7. **Family and octave, on the grid.** A close 3:2 or 4:3 family is fitted
+8. **Family and octave, on the grid.** A close 3:2 or 4:3 family is fitted
    too and the grid whose beats land on hits wins. The octave (half, same,
    double) is judged by where the snares and kicks fall on the fitted beats.
-8. **Off-beat and downbeat.** Kicks, structure and the music's start decide
+9. **Off-beat and downbeat.** Kicks, structure and the music's start decide
    whether the grid is on the beat or half a beat off; structure (novelty
    peaks at one to eight bars), bass-note changes and the music's start vote
-   for beat 1.
-9. **Confidence and flags.**
-10. **Where the music starts**, measured on the level: after silence or a
+   for beat 1. A dynamic stretch is judged on its own beats.
+10. **Confidence and flags.**
+11. **Where the music starts**, measured on the level: after silence or a
     noise floor, a hit or a rise. The grid's first beat is the first at or
     after it, and the automatic cue the first downbeat.
 
@@ -179,7 +188,7 @@ the strongest family wins. Harmonic strength cannot choose *within* a
 family (a kick on every beat with a hat between has as many lines at twice
 the tempo), so the octave is not chosen here: the working octave is the
 family member nearest the prior (125 BPM), and the octave is decided later
-on the fitted grid (section 7).
+on the fitted grid (section 8).
 
 **The tempogram** (`rx_tempo_regions`): 12-second windows every 3 s, each
 window's autocorrelation comb over the octave around the working tempo (the
@@ -191,7 +200,7 @@ are rhythmic, and support the main tempo poorly there; and that tempo is not
 dotted passages read at those ratios; 128 to 174 is 1.9 % from 4:3 and
 passes). The tracker then follows each region's tempo. If most windows
 settle on another tempo that is not one of those ratios, that becomes the
-main tempo (the ratios are left to the family check of section 7, which
+main tempo (the ratios are left to the family check of section 8, which
 fits both). In the final grids of the 150 evaluation tracks, four have
 regions, all live piano or jazz recordings.
 
@@ -274,7 +283,7 @@ merged fit keeps the kept line's own scale (an MM-estimate): a scale
 re-estimated from a mostly-disagreeing union grows until nothing is an
 outlier.
 
-After the off-beat decisions (section 8) two neighbours whose lines end up
+After the off-beat decisions (section 9) two neighbours whose lines end up
 within the merge tolerance again are merged: one line holds the other's
 beats within 15 ms at both of its ends (the lines are straight, so the ends
 are the worst). That is a stretch tracked on the off-beat that its own
@@ -286,7 +295,7 @@ attacks, if it holds both; otherwise the other one, if it does.
 
 **The exported beats.** The first section's start is the grid's first beat:
 there is none before it (`rxbox/model.h`), and the analyser puts it at the
-first beat at or after the start of the music (section 10). A section's
+first beat at or after the start of the music (section 11). A section's
 beats run up to the next section's
 start, less the last one when it lies within half a period of that start
 (`rx_grid_beats` in `src/core/grid.c`, rbxport's SAME_HIT): that beat and
@@ -304,7 +313,141 @@ made on the beat (a DJ edit cut on the bar line), the beat at the join lies
 on both lines and the search gives it to the old one, so it moves back while
 the old section's last attacks fit the new line within 3 ms.
 
-## 6. Phase and snapping (`beats.c`, `grid_fit.c`)
+## 6. Dynamic grids (`walk.c`, `beats.c`)
+
+A live drummer, rubato, a band without a click or a wobbly tape move the
+beat by far more than a straight line can hold: a 1 % wobble over sixteen
+bars at 120 is 300 ms. The sections of section 5 can only cut such music
+into straight pieces of 32 beats or more, each off the beat somewhere; the
+old `unsteady` flag said as much and gave up. Now the measured beats
+themselves become the grid there (`RXTempoSection.measured`,
+`rxbox/model.h`): one measured beat per beat, each with the local tempo
+of its interval, which is what rekordbox's "dynamic" analysis writes and
+every player plays (PQTZ, docs/anlz.md 4.3). A sequenced track keeps its
+straight grid, bit for bit.
+
+**What is read.** After the sections are fitted and put on their attacks,
+each section's attacks are measured again around the *tracked* beats (the
+line's own 35 ms search loses the beats a drift has carried furthest),
+attacks lighter than a quarter of their median dropped as the
+segmentation drops them, and the *strain* of the line on them read
+(`rx_line_strain`): a robust local line through the attacks eight beats
+either side of each (Tukey's biweight on the section's scatter), its
+residual from the section's line, and the running median over nine of
+that: the *deviation*, how far the music sits from the line along it; the
+*drift* is its largest value. And the *bend*: a quadratic through the
+attacks (weights from the line's own residuals, so a stretch half a beat
+off does not pull it), read as its rise between the section's middle and
+its ends; the bend white scatter alone would give is known (σ√(180/n)/4
+for n attacks, the standard error of the quadratic term over uniform
+abscissae, scaled to the ends), so a short live section is not called
+bent by its own scatter.
+
+**When the beats are kept.** A section is *bent* when the bend exceeds
+10 ms and four times its scatter's, and the line is 8 ms off somewhere:
+the tempo moves inside the section, and the whole section is dynamic (a
+ramp cut by the change-point search into 32-beat pieces leaves every
+piece bent). Otherwise, where the drift passes 15 ms, the merge tolerance
+of the sections (below it two lines are one; above it a DJ hears the
+flam), each run of beats off the line by more than 5 ms that reaches
+15 ms is dynamic, with four beats of margin either side (the tracker's
+counts, which the reading rests on, go wrong exactly where the music has
+moved most), unless:
+
+- the section's attacks sit on the line as a sequencer's do (spread under
+  3 ms, `refine_section`'s "steady"). Sequenced music does not drift, and
+  a stretch of its attacks off the line is another element being timed
+  (a breakdown's claps, an element swelling in); the bend reads a DAW's
+  ramp, and a run at the edge of a bent or dynamic neighbour counts all
+  the same (a ramp the change-point search cut where it was still within
+  a line's reach: the ramp case of `test_beats` ends its first section
+  with fifteen beats curving away, 39 ms by the last);
+- the run's deviation sits still: its longest stretch within 3 ms (or
+  the section's scatter) of one level covers two fifths of the run and
+  eight beats. A breakdown tracked on its off-beat sits half a beat from
+  the line for sixty bars on AD:HOUSE 11's "Hot Vacation", every attack
+  within a millisecond of −233 ms, flat but for the smoothing's eight
+  beats at each end; drift keeps moving;
+- the run's attacks scatter beat to beat three times more than the
+  section's (and 3 ms): the attacks jumping between elements (a
+  breakbeat's kicks and snares), not the tempo moving.
+
+A straight remnant shorter than 32 beats (64 between two dynamic
+stretches) joins the stretch beside it; the others keep the parent's
+line, which held them within 5 ms and is snapped and on the fold.
+
+**The walk.** Ellis's tracker held to one period puts extra beats on the
+hats when the music slows by a fifth (the rubato case of `test_beats`:
+two inserted in eight bars, the count wrong from there on), so a dynamic
+stretch is tracked again first at a period that follows the music: at
+every tracked beat the median of the intervals between consecutive
+attacks within eight beats of it, those within 40 % of the line's period
+(an inserted beat makes a half interval, a skipped one a double), and the
+same tracker over the stretch's frames with that period, from a quarter
+period before its first beat to a quarter past where its last belongs
+(the tracker ends on the best score within its last period: a range
+reaching further lets a hat end it half a beat short). The first beat
+kept sits on the old count within three tenths of a period, so the
+numbering through the stretch holds; the sections after move by the
+difference in count. Then the attacks within 25 ms of the new beats, and
+the walk (`rx_walk_beats`): a robust local *quadratic* through the
+attacks a bar either side of every beat, evaluated at the beat. A local
+line sits off a tempo that moves by four times its curvature per beat
+squared (the window's second moment), 17 ms at the steepest point of the
+rubato case; the quadratic has no bias. It follows a tempo that moves
+inside a bar or two, as a player following a drummer does, and averages
+the drummer's scatter rather than reproducing it (a grid that copied
+every early and late hit would make the deck's beat counter and the
+player's sync jitter with it). An attack not where its neighbours say
+gets Tukey's weight of nothing; a beat without an attack, or a breakdown
+without any, is interpolated linearly between the nearest beats that
+have them; the ends are extrapolated on the last local slope; no two
+beats closer than a third of the median interval survive. Each beat's
+tempo is 60 over its interval; the last's that of the interval to the
+section after.
+
+**The judgment.** The walked beats are kept only where they follow the
+hits better than the line they replace: the mean distance of the average
+beat's rise (the confidence's 16-beat windows, every 8 beats) from the
+beats, on envelopes cut at the beats themselves and at the line's beats
+alike (judged on envelopes cut around the tracked beats, a line far from
+the music has no data where it is wrong and scores on the windows where
+it is right), a window whose average beat rises by less than half the
+walked beats' median contrast counted at the search width (`rx_fold`
+reports no rise as an offset of 0). The beats must win by a millisecond;
+the line is the simpler grid and a tie is its, and the tracker's beats
+then come back as they were. The confidence's own yes-or-no at 15 ms is
+too coarse here: a line 20 ms off scores as the beats do.
+
+**Phase, downbeat, the rest.** A dynamic stretch is a section like any
+other to what follows, on its beats' own times: the half beats are the
+beats and the midpoints after them, the kicks are weighed on those
+(`support_at`), the structure votes over them (`rx_downbeat_vote_times`,
+the line version a wrapper that builds the same arrays), a move by half
+a beat puts every beat on the midpoint after it and walks again, and the
+downbeat is counted from the stretch's first beat as from a line's t0.
+The confidence folds a dynamic section on its beats. A boundary between a
+dynamic stretch and a straight section is no tempo change or phase cut
+(the `dynamic` flag covers it); `unsteady` on a dynamic section is the
+scatter around the walked beats. The grid lists a measured beat per beat,
+the first with the section's number, the rest continuing the count; a
+dynamic first section reaches back to time 0 at its first interval as a
+line does, before the music's start moves the grid on. The last measured
+beat of a track runs on at its tempo. Nothing of this runs with
+`allow_dynamic` off (`rxbox-eval --no-dynamic`), and nothing of it touches
+the GPU front end: the decisions stay in C on both paths, and the two
+agree on every synthetic grid, dynamic ones included.
+
+**What it costs.** On the 58 acceptance tracks from the harness's cache
+(the front end on the RX 6900 XT, `-j 2`, the machine otherwise quiet):
+108 ms of CPU per file with the dynamic pass against 103 without it in
+the same binary (the strain of every section; the re-tracking, attacks,
+envelope cuts and walk of the dynamic stretches only), 126 against 123 ms
+of wall time for the decisions; the baseline binary of the day took 115
+and 133 in the same session. About 5 % on the decisions, well inside the
+doubling the feature was allowed.
+
+## 7. Phase and snapping (`beats.c`, `grid_fit.c`)
 
 Per section: fold all bands on the line and move it onto the start of the
 average hit (search ±30 ms), measure the attacks within 3× the section's
@@ -321,7 +464,7 @@ within 5 ms. dj's rule (15 ms over the whole track from one end) with the
 drift measured from the centre; rbxport's "within 0.1 BPM" would shift the
 end of a six-minute track by 280 ms if the track really is at 128.1.
 
-## 7. Family and octave on the grid (`beats.c`, `tempo.c`)
+## 8. Family and octave on the grid (`beats.c`, `tempo.c`)
 
 **Close families.** When the runner-up family's harmonic strength is within
 25 % (3:2, 4:3 readings of a syncopated track), its grid is fitted too, and
@@ -384,7 +527,7 @@ The kick band as a general veto was tried and made things worse (an off-beat
 bass fills it between the kicks). The full band was tried and was worse
 still (off-beat hats are as strong as kicks in flux). See "Evaluation".
 
-## 8. Off-beat and downbeat (`beats.c`, `downbeat.c`)
+## 9. Off-beat and downbeat (`beats.c`, `downbeat.c`)
 
 **Structure** (rbxport's method): one 16-band log-mel profile per half beat;
 novelty at every half beat is the distance between the mean profiles before
@@ -402,14 +545,14 @@ had beat 1 there, and most of the other 7 were weak votes; with the start
 worth one scale, all 68 such tracks do. "Where the music starts" was dj's
 first loud onset; where the music starts after silence with a hit carrying
 a kick, or fades in on a beat, the start is now a witness of its own,
-outside the structure (section 10).
+outside the structure (section 11).
 
 **On the beat or off it?** Two witnesses as log evidence: the arbiter band
 (kicks on the beats against on the half beats, in a window reaching 30 ms
 back and 10 ms forward, since a kick's low band leads its click) and the
 structure (best beat position against best half-beat position, weighted 1.5:
 rbxport found structure right on 153 of 155 reference grids, the kick alone
-on 150); and, where the music starts after silence, the start (section 10).
+on 150); and, where the music starts after silence, the start (section 11).
 The grid moves half a beat only when the sum says so by a factor 1.25; the
 envelopes are cut again where the beats now are and the section is refined
 again.
@@ -419,7 +562,7 @@ section that starts on the previous one's grid continues its count (beat
 field 0) unless its own vote clearly says otherwise; a section after a phase
 cut numbers itself.
 
-## 9. Confidence and flags
+## 10. Confidence and flags
 
 **Confidence** (dj's): the share of 16-beat windows (every 8 beats) whose
 average beat starts its rise within 15 ms of the grid, weighted by how
@@ -442,7 +585,8 @@ Flags (`RXGridFlag`), and what they should mean to the DJ in the interface:
 | `downbeat-weak` | best beat position < 1.2× the next, or the section is too short to vote | Beat 1 may be another beat of the bar: use "set downbeat". |
 | `no-kicks` | the kick band carries less than half the full band's periodicity at the beat rate and at twice it, and less than all of it at half the beat rate | Timed on clicks and claps; less precise. |
 | `low-confidence` | confidence < 0.5 | The grid does not follow the hits in many places: check by ear. |
-| `unsteady` | in some section, the attacks spread around the line by more than 6 ms *and* scatter from beat to beat by more than 4 ms | Live playing: the grid is the best straight line, beats scatter around it. |
+| `unsteady` | in some section, the attacks spread around the line (or the walked beats) by more than 6 ms *and* scatter from beat to beat by more than 4 ms | Live playing: beats scatter around the grid. |
+| `dynamic` | some stretch keeps its measured beats (section 6) | The grid follows the beats one by one; the BPM readout is the local tempo. |
 
 **Phase cuts** were reported as `tempo-change` until an acceptance trial
 (AZKi's "明けない夜があったなら": the music re-enters 71 ms late at 3:52, same
@@ -476,7 +620,7 @@ consecutive attacks to measure the scatter, the spread alone decides.
 On the evaluation sample, 78 of 89 electronic tracks carry no flag at all,
 and 34 of the 61 others.
 
-## 10. Where the music starts (`start.c`, `beats.c`)
+## 11. Where the music starts (`start.c`, `beats.c`)
 
 Nearly every track in the library starts after some silence: of the 150
 sample tracks, 142 have at least 60 ms of digital silence or a noise floor
@@ -660,13 +804,21 @@ the final version was not finished (see "Known weaknesses").
 | Tempogram | 12 s windows, 3 s hop, 4 windows | 21 s of a new tempo |
 | Family check | runner-up within 25 %, 10 % more support | 3:2 and 4:3 |
 | Unsteady | spread > 6 ms and beat-to-beat scatter > 4 ms | live drums scatter 5-15 ms, sequencers < 1 |
+| Dynamic: drift | deviation > 15 ms (runs from 5 ms, 4 beats of margin); the section's spread > 3 ms, or at a dynamic neighbour | the merge tolerance; sequenced music does not drift |
+| Dynamic: bend | > 10 ms and 4× the scatter's, with 8 ms of drift | a ramp's 32-beat pieces bend 20-40 ms |
+| Dynamic: plateau | longest flat stretch (3 ms or the scatter) ≥ 2/5 of the run and 8 beats | an off-beat breakdown is flat at half a beat |
+| Dynamic: ragged | the run's scatter > 3× the section's and 3 ms | attacks jumping between elements |
+| Dynamic: remnants | a straight remnant < 32 beats (64 between two) joins | a section's minimum |
+| Walk | local quadratic ±4 beats; strain ±8, running median of 9 | a bar either side; no bias under a moving tempo |
+| Re-track | the local period from attack intervals within 40 % of the line's, ±8 beats; the range from ¼ period before the first beat to ¼ past the last | the tracker inserts beats at one period |
+| Judgment | the walked beats' mean distance to the hits must beat the line's by 1 ms | the line is the simpler grid |
 | No kicks | kick/full periodicity < 0.5 at 1× and 2× the beat rate, < 1 at ½× | two-step kicks cancel at the beat rate |
 | Low confidence | < 0.5 | |
 | Music start | floor: commonest level before the music is within 45 dB of the loud level (90th percentile); at least 60 dB under it and 60 ms long | dither and hiss are floors; an encoder delay is not |
 | Start threshold | after digital silence 65 dB under the loud level; over a noise floor 20 dB over it and at least 50 dB under the loud level; held for a third of 200 ms | a -60 dB fade counts from its first hit; a fade over dither from where it is heard; no clicks |
 | Hit | 25 dB over the threshold two frames on; time at 3 % of its peak | a jump within a frame or two |
 | Fade, swell | a rise to 15 dB under the loud level in a second or more, or less; out of digital silence from the first sound | a swell leads into a bar line |
-| Start witness | within 0.1 beat (40 ms) of a beat or half beat; a hit whose kick band is at least twice the kick beats', where the kicks leave the half of the beat open (log under 1.0): log 2.5 and 2 scales for beat 1; a fade's first beat: half a scale for beat 1 | measured on the library, section 10 |
+| Start witness | within 0.1 beat (40 ms) of a beat or half beat; a hit whose kick band is at least twice the kick beats', where the kicks leave the half of the beat open (log under 1.0): log 2.5 and 2 scales for beat 1; a fade's first beat: half a scale for beat 1 | measured on the library, section 11 |
 | Grid start | first beat at or after the start, less 50 ms | a line a few ms early on the hit |
 
 ## Evaluation
@@ -720,6 +872,18 @@ beat, bar or snap lies before it, and the automatic cue.
 | two-step garage 134 (kick on 1, the "and" of 2 and of 3) after 0.72 s | on the hit, beat 1 |
 | a chord stab on the "and" before bar 1 | music starts at the stab; the grid stays on the kicks, first beat bar 1 |
 | a snare pickup on beat 4 before bar 1 | first beat the pickup, numbered 4; bar 1 and the cue on the next |
+| ramp 120 → 132 over bars 8-40, then held (house) | dynamic over 130 beats: beats within 1.2 ms RMS, 1.6 ms worst, 56 of 56 bar lines downbeats; the best straight grid (4 sections) 59 ms RMS, 263 ms worst |
+| a drummer's random walk (0.4 % a beat, within 10 %), 6 ms jitter, 122 | dynamic throughout (262 beats): 3.3 ms RMS, 11.1 ms worst, 64 of 64 downbeats; straight (5 sections) 51 ms RMS, 256 worst |
+| rubato: hip-hop 120 dipping to 100 over bars 16-24, 3 ms jitter | dynamic over the dip (42 beats), straight either side: 1.1 ms RMS, 4.6 worst, 48 of 48 downbeats; straight (one section) 54 ms RMS, 247 worst |
+
+The three tracks with a tempo that moves are judged beat by beat against
+their true beat times (the RMS and the largest distance of each true
+beat from the nearest grid beat, from the grid's first beat on, and that
+every bar line has a downbeat), and against the best straight grid of the
+same analyser with `allow_dynamic` off, which the dynamic grid must beat.
+The errors are against the smooth beat times the tempo curve gives, not
+the jittered hits: a grid that reproduced the drummer's scatter would
+score worse, as it should.
 
 ### Against dj's analyser (`py_beats.py`)
 
@@ -864,7 +1028,7 @@ bands in 16ths (`pattern.py`), and by musical reasoning about the genre.
 | AD:HOUSE Winter 3 / White Lie | 127 | 127 | Same. Showed the need for the four-on-the-floor rule: a stab on the "and" of 1 and 3 made the snare test halve it. |
 | ADvantage / Kneading | 104 | 138.66 | Undecided: 208 = 1.5 × 138.667 exactly, so one is a 3:2 reading; versions of rxbox have given 208, 138.667 and 104. |
 | emome CASE01 / FVERTEX | 150 | 75 | rxbox, probably (dj's confidence 0.01). |
-| COLORS / INTO THE LIGHT (Nhato remix) | 150, one section | 112.5 | rxbox, probably: a trance remix at 150. Earlier versions said 75 in three sections, flagged octave-uncertain and unsteady; choosing the line's beats by kick and snare (section 7) fixed it. |
+| COLORS / INTO THE LIGHT (Nhato remix) | 150, one section | 112.5 | rxbox, probably: a trance remix at 150. Earlier versions said 75 in three sections, flagged octave-uncertain and unsteady; choosing the line's beats by kick and snare (section 8) fixed it. |
 | AD:Drum'n Bass 5 / Penglaishan | 190 | 190 | Same, flagged octave-uncertain: 95 and 190 were nearly tied. |
 | AD:HOUSE 13 / When the Salsa Turns Orange | 123 | 123 | Same; an earlier version halved it (the octave test read the phase of the DFT's fundamental, 42 ms before the kick). |
 | Taiyou no Kakera (Electric Sheep Remix) | 118.99 | 118.99 | Same. Showed that the tempogram must not override a 4:3 family (it gave 158.65). |
@@ -881,7 +1045,7 @@ A trial imported 58 tracks into a library and read the grids back
 
 | Track | Trial | Now | Change |
 | --- | --- | --- | --- |
-| AD:Drum'n Bass 5 / Determination | 87.5, conf 1.00, `octave-uncertain` | 175 (margin 4.7) | the line's level chosen by kick and snare (section 7) |
+| AD:Drum'n Bass 5 / Determination | 87.5, conf 1.00, `octave-uncertain` | 175 (margin 4.7) | the line's level chosen by kick and snare (section 8) |
 | AD:Drum'n Bass 5 / Roundabout | 172 | 172 (margin 4.1) | the kick veto only below 200 BPM; it had fallen to a 2 % margin |
 | AD:Drum'n Bass 5 / Hullbreaker, Keeps Me High | 175, 174, `octave-uncertain` | same, without it | the kick veto only below 200 BPM |
 | AD:Drum'n Bass 5 / Neon | 174, `no-kicks` | 174 | kick presence also at half the beat rate |
@@ -897,6 +1061,42 @@ same changes left the agreement with dj as it was (110 equal, 11 octave, 29
 other; downbeat 72), moved one phase into agreement (86), fixed the one
 labelled octave rxbox had wrong (INTO THE LIGHT: 83 of 83), and otherwise
 changed only flags.
+
+**Dynamic grids** (section 6), the same 58 tracks analysed from the
+harness's cache before and after, every column of the CSV compared
+(`build-grid/acc/` in the worktree the feature was made in; `--no-dynamic`
+reproduces the baseline on all 58 to the last digit, sections, flags,
+confidence and starts of the music). 48 grids are the baseline's, bit for
+bit: every sequenced track (AD:HOUSE 11, AD:HOUSE 7, Drum'n Bass 5, the
+MP3s), and Orange Pekoe's "Ai no Izumi" and "Adagio", AZKi's
+"エントロピー", "Lazy" and Yokokura's "Tonight", on which stretches were
+walked and judged for the line. Ten grids are dynamic, all on tracks the
+baseline had flagged `unsteady` or `low-confidence`, or at 0.77 and
+below; the confidence is the whole-track share of 16-beat windows on the
+beat (section 10), the same measure before and after:
+
+| Track | Before | Now |
+| --- | --- | --- |
+| AD:HOUSE 11 / Felicidade (latin house, live percussion) | 130.000, conf 0.50, no flag | 570 measured beats from 24 s (105-155 BPM local, 130.1 median), conf 0.91, `downbeat-weak` |
+| Yokokura / Shizuka No Office | 124.29, 0.31, `low-confidence` | 75 beats, 0.77 |
+| Yokokura / Martin No Yakata | 98.0, 0.09, `low-confidence` | 66 beats, 0.47 |
+| Yokokura / Saimin De Tonight | 98.0, 0.34, `low-confidence` | 49 beats, 0.51 |
+| Yokokura / Fortune Land E | 124.0, 0.47, `low-confidence` | 31 beats at the start, 0.62 |
+| AZKi / Chaotic inner world | 155, 0.93, `phase-uncertain`, `no-kicks` | two stretches (136 beats), 0.94 |
+| Orange Pekoe / Happy Valley | 105.13, 0.77 | 143 beats from the start, 0.78, `phase-uncertain` |
+| Orange Pekoe / Introduction (36 s, no steady beat) | 126.63, 0.65, `unsteady` | 78 beats, 0.67: as meaningless as before |
+| Orange Pekoe / Taiyo no Kakera | 120, 0.36, `low-confidence` | 111 beats in the middle, 0.37, still `low-confidence` |
+| AZKi / 明けない夜があったなら | 176, two sections (`phase-cut` at 3:52), 0.84 | 38 beats at the start, 107 from 3:52 (the 71 ms re-entry one short interval), 0.84; the `phase-cut` flag goes with the cut |
+
+The Yokokura soundtrack recordings, live and loose, gain the most: a
+straight grid followed half their windows or fewer, the walked beats two
+thirds and more. Felicidade's attacks spread 7 ms beat to beat around
+the line (the baseline's 0.50 says the line held half of it), and its
+local tempo wanders a quarter around 130: whether the band or the
+analyser is loose was not checked by ear. Nothing a straight grid held
+got worse: the judgment keeps the line wherever the walked beats do not
+bring the hits closer, which on this list was every sequenced stretch
+that passed the earlier tests and three live ones.
 
 ### What was tried and dropped
 
@@ -917,11 +1117,26 @@ changed only flags.
   3:2 readings like Kneading that neither analyser settles). The
   `octave-uncertain` flag marks most of them; ×2 and ÷2 in the interface fix
   them in a click.
-- **Live recordings.** Rubato jazz and live pop get sections or `unsteady`
-  grids with low confidence. The grid is the best piecewise-straight line;
-  a beat-by-beat grid (rbxport's walked ramps) is not implemented.
-- **Ramps** are approximated by the sections the change-point search keeps
-  (each at least 32 beats), not followed beat by beat.
+- **Live recordings** now get dynamic grids where the line does not hold
+  (section 6), and the confidence rises with them on the acceptance list
+  (five of the Yokokura recordings from 0.09-0.56 to 0.47-0.77). What a
+  dynamic grid cannot fix is music without a clear beat: Orange Pekoe's
+  "Introduction" (36 s, no steady beat) is as meaningless walked as
+  straight, and a drummer's scatter stays scatter (`unsteady` is still
+  set, now around the walked beats). A drift of under 15 ms, or of a
+  section whose attacks are sequencer-tight, stays straight by design.
+- **The judgment is by the hits**, the same envelopes the confidence
+  reads: where a live recording's attacks are poor (brushes, a soft
+  kick), the walked beats and the line are judged on the same poor
+  evidence, and the line, the simpler grid, wins ties. "Happy Valley"
+  keeps a dynamic stretch whose beats the fold prefers while the
+  whole-track confidence fell from 0.77 to 0.52: the two measures do not
+  always agree, and the confidence's 15 ms yes-or-no was not the one to
+  judge by.
+- **Ramps** are followed beat by beat where the change-point search left
+  bent pieces; a ramp slower than about 2 BPM a minute at 125 leaves
+  32-beat pieces bent by under 10 ms, a staircase of straight sections
+  within 8 ms of the music.
 - **DJ mixes** work but are not what it is tuned for: a 65-minute mix of
   pop songs comes out as one section per song where the tempogram finds the
   song's tempo settled (confidence 0.88), in 11 s of CPU. An hour at 44.1
@@ -995,9 +1210,13 @@ cache analyses the 16-bit copy it stores, so every run with the cache sees
 the same samples; against a run without it only levels below -96 dB move
 (on a test track the same grid, flags and start, confidence 0.964 against
 0.965). Bump `RX_FRONTEND_VERSION` when the front end's output changes. `--bpm-range LO HI`, `--no-sections`,
-`--from CSV` (compare without analysing) are also there, and `--starts`
+`--from CSV` (compare without analysing) and `--no-dynamic` (the best
+straight sections everywhere) are also there, and `--starts`
 measures only where the music starts (no beat analysis), one line per file.
-Its CSV has the start (`music_start`, `start_kind`, the threshold crossing,
+Its CSV writes a dynamic passage as one `D:` entry in `sections` (its
+first beat) with the count and tempo range of the measured beats in
+`dynamic_beats`, `dynamic_bpm_lo` and `dynamic_bpm_hi`, and has the start
+(`music_start`, `start_kind`, the threshold crossing,
 floor, loud level, rise), the grid's first beat and its number, its first
 downbeat and the automatic cue, and the start's section's evidence before
 its on/off-beat decision (kicks, structure, the start's witness, its half

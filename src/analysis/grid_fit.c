@@ -142,6 +142,25 @@ int rx_track_beats(const RXOnsets *o, const float *period_s, double tightness,
     return 0;
 }
 
+int rx_track_beats_range(const RXOnsets *o, const float *period_s, double tightness,
+                         int f0, int f1, RXBeatObs **out, int *nb_out)
+{
+    *out = NULL;
+    *nb_out = 0;
+    f0 = RX_CLAMP(f0, 0, o->nb - 1);
+    f1 = RX_CLAMP(f1, f0, o->nb - 1);
+    /* A view of the onsets from f0: the tracker reads the accent and the
+     * kick band by frame. */
+    RXOnsets v = *o;
+    v.nb = f1 - f0 + 1;
+    v.accent = o->accent + f0;
+    v.low = o->low + f0;
+    int ret = rx_track_beats(&v, period_s + f0, tightness, out, nb_out);
+    for (int i = 0; ret >= 0 && i < *nb_out; i++)
+        (*out)[i].time += f0 / o->fps;
+    return ret;
+}
+
 /* --------------------------------------------------------- envelopes */
 
 int rx_beat_envs(RXEnvCtx *ctx, const RXBeatObs *beats, int nb, RXBeatEnvs *out)
@@ -393,6 +412,7 @@ int rx_fit_line(const RXBeatObs *beats, int first, int last, const RXFitSection 
     s->first = first;
     s->last = last;
     s->index0 = beats[first].index;
+    s->dynamic = false;
 
     int sup = 0;
     for (int i = first; i <= last; i++)
@@ -700,7 +720,7 @@ static void seg_recount(Seg *g, int i, int j, int dom)
  * section dom's line. */
 static int seg_merge(Seg *g, int i, int j, int dom)
 {
-    RXFitSection init = g->s[dom], out;
+    RXFitSection init = g->s[dom], out = { 0 };
     seg_recount(g, i, j, dom);
     int ret = rx_fit_line(g->beats, g->s[i].first, g->s[j].last, &init, &out);
     if (ret < 0)
@@ -742,7 +762,7 @@ static double merged_deviation(Seg *g, int i, int j, int dom, int hide)
             g->beats[k].weight = 0.0;
     }
     seg_recount(g, i, j, dom);
-    RXFitSection init = g->s[dom], out;
+    RXFitSection init = g->s[dom], out = { 0 };
     double dev = INFINITY;
     if (rx_fit_line(g->beats, first, last, &init, &out) == 0)
         dev = max_deviation(g->beats, &out);

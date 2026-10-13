@@ -231,12 +231,22 @@ typedef struct RXFitSection {
     double jitter;                  /* robust spread of the attacks around the line (s) */
     double scatter;                 /* robust beat-to-beat scatter (s), from second differences */
     int    supported;               /* beats with an attack */
+    /* The section's grid is its beats' own times (walk.c), not the line:
+     * the line is kept as their straight approximation, for the
+     * arithmetic that wants a period and a count. Attacks lighter than
+     * wmin are noise there, not beats (a quarter of the median weight of
+     * the section's attacks, the segmentation's rule). */
+    bool   dynamic;
+    double wmin;
 } RXFitSection;
 
 /* Dynamic-programming beat tracker (Ellis 2007) on the accent onsets,
  * following `period_s[f]` (the target period at every frame, seconds). */
 int rx_track_beats(const RXOnsets *o, const float *period_s, double tightness,
                    RXBeatObs **beats, int *nb);
+/* The same over the frames [f0, f1] only (times still from 0). */
+int rx_track_beats_range(const RXOnsets *o, const float *period_s, double tightness,
+                         int f0, int f1, RXBeatObs **beats, int *nb);
 
 /* The fine envelopes of every tracked beat: a window of RX_NB_BANDS x
  * RX_ENV_LEN values around each beat's tracked time. */
@@ -295,6 +305,25 @@ int rx_segment(RXBeatObs *beats, int nb, const RXOnsets *o, const float *support
  * seconds; re-phased through the same attacks. Returns true if snapped. */
 bool rx_snap_section(const RXBeatObs *beats, RXFitSection *s, double tol);
 
+/* ------------------------------------------------------------------ walk */
+
+/* How far the attacks of section s stray from its line (walk.c): dev[i]
+ * (one per beat of the section, NAN without an attack) is the running
+ * median of the smoothed residuals, *drift the largest of them, *bend
+ * how much a quadratic through the attacks rises over the line between
+ * the section's middle and its ends, and *bend_noise what the section's
+ * own scatter would bend by. */
+int rx_line_strain(const RXBeatObs *beats, const RXFitSection *s, double *dev,
+                   double *drift, double *bend, double *bend_noise);
+
+/* The walk: beats [first, last], whose counts must be consecutive, get
+ * the times a player would follow through their attacks (a robust local
+ * line a bar either side, gaps interpolated, the ends extrapolated),
+ * written to beats[i].time. `scatter` is the section's beat-to-beat
+ * scatter, the floor of the robust scale. -EINVAL with fewer than four
+ * attacks or a gap in the counts. */
+int rx_walk_beats(RXBeatObs *beats, int first, int last, double scatter);
+
 /* ---------------------------------------------------------------- downbeat */
 
 typedef struct RXDownbeat {
@@ -310,6 +339,15 @@ typedef struct RXDownbeat {
 int rx_downbeat_vote(const RXSpectrum *s, const float *x, int64_t n,
                      double t0, double period, double start, double end, double start_vote,
                      RXDownbeat *out);
+/* The same vote over beats given by their times (a dynamic section): the
+ * J half beats span [from[j], to[j]), the first at position pos0 of the
+ * bar (0..7); the bass vote reads the K beats `beat`, the first at the
+ * even position bpos0; start_pos is the position the music's start votes
+ * for, -1 for none. */
+int rx_downbeat_vote_times(const RXSpectrum *s, const float *x, int64_t n,
+                           const double *from, const double *to, int J, int pos0,
+                           const double *beat, int K, int bpos0, int start_pos,
+                           RXDownbeat *out);
 
 /* ------------------------------------------------------------ diagnostics */
 
