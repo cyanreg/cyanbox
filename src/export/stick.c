@@ -813,7 +813,8 @@ static int read_cue_tags(int root, const char *stick_path, uint8_t **out, size_t
         if (!cue)
             continue;
         cues = true;
-        if ((ret = rx_buf_reserve(&b, len)) < 0 || (ret = pread_all(fd, b.data + b.len, len, (off_t)off)) < 0)
+        if ((ret = rx_buf_reserve(&b, len)) < 0 ||
+            (ret = pread_all(fd, b.data + b.len, len, (off_t)off)) < 0)
             break;
         b.len += len;
     }
@@ -1077,8 +1078,8 @@ int rx_stick_read(const RXLibrary *lib, const char *mount, RXStickState *out)
                     qsort(pdb_paths, pdb_rows, sizeof(*pdb_paths), cmp_path);
                 for (size_t i = 0; i < more.nb; i++) {
                     StickRow *m = rx_array_at(&more, i);
-                    bool dup = !pdb_paths ||
-                               (pdb_rows && bsearch(&m->path, pdb_paths, pdb_rows, sizeof(*pdb_paths), cmp_path));
+                    bool dup = !pdb_paths || (pdb_rows && bsearch(&m->path, pdb_paths, pdb_rows,
+                                                                  sizeof(*pdb_paths), cmp_path));
                     if (dup || !rx_array_push(&rows, m)) {
                         free(m->path);
                         free(m->anlz);

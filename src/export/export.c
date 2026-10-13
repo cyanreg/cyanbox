@@ -718,7 +718,8 @@ static bool same_as(const Ctx *c, const Ours *o, const char *key, const struct s
 {
     for (int i = ours_find(o, key); i >= 0 && i < o->nb && !strcmp(o->v[i].key, key); i++) {
         struct stat s;
-        if (rx_stick_stat(c->root, o->v[i].path, &s) >= 0 && s.st_dev == st->st_dev && s.st_ino == st->st_ino)
+        if (rx_stick_stat(c->root, o->v[i].path, &s) >= 0 && s.st_dev == st->st_dev &&
+            s.st_ino == st->st_ino)
             return true;
     }
     return false;
@@ -832,7 +833,8 @@ static bool prune_empty(int fd, dev_t dev)
         if (fstatat(dirfd(d), e->d_name, &st, AT_SYMLINK_NOFOLLOW) == 0 && S_ISDIR(st.st_mode) &&
             st.st_dev == dev) {
             int sub = openat(dirfd(d), e->d_name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-            removed = sub >= 0 && prune_empty(sub, dev) && unlinkat(dirfd(d), e->d_name, AT_REMOVEDIR) == 0;
+            removed = sub >= 0 && prune_empty(sub, dev) &&
+                      unlinkat(dirfd(d), e->d_name, AT_REMOVEDIR) == 0;
         }
         if (!removed)
             empty = false;
@@ -990,15 +992,17 @@ static void check_path(Ctx *c, const char *stick_path, int *bad)
         return;
     if ((*bad)++ < 10)
         reportf(c, "check", "%s%s: %s; not writing through it", c->dest, stick_path,
-                ret == RX_ERROR(EXDEV) ? "another file system is mounted on the way" : "a symbolic link on the way");
+                ret == RX_ERROR(EXDEV) ? "another file system is mounted on the way"
+                                       : "a symbolic link on the way");
 }
 
 static int check_paths(Ctx *c, const RXPlan *plan)
 {
     static const char *const fixed[] = {
-        "/PIONEER/MYSETTING.DAT", "/PIONEER/MYSETTING2.DAT", "/PIONEER/DJMMYSETTING.DAT", "/PIONEER/DEVSETTING.DAT",
-        "/PIONEER/rekordbox/export.pdb", "/PIONEER/rekordbox/exportExt.pdb", "/PIONEER/rekordbox/exportLibrary.db",
-        "/PIONEER/rekordbox/exportLibrary.db-wal", "/PIONEER/rekordbox/exportLibrary.db-shm", RX_SYNC_PATH,
+        "/PIONEER/MYSETTING.DAT", "/PIONEER/MYSETTING2.DAT", "/PIONEER/DJMMYSETTING.DAT",
+        "/PIONEER/DEVSETTING.DAT", "/PIONEER/rekordbox/export.pdb", "/PIONEER/rekordbox/exportExt.pdb",
+        "/PIONEER/rekordbox/exportLibrary.db", "/PIONEER/rekordbox/exportLibrary.db-wal",
+        "/PIONEER/rekordbox/exportLibrary.db-shm", RX_SYNC_PATH,
     };
     int bad = 0;
     for (size_t i = 0; i < RX_ARRAY_ELEMS(fixed); i++)

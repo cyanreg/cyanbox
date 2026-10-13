@@ -7,8 +7,9 @@
 # the stick gets, a real export to a directory and inspect it, sync and
 # pull refusing a directory that is no stick, settings, results of an
 # older analyser counted and analysed again (by the export, not by its
-# dry run, which leaves the library as it was), and the exit codes. The FLAC carries a comment tag, which the library leaves out
-# unless import.comment says to take it.
+# dry run, which leaves the library as it was), and the exit codes. The
+# FLAC carries a comment tag, which the library leaves out unless
+# import.comment says to take it.
 # Then the edges: init over a library, a relative --library, an id that
 # also names a directory, an unreadable file, output that cannot be
 # written. No audio device and no window are used.
