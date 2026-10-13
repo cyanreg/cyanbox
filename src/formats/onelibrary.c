@@ -587,10 +587,11 @@ static int check_plain(sqlite3 *db)
     int64_t other = -1, generated = -1;
     int ret = query_count(db, "SELECT (SELECT count(*) FROM pragma_table_list "
                               "        WHERE schema = 'main' AND type != 'table') + "
-                              "(SELECT count(*) FROM sqlite_schema WHERE type NOT IN ('table', 'index'))",
-                          &other);
+                              "       (SELECT count(*) FROM sqlite_schema "
+                              "        WHERE type NOT IN ('table', 'index'))", &other);
     if (ret >= 0)
-        ret = query_count(db, "SELECT count(*) FROM sqlite_schema AS s, pragma_table_xinfo(s.name) AS c "
+        ret = query_count(db, "SELECT count(*) FROM sqlite_schema AS s, "
+                              "pragma_table_xinfo(s.name) AS c "
                               "WHERE s.type = 'table' AND c.hidden IN (2, 3)", &generated);
     if (ret < 0 || other || generated) {
         rx_warn("exportLibrary.db: not rekordbox's schema (views, triggers, virtual tables or "
@@ -646,8 +647,8 @@ int rx_onelibrary_open_plain(const uint8_t *plain, size_t size, sqlite3 **db)
     memcpy(b, plain, size);
     /* Memory databases cannot use WAL: legacy journal flags. */
     b[18] = b[19] = 1;
-    if (sqlite3_deserialize(d, "main", b, (sqlite3_int64)size, (sqlite3_int64)size,
-                            SQLITE_DESERIALIZE_FREEONCLOSE | SQLITE_DESERIALIZE_RESIZEABLE) != SQLITE_OK ||
+    unsigned flags = SQLITE_DESERIALIZE_FREEONCLOSE | SQLITE_DESERIALIZE_RESIZEABLE;
+    if (sqlite3_deserialize(d, "main", b, (sqlite3_int64)size, (sqlite3_int64)size, flags) != SQLITE_OK ||
         check_plain(d) < 0) {
         sqlite3_close(d);
         return RX_ERROR(EINVAL);
