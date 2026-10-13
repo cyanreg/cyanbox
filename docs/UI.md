@@ -197,8 +197,8 @@ and Artist are fixed widths, resizable by dragging their edges: stretched
 they ran far wider than any title. There is no Date Added column (the
 library keeps the date). There are no Color, Genre or Hot
 Cue columns: the info panel shows and edits a track's colour and genre,
-the player's cue list a loaded track's cues. Cell text is 14 px, the
-title 15 px, `#` and the dates 12.5 px. The Key column has rekordbox's
+the player's cue list a loaded track's cues. Cell text is 16 px, the
+title 17 px, `#` and the dates 14 px. The Key column has rekordbox's
 Traffic Light: while a track is loaded, the Key cell of every key that
 mixes with its key is filled green (`#3CEB50`, the whole cell, padding
 included) with the key in black, the loaded track's own row included and
