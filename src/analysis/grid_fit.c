@@ -504,7 +504,7 @@ int rx_fit_line(const RXBeatObs *beats, int first, int last, const RXFitSection 
 
 int rx_fold(const RXBeatEnvs *e, const RXBeatObs *beats, int first, int last,
             const RXFitSection *line, int band, double search,
-            double *contrast, double *offset)
+            double *contrast, double *offset, double *rise)
 {
     double fold[RX_NB_BANDS][FOLD_LEN], cnt[RX_NB_BANDS][FOLD_LEN];
     memset(fold, 0, sizeof(fold));
@@ -530,11 +530,19 @@ int rx_fold(const RXBeatEnvs *e, const RXBeatObs *beats, int first, int last,
     /* Average, then smooth over +-1 ms: the bins are finer than the
      * envelope's samples, so some are empty or single. Per band: the
      * contrast (dj: how much the average beat rises and falls relative to
-     * its level) and the steepest rise within +-search. */
-    double sm[RX_NB_BANDS][FOLD_LEN], con[RX_NB_BANDS], pos[RX_NB_BANDS];
+     * its level), the steepest rise within +-search, and its height: from
+     * the lowest level within the search before its steepest point to the
+     * highest within the search after it, relative to the level as the
+     * contrast is. As far as the search, not half_energy's 10 ms: a
+     * drummer's scattered hits (test_beats' 8 ms of jitter) average to a
+     * rise some 30 ms long. A decaying tail has no height however far it
+     * is read: its lowest level before a ripple and its highest after it
+     * are the ripple's own. */
+    double sm[RX_NB_BANDS][FOLD_LEN], con[RX_NB_BANDS], pos[RX_NB_BANDS], hgt[RX_NB_BANDS];
     bool rises[RX_NB_BANDS];
-    int lo = RX_MAX(FOLD_HALF - (int)(search / FOLD_BIN), 1);
-    int hi = RX_MIN(FOLD_HALF + (int)(search / FOLD_BIN), FOLD_LEN - 2);
+    const int S = (int)(search / FOLD_BIN);
+    int lo = RX_MAX(FOLD_HALF - S, 1);
+    int hi = RX_MIN(FOLD_HALF + S, FOLD_LEN - 2);
     for (int b = 0; b < RX_NB_BANDS; b++) {
         for (int k = 0; k < FOLD_LEN; k++)
             fold[b][k] = cnt[b][k] > 0 ? fold[b][k] / cnt[b][k] : NAN;
@@ -568,6 +576,12 @@ int rx_fold(const RXBeatEnvs *e, const RXBeatObs *beats, int first, int last,
         rises[b] = bd > 0.0;
         double x = half_energy(sm[b], FOLD_LEN, arg, (int)(0.010 / FOLD_BIN));
         pos[b] = (x - FOLD_HALF) * FOLD_BIN;
+        double r0 = sm[b][arg], r1 = sm[b][arg];
+        for (int k = RX_MAX(arg - S, 0); k <= arg; k++)
+            r0 = fmin(r0, sm[b][k]);
+        for (int k = arg; k <= RX_MIN(arg + S, FOLD_LEN - 1); k++)
+            r1 = fmax(r1, sm[b][k]);
+        hgt[b] = rises[b] ? (r1 - r0) / (mean + 1e-9) : 0.0;
     }
 
     /* Which band times the beat. Not simply the one with the most
@@ -601,6 +615,8 @@ int rx_fold(const RXBeatEnvs *e, const RXBeatObs *beats, int first, int last,
         *contrast = con[best];
     if (offset)
         *offset = rises[best] ? pos[best] : 0.0;
+    if (rise)
+        *rise = hgt[best];
     return best;
 }
 

@@ -55,6 +55,12 @@
 
 /* ------------------------------------------------------------ utilities */
 
+static int cmp_double(const void *a, const void *b)
+{
+    double x = *(const double *)a, y = *(const double *)b;
+    return (x > y) - (x < y);
+}
+
 static int next_pow2(int64_t n)
 {
     int p = 1;
@@ -779,15 +785,7 @@ int rx_tempo_regions(const RXOnsets *o, double bpm, double lo, double hi,
             int m = RX_MIN(e - w, 256);
             for (int k = 0; k < m; k++)
                 tmp[k] = best[w + k];
-            for (int a = 1; a < m; a++) {
-                double v = tmp[a];
-                int b = a - 1;
-                while (b >= 0 && tmp[b] > v) {
-                    tmp[b + 1] = tmp[b];
-                    b--;
-                }
-                tmp[b + 1] = v;
-            }
+            qsort(tmp, (size_t)m, sizeof(*tmp), cmp_double);
             double t0 = (w * H + W / 2.0) / fps - TG_HOP / 2.0;
             double t1 = ((e - 1) * H + W / 2.0) / fps + TG_HOP / 2.0;
             r[nr - 1].end = t0;

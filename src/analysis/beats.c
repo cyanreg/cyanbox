@@ -273,13 +273,11 @@ static int cmp_dbl(const void *a, const void *b)
     return (x > y) - (x < y);
 }
 
-/* Robust spread (MAD) of the attacks around the section's line. */
-static double section_jitter(const RXBeatObs *beats, const RXFitSection *s)
+/* Robust spread (MAD) of the attacks around the section's line; r has
+ * room for the section's beats. */
+static double section_jitter(const RXBeatObs *beats, const RXFitSection *s, double *r)
 {
     int n = 0;
-    double *r = malloc((size_t)(s->last - s->first + 1) * sizeof(*r));
-    if (!r)
-        return 0.0;
     for (int i = s->first; i <= s->last; i++) {
         if (beats[i].weight > 0.0 && !isnan(beats[i].attack))
             r[n++] = fabs(beats[i].attack - rx_beat_predict(beats, i, s->dynamic ? NULL : s));
@@ -289,7 +287,6 @@ static double section_jitter(const RXBeatObs *beats, const RXFitSection *s)
         qsort(r, n, sizeof(*r), cmp_dbl);
         j = 1.4826 * r[n / 2];
     }
-    free(r);
     return j;
 }
 
@@ -311,13 +308,10 @@ static double line_distance(const RXBeatObs *beats, const RXFitSection *x, const
  * differences of consecutive attacks, divided by sqrt(6) (white jitter of
  * sigma gives sigma). Unlike the spread around the line, a step or a slow
  * drift hardly moves it: it is what a live drummer shows. -1 when there
- * are too few runs of three attacks to tell. */
-static double section_scatter(const RXBeatObs *beats, const RXFitSection *s)
+ * are too few runs of three attacks to tell. r as for section_jitter. */
+static double section_scatter(const RXBeatObs *beats, const RXFitSection *s, double *r)
 {
     int n = 0;
-    double *r = malloc((size_t)(s->last - s->first + 1) * sizeof(*r));
-    if (!r)
-        return 0.0;
     for (int i = s->first + 1; i < s->last; i++) {
         const RXBeatObs *a = &beats[i - 1], *b = &beats[i], *c = &beats[i + 1];
         if (a->weight <= 0.0 || b->weight <= 0.0 || c->weight <= 0.0 || isnan(a->attack) ||
@@ -332,8 +326,20 @@ static double section_scatter(const RXBeatObs *beats, const RXFitSection *s)
         qsort(r, n, sizeof(*r), cmp_dbl);
         sc = 1.4826 * r[n / 2] / sqrt(6.0);
     }
-    free(r);
     return sc;
+}
+
+/* The section's jitter and scatter, or -ENOMEM: no value stands in for
+ * them (a spread of 0 calls a section steady and sequenced). */
+static int section_spread(const RXBeatObs *beats, RXFitSection *s)
+{
+    double *r = malloc((size_t)RX_MAX(s->last - s->first + 1, 1) * sizeof(*r));
+    if (!r)
+        return RX_ERROR(ENOMEM);
+    s->jitter = section_jitter(beats, s, r);
+    s->scatter = section_scatter(beats, s, r);
+    free(r);
+    return 0;
 }
 
 /* Puts a section on its attacks. The fold of the whole section chooses
@@ -347,7 +353,8 @@ static double section_scatter(const RXBeatObs *beats, const RXFitSection *s)
 static int refine_section(Ctx *c, RXFitSection *s, double *contrast)
 {
     double off = 0.0;
-    int band = rx_fold(&c->envs, c->beats, s->first, s->last, s, -1, 0.030, contrast, &off);
+    int band = rx_fold(&c->envs, c->beats, s->first, s->last, s, -1, 0.030, contrast, &off,
+                       NULL);
     s->t0 += off;
     /* The attack search scales with the section's scatter: a tight window
      * around a line that a drummer's spread has pulled early would cut the
@@ -368,20 +375,19 @@ static int refine_section(Ctx *c, RXFitSection *s, double *contrast)
      * the attacks, their mean, is the phase. */
     bool steady = s->jitter < 0.003;
     if (steady) {
-        rx_fold(&c->envs, c->beats, s->first, s->last, s, band, 0.005, contrast, &off);
+        rx_fold(&c->envs, c->beats, s->first, s->last, s, band, 0.005, contrast, &off, NULL);
         s->t0 += off;
     }
     if (c->opt->snap_bpm && rx_snap_section(c->beats, s, SNAP_TOL) && steady) {
-        rx_fold(&c->envs, c->beats, s->first, s->last, s, band, 0.003, contrast, &off);
+        rx_fold(&c->envs, c->beats, s->first, s->last, s, band, 0.003, contrast, &off, NULL);
         s->t0 += off;
     }
     /* The jitter: the spread of the attacks around the final line, looked
      * for within 35 ms (a narrower search would cut a live drummer's
      * scatter short and call it steady). */
     rx_measure_attacks(&c->envs, c->beats, s->first, s->last, band, s, 0.035);
-    s->jitter = section_jitter(c->beats, s);
-    s->scatter = section_scatter(c->beats, s);
-    return band;
+    int ret = section_spread(c->beats, s);
+    return ret < 0 ? ret : band;
 }
 
 /* ------------------------------------------------------- dynamic pass */
@@ -690,7 +696,7 @@ static int stretch_windows(Ctx *c, const RXFitSection *s, int band, const double
         int b = RX_MIN(a + 15, n - 1);
         if (b - a < 7)
             break;
-        rx_fold(&e, obs, a, b, NULL, band, search, &contrast[nw], &offs[nw]);
+        rx_fold(&e, obs, a, b, NULL, band, search, &contrast[nw], &offs[nw], NULL);
         nw++;
     }
     /* The reference contrast: the median over these windows when none is
@@ -738,8 +744,8 @@ static int refine_dynamic(Ctx *c, RXFitSection *s, int band)
         return ret;
     line_through_times(c->beats, s);
     s->dynamic = true;
-    s->jitter = section_jitter(c->beats, s);
-    s->scatter = section_scatter(c->beats, s);
+    if ((ret = section_spread(c->beats, s)) < 0)
+        return ret;
     s->supported = 0;
     for (int i = s->first; i <= s->last; i++)
         s->supported += c->beats[i].weight > 0.0 && !isnan(c->beats[i].attack);
@@ -1006,7 +1012,7 @@ static int strain_read(Ctx *c, int si, Strain *st)
  * when the section's attacks say live playing or the run meets a dynamic
  * neighbour (a ramp's edge in a sequenced track), and the run is neither
  * a plateau nor ragged. Then the straight remnants too short to stand
- * join. Returns how many beats are dynamic. */
+ * join. Returns how many beats are dynamic, or -ENOMEM. */
 static int strain_classify(const Ctx *c, int si, Strain *all)
 {
     const RXFitSection *s = &c->secs[si];
@@ -1019,7 +1025,7 @@ static int strain_classify(const Ctx *c, int si, Strain *all)
     bool *dyn = st->dyn;
     double *tmp = malloc((size_t)n * sizeof(*tmp));
     if (!tmp)
-        return 0;
+        return RX_ERROR(ENOMEM);
     memset(dyn, 0, (size_t)n * sizeof(*dyn));
     bool left = si > 0 && all[si - 1].done && all[si - 1].dyn[c->secs[si - 1].last -
                                                               c->secs[si - 1].first];
@@ -1411,9 +1417,13 @@ static int dynamic_pass(Ctx *c)
         strain_free(st, nb);
         return ret;
     }
-    for (int sweep = 0; sweep < 2; sweep++) {
-        for (int si = 0; si < nb; si++)
-            strain_classify(c, si, st);
+    for (int sweep = 0; sweep < 2 && ret >= 0; sweep++) {
+        for (int si = 0; si < nb && ret >= 0; si++)
+            ret = strain_classify(c, si, st);
+    }
+    if (ret < 0) {
+        strain_free(st, nb);
+        return ret;
     }
     /* Splitting moves the sections after: from the last backwards, so
      * that every index still names the section its strain was read on. */
@@ -1450,14 +1460,20 @@ static int dynamic_pass(Ctx *c)
     return ret < 0 ? ret : 0;
 }
 
+/* One of the confidence's windows, as rx_fold reads it. */
+typedef struct Window {
+    double contrast, offset, rise;
+} Window;
+
 /* The confidence, as dj's: the share of 16-beat windows (every 8 beats)
- * whose average beat starts its rise within 15 ms of the grid, weighted
- * by how clearly it rises. */
-static double grid_confidence(const Ctx *c, const int *bands)
+ * whose average beat starts a clear rise within 15 ms of the grid,
+ * weighted by how much of a beat the window shows. Into *out; 0 or
+ * -ENOMEM (a confidence of 0 would flag the grid low-confidence). */
+static int grid_confidence(const Ctx *c, const int *bands, double *out)
 {
-    double num = 0.0, den = 0.0;
-    double *contrast = NULL, *offs = NULL;
+    Window *win = NULL;
     int nw = 0, cap = 0;
+    *out = 0.0;
     for (int si = 0; si < c->nb_secs; si++) {
         const RXFitSection *s = &c->secs[si];
         double search = fmin(0.125 * s->period, 0.050);
@@ -1467,67 +1483,75 @@ static double grid_confidence(const Ctx *c, const int *bands)
                 break;
             if (nw == cap) {
                 cap = cap ? 2 * cap : 64;
-                double *nc = realloc(contrast, cap * sizeof(*nc));
-                double *no = realloc(offs, cap * sizeof(*no));
-                if (!nc || !no) {
-                    free(nc ? nc : contrast);
-                    free(no ? no : offs);
-                    return 0.0;
+                Window *nwin = realloc(win, (size_t)cap * sizeof(*nwin));
+                if (!nwin) {
+                    free(win);
+                    return RX_ERROR(ENOMEM);
                 }
-                contrast = nc;
-                offs = no;
+                win = nwin;
             }
+            Window *w = &win[nw++];
             rx_fold(&c->envs, c->beats, a, b, s->dynamic ? NULL : s, bands[si], search,
-                    &contrast[nw], &offs[nw]);
-            nw++;
+                    &w->contrast, &w->offset, &w->rise);
         }
     }
-    if (!nw) {
-        free(contrast);
-        free(offs);
-        return 0.0;
-    }
-    double *tmp = malloc(nw * sizeof(*tmp));
+    double *tmp = malloc((size_t)RX_MAX(nw, 1) * sizeof(*tmp));
     if (!tmp) {
-        free(contrast);
-        free(offs);
-        return 0.0;
+        free(win);
+        return RX_ERROR(ENOMEM);
     }
     /* The median over the windows that have an average beat at all. */
     int nt = 0;
     for (int i = 0; i < nw; i++) {
-        if (contrast[i] > 0.0)
-            tmp[nt++] = contrast[i];
+        if (win[i].contrast > 0.0)
+            tmp[nt++] = win[i].contrast;
     }
-    if (!nt) {
-        free(tmp);
-        free(contrast);
-        free(offs);
-        return 0.0;
+    double med = 0.0;
+    if (nt) {
+        qsort(tmp, (size_t)nt, sizeof(*tmp), cmp_dbl);
+        med = tmp[nt / 2];
     }
-    for (int i = 1; i < nt; i++) {
-        double v = tmp[i];
-        int j = i - 1;
-        while (j >= 0 && tmp[j] > v) {
-            tmp[j + 1] = tmp[j];
-            j--;
-        }
-        tmp[j + 1] = v;
-    }
-    double med = tmp[nt / 2];
     free(tmp);
     /* dj weighted a window by its contrast less half the median. Capped
      * here at twice the median: in a breakdown the average beat's level is
      * tiny, its contrast explodes, and a few such windows (whose loudest
-     * rise is a riser or a crash) outweighed thirty bars of kicks. */
+     * rise is a riser or a crash) outweighed thirty bars of kicks.
+     *
+     * On the grid, the window's average beat rises within 15 ms of it, and
+     * clearly: by at least half of its contrast or of the median contrast,
+     * whichever is less. rx_fold takes the steepest point within the
+     * search however small, and the contrast spans the whole fold, +-50
+     * ms: beats 60 ms after their hits fold the hits' decaying tails
+     * (contrast 13 to 33 on a kick and click loop) and find a ripple near
+     * the beats (a rise under 0.01), which counted as on the grid (0.87
+     * on that loop's mid band). Half, as stretch_windows counts a window
+     * whose average beat rises by less than half the reference at the
+     * search width. Of the less of the two: a quiet window's hit rises by
+     * half of its own contrast and less than half the median's, and a hit
+     * after something louder in the same window (a riser's peak, which is
+     * then the contrast) by half the median's and less than half its own;
+     * both are on the grid. The weight stays the contrast: a window whose
+     * beats sit in a tail has a beat, just not where the grid is, and
+     * weighted by the rise it found it would count for nothing (a grid
+     * half on that loop's hits and half 60 ms late read 1.0 so; 0.30 to
+     * 0.39 now, 0.39 to 0.90 before). */
+    double num = 0.0, den = 0.0;
+    int nb_on = 0, nb_flat = 0;
     for (int i = 0; i < nw; i++) {
-        double w = contrast[i] < 0.5 * med ? 0.0 : fmin(contrast[i], 2.0 * med) - 0.5 * med;
-        num += w * (fabs(offs[i]) <= 0.015);
-        den += w;
+        const Window *w = &win[i];
+        double wt = w->contrast < 0.5 * med ? 0.0 : fmin(w->contrast, 2.0 * med) - 0.5 * med;
+        bool near = fabs(w->offset) <= 0.015;
+        bool on = near && w->rise >= 0.5 * fmin(w->contrast, med);
+        num += wt * on;
+        den += wt;
+        nb_on += on && wt > 0.0;
+        nb_flat += near && !on && wt > 0.0;
     }
-    free(contrast);
-    free(offs);
-    return den > 0.0 ? num / den : 0.0;
+    free(win);
+    *out = den > 0.0 ? num / den : 0.0;
+    rx_debug("beats: confidence %.3f: %d of %d windows on the grid, %d near it without a clear "
+             "rise\n", *out, nb_on, nw, nb_flat);
+    return 0;
 }
 
 /* --------------------------------------------------- phase and downbeat */
@@ -2037,9 +2061,9 @@ static int longest_section(const Ctx *c)
     return m;
 }
 
-/* How well a grid's beats land on hits: the mean of the arbiter onset
- * around every beat of every section. */
-static double grid_support(const Ctx *c)
+/* How well a grid's beats land on hits: the mean of the onset v (the
+ * kick band, or the full band) around every beat of every section. */
+static double grid_support(const Ctx *c, const float *v)
 {
     double acc = 0.0;
     int n = 0;
@@ -2052,7 +2076,7 @@ static double grid_support(const Ctx *c)
             int f1 = (int)lrint((t + 0.010) * c->ons.fps);
             double m = 0.0;
             for (int f = RX_MAX(f0, 0); f <= RX_MIN(f1, c->ons.nb - 1); f++)
-                m = fmax(m, c->arbiter[f]);
+                m = fmax(m, v[f]);
             acc += m;
             n++;
         }
@@ -2256,7 +2280,8 @@ static int fit_grid(Ctx *c, double bpm, double lo, double hi)
      * tracked times move by that much before each beat's attack is
      * measured. */
     double contrast, shift;
-    int band = rx_fold(&c->envs, c->beats, 0, c->nb_beats - 1, NULL, -1, 0.025, &contrast, &shift);
+    int band = rx_fold(&c->envs, c->beats, 0, c->nb_beats - 1, NULL, -1, 0.025, &contrast, &shift,
+                       NULL);
     for (int i = 0; i < c->nb_beats; i++)
         c->beats[i].time += shift;
     c->onset_shift = shift;
@@ -2386,6 +2411,8 @@ static int analyse(const float *mono, int64_t nb_samples, int rate, RXSpectrum *
         lo = hi = 0.0;
     ret = rx_tempo_estimate(&c.ons, lo, hi, c.opt->prior_bpm, &c.tempo);
     stage(&tm, "tempo");
+    if (ret == RX_ERROR(ENOMEM))
+        goto fail;
     if (ret < 0) {
         /* No periodicity at all (silence, a spoken word track). */
         out->flags = RX_GRID_FLAG_LOW_CONFIDENCE;
@@ -2413,7 +2440,12 @@ static int analyse(const float *mono, int64_t nb_samples, int rate, RXSpectrum *
     /* A close runner-up family (3:2, 4:3: harmonic strength within 25 %)
      * is fitted too, and the grid whose beats land on hits wins: an
      * impostor at three halves of the beat puts every third beat where
-     * nothing happens. It must beat the first by 10 %. */
+     * nothing happens. It must beat the first by 10 %, both read on one
+     * band: the kick band when either grid's tempo has kicks carrying it
+     * (its arbiter), else the full band. Each fit's own arbiter compared
+     * unlike quantities where the kick share crosses a half between the
+     * two tempos; the kicks mark the beat where there are any, and the
+     * full band, hats on every subdivision, favours neither grid. */
     double alt = c.tempo.second_bpm;
     const double rlo = lo > 0.0 ? lo : RX_TEMPO_MIN, rhi = hi > 0.0 ? hi : RX_TEMPO_MAX;
     if (alt > 0.0) {
@@ -2429,7 +2461,7 @@ static int analyse(const float *mono, int64_t nb_samples, int rate, RXSpectrum *
             alt *= 2.0;
     }
     if (alt > 0.0 && alt <= rhi && c.tempo.second_ratio >= 0.75) {
-        double s1 = grid_support(&c);
+        double s1_low = grid_support(&c, c.ons.low), s1_full = grid_support(&c, c.ons.full);
         Fit first = fit_take(&c);
         /* Its envelopes go while the other is tried (an hour of them is
          * 30 MB); their centres are enough to cut them again. */
@@ -2441,8 +2473,13 @@ static int analyse(const float *mono, int64_t nb_samples, int rate, RXSpectrum *
             ret = r2;
             goto fail;
         }
-        double s2 = r2 == 0 ? grid_support(&c) : 0.0;
-        rx_debug("beats: family %.3f support %.3f vs %.3f support %.3f\n", bpm0, s1, alt, s2);
+        bool kicks = first.arbiter == c.ons.low || (r2 == 0 && c.arbiter == c.ons.low);
+        const float *band = kicks ? c.ons.low : c.ons.full;
+        double s1 = kicks ? s1_low : s1_full;
+        double s2 = r2 == 0 ? grid_support(&c, band) : 0.0;
+        rx_debug("beats: family %.3f support %.3f vs %.3f support %.3f (the %s band; kick "
+                 "shares %.2f, %.2f)\n", bpm0, s1, alt, s2, kicks ? "kick" : "full",
+                 first.kick_share, r2 == 0 ? c.kick_share : 0.0);
         /* And it must be as clean a grid: no more sections, no more
          * scatter (a syncopated two-step at 3/4 of its tempo can collect
          * hits, but only with a ragged grid). */
@@ -2467,7 +2504,10 @@ static int analyse(const float *mono, int64_t nb_samples, int rate, RXSpectrum *
 
     /* The octave, judged on the fitted grid, whose beats are on the hits:
      * if another octave is the beat, the grid is fitted again there (the
-     * tracker then follows the right beats). Within the requested range. */
+     * tracker then follows the right beats). Within the requested range.
+     * A refit with no grid to be had (a loop of a few seconds has 16 beats
+     * at 174 but not at 87) keeps the grid it had, its octave uncertain:
+     * the other level's evidence stands against it. */
     {
         int m = longest_section(&c);
         const RXFitSection *s = &c.secs[m];
@@ -2481,15 +2521,26 @@ static int analyse(const float *mono, int64_t nb_samples, int rate, RXSpectrum *
                  od.factor, od.margin, od.bpm[0], od.ev[0].score, od.bpm[1], od.ev[1].score,
                  od.bpm[2], od.ev[2].score);
         if (od.factor != 1.0) {
+            Fit working = fit_take(&c);
+            /* Its envelopes go while the other is fitted, as above. */
+            free(working.envs.env);
+            working.envs.env = NULL;
             ret = fit_grid(&c, bpm0 * od.factor, lo, hi);
             stage(&tm, "octave");
             if (ret > 0) {
-                out->flags = RX_GRID_FLAG_LOW_CONFIDENCE;
-                ret = 0;
-                goto fail;
+                rx_debug("beats: no grid at %.3f BPM: the grid stays at %.3f\n",
+                         bpm0 * od.factor, bpm0);
+                fit_put(&c, &working);
+                if ((ret = recut_envs(&c)) < 0)
+                    goto fail;
+                /* The grid's octave against the one that beat it: under
+                 * 1, and so flagged octave-uncertain. */
+                out->octave_margin = 1.0 / od.margin;
+            } else {
+                fit_free(&working);
+                if (ret < 0)
+                    goto fail;
             }
-            if (ret < 0)
-                goto fail;
         }
     }
     /* Which sections keep their measured beats. */
@@ -2712,7 +2763,11 @@ static int analyse(const float *mono, int64_t nb_samples, int rate, RXSpectrum *
         g->measured = false;
         if (i == 0) {
             /* From its first beat at or after 0 (the music's start moves it
-             * on below), numbered from the downbeat. */
+             * on below), numbered from the downbeat. Not before 0, not even
+             * by a few ms where the music starts at once: the players'
+             * timeline has no beat there (rx_grid_beats lists none, and the
+             * stick's beat times are unsigned ms), and the whole line would
+             * have to move to put it at 0. */
             double d = isnan(own) ? s->t0 : own;
             long k = (long)floor(d / P);
             g->start = d - k * P;
@@ -2797,7 +2852,8 @@ static int analyse(const float *mono, int64_t nb_samples, int rate, RXSpectrum *
         if (ret < 0)
             goto fail;
     }
-    out->confidence = grid_confidence(&c, bands);
+    if ((ret = grid_confidence(&c, bands, &out->confidence)) < 0)
+        goto fail;
     stage(&tm, "confidence");
     rx_debug("beats: total      %6.1f ms\n", (rx_time_us() - tm0) / 1000.0);
     out->bpm_second_best = c.tempo.second_bpm;

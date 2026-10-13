@@ -289,11 +289,16 @@ void rx_recount(RXBeatObs *beats, int first, int last, const RXFitSection *line,
 /* Folds the band envelopes of beats [first, last] on their predictions
  * (the line, or the tracked times when line is NULL): the average beat.
  * Returns the band with the most contrast when band < 0 (else `band`),
- * its contrast, and the offset of its steepest rise from the prediction
- * within +-search seconds (0 if it does not rise). */
+ * its contrast, the offset of its steepest rise from the prediction
+ * within +-search seconds (0 if it does not rise), and the height of that
+ * rise, from the lowest level within the search before it to the highest
+ * within the search after it, in the contrast's units (0 if it does not
+ * rise; any output may be NULL). The contrast is the whole fold's, +-50
+ * ms: a hit just outside the search, its decaying tail inside, has a
+ * contrast and no rise. */
 int rx_fold(const RXBeatEnvs *e, const RXBeatObs *beats, int first, int last,
             const RXFitSection *line, int band, double search,
-            double *contrast, double *offset);
+            double *contrast, double *offset, double *rise);
 
 /* Piecewise-constant segmentation (docs/BEATS.md, "Sections"): a
  * change-point search over the attacks with a penalty per section, then

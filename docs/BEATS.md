@@ -595,7 +595,17 @@ end of a six-minute track by 280 ms if the track really is at 128.1.
 it replaces the first only if its beats collect at least 10 % more of the
 arbiter onset *and* it is as clean a grid (no more sections, no more
 jitter): a 2-step garage track at 3/4 of its tempo collects hits, but only
-with a ragged grid.
+with a ragged grid. Both grids are read on one band: the kick band when
+either fit has it as its arbiter (kicks carrying the beat at its tempo),
+the full band otherwise. Each grid used to be read on its own fit's
+arbiter, and the kick share can cross a half between two tempos a 3:2 or
+4:3 apart: one grid was then scored on the kicks and the other on the
+full band, unlike quantities. The kicks mark the beat where a track has
+them, while the full band, hats on every subdivision, favours neither
+grid. On the 58 acceptance tracks the check runs on three, each with
+kicks at both tempos, and on 18 synthetic cases, two of them with a kick
+share under a half at the runner-up (0.44, 0.21) whose decision stands
+either way: no grid changed.
 
 **The octave** is decided on the fitted grid, whose beats sit on the hits
 (rhythm evidence needs that; a whole-track estimate does not have it). Half,
@@ -625,6 +635,14 @@ same and double are each judged by:
   (Orange Pekoe's "Happy Valley" came out 210.24); drum & bass at 170-180
   is inside and unaffected. With `bpm_min`/`bpm_max` set, the range is the
   user's and nothing is folded.
+
+When another level wins, the grid is fitted again there. A track too short
+for a grid at that level (16 beats) keeps the grid it had, flagged
+`octave-uncertain`: its octave margin is then the reciprocal of the
+decision's, under 1. A kick and clap loop at 87 of 9 or 10 seconds has 27
+or 30 beats at 174, where it is fitted first, and the octave decision
+chooses 87 (margin 3.0), where the tracker finds fewer than 16: such a
+loop used to get no grid at all, flagged `low-confidence`.
 
 Each level's beats are chosen from the finest down, because the line may
 still sit on any eighth of the double level at this stage (a tracker held at
@@ -690,13 +708,39 @@ cut numbers itself.
 
 **Confidence** (dj's): the share of 16-beat windows (every 8 beats) whose
 average beat starts its rise within 15 ms of the grid, weighted by how
-clearly it rises (contrast less half the median contrast). Two changes. The
-weight is capped at twice the median: in a breakdown the average beat's
+clearly it rises (contrast less half the median contrast). Three changes.
+The weight is capped at twice the median: in a breakdown the average beat's
 level is tiny, its contrast explodes, and a few windows whose loudest rise
-is a riser or a crash outweighed thirty bars of kicks. And the envelopes are
+is a riser or a crash outweighed thirty bars of kicks. The envelopes are
 cut again at the grid's own beats wherever a tracked beat strayed more than
 25 ms from it, so the confidence reads the grid as written rather than
 where the tracker happened to be (empty windows had given one track 0.00).
+And the rise must be one: at least half the window's contrast, or half the
+median contrast if that is less, from the lowest level within the search
+(an eighth of a beat, at most 50 ms) before its steepest point to the
+highest within it after. The steepest point of the average beat is taken
+however small, and the contrast spans the whole fold (±50 ms): beats 60 ms
+after their hits fold the hits' decaying tails, a contrast of 13 to 33 on
+a kick and click loop, and find a ripple near the beats, a rise under 0.01,
+which counted as on the grid (0.87 on that loop's mid band, 0.20 on its
+high band; now 0). The less of the two halves, because a quiet window's
+hit rises by half of its own contrast but not of the median's, and a hit
+after something louder in the same window by half the median's but not of
+its own. Read only 10 ms either side (where the attack is timed), the
+rise of a drummer's scattered hits falls short: `test_beats`' live drums
+(8 ms of jitter) would read 0.85 instead of 1.00 on a grid that is right.
+The weight is still the contrast, not the rise: a window whose
+beats sit in a tail has a beat, not where the grid is, and weighted by
+the rise it found it counts for nothing (a grid half on that loop's hits
+and half 60 ms late read 1.0 so; it reads 0.30 to 0.39 now, 0.39 to 0.90
+before). On the 58 acceptance tracks two confidences moved, each by one
+window whose rise at the grid is a third of its contrast and under half
+the median's: "CYBERPROTOCOL" 0.976 to 0.972 and "ag - Weary" 1.000 to
+0.970 (a window at 4:17); no flag changed, so `low-confidence` means what
+it did. Still
+out of its reach: a grid off by more than the fold reaches everywhere,
+whose windows hold no hit at all and so set their own median (one 100 ms
+late on that loop reads up to 0.24, as before).
 
 Flags (`RXGridFlag`), and what they should mean to the DJ in the interface:
 
@@ -704,7 +748,7 @@ Flags (`RXGridFlag`), and what they should mean to the DJ in the interface:
 | --- | --- | --- |
 | `tempo-change` | a section at another tempo than the one before it (more than 0.5 % apart) | The grid changes tempo; check each boundary. |
 | `phase-cut` | a section at the same tempo as the one before it, re-entering shifted | An edit or a skip: the grid jumps phase at the boundary; check it. |
-| `octave-uncertain` | the octave decision's margin < 1.5 | Half or double tempo was almost as likely: try ×2 / ÷2. |
+| `octave-uncertain` | the octave decision's margin < 1.5, or the octave it chose has no grid (section 8) | Half or double tempo was almost as likely: try ×2 / ÷2. |
 | `phase-uncertain` | on-beat vs off-beat evidence < 1.5× | The grid may be half a beat off: listen to the first kick. |
 | `downbeat-weak` | best beat position < 1.2× the next, or the section is too short to vote | Beat 1 may be another beat of the bar: use "set downbeat". |
 | `no-kicks` | the kick band carries less than half the full band's periodicity at the beat rate and at twice it, and less than all of it at half the beat rate | Timed on clicks and claps; less precise. |
@@ -821,6 +865,20 @@ longer do (`rxbox/model.h`, `src/core/grid.c`). **The automatic cue** is the
 first downbeat at or after the start (it was the first after dj's first
 loud onset).
 
+**Never before time 0.** Where the music starts at once there is no slack:
+the first beat is the line's first at or after 0, so a track whose first
+hit is its very first sample, on a line a few ms early, begins its grid on
+the second hit (a kick loop at 128 whose line sits 2.3 ms early: its
+first beat at 0.4665 s). On the acceptance list AD:Drum'n Bass 5's "Keeps
+Me High" and AD:HOUSE 7's "A Small Happiness", which start at once, have
+their line's beat 21 and 16 ms before 0. A beat before 0 is no beat on
+the players' timeline: `rx_grid_beats` lists none (`src/core/grid.c`), so
+the stick's PQTZ (its times unsigned milliseconds, docs/anlz.md 4.3), the
+automatic cue and the waveform would never see it, and rekordbox's own
+grids begin at the first position at or after zero (rbxport's
+`first_beat_secs`). Putting it at 0 instead would move the whole first
+section, every beat of it, by those few ms.
+
 **Witnesses.** Section 8 had the start as one vote of one scale inside the
 structure, at dj's first loud onset, and so only as a half-beat position.
 On AD:Garage "Feel Alive" (134 BPM, digital silence until the hit at
@@ -927,7 +985,7 @@ the final version was not finished (see "Known weaknesses").
 | Support ratio | 1.25 on the kick band; 1.5 for a phase cut | rbxport: 1.5 for the new phase |
 | Min section | 16 attacks, 32 beats; 64 for a phase, 128 half a beat away | rbxport's outro rule; off-beat basses |
 | Tempogram | 12 s windows, 3 s hop, 4 windows | 21 s of a new tempo |
-| Family check | runner-up within 25 %, 10 % more support | 3:2 and 4:3 |
+| Family check | runner-up within 25 %, 10 % more support, both on the kick band if either fit's arbiter is it | 3:2 and 4:3; like with like |
 | Unsteady | spread > 6 ms and beat-to-beat scatter > 4 ms | live drums scatter 5-15 ms, sequencers < 1 |
 | Dynamic: drift | deviation > 15 ms (runs from 5 ms, 4 beats of margin); live (spread > 3 ms and the attacks on the line not sequenced), or at a dynamic neighbour | the merge tolerance; sequenced music does not drift |
 | Dynamic: sequenced | the attacks on the line (triples within 15 ms of a beat or half beat), lower quartile of the second differences as a scatter, < 1.5 ms on 32 triples | runs off the line inflate the spread; Felicidade 0.57, the rubato case 3.0 |
@@ -939,13 +997,14 @@ the final version was not finished (see "Known weaknesses").
 | Re-track | the local period from attack intervals within 40 % of the line's, ±8 beats; the range from ¼ period before the first beat to ¼ past the last | the tracker inserts beats at one period |
 | Judgment | per 16-beat window: lost where the line is within 15 ms of the hits and the walk twice as far and 3 ms more, or an end beat 15 ms off a straight neighbour's line; lost windows back to the line, then the mean must beat the line's by 1 ms | the line is the simpler grid; a fold is noisy, and blind to half a window |
 | No kicks | kick/full periodicity < 0.5 at 1× and 2× the beat rate, < 1 at ½× | two-step kicks cancel at the beat rate |
+| Confidence | 16-beat windows every 8; on the grid: a rise within 15 ms, at least half the window's contrast or the median's (the less), read over the search either side; weight: contrast less half the median, at most 1.5 medians | dj's; a hit's tail is no rise |
 | Low confidence | < 0.5 | |
 | Music start | floor: commonest level before the music is within 45 dB of the loud level (90th percentile); at least 60 dB under it and 60 ms long | dither and hiss are floors; an encoder delay is not |
 | Start threshold | after digital silence 65 dB under the loud level; over a noise floor 20 dB over it, never lower than 50 dB under the loud level; held for a third of 200 ms | a -60 dB fade counts from its first hit; a fade over dither from where it is heard; no clicks |
 | Hit | 25 dB over the threshold two frames on; time at 3 % of its peak | a jump within a frame or two |
 | Fade, swell | a rise to 15 dB under the loud level in a second or more, or less; out of digital silence from the first sound | a swell leads into a bar line |
 | Start witness | within 0.1 beat (40 ms) of a beat or half beat; a hit whose kick band is at least twice the kick beats', where the kicks leave the half of the beat open (log under 1.0): log 2.5 and 2 scales for beat 1; a fade's first beat: half a scale for beat 1 | measured on the library, section 11 |
-| Grid start | first beat at or after the start, less 50 ms | a line a few ms early on the hit |
+| Grid start | first beat at or after the start, less 50 ms, never before 0 | a line a few ms early on the hit; no beat before the file |
 
 ## Evaluation
 
@@ -1002,7 +1061,10 @@ beat, bar or snap lies before it, and the automatic cue.
 | a drummer's random walk (0.4 % a beat, within 10 %), 6 ms jitter, 122 | dynamic throughout (262 beats): 3.3 ms RMS, 11.1 ms worst, 64 of 64 downbeats; straight (5 sections) 51 ms RMS, 256 worst |
 | rubato: hip-hop 120 dipping to 100 over bars 16-24, 3 ms jitter | dynamic over the dip (42 beats), straight either side: 1.1 ms RMS, 4.6 worst, 48 of 48 downbeats; straight (one section) 54 ms RMS, 247 worst |
 | sequenced house 130, a two-bar syncopated fill at Felicidade's gaps (467, 533, 620, 467, 533, 460 ms, the last two on the beats) | one straight section, 130.000, not dynamic; the beats through the fill and a bar either side within 1.2 ms of the pulse, none missing or extra |
+| a kick and clap loop at 87, 9 and 10 s long | 174.000, `octave-uncertain` (margin 0.33): 87 won the octave, but has too few beats for a grid; no grid before |
+| the same loop, 12 s long | 87.000, −1.3 ms |
 | (not a track) a walk through attacks that leave a 130 BPM pulse for a dozen beats, 160 ms off | tempo steps of 3.8 % at most (5.5 % without the continuity), the beats away from it on the pulse |
+| (not a track) a kick and a click on every beat at 128, sixteen beats folded on their hits and 60 ms after them (the confidence's windows) | on the hits a rise of 7.20, its whole contrast, at −1.3 ms; 60 ms late a contrast of 12.83 from the tails and a rise of 0.002 at +4.6 ms: not on the grid (it counted as on it) |
 
 The three tracks with a tempo that moves are judged beat by beat against
 their true beat times (the RMS and the largest distance of each true
