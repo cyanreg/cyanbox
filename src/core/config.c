@@ -11,15 +11,20 @@
  *   player.<name>  mixer.<name>  device.<name>     My Settings, names as
  *                                                  `rxbox settings` lists them
  *   audio.sink
- *   ui.wave_palette  ui.detail_bars  ui.split_player  ui.split_tree
- *   ui.traffic_light
+ *   ui.detail_bars  ui.split_player  ui.split_tree  ui.traffic_light
  *
  * Booleans are "true"/"false", numbers their shortest exact decimal form,
  * analysis.what the names `rxbox analyze --what` takes ("beats,key,waves").
  * A value that does not parse is logged and the default kept, so a bad row
  * never stops the library from opening. Other keys are free for
  * rx_library_setting_get/set (the interface's column layout and such) and
- * are left alone by rx_library_config_save. */
+ * are left alone by rx_library_config_save.
+ *
+ * The interface's waveform colour and key notation are the players'
+ * device.waveform_color and device.key_display (one setting for rxbox and
+ * the stick). An older rxbox kept them in ui.wave_palette and, through
+ * its View menu, export.key_notation; rx_core_config_migrate moves them
+ * over once when the library opens. */
 
 #include "core.h"
 
@@ -39,7 +44,6 @@ void rx_config_defaults(RXConfig *c)
         .key_notation      = "classic",
         .export_pdb        = true,
         .export_onelibrary = true,
-        .wave_palette      = "3band",
         .traffic_light     = "related3",
         .detail_bars       = 12,
     };
@@ -235,11 +239,6 @@ static int apply_setting(RXConfig *c, const char *key, const char *value)
         return set_string(&c->device_name, value);
     } else if (!strcmp(key, "audio.sink")) {
         return set_string(&c->audio_sink, value);
-    } else if (!strcmp(key, "ui.wave_palette")) {
-        if (strcmp(value, "3band") && strcmp(value, "blue") && strcmp(value, "rgb"))
-            bad_value(key, value);
-        else
-            snprintf(c->wave_palette, sizeof(c->wave_palette), "%s", value);
     } else if (!strcmp(key, "ui.traffic_light")) {
         if (rx_key_reach_parse(value) < 0)
             bad_value(key, value);
@@ -333,7 +332,6 @@ int rx_library_config_save(RXLibrary *lib)
         { "export.compat_transcode", c->compat_transcode ? "true" : "false" },
         { "export.device_name",      c->device_name },
         { "audio.sink",              c->audio_sink },
-        { "ui.wave_palette",         c->wave_palette },
         { "ui.traffic_light",        c->traffic_light },
         { "ui.detail_bars",          rx_core_fmt_double(c->detail_bars, bars, sizeof(bars)) },
         { "ui.split_player",         rx_core_fmt_double(c->split_player, split_p, sizeof(split_p)) },
@@ -385,5 +383,90 @@ int rx_library_setting_set(RXLibrary *lib, const char *key, const char *value)
     int ret = put(lib, key, value);
     if (ret >= 0)
         lib->generation++;
+    return ret;
+}
+
+/* ------------------------------------------------------------- migration */
+
+/* The library's device.<name>, NULL when it has none. */
+static const char *device_value(const RXConfig *c, const char *name)
+{
+    for (int i = 0; i < c->nb_device; i++) {
+        if (!strcmp(c->device[i].key, name))
+            return c->device[i].value ? c->device[i].value : "";
+    }
+    return NULL;
+}
+
+static int device_set(RXConfig *c, const char *name, const char *value)
+{
+    for (int i = 0; i < c->nb_device; i++) {
+        if (strcmp(c->device[i].key, name))
+            continue;
+        char *v = rx_strdup(value);
+        if (!v)
+            return RX_ERROR(ENOMEM);
+        free(c->device[i].value);
+        c->device[i].value = v;
+        return 0;
+    }
+    return kv_push(&c->device, &c->nb_device, name, value);
+}
+
+/* The interface's waveform colour (ui.wave_palette) and key notation (the
+ * View menu wrote export.key_notation) became the players' device settings.
+ * Once, at open:
+ *  - ui.wave_palette goes. A 3-band or RGB palette becomes
+ *    device.waveform_color while that is at its default, blue
+ *    (docs/settings.md 6, as `rxbox settings` lists it): the same palette
+ *    as before, now also on the stick. A blue one is the default already
+ *    and adds no row, which would make the export write DEVSETTING.DAT.
+ *  - A Camelot or Open Key export.key_notation sets device.key_display to
+ *    alphanumeric when the library has no key display yet. export.key_notation
+ *    stays: it is also how the export names keys in export.pdb. Once the
+ *    row exists, by this or by a pick, nothing here touches it again.
+ * The defaults are spelt out here because the settings tables are the
+ * formats module's, which core does not use. */
+int rx_core_config_migrate(RXLibrary *lib)
+{
+    RXConfig *c = &lib->cfg;
+    char *palette = NULL;
+    int ret = rx_library_setting_get(lib, "ui.wave_palette", &palette);
+    if (ret < 0 && ret != RX_ERROR(ENOENT))
+        return ret;
+    bool old_palette = ret >= 0;
+    const char *colour = device_value(c, "waveform_color");
+    bool copy = old_palette && palette && (!strcmp(palette, "3band") || !strcmp(palette, "rgb")) &&
+                (!colour || !rx_strcasecmp(colour, "blue"));
+    bool key = (!strcmp(c->key_notation, "camelot") || !strcmp(c->key_notation, "open")) &&
+               !device_value(c, "key_display");
+    if (!old_palette && !key) {
+        free(palette);
+        return 0;
+    }
+
+    ret = rx_db_begin(lib->db);
+    if (ret >= 0 && copy)
+        ret = put(lib, "device.waveform_color", palette);
+    if (ret >= 0 && old_palette)
+        ret = put(lib, "ui.wave_palette", NULL);
+    if (ret >= 0 && key)
+        ret = put(lib, "device.key_display", "alphanumeric");
+    if (ret >= 0)
+        ret = rx_db_commit(lib->db);
+    else
+        rx_db_rollback(lib->db);
+
+    /* RXConfig follows what the table now holds. */
+    if (ret >= 0 && copy) {
+        ret = device_set(c, "waveform_color", palette);
+        rx_info("settings: ui.wave_palette %s is now device.waveform_color", palette);
+    }
+    if (ret >= 0 && key) {
+        ret = device_set(c, "key_display", "alphanumeric");
+        rx_info("settings: export.key_notation %s set device.key_display alphanumeric",
+                c->key_notation);
+    }
+    free(palette);
     return ret;
 }

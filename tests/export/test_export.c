@@ -359,8 +359,9 @@ static void play_a_gig(RXLibrary *lib)
     free(p);
     free(enc);
 
-    /* The player saves My Settings with a ±6 % tempo range. */
-    RXKv kv[2] = { { "quantize", "true" }, { "tempo_range", "6" } };
+    /* The player saves My Settings with a ±16 % tempo range (the default
+     * is ±6 %). */
+    RXKv kv[2] = { { "quantize", "true" }, { "tempo_range", "16" } };
     CHECK_EQ(rx_settings_encode("MYSETTING.DAT", kv, 2, &b, &n), 0);
     p = rx_stick_file(stick, "/PIONEER/MYSETTING.DAT");
     CHECK_EQ(rx_file_write_atomic(p, b, n), 0);
@@ -430,8 +431,8 @@ int main(void)
         if (items[i].kind == RX_SYNC_SETTING) {
             settings++;
             CHECK_STR(items[i].setting_key, "player.tempo_range");
-            CHECK_STR(items[i].setting_value, "6");
-            CHECK_STR(items[i].setting_old, "10");
+            CHECK_STR(items[i].setting_value, "16");
+            CHECK_STR(items[i].setting_old, "6");
         }
         if (items[i].kind == RX_SYNC_HOT_CUE_SET)
             CHECK_STR(items[i].cue.color, "blue");
@@ -458,7 +459,7 @@ int main(void)
     CHECK_EQ(track_named(&lib, "two.mp3")->play_count, two_plays + 1);
     bool tempo = false;
     for (int i = 0; i < lib.cfg.nb_player; i++)
-        tempo |= !strcmp(lib.cfg.player[i].key, "tempo_range") && !strcmp(lib.cfg.player[i].value, "6");
+        tempo |= !strcmp(lib.cfg.player[i].key, "tempo_range") && !strcmp(lib.cfg.player[i].value, "16");
     CHECK(tempo);
 
     /* Synced: nothing left, plays not proposed twice, the export runs. */

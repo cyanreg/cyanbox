@@ -189,6 +189,13 @@ void rx_settings_list(rx_settings_list_cb cb, void *opaque);
  * "Touch & Release" is "touch_release", "+6" is "6"); NULL when it is none
  * of them or the setting is unknown. The string is static. */
 const char *rx_settings_value(const char *file, const char *name, const char *value);
+/* The value of the My Setting `key` ("player.quantize", "device.waveform_color":
+ * the keys `rxbox config` takes) that an export of `cfg` gives the players,
+ * as rx_settings_list lists it: the library's, or the setting's default when
+ * the library has none or one the export would refuse. What the interface
+ * follows, so that it shows what the players will. NULL for a key that is
+ * no My Setting. The string is static. */
+const char *rx_settings_get(const RXConfig *cfg, const char *key);
 void rx_kv_free(RXKv *kv, int nb);
 
 #endif /* RXBOX_FORMATS_H */

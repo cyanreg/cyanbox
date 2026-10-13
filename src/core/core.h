@@ -108,8 +108,10 @@ void rx_db_rollback(RXDb *db);
 
 /* -------------------------------------------------------------- library */
 
-/* Settings <-> RXConfig (config.c), called by open. */
+/* Settings <-> RXConfig (config.c), called by open. Migrate runs after the
+ * load's read transaction, in one of its own. */
 int  rx_core_config_load(RXLibrary *lib);
+int  rx_core_config_migrate(RXLibrary *lib);
 /* The playlist tree (playlist.c): load at open, free at close. When a
  * track is removed, drop_track renumbers the entries of the playlists that
  * held it, inside the caller's transaction, and forget_track removes it

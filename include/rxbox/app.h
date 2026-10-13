@@ -93,8 +93,10 @@ typedef struct RXApp {
     uint64_t   stick_request;       /* in flight, 0 none */
     RXJobResult *stick_result;
 
-    /* Interface preferences (persisted in the library's ui.* settings) */
-    int        wave_palette;        /* 0 3band, 1 blue, 2 rgb */
+    /* The waveform palette of the deck and the table's previews: 0 3band,
+     * 1 blue, 2 rgb. The players' device.waveform_color, which rx_app_tick
+     * reads again every tick; set that, not this. */
+    int        wave_palette;
     bool       dirty;               /* the next frame must be drawn */
     bool       quit;
 
@@ -156,8 +158,9 @@ void rx_app_cancel_stick(RXApp *app, uint64_t request);
 int  rx_app_apply_analysis(RXApp *app, RXTrack *t, RXAnalysis *a);
 /* Re-checks which audio files are missing; returns how many changed. */
 int  rx_app_rescan(RXApp *app);
-/* For the browser: a track's cover thumbnail texture and its PWV6 preview
- * (3-band, 1200 columns) on the GPU, made on demand from the library (an
+/* For the browser: a track's cover thumbnail texture and its preview in the
+ * waveform palette (PWV6, PWAV or PWV4: wave_palette) on the GPU, made on
+ * demand from the library (an
  * artwork job when the library has no thumbnail yet; it is stored there)
  * and cached, the least recently asked for released beyond a few hundred.
  * 0 / NULL while being made or when there is none. Window only; valid

@@ -6,10 +6,16 @@
  * docs/settings.md.
  *
  * Payloads start from rekordbox 7.2.8's defaults (the fixture in
- * tests/data/settings) and each setting is one byte chosen from a fixed
- * set. Encoding the fixture's decoded values gives the fixture back byte
- * for byte (tests/formats/test_settings.c). Players apply [player] and
- * [mixer] only when the DJ loads My Settings; DEVSETTING applies directly.
+ * tests/data/settings), but for the tempo range, and each setting is one
+ * byte chosen from a fixed set. Encoding the fixture's decoded values gives
+ * the fixture back byte for byte (tests/formats/test_settings.c). Players
+ * apply [player] and [mixer] only when the DJ loads My Settings;
+ * DEVSETTING applies directly.
+ *
+ * The tempo range defaults to +-6 % where rekordbox writes +-10 %: rxbox's
+ * deck starts at the range this setting holds (rx_settings_get), as a CDJ
+ * switched on starts at +-6 %, so the default is the range wanted on both
+ * (docs/settings.md 3).
  *
  * The [device] background colour is not in any of these files: rekordbox
  * keeps it in export.pdb's property row and exportLibrary.db's property
@@ -130,11 +136,12 @@ typedef struct File {
     int          nb_fields;
 } File;
 
-/* rekordbox 7.2.8's default payloads (dj's DEFAULTS; docs/settings.md 3-7). */
+/* rekordbox 7.2.8's default payloads (dj's DEFAULTS; docs/settings.md 3-7),
+ * but MYSETTING's tempo range (byte 36) at 0x80, +-6 %, not 0x81. */
 static const uint8_t mysetting_default[40] = {
     0x78, 0x56, 0x34, 0x12, 0x02, 0x00, 0x00, 0x00, 0x81, 0x83, 0x81, 0x88, 0x81, 0x01, 0x82, 0x81,
     0x81, 0x01, 0x01, 0x01, 0x82, 0x80, 0x80, 0x81, 0x80, 0x81, 0x80, 0x00, 0x00, 0x81, 0x00, 0x00,
-    0x81, 0x81, 0x81, 0x80, 0x81, 0x80, 0x00, 0x00,
+    0x81, 0x81, 0x81, 0x80, 0x80, 0x80, 0x00, 0x00,
 };
 static const uint8_t mysetting2_default[40] = {
     0x81, 0x80, 0x83, 0x83, 0x81, 0x80, 0x80, 0x00, 0x00, 0x00, 0x80, 0x81, 0x85,
@@ -311,19 +318,28 @@ int rx_settings_encode(const char *file_name, const RXKv *kv, int nb, uint8_t **
     return 0;
 }
 
-/* The config form of a stored byte (dj's decode: the first name for it). */
-static void byte_name(const Field *f, uint8_t byte, char *buf, size_t size)
+/* The listed form of a byte (dj's decode: the first name for it); NULL
+ * for a byte the field has no name for. */
+static const char *byte_listed(const Field *f, uint8_t byte)
 {
     for (int i = 0; f->opts[i].name; i++) {
         if (f->opts[i].byte != byte)
             continue;
         if (f->onoff && i < 2)
-            snprintf(buf, size, "%s", i ? "true" : "false");
-        else
-            snprintf(buf, size, "%s", f->opts[i].name);
-        return;
+            return i ? "true" : "false";
+        return f->opts[i].name;
     }
-    snprintf(buf, size, "0x%02x", byte);
+    return NULL;
+}
+
+/* The config form of a stored byte; "0x99" for one without a name. */
+static void byte_name(const Field *f, uint8_t byte, char *buf, size_t size)
+{
+    const char *name = byte_listed(f, byte);
+    if (name)
+        snprintf(buf, size, "%s", name);
+    else
+        snprintf(buf, size, "0x%02x", byte);
 }
 
 void rx_kv_free(RXKv *kv, int nb)
@@ -462,12 +478,60 @@ const char *rx_settings_value(const char *file, const char *name, const char *va
     if (!fl || lookup(fl, value, &byte) < 0)
         return NULL;
     /* The first name for the byte, as byte_name() and the list give it. */
-    for (int i = 0; fl->opts[i].name; i++) {
-        if (fl->opts[i].byte != byte)
+    return byte_listed(fl, byte);
+}
+
+const char *rx_settings_get(const RXConfig *cfg, const char *key)
+{
+    if (!key)
+        return NULL;
+    const RXKv *kv = NULL;
+    int nb = 0;
+    const File *in[2] = { NULL, NULL };
+    const char *name;
+    if (rx_str_starts(key, "player.")) {
+        name = key + 7;
+        if (cfg) {
+            kv = cfg->player;
+            nb = cfg->nb_player;
+        }
+        in[0] = find_file("MYSETTING.DAT");
+        in[1] = find_file("MYSETTING2.DAT");
+    } else if (rx_str_starts(key, "mixer.")) {
+        name = key + 6;
+        if (cfg) {
+            kv = cfg->mixer;
+            nb = cfg->nb_mixer;
+        }
+        in[0] = find_file("DJMMYSETTING.DAT");
+    } else if (rx_str_starts(key, "device.")) {
+        name = key + 7;
+        if (cfg) {
+            kv = cfg->device;
+            nb = cfg->nb_device;
+        }
+        in[0] = find_file("DEVSETTING.DAT");
+    } else {
+        return NULL;
+    }
+
+    const char *stored = NULL;
+    for (int i = 0; i < nb; i++) {
+        if (!strcmp(kv[i].key, name))
+            stored = kv[i].value ? kv[i].value : "";
+    }
+    /* A value the export would refuse counts as none: what the players get
+     * is then still the default (and the export says so). */
+    if (!strcmp(name, background_key) && !strcmp(in[0]->name, "DEVSETTING.DAT")) {
+        const char *v = stored ? rx_settings_value("", name, stored) : NULL;
+        return v ? v : background_values[0];
+    }
+    for (int i = 0; i < 2 && in[i]; i++) {
+        const Field *fl = find_field(in[i], name);
+        if (!fl)
             continue;
-        if (fl->onoff && i < 2)
-            return i ? "true" : "false";
-        return fl->opts[i].name;
+        const char *v = stored ? rx_settings_value(in[i]->name, name, stored) : NULL;
+        return v ? v : byte_listed(fl, in[i]->defaults[fl->offset]);
     }
     return NULL;
 }

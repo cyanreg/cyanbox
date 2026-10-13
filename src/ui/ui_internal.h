@@ -79,12 +79,14 @@ static inline ImU32 ui_alpha(ImU32 col, float alpha)
 static const double UI_ZOOM_STEPS[] = { 0.25, 0.5, 1, 2, 4, 8, 12, 16, 32, 64 };
 #define UI_NB_ZOOM ((int)(sizeof(UI_ZOOM_STEPS) / sizeof(UI_ZOOM_STEPS[0])))
 
-// rekordbox's beat jump menu, in its order (rbxport JUMP_SIZES): it skips
-// 1 and 2 beats and changes unit at 8 bars. Fine moves 10 ms.
+// rekordbox's beat jump menu, in its order (rbxport JUMP_SIZES), which
+// changes unit at 8 bars, with the 1 and 2 beats it skips and the players'
+// BEAT JUMP BEAT VALUE offers (player.beat_jump_beats, the deck's size at
+// start). Fine moves 10 ms; it also stands for the setting's 1/2 beat.
 struct UiJumpSize { const char *label; double beats; };
 static const UiJumpSize UI_JUMP_SIZES[] = {
-    { "Fine", 0 }, { "4Beats", 4 }, { "8Beats", 8 }, { "16Beats", 16 },
-    { "8Bars", 32 }, { "16Bars", 64 }, { "32Bars", 128 },
+    { "Fine", 0 }, { "1Beat", 1 }, { "2Beats", 2 }, { "4Beats", 4 }, { "8Beats", 8 },
+    { "16Beats", 16 }, { "8Bars", 32 }, { "16Bars", 64 }, { "32Bars", 128 },
 };
 #define UI_NB_JUMP ((int)(sizeof(UI_JUMP_SIZES) / sizeof(UI_JUMP_SIZES[0])))
 #define UI_FINE_JUMP_SECONDS 0.01
@@ -92,6 +94,9 @@ static const UiJumpSize UI_JUMP_SIZES[] = {
 // The tempo slider ranges a CDJ cycles through (WIDE is +-100 %).
 static const double UI_TEMPO_RANGES[] = { 6, 10, 16, 100 };
 #define UI_NB_TEMPO_RANGES 4
+
+// The players' settings that set the deck's state at startup (ui.cpp).
+#define UI_NB_STARTUP 5
 
 // Beat jump repeats while held, from the keys and the buttons alike: the
 // first jump on the press, then one every 120 ms once held for 300 ms.
@@ -111,6 +116,11 @@ static const double UI_TEMPO_RANGES[] = { 6, 10, 16, 100 };
 #define UI_GRID_STRIP_H    32
 #define UI_DETAIL_NATURAL  204
 
+// Where the detail's playhead sits with the players' WAVEFORM CURRENT
+// POSITION at LEFT (device.waveform_position), as a fraction of the width
+// from the left edge: the music to come takes the rest.
+#define UI_PLAYHEAD_LEFT   0.15f
+
 /* -------------------------------------------------------------------- state */
 
 struct UiDeck {
@@ -119,10 +129,14 @@ struct UiDeck {
     RXBeat  *beats;
     int      nb_beats;
 
+    // The live state of the deck's buttons. Each starts as the players'
+    // setting says (player.time_mode, tempo_range, beat_jump_beats,
+    // master_tempo: ui.cpp, follow_settings) and follows a change of it;
+    // the buttons and keys change only these, never the setting.
     bool     time_remaining;   // time readout shows remaining (T)
-    int      tempo_range;      // index into UI_TEMPO_RANGES, 0 at every start (not kept)
+    int      tempo_range;      // index into UI_TEMPO_RANGES
     int      jump_size;        // index into UI_JUMP_SIZES
-    bool     master_tempo;     // MASTER TEMPO as last asked for (the layout keeps it)
+    bool     master_tempo;     // MASTER TEMPO as last asked for
 
     // Waveform drag state (overview and detail share one deck scrub).
     int      drag_area;        // 0 none, 1 overview, 2 detail
@@ -205,8 +219,26 @@ struct UiState {
     float  deck_split;         // fraction of the height for the player, < 0: the default
     float  tree_width;         // logical pixels
     bool   detail_half;        // rekordbox 2 PLAYER half-height detail instead of CDJ centred
-    int    key_notation;       // 0 classic, 1 Camelot, 2 Open Key
     int    traffic_light;      // RXKeyReach of the table's key highlight
+
+    // The players' My Settings the drawing follows, set from RXConfig at
+    // the start of every frame (ui.cpp, follow_settings).
+    bool   key_camelot;        // device.key_display alphanumeric: keys as Camelot codes
+    bool   overview_full;      // device.overview_waveform full: the overview and the row
+                               // previews centred, both halves, instead of the stacked half
+    bool   playhead_left;      // device.waveform_position left: the detail's playhead at
+                               // UI_PLAYHEAD_LEFT of its width instead of the centre
+    bool   hot_cue_colour;     // player.hot_cue_color: hot cues in their own colours, else
+                               // in the slots' default pad colours
+    // What the last frame drew, for the test hooks' log: the overview's and
+    // the row previews' RXWaveMode (-1 none drawn) and the deck's KEY.
+    int    overview_mode_drawn, preview_mode_drawn;
+    char   key_drawn[16];
+    // The settings of the deck's startup state as last applied to it
+    // (ui.cpp, follow_settings: player.quantize, beat_jump_beats,
+    // tempo_range, master_tempo, time_mode); NULL before the first time.
+    // The strings are rx_settings_get's, which are static.
+    const char *startup_applied[UI_NB_STARTUP];
     bool   layout_dirty;
 
     UiDeck decks[RX_DECKS];
@@ -290,7 +322,6 @@ struct UiState {
     std::string autoshow;      // panels and dialogs to open (test hook)
     std::vector<UiTestEvent> test_events;   // input to give ImGui (test hook)
     bool      autoload_done;
-    bool      master_tempo_applied;    // the remembered MASTER TEMPO went to the player
     double    saved_zoom;
 };
 
@@ -303,7 +334,7 @@ const char *ui_fmt_time(double seconds, char *buf, size_t size, bool tenths);
 const char *ui_key_text(const UiState *ui, const char *classic, char *buf, size_t size);
 const char *ui_title(const RXTrack *t);
 const char *ui_artist(const RXTrack *t);
-uint32_t    ui_hot_cue_rgb(const RXCue *c);
+uint32_t    ui_hot_cue_rgb(const UiState *ui, const RXCue *c);
 uint32_t    ui_memory_cue_rgb(const RXCue *c);
 uint32_t    ui_track_rgb(const RXTrack *t);
 ImU32       ui_text_on(uint32_t rgb);
@@ -359,6 +390,13 @@ const std::vector<UiSetting> &ui_settings(UiState *ui);
 int         ui_setting_key(const char *key, const char **name);       // "player.quantize": section, name
 const char *ui_setting_label(const char *name, char *buf, size_t size);
 const char *ui_setting_value(const char *name, const char *value, char *buf, size_t size);
+// The value of a My Setting the interface follows ("device.key_display"),
+// as an export would write it: the library's, else the default.
+const char *ui_my_setting(UiState *ui, const char *key);
+// Sets a My Setting from outside the Player settings dialog (the View
+// menu), the way the dialog sets one: in RXConfig and the library at once,
+// said in the status bar. `value` as rx_settings_list lists it.
+void        ui_setting_pick(UiState *ui, const char *key, const char *value);
 
 // Loads a track into the player, pausing it first when it plays.
 void ui_load(UiState *ui, RXTrack *t);

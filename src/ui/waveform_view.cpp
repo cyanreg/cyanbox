@@ -1,8 +1,13 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
 // The waveforms: the player's overview (the whole track) and detail (a
-// window of `zoom_bars` bars under a fixed centre playhead), and the table's
-// row previews. The waveform itself is always rx_wave_draw(): the ANLZ
+// window of `zoom_bars` bars under a fixed playhead), and the table's row
+// previews. The players' My Settings decide what a CDJ would: the palette
+// (app.c uploads the tags of device.waveform_color), the overview and the
+// previews as the stacked half or centred (device.overview_waveform), the
+// playhead at the centre or near the left (device.waveform_position), and
+// whether hot cues show their colours (player.hot_cue_color, through
+// ui_hot_cue_rgb). The waveform itself is always rx_wave_draw(): the ANLZ
 // column bytes go to the GPU once and the shader colours every pixel the
 // way rekordbox does, at any zoom. Everything over it (beat grid, cue
 // markers, loop bands, playhead) is ImDrawList.
@@ -130,7 +135,7 @@ static double detail_half_seconds(const RXTrack *t, double pos, double bars)
 static void hot_badge(UiState *ui, ImDrawList *dl, float x, float y, float size, float x_max,
                       const RXCue *c)
 {
-    uint32_t rgb = ui_hot_cue_rgb(c);
+    uint32_t rgb = ui_hot_cue_rgb(ui, c);
     float bx = ImMin(x, x_max - size);
     ImVec2 p0(floorf(bx), floorf(y)), p1(p0.x + size, p0.y + size);
     dl->AddRectFilled(p0, p1, ui_rgb(rgb), PX(1.5f));
@@ -235,13 +240,17 @@ void ui_overview(UiState *ui, int deck, ImVec2 a, ImVec2 b)
         d.y1 = b.y;
         d.col0 = 0;
         d.col1 = cols;
-        // The stacked half from the strip's floor at the tag's own levels,
-        // as rbxport draws its overview by default (src/lib/preferences.ts:
-        // overviewWaveform "half", no gain). Centred with a gain, the
-        // three-band levels of a loud track filled the strip solid cream.
-        // The top inset keeps the waveform clear of the hot cue badges and
-        // the memory cue heads drawn along the top edge.
-        d.mode = RX_WAVE_HALF_STACKED;
+        // The players' overview type (device.overview_waveform). Half, the
+        // default: the stacked half from the strip's floor at the tag's own
+        // levels, as rbxport draws its overview by default
+        // (src/lib/preferences.ts: overviewWaveform "half", no gain). Full:
+        // the waveform centred on the strip, both halves, at the same
+        // levels (gain 1: with a gain the three-band levels of a loud track
+        // filled the strip solid cream). The top inset keeps the waveform
+        // clear of the hot cue badges and the memory cue heads drawn along
+        // the top edge.
+        d.mode = ui->overview_full ? RX_WAVE_CENTRED : RX_WAVE_HALF_STACKED;
+        d.gain = 1.0f;
         d.inset_top = PX(13);
         d.inset_bottom = PX(1);
         d.alpha = 1.0f;
@@ -249,6 +258,7 @@ void ui_overview(UiState *ui, int deck, ImVec2 a, ImVec2 b)
         d.dim = 0.45f;
         d.dim_until = pos / dur * cols;
         rx_wave_draw(app->window, dl, dv->wave_preview, &d);
+        ui->overview_mode_drawn = d.mode;
     } else {
         ui_text_centre(ui, dl, nullptr, 11.0f, a, b, UI_FAINT, t->has_waveforms ? "" : "not analysed");
     }
@@ -276,7 +286,7 @@ void ui_overview(UiState *ui, int deck, ImVec2 a, ImVec2 b)
         if (!rx_cue_is_hot(c))
             continue;
         float x = floorf(xof(c->time));
-        dl->AddLine(ImVec2(x + 0.5f, a.y), ImVec2(x + 0.5f, b.y), ui_rgb(ui_hot_cue_rgb(c), 0.55f));
+        dl->AddLine(ImVec2(x + 0.5f, a.y), ImVec2(x + 0.5f, b.y), ui_rgb(ui_hot_cue_rgb(ui, c), 0.55f));
         hot_badge(ui, dl, x, a.y, PX(11), b.x, c);
     }
     if (dv->ctl.cue_point >= 0)
@@ -402,13 +412,18 @@ void ui_detail(UiState *ui, int deck, ImVec2 a, ImVec2 b)
     double pos = ui_deck_position(ui, deck, &st);
     bool loaded = st.loaded && t && !dv->loading_request;
     float w = b.x - a.x, h = b.y - a.y;
-    float cx = floorf(a.x + w * 0.5f);
+    // The playhead stays put while the waveform moves under it: at the
+    // centre, or with the players' WAVEFORM CURRENT POSITION at LEFT
+    // (device.waveform_position) near the left edge, so that more of what
+    // is coming shows. Either way the window holds `zoom_bars` bars.
+    float at = ui->playhead_left ? UI_PLAYHEAD_LEFT : 0.5f;
+    float cx = floorf(a.x + w * at);
     dl->AddRectFilled(a, b, UI_WAVE_BG, PX(2));
     if (!(dv->zoom_bars > 0))
         dv->zoom_bars = 12;
 
-    double half = detail_half_seconds(loaded ? t : nullptr, pos, dv->zoom_bars);
-    double w0 = pos - half, w1 = pos + half;
+    double span = 2.0 * detail_half_seconds(loaded ? t : nullptr, pos, dv->zoom_bars);
+    double w0 = pos - span * at, w1 = pos + span * (1.0 - at);
     double spp = (w1 - w0) / w;
     auto xof = [&](double sec) { return a.x + (float)((sec - w0) / spp); };
 
@@ -427,9 +442,9 @@ void ui_detail(UiState *ui, int deck, ImVec2 a, ImVec2 b)
         ui_want_frames(ui, 2);
     }
     if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right) && loaded) {
-        double tt = pos + (io.MousePos.x - cx) * spp;
-        if (dv->ctl.quantize && rx_track_analysed(t))
-            tt = rx_grid_quantize(&t->grid, tt);
+        // On the QUANTIZE grid, a beat or the part of one the players'
+        // QUANTIZE BEAT VALUE says, as the deck's own cues land.
+        double tt = rx_ctl_quantized(&dv->ctl, pos + (io.MousePos.x - cx) * spp);
         ud->ctx_time = ImClamp(tt, 0.0, t->duration);
         ud->ctx_cue = -1;
         float best = PX(7);
@@ -535,7 +550,7 @@ void ui_detail(UiState *ui, int deck, ImVec2 a, ImVec2 b)
             if (!rx_cue_is_hot(c) || c->time < w0 - 1 || c->time > w1 + 1)
                 continue;
             float x = floorf(xof(c->time));
-            ImU32 col = ui_rgb(ui_hot_cue_rgb(c));
+            ImU32 col = ui_rgb(ui_hot_cue_rgb(ui, c));
             dl->AddLine(ImVec2(x + 0.5f, top), ImVec2(x + 0.5f, b.y), col);
             hot_badge(ui, dl, x, a.y + PX(1), PX(13), b.x + PX(13), c);
             if (c->name[0])
@@ -546,7 +561,7 @@ void ui_detail(UiState *ui, int deck, ImVec2 a, ImVec2 b)
             cue_point_mark(dl, floorf(xof(dv->ctl.cue_point)) + 0.5f, b.y, PX(5), UI_ACCENT);
     }
 
-    // The fixed centre playhead: 2 px white with a triangle at each end.
+    // The fixed playhead: 2 px white with a triangle at each end.
     dl->AddRectFilled(ImVec2(cx - PX(1), a.y), ImVec2(cx + PX(1), b.y), loaded ? UI_TEXT : UI_FAINT);
     if (loaded) {
         float k = PX(5);
@@ -593,10 +608,12 @@ void ui_detail(UiState *ui, int deck, ImVec2 a, ImVec2 b)
 
 /* -------------------------------------------------------------- row preview */
 
-// The table's Preview cell: the 3-band preview (PWV6) as a stacked half
-// waveform, rekordbox's row preview (the shader holds rbxport's measured
-// 128/256/128 scales), with hot cue badges and memory cue heads over it.
-// The upload and its cache are app.c's (rx_app_preview_wave).
+// The table's Preview cell: the preview tag of the waveform colour (PWV6,
+// PWAV or PWV4) drawn as the overview is, by the players' overview type:
+// the stacked half, rekordbox's row preview (the shader holds rbxport's
+// measured 128/256/128 scales), or centred with both halves; hot cue
+// badges and memory cue heads over it. The upload and its cache are
+// app.c's (rx_app_preview_wave).
 void ui_row_preview(UiState *ui, const RXTrack *t, ImVec2 a, ImVec2 b, bool analysing)
 {
     RXApp *app = ui->app;
@@ -613,13 +630,15 @@ void ui_row_preview(UiState *ui, const RXTrack *t, ImVec2 a, ImVec2 b, bool anal
         d.y1 = b.y;
         d.col0 = 0;
         d.col1 = rx_wave_columns(g);
-        d.mode = RX_WAVE_HALF_STACKED;
+        d.mode = ui->overview_full ? RX_WAVE_CENTRED : RX_WAVE_HALF_STACKED;
+        d.gain = 1.0f;
         d.inset_top = PX(1);
         d.alpha = t->missing ? 0.3f : 1.0f;
         rx_wave_draw(app->window, dl, g, &d);
+        ui->preview_mode_drawn = d.mode;
     } else if (!t->has_waveforms) {
-        // Unanalysed: a thin flat line.
-        float y = floorf(b.y - PX(2));
+        // Unanalysed: a thin flat line, where the waveform's silence would be.
+        float y = ui->overview_full ? floorf((a.y + b.y) * 0.5f) : floorf(b.y - PX(2));
         dl->AddLine(ImVec2(a.x, y), ImVec2(b.x, y), IM_COL32(0x44, 0x44, 0x44, 0xFF));
     }
     if (t->duration > 0 && !t->missing) {
@@ -635,7 +654,7 @@ void ui_row_preview(UiState *ui, const RXTrack *t, ImVec2 a, ImVec2 b, bool anal
             if (!rx_cue_is_hot(c))
                 continue;
             float x = floorf(ImMin(a.x + (float)(c->time / t->duration) * w, b.x - bsz));
-            dl->AddRectFilled(ImVec2(x, a.y), ImVec2(x + bsz, a.y + bsz), ui_rgb(ui_hot_cue_rgb(c)));
+            dl->AddRectFilled(ImVec2(x, a.y), ImVec2(x + bsz, a.y + bsz), ui_rgb(ui_hot_cue_rgb(ui, c)));
         }
     }
     if (analysing)

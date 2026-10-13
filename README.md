@@ -164,7 +164,18 @@ line `rxbox export STICK`.
   My Settings. `rxbox settings` lists the names and values and
   `rxbox config player.NAME VALUE` sets one; in the interface, File → Player
   settings (`Ctrl+,`) shows every one of them in Player, Mixer and Device
-  tabs and changes them in the library at once.
+  tabs and changes them in the library at once. The tempo range defaults to
+  ±6 %, not rekordbox's ±10 %.
+- rxbox's own interface follows the same settings, so it shows and starts
+  as the players will: the waveform colour and overview type (the player's
+  overview and detail, and the previews in the track table, half or full),
+  the key display (classic or Camelot keys everywhere), the waveform
+  position, hot cue colours, auto cue, the quantize beat value, play mode
+  (continue plays the next track of the view), and the deck's state at
+  startup (quantize, beat jump size, tempo range, master tempo, time mode;
+  the deck's buttons change only the running deck). The View menu's
+  waveform colour and key notation set those settings. The rest (jog, LCD,
+  language, the mixer...) only go on the stick.
 
 ## Syncing after a gig
 

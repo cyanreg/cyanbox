@@ -19,14 +19,16 @@
 # Then the variants, each a run with input given at set frames
 # (RXBOX_UI_EVENTS) and the state the interface logs with the screenshot
 # checked: CUE held while the window loses the keyboard is let go; Enter on
-# another track while one plays loads it at once (the playing one pauses,
-# the new one waits at its auto-cue, no question asked); the Add browser on
+# another track while one plays loads it at once (the playing one pauses
+# for the swap, the new one plays on, no question asked); the Add browser on
 # a folder it cannot read says so; Delete after a click on a cue in the
 # player's cue list deletes that cue and nothing else (with
-# RXBOX_UI_SWAYSOCK only: the click needs a known size). Last, the Player
+# RXBOX_UI_SWAYSOCK only: the click needs a known size). Then the Player
 # settings dialog, shot open, and a value picked in it with two clicks,
 # which must land in the library's setting table (the clicks with
-# RXBOX_UI_SWAYSOCK only).
+# RXBOX_UI_SWAYSOCK only). Last, the interface following two of those
+# settings: the overview type for the overview and the row previews, and
+# the key display for the deck's KEY.
 #
 # usage: screenshot.sh RXBOX OUTDIR
 
@@ -168,12 +170,12 @@ fi
 variant cue-focus "70:down:C,72:up:C,80:down:C,88:up:C,88:focus-out" \
     "track $ID playing 0 position 0\.00 "
 
-# Enter on the next row while the deck plays: the deck pauses and the other
-# track loads, paused at its auto-cue; nothing asks.
+# Enter on the next row while the deck plays: the deck pauses for the swap
+# and the other track loads and plays on; nothing asks.
 FRAMES=160
 export RXBOX_UI_SCREENSHOT_FRAME=140
 variant enter-loads "70:down:DownArrow,71:up:DownArrow,75:down:Enter,76:up:Enter" \
-    "track $ID2 playing 0 .*popup 0"
+    "track $ID2 playing 1 .*popup 0"
 unset FRAMES RXBOX_UI_SCREENSHOT_FRAME
 
 # The Add browser on a folder it cannot read ($HOME/Music) says why.
@@ -227,3 +229,19 @@ if [ -n "${RXBOX_UI_SWAYSOCK:-}" ]; then
              "first combo and its second item at 1600x900: $OUT/variant-settings-write.png)"
         cat "$OUT/variant-settings-write.png.log"; exit 1; }
 fi
+
+# The players' My Settings drive the interface: at their defaults the
+# overview and the row previews are the stacked half and the deck's KEY is
+# the classic name; with device.overview_waveform full and
+# device.key_display alphanumeric set (by `rxbox config`, as the Player
+# settings dialog writes them) both are drawn centred and KEY is the
+# Camelot code. The log says how the last frame drew them and what KEY
+# read; the names to expect are the ones `rxbox show` gives for the track.
+keys=$(rx show "$AUDIO/01-house.flac" | sed -n 's/^  key: \([^ ]*\) (Camelot \([0-9]*[AB]\),.*/\1 \2/p')
+[ -n "$keys" ] || { echo "FAIL: settings-follow: the first track has no key"; exit 1; }
+classic=${keys% *}
+camelot=${keys#* }
+variant settings-default "" "track $ID .*overview half previews half key $classic\$"
+rx config device.overview_waveform full > /dev/null
+rx config device.key_display alphanumeric > /dev/null
+variant settings-follow "" "track $ID .*overview centred previews centred key $camelot\$"

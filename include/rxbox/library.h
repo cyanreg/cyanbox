@@ -45,7 +45,10 @@ typedef struct RXKv { char *key; char *value; } RXKv;
 
 /* The settings, read from the `setting` table at open and written back by
  * rx_library_config_save. Keys in the table are "analysis.bpm_min",
- * "export.key_notation", "player.quantize" (a My Settings name), "ui.wave_palette"... */
+ * "export.key_notation", "player.quantize" (a My Settings name),
+ * "ui.traffic_light"... The interface's waveform colour, key notation and
+ * the deck's startup state are the players' My Settings (device.*,
+ * player.*), not ui.* keys: rxbox shows what the stick will carry. */
 typedef struct RXConfig {
     /* analysis.* */
     double bpm_min, bpm_max;    /* 0 = unset */
@@ -71,7 +74,6 @@ typedef struct RXConfig {
     char *audio_sink;           /* PipeWire node name, NULL = default */
 
     /* ui.* */
-    char  wave_palette[8];      /* 3band (default), blue, rgb */
     char  traffic_light[12];    /* the browser's key highlight (rx_key_reach_name): off,
                                    same, related1, related2, related3 (default) */
     int   detail_bars;          /* 12 */
@@ -116,7 +118,9 @@ typedef struct RXLibrary {
 /* Opens (creating when absent) the library at `root` (NULL = default),
  * migrates the schema if needed, loads every track and playlist, checks
  * which audio files are missing (stat; such tracks are kept, flagged
- * `missing` and shown greyed out; they come back when the file does). */
+ * `missing` and shown greyed out; they come back when the file does).
+ * Settings an older rxbox kept elsewhere move to the My Settings that now
+ * hold them, once (src/core/config.c, rx_core_config_migrate). */
 int  rx_library_open(RXLibrary *lib, const char *root);
 void rx_library_close(RXLibrary *lib);
 /* Re-checks `missing` on every track (also called by open). Returns how

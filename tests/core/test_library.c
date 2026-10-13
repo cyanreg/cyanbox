@@ -84,8 +84,8 @@ static void test_create_and_add(void)
     CHECK(lib.nb_tracks == 0 && lib.root_folder && !lib.root_folder->nb_playlists);
     CHECK(lib.cfg.snap_bpm && lib.cfg.auto_cues && !strcmp(lib.cfg.key_notation, "classic"));
     CHECK(lib.cfg.export_pdb && lib.cfg.export_onelibrary && lib.cfg.detail_bars == 12);
-    CHECK(!strcmp(lib.cfg.wave_palette, "3band"));
     CHECK(!strcmp(lib.cfg.traffic_light, "related3"));
+    CHECK(!lib.cfg.nb_player && !lib.cfg.nb_mixer && !lib.cfg.nb_device);
 
     sqlite3_stmt *st;
     sqlite3_prepare_v2(lib.db->db, "PRAGMA user_version", -1, &st, NULL);
@@ -201,7 +201,6 @@ static void test_edit_and_reopen(void)
     lib.cfg.audio_sink = rx_strdup("rxbox-null");
     lib.cfg.detail_bars = 16;
     lib.cfg.split_tree = 0.25f;
-    snprintf(lib.cfg.wave_palette, sizeof(lib.cfg.wave_palette), "rgb");
     snprintf(lib.cfg.traffic_light, sizeof(lib.cfg.traffic_light), "related1");
     lib.cfg.player = calloc(2, sizeof(RXKv));
     lib.cfg.player[0] = (RXKv) { rx_strdup("quantize"), rx_strdup("true") };
@@ -272,13 +271,20 @@ static void test_edit_and_reopen(void)
     CHECK(cfg->compat_transcode && cfg->export_pdb && cfg->detail_bars == 16 && cfg->split_tree == 0.25f);
     CHECK_STR(cfg->device_name, "MY STICK");
     CHECK_STR(cfg->audio_sink, "rxbox-null");
-    CHECK_STR(cfg->wave_palette, "rgb");
     CHECK_STR(cfg->traffic_light, "related1");
-    CHECK(cfg->nb_player == 2 && cfg->nb_device == 1 && cfg->nb_mixer == 0);
+    /* The Camelot export.key_notation, which an older View menu set, also
+     * set the players' key display once (rx_core_config_migrate). */
+    CHECK(cfg->nb_player == 2 && cfg->nb_device == 2 && cfg->nb_mixer == 0);
     if (cfg->nb_player == 2) {
         CHECK_STR(cfg->player[0].key, "quantize");
         CHECK_STR(cfg->player[1].key, "tempo_range");
         CHECK_STR(cfg->player[1].value, "10");
+    }
+    if (cfg->nb_device == 2) {
+        CHECK_STR(cfg->device[0].key, "waveform_color");
+        CHECK_STR(cfg->device[0].value, "3band");
+        CHECK_STR(cfg->device[1].key, "key_display");
+        CHECK_STR(cfg->device[1].value, "alphanumeric");
     }
     CHECK(rx_library_setting_get(&lib, "ui.columns", &v) == 0 && v && !strcmp(v, "title,artist,bpm"));
     free(v);
@@ -306,6 +312,80 @@ static void test_edit_and_reopen(void)
     CHECK(rx_library_open(&lib, root) == 0);
     CHECK(lib.cfg.nb_player == 1 && !lib.cfg.device_name);
     rx_library_close(&lib);
+}
+
+/* An older rxbox's ui.wave_palette, and the key notation its View menu
+ * kept in export.key_notation, become the players' device settings once. */
+static bool setting_is(const RXLibrary *lib, const char *key, const char *want)
+{
+    char *v = NULL;
+    int ret = rx_library_setting_get(lib, key, &v);
+    bool ok = want ? ret == 0 && v && !strcmp(v, want) : ret == RX_ERROR(ENOENT);
+    if (!ok)
+        fprintf(stderr, "%s: %s, want %s\n", key, ret == 0 && v ? v : "none", want ? want : "none");
+    free(v);
+    return ok;
+}
+
+static void test_settings_migration(void)
+{
+    char *dir = test_dir("library-settings");
+    char *lroot = rx_asprintf("%s/old", dir);
+    RXLibrary lib;
+    CHECK(rx_library_open(&lib, lroot) == 0);
+    CHECK(rx_library_setting_set(&lib, "ui.wave_palette", "rgb") == 0);
+    snprintf(lib.cfg.key_notation, sizeof(lib.cfg.key_notation), "open");
+    CHECK(rx_library_config_save(&lib) == 0);
+    rx_library_close(&lib);
+
+    CHECK(rx_library_open(&lib, lroot) == 0);
+    CHECK(setting_is(&lib, "ui.wave_palette", NULL));
+    CHECK(setting_is(&lib, "device.waveform_color", "rgb"));
+    CHECK(setting_is(&lib, "device.key_display", "alphanumeric"));
+    CHECK(setting_is(&lib, "export.key_notation", "open"));
+    CHECK(lib.cfg.nb_device == 2);
+    /* A pick of classic is kept: the migration does not come back. */
+    for (int i = 0; i < lib.cfg.nb_device; i++) {
+        if (!strcmp(lib.cfg.device[i].key, "key_display")) {
+            free(lib.cfg.device[i].value);
+            lib.cfg.device[i].value = rx_strdup("classic");
+        }
+    }
+    CHECK(rx_library_config_save(&lib) == 0);
+    rx_library_close(&lib);
+    CHECK(rx_library_open(&lib, lroot) == 0);
+    CHECK(setting_is(&lib, "device.key_display", "classic"));
+    CHECK(setting_is(&lib, "device.waveform_color", "rgb"));
+    rx_library_close(&lib);
+    free(lroot);
+
+    /* A colour the user set wins over the old palette, which only goes; a
+     * blue palette is the default and adds no row; classic adds none. */
+    lroot = rx_asprintf("%s/set", dir);
+    CHECK(rx_library_open(&lib, lroot) == 0);
+    CHECK(rx_library_setting_set(&lib, "ui.wave_palette", "3band") == 0);
+    CHECK(rx_library_setting_set(&lib, "device.waveform_color", "rgb") == 0);
+    rx_library_close(&lib);
+    CHECK(rx_library_open(&lib, lroot) == 0);
+    CHECK(setting_is(&lib, "ui.wave_palette", NULL));
+    CHECK(setting_is(&lib, "device.waveform_color", "rgb"));
+    CHECK(setting_is(&lib, "device.key_display", NULL));
+    rx_library_close(&lib);
+    free(lroot);
+
+    lroot = rx_asprintf("%s/blue", dir);
+    CHECK(rx_library_open(&lib, lroot) == 0);
+    CHECK(rx_library_setting_set(&lib, "ui.wave_palette", "blue") == 0);
+    rx_library_close(&lib);
+    CHECK(rx_library_open(&lib, lroot) == 0);
+    CHECK(setting_is(&lib, "ui.wave_palette", NULL));
+    CHECK(setting_is(&lib, "device.waveform_color", NULL));
+    CHECK(lib.cfg.nb_device == 0);
+    rx_library_close(&lib);
+    free(lroot);
+
+    test_rm_rf(dir);
+    free(dir);
 }
 
 /* The file is retagged: fields the user did not change follow it. */
@@ -853,6 +933,7 @@ int main(void)
 
     test_create_and_add();
     test_edit_and_reopen();
+    test_settings_migration();
     test_refresh();
     test_grid_migration();
     test_missing_relocate_remove();
