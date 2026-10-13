@@ -206,7 +206,10 @@ static void sync_record(void)
     r.settings[0].data = setting;
     r.settings[0].size = 4;
     r.nb_settings = 1;
-    CHECK_EQ(rx_sync_record_write(dir, &r), 0);
+    int root = rx_stick_root(dir);
+    CHECK(root >= 0);
+    CHECK_EQ(rx_sync_record_write(root, &r), 0);
+    close(root);
 
     RXSyncRecord back;
     CHECK_EQ(rx_sync_record_read(dir, &back), 0);

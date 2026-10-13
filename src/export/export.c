@@ -39,16 +39,19 @@
  *  - the databases are built during the checks, so a library they cannot
  *    hold (a name no DeviceSQL page fits) stops the export before anything
  *    is written;
- *  - the export refuses a stick whose Contents or PIONEER directories are
- *    symbolic links (FAT has none; a staging directory may), so nothing is
- *    written or deleted out of the stick;
+ *  - every file written, read back or deleted is resolved below the
+ *    stick's root with no symbolic link followed and no other file system
+ *    entered (rx_stick_open; FAT has no links, a staging directory may,
+ *    at any depth), and the checks name such a path before anything is
+ *    written, so nothing is written or deleted out of the stick;
  *  - the old sync record is removed before the databases are replaced and
  *    the new one written after them, so a record never describes other
  *    databases than the stick's;
- *  - prune never deletes a file that is, by the file system's own lookup,
- *    one the plan writes (FAT and exFAT fold case further than
- *    rx_plan_fold_case does), a library track's file or anything under the
- *    library's root, wherever those are. */
+ *  - prune never deletes a file that is, by the file system's own lookup
+ *    of the plan's spelling and the file found, back to back as it
+ *    deletes, one the plan writes, nor a library track's file or anything
+ *    under the library's root, wherever those are; its walk follows no
+ *    link and does not leave the stick's file system. */
 
 #include "rxbox/export.h"
 
@@ -75,6 +78,11 @@ void rx_export_options_default(RXExportOptions *o)
 typedef struct Ctx {
     RXLibrary              *lib;
     const char             *dest;
+    /* The stick's root (rx_stick_root): every file written, read back or
+     * deleted is resolved below it (export_priv.h), and the device it is
+     * on, which prune's walk does not leave. */
+    int                     root;
+    dev_t                   dev;
     const RXExportOptions  *opt;
     rx_progress_cb          cb;
     void                   *opaque;
@@ -107,7 +115,8 @@ static void reportf(Ctx *c, const char *stage, const char *fmt, ...) RX_PRINTF(3
 #define PUT_QUEUE   64
 
 typedef struct PutJob {
-    char    *path;              /* on the stick, full; NULL for a close */
+    int      root;              /* the stick's (Ctx.root) */
+    char    *path;              /* the stick path; NULL for a close */
     uint8_t *data;
     size_t   size;
     bool     owns;              /* free the data once written */
@@ -122,7 +131,7 @@ static void put_job(void *arg)
         j->ret = close(j->fd) < 0 ? RX_ERROR(errno) : 0;
         j->fd = -1;
     } else {
-        j->ret = rx_stick_write(j->path, j->data, j->size);
+        j->ret = rx_stick_write(j->root, j->path, j->data, j->size);
     }
     if (j->owns)
         free(j->data);
@@ -156,7 +165,7 @@ static int put_submit(Ctx *c, const char *path, uint8_t *data, size_t size, bool
         free(p);
         return RX_ERROR(ENOMEM);
     }
-    *j = (PutJob) { .path = p, .data = data, .size = size, .owns = owns, .fd = fd };
+    *j = (PutJob) { .root = c->root, .path = p, .data = data, .size = size, .owns = owns, .fd = fd };
     if (!rx_array_push(&c->puts, &j)) {
         j->owns = false;
         j->fd = -1;
@@ -337,11 +346,12 @@ static int select_tracks(Ctx *c, const RXPlaylist *const *pls, int nb_pls, RXTra
 
 /* -------------------------------------------------------------- files */
 
-/* dj's _same_file(): same size, mtime within FAT's 2 s resolution. */
-static bool same_file(const char *src, const char *dst)
+/* dj's _same_file(): same size, mtime within FAT's 2 s resolution. The
+ * stick's copy is a regular file reached through no link. */
+static bool same_file(int root, const char *src, const char *stick_path)
 {
     struct stat a, b;
-    if (stat(src, &a) < 0 || stat(dst, &b) < 0)
+    if (root < 0 || stat(src, &a) < 0 || rx_stick_stat(root, stick_path, &b) < 0 || !S_ISREG(b.st_mode))
         return false;
     return a.st_size == b.st_size && llabs((long long)a.st_mtime - (long long)b.st_mtime) <= 2;
 }
@@ -358,31 +368,20 @@ static bool same_file(const char *src, const char *dst)
  * item) moves the interface and lets it cancel inside a long file. */
 static int copy_file(Ctx *c, const char *src, const char *dst, int step, int steps)
 {
-    char *dir = rx_strdup(dst);
-    if (!dir)
-        return RX_ERROR(ENOMEM);
-    char *slash = strrchr(dir, '/');
-    int ret = 0;
-    if (slash && slash != dir) {
-        *slash = '\0';
-        ret = rx_mkdir_p(dir);
-    }
-    free(dir);
-    if (ret < 0)
-        return ret;
-
     enum { CHUNK = 1 << 20, ALIGN = 4096 };
+    int ret = 0;
     int in = open(src, O_RDONLY | O_CLOEXEC);
     if (in < 0)
         return RX_ERROR(errno);
-    int flags = O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC;
-    int out = open(dst, flags | O_DIRECT, 0644);
+    int flags = O_WRONLY | O_CREAT | O_TRUNC;
+    int out = rx_stick_open(c->root, dst, flags | O_DIRECT, 0644);
     bool direct = out >= 0;
-    if (out < 0 && errno == EINVAL)
-        out = open(dst, flags, 0644);
+    if (out == RX_ERROR(EINVAL))
+        out = rx_stick_open(c->root, dst, flags, 0644);
     uint8_t *buf = NULL;
     if (out < 0 || posix_memalign((void **)&buf, ALIGN, CHUNK)) {
-        ret = out < 0 ? RX_ERROR(errno) : RX_ERROR(ENOMEM);
+        ret = out < 0 ? out : RX_ERROR(ENOMEM);
+        out = -1;
         buf = NULL;
         goto out;
     }
@@ -456,25 +455,21 @@ out:
  * returns. */
 static int write_file(Ctx *c, const char *stick_path, const void *data, size_t size)
 {
-    char *p = rx_stick_file(c->dest, stick_path);
-    if (!p)
-        return RX_ERROR(ENOMEM);
-    int ret = rx_stick_write(p, data, size);
+    int ret = rx_stick_write(c->root, stick_path, data, size);
     if (ret < 0)
-        reportf(c, "database", "cannot write %s: %s", p, strerror(-ret));
-    free(p);
+        reportf(c, "database", "cannot write %s%s: %s", c->dest, stick_path, strerror(-ret));
     return ret;
 }
 
-/* Whether the stick already holds exactly these bytes at `path`. */
-static bool unchanged(const char *path, const void *data, size_t size)
+/* Whether the stick already holds exactly these bytes at `stick_path`. */
+static bool unchanged(Ctx *c, const char *stick_path, const void *data, size_t size)
 {
     struct stat st;
-    if (stat(path, &st) < 0 || !S_ISREG(st.st_mode) || st.st_size != (off_t)size)
+    if (rx_stick_stat(c->root, stick_path, &st) < 0 || !S_ISREG(st.st_mode) || st.st_size != (off_t)size)
         return false;
     uint8_t *old;
     size_t n;
-    if (rx_file_read(path, &old, &n) < 0)
+    if (rx_stick_read_file(c->root, stick_path, &old, &n) < 0)
         return false;
     bool same = n == size && !memcmp(old, data, size);
     free(old);
@@ -488,77 +483,91 @@ static bool unchanged(const char *path, const void *data, size_t size)
  * counts the files written. */
 static int put_file(Ctx *c, const char *stick_path, uint8_t *data, size_t size, bool owns, int *written)
 {
-    char *p = rx_stick_file(c->dest, stick_path);
-    if (!p) {
-        if (owns)
-            free(data);
-        return RX_ERROR(ENOMEM);
-    }
     int ret = 0;
-    if (unchanged(p, data, size)) {
+    if (unchanged(c, stick_path, data, size)) {
         if (owns)
             free(data);
-    } else if ((ret = put_submit(c, p, data, size, owns, -1)) < 0) {
+    } else if ((ret = put_submit(c, stick_path, data, size, owns, -1)) < 0) {
         if (owns)
             free(data);
     } else {
         (*written)++;
     }
-    free(p);
     return ret;
 }
 
 static void remove_file(Ctx *c, const char *stick_path)
 {
-    char *p = rx_stick_file(c->dest, stick_path);
-    if (p && unlink(p) == 0)
+    if (rx_stick_unlink(c->root, stick_path, 0) == 0)
         reportf(c, "database", "removed stale %s", stick_path);
-    free(p);
 }
 
 /* ---------------------------------------------------------- our files */
 
+/* A stick path and its key under the stick's case rules
+ * (rx_plan_fold_case: two paths with one key are one file on FAT and
+ * exFAT). */
+typedef struct OurPath {
+    char *key, *path;
+} OurPath;
+
 typedef struct Ours {
-    char **paths;                /* folded, sorted */
-    int    nb, cap;
+    OurPath *v;                  /* sorted by key (ours_sort) */
+    int      nb, cap;
 } Ours;
 
 static int ours_add(Ours *o, const char *stick_path)
 {
     if (o->nb == o->cap) {
         int cap = o->cap ? 2 * o->cap : 256;
-        char **p = realloc(o->paths, (size_t)cap * sizeof(*p));
-        if (!p)
+        OurPath *v = realloc(o->v, (size_t)cap * sizeof(*v));
+        if (!v)
             return RX_ERROR(ENOMEM);
-        o->paths = p;
+        o->v = v;
         o->cap = cap;
     }
-    if (!(o->paths[o->nb] = rx_plan_fold_case(stick_path)))
+    char *key = rx_plan_fold_case(stick_path), *path = rx_strdup(stick_path);
+    if (!key || !path) {
+        free(key);
+        free(path);
         return RX_ERROR(ENOMEM);
-    o->nb++;
+    }
+    o->v[o->nb++] = (OurPath) { .key = key, .path = path };
     return 0;
 }
 
-static int cmp_str(const void *a, const void *b)
+static int cmp_our(const void *a, const void *b)
 {
-    return strcmp(*(char *const *)a, *(char *const *)b);
+    return strcmp(((const OurPath *)a)->key, ((const OurPath *)b)->key);
 }
 
-static bool ours_has(const Ours *o, const char *stick_path)
+static void ours_sort(Ours *o)
 {
-    if (!o->nb)
-        return false;
-    char *f = rx_plan_fold_case(stick_path);
-    bool has = f && bsearch(&f, o->paths, (size_t)o->nb, sizeof(*o->paths), cmp_str);
-    free(f);
-    return has;
+    if (o->nb)
+        qsort(o->v, (size_t)o->nb, sizeof(*o->v), cmp_our);
+}
+
+/* The first path under `key`, or -1. */
+static int ours_find(const Ours *o, const char *key)
+{
+    int lo = 0, hi = o->nb;
+    while (lo < hi) {
+        int mid = lo + (hi - lo) / 2;
+        if (strcmp(o->v[mid].key, key) < 0)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    return lo < o->nb && !strcmp(o->v[lo].key, key) ? lo : -1;
 }
 
 static void ours_free(Ours *o)
 {
-    for (int i = 0; i < o->nb; i++)
-        free(o->paths[i]);
-    free(o->paths);
+    for (int i = 0; i < o->nb; i++) {
+        free(o->v[i].key);
+        free(o->v[i].path);
+    }
+    free(o->v);
     *o = (Ours) { 0 };
 }
 
@@ -588,20 +597,25 @@ static int collect_ours(const RXPlan *plan, Ours *o)
             ret = RX_ERROR(ENOMEM);
         free(dir);
     }
-    if (o->nb)
-        qsort(o->paths, (size_t)o->nb, sizeof(*o->paths), cmp_str);
+    ours_sort(o);
     return ret;
 }
 
-/* Files prune must keep whatever their names: identified by device and
- * inode, which the file system resolves with its own case rules. */
+/* What prune keeps besides the plan's files: the library's own (its
+ * tracks and the transcodes copied) where they are on the stick, by stick
+ * path, and everything under the library's root. Inode numbers seen at
+ * the start are a last resort that can only keep more: FAT and exFAT make
+ * them up as they read inodes in, so a file read in again (the cache full
+ * of a big export) has another, and a number seen at the start may be
+ * another file's by the time the walk gets there. */
 typedef struct Keep {
     dev_t dev;
     ino_t ino;
 } Keep;
 
 typedef struct KeepSet {
-    RXArray files;               /* Keep, sorted */
+    Ours    lib;                 /* the library's files on the stick */
+    RXArray inodes;              /* Keep, sorted */
     char   *lib_root;            /* the library's root, resolved; NULL if unknown */
 } KeepSet;
 
@@ -613,114 +627,191 @@ static int cmp_keep(const void *a, const void *b)
     return x->ino < y->ino ? -1 : x->ino > y->ino;
 }
 
-static int keep_add(KeepSet *k, const char *path)
+static bool keep_has(const KeepSet *k, const struct stat *st)
+{
+    Keep e = { st->st_dev, st->st_ino };
+    return k->inodes.nb && bsearch(&e, k->inodes.data, k->inodes.nb, sizeof(e), cmp_keep);
+}
+
+static void keep_free(KeepSet *k)
+{
+    ours_free(&k->lib);
+    rx_array_free(&k->inodes);
+    free(k->lib_root);
+}
+
+/* A library file: its inode, and its stick path when it is on the stick
+ * (`dest` is the stick's root resolved, `n` its length). */
+static int keep_add(const Ctx *c, KeepSet *k, const char *dest, size_t n, const char *path)
 {
     struct stat st;
     if (!path || stat(path, &st) < 0 || !S_ISREG(st.st_mode))
         return 0;
     Keep e = { st.st_dev, st.st_ino };
-    return rx_array_push(&k->files, &e) ? 0 : RX_ERROR(ENOMEM);
-}
-
-static bool keep_has(const KeepSet *k, const struct stat *st)
-{
-    Keep e = { st->st_dev, st->st_ino };
-    return k->files.nb && bsearch(&e, k->files.data, k->files.nb, sizeof(e), cmp_keep);
-}
-
-static void keep_free(KeepSet *k)
-{
-    rx_array_free(&k->files);
-    free(k->lib_root);
-}
-
-/* Everything the export writes, every library track's file and the
- * transcodes, as they are on disk now. */
-static int collect_keep(Ctx *c, const RXPlan *plan, const Ours *o, KeepSet *k)
-{
-    rx_array_init(&k->files, sizeof(Keep));
-    k->lib_root = c->lib->root ? realpath(c->lib->root, NULL) : NULL;
+    if (!rx_array_push(&k->inodes, &e))
+        return RX_ERROR(ENOMEM);
+    if (!dest || st.st_dev != c->dev)
+        return 0;
+    char *real = realpath(path, NULL);
     int ret = 0;
-    for (int i = 0; i < o->nb && ret >= 0; i++) {
-        /* Every file written, by its folded name (which a case-insensitive
-         * stick resolves) and, below, the plan's own spelling. */
-        char *p = rx_stick_file(c->dest, o->paths[i]);
-        ret = p ? keep_add(k, p) : RX_ERROR(ENOMEM);
-        free(p);
-    }
-    for (int i = 0; i < plan->nb_tracks && ret >= 0; i++) {
-        const RXPlanTrack *t = &plan->tracks[i];
-        char *p = rx_stick_file(c->dest, t->usb_path);
-        ret = p ? keep_add(k, p) : RX_ERROR(ENOMEM);
-        free(p);
-        if (ret >= 0)
-            ret = keep_add(k, t->source);
-    }
-    for (int i = 0; i < c->lib->nb_tracks && ret >= 0; i++)
-        ret = keep_add(k, c->lib->tracks[i]->path);
-    if (k->files.nb)
-        qsort(k->files.data, k->files.nb, sizeof(Keep), cmp_keep);
+    if (real && !strncmp(real, dest, n) && real[n] == '/')
+        ret = ours_add(&k->lib, real + n);
+    free(real);
     return ret;
 }
 
-/* Files under the stick's audio, analysis and artwork trees that this
- * export does not write. */
-static int find_extra(Ctx *c, const Ours *o, const KeepSet *k, const char *stick_dir, RXArray *extra)
+static int collect_keep(Ctx *c, const RXPlan *plan, KeepSet *k)
 {
-    char *dir = rx_stick_file(c->dest, stick_dir);
-    DIR *d = dir ? opendir(dir) : NULL;
-    int ret = dir ? 0 : RX_ERROR(ENOMEM);
+    rx_array_init(&k->inodes, sizeof(Keep));
+    k->lib_root = c->lib->root ? realpath(c->lib->root, NULL) : NULL;
+    char *dest = realpath(c->dest, NULL);
+    size_t n = dest ? strlen(dest) : 0;
+    while (n && dest[n - 1] == '/')
+        n--;
+    int ret = 0;
+    for (int i = 0; i < plan->nb_tracks && ret >= 0; i++) {
+        const RXPlanTrack *t = &plan->tracks[i];
+        struct stat st;
+        if (rx_stick_stat(c->root, t->usb_path, &st) >= 0 && S_ISREG(st.st_mode)) {
+            Keep e = { st.st_dev, st.st_ino };
+            if (!rx_array_push(&k->inodes, &e))
+                ret = RX_ERROR(ENOMEM);
+        }
+        if (ret >= 0)
+            ret = keep_add(c, k, dest, n, t->source);
+    }
+    for (int i = 0; i < c->lib->nb_tracks && ret >= 0; i++)
+        ret = keep_add(c, k, dest, n, c->lib->tracks[i]->path);
+    free(dest);
+    if (k->inodes.nb)
+        qsort(k->inodes.data, k->inodes.nb, sizeof(Keep), cmp_keep);
+    ours_sort(&k->lib);
+    return ret;
+}
+
+/* Whether the file `st` is, now, the one a path in `o` under `key` names. */
+static bool same_as(const Ctx *c, const Ours *o, const char *key, const struct stat *st)
+{
+    for (int i = ours_find(o, key); i >= 0 && i < o->nb && !strcmp(o->v[i].key, key); i++) {
+        struct stat s;
+        if (rx_stick_stat(c->root, o->v[i].path, &s) >= 0 && s.st_dev == st->st_dev && s.st_ino == st->st_ino)
+            return true;
+    }
+    return false;
+}
+
+/* Whether prune keeps the file `name` in the open directory `dir` (the
+ * stick path `stick_path`): a file the plan writes or a library file on
+ * the stick, the file system resolving their spelling and the file found
+ * back to back. The file is held open while the other is looked up, so
+ * its inode number cannot change in between; on a case-sensitive staging
+ * directory a name that differs from the plan's in case alone is another
+ * file. A file that cannot be looked at is not prune's to judge. */
+static bool keep_file(const Ctx *c, const Ours *o, const KeepSet *k, int dir, const char *name,
+                      const char *stick_path)
+{
+    char *key = rx_plan_fold_case(stick_path);
+    int fd = openat(dir, name, O_PATH | O_NOFOLLOW | O_CLOEXEC);
+    struct stat st;
+    bool keep = !key || fd < 0 || fstat(fd, &st) < 0 || !S_ISREG(st.st_mode) || st.st_dev != c->dev ||
+                same_as(c, o, key, &st) || same_as(c, &k->lib, key, &st) || keep_has(k, &st);
+    if (fd >= 0)
+        close(fd);
+    free(key);
+    return keep;
+}
+
+/* Whether the open directory `fd` is the library's root (looked up now,
+ * with `fd` held open). */
+static bool is_lib_root(const KeepSet *k, int fd)
+{
+    struct stat a, b;
+    return k->lib_root && fstat(fd, &a) == 0 && stat(k->lib_root, &b) == 0 && a.st_dev == b.st_dev &&
+           a.st_ino == b.st_ino;
+}
+
+/* Files under the open directory `fd` (the stick's `stick_dir`; this takes
+ * the descriptor over) that this export does not write. Nothing through a
+ * link or on another file system mounted on the stick is looked at. */
+static int find_extra(const Ctx *c, const Ours *o, const KeepSet *k, int fd, const char *stick_dir,
+                      RXArray *extra)
+{
+    DIR *d = fdopendir(fd);
+    if (!d) {
+        close(fd);
+        return 0;
+    }
+    int ret = 0;
     struct dirent *e;
-    while (d && ret >= 0 && (e = readdir(d))) {
+    while (ret >= 0 && (e = readdir(d))) {
         if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, ".."))
             continue;
         char *sub = rx_asprintf("%s/%s", stick_dir, e->d_name);
-        char *full = sub ? rx_stick_file(c->dest, sub) : NULL;
         struct stat st;
-        if (!sub || !full) {
+        if (!sub) {
             ret = RX_ERROR(ENOMEM);
-        } else if (lstat(full, &st) < 0) {
-            /* Gone meanwhile, or unreadable: not ours to judge. */
+        } else if (fstatat(dirfd(d), e->d_name, &st, AT_SYMLINK_NOFOLLOW) < 0 || st.st_dev != c->dev) {
+            /* Gone meanwhile, unreadable, or another file system: not ours
+             * to judge. */
         } else if (S_ISDIR(st.st_mode)) {
-            char *real = k->lib_root ? realpath(full, NULL) : NULL;
-            if (!real || strcmp(real, k->lib_root))
-                ret = find_extra(c, o, k, sub, extra);
-            free(real);
-        } else if (S_ISREG(st.st_mode) && !ours_has(o, sub) && !keep_has(k, &st)) {
-            char *keep = rx_strdup(sub);
-            if (!keep || !rx_array_push(extra, &keep)) {
-                free(keep);
+            int sfd = openat(dirfd(d), e->d_name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+            if (sfd >= 0 && !is_lib_root(k, sfd))
+                ret = find_extra(c, o, k, sfd, sub, extra);
+            else if (sfd >= 0)
+                close(sfd);
+        } else if (S_ISREG(st.st_mode) && !keep_file(c, o, k, dirfd(d), e->d_name, sub)) {
+            if (rx_array_push(extra, &sub))
+                sub = NULL;
+            else
                 ret = RX_ERROR(ENOMEM);
-            }
         }
         free(sub);
-        free(full);
     }
-    if (d)
-        closedir(d);
-    free(dir);
+    closedir(d);
     return ret;
 }
 
-/* Removes the directories left empty under `full` (not itself); true
- * when nothing is left in it. */
-static bool prune_empty(const char *full)
+/* Deletes a file find_extra() listed unless, looked at again now, it is
+ * one to keep: 1 deleted, 0 kept, or an error. */
+static int delete_extra(const Ctx *c, const Ours *o, const KeepSet *k, const char *stick_path)
 {
-    DIR *d = opendir(full);
-    if (!d)
+    const char *base = strrchr(stick_path, '/') + 1;
+    char *parent = rx_strndup(stick_path, (size_t)(base - 1 - stick_path));
+    int dir = parent ? rx_stick_open(c->root, parent, O_PATH | O_DIRECTORY, 0) : RX_ERROR(ENOMEM);
+    free(parent);
+    if (dir < 0)
+        return dir;
+    int ret = 0;
+    if (!keep_file(c, o, k, dir, base, stick_path))
+        ret = unlinkat(dir, base, 0) < 0 ? RX_ERROR(errno) : 1;
+    close(dir);
+    return ret;
+}
+
+/* Removes the directories left empty under the open directory `fd` (not
+ * itself; this takes the descriptor over); true when nothing is left in
+ * it. */
+static bool prune_empty(int fd, dev_t dev)
+{
+    DIR *d = fdopendir(fd);
+    if (!d) {
+        close(fd);
         return false;
+    }
     bool empty = true;
     struct dirent *e;
     while ((e = readdir(d))) {
         if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, ".."))
             continue;
-        char *sub = rx_asprintf("%s/%s", full, e->d_name);
         struct stat st;
-        bool removed = sub && lstat(sub, &st) == 0 && S_ISDIR(st.st_mode) && prune_empty(sub) &&
-                       rmdir(sub) == 0;
+        bool removed = false;
+        if (fstatat(dirfd(d), e->d_name, &st, AT_SYMLINK_NOFOLLOW) == 0 && S_ISDIR(st.st_mode) &&
+            st.st_dev == dev) {
+            int sub = openat(dirfd(d), e->d_name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+            removed = sub >= 0 && prune_empty(sub, dev) && unlinkat(dirfd(d), e->d_name, AT_REMOVEDIR) == 0;
+        }
         if (!removed)
             empty = false;
-        free(sub);
     }
     closedir(d);
     return empty;
@@ -728,20 +819,17 @@ static bool prune_empty(const char *full)
 
 /* ---------------------------------------------------------------- checks */
 
-
 /* The directories the export writes into and prunes: real directories
  * on the stick, never links out of it. */
 static const char *const stick_dirs[] = {
     "/Contents", "/PIONEER", "/PIONEER/rekordbox", "/PIONEER/USBANLZ", "/PIONEER/Artwork", "/PIONEER/rxbox",
 };
 
-static bool stick_dir_ok(const char *dest, const char *stick_dir)
+static bool stick_dir_ok(const Ctx *c, const char *stick_dir)
 {
-    char *p = rx_stick_file(dest, stick_dir);
     struct stat st;
-    bool ok = p && (lstat(p, &st) < 0 ? errno == ENOENT : S_ISDIR(st.st_mode));
-    free(p);
-    return ok;
+    int ret = rx_stick_stat(c->root, stick_dir, &st);
+    return ret < 0 ? ret == RX_ERROR(ENOENT) : S_ISDIR(st.st_mode);
 }
 
 static int64_t round_up(int64_t n, int64_t cluster)
@@ -757,24 +845,22 @@ static void account(int64_t new_size, int64_t old_size, int64_t cluster, int64_t
     *need += RX_MAX(n - o, 0);
 }
 
-static int64_t stick_size(const char *dest, const char *stick_path)
+static int64_t stick_size(int root, const char *stick_path)
 {
-    char *p = rx_stick_file(dest, stick_path);
-    int64_t n = p ? RX_MAX(rx_file_size(p), 0) : 0;
-    free(p);
-    return n;
+    struct stat st;
+    return root >= 0 && rx_stick_stat(root, stick_path, &st) >= 0 && S_ISREG(st.st_mode) ? st.st_size : 0;
 }
 
 int64_t rx_export_space_needed(const RXPlan *plan, const char *dest, int64_t cluster)
 {
     cluster = RX_MAX(cluster, 1);
     int64_t need = DB_RESERVE;
+    /* Without the stick, everything counts as new. */
+    int root = rx_stick_root(dest);
     for (int i = 0; i < plan->nb_tracks; i++) {
         const RXPlanTrack *t = &plan->tracks[i];
-        char *dst = rx_stick_file(dest, t->usb_path);
-        if (dst && !same_file(t->source, dst))
-            account(t->file_size, RX_MAX(rx_file_size(dst), 0), cluster, &need);
-        free(dst);
+        if (!same_file(root, t->source, t->usb_path))
+            account(t->file_size, stick_size(root, t->usb_path), cluster, &need);
         /* The analysis files, counted as if rewritten: the waveform details
          * take 1 + 2 bytes (.EXT) and 3 bytes (.2EX) a column at 150
          * columns a second (docs/anlz.md 4.9-4.12), the beats 8 bytes each
@@ -790,7 +876,7 @@ int64_t rx_export_space_needed(const RXPlan *plan, const char *dest, int64_t clu
         const char *ext[3] = { ".DAT", ".EXT", ".2EX" };
         for (int k = 0; k < 3; k++) {
             char *p = t->anlz_dir ? rx_plan_anlz_path(t, ext[k]) : NULL;
-            account(sizes[k], p ? stick_size(dest, p) : 0, cluster, &need);
+            account(sizes[k], p ? stick_size(root, p) : 0, cluster, &need);
             free(p);
         }
     }
@@ -800,11 +886,13 @@ int64_t rx_export_space_needed(const RXPlan *plan, const char *dest, int64_t clu
         const char *fmt[4] = { "%s/a%u.jpg", "%s/a%u_m.jpg", "%s/b%u.jpg", "%s/b%u_m.jpg" };
         for (int k = 0; dir && k < 4; k++) {
             char *p = rx_asprintf(fmt[k], dir, a->id);
-            account((int64_t)(k & 1 ? a->size240 : a->size80), p ? stick_size(dest, p) : 0, cluster, &need);
+            account((int64_t)(k & 1 ? a->size240 : a->size80), p ? stick_size(root, p) : 0, cluster, &need);
             free(p);
         }
         free(dir);
     }
+    if (root >= 0)
+        close(root);
     return need;
 }
 
@@ -861,18 +949,83 @@ static int build_databases(Ctx *c, const RXPlan *plan)
     return ret;
 }
 
+/* A file the export writes, looked up before anything is written: a link
+ * or another file system on its way (rx_stick_open's rules) is refused
+ * now rather than half way through. `bad` counts them; the first few are
+ * named. */
+static void check_path(Ctx *c, const char *stick_path, int *bad)
+{
+    int fd = rx_stick_open(c->root, stick_path, O_PATH | O_NOFOLLOW, 0);
+    struct stat st;
+    int ret = fd;
+    if (fd >= 0) {
+        ret = fstat(fd, &st) < 0 ? RX_ERROR(errno) : S_ISLNK(st.st_mode) ? RX_ERROR(ELOOP) : 0;
+        close(fd);
+    }
+    if (ret != RX_ERROR(ELOOP) && ret != RX_ERROR(EXDEV))
+        return;
+    if ((*bad)++ < 10)
+        reportf(c, "check", "%s%s: %s; not writing through it", c->dest, stick_path,
+                ret == RX_ERROR(EXDEV) ? "another file system is mounted on the way" : "a symbolic link on the way");
+}
+
+static int check_paths(Ctx *c, const RXPlan *plan)
+{
+    static const char *const fixed[] = {
+        "/PIONEER/MYSETTING.DAT", "/PIONEER/MYSETTING2.DAT", "/PIONEER/DJMMYSETTING.DAT", "/PIONEER/DEVSETTING.DAT",
+        "/PIONEER/rekordbox/export.pdb", "/PIONEER/rekordbox/exportExt.pdb", "/PIONEER/rekordbox/exportLibrary.db",
+        "/PIONEER/rekordbox/exportLibrary.db-wal", "/PIONEER/rekordbox/exportLibrary.db-shm", RX_SYNC_PATH,
+    };
+    int bad = 0;
+    for (size_t i = 0; i < RX_ARRAY_ELEMS(fixed); i++)
+        check_path(c, fixed[i], &bad);
+    const char *ext[3] = { ".DAT", ".EXT", ".2EX" };
+    for (int i = 0; i < plan->nb_tracks; i++) {
+        const RXPlanTrack *t = &plan->tracks[i];
+        check_path(c, t->usb_path, &bad);
+        for (int k = 0; k < 3; k++) {
+            char *p = rx_plan_anlz_path(t, ext[k]);
+            if (!p)
+                return RX_ERROR(ENOMEM);
+            check_path(c, p, &bad);
+            free(p);
+        }
+    }
+    const char *fmt[4] = { "%s/a%u.jpg", "%s/a%u_m.jpg", "%s/b%u.jpg", "%s/b%u_m.jpg" };
+    for (int i = 0; i < plan->nb_artworks; i++) {
+        uint32_t id = plan->artworks[i].id;
+        char *dir = rx_plan_artwork_dir(id);
+        for (int k = 0; k < 4; k++) {
+            char *p = dir ? rx_asprintf(fmt[k], dir, id) : NULL;
+            if (!p) {
+                free(dir);
+                return RX_ERROR(ENOMEM);
+            }
+            check_path(c, p, &bad);
+            free(p);
+        }
+        free(dir);
+    }
+    if (bad > 10)
+        reportf(c, "check", "and %d more paths through a link or another file system", bad - 10);
+    return bad ? RX_ERROR(ELOOP) : 0;
+}
+
 static int checks(Ctx *c, const RXPlan *plan)
 {
     int ret = 0;
     char fs[64];
 
     for (size_t i = 0; i < RX_ARRAY_ELEMS(stick_dirs); i++) {
-        if (!stick_dir_ok(c->dest, stick_dirs[i])) {
+        if (!stick_dir_ok(c, stick_dirs[i])) {
             reportf(c, "check", "%s%s is not a directory on the stick (a link?); not writing through it",
                     c->dest, stick_dirs[i]);
             ret = ret ? ret : RX_ERROR(ENOTDIR);
         }
     }
+    int r = check_paths(c, plan);
+    if (r < 0)
+        ret = ret ? ret : r;
 
     if (!rx_stick_is_mounted(c->dest))
         reportf(c, "check", "warning: %s is not a mount point; writing into a directory", c->dest);
@@ -895,7 +1048,8 @@ static int checks(Ctx *c, const RXPlan *plan)
         }
     }
 
-    /* Stick paths on the stick and unique (case-insensitively, as FAT). */
+    /* Stick paths on the stick and unique as FAT and exFAT compare names
+     * (rx_plan_fold_case). */
     Ours o = { 0 };
     for (int i = 0; i < plan->nb_tracks; i++) {
         if (!rx_stick_path_safe(plan->tracks[i].usb_path)) {
@@ -905,11 +1059,11 @@ static int checks(Ctx *c, const RXPlan *plan)
         if (ours_add(&o, plan->tracks[i].usb_path) < 0)
             ret = ret ? ret : RX_ERROR(ENOMEM);
     }
-    if (o.nb)
-        qsort(o.paths, (size_t)o.nb, sizeof(*o.paths), cmp_str);
+    ours_sort(&o);
     for (int i = 1; i < o.nb; i++) {
-        if (!strcmp(o.paths[i], o.paths[i - 1])) {
-            reportf(c, "check", "two tracks map to %s", o.paths[i]);
+        if (!strcmp(o.v[i].key, o.v[i - 1].key)) {
+            reportf(c, "check", "two tracks map to one file on the stick: %s and %s", o.v[i - 1].path,
+                    o.v[i].path);
             ret = ret ? ret : RX_ERROR(EEXIST);
         }
     }
@@ -919,7 +1073,7 @@ static int checks(Ctx *c, const RXPlan *plan)
      * would be lost: export.pdb and exportLibrary.db are rebuilt, the ANLZ
      * cue lists rewritten. */
     RXStickState s;
-    int r = rx_stick_read(c->lib, c->dest, &s);
+    r = rx_stick_read(c->lib, c->dest, &s);
     if (r >= 0) {
         RXSyncItem *items;
         int nb;
@@ -1043,15 +1197,11 @@ static int write_databases(Ctx *c, const RXPlan *plan)
     /* The old sync record first: from here on it would describe databases
      * the stick no longer has, and the sync would trust its ids. Without
      * one the sync only proposes additions. */
-    char *rec = rx_stick_file(c->dest, RX_SYNC_PATH);
-    if (!rec)
-        return RX_ERROR(ENOMEM);
-    ret = unlink(rec) < 0 && errno != ENOENT ? RX_ERROR(errno) : 0;
-    if (ret < 0)
-        reportf(c, "database", "cannot replace %s: %s", rec, strerror(-ret));
-    free(rec);
-    if (ret < 0)
+    ret = rx_stick_unlink(c->root, RX_SYNC_PATH, 0);
+    if (ret < 0 && ret != RX_ERROR(ENOENT)) {
+        reportf(c, "database", "cannot replace %s%s: %s", c->dest, RX_SYNC_PATH, strerror(-ret));
         return ret;
+    }
 
     RXSettingsFile files[4];
     int nf = 0;
@@ -1104,8 +1254,8 @@ static int write_databases(Ctx *c, const RXPlan *plan)
     if ((ret = rx_sync_record_from_plan(plan, &r)) < 0)
         return ret;
     if ((ret = rx_sync_library_key(c->lib, r.library)) >= 0) {
-        rx_sync_record_add_settings(&r, c->dest);
-        ret = rx_sync_record_write(c->dest, &r);
+        rx_sync_record_add_settings(&r, c->root);
+        ret = rx_sync_record_write(c->root, &r);
     }
     rx_sync_record_free(&r);
     return ret;
@@ -1119,35 +1269,41 @@ static int prune(Ctx *c, const RXPlan *plan, bool dry)
     rx_array_init(&extra, sizeof(char *));
     int ret = collect_ours(plan, &o);
     if (ret >= 0)
-        ret = collect_keep(c, plan, &o, &k);
+        ret = collect_keep(c, plan, &k);
+    /* Through no link (checks() refused them already; this keeps it so). */
     const char *roots[3] = { "/Contents", "/PIONEER/USBANLZ", "/PIONEER/Artwork" };
     for (int i = 0; i < 3 && ret >= 0; i++) {
-        /* checks() refused links already; this keeps it so. */
-        if (!stick_dir_ok(c->dest, roots[i]) || !stick_dir_ok(c->dest, "/PIONEER")) {
-            ret = RX_ERROR(ENOTDIR);
+        int fd = rx_stick_open(c->root, roots[i], O_RDONLY | O_DIRECTORY, 0);
+        if (fd == RX_ERROR(ENOENT))
+            continue;
+        if (fd < 0) {
+            reportf(c, "prune", "cannot look in %s%s: %s", c->dest, roots[i], strerror(-fd));
+            ret = fd;
             break;
         }
-        ret = find_extra(c, &o, &k, roots[i], &extra);
+        ret = find_extra(c, &o, &k, fd, roots[i], &extra);
     }
     for (size_t i = 0; i < extra.nb && ret >= 0; i++) {
         const char *p = *(char **)rx_array_at(&extra, i);
+        /* Decided again as it is deleted, the file system looking up both
+         * names at that moment. */
+        int r = 0;
+        if (!dry && c->opt->prune && !(r = delete_extra(c, &o, &k, p))) {
+            rx_info("export: %s on %s is a file this export or the library keeps; not deleted", p, c->dest);
+            continue;
+        }
         if (!progress(c, "prune", (int)i + 1, (int)extra.nb, p)) {
             ret = RX_ERROR(ECANCELED);
             break;
         }
-        if (dry || !c->opt->prune)
-            continue;
-        char *full = rx_stick_file(c->dest, p);
-        if (full && unlink(full) < 0)
-            reportf(c, "prune", "cannot remove %s: %s", p, strerror(errno));
-        free(full);
+        if (r < 0)
+            reportf(c, "prune", "cannot remove %s: %s", p, strerror(-r));
     }
     if (!dry && c->opt->prune && ret >= 0) {
         for (int i = 0; i < 3; i++) {
-            char *full = rx_stick_file(c->dest, roots[i]);
-            if (full)
-                prune_empty(full);
-            free(full);
+            int fd = rx_stick_open(c->root, roots[i], O_RDONLY | O_DIRECTORY, 0);
+            if (fd >= 0)
+                prune_empty(fd, c->dev);
         }
     } else if (!dry && extra.nb && ret >= 0) {
         reportf(c, "prune", "%zu file%s on the stick %s not part of this export (prune to remove)",
@@ -1167,9 +1323,8 @@ static void dry_run_report(Ctx *c, const RXPlan *plan)
 {
     for (int i = 0; i < plan->nb_tracks; i++) {
         const RXPlanTrack *t = &plan->tracks[i];
-        char *dst = rx_stick_file(c->dest, t->usb_path);
-        progress(c, dst && same_file(t->source, dst) ? "skip" : "copy", i + 1, plan->nb_tracks, t->usb_path);
-        free(dst);
+        progress(c, same_file(c->root, t->source, t->usb_path) ? "skip" : "copy", i + 1, plan->nb_tracks,
+                 t->usb_path);
     }
     RXSettingsFile files[4];
     int nf = 0;
@@ -1332,6 +1487,7 @@ int rx_export(RXLibrary *lib, const char *dest, const RXExportOptions *opt_in, r
     Ctx c = {
         .lib    = lib,
         .dest   = dest,
+        .root   = -1,
         .opt    = opt,
         .cb     = cb,
         .opaque = opaque,
@@ -1342,22 +1498,34 @@ int rx_export(RXLibrary *lib, const char *dest, const RXExportOptions *opt_in, r
         return RX_ERROR(ENOTDIR);
     }
 
-    /* Every playlist unless some were chosen. */
     RXPlaylist **all = NULL;
+    RXTrack **tracks = NULL;
+    int nb_tracks = 0, copied = 0;
+    RXPlan plan = { 0 };
+    struct stat st;
+    int ret = c.root = rx_stick_root(dest);
+    if (ret >= 0)
+        ret = fstat(c.root, &st) < 0 ? RX_ERROR(errno) : 0;
+    if (ret < 0) {
+        reportf(&c, "check", "cannot open %s: %s", dest, strerror(-ret));
+        goto out;
+    }
+    c.dev = st.st_dev;
+
+    /* Every playlist unless some were chosen. */
     const RXPlaylist *const *pls = opt->playlists;
     int nb_pls = opt->nb_playlists;
     if (!pls) {
         int n = rx_library_playlists_flat(lib, NULL, 0);
         all = calloc((size_t)RX_MAX(n, 1), sizeof(*all));
-        if (!all)
-            return RX_ERROR(ENOMEM);
+        if (!all) {
+            ret = RX_ERROR(ENOMEM);
+            goto out;
+        }
         nb_pls = rx_library_playlists_flat(lib, all, RX_MAX(n, 0));
     }
 
-    RXTrack **tracks = NULL;
-    int nb_tracks = 0;
-    RXPlan plan = { 0 };
-    int ret = select_tracks(&c, all ? (const RXPlaylist *const *)all : pls, nb_pls, &tracks, &nb_tracks);
+    ret = select_tracks(&c, all ? (const RXPlaylist *const *)all : pls, nb_pls, &tracks, &nb_tracks);
     if (ret < 0)
         goto out;
 
@@ -1393,29 +1561,20 @@ int rx_export(RXLibrary *lib, const char *dest, const RXExportOptions *opt_in, r
     int64_t bytes = 0;
     for (int i = 0; i < plan.nb_tracks; i++) {
         const RXPlanTrack *t = &plan.tracks[i];
-        char *dst = rx_stick_file(dest, t->usb_path);
-        if (dst && !same_file(t->source, dst))
+        if (!same_file(c.root, t->source, t->usb_path))
             bytes += RX_MAX(t->file_size, 0);
-        free(dst);
     }
     stats_start(&c, bytes);
-    int copied = 0;
     for (int i = 0; i < plan.nb_tracks; i++) {
         const RXPlanTrack *t = &plan.tracks[i];
-        char *dst = rx_stick_file(dest, t->usb_path);
-        if (!dst) {
-            ret = RX_ERROR(ENOMEM);
-            goto out;
-        }
-        if (same_file(t->source, dst)) {
+        if (same_file(c.root, t->source, t->usb_path)) {
             progress(&c, "skip", i + 1, plan.nb_tracks, t->usb_path);
         } else if (progress(&c, "copy", i + 1, plan.nb_tracks, t->usb_path)) {
-            ret = copy_file(&c, t->source, dst, i + 1, plan.nb_tracks);
+            ret = copy_file(&c, t->source, t->usb_path, i + 1, plan.nb_tracks);
             if (ret < 0 && ret != RX_ERROR(ECANCELED))
                 reportf(&c, "copy", "cannot copy %s: %s", t->source, strerror(-ret));
             copied++;
         }
-        free(dst);
         if (ret < 0)
             goto out;
         if (c.cancelled) {
@@ -1452,6 +1611,8 @@ out:
     for (size_t i = 0; i < c.puts.nb; i++)
         put_free(*(PutJob **)rx_array_at(&c.puts, i));
     rx_array_free(&c.puts);
+    if (c.root >= 0)
+        close(c.root);
     free(c.pdb);
     free(c.ext);
     free(c.olib);

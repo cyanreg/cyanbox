@@ -4,7 +4,11 @@
  * believe, on staging "sticks" under the build directory:
  *
  *  - prune a file the library still needs (a library kept on the stick);
- *  - write or delete through a symbolic link out of the stick;
+ *  - write or delete through a symbolic link out of the stick, at any
+ *    depth, or through a link as the file itself;
+ *  - give two tracks one file when exFAT's case rules make their names one
+ *    (Șerban, șerban), or keep a file whose name differs from the plan's
+ *    in case alone on a case-sensitive staging directory;
  *  - start copying when a database cannot be built (a name too long for
  *    export.pdb is found before anything is written);
  *  - leave a sync record describing databases other than those written;
@@ -22,6 +26,7 @@
  * The audio is WAV written here, so no ffmpeg CLI is needed. */
 
 #include <dirent.h>
+#include <fcntl.h>
 #include <math.h>
 #include <stdio.h>
 #include <sys/stat.h>
@@ -687,6 +692,120 @@ static void dry_run_and_dates(void)
     free(cover);
 }
 
+/* A link deeper in a staging stick (Contents/Artist, as a staging
+ * directory may have): the checks refuse it before anything is written,
+ * nothing is written or deleted outside, and the stick's file functions
+ * refuse every path through a link, a link as the file itself included.
+ * Moved off the plan's paths, the link is left alone: the export runs and
+ * prune does not walk through it. */
+static void links_inside(void)
+{
+    RXLibrary lib = { 0 };
+    char *libdir = at("lib-deep"), *stick = at("stick-deep"), *outside = at("outside-deep");
+    char *song = at("music-deep/song.wav"), *old = at("outside-deep/old.wav");
+    char *contents = at("stick-deep/Contents"), *artist = at("stick-deep/Contents/Artist");
+    char *aside = at("stick-deep/Contents/Elsewhere"), *file = at("stick-deep/Contents/file.wav");
+    char *pdb = at("stick-deep/PIONEER/rekordbox/export.pdb");
+    rx_mkdir_p(contents);
+    CHECK_EQ(write_wav(old, 220.0), 0);
+    int64_t old_size = rx_file_size(old);
+    CHECK_EQ(symlink(outside, artist), 0);
+    CHECK_EQ(rx_library_open(&lib, libdir), 0);
+    add_track(&lib, song, "Artist", -1);
+
+    Stages st = { 0 };
+    CHECK(export_to(&lib, stick, true, &st) < 0);
+    CHECK(st.check > 0);
+    CHECK_EQ(st.copy, 0);
+    CHECK_EQ(entries(outside), 1);
+    CHECK(!exists(pdb));
+
+    int fd = rx_stick_root(stick);
+    CHECK(fd >= 0);
+    CHECK_EQ(rx_stick_write(fd, "/Contents/Artist/Album/x.wav", "x", 1), RX_ERROR(ELOOP));
+    CHECK_EQ(rx_stick_mkdirs(fd, "/Contents/Artist/Album"), RX_ERROR(ELOOP));
+    CHECK_EQ(rx_stick_unlink(fd, "/Contents/Artist/old.wav", 0), RX_ERROR(ELOOP));
+    uint8_t *b = NULL;
+    size_t n = 0;
+    CHECK_EQ(rx_stick_read_file(fd, "/Contents/Artist/old.wav", &b, &n), RX_ERROR(ELOOP));
+    free(b);
+    CHECK_EQ(symlink(old, file), 0);
+    CHECK_EQ(rx_stick_write(fd, "/Contents/file.wav", "x", 1), RX_ERROR(ELOOP));
+    CHECK_EQ(rx_stick_open(fd, "/Contents/file.wav", O_WRONLY | O_TRUNC, 0), RX_ERROR(ELOOP));
+    close(fd);
+    CHECK_EQ(entries(outside), 1);
+    CHECK_EQ(rx_file_size(old), old_size);
+
+    CHECK_EQ(rename(artist, aside), 0);
+    st = (Stages) { 0 };
+    CHECK_EQ(export_to(&lib, stick, true, &st), 0);
+    CHECK_EQ(st.copy, 1);
+    CHECK_EQ(st.prune, 0);
+    CHECK_EQ(entries(outside), 1);
+    CHECK_EQ(rx_file_size(old), old_size);
+    rx_library_close(&lib);
+    free(libdir);
+    free(stick);
+    free(outside);
+    free(song);
+    free(old);
+    free(contents);
+    free(artist);
+    free(aside);
+    free(file);
+    free(pdb);
+}
+
+/* Șerban and șerban are one name to exFAT (its up-case table): their
+ * tracks get two files on the stick, not one copied over the other. A
+ * file whose name differs from the plan's in case alone is, on a
+ * case-sensitive staging directory, another file: prune lists and deletes
+ * it, looking both names up as it does, and keeps the plan's. */
+static void case_names(void)
+{
+    RXLibrary lib = { 0 };
+    char *libdir = at("lib-case"), *stick = at("stick-case");
+    char *a = at("music-case/a/song.wav"), *b = at("music-case/b/song.wav");
+    char *first = at("stick-case/Contents/Șerban/Album/song.wav");
+    char *second = at("stick-case/Contents/șerban/Album/song-1.wav");
+    char *stale = at("stick-case/Contents/ȘERBAN/Album/song.wav");
+    rx_mkdir_p(stick);
+    CHECK_EQ(write_wav(a, 440.0), 0);
+    CHECK_EQ(write_wav(b, 550.0), 0);
+    CHECK_EQ(rx_library_open(&lib, libdir), 0);
+    add_track(&lib, a, "Șerban", -1);
+    add_track(&lib, b, "șerban", -1);
+    Stages st = { 0 };
+    CHECK_EQ(export_to(&lib, stick, false, &st), 0);
+    CHECK_EQ(st.copy, 2);
+    CHECK(rx_file_exists(first));
+    CHECK(rx_file_exists(second));
+    CHECK(rx_file_size(first) > 0 && rx_file_size(first) == rx_file_size(a));
+
+    CHECK_EQ(write_wav(stale, 330.0), 0);
+    RXExportOptions opt;
+    rx_export_options_default(&opt);
+    opt.whole_library = true;
+    opt.dry_run = true;
+    st = (Stages) { 0 };
+    CHECK_EQ(rx_export(&lib, stick, &opt, on_progress, &st), 0);
+    CHECK_EQ(st.prune, 1);
+    st = (Stages) { 0 };
+    CHECK_EQ(export_to(&lib, stick, true, &st), 0);
+    CHECK_EQ(st.prune, 1);
+    CHECK(!exists(stale));
+    CHECK(rx_file_exists(first));
+    CHECK(rx_file_exists(second));
+    rx_library_close(&lib);
+    free(libdir);
+    free(stick);
+    free(a);
+    free(b);
+    free(first);
+    free(second);
+    free(stale);
+}
+
 int main(void)
 {
     const char *base = getenv("RX_TEST_DIR");
@@ -702,6 +821,8 @@ int main(void)
     record_not_writable();
     space();
     dry_run_and_dates();
+    links_inside();
+    case_names();
 
     if (!failures)
         sh("rm -rf '%s'", root);
