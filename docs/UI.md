@@ -51,28 +51,38 @@ The full width of the window. Rows, top to bottom:
 1. **Title row** (height 64): the artwork (56×56, placeholder record icon
    when none; clicking it ejects a stopped track), then the title (26 px
    bold) over the artist (15 px), then the readouts right-aligned, each a
-   10.5 px caps label over a 24 px value, centred on the row: key (classic
-   by default, Camelot/Open Key per config), BPM as `128.00` with the
+   10.5 px caps label over a 24 px value, centred on the row: key (in the
+   players' key display, `device.key_display`: the classic name, or the
+   Camelot code for alphanumeric), BPM as `128.00` with the
    tempo-adjusted value in orange when the slider is not at 0, the time
-   (elapsed / remaining, toggled by clicking or `T`), the bar.beat counter
-   (`17.3`), and the `GRID` button.
-2. **Overview waveform** (height 64): the whole track. The preview tag of the
-   selected palette (PWV6 3-band by default; PWAV blue; PWV4 RGB) drawn
-   with `rx_wave_draw` as the stacked half, growing from the strip's floor
-   (inset 13 above, clear of the cue markers along the top edge, 1 below),
-   at the tag's own levels with no gain: rbxport's default overview
-   (`overviewWaveform: "half"` in its src/lib/preferences.ts), the row
-   previews' mode. Centred with a gain, as before, the three-band levels of
-   a loud track filled the strip solid cream. Over it: memory cue markers (a red triangle head `#EA3323` at the top with a
+   (elapsed / remaining, starting as the players' time mode says,
+   remaining by default; clicking or `T` toggles the running deck's), the
+   bar.beat counter (`17.3`), and the `GRID` button.
+2. **Overview waveform** (height 64): the whole track. The preview tag of
+   the players' waveform colour (`device.waveform_color`: PWAV for blue,
+   the default; PWV4 for RGB; PWV6 for 3-band) drawn with `rx_wave_draw`
+   as the players' overview type says (`device.overview_waveform`). Half,
+   the default: the stacked half, growing from the strip's floor at the
+   tag's own levels with no gain, rbxport's default overview
+   (`overviewWaveform: "half"` in its src/lib/preferences.ts). Full: the
+   waveform centred, both halves, at gain 1 (with a gain, the three-band
+   levels of a loud track filled the strip solid cream). Either way inset
+   13 above, clear of the cue markers along the top edge, and 1 below; the
+   row previews are drawn the same way. Over it: memory cue markers (a red triangle head `#EA3323` at the top with a
    1 px line), hot cues (a filled square badge with the letter in the cue's
-   colour, default pad colour when none), loop bands (translucent orange
+   colour with the players' hot cue colour on, `player.hot_cue_color`;
+   with it off, the default, or for a cue without a colour, the slot's
+   default pad colour), loop bands (translucent orange
    `#FF8C00` at 30 %; the active one brighter), the played part dimmed to
    55 %, the playhead (1 px white line, 2 px when playing). Click seeks;
    drag scrubs. The 1-second ticks are not drawn.
 3. **Detail waveform** (204 at the player's natural height; it takes all
    the height the player has beyond its other rows): the detail tag
-   (PWV7/PWV3/PWV5) scrolling under a fixed centre playhead (2 px, white, with a small triangle at the
-   top and bottom). Shows `zoom_bars` bars (default 12; steps 0.25 0.5 1 2 4 8
+   (PWV7/PWV3/PWV5) scrolling under a fixed playhead (2 px, white, with a
+   small triangle at the top and bottom): at the centre, or 15 % from the
+   left edge when the players' waveform position is left
+   (`device.waveform_position`), so that more of what is coming shows.
+   Shows `zoom_bars` bars (default 12; steps 0.25 0.5 1 2 4 8
    12 16 32 64 via mouse wheel over it or the `+`/`−` buttons at its right
    edge; `RST` resets to 12). Grid: beat lines in `#4C4C4C`, downbeats in
    `#9A9A9A` 1 px, with the bar number printed small above every downbeat
@@ -90,14 +100,17 @@ The full width of the window. Rows, top to bottom:
    - **Transport** (120 wide): `CUE` (round, orange ring, lit while a cue
      point exists; pressed = down) and `PLAY/PAUSE` (round, green ring, lit
      when playing), 56 across, centred on the pads; under them `Q` quantize toggle
-     (green when on) and the beat jump pair `◄ ►` with the size button
-     between (`4Beats` default; click cycles Fine/4Beats/8Beats/16Beats/
-     8Bars/16Bars/32Bars; right-click picks from a menu). The arrows jump
-     on the press and, held, again every 120 ms after 300 ms.
+     (green when on; quantize snaps to the beat, or to the half, quarter
+     or eighth of one the players' quantize beat value gives) and the beat
+     jump pair `◄ ►` with the size button between (click cycles
+     Fine/1Beat/2Beats/4Beats/8Beats/16Beats/8Bars/16Bars/32Bars;
+     right-click picks from a menu). The arrows jump on the press and,
+     held, again every 120 ms after 300 ms.
    - **HOT CUE**: pads A–H in one row of eight, 36 tall, 48 to 64 wide by
      the room (below). Empty: dark with
-     the dim letter. Set: filled in the cue's colour (default per slot,
-     `rx_hot_cue_default_rgb`) with the letter (15 px) over the name or
+     the dim letter. Set: filled in the cue's colour with the players' hot
+     cue colour on, else (and for a cue without one) the slot's default pad
+     colour (`rx_hot_cue_default_rgb`), with the letter (15 px) over the name or
      position (`1:02.5`, 10.5 px); a hot loop shows a loop glyph. Press =
      set/call per the engine rules; shift-click or the pad's `×` (top-right
      corner on hover) deletes; right-click = colour and name.
@@ -141,15 +154,24 @@ The full width of the window. Rows, top to bottom:
      never drawn over it.
    - **Tempo** (96 wide, the row's full height, having no caps label):
      vertical slider ±6/±10/±16/WIDE (range button
-     cycles; the range always starts at ±6 %, as a CDJ switched on does:
-     it is not kept in the layout, and an older layout's `TempoRange=` is
-     ignored), 0 detent, the percentage readout (`+0.00%`) over its
+     cycles), 0 detent, the percentage readout (`+0.00%`) over its
      `TEMPO` caps, `RESET`, and, on the strips' line,
      `MT` (MASTER TEMPO, key lock: the pitch stays while the tempo
-     changes), lit orange while the deck reports `master_tempo`. Its wish
-     is kept in the layout (`MasterTempo=`) and given to the player on the
-     first frame; a player that cannot keep the pitch refuses and the
-     button stays off. No sync: this is a preparation tool.
+     changes), lit orange while the deck reports `master_tempo`. A player
+     that cannot keep the pitch refuses and the button stays off. No sync:
+     this is a preparation tool.
+
+   **The deck's state at startup** is the players' (Player settings):
+   quantize (`player.quantize`, on by default), the beat jump size
+   (`player.beat_jump_beats`, 16 beats by default; 1/2 is Fine), the
+   tempo range (`player.tempo_range`, ±6 % by default, as a CDJ switched
+   on), master tempo (`player.master_tempo`, off) and the time mode
+   (`player.time_mode`, remaining). Each is applied when the interface
+   starts and again whenever the setting changes (the dialog, a sync); `Q`,
+   `T`, the size and range buttons and `MT` change only the running deck,
+   never the setting, as a CDJ's buttons leave its stored preferences
+   alone. None of them is kept in the layout; an older layout's
+   `TempoRange=`, `Jump=` and `MasterTempo=` are ignored.
 5. **Grid tools** (collapsible strip, height 32 with 11 px legends, toggled
    by the `GRID` button in the title row): BPM field (editable, Enter applies to the section under
    the playhead), `TAP` (tap tempo: ≥ 4 taps set the BPM, the first tap the
@@ -162,7 +184,14 @@ The full width of the window. Rows, top to bottom:
 
 The frame of the panel glows orange while playing. Loading a track: the
 panel shows "LOADING" over a dimmed waveform until the decode job returns,
-then the player auto-cues to the first memory cue (or 0).
+then the player auto-cues as the players' auto cue settings say: with
+auto cue on and the level MEMORY (the defaults) to the first memory cue
+(or 0); with a level in dB to the grid's first beat, which the analyser
+puts where the music starts, as a CDJ finds it by the level (the dB value
+itself is not evaluated); with auto cue off it stays at 0. At the end of a
+track the deck stops there (`player.play_mode` single, the default); with
+play mode continue the next track of the current view (the row after it
+in the table's order, the first after the last) loads and plays.
 
 ## Browser
 
@@ -178,8 +207,10 @@ artist, album, genre, comment, file name with `rx_str_contains_fold`
 
 **Track table** (ImGui table, resizable/reorderable/sortable columns,
 virtualised with the clipper): default columns in order: `#`, Preview
-(the PWV6 stacked-half waveform via `rx_wave_draw` in
-`RX_WAVE_HALF_STACKED`, its 1200 columns scaled to the cell; the one
+(the preview tag of the players' waveform colour, PWAV, PWV4 or PWV6 as
+the overview has it, via `rx_wave_draw`, its columns scaled to the cell,
+and drawn as the overview is: the stacked half, or centred with both
+halves when the players' overview type is full; the one
 column that stretches, taking the width the others leave: about 170 px at
 1600×900, 490 at 1920×1080), Artwork (rbxport's 80 px column: the sleeve
 fills the cell edge to edge, the row's full height, cropped as rbxport's
@@ -196,7 +227,9 @@ they ran far wider than any title. There is no Date Added column (the
 library keeps the date). There are no Color, Genre or Hot
 Cue columns: the info panel shows and edits a track's colour and genre,
 the player's cue list a loaded track's cues. Cell text is 18 px, the
-title 19 px, `#` and the dates 15 px. The Key column has rekordbox's
+title 19 px, `#` and the dates 15 px. The Key column shows keys in the
+players' key display (classic names, or Camelot codes for alphanumeric),
+as the deck's KEY and the info panel do. It has rekordbox's
 Traffic Light: while a track is loaded, the Key cell of every key that
 mixes with its key is filled green (`#3CEB50`, the whole cell, padding
 included) with the key in black, the loaded track's own row included and
@@ -214,7 +247,8 @@ set, so a layout saved for the old one starts from these defaults. Row height
 40 when artwork is shown, else 22. Selected rows highlighted; the focused row has a
 1 px outline. A row whose file is missing is drawn greyed out with a "missing" glyph,
 cannot be loaded or analysed, and offers Relocate… in its context menu;
-an unanalysed row shows `—` for BPM/key and a thin flat preview; a row being
+an unanalysed row shows `—` for BPM/key and a thin flat preview (at the
+bottom, or the middle for the full overview type); a row being
 analysed shows a small spinner in the Preview cell.
 
 Actions: double-click loads the track into the player at once (over a
@@ -234,8 +268,8 @@ of the browser's width), the focused track's editable fields: title,
 artist, album, album artist, genre, label, remixer, composer, original
 artist, comment, year, track/disc numbers, rating, colour, My Tags (comma
 separated), file facts (type, size, rate, bit depth, bit rate, duration,
-path). Edits save on focus loss as overrides in the library (the file's
-own tags are kept).
+grid, key in the players' key display, plays, path). Edits save on focus
+loss as overrides in the library (the file's own tags are kept).
 
 ## Status bar
 
@@ -251,8 +285,13 @@ A menu bar at the very top: **File** (Add files/folders… (ImGui file
 browser: a simple directory lister with a path field, since there is no
 native dialog), Export to USB…, Sync from USB…, Inspect USB…, Player
 settings… (`Ctrl+,`), Rescan missing files, Quit),
-**View** (waveform colour 3Band/Blue/RGB, key notation, Traffic Light
-off/same key/related 1–3, detail waveform centred/half, grid tools),
+**View** (waveform colour 3Band/Blue/RGB, key notation Classic/
+Alphanumeric, Traffic Light off/same key/related 1–3, detail waveform
+centred/half, grid tools; the waveform colour and the key notation are the
+players' `device.waveform_color` and `device.key_display`: the items show
+those settings and a pick sets them, as the Player settings dialog's
+Device tab does, so they reach the stick too; Open Key is the command
+line's `export.key_notation` only),
 **Analysis** (analyse selection, analyse all
 unanalysed, re-analyse selection, analysis settings…), **Help** (about,
 keyboard map). "Unanalysed" includes results an older analyser made; the
@@ -285,6 +324,29 @@ Analysis), with the usual progress in the status bar.
   tab's fields that are not at their defaults back to them; their rows
   stay, holding the defaults, so the next export replaces the stick's files
   rather than leaving them. The dialog keeps nothing of its own.
+
+  The same settings drive rxbox's own interface, one setting for both, so
+  it shows and starts as the players will; a pick takes effect at once
+  (the interface reads RXConfig at every frame, app.c at every tick):
+  the waveform colour (the overview, the detail and the row previews), the
+  overview type (the overview and the row previews: the stacked half, or
+  centred for full), the key display (the Key column, the deck's KEY, the
+  info panel), the waveform position (the detail's playhead at the centre
+  or 15 % from the left), quantize and the tempo range, beat jump size,
+  master tempo and time mode (the deck's state at startup), the quantize
+  beat value (what quantize snaps to), auto cue and its level (where a
+  load cues), hot cue colour (pads and badges in the cues' colours or the
+  default pad colours) and play mode (continue plays the next track of the
+  view at the end). An older library's `ui.wave_palette`, and the key
+  notation its View menu kept in `export.key_notation`, become
+  `device.waveform_color` and `device.key_display` once when it opens.
+  Everything else is written to the stick only, meaning nothing to rxbox:
+  on air display, LCD brightness, language, the jog ring's brightness and
+  indicator, jog mode, vinyl speed adjust, the jog display and jog LCD
+  brightness, slip flashing, disc slot illumination, eject/load lock,
+  sync, hot cue auto load, needle lock, phase meter, the waveform area
+  (waveform or phase meter), waveform divisions, pad brightness, every
+  mixer setting, and the background colour.
 - **Export**: destination path (with a list of mounted removable volumes
   read from /proc/mounts under /run/media and /media), whole library or
   selected playlists, prune, compatibility transcode, then a progress view
@@ -306,8 +368,8 @@ rekordbox's Export preset for player 1 (no shifted second-player set):
 | --- | --- |
 | Space | Play/Pause |
 | C | Cue (press/hold/release semantics) |
-| Q | Quantize |
-| T | Time mode |
+| Q | Quantize (the running deck's; the Player setting stays) |
+| T | Time mode (likewise) |
 | M | Memory cue set |
 | B / N | Previous / next memory cue |
 | X | Delete memory cue |
@@ -336,7 +398,8 @@ Hot cue pads D–H have no default keys (rekordbox binds none).
   the CPU. The overview maps the whole column range to the rectangle; the
   detail maps `[playhead − zoom/2, playhead + zoom/2]` in bars converted to
   columns through the grid (bars → seconds via `rx_grid_offset_beats`, then
-  × 150).
+  × 150), or, with the playhead on the left, the same span from 15 % of it
+  before the playhead.
 - The played part of the overview is dimmed with `dim`.
 - While playing, the interface requests a redraw every frame (`rx_ui_frame`
   returns true); stopped, it draws nothing until input arrives.
