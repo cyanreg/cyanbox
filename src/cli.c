@@ -9,10 +9,10 @@
  * The analysing subcommands use RXJobs directly with every CPU, and apply
  * each result with rx_app_apply_analysis() on an RXApp that holds only the
  * library and the jobs (no player, no window, no private state): the same
- * rules as the interface (only what is missing, grid locks, waveforms,
- * automatic cues), printed as one line per track. The library (a directory
- * holding library.db) is -c/--library DIR, else $RXBOX_LIBRARY, else
- * ~/.local/share/rxbox (rx_library_default_root).
+ * rules as the interface (only what is missing or an older analyser made,
+ * grid locks, waveforms, automatic cues), printed as one line per track.
+ * The library (a directory holding library.db) is -c/--library DIR, else
+ * $RXBOX_LIBRARY, else ~/.local/share/rxbox (rx_library_default_root).
  *
  * Arguments: options and names mix in any order after the command; `--`
  * ends the options, so every argument after it is a name, even one that
@@ -64,11 +64,12 @@ static const char usage_text[] =
     "\n"
     "Commands:\n"
     "  add PATH...              add audio files or folders to the library and analyse them\n"
-    "  analyze [TRACK...]       analyse what is missing (the whole library by default)\n"
+    "  analyze [TRACK...]       analyse what is missing or was made by an older analyser\n"
+    "                           (the whole library by default)\n"
     "      -f, --force          re-analyse what is there too (a locked grid only when\n"
     "                           the track is named)\n"
     "      -w, --what LIST      any of beats,key,waves (default: all)\n"
-    "  show TRACK...            print the resolved grid, key and cues\n"
+    "  show TRACK...            print the resolved grid, key, cues and analyser versions\n"
     "  export STICK             write the settings, every playlist and their tracks to a\n"
     "                           mounted stick (files already there are not copied again)\n"
     "      --all                every track in the library, not only those in playlists\n"
@@ -82,7 +83,8 @@ static const char usage_text[] =
     "                           stick that the library lacks; --apply takes them\n"
     "  pull STICK               take all of them (sync --apply)\n"
     "  rescan                   check which audio files are missing (or back)\n"
-    "  check                    check the library database's integrity\n"
+    "  check                    check the library database's integrity and count the\n"
+    "                           tracks an older analyser analysed\n"
     "  settings                 list the My Settings names and values\n"
     "  config [KEY [VALUE]]     show or change a setting (analysis.bpm_min,\n"
     "                           export.key_notation, player.quantize ...)\n"
@@ -468,12 +470,14 @@ static int analyse_tracks(Cli *cli, RXTrack **tracks, int nb, unsigned what, boo
         return RX_MAX(nb, 1);
     }
 
-    int todo = 0;
+    /* stale: tracks analysed again for what an older analyser made. */
+    int todo = 0, stale = 0;
     for (int i = 0; i < nb; i++) {
         need[i] = rx_app_analysis_needed(app, tracks[i], what, force);
         if (tracks[i]->grid_locked && !override_lock)
             need[i] &= ~RX_ANALYSE_BEATS;
         todo += need[i] != 0;
+        stale += (need[i] & rx_analysis_stale(tracks[i])) != 0;
     }
     if (!todo) {
         free(need);
@@ -498,7 +502,10 @@ static int analyse_tracks(Cli *cli, RXTrack **tracks, int nb, unsigned what, boo
     /* Several tracks: the pool is the parallelism. */
     opt.deterministic_threads = todo > 1;
 
-    printf("analysing %d track%s\n", todo, todo == 1 ? "" : "s");
+    printf("analysing %d track%s", todo, todo == 1 ? "" : "s");
+    if (stale)
+        printf(" (%d made by an older analyser)", stale);
+    printf("\n");
     fflush(stdout);
 
     int queued = 0, done = 0;
@@ -1083,6 +1090,16 @@ end:
     return code;
 }
 
+/* " beats 1", or " beats 0 (older than 1)" for a stale result. */
+static void print_version(const char *stage, int version, int current, bool stale,
+                          const char *sep)
+{
+    printf(" %s %d", stage, version);
+    if (stale)
+        printf(" (older than %d)", current);
+    printf("%s", sep);
+}
+
 static void show_track(const RXTrack *t)
 {
     char a[32], b[32], bpm[32];
@@ -1132,6 +1149,12 @@ static void show_track(const RXTrack *t)
                t->key_confidence);
     else
         printf("  key: unknown\n");
+
+    unsigned stale = rx_analysis_stale(t);
+    printf("  analyser versions:");
+    print_version("beats", t->beats_version, RX_BEATS_VERSION, stale & RX_ANALYSE_BEATS, ",");
+    print_version("key", t->key_version, RX_KEY_VERSION, stale & RX_ANALYSE_KEY, ",");
+    print_version("waves", t->waves_version, RX_WAVES_VERSION, stale & RX_ANALYSE_WAVES, "\n");
 
     if (!t->nb_cues)
         printf("  cues: none\n");
@@ -1684,12 +1707,35 @@ static int cmd_check(Cli *cli, int argc, char **argv)
         return code;
 
     /* The problems themselves are logged by the check. */
-    int ret = rx_library_check(&cli->app.lib);
+    const RXLibrary *lib = &cli->app.lib;
+    int ret = rx_library_check(lib);
     if (ret < 0)
         code = fail("the library database has problems: %s", strerror(-ret));
     else
-        printf("OK: the library database is intact (%d track%s)\n", cli->app.lib.nb_tracks,
-               cli->app.lib.nb_tracks == 1 ? "" : "s");
+        printf("OK: the library database is intact (%d track%s)\n", lib->nb_tracks,
+               lib->nb_tracks == 1 ? "" : "s");
+
+    /* What `rxbox analyze` would analyse again because an older analyser
+     * made it (rx_app_analysis_needed's rule): locked grids stay, so they
+     * are counted apart, and a missing file cannot be analysed. */
+    int stale = 0, locked = 0;
+    for (int i = 0; i < lib->nb_tracks; i++) {
+        const RXTrack *t = lib->tracks[i];
+        unsigned s = t->missing ? 0 : rx_analysis_stale(t);
+        if (t->grid_locked && (s & RX_ANALYSE_BEATS)) {
+            locked++;
+            s &= ~RX_ANALYSE_BEATS;
+        }
+        stale += s != 0;
+    }
+    if (stale)
+        printf("%d track%s results from an older analyser; `rxbox analyze` analyses %s "
+               "again\n", stale, stale == 1 ? " has" : "s have", stale == 1 ? "it" : "them");
+    else
+        printf("no track has results from an older analyser\n");
+    if (locked)
+        printf("%d locked grid%s from an older analyser %s kept (`rxbox analyze --force TRACK` "
+               "replaces one)\n", locked, locked == 1 ? "" : "s", locked == 1 ? "is" : "are");
     cli_close(cli);
     return code;
 }
