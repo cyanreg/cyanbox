@@ -711,6 +711,33 @@ static int playlist_create(Cli *cli, const char *name)
     if (!copy)
         return fail("out of memory");
 
+    /* The name and an existing playlist are checked first, so a refused
+     * name leaves no folder behind. */
+    const char *last = strrchr(name, '/');
+    const char *want = last ? last + 1 : name;
+    if (!*want) {
+        free(copy);
+        return usage_error(cli, "%s: the playlist needs a name", name);
+    }
+    RXPlaylistFolder *in = lib->root_folder;
+    for (const char *c = name; in && c < want;) {
+        const char *slash = strchr(c, '/');
+        size_t n = (size_t)(slash - c);
+        RXPlaylistFolder *sub = NULL;
+        for (int i = 0; n && i < in->nb_folders; i++) {
+            if (strlen(in->folders[i]->name) == n && !strncmp(in->folders[i]->name, c, n))
+                sub = in->folders[i];
+        }
+        in = n ? sub : in;
+        c = slash + 1;
+    }
+    for (int i = 0; in && i < in->nb_playlists; i++) {
+        if (!strcmp(in->playlists[i]->name, want)) {
+            free(copy);
+            return fail("the playlist %s already exists", name);
+        }
+    }
+
     /* Every component but the last is a folder, created when missing. */
     RXPlaylistFolder *folder = lib->root_folder;
     char *leaf = copy;
@@ -2488,18 +2515,29 @@ static int cli_run(int argc, char **argv)
     if (i >= argc)
         return run_interface(&cli);
 
-    cli.cmd = argv[i];
+    /* `rxbox help CMD` and `rxbox CMD -h|--help` (before a `--`): the
+     * command's usage line, on stdout, and success. */
+    bool help = !strcmp(argv[i], "help");
+    const char *name = help && i + 1 < argc ? argv[i + 1] : argv[i];
+    for (int k = i + 1; !help && k < argc && strcmp(argv[k], "--"); k++)
+        help = !strcmp(argv[k], "-h") || !strcmp(argv[k], "--help");
+
+    cli.cmd = name;
     for (size_t k = 0; k < RX_ARRAY_ELEMS(commands); k++) {
-        if (!strcmp(commands[k].name, argv[i])) {
-            cli.usage = commands[k].usage;
-            return commands[k].fn(&cli, argc - i, argv + i);
+        if (strcmp(commands[k].name, name))
+            continue;
+        if (help) {
+            printf("usage: rxbox %s\n", commands[k].usage);
+            return EXIT_OK;
         }
+        cli.usage = commands[k].usage;
+        return commands[k].fn(&cli, argc - i, argv + i);
     }
-    if (!strcmp(argv[i], "help")) {
+    if (help && !strcmp(name, "help")) {
         fputs(usage_text, stdout);
         return EXIT_OK;
     }
-    return usage_error(NULL, "unknown command %s", argv[i]);
+    return usage_error(NULL, "unknown command %s", name);
 }
 
 int rx_cli_main(int argc, char **argv)
