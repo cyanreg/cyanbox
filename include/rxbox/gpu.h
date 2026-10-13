@@ -51,6 +51,9 @@ void rx_window_destroy(RXWindow *w);
  * waited up to `timeout_ms` for events and returns false. */
 bool rx_window_poll(RXWindow *w, bool want_redraw, int timeout_ms);
 bool rx_window_should_close(const RXWindow *w);
+/* True while the compositor says nobody can see the window (occluded,
+ * hidden, minimised): it then sends no frame callbacks and nothing is drawn. */
+bool rx_window_hidden(const RXWindow *w);
 void rx_window_request_close(RXWindow *w);
 /* Begins an ImGui frame (NewFrame). */
 void rx_window_begin_frame(RXWindow *w);

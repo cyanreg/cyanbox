@@ -27,11 +27,12 @@
  *
  * A window nobody can see (another workspace, the scratchpad, a
  * minimised or fully covered window) gets no frame callbacks. The loop
- * then never draws, still processes every event, and sleeps for the
- * caller's timeout between them: it costs nothing, and it never blocks in
- * the driver, which a FIFO present on such a window would. When the window
- * is shown again the compositor answers the outstanding request and
- * drawing resumes. */
+ * then never draws, still processes every event, and after 150 ms without
+ * an answer sleeps at least 100 ms between looks (rx_window_poll): it
+ * costs nothing, and it never blocks in the driver, which a FIFO present
+ * on such a window would. When the window is shown again the compositor
+ * answers the outstanding request, the socket wakes the sleep, and drawing
+ * resumes. */
 
 #include "rxbox/gpu.h"
 
@@ -275,10 +276,19 @@ bool rx_window_poll(RXWindow *w, bool want_redraw, int timeout_ms)
     if (wanted(w, want_redraw) && ready(w))
         return true;
 
-    if (wanted(w, want_redraw) && !w->frame_done)
-        wait_frame(w, timeout_ms);
-    else
+    if (wanted(w, want_redraw) && !w->frame_done) {
+        /* A window nobody can see gets no answer. After 150 ms without one
+         * the wait stretches to 100 ms: the socket wakes it the moment the
+         * answer comes, so a visible window loses nothing, and a hidden one
+         * stops waking every few milliseconds for a callback that is not
+         * coming (the caller's short timeout is for its own bookkeeping). */
+        int t = timeout_ms;
+        if (rx_time_us() - w->req_wall > 150000)
+            t = RX_MAX(t, 100);
+        wait_frame(w, t);
+    } else {
         wait_event(w, timeout_ms);
+    }
 
     /* A frame that could not be drawn (no area, swapchain out of date) is
      * retried after one wait rather than at once. */
@@ -286,6 +296,11 @@ bool rx_window_poll(RXWindow *w, bool want_redraw, int timeout_ms)
 
     pump(w);
     return !w->should_close && wanted(w, want_redraw) && ready(w);
+}
+
+bool rx_window_hidden(const RXWindow *w)
+{
+    return w && w->hidden;
 }
 
 bool rx_window_should_close(const RXWindow *w)

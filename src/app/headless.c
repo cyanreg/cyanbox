@@ -35,6 +35,11 @@ bool rx_window_poll(RXWindow *w, bool want_redraw, int timeout_ms)
     return false;
 }
 
+bool rx_window_hidden(const RXWindow *w)
+{
+    return false;
+}
+
 bool rx_window_should_close(const RXWindow *w)
 {
     return true;
