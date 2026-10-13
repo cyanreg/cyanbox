@@ -22,6 +22,11 @@
  * grid is checked beat by beat against the truth (the RMS and the largest
  * error, and that the downbeats fall on the bar lines), the dynamic grid
  * against the best straight one (`allow_dynamic` off), which it must beat.
+ * One has a tempo that does not move under a syncopated fill that leaves
+ * the beats (AD:HOUSE 11's "Felicidade", which was walked): it must stay
+ * one straight section, its beats through the fill on the pulse. And the
+ * walk itself, through attacks that leave a pulse for a dozen beats,
+ * must keep its tempo's continuity (check_misc).
  *
  * The GPU front end (rxbox/compute.h) must give the same results. When a
  * device is there, every case runs on both paths: each must pass on its
@@ -156,7 +161,15 @@ enum {
     BAR_BREAK,          /* pads only: no drums at all */
     BAR_HALF,           /* half time: kick on 1, snare on 3 */
     BAR_INTRO,          /* pads and a quiet hat, no kick */
+    BAR_FILL,           /* a syncopated fill: the accents of fill_gaps, no kick on the beats */
 };
+
+/* The fill of AD:HOUSE 11's "Felicidade" at 44-47 s, a sequenced 130 BPM
+ * track: strong onsets 467, 533, 620, 467, 533 and 460 ms apart, the last
+ * two on the beats, then the music back on the pulse. Counted back from
+ * the downbeat after the fill, the accents fall a third of a beat, half
+ * a beat and a sixth of a beat off the beats. */
+static const double fill_gaps[] = { 0.467, 0.533, 0.620, 0.467, 0.533, 0.460 };
 
 enum {
     STYLE_HOUSE = 1,    /* four-on-the-floor kick, off-beat hats, claps on 2 and 4 */
@@ -207,6 +220,9 @@ typedef struct Spec {
     double walk_sigma;
     double rubato;
     int    rubato_from, rubato_to;
+    /* A two-bar syncopated fill (BAR_FILL) from bar fill_bar (0: none):
+     * a pulse that does not move, under accents that leave it. */
+    int    fill_bar;
 } Spec;
 
 enum {
@@ -328,6 +344,8 @@ static int synth(const Spec *sp, Track *t, Truth *truth)
             kind = BAR_BREAK;
         else if (b >= sp->half_from && b < sp->half_to)
             kind = BAR_HALF;
+        else if (sp->fill_bar && b >= sp->fill_bar && b < sp->fill_bar + 2)
+            kind = BAR_FILL;
 
         /* Pads and bass: a chord change every bar, louder every other
          * eight bars, the bass from bar 8: structure on the bar line. */
@@ -346,6 +364,21 @@ static int synth(const Spec *sp, Track *t, Truth *truth)
 
         if (kind == BAR_BREAK)
             continue;
+        if (kind == BAR_FILL) {
+            /* Its accents, counted back from the downbeat after it, and
+             * the hats going on. */
+            if (b == sp->fill_bar) {
+                double at = tb + 8.0 * p;
+                for (int k = (int)RX_ARRAY_ELEMS(fill_gaps) - 1; k >= 0; k--) {
+                    at -= fill_gaps[k];
+                    add_kick(t, at, 1.0);
+                    add_snare(t, at, 0.8, &l);
+                }
+            }
+            for (int q = 0; q < 4; q++)
+                add_hat(t, tb + (q + 0.5) * p, 1.0, &l);
+            continue;
+        }
         /* Every hit jittered the same way (a drummer plays the whole kit
          * early or late on a beat), per beat. */
         for (int q = 0; q < 4; q++) {
@@ -521,6 +554,9 @@ static const Spec cases[] = {
     { .name = "rubato: 120 dipping to 100 over bars 16-24, steady either side",
       .style = STYLE_HIPHOP, .bpm = 120.0, .first_downbeat = 0.6, .bars = 48, .seed = 26,
       .rubato = 0.17, .rubato_from = 16, .rubato_to = 24, .jitter = 0.003 },
+    /* A tempo that does not move under a fill that does. */
+    { .name = "sequenced 130, a two-bar syncopated fill (Felicidade's)", .style = STYLE_HOUSE,
+      .bpm = 130.0, .first_downbeat = 0.578, .bars = 48, .seed = 27, .fill_bar = 20 },
 };
 
 typedef struct Want {
@@ -558,6 +594,7 @@ static const Want wants[] = {
     { RX_GRID_FLAG_DYNAMIC, CUTS },
     { RX_GRID_FLAG_DYNAMIC, CUTS },
     { RX_GRID_FLAG_DYNAMIC, CUTS },
+    { 0, CUTS | RX_GRID_FLAG_UNSTEADY | RX_GRID_FLAG_DYNAMIC },
 };
 
 /* ----------------------------------------------------------- the checks */
@@ -675,6 +712,27 @@ static int check(int idx, RXCompute *gpu, RXBeatResult *keep)
                 rx_beat_result_free(&sr);
             }
         }
+    }
+    if (sp->fill_bar) {
+        /* The beats through the fill, a bar either side, on the pulse
+         * (within 3 ms, as the phase) and none between. */
+        double pulse[16];
+        int np = 0;
+        for (int k = 4 * (sp->fill_bar - 1); k < 4 * (sp->fill_bar + 3); k++)
+            pulse[np++] = sp->first_downbeat + k * 60.0 / sp->bpm;
+        BeatError d = beat_error(&r.grid, dur, pulse, np);
+        RXBeat *gb = NULL;
+        int ngb = 0, extra = -np;
+        double half = 30.0 / sp->bpm;
+        if (rx_grid_beats(&r.grid, dur, &gb, &ngb) == 0) {
+            for (int i = 0; i < ngb; i++)
+                extra += gb[i].time > pulse[0] - half && gb[i].time < pulse[np - 1] + half;
+        }
+        free(gb);
+        if (!(d.max <= 0.003) || extra)
+            FAILF(" fill: beats %.1f ms from the pulse, %+d beats", d.max * 1e3, extra);
+        snprintf(curve_note, sizeof(curve_note), "      fill: beats within %.1f ms of the pulse",
+                 d.max * 1e3);
     }
     free(t.x);
     if (!truth.beats && r.grid.nb_sections != truth.nb_secs)
@@ -949,6 +1007,41 @@ static int check_misc(RXCompute *gpu)
     if (rx_grid_flag_parse("bogus") != 0) {
         printf("FAIL flag parse bogus\n");
         fails++;
+    }
+
+    /* The walk keeps the tempo's continuity (walk.c): a pulse at 130 BPM
+     * whose attacks leave it for a dozen beats, two beats to get 160 ms
+     * away and two to come back, as the beats re-tracked through
+     * Felicidade's fill did (the walk that followed them moved the tempo
+     * by 12.5 % in one beat). No step of the walked tempo is over 4 %,
+     * and the beats away from it stay on the pulse. */
+    if (!gpu) {
+        static const double off[] = { 0.060, 0.120, 0.160, 0.160, 0.165, 0.155, 0.160, 0.170,
+                                      0.160, 0.160, 0.110, 0.050 };
+        const double P = 60.0 / 130.0;
+        RXBeatObs ob[80];
+        for (int k = 0; k < 80; k++) {
+            double a = k * P + (k >= 34 && k < 46 ? off[k - 34] : 0.0);
+            ob[k] = (RXBeatObs) { .time = a, .attack = a, .weight = 1.0, .index = k };
+        }
+        double step = INFINITY, far = INFINITY;
+        if (rx_walk_beats(ob, 0, 79, 0.0005) == 0) {
+            step = far = 0.0;
+            for (int k = 1; k + 1 < 80; k++)
+                step = fmax(step, fabs((ob[k + 1].time - ob[k].time) /
+                                       (ob[k].time - ob[k - 1].time) - 1.0));
+            for (int k = 0; k < 80; k++) {
+                if (k < 20 || k >= 60)
+                    far = fmax(far, fabs(ob[k].time - k * P));
+            }
+        }
+        if (step > 0.0401 || far > 0.002) {
+            printf("FAIL walk through a fill: tempo steps %.1f %%, beats %.1f ms off the pulse\n",
+                   step * 100.0, far * 1e3);
+            fails++;
+        } else {
+            printf("ok   walk through a fill: tempo steps of %.1f %% at most\n", step * 100.0);
+        }
     }
 
     /* Silence and a too-short input give an empty grid, not an error. */
