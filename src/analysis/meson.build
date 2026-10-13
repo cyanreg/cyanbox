@@ -34,3 +34,10 @@ test('key', test_key, suite: 'analysis', workdir: meson.project_source_root(), t
 test_beats = executable('test_beats', files('../../tests/analysis/test_beats.c'),
     include_directories: rx_inc, dependencies: [ rx_analysis_dep ])
 test('beats', test_beats, suite: 'analysis', workdir: meson.project_source_root(), timeout: 1200)
+# rx_analyse's edges: NaN in a float file, the onsets of a few frames, the
+# first loud onset, the automatic cue without a length. Writes its WAVs
+# under the build directory.
+test_analysis = executable('test_analysis', files('../../tests/analysis/test_analysis.c'),
+    include_directories: rx_inc, dependencies: [ rx_analysis_dep ])
+test('analysis', test_analysis, suite: 'analysis', workdir: meson.project_source_root(),
+     env: [ 'RX_TEST_DIR=' + meson.current_build_dir() / 'test-media' ], timeout: 300)
