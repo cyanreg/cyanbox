@@ -970,17 +970,26 @@ resets the kernel's high-water mark after decoding; `--all` runs the whole
 `rx_analyse`: waveforms, beats and key). Files made by concatenating
 AD:HOUSE albums with ffmpeg; mono 44.1 kHz as the application decodes:
 
-| Length | Input (mono float) | Beats | `rx_analyse` | Whole process, `rx_analyse` |
-| --- | --- | --- | --- | --- |
-| 5 min | 53 MB | 8 MB | 17 MB | 96 MB |
-| 10 min | 106 MB | 14 MB | 32 MB | 162 MB |
-| 30 min | 318 MB | 41 MB | 88 MB | 419 MB |
-| 60 min | 635 MB | 81 MB | 176 MB | 810 MB |
+| Length | Input (mono float) | Beats | `rx_analyse` | `rx_analyse` before 2026-10-14 | Whole process, before |
+| --- | --- | --- | --- | --- | --- |
+| 5 min | 53 MB | 8 MB | 9 MB | 17 MB | 96 MB |
+| 10 min | 106 MB | 14 MB | 17 MB | 32 MB | 162 MB |
+| 30 min | 318 MB | 41 MB | 44 MB | 88 MB | 419 MB |
+| 60 min | 635 MB | 81 MB | 86 MB | 176 MB | 810 MB |
 
 The beat analyser grows by about 1.35 MB per minute: the onset signals, the
 per-half-beat profiles and the tracked beats, but not the spectrum. The
-largest stage of `rx_analyse` on an hour is the key analysis (151 MB above
-the input), then the beats (82), then the waveforms (68).
+largest stage of `rx_analyse` on an hour is the beats (82 MB above the
+input), then the waveforms (68); the key takes 2 MB. Until 2026-10-14 the
+key kept a decimated copy of the track (a quarter of the input at 44.1
+kHz) and took 151 MB, the largest stage; it now decimates as it reads,
+once per pass (docs/KEY.md), and the key and its confidence came out the
+same to the bit (225 synthetic tracks, the 58 acceptance tracks). The
+`rx_analyse` column was measured again then on a synthetic loop of each
+length (mono 16-bit FLAC, the GPU front end, three runs alike to 1 MB):
+the analyser before the change took 16, 33, 89 and 177 MB above the input
+there, as on the albums, and the whole process peaked at 150, 218, 477
+and 866 MB (the Vulkan context included), now 144, 203, 431 and 776.
 
 At 48 kHz an hour costs 687 MB in the beat analyser and 781 MB in
 `rx_analyse`, of which 606 MB is the one 44.1 kHz copy the analysers read;

@@ -85,10 +85,11 @@
  * are less reliable there than their confidence says, as the test set is
  * 85 % minor where the development set is 67 %.
  *
- * Memory: the decimated signal (a quarter of the input at 44.1 kHz), the
- * whitened 72-band frames of the whole track (2.8 MB an hour) and one FFT.
- * Time: ~80 ms for five minutes at 44.1 kHz on one core (dj's: ~550 ms):
- * 30 in the decimation, 30 in the tuning pass, 20 in the band pass.
+ * Memory: the whitened 72-band frames of the whole track (2.8 MB an hour),
+ * one FFT and a ring of the decimated signal (32 kB), each pass decimating
+ * again as its frames need it (the STFT below). Time: ~110 ms for five
+ * minutes at 44.1 kHz on one core (dj's: ~550 ms): 30 in each of the two
+ * decimations, 30 in the tuning pass, 20 in the band pass.
  *
  * Silence (no tonal energy at all) gives "" and confidence 0, as before. */
 
@@ -180,24 +181,34 @@ static double bessel_i0(double x)
     return sum;
 }
 
-/* Keeps every d-th sample of x (d >= 2) after a low-pass at the new
- * Nyquist: a sinc under a Kaiser window (beta 6, ~60 dB) of 16d + 1 taps,
- * padded with zeros to a multiple of 8 so that the dot products run as
- * eight lanes. Output k is centred on input k * d, zero padded at the
- * ends. */
-static int decimate(const float *x, int64_t n, int d, float **out, int64_t *nb_out)
-{
-    int64_t ny = (n + d - 1) / d;
-    float *y = malloc(sizeof(*y) * RX_MAX(ny, 1));
-    if (!y)
-        return RX_ERROR(ENOMEM);
+/* Every d-th sample of x (d >= 2) after a low-pass at the new Nyquist: a
+ * sinc under a Kaiser window (beta 6, ~60 dB) of 16d + 1 taps, padded with
+ * zeros to a multiple of 8 so that the dot products run as eight lanes.
+ * Output k is centred on input k * d, zero padded at the ends. One sample
+ * at a time, as the STFT reads them (below). */
+typedef struct Decimator {
+    const float *x;
+    int64_t n;                      /* input samples */
+    int64_t ny;                     /* output samples */
+    int d, half, taps, padded;
+    float *h;                       /* the taps, padded */
+} Decimator;
 
+static int decimator_init(Decimator *dc, const float *x, int64_t n, int d)
+{
     int half = 8 * d, taps = 2 * half + 1, padded = (taps + 7) & ~7;
+    *dc = (Decimator) {
+        .x      = x,
+        .n      = n,
+        .ny     = (n + d - 1) / d,
+        .d      = d,
+        .half   = half,
+        .taps   = taps,
+        .padded = padded,
+    };
     float *h = calloc(padded, sizeof(*h));
-    if (!h) {
-        free(y);
+    if (!h)
         return RX_ERROR(ENOMEM);
-    }
     double sum = 0.0, i0b = bessel_i0(6.0);
     for (int i = 0; i < taps; i++) {
         double m = i - half, r = m / half;
@@ -207,39 +218,48 @@ static int decimate(const float *x, int64_t n, int d, float **out, int64_t *nb_o
     }
     for (int i = 0; i < taps; i++)
         h[i] = (float)(h[i] / sum);
-
-    for (int64_t k = 0; k < ny; k++) {
-        int64_t c = k * d;
-        if (c >= half && c - half + padded <= n) {
-            const float *p = x + c - half;
-            float acc[8] = { 0 };
-            for (int i = 0; i < padded; i += 8)
-                for (int j = 0; j < 8; j++)
-                    acc[j] += h[i + j] * p[i + j];
-            float lo4 = (acc[0] + acc[1]) + (acc[2] + acc[3]);
-            float hi4 = (acc[4] + acc[5]) + (acc[6] + acc[7]);
-            y[k] = lo4 + hi4;
-        } else {
-            float acc = 0;
-            for (int i = 0; i < taps; i++) {
-                int64_t j = c - half + i;
-                if (j >= 0 && j < n)
-                    acc += h[i] * x[j];
-            }
-            y[k] = acc;
-        }
-    }
-    free(h);
-    *out = y;
-    *nb_out = ny;
+    dc->h = h;
     return 0;
+}
+
+/* Output sample k */
+static float decimate_at(const Decimator *dc, int64_t k)
+{
+    const float *h = dc->h, *x = dc->x;
+    int64_t c = k * dc->d;
+    if (c >= dc->half && c - dc->half + dc->padded <= dc->n) {
+        const float *p = x + c - dc->half;
+        float acc[8] = { 0 };
+        for (int i = 0; i < dc->padded; i += 8)
+            for (int j = 0; j < 8; j++)
+                acc[j] += h[i + j] * p[i + j];
+        float lo4 = (acc[0] + acc[1]) + (acc[2] + acc[3]);
+        float hi4 = (acc[4] + acc[5]) + (acc[6] + acc[7]);
+        return lo4 + hi4;
+    }
+    float acc = 0;
+    for (int i = 0; i < dc->taps; i++) {
+        int64_t j = c - dc->half + i;
+        if (j >= 0 && j < dc->n)
+            acc += h[i] * x[j];
+    }
+    return acc;
 }
 
 /* ------------------------------------------------------------------- STFT */
 
+/* The STFT reads the signal itself or, decimated, a ring of its last N_FFT
+ * samples, filled as the frames need them. Each pass decimates again from
+ * the start (stft_rewind) instead of reading a copy of the whole decimated
+ * track: a quarter of the input at 44.1 kHz, 159 MB an hour, which made
+ * the key the largest stage of rx_analyse (docs/BEATS.md, "Memory"). The
+ * frames read the same samples either way, to the bit. */
 typedef struct Stft {
-    const float *x;
-    int64_t n;
+    const float *x;                 /* the signal, when it is not decimated */
+    const Decimator *dc;            /* else this, through the ring */
+    float *ring;                    /* decimated sample j at j % N_FFT */
+    int64_t filled;                 /* samples [0, filled) made; the ring holds the last N_FFT */
+    int64_t n;                      /* samples the frames read */
     AVTXContext *tx;
     av_tx_fn fn;
     float *win, *frame, *mag;
@@ -253,11 +273,17 @@ static void stft_free(Stft *s)
     av_freep(&s->frame);
     av_freep(&s->spec);
     av_freep(&s->mag);
+    av_freep(&s->ring);
 }
 
-static int stft_init(Stft *s, const float *x, int64_t n)
+/* Over x (n samples) as it is, or over its decimation by dc */
+static int stft_init(Stft *s, const float *x, int64_t n, const Decimator *dc)
 {
-    *s = (Stft) { .x = x, .n = n };
+    *s = (Stft) {
+        .x  = dc ? NULL : x,
+        .dc = dc,
+        .n  = dc ? dc->ny : n,
+    };
     float scale = 1.0f;
     /* AVERROR(e) is -e on POSIX systems, the same convention as rxbox's */
     int ret = av_tx_init(&s->tx, &s->fn, AV_TX_FLOAT_RDFT, 0, N_FFT, &scale, 0);
@@ -267,20 +293,41 @@ static int stft_init(Stft *s, const float *x, int64_t n)
     s->frame = av_malloc(sizeof(*s->frame) * (N_FFT + 2));
     s->spec = av_malloc(sizeof(*s->spec) * (N_FFT / 2 + 1));
     s->mag = av_malloc(sizeof(*s->mag) * (N_FFT / 2 + 1));
-    if (!s->win || !s->frame || !s->spec || !s->mag)
+    if (dc)
+        s->ring = av_malloc(sizeof(*s->ring) * N_FFT);
+    if (!s->win || !s->frame || !s->spec || !s->mag || (dc && !s->ring))
         return RX_ERROR(ENOMEM);
     for (int i = 0; i < N_FFT; i++)
         s->win[i] = (float)(0.5 - 0.5 * cos(2 * M_PI * i / N_FFT));
     return 0;
 }
 
-/* The magnitudes of bins [0, nb) of frame f, centred on sample f * HOP */
+/* A new pass, from the first frame */
+static void stft_rewind(Stft *s)
+{
+    s->filled = 0;
+}
+
+/* The magnitudes of bins [0, nb) of frame f, centred on sample f * HOP.
+ * Within a pass the frames come in order: the ring holds the N_FFT
+ * samples up to the end of the latest frame, and no frame starts before
+ * the one before it. */
 static void stft_frame(Stft *s, int64_t f, int nb)
 {
     int64_t start = f * HOP - N_FFT / 2;
-    for (int i = 0; i < N_FFT; i++) {
-        int64_t j = start + i;
-        s->frame[i] = j >= 0 && j < s->n ? s->x[j] * s->win[i] : 0.0f;
+    if (s->dc) {
+        int64_t end = RX_MIN(start + N_FFT, s->n);
+        for (; s->filled < end; s->filled++)
+            s->ring[s->filled % N_FFT] = decimate_at(s->dc, s->filled);
+        for (int i = 0; i < N_FFT; i++) {
+            int64_t j = start + i;
+            s->frame[i] = j >= 0 && j < s->n ? s->ring[j % N_FFT] * s->win[i] : 0.0f;
+        }
+    } else {
+        for (int i = 0; i < N_FFT; i++) {
+            int64_t j = start + i;
+            s->frame[i] = j >= 0 && j < s->n ? s->x[j] * s->win[i] : 0.0f;
+        }
     }
     s->fn(s->tx, s->spec, s->frame, sizeof(float));
     for (int b = 0; b < nb; b++)
@@ -394,26 +441,20 @@ static int key_frames(const float *mono, int64_t n, int rate, KeyFrames *kf)
 {
     *kf = (KeyFrames) { 0 };
     int ret = 0;
-    float *own = NULL;
+    Decimator dc = { 0 };
     Stft s = { 0 };
     Kernel k = { 0 };
 
     /* Rates up to ~16.5 kHz are analysed as they are */
     int d = RX_MAX((int)lrint(rate / KEY_RATE), 1);
-    const float *y = mono;
-    int64_t ny = n;
-    if (d > 1) {
-        ret = decimate(mono, n, d, &own, &ny);
-        if (ret < 0)
-            goto fail;
-        y = own;
-    }
-    kf->fs = (double)rate / d;
-    kf->nb_frames = ny / HOP + 1;
-
-    ret = stft_init(&s, y, ny);
+    if (d > 1 && (ret = decimator_init(&dc, mono, n, d)) < 0)
+        goto fail;
+    ret = stft_init(&s, mono, n, d > 1 ? &dc : NULL);
     if (ret < 0)
         goto fail;
+    kf->fs = (double)rate / d;
+    kf->nb_frames = s.n / HOP + 1;
+
     kf->tuning = estimate_tuning(&s, kf->nb_frames, kf->fs);
     ret = kernel_init(&k, kf->fs, kf->tuning);
     if (ret < 0)
@@ -425,6 +466,7 @@ static int key_frames(const float *mono, int64_t n, int rate, KeyFrames *kf)
         goto fail;
     }
     float top = 0;
+    stft_rewind(&s);
     for (int64_t f = 0; f < kf->nb_frames; f++) {
         stft_frame(&s, f, k.nb_bins);
         float *row = &kf->bands[f * NB_BANDS];
@@ -460,7 +502,7 @@ fail:
         key_frames_free(kf);
     stft_free(&s);
     free(k.w);
-    free(own);
+    free(dc.h);
     return ret;
 }
 

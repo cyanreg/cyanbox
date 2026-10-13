@@ -16,7 +16,7 @@ tuning offset from A440 in cents.
 | --- | --- | --- | --- | --- |
 | Before (dj's port) | 30.3 %, MIREX 0.404 | 28.8 %, 0.389 | 216 of 225 | ~550 ms |
 | libKeyFinder 2 | 60.4 %, 0.674 | 54.7 %, 0.632 | | ~700 ms |
-| Now | **64.7 %, 0.704** | **63.2 %, 0.696** (cross-validated) | **225 of 225** | **~80 ms** |
+| Now | **64.7 %, 0.704** | **63.2 %, 0.696** (cross-validated) | **225 of 225** | **~110 ms** |
 
 Times are the best of several runs on one core of a shared machine (the
 before and KeyFinder figures include reading the 50 MB file). Accuracy is
@@ -57,8 +57,12 @@ confidences 0.26-0.95 (median 0.60), and ties are broken by rule.
     share of 20-second segments whose own best key is the same go through a
     logistic fitted on cross-validated answers of the development set.
 
-Memory is the decimated signal plus 288 bytes per frame (2.8 MB an hour).
-Time, five minutes at 44.1 kHz on one core: 30 ms decimation, 30 ms tuning
+Memory is 288 bytes per frame (2.8 MB an hour) and a ring of 8192
+decimated samples: each pass decimates the signal again as it reads it.
+A copy of the decimated track (a quarter of the input at 44.1 kHz, 159 MB
+an hour) made the key the largest stage of `rx_analyse` until 2026-10-14,
+for a decimation less (~80 ms for five minutes). Time, five minutes at
+44.1 kHz on one core: 30 ms for each of the two decimations, 30 ms tuning
 pass, 20 ms band pass.
 
 ## The evaluation
