@@ -6,7 +6,7 @@
 # memory cues and loops, then runs the interface with the first track
 # loaded and playing (RXBOX_UI_AUTOLOAD) and saves frame 100
 # (RXBOX_UI_SCREENSHOT; --frames 120 bounds the run). Audio goes nowhere
-# (--audio none).
+# (--audio none), and the player stays off the session bus (--no-mpris).
 #
 # It never runs on the user's session: it needs RXBOX_UI_TEST=1 and a
 # WAYLAND_DISPLAY of a private compositor (docs/HACKING.md, "Running the
@@ -136,7 +136,7 @@ shoot() {
     rm -f "$png"
     RXBOX_UI_AUTOLOAD=$ID RXBOX_UI_AUTOLOAD_AT=${RXBOX_UI_AUTOLOAD_AT:-13.5} \
     RXBOX_UI_SCREENSHOT=$png timeout 120 \
-        "$RXBOX" -c "$LIB" --audio none --frames ${FRAMES:-120} > "$png.log" 2>&1 || {
+        "$RXBOX" -c "$LIB" --audio none --no-mpris --frames ${FRAMES:-120} > "$png.log" 2>&1 || {
         echo "rxbox failed:"; cat "$png.log"; exit 1; }
     [ -s "$png" ] || { echo "no screenshot at $png"; cat "$png.log"; exit 1; }
     echo "screenshot: $png"

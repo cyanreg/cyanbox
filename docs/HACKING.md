@@ -112,6 +112,7 @@ src/player        player.c pipewire.c nullout.c deck.c feed.c         -> rx_play
 src/app           jobs.c app.c                                        -> rx_app_dep (everything above,
                                                                        ml for the tag batch)
                   headless.c (src/gpu and src/ui stand-ins for rxbox-cli and test_app)
+                  mpris.c (MPRIS on the D-Bus session bus, with libdbus: -Dmpris)
 src/gpu           compute.c compute_dsp.c compute_priv.h              -> rx_compute_dep (common; Vulkan, VMA)
                   shaders/fft.glsl stft.comp env.comp                 (no window: CLI, tests, tools)
                   window.c vk.c swapchain.c textures.c wave.c         (executable only)

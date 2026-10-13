@@ -40,6 +40,7 @@
 #include "rxbox/export.h"
 #include "rxbox/formats.h"
 #include "rxbox/ml.h"
+#include "rxbox/mpris.h"
 #include "rxbox/notation.h"
 
 int rx_cli_main(int argc, char **argv);
@@ -58,6 +59,7 @@ typedef struct Cli {
     bool  no_gpu;               /* --no-gpu: analyse on the CPU only */
     int   frames;
     bool  validation;
+    bool  no_mpris;             /* --no-mpris: the interface stays off the session bus */
     bool  verbose;
     const char *cmd;
     const char *usage;          /* the command's usage line, for usage errors */
@@ -140,6 +142,7 @@ static const char usage_text[] =
     "  --audio pipewire|none    audio output; none plays to no device at all\n"
     "  --audio-sink NAME        the PipeWire node to play to\n"
     "  --validation             enable the Vulkan validation layer\n"
+    "  --no-mpris               stay off the D-Bus session bus (no MPRIS media controls)\n"
     "  --frames N               draw N frames, then exit (tests)\n";
 
 /* ------------------------------------------------------------------ helpers */
@@ -2260,6 +2263,9 @@ static int run_interface(Cli *cli)
         free(root);
         return fail("cannot start the interface: %s", strerror(-ret));
     }
+    /* The deck on the session bus; without one it runs on as it is. */
+    if (!cli->no_mpris)
+        rx_mpris_create(app);
     ret = rx_app_run(app);
     rx_app_destroy(app);
     free(app);
@@ -2327,6 +2333,10 @@ static int cli_run(int argc, char **argv)
         }
         if (opt_flag(&cli, a, NULL, "--validation")) {
             cli.validation = true;
+            continue;
+        }
+        if (opt_flag(&cli, a, NULL, "--no-mpris")) {
+            cli.no_mpris = true;
             continue;
         }
         if ((r = opt_value(&cli, argc, argv, &i, NULL, "--audio", &val))) {
