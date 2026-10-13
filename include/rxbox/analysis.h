@@ -12,6 +12,7 @@
 
 #include "rxbox/model.h"
 #include "rxbox/audio.h"
+#include "rxbox/compute.h"
 
 /* --------------------------------------------------------------- waveforms */
 
@@ -75,6 +76,12 @@ typedef struct RXAnalysisOptions {
     bool   snap_bpm;             /* snap to integer/half BPM when the drift allows */
     bool   allow_sections;       /* split on real tempo/phase changes (default true) */
     bool   deterministic_threads;/* run single-threaded inside the call (default false) */
+    /* The GPU the beat analyser's spectral front end runs on (its STFT and
+     * band envelopes, rxbox/compute.h), NULL: the CPU. The results agree
+     * with the CPU's to float rounding (docs/BEATS.md, section 1); should
+     * the GPU fail, the CPU takes over. Not owned; it must outlive the
+     * call. Default NULL. */
+    RXCompute *compute;
 } RXAnalysisOptions;
 void rx_analysis_options_default(RXAnalysisOptions *o);
 

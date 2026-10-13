@@ -2,9 +2,20 @@
 
 /* The spectral front end of the beat analyser: a centred Hann STFT with
  * mel bands, a dedicated kick band, the resampler, and fine band envelopes
- * around chosen instants. Every FFT is libavutil's av_tx. Everything else
- * in the analyser reads only what this file produces, so a GPU version can
- * replace it behind the same interface.
+ * around chosen instants. On the CPU every FFT is libavutil's av_tx; with a
+ * GPU (rxbox/compute.h) the STFT's transforms and band energies and the
+ * envelopes' transforms run there instead. Everything else in the analyser
+ * reads only what this file produces.
+ *
+ * The GPU is given the tables this file builds (the window, the mel and
+ * kick weights, the envelopes' taper and band gains) and does only the
+ * arithmetic that decides nothing: transforms, weighted sums of power,
+ * compression, smoothed energies. The profile sums and the flux, and
+ * everything after them, stay here in C on both paths, so changing the
+ * analyser never means changing a shader. The two paths agree to float
+ * rounding (the transforms differ in their last bits);
+ * tests/analysis/test_beats.c checks the arrays, and every synthetic
+ * track's grid, on both.
  *
  * Choices, and why:
  *  - 2048-point frames every 294 samples at 44.1 kHz (150 frames a second,
@@ -134,7 +145,105 @@ typedef struct MelBand {
     float *w;                       /* k1 - k0 weights */
 } MelBand;
 
-int rx_spectrum_compute(const float *x, int64_t n, RXSpectrum *s)
+/* The kick band: 30..150 Hz from the bins themselves (bins 1 and 7 at half
+ * weight), finer than the lowest mel triangles, which straddle kick and
+ * bass. */
+static const struct { int k; float w; } kick_bins[] = {
+    { 1, 0.5f }, { 2, 1.0f }, { 3, 1.0f }, { 4, 1.0f }, { 5, 1.0f }, { 6, 1.0f }, { 7, 0.5f },
+};
+
+/* What every frame leaves behind once its mel bands and kick band are
+ * known, the same on both paths: the downbeat's profile bands and the
+ * flux of the frame before. The last three mel frames are kept: the flux
+ * at frame t compares t + 1 with t - 1. */
+typedef struct Frames {
+    RXSpectrum *s;
+    float ring[3][RX_BEAT_NMELS];
+    int mid0, mid1, high0;
+} Frames;
+
+/* Frame f's mel bands are in ring[f % 3], its kick band in s->kick[f]. */
+static void frame_done(Frames *fr, int f)
+{
+    RXSpectrum *s = fr->s;
+    const float *out = fr->ring[f % 3];
+
+    /* The downbeat's profile bands: sums of four mel bands. */
+    float *pr = s->prof + (size_t)f * RX_BEAT_NPROF;
+    for (int g = 0; g < RX_BEAT_NPROF; g++) {
+        float acc = 0.0f;
+        for (int k = 0; k < RX_BEAT_GROUP; k++)
+            acc += out[g * RX_BEAT_GROUP + k];
+        pr[g] = acc;
+    }
+
+    /* The flux of frame f - 1, now that frame f is known (frames 0 and
+     * nb_frames - 1 have none). */
+    if (f >= 2)
+        rx_superflux_frame(fr->ring[(f - 2) % 3], out, fr->mid0, fr->mid1, fr->high0,
+                           &s->flux_full[f - 1], &s->flux_mid[f - 1], &s->flux_high[f - 1]);
+}
+
+/* The GPU's frames: the 64 mel bands, then the kick band. */
+static int gpu_frames(void *opaque, int64_t f0, int nb, const float *bands)
+{
+    Frames *fr = opaque;
+    for (int i = 0; i < nb; i++) {
+        int f = (int)(f0 + i);
+        const float *b = bands + (size_t)i * (RX_BEAT_NMELS + 1);
+        memcpy(fr->ring[f % 3], b, RX_BEAT_NMELS * sizeof(*b));
+        fr->s->kick[f] = b[RX_BEAT_NMELS];
+        frame_done(fr, f);
+    }
+    return 0;
+}
+
+/* The STFT on the GPU, with the same window and weights; the kick band is
+ * a 65th band. */
+static int stft_gpu(RXCompute *gpu, const float *x, int64_t n, const float *win,
+                    const MelBand *bands, const float *weights, int nb_weights, float comp,
+                    Frames *fr)
+{
+    int k0[RX_BEAT_NMELS + 1], k1[RX_BEAT_NMELS + 1];
+    float *w = malloc((nb_weights + RX_ARRAY_ELEMS(kick_bins)) * sizeof(*w));
+    if (!w)
+        return RX_ERROR(ENOMEM);
+    memcpy(w, weights, nb_weights * sizeof(*w));
+    for (int b = 0; b < RX_BEAT_NMELS; b++) {
+        k0[b] = bands[b].k0;
+        k1[b] = bands[b].k1;
+    }
+    /* The kick bins are consecutive. */
+    k0[RX_BEAT_NMELS] = kick_bins[0].k;
+    k1[RX_BEAT_NMELS] = kick_bins[RX_ARRAY_ELEMS(kick_bins) - 1].k + 1;
+    for (size_t i = 0; i < RX_ARRAY_ELEMS(kick_bins); i++)
+        w[nb_weights + i] = kick_bins[i].w;
+
+    RXComputeSTFT p = {
+        .nfft     = RX_BEAT_NFFT,
+        .hop      = RX_BEAT_HOP,
+        .window   = win,
+        .nb_bands = RX_BEAT_NMELS + 1,
+        .k0       = k0,
+        .k1       = k1,
+        .weights  = w,
+        .scale    = comp,
+    };
+    RXComputeSTFTPlan *plan = NULL;
+    int ret = rx_compute_stft_plan(gpu, &p, &plan);
+    free(w);
+    if (ret < 0)
+        return ret;
+    ret = rx_compute_stft_run(plan, x, n, fr->s->nb_frames, gpu_frames, fr);
+    double gpu_ms, wall_ms;
+    rx_compute_stft_times(plan, &gpu_ms, &wall_ms);
+    rx_debug("spectrum: %d frames on %s: %.1f ms on the GPU, %.1f ms in all\n",
+             fr->s->nb_frames, rx_compute_device_name(gpu), gpu_ms, wall_ms);
+    rx_compute_stft_free(&plan);
+    return ret;
+}
+
+int rx_spectrum_compute(const float *x, int64_t n, RXCompute *gpu, RXSpectrum *s)
 {
     memset(s, 0, sizeof(*s));
     const int N = RX_BEAT_NFFT, hop = RX_BEAT_HOP, nbins = N / 2 + 1;
@@ -150,9 +259,7 @@ int rx_spectrum_compute(const float *x, int64_t n, RXSpectrum *s)
     s->flux_full = calloc((size_t)nf, sizeof(*s->flux_full));
     s->flux_mid = calloc((size_t)nf, sizeof(*s->flux_mid));
     s->flux_high = calloc((size_t)nf, sizeof(*s->flux_high));
-    /* The last three mel frames: the flux at frame t compares t + 1 with
-     * t - 1. */
-    float ring[3][RX_BEAT_NMELS];
+    Frames fr = { .s = s };
 
     AVTXContext *tx = NULL;
     av_tx_fn fn = NULL;
@@ -167,10 +274,6 @@ int rx_spectrum_compute(const float *x, int64_t n, RXSpectrum *s)
         ret = RX_ERROR(ENOMEM);
         goto fail;
     }
-    float scale = 1.0f;
-    ret = av_tx_init(&tx, &fn, AV_TX_FLOAT_RDFT, 0, N, &scale, 0);
-    if (ret < 0)
-        goto fail;
 
     /* Periodic Hann, as np.hanning(N + 1)[:-1] in dj. */
     for (int i = 0; i < N; i++)
@@ -203,13 +306,6 @@ int rx_spectrum_compute(const float *x, int64_t n, RXSpectrum *s)
         }
     }
 
-    /* The kick band: 30..150 Hz from the bins themselves (bins 1 and 7 at
-     * half weight), finer than the lowest mel triangles, which straddle
-     * kick and bass. */
-    static const struct { int k; float w; } kick_bins[] = {
-        { 1, 0.5f }, { 2, 1.0f }, { 3, 1.0f }, { 4, 1.0f }, { 5, 1.0f }, { 6, 1.0f }, { 7, 0.5f },
-    };
-
     /* The flux bands: 150..2500 Hz (snares, claps) and above 5 kHz (hats),
      * by band centre. */
     int mid0 = RX_BEAT_NMELS, mid1 = 0, high0 = RX_BEAT_NMELS;
@@ -221,9 +317,28 @@ int rx_spectrum_compute(const float *x, int64_t n, RXSpectrum *s)
         if (s->mel_hz[b] >= 5000.0)
             high0 = RX_MIN(high0, b);
     }
-    mid1 = RX_MAX(mid1, mid0);
+    fr.mid0 = mid0;
+    fr.mid1 = RX_MAX(mid1, mid0);
+    fr.high0 = high0;
 
     const float comp = 1000.0f / (N / 4);
+    if (gpu) {
+        ret = stft_gpu(gpu, x, n, win, bands, weights, (int)(wp - weights), comp, &fr);
+        if (ret >= 0)
+            goto fail;
+        /* Every frame is written again below; the flux only where there
+         * is one. */
+        rx_warn("spectrum: the GPU failed (%s); the CPU takes over\n", strerror(-ret));
+        memset(s->flux_full, 0, (size_t)nf * sizeof(*s->flux_full));
+        memset(s->flux_mid, 0, (size_t)nf * sizeof(*s->flux_mid));
+        memset(s->flux_high, 0, (size_t)nf * sizeof(*s->flux_high));
+    }
+
+    float scale = 1.0f;
+    ret = av_tx_init(&tx, &fn, AV_TX_FLOAT_RDFT, 0, N, &scale, 0);
+    if (ret < 0)
+        goto fail;
+
     for (int f = 0; f < s->nb_frames; f++) {
         int64_t c = (int64_t)f * hop, a = c - N / 2;
         if (a >= 0 && a + N <= n) {
@@ -243,7 +358,7 @@ int rx_spectrum_compute(const float *x, int64_t n, RXSpectrum *s)
 
         /* Four accumulators: a single one makes every band a chain of
          * dependent multiply-adds, which was most of this function's time. */
-        float *out = ring[f % 3];
+        float *out = fr.ring[f % 3];
         for (int b = 0; b < RX_BEAT_NMELS; b++) {
             const MelBand *mb = &bands[b];
             const float *w = mb->w - mb->k0;
@@ -264,20 +379,7 @@ int rx_spectrum_compute(const float *x, int64_t n, RXSpectrum *s)
             kick += kick_bins[i].w * pow2[kick_bins[i].k];
         s->kick[f] = logf(1.0f + comp * sqrtf(kick));
 
-        /* The downbeat's profile bands: sums of four mel bands. */
-        float *pr = s->prof + (size_t)f * RX_BEAT_NPROF;
-        for (int g = 0; g < RX_BEAT_NPROF; g++) {
-            float acc = 0.0f;
-            for (int k = 0; k < RX_BEAT_GROUP; k++)
-                acc += out[g * RX_BEAT_GROUP + k];
-            pr[g] = acc;
-        }
-
-        /* The flux of frame f - 1, now that frame f is known (frames 0 and
-         * nb_frames - 1 have none). */
-        if (f >= 2)
-            rx_superflux_frame(ring[(f - 2) % 3], out, mid0, mid1, high0, &s->flux_full[f - 1],
-                               &s->flux_mid[f - 1], &s->flux_high[f - 1]);
+        frame_done(&fr, f);
     }
 
 fail:
@@ -325,7 +427,13 @@ struct RXEnvCtx {
     AVComplexFloat *band;           /* ENV_BINS */
     float          *y;              /* ENV_N */
     float          *mask[RX_NB_BANDS];
+    float          *taper;          /* ENV_N */
+    int             smooth[RX_NB_BANDS];
     double         *cum;            /* ENV_N + 1 prefix sums of y^2 */
+    /* The GPU's plan, when there is one; and what it did, for the log. */
+    RXComputeEnvPlan *plan;
+    const char     *gpu_name;
+    int             gpu_windows;
 };
 
 /* A band-pass mask with raised-cosine edges `tw` Hz wide around lo and
@@ -347,7 +455,31 @@ static void make_mask(float *m, double lo, double hi, double tw)
     }
 }
 
-int rx_env_alloc(RXEnvCtx **out, const float *x, int64_t n)
+/* The envelopes' transforms on the GPU, with the same taper, masks and
+ * smoothing. */
+static int env_gpu_plan(RXEnvCtx *c, RXCompute *gpu)
+{
+    float *gains = malloc(RX_NB_BANDS * ENV_BINS * sizeof(*gains));
+    if (!gains)
+        return RX_ERROR(ENOMEM);
+    for (int b = 0; b < RX_NB_BANDS; b++)
+        memcpy(gains + b * ENV_BINS, c->mask[b], ENV_BINS * sizeof(*gains));
+    RXComputeEnv p = {
+        .nfft     = ENV_N,
+        .taper    = c->taper,
+        .nb_bands = RX_NB_BANDS,
+        .gains    = gains,
+        .smooth   = c->smooth,
+        .step     = RX_ENV_DECIM,
+        .half     = RX_ENV_HALF,
+    };
+    int ret = rx_compute_env_plan(gpu, &p, &c->plan);
+    free(gains);
+    c->gpu_name = rx_compute_device_name(gpu);
+    return ret;
+}
+
+int rx_env_alloc(RXEnvCtx **out, const float *x, int64_t n, RXCompute *gpu)
 {
     RXEnvCtx *c = calloc(1, sizeof(*c));
     if (!c)
@@ -359,13 +491,14 @@ int rx_env_alloc(RXEnvCtx **out, const float *x, int64_t n)
     c->band = av_malloc(ENV_BINS * sizeof(*c->band));
     c->y = av_malloc(ENV_N * sizeof(*c->y));
     c->cum = malloc((ENV_N + 1) * sizeof(*c->cum));
+    c->taper = malloc(ENV_N * sizeof(*c->taper));
     int ret = 0;
     for (int b = 0; b < RX_NB_BANDS; b++) {
         c->mask[b] = malloc(ENV_BINS * sizeof(*c->mask[b]));
         if (!c->mask[b])
             ret = RX_ERROR(ENOMEM);
     }
-    if (!c->buf || !c->spec || !c->band || !c->y || !c->cum)
+    if (!c->buf || !c->spec || !c->band || !c->y || !c->cum || !c->taper)
         ret = RX_ERROR(ENOMEM);
     if (ret < 0)
         goto fail;
@@ -384,6 +517,21 @@ int rx_env_alloc(RXEnvCtx **out, const float *x, int64_t n)
     make_mask(c->mask[RX_BAND_LOW], 25.0, 150.0, 40.0);
     make_mask(c->mask[RX_BAND_MID], 150.0, 2500.0, 80.0);
     make_mask(c->mask[RX_BAND_HIGH], 2500.0, 16000.0, 400.0);
+
+    /* A gentle taper (Tukey, 10 % each side) against the window's edges
+     * ringing through the band filters; 1 in the middle. */
+    for (int i = 0; i < ENV_N; i++) {
+        int e = RX_MIN(i, ENV_N - 1 - i);
+        c->taper[i] = e < ENV_N / 10 ? (float)(0.5 - 0.5 * cos(M_PI * e / (ENV_N / 10))) : 1.0f;
+    }
+    for (int b = 0; b < RX_NB_BANDS; b++)
+        c->smooth[b] = (int)(env_smooth[b] * RX_BEAT_RATE) / 2;
+
+    if (gpu && (ret = env_gpu_plan(c, gpu)) < 0) {
+        rx_warn("spectrum: no envelopes on the GPU (%s); the CPU makes them\n", strerror(-ret));
+        rx_compute_env_free(&c->plan);
+        ret = 0;
+    }
     *out = c;
     return 0;
 
@@ -397,6 +545,13 @@ void rx_env_free(RXEnvCtx **pc)
     RXEnvCtx *c = *pc;
     if (!c)
         return;
+    if (c->plan) {
+        double gpu_ms, wall_ms;
+        rx_compute_env_times(c->plan, &gpu_ms, &wall_ms);
+        rx_debug("spectrum: %d envelope windows on %s: %.1f ms on the GPU, %.1f ms in all\n",
+                 c->gpu_windows, c->gpu_name, gpu_ms, wall_ms);
+        rx_compute_env_free(&c->plan);
+    }
     av_tx_uninit(&c->fwd);
     av_tx_uninit(&c->inv);
     av_free(c->buf);
@@ -404,29 +559,31 @@ void rx_env_free(RXEnvCtx **pc)
     av_free(c->band);
     av_free(c->y);
     free(c->cum);
+    free(c->taper);
     for (int b = 0; b < RX_NB_BANDS; b++)
         free(c->mask[b]);
     free(c);
     *pc = NULL;
 }
 
-int rx_env_window(RXEnvCtx *c, double t, float *env, double *centre)
+/* The window's centre on the envelope's own sample grid, so that windows
+ * taken around different beats share one time base and can be folded;
+ * returns its first sample. */
+static int64_t env_start(double t, double *centre)
 {
-    /* The centre on the envelope's own sample grid, so that windows taken
-     * around different beats share one time base and can be folded. */
     int64_t ci = (int64_t)llround(t * RX_ENV_RATE);
-    int64_t cs = ci * RX_ENV_DECIM;
     *centre = (double)ci / RX_ENV_RATE;
-    int64_t a = cs - ENV_N / 2;
+    return ci * RX_ENV_DECIM - ENV_N / 2;
+}
 
-    /* A gentle taper (Tukey, 10 % each side) against the window's edges
-     * ringing through the band filters. */
+static void env_window_cpu(RXEnvCtx *c, int64_t a, float *env)
+{
     for (int i = 0; i < ENV_N; i++) {
         int64_t j = a + i;
         float v = (j >= 0 && j < c->n) ? c->x[j] : 0.0f;
         int e = RX_MIN(i, ENV_N - 1 - i);
         if (e < ENV_N / 10)
-            v *= (float)(0.5 - 0.5 * cos(M_PI * e / (ENV_N / 10)));
+            v *= c->taper[i];
         c->buf[i] = v;
     }
     c->fwd_fn(c->fwd, c->spec, c->buf, sizeof(float));
@@ -446,7 +603,7 @@ int rx_env_window(RXEnvCtx *c, double t, float *env, double *centre)
          * the synthetic kicks. Attack times are taken on the energy
          * (grid_fit.c), the amplitude only finds the rises. */
         /* Prefix sums only over the samples the envelope reads. */
-        int h = (int)(env_smooth[b] * RX_BEAT_RATE) / 2;
+        int h = c->smooth[b];
         int a0 = ENV_N / 2 - RX_ENV_HALF * RX_ENV_DECIM - h;
         int a1 = ENV_N / 2 + RX_ENV_HALF * RX_ENV_DECIM + h + 1;
         double *cum = c->cum - a0;
@@ -460,7 +617,35 @@ int rx_env_window(RXEnvCtx *c, double t, float *env, double *centre)
             e[i] = (float)sqrt(fmax(en, 0.0));
         }
     }
+}
+
+int rx_env_windows(RXEnvCtx *c, const double *t, int nb, float *env, double *centre)
+{
+    if (nb <= 0)
+        return 0;
+    if (c->plan) {
+        int64_t *start = malloc((size_t)nb * sizeof(*start));
+        if (!start)
+            return RX_ERROR(ENOMEM);
+        for (int i = 0; i < nb; i++)
+            start[i] = env_start(t[i], &centre[i]);
+        int ret = rx_compute_env_run(c->plan, c->x, c->n, start, nb, env);
+        free(start);
+        if (ret >= 0) {
+            c->gpu_windows += nb;
+            return 0;
+        }
+        rx_warn("spectrum: the GPU failed (%s); the CPU makes the envelopes\n", strerror(-ret));
+        rx_compute_env_free(&c->plan);
+    }
+    for (int i = 0; i < nb; i++)
+        env_window_cpu(c, env_start(t[i], &centre[i]), env + (size_t)i * RX_NB_BANDS * RX_ENV_LEN);
     return 0;
+}
+
+int rx_env_window(RXEnvCtx *c, double t, float *env, double *centre)
+{
+    return rx_env_windows(c, &t, 1, env, centre);
 }
 
 /* ------------------------------------------------------------ bass chroma */

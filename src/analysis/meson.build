@@ -19,9 +19,10 @@ rx_analysis_sources = files(
 rx_analysis_lib = static_library('rx_analysis',
     rx_analysis_sources,
     include_directories: rx_inc,
-    dependencies: [ rx_core_dep, libavutil, libswresample ],
+    dependencies: [ rx_core_dep, rx_compute_dep, libavutil, libswresample ],
 )
-rx_analysis_dep = declare_dependency(link_with: rx_analysis_lib, dependencies: [ rx_core_dep ])
+rx_analysis_dep = declare_dependency(link_with: rx_analysis_lib,
+                                     dependencies: [ rx_core_dep, rx_compute_dep ])
 
 test_waveform = executable('test_waveform', files('../../tests/analysis/test_waveform.c'),
     include_directories: rx_inc, dependencies: [ rx_analysis_dep ])

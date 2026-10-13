@@ -64,6 +64,7 @@ void rx_analysis_options_default(RXAnalysisOptions *o)
         .snap_bpm              = true,
         .allow_sections        = true,
         .deterministic_threads = false,
+        .compute               = NULL,
     };
 }
 
@@ -140,6 +141,34 @@ static void ctx_free(Ctx *c)
     rx_beat_envs_free(&c->envs);
     free(c->secs);
     free(c->bands);
+}
+
+/* Cuts the envelopes of the beats idx[0 .. nb) again at their times, in
+ * one batch: on the GPU each window is a workgroup of one dispatch. */
+static int cut_envs(Ctx *c, const int *idx, int nb)
+{
+    if (nb <= 0)
+        return 0;
+    const size_t len = (size_t)RX_NB_BANDS * RX_ENV_LEN;
+    double *t = malloc((size_t)nb * sizeof(*t));
+    double *centre = malloc((size_t)nb * sizeof(*centre));
+    float *env = malloc((size_t)nb * len * sizeof(*env));
+    int ret = RX_ERROR(ENOMEM);
+    if (t && centre && env) {
+        for (int i = 0; i < nb; i++)
+            t[i] = c->beats[idx[i]].time;
+        ret = rx_env_windows(c->envctx, t, nb, env, centre);
+    }
+    if (ret >= 0) {
+        for (int i = 0; i < nb; i++) {
+            memcpy(c->envs.env + idx[i] * len, env + i * len, len * sizeof(*env));
+            c->envs.centre[idx[i]] = centre[i];
+        }
+    }
+    free(t);
+    free(centre);
+    free(env);
+    return ret;
 }
 
 static int cmp_dbl(const void *a, const void *b)
@@ -526,14 +555,17 @@ static int decide_phase(Ctx *c, int i, SecInfo *si, const float *arbiter, const 
         /* Move the line half a beat, re-cut the envelopes where its beats
          * now are, and put it on its attacks again. */
         s->t0 += P / 2;
+        int *idx = malloc((size_t)(s->last - s->first + 1) * sizeof(*idx));
+        if (!idx)
+            return RX_ERROR(ENOMEM);
         for (int k = s->first; k <= s->last; k++) {
             c->beats[k].time = rx_beat_predict(c->beats, k, s);
-            int ret = rx_env_window(c->envctx, c->beats[k].time,
-                                    c->envs.env + (size_t)k * RX_NB_BANDS * RX_ENV_LEN,
-                                    &c->envs.centre[k]);
-            if (ret < 0)
-                return ret;
+            idx[k - s->first] = k;
         }
+        int ret = cut_envs(c, idx, s->last - s->first + 1);
+        free(idx);
+        if (ret < 0)
+            return ret;
         double contrast;
         *band = refine_section(c, s, &contrast);
         si->shifted = true;
@@ -709,18 +741,16 @@ static int recut_envs(Ctx *c)
 {
     RXBeatEnvs *e = &c->envs;
     e->env = malloc((size_t)RX_MAX(e->nb, 1) * RX_NB_BANDS * RX_ENV_LEN * sizeof(*e->env));
-    if (!e->env)
-        return RX_ERROR(ENOMEM);
-    for (int i = 0; i < e->nb; i++) {
-        double centre;
-        int ret = rx_env_window(c->envctx, e->centre[i],
-                                e->env + (size_t)i * RX_NB_BANDS * RX_ENV_LEN, &centre);
-        if (ret < 0)
-            return ret;
-        if (centre != e->centre[i])
-            return RX_ERROR(EINVAL);
+    double *centre = malloc((size_t)RX_MAX(e->nb, 1) * sizeof(*centre));
+    int ret = RX_ERROR(ENOMEM);
+    if (e->env && centre)
+        ret = rx_env_windows(c->envctx, e->centre, e->nb, e->env, centre);
+    for (int i = 0; ret >= 0 && i < e->nb; i++) {
+        if (centre[i] != e->centre[i])
+            ret = RX_ERROR(EINVAL);
     }
-    return 0;
+    free(centre);
+    return ret < 0 ? ret : 0;
 }
 
 /* Stage timings for the debug log. */
@@ -847,8 +877,10 @@ int rx_analyse_beats(const float *mono, int64_t nb_samples, int rate,
     return rx_analyse_beats_dbg(mono, nb_samples, rate, opt, out, NULL);
 }
 
-int rx_analyse_beats_dbg(const float *mono, int64_t nb_samples, int rate,
-                         const RXAnalysisOptions *opt_in, RXBeatResult *out, RXBeatDebug *dbg)
+/* The whole analysis; `pre`, when given, is the spectrum of the 44.1 kHz
+ * input, taken over. */
+static int analyse(const float *mono, int64_t nb_samples, int rate, RXSpectrum *pre,
+                   const RXAnalysisOptions *opt_in, RXBeatResult *out, RXBeatDebug *dbg)
 {
     memset(out, 0, sizeof(*out));
     if (dbg) {
@@ -860,8 +892,11 @@ int rx_analyse_beats_dbg(const float *mono, int64_t nb_samples, int rate,
         rx_analysis_options_default(&defopt);
         opt_in = &defopt;
     }
-    if (!mono || nb_samples < 0 || rate <= 0)
+    if (!mono || nb_samples < 0 || rate <= 0 || (pre && rate != RX_BEAT_RATE)) {
+        if (pre)
+            rx_spectrum_free(pre);
         return RX_ERROR(EINVAL);
+    }
 
     Ctx c = { .opt = opt_in };
     float *resampled = NULL;
@@ -884,12 +919,18 @@ int rx_analyse_beats_dbg(const float *mono, int64_t nb_samples, int rate,
     if (c.duration < 8.0) {
         out->flags = RX_GRID_FLAG_LOW_CONFIDENCE;
         free(resampled);
+        if (pre)
+            rx_spectrum_free(pre);
         return 0;
     }
 
     int64_t tm = rx_time_us(), tm0 = tm;
-    if ((ret = rx_spectrum_compute(c.x, c.n, &c.spec)) < 0)
+    if (pre) {
+        c.spec = *pre;
+        memset(pre, 0, sizeof(*pre));
+    } else if ((ret = rx_spectrum_compute(c.x, c.n, c.opt->compute, &c.spec)) < 0) {
         goto fail;
+    }
     stage(&tm, "spectrum");
     if ((ret = rx_onsets_compute(&c.spec, &c.ons)) < 0)
         goto fail;
@@ -926,7 +967,7 @@ int rx_analyse_beats_dbg(const float *mono, int64_t nb_samples, int rate,
              bpm0, c.tempo.octave_bpm, c.tempo.octave_margin, c.tempo.second_bpm,
              c.tempo.second_ratio);
 
-    if ((ret = rx_env_alloc(&c.envctx, c.x, c.n)) < 0)
+    if ((ret = rx_env_alloc(&c.envctx, c.x, c.n, c.opt->compute)) < 0)
         goto fail;
     ret = fit_grid(&c, bpm0, lo, hi);
     stage(&tm, "grid");
@@ -1150,18 +1191,30 @@ int rx_analyse_beats_dbg(const float *mono, int64_t nb_samples, int rate,
      * where a tracked beat strayed from it (a stretch followed on the
      * off-beat and outvoted), the envelopes are cut again at the grid. */
     stage(&tm, "phase+down");
-    for (int i = 0; i < c.nb_secs; i++) {
-        const RXFitSection *s = &c.secs[i];
-        for (int k = s->first; k <= s->last; k++) {
-            double p = rx_beat_predict(c.beats, k, s);
-            if (fabs(c.beats[k].time - p) <= 0.025)
-                continue;
-            c.beats[k].time = p;
-            ret = rx_env_window(c.envctx, p, c.envs.env + (size_t)k * RX_NB_BANDS * RX_ENV_LEN,
-                                &c.envs.centre[k]);
-            if (ret < 0)
-                goto fail;
+    {
+        size_t total = 1;
+        for (int i = 0; i < c.nb_secs; i++)
+            total += (size_t)(c.secs[i].last - c.secs[i].first + 1);
+        int *strays = malloc(total * sizeof(*strays));
+        if (!strays) {
+            ret = RX_ERROR(ENOMEM);
+            goto fail;
         }
+        int nb_strays = 0;
+        for (int i = 0; i < c.nb_secs; i++) {
+            const RXFitSection *s = &c.secs[i];
+            for (int k = s->first; k <= s->last; k++) {
+                double p = rx_beat_predict(c.beats, k, s);
+                if (fabs(c.beats[k].time - p) <= 0.025)
+                    continue;
+                c.beats[k].time = p;
+                strays[nb_strays++] = k;
+            }
+        }
+        ret = cut_envs(&c, strays, nb_strays);
+        free(strays);
+        if (ret < 0)
+            goto fail;
     }
     out->confidence = grid_confidence(&c, bands);
     stage(&tm, "confidence");
@@ -1230,4 +1283,16 @@ fail:
     if (ret < 0)
         rx_beat_result_free(out);
     return ret;
+}
+
+int rx_analyse_beats_dbg(const float *mono, int64_t nb_samples, int rate,
+                         const RXAnalysisOptions *opt, RXBeatResult *out, RXBeatDebug *dbg)
+{
+    return analyse(mono, nb_samples, rate, NULL, opt, out, dbg);
+}
+
+int rx_analyse_beats_spec(const float *x, int64_t n, RXSpectrum *spec,
+                          const RXAnalysisOptions *opt, RXBeatResult *out, RXBeatDebug *dbg)
+{
+    return analyse(x, n, RX_BEAT_RATE, spec, opt, out, dbg);
 }
