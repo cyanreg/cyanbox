@@ -83,6 +83,8 @@ typedef struct RXApp {
          * the steps that rewrite the rest (a track's ANLZ files, an
          * artwork, a settings file or database). */
         int    copied, skipped, pruned, rewritten;
+        /* The copy's throughput (RXExportStats), copied here each tick. */
+        int64_t bytes_done, bytes_total, rate, seconds_left;
         char   stage[32];
         char   item[256];
         char   log[4096];

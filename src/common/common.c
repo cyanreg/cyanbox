@@ -305,6 +305,30 @@ int rx_file_read(const char *path, uint8_t **out, size_t *size)
     return 0;
 }
 
+int rx_file_write(const char *path, const void *data, size_t size)
+{
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+    if (fd < 0)
+        return RX_ERROR(errno);
+    int ret = 0;
+    const uint8_t *p = data;
+    size_t left = size;
+    while (left) {
+        ssize_t n = write(fd, p, left);
+        if (n < 0) {
+            if (errno == EINTR)
+                continue;
+            ret = RX_ERROR(errno);
+            break;
+        }
+        p += n;
+        left -= (size_t)n;
+    }
+    if (close(fd) < 0 && !ret)
+        ret = RX_ERROR(errno);
+    return ret;
+}
+
 int rx_file_write_atomic(const char *path, const void *data, size_t size)
 {
     /* The temporary is named after the thread, not the process: two

@@ -509,8 +509,8 @@ static void space(void)
     RXPlan plan = { .tracks = &pt, .nb_tracks = 1 };
     int64_t empty = rx_export_space_needed(&plan, stick, 1);
     CHECK(empty >= size);
-    /* On the stick already, larger (a different file): the new one is
-     * written beside it. */
+    /* On the stick already, larger (a different file): the new one
+     * replaces it in place, so the audio needs nothing more. */
     char *dst = rx_stick_file(stick, pt.usb_path);
     char *d = rx_strdup(dst);
     *strrchr(d, '/') = '\0';
@@ -519,7 +519,8 @@ static void space(void)
     uint8_t *big = calloc(1, (size_t)size * 3);
     CHECK_EQ(rx_file_write_atomic(dst, big, (size_t)size * 3), 0);
     free(big);
-    CHECK(rx_export_space_needed(&plan, stick, 1) >= empty);
+    CHECK_EQ(rx_export_space_needed(&plan, stick, 1), empty - size);
+    unlink(dst);
     /* Ten minutes of analysis: the waveform details alone are 6 bytes a
      * column, 150 columns a second. */
     pt.duration = 600;

@@ -9,8 +9,12 @@
  * the ANLZ files, artwork and settings, and the databases last, so a
  * database never points at files that are not there yet (dj). Audio
  * already on the stick with the same size and a modification time within
- * FAT's two seconds is skipped (dj's _same_file); everything else is
- * rewritten every time. Files written atomically (temporary name, rename).
+ * FAT's two seconds is skipped (dj's _same_file); the analysis files and
+ * artwork are rebuilt and written where the stick's differ; the settings
+ * files and databases every time. Everything is written in place, the
+ * audio straight through to the stick (O_DIRECT), with one sync of the
+ * stick at the end: no temporaries, no fsync per file (a tenth of a second
+ * each on a stick mounted with flush, three files a track).
  *
  * What is replaced and what is kept: export.pdb, exportExt.pdb and
  * exportLibrary.db are rebuilt (the history a player appended to them goes
@@ -54,6 +58,7 @@
 #include <stdio.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "rxbox/thread.h"
@@ -77,7 +82,164 @@ typedef struct Ctx {
     /* The databases, built by the checks and written last. */
     uint8_t                *pdb, *ext, *olib;
     size_t                  pdb_size, ext_size, olib_size;
+    /* The copy's throughput for opt->stats: bytes so far, and samples of
+     * (time, bytes) a quarter second apart, the rate taken over them. */
+    int64_t                 bytes_total, bytes_done;
+    int64_t                 t_sample[16], b_sample[16];
+    int                     nb_samples, head;
+    /* The small files' writes and the audio files' closes, in parallel
+     * (PutJob); the jobs of the stage, checked by puts_wait. */
+    RXThreadPool           *pool;
+    RXArray                 puts;       /* PutJob * */
 } Ctx;
+
+static void reportf(Ctx *c, const char *stage, const char *fmt, ...) RX_PRINTF(3, 4);
+
+/* A stick mounted with flush (udisks' default for removable FAT) sleeps a
+ * tenth of a second in the kernel on every close of a file written
+ * (fs/fat/file.c, fat_file_release), whatever its size: two hundred
+ * analysis and artwork files written one after another cost twenty
+ * seconds, sixteen at a time a little over one. So the small files are
+ * written, and the copied audio files closed, on a pool, and a stage
+ * waits for its jobs at its end. The job frees the bytes it owns as soon
+ * as they are written, so what waits in the queue is bounded. */
+#define PUT_THREADS 16
+#define PUT_QUEUE   64
+
+typedef struct PutJob {
+    char    *path;              /* on the stick, full; NULL for a close */
+    uint8_t *data;
+    size_t   size;
+    bool     owns;              /* free the data once written */
+    int      fd;                /* the audio file to close, or -1 */
+    int      ret;
+} PutJob;
+
+static void put_job(void *arg)
+{
+    PutJob *j = arg;
+    if (j->fd >= 0) {
+        j->ret = close(j->fd) < 0 ? RX_ERROR(errno) : 0;
+        j->fd = -1;
+    } else {
+        j->ret = rx_stick_write(j->path, j->data, j->size);
+    }
+    if (j->owns)
+        free(j->data);
+    j->data = NULL;
+}
+
+static void put_free(PutJob *j)
+{
+    if (!j)
+        return;
+    if (j->fd >= 0)
+        close(j->fd);
+    if (j->owns)
+        free(j->data);
+    free(j->path);
+    free(j);
+}
+
+/* Queues a write (`path`, `data`) or a close (`fd`). The data is the
+ * job's when `owns`, freed by it; the path is copied. On failure the data
+ * and fd are still the caller's. */
+static int put_submit(Ctx *c, const char *path, uint8_t *data, size_t size, bool owns, int fd)
+{
+    int ret = 0;
+    if (!c->pool && (ret = rx_pool_create(&c->pool, PUT_THREADS)) < 0)
+        return ret;
+    PutJob *j = calloc(1, sizeof(*j));
+    char *p = path ? rx_strdup(path) : NULL;
+    if (!j || (path && !p)) {
+        free(j);
+        free(p);
+        return RX_ERROR(ENOMEM);
+    }
+    *j = (PutJob) { .path = p, .data = data, .size = size, .owns = owns, .fd = fd };
+    if (!rx_array_push(&c->puts, &j)) {
+        j->owns = false;
+        j->fd = -1;
+        put_free(j);
+        return RX_ERROR(ENOMEM);
+    }
+    /* No more than a queue's worth ahead of the writers. */
+    while (rx_pool_pending(c->pool) >= PUT_QUEUE)
+        nanosleep(&(struct timespec) { .tv_nsec = 2000000 }, NULL);
+    if ((ret = rx_pool_submit(c->pool, put_job, j)) < 0) {
+        c->puts.nb--;
+        j->owns = false;
+        j->fd = -1;
+        put_free(j);
+    }
+    return ret;
+}
+
+/* The stage's jobs done; the first failure reported under `stage`. */
+static int puts_wait(Ctx *c, const char *stage)
+{
+    if (c->pool)
+        rx_pool_wait(c->pool);
+    int ret = 0;
+    for (size_t i = 0; i < c->puts.nb; i++) {
+        PutJob *j = *(PutJob **)rx_array_at(&c->puts, i);
+        if (j->ret < 0) {
+            reportf(c, stage, "cannot write %s: %s", j->path ? j->path : "an audio file", strerror(-j->ret));
+            ret = ret ? ret : j->ret;
+        }
+        put_free(j);
+    }
+    c->puts.nb = 0;
+    return ret;
+}
+
+static void stats_store(Ctx *c, int64_t done, int64_t rate, int64_t left)
+{
+    if (!c->opt->stats)
+        return;
+    __atomic_store_n(&c->opt->stats->bytes_total, c->bytes_total, __ATOMIC_RELAXED);
+    __atomic_store_n(&c->opt->stats->bytes_done, done, __ATOMIC_RELAXED);
+    __atomic_store_n(&c->opt->stats->rate, rate, __ATOMIC_RELAXED);
+    __atomic_store_n(&c->opt->stats->seconds_left, left, __ATOMIC_RELAXED);
+}
+
+static void stats_start(Ctx *c, int64_t bytes_total)
+{
+    c->bytes_total = bytes_total;
+    c->bytes_done = 0;
+    c->nb_samples = 1;
+    c->head = 0;
+    c->t_sample[0] = rx_time_us();
+    c->b_sample[0] = 0;
+    stats_store(c, 0, 0, -1);
+}
+
+/* After a chunk reached the stick: the bytes, and every quarter second a
+ * sample; the rate is over the samples kept (sixteen: four seconds at
+ * full speed, longer on a slow stick), the time left at that rate. */
+static void stats_add(Ctx *c, int64_t bytes)
+{
+    c->bytes_done += bytes;
+    if (!c->opt->stats)
+        return;
+    int64_t now = rx_time_us();
+    int last = (c->head + c->nb_samples - 1) % 16;
+    if (now - c->t_sample[last] < 250000) {
+        __atomic_store_n(&c->opt->stats->bytes_done, c->bytes_done, __ATOMIC_RELAXED);
+        return;
+    }
+    if (c->nb_samples == 16)
+        c->head = (c->head + 1) % 16;
+    else
+        c->nb_samples++;
+    int idx = (c->head + c->nb_samples - 1) % 16;
+    c->t_sample[idx] = now;
+    c->b_sample[idx] = c->bytes_done;
+    int64_t dt = now - c->t_sample[c->head], db = c->bytes_done - c->b_sample[c->head];
+    int64_t rate = dt >= 500000 ? db * 1000000 / dt : 0;
+    int64_t left = rate > 0 ? (RX_MAX(c->bytes_total - c->bytes_done, 0) + rate - 1) / rate : -1;
+    stats_store(c, c->bytes_done, rate, left);
+}
 
 static bool progress(Ctx *c, const char *stage, int done, int total, const char *item)
 {
@@ -97,6 +259,18 @@ static void reportf(Ctx *c, const char *stage, const char *fmt, ...)
     va_end(ap);
     progress(c, stage, 0, 0, msg);
     free(msg);
+}
+
+/* "1.7 GB", "320 MB", "12 kB": decimal units, as the rate is shown. */
+static void size_text(int64_t bytes, char *buf, size_t size)
+{
+    double b = (double)RX_MAX(bytes, 0);
+    if (b >= 1e9)
+        snprintf(buf, size, "%.1f GB", b / 1e9);
+    else if (b >= 1e6)
+        snprintf(buf, size, "%.0f MB", b / 1e6);
+    else
+        snprintf(buf, size, "%.0f kB", b / 1e3);
 }
 
 /* ------------------------------------------------------------- tracks */
@@ -172,7 +346,17 @@ static bool same_file(const char *src, const char *dst)
     return a.st_size == b.st_size && llabs((long long)a.st_mtime - (long long)b.st_mtime) <= 2;
 }
 
-static int copy_file(const char *src, const char *dst)
+/* Straight onto the stick, in place: no temporary, no fsync. The file is
+ * opened O_DIRECT where the file system takes it, so every chunk is on
+ * the stick when write() returns and the rate shown is the stick's, not
+ * the page cache's filling up and draining at the end (FAT and exFAT
+ * write an O_DIRECT chunk through before returning; ext4 and the like
+ * want the chunks aligned, so the file's tail goes buffered; tmpfs
+ * refuses the flag and gets plain writes). A copy that stops part way
+ * leaves a shorter file with today's time, which same_file() does not
+ * take for the source. A tick every quarter second (the step again, no
+ * item) moves the interface and lets it cancel inside a long file. */
+static int copy_file(Ctx *c, const char *src, const char *dst, int step, int steps)
 {
     char *dir = rx_strdup(dst);
     if (!dir)
@@ -186,63 +370,90 @@ static int copy_file(const char *src, const char *dst)
     free(dir);
     if (ret < 0)
         return ret;
-    char *tmp = rx_asprintf("%s.rxbox-tmp", dst);
-    if (!tmp)
-        return RX_ERROR(ENOMEM);
+
+    enum { CHUNK = 1 << 20, ALIGN = 4096 };
     int in = open(src, O_RDONLY | O_CLOEXEC);
-    int out = in >= 0 ? open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644) : -1;
-    uint8_t *buf = malloc(1 << 20);
-    if (in < 0 || out < 0 || !buf) {
-        ret = !buf ? RX_ERROR(ENOMEM) : RX_ERROR(errno);
+    if (in < 0)
+        return RX_ERROR(errno);
+    int flags = O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC;
+    int out = open(dst, flags | O_DIRECT, 0644);
+    bool direct = out >= 0;
+    if (out < 0 && errno == EINVAL)
+        out = open(dst, flags, 0644);
+    uint8_t *buf = NULL;
+    if (out < 0 || posix_memalign((void **)&buf, ALIGN, CHUNK)) {
+        ret = out < 0 ? RX_ERROR(errno) : RX_ERROR(ENOMEM);
+        buf = NULL;
         goto out;
     }
+    int64_t last_tick = rx_time_us();
     while (1) {
-        ssize_t n = read(in, buf, 1 << 20);
-        if (n < 0 && errno == EINTR)
-            continue;
-        if (n < 0) {
-            ret = RX_ERROR(errno);
-            break;
+        /* A whole chunk; a short one is the end of the file. */
+        size_t n = 0;
+        while (n < CHUNK) {
+            ssize_t r = read(in, buf + n, CHUNK - n);
+            if (r < 0 && errno == EINTR)
+                continue;
+            if (r < 0) {
+                ret = RX_ERROR(errno);
+                goto out;
+            }
+            if (!r)
+                break;
+            n += (size_t)r;
         }
         if (!n)
             break;
-        for (ssize_t o = 0; o < n;) {
-            ssize_t w = write(out, buf + o, (size_t)(n - o));
+        if (direct && n % ALIGN) {
+            int fl = fcntl(out, F_GETFL);
+            if (fl < 0 || fcntl(out, F_SETFL, fl & ~O_DIRECT) < 0) {
+                ret = RX_ERROR(errno);
+                goto out;
+            }
+            direct = false;
+        }
+        for (size_t o = 0; o < n;) {
+            ssize_t w = write(out, buf + o, n - o);
             if (w < 0 && errno == EINTR)
                 continue;
             if (w < 0) {
                 ret = RX_ERROR(errno);
                 goto out;
             }
-            o += w;
+            o += (size_t)w;
         }
-    }
-    if (!ret) {
-        struct stat st;
-        if (fstat(in, &st) == 0) {
-            struct timespec ts[2] = { st.st_atim, st.st_mtim };
-            futimens(out, ts);
+        stats_add(c, (int64_t)n);
+        int64_t now = rx_time_us();
+        if (now - last_tick >= 250000) {
+            last_tick = now;
+            if (!progress(c, "copy", step, steps, NULL)) {
+                ret = RX_ERROR(ECANCELED);
+                goto out;
+            }
         }
-        /* On the stick before the rename: a file renamed into place but
-         * not written out has the right size and time after an unplug,
-         * and same_file() would keep it forever. */
-        if (fsync(out) < 0)
-            ret = RX_ERROR(errno);
+        if (n < CHUNK)
+            break;
     }
+    /* The source's time, for same_file() next time. */
+    struct stat st;
+    if (fstat(in, &st) == 0) {
+        struct timespec ts[2] = { st.st_atim, st.st_mtim };
+        futimens(out, ts);
+    }
+    /* The close on the pool: its tenth of a second (PutJob) overlaps the
+     * next file. */
+    if (put_submit(c, dst, NULL, 0, false, out) >= 0)
+        out = -1;
 out:
     if (out >= 0 && close(out) < 0 && !ret)
         ret = RX_ERROR(errno);
-    if (in >= 0)
-        close(in);
+    close(in);
     free(buf);
-    if (!ret && rename(tmp, dst) < 0)
-        ret = RX_ERROR(errno);
-    if (ret)
-        unlink(tmp);
-    free(tmp);
     return ret;
 }
 
+/* The databases and settings files: few, and on the stick before the call
+ * returns. */
 static int write_file(Ctx *c, const char *stick_path, const void *data, size_t size)
 {
     char *p = rx_stick_file(c->dest, stick_path);
@@ -251,6 +462,48 @@ static int write_file(Ctx *c, const char *stick_path, const void *data, size_t s
     int ret = rx_stick_write(p, data, size);
     if (ret < 0)
         reportf(c, "database", "cannot write %s: %s", p, strerror(-ret));
+    free(p);
+    return ret;
+}
+
+/* Whether the stick already holds exactly these bytes at `path`. */
+static bool unchanged(const char *path, const void *data, size_t size)
+{
+    struct stat st;
+    if (stat(path, &st) < 0 || !S_ISREG(st.st_mode) || st.st_size != (off_t)size)
+        return false;
+    uint8_t *old;
+    size_t n;
+    if (rx_file_read(path, &old, &n) < 0)
+        return false;
+    bool same = n == size && !memcmp(old, data, size);
+    free(old);
+    return same;
+}
+
+/* A per-track file (analysis, artwork): kept when the stick holds it
+ * already, written otherwise. Reading a file back costs milliseconds, a
+ * write on a stick far more, three files a track, and a stick is
+ * exported to again far more often than its tracks change. `*written`
+ * counts the files written. */
+static int put_file(Ctx *c, const char *stick_path, uint8_t *data, size_t size, bool owns, int *written)
+{
+    char *p = rx_stick_file(c->dest, stick_path);
+    if (!p) {
+        if (owns)
+            free(data);
+        return RX_ERROR(ENOMEM);
+    }
+    int ret = 0;
+    if (unchanged(p, data, size)) {
+        if (owns)
+            free(data);
+    } else if ((ret = put_submit(c, p, data, size, owns, -1)) < 0) {
+        if (owns)
+            free(data);
+    } else {
+        (*written)++;
+    }
     free(p);
     return ret;
 }
@@ -496,13 +749,12 @@ static int64_t round_up(int64_t n, int64_t cluster)
     return n <= 0 ? 0 : (n + cluster - 1) / cluster * cluster;
 }
 
-/* One file written beside its old copy and renamed over it: while it is
- * written both exist, and a smaller one frees space only afterwards. */
-static void account(int64_t new_size, int64_t old_size, int64_t cluster, int64_t *need, int64_t *overlap)
+/* One file written over its old copy in place: only the growth counts,
+ * and a smaller one frees space. */
+static void account(int64_t new_size, int64_t old_size, int64_t cluster, int64_t *need)
 {
     int64_t n = round_up(new_size, cluster), o = round_up(old_size, cluster);
     *need += RX_MAX(n - o, 0);
-    *overlap = RX_MAX(*overlap, RX_MIN(n, o));
 }
 
 static int64_t stick_size(const char *dest, const char *stick_path)
@@ -516,14 +768,14 @@ static int64_t stick_size(const char *dest, const char *stick_path)
 int64_t rx_export_space_needed(const RXPlan *plan, const char *dest, int64_t cluster)
 {
     cluster = RX_MAX(cluster, 1);
-    int64_t need = DB_RESERVE, overlap = 0;
+    int64_t need = DB_RESERVE;
     for (int i = 0; i < plan->nb_tracks; i++) {
         const RXPlanTrack *t = &plan->tracks[i];
         char *dst = rx_stick_file(dest, t->usb_path);
         if (dst && !same_file(t->source, dst))
-            account(t->file_size, RX_MAX(rx_file_size(dst), 0), cluster, &need, &overlap);
+            account(t->file_size, RX_MAX(rx_file_size(dst), 0), cluster, &need);
         free(dst);
-        /* The analysis files, rewritten every time: the waveform details
+        /* The analysis files, counted as if rewritten: the waveform details
          * take 1 + 2 bytes (.EXT) and 3 bytes (.2EX) a column at 150
          * columns a second (docs/anlz.md 4.9-4.12), the beats 8 bytes each
          * (4.3; up to 5 a second here), the previews, PVBR, PVB2 and cue
@@ -538,7 +790,7 @@ int64_t rx_export_space_needed(const RXPlan *plan, const char *dest, int64_t clu
         const char *ext[3] = { ".DAT", ".EXT", ".2EX" };
         for (int k = 0; k < 3; k++) {
             char *p = t->anlz_dir ? rx_plan_anlz_path(t, ext[k]) : NULL;
-            account(sizes[k], p ? stick_size(dest, p) : 0, cluster, &need, &overlap);
+            account(sizes[k], p ? stick_size(dest, p) : 0, cluster, &need);
             free(p);
         }
     }
@@ -548,13 +800,12 @@ int64_t rx_export_space_needed(const RXPlan *plan, const char *dest, int64_t clu
         const char *fmt[4] = { "%s/a%u.jpg", "%s/a%u_m.jpg", "%s/b%u.jpg", "%s/b%u_m.jpg" };
         for (int k = 0; dir && k < 4; k++) {
             char *p = rx_asprintf(fmt[k], dir, a->id);
-            account((int64_t)(k & 1 ? a->size240 : a->size80), p ? stick_size(dest, p) : 0, cluster, &need,
-                    &overlap);
+            account((int64_t)(k & 1 ? a->size240 : a->size80), p ? stick_size(dest, p) : 0, cluster, &need);
             free(p);
         }
         free(dir);
     }
-    return need + overlap;
+    return need;
 }
 
 /* Names longer than any export.pdb row holds (docs/pdb.md 2.6: a row and
@@ -698,47 +949,62 @@ static int checks(Ctx *c, const RXPlan *plan)
     int64_t cluster = statvfs(c->dest, &vfs) == 0 && vfs.f_frsize ? (int64_t)vfs.f_frsize : 4096;
     int64_t need = rx_export_space_needed(plan, c->dest, cluster);
     int64_t free_bytes = rx_fs_free_bytes(c->dest);
+    char need_text[32], free_text[32];
+    size_text(need, need_text, sizeof(need_text));
+    size_text(free_bytes, free_text, sizeof(free_text));
     if (free_bytes >= 0 && free_bytes < need) {
-        reportf(c, "check", "not enough space on %s: %lld MiB free, %lld MiB needed", c->dest,
-                (long long)(free_bytes >> 20), (long long)(need >> 20));
+        reportf(c, "check", "not enough space on %s: %s free, %s needed", c->dest, free_text, need_text);
         ret = ret ? ret : RX_ERROR(ENOSPC);
+    } else if (free_bytes >= 0) {
+        reportf(c, "check", "takes %s on the stick (%s free)", need_text, free_text);
     }
     return ret;
 }
 
 /* ------------------------------------------------------------- writing */
 
+/* The analysis files a player reads (ANLZ0000.DAT, .EXT, .2EX: the grid,
+ * cues and waveforms, docs/anlz.md) are built from what the library holds;
+ * nothing is analysed here. A track's step names it when a file of its
+ * was written and carries no item otherwise, so the interface counts
+ * rewrites, not tracks. */
 static int write_anlz(Ctx *c, const RXPlan *plan)
 {
     for (int i = 0; i < plan->nb_tracks; i++) {
         const RXPlanTrack *t = &plan->tracks[i];
         char name[512];
         rx_track_display(t->track, name, sizeof(name));
-        if (!progress(c, "analysis", i + 1, plan->nb_tracks, name))
-            return RX_ERROR(ECANCELED);
         RXWaveforms w = { 0 };
         bool have = rx_library_waveforms_load(c->lib, t->id, &w) >= 0;
         if (!have)
-            reportf(c, "analysis", "no waveforms for %s (analyse it to add them)", name);
+            reportf(c, "analysis files", "no waveforms for %s (analyse it to add them)", name);
         RXAnlzFiles f;
         int ret = rx_anlz_build(t, have ? &w : NULL, &f);
         if (have)
             rx_waveforms_free(&w);
         if (ret < 0)
             return ret;
+        /* The buffers go to the jobs. */
         const char *ext[3] = { ".DAT", ".EXT", ".2EX" };
-        const uint8_t *data[3] = { f.dat, f.ext, f.ex2 };
+        uint8_t *data[3] = { f.dat, f.ext, f.ex2 };
         size_t size[3] = { f.dat_size, f.ext_size, f.ex2_size };
-        for (int k = 0; k < 3 && ret >= 0; k++) {
-            char *p = rx_plan_anlz_path(t, ext[k]);
-            ret = p ? write_file(c, p, data[k], size[k]) : RX_ERROR(ENOMEM);
+        int written = 0;
+        for (int k = 0; k < 3; k++) {
+            char *p = ret >= 0 ? rx_plan_anlz_path(t, ext[k]) : NULL;
+            if (p)
+                ret = put_file(c, p, data[k], size[k], true, &written);
+            else
+                free(data[k]);
+            if (!p && ret >= 0)
+                ret = RX_ERROR(ENOMEM);
             free(p);
         }
-        rx_anlz_files_free(&f);
         if (ret < 0)
             return ret;
+        if (!progress(c, "analysis files", i + 1, plan->nb_tracks, written ? name : NULL))
+            return RX_ERROR(ECANCELED);
     }
-    return 0;
+    return puts_wait(c, "analysis files");
 }
 
 /* a<id>.jpg (80 px) and a<id>_m.jpg (240 px) for export.pdb, the same as
@@ -747,24 +1013,26 @@ static int write_artwork(Ctx *c, const RXPlan *plan)
 {
     for (int i = 0; i < plan->nb_artworks; i++) {
         const RXPlanArtwork *a = &plan->artworks[i];
-        if (!progress(c, "artwork", i + 1, plan->nb_artworks, a->path80))
-            return RX_ERROR(ECANCELED);
         char *dir = rx_plan_artwork_dir(a->id);
         if (!dir)
             return RX_ERROR(ENOMEM);
-        int ret = 0;
+        int ret = 0, written = 0;
         const char *fmt[4] = { "%s/a%u.jpg", "%s/a%u_m.jpg", "%s/b%u.jpg", "%s/b%u_m.jpg" };
         for (int k = 0; k < 4 && ret >= 0; k++) {
             char *p = rx_asprintf(fmt[k], dir, a->id);
-            ret = p ? write_file(c, p, k & 1 ? a->jpeg240 : a->jpeg80, k & 1 ? a->size240 : a->size80)
+            /* The plan's bytes, which outlive the jobs. */
+            ret = p ? put_file(c, p, (uint8_t *)(k & 1 ? a->jpeg240 : a->jpeg80),
+                               k & 1 ? a->size240 : a->size80, false, &written)
                     : RX_ERROR(ENOMEM);
             free(p);
         }
         free(dir);
         if (ret < 0)
             return ret;
+        if (!progress(c, "artwork", i + 1, plan->nb_artworks, written ? a->path80 : NULL))
+            return RX_ERROR(ECANCELED);
     }
-    return 0;
+    return puts_wait(c, "artwork");
 }
 
 static int write_databases(Ctx *c, const RXPlan *plan)
@@ -893,7 +1161,8 @@ static int prune(Ctx *c, const RXPlan *plan, bool dry)
     return ret;
 }
 
-/* Every file a real run would write, in the order it would. */
+/* Every file a real run would write (or keep, finding it on the stick
+ * unchanged), in the order it would. */
 static void dry_run_report(Ctx *c, const RXPlan *plan)
 {
     for (int i = 0; i < plan->nb_tracks; i++) {
@@ -1067,6 +1336,7 @@ int rx_export(RXLibrary *lib, const char *dest, const RXExportOptions *opt_in, r
         .cb     = cb,
         .opaque = opaque,
     };
+    rx_array_init(&c.puts, sizeof(PutJob *));
     if (!rx_dir_exists(dest)) {
         reportf(&c, "check", "%s is not a directory (mount the stick first)", dest);
         return RX_ERROR(ENOTDIR);
@@ -1116,7 +1386,16 @@ int rx_export(RXLibrary *lib, const char *dest, const RXExportOptions *opt_in, r
         goto out;
     }
 
-    /* Audio. */
+    /* Audio: the bytes to copy first, for the rate and time left. */
+    int64_t bytes = 0;
+    for (int i = 0; i < plan.nb_tracks; i++) {
+        const RXPlanTrack *t = &plan.tracks[i];
+        char *dst = rx_stick_file(dest, t->usb_path);
+        if (dst && !same_file(t->source, dst))
+            bytes += RX_MAX(t->file_size, 0);
+        free(dst);
+    }
+    stats_start(&c, bytes);
     int copied = 0;
     for (int i = 0; i < plan.nb_tracks; i++) {
         const RXPlanTrack *t = &plan.tracks[i];
@@ -1128,7 +1407,8 @@ int rx_export(RXLibrary *lib, const char *dest, const RXExportOptions *opt_in, r
         if (same_file(t->source, dst)) {
             progress(&c, "skip", i + 1, plan.nb_tracks, t->usb_path);
         } else if (progress(&c, "copy", i + 1, plan.nb_tracks, t->usb_path)) {
-            if ((ret = copy_file(t->source, dst)) < 0)
+            ret = copy_file(&c, t->source, dst, i + 1, plan.nb_tracks);
+            if (ret < 0 && ret != RX_ERROR(ECANCELED))
                 reportf(&c, "copy", "cannot copy %s: %s", t->source, strerror(-ret));
             copied++;
         }
@@ -1140,12 +1420,21 @@ int rx_export(RXLibrary *lib, const char *dest, const RXExportOptions *opt_in, r
             goto out;
         }
     }
+    if ((ret = puts_wait(&c, "copy")) < 0)
+        goto out;
 
     if ((ret = write_anlz(&c, &plan)) < 0 || (ret = write_artwork(&c, &plan)) < 0 ||
         (ret = write_databases(&c, &plan)) < 0)
         goto out;
     if ((ret = prune(&c, &plan, false)) < 0)
         goto out;
+    /* The one sync: whatever the file system still holds back (the
+     * audio went through already), so "done" means on the stick. */
+    progress(&c, "flush", 1, 1, NULL);
+    if ((ret = rx_stick_sync(dest)) < 0) {
+        reportf(&c, "flush", "cannot write out %s: %s", dest, strerror(-ret));
+        goto out;
+    }
     reportf(&c, "done", "%d tracks, %d copied, %d playlists, %d artworks", plan.nb_tracks, copied,
             plan.nb_playlists, plan.nb_artworks);
     ret = 0;
@@ -1153,6 +1442,13 @@ int rx_export(RXLibrary *lib, const char *dest, const RXExportOptions *opt_in, r
 out:
     if (c.cancelled && ret >= 0)
         ret = RX_ERROR(ECANCELED);
+    /* Jobs a failed or cancelled stage left: run out, their results
+     * dropped. */
+    if (c.pool)
+        rx_pool_destroy(c.pool);
+    for (size_t i = 0; i < c.puts.nb; i++)
+        put_free(*(PutJob **)rx_array_at(&c.puts, i));
+    rx_array_free(&c.puts);
     free(c.pdb);
     free(c.ext);
     free(c.olib);

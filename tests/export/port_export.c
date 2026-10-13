@@ -27,7 +27,7 @@ static int cmp_str(const void *a, const void *b)
 
 static bool progress(void *opaque, const char *stage, int done, int total, const char *item)
 {
-    if (item && strcmp(stage, "copy") && strcmp(stage, "skip") && strcmp(stage, "analysis") &&
+    if (item && strcmp(stage, "copy") && strcmp(stage, "skip") && strcmp(stage, "analysis files") &&
         strcmp(stage, "artwork"))
         fprintf(stderr, "[%s] %s\n", stage, item);
     return true;

@@ -50,6 +50,7 @@ void rx_config_defaults(RXConfig *c)
         .key_notation      = "classic",
         .export_pdb        = true,
         .export_onelibrary = true,
+        .compat_transcode  = true,
         .traffic_light     = "related3",
         .detail_bars       = 12,
     };

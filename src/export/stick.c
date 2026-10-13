@@ -35,6 +35,7 @@
 
 #include <ctype.h>
 #include <dirent.h>
+#include <fcntl.h>
 #include <math.h>
 #include <stdio.h>
 #include <sys/random.h>
@@ -95,7 +96,17 @@ int rx_stick_write(const char *path, const void *data, size_t size)
         ret = rx_mkdir_p(dir);
     }
     free(dir);
-    return ret < 0 ? ret : rx_file_write_atomic(path, data, size);
+    return ret < 0 ? ret : rx_file_write(path, data, size);
+}
+
+int rx_stick_sync(const char *mount)
+{
+    int fd = open(mount, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (fd < 0)
+        return RX_ERROR(errno);
+    int ret = syncfs(fd) < 0 ? RX_ERROR(errno) : 0;
+    close(fd);
+    return ret;
 }
 
 /* Only regular files: a link or a FIFO on a stick formatted with a Unix

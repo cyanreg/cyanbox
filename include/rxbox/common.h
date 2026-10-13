@@ -87,7 +87,10 @@ char *rx_path_expand(const char *path);
 int rx_mkdir_p(const char *path);
 /* Reads a whole file. `*out` is malloc'd with one extra NUL byte. */
 int rx_file_read(const char *path, uint8_t **out, size_t *size);
-/* Writes a file atomically: temp file next to it, fsync, rename. */
+/* Writes a file: open, write, close, nothing else. */
+int rx_file_write(const char *path, const void *data, size_t size);
+/* Writes a file atomically: temp file next to it, fsync, rename. For the
+ * library's own files; a stick is synced once at the end of an export. */
 int rx_file_write_atomic(const char *path, const void *data, size_t size);
 bool rx_file_exists(const char *path);
 bool rx_dir_exists(const char *path);

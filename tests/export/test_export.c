@@ -28,6 +28,8 @@ static char root[512], music[600], libdir[600], stick[600];
 
 typedef struct Stages {
     int copy, skip, prune, check, rewrite;
+    int anlz, art;              /* tracks and artworks with a file written (an item) */
+    int anlz_steps;             /* tracks looked at */
     bool quiet;
 } Stages;
 
@@ -44,8 +46,12 @@ static bool on_progress(void *opaque, const char *stage, int done, int total, co
         s->rewrite++;
     else if (!strcmp(stage, "check"))
         s->check++;
-    if (item && !s->quiet && strcmp(stage, "copy") && strcmp(stage, "skip") && strcmp(stage, "analysis") &&
-        strcmp(stage, "artwork") && strcmp(stage, "rewrite"))
+    else if (!strcmp(stage, "analysis files") && total > 0)
+        s->anlz_steps++, s->anlz += !!item;
+    else if (!strcmp(stage, "artwork") && total > 0)
+        s->art += !!item;
+    if (item && !s->quiet && strcmp(stage, "copy") && strcmp(stage, "skip") &&
+        strcmp(stage, "analysis files") && strcmp(stage, "artwork") && strcmp(stage, "rewrite"))
         fprintf(stderr, "  [%s] %s\n", stage, item);
     return true;
 }
@@ -193,6 +199,9 @@ static int setup_library(RXLibrary *lib)
 
     kv_add(&lib->cfg.player, &lib->cfg.nb_player, "quantize", "true");
     kv_add(&lib->cfg.device, &lib->cfg.nb_device, "waveform_color", "3band");
+    /* The compatibility transcode is on by default; off here, so four.m4a
+     * goes as AAC and only five.opus is transcoded (check_stick). */
+    lib->cfg.compat_transcode = false;
     CHECK_EQ(rx_library_config_save(lib), 0);
     return 0;
 }
@@ -395,6 +404,9 @@ int main(void)
     Stages st = { 0 };
     CHECK_EQ(rx_export(&lib, stick, &opt, on_progress, &st), 0);
     CHECK_EQ(st.copy, 5);
+    CHECK_EQ(st.anlz_steps, 5);
+    CHECK_EQ(st.anlz, 5);                    /* every track's analysis files written */
+    CHECK_EQ(st.art, 1);                     /* the shared folder cover */
     int problems = rx_inspect(stick, on_line, NULL);
     if (problems)
         rx_inspect(stick, on_line, (void *)1);
@@ -406,6 +418,9 @@ int main(void)
     CHECK_EQ(rx_export(&lib, stick, &opt, on_progress, &st), 0);
     CHECK_EQ(st.copy, 0);
     CHECK_EQ(st.skip, 5);
+    CHECK_EQ(st.anlz_steps, 5);
+    CHECK_EQ(st.anlz, 0);                    /* the stick's analysis files are kept, byte for byte */
+    CHECK_EQ(st.art, 0);
     CHECK_EQ(rx_inspect(stick, on_line, NULL), 0);
     CHECK_EQ(count_items(&lib, RX_SYNC_HOT_CUE_SET, NULL, NULL), 0);
 
@@ -469,6 +484,9 @@ int main(void)
     CHECK_EQ(rx_pull(&lib, stick, NULL, NULL), 0);
     st = (Stages) { .quiet = true };
     CHECK_EQ(rx_export(&lib, stick, &opt, on_progress, &st), 0);
+    /* Only the tracks whose cues changed (one from the player, three in
+     * the library) get their analysis files written again. */
+    CHECK_EQ(st.anlz, 2);
     CHECK_EQ(rx_inspect(stick, on_line, NULL), 0);
 
     /* four leaves the playlists: a dry run lists its files for pruning,

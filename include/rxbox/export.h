@@ -12,19 +12,57 @@
  * decision are reported through the callback; nothing prints. */
 
 #include "rxbox/library.h"
+#include <stdio.h>
+
 #include "rxbox/analysis.h"
 #include "rxbox/formats.h"
 
-/* Progress: `stage` is one of "prepare", "check", "copy", "analysis",
- * "artwork", "database", "prune", "done"; `item` is the file or track being
- * handled (may be NULL). Returning false cancels. */
+/* Progress: `stage` is one of "prepare", "check", "transcode", "copy",
+ * "skip", "analysis files", "artwork", "database", "prune", "flush",
+ * "done"; `item` is the file or track being handled, NULL for a step that
+ * wrote nothing (an analysis file or artwork the stick held unchanged) and
+ * for the ticks a long copy sends while it runs (same step again; a chance
+ * to cancel and to redraw the rate). Returning false cancels. */
 typedef bool (*rx_progress_cb)(void *opaque, const char *stage, int done, int total, const char *item);
+
+/* The copy's throughput, kept up to date by the export thread for whoever
+ * displays it (read with __atomic_load_n, or on the progress callback's
+ * thread). The audio is written straight to the stick (O_DIRECT where the
+ * file system takes it), so the bytes done are bytes on the stick and the
+ * rate is the stick's, not the page cache's. */
+typedef struct RXExportStats {
+    int64_t bytes_total;        /* audio bytes this export copies */
+    int64_t bytes_done;
+    int64_t rate;               /* bytes a second over the last few seconds; 0 until known */
+    int64_t seconds_left;       /* at that rate; -1 until known */
+} RXExportStats;
+
+/* "18.3 MB/s, 2:31 left"; empty while the rate is unknown. */
+static inline void rx_export_rate_text(int64_t rate, int64_t seconds_left, char *buf, size_t size)
+{
+    if (rate <= 0) {
+        if (size)
+            buf[0] = '\0';
+        return;
+    }
+    double mbs = (double)rate / 1e6;
+    if (seconds_left < 0)
+        snprintf(buf, size, "%.1f MB/s", mbs);
+    else if (seconds_left >= 3600)
+        snprintf(buf, size, "%.1f MB/s, %lld:%02lld:%02lld left", mbs, (long long)seconds_left / 3600,
+                 (long long)seconds_left / 60 % 60, (long long)seconds_left % 60);
+    else
+        snprintf(buf, size, "%.1f MB/s, %lld:%02lld left", mbs, (long long)seconds_left / 60,
+                 (long long)seconds_left % 60);
+}
 
 /* The export model (rekordbox's sync manager): one click exports the
  * settings, every playlist, and the union of the tracks in them; nothing
  * else. Files already on the stick with the same size and mtime are
- * skipped; the ANLZ files, artwork, settings files and both databases are
- * rewritten every time. Tracks no longer in any playlist are pruned (the
+ * skipped; the ANLZ files and artwork are rebuilt from the library (no
+ * analysis runs here) and written only where the stick's differ; the
+ * settings files and both databases are rewritten every time. Tracks no
+ * longer in any playlist are pruned (the
  * interface lists them and asks once; the CLI needs --prune). A stick that
  * holds player-written cues, history or presets not yet synced into the
  * library blocks the export (reported as a "check" item) unless
@@ -38,6 +76,7 @@ typedef struct RXExportOptions {
     bool dry_run;               /* plan and check, report every copy/prune/rewrite, write nothing */
     bool force_analysis;        /* re-analyse everything first */
     const char *device_name;    /* NULL: the config's, else the stick's label */
+    RXExportStats *stats;       /* kept up to date while the export runs; may be NULL */
 } RXExportOptions;
 void rx_export_options_default(RXExportOptions *o);
 

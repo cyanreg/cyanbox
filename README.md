@@ -179,7 +179,7 @@ The settings live in the library. `rxbox config` lists them and
 | `import.comment` | `false` | take the file's comment tag when a track is added; `false` leaves the comment empty for you |
 | `export.key_notation` | `classic` | how export.pdb names keys: `classic`, `camelot` or `open` |
 | `export.pdb`, `export.onelibrary` | `true` | which device libraries an export writes |
-| `export.compat_transcode` | `false` | transcode AAC and hi-res files, as `--compat` |
+| `export.compat_transcode` | `true` | transcode AAC and hi-res files to 16-bit/44.1 kHz FLAC (`--no-compat` for one export) |
 | `export.device_name` | the stick's label | the name the players show for the stick |
 | `audio.sink` | the default output | the PipeWire node to play to |
 | `ml.model` | `models/moss-audio-4b-instruct-q4_k.gguf` | the tagging model's file (also `$RXBOX_ML_MODEL`) |
@@ -218,8 +218,10 @@ line `rxbox export STICK`.
 - Tracks that lack an analysis, or have one an older analyser made, are
   analysed first.
 - Audio files already on the stick with the same size and modification
-  time are skipped. The analysis files, artwork, settings files and both
-  databases are rewritten every time.
+  time are skipped. The analysis files (the grid, cues and waveforms in
+  the form players read) and artwork are built from the library, nothing
+  is analysed, and only those that differ from the stick's are written.
+  The settings files and both databases are rewritten every time.
 - Files on the stick that are no longer exported are only deleted after
   confirmation: the interface lists them and asks once; the command line
   deletes them only with `--prune` and otherwise reports how many there are.
@@ -232,8 +234,17 @@ line `rxbox export STICK`.
   the destination is a FAT32 or exFAT mount (a warning otherwise). Missing
   and unanalysed tracks are reported and skipped. `-n` / `--dry-run` prints
   what would be copied and deleted and writes nothing.
-- `--compat` (or the dialog's checkbox) transcodes AAC and hi-res files to
-  16-bit/44.1 kHz FLAC on the stick.
+- The compatibility transcode (AAC and hi-res files to 16-bit/44.1 kHz
+  FLAC on the stick) is on by default: the dialog's checkbox, the
+  `export.compat_transcode` setting, `--compat` / `--no-compat` for one
+  export.
+- Before anything is written the export works out what the stick will
+  take (the audio not yet on it, the analysis files, artwork and
+  databases, in whole clusters) and refuses when there is not enough
+  free; the figures are in the log. The audio is written straight to the
+  stick (O_DIRECT where the file system takes it, no temporaries, no
+  fsync), so the progress bar, the MB/s and the time left are the stick's
+  own; the stick is synced once at the end.
 - The players' My Settings (quantize, auto cue level, tempo range, the
   mixer's fader curves, the waveform colour...) go on the stick for the
   sections the library has values for; the players apply them when you LOAD

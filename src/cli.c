@@ -92,7 +92,9 @@ static const char usage_text[] =
     "      --all                every track in the library, not only those in playlists\n"
     "      -p, --playlist NAME  only this playlist and its tracks (repeatable)\n"
     "      --prune              delete files on the stick that are no longer exported\n"
-    "      --compat             transcode AAC and hi-res files to 16-bit/44.1 kHz FLAC\n"
+    "      --compat, --no-compat\n"
+    "                           transcode AAC and hi-res files to 16-bit/44.1 kHz FLAC\n"
+    "                           (on by default: export.compat_transcode)\n"
     "      --ignore-unsynced    export although the stick has player changes not synced\n"
     "      -n, --dry-run        print what would be copied and deleted, write nothing\n"
     "  inspect STICK            re-read and validate a stick\n"
@@ -1490,6 +1492,7 @@ end:
 
 typedef struct ProgressCtx {
     char stage[32];
+    char item[256];             /* the last item of the stage, for the ticks without one */
     bool tty;
     bool verbose;
     bool all_items;             /* a dry run prints everything it would do */
@@ -1497,6 +1500,7 @@ typedef struct ProgressCtx {
     bool line_open;
     int  prune;                 /* stick files beyond the export */
     int  unsynced;              /* "check" items about unsynced player changes */
+    RXExportStats stats;        /* the copy's rate, shown on the line */
 } ProgressCtx;
 
 /* The check that blocks an export over player changes not synced back
@@ -1523,6 +1527,7 @@ static bool progress_cb(void *opaque, const char *stage, int done, int total, co
     if (strcmp(stage, ctx->stage)) {
         progress_end_line(ctx);
         snprintf(ctx->stage, sizeof(ctx->stage), "%s", stage);
+        ctx->item[0] = '\0';
         if (total > 0)
             printf("%s (%d)\n", stage, total);
         else
@@ -1547,12 +1552,20 @@ static bool progress_cb(void *opaque, const char *stage, int done, int total, co
         } else if (ctx->all_items) {
             progress_end_line(ctx);
             printf("  %s\n", item);
-        } else if (ctx->tty) {
-            printf("\r\033[K  [%d/%d] %.100s", done, total, item);
-            ctx->line_open = true;
-        } else if (ctx->verbose) {
+        } else if (ctx->verbose && !ctx->tty) {
             printf("  [%d/%d] %s\n", done, total, item);
         }
+        if (total > 0)
+            snprintf(ctx->item, sizeof(ctx->item), "%s", item);
+    }
+    /* On a terminal the stage's line: the step, the copy's rate and time
+     * left, the item (a tick without one redraws it with the new rate). */
+    if (ctx->tty && !ctx->all_items && total > 0 && strcmp(stage, "check") && strcmp(stage, "prune")) {
+        char rate[64];
+        rx_export_rate_text(!strcmp(stage, "copy") ? ctx->stats.rate : 0, ctx->stats.seconds_left, rate,
+                            sizeof(rate));
+        printf("\r\033[K  [%d/%d]%s%s %.100s", done, total, rate[0] ? " " : "", rate, ctx->item);
+        ctx->line_open = true;
     }
     fflush(stdout);
     return true;
@@ -1563,7 +1576,7 @@ static int cmd_export(Cli *cli, int argc, char **argv)
     const char *stick = NULL;
     RXExportOptions opt;
     rx_export_options_default(&opt);
-    bool compat = false;
+    bool compat = false, no_compat = false;
     RXArray names;
     rx_array_init(&names, sizeof(char *));
     RXArray playlists;
@@ -1588,6 +1601,8 @@ static int cmd_export(Cli *cli, int argc, char **argv)
             opt.prune = true;
         } else if (opt_flag(cli, argv[i], NULL, "--compat")) {
             compat = true;
+        } else if (opt_flag(cli, argv[i], NULL, "--no-compat")) {
+            no_compat = true;
         } else if (opt_flag(cli, argv[i], NULL, "--ignore-unsynced")) {
             opt.ignore_unsynced = true;
         } else if (opt_flag(cli, argv[i], "-n", "--dry-run")) {
@@ -1677,7 +1692,7 @@ static int cmd_export(Cli *cli, int argc, char **argv)
 
     opt.playlists = playlists.nb ? (const RXPlaylist *const *)playlists.data : NULL;
     opt.nb_playlists = (int)playlists.nb;
-    opt.compat_transcode = compat || lib->cfg.compat_transcode;
+    opt.compat_transcode = (compat || lib->cfg.compat_transcode) && !no_compat;
 
     ProgressCtx ctx = {
         .tty       = isatty(STDOUT_FILENO),
@@ -1685,6 +1700,7 @@ static int cmd_export(Cli *cli, int argc, char **argv)
         .all_items = opt.dry_run,
         .pruning   = opt.prune,
     };
+    opt.stats = &ctx.stats;
     int ret = rx_export(lib, stick, &opt, progress_cb, &ctx);
     progress_end_line(&ctx);
     if (ret < 0) {

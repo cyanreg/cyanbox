@@ -139,6 +139,7 @@ typedef struct ExportJob {
     bool     whole_library, prune, ignore_unsynced, compat, dry_run;
     RXMailbox *mb;
     RXCancel  *cancel;
+    RXExportStats stats;        /* written by the export thread, read by the ticks */
     int      result;
     int      finished;          /* atomic */
 } ExportJob;
@@ -1815,6 +1816,7 @@ static void *export_main(void *arg)
         opt.ignore_unsynced = ej->ignore_unsynced;
         opt.compat_transcode = ej->compat;
         opt.dry_run = ej->dry_run;
+        opt.stats = &ej->stats;
         ret = rx_export(ej->lib, ej->dest, &opt, export_progress, ej);
     }
     free(playlists);
@@ -1979,12 +1981,15 @@ static void export_apply_msg(RXApp *app, const ExportMsg *m)
     if (strcmp(m->stage, priv->export_last_stage)) {
         snprintf(priv->export_last_stage, sizeof(priv->export_last_stage), "%s", m->stage);
         snprintf(es->stage, sizeof(es->stage), "%s", m->stage);
+        es->item[0] = '\0';
         if (!dry)
             export_log(app, "%s", m->stage);
     }
-    snprintf(es->item, sizeof(es->item), "%s", m->item ? m->item : "");
+    /* A step without an item (a copy's tick, a file kept as it was) moves
+     * the bar and keeps the name shown. */
     if (!m->item)
         return;
+    snprintf(es->item, sizeof(es->item), "%s", m->item);
 
     /* The summary's counts. A step of a stage carries its total; a message
      * about one (export.c's reportf) carries none. */
@@ -1995,7 +2000,7 @@ static void export_apply_msg(RXApp *app, const ExportMsg *m)
             es->skipped++;
         else if (!strcmp(m->stage, "prune") && es->prune)
             es->pruned++;
-        else if (!strcmp(m->stage, "analysis") || !strcmp(m->stage, "artwork") ||
+        else if (!strcmp(m->stage, "analysis files") || !strcmp(m->stage, "artwork") ||
                  !strcmp(m->stage, "database"))
             es->rewritten++;
     } else if (!dry && !strcmp(m->stage, "prune") && rx_str_starts(m->item, "cannot remove")) {
@@ -2110,6 +2115,22 @@ static bool export_tick(RXApp *app)
         export_msg_free(m);
         changed = true;
     }
+    if (ej) {
+        int64_t v[4] = {
+            __atomic_load_n(&ej->stats.bytes_done, __ATOMIC_RELAXED),
+            __atomic_load_n(&ej->stats.bytes_total, __ATOMIC_RELAXED),
+            __atomic_load_n(&ej->stats.rate, __ATOMIC_RELAXED),
+            __atomic_load_n(&ej->stats.seconds_left, __ATOMIC_RELAXED),
+        };
+        if (v[0] != es->bytes_done || v[1] != es->bytes_total || v[2] != es->rate ||
+            v[3] != es->seconds_left) {
+            es->bytes_done = v[0];
+            es->bytes_total = v[1];
+            es->rate = v[2];
+            es->seconds_left = v[3];
+            changed = true;
+        }
+    }
     if (finished) {
         int result = ej->result;
         /* A real run that got to the end despite a late cancel did export;
@@ -2173,6 +2194,8 @@ int rx_app_start_export(RXApp *app)
     es->unsynced = 0;
     es->done = 0;
     es->total = 0;
+    es->bytes_done = es->bytes_total = es->rate = 0;
+    es->seconds_left = -1;
     es->item[0] = '\0';
     es->log[0] = '\0';
     export_prune_list_free(app);

@@ -1123,14 +1123,19 @@ static void status_bar(UiState *ui, ImVec2 a, ImVec2 b)
     // Middle: analysis and export progress, each with a thin bar.
     float mid_x = a.x + w * 0.38f;
     float mid_w = ImMin(right_edge - mid_x, PX(380));
-    char mid[320] = "";
+    char mid[640] = "";
     float frac = -1;
     int tag_done = 0, tag_total = 0;
     uint64_t tag_current = 0;
     if (app->export_state.running) {
         const auto &es = app->export_state;
-        snprintf(mid, sizeof(mid), "Export %s %d/%d  %s", es.stage, es.done, es.total, es.item);
-        frac = es.total > 0 ? (float)es.done / es.total : 0;
+        bool copying = !strcmp(es.stage, "copy") && es.bytes_total > 0;
+        char rate[64];
+        rx_export_rate_text(copying ? es.rate : 0, es.seconds_left, rate, sizeof(rate));
+        snprintf(mid, sizeof(mid), "Export %s %d/%d%s%s  %s", es.stage, es.done, es.total, rate[0] ? "  " : "",
+                 rate, es.item);
+        frac = copying ? (float)((double)es.bytes_done / (double)es.bytes_total)
+             : es.total > 0 ? (float)es.done / es.total : 0;
     } else if (app->analysing_total > 0 && app->analysing_done < app->analysing_total) {
         char name[200] = "";
         uint64_t ids[16];

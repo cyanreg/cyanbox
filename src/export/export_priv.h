@@ -136,8 +136,11 @@ char *rx_stick_file(const char *mount, const char *stick_path);
 /* A path read from a stick (a database row, an analysis path) that names a
  * file on the stick: absolute, and no empty, "." or ".." component. */
 bool rx_stick_path_safe(const char *stick_path);
-/* Writes a file atomically, creating its directory. */
+/* Writes a file in place, creating its directory; no temporary, no sync
+ * (rx_stick_sync at the end of an export covers everything at once). */
 int  rx_stick_write(const char *path, const void *data, size_t size);
+/* Writes out everything pending on the stick's file system (syncfs). */
+int  rx_stick_sync(const char *mount);
 /* Bytes the export of `plan` to `dest` needs free, the files counted in
  * whole clusters of `cluster` bytes. */
 int64_t rx_export_space_needed(const RXPlan *plan, const char *dest, int64_t cluster);

@@ -807,11 +807,20 @@ static void export_dialog(UiState *ui)
             es.cancel = true;
     } else {
         // Progress, then the summary.
-        float frac = es.total > 0 ? (float)es.done / es.total : 0.0f;
+        // The copy's bar is its bytes on the stick, the other stages' their steps.
+        bool copying = !strcmp(es.stage, "copy") && es.bytes_total > 0;
+        float frac = copying ? (float)((double)es.bytes_done / (double)es.bytes_total)
+                   : es.total > 0 ? (float)es.done / es.total : 0.0f;
         if (es.running) {
             ImGui::Text("%s", es.stage[0] ? es.stage : "starting");
             ImGui::SameLine();
             ImGui::TextDisabled("%d / %d", es.done, es.total);
+            char rate[64];
+            rx_export_rate_text(copying ? es.rate : 0, es.seconds_left, rate, sizeof(rate));
+            if (rate[0]) {
+                ImGui::SameLine();
+                ImGui::TextDisabled("%s", rate);
+            }
             ImGui::ProgressBar(frac, ImVec2(-FLT_MIN, PX(6)), "");
             ImGui::TextDisabled("%s", es.item);
         } else if (es.result == RX_ERROR(ECANCELED)) {

@@ -301,7 +301,9 @@ or instrumental; "none" for a track never tagged.
 
 Left: the last message (`rx_app_set_status`). Middle: analysis progress
 (`Analysing 12/340: Artist - Title`) with a thin bar; export progress
-likewise, and tagging's (`Tagging 3/12: Artist - Title`, `loading the
+likewise (`Export copy 12/57  18.3 MB/s, 2:31 left  Artist - Title`, the
+copy's bar and rate from the bytes on the stick, since the audio is
+written through with O_DIRECT), and tagging's (`Tagging 3/12: Artist - Title`, `loading the
 model` before its first track) when no analysis is running. Right: audio
 state (`PipeWire 48 kHz · rxbox-null`, `Audio: none` under `--audio none`, or
 the error in red), the library track count with the size of its files
