@@ -33,7 +33,7 @@
  *    is one contiguous read for the attention kernel.
  *  - Tables (the DFT's basis, RoPE's angles, the encoder's positions) are
  *    computed here in double precision and uploaded once.
- *  - The audio's scratch (the encoder's buffers, 1.2 GB for ten minutes,
+ *  - The audio's scratch (the encoder's buffers, 1.2 GB for 9.5 minutes,
  *    and the adapter's rows) is freed once the audio is in the cache: the
  *    questions after it read none of it, and the GPU is shared with the
  *    desktop and the analyses. Each listen allocates it again, at the size

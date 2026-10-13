@@ -672,10 +672,12 @@ int ml_gpu_create(MLGpu *g, const char *device, bool validation)
     if ((ret = create_device(g)) < 0)
         goto fail;
 
-    rx_debug("ml: %s, Vulkan %u.%u, queue family %u%s, subgroups of %u%s", g->props.deviceName,
+    char sub[32] = "as the driver picks";
+    if (g->sub_size)
+        snprintf(sub, sizeof(sub), "of %u", g->sub_size);
+    rx_debug("ml: %s, Vulkan %u.%u, queue family %u%s, subgroups %s", g->props.deviceName,
              VK_API_VERSION_MAJOR(g->props.apiVersion), VK_API_VERSION_MINOR(g->props.apiVersion),
-             g->qfam, g->ts_mask ? "" : " (no timestamps)", g->sub_size,
-             g->sub_size ? "" : " (the driver's)");
+             g->qfam, g->ts_mask ? "" : " (no timestamps)", sub);
     return 0;
 
 fail:
