@@ -477,7 +477,7 @@ static int analyse_tracks(Cli *cli, RXTrack **tracks, int nb, unsigned what, boo
         if (tracks[i]->grid_locked && !override_lock)
             need[i] &= ~RX_ANALYSE_BEATS;
         todo += need[i] != 0;
-        stale += (need[i] & rx_analysis_stale(tracks[i])) != 0;
+        stale += (need[i] & rx_app_analysis_stale(app, tracks[i])) != 0;
     }
     if (!todo) {
         free(need);
@@ -1090,17 +1090,21 @@ end:
     return code;
 }
 
-/* " beats 1", or " beats 0 (older than 1)" for a stale result. */
+/* " beats 1", " beats 0 (older than 1)" for a result an older analyser
+ * made, " waves 1 (older format)" for waveforms stored in a format this
+ * build no longer reads. */
 static void print_version(const char *stage, int version, int current, bool stale,
                           const char *sep)
 {
     printf(" %s %d", stage, version);
-    if (stale)
+    if (stale && version < current)
         printf(" (older than %d)", current);
+    else if (stale)
+        printf(" (older format)");
     printf("%s", sep);
 }
 
-static void show_track(const RXTrack *t)
+static void show_track(const RXApp *app, const RXTrack *t)
 {
     char a[32], b[32], bpm[32];
 
@@ -1150,7 +1154,7 @@ static void show_track(const RXTrack *t)
     else
         printf("  key: unknown\n");
 
-    unsigned stale = rx_analysis_stale(t);
+    unsigned stale = rx_app_analysis_stale(app, t);
     printf("  analyser versions:");
     print_version("beats", t->beats_version, RX_BEATS_VERSION, stale & RX_ANALYSE_BEATS, ",");
     print_version("key", t->key_version, RX_KEY_VERSION, stale & RX_ANALYSE_KEY, ",");
@@ -1233,7 +1237,7 @@ static int cmd_show(Cli *cli, int argc, char **argv)
             code = EXIT_FAIL;
     }
     for (size_t i = 0; i < tracks.nb; i++)
-        show_track(*(RXTrack **)rx_array_at(&tracks, i));
+        show_track(&cli->app, *(RXTrack **)rx_array_at(&tracks, i));
     rx_array_free(&tracks);
 
 end:
@@ -1715,13 +1719,14 @@ static int cmd_check(Cli *cli, int argc, char **argv)
         printf("OK: the library database is intact (%d track%s)\n", lib->nb_tracks,
                lib->nb_tracks == 1 ? "" : "s");
 
-    /* What `rxbox analyze` would analyse again because an older analyser
-     * made it (rx_app_analysis_needed's rule): locked grids stay, so they
-     * are counted apart, and a missing file cannot be analysed. */
+    /* What `rxbox analyze` would analyse again because it is stale (an
+     * older analyser, or an older waveform format, made it): locked grids
+     * stay, so they are counted apart, and a missing file cannot be
+     * analysed. */
     int stale = 0, locked = 0;
     for (int i = 0; i < lib->nb_tracks; i++) {
         const RXTrack *t = lib->tracks[i];
-        unsigned s = t->missing ? 0 : rx_analysis_stale(t);
+        unsigned s = t->missing ? 0 : rx_app_analysis_stale(&cli->app, t);
         if (t->grid_locked && (s & RX_ANALYSE_BEATS)) {
             locked++;
             s &= ~RX_ANALYSE_BEATS;

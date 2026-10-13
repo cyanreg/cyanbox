@@ -108,6 +108,44 @@ EOF
     run check | grep -q "^no track has results from an older analyser" ||
         fail "the track is still stale after analyze"
     run analyze | grep -q "nothing to analyse" || fail "analyze redid finished work"
+
+    # The export's analysis uses the same notion: a dry run on a library
+    # whose waveforms an older analyser made, then on one whose stored
+    # waveforms are format version 1 (before the recalibrations), makes
+    # them again before it writes.
+    python3 - "$lib/library.db" <<'EOF' || fail "cannot make the waveforms old"
+import sqlite3, sys
+db = sqlite3.connect(sys.argv[1])
+db.execute("UPDATE track SET waves_version = 0")
+db.commit()
+db.close()
+EOF
+    run export --dry-run "$dir/dry" > "$dir/dry-stale.out" ||
+        { cat "$dir/dry-stale.out"; fail "export --dry-run of stale waveforms"; }
+    grep -q "^analysing 1 track (1 made by an older analyser)" "$dir/dry-stale.out" ||
+        { cat "$dir/dry-stale.out"; fail "the export did not analyse waveforms of an older analyser"; }
+    python3 - "$lib/library.db" <<'EOF' || fail "cannot make the waveforms an older format"
+import sqlite3, sys
+db = sqlite3.connect(sys.argv[1])
+for track_id, data in db.execute("SELECT track_id, data FROM waveform").fetchall():
+    data = bytearray(data)
+    data[4:8] = (1).to_bytes(4, "little")
+    db.execute("UPDATE waveform SET data = ? WHERE track_id = ?", (bytes(data), track_id))
+db.commit()
+db.close()
+EOF
+    run show "$track" | grep -q "waves [0-9]* (older format)" ||
+        fail "show does not say the waveforms are an older format"
+    run check | grep -q "^1 track has results from an older analyser" ||
+        fail "check does not count waveforms of an older format"
+    run export --dry-run "$dir/dry" > "$dir/dry-stale.out" ||
+        { cat "$dir/dry-stale.out"; fail "export --dry-run of an older waveform format"; }
+    cat "$dir/dry-stale.out"
+    grep -q "^analysing 1 track (1 made by an older analyser)" "$dir/dry-stale.out" ||
+        fail "the export did not analyse waveforms of an older format"
+    [ -z "$(ls -A "$dir/dry")" ] || fail "the dry run wrote to the stick"
+    run check | grep -q "^no track has results from an older analyser" ||
+        fail "the export left the waveforms stale"
 else
     echo "no python3 with sqlite3: the stale library is not tested" >&2
 fi
