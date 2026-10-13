@@ -230,6 +230,32 @@ static void analyse_selection(UiState *ui, unsigned what, bool force)
         rx_app_set_status(app, "Nothing to analyse");
 }
 
+// The playlists under `f` as menu items, folders as submenus; the one
+// picked, or NULL.
+static RXPlaylist *playlist_menu(RXPlaylistFolder *f)
+{
+    RXPlaylist *picked = nullptr;
+    for (int i = 0; i < f->nb_folders; i++) {
+        ImGui::PushID(i);
+        if (ImGui::BeginMenu(f->folders[i]->name)) {
+            RXPlaylist *p = playlist_menu(f->folders[i]);
+            if (p)
+                picked = p;
+            ImGui::EndMenu();
+        }
+        ImGui::PopID();
+    }
+    for (int i = 0; i < f->nb_playlists; i++) {
+        ImGui::PushID(f->nb_folders + i);
+        if (ImGui::MenuItem(f->playlists[i]->name))
+            picked = f->playlists[i];
+        ImGui::PopID();
+    }
+    if (!f->nb_folders && !f->nb_playlists)
+        ImGui::TextDisabled("No playlists");
+    return picked;
+}
+
 static void track_menu(UiState *ui)
 {
     RXApp *app = ui->app;
@@ -284,6 +310,17 @@ static void track_menu(UiState *ui)
     if (t->missing && ImGui::MenuItem("Relocate..."))
         ui_open_relocate(ui, t);
     ImGui::Separator();
+    // Every playlist, folders as submenus, in the tree's order.
+    if (ImGui::BeginMenu("Add to playlist", app->lib.root_folder != nullptr)) {
+        std::vector<uint64_t> ids;
+        if (ui_is_selected(ui, t->id))
+            ids.assign(app->selection, app->selection + app->nb_selection);
+        else
+            ids.push_back(t->id);
+        if (RXPlaylist *p = playlist_menu(app->lib.root_folder))
+            ui_add_to_playlist(ui, p, ids);
+        ImGui::EndMenu();
+    }
     if (ImGui::MenuItem("Remove from playlist", "Delete", false, app->current_playlist != nullptr))
         ui_remove_from_playlist(ui);
     if (ImGui::MenuItem("Remove from library...")) {

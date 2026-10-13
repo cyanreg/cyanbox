@@ -443,6 +443,9 @@ bool ui_accept_tracks(UiState *ui, std::vector<uint64_t> &ids);
 /* --------------------------------------------------------------- tree.cpp */
 
 void ui_tree(UiState *ui, ImVec2 size);
+// Appends the tracks to the playlist (a track once per playlist), with the
+// count in the status bar.
+void ui_add_to_playlist(UiState *ui, RXPlaylist *p, const std::vector<uint64_t> &ids);
 
 /* ------------------------------------------------------------ dialogs.cpp */
 
