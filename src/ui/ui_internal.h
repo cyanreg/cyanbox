@@ -205,8 +205,11 @@ struct UiState {
     float  deck_split;         // fraction of the height for the player, < 0: the default
     float  tree_width;         // logical pixels
     bool   detail_half;        // rekordbox 2 PLAYER half-height detail instead of CDJ centred
-    int    key_notation;       // 0 classic, 1 Camelot, 2 Open Key
     int    traffic_light;      // RXKeyReach of the table's key highlight
+
+    // The players' My Settings the drawing follows, set from RXConfig at
+    // the start of every frame (ui.cpp, follow_settings).
+    bool   key_camelot;        // device.key_display alphanumeric: keys as Camelot codes
     bool   layout_dirty;
 
     UiDeck decks[RX_DECKS];
@@ -359,6 +362,13 @@ const std::vector<UiSetting> &ui_settings(UiState *ui);
 int         ui_setting_key(const char *key, const char **name);       // "player.quantize": section, name
 const char *ui_setting_label(const char *name, char *buf, size_t size);
 const char *ui_setting_value(const char *name, const char *value, char *buf, size_t size);
+// The value of a My Setting the interface follows ("device.key_display"),
+// as an export would write it: the library's, else the default.
+const char *ui_my_setting(UiState *ui, const char *key);
+// Sets a My Setting from outside the Player settings dialog (the View
+// menu), the way the dialog sets one: in RXConfig and the library at once,
+// said in the status bar. `value` as rx_settings_list lists it.
+void        ui_setting_pick(UiState *ui, const char *key, const char *value);
 
 // Loads a track into the player, pausing it first when it plays.
 void ui_load(UiState *ui, RXTrack *t);

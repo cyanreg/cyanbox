@@ -53,6 +53,7 @@
 #include "rxbox/analysis.h"
 #include "rxbox/colors.h"
 #include "rxbox/export.h"
+#include "rxbox/formats.h"
 #include "rxbox/notation.h"
 
 /* Job results applied per tick: an analysis writes the track and its
@@ -176,22 +177,17 @@ struct RXAppPriv {
 
 /* ------------------------------------------------------------------ helpers */
 
-static int palette_index(const char *name)
+/* The waveform palette is the players' WAVEFORM COLOR (device.waveform_color,
+ * rxbox/formats.h rx_settings_get): what the stick will show is what the
+ * deck and the table show. */
+static int palette_of(const RXConfig *cfg)
 {
-    if (!rx_strcasecmp(name, "blue"))
+    const char *name = rx_settings_get(cfg, "device.waveform_color");
+    if (name && !strcmp(name, "blue"))
         return 1;
-    if (!rx_strcasecmp(name, "rgb"))
+    if (name && !strcmp(name, "rgb"))
         return 2;
     return 0;
-}
-
-static const char *palette_name(int palette)
-{
-    switch (palette) {
-    case 1:  return "blue";
-    case 2:  return "rgb";
-    default: return "3band";
-    }
 }
 
 static void analysis_options(const RXConfig *cfg, RXAnalysisOptions *opt)
@@ -437,6 +433,20 @@ bool rx_app_artwork_pending(RXApp *app, const RXTrack *t)
     return !e || e->art_state != GPU_DONE;
 }
 
+/* A preview tag on the GPU in a palette: PWV6 (3-band), PWAV (blue) or
+ * PWV4 (RGB), the overview the players draw in that WAVEFORM COLOR. */
+static RXWaveGpu *upload_preview(RXApp *app, int palette, const RXWaveforms *w)
+{
+    switch (palette) {
+    case 1:
+        return rx_wave_upload(app->window, RX_WAVE_BLUE, w->pwav, RX_WAVE_PWAV_COLUMNS);
+    case 2:
+        return rx_wave_upload(app->window, RX_WAVE_RGB_PREVIEW, w->pwv4, RX_WAVE_PWV4_COLUMNS);
+    default:
+        return rx_wave_upload(app->window, RX_WAVE_3BAND, w->pwv6, RX_WAVE_PWV6_COLUMNS);
+    }
+}
+
 RXWaveGpu *rx_app_preview_wave(RXApp *app, const RXTrack *t)
 {
     RXAppPriv *priv = app->priv;
@@ -448,13 +458,13 @@ RXWaveGpu *rx_app_preview_wave(RXApp *app, const RXTrack *t)
     e->used = priv->tick;
 
     /* Unknown until the track has waveforms: the analysis drops the entry's
-     * state when they land. */
+     * state when they land, a change of palette every entry's. */
     if (e->wave_state == GPU_UNKNOWN && t->has_waveforms && priv->gpu_budget > 0) {
         priv->gpu_budget--;
         RXWaveforms w = { 0 };
         int ret = rx_library_waveforms_load(&app->lib, t->id, &w);
         if (ret >= 0)
-            e->preview = rx_wave_upload(app->window, RX_WAVE_3BAND, w.pwv6, RX_WAVE_PWV6_COLUMNS);
+            e->preview = upload_preview(app, app->wave_palette, &w);
         rx_waveforms_free(&w);
         e->wave_state = GPU_DONE;
         /* Stale ones are made again; the preview follows (gpu_forget_waves). */
@@ -478,6 +488,20 @@ static void gpu_forget_waves(RXApp *app, uint64_t id)
         rx_wave_release(app->window, e->preview);
     e->preview = NULL;
     e->wave_state = GPU_UNKNOWN;
+}
+
+/* The palette changed: every preview is made again, in the new one, as
+ * the table asks for it. */
+static void gpu_forget_previews(RXApp *app)
+{
+    RXAppPriv *priv = app->priv;
+    for (size_t i = 0; i < priv->gpu.nb; i++) {
+        GpuEntry *e = rx_array_at(&priv->gpu, i);
+        if (e->preview && app->window)
+            rx_wave_release(app->window, e->preview);
+        e->preview = NULL;
+        e->wave_state = GPU_UNKNOWN;
+    }
 }
 
 static void gpu_cache_free(RXApp *app)
@@ -522,22 +546,18 @@ static void deck_upload_waves(RXApp *app, int deck)
     if (!app->window || w->nb_detail <= 0)
         return;
 
+    dv->wave_preview = upload_preview(app, app->wave_palette, w);
     switch (app->wave_palette) {
     case 1:
-        dv->wave_preview = rx_wave_upload(app->window, RX_WAVE_BLUE, w->pwav, RX_WAVE_PWAV_COLUMNS);
         if (w->pwv3)
             dv->wave_detail = rx_wave_upload(app->window, RX_WAVE_BLUE, w->pwv3, w->nb_detail);
         break;
     case 2:
-        dv->wave_preview = rx_wave_upload(app->window, RX_WAVE_RGB_PREVIEW, w->pwv4,
-                                          RX_WAVE_PWV4_COLUMNS);
         if (w->pwv5)
             dv->wave_detail = rx_wave_upload(app->window, RX_WAVE_RGB_DETAIL, w->pwv5,
                                              w->nb_detail);
         break;
     default:
-        dv->wave_preview = rx_wave_upload(app->window, RX_WAVE_3BAND, w->pwv6,
-                                          RX_WAVE_PWV6_COLUMNS);
         if (w->pwv7)
             dv->wave_detail = rx_wave_upload(app->window, RX_WAVE_3BAND, w->pwv7, w->nb_detail);
         break;
@@ -2231,7 +2251,7 @@ int rx_app_create(RXApp *app, const char *library_root, const RXPlayerOptions *p
         rx_ctl_init(&dv->ctl, app->player, d, deck_changed, app);
         dv->zoom_bars = cfg->detail_bars > 0 ? cfg->detail_bars : 12;
     }
-    app->wave_palette = palette_index(cfg->wave_palette);
+    app->wave_palette = palette_of(cfg);
     app->export_state.compat = cfg->compat_transcode;
     app->sort_column = -1;
     app->rows_dirty = true;
@@ -2378,6 +2398,16 @@ bool rx_app_tick(RXApp *app)
     if (export_tick(app))
         changed = true;
 
+    /* The palette follows the setting, which the Player settings dialog,
+     * the View menu and Sync from USB change: the deck's waveforms are
+     * uploaded again below, the table's previews as it asks for them. */
+    int palette = palette_of(&app->lib.cfg);
+    if (palette != app->wave_palette) {
+        app->wave_palette = palette;
+        gpu_forget_previews(app);
+        changed = true;
+    }
+
     for (int d = 0; d < RX_DECKS; d++) {
         RXDeckView *dv = &app->decks[d];
         if (app->player)
@@ -2414,20 +2444,6 @@ static bool deck_moving(const RXApp *app)
             return true;
     }
     return false;
-}
-
-/* Remembers the waveform palette in the library's settings, only when it
- * changed. */
-static void save_ui_prefs(RXApp *app)
-{
-    RXConfig *cfg = &app->lib.cfg;
-    const char *palette = palette_name(app->wave_palette);
-    if (!strcmp(cfg->wave_palette, palette))
-        return;
-    snprintf(cfg->wave_palette, sizeof(cfg->wave_palette), "%s", palette);
-    int ret = rx_library_config_save(&app->lib);
-    if (ret < 0)
-        rx_warn("cannot save the interface settings: %s", strerror(-ret));
 }
 
 int rx_app_run(RXApp *app)
@@ -2468,6 +2484,5 @@ int rx_app_run(RXApp *app)
         export_tick(app);
     }
     flush_saves(app);
-    save_ui_prefs(app);
     return 0;
 }

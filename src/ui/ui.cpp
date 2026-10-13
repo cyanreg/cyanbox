@@ -59,13 +59,13 @@ const char *ui_fmt_time(double seconds, char *buf, size_t size, bool tenths)
     return buf;
 }
 
-static const char *const NOTATIONS[3] = { "classic", "camelot", "open" };
-
+// The players' key display (device.key_display): classic names, or for
+// "alphanumeric" the Camelot codes (8A).
 const char *ui_key_text(const UiState *ui, const char *classic, char *buf, size_t size)
 {
     if (!classic || !classic[0])
         return "";
-    const char *k = rx_key_display(classic, NOTATIONS[ImClamp(ui->key_notation, 0, 2)], buf, size);
+    const char *k = rx_key_display(classic, ui->key_camelot ? "camelot" : "classic", buf, size);
     return k ? k : classic;
 }
 
@@ -575,6 +575,12 @@ const char *ui_setting_value(const char *name, const char *value, char *buf, siz
     return buf;
 }
 
+const char *ui_my_setting(UiState *ui, const char *key)
+{
+    const char *v = rx_settings_get(&ui->app->lib.cfg, key);
+    return v ? v : "";
+}
+
 void ui_want_frames(UiState *ui, int n)
 {
     if (ui->frames_wanted < n)
@@ -856,29 +862,32 @@ static void menu_bar(UiState *ui)
     }
 
     if (ImGui::BeginMenu("View")) {
-        // rekordbox: View > Color > Waveform color. All three are on the stick.
+        // rekordbox: View > Color > Waveform color, which is the players'
+        // WAVEFORM COLOR: one setting, device.waveform_color, for the deck,
+        // the table's previews and the stick, as the Player settings
+        // dialog's Device tab shows it.
         static const char *const palettes[] = { "3Band", "Blue", "RGB" };
         static const char *const palette_cfg[] = { "3band", "blue", "rgb" };
         if (ImGui::BeginMenu("Waveform colour")) {
+            const char *now = ui_my_setting(ui, "device.waveform_color");
             for (int i = 0; i < 3; i++) {
-                bool on = app->wave_palette == i;
-                if (ImGui::MenuItem(palettes[i], nullptr, on) && !on) {
-                    app->wave_palette = i;
-                    snprintf(cfg->wave_palette, sizeof(cfg->wave_palette), "%s", palette_cfg[i]);
-                    ui_save_config(ui);
-                }
+                bool on = !strcmp(now, palette_cfg[i]);
+                if (ImGui::MenuItem(palettes[i], nullptr, on) && !on)
+                    ui_setting_pick(ui, "device.waveform_color", palette_cfg[i]);
             }
             ImGui::EndMenu();
         }
-        static const char *const notations[] = { "Classic (Am)", "Camelot (8A)", "Open Key (1m)" };
+        // The players' key display format (device.key_display), for the
+        // table, the deck and the info panel. Open Key stays the command
+        // line's (export.key_notation names keys on the stick).
+        static const char *const notations[] = { "Classic (Am)", "Alphanumeric (8A)" };
+        static const char *const notation_cfg[] = { "classic", "alphanumeric" };
         if (ImGui::BeginMenu("Key notation")) {
-            for (int i = 0; i < 3; i++) {
-                bool on = ui->key_notation == i;
-                if (ImGui::MenuItem(notations[i], nullptr, on) && !on) {
-                    ui->key_notation = i;
-                    snprintf(cfg->key_notation, sizeof(cfg->key_notation), "%s", NOTATIONS[i]);
-                    ui_save_config(ui);
-                }
+            const char *now = ui_my_setting(ui, "device.key_display");
+            for (int i = 0; i < 2; i++) {
+                bool on = !strcmp(now, notation_cfg[i]);
+                if (ImGui::MenuItem(notations[i], nullptr, on) && !on)
+                    ui_setting_pick(ui, "device.key_display", notation_cfg[i]);
             }
             ImGui::EndMenu();
         }
@@ -1145,6 +1154,19 @@ static void log_test_state(UiState *ui)
             t ? t->nb_cues : 0, ui_cue_list_has_keys(ui, 0));
 }
 
+/* -------------------------------------------------------------- My Settings */
+
+// The players' My Settings drive the interface the way they drive the
+// players (docs/UI.md, Player settings): one setting for both, so rxbox
+// shows what the stick will. They are read from RXConfig at every frame;
+// the Player settings dialog, the View menu and Sync from USB write it,
+// and the next frame shows the change. The waveform palette is app.c's,
+// which uploads the waveforms (rx_app_tick).
+static void follow_settings(UiState *ui)
+{
+    ui->key_camelot = !strcmp(ui_my_setting(ui, "device.key_display"), "alphanumeric");
+}
+
 /* ------------------------------------------------------------- entry points */
 
 int rx_ui_init(RXApp *app)
@@ -1172,16 +1194,6 @@ int rx_ui_init(RXApp *app)
         ui->deck_split = ImClamp(cfg->split_player, 0.2f, 0.8f);
     if (cfg->split_tree > 0)
         ui->tree_width = ImClamp(cfg->split_tree, 120.0f, 600.0f);
-    if (!strcmp(cfg->wave_palette, "blue"))
-        app->wave_palette = 1;
-    else if (!strcmp(cfg->wave_palette, "rgb"))
-        app->wave_palette = 2;
-    else
-        app->wave_palette = 0;
-    if (!strcmp(cfg->key_notation, "camelot"))
-        ui->key_notation = 1;
-    else if (!strcmp(cfg->key_notation, "open"))
-        ui->key_notation = 2;
     int reach = rx_key_reach_parse(cfg->traffic_light);
     ui->traffic_light = reach >= 0 ? reach : RX_KEY_REACH_RELATED3;
     double bars = cfg->detail_bars > 0 ? cfg->detail_bars : 12;
@@ -1357,6 +1369,7 @@ bool rx_ui_frame(RXApp *app)
     if (ui->s < 0.5f || ui->s > 4.0f)
         ui->s = 1.0f;
 
+    follow_settings(ui);
     autoload_tick(ui);
     // MASTER TEMPO as the layout remembers it, once there is a player. A
     // player that cannot keep the pitch refuses and the deck stays off;

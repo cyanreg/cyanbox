@@ -8,7 +8,10 @@
 // Player settings is rekordbox's My Settings, built from rx_settings_list:
 // a field settings.c gains shows up with no change here. Its values are
 // RXConfig's player/mixer/device groups, set and saved at once with
-// rx_library_config_save, the way Sync from USB's apply sets them.
+// rx_library_config_save, the way Sync from USB's apply sets them. The
+// interface follows several of them from the next frame on (ui.cpp,
+// follow_settings), and the View menu's waveform colour and key notation
+// set theirs through here (ui_setting_pick).
 //
 // Export follows the app's flow (rxbox/app.h export_state): Export starts
 // a dry run; when it finds stick files to prune or player changes not yet
@@ -385,6 +388,23 @@ static void setting_write(UiState *ui, const UiSetting &f, int value)
     ui_setting_label(f.name.c_str(), label, sizeof(label));
     ui_setting_value(f.name.c_str(), f.values[value].c_str(), text, sizeof(text));
     rx_app_set_status(app, "%s setting %s: %s", ui_setting_titles[f.section], label, text);
+}
+
+void ui_setting_pick(UiState *ui, const char *key, const char *value)
+{
+    const char *name;
+    int section = ui_setting_key(key, &name);
+    for (const UiSetting &f : ui_settings(ui)) {
+        if (f.section != section || f.name != name)
+            continue;
+        for (int i = 0; i < (int)f.values.size(); i++) {
+            if (f.values[i] == value) {
+                setting_write(ui, f, i);
+                return;
+            }
+        }
+    }
+    rx_warn("ui: %s = %s is not a My Setting", key, value);
 }
 
 // Every field of the section that is not at its default goes back to it.
