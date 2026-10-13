@@ -626,6 +626,14 @@ same and double are each judged by:
   is inside and unaffected. With `bpm_min`/`bpm_max` set, the range is the
   user's and nothing is folded.
 
+When another level wins, the grid is fitted again there. A track too short
+for a grid at that level (16 beats) keeps the grid it had, flagged
+`octave-uncertain`: its octave margin is then the reciprocal of the
+decision's, under 1. A kick and clap loop at 87 of 9 or 10 seconds has 27
+or 30 beats at 174, where it is fitted first, and the octave decision
+chooses 87 (margin 3.0), where the tracker finds fewer than 16: such a
+loop used to get no grid at all, flagged `low-confidence`.
+
 Each level's beats are chosen from the finest down, because the line may
 still sit on any eighth of the double level at this stage (a tracker held at
 half the tempo can lock onto the "and"s): the double level's beats are the
@@ -704,7 +712,7 @@ Flags (`RXGridFlag`), and what they should mean to the DJ in the interface:
 | --- | --- | --- |
 | `tempo-change` | a section at another tempo than the one before it (more than 0.5 % apart) | The grid changes tempo; check each boundary. |
 | `phase-cut` | a section at the same tempo as the one before it, re-entering shifted | An edit or a skip: the grid jumps phase at the boundary; check it. |
-| `octave-uncertain` | the octave decision's margin < 1.5 | Half or double tempo was almost as likely: try ×2 / ÷2. |
+| `octave-uncertain` | the octave decision's margin < 1.5, or the octave it chose has no grid (section 8) | Half or double tempo was almost as likely: try ×2 / ÷2. |
 | `phase-uncertain` | on-beat vs off-beat evidence < 1.5× | The grid may be half a beat off: listen to the first kick. |
 | `downbeat-weak` | best beat position < 1.2× the next, or the section is too short to vote | Beat 1 may be another beat of the bar: use "set downbeat". |
 | `no-kicks` | the kick band carries less than half the full band's periodicity at the beat rate and at twice it, and less than all of it at half the beat rate | Timed on clicks and claps; less precise. |
@@ -1002,6 +1010,8 @@ beat, bar or snap lies before it, and the automatic cue.
 | a drummer's random walk (0.4 % a beat, within 10 %), 6 ms jitter, 122 | dynamic throughout (262 beats): 3.3 ms RMS, 11.1 ms worst, 64 of 64 downbeats; straight (5 sections) 51 ms RMS, 256 worst |
 | rubato: hip-hop 120 dipping to 100 over bars 16-24, 3 ms jitter | dynamic over the dip (42 beats), straight either side: 1.1 ms RMS, 4.6 worst, 48 of 48 downbeats; straight (one section) 54 ms RMS, 247 worst |
 | sequenced house 130, a two-bar syncopated fill at Felicidade's gaps (467, 533, 620, 467, 533, 460 ms, the last two on the beats) | one straight section, 130.000, not dynamic; the beats through the fill and a bar either side within 1.2 ms of the pulse, none missing or extra |
+| a kick and clap loop at 87, 9 and 10 s long | 174.000, `octave-uncertain` (margin 0.33): 87 won the octave, but has too few beats for a grid; no grid before |
+| the same loop, 12 s long | 87.000, −1.3 ms |
 | (not a track) a walk through attacks that leave a 130 BPM pulse for a dozen beats, 160 ms off | tempo steps of 3.8 % at most (5.5 % without the continuity), the beats away from it on the pulse |
 
 The three tracks with a tempo that moves are judged beat by beat against

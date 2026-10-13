@@ -28,6 +28,11 @@
  * walk itself, through attacks that leave a pulse for a dozen beats,
  * must keep its tempo's continuity (check_misc).
  *
+ * Three short loops, a kick and a clap at 87 BPM, 9, 10 and 12 s long:
+ * the octave is decided at 174, where the grid is fitted first, and the
+ * shorter two have too few beats for a grid at 87. They keep the grid
+ * at 174, flagged octave-uncertain, rather than none.
+ *
  * The GPU front end (rxbox/compute.h) must give the same results. When a
  * device is there, every case runs on both paths: each must pass on its
  * own, and the two grids must be the same (sections, their tempo and
@@ -178,6 +183,7 @@ enum {
     STYLE_TECHHOUSE,    /* four-on-the-floor, but loud open hats and bass on the off-beats */
     STYLE_TWOSTEP,      /* UK garage: kick on 1, the "and" of 2 and the "and" of 3, snare on 2
                          * and 4, hats on the "and"s: the kicks lean to the off-beat */
+    STYLE_CLAP,         /* a kick on every beat and a clap on 2 and 4, nothing else */
 };
 
 typedef struct Spec {
@@ -223,6 +229,13 @@ typedef struct Spec {
     /* A two-bar syncopated fill (BAR_FILL) from bar fill_bar (0: none):
      * a pulse that does not move, under accents that leave it. */
     int    fill_bar;
+    /* The track cut this many seconds in (0: two seconds after its last
+     * bar). */
+    double seconds;
+    /* A grid at twice the tempo passes when it is flagged
+     * octave-uncertain: the track is too short to fit one at its own (a
+     * grid needs 16 beats), and the grid it has is better than none. */
+    bool   double_ok;
 } Spec;
 
 enum {
@@ -293,10 +306,14 @@ static int synth(const Spec *sp, Track *t, Truth *truth)
             return -1;
         dur = bt[4 * sp->bars] + 2.0;
     }
+    if (sp->seconds > 0.0)
+        dur = sp->seconds;
     if (track_alloc(t, dur) < 0) {
         free(bt);
         return -1;
     }
+    if (sp->seconds > 0.0)
+        t->n = (int64_t)llround(sp->seconds * RATE);
     Lcg l = { .s = sp->seed * 7919 + 17 };
     static const int prog[4][3] = { { 0, 3, 7 }, { 5, 8, 12 }, { 7, 11, 14 }, { 0, 3, 7 } };
     const int tonic = 9;
@@ -351,9 +368,9 @@ static int synth(const Spec *sp, Track *t, Truth *truth)
          * eight bars, the bass from bar 8: structure on the bar line. */
         const int *ch = prog[b % 4];
         double pad = ((b / 8) % 2) ? 0.06 : 0.10;
-        for (int k = 0; k < 3; k++)
+        for (int k = 0; k < 3 && sp->style != STYLE_CLAP; k++)
             add_tone(t, tb, bar_len, midi_hz(48 + tonic + ch[k]), pad / 3.0);
-        if (b >= 8 && kind != BAR_INTRO) {
+        if (b >= 8 && kind != BAR_INTRO && sp->style != STYLE_CLAP) {
             if (sp->style == STYLE_TECHHOUSE) {
                 for (int q = 0; q < 4; q++)
                     add_tone(t, tb + (q + 0.5) * p, 0.4 * p, midi_hz(36 + tonic + ch[0]), 0.25);
@@ -431,6 +448,11 @@ static int synth(const Spec *sp, Track *t, Truth *truth)
                 if (q == 1 || q == 3)
                     add_snare(t, tq, 0.6, &l);
                 add_hat(t, th, 0.5, &l);
+                break;
+            case STYLE_CLAP:
+                add_kick(t, tq, 1.0);
+                if (q == 1 || q == 3)
+                    add_snare(t, tq, 0.8, &l);
                 break;
             case STYLE_HIPHOP:
                 if (q == 0 || q == 2)
@@ -557,6 +579,15 @@ static const Spec cases[] = {
     /* A tempo that does not move under a fill that does. */
     { .name = "sequenced 130, a two-bar syncopated fill (Felicidade's)", .style = STYLE_HOUSE,
       .bpm = 130.0, .first_downbeat = 0.578, .bars = 48, .seed = 27, .fill_bar = 20 },
+    /* Short loops. */
+    { .name = "a kick and clap loop at 87, 9 s", .style = STYLE_CLAP, .bpm = 87.0,
+      .first_downbeat = 0.3, .bars = 4, .seed = 28, .seconds = 9.0,
+      .double_ok = true },
+    { .name = "a kick and clap loop at 87, 10 s", .style = STYLE_CLAP, .bpm = 87.0,
+      .first_downbeat = 0.3, .bars = 4, .seed = 29, .seconds = 10.0,
+      .double_ok = true },
+    { .name = "a kick and clap loop at 87, 12 s", .style = STYLE_CLAP, .bpm = 87.0,
+      .first_downbeat = 0.3, .bars = 5, .seed = 30, .seconds = 12.0 },
 };
 
 typedef struct Want {
@@ -595,6 +626,9 @@ static const Want wants[] = {
     { RX_GRID_FLAG_DYNAMIC, CUTS },
     { RX_GRID_FLAG_DYNAMIC, CUTS },
     { 0, CUTS | RX_GRID_FLAG_UNSTEADY | RX_GRID_FLAG_DYNAMIC },
+    { 0, CUTS | RX_GRID_FLAG_UNSTEADY },
+    { 0, CUTS | RX_GRID_FLAG_UNSTEADY },
+    { 0, CUTS | RX_GRID_FLAG_UNSTEADY },
 };
 
 /* ----------------------------------------------------------- the checks */
@@ -739,9 +773,12 @@ static int check(int idx, RXCompute *gpu, RXBeatResult *keep)
         FAILF(" sections %d (want %d)", r.grid.nb_sections, truth.nb_secs);
     for (int s = 0; s < RX_MIN(r.grid.nb_sections, truth.nb_secs); s++) {
         const RXTempoSection *g = &r.grid.sections[s];
-        if (fabs(g->bpm - truth.bpm[s]) > 0.05)
+        bool twice = sp->double_ok && fabs(g->bpm - 2.0 * truth.bpm[s]) <= 0.05;
+        if (twice && !(r.flags & RX_GRID_FLAG_OCTAVE_UNCERTAIN))
+            FAILF(" bpm[%d] %.4f, twice the tempo, not flagged", s, g->bpm);
+        if (fabs(g->bpm - truth.bpm[s]) > 0.05 && !twice)
             FAILF(" bpm[%d] %.4f (want %g)", s, g->bpm, truth.bpm[s]);
-        double p = 60.0 / truth.bpm[s];
+        double p = 60.0 / (twice ? g->bpm : truth.bpm[s]);
         /* Phase: the grid's beats against the true beats of the section. */
         double d = fmod(g->start - truth.start[s], p);
         if (d > p / 2)
@@ -759,7 +796,7 @@ static int check(int idx, RXCompute *gpu, RXBeatResult *keep)
             down += ((5 - (g->beat ? g->beat : 1)) % 4) * p;
         double bars = (down - truth.start[s]) / (4.0 * p);
         bool on_bar = fabs(bars - round(bars)) * 4.0 * p < 0.010;
-        if (s == 0 && !on_bar)
+        if (s == 0 && !on_bar && !twice)
             FAILF(" downbeat off by %.2f beats", (bars - round(bars)) * 4.0);
         if (s > 0) {
             /* The boundary itself: at the new part's first beat, which is

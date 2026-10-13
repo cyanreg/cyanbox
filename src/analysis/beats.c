@@ -2467,7 +2467,10 @@ static int analyse(const float *mono, int64_t nb_samples, int rate, RXSpectrum *
 
     /* The octave, judged on the fitted grid, whose beats are on the hits:
      * if another octave is the beat, the grid is fitted again there (the
-     * tracker then follows the right beats). Within the requested range. */
+     * tracker then follows the right beats). Within the requested range.
+     * A refit with no grid to be had (a loop of a few seconds has 16 beats
+     * at 174 but not at 87) keeps the grid it had, its octave uncertain:
+     * the other level's evidence stands against it. */
     {
         int m = longest_section(&c);
         const RXFitSection *s = &c.secs[m];
@@ -2481,15 +2484,26 @@ static int analyse(const float *mono, int64_t nb_samples, int rate, RXSpectrum *
                  od.factor, od.margin, od.bpm[0], od.ev[0].score, od.bpm[1], od.ev[1].score,
                  od.bpm[2], od.ev[2].score);
         if (od.factor != 1.0) {
+            Fit working = fit_take(&c);
+            /* Its envelopes go while the other is fitted, as above. */
+            free(working.envs.env);
+            working.envs.env = NULL;
             ret = fit_grid(&c, bpm0 * od.factor, lo, hi);
             stage(&tm, "octave");
             if (ret > 0) {
-                out->flags = RX_GRID_FLAG_LOW_CONFIDENCE;
-                ret = 0;
-                goto fail;
+                rx_debug("beats: no grid at %.3f BPM: the grid stays at %.3f\n",
+                         bpm0 * od.factor, bpm0);
+                fit_put(&c, &working);
+                if ((ret = recut_envs(&c)) < 0)
+                    goto fail;
+                /* The grid's octave against the one that beat it: under
+                 * 1, and so flagged octave-uncertain. */
+                out->octave_margin = 1.0 / od.margin;
+            } else {
+                fit_free(&working);
+                if (ret < 0)
+                    goto fail;
             }
-            if (ret < 0)
-                goto fail;
         }
     }
     /* Which sections keep their measured beats. */
