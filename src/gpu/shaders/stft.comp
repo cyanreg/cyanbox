@@ -9,6 +9,11 @@
 // The band sums keep four accumulators and add them as (a0 + a1) + (a2 +
 // a3), as spectrum.c's CPU loop does, so that the order of the additions is
 // not one more difference between the two paths.
+//
+// The power spectrum is kept in the transform's own shared array, two bins
+// to a complex point, once the split has read it: an array of its own
+// (M + 1 floats) took an 8192-point transform to 49156 bytes of shared
+// memory, over the 49152 the Iris Xe has.
 
 #version 460
 #extension GL_GOOGLE_include_directive : require
@@ -42,7 +47,14 @@ layout(push_constant, std430) uniform Push {
     float    scale;
 } pc;
 
-shared float pw[M + 1u];
+// The power of bin k in [0, M], in buf (see above).
+float pw(uint k)
+{
+    return buf[k >> 1u][k & 1u];
+}
+
+// The bins an invocation splits, M / 2 + 1 over THREADS, for M <= 4096.
+#define NB_SPLIT 9u
 
 void main()
 {
@@ -61,11 +73,27 @@ void main()
 
     fft_forward(pc.tw);
 
-    for (uint k = tid; k <= M / 2u; k += THREADS) {
-        vec2 xk, xmk;
-        real_split(pc.tw, k, xk, xmk);
-        pw[k] = xk.x * xk.x + xk.y * xk.y;
-        pw[M - k] = xmk.x * xmk.x + xmk.y * xmk.y;
+    // Every split reads two points anywhere in buf: all are read before
+    // any power is written over them. (k = M / 2 writes its one bin twice,
+    // the second value last, as before.)
+    float pk[NB_SPLIT], pmk[NB_SPLIT];
+    for (uint i = 0u; i < NB_SPLIT; i++) {
+        uint k = tid + i * THREADS;
+        if (k <= M / 2u) {
+            vec2 xk, xmk;
+            real_split(pc.tw, k, xk, xmk);
+            pk[i] = xk.x * xk.x + xk.y * xk.y;
+            pmk[i] = xmk.x * xmk.x + xmk.y * xmk.y;
+        }
+    }
+    memoryBarrierShared();
+    barrier();
+    for (uint i = 0u; i < NB_SPLIT; i++) {
+        uint k = tid + i * THREADS;
+        if (k <= M / 2u) {
+            buf[k >> 1u][k & 1u] = pk[i];
+            buf[(M - k) >> 1u][(M - k) & 1u] = pmk[i];
+        }
     }
     memoryBarrierShared();
     barrier();
@@ -76,13 +104,13 @@ void main()
         float a0 = 0.0, a1 = 0.0, a2 = 0.0, a3 = 0.0;
         int k = k0;
         for (; k + 4 <= k1; k += 4) {
-            a0 += pc.weights.v[w + k] * pw[k];
-            a1 += pc.weights.v[w + k + 1] * pw[k + 1];
-            a2 += pc.weights.v[w + k + 2] * pw[k + 2];
-            a3 += pc.weights.v[w + k + 3] * pw[k + 3];
+            a0 += pc.weights.v[w + k] * pw(uint(k));
+            a1 += pc.weights.v[w + k + 1] * pw(uint(k + 1));
+            a2 += pc.weights.v[w + k + 2] * pw(uint(k + 2));
+            a3 += pc.weights.v[w + k + 3] * pw(uint(k + 3));
         }
         for (; k < k1; k++)
-            a0 += pc.weights.v[w + k] * pw[k];
+            a0 += pc.weights.v[w + k] * pw(uint(k));
         float s = (a0 + a1) + (a2 + a3);
         pc.dst.v[f * pc.nb_bands + b] = pc.scale > 0.0 ? log(1.0 + pc.scale * sqrt(s)) : s;
     }

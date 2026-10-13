@@ -23,7 +23,7 @@ genre unless the user typed one (README.md, Tags).
 | Listening (the whole track) | ~4 s on a 6900 XT, ~70x real time |
 | The other questions of `rx_ml_tag` (seven yes/no, three in words) | ~1.1 s |
 | The colour question, in eight orders | ~1.7 s (1.3–2.1; 2.5 s with three renders sharing the GPU) |
-| Memory | 174 MB of RAM at most (64 MB of it a read buffer while loading); 7 GB of VRAM at the peak (4.1 GB weights, 1.2 GB cache, the encoder's scratch for a 6-minute track) |
+| Memory | 174 MB of RAM at most (64 MB of it a read buffer while loading); 5.4 GB of VRAM in buffers from one listen to the next (4.1 GB weights, 1.2 GB cache, the decoder's scratch), 6.2 GB at the peak for a 4-minute track and 6.7 GB for one of 9.5 minutes or more (the encoder's scratch, freed after listening) |
 
 What it gives, measured on the author's library (some 150 tracks: house,
 garage, techno, trance, J-core, electro, bossa nova, jazz, AOR, J-pop,
@@ -62,8 +62,9 @@ ambient, orchestral):
 
 ## The tags
 
-`rx_ml_tag` listens to the whole track (up to what fits in the context,
-about ten and a half minutes; longer tracks are cut at the end) and asks:
+`rx_ml_tag` listens to the whole track (up to what fits in the context
+beside the questions, about nine and a half minutes; longer tracks are cut
+at the end) and asks:
 
 1. Seven yes/no questions, each read as the log-odds of "Yes", centred and
    scaled by its mean and spread over the library above (each question has
@@ -111,6 +112,18 @@ for each is how well it hears that description in the track. The colour is
 the most probable, so the division into eight is the model's; the eight
 probabilities are kept with the track, with a hash of the legend's words
 (`rx_ml_legend_hash`), so a track tagged under other words shows as such.
+Should the letters ever hold less than half of it, the tag fails: the
+model is not answering the question, and eight renormalised scraps would
+make a colour of nothing.
+
+The question is as long as the legend's words, which the user writes: the
+context left beside the audio is measured from the questions (the colour
+question in every rotation, the others with the longest answers they are
+allowed), 256 tokens at least. The default legend's question is under
+that; eight Japanese descriptions of the 127 bytes the interface's fields
+hold take 310 tokens, and a track of 9.5 minutes or more is cut 3 s
+shorter for them. A legend whose question would take more than a quarter
+of the context (2048 tokens) is refused.
 
 **The order of the list matters, a lot.** Asked in one order, the model
 pulls towards the letters D and E whatever stands there. Over the 58

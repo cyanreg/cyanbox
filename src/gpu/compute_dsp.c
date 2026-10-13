@@ -230,6 +230,8 @@ static int upload_tables(Plan *p, const void *data, size_t size)
     barrier(cmd, VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_READ_BIT);
     vkEndCommandBuffer(cmd);
+    /* A failed wait returns with the device idle: the staging buffer can
+     * go either way. */
     uint64_t value = 0;
     ret = rx_compute_submit(c, cmd, &value);
     if (ret >= 0)
@@ -314,9 +316,9 @@ static int slot_wait(Plan *p, int i)
 {
     Slot *s = &p->slots[i];
     int ret = rx_compute_wait(p->c, s->value);
-    s->value = 0;
     if (ret < 0)
         return ret;
+    s->value = 0;
     if (p->times) {
         uint64_t ts[2];
         if (vkGetQueryPoolResults(p->c->dev, p->times, 2 * i, 2, sizeof(ts), ts, sizeof(ts[0]),
@@ -327,12 +329,16 @@ static int slot_wait(Plan *p, int i)
     return rx_cbuf_invalidate(p->c, &s->out);
 }
 
-/* After an error: nothing may still be using the slots. */
+/* After an error: nothing may still be using the slots. A wait that fails
+ * has waited for the device to go idle (rx_compute_wait), so after this
+ * neither slot is in flight, whatever the waits returned. */
 static void slots_drain(Plan *p)
 {
     for (int i = 0; i < 2; i++) {
-        if (p->slots[i].value)
-            slot_wait(p, i);
+        Slot *s = &p->slots[i];
+        if (s->value)
+            rx_compute_wait(p->c, s->value);
+        s->value = 0;
     }
 }
 

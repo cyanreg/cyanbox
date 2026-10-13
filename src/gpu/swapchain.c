@@ -286,6 +286,8 @@ void rx_swapchain_destroy(RXWindow *w)
     if (w->swapchain)
         vkDestroySwapchainKHR(w->dev, w->swapchain, NULL);
     w->swapchain = VK_NULL_HANDLE;
+    if (w->cap.buf)
+        rx_vk_defer_unreserve(w, 1);
     rx_vk_buffer_free(w, &w->cap);
 }
 
@@ -334,11 +336,17 @@ static int ensure_capture(RXWindow *w)
         w->cap = (RXVkBuffer) { 0 };
     }
 
-    VkDeviceSize size = (VkDeviceSize)w->extent.width * w->extent.height * 4;
-    int ret = rx_vk_buffer_create(w, &w->cap, size, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                  RX_MEM_READBACK);
+    /* Room to defer it when the extent changes (vk.c). */
+    int ret = rx_vk_defer_reserve(w, 1);
     if (ret < 0)
         return ret;
+    VkDeviceSize size = (VkDeviceSize)w->extent.width * w->extent.height * 4;
+    ret = rx_vk_buffer_create(w, &w->cap, size, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                              RX_MEM_READBACK);
+    if (ret < 0) {
+        rx_vk_defer_unreserve(w, 1);
+        return ret;
+    }
 
     w->cap_width = w->extent.width;
     w->cap_height = w->extent.height;
@@ -410,6 +418,14 @@ int rx_swapchain_frame(RXWindow *w, void *draw_data, bool capture)
     int pw = 0, ph = 0;
     SDL_GetWindowSizeInPixels(w->win, &pw, &ph);
     if (pw <= 0 || ph <= 0)
+        return 1;
+    /* ImGui moves on to its next vertex buffers only when it draws, and it
+     * draws nothing when the draw data has no area (SDL's backend gives a
+     * minimised window none, whatever its size in pixels). The frame slot
+     * moves on with every submission, and its fence is what protects
+     * ImGui's buffers: a frame ImGui would not draw is not submitted, so
+     * the two stay in step. */
+    if (draw_data && !rx_imgui_drawable(draw_data))
         return 1;
 
     int ret;
@@ -727,6 +743,10 @@ int rx_window_screenshot(RXWindow *w, const char *png_path)
         void *dd = rx_imgui_last_draw_data(w);
         if (!dd)
             return RX_ERROR(EAGAIN);
+        /* That draw data may use what was released while it was built
+         * (deferred to its own submission, which may be complete by now):
+         * it is kept until the submission drawing it again completes. */
+        rx_vk_defer_hold(w, w->last_present_serial, w->serial + 1);
         int ret = rx_swapchain_frame(w, dd, true);
         if (ret < 0)
             return ret;

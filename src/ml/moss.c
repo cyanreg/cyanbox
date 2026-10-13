@@ -32,7 +32,15 @@
  *  - The cache is f16, [layer][kv head][position][128]: a block of keys
  *    is one contiguous read for the attention kernel.
  *  - Tables (the DFT's basis, RoPE's angles, the encoder's positions) are
- *    computed here in double precision and uploaded once. */
+ *    computed here in double precision and uploaded once.
+ *  - The audio's scratch (the encoder's buffers, 1.2 GB for 9.5 minutes,
+ *    and the adapter's rows) is freed once the audio is in the cache: the
+ *    questions after it read none of it, and the GPU is shared with the
+ *    desktop and the analyses. Each listen allocates it again, at the size
+ *    it needs.
+ *  - The context left for the questions is what they need, measured by the
+ *    caller (rx_ml_tag: the colour question grows with the legend's
+ *    words), and never less than QUESTION_ROOM. */
 
 #include "ml_priv.h"
 #include "kernels.h"
@@ -129,8 +137,11 @@ struct RXML {
 
 /* ----------------------------------------------------------------- tensors */
 
-static const MLTensor *tensor(RXML *ml, const char *fmt, int i, enum MLType type,
-                              int64_t ne0, int64_t ne1)
+/* The tensor `fmt` (with i), of exactly this type, shape and size: the
+ * kernels read as much of it as the shape says, unchecked. The sizes past
+ * a tensor's own dimensions are 1 (gguf.c), so the four say everything. */
+static const MLTensor *tensor4(RXML *ml, const char *fmt, int i, enum MLType type,
+                               int64_t ne0, int64_t ne1, int64_t ne2, int64_t ne3)
 {
     char name[96];
     snprintf(name, sizeof(name), fmt, i);
@@ -139,13 +150,24 @@ static const MLTensor *tensor(RXML *ml, const char *fmt, int i, enum MLType type
         rx_err("ml: the model has no tensor %s", name);
         return NULL;
     }
-    if (t->type != type || t->ne[0] != ne0 || t->ne[1] != ne1) {
-        rx_err("ml: tensor %s is type %d, %lld x %lld; expected type %d, %lld x %lld", name,
-               t->type, (long long)t->ne[0], (long long)t->ne[1], type, (long long)ne0,
-               (long long)ne1);
+    uint64_t n = (uint64_t)(ne0 * ne1 * ne2 * ne3);
+    uint64_t size = type == ML_TYPE_Q4_K ? n / ML_QK_K * ML_Q4K_BYTES :
+                    n * (type == ML_TYPE_F16 ? 2 : 4);
+    if (t->type != type || t->ne[0] != ne0 || t->ne[1] != ne1 || t->ne[2] != ne2 ||
+        t->ne[3] != ne3 || t->size != size) {
+        rx_err("ml: tensor %s is type %d, %lld x %lld x %lld x %lld; expected type %d, "
+               "%lld x %lld x %lld x %lld", name, t->type, (long long)t->ne[0],
+               (long long)t->ne[1], (long long)t->ne[2], (long long)t->ne[3], type,
+               (long long)ne0, (long long)ne1, (long long)ne2, (long long)ne3);
         return NULL;
     }
     return t;
+}
+
+static const MLTensor *tensor(RXML *ml, const char *fmt, int i, enum MLType type,
+                              int64_t ne0, int64_t ne1)
+{
+    return tensor4(ml, fmt, i, type, ne0, ne1, 1, 1);
 }
 
 #define T_(dst, ...) do { if (!((dst) = tensor(ml, __VA_ARGS__))) return RX_ERROR(EINVAL); } while (0)
@@ -154,7 +176,14 @@ static int find_tensors(RXML *ml)
 {
     T_(ml->mel_filters, "audio.mel_filters", 0, ML_TYPE_F32, N_MEL, N_FFT / 2 + 1);
     T_(ml->mel_window, "audio.mel_window", 0, ML_TYPE_F32, N_FFT, 1);
-    T_(ml->conv1_w, "enc.conv1.weight", 0, ML_TYPE_F16, 3, 3);
+    if (!(ml->conv1_w = tensor4(ml, "enc.conv1.weight", 0, ML_TYPE_F16, 3, 3, 1, C_DIM)))
+        return RX_ERROR(EINVAL);
+    /* conv2 and conv3 are read once, by permute_convs: checked here, before
+     * the weights go up. */
+    for (int i = 2; i <= 3; i++) {
+        if (!tensor4(ml, "enc.conv%d.weight", i, ML_TYPE_F16, 3, 3, C_DIM, C_DIM))
+            return RX_ERROR(EINVAL);
+    }
     T_(ml->conv1_b, "enc.conv1.bias", 0, ML_TYPE_F32, C_DIM, 1);
     T_(ml->conv2_b, "enc.conv2.bias", 0, ML_TYPE_F32, C_DIM, 1);
     T_(ml->conv3_b, "enc.conv3.bias", 0, ML_TYPE_F32, C_DIM, 1);
@@ -257,10 +286,25 @@ static int reserve(RXML *ml, Scratch *s, size_t size)
 {
     if (s->b.size >= size)
         return 0;
+    /* A buffer that grows grows by half again, so a slowly growing need
+     * does not reallocate every time; the first is the size asked. */
+    size_t want = s->b.size ? size + size / 2 : size;
     ml_buf_free(&ml->g, &s->b);
-    /* Grow by half again, so a slowly growing need does not reallocate
-     * every time. */
-    return ml_buf_create(&ml->g, &s->b, RX_ALIGN(size + size / 2, 65536), ML_MEM_DEVICE);
+    return ml_buf_create(&ml->g, &s->b, RX_ALIGN(want, 65536), ML_MEM_DEVICE);
+}
+
+/* The audio's buffers: the encoder's scratch and the rows it made, which
+ * only rx_ml_listen reads. */
+static void free_audio_scratch(RXML *ml)
+{
+    Scratch *all[] = {
+        &ml->pcm, &ml->mel, &ml->maxbits, &ml->c1, &ml->c2, &ml->c3, &ml->stem,
+        &ml->ex, &ml->eh, &ml->eq, &ml->ek, &ml->ev, &ml->eo, &ml->ef,
+        &ml->ds_x[0], &ml->ds_x[1], &ml->ds_x[2], &ml->ag, &ml->au,
+        &ml->audio, &ml->ds_out[0], &ml->ds_out[1], &ml->ds_out[2],
+    };
+    for (size_t i = 0; i < RX_ARRAY_ELEMS(all); i++)
+        ml_buf_free(&ml->g, &all[i]->b);
 }
 
 /* x and y dims of a dispatch of `groups` workgroups along one axis. */
@@ -420,8 +464,9 @@ static int make_tables(RXML *ml)
 static int permute_convs(RXML *ml)
 {
     for (int i = 0; i < 2; i++) {
-        const MLTensor *w = tensor(ml, "enc.conv%d.weight", i + 2, ML_TYPE_F16, 3, 3);
-        if (!w || w->ne[2] != C_DIM || w->ne[3] != C_DIM)
+        const MLTensor *w = tensor4(ml, "enc.conv%d.weight", i + 2, ML_TYPE_F16, 3, 3, C_DIM,
+                                    C_DIM);
+        if (!w)
             return RX_ERROR(EINVAL);
         int ret = ml_buf_create(&ml->g, &ml->conv_w[i], w->size, ML_MEM_DEVICE);
         if (ret < 0)
@@ -1055,36 +1100,41 @@ static int audio_prompt_tokens(int64_t n)
     return tokens;
 }
 
-int rx_ml_listen(RXML *ml, const float *pcm, int64_t n, RXCancel *cancel)
+int ml_max_context(const RXML *ml)
+{
+    return ml->max_ctx;
+}
+
+int ml_listen(RXML *ml, const float *pcm, int64_t n, int room, RXCancel *cancel)
 {
     int64_t t0 = rx_time_us();
     ml->nb_prefix = 0;
     ml->nb_audio = 0;
+    room = RX_MAX(room, QUESTION_ROOM);
 
-    /* What fits: the head, the audio and its markers, and room for a
-     * question and its answer; whole seconds are cut from the end until it
-     * does. */
+    /* What fits: the head, the audio and its markers, and room for the
+     * questions and their answers; whole seconds are cut from the end
+     * until it does. */
     int64_t fit = n;
-    while (fit > RX_ML_RATE && HEAD_TOKENS + audio_prompt_tokens(fit) + QUESTION_ROOM > ml->max_ctx)
+    while (fit > RX_ML_RATE && HEAD_TOKENS + audio_prompt_tokens(fit) + room > ml->max_ctx)
         fit -= RX_ML_RATE;
     if (fit < n) {
-        rx_debug("ml: %.1f s of audio, %.1f s fit in the context", n / (double)RX_ML_RATE,
-                 fit / (double)RX_ML_RATE);
+        rx_debug("ml: %.1f s of audio, %.1f s fit in the context beside %d tokens of questions",
+                 n / (double)RX_ML_RATE, fit / (double)RX_ML_RATE, room);
         n = fit;
     }
-    if (n < N_FFT || HEAD_TOKENS + audio_prompt_tokens(n) + QUESTION_ROOM > ml->max_ctx)
+    if (n < N_FFT || HEAD_TOKENS + audio_prompt_tokens(n) + room > ml->max_ctx)
         return RX_ERROR(E2BIG);
 
-    int nb_audio = encode(ml, pcm, n, cancel);
-    if (nb_audio < 0)
-        return nb_audio;
-
     Tokens t = { 0 };
-    int ret;
+    int ret = encode(ml, pcm, n, cancel);
+    if (ret < 0)
+        goto end;
+    int nb_audio = ret;
     if ((ret = tok_head(ml, &t)) < 0 || (ret = tok_push(&t, TOK_AUDIO_BOS, -1)) < 0 ||
         (ret = tok_audio(&t, nb_audio)) < 0 || (ret = tok_push(&t, TOK_AUDIO_EOS, -1)) < 0)
         goto end;
-    if (t.nb + QUESTION_ROOM > ml->max_ctx) {
+    if (t.nb + room > ml->max_ctx) {
         ret = RX_ERROR(E2BIG);
         goto end;
     }
@@ -1095,9 +1145,20 @@ int rx_ml_listen(RXML *ml, const float *pcm, int64_t n, RXCancel *cancel)
 
 end:
     tok_free(&t);
+    if (ret < 0)
+        ml_gpu_discard(&ml->g);
+    uint64_t during = ml_gpu_allocated(&ml->g);
+    free_audio_scratch(ml);
+    rx_debug("ml: %.2f GB on the GPU while listening, %.2f GB after", during * 1e-9,
+             ml_gpu_allocated(&ml->g) * 1e-9);
     ml->listen_ms = (rx_time_us() - t0) * 1e-3;
     ml->ask_ms = 0.0;
     return ret;
+}
+
+int rx_ml_listen(RXML *ml, const float *pcm, int64_t n, RXCancel *cancel)
+{
+    return ml_listen(ml, pcm, n, QUESTION_ROOM, cancel);
 }
 
 void rx_ml_forget(RXML *ml)
@@ -1107,13 +1168,14 @@ void rx_ml_forget(RXML *ml)
 }
 
 /* The question's tokens, after the cached head and audio (or after a head
- * of its own when there is no audio). */
-static int tok_question(RXML *ml, Tokens *t, const char *question, const char *prefix)
+ * of its own when there is none). */
+static int tok_question(RXML *ml, Tokens *t, const char *question, const char *prefix,
+                        bool after_audio)
 {
     int ret;
-    if (!ml->nb_prefix && (ret = tok_head(ml, t)) < 0)
+    if (!after_audio && (ret = tok_head(ml, t)) < 0)
         return ret;
-    char *q = rx_asprintf("%s%s", ml->nb_prefix ? "\n" : "", question);
+    char *q = rx_asprintf("%s%s", after_audio ? "\n" : "", question);
     if (!q)
         return RX_ERROR(ENOMEM);
     ret = tok_text(ml, t, q);
@@ -1126,6 +1188,16 @@ static int tok_question(RXML *ml, Tokens *t, const char *question, const char *p
     return ret;
 }
 
+int ml_question_tokens(RXML *ml, const char *question, const char *prefix)
+{
+    Tokens t = { 0 };
+    int ret = tok_question(ml, &t, question, prefix, true);
+    if (ret >= 0)
+        ret = t.nb;
+    tok_free(&t);
+    return ret;
+}
+
 int rx_ml_ask(RXML *ml, const char *question, int max_tokens, char **answer)
 {
     *answer = NULL;
@@ -1133,7 +1205,7 @@ int rx_ml_ask(RXML *ml, const char *question, int max_tokens, char **answer)
     Tokens t = { 0 };
     char *out = NULL;
     size_t len = 0, cap = 0;
-    int ret = tok_question(ml, &t, question, NULL);
+    int ret = tok_question(ml, &t, question, NULL, ml->nb_prefix);
     if (ret < 0)
         goto end;
 
@@ -1167,6 +1239,8 @@ int rx_ml_ask(RXML *ml, const char *question, int max_tokens, char **answer)
 end:
     free(out);
     tok_free(&t);
+    if (ret < 0)
+        ml_gpu_discard(&ml->g);
     ml->ask_ms += (rx_time_us() - t0) * 1e-3;
     return ret;
 }
@@ -1196,7 +1270,7 @@ int rx_ml_choose(RXML *ml, const char *question, const char *prefix,
             goto end;
     }
 
-    if ((ret = tok_question(ml, &t, question, prefix)) < 0)
+    if ((ret = tok_question(ml, &t, question, prefix, ml->nb_prefix)) < 0)
         goto end;
     if ((ret = decode(ml, t.ids, NULL, t.nb, ml->nb_prefix, 1, NULL)) < 0)
         goto end;
@@ -1207,10 +1281,18 @@ int rx_ml_choose(RXML *ml, const char *question, const char *prefix,
     ml_buf_invalidate(&ml->g, &ml->down);
     const float *logits = ml->down.map;
 
-    /* Softmax over the whole vocabulary, in double. */
+    /* Softmax over the whole vocabulary, in double. A logit that is not a
+     * number (a fault on the GPU) would make it uniform, or every choice
+     * 0: an error, not an answer. */
     double mx = -INFINITY;
-    for (int i = 0; i < VOCAB; i++)
+    for (int i = 0; i < VOCAB; i++) {
+        if (!isfinite(logits[i])) {
+            rx_err("ml: the model's logits are not finite");
+            ret = RX_ERROR(EIO);
+            goto end;
+        }
         mx = fmax(mx, logits[i]);
+    }
     double z = 0.0;
     for (int i = 0; i < VOCAB; i++)
         z += exp(logits[i] - mx);
@@ -1219,14 +1301,21 @@ int rx_ml_choose(RXML *ml, const char *question, const char *prefix,
         probs[i] = (float)(exp(logits[ids[i]] - mx) / z);
         sum += probs[i];
     }
+    if (!(sum > 0.0) || !isfinite(sum)) {
+        rx_err("ml: the choices have no probability at all");
+        ret = RX_ERROR(EIO);
+        goto end;
+    }
     for (int i = 0; i < nb; i++)
-        probs[i] = sum > 0.0 ? (float)(probs[i] / sum) : 1.0f / nb;
+        probs[i] = (float)(probs[i] / sum);
     if (mass)
         *mass = (float)sum;
 
 end:
     free(ids);
     tok_free(&t);
+    if (ret < 0)
+        ml_gpu_discard(&ml->g);
     ml->ask_ms += (rx_time_us() - t0) * 1e-3;
     return ret;
 }
@@ -1259,7 +1348,7 @@ int rx_ml_rank(RXML *ml, const char *question, const char *prefix,
     int64_t t0 = rx_time_us();
     Tokens t = { 0 };
     float *first = NULL;
-    int ret = tok_question(ml, &t, question, prefix);
+    int ret = tok_question(ml, &t, question, prefix, ml->nb_prefix);
     if (ret < 0)
         goto end;
     int pos = ml->nb_prefix + t.nb;
@@ -1305,6 +1394,8 @@ int rx_ml_rank(RXML *ml, const char *question, const char *prefix,
 end:
     free(first);
     tok_free(&t);
+    if (ret < 0)
+        ml_gpu_discard(&ml->g);
     ml->ask_ms += (rx_time_us() - t0) * 1e-3;
     return ret;
 }

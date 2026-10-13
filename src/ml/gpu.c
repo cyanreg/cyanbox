@@ -14,12 +14,27 @@
  *    F16), 8- and 16-bit storage (Q4_K's bytes and halves), 64-bit
  *    integers (address arithmetic), subgroup arithmetic and shuffles, and
  *    48 kB of shared memory (the attention's tiles).
+ *  - Three kernels count on the subgroup's size: gemv.comp sums a row's 64
+ *    lanes in subgroups of 16 to 64 (its shared memory has room for four,
+ *    and a subgroup must not straddle two rows), attn.comp and
+ *    attn_dec.comp share sums among 8 neighbouring lanes by shuffles. A
+ *    device whose sizes all lie in 16 to 64 (AMD's 32 and 64) runs them as
+ *    its driver likes; one that may pick fewer (Intel's 8) is given a size
+ *    (Vulkan 1.3's subgroup size control), and one that cannot be is not
+ *    used. Those three ask for full subgroups where the device has them.
  *  - A compute-only queue family when there is one, as the compute context
  *    does: the desktop's graphics are not held up behind a transformer
  *    layer.
  *  - One command buffer, recorded and submitted by the one thread using
  *    the model; a dispatch is followed by a global barrier only where the
- *    caller says one depends on another (ml_gpu_barrier).
+ *    caller says one depends on another (ml_gpu_barrier). Every submission
+ *    ends with one more, to the host's reads and to the next submission's
+ *    dispatches and copies: ml_gpu_run waits for the timeline, which orders
+ *    the work but makes none of its writes visible.
+ *  - A wait that fails (a minute without an answer, or the device lost)
+ *    waits for the device to go idle, so that nothing the submission uses
+ *    is freed or recorded again under it, and the context is not used
+ *    again: every later run fails with -EIO.
  *  - No descriptors: every shader takes its buffers as device addresses in
  *    its push constants, so one pipeline layout serves all. */
 
@@ -195,22 +210,39 @@ static int create_instance(MLGpu *g, bool validation)
         return RX_ERROR(ENODEV);
     }
 
-    const char *exts[1];
+    const char *exts[2];
     uint32_t nb_exts = 0;
     const char *layers[1];
     uint32_t nb_layers = 0;
-    bool debug_utils = false;
+    bool debug_utils = false, features = false;
     if (validation) {
-        if (have_layer("VK_LAYER_KHRONOS_validation"))
+        if (have_layer("VK_LAYER_KHRONOS_validation")) {
             layers[nb_layers++] = "VK_LAYER_KHRONOS_validation";
-        else
+            features = have_instance_ext("VK_LAYER_KHRONOS_validation",
+                                         VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME);
+            if (features)
+                exts[nb_exts++] = VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME;
+        } else {
             rx_warn("ml: VK_LAYER_KHRONOS_validation is not installed");
+        }
         debug_utils = have_instance_ext(NULL, VK_EXT_DEBUG_UTILS_EXTENSION_NAME) ||
                       (nb_layers && have_instance_ext("VK_LAYER_KHRONOS_validation",
                                                       VK_EXT_DEBUG_UTILS_EXTENSION_NAME));
         if (debug_utils)
             exts[nb_exts++] = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
     }
+
+    /* Synchronisation validation too, as the compute context has: the
+     * barriers between dispatches, copies and the host's reads are what
+     * the model's recording gets wrong if it gets anything wrong. */
+    const VkValidationFeatureEnableEXT enables[] = {
+        VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT,
+    };
+    VkValidationFeaturesEXT vfeat = {
+        .sType                         = VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT,
+        .enabledValidationFeatureCount = RX_ARRAY_ELEMS(enables),
+        .pEnabledValidationFeatures    = enables,
+    };
 
     VkApplicationInfo app = {
         .sType              = VK_STRUCTURE_TYPE_APPLICATION_INFO,
@@ -222,6 +254,7 @@ static int create_instance(MLGpu *g, bool validation)
     };
     VkInstanceCreateInfo info = {
         .sType                   = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
+        .pNext                   = features ? &vfeat : NULL,
         .pApplicationInfo        = &app,
         .enabledLayerCount       = nb_layers,
         .ppEnabledLayerNames     = nb_layers ? layers : NULL,
@@ -251,7 +284,7 @@ static int create_instance(MLGpu *g, bool validation)
             create(g->inst, &dinfo, NULL, &g->messenger);
     }
     if (nb_layers)
-        rx_info("ml: validation enabled");
+        rx_info("ml: validation enabled%s", features ? " (with synchronisation checks)" : "");
 
     return 0;
 }
@@ -260,10 +293,21 @@ static int create_instance(MLGpu *g, bool validation)
 
 #define NEED_SHARED (48 * 1024)
 
-/* Why a device cannot run the model, or NULL; `qfam` gets the queue family
- * to use. */
+/* The subgroup sizes gemv.comp works with (see the top of the file). */
+#define SUB_MIN 16
+#define SUB_MAX 64
+
+/* What a device is set up with beyond the defaults. */
+typedef struct DevChoice {
+    uint32_t qfam;
+    uint32_t sub_size;          /* the size the subgroup kernels require, 0: any it picks */
+    bool full_sub;              /* computeFullSubgroups */
+} DevChoice;
+
+/* Why a device cannot run the model, or NULL; `c` gets the queue family
+ * to use and how the subgroup kernels are run. */
 static const char *device_unusable(VkPhysicalDevice pd, const VkPhysicalDeviceProperties *props,
-                                   uint32_t *qfam)
+                                   DevChoice *c)
 {
     if (props->apiVersion < VK_API_VERSION_1_3)
         return "Vulkan 1.3 is required";
@@ -297,8 +341,12 @@ static const char *device_unusable(VkPhysicalDevice pd, const VkPhysicalDevicePr
     if (!f2.features.shaderInt64)
         return "no 64-bit integers in shaders";
 
+    VkPhysicalDeviceVulkan13Properties p13 = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_PROPERTIES,
+    };
     VkPhysicalDeviceSubgroupProperties sub = {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES,
+        .pNext = &p13,
     };
     VkPhysicalDeviceProperties2 p2 = {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,
@@ -309,8 +357,22 @@ static const char *device_unusable(VkPhysicalDevice pd, const VkPhysicalDevicePr
                                         VK_SUBGROUP_FEATURE_ARITHMETIC_BIT |
                                         VK_SUBGROUP_FEATURE_SHUFFLE_BIT;
     if (!(sub.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) ||
-        (sub.supportedOperations & need) != need || sub.subgroupSize < 4)
+        (sub.supportedOperations & need) != need)
         return "no subgroup arithmetic and shuffles";
+
+    /* Subgroups of 16 to 64 lanes: any the device has, or one it is told
+     * to use. Sizes are powers of two. */
+    c->sub_size = 0;
+    c->full_sub = f13.computeFullSubgroups;
+    if (p13.minSubgroupSize < SUB_MIN || p13.maxSubgroupSize > SUB_MAX) {
+        uint32_t size = RX_MAX(p13.minSubgroupSize, SUB_MIN);
+        if (!f13.subgroupSizeControl ||
+            !(p13.requiredSubgroupSizeStages & VK_SHADER_STAGE_COMPUTE_BIT) ||
+            size > RX_MIN(p13.maxSubgroupSize, SUB_MAX) ||
+            (uint64_t)size * p13.maxComputeWorkgroupSubgroups < 256)
+            return "no subgroups of 16 to 64 lanes";
+        c->sub_size = size;
+    }
 
     const VkPhysicalDeviceLimits *l = &props->limits;
     if (l->maxComputeSharedMemorySize < NEED_SHARED)
@@ -339,7 +401,7 @@ static const char *device_unusable(VkPhysicalDevice pd, const VkPhysicalDevicePr
     if (any < 0)
         return "no compute queue";
 
-    *qfam = (uint32_t)(only >= 0 ? only : any);
+    c->qfam = (uint32_t)(only >= 0 ? only : any);
     return NULL;
 }
 
@@ -371,11 +433,11 @@ static int pick_device(MLGpu *g, const char *want)
     bool named = false;
     for (uint32_t i = 0; i < nb; i++) {
         VkPhysicalDeviceProperties props;
-        uint32_t qfam = 0;
+        DevChoice choice = { 0 };
 
         vkGetPhysicalDeviceProperties(devs[i], &props);
         bool match = want && rx_str_contains_fold(props.deviceName, want);
-        const char *why = device_unusable(devs[i], &props, &qfam);
+        const char *why = device_unusable(devs[i], &props, &choice);
         if (!why && props.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU && !match)
             why = "a CPU implementation (used only when named)";
         if (why) {
@@ -392,7 +454,9 @@ static int pick_device(MLGpu *g, const char *want)
             named = match;
             g->phys = devs[i];
             g->props = props;
-            g->qfam = qfam;
+            g->qfam = choice.qfam;
+            g->sub_size = choice.sub_size;
+            g->full_sub = choice.full_sub;
         }
     }
     free(devs);
@@ -433,10 +497,18 @@ static int create_pipelines(MLGpu *g)
         if (res != VK_SUCCESS)
             return ret2err(res);
 
+        bool sub = k == ML_K_GEMV_Q4K || k == ML_K_ATTN || k == ML_K_ATTN_DEC;
+        VkPipelineShaderStageRequiredSubgroupSizeCreateInfo size = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_REQUIRED_SUBGROUP_SIZE_CREATE_INFO,
+            .requiredSubgroupSize = g->sub_size,
+        };
         VkComputePipelineCreateInfo pinfo = {
             .sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
             .stage  = {
                 .sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                .pNext  = sub && g->sub_size ? &size : NULL,
+                .flags  = sub && g->full_sub ?
+                          VK_PIPELINE_SHADER_STAGE_CREATE_REQUIRE_FULL_SUBGROUPS_BIT : 0,
                 .stage  = VK_SHADER_STAGE_COMPUTE_BIT,
                 .module = mod,
                 .pName  = "main",
@@ -456,8 +528,10 @@ static int create_pipelines(MLGpu *g)
 static int create_device(MLGpu *g)
 {
     VkPhysicalDeviceVulkan13Features f13 = {
-        .sType            = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
-        .synchronization2 = VK_TRUE,
+        .sType                = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
+        .synchronization2     = VK_TRUE,
+        .subgroupSizeControl  = g->sub_size != 0,
+        .computeFullSubgroups = g->full_sub,
     };
     VkPhysicalDeviceVulkan12Features f12 = {
         .sType                   = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
@@ -598,9 +672,12 @@ int ml_gpu_create(MLGpu *g, const char *device, bool validation)
     if ((ret = create_device(g)) < 0)
         goto fail;
 
-    rx_debug("ml: %s, Vulkan %u.%u, queue family %u%s", g->props.deviceName,
+    char sub[32] = "as the driver picks";
+    if (g->sub_size)
+        snprintf(sub, sizeof(sub), "of %u", g->sub_size);
+    rx_debug("ml: %s, Vulkan %u.%u, queue family %u%s, subgroups %s", g->props.deviceName,
              VK_API_VERSION_MAJOR(g->props.apiVersion), VK_API_VERSION_MINOR(g->props.apiVersion),
-             g->qfam, g->ts_mask ? "" : " (no timestamps)");
+             g->qfam, g->ts_mask ? "" : " (no timestamps)", sub);
     return 0;
 
 fail:
@@ -707,6 +784,18 @@ void ml_buf_free(MLGpu *g, MLBuf *b)
         return;
     vmaDestroyBuffer(g->vma, b->buf, b->alloc);
     *b = (MLBuf) { 0 };
+}
+
+uint64_t ml_gpu_allocated(MLGpu *g)
+{
+    VmaBudget budgets[VK_MAX_MEMORY_HEAPS];
+    vmaGetHeapBudgets(g->vma, budgets);
+    const VkPhysicalDeviceMemoryProperties *mp = NULL;
+    vmaGetMemoryProperties(g->vma, &mp);
+    uint64_t total = 0;
+    for (uint32_t i = 0; i < mp->memoryHeapCount; i++)
+        total += budgets[i].statistics.allocationBytes;
+    return total;
 }
 
 int ml_buf_invalidate(MLGpu *g, MLBuf *b)
@@ -817,12 +906,51 @@ static void read_times(MLGpu *g)
     g->nb_times = 0;
 }
 
-int ml_gpu_run(MLGpu *g)
+void ml_gpu_discard(MLGpu *g)
 {
     if (!g->recording)
-        return 0;
+        return;
     vkEndCommandBuffer(g->cmd);
+    vkResetCommandBuffer(g->cmd, 0);
     g->recording = false;
+    g->nb_times = 0;
+}
+
+int ml_gpu_run(MLGpu *g)
+{
+    if (g->lost) {
+        ml_gpu_discard(g);
+        return RX_ERROR(EIO);
+    }
+    if (!g->recording)
+        return 0;
+
+    VkMemoryBarrier2 mb = {
+        .sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
+        .srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_COPY_BIT |
+                         VK_PIPELINE_STAGE_2_CLEAR_BIT,
+        .srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT,
+        .dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_COPY_BIT |
+                         VK_PIPELINE_STAGE_2_CLEAR_BIT | VK_PIPELINE_STAGE_2_HOST_BIT,
+        .dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                         VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
+                         VK_ACCESS_2_TRANSFER_READ_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT |
+                         VK_ACCESS_2_HOST_READ_BIT,
+    };
+    VkDependencyInfo dep = {
+        .sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+        .memoryBarrierCount = 1,
+        .pMemoryBarriers    = &mb,
+    };
+    vkCmdPipelineBarrier2(g->cmd, &dep);
+    VkResult res = vkEndCommandBuffer(g->cmd);
+    g->recording = false;
+    if (res != VK_SUCCESS) {
+        rx_warn("ml: recording failed: %s", vk_strerror(res));
+        vkResetCommandBuffer(g->cmd, 0);
+        g->nb_times = 0;
+        return ret2err(res);
+    }
 
     uint64_t v = g->submitted + 1;
     VkSemaphoreSubmitInfo signal = {
@@ -842,10 +970,11 @@ int ml_gpu_run(MLGpu *g)
         .signalSemaphoreInfoCount = 1,
         .pSignalSemaphoreInfos    = &signal,
     };
-    VkResult res = vkQueueSubmit2(g->queue, 1, &info, VK_NULL_HANDLE);
+    res = vkQueueSubmit2(g->queue, 1, &info, VK_NULL_HANDLE);
     if (res != VK_SUCCESS) {
         rx_warn("ml: submission failed: %s", vk_strerror(res));
         vkResetCommandBuffer(g->cmd, 0);
+        g->nb_times = 0;
         return ret2err(res);
     }
     g->submitted = v;
@@ -860,7 +989,15 @@ int ml_gpu_run(MLGpu *g)
     };
     res = vkWaitSemaphores(g->dev, &winfo, UINT64_C(60000000000));
     if (res != VK_SUCCESS) {
-        rx_warn("ml: waiting for the GPU failed: %s", vk_strerror(res));
+        /* The command buffer may still be running, or never end: wait
+         * until the device is idle (a hung GPU is reset by its driver,
+         * and the wait ends with the device lost) before its buffers can
+         * be freed, and use the context no more. */
+        rx_err("ml: waiting for the GPU failed: %s; the model stops", vk_strerror(res));
+        vkDeviceWaitIdle(g->dev);
+        g->lost = true;
+        vkResetCommandBuffer(g->cmd, 0);
+        g->nb_times = 0;
         return ret2err(res);
     }
     read_times(g);

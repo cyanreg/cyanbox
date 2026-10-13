@@ -19,6 +19,13 @@
  * signal covers every earlier submission on the queue, so "completed" is
  * simply the highest serial whose fence has signalled.
  *
+ * Deferring never needs memory: whatever will be deferred (a texture, a
+ * waveform's buffer, a staging buffer, the capture buffer) takes its room
+ * in the list when it is made, where a failure is an ordinary error. The
+ * frame being recorded may still use what is released, so there is no
+ * freeing it at once when the list cannot grow, even after waiting for
+ * the device.
+ *
  * Uploads are staged and recorded at the start of the next frame's command
  * buffer, not submitted on their own: creating a texture or a waveform
  * never waits for the GPU, and the copy lands in the same submission as
@@ -708,24 +715,56 @@ static void free_deferred(RXWindow *w, const RXDeferred *d)
         vmaFreeMemory(w->vma, d->alloc);
 }
 
+int rx_vk_defer_reserve(RXWindow *w, size_t n)
+{
+    size_t need = w->garbage.nb + w->defer_room + n;
+    if (need > w->garbage.cap &&
+        rx_array_reserve(&w->garbage, RX_MAX(need, w->garbage.cap * 2)) < 0)
+        return RX_ERROR(ENOMEM);
+    w->defer_room += n;
+    return 0;
+}
+
+void rx_vk_defer_unreserve(RXWindow *w, size_t n)
+{
+    w->defer_room -= RX_MIN(n, w->defer_room);
+}
+
 static void defer_at(RXWindow *w, const RXDeferred *d, uint64_t serial)
 {
+    /* The room taken when it was made: the push below does not allocate. */
+    if (w->defer_room)
+        w->defer_room--;
     RXDeferred *item = rx_array_push(&w->garbage, d);
-    if (item) {
-        item->serial = serial;
+    if (!item) {
+        /* Deferred without room taken for it, and no memory to grow:
+         * everything submitted is done once the device is idle, and its
+         * garbage makes room. */
+        vkDeviceWaitIdle(w->dev);
+        w->completed = w->serial;
+        rx_vk_collect(w, false);
+        item = rx_array_push(&w->garbage, d);
+    }
+    if (!item) {
+        /* The frame being built may still use it: leaked, not freed. */
+        rx_err("gpu: out of memory to defer the destruction of a resource; it is leaked");
         return;
     }
-
-    /* Out of memory to remember it: the only safe way to free it now is
-     * to wait for the GPU first. */
-    vkDeviceWaitIdle(w->dev);
-    w->completed = w->serial;
-    free_deferred(w, d);
+    item->serial = serial;
 }
 
 void rx_vk_defer(RXWindow *w, const RXDeferred *d)
 {
     defer_at(w, d, w->serial + 1);
+}
+
+void rx_vk_defer_hold(RXWindow *w, uint64_t from, uint64_t until)
+{
+    for (size_t i = 0; i < w->garbage.nb; i++) {
+        RXDeferred *d = rx_array_at(&w->garbage, i);
+        if (d->serial >= from && d->serial < until)
+            d->serial = until;
+    }
 }
 
 void rx_vk_poll_completed(RXWindow *w)

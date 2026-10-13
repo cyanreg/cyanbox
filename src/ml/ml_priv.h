@@ -83,6 +83,8 @@ typedef struct MLGpu {
     VkQueue queue;
     VmaAllocator vma;
     uint64_t ts_mask;           /* the queue's valid timestamp bits, 0 = none */
+    uint32_t sub_size;          /* the subgroup size gemv and attention require, 0: any */
+    bool full_sub;              /* and full subgroups (gpu.c says why) */
 
     VkSemaphore timeline;
     uint64_t submitted;
@@ -94,6 +96,7 @@ typedef struct MLGpu {
     VkCommandPool pool;
     VkCommandBuffer cmd;
     bool recording;
+    bool lost;                  /* a wait failed: nothing runs any more (-EIO) */
 
     /* Per-kernel GPU time, when RXBOX_ML_PROFILE=1: a timestamp after
      * every dispatch, read back at each wait. */
@@ -114,8 +117,10 @@ int  ml_buf_invalidate(MLGpu *g, MLBuf *b);
 int  ml_buf_flush(MLGpu *g, MLBuf *b, VkDeviceSize size);
 
 /* Recording: dispatches go into the one command buffer, begun on first
- * use; ml_gpu_run submits it and waits. Between dispatches that depend on
- * each other, ml_gpu_barrier. */
+ * use; ml_gpu_run submits it and waits, after which what it wrote is
+ * visible to the host and to later submissions. Between dispatches that
+ * depend on each other, ml_gpu_barrier. ml_gpu_discard drops what was
+ * recorded and not run (an error part way). */
 void ml_gpu_dispatch(MLGpu *g, enum MLKernel k, const void *push, size_t size,
                      uint32_t x, uint32_t y, uint32_t z);
 void ml_gpu_barrier(MLGpu *g);
@@ -123,6 +128,9 @@ void ml_gpu_copy(MLGpu *g, const MLBuf *src, VkDeviceSize src_off, const MLBuf *
                  VkDeviceSize dst_off, VkDeviceSize size);
 void ml_gpu_fill(MLGpu *g, const MLBuf *dst, VkDeviceSize off, VkDeviceSize size, uint32_t v);
 int  ml_gpu_run(MLGpu *g);
+void ml_gpu_discard(MLGpu *g);
+/* The bytes of GPU memory allocated, all buffers together. */
+uint64_t ml_gpu_allocated(MLGpu *g);
 void ml_gpu_profile_print(MLGpu *g);
 
 /* ----------------------------------------------------------------- GGUF */
@@ -180,7 +188,9 @@ typedef struct MLGguf {
 } MLGguf;
 
 /* Reads the header and the tensor table (the metadata, tokenizer
- * included, is kept; the weights are not read). */
+ * included, is kept; the weights are not read). -EINVAL for a table whose
+ * tensors are not each inside the file, apart from the others and aligned,
+ * or whose sizes overflow. */
 int  ml_gguf_open(MLGguf *f, const char *path);
 /* Streams every tensor onto the GPU through a small staging buffer: the
  * weights never sit in system memory. */
@@ -204,5 +214,17 @@ int  ml_tok_encode(const MLTokenizer *t, const char *text, int32_t **ids, int *n
 /* The bytes of token `id`, appended to *out (NUL-terminated). */
 int  ml_tok_decode(const MLTokenizer *t, int32_t id, char **out, size_t *len, size_t *cap);
 int32_t ml_tok_id(const MLTokenizer *t, const char *token);
+
+/* ---------------------------------------------------------------- moss.c */
+
+/* rx_ml_listen with `room` tokens of the context left for the questions
+ * after the audio and their answers (QUESTION_ROOM at least): the audio is
+ * cut until they fit. */
+int ml_listen(RXML *ml, const float *pcm, int64_t n, int room, RXCancel *cancel);
+/* The tokens `question` (and the answer's start, `prefix`, may be NULL)
+ * takes asked after the audio, as rx_ml_ask, rx_ml_choose and rx_ml_pick
+ * ask it. */
+int ml_question_tokens(RXML *ml, const char *question, const char *prefix);
+int ml_max_context(const RXML *ml);
 
 #endif /* RXBOX_ML_PRIV_H */

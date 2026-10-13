@@ -4,8 +4,9 @@
  * inputs of awkward sizes (rows and columns that do not fill a tile), and,
  * with -b, the speed of the matrix products at the model's sizes.
  * Each check prints the largest error relative to the reference's
- * largest magnitude and fails above its tolerance. Skipped (77) without a
- * device that can run the model. */
+ * largest magnitude and fails above its tolerance; with
+ * RXBOX_GPU_VALIDATION=1, any error the validation layer reports fails it
+ * too. Skipped (77) without a device that can run the model. */
 
 #include <math.h>
 #include <stdio.h>
@@ -75,10 +76,16 @@ static MLBuf zeros(size_t size)
 static void download(const MLBuf *b, void *dst, size_t size)
 {
     MLBuf rb;
-    ml_buf_create(&gpu, &rb, size, ML_MEM_READBACK);
+    if (ml_buf_create(&gpu, &rb, size, ML_MEM_READBACK) < 0) {
+        fprintf(stderr, "out of memory\n");
+        exit(1);
+    }
     ml_gpu_barrier(&gpu);
     ml_gpu_copy(&gpu, b, 0, &rb, 0, size);
-    ml_gpu_run(&gpu);
+    if (ml_gpu_run(&gpu) < 0) {
+        printf("the GPU failed\n");
+        failures++;
+    }
     ml_buf_invalidate(&gpu, &rb);
     memcpy(dst, rb.map, size);
     ml_buf_free(&gpu, &rb);
@@ -345,10 +352,10 @@ static void test_attn(int nq, int pos0, bool dec, bool split)
     }
 
     MLBuf bq = upload(q, nqv * 4), bk = upload(kc, nc * 2), bv = upload(vc, nc * 2);
-    MLBuf bo = zeros(nqv * 4);
-    uint32_t nsplit = (nk + ATTN_SPLIT - 1) / ATTN_SPLIT;
-    MLBuf bp = zeros((size_t)KV * nsplit * ATTN_DEC_ROWS * ATTN_PART * 4);
+    MLBuf bo = zeros(nqv * 4), bp;
     if (dec) {
+        uint32_t nsplit = (nk + ATTN_SPLIT - 1) / ATTN_SPLIT;
+        bp = zeros((size_t)KV * nsplit * ATTN_DEC_ROWS * ATTN_PART * 4);
         AttnDecPush p = {
             .q = bq.addr, .o = bo.addr, .kc = bk.addr, .vc = bv.addr, .part = bp.addr,
             .nq = (uint32_t)nq, .pos0 = (uint32_t)pos0, .max_ctx = CTX,
@@ -362,7 +369,6 @@ static void test_attn(int nq, int pos0, bool dec, bool split)
         /* Split the keys whenever there are 128 or more. */
         uint32_t fsplit = RX_MAX(1, nk / 128), len = RX_ALIGN((nk + fsplit - 1) / fsplit, 32);
         fsplit = (nk + len - 1) / len;
-        ml_buf_free(&gpu, &bp);
         bp = zeros((size_t)fsplit * nq * H * ATTN_PART * 4);
         AttnPush p = {
             .q = bq.addr, .o = bo.addr, .kc = bk.addr, .vc = bv.addr, .part = bp.addr,
@@ -721,6 +727,13 @@ int main(int argc, char **argv)
         test_norm(true);
     }
 
+    /* With RXBOX_GPU_VALIDATION=1: what the layer found fails the test, as
+     * test_compute's does. */
+    int errors = atomic_load(&gpu.validation_errors);
+    if (errors) {
+        printf("FAIL %d Vulkan validation errors\n", errors);
+        failures++;
+    }
     ml_gpu_destroy(&gpu);
     printf("%s\n", failures ? "FAILED" : "all ok");
     return failures ? 1 : 0;
