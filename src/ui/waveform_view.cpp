@@ -23,13 +23,6 @@
 #include <math.h>
 #include <stdio.h>
 
-// The 3-band overview's gain (rx_wave_draw). PWV6 at rekordbox's levels
-// (encoder version 3) has a low band of about 22 on average and 39 at the
-// 95th percentile on loud tracks, so value/127 would draw a thin strip;
-// rekordbox's overview fills its height, which 127/42 does, with only
-// the loudest columns clipped.
-#define UI_OVERVIEW_GAIN (127.0f / 42.0f)
-
 /* ------------------------------------------------------------- grid helpers */
 
 double ui_zoom_step(double bars, int dir)
@@ -242,18 +235,19 @@ void ui_overview(UiState *ui, int deck, ImVec2 a, ImVec2 b)
         d.y1 = b.y;
         d.col0 = 0;
         d.col1 = cols;
-        d.mode = RX_WAVE_CENTRED;
-        d.inset_top = PX(8);
-        d.inset_bottom = PX(2);
+        // The stacked half from the strip's floor at the tag's own levels,
+        // as rbxport draws its overview by default (src/lib/preferences.ts:
+        // overviewWaveform "half", no gain). Centred with a gain, the
+        // three-band levels of a loud track filled the strip solid cream.
+        // The top inset keeps the waveform clear of the hot cue badges and
+        // the memory cue heads drawn along the top edge.
+        d.mode = RX_WAVE_HALF_STACKED;
+        d.inset_top = PX(13);
+        d.inset_bottom = PX(1);
         d.alpha = 1.0f;
         // The played part at 55 % brightness, as rekordbox dims it.
         d.dim = 0.45f;
         d.dim_until = pos / dur * cols;
-        // PWV6 at rekordbox's levels is drawn up to fill the strip, as
-        // rekordbox's overview does (UI_OVERVIEW_GAIN); PWAV and PWV4
-        // heights already fill it.
-        if (app->wave_palette == 0)
-            d.gain = UI_OVERVIEW_GAIN;
         rx_wave_draw(app->window, dl, dv->wave_preview, &d);
     } else {
         ui_text_centre(ui, dl, nullptr, 11.0f, a, b, UI_FAINT, t->has_waveforms ? "" : "not analysed");

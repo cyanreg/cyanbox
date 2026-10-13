@@ -55,8 +55,12 @@ The full width of the window. Rows, top to bottom:
    (`17.3`), and the `GRID` button.
 2. **Overview waveform** (height 64): the whole track. The preview tag of the
    selected palette (PWV6 3-band by default; PWAV blue; PWV4 RGB) drawn
-   centred with `rx_wave_draw` (inset 8 above, 2 below as rekordbox). Over
-   it: memory cue markers (a red triangle head `#EA3323` at the top with a
+   with `rx_wave_draw` as the stacked half, growing from the strip's floor
+   (inset 13 above, clear of the cue markers along the top edge, 1 below),
+   at the tag's own levels with no gain: rbxport's default overview
+   (`overviewWaveform: "half"` in its src/lib/preferences.ts), the row
+   previews' mode. Centred with a gain, as before, the three-band levels of
+   a loud track filled the strip solid cream. Over it: memory cue markers (a red triangle head `#EA3323` at the top with a
    1 px line), hot cues (a filled square badge with the letter in the cue's
    colour, default pad colour when none), loop bands (translucent orange
    `#FF8C00` at 30 %; the active one brighter), the played part dimmed to
