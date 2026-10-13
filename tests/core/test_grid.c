@@ -5,7 +5,8 @@
  * time (beat list, index, quantize) lands on the same bits. Times are
  * chosen so the arithmetic is exact in binary where a check uses ==. Then
  * a dynamic grid (measured beats between straight sections) through every
- * query and every tool. */
+ * query and every tool, and the edits' properties on 20000 random grids
+ * mixing the two. */
 
 #include "rxbox/model.h"
 
@@ -660,7 +661,7 @@ static void test_dynamic_tools(void)
 
     /* A tempo set inside the passage: straight at that tempo from the
      * beat at or before the playhead, the earlier beats as measured. */
-    RXGrid s;
+    RXGrid s = { 0 };
     rx_grid_copy(&s, &g);
     rx_grid_set_bpm_at(&s, 5.1, 110.0);
     CHECK(s.nb_sections == 5 && s.sections[1].measured && s.sections[2].measured);
@@ -742,8 +743,80 @@ static void test_dynamic_tools(void)
     CHECK(rx_grid_add_beat(&s, OUTRO, 119.0, 0) == 6 && s.sections[6].measured && s.nb_sections == 7);
     rx_grid_free(&s);
 
+    /* MERGE just inside the outro: its start is the passage's boundary,
+     * and the passage is straightened. Removed instead, the last measured
+     * beat ran on at its one interval's tempo (120) through the outro, and
+     * bar 60 came 1.9 s early (118.02 s for 119.91 s). */
+    rx_grid_copy(&s, &g);
+    double bar60 = rx_grid_bar_time(&g, 60, 1);
+    CHECK_NEAR(bar60, 119.91, 0.005);
+    CHECK(rx_grid_merge_at(&s, 6.6) == 1);
+    CHECK(s.nb_sections == 3 && !rx_grid_dynamic(&s) && s.sections[2].start == OUTRO);
+    CHECK_NEAR(rx_grid_bar_time(&s, 60, 1), bar60, 1e-9);
+    rx_grid_free(&s);
+    /* And so at the passage's first beat from the intro. */
+    rx_grid_copy(&s, &g);
+    CHECK(rx_grid_merge_at(&s, 3.9) == 1 && s.nb_sections == 3 && s.sections[1].start == 4.0);
+    CHECK_NEAR(rx_grid_bar_time(&s, 60, 1), bar60, 1e-9);
+    rx_grid_free(&s);
+
     free(before);
     rx_grid_free(&g);
+
+    /* SPLIT past the last measured beat of a grid that ends in a passage
+     * (120 BPM, then measured 2.0 and 2.5 running on at 120): a section
+     * at 4.0, and 3.0 and 3.5 stay. Before, the measured beat became one
+     * beat again: 3.0 and 3.5 went and a cue at 6.0 moved to 7.0. */
+    RXGrid r = { .beats_per_bar = 4 };
+    rx_grid_add_section(&r, 0.0, 120.0, 1);
+    rx_grid_add_beat(&r, 2.0, 120.0, 0);
+    rx_grid_add_beat(&r, 2.5, 120.0, 0);
+    before = beats_of(&r, 10.0, &nb0);
+    RXCue cue;
+    rx_cue_init(&cue, 6.0);
+    rx_cue_attach_to_grid(&cue, &r);
+    CHECK(rx_grid_split_at(&r, 4.0) == 4 && r.nb_sections == 5);
+    CHECK(r.sections[2].measured && !r.sections[3].measured && r.sections[3].start == 3.0);
+    CHECK(r.sections[4].start == 4.0 && r.sections[4].beat == 0);
+    after = beats_of(&r, 10.0, &nb1);
+    CHECK(nb0 == nb1);
+    for (int i = 0; i < nb0 && i < nb1; i++)
+        CHECK(after[i].time == before[i].time && after[i].number == before[i].number);
+    CHECK(rx_grid_beat_to_time(&r, cue.grid_beat) == 6.0);
+    free(after);
+    free(before);
+    /* The beat right after the measured one: one section there. */
+    CHECK(rx_grid_split_at(&r, 3.0) == 3 && r.nb_sections == 5);
+    rx_grid_free(&r);
+
+    /* /2 keeps the numbers the beats were given: eight measured beats
+     * numbered 1 2 3 4 1 2 3 4 by hand keep 1 3 1 3 (the downbeat at 2.0
+     * is still one; before, it became 3). */
+    for (int i = 0; i < 8; i++)
+        rx_grid_add_beat(&r, 0.5 * i, 120.0, i % 4 + 1);
+    CHECK(rx_grid_halve_at(&r, 0.1) == 0 && r.nb_sections == 4);
+    after = beats_of(&r, 3.5, &nb1);
+    static const int halved[] = { 1, 3, 1, 3 };
+    CHECK(nb1 == 4);
+    for (int i = 0; i < nb1 && i < 4; i++)
+        CHECK(after[i].time == 1.0 * i && after[i].number == halved[i]);
+    free(after);
+    rx_grid_free(&r);
+
+    /* /2 on a passage of one beat that starts the grid, a section after
+     * it: the beat stays. Before, it went, the section after became the
+     * first and its count started again from 1, every downbeat moved. */
+    rx_grid_add_beat(&r, 1.0, 120.0, 3);
+    rx_grid_add_section(&r, 1.5, 120.0, 0);
+    before = beats_of(&r, 10.0, &nb0);
+    CHECK(rx_grid_halve_at(&r, 1.2) == 0 && r.nb_sections == 2 && r.sections[0].measured);
+    after = beats_of(&r, 10.0, &nb1);
+    CHECK(nb0 == nb1);
+    for (int i = 0; i < nb0 && i < nb1; i++)
+        CHECK(after[i].time == before[i].time && after[i].number == before[i].number);
+    free(after);
+    free(before);
+    rx_grid_free(&r);
 
     /* A thousand measured beats: the walk is linear, and a query costs a
      * few microseconds. */
@@ -766,6 +839,302 @@ static void test_dynamic_tools(void)
     rx_grid_free(&big);
 }
 
+/* -------------------------------------------------------------- properties */
+
+/* The edits on random grids: straight sections (some restarting the
+ * count, some off the line before them) and dynamic passages (1 to 20
+ * measured beats within 8 % of a tempo, some restarting the count),
+ * mixed, the grid ending in either. Every edit keeps the beats it should:
+ * a split moves no beat and renumbers none, x2 then /2 gives the grid
+ * back, /2 keeps the beats it keeps where they were, a merge moves only
+ * the beats of the section it removes. A grid is its seed, so a failure
+ * names one to look at. */
+
+static uint64_t prop_state;
+
+static uint32_t prop_rand(void)
+{
+    prop_state ^= prop_state << 13;
+    prop_state ^= prop_state >> 7;
+    prop_state ^= prop_state << 17;
+    return (uint32_t)(prop_state >> 32);
+}
+
+static double prop_uniform(double a, double b)
+{
+    return a + (b - a) * ((double)prop_rand() / 4294967296.0);
+}
+
+/* The grid and the time past its last section the beats are listed to. */
+static RXGrid random_grid(uint64_t seed, double *end)
+{
+    prop_state = seed * 0x9E3779B97F4A7C15ull + 1;
+    RXGrid g = { .beats_per_bar = 4 };
+    double t = prop_uniform(0.0, 2.0);
+    int parts = 1 + (int)(prop_rand() % 5);
+    for (int p = 0; p < parts; p++) {
+        double period = 60.0 / prop_uniform(80.0, 180.0);
+        int beat = prop_rand() % 3 ? 0 : 1 + (int)(prop_rand() % 4);
+        if (prop_rand() % 2) {
+            rx_grid_add_section(&g, t, 60.0 / period, beat);
+            t += (2 + prop_rand() % 40) * period;
+            if (!(prop_rand() % 4))
+                t += prop_uniform(-0.3, 0.3) * period;
+            continue;
+        }
+        int n = 1 + (int)(prop_rand() % 20);
+        for (int k = 0; k < n; k++) {
+            double iv = period * prop_uniform(0.92, 1.08);
+            int b = k == 0 ? beat : prop_rand() % 8 ? 0 : 1 + (int)(prop_rand() % 4);
+            rx_grid_add_beat(&g, t, 60.0 / iv, b);
+            t += iv;
+        }
+    }
+    *end = g.sections[g.nb_sections - 1].start + 10.0;
+    return g;
+}
+
+/* The beats of a and b in [lo, hi) agree: as many, at the same times (to
+ * a nanosecond), with the same numbers when `numbers`. */
+static bool same_beats(const RXBeat *a, int na, const RXBeat *b, int nb, double lo, double hi,
+                       bool numbers)
+{
+    lo -= 1e-6;
+    hi -= 1e-6;
+    int i = 0, j = 0;
+    while (i < na && a[i].time < lo)
+        i++;
+    while (j < nb && b[j].time < lo)
+        j++;
+    while (1) {
+        bool ea = i >= na || a[i].time >= hi, eb = j >= nb || b[j].time >= hi;
+        if (ea || eb)
+            return ea && eb;
+        if (fabs(a[i].time - b[j].time) > 1e-9 || (numbers && a[i].number != b[j].number))
+            return false;
+        i++;
+        j++;
+    }
+}
+
+/* The beat of the list at time t (to a nanosecond), or NULL. */
+static const RXBeat *beat_at_time(const RXBeat *b, int nb, double t)
+{
+    for (int i = 0; i < nb; i++) {
+        if (fabs(b[i].time - t) <= 1e-9)
+            return &b[i];
+    }
+    return NULL;
+}
+
+static bool in_passage(const RXGrid *g, int i, int *a, int *b)
+{
+    if (i < 0 || !g->sections[i].measured)
+        return false;
+    *a = *b = i;
+    while (*a > 0 && g->sections[*a - 1].measured)
+        (*a)--;
+    while (*b + 1 < g->nb_sections && g->sections[*b + 1].measured)
+        (*b)++;
+    return true;
+}
+
+typedef struct PropCount {
+    const char *name;
+    int fails;
+} PropCount;
+
+static void prop_fail(PropCount *p, uint64_t seed, double t)
+{
+    if (p->fails++ < 3)
+        fprintf(stderr, "grid property \"%s\" fails on seed %llu at t = %.6f\n", p->name,
+                (unsigned long long)seed, t);
+}
+
+/* A split moves no beat, renumbers none, and moves no musical cue. */
+static bool prop_split(const RXGrid *g, const RXBeat *b0, int n0, double end, double t)
+{
+    RXGrid s = { 0 };
+    rx_grid_copy(&s, g);
+    bool ok = rx_grid_split_at(&s, t) >= 0 && rx_grid_valid(&s);
+    int n1;
+    RXBeat *b1 = NULL;
+    if (ok && rx_grid_beats(&s, end, &b1, &n1) >= 0)
+        ok = same_beats(b0, n0, b1, n1, -INFINITY, INFINITY, true);
+    for (int k = 0; ok && k < 8 && n0; k++) {
+        double x = b0[prop_rand() % (uint32_t)n0].time + prop_uniform(-0.2, 0.2);
+        ok = fabs(rx_grid_time_to_beat(g, x) - rx_grid_time_to_beat(&s, x)) < 1e-9;
+    }
+    free(b1);
+    rx_grid_free(&s);
+    return ok;
+}
+
+/* x2 then /2 at the same place gives the grid back: its beats, their
+ * numbers and their tempos. */
+static bool prop_double_halve(const RXGrid *g, const RXBeat *b0, int n0, double end, double t)
+{
+    RXGrid s = { 0 };
+    rx_grid_copy(&s, g);
+    bool ok = true;
+    if (rx_grid_double_at(&s, t) >= 0) {
+        ok = rx_grid_halve_at(&s, t) >= 0 && s.nb_sections == g->nb_sections;
+        int n1;
+        RXBeat *b1 = NULL;
+        if (ok && rx_grid_beats(&s, end, &b1, &n1) >= 0)
+            ok = same_beats(b0, n0, b1, n1, -INFINITY, INFINITY, true);
+        for (int i = 0; ok && i < g->nb_sections; i++) {
+            const RXTempoSection *x = &g->sections[i], *y = &s.sections[i];
+            ok = x->start == y->start && fabs(x->bpm - y->bpm) <= 1e-9 * x->bpm &&
+                 x->measured == y->measured && x->beat == y->beat;
+        }
+        free(b1);
+    }
+    rx_grid_free(&s);
+    return ok;
+}
+
+/* /2 keeps every other beat of a passage from its first, each where it
+ * was, the first with its number and every kept one with the number it
+ * was given, and moves nothing before the passage or after it; on a
+ * straight section it moves nothing before the section or after it. */
+static bool prop_halve(const RXGrid *g, const RXBeat *b0, int n0, double end, double t)
+{
+    RXGrid s = { 0 };
+    rx_grid_copy(&s, g);
+    bool ok = rx_grid_halve_at(&s, t) >= 0 && rx_grid_valid(&s);
+    int n1 = 0;
+    RXBeat *b1 = NULL;
+    if (ok)
+        ok = rx_grid_beats(&s, end, &b1, &n1) >= 0;
+    int i = rx_grid_section_at(g, t), a, b;
+    bool next;
+    if (ok && in_passage(g, i, &a, &b)) {
+        next = b + 1 < g->nb_sections;
+        double lo = g->sections[a].start, hi = next ? g->sections[b + 1].start : INFINITY;
+        ok = same_beats(b0, n0, b1, n1, -INFINITY, lo, true) && same_beats(b0, n0, b1, n1, hi, INFINITY, false);
+        /* Kept: a, a + 2 ... up to the last, or the one before it when
+         * that would leave the section after half a beat away; never
+         * fewer than the first. Without a section after, the last kept
+         * one runs on: the kept ones are the list up to it. */
+        int last = next && b > a && (b - a) % 2 == 0 ? b - 1 : b;
+        int kept = (last - a) / 2 + 1;
+        double top = next ? hi : g->sections[a + 2 * (kept - 1)].start + 1e-3;
+        int k = 0;
+        for (int j = 0; ok && j < n1; j++) {
+            if (b1[j].time < lo - 1e-6 || b1[j].time >= top - 1e-6)
+                continue;
+            int at = a + 2 * k++;
+            ok = k <= kept && b1[j].time == g->sections[at].start;
+            if (ok && at == a) {
+                const RXBeat *was = beat_at_time(b0, n0, lo);
+                ok = was && was->number == b1[j].number;
+            } else if (ok && g->sections[at].beat) {
+                ok = b1[j].number == g->sections[at].beat;
+            }
+        }
+        ok = ok && k == kept;
+    } else if (ok) {
+        next = i + 1 < g->nb_sections;
+        double lo = g->sections[i].start, hi = next ? g->sections[i + 1].start : INFINITY;
+        ok = same_beats(b0, n0, b1, n1, -INFINITY, lo, true) && same_beats(b0, n0, b1, n1, hi, INFINITY, false);
+        const RXBeat *was = beat_at_time(b0, n0, lo), *now = beat_at_time(b1, n1, lo);
+        ok = ok && (!was || (now && now->number == was->number));
+    }
+    free(b1);
+    rx_grid_free(&s);
+    return ok;
+}
+
+/* A merge in a passage, or at the boundary nearest to t when that is a
+ * passage's (one of its beats, or the start of the section after it),
+ * straightens the passage: nothing before it moves, nor its first beat,
+ * nor anything after it. Elsewhere it removes the boundary nearest to t:
+ * nothing before it moves, nor anything from the boundary after. */
+static bool prop_merge(const RXGrid *g, const RXBeat *b0, int n0, double end, double t)
+{
+    if (g->nb_sections < 2)
+        return true;
+    RXGrid s = { 0 };
+    rx_grid_copy(&s, g);
+    int i = rx_grid_section_at(g, t), a, b;
+    bool passage = in_passage(g, i, &a, &b);
+    int best = 1;
+    for (int k = 2; k < g->nb_sections; k++) {
+        if (fabs(g->sections[k].start - t) < fabs(g->sections[best].start - t))
+            best = k;
+    }
+    if (!passage && g->sections[best].measured)
+        passage = in_passage(g, best, &a, &b);
+    else if (!passage && g->sections[best - 1].measured)
+        passage = in_passage(g, best - 1, &a, &b);
+    bool ok = rx_grid_merge_at(&s, t) >= 0 && rx_grid_valid(&s);
+    int n1 = 0;
+    RXBeat *b1 = NULL;
+    if (ok)
+        ok = rx_grid_beats(&s, end, &b1, &n1) >= 0;
+    if (ok && passage) {
+        double lo = g->sections[a].start;
+        double hi = b + 1 < g->nb_sections ? g->sections[b + 1].start : INFINITY;
+        const RXBeat *was = beat_at_time(b0, n0, lo), *now = beat_at_time(b1, n1, lo);
+        ok = same_beats(b0, n0, b1, n1, -INFINITY, lo, true) &&
+             same_beats(b0, n0, b1, n1, hi, INFINITY, false) && was && now && was->number == now->number;
+    } else if (ok) {
+        double lo = g->sections[best].start - 60.0 / g->sections[best - 1].bpm;
+        double hi = best + 1 < g->nb_sections ? g->sections[best + 1].start : INFINITY;
+        ok = same_beats(b0, n0, b1, n1, -INFINITY, lo, true) && same_beats(b0, n0, b1, n1, hi, INFINITY, false);
+    }
+    free(b1);
+    rx_grid_free(&s);
+    return ok;
+}
+
+static void test_edit_properties(void)
+{
+    PropCount counts[] = {
+        { "split moves nothing" }, { "x2 then /2 is the grid" }, { "/2 keeps its beats" },
+        { "merge keeps the rest" },
+    };
+    const int nb_grids = 20000;
+    for (int n = 0; n < nb_grids; n++) {
+        uint64_t seed = (uint64_t)n;
+        double end;
+        RXGrid g = random_grid(seed, &end);
+        if (!rx_grid_valid(&g)) {
+            CHECK(rx_grid_valid(&g));
+            rx_grid_free(&g);
+            continue;
+        }
+        RXBeat *b0;
+        int n0;
+        rx_grid_beats(&g, end, &b0, &n0);
+        double first = g.sections[0].start;
+        for (int k = 0; k < 4; k++) {
+            /* Anywhere from just before the grid to its run-on, often
+             * right at a beat. */
+            double t = prop_uniform(first - 1.0, end);
+            if (n0 && prop_rand() % 2)
+                t = b0[prop_rand() % (uint32_t)n0].time + prop_uniform(-0.05, 0.05);
+            if (!prop_split(&g, b0, n0, end, t))
+                prop_fail(&counts[0], seed, t);
+            if (!prop_double_halve(&g, b0, n0, end, t))
+                prop_fail(&counts[1], seed, t);
+            if (!prop_halve(&g, b0, n0, end, t))
+                prop_fail(&counts[2], seed, t);
+            if (!prop_merge(&g, b0, n0, end, t))
+                prop_fail(&counts[3], seed, t);
+        }
+        free(b0);
+        rx_grid_free(&g);
+    }
+    for (size_t k = 0; k < RX_ARRAY_ELEMS(counts); k++) {
+        if (counts[k].fails)
+            fprintf(stderr, "grid property \"%s\": %d of %d edits fail\n", counts[k].name,
+                    counts[k].fails, 4 * nb_grids);
+        CHECK(counts[k].fails == 0);
+    }
+}
+
 int main(void)
 {
     test_single();
@@ -781,5 +1150,6 @@ int main(void)
     test_same_hit();
     test_dynamic_queries();
     test_dynamic_tools();
+    test_edit_properties();
     return test_done("core_grid");
 }
