@@ -117,7 +117,21 @@ bool rx_deck_loaded(const RXPlayer *p, int deck);
  * owner learns of the move from RXDeckState.advanced, after which the
  * state (duration, position) is the next track's and what was loaded is
  * released. Queueing again replaces the queued track; a load, an unload
- * or rx_deck_clear_next drops it. */
+ * or rx_deck_clear_next drops it.
+ *
+ * The deck may move on at any callback, and with MASTER TEMPO on it reads
+ * the next the shifter's delay (120 ms) before the move is heard: so
+ * dropping or replacing the queued track can come too late. Then the deck
+ * plays the queued track all the same, and the move is reported as any
+ * other (advanced); a replacement is let go of, unplayed. While the deck
+ * may still move on into a track (queued, read and not yet heard, or
+ * dropped and the drop not yet applied), has_next stays true: a caller
+ * that needs to know which track the deck moves on into drops the queued
+ * one and queues another only once has_next is false. Queueing while the
+ * deck reads the queued track already, the move not heard yet, fails with
+ * -EBUSY. Seeks, loops and cue points meant for the old track are not
+ * applied to the new one: from the read to the heard move they do
+ * nothing. */
 int  rx_deck_queue_next(RXPlayer *p, int deck, RXAudio *audio, const RXGrid *grid);
 int  rx_deck_queue_next_packets(RXPlayer *p, int deck, RXPackets *pk, const RXGrid *grid);
 void rx_deck_clear_next(RXPlayer *p, int deck);
@@ -173,7 +187,9 @@ typedef struct RXDeckState {
     unsigned advanced;      /* bumps each time the deck moved on to a queued track
                                (rx_deck_queue_next): from then on the state is that
                                track's. With MASTER TEMPO on, when the move is heard. */
-    bool   has_next;        /* a track is queued to follow */
+    bool   has_next;        /* the deck may still move on into a queued track (queued,
+                               or dropped and the drop not applied yet: see
+                               rx_deck_queue_next) */
 } RXDeckState;
 
 void rx_deck_state(const RXPlayer *p, int deck, RXDeckState *out);

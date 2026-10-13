@@ -179,7 +179,7 @@ static void settle(RXPlayer *p)
 {
     rx_player_mix(p, NULL, 0);
     st(p);
-    CHECK(rx_player_feed_wait(&p->feed[0], p->rt[0].stream, 10000000), "the feed is stuck");
+    CHECK(rx_player_feed_wait(&p->feed[0], p->rt[0].src.stream, 10000000), "the feed is stuck");
 }
 
 /* Renders n frames in callbacks, settling before each when asked. */
@@ -235,7 +235,7 @@ static void test_play_through(const char *path)
 
     /* What the window holds: no more than its span, however long the
      * track. */
-    const RXStream *sm = p->rt[0].stream;
+    const RXStream *sm = p->rt[0].src.stream;
     int held = 0;
     for (int i = 0; i < sm->nb_slots; i++)
         held += atomic_load(&sm->slots[i].first) >= 0;
@@ -428,7 +428,7 @@ static void test_no_allocation(const char *path)
 static void settle_next(RXPlayer *p)
 {
     static float probe[2 * 2 * RX_CHUNK];
-    RXStream *s = p->own[0].next_stream;
+    RXStream *s = p->own[0].next.stream;
     int64_t t0 = rx_time_us();
     while (!rx_player_stream_read(s, rx_packets_length(s->pk, NULL), 0, 2 * RX_CHUNK, probe)) {
         if (rx_time_us() - t0 > 10000000) {
@@ -517,10 +517,14 @@ static void test_next(const char *path)
     CHECK(fabs(s.position * RATE - (double)n) < 0.5, "position %f s", s.position);
     CHECK(mismatches(out + 2 * PERIOD, n - PERIOD, PERIOD) == 0, "played from its first frame");
 
-    /* Dropped: the deck stops at its end. */
+    /* Dropped: still pending until the deck has applied the drop (it might
+     * have moved on into it before), then gone; the deck stops at its
+     * end. */
     CHECK(rx_packets_open(path, &pk) >= 0, "open a fourth");
     CHECK(rx_deck_queue_next_packets(p, 0, pk, NULL) == 0, "queue a fourth");
     rx_deck_clear_next(p, 0);
+    CHECK(st(p).has_next, "dropped, not applied yet");
+    render(p, NULL, PERIOD, true);
     CHECK(!st(p).has_next, "dropped");
     rx_deck_play_from(p, 0, SECONDS - 0.1);
     render(p, NULL, RATE / 4, true);
@@ -529,6 +533,37 @@ static void test_next(const char *path)
           "stops at the end with nothing queued: %d at %f, advanced %u", s.playing, s.position,
           s.advanced);
     free(out);
+    rx_player_destroy(p);
+}
+
+/* With MASTER TEMPO on, the deck reads the shifter's delay ahead of what
+ * is heard, so it reads the next while the old track is still heard. The
+ * owner hands the feed the stream the deck reads as soon as the deck
+ * reads it, and manual mode waits for the feed of the stream the deck
+ * reads: no advance waits on a feed still filling the old one (each one in
+ * that delay waited out the 10 s timeout). The move is heard once, and the
+ * next plays on from its start. */
+static void test_next_master_tempo(const char *path)
+{
+    RXPlayer *p = load(path);
+    CHECK(rx_deck_set_master_tempo(p, 0, true), "master tempo");
+    RXPackets *pk = NULL;
+    CHECK(rx_packets_open(path, &pk) >= 0, "open the next");
+    CHECK(rx_deck_queue_next_packets(p, 0, pk, NULL) == 0, "queue the next");
+    rx_deck_play_from(p, 0, SECONDS - 0.5);
+    unsigned adv0 = st(p).advanced;
+    int slow = 0, steps = RATE / PERIOD;
+    for (int i = 0; i < steps; i++) {
+        int64_t t0 = rx_time_us();
+        rx_player_null_advance(p, PERIOD);
+        slow += rx_time_us() - t0 > 1000000;
+    }
+    RXDeckState s = st(p);
+    CHECK(!slow, "%s: %d advances waited a second or more", path, slow);
+    double want = (double)steps * PERIOD / RATE - 0.5;
+    CHECK(s.advanced == adv0 + 1 && s.playing && !s.has_next && fabs(s.position - want) < 0.01,
+          "%s: moved on %u times, playing %d at %f s (want %f)", path, s.advanced - adv0,
+          s.playing, s.position, want);
     rx_player_destroy(p);
 }
 
@@ -576,6 +611,7 @@ int main(void)
         test_hot_cue(paths[i]);
         test_no_allocation(paths[i]);
         test_next(paths[i]);
+        test_next_master_tempo(paths[i]);
         test_reload(paths[i]);
     }
 

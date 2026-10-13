@@ -10,6 +10,7 @@
  * the very next block, sample-exact loops through the shifter, no click
  * when the button is switched, the button surviving a track change, and
  * a buffer queued to follow, taken at the end and reported when heard.
+ * Commands meant for a track the deck has left are dropped.
  *
  * The track is synthetic: 44.1 kHz stereo, 60 s, a one-sample click on
  * every beat at 128 BPM whose height encodes the beat number (negated on
@@ -1088,14 +1089,15 @@ static void test_next_buffer(void)
     int lat = mt_latency(p);
     unsigned adv0 = st(p).advanced;
 
-    /* Up to the read side's move (the real-time deck's own count). */
+    /* Up to the read side's move (the track the real-time deck reads). */
+    uint64_t next_id = p->own[0].next.id;
     rx_deck_play_from(p, 0, 10.0 - 0.25);
     int steps = 0;
-    while (p->rt[0].track_gen == adv0 && steps < 1000) {
+    while (p->rt[0].src.id != next_id && steps < 1000) {
         rx_player_null_advance(p, PERIOD);
         steps++;
     }
-    CHECK(p->rt[0].track_gen == adv0 + 1, "the read side moved on after %d steps", steps);
+    CHECK(p->rt[0].src.id == next_id, "the read side moved on after %d steps", steps);
     RXDeckState s = st(p);
     CHECK(s.advanced == adv0 && rx_deck_audio(p, 0) == a && nb_released == 0,
           "not heard yet: advanced %u, released %d", s.advanced, nb_released);
@@ -1118,14 +1120,15 @@ static void test_next_buffer(void)
     /* A pause inside the delay lands at the start of the new track. */
     RXAudio *c = make_track(2, 10.0);
     CHECK(rx_deck_queue_next(p, 0, c, NULL) == 0, "queue c");
+    next_id = p->own[0].next.id;
     rx_deck_play_from(p, 0, 10.0 - 0.25);
     adv0 = st(p).advanced;
     steps = 0;
-    while (p->rt[0].track_gen == adv0 && steps < 1000) {
+    while (p->rt[0].src.id != next_id && steps < 1000) {
         rx_player_null_advance(p, PERIOD);
         steps++;
     }
-    CHECK(p->rt[0].track_gen == adv0 + 1, "the read side moved on to c");
+    CHECK(p->rt[0].src.id == next_id, "the read side moved on to c");
     rx_deck_pause(p, 0);
     rx_player_null_advance(p, PERIOD);
     s = st(p);
@@ -1142,6 +1145,50 @@ static void test_next_buffer(void)
     rx_player_null_advance(p, PERIOD);
     st(p);
     CHECK(nb_released == before + 2, "c and d released: %d", nb_released - before);
+    rx_player_destroy(p);
+}
+
+/* (h) Commands the owner meant for a track the deck has left are dropped
+ * on the real-time side: a seek, a loop or a next carrying the old
+ * track's id leaves the deck as it was, and is counted. The owner sends
+ * such a command only when the deck moves on between the owner's last look
+ * and the callback (the races test), so this applies them by hand. */
+static void test_stale_commands(void)
+{
+    RXPlayer *p = make_player(RATE);
+    RXAudio *a = make_track(2, 5.0), *b = make_track(2, 5.0);
+    rx_deck_load(p, 0, a, NULL);
+    CHECK(rx_deck_queue_next(p, 0, b, NULL) == 0, "queue b");
+    uint64_t a_id = p->own[0].cur.id, b_id = p->own[0].next.id;
+    rx_deck_play_from(p, 0, 5.0 - 0.01);
+    render(p, NULL, RATE / 10);
+    RXDeckRT *d = &p->rt[0];
+    CHECK(d->src.id == b_id && !d->next.id, "the deck plays b");
+
+    RXPos pos = d->pos;
+    uint64_t applied = d->applied;
+    RXCmd cmds[] = {
+        { .type = RX_CMD_SEEK, .deck = 0, .a = 1000.0, .track = a_id },
+        { .type = RX_CMD_PLAY_FROM, .deck = 0, .a = 1000.0, .track = a_id },
+        { .type = RX_CMD_LOOP_SET, .deck = 0, .a = 100.0, .b = 4000.0, .flag = true,
+          .track = a_id },
+        { .type = RX_CMD_LOOP_ENABLE, .deck = 0, .flag = true, .track = a_id },
+        { .type = RX_CMD_SCRUB_TO, .deck = 0, .a = 1000.0, .track = a_id },
+        { .type = RX_CMD_NEXT, .deck = 0, .samples = a->samples, .channels = 2, .rate = RATE,
+          .nb_frames = a->nb_frames, .id = 9999, .track = a_id },
+    };
+    for (int i = 0; i < (int)RX_ARRAY_ELEMS(cmds); i++)
+        rx_player_deck_apply(d, &cmds[i], RATE);
+    CHECK(!rx_pos_cmp(d->pos, pos) && !d->loop_set && !d->loop_enabled && !d->next.id &&
+          d->playing && d->applied == applied + RX_ARRAY_ELEMS(cmds),
+          "stale commands changed the deck: at %f, loop %d, next %llu, applied %llu",
+          rx_pos_get(d->pos), d->loop_enabled, (unsigned long long)d->next.id,
+          (unsigned long long)(d->applied - applied));
+
+    /* The same, meant for b, apply. */
+    RXCmd seek = { .type = RX_CMD_SEEK, .deck = 0, .a = 1000.0, .track = b_id };
+    rx_player_deck_apply(d, &seek, RATE);
+    CHECK(d->pos.i == 1000, "a seek meant for b: at %f", rx_pos_get(d->pos));
     rx_player_destroy(p);
 }
 
@@ -1170,6 +1217,7 @@ int main(void)
     test_mt_toggle();
     test_mt_flag();
     test_next_buffer();
+    test_stale_commands();
 
     if (failures) {
         fprintf(stderr, "%d failures\n", failures);
