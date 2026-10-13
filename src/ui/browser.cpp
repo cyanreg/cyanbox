@@ -23,8 +23,8 @@
 
 enum UiCol {
     COL_IDX = 0, COL_PREVIEW, COL_ART, COL_TITLE, COL_KEY, COL_BPM, COL_TIME, COL_RATING,
-    COL_ARTIST, COL_COLOR, COL_CUES, COL_GENRE, COL_YEAR, COL_ADDED, COL_ALBUM, COL_PATH,
-    COL_PLAYS, COL_LAST_PLAYED, COL_N,
+    COL_ARTIST, COL_COLOR, COL_GENRE, COL_YEAR, COL_ADDED, COL_ALBUM, COL_PATH, COL_PLAYS,
+    COL_LAST_PLAYED, COL_N,
 };
 
 #define NO_SORT (-2)
@@ -57,7 +57,6 @@ static const UiColSpec COLS[COL_N] = {
     { "Rating",       74, RX_COL_RATING, FIXED, false },
     { "Artist",        2, RX_COL_ARTIST, STRETCH, false },
     { "Color",        44, RX_COL_COLOR,  FIXED, false },
-    { "Hot Cue",      84, RX_COL_CUES,   FIXED, false },
     { "Genre",       110, RX_COL_GENRE,  FIXED, false },
     { "Year",         44, RX_COL_YEAR,   FIXED, true },
     { "Date Added",   84, RX_COL_ADDED,  FIXED, true },
@@ -456,23 +455,6 @@ static void row_cells(UiState *ui, RXTrack *t, int row, float row_h, const uint6
             if (rgb)
                 dl->AddCircleFilled(ImVec2(p.x + PX(10), p.y + row_h * 0.5f), PX(5),
                                     ui_rgb(rgb, dim ? 0.4f : 1.0f), 16);
-            break;
-        }
-        case COL_CUES: {
-            // The set hot cue letters in their pad colours.
-            float x = p.x;
-            for (int slot = 0; slot < RX_HOT_CUE_SLOTS; slot++) {
-                int idx = rx_track_hot_cue(t, slot);
-                if (idx < 0)
-                    continue;
-                char l[2] = { (char)('A' + slot), 0 };
-                ImU32 col = dim ? UI_FAINT : ui_rgb(ui_hot_cue_rgb(&t->cues[idx]));
-                if (x + PX(10) > p.x + w)
-                    break;
-                ui_text(ui, dl, ui->font_bold, 12.0f, ImVec2(x, p.y + (row_h - PX(12)) * 0.5f - PX(1)),
-                        col, l);
-                x += PX(10);
-            }
             break;
         }
         case COL_GENRE:

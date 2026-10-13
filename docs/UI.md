@@ -122,8 +122,9 @@ virtualised with the clipper): default columns in order: `#`, Preview
 `RX_WAVE_HALF_STACKED`, 1200 columns into 128 px), Artwork (36 px
 thumbnail, textures cached per track with an LRU of ~400), Track Title,
 Key, BPM, Time, Rating (five stars, click sets), Artist, Color (a dot),
-Hot Cue (the letters, coloured), Genre, Year, Date Added; Plays and Last
-Played exist but are hidden by default. Row height 40 when
+Genre, Year, Date Added; Album, Location, Plays and Last Played exist but
+are hidden by default (the header's context menu shows them). There is no
+hot cue column: the player's cue list shows a loaded track's cues. Row height 40 when
 artwork is shown, else 22. Selected rows highlighted; the focused row has a
 1 px outline. A row whose file is missing is drawn greyed out with a "missing" glyph,
 cannot be loaded or analysed, and offers Relocate… in its context menu;
