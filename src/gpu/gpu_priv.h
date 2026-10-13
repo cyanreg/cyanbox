@@ -87,13 +87,15 @@ typedef struct RXTexture {
     VmaAllocation alloc;
 } RXTexture;
 
-/* One frame in flight. The fence says the slot's command buffer and its
- * acquire semaphore are free again. */
+/* One frame in flight. The fence says the slot's command buffer, its
+ * acquire semaphore and its timestamps are free again. */
 typedef struct RXFrame {
     VkCommandPool   pool;
     VkCommandBuffer cmd;
     VkFence         fence;
     VkSemaphore     acquired;
+    VkQueryPool     times;      /* two timestamps around the rendering, if the queue has them */
+    bool            timed;      /* the last submission wrote them */
     uint64_t        serial;     /* the submission the slot last carried, 0 = none */
 } RXFrame;
 
@@ -148,6 +150,8 @@ struct RXWindow {
     uint64_t serial;                /* submissions made; the next one is serial + 1 */
     uint64_t completed;             /* every submission up to this one has finished */
     int frames_drawn;
+    uint64_t ts_mask;               /* the queue's valid timestamp bits */
+    double gpu_ms;                  /* the rendering of the last finished frame, 0 = unknown */
 
     RXArray garbage;                /* RXDeferred */
     RXArray uploads;                /* RXUpload */

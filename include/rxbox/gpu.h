@@ -105,7 +105,8 @@ typedef struct RXWaveDraw {
     double col0, col1;          /* columns mapped onto x0..x1 (fractional; may run past the data: drawn empty) */
     enum RXWaveMode mode;
     float  inset_top, inset_bottom;  /* pixels left clear (rekordbox: 8 above, 2 below) */
-    bool   detail;              /* detail interpolation rule when columns are wider than a pixel */
+    bool   detail;              /* a view that scrolls: box-filtered across, and the detail
+                                   interpolation rule when columns are wider than a pixel */
     float  alpha;               /* 1 */
     float  dim;                 /* 0..1: darkens the part before col_dim_until (played part), 0 = off */
     double dim_until;           /* column */
@@ -122,7 +123,16 @@ typedef struct RXWaveDraw {
  *   blue:   height 0..31 and whiteness 0..7 ramped from #0055E1 to #F5EBD7.
  *   rgb:    the strongest channel at full, the others in proportion.
  * The 3-band centred draw uses the reach rule: each pixel in the colour of
- * exactly the bands that reach it. */
+ * exactly the bands that reach it.
+ * A detail draw is box-filtered horizontally, so that it scrolls by
+ * fractions of a pixel without shimmering: up to 16 columns a pixel, each
+ * column the pixel covers is drawn on its own by the rules above and the
+ * results are blended by the share of the pixel each covers; columns wider
+ * than a pixel are interpolated at the pixel's centre, and the pixel a
+ * sharp attack's vertical edge runs through is split by area between the
+ * two sides. Other draws (the overview, the row previews), and a detail
+ * draw past 16 columns a pixel, take each band's maximum over the columns
+ * a pixel covers, so that a transient survives. */
 void rx_wave_draw(RXWindow *w, void *im_draw_list, const RXWaveGpu *g, const RXWaveDraw *d);
 
 #endif /* RXBOX_GPU_H */

@@ -434,6 +434,16 @@ int rx_swapchain_frame(RXWindow *w, void *draw_data, bool capture)
     rx_vk_poll_completed(w);
     rx_vk_collect(w, false);
 
+    /* The slot's last frame is done, so its timestamps are there. */
+    if (f->timed) {
+        uint64_t ts[2];
+        if (vkGetQueryPoolResults(w->dev, f->times, 0, 2, sizeof(ts), ts, sizeof(ts[0]),
+                                  VK_QUERY_RESULT_64_BIT) == VK_SUCCESS)
+            w->gpu_ms = (double)((ts[1] - ts[0]) & w->ts_mask) *
+                        w->props.limits.timestampPeriod * 1e-6;
+        f->timed = false;
+    }
+
     uint32_t idx = 0;
     res = acquire(w, f, &idx);
     if (res == VK_ERROR_OUT_OF_DATE_KHR) {
@@ -470,6 +480,8 @@ int rx_swapchain_frame(RXWindow *w, void *draw_data, bool capture)
         .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
     };
     vkBeginCommandBuffer(f->cmd, &binfo);
+    if (f->times)
+        vkCmdResetQueryPool(f->cmd, f->times, 0, 2);
 
     const uint64_t serial = w->serial + 1;
     rx_vk_record_uploads(w, f->cmd, serial);
@@ -497,10 +509,16 @@ int rx_swapchain_frame(RXWindow *w, void *draw_data, bool capture)
         .colorAttachmentCount = 1,
         .pColorAttachments    = &att,
     };
+    /* The frame's GPU time is the rendering alone: after the uploads, before
+     * the capture's copy. */
+    if (f->times)
+        vkCmdWriteTimestamp2(f->cmd, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, f->times, 0);
     vkCmdBeginRendering(f->cmd, &rinfo);
     if (draw_data)
         rx_imgui_record(w, draw_data, f->cmd);
     vkCmdEndRendering(f->cmd);
+    if (f->times)
+        vkCmdWriteTimestamp2(f->cmd, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, f->times, 1);
 
     if (capture)
         record_capture(w, f->cmd, img);
@@ -549,6 +567,7 @@ int rx_swapchain_frame(RXWindow *w, void *draw_data, bool capture)
         return RX_ERROR(EIO);
     }
     f->serial = serial;
+    f->timed = f->times != VK_NULL_HANDLE;
     w->serial = serial;
     w->frame_idx = (w->frame_idx + 1) % RX_FRAMES_IN_FLIGHT;
 

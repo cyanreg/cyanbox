@@ -375,6 +375,11 @@ double rx_window_frame_interval_ms(const RXWindow *w)
     return w->interval_ms;
 }
 
+double rx_window_gpu_ms(const RXWindow *w)
+{
+    return w->gpu_ms;
+}
+
 int rx_window_validation_errors(const RXWindow *w)
 {
     return w->validation_errors;

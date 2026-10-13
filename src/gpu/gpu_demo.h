@@ -18,6 +18,10 @@ bool rx_window_frame_pending(const RXWindow *w);
 void rx_window_capture_next(RXWindow *w);
 /* The last presented frame as RGBA, if it was captured; -EAGAIN if not. */
 int  rx_window_readback(RXWindow *w, uint8_t **rgba, int *width, int *height);
+/* How long the GPU took to render the latest frame known to be finished
+ * (frames in flight make it a frame or two old), in ms; 0 when the queue
+ * has no timestamps or no frame has finished yet. */
+double rx_window_gpu_ms(const RXWindow *w);
 
 /* ImGui, from C. Colours are 0xRRGGBBAA. Draw lists are ImDrawList *. */
 void  rx_demo_show_demo_window(void);

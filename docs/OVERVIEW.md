@@ -154,7 +154,16 @@ Decisions and why:
   MAILBOX presentation when offered, FIFO otherwise.
 - **Waveforms are drawn by a fragment shader** reading the ANLZ column bytes
   from a storage buffer: per-pixel exact colours at any zoom, no CPU redraw, and
-  the same bytes that go on the stick. ImGui draws everything else.
+  the same bytes that go on the stick. Edges are anti-aliased by exact area
+  vertically, and the scrolling detail view is box-filtered horizontally: each
+  column a pixel covers is coloured on its own (the reach rule: each band
+  reaches its level of the height, and every pixel is in the colour of exactly
+  the bands that reach it) and the results are blended by the share of the
+  pixel each column covers; wide columns are interpolated at the pixel's centre
+  and a sharp attack's edge is split by area. A one-column spike so keeps its
+  weight as it moves by fractions of a pixel instead of flickering. The
+  overview and the row previews, which do not scroll, keep each band's maximum
+  over a pixel's columns. ImGui draws everything else.
 - **Whole track decoded into memory** for playback (float, native rate). No
   seek inaccuracy, sample-exact loops, and the deck plays exactly the samples
   the analyser saw, so grid and audio agree on MP3s too. Resampling and
