@@ -3,7 +3,8 @@
 #
 # The command line end to end, in a scratch directory: init a library, add a
 # generated 128 BPM FLAC, show its grid, make a playlist, a dry-run export,
-# a real export to a directory and inspect it, settings, and the exit codes.
+# a real export to a directory and inspect it, settings, results of an
+# older analyser counted and analysed again, and the exit codes.
 # Then the edges: init over a library, a relative --library, an id that
 # also names a directory, an unreadable file, output that cannot be
 # written. No audio device and no window are used.
@@ -77,7 +78,77 @@ cat "$dir/inspect.out"
 grep -q "no problems" "$dir/inspect.out" || fail "inspect found problems"
 
 run settings | grep -q "quantize" || fail "settings"
-run check | grep -q "^OK" || fail "check"
+run check > "$dir/check.out" || { cat "$dir/check.out"; fail "check"; }
+grep -q "^OK" "$dir/check.out" || fail "check"
+
+# show prints the analyser versions, and nothing this rxbox analysed is
+# older than it. Results at version 0 (a library from before the versions)
+# are counted by check, said by show, and analysed again by analyze.
+run show "$track" | grep -q "^  analyser versions: beats [0-9]*, key [0-9]*, waves [0-9]*$" ||
+    fail "show prints no analyser versions, or calls them old"
+grep -q "^no track has results from an older analyser" "$dir/check.out" ||
+    { cat "$dir/check.out"; fail "check counts stale tracks in a new library"; }
+if python3 -c "import sqlite3" 2> /dev/null; then
+    python3 - "$lib/library.db" <<'EOF' || fail "cannot make the results old"
+import sqlite3, sys
+db = sqlite3.connect(sys.argv[1])
+db.execute("UPDATE track SET beats_version = 0, key_version = 0, waves_version = 0")
+db.commit()
+db.close()
+EOF
+    run show "$track" | grep -q "beats 0 (older than [0-9]*)" ||
+        fail "show does not say the grid is older"
+    run check > "$dir/check.out" || fail "check of a stale library"
+    grep -q "^1 track has results from an older analyser" "$dir/check.out" ||
+        { cat "$dir/check.out"; fail "check does not count the stale track"; }
+    run analyze > "$dir/stale.out" || { cat "$dir/stale.out"; fail "analyze of a stale track"; }
+    cat "$dir/stale.out"
+    grep -q "^analysing 1 track (1 made by an older analyser)" "$dir/stale.out" ||
+        fail "analyze did not analyse the stale track again"
+    run check | grep -q "^no track has results from an older analyser" ||
+        fail "the track is still stale after analyze"
+    run analyze | grep -q "nothing to analyse" || fail "analyze redid finished work"
+
+    # The export's analysis uses the same notion: a dry run on a library
+    # whose waveforms an older analyser made, then on one whose stored
+    # waveforms are format version 1 (before the recalibrations), makes
+    # them again before it writes.
+    python3 - "$lib/library.db" <<'EOF' || fail "cannot make the waveforms old"
+import sqlite3, sys
+db = sqlite3.connect(sys.argv[1])
+db.execute("UPDATE track SET waves_version = 0")
+db.commit()
+db.close()
+EOF
+    run export --dry-run "$dir/dry" > "$dir/dry-stale.out" ||
+        { cat "$dir/dry-stale.out"; fail "export --dry-run of stale waveforms"; }
+    grep -q "^analysing 1 track (1 made by an older analyser)" "$dir/dry-stale.out" ||
+        { cat "$dir/dry-stale.out"; fail "the export did not analyse waveforms of an older analyser"; }
+    python3 - "$lib/library.db" <<'EOF' || fail "cannot make the waveforms an older format"
+import sqlite3, sys
+db = sqlite3.connect(sys.argv[1])
+for track_id, data in db.execute("SELECT track_id, data FROM waveform").fetchall():
+    data = bytearray(data)
+    data[4:8] = (1).to_bytes(4, "little")
+    db.execute("UPDATE waveform SET data = ? WHERE track_id = ?", (bytes(data), track_id))
+db.commit()
+db.close()
+EOF
+    run show "$track" | grep -q "waves [0-9]* (older format)" ||
+        fail "show does not say the waveforms are an older format"
+    run check | grep -q "^1 track has results from an older analyser" ||
+        fail "check does not count waveforms of an older format"
+    run export --dry-run "$dir/dry" > "$dir/dry-stale.out" ||
+        { cat "$dir/dry-stale.out"; fail "export --dry-run of an older waveform format"; }
+    cat "$dir/dry-stale.out"
+    grep -q "^analysing 1 track (1 made by an older analyser)" "$dir/dry-stale.out" ||
+        fail "the export did not analyse waveforms of an older format"
+    [ -z "$(ls -A "$dir/dry")" ] || fail "the dry run wrote to the stick"
+    run check | grep -q "^no track has results from an older analyser" ||
+        fail "the export left the waveforms stale"
+else
+    echo "no python3 with sqlite3: the stale library is not tested" >&2
+fi
 
 # Taking a track out of a playlist (by id), then deleting a playlist; the
 # track stays in the library.

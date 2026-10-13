@@ -19,7 +19,9 @@
  *                  has_artwork, file_* (the tags as read from the file), the override
  *                  columns (NULL = use the file's), year, track_number, disc_number,
  *                  rating, color, key, key_confidence, grid_confidence, grid_flags,
- *                  grid_locked, added, analysed, play_count, last_played, missing
+ *                  grid_locked, added, analysed, play_count, last_played, missing,
+ *                  beats_version, key_version, waves_version (the analyser that made
+ *                  the grid, key and waveforms: RX_*_VERSION, 0 before schema 2)
  *   grid_section   track_id, idx, start, bpm, beat
  *   cue            id, track_id, time, grid_beat, hot, loop_end, loop_beats, active, name, color
  *   track_tag      track_id, tag
@@ -143,7 +145,8 @@ bool     rx_is_audio_path(const char *path);
  * artwork, plays, playlist entries). */
 int      rx_library_remove(RXLibrary *lib, RXTrack *t);
 /* Writes a track's editable state (meta overrides, rating, colour, tags,
- * key, grid, cues, locked) in one transaction. Call after any edit. */
+ * key, grid, cues, locked, the analyser versions) in one transaction.
+ * Call after any edit. */
 int      rx_library_save_track(RXLibrary *lib, RXTrack *t);
 /* Re-probes a track whose file changed (mtime); keeps grid/key/cues. */
 int      rx_library_refresh_track(RXLibrary *lib, RXTrack *t);
@@ -157,6 +160,11 @@ struct RXWaveforms;
 int  rx_library_waveforms_save(RXLibrary *lib, uint64_t id, const struct RXWaveforms *w);
 int  rx_library_waveforms_load(const RXLibrary *lib, uint64_t id, struct RXWaveforms *w);
 bool rx_library_has_waveforms(const RXLibrary *lib, uint64_t id);
+/* Whether the stored waveforms are of the format version this build reads,
+ * from their header alone (cheap enough for the whole library): 0 when
+ * they are, -EPROTO when another version (load would refuse them: make
+ * them again), -EINVAL when not waveforms at all, -ENOENT when none. */
+int  rx_library_waveforms_check(const RXLibrary *lib, uint64_t id);
 int  rx_library_artwork_save(RXLibrary *lib, uint64_t id, const uint8_t *jpeg, size_t size, int width, int height);
 int  rx_library_artwork_load(const RXLibrary *lib, uint64_t id, uint8_t **jpeg, size_t *size, int *width, int *height);
 
