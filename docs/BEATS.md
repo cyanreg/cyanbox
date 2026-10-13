@@ -761,24 +761,27 @@ envelopes, attacks, sections and refinement 110, octave and family refits
 when needed 100 each, phase, downbeat and bass 11, confidence 5.
 
 **With the GPU** (section 1). On two 3.3-minute FLAC tracks, one core for
-everything, the machine busy with other builds (the fastest of five runs;
-the RX 6900 XT sits behind Thunderbolt here, so its time is mostly the
-transfers, while the Iris Xe shares the CPU's memory):
+everything, the fastest of seven runs with the two paths alternating (the
+machine was busy with other builds, so the CPU path is given for each
+device's runs; the RX 6900 XT sits behind Thunderbolt here, so its time is
+mostly the transfers, while the Iris Xe shares the CPU's memory and power):
 
-| | Feel Alive (garage, 1726 windows) | PASSIVE (470 windows) |
+| Beat analyser | Feel Alive (garage, 1726 windows) | PASSIVE (470 windows) |
 | --- | --- | --- |
-| beat analyser, CPU path | 600 ms | 347 ms |
-| beat analyser, RX 6900 XT | 174 ms (142 ms CPU) | 113 ms (93 ms CPU) |
-| beat analyser, Iris Xe | 286 ms (201 ms CPU) | 134 ms (89 ms CPU) |
-| GPU time (timestamps): STFT, envelopes, 6900 XT | 18.7, 27.1 ms | 18.3, 7.5 ms |
-| GPU time: STFT, envelopes, Iris Xe | 64, 51 ms | 42, 11 ms |
+| CPU path / RX 6900 XT | 322 / 135 ms (98 ms CPU) | 208 / 80 ms (63 ms CPU) |
+| CPU path / Iris Xe | 371 / 236 ms (152 ms CPU) | 171 / 100 ms (59 ms CPU) |
+| GPU time (timestamps), STFT + envelopes, 6900 XT | 18.8 + 27.1 ms | 17.6 + 7.4 ms |
+| GPU time, STFT + envelopes, Iris Xe | 48.6 + 43.2 ms | 36.7 + 12.0 ms |
+| Decoding, then `rx_analyse` (all stages), CPU path / 6900 XT | 1013 / 815 ms | 791 / 650 ms |
+| the same, CPU path / Iris Xe | 1256 / 1137 ms | 624 / 589 ms |
 
-What is left on the CPU is the decisions (and copying the signal up). On
-the 58 acceptance tracks (`-j 2`, the RX 6900 XT): 204 ms CPU per file
-against 656 on the CPU path (54 against 172 ms per minute of audio), the
-front end 47 ms of wall time per file against 377. A context costs 80-190
-ms to make, and its pipelines 160-450 ms to compile the first time they
-are used (once per process; Mesa caches them on disk).
+What is left on the CPU is the decisions (and copying the signal up);
+decoding (250-350 ms) and the waveforms now take longer than the beats. On
+the 58 acceptance tracks (`-j 2`, the RX 6900 XT, a busier machine): 204
+ms CPU per file against 656 on the CPU path (54 against 172 ms per minute
+of audio), the front end 47 ms of wall time per file against 377. A
+context costs 30-190 ms to make, and its pipelines 130-570 ms to compile
+the first time they are used (once per process; Mesa caches them on disk).
 
 ### Memory
 
