@@ -15,7 +15,9 @@
  * The tempo range defaults to +-6 % where rekordbox writes +-10 %: rxbox's
  * deck starts at the range this setting holds (rx_settings_get), as a CDJ
  * switched on starts at +-6 %, so the default is the range wanted on both
- * (docs/settings.md 3).
+ * (docs/settings.md 3). The waveform colour defaults to 3-band where
+ * rekordbox writes blue, for the same reason: the interface draws the
+ * palette this setting holds, and the user wants 3-band on both.
  *
  * The [device] background colour is not in any of these files: rekordbox
  * keeps it in export.pdb's property row and exportLibrary.db's property
@@ -151,7 +153,7 @@ static const uint8_t djmmysetting_default[52] = {
     0x81, 0x81, 0x80, 0x81, 0x80, 0x80, 0x85, 0x82, 0x80, 0x80, 0x82, 0x84, 0x81, 0x81,
 };
 static const uint8_t devsetting_default[32] = {
-    0x78, 0x56, 0x34, 0x12, 0x01, 0x00, 0x00, 0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
+    0x78, 0x56, 0x34, 0x12, 0x01, 0x00, 0x00, 0x00, 0x01, 0x01, 0x04, 0x01, 0x01, 0x01, 0x01, 0x01,
     0x01,
 };
 
