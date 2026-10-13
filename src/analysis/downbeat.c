@@ -24,7 +24,8 @@
  * Extra, weaker votes: the beat where the music starts (tracks made for DJs
  * nearly always start on a downbeat, dj's rule) and the beats where the
  * bass note changes (a bass line moves on the bar far more often than
- * inside it). The caller decides what an odd (half-beat) winner means. */
+ * inside it). The caller decides what an odd (half-beat) winner means, and
+ * weighs a start after silence itself (beats.c). */
 
 #include "beats_internal.h"
 
@@ -89,7 +90,7 @@ end:
 }
 
 int rx_downbeat_vote(const RXSpectrum *s, const float *x, int64_t n,
-                     double t0, double period, double start, double end, double first_onset,
+                     double t0, double period, double start, double end, double start_vote,
                      RXDownbeat *out)
 {
     memset(out, 0, sizeof(*out));
@@ -179,10 +180,12 @@ int rx_downbeat_vote(const RXSpectrum *s, const float *x, int64_t n,
     }
 
     /* The beat where the music starts, if a beat is there. */
-    double k = (first_onset - t0) / hp;
-    int kj = (int)lrint(k);
-    if (fabs(k - kj) < 0.2 && first_onset >= start - period && first_onset < end)
-        score[((kj % 8) + 8) % 8] += START_WEIGHT;
+    if (!isnan(start_vote)) {
+        double k = (start_vote - t0) / hp;
+        int kj = (int)lrint(k);
+        if (fabs(k - kj) < 0.2 && start_vote >= start - period && start_vote < end)
+            score[((kj % 8) + 8) % 8] += START_WEIGHT;
+    }
 
     memcpy(out->scores, score, sizeof(score));
     int best = 0;

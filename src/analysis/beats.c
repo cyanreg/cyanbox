@@ -90,6 +90,24 @@ void rx_beat_result_free(RXBeatResult *r)
 /* Two sections whose lines agree this closely are one (grid_fit.c's
  * SEG_MAX_DEV, the segmentation's test 1). */
 #define SECTION_MERGE_DEV 0.015
+/* The music's start as a witness (docs/BEATS.md, section 10). A hit or a
+ * fade's origin within a tenth of a beat (at most 40 ms) of a beat or a
+ * half beat of the line is on it. A hit counts when the kick band rises at
+ * it at least as much as on the beats that carry the kicks, and only while
+ * the kicks themselves do not mark one half of the beat by a factor e.
+ * Each has a log evidence for its half of the beat and a vote for beat 1
+ * (in structure scales, as downbeat.c's votes). */
+#define START_ON_BEAT     0.10
+#define START_ON_BEAT_MAX 0.040
+#define HIT_KICK          1.0
+#define HIT_KICKS_CLEAR   1.0
+#define HIT_PHASE         2.5
+#define HIT_DOWNBEAT      2.0
+#define FADE_PHASE        1.0
+#define FADE_DOWNBEAT     0.25
+/* The grid's first beat may lie this much before the music's start (a
+ * line a few ms early on the hit; a fade's start is a frame's estimate). */
+#define START_SLACK       0.050
 
 typedef struct Ctx {
     const RXAnalysisOptions *opt;
@@ -325,9 +343,25 @@ typedef struct SecInfo {
     bool       has_vote;            /* long enough for a structure vote */
     RXDownbeat db;
     bool       shifted;             /* moved by half a beat */
+    bool       has_down;            /* beat 1 decided (a structure vote, or the start's) */
     int        pos;                 /* even: the downbeat's half-beat position from t0 */
     double     down_margin;
 } SecInfo;
+
+/* Where t falls on line s: the nearest half beat from t0 (even: a beat)
+ * and how far t is from it. */
+static long half_beat(const RXFitSection *s, double t, double *off)
+{
+    double hp = s->period / 2;
+    long j = lrint((t - s->t0) / hp);
+    *off = t - (s->t0 + j * hp);
+    return j;
+}
+
+static int position(long j)
+{
+    return (int)((j % 8 + 8) % 8);
+}
 
 /* Mean of the arbiter onset over [t - 30 ms, t + 10 ms] at the line's beats
  * in [from, to) moved by `shift`: a kick's low band rises up to 20 ms
@@ -351,6 +385,67 @@ static double arbiter_support(const Ctx *c, const float *v, const RXFitSection *
     return n ? acc / n : 0.0;
 }
 
+/* What the music's start says about section s (docs/BEATS.md). It counts
+ * only where it is placed: a hit carrying a kick or a fade's origin, in
+ * this section, on a beat or a half beat of the line. Otherwise (the music
+ * starts at once, a swell, a hit without a kick, a start between the
+ * line's half beats) the structure takes dj's first loud onset as its start
+ * vote, as before. */
+typedef struct StartWitness {
+    bool   counts;
+    bool   onset_too;               /* dj's first loud onset still votes in the structure */
+    double at;                      /* the hit, or the fade's origin */
+    double phase;                   /* log evidence for the half of the beat it is on */
+    double down;                    /* its vote for beat 1 when on a beat */
+    double kick;                    /* a hit's kick band against the kick beats' (debug) */
+} StartWitness;
+
+static StartWitness start_witness(const Ctx *c, const RXFitSection *s, const SecInfo *si,
+                                  const RXMusicStart *ms)
+{
+    StartWitness w = { .at = ms->start };
+    if ((ms->kind != RX_START_HIT && ms->kind != RX_START_FADE) || w.at < si->start ||
+        w.at >= si->end)
+        return w;
+    const double P = s->period;
+    double off;
+    half_beat(s, w.at, &off);
+    if (fabs(off) > fmin(START_ON_BEAT * P, START_ON_BEAT_MAX))
+        return w;
+    /* A fade begins on a beat, not between two; whether on beat 1 the first
+     * loud onset knows better (where the drums come in after the fade),
+     * so it keeps its vote and the origin only breaks a tie. */
+    if (ms->kind == RX_START_FADE) {
+        w.counts = true;
+        w.onset_too = true;
+        w.phase = FADE_PHASE;
+        w.down = FADE_DOWNBEAT;
+        return w;
+    }
+    /* The kick band from 15 ms before the hit to 60 ms after it (a kick's
+     * body builds after its click), against its level on the beats or the
+     * half beats, whichever carry the kicks. A stab or a vocal on the "and"
+     * before bar 1 has no kick; the hit that opens a track on beat 1
+     * usually has one. */
+    int a = (int)lrint((w.at - 0.015) * c->ons.fps), b = (int)lrint((w.at + 0.060) * c->ons.fps);
+    double m = 0.0;
+    for (int f = RX_MAX(a, 0); f <= RX_MIN(b, c->ons.nb - 1); f++)
+        m = fmax(m, c->ons.low[f]);
+    double beats = fmax(arbiter_support(c, c->ons.low, s, si->start, si->end, 0.0),
+                        arbiter_support(c, c->ons.low, s, si->start, si->end, P / 2));
+    w.kick = beats > 0.0 ? m / beats : 0.0;
+    /* Where the kick band clearly marks one half of the beat, a hit with
+     * a kick half a beat from it is a pickup (a kick and a crash on the
+     * "and" before bar 1); where it does not (a two-step kick on the "and"s
+     * as often as on the beats), the opening hit is the better witness. */
+    if (w.kick >= HIT_KICK && fabs(log(si->kick_ratio)) < HIT_KICKS_CLEAR) {
+        w.counts = true;
+        w.phase = HIT_PHASE;
+        w.down = HIT_DOWNBEAT;
+    }
+    return w;
+}
+
 /* Is the section on the beat or on the off-beat, and where is beat 1?
  *
  * Two witnesses. The arbiter band (the kicks, when the track has them): a
@@ -361,9 +456,18 @@ static double arbiter_support(const Ctx *c, const float *v, const RXFitSection *
  * structural change half a beat early. So both are weighed as log
  * evidence, structure at 1.5 times the kicks (rbxport measured structure
  * right on 153 of 155 reference grids, the kick alone on 150), and the
- * grid moves by half a beat only when the sum says so by a margin. */
-static int decide_phase(Ctx *c, int i, SecInfo *si, const float *arbiter, double first_onset,
-                        int *band)
+ * grid moves by half a beat only when the sum says so by a margin.
+ *
+ * The music's start is a third (start.c, start_witness above). A hit
+ * after silence that carries a kick, where the kicks leave the half of the
+ * beat open, is on the beat (tracks made for DJs start on a bar line) and
+ * is beat 1 unless the structure clearly says otherwise. A fade's origin
+ * is on the beat too, and breaks a tie for beat 1. Everywhere else (the
+ * music starts at once, a swell, any other hit, a start between the
+ * line's half beats), and for beat 1 after a fade, dj's first loud onset
+ * votes in the structure as one scale, as it always did. */
+static int decide_phase(Ctx *c, int i, SecInfo *si, const float *arbiter, const RXMusicStart *ms,
+                        double first_onset, int *band, RXBeatDebug *dbg)
 {
     RXFitSection *s = &c->secs[i];
     const double P = s->period;
@@ -372,11 +476,12 @@ static int decide_phase(Ctx *c, int i, SecInfo *si, const float *arbiter, double
     double off = arbiter_support(c, arbiter, s, si->start, si->end, P / 2);
     si->kick_ratio = (on + eps) / (off + eps);
 
+    StartWitness w = start_witness(c, s, si, ms);
     si->has_vote = (si->end - si->start) / P >= 32.0;
     double sv = 0.0;
     if (si->has_vote) {
         int ret = rx_downbeat_vote(&c->spec, c->x, c->n, s->t0, P, si->start, si->end,
-                                   first_onset, &si->db);
+                                   w.counts && !w.onset_too ? NAN : first_onset, &si->db);
         if (ret < 0)
             return ret;
         double be = 0.0, bo = 0.0;
@@ -388,8 +493,34 @@ static int decide_phase(Ctx *c, int i, SecInfo *si, const float *arbiter, double
         }
         sv = log((be + 0.05) / (bo + 0.05));
     }
-    double ev = log(si->kick_ratio) + 1.5 * sv;
+
+    /* The start's half of the beat. */
+    double hoff = 0.0;
+    long hj = half_beat(s, w.at, &hoff);
+    double hv = w.counts ? (hj & 1 ? -w.phase : w.phase) : 0.0;
+    bool here = (ms->kind == RX_START_HIT || ms->kind == RX_START_FADE) && w.at >= si->start &&
+                w.at < si->end;
+
+    double ev = log(si->kick_ratio) + 1.5 * sv + hv;
     si->phase_evidence = ev;
+    rx_debug("beats: section %d phase: arbiter %.3f on, %.3f off (log %.3f); structure %.3f "
+             "(scores %.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f); start %+.2f (half beat %ld "
+             "%+.1f ms); evidence %.3f\n", i, on, off, log(si->kick_ratio), sv,
+             si->db.scores[0], si->db.scores[1], si->db.scores[2], si->db.scores[3],
+             si->db.scores[4], si->db.scores[5], si->db.scores[6], si->db.scores[7], hv, hj,
+             hoff * 1e3, ev);
+    if (dbg && here) {
+        dbg->start_section = i;
+        dbg->start_kick = log(si->kick_ratio);
+        dbg->start_struct = sv;
+        dbg->start_hit = hv;
+        dbg->start_half_beat = hj;
+        dbg->start_off = hoff;
+        dbg->start_t0 = s->t0;
+        dbg->start_period = P;
+        memcpy(dbg->start_scores, si->db.scores, sizeof(dbg->start_scores));
+        dbg->start_kick_ratio = w.kick;
+    }
     if (ev < -log(1.25)) {
         /* Move the line half a beat, re-cut the envelopes where its beats
          * now are, and put it on its attacks again. */
@@ -415,8 +546,20 @@ static int decide_phase(Ctx *c, int i, SecInfo *si, const float *arbiter, double
         }
     }
 
+    /* The start's vote for beat 1, when it is on a beat of the line as it
+     * now is. */
+    bool voted = false;
+    if (w.counts) {
+        long j = half_beat(s, w.at, &hoff);
+        if (!(j & 1)) {
+            si->db.scores[position(j)] += w.down;
+            voted = true;
+        }
+    }
+
     /* Beat 1: the best of the four beats (never a half beat). */
-    if (si->has_vote) {
+    si->has_down = si->has_vote || voted;
+    if (si->has_down) {
         int best = 0;
         for (int p = 2; p < 8; p += 2) {
             if (si->db.scores[p] > si->db.scores[best])
@@ -703,6 +846,10 @@ int rx_analyse_beats_dbg(const float *mono, int64_t nb_samples, int rate,
                          const RXAnalysisOptions *opt_in, RXBeatResult *out, RXBeatDebug *dbg)
 {
     memset(out, 0, sizeof(*out));
+    if (dbg) {
+        memset(dbg, 0, sizeof(*dbg));
+        dbg->start_section = -1;
+    }
     RXAnalysisOptions defopt;
     if (!opt_in) {
         rx_analysis_options_default(&defopt);
@@ -742,7 +889,19 @@ int rx_analyse_beats_dbg(const float *mono, int64_t nb_samples, int rate,
     if ((ret = rx_onsets_compute(&c.spec, &c.ons)) < 0)
         goto fail;
     stage(&tm, "onsets");
-    out->first_onset = rx_onsets_first(&c.ons);
+    /* Where the music starts, from the level; and dj's first loud onset,
+     * which votes for beat 1 when the music starts at once. */
+    RXMusicStart ms;
+    if ((ret = rx_music_start(c.x, c.n, &ms)) < 0)
+        goto fail;
+    out->music_start = ms.start;
+    out->start_kind = ms.kind;
+    const double first_onset = rx_onsets_first(&c.ons);
+    rx_debug("beats: music starts at %.4f s (%s; over the threshold at %.4f, floor %.1f dB, "
+             "loud %.1f dB, jump %.1f dB, rise %.3f s); first loud onset %.3f s\n", ms.start,
+             ms.kind == RX_START_HIT ? "hit" : ms.kind == RX_START_FADE ? "fade" :
+             ms.kind == RX_START_SWELL ? "swell" : "at once",
+             ms.audible, ms.floor_db, ms.loud_db, ms.jump_db, ms.rise, first_onset);
 
     /* Tempo. */
     double lo = c.opt->bpm_min, hi = c.opt->bpm_max;
@@ -873,8 +1032,10 @@ int rx_analyse_beats_dbg(const float *mono, int64_t nb_samples, int rate,
         if (i)
             sinfo[i - 1].end = sinfo[i].start;
     }
+    if (dbg)
+        dbg->start = ms;
     for (int i = 0; i < c.nb_secs; i++) {
-        if ((ret = decide_phase(&c, i, &sinfo[i], arbiter, out->first_onset, &bands[i])) < 0)
+        if ((ret = decide_phase(&c, i, &sinfo[i], arbiter, &ms, first_onset, &bands[i], dbg)) < 0)
             goto fail;
     }
 
@@ -942,11 +1103,10 @@ int rx_analyse_beats_dbg(const float *mono, int64_t nb_samples, int rate,
         RXTempoSection *g = &out->grid.sections[i];
         const double P = s->period;
         g->bpm = 60.0 / P;
-        double own = si->has_vote ? s->t0 + si->pos / 2 * P : NAN;
+        double own = si->has_down ? s->t0 + si->pos / 2 * P : NAN;
         if (i == 0) {
-            /* From its first beat at or after 0 (rxbox/model.h: nothing
-             * before the first section's start), numbered from the
-             * downbeat. */
+            /* From its first beat at or after 0 (the music's start moves it
+             * on below), numbered from the downbeat. */
             double d = isnan(own) ? s->t0 : own;
             long k = (long)floor(d / P);
             g->start = d - k * P;
@@ -975,6 +1135,11 @@ int rx_analyse_beats_dbg(const float *mono, int64_t nb_samples, int rate,
         prev_down = g->start - (mine - 1) * P;
     }
     out->grid.nb_sections = c.nb_secs;
+    /* No grid in the silence before the music: the first beat is the first
+     * at or after its start, every later beat as it was. */
+    if (ms.kind != RX_START_AT_ONCE &&
+        (ret = rx_grid_start_at(&out->grid, fmax(ms.start - START_SLACK, 0.0))) < 0)
+        goto fail;
 
     /* Confidence and flags. The confidence reads the grid as written:
      * where a tracked beat strayed from it (a stretch followed on the
@@ -1035,7 +1200,6 @@ int rx_analyse_beats_dbg(const float *mono, int64_t nb_samples, int rate,
     out->flags = flags;
 
     if (dbg) {
-        memset(dbg, 0, sizeof(*dbg));
         dbg->ons = c.ons;
         memset(&c.ons, 0, sizeof(c.ons));
         dbg->beats = c.beats;

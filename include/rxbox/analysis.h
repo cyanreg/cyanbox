@@ -77,11 +77,23 @@ typedef struct RXAnalysisOptions {
 } RXAnalysisOptions;
 void rx_analysis_options_default(RXAnalysisOptions *o);
 
+/* How the music starts, measured on the audio's level (docs/BEATS.md,
+ * "Where the music starts"). */
+enum RXStartKind {
+    RX_START_AT_ONCE = 0,        /* from the first frames: no silence or floor before it */
+    RX_START_HIT,                /* after silence or a noise floor, with a hit */
+    RX_START_FADE,               /* after silence or a noise floor, rising for a second or more */
+    RX_START_SWELL,              /* after silence, rising faster than that (a riser, a pad) */
+};
+
 typedef struct RXBeatResult {
-    RXGrid   grid;
+    RXGrid   grid;               /* its first beat is the first at or after music_start */
     double   confidence;         /* 0..1 */
     unsigned flags;              /* RX_GRID_FLAG_* */
-    double   first_onset;        /* seconds: where the music starts */
+    /* Where the music starts (seconds): 0 when at once, a hit's first
+     * sample, where a fade or a swell leaves the floor. */
+    double   music_start;
+    enum RXStartKind start_kind;
     /* Diagnostics for the evaluation tool; may be empty. */
     double   bpm_second_best;    /* the runner-up tempo, 0 if none */
     double   octave_margin;      /* score ratio of the chosen octave to the other */
@@ -126,7 +138,7 @@ int  rx_analyse(const RXAudio *audio, const RXAnalysisOptions *opt, unsigned wha
 void rx_analysis_free(RXAnalysis *a);
 
 /* The automatic cue: a memory cue on the first downbeat at or after the
- * first onset, added when the track has no cues yet. */
+ * start of the music, added when the track has no cues yet. */
 int  rx_analysis_auto_cues(RXTrack *t, const RXBeatResult *beats);
 
 #endif /* RXBOX_ANALYSIS_H */

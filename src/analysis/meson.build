@@ -10,6 +10,7 @@ rx_analysis_sources = files(
     'grid_fit.c',
     'downbeat.c',
     'beats.c',
+    'start.c',
     'analysis.c',
     # waveforms and key
     'waveform.c',

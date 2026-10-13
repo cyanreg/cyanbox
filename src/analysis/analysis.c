@@ -107,11 +107,13 @@ void rx_analysis_free(RXAnalysis *a)
 int rx_analysis_auto_cues(RXTrack *t, const RXBeatResult *beats)
 {
     /* dj's export._auto_cues: one memory cue, on the first downbeat at or
-     * after the first onset (50 ms of slack, so a downbeat that the onset
-     * detector places a hair late still counts). With the players' default
-     * AUTO CUE LEVEL = MEMORY, loading the track jumps there. Musical (on
-     * the grid), so it follows a corrected grid. Only for a track that has
-     * no cues yet, as dj did it: a cue the DJ set is theirs to keep. */
+     * after the start of the music (50 ms of slack, so a downbeat that the
+     * grid places a hair before a hit still counts; dj took its first loud
+     * onset, which in a fade-in is anywhere along the rise). With the
+     * players' default AUTO CUE LEVEL = MEMORY, loading the track jumps
+     * there. Musical (on the grid), so it follows a corrected grid. Only
+     * for a track that has no cues yet, as dj did it: a cue the DJ set is
+     * theirs to keep. */
     if (!t || !beats || t->nb_cues > 0)
         return 0;
     const RXGrid *g = rx_grid_valid(&t->grid) ? &t->grid : &beats->grid;
@@ -126,7 +128,7 @@ int rx_analysis_auto_cues(RXTrack *t, const RXBeatResult *beats)
         return ret;
     double at = NAN;
     for (int i = 0; i < nb; i++) {
-        if (b[i].number == 1 && b[i].time >= beats->first_onset - 0.05) {
+        if (b[i].number == 1 && b[i].time >= beats->music_start - 0.05) {
             at = b[i].time;
             break;
         }
