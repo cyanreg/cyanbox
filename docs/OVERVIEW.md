@@ -75,7 +75,7 @@ One binary, `rxbox`:
 ```
 rxbox                      the interface
 rxbox add <path>...        add files or folders to the library and analyse them
-rxbox analyze [paths]      (re)analyse; by default only what is missing
+rxbox analyze [paths]      (re)analyse; by default only what is missing or stale
 rxbox show <track>         print the resolved grid, key and cues
 rxbox export <stick>       write a stick (both libraries, ANLZ, artwork, presets)
 rxbox inspect <stick>      re-read and validate a stick

@@ -53,6 +53,27 @@ the library, greyed out, until the file comes back or is relocated. A
 track's library id is also its id on every stick, so players keep their
 cached data across exports.
 
+## Analysis
+
+Adding a track analyses its beat grid, key and waveforms. After that,
+`rxbox analyze` and Analysis → Analyse all unanalysed in the interface
+analyse only what a track lacks; `-f` (Re-analyse in the interface) does it
+all again. A locked grid is never replaced unless you name the track:
+`rxbox analyze --force TRACK`, or RE-ANALYSE on the deck.
+
+The library keeps the version of the analyser that made each track's grid,
+key and waveforms. When a new rxbox improves one of them, that version goes
+up, and a result an older version made counts as missing: the interface
+analyses those tracks again in the background when it opens the library,
+without being asked, and `rxbox analyze` does the same. Only the stale
+parts are redone, and locked grids are kept. A grid you edit by hand keeps
+the version of the grid it was edited from, so it is replaced like any
+other at the next upgrade of the grid analyser: lock a grid you corrected
+to keep it. `rxbox check` counts the stale tracks and `rxbox show` prints a
+track's versions. A library from before versions were kept counts all its
+results as stale, so the first start after that upgrade analyses the whole
+library again.
+
 ## Command line
 
 `rxbox [OPTIONS] COMMAND [ARGS]`. A TRACK is an audio file in the library
@@ -61,14 +82,14 @@ cached data across exports.
 | Command | What it does |
 | --- | --- |
 | `add PATH...` | add audio files or folders to the library and analyse them |
-| `analyze [TRACK...]` | analyse what is missing (the whole library by default); `-f` re-analyses, `-w beats,key,waves` limits it |
-| `show TRACK...` | print the resolved grid, key and cues |
+| `analyze [TRACK...]` | analyse what is missing or was made by an older analyser (the whole library by default); `-f` re-analyses, `-w beats,key,waves` limits it |
+| `show TRACK...` | print the resolved grid, key, cues and analyser versions |
 | `export STICK` | write the settings, every playlist and their tracks to a mounted stick (`--all`, `-p NAME`, `--prune`, `--compat`, `--ignore-unsynced`, `-n`) |
 | `inspect STICK` | re-read and validate a stick |
 | `sync STICK [--apply]` | list the cues, plays and settings a player saved on the stick that the library lacks; `--apply` takes them |
 | `pull STICK` | take all of them (`sync --apply`) |
 | `rescan` | check which audio files are missing (or back) |
-| `check` | check the library database's integrity |
+| `check` | check the library database's integrity and count the tracks an older analyser analysed |
 | `settings` | list the My Settings names and values |
 | `config [KEY [VALUE]]` | show or change a setting (`analysis.bpm_min`, `export.key_notation`, `player.quantize` ...) |
 | `init [DIR]` | create a library |
@@ -109,7 +130,8 @@ line `rxbox export STICK`.
 - What is exported: every playlist and the union of their tracks by
   default; only the chosen playlists (`-p NAME`, or "Selected playlists"),
   or the whole library (`--all`).
-- Tracks that lack an analysis are analysed first.
+- Tracks that lack an analysis, or have one an older analyser made, are
+  analysed first.
 - Audio files already on the stick with the same size and modification
   time are skipped. The analysis files, artwork, settings files and both
   databases are rewritten every time.
