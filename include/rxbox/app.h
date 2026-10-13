@@ -43,6 +43,11 @@ typedef struct RXApp {
     /* Browser state */
     RXPlaylist *current_playlist;   /* NULL = collection */
     RXPlaylistFolder *current_folder;
+    /* The album shown (rx_app_show_album): the tracks whose album this
+     * is, in disc and track order, like a playlist that nothing can be
+     * added to and that the export does not know. NULL = not an album
+     * view. Owned here. */
+    char      *current_album;
     char       search[128];
     int        sort_column;         /* RXColumn index */
     bool       sort_descending;
@@ -152,6 +157,19 @@ int  rx_app_add_path(RXApp *app, const char *path);  /* add + queue analysis */
 void rx_app_save_track(RXApp *app, RXTrack *t);      /* to the library now */
 void rx_app_set_status(RXApp *app, const char *fmt, ...) RX_PRINTF(2, 3);
 void rx_app_rebuild_rows(RXApp *app);
+/* The albums for the tree: every distinct album name among the tracks,
+ * in the order the table sorts names, each with its track count. Made
+ * when the library has changed since the last call; valid until the next
+ * one. Returns the count. */
+typedef struct RXAlbum {
+    const char *name;
+    int         nb;
+} RXAlbum;
+int  rx_app_albums(RXApp *app, const RXAlbum **albums);
+/* Shows the album `name` (copied; NULL: the album view is left, the
+ * playlist or collection view stays): the playlist view is cleared and
+ * the rows rebuilt. */
+void rx_app_show_album(RXApp *app, const char *name);
 int  rx_app_start_export(RXApp *app);                /* from export_state */
 /* RX_JOB_STICK_READ against the library as saved (pending saves are
  * written first), or RX_JOB_INSPECT, of the stick at `mount`; see

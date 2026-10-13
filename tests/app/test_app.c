@@ -511,6 +511,38 @@ int main(int argc, char **argv)
         rx_app_tick(&app);
     }
 
+    /* An album is a view of the tracks tagged with it, in track order,
+     * listed alphabetically among the albums; leaving it goes back to the
+     * collection. */
+    {
+        free(a->meta.album);
+        free(b->meta.album);
+        a->meta.album = rx_strdup("Zeta");
+        b->meta.album = rx_strdup("Zeta");
+        a->meta.track_number = 2;
+        b->meta.track_number = 1;
+        CHECK(rx_library_save_track(&app.lib, a) == 0 && rx_library_save_track(&app.lib, b) == 0,
+              "saving the album tags");
+        const RXAlbum *albums = NULL;
+        int n = rx_app_albums(&app, &albums);
+        CHECK(n == 1 && albums && !strcmp(albums[0].name, "Zeta") && albums[0].nb == 2,
+              "albums: %d", n);
+        rx_app_show_album(&app, "Zeta");
+        CHECK(app.current_album && !app.current_playlist && app.nb_rows == 2 &&
+              app.lib.tracks[app.rows[0]] == b && app.lib.tracks[app.rows[1]] == a,
+              "album rows %d, in track order", app.nb_rows);
+        free(b->meta.album);
+        b->meta.album = rx_strdup("Alpha");
+        CHECK(rx_library_save_track(&app.lib, b) == 0, "saving b's album");
+        n = rx_app_albums(&app, &albums);
+        CHECK(n == 2 && !strcmp(albums[0].name, "Alpha") && !strcmp(albums[1].name, "Zeta"),
+              "albums alphabetically: %d", n);
+        rx_app_tick(&app);
+        CHECK(app.nb_rows == 1 && app.lib.tracks[app.rows[0]] == a, "the album view follows the tags");
+        rx_app_show_album(&app, NULL);
+        CHECK(!app.current_album && app.nb_rows == 2, "back to the collection: %d rows", app.nb_rows);
+    }
+
     /* The deck: decoded on the io queue, waveforms from the library. */
     ret = rx_app_load_deck(&app, 0, b);
     CHECK(ret == 0, "load: %s", strerror(-ret));

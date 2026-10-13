@@ -231,8 +231,14 @@ last.
 ## Browser
 
 **Playlist tree** (left, 220 default): `Collection` at the top (every
-track), then the folders and playlists from the library. Click selects the
-view. Right-click: new playlist, new folder, rename, delete (with confirm),
+track), `Albums` under it (closed by default: every album tag in the
+library, alphabetically, with its track count; click one and the table
+shows its tracks in disc and track order, like a playlist, but nothing
+can be dropped on an album, nothing renames or deletes one, and the
+export does not know them: they are the tags' view of the collection;
+playing one through continues from track to track as a playlist does),
+then the folders and playlists from the library. Click selects the view.
+Right-click: new playlist, new folder, rename, delete (with confirm),
 import m3u8, export m3u8. Drag tracks from the table onto a playlist to
 add; drag playlists and folders within the tree to move them.
 

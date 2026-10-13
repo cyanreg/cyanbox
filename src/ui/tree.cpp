@@ -1,7 +1,9 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
-// The playlist tree on the browser's left: Collection (every track), then
-// the library's folders and playlists. A click shows a playlist; the
+// The playlist tree on the browser's left: Collection (every track), the
+// Albums (every album tag, alphabetically, each a view of its tracks in
+// disc and track order: nothing is added to, renamed or exported there),
+// then the library's folders and playlists. A click shows a playlist; the
 // context menu creates, renames (in place, as rekordbox does) and deletes
 // (after a confirmation). Tracks dragged from the table onto a playlist
 // are appended to it; playlists and folders dragged within the tree move
@@ -184,6 +186,16 @@ static void collection_icon(ImDrawList *dl, ImVec2 p, float s, ImU32 col)
     dl->AddCircleFilled(c, s * 0.12f, col, 10);
 }
 
+// A sleeve with the record showing at its edge.
+static void album_icon(ImDrawList *dl, ImVec2 p, float s, ImU32 col)
+{
+    dl->AddRect(ImVec2(p.x, p.y + s * 0.15f), ImVec2(p.x + s * 0.8f, p.y + s * 0.95f), col, 1.0f,
+                1.5f);
+    ImVec2 c(p.x + s * 0.72f, p.y + s * 0.55f);
+    dl->AddCircle(c, s * 0.28f, col, 16, 1.5f);
+    dl->AddCircleFilled(c, s * 0.08f, col, 8);
+}
+
 /* -------------------------------------------------------------------- nodes */
 
 // The label drawn over an empty-labelled tree node: icon, name, count.
@@ -199,6 +211,8 @@ static void node_label(UiState *ui, ImVec2 a, ImVec2 b, int icon, const char *na
         collection_icon(dl, ip, s, ic);
     else if (icon == 1)
         folder_icon(dl, ip, s, ic);
+    else if (icon == 3)
+        album_icon(dl, ip, s, ic);
     else
         playlist_icon(dl, ip, s, ic);
     char num[16] = "";
@@ -292,7 +306,7 @@ static void draw_playlist(UiState *ui, RXPlaylist *p, RXPlaylistFolder *parent, 
         app->current_playlist = p;
         app->current_folder = parent;
         app->nb_selection = 0;
-        rx_app_rebuild_rows(app);
+        rx_app_show_album(app, nullptr);
     }
     if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
         start_rename(ui, p, false, p->name);
@@ -422,17 +436,17 @@ void ui_tree(UiState *ui, ImVec2 size)
     ImGui::PushStyleColor(ImGuiCol_Header, IM_COL32(0x2E, 0x2E, 0x2E, 0xFF));
 
     // Collection: every track.
-    bool sel = app->current_playlist == nullptr;
+    bool sel = app->current_playlist == nullptr && app->current_album == nullptr;
     ImGuiTreeNodeFlags fl = ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen |
                             ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_FramePadding;
     if (sel)
         fl |= ImGuiTreeNodeFlags_Selected;
     ImGui::TreeNodeEx("##collection", fl);
     ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
-    if (ImGui::IsItemClicked() && app->current_playlist) {
+    if (ImGui::IsItemClicked() && !sel) {
         app->current_playlist = nullptr;
         app->nb_selection = 0;
-        rx_app_rebuild_rows(app);
+        rx_app_show_album(app, nullptr);
     }
     if (ImGui::BeginPopupContextItem("##menu")) {
         node_menu(ui, root, nullptr, nullptr);
@@ -446,6 +460,47 @@ void ui_tree(UiState *ui, ImVec2 size)
     }
     float lx = a.x + ImGui::GetTreeNodeToLabelSpacing() - PX(14);
     node_label(ui, ImVec2(lx, a.y), b, 0, "Collection", app->lib.nb_tracks, sel);
+
+    // Albums: every album of the library, alphabetically, each shown like
+    // a playlist of its tracks in disc and track order. Nothing can be
+    // dropped on one, nothing renames or deletes one, and the export does
+    // not know them: they are the tags' view of the collection.
+    const RXAlbum *albums = nullptr;
+    int nb_albums = rx_app_albums(app, &albums);
+    ImGuiTreeNodeFlags afl = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick |
+                             ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_FramePadding;
+    bool albums_open = ImGui::TreeNodeEx("##albums", afl);
+    a = ImGui::GetItemRectMin();
+    b = ImGui::GetItemRectMax();
+    node_label(ui, ImVec2(a.x + ImGui::GetTreeNodeToLabelSpacing(), a.y), b, 3, "Albums",
+               nb_albums, false);
+    if (albums_open) {
+        for (int i = 0; i < nb_albums; i++) {
+            ImGui::PushID(i);
+            bool asel = app->current_album && !strcmp(app->current_album, albums[i].name);
+            ImGuiTreeNodeFlags lf = ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen |
+                                    ImGuiTreeNodeFlags_SpanAvailWidth |
+                                    ImGuiTreeNodeFlags_FramePadding;
+            if (asel)
+                lf |= ImGuiTreeNodeFlags_Selected;
+            ImGui::TreeNodeEx("##album", lf);
+            ImVec2 la = ImGui::GetItemRectMin(), lb = ImGui::GetItemRectMax();
+            if (ImGui::IsItemClicked() && !asel) {
+                app->nb_selection = 0;
+                rx_app_show_album(app, albums[i].name);
+                // The list may have been made again: this frame's names
+                // are gone with it.
+                nb_albums = rx_app_albums(app, &albums);
+            }
+            float llx = la.x + ImGui::GetTreeNodeToLabelSpacing() - PX(14);
+            if (i < nb_albums)
+                node_label(ui, ImVec2(llx, la.y), lb, 3, albums[i].name, albums[i].nb, asel);
+            ImGui::PopID();
+        }
+        if (nb_albums == 0)
+            ImGui::TextDisabled("  No album tags yet.");
+        ImGui::TreePop();
+    }
 
     ImGui::Dummy(ImVec2(0, PX(2)));
     ImGui::TextDisabled("  PLAYLISTS");

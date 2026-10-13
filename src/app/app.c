@@ -183,6 +183,8 @@ struct RXAppPriv {
 
     RXArray  gpu;               /* GpuEntry, the browser's cache */
     int      gpu_budget;
+    RXArray  albums;            /* RXAlbum, the names copies: the tree's list (rx_app_albums) */
+    unsigned albums_generation; /* lib.generation it was made for; 0 none */
     RXArray  wave_checks;       /* WaveCheck: the stored waveforms looked at */
 
     RXMailbox *export_mb;
@@ -849,7 +851,7 @@ static RXTrack *next_candidate(RXApp *app, const RXTrack *t)
     if (app->rows_dirty || app->rows_generation != app->lib.generation || !app->rows)
         rx_app_rebuild_rows(app);
     bool wrap = my_setting_is(&app->lib.cfg, "player.play_mode", "continue");
-    if (!wrap && !app->current_playlist)
+    if (!wrap && !app->current_playlist && !app->current_album)
         return NULL;
     int n = app->nb_rows;
     int idx = rx_library_index_of(&app->lib, t);
@@ -2661,6 +2663,33 @@ static bool playlist_exists(const RXLibrary *lib, const RXPlaylist *p)
     return found;
 }
 
+/* The tracks of an album in the album's own order: disc, then track
+ * number (tracks without one last), then title; the library's order
+ * between equals. */
+static int compare_album_rows(const void *pa, const void *pb, void *opaque)
+{
+    const RowKey *ra = pa, *rb = pb;
+    const RXLibrary *lib = opaque;
+    const RXTrack *a = lib->tracks[ra->index], *b = lib->tracks[rb->index];
+    int da = a->meta.disc_number > 0 ? a->meta.disc_number : INT_MAX;
+    int db = b->meta.disc_number > 0 ? b->meta.disc_number : INT_MAX;
+    if (da != db)
+        return da < db ? -1 : 1;
+    int na = a->meta.track_number > 0 ? a->meta.track_number : INT_MAX;
+    int nb = b->meta.track_number > 0 ? b->meta.track_number : INT_MAX;
+    if (na != nb)
+        return na < nb ? -1 : 1;
+    int c = rx_strcasecmp(title_of(a), title_of(b));
+    if (c)
+        return c;
+    return (ra->pos > rb->pos) - (ra->pos < rb->pos);
+}
+
+static bool in_album(const RXTrack *t, const char *album)
+{
+    return t->meta.album && !strcmp(t->meta.album, album);
+}
+
 void rx_app_rebuild_rows(RXApp *app)
 {
     RXLibrary *lib = &app->lib;
@@ -2670,6 +2699,7 @@ void rx_app_rebuild_rows(RXApp *app)
         app->current_playlist = NULL;
 
     const RXPlaylist *pl = app->current_playlist;
+    const char *album = pl ? NULL : app->current_album;
     int cap = pl ? pl->nb : lib->nb_tracks;
     RowKey *keys = calloc(RX_MAX(cap, 1), sizeof(*keys));
     if (!keys) {
@@ -2686,6 +2716,8 @@ void rx_app_rebuild_rows(RXApp *app)
         const RXTrack *t = pl ? rx_library_find_id(lib, pl->track_ids[i]) : lib->tracks[i];
         if (!t)
             continue;
+        if (album && !in_album(t, album))
+            continue;
         if (nb_words && !track_matches(t, words, nb_words))
             continue;
         keys[nb++] = (RowKey) {
@@ -2701,6 +2733,16 @@ void rx_app_rebuild_rows(RXApp *app)
     };
     if (ctx.column >= 0 && ctx.column < RX_COL_COUNT) {
         qsort_r(keys, nb, sizeof(*keys), compare_rows, &ctx);
+    } else if (album) {
+        /* An album's natural order is its own, not the library's. */
+        qsort_r(keys, nb, sizeof(*keys), compare_album_rows, lib);
+        if (ctx.descending) {
+            for (int i = 0; i < nb / 2; i++) {
+                RowKey tmp = keys[i];
+                keys[i] = keys[nb - 1 - i];
+                keys[nb - 1 - i] = tmp;
+            }
+        }
     } else if (ctx.descending) {
         for (int i = 0; i < nb / 2; i++) {
             RowKey tmp = keys[i];
@@ -2726,6 +2768,69 @@ void rx_app_rebuild_rows(RXApp *app)
     app->dirty = true;
 }
 
+static int compare_album_names(const void *pa, const void *pb)
+{
+    return rx_strcasecmp(*(const char *const *)pa, *(const char *const *)pb);
+}
+
+static void albums_free(RXAppPriv *priv)
+{
+    for (size_t i = 0; i < priv->albums.nb; i++)
+        free((char *)((RXAlbum *)rx_array_at(&priv->albums, i))->name);
+    priv->albums.nb = 0;
+    priv->albums_generation = 0;
+}
+
+int rx_app_albums(RXApp *app, const RXAlbum **albums)
+{
+    RXAppPriv *priv = app->priv;
+    RXLibrary *lib = &app->lib;
+    *albums = NULL;
+    if (!priv)
+        return 0;
+    if (priv->albums_generation != lib->generation) {
+        albums_free(priv);
+        /* The names, sorted; a run of equal ones is one album. */
+        const char **names = malloc(sizeof(*names) * RX_MAX(lib->nb_tracks, 1));
+        if (!names)
+            return 0;
+        int n = 0;
+        for (int i = 0; i < lib->nb_tracks; i++) {
+            const char *a = lib->tracks[i]->meta.album;
+            if (a && a[0])
+                names[n++] = a;
+        }
+        qsort(names, n, sizeof(*names), compare_album_names);
+        for (int i = 0; i < n;) {
+            int j = i + 1;
+            while (j < n && !strcmp(names[j], names[i]))
+                j++;
+            RXAlbum al = { .name = rx_strdup(names[i]), .nb = j - i };
+            if (!al.name || !rx_array_push(&priv->albums, &al)) {
+                free((char *)al.name);
+                break;
+            }
+            i = j;
+        }
+        free(names);
+        priv->albums_generation = lib->generation;
+    }
+    *albums = priv->albums.data;
+    return (int)priv->albums.nb;
+}
+
+void rx_app_show_album(RXApp *app, const char *name)
+{
+    char *copy = name ? rx_strdup(name) : NULL;
+    if (name && !copy)
+        return;
+    free(app->current_album);
+    app->current_album = copy;
+    if (copy)
+        app->current_playlist = NULL;
+    rx_app_rebuild_rows(app);
+}
+
 /* ---------------------------------------------------------------- lifecycle */
 
 int rx_app_create(RXApp *app, const char *library_root, const RXPlayerOptions *player_opt,
@@ -2740,6 +2845,7 @@ int rx_app_create(RXApp *app, const char *library_root, const RXPlayerOptions *p
     rx_array_init(&priv->saves, sizeof(uint64_t));
     rx_array_init(&priv->gpu, sizeof(GpuEntry));
     rx_array_init(&priv->wave_checks, sizeof(WaveCheck));
+    rx_array_init(&priv->albums, sizeof(RXAlbum));
     for (int d = 0; d < RX_DECKS; d++) {
         priv->uploaded_palette[d] = -1;
         priv->play_last_pos[d] = -1.0;
@@ -2886,6 +2992,10 @@ void rx_app_destroy(RXApp *app)
     free(app->rows);
     app->rows = NULL;
     app->nb_rows = 0;
+    free(app->current_album);
+    app->current_album = NULL;
+    albums_free(priv);
+    rx_array_free(&priv->albums);
     free(app->selection);
     app->selection = NULL;
     app->nb_selection = 0;
