@@ -130,16 +130,17 @@ src/audio     libavformat/libavcodec decode to memory on the players' timeline, 
 src/analysis  spectral front end (libavutil av_tx), onset, tempo, grid, downbeat, key, waveforms
 src/formats   export.pdb, ANLZ read/write, OneLibrary (sqlite3 + SQLCipher pages), My Settings, colours
 src/export    stick plan, writer, inspect, pull
-src/player    PipeWire stream, the player, lock-free command queue, cue/loop/quantize controls, null backend for tests
+src/player    PipeWire stream, the player, lock-free command queue, cue/loop/quantize controls, MASTER TEMPO, null backend for tests
 src/gpu       SDL3 window (Wayland), Vulkan device + VMA, swapchain, Wayland frame-callback pacing, ImGui glue, waveform shader
-src/ui        Dear ImGui screens (C++; the only C++ besides vendored code)
+src/ui        Dear ImGui screens (C++, as are only vendored code and the player's Signalsmith Stretch interface)
 src/cli.c     the subcommands
 ```
 
 Decisions and why:
 
 - **C23, meson, one binary.** The user's house style (libcraw). C++ is used only
-  for the ImGui-facing UI files and the vendored VMA/ImGui; everything else,
+  for the ImGui-facing UI files, the vendored VMA/ImGui and the small C
+  interface to Signalsmith Stretch's templates; everything else,
   including every rule about formats and timing, is C and testable without a
   window.
 - **Vulkan through VMA, SDL3 only for the window and input.** The Vulkan
@@ -158,6 +159,13 @@ Decisions and why:
   seek inaccuracy, sample-exact loops, and the deck plays exactly the samples
   the analyser saw, so grid and audio agree on MP3s too. Resampling and
   varispeed are one cubic interpolator in the real-time callback.
+- **MASTER TEMPO with Signalsmith Stretch** (MIT, a git submodule in
+  `subprojects/`, read through meson's CMake module): the deck's varispeed
+  output is shifted back by 1 / (tempo + bend). The shifter's 120 ms delay
+  is read ahead, so jumps, starts and stops are heard at once, and the
+  position reported is the one heard. Chosen over Rubber Band, whose
+  licence is the GPL, and which measured worse (and allocated inside its
+  processing call on first use and on reset).
 - **PipeWire natively** (`pw_stream`), one process callback that never
   allocates or locks; commands arrive through a lock-free ring, positions leave
   through atomics. The sink is selectable (`--audio-sink`, `PIPEWIRE_NODE`) and
@@ -277,7 +285,7 @@ Implemented by subagents against the interfaces in `include/rxbox/`:
 | analysis/waveforms | byte-faithful port of dj's waveform encoders |
 | analysis/beats+key | the new grid analyser, key detection, evaluation harness over ~/Music |
 | formats+export | pdb, ANLZ, OneLibrary, settings, colours, plan, stick writer, inspect, stick sync |
-| player | PipeWire, decks, controls, null backend |
+| player | PipeWire, decks, controls, MASTER TEMPO, null backend |
 | gpu | window, Vulkan, VMA, frame callback, ImGui glue, waveform shader |
 | ui | the screens |
 | cli/tests | subcommands, meson tests, headless run |

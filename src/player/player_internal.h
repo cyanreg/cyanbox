@@ -26,6 +26,8 @@
 #include <stdalign.h>
 #include <stdatomic.h>
 
+#include "stretch.h"
+
 /* Commands in flight. One UI frame sends a handful; a drag sends one per
  * pointer event. 1024 is several seconds of a stalled output. */
 #define RX_CMD_RING 1024
@@ -43,6 +45,12 @@
 
 /* The level meters hold a peak and let it fall with this time constant. */
 #define RX_LEVEL_RELEASE_SECONDS 0.3f
+
+/* MASTER TEMPO renders a deck in pieces of at most this many frames, which
+ * is what its scratch buffers hold. A callback has no bound of ours:
+ * PipeWire hands it as many frames as its buffer has room for (pipewire.c,
+ * on_process), so a longer one is cut up rather than refused. */
+#define RX_MT_CHUNK 1024
 
 /* ------------------------------------------------------------- positions */
 
@@ -121,6 +129,7 @@ enum RXCmdType {
     RX_CMD_SCRUB_TO,        /* a = frames */
     RX_CMD_SCRUB_END,
     RX_CMD_MASTER_VOLUME,   /* a = gain; deck = -1 */
+    RX_CMD_MASTER_TEMPO,    /* flag */
 };
 
 /* A command is copied into the ring by value. A load carries the buffer's
@@ -143,6 +152,31 @@ typedef struct RXGrain {
     RXPos pos;
     int   age, len;         /* len == 0: idle */
 } RXGrain;
+
+/* MASTER TEMPO on the real-time side (deck.c has the why). Everything is
+ * allocated by rx_player_create; st == NULL means the player has none. */
+typedef struct RXDeckMT {
+    RXStretch *st;
+    int     latency;        /* frames from the shifter's input to its output */
+    int     in_latency;     /* frames from its newest input to the block it analyses */
+    float  *in[2], *out[2]; /* RX_MT_CHUNK frames: varispeed in, shifted out */
+    float  *ahead[2];       /* latency frames: what a restart starts from */
+    float  *xf[2];          /* RX_MT_CHUNK frames: the old sound of a crossfade */
+    int     xf_len, xf_left;
+    /* The read position and speed ratio (0 when stopped) of every frame fed,
+     * a ring of hist_mask + 1: what is heard now was fed `latency` ago. */
+    RXPos  *hist;
+    float  *hist_speed;
+    int64_t hist_mask;
+    int64_t fed;            /* frames fed so far */
+    int64_t fill_until;     /* frames fed before this one count as fill_pos */
+    RXPos   fill_pos;
+    bool    on;             /* the shifter is in the deck's path */
+    /* A restart is due at the next render. was_on and *was are the deck as
+     * it sounded before the first command that asked for it. */
+    bool    restart, was_on;
+    struct RXDeckRT *was;
+} RXDeckMT;
 
 typedef struct RXDeckRT {
     /* The buffer: owned by the owner side, read-only here. */
@@ -175,6 +209,8 @@ typedef struct RXDeckRT {
 
     float    level_l, level_r;
     uint64_t applied;           /* commands applied to this deck */
+
+    RXDeckMT mt;
 } RXDeckRT;
 
 /* ------------------------------------------------------- published state */
@@ -222,6 +258,7 @@ typedef struct RXDeckOwner {
     bool     loop_enabled;
     double   loop_in, loop_out; /* seconds, < 0 none */
     bool     scrubbing, scrub_resume;
+    bool     master_tempo;      /* the deck's button: survives loads */
 } RXDeckOwner;
 
 /* A buffer the owner let go of, freed once its deck has applied `serial`. */
@@ -271,6 +308,7 @@ struct RXPlayer {
     RXRelease      *releases;
     int             nb_releases, releases_cap;
     bool            ring_full_warned;
+    bool            master_tempo_ok;    /* every deck has a shifter */
 
     RXPwOut   *pw;
     RXNullOut *null;
@@ -290,12 +328,19 @@ const RXGrid *rx_player_deck_grid(const RXPlayer *p, int deck);
 /* ---------------------------------------------------------------- deck.c */
 
 void rx_player_deck_init(RXDeckRT *d);
+/* Owner thread: the deck's master tempo shifter and buffers, for a device at
+ * `rate`, and their release (safe on a deck without them). */
+int  rx_player_deck_mt_alloc(RXDeckRT *d, int rate);
+void rx_player_deck_mt_free(RXDeckRT *d);
 /* Applies one command for this deck (real-time thread). */
 void rx_player_deck_apply(RXDeckRT *d, const RXCmd *cmd, int rate);
 /* Adds the deck's output to `out` with its gain and updates its meters. */
 void rx_player_deck_render(RXDeckRT *d, float *out, int frames, int rate);
 /* Track frames per second of output the deck advances by. */
 double rx_player_deck_speed(const RXDeckRT *d);
+/* The position the listener hears: the read position, or with master tempo
+ * on, the position of what the shifter is putting out now. */
+RXPos rx_player_deck_heard(const RXDeckRT *d);
 
 /* -------------------------------------------------------------- backends */
 

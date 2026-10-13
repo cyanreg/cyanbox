@@ -13,8 +13,12 @@
  * atomics that rx_deck_state() reads. A deck plays a whole track decoded
  * in memory (RXAudio, native rate, interleaved float); the real-time
  * thread resamples to the device rate with a cubic interpolator, which is
- * also how tempo changes play (pitch follows tempo, as a CDJ without
- * master tempo). Loops wrap sample-exactly inside the callback.
+ * also how tempo changes play: pitch follows tempo, as on a CDJ with
+ * MASTER TEMPO off. With it on, the deck's output is shifted back by
+ * 1 / (tempo + bend) (Signalsmith Stretch), reading ahead by the
+ * shifter's delay so that jumps, starts and stops are still heard at once
+ * and the position reported is the one heard. Loops wrap sample-exactly
+ * inside the callback.
  *
  * Loading hands an RXAudio to the player, which owns it until the deck is
  * unloaded or loaded again; the old buffer is released only after the
@@ -90,10 +94,10 @@ void rx_deck_play_from(RXPlayer *p, int deck, double seconds);
 /* 1.0 = original speed; the tempo slider's ratio. */
 void rx_deck_set_tempo(RXPlayer *p, int deck, double ratio);
 /* MASTER TEMPO: the deck keeps its pitch while the tempo changes (the
- * varispeed output is shifted back by 1/speed with Rubber Band's live
- * shifter on the real-time thread). A property of the deck that survives
- * loads. Returns false when the player has no shifter (creation failed),
- * in which case the deck stays as a CDJ with MASTER TEMPO off. */
+ * varispeed output is shifted back by 1/speed with Signalsmith Stretch on
+ * the real-time thread). A property of the deck that survives loads.
+ * Returns false when the player has no shifter (creation failed), in which
+ * case the deck stays as a CDJ with MASTER TEMPO off. */
 bool rx_deck_set_master_tempo(RXPlayer *p, int deck, bool on);
 /* Loop between in and out seconds. `enabled` starts looping right away. */
 void rx_deck_set_loop(RXPlayer *p, int deck, double in, double out, bool enabled);

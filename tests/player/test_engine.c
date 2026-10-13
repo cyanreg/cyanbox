@@ -5,7 +5,10 @@
  * wraps checked against the expected output frame by frame, pause and
  * resume, tempo changes while playing, the end of the track, buffer
  * release after the real-time side's acknowledgement, scrubbing, meters,
- * the master volume and the limiter.
+ * the master volume and the limiter, and MASTER TEMPO: the pitch kept at
+ * another tempo, the position reported where it is heard, a jump heard in
+ * the very next block, sample-exact loops through the shifter, no click
+ * when the button is switched, and the button surviving a track change.
  *
  * The track is synthetic: 44.1 kHz stereo, 60 s, a one-sample click on
  * every beat at 128 BPM whose height encodes the beat number (negated on
@@ -406,7 +409,8 @@ static void test_tempo_change(void)
     CHECK(fabs(st(p).position * RATE - want) < 1.0, "bend: %f, want %f", st(p).position * RATE,
           want);
 
-    CHECK(!rx_deck_set_master_tempo(p, 0, true), "master tempo is not offered");
+    CHECK(rx_deck_set_master_tempo(p, 0, true), "master tempo is offered");
+    CHECK(st(p).master_tempo, "and reported");
     rx_player_destroy(p);
 }
 
@@ -753,6 +757,317 @@ static void test_threaded(void)
     rx_player_destroy(p);
 }
 
+/* ---------------------------------------------------------- master tempo */
+
+#define MT_RATE 48000
+
+/* A stereo sine at the device rate, so tempo is the only resampling. */
+static RXAudio *make_sine(double hz, double seconds)
+{
+    RXAudio *a = calloc(1, sizeof(*a));
+    if (!a)
+        abort();
+    a->rate = MT_RATE;
+    a->channels = 2;
+    a->nb_frames = (int64_t)(seconds * MT_RATE);
+    a->samples = calloc((size_t)a->nb_frames * 2, sizeof(float));
+    if (!a->samples)
+        abort();
+    for (int64_t i = 0; i < a->nb_frames; i++)
+        a->samples[2 * i] = a->samples[2 * i + 1] = 0.5f * (float)sin(2 * M_PI * hz * i / MT_RATE);
+    return a;
+}
+
+/* The left channel's frequency from its upward zero crossings, each placed
+ * between its two samples. */
+static double sine_freq(const float *buf, int frames, int rate)
+{
+    double first = -1.0, last = -1.0;
+    int count = 0;
+    for (int i = 1; i < frames; i++) {
+        float a = buf[2 * (i - 1)], b = buf[2 * i];
+        if (a < 0.0f && b >= 0.0f) {
+            double t = i - 1 + a / (a - b);
+            if (first < 0.0)
+                first = t;
+            last = t;
+            count++;
+        }
+    }
+    return count > 1 ? (count - 1) * (double)rate / (last - first) : 0.0;
+}
+
+static int mt_latency(const RXPlayer *p)
+{
+    return p->rt[0].mt.latency;
+}
+
+/* (a) A 440 Hz tone at tempo 1.08 plays at 475.2 Hz as a CDJ does, and at
+ * 440 Hz with the button on, measured over a second once the shifter's
+ * delay has passed. */
+static void test_mt_pitch(void)
+{
+    static float buf[2 * MT_RATE];
+    for (int pass = 0; pass < 2; pass++) {
+        RXPlayer *p = make_player(MT_RATE);
+        rx_deck_load(p, 0, make_sine(440.0, 10.0), NULL);
+        rx_deck_set_tempo(p, 0, 1.08);
+        CHECK(rx_deck_set_master_tempo(p, 0, pass == 1), "set master tempo");
+        rx_deck_play(p, 0);
+        render(p, NULL, mt_latency(p) + MT_RATE / 4);
+        render(p, buf, MT_RATE);
+        double f = sine_freq(buf, MT_RATE, MT_RATE);
+        double want = pass ? 440.0 : 440.0 * 1.08;
+        CHECK(fabs(f / want - 1.0) < 0.01, "master tempo %s: %.2f Hz, want %.1f",
+              pass ? "on" : "off", f, want);
+        printf("master tempo %s at 1.08: %.2f Hz\n", pass ? "on" : "off", f);
+        rx_player_destroy(p);
+    }
+}
+
+/* (b) With the button on, what is reported is what is heard: the read
+ * position less the delay while playing; right after a jump, the jump's
+ * target and never anything before it; paused, where it stopped; inside a
+ * loop shorter than the delay, inside the loop. */
+static void test_mt_position(void)
+{
+    RXPlayer *p = make_player(MT_RATE);
+    rx_deck_load(p, 0, make_track(2, SECONDS), NULL);
+    rx_deck_set_tempo(p, 0, 1.08);
+    rx_deck_set_master_tempo(p, 0, true);
+    int lat = mt_latency(p);
+    printf("master tempo delay: %d frames, %.1f ms at %d Hz\n", lat, lat * 1000.0 / MT_RATE,
+           MT_RATE);
+
+    double inc = 1.08 * RATE / MT_RATE;
+    rx_deck_play_from(p, 0, 5.0);
+    for (int i = 0; i < 20; i++) {
+        rx_player_null_advance(p, 3 * PERIOD + 11);
+        double heard = st(p).position * RATE;
+        double read = rx_pos_get(p->rt[0].pos);
+        CHECK(fabs(read - heard - lat * inc) < 1e-6, "lag %f frames, want %f", read - heard,
+              lat * inc);
+        double want = 5.0 * RATE + (i + 1) * (3 * PERIOD + 11) * inc;
+        CHECK(fabs(heard - want) < 1e-6, "heard at %f, want %f", heard, want);
+    }
+
+    /* Jumps both ways: the target at once and after the next block. */
+    double targets[] = { 20.0, 8.0, 8.5, 30.0 };
+    for (int i = 0; i < 4; i++) {
+        double t = targets[i];
+        rx_deck_seek(p, 0, t);
+        CHECK(st(p).position == t, "reported at once: %f", st(p).position);
+        rx_player_null_advance(p, PERIOD);
+        double heard = st(p).position;
+        CHECK(heard >= t, "never before the target: %f < %f", heard, t);
+        CHECK(fabs(heard * RATE - (t * RATE + PERIOD * inc)) < 1e-6, "%f after %f", heard, t);
+    }
+
+    /* Paused, it is where it stopped; moved while stopped, where it went. */
+    rx_deck_pause(p, 0);
+    rx_player_null_advance(p, PERIOD);
+    double paused = st(p).position;
+    CHECK(fabs(rx_pos_get(p->rt[0].pos) - paused * RATE) < 1e-6, "paused where heard");
+    rx_player_null_advance(p, lat + PERIOD);
+    CHECK(st(p).position == paused, "stays: %f, %f", st(p).position, paused);
+    rx_deck_scrub_begin(p, 0);
+    rx_deck_scrub_to(p, 0, 12.0);
+    rx_player_null_advance(p, PERIOD);
+    CHECK(st(p).position == 12.0, "a scrub is where the pointer is: %f", st(p).position);
+    rx_deck_scrub_end(p, 0);
+
+    /* A quarter of a beat at 128 BPM, 0.117 s: shorter than the delay. */
+    double in = 16 * 60.0 / BPM, out = in + 0.25 * 60.0 / BPM;
+    rx_deck_set_loop(p, 0, in, out, true);
+    rx_deck_play_from(p, 0, in);
+    bool inside = true;
+    for (int i = 0; i < 200; i++) {
+        rx_player_null_advance(p, PERIOD);
+        double t = st(p).position;
+        inside &= t >= in && t < out;
+    }
+    CHECK(inside, "a short loop is reported inside itself");
+    rx_player_destroy(p);
+}
+
+/* (e) A jump is heard in the very next block. At tempo 1.0 on a device at
+ * the track's rate the shifter is transparent, so every output frame says
+ * which track frame it came from: after a seek to 200 frames before a
+ * click, the first block after the seek has that click at frame 200 and
+ * nothing else, so nothing from where the deck was. (The level comes back
+ * from 98 % at the restart to 100 % 36 ms later, Stretch's outputSeek
+ * measured with impulses, hence 3 % on the height.) The same holds through
+ * a loop: the output is the loop arithmetic's frame sequence, wraps
+ * included, from the first frame after the 3 ms crossfade, and the
+ * reported position is the frame heard. */
+static void test_mt_seek_exact(void)
+{
+    RXPlayer *p = make_player(RATE);
+    RXAudio *a = make_track(2, SECONDS);
+    rx_deck_load(p, 0, a, NULL);
+    rx_deck_set_master_tempo(p, 0, true);
+    rx_deck_play_from(p, 0, 2.0);
+    rx_player_null_advance(p, RATE);
+    int xf = (int)(RATE * RX_FADE_SECONDS);
+
+    float buf[2 * PERIOD];
+    for (int k = 120; k > 0; k -= 13) {
+        int64_t target = click_frame(k) - 200;
+        rx_deck_seek(p, 0, (double)target / RATE);
+        render(p, buf, PERIOD);
+        float other = 0.0f;
+        for (int n = xf; n < PERIOD; n++) {
+            if (n != 200)
+                other = fmaxf(other, fmaxf(fabsf(buf[2 * n]), fabsf(buf[2 * n + 1])));
+        }
+        float l = buf[2 * 200], r = buf[2 * 200 + 1];
+        CHECK(fabsf(l / click_amp(k) - 1.0f) < 0.03f && fabsf(r / click_amp(k) + 1.0f) < 0.03f &&
+              other < 1e-3f, "beat %d: %f %f at frame 200, want +-%f; %f elsewhere", k, l, r,
+              click_amp(k), other);
+        render(p, NULL, 3 * PERIOD);
+    }
+
+    double in = 8 * 60.0 / BPM, out = 16 * 60.0 / BPM;
+    int64_t in_f = (int64_t)(in * RATE), out_f = (int64_t)(out * RATE);
+    rx_deck_set_loop(p, 0, in, out, true);
+    rx_deck_play_from(p, 0, 3.0);
+    int64_t t = 3 * RATE;
+    int wraps = 0, bad = 0, bad_pos = 0;
+    double err = 0.0;
+    for (int chunk = 0; chunk < 20 * RATE / PERIOD; chunk++) {
+        render(p, buf, PERIOD);
+        for (int n = 0; n < PERIOD; n++) {
+            if (chunk > 0 || n >= xf) {
+                float l = a->samples[2 * t], r = a->samples[2 * t + 1];
+                double e = fmax(fabs(buf[2 * n] - l), fabs(buf[2 * n + 1] - r));
+                err = fmax(err, e);
+                bad += e > 1e-3;
+            }
+            if (++t == out_f) {
+                t = in_f;
+                wraps++;
+            }
+        }
+        bad_pos += st(p).frame != t;
+    }
+    CHECK(bad == 0 && bad_pos == 0, "%d frames differ (worst %g), %d positions", bad, err,
+          bad_pos);
+    CHECK(wraps >= 4, "%d wraps", wraps);
+    printf("master tempo at tempo 1.0: worst difference from the track %g\n", err);
+    rx_player_destroy(p);
+}
+
+/* (c) Switching the button while a tone plays, and jumping, pausing and
+ * playing with it on: no click and no drop-out. The bound on the step
+ * between two output samples is the steepest a sine of this amplitude gets
+ * (2 pi f A / rate, with 10 % for the shifter's ripple) plus what a 3 ms
+ * crossfade between two unrelated signals of that amplitude adds per
+ * sample (2 A / fade length). A cut would step by up to 2 A, ten times
+ * more. */
+static void test_mt_toggle(void)
+{
+    RXPlayer *p = make_player(MT_RATE);
+    rx_deck_load(p, 0, make_sine(440.0, 30.0), NULL);
+    rx_deck_set_tempo(p, 0, 1.08);
+    rx_deck_play(p, 0);
+
+    int xf = (int)(MT_RATE * RX_FADE_SECONDS);
+    double amp = 0.5 * 1.1;
+    double bound = 2 * M_PI * 440.0 * 1.08 * amp / MT_RATE + 2 * amp / xf;
+
+    enum { ON, OFF, JUMP, PAUSE, PLAY, NOTHING };
+    static const struct {
+        int frames, what;
+    } steps[] = {
+        { MT_RATE / 4, ON },        /* while playing */
+        { MT_RATE / 2, OFF },
+        { MT_RATE / 4, ON },
+        { PERIOD,      OFF },       /* again in the middle of the crossfade */
+        { 2 * PERIOD,  ON },
+        { MT_RATE / 4, JUMP },
+        { MT_RATE / 4, PAUSE },
+        { MT_RATE / 8, PLAY },
+        { MT_RATE / 4, OFF },
+        { MT_RATE / 4, NOTHING },
+    };
+    static float buf[2 * 3 * MT_RATE];
+    int total = 0, pause_at = 0, play_at = 0;
+    for (size_t i = 0; i < RX_ARRAY_ELEMS(steps); i++) {
+        render(p, buf + 2 * total, steps[i].frames);
+        total += steps[i].frames;
+        switch (steps[i].what) {
+        case ON:
+        case OFF:
+            rx_deck_set_master_tempo(p, 0, steps[i].what == ON);
+            break;
+        case JUMP:
+            rx_deck_seek(p, 0, 7.123);
+            break;
+        case PAUSE:
+            rx_deck_pause(p, 0);
+            pause_at = total;
+            break;
+        case PLAY:
+            rx_deck_play(p, 0);
+            play_at = total;
+            break;
+        }
+    }
+
+    double worst = 0.0;
+    int worst_at = 0;
+    for (int n = 1; n < total; n++) {
+        for (int c = 0; c < 2; c++) {
+            double d = fabs(buf[2 * n + c] - buf[2 * (n - 1) + c]);
+            if (d > worst) {
+                worst = d;
+                worst_at = n;
+            }
+        }
+    }
+    CHECK(worst < bound, "a step of %f at frame %d, bound %f", worst, worst_at, bound);
+    printf("master tempo switches: largest step %f (bound %f)\n", worst, bound);
+
+    /* No drop-out while it plays: every 5 ms block outside the pause keeps
+     * most of the tone's level (0.35 RMS). */
+    int quiet = 0;
+    for (int n = 0; n + PERIOD <= total; n += PERIOD) {
+        if (n + PERIOD > pause_at && n < play_at + PERIOD)
+            continue;
+        double e = 0.0;
+        for (int k = 0; k < PERIOD; k++)
+            e += buf[2 * (n + k)] * buf[2 * (n + k)];
+        quiet += sqrt(e / PERIOD) < 0.2;
+    }
+    CHECK(quiet == 0, "%d blocks drop out", quiet);
+    rx_player_destroy(p);
+}
+
+/* (d) The button is the deck's, not the track's: it survives loads and
+ * unloads, and an empty deck reports it too. */
+static void test_mt_flag(void)
+{
+    RXPlayer *p = make_player(MT_RATE);
+    CHECK(!st(p).master_tempo, "off by default");
+    CHECK(rx_deck_set_master_tempo(p, 0, true), "on, with nothing loaded");
+    CHECK(st(p).master_tempo, "reported on an empty deck");
+    rx_deck_load(p, 0, make_track(2, 5.0), NULL);
+    rx_player_null_advance(p, PERIOD);
+    CHECK(st(p).master_tempo && p->rt[0].mt.on, "kept by a load");
+    rx_deck_unload(p, 0);
+    rx_player_null_advance(p, PERIOD);
+    CHECK(st(p).master_tempo && p->rt[0].mt.on, "kept by an unload");
+    rx_deck_load(p, 0, make_track(2, 5.0), NULL);
+    rx_deck_load(p, 0, make_track(2, 5.0), NULL);
+    rx_player_null_advance(p, PERIOD);
+    CHECK(st(p).master_tempo && p->rt[0].mt.on, "kept by a reload");
+    CHECK(rx_deck_set_master_tempo(p, 0, false), "off");
+    rx_player_null_advance(p, PERIOD);
+    CHECK(!st(p).master_tempo && !p->rt[0].mt.on, "switched off");
+    CHECK(!rx_deck_set_master_tempo(p, RX_DECKS, true), "no such deck");
+    rx_player_destroy(p);
+}
+
 int main(void)
 {
     test_positions();
@@ -772,6 +1087,11 @@ int main(void)
     test_levels_and_limits();
     test_ring_full();
     test_threaded();
+    test_mt_pitch();
+    test_mt_position();
+    test_mt_seek_exact();
+    test_mt_toggle();
+    test_mt_flag();
 
     if (failures) {
         fprintf(stderr, "%d failures\n", failures);

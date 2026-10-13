@@ -7,8 +7,9 @@ through theirs.
 
 ## Language and style
 
-- C23 (`-std=c23`), GCC. The only C++ is `src/ui/` (Dear ImGui) and the
-  vendored code in `third_party/`. C++ files include C headers directly; every
+- C23 (`-std=c23`), GCC. The only C++ is `src/ui/` (Dear ImGui),
+  `src/player/stretch.cpp` (a C interface to Signalsmith Stretch's templates)
+  and the vendored code. C++ files include C headers directly; every
   C header is already `extern "C"`-safe through plain C declarations, so wrap
   the includes in `extern "C" { }` on the C++ side.
 - Every file starts with `/* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */`
@@ -107,7 +108,7 @@ src/formats       pdb.c anlz.c onelibrary.c sqlcipher.c sha512.h settings.c colo
                   colors.c util.c buf.h formats_priv.h nfc_tables.h
 src/export        plan.c export.c inspect.c stick.c export_priv.h     -> rx_export_dep
 src/player        player.c pipewire.c nullout.c deck.c controls.c     -> rx_player_dep (core)
-                  player_internal.h
+                  stretch.cpp stretch.h player_internal.h
 src/app           jobs.c app.c                                        -> rx_app_dep (everything above)
                   headless.c (src/gpu and src/ui stand-ins for rxbox-cli and test_app)
 src/gpu           window.c vk.c swapchain.c textures.c wave.c         (executable only)
