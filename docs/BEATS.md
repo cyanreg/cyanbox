@@ -195,14 +195,14 @@ on the fitted grid (section 8).
 window's autocorrelation comb over the octave around the working tempo (the
 comb sums the beat, two-beat and bar lags, so a half-time stretch still
 reads as the main tempo). A *region* is a run of at least four windows
-(21 s) that agree within 1.5 % on a tempo more than 3 % from the main one,
-are rhythmic, and support the main tempo poorly there; and that tempo is not
-3:2, 2:3, 4:3 or 3:4 of the main one within 1 % (rbxport's rule: triplet and
-dotted passages read at those ratios; 128 to 174 is 1.9 % from 4:3 and
-passes). The tracker then follows each region's tempo. If most windows
-settle on another tempo that is not one of those ratios, that becomes the
-main tempo (the ratios are left to the family check of section 8, which
-fits both). In the final grids of the 150 evaluation tracks, four have
+(21 s), each within 1.5 % of the run's first window, whose tempo is more
+than 3 % from the main one and not 3:2, 2:3, 4:3 or 3:4 of it within 1 %
+(rbxport's rule: triplet and dotted passages read at those ratios; 128 to
+174 is 1.9 % from 4:3 and passes); the windows are rhythmic and support the
+main tempo poorly there. The region's tempo is the run's median, and the
+tracker follows it there. If most windows settle on another tempo that is
+not one of those ratios, that becomes the main tempo (the ratios are left
+to the family check of section 8, which fits both). In the final grids of the 150 evaluation tracks, four have
 regions, all live piano or jazz recordings.
 
 ## 4. Tracking and attacks (`grid_fit.c`)
@@ -649,8 +649,9 @@ make a frame look silent):
 - the threshold: after digital silence, 65 dB under the loud level, so
   that a few ms of dither before the music (-90 to -100 dB) is not the
   music while a fade from -60 dB is, from its first hit; over a noise floor
-  (dither, hiss), 20 dB over it and at least 50 dB under the loud level
-  (-60 dBFS on a loud master), where a fade becomes audible over the floor.
+  (dither, hiss), 20 dB over it but never lower than 50 dB under the loud
+  level (-60 dBFS on a loud master), where a fade becomes audible over the
+  floor.
   The level stays over it for a third of the next 200 ms: a click in a
   pregap is no start;
 - **a hit**: two frames (13 ms) after the level crosses the threshold it is
@@ -816,7 +817,7 @@ the final version was not finished (see "Known weaknesses").
 | No kicks | kick/full periodicity < 0.5 at 1× and 2× the beat rate, < 1 at ½× | two-step kicks cancel at the beat rate |
 | Low confidence | < 0.5 | |
 | Music start | floor: commonest level before the music is within 45 dB of the loud level (90th percentile); at least 60 dB under it and 60 ms long | dither and hiss are floors; an encoder delay is not |
-| Start threshold | after digital silence 65 dB under the loud level; over a noise floor 20 dB over it and at least 50 dB under the loud level; held for a third of 200 ms | a -60 dB fade counts from its first hit; a fade over dither from where it is heard; no clicks |
+| Start threshold | after digital silence 65 dB under the loud level; over a noise floor 20 dB over it, never lower than 50 dB under the loud level; held for a third of 200 ms | a -60 dB fade counts from its first hit; a fade over dither from where it is heard; no clicks |
 | Hit | 25 dB over the threshold two frames on; time at 3 % of its peak | a jump within a frame or two |
 | Fade, swell | a rise to 15 dB under the loud level in a second or more, or less; out of digital silence from the first sound | a swell leads into a bar line |
 | Start witness | within 0.1 beat (40 ms) of a beat or half beat; a hit whose kick band is at least twice the kick beats', where the kicks leave the half of the beat open (log under 1.0): log 2.5 and 2 scales for beat 1; a fade's first beat: half a scale for beat 1 | measured on the library, section 11 |
