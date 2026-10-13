@@ -31,6 +31,8 @@
 
 #include "rxbox/export.h"
 
+#include <sys/stat.h>
+
 #define RX_SYNC_PATH "/PIONEER/rxbox/sync.txt"
 
 /* ------------------------------------------------------------------ plan */
@@ -69,8 +71,9 @@ char *rx_plan_usb_stem(const RXTrack *t);
  * stem, or its first 40 characters with a "-N" collision suffix): a guard
  * when a stick's track ids may not be ours. */
 bool rx_plan_usb_name_matches(const RXTrack *t, const char *stick_path);
-/* Lower-cases ASCII and the common Latin, Greek and Cyrillic capitals, for
- * FAT's case-insensitive names (dj compared with str.lower()). */
+/* A path's key under FAT's and exFAT's case-insensitive names: up-cased
+ * as exFAT's default up-case table does (plan.c); two paths with one key
+ * are one file on the stick. */
 char *rx_plan_fold_case(const char *s);
 /* The background colour setting ([device] background_color): 0 default,
  * 1..8 pink..purple. */
@@ -115,13 +118,13 @@ typedef struct RXSyncRecord {
 } RXSyncRecord;
 
 int  rx_sync_record_read(const char *mount, RXSyncRecord *r);   /* -ENOENT when absent */
-int  rx_sync_record_write(const char *mount, const RXSyncRecord *r);
+int  rx_sync_record_write(int root, const RXSyncRecord *r);
 void rx_sync_record_free(RXSyncRecord *r);
 const RXSyncTrack *rx_sync_record_track(const RXSyncRecord *r, uint64_t id);
 /* A fresh record for a plan: new uuid, every track's cues as written. */
 int  rx_sync_record_from_plan(const RXPlan *plan, RXSyncRecord *r);
 /* Adds the settings files found on the stick now. */
-int  rx_sync_record_add_settings(RXSyncRecord *r, const char *mount);
+int  rx_sync_record_add_settings(RXSyncRecord *r, int root);
 /* The library's identity for the record: 32 hex digits made once and kept
  * in the library (setting "sync.library"). */
 int  rx_sync_library_key(RXLibrary *lib, char key[33]);
@@ -136,9 +139,26 @@ char *rx_stick_file(const char *mount, const char *stick_path);
 /* A path read from a stick (a database row, an analysis path) that names a
  * file on the stick: absolute, and no empty, "." or ".." component. */
 bool rx_stick_path_safe(const char *stick_path);
+/* The stick's files by stick path, below a descriptor of its root
+ * (rx_stick_root, an O_PATH descriptor of the mount) and nowhere else: no
+ * symbolic link is followed on the way and no other file system mounted
+ * inside is entered (ELOOP, EXDEV; stick.c). Errors are negative errno
+ * values; the descriptors returned are O_CLOEXEC. */
+int  rx_stick_root(const char *mount);
+/* openat(2) of a file on the stick; with O_CREAT the missing directories
+ * on the way are made. A trailing link is refused, or with O_PATH |
+ * O_NOFOLLOW opened as itself. */
+int  rx_stick_open(int root, const char *stick_path, int flags, mode_t mode);
+int  rx_stick_mkdirs(int root, const char *stick_dir);
+/* The file itself, as lstat(2) would see it. */
+int  rx_stick_stat(int root, const char *stick_path, struct stat *st);
+/* unlinkat(2) in the file's directory; `flags` 0 or AT_REMOVEDIR. */
+int  rx_stick_unlink(int root, const char *stick_path, int flags);
 /* Writes a file in place, creating its directory; no temporary, no sync
  * (rx_stick_sync at the end of an export covers everything at once). */
-int  rx_stick_write(const char *path, const void *data, size_t size);
+int  rx_stick_write(int root, const char *stick_path, const void *data, size_t size);
+/* A regular file's bytes; -EINVAL for anything else. */
+int  rx_stick_read_file(int root, const char *stick_path, uint8_t **data, size_t *size);
 /* Writes out everything pending on the stick's file system (syncfs). */
 int  rx_stick_sync(const char *mount);
 /* Bytes the export of `plan` to `dest` needs free, the files counted in

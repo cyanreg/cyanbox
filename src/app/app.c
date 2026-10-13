@@ -35,12 +35,15 @@
  *    own (a second connection to the same database): rx_export() wants a
  *    mutable library, and sharing the interface's would race with every
  *    edit made while it runs. What the tracks lack is analysed first here,
- *    through the normal jobs, and pending saves are flushed, so the
- *    export's handle finds everything in the database. That handle is a
- *    snapshot opened here, on the thread that makes every edit, so no edit
- *    lands half way through its reading; the dry run and the real run use
- *    the same one, so what the interface asked about (the files to delete)
- *    is what the real run does, whatever was edited meanwhile. Progress
+ *    through the normal jobs (the export waits for its own tracks'
+ *    analyses, not for the rest of the queue), and pending saves are
+ *    flushed, so the export's handle finds everything in the database. That handle is a
+ *    snapshot the export thread opens as the dry run starts (reading the
+ *    library and looking at every file take a while, and the interface
+ *    goes on), in one read transaction, so an edit committed meanwhile is
+ *    in it whole or not at all; the dry run and the real run use the same
+ *    one, so what the interface asked about (the files to delete) is what
+ *    the real run does, whatever was edited meanwhile. Progress
  *    comes back as malloc'd messages (strings copied) through a mailbox;
  *    the only other shared state is the cancel flag and the finished
  *    flag/result, published with release/acquire.
@@ -139,10 +142,13 @@ typedef struct ExportMsg {
 } ExportMsg;
 
 /* Owned by the main thread; the export thread reads the inputs, writes
- * `result`, then sets `finished` last. The library is the export's
- * snapshot (RXAppPriv.export_lib), the thread's alone while it runs. */
+ * `result` (and `opened`), then sets `finished` last. The library is the
+ * export's snapshot (RXAppPriv.export_lib), the thread's alone while it
+ * runs; with `root` set the thread opens it first. */
 typedef struct ExportJob {
     RXLibrary *lib;
+    char    *root;              /* the library to open as the snapshot; NULL: open already */
+    bool     opened;            /* the thread opened the snapshot (export_join takes it over) */
     char    *dest;
     int64_t *playlists;         /* ids of the selected playlists */
     int      nb_playlists;
@@ -198,10 +204,13 @@ struct RXAppPriv {
     unsigned   export_generation;   /* lib.generation when the snapshot was taken */
     ExportJob *export_job;      /* the run on the thread, NULL between runs */
     bool       export_started;  /* the thread exists and must be joined */
-    bool       export_probe;    /* the dry run again, past the unsynced check
-                                   (export_after_dry_run) */
     pthread_t  export_thread;
     char       export_last_stage[32];
+    uint64_t  *export_wait;     /* the export's tracks with an analysis in flight, sorted */
+    int        nb_export_wait;
+    int        export_wait_total;
+    bool       export_idle;     /* the jobs were seen with nothing pending (export_lost) */
+    int        export_idle_done;    /* app->analysing_done then */
 };
 
 /* ------------------------------------------------------------------ helpers */
@@ -1911,12 +1920,10 @@ end:
 /* The export runs in phases: what the selected tracks lack is analysed
  * through the jobs; a dry run on the export thread reports what a real run
  * would copy, skip and prune and whether the stick has player changes not
- * synced back; when there is something to ask, the interface confirms
- * (prune or not, export over unsynced changes or not), both questions at
- * once; then the real run. rx_export's checks stop a dry run at the
- * unsynced changes before it lists what pruning would delete, so a dry run
- * stopped there alone is run again past that check (the probe), and the
- * question waits for both answers. */
+ * synced back (a dry run that only those stop lists everything all the
+ * same, rxbox/export.h); when there is something to ask, the interface
+ * confirms (prune or not, export over unsynced changes or not), both
+ * questions at once; then the real run. */
 enum ExportPhase {
     EXPORT_IDLE = 0,
     EXPORT_ANALYSING,
@@ -1929,6 +1936,7 @@ static void export_job_free(ExportJob *ej)
 {
     if (!ej)
         return;
+    free(ej->root);
     free(ej->dest);
     free(ej->playlists);
     free(ej);
@@ -1982,6 +1990,106 @@ static void export_log(RXApp *app, const char *fmt, ...)
         len -= drop;
     }
     snprintf(log + len, cap - len, "%s\n", line);
+}
+
+static int export_cmp_id(const void *a, const void *b)
+{
+    uint64_t x = *(const uint64_t *)a, y = *(const uint64_t *)b;
+    return x < y ? -1 : x > y;
+}
+
+static void export_wait_free(RXAppPriv *priv)
+{
+    free(priv->export_wait);
+    priv->export_wait = NULL;
+    priv->nb_export_wait = priv->export_wait_total = 0;
+}
+
+/* What the analysing phase waits for: those of the export's tracks (`ids`)
+ * with an analysis in flight, queued by the export or before it, and
+ * nothing else (after an analyser upgrade the startup queue holds the
+ * whole library). */
+static int export_wait_for(RXApp *app, const RXArray *ids)
+{
+    RXAppPriv *priv = app->priv;
+    export_wait_free(priv);
+    uint64_t *in = malloc(RX_MAX(priv->inflight.nb, 1) * sizeof(*in));
+    uint64_t *w = malloc(RX_MAX(ids->nb, 1) * sizeof(*w));
+    if (!in || !w) {
+        free(in);
+        free(w);
+        return RX_ERROR(ENOMEM);
+    }
+    for (size_t i = 0; i < priv->inflight.nb; i++)
+        in[i] = ((const Inflight *)rx_array_at(&priv->inflight, i))->track_id;
+    if (priv->inflight.nb)
+        qsort(in, priv->inflight.nb, sizeof(*in), export_cmp_id);
+    int n = 0;
+    for (size_t i = 0; i < ids->nb; i++) {
+        const uint64_t *id = rx_array_at(ids, i);
+        if (priv->inflight.nb && bsearch(id, in, priv->inflight.nb, sizeof(*in), export_cmp_id))
+            w[n++] = *id;
+    }
+    free(in);
+    if (n)
+        qsort(w, (size_t)n, sizeof(*w), export_cmp_id);
+    int k = 0;
+    for (int i = 0; i < n; i++)
+        if (!k || w[k - 1] != w[i])
+            w[k++] = w[i];
+    priv->export_wait = w;
+    priv->nb_export_wait = priv->export_wait_total = k;
+    priv->export_idle = false;
+    return 0;
+}
+
+/* How many of them are still in flight; the others leave the list. */
+static int export_waiting(RXApp *app)
+{
+    RXAppPriv *priv = app->priv;
+    if (!priv->nb_export_wait)
+        return 0;
+    uint8_t *still = calloc((size_t)priv->nb_export_wait, 1);
+    if (!still)
+        return priv->nb_export_wait;
+    for (size_t i = 0; i < priv->inflight.nb; i++) {
+        const Inflight *f = rx_array_at(&priv->inflight, i);
+        const uint64_t *at = bsearch(&f->track_id, priv->export_wait, (size_t)priv->nb_export_wait,
+                                     sizeof(*priv->export_wait), export_cmp_id);
+        if (at)
+            still[at - priv->export_wait] = 1;
+    }
+    int k = 0;
+    for (int i = 0; i < priv->nb_export_wait; i++)
+        if (still[i])
+            priv->export_wait[k++] = priv->export_wait[i];
+    priv->nb_export_wait = k;
+    free(still);
+    return k;
+}
+
+/* Whether the analyses still waited for will never come back. The jobs
+ * post a result before they count it done (rxbox/jobs.h), so with nothing
+ * pending every result is in their mailbox, and a tick that then applies
+ * none (rx_app_tick drains before this) has seen the last: one whose post
+ * failed for memory is lost, and the export goes on without it rather
+ * than wait for ever. */
+static bool export_lost(RXApp *app, int waiting)
+{
+    RXAppPriv *priv = app->priv;
+    if (rx_jobs_pending(app->jobs) > 0) {
+        priv->export_idle = false;
+        return false;
+    }
+    if (!priv->export_idle || priv->export_idle_done != app->analysing_done) {
+        priv->export_idle = true;
+        priv->export_idle_done = app->analysing_done;
+        return false;
+    }
+    rx_warn("export: %d analys%s never came back", waiting, waiting == 1 ? "is" : "es");
+    export_log(app, "%d analys%s never came back; exporting without waiting", waiting,
+               waiting == 1 ? "is" : "es");
+    return true;
 }
 
 /* Export thread: progress to the mailbox, strings copied. */
@@ -2038,8 +2146,12 @@ static void *export_main(void *arg)
     ExportJob *ej = arg;
     RXPlaylist **playlists = NULL;
 
+    /* The snapshot, opened here: reading the library and looking at every
+     * file takes a while, and the interface goes on meanwhile. */
     int ret = 0;
-    if (ej->nb_playlists)
+    if (ej->root && (ret = rx_library_open(ej->lib, ej->root)) >= 0)
+        ej->opened = true;
+    if (ret >= 0 && ej->nb_playlists)
         ret = resolve_playlists(ej->lib, ej, &playlists);
     if (ret >= 0) {
         RXExportOptions opt;
@@ -2061,13 +2173,16 @@ static void *export_main(void *arg)
     return NULL;
 }
 
-/* Joins the export thread and drops its job. */
+/* Joins the export thread and drops its job; a snapshot the thread opened
+ * is the app's from here on. */
 static void export_join(RXAppPriv *priv)
 {
     if (priv->export_started) {
         pthread_join(priv->export_thread, NULL);
         priv->export_started = false;
     }
+    if (priv->export_job && priv->export_job->opened)
+        priv->export_lib_open = true;
     export_drain(priv);
     export_job_free(priv->export_job);
     priv->export_job = NULL;
@@ -2086,6 +2201,7 @@ static void export_finish(RXApp *app, int result)
     RXAppPriv *priv = app->priv;
     export_join(priv);
     export_snapshot_close(priv);
+    export_wait_free(priv);
     priv->export_phase = EXPORT_IDLE;
 
     typeof(app->export_state) *es = &app->export_state;
@@ -2116,19 +2232,15 @@ static void export_run(RXApp *app, bool dry_run)
     RXAppPriv *priv = app->priv;
     typeof(app->export_state) *es = &app->export_state;
 
-    /* The snapshot both runs export, taken once pending saves are written
-     * (export_tick) and before anything can be edited again. */
-    if (!priv->export_lib_open) {
-        int ret = rx_library_open(&priv->export_lib, app->lib.root);
-        if (ret < 0) {
-            export_finish(app, ret);
-            return;
-        }
-        priv->export_lib_open = true;
+    /* The snapshot both runs export: the dry run's thread opens it once
+     * pending saves are written (export_tick), the real run exports the
+     * same one. An edit committed while it is read is in it whole or not
+     * at all (rx_library_open reads in one transaction). */
+    bool open = !priv->export_lib_open;
+    if (open)
         priv->export_generation = app->lib.generation;
-    } else if (!dry_run && priv->export_generation != app->lib.generation) {
+    else if (!dry_run && priv->export_generation != app->lib.generation)
         export_log(app, "Changes made since the check are not in this export");
-    }
 
     ExportJob *ej = calloc(1, sizeof(*ej));
     if (!ej) {
@@ -2136,6 +2248,7 @@ static void export_run(RXApp *app, bool dry_run)
         return;
     }
     ej->lib = &priv->export_lib;
+    ej->root = open ? rx_strdup(app->lib.root) : NULL;
     ej->dest = rx_strdup(es->dest);
     if (priv->nb_export_playlists) {
         ej->playlists = calloc(priv->nb_export_playlists, sizeof(*ej->playlists));
@@ -2145,7 +2258,7 @@ static void export_run(RXApp *app, bool dry_run)
             ej->nb_playlists = priv->nb_export_playlists;
         }
     }
-    if (!ej->dest || (priv->nb_export_playlists && !ej->playlists)) {
+    if (!ej->dest || (open && !ej->root) || (priv->nb_export_playlists && !ej->playlists)) {
         export_job_free(ej);
         export_finish(app, RX_ERROR(ENOMEM));
         return;
@@ -2153,17 +2266,15 @@ static void export_run(RXApp *app, bool dry_run)
     ej->whole_library = es->whole_library;
     /* The dry run lists what pruning would delete, for the question. */
     ej->prune = dry_run || es->prune;
-    ej->ignore_unsynced = es->ignore_unsynced || (dry_run && priv->export_probe);
+    ej->ignore_unsynced = es->ignore_unsynced;
     ej->compat = es->compat;
     ej->dry_run = dry_run;
     ej->mb = priv->export_mb;
     ej->cancel = &priv->export_cancel;
 
-    /* The probe keeps what the first dry run found unsynced. */
     if (dry_run) {
         export_prune_list_free(app);
-        if (!priv->export_probe)
-            es->unsynced = 0;
+        es->unsynced = 0;
     }
     es->done = 0;
     es->total = 0;
@@ -2181,8 +2292,7 @@ static void export_run(RXApp *app, bool dry_run)
         return;
     }
     priv->export_started = true;
-    if (!priv->export_probe)
-        export_log(app, "%s to %s", dry_run ? "Checking the export" : "Exporting", es->dest);
+    export_log(app, "%s to %s", dry_run ? "Checking the export" : "Exporting", es->dest);
     rx_app_set_status(app, "%s to %s", dry_run ? "Checking the export" : "Exporting", es->dest);
 }
 
@@ -2243,11 +2353,7 @@ static void export_apply_msg(RXApp *app, const ExportMsg *m)
     }
 
     if (!strcmp(m->stage, "check")) {
-        /* The checks name their problems in `item`. The probe's are the
-         * first dry run's again, but for the unsynced changes, which it
-         * passes ("overwriting ...") before anyone said so. */
-        if (priv->export_probe)
-            return;
+        /* The checks name their problems in `item`. */
         export_log(app, "  %s", m->item);
         if (dry && unsynced_check(m->item))
             es->unsynced += unsynced_changes(m->item);
@@ -2266,6 +2372,9 @@ static void export_apply_msg(RXApp *app, const ExportMsg *m)
         } else if (!dry && (!path || es->prune)) {
             export_log(app, "  %s%s", path ? "deleted " : "", m->item);
         }
+    } else if (!strcmp(m->stage, "flush")) {
+        /* A failed or cancelled run's sync, or the sync failing. */
+        export_log(app, "  %s", m->item);
     }
 }
 
@@ -2276,20 +2385,11 @@ static void export_after_dry_run(RXApp *app, int result)
     typeof(app->export_state) *es = &app->export_state;
     export_join(priv);
 
+    /* Stopped by the unsynced changes alone (EBUSY), the dry run listed
+     * everything else, and one question covers both; stopped by anything
+     * else, the export cannot run: nothing to ask. */
     bool blocked = es->unsynced > 0 && !es->ignore_unsynced;
-    bool probed = priv->export_probe;
-    priv->export_probe = false;
-    if (blocked && !probed) {
-        /* Stopped at the checks, the unsynced one among them, before the
-         * prune list: again past that one, so the question covers both
-         * (and is not asked at all when another check fails too). */
-        priv->export_probe = true;
-        export_run(app, true);
-        return;
-    }
-    /* Past the unsynced check, the export still cannot run: nothing to
-     * ask. */
-    if (result < 0) {
+    if (result < 0 && !(blocked && result == RX_ERROR(EBUSY))) {
         export_finish(app, result);
         return;
     }
@@ -2326,14 +2426,17 @@ static bool export_tick(RXApp *app)
     }
 
     switch (priv->export_phase) {
-    case EXPORT_ANALYSING:
-        es->done = app->analysing_done;
-        es->total = app->analysing_total;
-        if (priv->inflight.nb)
+    case EXPORT_ANALYSING: {
+        int waiting = export_waiting(app);
+        es->done = priv->export_wait_total - waiting;
+        es->total = priv->export_wait_total;
+        if (waiting && !export_lost(app, waiting))
             return false;
+        export_wait_free(priv);
         flush_saves(app);
         export_run(app, true);
         return true;
+    }
     case EXPORT_CONFIRM:
         return false;
     default:
@@ -2391,6 +2494,7 @@ static void export_stop(RXApp *app)
     rx_cancel(&priv->export_cancel);
     export_join(priv);
     export_snapshot_close(priv);
+    export_wait_free(priv);
     priv->export_phase = EXPORT_IDLE;
     app->export_state.running = false;
     app->export_state.confirm = false;
@@ -2405,7 +2509,7 @@ int rx_app_start_export(RXApp *app)
         return RX_ERROR(EINVAL);
 
     /* The answer to the confirmation: the real run, which the dry run
-     * (and the probe) found nothing else in the way of. */
+     * found nothing else in the way of. */
     if (priv->export_phase == EXPORT_CONFIRM) {
         es->confirm = false;
         export_run(app, false);
@@ -2434,7 +2538,6 @@ int rx_app_start_export(RXApp *app)
     es->item[0] = '\0';
     es->log[0] = '\0';
     export_prune_list_free(app);
-    priv->export_probe = false;
 
     /* The interface owns its selection array: keep the ids. */
     free(priv->export_playlists);
@@ -2454,13 +2557,19 @@ int rx_app_start_export(RXApp *app)
 
     /* What goes on the stick is analysed first, here, so the export's
      * handle finds every grid and waveform in the database: the chosen
-     * playlists' tracks, every playlist's by default, or everything. */
-    int queued = 0;
+     * playlists' tracks, every playlist's by default, or everything. The
+     * export waits for those (export_wait_for), not for the rest of the
+     * queue. */
+    RXArray ids;
+    rx_array_init(&ids, sizeof(uint64_t));
+    bool oom = false;
     if (es->whole_library) {
         for (int i = 0; i < app->lib.nb_tracks; i++) {
             RXTrack *t = app->lib.tracks[i];
-            if (!t->missing && queue_analysis(app, t, RX_ANALYSE_ALL, false, false) > 0)
-                queued++;
+            if (t->missing)
+                continue;
+            queue_analysis(app, t, RX_ANALYSE_ALL, false, false);
+            oom |= !rx_array_push(&ids, &t->id);
         }
     } else {
         int nb = es->nb_playlists;
@@ -2476,11 +2585,19 @@ int rx_app_start_export(RXApp *app)
             const RXPlaylist *p = pls[i];
             for (int k = 0; p && k < p->nb; k++) {
                 RXTrack *t = rx_library_find_id(&app->lib, p->track_ids[k]);
-                if (t && !t->missing && queue_analysis(app, t, RX_ANALYSE_ALL, false, false) > 0)
-                    queued++;
+                if (!t || t->missing)
+                    continue;
+                queue_analysis(app, t, RX_ANALYSE_ALL, false, false);
+                oom |= !rx_array_push(&ids, &t->id);
             }
         }
         free(all);
+    }
+    int ret = oom ? RX_ERROR(ENOMEM) : export_wait_for(app, &ids);
+    rx_array_free(&ids);
+    if (ret < 0) {
+        es->running = false;
+        return ret;
     }
     flush_saves(app);
 
@@ -2488,8 +2605,9 @@ int rx_app_start_export(RXApp *app)
                es->compat ? " with the compatibility transcode" : "");
     priv->export_phase = EXPORT_ANALYSING;
     snprintf(es->stage, sizeof(es->stage), "analysis");
-    if (queued) {
-        export_log(app, "Analysing %d track%s first", queued, queued == 1 ? "" : "s");
+    if (priv->nb_export_wait) {
+        export_log(app, "Analysing %d track%s first", priv->nb_export_wait,
+                   priv->nb_export_wait == 1 ? "" : "s");
         rx_app_set_status(app, "Analysing before the export to %s", es->dest);
     }
     /* With nothing to wait for, the next tick starts the dry run. */

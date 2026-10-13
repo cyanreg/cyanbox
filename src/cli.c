@@ -1667,6 +1667,10 @@ static bool progress_cb(void *opaque, const char *stage, int done, int total, co
             progress_end_line(ctx);
             printf("  %s\n", item);
             ctx->unsynced += unsynced_check(item);
+        } else if (!strcmp(stage, "flush")) {
+            /* A failed or cancelled export's sync, or the sync failing. */
+            progress_end_line(ctx);
+            printf("  %s\n", item);
         } else if (!strcmp(stage, "prune")) {
             /* Stick paths are the files beyond the export, anything else a
              * message about them. */
@@ -1811,10 +1815,34 @@ static int cmd_export(Cli *cli, int argc, char **argv)
         printf(" in %d playlist%s", nb_pls, nb_pls == 1 ? "" : "s");
     if (missing)
         printf(", %d missing (skipped)", missing);
-    printf("; analysing what is missing\n");
-    int failed = analyse_tracks(cli, tracks.data, (int)tracks.nb, RX_ANALYSE_ALL, false, false);
-    if (failed)
-        printf("%d track%s could not be analysed\n", failed, failed == 1 ? "" : "s");
+    if (opt.dry_run) {
+        /* A dry run writes nothing, the library included: what the export
+         * would analyse first is only counted, as analyse_tracks counts
+         * it, and the dry run describes the tracks as they are. */
+        int todo = 0, stale = 0;
+        for (size_t i = 0; i < tracks.nb; i++) {
+            RXTrack *t = *(RXTrack **)rx_array_at(&tracks, i);
+            unsigned need = rx_app_analysis_needed(&cli->app, t, RX_ANALYSE_ALL, false);
+            if (t->grid_locked)
+                need &= ~RX_ANALYSE_BEATS;
+            todo += need != 0;
+            stale += (need & rx_app_analysis_stale(&cli->app, t)) != 0;
+        }
+        printf("\n");
+        if (todo) {
+            printf("%d track%s would be analysed first", todo, todo == 1 ? "" : "s");
+            if (stale)
+                printf(" (%d made by an older analyser)", stale);
+            printf("; a dry run analyses nothing\n");
+        } else {
+            printf("nothing to analyse\n");
+        }
+    } else {
+        printf("; analysing what is missing\n");
+        int failed = analyse_tracks(cli, tracks.data, (int)tracks.nb, RX_ANALYSE_ALL, false, false);
+        if (failed)
+            printf("%d track%s could not be analysed\n", failed, failed == 1 ? "" : "s");
+    }
 
     opt.playlists = playlists.nb ? (const RXPlaylist *const *)playlists.data : NULL;
     opt.nb_playlists = (int)playlists.nb;
@@ -1917,7 +1945,10 @@ static int cmd_pull(Cli *cli, int argc, char **argv)
     };
     int ret = rx_pull(&cli->app.lib, stick, progress_cb, &ctx);
     progress_end_line(&ctx);
-    if (ret < 0) {
+    if (ret == RX_ERROR(ENOENT)) {
+        code = fail("%s holds no export.pdb, exportLibrary.db or My Settings: not a stick, or not "
+                    "mounted there", stick);
+    } else if (ret < 0) {
         code = fail("cannot pull cues from %s: %s", stick, strerror(-ret));
     } else {
         printf("updated %d track%s from %s\n", ret, ret == 1 ? "" : "s", stick);
@@ -2004,7 +2035,11 @@ static int cmd_sync(Cli *cli, int argc, char **argv)
     RXSyncItem *items = NULL;
     int nb = 0;
     int ret = rx_stick_read(lib, stick, &state);
-    if (ret < 0) {
+    if (ret == RX_ERROR(ENOENT)) {
+        code = fail("%s holds no export.pdb, exportLibrary.db or My Settings: not a stick, or not "
+                    "mounted there", stick);
+        goto end;
+    } else if (ret < 0) {
         code = fail("cannot read %s: %s", stick, strerror(-ret));
         goto end;
     }

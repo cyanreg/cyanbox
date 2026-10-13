@@ -40,7 +40,12 @@
 #include <stdio.h>
 #include <sys/random.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <unistd.h>
+
+#ifdef SYS_openat2
+#include <linux/openat2.h>
+#endif
 
 #include "rxbox/colors.h"
 #include "src/export/export_priv.h"
@@ -84,19 +89,185 @@ bool rx_stick_path_safe(const char *p)
     return true;
 }
 
-int rx_stick_write(const char *path, const void *data, size_t size)
+/* Every file the export writes or deletes, and every file the sync reads,
+ * is resolved from a descriptor of the stick's root with openat2's
+ * RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_XDEV: a symbolic link
+ * anywhere on the way (FAT has none; a staging directory may, at any
+ * depth) or another file system mounted inside the stick fails the call
+ * (ELOOP, EXDEV) instead of leading out of it. Kernels without openat2
+ * (before 5.6, or a sandbox that hides it) get the same rules one
+ * component at a time: O_NOFOLLOW, and the device compared with the
+ * root's. */
+static int open_beneath(int dir, const char *rel, int flags, mode_t mode)
 {
-    char *dir = rx_strdup(path);
-    if (!dir)
-        return RX_ERROR(ENOMEM);
-    char *slash = strrchr(dir, '/');
-    int ret = 0;
-    if (slash && slash != dir) {
-        *slash = '\0';
-        ret = rx_mkdir_p(dir);
+#ifdef SYS_openat2
+    struct open_how how = {
+        .flags   = (uint64_t)(flags | O_CLOEXEC),
+        .mode    = flags & O_CREAT ? mode : 0,
+        .resolve = RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_XDEV,
+    };
+    for (int tries = 0; tries < 8; tries++) {
+        long fd = syscall(SYS_openat2, dir, rel, &how, sizeof(how));
+        if (fd >= 0)
+            return (int)fd;
+        /* EAGAIN: a rename or mount raced the resolution; try again. */
+        if (errno != EAGAIN)
+            break;
     }
+    if (errno != ENOSYS && errno != EPERM)
+        return RX_ERROR(errno);
+#endif
+    struct stat root;
+    if (fstat(dir, &root) < 0)
+        return RX_ERROR(errno);
+    int at = dir, ret = 0;
+    const char *p = rel;
+    const char *slash;
+    while ((slash = strchr(p, '/'))) {
+        /* The link itself, if it is one, and refused below. */
+        char *name = rx_strndup(p, (size_t)(slash - p));
+        int next = name ? openat(at, name, O_PATH | O_NOFOLLOW | O_CLOEXEC) : -1;
+        ret = !name ? RX_ERROR(ENOMEM) : next < 0 ? RX_ERROR(errno) : 0;
+        free(name);
+        struct stat st;
+        if (ret >= 0 && fstat(next, &st) < 0)
+            ret = RX_ERROR(errno);
+        else if (ret >= 0 && S_ISLNK(st.st_mode))
+            ret = RX_ERROR(ELOOP);
+        else if (ret >= 0 && !S_ISDIR(st.st_mode))
+            ret = RX_ERROR(ENOTDIR);
+        else if (ret >= 0 && st.st_dev != root.st_dev)
+            ret = RX_ERROR(EXDEV);
+        if (at != dir)
+            close(at);
+        at = next;
+        if (ret < 0) {
+            if (next >= 0)
+                close(next);
+            return ret;
+        }
+        p = slash + 1;
+    }
+    int fd = openat(at, p, flags | O_NOFOLLOW | O_CLOEXEC, mode);
+    ret = fd < 0 ? RX_ERROR(errno) : 0;
+    struct stat st;
+    /* A link opened as a directory is refused as openat2 refuses it. */
+    if (ret == RX_ERROR(ENOTDIR) && !fstatat(at, p, &st, AT_SYMLINK_NOFOLLOW) && S_ISLNK(st.st_mode))
+        ret = RX_ERROR(ELOOP);
+    else if (ret >= 0 && fstat(fd, &st) < 0)
+        ret = RX_ERROR(errno);
+    else if (ret >= 0 && st.st_dev != root.st_dev)
+        ret = RX_ERROR(EXDEV);
+    if (at != dir)
+        close(at);
+    if (ret < 0 && fd >= 0)
+        close(fd);
+    return ret < 0 ? ret : fd;
+}
+
+int rx_stick_root(const char *mount)
+{
+    int fd = open(mount, O_PATH | O_DIRECTORY | O_CLOEXEC);
+    return fd < 0 ? RX_ERROR(errno) : fd;
+}
+
+int rx_stick_mkdirs(int root, const char *stick_dir)
+{
+    if (!rx_stick_path_safe(stick_dir))
+        return RX_ERROR(EINVAL);
+    /* Down from the root, each directory made where missing and then
+     * opened by the same rules, so a link put in its place is refused. */
+    int at = root, ret = 0;
+    const char *p = stick_dir + 1;
+    while (*p && ret >= 0) {
+        const char *slash = strchr(p, '/');
+        size_t n = slash ? (size_t)(slash - p) : strlen(p);
+        char *name = rx_strndup(p, n);
+        if (!name) {
+            ret = RX_ERROR(ENOMEM);
+            break;
+        }
+        if (mkdirat(at, name, 0755) < 0 && errno != EEXIST)
+            ret = RX_ERROR(errno);
+        int next = ret >= 0 ? open_beneath(at, name, O_PATH | O_DIRECTORY, 0) : -1;
+        if (ret >= 0 && next < 0)
+            ret = next;
+        free(name);
+        if (at != root)
+            close(at);
+        at = next;
+        p += n + (slash != NULL);
+    }
+    if (at >= 0 && at != root)
+        close(at);
+    return ret;
+}
+
+int rx_stick_open(int root, const char *stick_path, int flags, mode_t mode)
+{
+    if (!rx_stick_path_safe(stick_path))
+        return RX_ERROR(EINVAL);
+    int fd = open_beneath(root, stick_path + 1, flags, mode);
+    if (fd != RX_ERROR(ENOENT) || !(flags & O_CREAT))
+        return fd;
+    /* A directory on the way is missing. */
+    char *dir = rx_strndup(stick_path, (size_t)(strrchr(stick_path, '/') - stick_path));
+    int ret = !dir ? RX_ERROR(ENOMEM) : dir[0] ? rx_stick_mkdirs(root, dir) : fd;
     free(dir);
-    return ret < 0 ? ret : rx_file_write(path, data, size);
+    return ret < 0 ? ret : open_beneath(root, stick_path + 1, flags, mode);
+}
+
+int rx_stick_stat(int root, const char *stick_path, struct stat *st)
+{
+    int fd = rx_stick_open(root, stick_path, O_PATH | O_NOFOLLOW, 0);
+    if (fd < 0)
+        return fd;
+    int ret = fstat(fd, st) < 0 ? RX_ERROR(errno) : 0;
+    close(fd);
+    return ret;
+}
+
+int rx_stick_unlink(int root, const char *stick_path, int flags)
+{
+    if (!rx_stick_path_safe(stick_path))
+        return RX_ERROR(EINVAL);
+    const char *base = strrchr(stick_path, '/') + 1;
+    int dir = root;
+    if (base - 1 != stick_path) {
+        char *parent = rx_strndup(stick_path, (size_t)(base - 1 - stick_path));
+        dir = parent ? rx_stick_open(root, parent, O_PATH | O_DIRECTORY, 0) : RX_ERROR(ENOMEM);
+        free(parent);
+        if (dir < 0)
+            return dir;
+    }
+    int ret = unlinkat(dir, base, flags) < 0 ? RX_ERROR(errno) : 0;
+    if (dir != root)
+        close(dir);
+    return ret;
+}
+
+int rx_stick_write(int root, const char *stick_path, const void *data, size_t size)
+{
+    int fd = rx_stick_open(root, stick_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0)
+        return fd;
+    int ret = 0;
+    const uint8_t *p = data;
+    size_t left = size;
+    while (left) {
+        ssize_t n = write(fd, p, left);
+        if (n < 0 && errno == EINTR)
+            continue;
+        if (n < 0) {
+            ret = RX_ERROR(errno);
+            break;
+        }
+        p += n;
+        left -= (size_t)n;
+    }
+    if (close(fd) < 0 && !ret)
+        ret = RX_ERROR(errno);
+    return ret;
 }
 
 int rx_stick_sync(const char *mount)
@@ -111,20 +282,50 @@ int rx_stick_sync(const char *mount)
 
 /* Only regular files: a link or a FIFO on a stick formatted with a Unix
  * file system could point the reader at /dev/zero. */
+int rx_stick_read_file(int root, const char *stick_path, uint8_t **data, size_t *size)
+{
+    *data = NULL;
+    *size = 0;
+    int fd = rx_stick_open(root, stick_path, O_RDONLY, 0);
+    if (fd < 0)
+        return fd;
+    struct stat st;
+    int ret = fstat(fd, &st) < 0 ? RX_ERROR(errno) : S_ISREG(st.st_mode) ? 0 : RX_ERROR(EINVAL);
+    uint8_t *buf = ret >= 0 ? malloc((size_t)RX_MAX(st.st_size, 1)) : NULL;
+    if (ret >= 0 && !buf)
+        ret = RX_ERROR(ENOMEM);
+    size_t n = 0;
+    while (ret >= 0 && n < (size_t)st.st_size) {
+        ssize_t r = read(fd, buf + n, (size_t)st.st_size - n);
+        if (r < 0 && errno == EINTR)
+            continue;
+        if (r < 0)
+            ret = RX_ERROR(errno);
+        else if (!r)
+            break;
+        else
+            n += (size_t)r;
+    }
+    close(fd);
+    if (ret < 0) {
+        free(buf);
+        return ret;
+    }
+    *data = buf;
+    *size = n;
+    return 0;
+}
+
+/* The same by mount point, for the readers that look at a file or two. */
 static int read_stick_file(const char *mount, const char *stick_path, uint8_t **data, size_t *size)
 {
     *data = NULL;
     *size = 0;
-    if (!rx_stick_path_safe(stick_path))
-        return RX_ERROR(EINVAL);
-    char *p = rx_stick_file(mount, stick_path);
-    if (!p)
-        return RX_ERROR(ENOMEM);
-    struct stat st;
-    int ret = lstat(p, &st) < 0 ? RX_ERROR(errno) : S_ISREG(st.st_mode) ? 0 : RX_ERROR(EINVAL);
-    if (ret >= 0)
-        ret = rx_file_read(p, data, size);
-    free(p);
+    int root = rx_stick_root(mount);
+    if (root < 0)
+        return root;
+    int ret = rx_stick_read_file(root, stick_path, data, size);
+    close(root);
     return ret;
 }
 
@@ -316,14 +517,14 @@ static bool record_is_ours(const RXLibrary *lib, const RXSyncRecord *r)
     return ours;
 }
 
-int rx_sync_record_add_settings(RXSyncRecord *r, const char *mount)
+int rx_sync_record_add_settings(RXSyncRecord *r, int root)
 {
     for (int i = 0; i < 4; i++) {
         char path[64];
         snprintf(path, sizeof(path), "/PIONEER/%s", settings_files[i]);
         uint8_t *d;
         size_t n;
-        if (read_stick_file(mount, path, &d, &n) < 0)
+        if (rx_stick_read_file(root, path, &d, &n) < 0)
             continue;
         snprintf(r->settings[r->nb_settings].name, sizeof(r->settings[0].name), "%s", settings_files[i]);
         r->settings[r->nb_settings].data = d;
@@ -333,7 +534,7 @@ int rx_sync_record_add_settings(RXSyncRecord *r, const char *mount)
     return 0;
 }
 
-int rx_sync_record_write(const char *mount, const RXSyncRecord *r)
+int rx_sync_record_write(int root, const RXSyncRecord *r)
 {
     char *buf = NULL;
     size_t size = 0;
@@ -368,9 +569,7 @@ int rx_sync_record_write(const char *mount, const RXSyncRecord *r)
         free(buf);
         return RX_ERROR(EIO);
     }
-    char *path = rx_stick_file(mount, RX_SYNC_PATH);
-    int ret = path ? rx_stick_write(path, buf, size) : RX_ERROR(ENOMEM);
-    free(path);
+    int ret = rx_stick_write(root, RX_SYNC_PATH, buf, size);
     free(buf);
     return ret;
 }
@@ -551,8 +750,84 @@ void rx_stick_state_free(RXStickState *s)
     *s = (RXStickState) { 0 };
 }
 
+/* pread(2) of exactly `n` bytes at `off`; a file shorter than that is
+ * damaged. */
+static int pread_all(int fd, void *buf, size_t n, off_t off)
+{
+    size_t done = 0;
+    while (done < n) {
+        ssize_t r = pread(fd, (uint8_t *)buf + done, n - done, off + (off_t)done);
+        if (r < 0 && errno == EINTR)
+            continue;
+        if (r < 0)
+            return RX_ERROR(errno);
+        if (!r)
+            return RX_ERROR(EINVAL);
+        done += (size_t)r;
+    }
+    return 0;
+}
+
+/* An analysis file's header and cue tags (PCOB, PCO2), as an analysis file
+ * of their own for rx_anlz_read_cues: a sync, and every export's check,
+ * reads the cues of a stick of five thousand tracks, not the gigabyte of
+ * waveforms around them. Of the other tags only the headers are read, up
+ * to the waveforms after the cues (rekordbox's order, docs/anlz.md 1.2:
+ * the .DAT ends with the cues; the .EXT has PWV3 before them, PQT2 and
+ * the other waveforms after); a file that puts its cues anywhere else is
+ * still read, header by header. */
+static int read_cue_tags(int root, const char *stick_path, uint8_t **out, size_t *size)
+{
+    *out = NULL;
+    *size = 0;
+    int fd = rx_stick_open(root, stick_path, O_RDONLY, 0);
+    if (fd < 0)
+        return fd;
+    struct stat st;
+    int ret = fstat(fd, &st) < 0 ? RX_ERROR(errno) : S_ISREG(st.st_mode) ? 0 : RX_ERROR(EINVAL);
+    /* The pages asked for, no read-ahead into the waveforms. */
+    if (ret >= 0)
+        posix_fadvise(fd, 0, 0, POSIX_FADV_RANDOM);
+    uint64_t end = ret >= 0 ? (uint64_t)st.st_size : 0;
+    uint8_t h[12];
+    if (ret >= 0)
+        ret = pread_all(fd, h, sizeof(h), 0);
+    uint64_t len = ret >= 0 ? rx_rd_be32(h + 4) : 0;
+    if (ret >= 0 && (memcmp(h, "PMAI", 4) || len < 12 || len > end))
+        ret = RX_ERROR(EINVAL);
+    RXBuf b = { 0 };
+    if (ret >= 0 && (ret = rx_buf_reserve(&b, len)) >= 0 && (ret = pread_all(fd, b.data, len, 0)) >= 0)
+        b.len = len;
+    bool cues = false;
+    for (uint64_t off = len; ret >= 0 && off + 12 <= end; off += len) {
+        if ((ret = pread_all(fd, h, sizeof(h), (off_t)off)) < 0)
+            break;
+        len = rx_rd_be32(h + 8);
+        if (len < 12 || off + len > end) {
+            ret = RX_ERROR(EINVAL);
+            break;
+        }
+        bool cue = !memcmp(h, "PCOB", 4) || !memcmp(h, "PCO2", 4);
+        if (cues && !cue && !memcmp(h, "PWV", 3))
+            break;
+        if (!cue)
+            continue;
+        cues = true;
+        if ((ret = rx_buf_reserve(&b, len)) < 0 ||
+            (ret = pread_all(fd, b.data + b.len, len, (off_t)off)) < 0)
+            break;
+        b.len += len;
+    }
+    close(fd);
+    if (ret < 0) {
+        rx_buf_free(&b);
+        return ret;
+    }
+    return rx_buf_finish(&b, out, size);
+}
+
 /* The cues of one track as the stick holds them. */
-static int stick_cues(const char *mount, const char *dat_path, RXStickCue **out, int *nb)
+static int stick_cues(int root, const char *dat_path, RXStickCue **out, int *nb)
 {
     *out = NULL;
     *nb = 0;
@@ -564,9 +839,9 @@ static int stick_cues(const char *mount, const char *dat_path, RXStickCue **out,
     memcpy(ext_path + strlen(ext_path) - 4, ".EXT", 4);
     uint8_t *dat = NULL, *ext = NULL;
     size_t dat_size = 0, ext_size = 0;
-    int ret = read_stick_file(mount, dat_path, &dat, &dat_size);
+    int ret = read_cue_tags(root, dat_path, &dat, &dat_size);
     if (ret >= 0)
-        read_stick_file(mount, ext_path, &ext, &ext_size);
+        read_cue_tags(root, ext_path, &ext, &ext_size);
     free(ext_path);
     if (ret < 0)
         return ret;
@@ -684,6 +959,17 @@ static int onelibrary_rows(sqlite3 *db, RXArray *rows, RXArray *hist)
     return 0;
 }
 
+static int cmp_path(const void *a, const void *b)
+{
+    return strcmp(*(char *const *)a, *(char *const *)b);
+}
+
+static int cmp_u64(const void *a, const void *b)
+{
+    uint64_t x = *(const uint64_t *)a, y = *(const uint64_t *)b;
+    return x < y ? -1 : x > y;
+}
+
 int rx_stick_read(const RXLibrary *lib, const char *mount, RXStickState *out)
 {
     *out = (RXStickState) { 0 };
@@ -705,6 +991,13 @@ int rx_stick_read(const RXLibrary *lib, const char *mount, RXStickState *out)
     rx_array_init(&settings, sizeof(RXKv));
     StickTrack *cues = NULL;
     int nb_cues = 0;
+    char **pdb_paths = NULL;
+    uint64_t *ids = NULL;
+    int root = rx_stick_root(mount);
+    if (root < 0) {
+        ret = root;
+        goto fail;
+    }
 
     p->has_record = rx_sync_record_read(mount, &p->record) >= 0;
     if (p->has_record && !record_is_ours(lib, &p->record)) {
@@ -719,7 +1012,7 @@ int rx_stick_read(const RXLibrary *lib, const char *mount, RXStickState *out)
     uint8_t *data;
     size_t size;
     size_t pdb_rows = 0;
-    if (read_stick_file(mount, "/PIONEER/rekordbox/export.pdb", &data, &size) >= 0) {
+    if (rx_stick_read_file(root, "/PIONEER/rekordbox/export.pdb", &data, &size) >= 0) {
         RXPdb pdb;
         out->has_pdb = true;
         if (rx_pdb_read(data, size, &pdb) >= 0) {
@@ -760,31 +1053,40 @@ int rx_stick_read(const RXLibrary *lib, const char *mount, RXStickState *out)
         }
         free(data);
     }
-    if (read_stick_file(mount, "/PIONEER/rekordbox/exportLibrary.db", &data, &size) >= 0) {
+    if (rx_stick_read_file(root, "/PIONEER/rekordbox/exportLibrary.db", &data, &size) >= 0) {
         out->has_onelibrary = true;
         uint8_t *wal = NULL, *plain;
         size_t wal_size = 0, plain_size;
-        read_stick_file(mount, "/PIONEER/rekordbox/exportLibrary.db-wal", &wal, &wal_size);
+        rx_stick_read_file(root, "/PIONEER/rekordbox/exportLibrary.db-wal", &wal, &wal_size);
         if (rx_sqlcipher_decrypt(data, size, rx_onelibrary_passphrase, wal, wal_size, &plain,
                                  &plain_size) >= 0) {
             sqlite3 *db;
             if (rx_onelibrary_open_plain(plain, plain_size, &db) >= 0) {
                 /* Track identity from export.pdb; the OneLibrary adds the
                  * tracks export.pdb does not have (it may be damaged, or
-                 * be a player's half-written one) and its history. */
+                 * be a player's half-written one) and its history. Its
+                 * rows are looked up among export.pdb's by path, sorted. */
                 RXArray more;
                 rx_array_init(&more, sizeof(StickRow));
                 onelibrary_rows(db, &more, &hist);
+                pdb_paths = malloc(RX_MAX(pdb_rows, 1) * sizeof(*pdb_paths));
+                if (!pdb_paths)
+                    ret = RX_ERROR(ENOMEM);
+                for (size_t k = 0; pdb_paths && k < pdb_rows; k++)
+                    pdb_paths[k] = ((StickRow *)rx_array_at(&rows, k))->path;
+                if (pdb_paths && pdb_rows)
+                    qsort(pdb_paths, pdb_rows, sizeof(*pdb_paths), cmp_path);
                 for (size_t i = 0; i < more.nb; i++) {
                     StickRow *m = rx_array_at(&more, i);
-                    bool known = false;
-                    for (size_t k = 0; k < pdb_rows && !known; k++)
-                        known = !strcmp(((StickRow *)rx_array_at(&rows, k))->path, m->path);
-                    if (known || !rx_array_push(&rows, m)) {
+                    bool dup = !pdb_paths || (pdb_rows && bsearch(&m->path, pdb_paths, pdb_rows,
+                                                                  sizeof(*pdb_paths), cmp_path));
+                    if (dup || !rx_array_push(&rows, m)) {
                         free(m->path);
                         free(m->anlz);
                     }
                 }
+                free(pdb_paths);
+                pdb_paths = NULL;
                 rx_array_free(&more);
                 sqlite3_close(db);
             }
@@ -793,6 +1095,8 @@ int rx_stick_read(const RXLibrary *lib, const char *mount, RXStickState *out)
         free(wal);
         free(data);
     }
+    if (ret < 0)
+        goto fail;
     out->nb_tracks = (int)rows.nb;
 
     cues = calloc(RX_MAX(rows.nb, 1), sizeof(*cues));
@@ -822,7 +1126,7 @@ int rx_stick_read(const RXLibrary *lib, const char *mount, RXStickState *out)
         }
         RXStickCue *sc = NULL;
         int nsc = 0;
-        if (stick_cues(mount, anlz, &sc, &nsc) < 0)
+        if (stick_cues(root, anlz, &sc, &nsc) < 0)
             continue;
         RXCue *rc = calloc((size_t)RX_MAX(nsc, 1), sizeof(*rc));
         typeof(out->tracks[0]) st = {
@@ -843,13 +1147,21 @@ int rx_stick_read(const RXLibrary *lib, const char *mount, RXStickState *out)
         cues[nb_cues++] = (StickTrack) { .cues = sc, .nb = nsc };
     }
 
+    /* The plays of the tracks read, looked up by id, sorted. */
+    ids = malloc(RX_MAX(states.nb, 1) * sizeof(*ids));
+    if (!ids) {
+        ret = RX_ERROR(ENOMEM);
+        goto fail;
+    }
+    for (size_t i = 0; i < states.nb; i++)
+        ids[i] = ((typeof(out->tracks[0]) *)rx_array_at(&states, i))->track_id;
+    if (states.nb)
+        qsort(ids, states.nb, sizeof(*ids), cmp_u64);
     for (size_t i = 0; i < hist.nb; i++) {
         HistList *h = rx_array_at(&hist, i);
         for (int k = 0; k < h->nb; k++) {
-            bool known = false;
-            for (size_t s = 0; s < states.nb && !known; s++)
-                known = ((typeof(out->tracks[0]) *)rx_array_at(&states, s))->track_id == h->track_ids[k];
-            if (!known)
+            uint64_t id = h->track_ids[k];
+            if (!states.nb || !bsearch(&id, ids, states.nb, sizeof(*ids), cmp_u64))
                 continue;
             typeof(out->plays[0]) pl = {
                 .track_id  = h->track_ids[k],
@@ -867,7 +1179,7 @@ int rx_stick_read(const RXLibrary *lib, const char *mount, RXStickState *out)
     for (int i = 0; i < 4; i++) {
         char path[64];
         snprintf(path, sizeof(path), "/PIONEER/%s", settings_files[i]);
-        if (read_stick_file(mount, path, &data, &size) < 0)
+        if (rx_stick_read_file(root, path, &data, &size) < 0)
             continue;
         RXKv *kv;
         int nk;
@@ -889,6 +1201,14 @@ int rx_stick_read(const RXLibrary *lib, const char *mount, RXStickState *out)
             }
         }
         rx_kv_free(kv, nk);
+    }
+
+    /* Neither database nor a settings file: not a stick (a mistyped mount
+     * point, or a stick not mounted yet), which must not pass for one
+     * with nothing to sync. */
+    if (!out->has_pdb && !out->has_onelibrary && !p->nb_files) {
+        ret = RX_ERROR(ENOENT);
+        goto fail;
     }
 
     out->tracks = states.data;
@@ -943,6 +1263,9 @@ fail:
             free(cues[i].cues);
         free(cues);
     }
+    free(ids);
+    if (root >= 0)
+        close(root);
     if (ret < 0)
         rx_stick_state_free(out);
     return ret;

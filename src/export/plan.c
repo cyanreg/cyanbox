@@ -115,43 +115,86 @@ static void strmap_free(StrMap *m)
 
 /* -------------------------------------------------------------- names */
 
-/* The small letter of a capital in the blocks above. Latin Extended-A
- * pairs capitals on even code points except in U+0139..U+0148 and
- * U+0179..U+017E, where they are odd (Ł ł, Ń ń, Ž ž); dj's str.lower()
- * knew that, and a fold that does not makes "Žena" and "žena" two names
- * on a stick where they are one file. Cyrillic's extensions pair the same
- * way from U+0460. */
-static uint32_t fold_cp(uint32_t c)
+/* FAT and exFAT compare names without case, and exFAT up-cases both with
+ * the volume's up-case table, code unit by code unit, characters beyond
+ * the BMP compared as they are (the Linux driver, fs/exfat/nls.c, and
+ * Windows alike). Every formatter writes the table the exFAT specification
+ * recommends (Microsoft, 2019, section 7.2.5.1; checksum 0xE619D30D): two
+ * names it up-cases alike are one file, so two tracks named Șerban and
+ * șerban must not share a path. Its 874 mappings as runs, read out of the
+ * table mkfs.exfat (exfatprogs 1.4.3) wrote to a new volume and checked
+ * against it code point by code point: every code point from `first` to
+ * `last` in steps of `step` up-cases to itself plus `delta`. dj folded
+ * with str.lower(), which differs in a few places (ǅ, the Kelvin sign);
+ * the stick decides. Linux's vfat folds less (ASCII), so there a name this
+ * folds together is at worst kept apart needlessly. */
+typedef struct UpcaseRun {
+    uint16_t first, last;
+    int16_t  delta;
+    uint8_t  step;
+} UpcaseRun;
+
+static const UpcaseRun upcase_runs[] = {
+    { 0x0061, 0x007A, -32, 1 }, { 0x00E0, 0x00F6, -32, 1 }, { 0x00F8, 0x00FE, -32, 1 },
+    { 0x00FF, 0x00FF, 121, 1 }, { 0x0101, 0x012F, -1, 2 }, { 0x0133, 0x0137, -1, 2 },
+    { 0x013A, 0x0148, -1, 2 }, { 0x014B, 0x0177, -1, 2 }, { 0x017A, 0x017E, -1, 2 },
+    { 0x0180, 0x0180, 195, 1 }, { 0x0183, 0x0185, -1, 2 }, { 0x0188, 0x0188, -1, 1 },
+    { 0x018C, 0x018C, -1, 1 }, { 0x0192, 0x0192, -1, 1 }, { 0x0195, 0x0195, 97, 1 },
+    { 0x0199, 0x0199, -1, 1 }, { 0x019A, 0x019A, 163, 1 }, { 0x019E, 0x019E, 130, 1 },
+    { 0x01A1, 0x01A5, -1, 2 }, { 0x01A8, 0x01A8, -1, 1 }, { 0x01AD, 0x01AD, -1, 1 },
+    { 0x01B0, 0x01B0, -1, 1 }, { 0x01B4, 0x01B6, -1, 2 }, { 0x01B9, 0x01B9, -1, 1 },
+    { 0x01BD, 0x01BD, -1, 1 }, { 0x01BF, 0x01BF, 56, 1 }, { 0x01C6, 0x01C6, -2, 1 },
+    { 0x01C9, 0x01C9, -2, 1 }, { 0x01CC, 0x01CC, -2, 1 }, { 0x01CE, 0x01DC, -1, 2 },
+    { 0x01DD, 0x01DD, -79, 1 }, { 0x01DF, 0x01EF, -1, 2 }, { 0x01F3, 0x01F3, -2, 1 },
+    { 0x01F5, 0x01F5, -1, 1 }, { 0x01F9, 0x021F, -1, 2 }, { 0x0223, 0x0233, -1, 2 },
+    { 0x023A, 0x023A, 10795, 1 }, { 0x023C, 0x023C, -1, 1 }, { 0x023E, 0x023E, 10792, 1 },
+    { 0x0242, 0x0242, -1, 1 }, { 0x0247, 0x024F, -1, 2 }, { 0x0253, 0x0253, -210, 1 },
+    { 0x0254, 0x0254, -206, 1 }, { 0x0256, 0x0257, -205, 1 }, { 0x0259, 0x0259, -202, 1 },
+    { 0x025B, 0x025B, -203, 1 }, { 0x0260, 0x0260, -205, 1 }, { 0x0263, 0x0263, -207, 1 },
+    { 0x0268, 0x0268, -209, 1 }, { 0x0269, 0x0269, -211, 1 }, { 0x026B, 0x026B, 10743, 1 },
+    { 0x026F, 0x026F, -211, 1 }, { 0x0272, 0x0272, -213, 1 }, { 0x0275, 0x0275, -214, 1 },
+    { 0x027D, 0x027D, 10727, 1 }, { 0x0280, 0x0280, -218, 1 }, { 0x0283, 0x0283, -218, 1 },
+    { 0x0288, 0x0288, -218, 1 }, { 0x0289, 0x0289, -69, 1 }, { 0x028A, 0x028B, -217, 1 },
+    { 0x028C, 0x028C, -71, 1 }, { 0x0292, 0x0292, -219, 1 }, { 0x037B, 0x037D, 130, 1 },
+    { 0x03AC, 0x03AC, -38, 1 }, { 0x03AD, 0x03AF, -37, 1 }, { 0x03B1, 0x03C1, -32, 1 },
+    { 0x03C2, 0x03C2, -31, 1 }, { 0x03C3, 0x03CB, -32, 1 }, { 0x03CC, 0x03CC, -64, 1 },
+    { 0x03CD, 0x03CE, -63, 1 }, { 0x03D9, 0x03EF, -1, 2 }, { 0x03F2, 0x03F2, 7, 1 },
+    { 0x03F8, 0x03F8, -1, 1 }, { 0x03FB, 0x03FB, -1, 1 }, { 0x0430, 0x044F, -32, 1 },
+    { 0x0450, 0x045F, -80, 1 }, { 0x0461, 0x0481, -1, 2 }, { 0x048B, 0x04BF, -1, 2 },
+    { 0x04C2, 0x04CE, -1, 2 }, { 0x04CF, 0x04CF, -15, 1 }, { 0x04D1, 0x0513, -1, 2 },
+    { 0x0561, 0x0586, -48, 1 }, { 0x1D7D, 0x1D7D, 3814, 1 }, { 0x1E01, 0x1E95, -1, 2 },
+    { 0x1EA1, 0x1EF9, -1, 2 }, { 0x1F00, 0x1F07, 8, 1 }, { 0x1F10, 0x1F15, 8, 1 },
+    { 0x1F20, 0x1F27, 8, 1 }, { 0x1F30, 0x1F37, 8, 1 }, { 0x1F40, 0x1F45, 8, 1 },
+    { 0x1F51, 0x1F57, 8, 2 }, { 0x1F60, 0x1F67, 8, 1 }, { 0x1F70, 0x1F71, 74, 1 },
+    { 0x1F72, 0x1F75, 86, 1 }, { 0x1F76, 0x1F77, 100, 1 }, { 0x1F78, 0x1F79, 128, 1 },
+    { 0x1F7A, 0x1F7B, 112, 1 }, { 0x1F7C, 0x1F7D, 126, 1 }, { 0x1F80, 0x1F87, 8, 1 },
+    { 0x1F90, 0x1F97, 8, 1 }, { 0x1FA0, 0x1FA7, 8, 1 }, { 0x1FB0, 0x1FB1, 8, 1 },
+    { 0x1FB3, 0x1FB3, 9, 1 }, { 0x1FCC, 0x1FCC, -9, 1 }, { 0x1FD0, 0x1FD1, 8, 1 },
+    { 0x1FE0, 0x1FE1, 8, 1 }, { 0x1FE5, 0x1FE5, 7, 1 }, { 0x1FFC, 0x1FFC, -9, 1 },
+    { 0x214E, 0x214E, -28, 1 }, { 0x2170, 0x217F, -16, 1 }, { 0x2184, 0x2184, -1, 1 },
+    { 0x24D0, 0x24E9, -26, 1 }, { 0x2C30, 0x2C5E, -48, 1 }, { 0x2C61, 0x2C61, -1, 1 },
+    { 0x2C68, 0x2C6C, -1, 2 }, { 0x2C76, 0x2C76, -1, 1 }, { 0x2C81, 0x2CE3, -1, 2 },
+    { 0x2D00, 0x2D25, -7264, 1 }, { 0xFF41, 0xFF5A, -32, 1 },
+};
+
+static uint32_t upcase(uint32_t c)
 {
-    if (c < 0x80)
-        return (uint32_t)tolower((int)c);
-    if ((c >= 0xC0 && c <= 0xDE && c != 0xD7) || (c >= 0x391 && c <= 0x3AB && c != 0x3A2) ||
-        (c >= 0x410 && c <= 0x42F))
-        return c + 0x20;
-    if (c == 0x178)
-        return 0xFF;
-    if ((c >= 0x100 && c <= 0x12F) || (c >= 0x132 && c <= 0x137) || (c >= 0x14A && c <= 0x177) ||
-        (c >= 0x460 && c <= 0x481) || (c >= 0x48A && c <= 0x4BF) || (c >= 0x4D0 && c <= 0x52F))
-        return c & 1 ? c : c + 1;
-    if ((c >= 0x139 && c <= 0x148) || (c >= 0x179 && c <= 0x17E) || (c >= 0x4C1 && c <= 0x4CE))
-        return c & 1 ? c + 1 : c;
-    if (c >= 0x400 && c <= 0x40F)
-        return c + 0x50;
-    if (c == 0x4C0)
-        return 0x4CF;
-    /* Greek capitals with tonos, and final sigma (both small sigmas have
-     * the one capital). */
-    if (c == 0x386)
-        return 0x3AC;
-    if (c >= 0x388 && c <= 0x38A)
-        return c + 0x25;
-    if (c == 0x38C)
-        return 0x3CC;
-    if (c == 0x38E || c == 0x38F)
-        return c + 0x3F;
-    if (c == 0x3C2)
-        return 0x3C3;
-    return c;
+    if (c > 0xFFFF)
+        return c;
+    int lo = 0, hi = (int)RX_ARRAY_ELEMS(upcase_runs) - 1, k = -1;
+    while (lo <= hi) {
+        int mid = (lo + hi) / 2;
+        if (upcase_runs[mid].first <= c) {
+            k = mid;
+            lo = mid + 1;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    if (k < 0)
+        return c;
+    const UpcaseRun *r = &upcase_runs[k];
+    return c <= r->last && (c - r->first) % r->step == 0 ? (uint32_t)((int32_t)c + r->delta) : c;
 }
 
 char *rx_plan_fold_case(const char *s)
@@ -161,7 +204,7 @@ char *rx_plan_fold_case(const char *s)
         return NULL;
     size_t o = 0;
     while (*s)
-        o += (size_t)rx_utf8_put(out + o, fold_cp(rx_utf8_next(&s)));
+        o += (size_t)rx_utf8_put(out + o, upcase(rx_utf8_next(&s)));
     out[o] = '\0';
     return out;
 }

@@ -280,7 +280,8 @@ line `rxbox export STICK`.
   default; only the chosen playlists (`-p NAME`, or "Selected playlists"),
   or the whole library (`--all`).
 - Tracks that lack an analysis, or have one an older analyser made, are
-  analysed first.
+  analysed first (the interface waits for those, not for the rest of the
+  analysis queue; a dry run only says how many).
 - Audio files already on the stick with the same size and modification
   time are skipped. The analysis files (the grid, cues and waveforms in
   the form players read) and artwork are built from the library, nothing
@@ -297,18 +298,22 @@ line `rxbox export STICK`.
   DeviceSQL page, that no two tracks map to the same stick path, and that
   the destination is a FAT32 or exFAT mount (a warning otherwise). Missing
   and unanalysed tracks are reported and skipped. `-n` / `--dry-run` prints
-  what would be copied and deleted and writes nothing.
+  what would be copied and deleted and writes nothing, the library
+  included. Nothing is written through a symbolic link or onto another
+  file system mounted inside the stick (a staging directory may have
+  them); such a path is named before anything is written.
 - The compatibility transcode (AAC and hi-res files to 16-bit/44.1 kHz
-  FLAC on the stick) is on by default: the dialog's checkbox, the
-  `export.compat_transcode` setting, `--compat` / `--no-compat` for one
-  export.
+  FLAC on the stick) is on by default: the `export.compat_transcode`
+  setting is the default of the dialog's checkbox, and `--compat` /
+  `--no-compat` decide for one export.
 - Before anything is written the export works out what the stick will
   take (the audio not yet on it, the analysis files, artwork and
   databases, in whole clusters) and refuses when there is not enough
   free; the figures are in the log. The audio is written straight to the
   stick (O_DIRECT where the file system takes it, no temporaries, no
   fsync), so the progress bar, the MB/s and the time left are the stick's
-  own; the stick is synced once at the end.
+  own; the stick is synced once at the end, a cancelled or failed export's
+  too.
 - The players' My Settings (quantize, auto cue level, tempo range, the
   mixer's fader curves, the waveform colour...) go on the stick for the
   sections the library has values for; the players apply them when you LOAD
@@ -338,7 +343,9 @@ My Settings values changed on the player. The command line lists them and
 `--apply` takes them all (`rxbox pull STICK` is the same); the interface
 shows one row per change, each accepted or rejected, and applies the
 accepted ones. Plays are not counted twice when the library already has a
-play of the same track within a minute.
+play of the same track within a minute. A directory with neither database
+nor My Settings file is not taken for a stick with nothing to sync: the
+commands fail.
 
 ## What is written to the stick
 

@@ -72,7 +72,8 @@ typedef struct RXExportOptions {
     const RXPlaylist *const *playlists; int nb_playlists;   /* NULL: every playlist; else only these */
     bool prune;                 /* delete files on the stick that are no longer exported */
     bool ignore_unsynced;       /* export even if the stick has changes not synced back */
-    bool compat_transcode;      /* AAC and hi-res FLAC -> 16/44.1 FLAC (overrides the config) */
+    bool compat_transcode;      /* AAC and hi-res FLAC -> 16/44.1 FLAC; the caller folds in the
+                                   export.compat_transcode setting (its default) */
     bool dry_run;               /* plan and check, report every copy/prune/rewrite, write nothing */
     bool force_analysis;        /* re-analyse everything first */
     const char *device_name;    /* NULL: the config's, else the stick's label */
@@ -92,7 +93,9 @@ void rx_export_options_default(RXExportOptions *o);
  *   - the stick has nothing unsynced (rx_stick_diff is empty), unless
  *     ignore_unsynced.
  * A dry run reports, as "copy"/"skip"/"prune"/"rewrite" stages, what a real
- * run would do, so the interface can show the prune list and ask. */
+ * run would do, so the interface can show the prune list and ask; one that
+ * only the unsynced changes stop reports all of it too, then returns
+ * -EBUSY as a real run would. */
 int  rx_export(RXLibrary *lib, const char *dest, const RXExportOptions *opt,
                rx_progress_cb cb, void *opaque);
 
@@ -153,6 +156,8 @@ typedef struct RXStickState {
     struct RXStickPriv *priv;         /* the reader's own state for the diff (the export's sync record, history lists) */
 } RXStickState;
 
+/* -ENOENT when `mount` holds neither database nor a My Settings file: not
+ * a stick (a mistyped mount point), never a stick with nothing to sync. */
 int  rx_stick_read(const RXLibrary *lib, const char *mount, RXStickState *out);
 void rx_stick_state_free(RXStickState *s);
 int  rx_stick_diff(const RXLibrary *lib, const RXStickState *s, RXSyncItem **items, int *nb);
