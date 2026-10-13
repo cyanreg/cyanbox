@@ -217,8 +217,9 @@ cannot be loaded or analysed, and offers Relocate… in its context menu;
 an unanalysed row shows `—` for BPM/key and a thin flat preview; a row being
 analysed shows a small spinner in the Preview cell.
 
-Actions: double-click loads the track into the player at once (a playing
-track is paused and replaced; the new one waits at its auto-cue); drag
+Actions: double-click loads the track into the player at once (over a
+playing track the new one plays on from its auto-cue; over a paused one it
+waits there); drag
 onto the player panel loads it; context menu: Load, Analyse (BPM/grid, key, both; force),
 Remove from playlist, Remove from library, Show in folder
 (prints the path to the status bar and copies it), Set colour, Set rating.

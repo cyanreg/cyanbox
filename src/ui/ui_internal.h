@@ -162,7 +162,7 @@ struct UiDeck {
     unsigned pads_down;        // hot cue pads pressed with the mouse (bit per slot)
     unsigned keys_hot_down;    // hot cue keys 1..3 held
     bool     key_cue_down;     // C held
-    bool     autoplay;         // start playing once loaded (test autoload)
+    bool     autoplay;         // start playing once loaded (a load over a playing track, the test autoload)
 };
 
 struct UiFileEntry {

@@ -620,12 +620,16 @@ void ui_load(UiState *ui, RXTrack *t)
         rx_app_set_status(ui->app, "%s is missing: relocate it first", ui_title(t));
         return;
     }
-    if (deck_playing(ui, 0))
+    // A track loaded over a playing one plays on: the deck pauses for the
+    // swap and starts the new track from its cue once it is in.
+    bool playing = deck_playing(ui, 0);
+    if (playing)
         rx_deck_pause(ui->app->player, 0);
     // The cue list's selection was the old track's: Delete is the table's
     // again (the list also lets go when it sees another track loaded).
     ui_cue_list_release(ui, 0);
     load_now(ui, 0, t);
+    ui->decks[0].autoplay = playing;
 }
 
 /* ------------------------------------------------------------------- style */
