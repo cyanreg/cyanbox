@@ -100,9 +100,7 @@ The full width of the window. Rows, top to bottom:
      `rx_hot_cue_default_rgb`) with the letter (15 px) over the name or
      position (`1:02.5`, 10.5 px); a hot loop shows a loop glyph. Press =
      set/call per the engine rules; shift-click or the pad's `×` (top-right
-     corner on hover) deletes; right-click = colour and name. Under them
-     the beat jump strip: `−32 −16 −8 −4 +4 +8 +16 +32` beats (with
-     `◄`/`►` when they fit), repeating while held like the arrows.
+     corner on hover) deletes; right-click = colour and name.
    - **BEAT LOOP**: `1/4 1/2 1 2 4 8 16 32` beat loops in one row of eight
      like the hot cues, the pad of the running loop lit orange; under them
      the loop strip `IN`, `OUT`, `EXIT`/`RELOOP`, `÷2`, `×2`.

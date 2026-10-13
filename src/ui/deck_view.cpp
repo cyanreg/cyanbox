@@ -5,9 +5,9 @@
 // readouts), the overview and detail waveforms (waveform_view.cpp), the
 // control row and the grid tools strip. The control row shows every group
 // at once, with no modes or tabs, in one row of pads so that the height it
-// does not need goes to the detail waveform: transport, the HOT CUE pads
-// over the beat jump strip, the BEAT LOOP pads over the loop strip, the
-// MEMORY buttons, one list of every cue, tempo.
+// does not need goes to the detail waveform: transport, the HOT CUE pads,
+// the BEAT LOOP pads over the loop strip, the MEMORY buttons, one list of
+// every cue, tempo.
 //
 // The cue list keeps a selection: a click on a row selects the cue (and
 // calls it), and while the list has the selection Delete deletes that cue
@@ -28,8 +28,6 @@
 // BEAT LOOP pads: the CDJ-3000's 1/4 .. 32 beat loops.
 static const double LOOP_PADS[8] = { 0.25, 0.5, 1, 2, 4, 8, 16, 32 };
 static const char *const LOOP_LABELS[8] = { "1/4", "1/2", "1", "2", "4", "8", "16", "32" };
-// The beat jump strip under the hot cue pads, in beats.
-static const double JUMP_PADS[8] = { -32, -16, -8, -4, 4, 8, 16, 32 };
 
 // The control row's grid in logical pixels (UI_CONTROL_ROW_H tall): each
 // group's caps label in the top band, one row of pads under it, the 24 px
@@ -628,45 +626,14 @@ static float pads_width(UiState *ui, float pad_w)
     return pad_w * 8 + PX(PAD_GAP) * 7;
 }
 
-// HOT CUE: pads A-H in one row, the beat jump strip under them. The
-// strip's buttons repeat while held, as the arrows do.
-static void hot_cue_group(UiState *ui, int deck, ImVec2 a, ImVec2 b, float pad_w,
-                          const RXDeckState &st)
+// HOT CUE: pads A-H in one row.
+static void hot_cue_group(UiState *ui, int deck, ImVec2 a, float pad_w)
 {
-    RXDeckCtl *c = &ui->app->decks[deck].ctl;
-    bool has = c->track && st.loaded;
     ImDrawList *dl = ImGui::GetWindowDrawList();
-    float w = pads_width(ui, pad_w);
     group_label(ui, dl, a, "HOT CUE");
     float py = a.y + PX(ROW_LABEL_H);
     for (int i = 0; i < 8; i++)
         hot_cue_pad(ui, deck, i, ImVec2(a.x + i * (pad_w + PX(PAD_GAP)), py), ImVec2(pad_w, PX(PAD_H)));
-
-    float sh = PX(STRIP_H), sy = b.y - PX(ROW_BOTTOM) - sh;
-    float sg = PX(3);
-    float bw = floorf((w - sg * 7) / 8);
-    // The arrows only when they fit beside the widest number, on every
-    // button alike.
-    bool arrows = ui_text_width(ui, ui->font_bold, 11.0f, "+32") + PX(11 + 3 + 8) <= bw;
-    for (int i = 0; i < 8; i++) {
-        char label[8], id[8], tip[64];
-        int beats = (int)JUMP_PADS[i];
-        snprintf(label, sizeof(label), "%+d", beats);
-        snprintf(id, sizeof(id), "bj%d", i);
-        snprintf(tip, sizeof(tip), "Beat jump %d beats %s (hold to repeat)", abs(beats),
-                 beats < 0 ? "back" : "forward");
-        UiButton jb = {};
-        jb.label = label;
-        if (arrows)
-            jb.icon = beats < 0 ? UI_ICON_LEFT : UI_ICON_RIGHT;
-        jb.disabled = !has;
-        jb.repeat = true;
-        jb.rounding = -1;
-        ImGui::SetCursorScreenPos(ImVec2(a.x + i * (bw + sg), sy));
-        if (ui_button(ui, id, ImVec2(i == 7 ? a.x + w - (a.x + i * (bw + sg)) : bw, sh), jb))
-            rx_ctl_beat_jump(c, JUMP_PADS[i]);
-        ui_tooltip(tip);
-    }
 }
 
 // BEAT LOOP: the auto loop pads in one row, the pad of the running loop lit
@@ -1271,7 +1238,7 @@ static void control_row(UiState *ui, int deck, ImVec2 a, ImVec2 b, const RXDeckS
     float pads_w = pads_width(ui, pad_w);
     ImGui::PushClipRect(ImVec2(gx0, a.y), ImVec2(gx1, b.y), true);
     float x = gx0;
-    hot_cue_group(ui, deck, ImVec2(x, a.y), ImVec2(x + pads_w, b.y), pad_w, st);
+    hot_cue_group(ui, deck, ImVec2(x, a.y), pad_w);
     x += pads_w + gg;
     loop_group(ui, deck, ImVec2(x, a.y), ImVec2(x + pads_w, b.y), pad_w, st);
     x += pads_w + gg;
