@@ -93,7 +93,9 @@ void rx_export_options_default(RXExportOptions *o);
  *   - the stick has nothing unsynced (rx_stick_diff is empty), unless
  *     ignore_unsynced.
  * A dry run reports, as "copy"/"skip"/"prune"/"rewrite" stages, what a real
- * run would do, so the interface can show the prune list and ask. */
+ * run would do, so the interface can show the prune list and ask; one that
+ * only the unsynced changes stop reports all of it too, then returns
+ * -EBUSY as a real run would. */
 int  rx_export(RXLibrary *lib, const char *dest, const RXExportOptions *opt,
                rx_progress_cb cb, void *opaque);
 

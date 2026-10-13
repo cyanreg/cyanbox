@@ -87,6 +87,9 @@ typedef struct Ctx {
      * whatever happens next); everything is written (a cancel changes
      * nothing any more). */
     bool                    writing, finished;
+    /* Changes a player left on the stick that this export would lose
+     * (checks); it refuses on them. */
+    int                     unsynced;
     const RXExportOptions  *opt;
     rx_progress_cb          cb;
     void                   *opaque;
@@ -1032,6 +1035,9 @@ static int check_paths(Ctx *c, const RXPlan *plan)
     return bad ? RX_ERROR(ELOOP) : 0;
 }
 
+/* The checks before anything is written; the first failure is returned.
+ * Unsynced changes a player left are counted in c->unsynced, not
+ * returned: the caller refuses on them, after the dry run's listing. */
 static int checks(Ctx *c, const RXPlan *plan)
 {
     int ret = 0;
@@ -1102,7 +1108,7 @@ static int checks(Ctx *c, const RXPlan *plan)
             if (nb && !c->opt->ignore_unsynced) {
                 reportf(c, "check", "stick has %d unsynced change%s (cues, history or settings a player "
                         "wrote); pull them first or export ignoring them", nb, nb == 1 ? "" : "s");
-                ret = ret ? ret : RX_ERROR(EBUSY);
+                c->unsynced = nb;
             } else if (nb) {
                 reportf(c, "check", "warning: overwriting %d unsynced change%s on the stick", nb,
                         nb == 1 ? "" : "s");
@@ -1117,7 +1123,10 @@ static int checks(Ctx *c, const RXPlan *plan)
         ret = ret ? ret : r;
     }
 
-    if (ret >= 0 && (r = build_databases(c, plan)) < 0)
+    /* The databases, when nothing else stops the export; a dry run stopped
+     * by the unsynced changes alone builds them too, to list all that a
+     * real run past them would write. */
+    if (ret >= 0 && (!c->unsynced || c->opt->dry_run) && (r = build_databases(c, plan)) < 0)
         ret = r;
 
     struct statvfs vfs;
@@ -1572,9 +1581,18 @@ int rx_export(RXLibrary *lib, const char *dest, const RXExportOptions *opt_in, r
     if ((ret = checks(&c, &plan)) < 0 || c.cancelled)
         goto out;
 
+    /* A dry run stopped by unsynced changes alone still lists what it
+     * would copy, rewrite and prune, so one question can cover both; the
+     * refusal stands. */
     if (opt->dry_run) {
         dry_run_report(&c, &plan);
         ret = prune(&c, &plan, true);
+        if (ret >= 0 && c.unsynced)
+            ret = RX_ERROR(EBUSY);
+        goto out;
+    }
+    if (c.unsynced) {
+        ret = RX_ERROR(EBUSY);
         goto out;
     }
 

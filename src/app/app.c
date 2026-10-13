@@ -198,8 +198,6 @@ struct RXAppPriv {
     unsigned   export_generation;   /* lib.generation when the snapshot was taken */
     ExportJob *export_job;      /* the run on the thread, NULL between runs */
     bool       export_started;  /* the thread exists and must be joined */
-    bool       export_probe;    /* the dry run again, past the unsynced check
-                                   (export_after_dry_run) */
     pthread_t  export_thread;
     char       export_last_stage[32];
 };
@@ -1906,12 +1904,10 @@ end:
 /* The export runs in phases: what the selected tracks lack is analysed
  * through the jobs; a dry run on the export thread reports what a real run
  * would copy, skip and prune and whether the stick has player changes not
- * synced back; when there is something to ask, the interface confirms
- * (prune or not, export over unsynced changes or not), both questions at
- * once; then the real run. rx_export's checks stop a dry run at the
- * unsynced changes before it lists what pruning would delete, so a dry run
- * stopped there alone is run again past that check (the probe), and the
- * question waits for both answers. */
+ * synced back (a dry run that only those stop lists everything all the
+ * same, rxbox/export.h); when there is something to ask, the interface
+ * confirms (prune or not, export over unsynced changes or not), both
+ * questions at once; then the real run. */
 enum ExportPhase {
     EXPORT_IDLE = 0,
     EXPORT_ANALYSING,
@@ -2148,17 +2144,15 @@ static void export_run(RXApp *app, bool dry_run)
     ej->whole_library = es->whole_library;
     /* The dry run lists what pruning would delete, for the question. */
     ej->prune = dry_run || es->prune;
-    ej->ignore_unsynced = es->ignore_unsynced || (dry_run && priv->export_probe);
+    ej->ignore_unsynced = es->ignore_unsynced;
     ej->compat = es->compat;
     ej->dry_run = dry_run;
     ej->mb = priv->export_mb;
     ej->cancel = &priv->export_cancel;
 
-    /* The probe keeps what the first dry run found unsynced. */
     if (dry_run) {
         export_prune_list_free(app);
-        if (!priv->export_probe)
-            es->unsynced = 0;
+        es->unsynced = 0;
     }
     es->done = 0;
     es->total = 0;
@@ -2176,8 +2170,7 @@ static void export_run(RXApp *app, bool dry_run)
         return;
     }
     priv->export_started = true;
-    if (!priv->export_probe)
-        export_log(app, "%s to %s", dry_run ? "Checking the export" : "Exporting", es->dest);
+    export_log(app, "%s to %s", dry_run ? "Checking the export" : "Exporting", es->dest);
     rx_app_set_status(app, "%s to %s", dry_run ? "Checking the export" : "Exporting", es->dest);
 }
 
@@ -2238,11 +2231,7 @@ static void export_apply_msg(RXApp *app, const ExportMsg *m)
     }
 
     if (!strcmp(m->stage, "check")) {
-        /* The checks name their problems in `item`. The probe's are the
-         * first dry run's again, but for the unsynced changes, which it
-         * passes ("overwriting ...") before anyone said so. */
-        if (priv->export_probe)
-            return;
+        /* The checks name their problems in `item`. */
         export_log(app, "  %s", m->item);
         if (dry && unsynced_check(m->item))
             es->unsynced += unsynced_changes(m->item);
@@ -2261,6 +2250,9 @@ static void export_apply_msg(RXApp *app, const ExportMsg *m)
         } else if (!dry && (!path || es->prune)) {
             export_log(app, "  %s%s", path ? "deleted " : "", m->item);
         }
+    } else if (!strcmp(m->stage, "flush")) {
+        /* A failed or cancelled run's sync, or the sync failing. */
+        export_log(app, "  %s", m->item);
     }
 }
 
@@ -2271,20 +2263,11 @@ static void export_after_dry_run(RXApp *app, int result)
     typeof(app->export_state) *es = &app->export_state;
     export_join(priv);
 
+    /* Stopped by the unsynced changes alone (EBUSY), the dry run listed
+     * everything else, and one question covers both; stopped by anything
+     * else, the export cannot run: nothing to ask. */
     bool blocked = es->unsynced > 0 && !es->ignore_unsynced;
-    bool probed = priv->export_probe;
-    priv->export_probe = false;
-    if (blocked && !probed) {
-        /* Stopped at the checks, the unsynced one among them, before the
-         * prune list: again past that one, so the question covers both
-         * (and is not asked at all when another check fails too). */
-        priv->export_probe = true;
-        export_run(app, true);
-        return;
-    }
-    /* Past the unsynced check, the export still cannot run: nothing to
-     * ask. */
-    if (result < 0) {
+    if (result < 0 && !(blocked && result == RX_ERROR(EBUSY))) {
         export_finish(app, result);
         return;
     }
@@ -2400,7 +2383,7 @@ int rx_app_start_export(RXApp *app)
         return RX_ERROR(EINVAL);
 
     /* The answer to the confirmation: the real run, which the dry run
-     * (and the probe) found nothing else in the way of. */
+     * found nothing else in the way of. */
     if (priv->export_phase == EXPORT_CONFIRM) {
         es->confirm = false;
         export_run(app, false);
@@ -2429,7 +2412,6 @@ int rx_app_start_export(RXApp *app)
     es->item[0] = '\0';
     es->log[0] = '\0';
     export_prune_list_free(app);
-    priv->export_probe = false;
 
     /* The interface owns its selection array: keep the ids. */
     free(priv->export_playlists);
