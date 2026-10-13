@@ -1406,6 +1406,62 @@ static void test_busy_add(void)
     free(dir);
 }
 
+/* rx_config_set checks a value against its key and an empty one is the
+ * default; a row stored before it checked (an older `rxbox config` took
+ * anything) still opens, with the default and a warning, and an empty
+ * row is the default without one. A colour's description is at most
+ * RX_CONFIG_VIBE_MAX bytes. */
+static void test_config_set(void)
+{
+    RXConfig c;
+    rx_config_defaults(&c);
+    CHECK(rx_config_set(&c, "analysis.snap_bpm", "maybe") == RX_ERROR(EINVAL) && c.snap_bpm);
+    CHECK(rx_config_set(&c, "analysis.snap_bpm", "off") == 0 && !c.snap_bpm);
+    CHECK(rx_config_set(&c, "analysis.snap_bpm", "") == 0 && c.snap_bpm);
+    CHECK(rx_config_set(&c, "export.pdb", "no") == 0 && !c.export_pdb);
+    CHECK(rx_config_set(&c, "export.pdb", NULL) == 0 && c.export_pdb);
+    CHECK(rx_config_set(&c, "analysis.bpm_min", "fast") == RX_ERROR(EINVAL) && c.bpm_min == 0.0);
+    CHECK(rx_config_set(&c, "analysis.bpm_min", "-1") == RX_ERROR(EINVAL));
+    CHECK(rx_config_set(&c, "analysis.bpm_min", "85.5") == 0 && c.bpm_min == 85.5);
+    CHECK(rx_config_set(&c, "analysis.bpm_min", "") == 0 && c.bpm_min == 0.0);
+    CHECK(rx_config_set(&c, "analysis.what", "beats,tempo") == RX_ERROR(EINVAL));
+    CHECK(rx_config_set(&c, "analysis.what", "key") == 0 && c.analyse_what == RX_ANALYSE_KEY);
+    CHECK(rx_config_set(&c, "analysis.what", "") == 0 && c.analyse_what == RX_ANALYSE_ALL);
+    CHECK(rx_config_set(&c, "export.key_notation", "roman") == RX_ERROR(EINVAL));
+    CHECK(rx_config_set(&c, "export.key_notation", "open") == 0 && !strcmp(c.key_notation, "open"));
+    CHECK(rx_config_set(&c, "ui.detail_bars", "0") == RX_ERROR(EINVAL) && c.detail_bars == 12);
+    CHECK(rx_config_set(&c, "ui.detail_bars", "16") == 0 && c.detail_bars == 16);
+    CHECK(rx_config_set(&c, "ui.traffic_light", "loud") == RX_ERROR(EINVAL));
+    CHECK(rx_config_set(&c, "audio.sink", "sink") == 0 && !strcmp(c.audio_sink, "sink"));
+    CHECK(rx_config_set(&c, "audio.sink", "") == 0 && !c.audio_sink);
+    CHECK(rx_config_set(&c, "ui.layout", "x") == RX_ERROR(ENOENT));
+    CHECK(rx_config_set(&c, "player.quantize", "on") == RX_ERROR(ENOENT));
+    CHECK(rx_config_set(&c, "analysis.nothing", "1") == RX_ERROR(ENOENT));
+    CHECK(rx_config_takes("analysis.snap_bpm") && !rx_config_takes("ui.layout"));
+
+    char long_vibe[RX_CONFIG_VIBE_MAX + 2];
+    memset(long_vibe, 'x', sizeof(long_vibe) - 1);
+    long_vibe[sizeof(long_vibe) - 1] = '\0';
+    CHECK(rx_config_set(&c, "color.red", long_vibe) == RX_ERROR(E2BIG) && !c.vibes[1]);
+    long_vibe[RX_CONFIG_VIBE_MAX] = '\0';
+    CHECK(rx_config_set(&c, "color.red", long_vibe) == 0 && strlen(c.vibes[1]) == RX_CONFIG_VIBE_MAX);
+    CHECK(rx_config_set(&c, "color.red", "") == 0 && !c.vibes[1]);
+    rx_config_free(&c);
+
+    char *dir = test_dir("library-config");
+    RXLibrary lib;
+    CHECK(rx_library_open(&lib, dir) == 0);
+    CHECK(rx_library_setting_set(&lib, "analysis.snap_bpm", "") == 0);
+    CHECK(rx_library_setting_set(&lib, "analysis.auto_cues", "maybe") == 0);
+    CHECK(rx_library_setting_set(&lib, "ui.detail_bars", "8") == 0);
+    rx_library_close(&lib);
+    CHECK(rx_library_open(&lib, dir) == 0);
+    CHECK(lib.cfg.snap_bpm && lib.cfg.auto_cues && lib.cfg.detail_bars == 8);
+    rx_library_close(&lib);
+    test_rm_rf(dir);
+    free(dir);
+}
+
 /* rx_library_find_path keeps a hash of the paths (re-adding a folder of
  * 20000 known files took 5 s scanning the list per file): it finds every
  * track by its path through the index growing, tracks removed and moved,
@@ -1617,6 +1673,7 @@ int main(void)
     test_newer_meanwhile();
     test_busy_add();
     test_find_path();
+    test_config_set();
 
     if (!test_failures)
         test_rm_rf(dir);

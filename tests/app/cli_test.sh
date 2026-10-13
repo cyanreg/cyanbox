@@ -91,6 +91,25 @@ run config color.aqua "" | grep -q "^color.aqua = calm, smooth (the default)$" |
 run config color.aqua | grep -q "^color.aqua = calm, smooth (the default)$" ||
     fail "config color.aqua is not back to the default"
 run config color.cyan x > /dev/null 2>&1 && fail "config took color.cyan"
+long=$(printf '%0128d' 0)
+run config color.red "$long" > /dev/null 2>&1 && fail "config took a 128-byte description"
+
+# A value the key does not take is a usage error (exit 1), not a row every
+# command then warns of; "" unsets a key.
+set +e
+run config analysis.snap_bpm maybe > /dev/null 2>&1; [ $? -eq 1 ] || fail "config took snap_bpm maybe"
+run config analysis.bpm_min x > /dev/null 2>&1; [ $? -eq 1 ] || fail "config took bpm_min x"
+run config player.quantize sometimes > /dev/null 2>&1; [ $? -eq 1 ] || fail "config took quantize sometimes"
+run config player.nonsense on > /dev/null 2>&1; [ $? -eq 1 ] || fail "config took player.nonsense"
+run config analysis.nonsense 1 > /dev/null 2>&1; [ $? -eq 1 ] || fail "config took analysis.nonsense"
+set -e
+run config analysis.snap_bpm false > /dev/null || fail "config analysis.snap_bpm false"
+run config analysis.snap_bpm "" | grep -q "^analysis.snap_bpm is not set" || fail "config \"\" did not unset"
+run config analysis.snap_bpm | grep -q "^analysis.snap_bpm is not set$" || fail "snap_bpm still set"
+run config player.quantize on > /dev/null || fail "config player.quantize on"
+run config player.quantize "" | grep -q "^player.quantize is not set (the default, " ||
+    fail "config player.quantize \"\" did not unset"
+run config 2>&1 | grep -q "not valid" && fail "a setting warns after config"
 
 # The file's comment tag was read and left out: the comment is the user's.
 run config | grep -q "^import.comment = false$" || fail "config does not list import.comment"

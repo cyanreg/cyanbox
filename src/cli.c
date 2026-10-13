@@ -2108,6 +2108,62 @@ static void print_kv(const char *section, const RXKv *kv, int nb)
         printf("%s.%s = %s\n", section, kv[i].key, kv[i].value ? kv[i].value : "");
 }
 
+static const char *settings_section(const char *file);
+
+/* A My Setting (player.NAME, mixer.NAME, device.NAME) as `rxbox settings`
+ * lists it: the file it is in and its values, for the check and the
+ * error. */
+typedef struct SettingFind {
+    char        section[16];
+    const char *name, *file;
+    char        values[512];
+} SettingFind;
+
+static void find_setting(void *opaque, const char *file, const char *name,
+                         const char *const *values, int nb_values, const char *deflt)
+{
+    SettingFind *f = opaque;
+    if (f->file || strcmp(settings_section(file), f->section) || strcmp(name, f->name))
+        return;
+    f->file = file;
+    size_t n = 0;
+    for (int i = 0; i < nb_values && n < sizeof(f->values); i++)
+        n += (size_t)snprintf(f->values + n, sizeof(f->values) - n, "%s%s",
+                              !i ? "" : i + 1 < nb_values ? ", " : " or ", values[i]);
+}
+
+/* `rxbox config KEY VALUE` stores only what the key takes: a value the
+ * library would warn of at every command, or the export refuse, is a
+ * usage error here. Keys under ui. that are none of RXConfig's are the
+ * interface's own (its layout) and taken as they are. */
+static int check_setting(const Cli *cli, const char *key, const char *value)
+{
+    if (rx_str_starts(key, "player.") || rx_str_starts(key, "mixer.") || rx_str_starts(key, "device.")) {
+        SettingFind f = { .name = strchr(key, '.') + 1 };
+        snprintf(f.section, sizeof(f.section), "%.*s", (int)(f.name - 1 - key), key);
+        rx_settings_list(find_setting, &f);
+        if (!f.file)
+            return usage_error(cli, "config: %s is no My Setting (`rxbox settings` lists them)", key);
+        if (!rx_settings_value(f.file, f.name, value))
+            return usage_error(cli, "config: %s takes %s, not \"%s\"", key, f.values, value);
+        return 0;
+    }
+    RXConfig c;
+    rx_config_defaults(&c);
+    int ret = rx_config_set(&c, key, value);
+    rx_config_free(&c);
+    if (ret == RX_ERROR(E2BIG))
+        return usage_error(cli, "config: %s: a colour's description is at most %d bytes, what the "
+                           "tagger's question has room for", key, RX_CONFIG_VIBE_MAX);
+    if (ret == RX_ERROR(EINVAL))
+        return usage_error(cli, "config: %s takes %s, not \"%s\"", key, rx_config_takes(key), value);
+    if (ret == RX_ERROR(ENOENT) && !rx_str_starts(key, "ui."))
+        return usage_error(cli, "config: there is no setting %s (`rxbox config` lists them)", key);
+    if (ret == RX_ERROR(ENOMEM))
+        return fail("out of memory");
+    return 0;
+}
+
 static int cmd_config(Cli *cli, int argc, char **argv)
 {
     const char *key = NULL, *value = NULL;
@@ -2146,6 +2202,10 @@ static int cmd_config(Cli *cli, int argc, char **argv)
             return usage_error(cli, "config: the colours are color.pink, color.red, color.orange, "
                                "color.yellow, color.green, color.aqua, color.blue and "
                                "color.purple");
+        /* An empty value unsets the key: the default from then on. */
+        int bad = value && *value ? check_setting(cli, key, value) : 0;
+        if (bad)
+            return bad;
     }
 
     int code = open_library(cli, false);
@@ -2168,11 +2228,16 @@ static int cmd_config(Cli *cli, int argc, char **argv)
         printf("%s = %s%s\n", key, rx_config_vibe(&lib->cfg, vibe),
                lib->cfg.vibes[vibe - 1] ? "" : " (the default)");
     } else if (key && value) {
-        int ret = rx_library_setting_set(lib, key, value);
+        int ret = rx_library_setting_set(lib, key, *value ? value : NULL);
+        const char *deflt = rx_settings_get(NULL, key);
         if (ret < 0)
             code = fail("cannot set %s: %s", key, strerror(-ret));
-        else
+        else if (*value)
             printf("%s = %s\n", key, value);
+        else if (deflt)
+            printf("%s is not set (the default, %s)\n", key, deflt);
+        else
+            printf("%s is not set (the default)\n", key);
     } else if (key) {
         char *v = NULL;
         int ret = rx_library_setting_get(lib, key, &v);

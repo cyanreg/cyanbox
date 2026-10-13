@@ -107,15 +107,31 @@ typedef struct RXConfig {
 
 void rx_config_free(RXConfig *c);
 void rx_config_defaults(RXConfig *c);
+/* One of RXConfig's own settings by its key as the setting table holds it
+ * (analysis.*, import.comment, export.*, audio.sink, ml.model, color.*,
+ * ui.traffic_light, ui.detail_bars, ui.split_*): 0 when `value` is valid
+ * for the key and now in c, an empty one (or NULL) putting the default
+ * back; -EINVAL when it is not valid (-E2BIG for a description too long),
+ * c unchanged; -ENOENT for any other key (the My Settings player.*,
+ * mixer.*, device.* are rxbox/formats.h's to check, and other keys are
+ * the interface's own, free for rx_library_setting_set). */
+int  rx_config_set(RXConfig *c, const char *key, const char *value);
+/* What a key of RXConfig takes, in words ("true or false"); NULL for any
+ * other key. */
+const char *rx_config_takes(const char *key);
 /* The legend: the description of track colour `id` (1..8) and its setting
  * key ("color.pink"); NULL for another id. rx_config_vibe is the user's
  * words or the default's. */
 const char *rx_config_vibe(const RXConfig *c, int id);
 const char *rx_config_vibe_default(int id);
 const char *rx_config_vibe_key(int id);
+/* The longest description the tagger is given, in bytes: what the
+ * interface's field holds, and room in the model's question. */
+#define RX_CONFIG_VIBE_MAX 127
 /* Sets colour `id`'s description, trimmed; NULL, blank or the default's
  * own words go back to the default (and the row away at the next save).
- * -EINVAL for another id. */
+ * -EINVAL for another id, -E2BIG for one longer than RX_CONFIG_VIBE_MAX
+ * once trimmed. */
 int  rx_config_set_vibe(RXConfig *c, int id, const char *text);
 /* All eight, by id - 1, as rx_ml_tag takes them. */
 void rx_config_legend(const RXConfig *c, const char *legend[8]);

@@ -24,8 +24,11 @@
  *
  * Booleans are "true"/"false", numbers their shortest exact decimal form,
  * analysis.what the names `rxbox analyze --what` takes ("beats,key,waves").
- * A value that does not parse is logged and the default kept, so a bad row
- * never stops the library from opening. Other keys are free for
+ * rx_config_set checks a value for its key (`rxbox config` refuses one that
+ * does not parse, rather than storing a row every command then warns of);
+ * an empty value is the key's default. A row that does not parse all the
+ * same (an older rxbox stored any) is logged and the default kept, so a
+ * bad row never stops the library from opening. Other keys are free for
  * rx_library_setting_get/set (the interface's column layout and such) and
  * are left alone by rx_library_config_save.
  *
@@ -131,6 +134,8 @@ int rx_config_set_vibe(RXConfig *c, int id, const char *text)
     size_t n = strlen(text);
     while (n && (text[n - 1] == ' ' || text[n - 1] == '\t' || text[n - 1] == '\n'))
         n--;
+    if (n > RX_CONFIG_VIBE_MAX)
+        return RX_ERROR(E2BIG);
     char *v = NULL;
     if (n && (strlen(vibe_defaults[id - 1]) != n || strncmp(text, vibe_defaults[id - 1], n))) {
         if (!(v = strndup(text, n)))
@@ -263,15 +268,147 @@ static int set_string(char **field, const char *value)
     return 0;
 }
 
-static void bad_value(const char *key, const char *value)
+/* RXConfig's own keys (not the My Settings), what each takes, and how it
+ * is read. */
+typedef enum Kind {
+    K_BOOL, K_BPM, K_WHAT, K_NOTATION, K_TEXT, K_VIBE, K_TRAFFIC, K_BARS, K_SPLIT,
+} Kind;
+
+static const struct {
+    const char *key;
+    Kind        kind;
+} known_keys[] = {
+    { "analysis.bpm_min",        K_BPM },
+    { "analysis.bpm_max",        K_BPM },
+    { "analysis.snap_bpm",       K_BOOL },
+    { "analysis.auto_cues",      K_BOOL },
+    { "analysis.allow_sections", K_BOOL },
+    { "analysis.what",           K_WHAT },
+    { "import.comment",          K_BOOL },
+    { "export.key_notation",     K_NOTATION },
+    { "export.pdb",              K_BOOL },
+    { "export.onelibrary",       K_BOOL },
+    { "export.compat_transcode", K_BOOL },
+    { "export.device_name",      K_TEXT },
+    { "audio.sink",              K_TEXT },
+    { "ml.model",                K_TEXT },
+    { "color.pink",              K_VIBE }, { "color.red",    K_VIBE },
+    { "color.orange",            K_VIBE }, { "color.yellow", K_VIBE },
+    { "color.green",             K_VIBE }, { "color.aqua",   K_VIBE },
+    { "color.blue",              K_VIBE }, { "color.purple", K_VIBE },
+    { "ui.traffic_light",        K_TRAFFIC },
+    { "ui.detail_bars",          K_BARS },
+    { "ui.split_player",         K_SPLIT },
+    { "ui.split_tree",           K_SPLIT },
+};
+
+static int key_kind(const char *key)
 {
-    rx_warn("setting %s = \"%s\" is not valid; using the default", key, value);
+    for (size_t i = 0; key && i < RX_ARRAY_ELEMS(known_keys); i++) {
+        if (!strcmp(key, known_keys[i].key))
+            return (int)known_keys[i].kind;
+    }
+    return -1;
 }
 
+static bool *bool_field(RXConfig *c, const char *key)
+{
+    return !strcmp(key, "analysis.snap_bpm")       ? &c->snap_bpm :
+           !strcmp(key, "analysis.auto_cues")      ? &c->auto_cues :
+           !strcmp(key, "analysis.allow_sections") ? &c->allow_sections :
+           !strcmp(key, "import.comment")          ? &c->import_comment :
+           !strcmp(key, "export.pdb")              ? &c->export_pdb :
+           !strcmp(key, "export.onelibrary")       ? &c->export_onelibrary : &c->compat_transcode;
+}
+
+#define STR_(x) #x
+#define STR(x) STR_(x)
+
+const char *rx_config_takes(const char *key)
+{
+    switch (key_kind(key)) {
+    case K_BOOL:     return "true or false";
+    case K_BPM:      return "a tempo in BPM up to 1000, or 0 for none";
+    case K_WHAT:     return "beats, key and waves, one or more, separated by commas";
+    case K_NOTATION: return "classic, camelot or open";
+    case K_TEXT:     return "any text";
+    case K_VIBE:     return "a description of at most " STR(RX_CONFIG_VIBE_MAX) " bytes";
+    case K_TRAFFIC:  return "off, same, related1, related2 or related3";
+    case K_BARS:     return "a whole number of bars from 1 to 1024";
+    case K_SPLIT:    return "a position, 0 or more (0: the default)";
+    default:         return NULL;
+    }
+}
+
+int rx_config_set(RXConfig *c, const char *key, const char *value)
+{
+    int kind = key_kind(key);
+    if (kind < 0)
+        return RX_ERROR(ENOENT);
+    if (!value)
+        value = "";
+    RXConfig def;
+    rx_config_defaults(&def);
+    bool reset = !*value;
+    double d;
+    bool b;
+    unsigned what;
+
+    switch ((Kind)kind) {
+    case K_BOOL:
+        if (!reset && !parse_bool(value, &b))
+            return RX_ERROR(EINVAL);
+        *bool_field(c, key) = reset ? *bool_field(&def, key) : b;
+        return 0;
+    case K_BPM:
+        if (!reset && (!parse_double(value, &d) || d < 0 || d > 1000))
+            return RX_ERROR(EINVAL);
+        *(!strcmp(key, "analysis.bpm_min") ? &c->bpm_min : &c->bpm_max) = reset ? 0.0 : d;
+        return 0;
+    case K_WHAT:
+        if (!reset && !parse_what(value, &what))
+            return RX_ERROR(EINVAL);
+        c->analyse_what = reset ? def.analyse_what : what;
+        return 0;
+    case K_NOTATION:
+        if (!reset && strcmp(value, "classic") && strcmp(value, "camelot") && strcmp(value, "open"))
+            return RX_ERROR(EINVAL);
+        snprintf(c->key_notation, sizeof(c->key_notation), "%s", reset ? def.key_notation : value);
+        return 0;
+    case K_TEXT:
+        return set_string(!strcmp(key, "export.device_name") ? &c->device_name :
+                          !strcmp(key, "audio.sink")         ? &c->audio_sink : &c->ml_model, value);
+    case K_VIBE:
+        for (int i = 0; i < RX_TRACK_COLORS; i++) {
+            if (!strcmp(key, vibe_keys[i]))
+                return rx_config_set_vibe(c, i + 1, value);
+        }
+        return RX_ERROR(ENOENT);
+    case K_TRAFFIC:
+        if (!reset && rx_key_reach_parse(value) < 0)
+            return RX_ERROR(EINVAL);
+        snprintf(c->traffic_light, sizeof(c->traffic_light), "%s", reset ? def.traffic_light : value);
+        return 0;
+    case K_BARS:
+        if (!reset && (!parse_double(value, &d) || d < 1 || d > 1024 || d != trunc(d)))
+            return RX_ERROR(EINVAL);
+        c->detail_bars = reset ? def.detail_bars : (int)d;
+        return 0;
+    case K_SPLIT:
+        if (!reset && (!parse_double(value, &d) || d < 0 || d > 1e6))
+            return RX_ERROR(EINVAL);
+        *(!strcmp(key, "ui.split_player") ? &c->split_player : &c->split_tree) = reset ? 0.0f : (float)d;
+        return 0;
+    }
+    return RX_ERROR(ENOENT);
+}
+
+/* One row of the setting table at load: a value that is not valid for
+ * its key is said and the default kept, so a bad row never stops the
+ * library from opening; a key that is none of RXConfig's is someone
+ * else's (the interface's, the sync's). */
 static int apply_setting(RXConfig *c, const char *key, const char *value)
 {
-    double d;
-
     if (rx_str_starts(key, "player."))
         return kv_push(&c->player, &c->nb_player, key + 7, value);
     if (rx_str_starts(key, "mixer."))
@@ -279,72 +416,13 @@ static int apply_setting(RXConfig *c, const char *key, const char *value)
     if (rx_str_starts(key, "device."))
         return kv_push(&c->device, &c->nb_device, key + 7, value);
 
-    if (!strcmp(key, "analysis.bpm_min") || !strcmp(key, "analysis.bpm_max")) {
-        if (!parse_double(value, &d) || d < 0)
-            bad_value(key, value);
-        else if (!strcmp(key, "analysis.bpm_min"))
-            c->bpm_min = d;
-        else
-            c->bpm_max = d;
-    } else if (!strcmp(key, "analysis.snap_bpm")) {
-        if (!parse_bool(value, &c->snap_bpm))
-            bad_value(key, value);
-    } else if (!strcmp(key, "analysis.auto_cues")) {
-        if (!parse_bool(value, &c->auto_cues))
-            bad_value(key, value);
-    } else if (!strcmp(key, "analysis.allow_sections")) {
-        if (!parse_bool(value, &c->allow_sections))
-            bad_value(key, value);
-    } else if (!strcmp(key, "analysis.what")) {
-        if (!parse_what(value, &c->analyse_what))
-            bad_value(key, value);
-    } else if (!strcmp(key, "import.comment")) {
-        if (!parse_bool(value, &c->import_comment))
-            bad_value(key, value);
-    } else if (!strcmp(key, "export.key_notation")) {
-        if (strcmp(value, "classic") && strcmp(value, "camelot") && strcmp(value, "open"))
-            bad_value(key, value);
-        else
-            snprintf(c->key_notation, sizeof(c->key_notation), "%s", value);
-    } else if (!strcmp(key, "export.pdb")) {
-        if (!parse_bool(value, &c->export_pdb))
-            bad_value(key, value);
-    } else if (!strcmp(key, "export.onelibrary")) {
-        if (!parse_bool(value, &c->export_onelibrary))
-            bad_value(key, value);
-    } else if (!strcmp(key, "export.compat_transcode")) {
-        if (!parse_bool(value, &c->compat_transcode))
-            bad_value(key, value);
-    } else if (!strcmp(key, "export.device_name")) {
-        return set_string(&c->device_name, value);
-    } else if (!strcmp(key, "audio.sink")) {
-        return set_string(&c->audio_sink, value);
-    } else if (!strcmp(key, "ml.model")) {
-        return set_string(&c->ml_model, value);
-    } else if (rx_str_starts(key, "color.")) {
-        for (int i = 0; i < RX_TRACK_COLORS; i++) {
-            if (!strcmp(key, vibe_keys[i]))
-                return rx_config_set_vibe(c, i + 1, value);
-        }
-    } else if (!strcmp(key, "ui.traffic_light")) {
-        if (rx_key_reach_parse(value) < 0)
-            bad_value(key, value);
-        else
-            snprintf(c->traffic_light, sizeof(c->traffic_light), "%s", value);
-    } else if (!strcmp(key, "ui.detail_bars")) {
-        if (!parse_double(value, &d) || d < 1 || d > 1024 || d != trunc(d))
-            bad_value(key, value);
-        else
-            c->detail_bars = (int)d;
-    } else if (!strcmp(key, "ui.split_player") || !strcmp(key, "ui.split_tree")) {
-        if (!parse_double(value, &d) || d < 0)
-            bad_value(key, value);
-        else if (!strcmp(key, "ui.split_player"))
-            c->split_player = (float)d;
-        else
-            c->split_tree = (float)d;
+    int ret = rx_config_set(c, key, value);
+    if (ret == RX_ERROR(EINVAL) || ret == RX_ERROR(E2BIG)) {
+        rx_warn("setting %s = \"%s\" is not valid (it takes %s); using the default", key, value,
+                rx_config_takes(key));
+        ret = 0;
     }
-    return 0;
+    return ret == RX_ERROR(ENOENT) ? 0 : ret;
 }
 
 int rx_core_config_load(RXLibrary *lib)
