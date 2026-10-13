@@ -59,13 +59,15 @@ else `$RXBOX_LIBRARY`, else `~/.local/share/rxbox`. `rxbox init [DIR]`
 creates one. The database holds the file facts and tags, your edits to the
 tags, grids, keys, cues, rating, colour, My Tags, play counts and history,
 waveforms, artwork thumbnails, playlists and folders, and the settings. The
-audio files stay where they are. A directory is added in the order of its
-files' disc and track tags (unnumbered files after, by name), so an album
-sits in the collection as it runs, and the Albums list under Collection
-shows each album that way. A track whose file goes missing stays in
-the library, greyed out, until the file comes back or is relocated. A
-track's library id is also its id on every stick, so players keep their
-cached data across exports.
+audio files stay where they are. A directory is added album by album
+(the albums in the order of their first files' names), each album in the
+order of its disc and track tags (unnumbered files after, by name), and
+files without an album tag last, by name; so an album sits in the
+collection as it runs, even in a folder of several, and the Albums list
+under Collection shows each album that way. A track whose file goes
+missing stays in the library, greyed out, until the file comes back or is
+relocated. A track's library id is also its id on every stick, so players
+keep their cached data across exports.
 
 A track's colour is one of rekordbox's eight, pink, red, orange, yellow,
 green, aqua, blue and purple, or none. Each colour stands for what a track

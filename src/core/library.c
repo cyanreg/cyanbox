@@ -783,6 +783,7 @@ typedef struct Probed {
     bool     comment;           /* import.comment, read on the owner's thread */
     char     container[32];
     int      err;
+    const char *album_first;    /* the path of its album's first file by name; NULL: no album */
 } Probed;
 
 /* Runs on a worker: touches only its own Probed and track. */
@@ -1013,20 +1014,73 @@ static int list_dir(const char *dir, DirList *l)
     return 0;
 }
 
-/* A directory's files once probed, in the order of their disc and track
- * tags: numbered tracks by disc then number, files without a number after
- * them, equals and failures by name. */
+/* The album a probed file is of: its album tag with the album artist's, so
+ * that two albums of one name by two artists stay two (a compilation
+ * names one album artist over its tracks' artists). NULL: none. */
+static const RXMeta *album_of(const Probed *p)
+{
+    const RXMeta *m = p->err >= 0 ? &p->t->file_meta : NULL;
+    return m && m->album && *m->album ? m : NULL;
+}
+
+static int cmp_album(const void *pa, const void *pb)
+{
+    const Probed *a = *(Probed *const *)pa, *b = *(Probed *const *)pb;
+    const RXMeta *ma = album_of(a), *mb = album_of(b);
+    int c = strcmp(ma->album, mb->album);
+    if (!c)
+        c = strcmp(ma->album_artist ? ma->album_artist : "", mb->album_artist ? mb->album_artist : "");
+    return c ? c : strcmp(a->t->path, b->t->path);
+}
+
+/* Sets each file's album_first: its album's files sorted together by
+ * name, the first one's path. */
+static int group_albums(Probed *items, int nb)
+{
+    Probed **v = malloc((size_t)RX_MAX(nb, 1) * sizeof(*v));
+    if (!v)
+        return RX_ERROR(ENOMEM);
+    int n = 0;
+    for (int i = 0; i < nb; i++) {
+        items[i].album_first = NULL;
+        if (album_of(&items[i]))
+            v[n++] = &items[i];
+    }
+    qsort(v, (size_t)n, sizeof(*v), cmp_album);
+    for (int i = 0; i < n; i++) {
+        const RXMeta *m = album_of(v[i]), *prev = i ? album_of(v[i - 1]) : NULL;
+        bool same = prev && !strcmp(m->album, prev->album) &&
+                    !strcmp(m->album_artist ? m->album_artist : "", prev->album_artist ? prev->album_artist : "");
+        v[i]->album_first = same ? v[i - 1]->album_first : v[i]->t->path;
+    }
+    free(v);
+    return 0;
+}
+
+/* A directory's files once probed, album by album (each album where its
+ * first file is by name), an album in the order of its disc and track
+ * tags (numbered tracks by disc then number, files without a number after
+ * them, equals by name); files without an album tag, and failures, after
+ * the albums, by name. A folder of several albums goes in an album at a
+ * time, not their first tracks, then their second ones. */
 static int cmp_probed(const void *pa, const void *pb)
 {
     const Probed *a = pa, *b = pb;
-    const RXMeta *ma = a->err >= 0 ? &a->t->file_meta : NULL;
-    const RXMeta *mb = b->err >= 0 ? &b->t->file_meta : NULL;
-    int da = ma && ma->disc_number > 0 ? ma->disc_number : INT_MAX;
-    int db = mb && mb->disc_number > 0 ? mb->disc_number : INT_MAX;
+    if (!a->album_first != !b->album_first)
+        return a->album_first ? -1 : 1;
+    if (!a->album_first)
+        return strcmp(a->t->path, b->t->path);
+    /* Two albums have two first files. */
+    int c = strcmp(a->album_first, b->album_first);
+    if (c)
+        return c;
+    const RXMeta *ma = &a->t->file_meta, *mb = &b->t->file_meta;
+    int da = ma->disc_number > 0 ? ma->disc_number : INT_MAX;
+    int db = mb->disc_number > 0 ? mb->disc_number : INT_MAX;
     if (da != db)
         return da < db ? -1 : 1;
-    int na = ma && ma->track_number > 0 ? ma->track_number : INT_MAX;
-    int nb = mb && mb->track_number > 0 ? mb->track_number : INT_MAX;
+    int na = ma->track_number > 0 ? ma->track_number : INT_MAX;
+    int nb = mb->track_number > 0 ? mb->track_number : INT_MAX;
     if (na != nb)
         return na < nb ? -1 : 1;
     return strcmp(a->t->path, b->t->path);
@@ -1072,8 +1126,10 @@ static int add_dir(RXLibrary *lib, RXThreadPool *pool, const char *dir, rx_add_c
     if (ret >= 0) {
         probe_all(pool, items, nb);
         /* The order the ids are given in is the collection's order: a
-         * directory holding an album goes in as the album runs. */
-        qsort(items, (size_t)nb, sizeof(*items), cmp_probed);
+         * directory holding albums goes in as each album runs (without
+         * the memory to group them, by name). */
+        if (group_albums(items, nb) >= 0)
+            qsort(items, (size_t)nb, sizeof(*items), cmp_probed);
         ret = insert_batch(lib, items, nb, cb, opaque);
         added = RX_MAX(ret, 0);
     }
