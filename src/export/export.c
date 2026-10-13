@@ -83,6 +83,10 @@ typedef struct Ctx {
      * on, which prune's walk does not leave. */
     int                     root;
     dev_t                   dev;
+    /* A real run past its checks has written to the stick (and syncs it
+     * whatever happens next); everything is written (a cancel changes
+     * nothing any more). */
+    bool                    writing, finished;
     const RXExportOptions  *opt;
     rx_progress_cb          cb;
     void                   *opaque;
@@ -267,6 +271,23 @@ static void reportf(Ctx *c, const char *stage, const char *fmt, ...)
     char *msg = rx_vasprintf(fmt, ap);
     va_end(ap);
     progress(c, stage, 0, 0, msg);
+    free(msg);
+}
+
+/* What the export says at its end, cancelled or not: the callback's answer
+ * no longer matters. */
+static void notify(Ctx *c, const char *stage, int done, int total, const char *fmt, ...) RX_PRINTF(5, 6);
+static void notify(Ctx *c, const char *stage, int done, int total, const char *fmt, ...)
+{
+    char *msg = NULL;
+    if (fmt) {
+        va_list ap;
+        va_start(ap, fmt);
+        msg = rx_vasprintf(fmt, ap);
+        va_end(ap);
+    }
+    if (c->cb)
+        c->cb(c->opaque, stage, done, total, msg);
     free(msg);
 }
 
@@ -1565,6 +1586,7 @@ int rx_export(RXLibrary *lib, const char *dest, const RXExportOptions *opt_in, r
             bytes += RX_MAX(t->file_size, 0);
     }
     stats_start(&c, bytes);
+    c.writing = true;
     for (int i = 0; i < plan.nb_tracks; i++) {
         const RXPlanTrack *t = &plan.tracks[i];
         if (same_file(c.root, t->source, t->usb_path)) {
@@ -1590,27 +1612,40 @@ int rx_export(RXLibrary *lib, const char *dest, const RXExportOptions *opt_in, r
         goto out;
     if ((ret = prune(&c, &plan, false)) < 0)
         goto out;
-    /* The one sync: whatever the file system still holds back (the
-     * audio went through already), so "done" means on the stick. */
-    progress(&c, "flush", 1, 1, NULL);
-    if ((ret = rx_stick_sync(dest)) < 0) {
-        reportf(&c, "flush", "cannot write out %s: %s", dest, strerror(-ret));
-        goto out;
-    }
-    reportf(&c, "done", "%d tracks, %d copied, %d playlists, %d artworks", plan.nb_tracks, copied,
-            plan.nb_playlists, plan.nb_artworks);
-    ret = 0;
+    /* All written: a cancel from here on changes nothing. */
+    c.finished = true;
 
 out:
-    if (c.cancelled && ret >= 0)
-        ret = RX_ERROR(ECANCELED);
-    /* Jobs a failed or cancelled stage left: run out, their results
-     * dropped. */
+    /* Jobs a failed or cancelled stage left: run out (before the sync),
+     * their results dropped. */
     if (c.pool)
         rx_pool_destroy(c.pool);
     for (size_t i = 0; i < c.puts.nb; i++)
         put_free(*(PutJob **)rx_array_at(&c.puts, i));
     rx_array_free(&c.puts);
+    /* The one sync, whenever a real run wrote anything: what the file
+     * system still holds back (the audio went through already), so "done"
+     * means on the stick, and a cancelled or failed run does not leave the
+     * FAT, analysis files or a new export.pdb in the page cache for the
+     * stick to be pulled from under. Its files are whole or cut short, and
+     * the databases go last, so what is on the stick is consistent. */
+    if (c.writing) {
+        notify(&c, "flush", 1, 1, NULL);
+        int r = rx_stick_sync(dest);
+        if (r < 0) {
+            notify(&c, "flush", 0, 0, "cannot write out %s: %s", dest, strerror(-r));
+            ret = ret < 0 ? ret : r;
+        } else if (!c.finished) {
+            rx_info("export to %s %s: what it wrote is written out", dest,
+                    c.cancelled || ret == RX_ERROR(ECANCELED) ? "cancelled" : "failed");
+            notify(&c, "flush", 0, 0, "what was written so far is on %s", dest);
+        }
+    }
+    if (c.finished && ret >= 0)
+        notify(&c, "done", 0, 0, "%d tracks, %d copied, %d playlists, %d artworks", plan.nb_tracks, copied,
+               plan.nb_playlists, plan.nb_artworks);
+    else if (c.cancelled && ret >= 0)
+        ret = RX_ERROR(ECANCELED);
     if (c.root >= 0)
         close(c.root);
     free(c.pdb);

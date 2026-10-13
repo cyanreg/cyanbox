@@ -9,6 +9,8 @@
  *  - give two tracks one file when exFAT's case rules make their names one
  *    (Șerban, șerban), or keep a file whose name differs from the plan's
  *    in case alone on a case-sensitive staging directory;
+ *  - leave what a cancelled run wrote unsynced, or call a run cancelled
+ *    during its last sync cancelled;
  *  - start copying when a database cannot be built (a name too long for
  *    export.pdb is found before anything is written);
  *  - leave a sync record describing databases other than those written;
@@ -806,6 +808,66 @@ static void case_names(void)
     free(stale);
 }
 
+/* What a run said, and when to cancel it. */
+typedef struct Flow {
+    const char *cancel_at;       /* the stage whose first message cancels */
+    int flush, done, after_cancel;
+    bool cancelled;
+} Flow;
+
+static bool on_flow(void *opaque, const char *stage, int done, int total, const char *item)
+{
+    Flow *f = opaque;
+    f->flush += !strcmp(stage, "flush");
+    f->done += !strcmp(stage, "done");
+    f->after_cancel += f->cancelled;
+    if (f->cancel_at && !strcmp(stage, f->cancel_at))
+        f->cancelled = true;
+    return !f->cancelled;
+}
+
+/* A real run cancelled half way still writes out what it wrote (the
+ * stick may be pulled next) and says so; one cancelled during that last
+ * sync has exported everything and succeeds. A dry run writes nothing and
+ * syncs nothing. */
+static void cancel_syncs(void)
+{
+    RXLibrary lib = { 0 };
+    char *libdir = at("lib-cancel"), *stick = at("stick-cancel");
+    char *a = at("music-cancel/a.wav"), *b = at("music-cancel/b.wav");
+    rx_mkdir_p(stick);
+    CHECK_EQ(rx_library_open(&lib, libdir), 0);
+    add_track(&lib, a, "Artist", -1);
+    add_track(&lib, b, "Other", -1);
+    RXExportOptions opt;
+    rx_export_options_default(&opt);
+    opt.whole_library = true;
+
+    Flow f = { .cancel_at = "analysis files" };
+    CHECK_EQ(rx_export(&lib, stick, &opt, on_flow, &f), RX_ERROR(ECANCELED));
+    CHECK(f.flush >= 1);
+    CHECK_EQ(f.done, 0);
+    char *pdb = at("stick-cancel/PIONEER/rekordbox/export.pdb");
+    CHECK(!exists(pdb));
+
+    f = (Flow) { .cancel_at = "flush" };
+    CHECK_EQ(rx_export(&lib, stick, &opt, on_flow, &f), 0);
+    CHECK(f.flush >= 1);
+    CHECK_EQ(f.done, 1);
+    CHECK(exists(pdb));
+
+    opt.dry_run = true;
+    f = (Flow) { 0 };
+    CHECK_EQ(rx_export(&lib, stick, &opt, on_flow, &f), 0);
+    CHECK_EQ(f.flush, 0);
+    free(pdb);
+    rx_library_close(&lib);
+    free(libdir);
+    free(stick);
+    free(a);
+    free(b);
+}
+
 int main(void)
 {
     const char *base = getenv("RX_TEST_DIR");
@@ -823,6 +885,7 @@ int main(void)
     dry_run_and_dates();
     links_inside();
     case_names();
+    cancel_syncs();
 
     if (!failures)
         sh("rm -rf '%s'", root);
