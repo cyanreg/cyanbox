@@ -128,6 +128,31 @@ static void list_cb(void *opaque, const char *file, const char *name, const char
     if (!found)
         fprintf(stderr, "%s %s: default %s not among the values\n", file, name, deflt);
     CHECK(found);
+    /* Every listed value is its own listed form. */
+    for (int i = 0; i < nb_values; i++) {
+        const char *v = rx_settings_value(file, name, values[i]);
+        if (!v || strcmp(v, values[i]))
+            fprintf(stderr, "%s %s: %s reads as %s\n", file, name, values[i], v ? v : "nothing");
+        CHECK(v && !strcmp(v, values[i]));
+    }
+}
+
+/* The listed form of what `rxbox config` may have been given. */
+static void listed_values(void)
+{
+    CHECK_STR(rx_settings_value("MYSETTING.DAT", "quantize", "on"), "true");
+    CHECK_STR(rx_settings_value("MYSETTING.DAT", "quantize", "0"), "false");
+    CHECK_STR(rx_settings_value("MYSETTING.DAT", "hot_cue_autoload", "rekordbox"), "rekordbox");
+    CHECK_STR(rx_settings_value("MYSETTING.DAT", "tempo_range", "+6"), "6");
+    CHECK_STR(rx_settings_value("MYSETTING.DAT", "tempo_range", "WIDE"), "wide");
+    CHECK_STR(rx_settings_value("MYSETTING2.DAT", "vinyl_speed_adjust", "Touch & Release"),
+              "touch_release");
+    CHECK_STR(rx_settings_value("export.pdb, exportLibrary.db", "background_color", "Blue"), "blue");
+    CHECK(!rx_settings_value("MYSETTING.DAT", "tempo_range", "12"));
+    CHECK(!rx_settings_value("MYSETTING.DAT", "tempo_range", "true"));
+    CHECK(!rx_settings_value("MYSETTING.DAT", "bogus", "1"));
+    CHECK(!rx_settings_value("MYSETTING2.DAT", "quantize", "on"));
+    CHECK(!rx_settings_value("export.pdb, exportLibrary.db", "background_color", "teal"));
 }
 
 int main(void)
@@ -135,6 +160,7 @@ int main(void)
     match_rekordbox();
     errors();
     from_config();
+    listed_values();
     int count = 0;
     rx_settings_list(list_cb, &count);
     /* 22 + 7 + 13 + 4 dj settings, plus the background colour. */

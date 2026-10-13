@@ -15,7 +15,7 @@
 // RXBOX_UI_AUTOLOAD=<id> loads that track on the first frame and starts it
 // once it is loaded (RXBOX_UI_AUTOLOAD_AT=<seconds>: from there);
 // RXBOX_UI_SHOW=<list> opens panels and dialogs on the first frame (grid,
-// half, export, sync, inspect, analysis, add, keys, about);
+// half, export, sync, inspect, analysis, settings, add, keys, about);
 // RXBOX_UI_SCREENSHOT=<png> saves frame 100 (RXBOX_UI_SCREENSHOT_FRAME=<n>:
 // frame n) through rx_window_screenshot_next(), which writes it once it is
 // presented, and the run goes on; a run that ends before that frame
@@ -29,6 +29,7 @@
 
 #include "ui_internal.h"
 
+#include <ctype.h>
 #include <math.h>
 #include <stdio.h>
 #include <time.h>
@@ -433,6 +434,147 @@ bool ui_button(UiState *ui, const char *id, ImVec2 size, const UiButton &b)
     return pressed && !b.disabled;
 }
 
+/* -------------------------------------------------------------- My Settings */
+
+const char *const ui_setting_titles[UI_NB_SETTING_SECTIONS] = { "Player", "Mixer", "Device" };
+const char *const ui_setting_prefixes[UI_NB_SETTING_SECTIONS] = { "player", "mixer", "device" };
+
+// The section `rxbox settings` prints a file's fields under (cli.c,
+// settings_section): the background colour, which the databases carry, is
+// a device setting like DEVSETTING.DAT's.
+static int setting_section(const char *file)
+{
+    if (!rx_strcasecmp(file, "MYSETTING.DAT") || !rx_strcasecmp(file, "MYSETTING2.DAT"))
+        return UI_SETTINGS_PLAYER;
+    if (!rx_strcasecmp(file, "DJMMYSETTING.DAT"))
+        return UI_SETTINGS_MIXER;
+    return UI_SETTINGS_DEVICE;
+}
+
+static void setting_listed(void *opaque, const char *file, const char *name,
+                           const char *const *values, int nb_values, const char *deflt)
+{
+    std::vector<UiSetting> *list = (std::vector<UiSetting> *)opaque;
+    UiSetting f;
+    f.file = file;
+    f.name = name;
+    f.section = setting_section(file);
+    f.deflt = 0;
+    for (int i = 0; i < nb_values; i++) {
+        f.values.push_back(values[i]);
+        if (deflt && !strcmp(values[i], deflt))
+            f.deflt = i;
+    }
+    list->push_back(std::move(f));
+}
+
+// Every field settings.c has, in its order, so one added there shows up in
+// the dialog by itself.
+const std::vector<UiSetting> &ui_settings(UiState *ui)
+{
+    if (ui->settings.empty())
+        rx_settings_list(setting_listed, &ui->settings);
+    return ui->settings;
+}
+
+int ui_setting_key(const char *key, const char **name)
+{
+    for (int s = 0; s < UI_NB_SETTING_SECTIONS; s++) {
+        size_t n = strlen(ui_setting_prefixes[s]);
+        if (!strncmp(key, ui_setting_prefixes[s], n) && key[n] == '.') {
+            *name = key + n + 1;
+            return s;
+        }
+    }
+    *name = key;
+    return -1;
+}
+
+// The words of the name, each capitalised, and the abbreviations the
+// players print in capitals.
+const char *ui_setting_label(const char *name, char *buf, size_t size)
+{
+    static const struct { const char *word, *text; } words[] = {
+        { "lcd", "LCD" }, { "midi", "MIDI" }, { "eq", "EQ" }, { "fx", "FX" }, { "cdj", "CDJ" },
+    };
+    std::string out;
+    for (const char *p = name; *p; ) {
+        size_t n = strcspn(p, "_");
+        std::string word(p, n);
+        const char *text = nullptr;
+        for (const auto &w : words) {
+            if (word == w.word)
+                text = w.text;
+        }
+        if (!out.empty())
+            out += ' ';
+        if (text) {
+            out += text;
+        } else if (!word.empty()) {
+            word[0] = (char)toupper((unsigned char)word[0]);
+            out += word;
+        }
+        p += n;
+        if (*p)
+            p++;
+    }
+    snprintf(buf, size, "%s", out.c_str());
+    return buf;
+}
+
+// `value` is as `rxbox settings` lists it (rx_settings_value gives that
+// form for what the library holds). The switches are On and Off; numbers
+// stay as they are, with the unit the listing leaves out; words are
+// written out with the first capitalised ("steep_top" is "Steep top"),
+// but for the players' own spellings.
+const char *ui_setting_value(const char *name, const char *value, char *buf, size_t size)
+{
+    if (!value)
+        value = "";
+    if (!strcmp(value, "true") || !strcmp(value, "false")) {
+        snprintf(buf, size, "%s", value[0] == 't' ? "On" : "Off");
+        return buf;
+    }
+    if (value[0] && strspn(value, "-0123456789/") == strlen(value)) {
+        if (!strcmp(name, "auto_cue_level") || !strcmp(name, "talk_over_level"))
+            snprintf(buf, size, "%s dB", value);
+        else if (!strcmp(name, "tempo_range"))
+            snprintf(buf, size, "\xC2\xB1%s %%", value);
+        else if (!strcmp(name, "phase_meter"))
+            snprintf(buf, size, "Type %s", value);
+        else if (!strcmp(name, "quantize_beat_value") || !strcmp(name, "beat_jump_beats"))
+            snprintf(buf, size, "%s beat%s", value, strcmp(value, "1") && !strchr(value, '/') ? "s" : "");
+        else
+            snprintf(buf, size, "%s", value);
+        return buf;
+    }
+    // The players' words (docs/settings.md, from the CDJ-3000 manual).
+    static const struct { const char *name, *value, *text; } words[] = {
+        { nullptr,              "touch_release",       "Touch & Release" },
+        { nullptr,              "cdj",                 "CDJ" },
+        { nullptr,              "rgb",                 "RGB" },
+        { nullptr,              "3band",               "3Band" },
+        { nullptr,              "chinese_simplified",  "Chinese (simplified)" },
+        { nullptr,              "chinese_traditional", "Chinese (traditional)" },
+        { "tempo_range",        "wide",                "WIDE" },
+        { "hot_cue_autoload",   "rekordbox",           "rekordbox SETTING" },
+        { "waveform_divisions", "time",                "Time scale" },
+    };
+    for (const auto &w : words) {
+        if ((!w.name || !strcmp(w.name, name)) && !strcmp(w.value, value)) {
+            snprintf(buf, size, "%s", w.text);
+            return buf;
+        }
+    }
+    snprintf(buf, size, "%s", value);
+    for (char *p = buf; *p; p++) {
+        if (*p == '_')
+            *p = ' ';
+    }
+    buf[0] = (char)toupper((unsigned char)buf[0]);
+    return buf;
+}
+
 void ui_want_frames(UiState *ui, int n)
 {
     if (ui->frames_wanted < n)
@@ -690,6 +832,8 @@ static void menu_bar(UiState *ui)
             ui_open_sync(ui);
         if (ImGui::MenuItem("Inspect USB..."))
             ui_open_inspect(ui);
+        if (ImGui::MenuItem("Player settings...", "Ctrl+,"))
+            ui_open_settings(ui);
         ImGui::Separator();
         if (ImGui::MenuItem("Rescan missing files")) {
             int n = rx_app_rescan(app);
@@ -1151,6 +1295,8 @@ static void autoshow(UiState *ui)
         ui_open_inspect(ui);
     if (shown(ui, "analysis"))
         ui->dlg_analysis = true;
+    if (shown(ui, "settings"))
+        ui_open_settings(ui);
     if (shown(ui, "add"))
         ui_open_add(ui);
     if (shown(ui, "keys"))

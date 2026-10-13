@@ -37,6 +37,7 @@ const UiKeyRow ui_key_rows[] = {
     { "Delete", "Remove the selection from the playlist; after a click on a cue, delete that cue" },
     { "Ctrl+A", "Select every track in the list" },
     { "Ctrl+F", "Search" },
+    { "Ctrl+,", "Player settings (the My Settings the export writes)" },
     { "Esc", "Clear the search / close a dialog / give Delete back to the track list" },
     { "Ctrl+Q", "Quit" },
 };
@@ -87,6 +88,11 @@ void ui_keys(UiState *ui)
     if (ctrl && pressed(ImGuiKey_G)) {
         dv->grid_edit = !dv->grid_edit;
         ImGui::MarkIniSettingsDirty();
+        return;
+    }
+    // Ctrl+, opens the settings in most programs; here, the players'.
+    if (ctrl && pressed(ImGuiKey_Comma)) {
+        ui_open_settings(ui);
         return;
     }
     if (ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel))
