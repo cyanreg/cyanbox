@@ -124,8 +124,8 @@ static uint32_t fold(uint32_t c)
         c = c - 0xFF01 + 0x21;
     if (c == 0x3000)
         c = ' ';
-    if (c < 128)
-        c = (uint32_t)tolower((int)c);
+    if (c >= 'A' && c <= 'Z')
+        c += 'a' - 'A';
     return c;
 }
 
@@ -152,6 +152,222 @@ bool rx_str_contains_fold(const char *haystack, const char *needle)
             return true;
     }
     return false;
+}
+
+/* ------------------------------------------------------------------ fuzzy */
+
+/* The text and the query, decoded once per call: no allocation, so the
+ * finder can run it over a few hundred thousand paths per keystroke. */
+#define FUZZY_TEXT  1024
+#define FUZZY_QUERY 256
+
+/* fzf's scores (src/algo/algo.go), which rank a letter at the start of a
+ * word above one inside it, and a run of letters above the same letters
+ * apart. */
+#define FUZZY_MATCH      16
+#define FUZZY_GAP_START  (-3)
+#define FUZZY_GAP_EXTEND (-1)
+#define FUZZY_PATH       10     /* first letter of a path component */
+#define FUZZY_WORD       8      /* after a space, _ - . ( [ */
+#define FUZZY_CAMEL      7      /* an upper case letter after a lower case one */
+#define FUZZY_DIGIT      4      /* the first digit of a number */
+#define FUZZY_RUN        4      /* right after the letter before, at least */
+#define FUZZY_BASENAME   8      /* a word found wholly in the last component */
+#define FUZZY_WHOLE      12     /* a word found as it is, no letter between */
+/* Places a word's first letter is tried from, at most: enough for any
+ * name, and a bound on what a pathological one (a thousand a's) costs. */
+#define FUZZY_STARTS     64
+
+typedef struct FuzzyText {
+    uint32_t c[FUZZY_TEXT];     /* folded */
+    uint8_t  upper[FUZZY_TEXT]; /* ASCII upper case before folding */
+    int      off[FUZZY_TEXT];   /* byte offset in the text */
+    int      n;
+    int      base;              /* first character of the last component */
+} FuzzyText;
+
+static int fuzzy_bonus(const FuzzyText *t, int i)
+{
+    if (i == 0)
+        return FUZZY_PATH;
+    uint32_t p = t->c[i - 1], c = t->c[i];
+    if (p == '/')
+        return FUZZY_PATH;
+    if (p == ' ' || p == '_' || p == '-' || p == '.' || p == '(' || p == '[')
+        return FUZZY_WORD;
+    if (t->upper[i] && !t->upper[i - 1] && p >= 'a' && p <= 'z')
+        return FUZZY_CAMEL;
+    if (c >= '0' && c <= '9' && !(p >= '0' && p <= '9'))
+        return FUZZY_DIGIT;
+    return 0;
+}
+
+/* A run of letters carries the bonus of its first one (fzf's): "Felic" at
+ * the start of a word is worth more than F-e-l-i-c, each a word of its
+ * own. */
+static int fuzzy_score(const FuzzyText *t, const int *pos, int m)
+{
+    int s = 0, run = 0;
+    for (int k = 0; k < m; k++) {
+        int b = fuzzy_bonus(t, pos[k]);
+        s += FUZZY_MATCH;
+        if (k == 0) {
+            s += 2 * b;
+            run = b;
+        } else if (pos[k] == pos[k - 1] + 1) {
+            s += RX_MAX(RX_MAX(b, run), FUZZY_RUN);
+        } else {
+            s += b + FUZZY_GAP_START + FUZZY_GAP_EXTEND * (pos[k] - pos[k - 1] - 2);
+            run = b;
+        }
+    }
+    if (pos[0] >= t->base)
+        s += FUZZY_BASENAME;
+    if (pos[m - 1] - pos[0] == m - 1)
+        s += FUZZY_WHOLE;
+    return s;
+}
+
+/* The best placement of word w (m letters) in t, into best[]; false when
+ * it is not there. Every place its first letter is a start: the earliest
+ * end from there, then the latest start before that end (the tightest
+ * window from that start, fzf's v1), scored. A start the word cannot be
+ * completed from ends the search: no later one can complete it either. */
+static bool fuzzy_word(const FuzzyText *t, const uint32_t *w, int m, int *best, int *best_score)
+{
+    int pos[FUZZY_QUERY];
+    bool found = false;
+    int starts = 0;
+    for (int p = 0; p + m <= t->n && starts < FUZZY_STARTS; p++) {
+        if (t->c[p] != w[0])
+            continue;
+        starts++;
+        int j = 0, e = -1;
+        for (int i = p; i < t->n; i++) {
+            if (t->c[i] == w[j] && ++j == m) {
+                e = i;
+                break;
+            }
+        }
+        if (e < 0)
+            break;
+        pos[m - 1] = e;
+        for (int i = e - 1, k = m - 2; k >= 0; i--) {
+            if (t->c[i] == w[k])
+                pos[k--] = i;
+        }
+        int s = fuzzy_score(t, pos, m);
+        if (!found || s > *best_score) {
+            memcpy(best, pos, sizeof(*pos) * (size_t)m);
+            *best_score = s;
+            found = true;
+        }
+    }
+    return found;
+}
+
+/* An ASCII text is read as its bytes, and first only checked: every
+ * word's letters in order. Most texts a query is run against fail that,
+ * and leave without being copied. A word with a letter outside ASCII
+ * after folding cannot be in an ASCII text. */
+static bool fuzzy_ascii_has(const char *text, size_t len, const uint32_t *q, int nq)
+{
+    for (int i = 0; i < nq;) {
+        while (i < nq && q[i] == ' ')
+            i++;
+        size_t at = 0;
+        for (; i < nq && q[i] != ' '; i++) {
+            if (q[i] >= 128)
+                return false;
+            while (at < len && fold((unsigned char)text[at]) != q[i])
+                at++;
+            if (at++ >= len)
+                return false;
+        }
+    }
+    return true;
+}
+
+bool rx_fuzzy_match(const char *text, const char *query, int *score, int *hits, int max_hits,
+                    int *nb_hits)
+{
+    if (score)
+        *score = 0;
+    if (nb_hits)
+        *nb_hits = 0;
+    if (!text || !query)
+        return false;
+
+    uint32_t q[FUZZY_QUERY];
+    int nq = 0;
+    for (const char *p = query; *p && nq < FUZZY_QUERY;)
+        q[nq++] = fold(utf8_next(&p));
+
+    FuzzyText t;
+    t.n = 0;
+    t.base = 0;
+    size_t len = 0;
+    bool ascii = true;
+    for (; text[len]; len++)
+        ascii &= (unsigned char)text[len] < 0x80;
+    if (ascii) {
+        if (!fuzzy_ascii_has(text, len, q, nq))
+            return false;
+        /* The last FUZZY_TEXT characters: the end of a path names it. */
+        size_t from = len > FUZZY_TEXT ? len - FUZZY_TEXT : 0;
+        for (size_t i = from; i < len; i++) {
+            unsigned char raw = (unsigned char)text[i];
+            t.upper[t.n] = raw >= 'A' && raw <= 'Z';
+            t.c[t.n] = fold(raw);
+            t.off[t.n] = (int)i;
+            if (raw == '/')
+                t.base = t.n + 1;
+            t.n++;
+        }
+    } else {
+        int total = 0;
+        for (const char *p = text; *p; utf8_next(&p))
+            total++;
+        int skip = RX_MAX(total - FUZZY_TEXT, 0);
+        for (const char *p = text; *p;) {
+            int off = (int)(p - text);
+            uint32_t raw = utf8_next(&p);
+            if (skip > 0) {
+                skip--;
+                continue;
+            }
+            t.upper[t.n] = raw >= 'A' && raw <= 'Z';
+            t.c[t.n] = fold(raw);
+            t.off[t.n] = off;
+            if (t.c[t.n] == '/')
+                t.base = t.n + 1;
+            t.n++;
+        }
+    }
+
+    int sum = 0, nh = 0;
+    int pos[FUZZY_QUERY];
+    for (int i = 0; i < nq;) {
+        while (i < nq && q[i] == ' ')
+            i++;
+        int start = i;
+        while (i < nq && q[i] != ' ')
+            i++;
+        int m = i - start;
+        if (!m)
+            continue;
+        int s = 0;
+        if (m > t.n || !fuzzy_word(&t, q + start, m, pos, &s))
+            return false;
+        sum += s;
+        for (int k = 0; k < m && hits && nh < max_hits; k++)
+            hits[nh++] = t.off[pos[k]];
+    }
+    if (score)
+        *score = sum;
+    if (nb_hits)
+        *nb_hits = nh;
+    return true;
 }
 
 /* ------------------------------------------------------------- paths & files */

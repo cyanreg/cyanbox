@@ -70,6 +70,19 @@ int rx_strcasecmp(const char *a, const char *b);
 /* UTF-8 aware, case-insensitive "needle in haystack" for the search box.
  * Folds ASCII case and full-width ASCII; everything else compares as is. */
 bool rx_str_contains_fold(const char *haystack, const char *needle);
+/* Fuzzy matching, as fzf does it, for the Add dialog's finder: every word
+ * of `query` (split at spaces) must be found in `text` with its letters in
+ * order, gaps allowed, folded as rx_str_contains_fold folds. Each letter
+ * found scores, more at the start of a path component or a word (after a
+ * separator, a case change or a digit run) and right after the letter
+ * before; each letter skipped costs; a word found whole, or wholly in the
+ * last path component, scores more. The best placement of each word counts. Returns
+ * false when a word is not found; *score (may be NULL) is the sum. `hits`
+ * (may be NULL) gets the byte offsets in `text` of the letters matched, at
+ * most max_hits, their count in *nb_hits. Only the last 1024 characters of
+ * `text` and the first 256 of `query` are looked at. */
+bool rx_fuzzy_match(const char *text, const char *query, int *score, int *hits, int max_hits,
+                    int *nb_hits);
 
 /* ------------------------------------------------------------- paths & files */
 

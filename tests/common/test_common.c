@@ -269,6 +269,73 @@ static void test_contains_fold(void)
     CHECK(contains("\x80" "abc", "ABC") && contains("abc\xc3", "\xc3"), "stray bytes");
 }
 
+static int fuzzy(const char *text, const char *query)
+{
+    int s = 0;
+    return rx_fuzzy_match(text, query, &s, NULL, 0, NULL) ? s : -1;
+}
+
+/* rx_fuzzy_match, the Add dialog's finder: words in any order, letters in
+ * order with gaps, folded; a letter at the start of a component or a word
+ * and a run of letters rank higher, a word in the last component higher
+ * still; the hits are byte offsets; invalid UTF-8 and long texts are safe. */
+static void test_fuzzy(void)
+{
+    const char *felic = "AD:HOUSE 11 [FLAC]/2.01 - Felicidade.flac";
+    int hits[16], nh = 0, s = 0;
+    CHECK(rx_fuzzy_match(felic, "felic", &s, hits, 16, &nh) && nh == 5, "felic: %d hits", nh);
+    const char *at = strstr(felic, "Felic");
+    for (int i = 0; i < nh; i++)
+        CHECK(hits[i] == (int)(at - felic) + i, "hit %d at %d", i, hits[i]);
+    CHECK(fuzzy(felic, "adhouse 11") >= 0, "letters apart, two words");
+    CHECK(fuzzy(felic, "11 adhouse") >= 0, "words in any order");
+    CHECK(fuzzy(felic, "flac felicidade xyz") < 0, "every word must be there");
+    CHECK(fuzzy(felic, "edadicilef") < 0, "letters in order");
+    CHECK(fuzzy(felic, "") == 0 && fuzzy(felic, "   ") == 0, "an empty query matches");
+
+    CHECK(fuzzy("Dub Techno", "dub") > fuzzy("Studio Rubber", "dub"), "a word's start ranks higher");
+    CHECK(fuzzy("x/Felicidade.flac", "felic") > fuzzy("x/F-e-l-i-c.flac", "felic"),
+          "a run ranks higher");
+    CHECK(fuzzy("Live/Album.flac", "album") > fuzzy("Album/Live.flac", "album"),
+          "the last component ranks higher");
+    CHECK(fuzzy("DeepHouse", "h") > fuzzy("deephouse", "h"), "a case change starts a word");
+    CHECK(fuzzy("x/2.01 - Felicidade.flac", "felic") > fuzzy("x/Felix the Cat", "felic"),
+          "a word found whole ranks higher");
+    CHECK(fuzzy("ＤＡＦＴ ＰＵＮＫ/one.flac", "daft punk") >= 0, "full width folds");
+
+    /* Byte offsets after multibyte characters. */
+    CHECK(rx_fuzzy_match("夏恋/Summer.flac", "sum", NULL, hits, 16, &nh) && nh == 3 &&
+          hits[0] == 7 && hits[1] == 8 && hits[2] == 9, "hits after UTF-8: %d %d", nh, hits[0]);
+    /* At most max_hits, but the match is still the whole query's. */
+    CHECK(rx_fuzzy_match(felic, "felicidade", NULL, hits, 3, &nh) && nh == 3, "max_hits");
+
+    /* A text longer than the 1024 characters looked at: its end counts. */
+    char *long_path = malloc(3000);
+    if (long_path) {
+        memset(long_path, 'a', 2000);
+        strcpy(long_path + 2000, "/target.flac");
+        CHECK(rx_fuzzy_match(long_path, "target", &s, hits, 16, &nh) && nh == 6 &&
+              hits[0] == 2001, "the end of a long text: %d", nh ? hits[0] : -1);
+        long_path[0] = 'z';
+        CHECK(fuzzy(long_path, "zt") < 0, "its start is not looked at");
+        free(long_path);
+    }
+
+    /* Invalid UTF-8 on either side: no read past the end, no hang. */
+    static const char *const bad[] = {
+        "\xf0", "\xf0\x9f", "\xe2\x82", "\xc3", "\x80", "\xff\xfe", "abc\xf0", "\xc0\x80",
+    };
+    for (size_t i = 0; i < RX_ARRAY_ELEMS(bad); i++) {
+        for (size_t j = 0; j < RX_ARRAY_ELEMS(bad); j++)
+            fuzzy(bad[i], bad[j]);
+        char *t = rx_asprintf("%sKey/name%s", bad[i], bad[i]);
+        CHECK(t && fuzzy(t, "key name") >= 0, "%zu: ASCII between invalid bytes", i);
+        free(t);
+    }
+    CHECK(!rx_fuzzy_match(NULL, "a", NULL, NULL, 0, NULL) &&
+          !rx_fuzzy_match("a", NULL, NULL, NULL, 0, NULL), "NULL");
+}
+
 static int remove_entry(const char *path, const struct stat *st, int flag, struct FTW *ftw)
 {
     return remove(path);
@@ -286,6 +353,7 @@ int main(void)
     test_path_abs();
     test_write_atomic();
     test_contains_fold();
+    test_fuzzy();
 
     if (nftw(dir, remove_entry, 16, FTW_DEPTH | FTW_PHYS) < 0)
         fprintf(stderr, "could not remove %s\n", dir);
