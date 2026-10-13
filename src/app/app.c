@@ -41,10 +41,16 @@
  *    the only other shared state is the cancel flag and the finished
  *    flag/result, published with release/acquire.
  *  - Saves asked for by the deck controls are queued and written once per
- *    tick, so a burst of edits costs one transaction. */
+ *    tick, so a burst of edits costs one transaction.
+ *  - Tagging with the model is the user's to ask for (the track menu, the
+ *    Analysis menu, `rxbox tag`), never done unasked: it holds the GPU for
+ *    seconds a track and up to 7 GB of its memory. Its results come back
+ *    through app->jobs like an analysis's; the batch's progress is the
+ *    jobs' own (rx_jobs_tag_progress). */
 
 #include "rxbox/app.h"
 
+#include <limits.h>
 #include <math.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -1088,6 +1094,152 @@ int rx_app_rescan(RXApp *app)
     return ret;
 }
 
+/* ------------------------------------------------------------------ tagging */
+
+/* `dir`/models/RX_APP_ML_MODEL when it is there. */
+static char *model_in(const char *dir)
+{
+    char *models = rx_path_join(dir, "models");
+    char *p = models ? rx_path_join(models, RX_APP_ML_MODEL) : NULL;
+    free(models);
+    if (p && rx_file_exists(p))
+        return p;
+    free(p);
+    return NULL;
+}
+
+int rx_app_ml_model(const RXApp *app, char **path)
+{
+    *path = NULL;
+    const char *named = app->lib.cfg.ml_model;
+    if (!named || !named[0])
+        named = getenv("RXBOX_ML_MODEL");
+    if (named && named[0]) {
+        char *p = rx_path_expand(named);
+        if (!p)
+            return RX_ERROR(ENOMEM);
+        *path = p;
+        return rx_file_exists(p) ? 0 : RX_ERROR(ENOENT);
+    }
+
+    /* Beside the program, so an installed rxbox and one run from its
+     * build directory (whose parent is the source tree) both find the
+     * tree's models/; then the current directory. */
+    char exe[PATH_MAX];
+    ssize_t n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
+    if (n > 0) {
+        exe[n] = '\0';
+        for (int up = 0; up < 2 && !*path; up++) {
+            char *slash = strrchr(exe, '/');
+            if (!slash)
+                break;
+            *slash = '\0';
+            *path = model_in(exe[0] ? exe : "/");
+        }
+    }
+    if (!*path)
+        *path = model_in(".");
+    return *path ? 0 : RX_ERROR(ENOENT);
+}
+
+int rx_app_tag_tracks(RXApp *app, const uint64_t *ids, int n)
+{
+    if (!app->jobs)
+        return RX_ERROR(EINVAL);
+
+    char *model = NULL;
+    int ret = rx_app_ml_model(app, &model);
+    if (ret < 0) {
+        app->last_error_count++;
+        if (model)
+            rx_app_set_status(app, "Cannot tag: there is no model at %s", model);
+        else
+            rx_app_set_status(app, "Cannot tag: no model in models/ (%s), and neither the "
+                              "setting ml.model nor RXBOX_ML_MODEL names one", RX_APP_ML_MODEL);
+        free(model);
+        return ret;
+    }
+
+    int queued = 0, missing = 0;
+    const RXTrack *first = NULL;
+    for (int i = 0; i < n; i++) {
+        RXTrack *t = rx_library_find_id(&app->lib, ids[i]);
+        if (!t)
+            continue;
+        if (t->missing) {
+            missing++;
+            continue;
+        }
+        uint64_t req = rx_jobs_tag(app->jobs, model, t->id, t->path);
+        if ((int64_t)req < 0) {
+            ret = (int)(int64_t)req;
+            break;
+        }
+        app->tag_request = req;
+        if (!queued++)
+            first = t;
+    }
+    free(model);
+
+    char name[256];
+    if (ret < 0) {
+        app->last_error_count++;
+        rx_app_set_status(app, "Cannot tag: %s", strerror(-ret));
+        return ret;
+    }
+    if (!queued && missing)
+        rx_app_set_status(app, "Nothing to tag: the file%s missing", missing == 1 ? " is" : "s are");
+    else if (!queued)
+        rx_app_set_status(app, "Nothing to tag");
+    else if (queued == 1)
+        rx_app_set_status(app, "Tagging %s", track_name(first, name, sizeof(name)));
+    else
+        rx_app_set_status(app, "Tagging %d tracks", queued);
+    return queued;
+}
+
+void rx_app_cancel_tags(RXApp *app)
+{
+    if (!app->jobs || !rx_jobs_tag_progress(app->jobs, NULL, NULL, NULL))
+        return;
+    rx_jobs_cancel(app->jobs, app->tag_request);
+    rx_app_set_status(app, "Tagging stopped");
+}
+
+bool rx_app_tag_progress(RXApp *app, int *done, int *total, uint64_t *current)
+{
+    return rx_jobs_tag_progress(app->jobs, done, total, current);
+}
+
+int rx_app_apply_tags(RXApp *app, RXTrack *t, const RXMLTags *tags)
+{
+    if (!t || !tags)
+        return RX_ERROR(EINVAL);
+
+    /* The genre the user sees is the file's unless they changed it; an
+     * override that is there and not empty is theirs, and stays. */
+    const char *g = t->meta.genre, *fg = t->file_meta.genre;
+    bool own = g && g[0] && strcmp(g, fg ? fg : "");
+    int ret = 0;
+    if (tags->genre && tags->genre[0] && !own)
+        ret = rx_meta_set(&t->meta.genre, tags->genre);
+    if (ret >= 0)
+        ret = rx_meta_set(&t->meta.comment, tags->comment ? tags->comment : "");
+    if (ret < 0)
+        return ret;
+    t->meta.hue = rx_hue_wrap(tags->hue);
+    t->ml_club = tags->club;
+    t->ml_intensity = tags->intensity;
+    t->ml_valence = tags->valence;
+    t->ml_vocals = tags->vocals;
+    t->tags_version = RX_ML_TAGS_VERSION;
+
+    ret = rx_library_save_track(&app->lib, t);
+    app->rows_dirty = true;
+    app->dirty = true;
+    return ret;
+}
+
 /* -------------------------------------------------------------- job results */
 
 static bool take_inflight(RXAppPriv *priv, uint64_t request, Inflight *out)
@@ -1173,6 +1325,67 @@ static void handle_analysis(RXApp *app, RXJobResult *r)
         app->analysing_total = 0;
         app->analysing_done = 0;
         priv->analyses_failed = 0;
+    }
+}
+
+/* Why tagging failed, for the status bar: the model's own errors, else
+ * the decoder's (analysis_error). */
+static const char *tag_error(int err)
+{
+    switch (err) {
+    case RX_ERROR(ENODEV): return "no GPU here can run the model (Vulkan 1.3 with 16- and 8-bit "
+                                  "storage)";
+    case RX_ERROR(EIO):    return "the GPU failed (see the log)";
+    case RX_ERROR(E2BIG):  return "the track is too long for the model";
+    default:               return analysis_error(err);
+    }
+}
+
+/* A failure is held in the status bar as an analysis's is. */
+static void handle_tags(RXApp *app, RXJobResult *r)
+{
+    RXAppPriv *priv = app->priv;
+    char name[256];
+    if (!r->track_id) {
+        /* The model did not load; the batch is over. */
+        app->last_error_count++;
+        rx_app_set_status(app, "Cannot load the model to tag: %s",
+                          r->err == RX_ERROR(EINVAL) ? "the file is not MOSS-Audio" : tag_error(r->err));
+        priv->status_held = app->status_time;
+        return;
+    }
+
+    RXTrack *t = rx_library_find_id(&app->lib, r->track_id);
+    if (!t)
+        return;
+    track_name(t, name, sizeof(name));
+    bool held = priv->status_held && priv->status_held == app->status_time &&
+                rx_time_us() - app->status_time < STATUS_HOLD_US;
+    if (r->err < 0 || !r->tags) {
+        int err = r->err < 0 ? r->err : RX_ERROR(EINVAL);
+        app->last_error_count++;
+        rx_warn("cannot tag %s: %s", t->path, strerror(-err));
+        rx_app_set_status(app, "Tagging failed for %s: %s", name, tag_error(err));
+        priv->status_held = app->status_time;
+        return;
+    }
+
+    const RXMLTags *tags = r->tags;
+    int ret = rx_app_apply_tags(app, t, tags);
+    rx_info("tagged %s in %.1f s: hue %.1f, %s, %s", t->path, r->seconds, tags->hue,
+            tags->genre ? tags->genre : "no genre", tags->comment ? tags->comment : "");
+    if (ret < 0) {
+        app->last_error_count++;
+        rx_app_set_status(app, "Tagged %s, but saving failed: %s", name, strerror(-ret));
+        priv->status_held = app->status_time;
+    } else if (held) {
+        /* The failure before it stays. */
+    } else if (tags->genre && t->meta.genre && strcmp(t->meta.genre, tags->genre)) {
+        rx_app_set_status(app, "Tagged %s in %.1f s: hue %.0f; the genre stays %s (the model "
+                          "hears %s)", name, r->seconds, tags->hue, t->meta.genre, tags->genre);
+    } else {
+        rx_app_set_status(app, "Tagged %s in %.1f s: %s, hue %.0f", name, r->seconds,
+                          tags->genre ? tags->genre : "no genre", tags->hue);
     }
 }
 
@@ -1338,6 +1551,9 @@ static void handle_result(RXApp *app, RXJobResult *r)
     case RX_JOB_STICK_READ:
     case RX_JOB_INSPECT:
         handle_stick(app, r);
+        break;
+    case RX_JOB_TAG:
+        handle_tags(app, r);
         break;
     }
 }
