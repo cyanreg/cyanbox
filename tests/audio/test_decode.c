@@ -7,7 +7,9 @@
  * against the frame-map rule: an ffmpeg-written MP3 (stereo Info frame over
  * joint-stereo audio) starts at its first audio frame, the same file with
  * the Info frame patched to joint stereo (what LAME writes) gains a frame of
- * silence, and a damaged frame plays as silence instead of being dropped. */
+ * silence, and a damaged frame plays as silence instead of being dropped.
+ * Float WAVs with NaN and infinite samples decode them as 0, the rest
+ * exactly, with one warning, whole and through the deck's packets. */
 
 #include "rxbox/audio.h"
 
@@ -130,6 +132,142 @@ static void test_logging(void)
           "warning line: %d '%s'", lc.level[0], lc.line[0]);
     CHECK(lc.n >= 2 && lc.level[1] == RX_LOG_DEBUG && strstr(lc.line[1], "testdemux") &&
           strstr(lc.line[1], "a note 7"), "note line: %d '%s'", lc.level[1], lc.line[1]);
+}
+
+/* A stereo IEEE float WAV of n frames, 32 or 64 bits a sample: x[i] in
+ * channel 0, -x[i] in channel 1, except `bad` values at frames `at` of
+ * channel `ch`. */
+static void write_float_wav(const char *path, const float *x, int64_t n, int bits,
+                            const int64_t *at, const int *ch, const double *bad, int nb)
+{
+    const int bps = bits / 8;
+    const uint32_t data = (uint32_t)(n * 2 * bps);
+    uint8_t *buf = malloc(44 + (size_t)data);
+    if (!buf)
+        exit(1);
+    const uint32_t head[] = { 16, 3 | 2 << 16, SIG_RATE, SIG_RATE * 2 * bps,
+                              (uint32_t)(2 * bps) | (uint32_t)bits << 16 };
+    memcpy(buf, "RIFF", 4);
+    uint32_t riff = 36 + data;
+    memcpy(buf + 4, &riff, 4);
+    memcpy(buf + 8, "WAVEfmt ", 8);
+    memcpy(buf + 16, head, sizeof(head));
+    memcpy(buf + 36, "data", 4);
+    memcpy(buf + 40, &data, 4);
+    for (int64_t i = 0; i < n; i++) {
+        for (int c = 0; c < 2; c++) {
+            double v = c ? -x[i] : x[i];
+            for (int k = 0; k < nb; k++) {
+                if (at[k] == i && ch[k] == c)
+                    v = bad[k];
+            }
+            uint8_t *p = buf + 44 + (i * 2 + c) * bps;
+            if (bits == 32) {
+                float f = (float)v;
+                memcpy(p, &f, 4);
+            } else {
+                memcpy(p, &v, 8);
+            }
+        }
+    }
+    write_bytes(path, buf, 44 + (size_t)data);
+    free(buf);
+}
+
+typedef struct NonFinite {
+    int  lines;
+    char line[256];
+} NonFinite;
+
+static void catch_nonfinite(void *opaque, enum RXLogLevel level, const char *line)
+{
+    NonFinite *c = opaque;
+    if (level == RX_LOG_WARN && strstr(line, "not finite")) {
+        c->lines++;
+        snprintf(c->line, sizeof(c->line), "%s", line);
+    }
+}
+
+/* NaN and infinite samples (a damaged float WAV) decode as 0, counted,
+ * with one warning: whole, mixed to mono, and through the deck's packet
+ * decoder, which would hand them to the resampler, the time stretcher and
+ * the output. Every other sample is exact. A double too large for a
+ * float is infinite once converted, so it goes too. */
+static void test_nonfinite(const char *dir)
+{
+    const int64_t n = SIG_RATE / 2;
+    float *x = malloc((size_t)n * sizeof(*x));
+    if (!x)
+        exit(1);
+    for (int64_t i = 0; i < n; i++)
+        x[i] = (float)(0.25 * sin(2.0 * M_PI * 440.0 * (double)i / SIG_RATE));
+    const int64_t at[] = { 100, 101, 5000, 20000 };
+    const int ch[] = { 0, 1, 1, 0 };
+    for (int bits = 32; bits <= 64; bits += 32) {
+        const double bad[] = { NAN, INFINITY, -INFINITY, bits == 64 ? 1e300 : -NAN };
+        char name[32];
+        snprintf(name, sizeof(name), "nonfinite%d.wav", bits);
+        char *path = test_path(dir, name);
+        write_float_wav(path, x, n, bits, at, ch, bad, 4);
+
+        NonFinite nf = { 0 };
+        rx_log_set_sink(catch_nonfinite, &nf);
+        RXAudio a, m;
+        int ret = rx_decode(path, 0, 0, &a), retm = rx_decode(path, 1, 0, &m);
+        rx_log_set_sink(NULL, NULL);
+        CHECK(ret >= 0 && retm >= 0 && a.channels == 2 && a.nb_frames == n &&
+              m.nb_frames == n, "%s: decode %d %d", name, ret, retm);
+        CHECK(nf.lines == 2 && strstr(nf.line, " 4 samples were not finite"),
+              "%s: %d warnings, the last \"%s\"", name, nf.lines, nf.line);
+        if (ret < 0 || retm < 0) {
+            free(path);
+            continue;
+        }
+        int64_t wrong = 0;
+        for (int64_t i = 0; i < n; i++) {
+            for (int c = 0; c < 2; c++) {
+                float want = c ? -x[i] : x[i];
+                for (int k = 0; k < 4; k++) {
+                    if (at[k] == i && ch[k] == c)
+                        want = 0.0f;
+                }
+                wrong += a.samples[i * 2 + c] != want;
+            }
+            wrong += !isfinite(m.samples[i]);
+        }
+        CHECK(!wrong, "%s: %" PRId64 " samples wrong", name, wrong);
+
+        /* The deck's packets: the same samples, and one warning */
+        nf = (NonFinite) { 0 };
+        rx_log_set_sink(catch_nonfinite, &nf);
+        RXPackets *pk = NULL;
+        RXPacketDecoder *d = NULL;
+        float *y = malloc((size_t)n * 2 * sizeof(*y));
+        int64_t got = -1;
+        if (y && rx_packets_open(path, &pk) >= 0 && rx_packets_decoder(pk, &d) >= 0) {
+            got = 0;
+            for (int64_t p = 0; p < n && got >= 0; p += 4096) {
+                int64_t r = rx_packets_decode(d, p, RX_MIN((int64_t)4096, n - p), y + p * 2, 0);
+                got = r < 0 ? r : got + r;
+            }
+            /* Again after a jump back: no second warning */
+            float z[2 * 256];
+            if (got >= 0 && rx_packets_decode(d, 0, 256, z, 0) < 0)
+                got = -1;
+        }
+        rx_log_set_sink(NULL, NULL);
+        CHECK(got == n && !memcmp(y, a.samples, (size_t)n * 2 * sizeof(*y)),
+              "%s: the packets gave %" PRId64 " frames, %s", name, got,
+              got == n ? "other samples" : "too few");
+        CHECK(nf.lines == 1, "%s: %d warnings from the packets", name, nf.lines);
+        rx_packets_decoder_free(d);
+        rx_packets_free(pk);
+        free(y);
+        rx_audio_free(&a);
+        rx_audio_free(&m);
+        free(path);
+    }
+    free(x);
 }
 
 static void test_mp3(const char *dir, const char *wav)
@@ -526,6 +664,7 @@ int main(void)
     }
 
     test_logging();
+    test_nonfinite(dir);
 
     /* Ten minutes at 96 kHz: the buffer grows without trouble */
     {

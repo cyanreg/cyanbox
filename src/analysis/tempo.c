@@ -740,9 +740,10 @@ int rx_tempo_regions(const RXOnsets *o, double bpm, double lo, double hi,
     }
 
     /* Runs of windows that settle on one other tempo: at least TG_RUN in a
-     * row within 1.5 % of their median, more than 3 % from the main tempo,
-     * rhythmic (comb above 0.3), with the main tempo doing clearly worse
-     * there (below 0.7 of the best). Anything shorter is a fill, a riser or
+     * row, each within 1.5 % of the run's first window, whose tempo is more
+     * than 3 % from the main one; rhythmic (comb above 0.3), with the main
+     * tempo doing clearly worse there (below 0.7 of the best). The region
+     * takes the run's median tempo. Anything shorter is a fill, a riser or
      * a triplet passage, and the tracker's own slack covers small drifts. */
     RXTempoRegion *r = malloc(sizeof(*r) * (size_t)(nw + 1));
     if (!r) {

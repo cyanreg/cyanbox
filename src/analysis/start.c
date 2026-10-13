@@ -19,25 +19,27 @@
  *    level and 60 ms long, or there is none and the music starts at once:
  *    an MP3's encoder delay (25 ms with LAME) is no silence, and a track
  *    cut out of a mix would "start" there with whatever is playing;
- *  - the threshold: 20 dB above the floor and no more than 65 dB under the
- *    loud level, so that dither or hiss after digital silence is not the
- *    music, while a fade from -60 dB still is from its first hit. The music
- *    stays over it for a third of the next 200 ms; a click in a pregap
- *    does not;
+ *  - the threshold: after digital silence, 65 dB under the loud level, so
+ *    that a few ms of dither before the music is not the music, while a
+ *    fade from -60 dB still is from its first hit; over a noise floor
+ *    (dither, hiss), 20 dB above the floor but never lower than 50 dB under
+ *    the loud level (-60 dBFS on a loud master): a fade is music where it
+ *    is heard over the floor. The music stays over the threshold for a
+ *    third of the next 200 ms; a click in a pregap does not;
  *  - a hit: two frames after the level crosses the threshold it is 25 dB
  *    over it. Its time is taken to the sample: the first sample at 3 % of
  *    the hit's peak (a sine kick from zero phase is there within two
  *    samples), above the floor's noise;
- *  - anything slower starts where its rise leaves the floor: the first
- *    frame of the run of frames more than 6 dB above the floor's commonest
- *    level that ends in the threshold crossing (out of digital silence,
- *    its first sound). A fade rises for a second or more until it is
- *    within 15 dB of the loud level; a swell (a riser, a reversed cymbal,
- *    a pad's attack) rises faster. A producer's fade begins on a bar line,
- *    where it leaves the floor, not where it happens to cross a threshold:
- *    on pushover's "PASSIVE" the rise leaves the -96 dB dither at 1.03 s,
- *    23 ms before a beat, is 20 dB over it at 1.48 s and reaches -60 dB at
- *    1.75 s;
+ *  - anything slower starts, out of digital silence, where it leaves the
+ *    silence: its first sound, or, with some dither before it, the first
+ *    frame of the run of frames more than 6 dB above the dither's
+ *    commonest level that ends in the threshold crossing. Over a noise
+ *    floor it starts at the threshold, where it is heard, not where it
+ *    leaves the floor: on pushover's "PASSIVE" the rise leaves the -96 dB
+ *    dither at 1.03 s, but nothing can be heard there (docs/BEATS.md,
+ *    section 11). A fade rises for a second or more until it is within
+ *    15 dB of the loud level; a swell (a riser, a reversed cymbal, a pad's
+ *    attack) rises faster;
  *  - but a fade may be only the way in: the first transient after its
  *    origin that stands 10 dB over everything in the half second before
  *    it is a hit, and the music starts there ("PASSIVE" again: a pad

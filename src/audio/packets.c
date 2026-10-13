@@ -695,6 +695,7 @@ struct RXPacketDecoder {
     int64_t   held_pos;
     int       held_n;
     int64_t   cursor;       /* after the last output, for a frame without pts */
+    bool      warned;       /* about samples that were not finite */
 };
 
 int rx_packets_decoder(RXPackets *pk, RXPacketDecoder **out)
@@ -817,6 +818,12 @@ static int receive(RXPacketDecoder *d, int64_t start, int64_t end, float *dst, i
         av_frame_unref(d->frame);
         if (n < 0)
             return n;
+        if (d->mixer.nonfinite && !d->warned) {
+            /* Once: a seek decodes the same packets again. */
+            rx_warn("%s: samples that are not finite (NaN or infinite) play as silence",
+                    d->pk->path);
+            d->warned = true;
+        }
         if (n == 0)
             continue;
         place(d, x, pos, n, start, end, dst, ch);

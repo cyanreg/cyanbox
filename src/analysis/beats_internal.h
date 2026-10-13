@@ -142,11 +142,11 @@ void rx_superflux_frame(const float *ref, const float *cur, int mid0, int mid1, 
 int  rx_onsets_compute(RXSpectrum *s, RXOnsets *o);
 void rx_onsets_free(RXOnsets *o);
 /* The first onset that is loud relative to the track (dj's rule; where
- * the music starts is start.c's). */
+ * the music starts is start.c's). Allocates nothing. */
 double rx_onsets_first(const RXOnsets *o);
 /* Removes the local mean (one second), clips at zero, scales to unit
  * standard deviation. In place. */
-void rx_onset_normalise(float *o, int n, double fps);
+int  rx_onset_normalise(float *o, int n, double fps);
 
 /* ------------------------------------------------------------------- tempo */
 

@@ -74,7 +74,8 @@ int  rx_flac_walk_next(RXFlacWalk *w, size_t *offset, int64_t *sample, int *bloc
 /* Decoded frames to interleaved float at out_ch channels: the conversion
  * and channel mix rx_decode applies (see decode.c), shared so that every
  * path through libavcodec gives the same samples. Set out_ch, zero the
- * rest; the buffers grow as frames need. */
+ * rest; the buffers grow as frames need. A sample that is not finite is
+ * decoded as 0 and counted in `nonfinite`, which the caller reports. */
 enum RXMixKind {
     RX_MIX_COPY,
     RX_MIX_MEAN,
@@ -89,6 +90,7 @@ typedef struct RXMixer {
     size_t planar_cap;
     float *mixed;               /* mixed, interleaved */
     size_t mixed_cap;
+    int64_t nonfinite;          /* samples that were NaN or infinite, decoded as 0 */
 } RXMixer;
 /* The frame's samples, interleaved, in *out (valid until the next call);
  * returns their count or a negative errno. */

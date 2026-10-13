@@ -30,7 +30,17 @@
  * stereo from more channels uses libswresample's downmix matrix normalised
  * to unity. Resampling is libswresample with soxr when it was built with it,
  * else its own Kaiser-windowed filter. The output buffer starts at the
- * container's length estimate and grows by half when that was short. */
+ * container's length estimate and grows by half when that was short.
+ *
+ * A float sample that is not finite (NaN or an infinity, from a damaged or
+ * badly written float WAV or AIFF) becomes 0 in that conversion, counted,
+ * with one warning per file. One such sample wiped a track's key and its
+ * waveforms (the three-band detail went to nothing from there to the end:
+ * every sum and filter after it was NaN); in the deck it would reach the
+ * resampler, the time stretcher and the output. Here every path through
+ * libavcodec is covered (the analyser's decode, the deck's packets, the
+ * stick's transcodes), the loop that touches every sample anyway does it,
+ * and integer formats cannot hold such a sample at all. */
 
 #include "rxbox/audio.h"
 
@@ -231,6 +241,9 @@ static int sink_frame(Sink *s, const AVFrame *f)
 
 static int sink_finish(Sink *s, RXAudio *out)
 {
+    if (s->mixer.nonfinite)
+        rx_warn("%s: %" PRId64 " sample%s not finite (NaN or infinite); decoded as silence",
+                s->path, s->mixer.nonfinite, s->mixer.nonfinite == 1 ? " was" : "s were");
     if (s->swr) {
         while (1) {
             int max = swr_get_out_samples(s->swr, 0);
@@ -339,14 +352,17 @@ static int mixer_setup(RXMixer *s, const AVChannelLayout *layout)
     return 0;
 }
 
-/* One channel of a frame as float, the way libswresample converts. */
-static void to_float(const AVFrame *f, int c, float *dst)
+/* One channel of a frame as float, the way libswresample converts, except
+ * that a sample that is not finite becomes 0 (see the top). Returns how
+ * many did. */
+static int to_float(const AVFrame *f, int c, float *dst)
 {
     int n = f->nb_samples, ch = f->ch_layout.nb_channels;
     bool planar = av_sample_fmt_is_planar(f->format);
     const uint8_t *base = planar ? f->extended_data[c] : f->extended_data[0];
     size_t step = planar ? 1 : (size_t)ch;
     size_t off = planar ? 0 : (size_t)c;
+    int bad = 0;
 
     switch (av_get_packed_sample_fmt(f->format)) {
     case AV_SAMPLE_FMT_U8:
@@ -373,20 +389,34 @@ static void to_float(const AVFrame *f, int c, float *dst)
     }
     case AV_SAMPLE_FMT_FLT: {
         const float *x = (const float *)base;
-        for (int i = 0; i < n; i++)
-            dst[i] = x[i * step + off];
+        for (int i = 0; i < n; i++) {
+            float v = x[i * step + off];
+            if (!isfinite(v)) {
+                v = 0.0f;
+                bad++;
+            }
+            dst[i] = v;
+        }
         break;
     }
     case AV_SAMPLE_FMT_DBL: {
+        /* Checked as float: a double beyond float's range is infinite there. */
         const double *x = (const double *)base;
-        for (int i = 0; i < n; i++)
-            dst[i] = (float)x[i * step + off];
+        for (int i = 0; i < n; i++) {
+            float v = (float)x[i * step + off];
+            if (!isfinite(v)) {
+                v = 0.0f;
+                bad++;
+            }
+            dst[i] = v;
+        }
         break;
     }
     default:
         memset(dst, 0, (size_t)n * sizeof(float));
         break;
     }
+    return bad;
 }
 
 int rx_mixer_frame(RXMixer *s, const AVFrame *f, const float **out)
@@ -406,7 +436,7 @@ int rx_mixer_frame(RXMixer *s, const AVFrame *f, const float **out)
         return ret;
 
     for (int c = 0; c < in; c++)
-        to_float(f, c, s->planar + (size_t)c * n);
+        s->nonfinite += to_float(f, c, s->planar + (size_t)c * n);
 
     const float *p = s->planar;
     float *m = s->mixed;
