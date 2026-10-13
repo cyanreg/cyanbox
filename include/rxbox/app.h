@@ -102,7 +102,10 @@ typedef struct RXApp {
     struct RXAppPriv *priv;         /* src/app/app.c private state */
 } RXApp;
 
-/* Lifecycle (src/app.c). player_opt NULL: the null audio backend. */
+/* Lifecycle (src/app.c). player_opt NULL: the null audio backend. Creating
+ * queues, in the background, the analysis of every result an older
+ * analyser made (rx_analysis_stale; locked grids stay), so an upgrade
+ * analyses again what it improved without being asked. */
 int  rx_app_create(RXApp *app, const char *library_root, const RXPlayerOptions *player_opt,
                    const RXWindowOptions *window_opt /* NULL: no window */);
 void rx_app_destroy(RXApp *app);
@@ -117,13 +120,15 @@ int  rx_app_run(RXApp *app);
 int  rx_app_load_deck(RXApp *app, int deck, RXTrack *t);
 void rx_app_unload_deck(RXApp *app, int deck);
 int  rx_app_analyse_track(RXApp *app, RXTrack *t, unsigned what, bool force);
-int  rx_app_analyse_all(RXApp *app, bool force);     /* everything not yet analysed */
+int  rx_app_analyse_all(RXApp *app, bool force);     /* everything not yet analysed, or stale */
 /* Which of `what` (RXAnalyseWhat) a track still lacks; everything asked
- * when force. A track without waveforms in the library always needs them,
- * and so does one whose stored waveforms are of a format version the
- * library no longer reads (-EPROTO: made before a recalibration; they are
- * loaded once to see); a locked grid never needs beats unless force; a
- * missing file needs nothing (it cannot be read). Needs only app->lib. */
+ * when force. A result an older analyser made (rx_analysis_stale: its
+ * version is below the current one) is lacking. A track without waveforms
+ * in the library always needs them, and so does one whose waveforms are
+ * stale or stored in a format version the library no longer reads
+ * (-EPROTO: made before a recalibration; they are loaded once to see); a
+ * locked grid never needs beats unless force, stale or not; a missing
+ * file needs nothing (it cannot be read). Needs only app->lib. */
 unsigned rx_app_analysis_needed(const RXApp *app, const RXTrack *t, unsigned what, bool force);
 int  rx_app_add_path(RXApp *app, const char *path);  /* add + queue analysis */
 void rx_app_save_track(RXApp *app, RXTrack *t);      /* to the library now */
