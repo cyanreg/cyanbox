@@ -1,9 +1,14 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
 // The dialogs: the confirmation of a removal from the library, Relocate,
-// Analysis settings, Export, Sync from USB, Inspect USB, the Add browser (a
-// plain directory lister: there is no native file dialog under a bare
-// Wayland compositor), the keyboard map and About.
+// Analysis settings, Player settings, Export, Sync from USB, Inspect USB,
+// the Add browser (a plain directory lister: there is no native file
+// dialog under a bare Wayland compositor), the keyboard map and About.
+//
+// Player settings is rekordbox's My Settings, built from rx_settings_list:
+// a field settings.c gains shows up with no change here. Its values are
+// RXConfig's player/mixer/device groups, set and saved at once with
+// rx_library_config_save, the way Sync from USB's apply sets them.
 //
 // Export follows the app's flow (rxbox/app.h export_state): Export starts
 // a dry run; when it finds stick files to prune or player changes not yet
@@ -280,6 +285,298 @@ static void analysis_settings(UiState *ui)
         ui_save_config(ui);
     ImGui::Spacing();
     ImGui::TextDisabled("Applies to the next analysis.");
+    ImGui::End();
+}
+
+/* ---------------------------------------------------------- player settings */
+
+void ui_open_settings(UiState *ui)
+{
+    ui->dlg_settings = true;
+    ui->settings_focus = true;
+}
+
+static RXKv **setting_group(RXConfig *cfg, int section, int **nb)
+{
+    switch (section) {
+    case UI_SETTINGS_PLAYER:
+        *nb = &cfg->nb_player;
+        return &cfg->player;
+    case UI_SETTINGS_MIXER:
+        *nb = &cfg->nb_mixer;
+        return &cfg->mixer;
+    default:
+        *nb = &cfg->nb_device;
+        return &cfg->device;
+    }
+}
+
+// The library's value: RXConfig's copy of the "<prefix>.<name>" row, NULL
+// when there is none (the field is at its default).
+static const char *setting_stored(UiState *ui, const UiSetting &f)
+{
+    int *nb;
+    RXKv **kv = setting_group(&ui->app->lib.cfg, f.section, &nb);
+    for (int i = 0; i < *nb; i++) {
+        if (!strcmp((*kv)[i].key, f.name.c_str()))
+            return (*kv)[i].value ? (*kv)[i].value : "";
+    }
+    return nullptr;
+}
+
+// The value the export would write, an index into the field's values; -1
+// for a value it would refuse (`rxbox config` takes anything).
+static int setting_current(UiState *ui, const UiSetting &f)
+{
+    const char *v = setting_stored(ui, f);
+    if (!v)
+        return f.deflt;
+    const char *listed = rx_settings_value(f.file.c_str(), f.name.c_str(), v);
+    for (int i = 0; listed && i < (int)f.values.size(); i++) {
+        if (f.values[i] == listed)
+            return i;
+    }
+    return -1;
+}
+
+// Sets one field in RXConfig; the caller saves it. The row lands in the
+// setting table as `rxbox config player.NAME VALUE` writes it, and RXConfig
+// stays in step, as Sync from USB keeps it (rx_stick_apply): written with
+// rx_library_setting_set alone, the row would be put back to RXConfig's old
+// copy by the next rx_library_config_save (any preference changed).
+static int setting_put(UiState *ui, const UiSetting &f, const std::string &value)
+{
+    int *nb;
+    RXKv **kv = setting_group(&ui->app->lib.cfg, f.section, &nb);
+    char *v = rx_strdup(value.c_str());
+    if (!v)
+        return RX_ERROR(ENOMEM);
+    for (int i = 0; i < *nb; i++) {
+        if (!strcmp((*kv)[i].key, f.name.c_str())) {
+            free((*kv)[i].value);
+            (*kv)[i].value = v;
+            return 0;
+        }
+    }
+    char *k = rx_strdup(f.name.c_str());
+    RXKv *n = k ? (RXKv *)realloc(*kv, (size_t)(*nb + 1) * sizeof(*n)) : nullptr;
+    if (!n) {
+        free(k);
+        free(v);
+        return RX_ERROR(ENOMEM);
+    }
+    *kv = n;
+    n[(*nb)++] = RXKv { k, v };
+    return 0;
+}
+
+// A value picked: into the library at once, and said in the status bar.
+static void setting_write(UiState *ui, const UiSetting &f, int value)
+{
+    RXApp *app = ui->app;
+    int ret = setting_put(ui, f, f.values[value]);
+    if (ret >= 0)
+        ret = rx_library_config_save(&app->lib);
+    if (ret < 0) {
+        rx_app_set_status(app, "Could not save the setting: %s", strerror(-ret));
+        return;
+    }
+    char label[64], text[64];
+    ui_setting_label(f.name.c_str(), label, sizeof(label));
+    ui_setting_value(f.name.c_str(), f.values[value].c_str(), text, sizeof(text));
+    rx_app_set_status(app, "%s setting %s: %s", ui_setting_titles[f.section], label, text);
+}
+
+// Every field of the section that is not at its default goes back to it.
+// The rows stay, holding the defaults: a section the library has rows for
+// is written to the stick, so the files a past export left there are
+// replaced by defaults rather than left as they were.
+static void settings_reset(UiState *ui, int section)
+{
+    RXApp *app = ui->app;
+    int changed = 0, ret = 0;
+    for (const UiSetting &f : ui_settings(ui)) {
+        if (f.section != section || setting_current(ui, f) == f.deflt)
+            continue;
+        if ((ret = setting_put(ui, f, f.values[f.deflt])) < 0)
+            break;
+        changed++;
+    }
+    if (changed) {
+        int err = rx_library_config_save(&app->lib);
+        if (ret >= 0)
+            ret = err;
+    }
+    if (ret < 0)
+        rx_app_set_status(app, "Could not save the settings: %s", strerror(-ret));
+    else
+        rx_app_set_status(app, "%s settings back to the defaults (%d changed)",
+                          ui_setting_titles[section], changed);
+}
+
+// One field: its label (in the accent colour when not at its default; the
+// key and the default on hover) and a combo of its values.
+static void setting_row(UiState *ui, const UiSetting &f, float combo_w)
+{
+    int cur = setting_current(ui, f);
+    const char *name = f.name.c_str();
+    char label[64], text[64];
+    ImGui::TableNextColumn();
+    ImGui::AlignTextToFramePadding();
+    ui_setting_label(name, label, sizeof(label));
+    if (cur != f.deflt)
+        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(UI_ACCENT), "%s", label);
+    else
+        ImGui::TextUnformatted(label);
+    ui_setting_value(name, f.values[f.deflt].c_str(), text, sizeof(text));
+    ImGui::SetItemTooltip("%s.%s, by default %s", ui_setting_prefixes[f.section], name, text);
+
+    ImGui::TableNextColumn();
+    char preview[96];
+    if (cur >= 0)
+        ui_setting_value(name, f.values[cur].c_str(), preview, sizeof(preview));
+    else
+        snprintf(preview, sizeof(preview), "%s (not valid)", setting_stored(ui, f));
+    ImGui::PushID(name);
+    ImGui::SetNextItemWidth(combo_w);
+    if (cur < 0)
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(UI_RED));
+    bool open = ImGui::BeginCombo("##value", preview, ImGuiComboFlags_HeightLarge);
+    if (cur < 0) {
+        ImGui::PopStyleColor();
+        ImGui::SetItemTooltip("Not a value the players know: the export refuses it until one is picked.");
+    }
+    if (open) {
+        const float dw = ImGui::CalcTextSize("default").x;
+        for (int i = 0; i < (int)f.values.size(); i++) {
+            ImGui::PushID(i);
+            ui_setting_value(name, f.values[i].c_str(), text, sizeof(text));
+            if (ImGui::Selectable(text, i == cur) && i != cur)
+                setting_write(ui, f, i);
+            if (i == f.deflt) {
+                ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+                ImGui::GetWindowDrawList()->AddText(ImVec2(b.x - dw - ImGui::GetStyle().ItemSpacing.x,
+                                                           a.y), UI_DIM, "default");
+            }
+            if (i == cur)
+                ImGui::SetItemDefaultFocus();
+            ImGui::PopID();
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::PopID();
+}
+
+// A section's fields in two columns, the first half down the left: the
+// player's 29 fit a 720 px high window without scrolling. Every tab is
+// padded to `rows` so the dialog keeps its size from tab to tab.
+static void settings_tab(UiState *ui, int section, int rows, float label_w, float combo_w)
+{
+    std::vector<const UiSetting *> list;
+    std::string files;
+    for (const UiSetting &f : ui_settings(ui)) {
+        if (f.section != section)
+            continue;
+        list.push_back(&f);
+        if (files.find(f.file) == std::string::npos)
+            files += (files.empty() ? "" : ", ") + f.file;
+    }
+    ImGui::TextDisabled("On the stick in %s.%s", files.c_str(), section == UI_SETTINGS_DEVICE ?
+                        " The player applies these as it reads the stick, without LOAD." : "");
+    ImGui::Spacing();
+
+    int n = (int)list.size(), half = (n + 1) / 2;
+    float y0 = ImGui::GetCursorPosY();
+    ImGuiTableFlags tf = ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_NoSavedSettings;
+    if (ImGui::BeginTable("##fields", 5, tf)) {
+        ImGui::TableSetupColumn("##label1", ImGuiTableColumnFlags_WidthFixed, label_w);
+        ImGui::TableSetupColumn("##value1", ImGuiTableColumnFlags_WidthFixed, combo_w);
+        ImGui::TableSetupColumn("##gap", ImGuiTableColumnFlags_WidthFixed, PX(24));
+        ImGui::TableSetupColumn("##label2", ImGuiTableColumnFlags_WidthFixed, label_w);
+        ImGui::TableSetupColumn("##value2", ImGuiTableColumnFlags_WidthFixed, combo_w);
+        for (int r = 0; r < half; r++) {
+            ImGui::TableNextRow();
+            setting_row(ui, *list[r], combo_w);
+            ImGui::TableNextColumn();
+            if (r + half < n)
+                setting_row(ui, *list[r + half], combo_w);
+        }
+        ImGui::EndTable();
+    }
+    float want = rows * (ImGui::GetFrameHeight() + 2 * ImGui::GetStyle().CellPadding.y);
+    float used = ImGui::GetCursorPosY() - y0;
+    if (want > used)
+        ImGui::Dummy(ImVec2(0, want - used));
+
+    ImGui::Spacing();
+    bool any = false;
+    for (const UiSetting *f : list)
+        any |= setting_current(ui, *f) != f->deflt;
+    ImGui::BeginDisabled(!any);
+    if (ImGui::Button("Reset to defaults", ImVec2(PX(160), PX(28))))
+        settings_reset(ui, section);
+    ImGui::EndDisabled();
+    if (!any) {
+        ImGui::SameLine();
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextDisabled("Every %s setting is at its default.", ui_setting_prefixes[section]);
+    }
+}
+
+// rekordbox's My Settings: what the export writes for the players to LOAD.
+// Generated from rx_settings_list; the values are the library's (RXConfig's
+// player/mixer/device groups), so the dialog keeps nothing of its own.
+static void settings_dialog(UiState *ui)
+{
+    if (!ui->dlg_settings)
+        return;
+    centre_next(ui, 0, 0);
+    if (ui->settings_focus) {
+        ImGui::SetNextWindowFocus();
+        ui->settings_focus = false;
+    }
+    if (!ImGui::Begin("Player settings", &ui->dlg_settings, ImGuiWindowFlags_NoCollapse |
+                      ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings)) {
+        ImGui::End();
+        return;
+    }
+    ui_settle_centred();
+
+    // Columns as wide as the widest label and value of any section, room
+    // for the dropdown's "default" beside the value.
+    const ImGuiStyle &st = ImGui::GetStyle();
+    float label_w = 0, value_w = 0;
+    int count[UI_NB_SETTING_SECTIONS] = {}, rows = 0;
+    for (const UiSetting &f : ui_settings(ui)) {
+        char buf[96];
+        label_w = ImMax(label_w, ImGui::CalcTextSize(ui_setting_label(f.name.c_str(), buf, sizeof(buf))).x);
+        for (const std::string &v : f.values) {
+            ui_setting_value(f.name.c_str(), v.c_str(), buf, sizeof(buf));
+            value_w = ImMax(value_w, ImGui::CalcTextSize(buf).x);
+        }
+        count[f.section]++;
+    }
+    for (int s = 0; s < UI_NB_SETTING_SECTIONS; s++)
+        rows = ImMax(rows, (count[s] + 1) / 2);
+    label_w += PX(12);
+    float combo_w = value_w + ImGui::CalcTextSize("default").x + st.ItemSpacing.x * 2 +
+                    ImGui::GetFrameHeight() + st.FramePadding.x * 2;
+    float table_w = 2 * (label_w + combo_w) + PX(24) + 10 * st.CellPadding.x;
+
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + table_w);
+    ImGui::TextWrapped("Written to the USB stick on export as the players' My Settings; "
+                       "LOAD them on the player under its settings.");
+    ImGui::PopTextWrapPos();
+    ImGui::Spacing();
+    if (ImGui::BeginTabBar("##sections")) {
+        for (int s = 0; s < UI_NB_SETTING_SECTIONS; s++) {
+            if (!ImGui::BeginTabItem(ui_setting_titles[s]))
+                continue;
+            settings_tab(ui, s, rows, label_w, combo_w);
+            ImGui::EndTabItem();
+        }
+        ImGui::EndTabBar();
+    }
     ImGui::End();
 }
 
@@ -602,11 +899,20 @@ static void sync_detail(const RXSyncItem *it, char *buf, size_t size)
             snprintf(buf, size, "played (history entry %d, no time)", it->play_index + 1);
         }
         break;
-    case RX_SYNC_SETTING:
-        snprintf(buf, size, "%s: %s -> %s", it->setting_key,
-                 it->setting_old[0] ? it->setting_old : "(default)",
-                 it->setting_value);
+    case RX_SYNC_SETTING: {
+        // As the Player settings dialog shows them: both values are in
+        // the listed form (rx_stick_diff decodes the stick's bytes and the
+        // library's value alike).
+        const char *name;
+        ui_setting_key(it->setting_key, &name);
+        char label[64], was[64] = "(default)", now[64];
+        ui_setting_label(name, label, sizeof(label));
+        if (it->setting_old[0])
+            ui_setting_value(name, it->setting_old, was, sizeof(was));
+        ui_setting_value(name, it->setting_value, now, sizeof(now));
+        snprintf(buf, size, "%s: %s -> %s", label, was, now);
         break;
+    }
     default:
         buf[0] = 0;
         break;
@@ -779,8 +1085,13 @@ static void sync_dialog(UiState *ui)
                     ImGui::TableSetColumnIndex(2);
                     RXTrack *t = it->track_id ? rx_library_find_id(&app->lib, it->track_id) : nullptr;
                     char name[200] = "-";
+                    const char *field;
+                    int section = it->kind == RX_SYNC_SETTING ?
+                                  ui_setting_key(it->setting_key, &field) : -1;
                     if (t)
                         rx_track_display(t, name, sizeof(name));
+                    else if (section >= 0)
+                        snprintf(name, sizeof(name), "%s settings", ui_setting_titles[section]);
                     else if (it->kind == RX_SYNC_SETTING)
                         snprintf(name, sizeof(name), "My Settings");
                     ImGui::TextUnformatted(name);
@@ -1135,6 +1446,7 @@ void ui_dialogs(UiState *ui)
     confirm_remove(ui);
     relocate(ui);
     analysis_settings(ui);
+    settings_dialog(ui);
     export_dialog(ui);
     sync_dialog(ui);
     inspect_dialog(ui);

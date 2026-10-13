@@ -23,7 +23,10 @@
 # the new one waits at its auto-cue, no question asked); the Add browser on
 # a folder it cannot read says so; Delete after a click on a cue in the
 # player's cue list deletes that cue and nothing else (with
-# RXBOX_UI_SWAYSOCK only: the click needs a known size).
+# RXBOX_UI_SWAYSOCK only: the click needs a known size). Last, the Player
+# settings dialog, shot open, and a value picked in it with two clicks,
+# which must land in the library's setting table (the clicks with
+# RXBOX_UI_SWAYSOCK only).
 #
 # usage: screenshot.sh RXBOX OUTDIR
 
@@ -196,4 +199,31 @@ if [ -n "${RXBOX_UI_SWAYSOCK:-}" ]; then
     SWAYSOCK=$RXBOX_UI_SWAYSOCK swaymsg -q output '*' resolution 1600x900
     variant cue-delete "70:click:1320:409,75:down:Delete,76:up:Delete,80:down:Delete,81:up:Delete,85:down:Escape,86:up:Escape" \
         "track $ID .*cues 8 cue-keys 0"
+fi
+
+# Player settings (RXBOX_UI_SHOW=settings): a shot of the dialog on its
+# Player tab. Then, at 1600x900 where the dialog sits centred, a click on
+# the first field's combo (On Air Display, On by default) and one on its
+# second item, Off: the library's setting table must hold
+# player.on_air_display = false afterwards, as `rxbox config` reads it
+# back, so a change that never reaches the library fails here. The clicks
+# need a known layout, so only with RXBOX_UI_SWAYSOCK.
+(
+    export RXBOX_UI_SHOW=settings
+    shoot "$OUT/settings.png"
+) || exit 1
+if [ -n "${RXBOX_UI_SWAYSOCK:-}" ]; then
+    SWAYSOCK=$RXBOX_UI_SWAYSOCK swaymsg -q output '*' resolution 1600x900
+    was=$(rx config player.on_air_display)
+    [ "$was" = "player.on_air_display is not set" ] || {
+        echo "FAIL: settings-write: the library already has a value: $was"; exit 1; }
+    export RXBOX_UI_SHOW=settings
+    variant settings-write "70:click:685:303,80:click:685:350" "track $ID .*popup 0"
+    unset RXBOX_UI_SHOW
+    now=$(rx config player.on_air_display)
+    echo "settings-write: $now"
+    [ "$now" = "player.on_air_display = false" ] || {
+        echo "FAIL: settings-write: want player.on_air_display = false (the clicks are on the" \
+             "first combo and its second item at 1600x900: $OUT/variant-settings-write.png)"
+        cat "$OUT/variant-settings-write.png.log"; exit 1; }
 fi

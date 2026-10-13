@@ -32,6 +32,7 @@ extern "C" {
 #include "rxbox/colors.h"
 #include "rxbox/notation.h"
 #include "rxbox/export.h"
+#include "rxbox/formats.h"
 }
 
 #define PX(v) (ui->s * (float)(v))
@@ -171,6 +172,20 @@ struct UiFileEntry {
     bool selected;
 };
 
+// A My Settings field as rx_settings_list gives it, in the section `rxbox
+// settings` prints it under: both MYSETTING files are the player's,
+// DJMMYSETTING.DAT the mixer's, DEVSETTING.DAT and the background colour
+// (which the databases carry) the device's. The library keeps its value as
+// "<prefix>.<name>" (player.quantize).
+enum { UI_SETTINGS_PLAYER, UI_SETTINGS_MIXER, UI_SETTINGS_DEVICE, UI_NB_SETTING_SECTIONS };
+struct UiSetting {
+    std::string file;          // MYSETTING.DAT ...
+    std::string name;          // quantize
+    int         section;       // UI_SETTINGS_*
+    std::vector<std::string> values;   // as `rxbox settings` lists them
+    int         deflt;         // the default, an index into values
+};
+
 // An input event the test hook gives ImGui at a frame (RXBOX_UI_EVENTS).
 struct UiTestEvent {
     int      frame;
@@ -233,6 +248,9 @@ struct UiState {
 
     // Dialogs.
     bool      dlg_analysis, dlg_export, dlg_keys, dlg_about, dlg_add, dlg_inspect, dlg_sync;
+    bool      dlg_settings;
+    bool      settings_focus;  // bring Player settings to the front (Ctrl+, while open)
+    std::vector<UiSetting> settings;   // every My Settings field (ui_settings)
     int       bpm_preset;
     std::string fb_path;
     char      fb_edit[1024];
@@ -332,6 +350,16 @@ bool ui_swatch(UiState *ui, const char *id, uint32_t rgb, bool selected, float s
 bool ui_hot_cue_colour_menu(UiState *ui, const char *current, char out[RX_COLOR_MAX]);
 bool ui_track_colour_menu(UiState *ui, const char *current, char out[RX_COLOR_MAX]);
 
+// My Settings as people read them, for the Player settings dialog and the
+// Sync dialog's rows alike: "lcd_brightness" is "LCD Brightness",
+// "touch_release" "Touch & Release", tempo_range's "6" "±6 %".
+extern const char *const ui_setting_titles[UI_NB_SETTING_SECTIONS];    // "Player"
+extern const char *const ui_setting_prefixes[UI_NB_SETTING_SECTIONS];  // "player", the keys'
+const std::vector<UiSetting> &ui_settings(UiState *ui);
+int         ui_setting_key(const char *key, const char **name);       // "player.quantize": section, name
+const char *ui_setting_label(const char *name, char *buf, size_t size);
+const char *ui_setting_value(const char *name, const char *value, char *buf, size_t size);
+
 // Loads a track into the player, pausing it first when it plays.
 void ui_load(UiState *ui, RXTrack *t);
 void ui_want_frames(UiState *ui, int n);
@@ -385,6 +413,7 @@ void ui_open_add(UiState *ui);
 void ui_open_export(UiState *ui);
 void ui_open_inspect(UiState *ui);
 void ui_open_sync(UiState *ui);
+void ui_open_settings(UiState *ui);
 void ui_open_relocate(UiState *ui, RXTrack *t);
 void ui_dialogs_shutdown(UiState *ui);
 void ui_scan_volumes(UiState *ui);
