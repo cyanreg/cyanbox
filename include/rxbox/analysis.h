@@ -155,10 +155,14 @@ enum RXAnalyseWhat {
  * below the current one. Says nothing of locks or missing files. */
 static inline unsigned rx_analysis_stale(const RXTrack *t)
 {
+    /* A grid or a key an older analyser made, or one an older analyser
+     * looked for and did not find (the version is set either way: a
+     * track left without a grid by an analyser bug is looked at again
+     * once the version moves). */
     unsigned stale = 0;
-    if (t->grid.nb_sections > 0 && t->beats_version < RX_BEATS_VERSION)
+    if ((t->grid.nb_sections > 0 || t->beats_version > 0) && t->beats_version < RX_BEATS_VERSION)
         stale |= RX_ANALYSE_BEATS;
-    if (t->key[0] && t->key_version < RX_KEY_VERSION)
+    if ((t->key[0] || t->key_version > 0) && t->key_version < RX_KEY_VERSION)
         stale |= RX_ANALYSE_KEY;
     if (t->has_waveforms && t->waves_version < RX_WAVES_VERSION)
         stale |= RX_ANALYSE_WAVES;
