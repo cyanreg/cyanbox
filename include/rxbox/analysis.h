@@ -112,6 +112,34 @@ enum RXAnalyseWhat {
     RX_ANALYSE_ALL   = 7,
 };
 
+/* The version of each stage's output. Bump one when that stage's output
+ * changes (a better grid, a recalibrated key, new waveform levels): the
+ * library keeps the version each track's results were made with, and a
+ * track whose version is lower is analysed for that stage again, by
+ * itself, in the interface and by `rxbox analyze`. 0 is a result made
+ * before versions were kept, so it is always older.
+ * RX_WAVES_VERSION is the algorithm; the packed blob has its own format
+ * version (rx_waveforms_pack), a storage matter. The two usually bump
+ * together, because new levels are what makes old blobs unreadable. */
+#define RX_BEATS_VERSION 1
+#define RX_KEY_VERSION   1
+#define RX_WAVES_VERSION 1
+
+/* Which stages of a track (RXAnalyseWhat) were made by an older analyser:
+ * among those it has (a grid, a key, waveforms), each whose version is
+ * below the current one. Says nothing of locks or missing files. */
+static inline unsigned rx_analysis_stale(const RXTrack *t)
+{
+    unsigned stale = 0;
+    if (t->grid.nb_sections > 0 && t->beats_version < RX_BEATS_VERSION)
+        stale |= RX_ANALYSE_BEATS;
+    if (t->key[0] && t->key_version < RX_KEY_VERSION)
+        stale |= RX_ANALYSE_KEY;
+    if (t->has_waveforms && t->waves_version < RX_WAVES_VERSION)
+        stale |= RX_ANALYSE_WAVES;
+    return stale;
+}
+
 typedef struct RXAnalysis {
     unsigned     done;           /* which of RXAnalyseWhat succeeded */
     double       duration;
