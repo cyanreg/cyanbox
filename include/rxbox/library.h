@@ -19,7 +19,9 @@
  *                  has_artwork, file_* (the tags as read from the file), the override
  *                  columns (NULL = use the file's), year, track_number, disc_number,
  *                  rating, color, key, key_confidence, grid_confidence, grid_flags,
- *                  grid_locked, added, analysed, play_count, last_played, missing
+ *                  grid_locked, added, analysed, play_count, last_played, missing,
+ *                  beats_version, key_version, waves_version (the analyser that made
+ *                  the grid, key and waveforms: RX_*_VERSION, 0 before schema 2)
  *   grid_section   track_id, idx, start, bpm, beat
  *   cue            id, track_id, time, grid_beat, hot, loop_end, loop_beats, active, name, color
  *   track_tag      track_id, tag
@@ -143,7 +145,8 @@ bool     rx_is_audio_path(const char *path);
  * artwork, plays, playlist entries). */
 int      rx_library_remove(RXLibrary *lib, RXTrack *t);
 /* Writes a track's editable state (meta overrides, rating, colour, tags,
- * key, grid, cues, locked) in one transaction. Call after any edit. */
+ * key, grid, cues, locked, the analyser versions) in one transaction.
+ * Call after any edit. */
 int      rx_library_save_track(RXLibrary *lib, RXTrack *t);
 /* Re-probes a track whose file changed (mtime); keeps grid/key/cues. */
 int      rx_library_refresh_track(RXLibrary *lib, RXTrack *t);

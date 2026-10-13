@@ -21,7 +21,7 @@
  * statements below are generated from these lists, and library.c binds
  * and reads them in this order. */
 #define RX_TRACK_FILE_COLS 24
-#define RX_TRACK_EDIT_COLS 22
+#define RX_TRACK_EDIT_COLS 25
 extern const char *const rx_track_file_cols[RX_TRACK_FILE_COLS];
 extern const char *const rx_track_edit_cols[RX_TRACK_EDIT_COLS];
 

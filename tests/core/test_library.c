@@ -3,8 +3,11 @@
 /* The SQLite library (src/core/library.c, db.c, config.c): a library made
  * in a scratch directory from real WAV files, edited, closed and opened
  * again, and checked field by field, then with SQLite's own integrity
- * and foreign key checks. Waveforms are stored through the raw blob layer
- * because the analysis module (which packs them) is not linked here. */
+ * and foreign key checks; a library of schema 1 migrated, its analysis
+ * results then older than the analyser. Waveforms are stored through the
+ * raw blob layer because the analysis module (which packs them) is not
+ * linked here; rxbox/analysis.h is used for its version constants and
+ * inline helper only. */
 
 #include "rxbox/library.h"
 
@@ -13,6 +16,7 @@
 
 #include <sqlite3.h>
 
+#include "rxbox/analysis.h"
 #include "src/core/core.h"
 #include "util.h"
 
@@ -85,7 +89,7 @@ static void test_create_and_add(void)
 
     sqlite3_stmt *st;
     sqlite3_prepare_v2(lib.db->db, "PRAGMA user_version", -1, &st, NULL);
-    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 1);
+    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 2);
     sqlite3_finalize(st);
     sqlite3_prepare_v2(lib.db->db, "PRAGMA journal_mode", -1, &st, NULL);
     CHECK(sqlite3_step(st) == SQLITE_ROW && !strcmp((const char *)sqlite3_column_text(st, 0), "wal"));
@@ -163,6 +167,9 @@ static void test_edit_and_reopen(void)
     a->grid_flags = 5;
     a->grid_locked = true;
     a->analysed = 1760000000;
+    a->beats_version = 3;
+    a->key_version = 2;
+    a->waves_version = 1;
 
     RXCue c;
     rx_cue_init(&c, 0.3125);
@@ -237,6 +244,7 @@ static void test_edit_and_reopen(void)
     CHECK_STR(a->key, "Am");
     CHECK(a->key_confidence == 0.8 && a->grid_confidence == 0.97);
     CHECK(a->grid_flags == 5 && a->grid_locked && a->analysed == 1760000000);
+    CHECK(a->beats_version == 3 && a->key_version == 2 && a->waves_version == 1);
     CHECK(a->grid.nb_sections == 2 && a->grid.beats_per_bar == 4);
     if (a->grid.nb_sections == 2) {
         CHECK(a->grid.sections[0].start == 0.3125 && a->grid.sections[0].bpm == 128.0 && a->grid.sections[0].beat == 1);
@@ -426,6 +434,77 @@ static void test_missing_relocate_remove(void)
     free(c_old);
     free(c_new);
     free(b_path);
+}
+
+/* A library of schema 1, from before the analyser versions were kept:
+ * made here as schema 2 and taken back (the columns dropped, the version
+ * set back), which leaves the track table as schema 1 created it. Opening
+ * it migrates it, and its tracks' grid, key and waveforms are then older
+ * than any analyser (version 0); a track with nothing analysed has
+ * nothing stale. Results stored at the current versions are not stale. */
+static void test_migrate_v1(void)
+{
+    char *dir = test_dir("library-v1");
+    char *db = path_in(dir, "library.db");
+    char *a_path = path_in(music, "a.wav"), *b_path = path_in(music, "b.wav");
+
+    RXLibrary lib;
+    int err;
+    CHECK(rx_library_open(&lib, dir) == 0);
+    RXTrack *a = rx_library_add_file(&lib, a_path, &err);
+    CHECK(a && rx_library_add_file(&lib, b_path, &err));
+    if (a) {
+        rx_grid_init(&a->grid, 0.5, 128.0);
+        snprintf(a->key, sizeof(a->key), "Am");
+        a->grid_locked = true;
+        CHECK(rx_library_save_track(&lib, a) == 0);
+        CHECK(rx_core_waveform_blob_put(&lib, a->id, blob, sizeof(blob)) == 0);
+    }
+    rx_library_close(&lib);
+
+    sqlite3 *s;
+    CHECK(sqlite3_open(db, &s) == SQLITE_OK);
+    CHECK(sqlite3_exec(s, "ALTER TABLE track DROP COLUMN beats_version;"
+                          "ALTER TABLE track DROP COLUMN key_version;"
+                          "ALTER TABLE track DROP COLUMN waves_version;"
+                          "PRAGMA user_version = 1", NULL, NULL, NULL) == SQLITE_OK);
+    sqlite3_close(s);
+
+    CHECK(rx_library_open(&lib, dir) == 0);
+    sqlite3_stmt *st;
+    sqlite3_prepare_v2(lib.db->db, "PRAGMA user_version", -1, &st, NULL);
+    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 2);
+    sqlite3_finalize(st);
+    CHECK(lib.nb_tracks == 2);
+    a = rx_library_find_path(&lib, a_path);
+    RXTrack *b = rx_library_find_path(&lib, b_path);
+    CHECK(a && b);
+    if (a && b) {
+        CHECK(a->grid.nb_sections == 1 && !strcmp(a->key, "Am") && a->has_waveforms);
+        CHECK(a->beats_version == 0 && a->key_version == 0 && a->waves_version == 0);
+        /* Locked or not: the lock is the app's rule, not the version's. */
+        CHECK(rx_analysis_stale(a) == RX_ANALYSE_ALL);
+        CHECK(b->beats_version == 0 && rx_analysis_stale(b) == 0);
+
+        a->beats_version = RX_BEATS_VERSION;
+        a->key_version = RX_KEY_VERSION;
+        CHECK(rx_library_save_track(&lib, a) == 0);
+        CHECK(rx_analysis_stale(a) == RX_ANALYSE_WAVES);
+    }
+    CHECK(rx_library_check(&lib) == 0);
+    rx_library_close(&lib);
+
+    CHECK(rx_library_open(&lib, dir) == 0);
+    a = rx_library_find_path(&lib, a_path);
+    CHECK(a && a->beats_version == RX_BEATS_VERSION && a->key_version == RX_KEY_VERSION &&
+          a->waves_version == 0 && rx_analysis_stale(a) == RX_ANALYSE_WAVES);
+    rx_library_close(&lib);
+
+    free(a_path);
+    free(b_path);
+    free(db);
+    test_rm_rf(dir);
+    free(dir);
 }
 
 /* A database from a newer rxbox is left alone; a foreign one too. */
@@ -730,6 +809,7 @@ int main(void)
     test_edit_and_reopen();
     test_refresh();
     test_missing_relocate_remove();
+    test_migrate_v1();
     test_refusals();
     test_lost_transaction();
     test_byte_paths();

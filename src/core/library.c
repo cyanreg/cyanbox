@@ -193,6 +193,9 @@ static void bind_edit(RXDb *db, sqlite3_stmt *st, int p, const RXTrack *t)
     rx_db_bind_int(db, st, p++, t->grid_flags);
     rx_db_bind_int(db, st, p++, t->grid_locked);
     rx_db_bind_int(db, st, p++, t->analysed);
+    rx_db_bind_int(db, st, p++, t->beats_version);
+    rx_db_bind_int(db, st, p++, t->key_version);
+    rx_db_bind_int(db, st, p++, t->waves_version);
 }
 
 /* Sections, cues and My Tags: replaced as a whole. */
@@ -355,6 +358,9 @@ static int track_from_row(sqlite3_stmt *st, RXTrack **out)
     t->grid_flags = (unsigned)sqlite3_column_int64(st, c++);
     t->grid_locked = sqlite3_column_int(st, c++);
     t->analysed = sqlite3_column_int64(st, c++);
+    t->beats_version = sqlite3_column_int(st, c++);
+    t->key_version = sqlite3_column_int(st, c++);
+    t->waves_version = sqlite3_column_int(st, c++);
 
     if (err || !t->path) {
         rx_track_free(t);
