@@ -20,10 +20,15 @@
  *
  * Track and memory cue colours are the eight rows of the colour table
  * (ids 1..8, docs/pdb.md colors); their RGB is how rekordbox 7.2.19 draws
- * them (rekordbox::cPink ... ColorTheme, as rbxport's tokens.css records). */
+ * them (rekordbox::cPink ... ColorTheme, as rbxport's tokens.css records).
+ * In the library a track's colour is a hue instead of one of the eight;
+ * the export writes the entry whose hue, computed from that RGB, is
+ * nearest around the circle, so each of the eight hues comes back as its
+ * own entry and anything between goes to the closer neighbour. */
 
 #include "rxbox/colors.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <strings.h>
 
@@ -63,7 +68,8 @@ const char *const rx_track_color_names[RX_TRACK_COLORS] = {
 };
 
 static const uint32_t track_color_rgb[RX_TRACK_COLORS] = {
-    0xF870F8, 0xF80000, 0xF8A030, 0xF8E330, 0x00E000, 0x00C0F8, 0x0050F8, 0x9808F8,
+    RX_TRACK_RGB_PINK, RX_TRACK_RGB_RED,   RX_TRACK_RGB_ORANGE, RX_TRACK_RGB_YELLOW,
+    RX_TRACK_RGB_GREEN, RX_TRACK_RGB_AQUA, RX_TRACK_RGB_BLUE,   RX_TRACK_RGB_PURPLE,
 };
 
 /* Pad colour of a hot cue without a colour. A to D: the RGB rekordbox 7
@@ -143,6 +149,131 @@ const char *rx_track_color_name(int id)
 uint32_t rx_track_color_rgb(int id)
 {
     return id >= 1 && id <= RX_TRACK_COLORS ? track_color_rgb[id - 1] : 0;
+}
+
+/* --------------------------------------------------------------------- hue */
+
+static uint32_t channel(double v)
+{
+    long c = lround(v * 255.0);
+    return (uint32_t)RX_CLAMP(c, 0, 255);
+}
+
+uint32_t rx_hue_rgb(double hue, double saturation, double value)
+{
+    double h = isfinite(hue) ? fmod(hue, 360.0) : 0.0;
+    if (h < 0)
+        h += 360.0;
+    /* A hue a hair below 0 wraps to 360.0 itself. */
+    if (h >= 360.0)
+        h = 0.0;
+    double v = RX_CLAMP(value, 0.0, 1.0);
+    double c = v * RX_CLAMP(saturation, 0.0, 1.0);
+    double x = c * (1.0 - fabs(fmod(h / 60.0, 2.0) - 1.0));
+    double r = 0, g = 0, b = 0;
+    switch ((int)(h / 60.0)) {
+    case 0:  r = c; g = x; break;
+    case 1:  r = x; g = c; break;
+    case 2:  g = c; b = x; break;
+    case 3:  g = x; b = c; break;
+    case 4:  r = x; b = c; break;
+    default: r = c; b = x; break;
+    }
+    double m = v - c;
+    return channel(r + m) << 16 | channel(g + m) << 8 | channel(b + m);
+}
+
+double rx_rgb_hue(uint32_t rgb)
+{
+    int r = (int)(rgb >> 16 & 0xFF), g = (int)(rgb >> 8 & 0xFF), b = (int)(rgb & 0xFF);
+    int max = RX_MAX(r, RX_MAX(g, b)), min = RX_MIN(r, RX_MIN(g, b));
+    if (max == min)
+        return -1.0;
+    double d = max - min, h;
+    if (max == r)
+        h = (g - b) / d;
+    else if (max == g)
+        h = (b - r) / d + 2.0;
+    else
+        h = (r - g) / d + 4.0;
+    h *= 60.0;
+    return h < 0 ? h + 360.0 : h;
+}
+
+double rx_track_color_hue(int id)
+{
+    return id >= 1 && id <= RX_TRACK_COLORS ? rx_rgb_hue(track_color_rgb[id - 1]) : -1.0;
+}
+
+int rx_track_color_nearest_hue(double hue)
+{
+    if (!isfinite(hue) || hue < 0)
+        return 0;
+    hue = fmod(hue, 360.0);
+    /* Ties (330 sits halfway between pink and red) go to the lower id. */
+    int best = 0;
+    double best_d = INFINITY;
+    for (int i = 0; i < RX_TRACK_COLORS; i++) {
+        double d = fabs(hue - rx_rgb_hue(track_color_rgb[i]));
+        d = RX_MIN(d, 360.0 - d);
+        if (d < best_d) {
+            best_d = d;
+            best = i + 1;
+        }
+    }
+    return best;
+}
+
+uint32_t rx_track_hue_rgb(double hue)
+{
+    if (!isfinite(hue) || hue < 0)
+        return 0;
+    return rx_hue_rgb(hue, 1.0, 0xF8 / 255.0);
+}
+
+int rx_parse_hue(const char *s, double *hue)
+{
+    if (!s)
+        return RX_ERROR(EINVAL);
+    while (*s == ' ' || *s == '\t')
+        s++;
+    if (!*s || name_eq(s, "none")) {
+        *hue = -1.0;
+        return 0;
+    }
+    int id = rx_track_color_id(s);
+    if (id) {
+        *hue = rx_track_color_hue(id);
+        return 0;
+    }
+    char *end;
+    double v = strtod(s, &end);
+    if (end == s || !isfinite(v) || v < 0 || v > 360)
+        return RX_ERROR(EINVAL);
+    if (!strncmp(end, "\xC2\xB0", 2))
+        end += 2;
+    while (*end == ' ' || *end == '\t')
+        end++;
+    if (*end)
+        return RX_ERROR(EINVAL);
+    *hue = v == 360 ? 0.0 : v;
+    return 0;
+}
+
+const char *rx_hue_format(double hue, char *buf, size_t size)
+{
+    int id = rx_track_color_nearest_hue(hue);
+    if (!id) {
+        snprintf(buf, size, "none");
+        return buf;
+    }
+    char deg[16];
+    snprintf(deg, sizeof(deg), "%.1f", fmod(hue, 360.0));
+    size_t n = strlen(deg);
+    if (n > 2 && !strcmp(deg + n - 2, ".0"))
+        deg[n - 2] = '\0';
+    snprintf(buf, size, "%s\xC2\xB0 (%s)", deg, rx_track_color_names[id - 1]);
+    return buf;
 }
 
 /* --------------------------------------------------------------- hot cues */

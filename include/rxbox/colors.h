@@ -19,6 +19,44 @@ int         rx_track_color_id(const char *name);                  /* 0 unknown/n
 const char *rx_track_color_name(int id);                          /* NULL for 0 */
 uint32_t    rx_track_color_rgb(int id);                           /* 0xRRGGBB, as the interface draws it */
 
+/* Their RGB, as rekordbox 7.2.19 draws them (rekordbox::cPink ...
+ * ColorTheme, as rbxport's tokens.css records). Macros so the library's
+ * schema 4 migration (src/core/db.c), which cannot link this module,
+ * computes its hues from the same values. */
+#define RX_TRACK_RGB_PINK   0xF870F8
+#define RX_TRACK_RGB_RED    0xF80000
+#define RX_TRACK_RGB_ORANGE 0xF8A030
+#define RX_TRACK_RGB_YELLOW 0xF8E330
+#define RX_TRACK_RGB_GREEN  0x00E000
+#define RX_TRACK_RGB_AQUA   0x00C0F8
+#define RX_TRACK_RGB_BLUE   0x0050F8
+#define RX_TRACK_RGB_PURPLE 0x9808F8
+
+/* A track's colour in the library is a hue (RXMeta.hue: the HSV hue angle
+ * in degrees, 0 <= hue < 360, 0 red, 60 yellow, 120 green, 180 cyan, 240
+ * blue, 300 magenta); the stick still carries one of the eight. Each
+ * entry's hue is the HSV hue of its RGB above (rx_rgb_hue): pink 300, red 0,
+ * orange 33.6, yellow 53.7, green 120, aqua 193.5, blue 220.6, purple 276. */
+double      rx_track_color_hue(int id);                           /* -1 for 0/unknown */
+/* The entry whose hue is nearest to `hue` by circular distance, 1..8; 0
+ * when `hue` is none (below 0 or not a number). Hues of 360 and over wrap. */
+int         rx_track_color_nearest_hue(double hue);
+/* The RGB a hue is drawn in: full saturation at the value the track
+ * colours above are drawn at (0xF8). 0 for none. */
+uint32_t    rx_track_hue_rgb(double hue);
+/* A hue as the command line takes it: degrees 0..360 (360 is 0; a "°"
+ * after the number is allowed), one of the eight names (that entry's hue),
+ * or "none" / "" (-1). -EINVAL otherwise. */
+int         rx_parse_hue(const char *s, double *hue);
+/* "193.5° (aqua)": the degrees to a tenth and the entry the stick gets; "none". */
+const char *rx_hue_format(double hue, char *buf, size_t size);
+
+/* HSV <-> RGB. Hue in degrees (wrapped into [0, 360)), saturation and value
+ * 0..1. rx_rgb_hue is the standard RGB -> HSV hue formula; -1 for a grey,
+ * which has no hue. */
+uint32_t    rx_hue_rgb(double hue, double saturation, double value);
+double      rx_rgb_hue(uint32_t rgb);
+
 /* Hot cue colours. Names the interface and the CLI use (rekordbox's
  * sixteen, in its pad-menu order), each mapping to a colour code in the
  * 64-entry palette. "#rrggbb" picks the nearest palette entry. */
