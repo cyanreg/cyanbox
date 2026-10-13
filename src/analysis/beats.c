@@ -333,7 +333,7 @@ static double section_scatter(const RXBeatObs *beats, const RXFitSection *s, dou
  * them (a spread of 0 calls a section steady and sequenced). */
 static int section_spread(const RXBeatObs *beats, RXFitSection *s)
 {
-    double *r = malloc((size_t)(s->last - s->first + 1) * sizeof(*r));
+    double *r = malloc((size_t)RX_MAX(s->last - s->first + 1, 1) * sizeof(*r));
     if (!r)
         return RX_ERROR(ENOMEM);
     s->jitter = section_jitter(beats, s, r);
