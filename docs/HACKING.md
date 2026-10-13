@@ -118,12 +118,32 @@ src/cli.c         the subcommands; src/main.c
 tests/<module>/   meson tests, registered from src/<module>/meson.build with suite: '<module>'
 tools/            developer tools (analysis evaluation, dumpers)
 third_party/      imgui, vma (vendored, never edited); tomlc17 is kept for m3u/toml imports only
+subprojects/      signalsmith-stretch, signalsmith-linear (git submodules, never edited)
 docs/             OVERVIEW.md, this file, the format references from dj
 ```
 
 Each `src/<module>/meson.build` builds its own static library, declares
 `rx_<module>_dep`, and registers its tests with `test(..., suite: '<module>')`.
 Only edit your own module's `meson.build`.
+
+## Building
+
+MASTER TEMPO's pitch shifter, Signalsmith Stretch, and the FFT library it
+uses, signalsmith-linear, are git submodules in `subprojects/` (both MIT,
+header-only, compiled into the player statically). After cloning, and
+whenever a pull moves them:
+
+```sh
+git submodule update --init --recursive
+```
+
+The top-level `meson.build` reads them with meson's CMake module, so
+`cmake` is needed at configure time. Stretch's CMakeLists.txt would fetch
+signalsmith-linear over the network; `subprojects/cmake/` gives it a
+stand-in to find instead, and the headers come from the submodule, so a
+configure never downloads anything. To move either library, check out the
+new commit in its submodule (signalsmith-linear at the tag Stretch's
+CMakeLists.txt names) and commit the submodule.
 
 ## Working alongside other agents
 
