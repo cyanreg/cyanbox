@@ -221,7 +221,9 @@ rest orange or yellow; the house albums orange and yellow; Orange Pekoe's
 No Yakata") purple, the soundtrack's "Fortune Land E" and Orange Pekoe's
 "Introduction" green. "Best wishes," (AD:HOUSE 11), orange in the hue's
 table of the first tagging (intense and bright), is orange (0.61, then red
-0.17). With three Blender renders sharing the 6900 XT, a track took 9.9 s
+0.17; with purple's default changed since to "calm and dark, ambient",
+0.57, then yellow 0.31: a description's words move every colour's
+share). These figures are the first legend's. With three Blender renders sharing the 6900 XT, a track took 9.9 s
 on average (4.4 to 14.3) from decoding to the last answer, the colour's
 eight asks 2.5 s of it. Alone on the GPU, the eight asks take 1.7 s (1.3
 to 2.1, the longer tracks' cache the slower) and listening 3.3 s.
