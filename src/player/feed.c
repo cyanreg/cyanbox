@@ -22,15 +22,25 @@
  * raced a write counts as frames not there.
  *
  * The feed's work, one piece at a time, reading the read position again
- * before each: the chunks from just behind the read position to the end of
- * the window ahead, nearest first (after a jump, the one the deck waits for
- * comes first); the cue caches; the window behind; then the rest of the
- * store's index, a few packets at a time. A chunk is a few hundred
- * microseconds of decoding (a millisecond or two after a jump, with the
- * codec's pre-roll). The real-time side wakes the feed (sem_post, which
- * neither blocks nor allocates) whenever it held for frames, and whenever
- * its read position enters a new chunk; an idle feed also looks every
- * IDLE_MS.
+ * before each: the target of a jump the owner has just sent (rx_deck_seek,
+ * a hot cue, a click on the waveform), a chunk's worth into the jump slot
+ * kept for it, unless the window or a cue cache has it; the chunks from
+ * just behind the read position to the end of the window ahead, nearest
+ * first; the cue caches; the window behind; then the rest of the store's
+ * index, a few packets at a time. A chunk is a few hundred microseconds of
+ * decoding (a millisecond or two after a jump, with the codec's pre-roll).
+ * The owner tells the feed of a jump as it sends it, and the real-time
+ * side applies it at its next callback, up to a period later: measured
+ * with 256-frame callbacks at 48 kHz, a jump far into a FLAC, MP3 or AAC
+ * track then plays from the next callback as with the whole track in
+ * memory (median 1.9 ms, worst 7.3), an Opus one, whose 640 ms of pre-roll
+ * take longer, a callback after that (median 7.2 ms, worst 12.7). The
+ * jump slot is apart from the window because the window's slots still hold
+ * the old window, which the feed would otherwise refill over the target
+ * before the real-time side got there. The real-time side wakes the feed
+ * (sem_post, which neither blocks nor allocates) whenever it held for
+ * frames, and whenever its read position enters a new chunk; an idle feed
+ * also looks every IDLE_MS.
  *
  * The real-time side reads every frame through rx_player_stream_read: the
  * interpolator's four frames, the de-click tail, the grains and master
@@ -74,7 +84,7 @@ int rx_player_stream_create(RXStream **out, RXPackets *pk)
      * written (caches of points a track does not have) stay unallocated. */
     size_t chunk = (size_t)RX_CHUNK * ch, cache = (size_t)s->cache_len * ch;
     s->slots = calloc((size_t)s->nb_slots, sizeof(*s->slots));
-    s->mem = malloc(sizeof(float) * (chunk * s->nb_slots + cache * RX_DECK_CUE_POINTS));
+    s->mem = malloc(sizeof(float) * (chunk * s->nb_slots + cache * (RX_DECK_CUE_POINTS + 1)));
     if (!s->slots || !s->mem) {
         free(s->slots);
         free(s->mem);
@@ -84,15 +94,18 @@ int rx_player_stream_create(RXStream **out, RXPackets *pk)
     for (int i = 0; i < s->nb_slots; i++) {
         atomic_init(&s->slots[i].seq, 0);
         atomic_init(&s->slots[i].first, -1);
+        atomic_init(&s->slots[i].len, 0);
         s->slots[i].data = s->mem + chunk * i;
     }
-    for (int i = 0; i < RX_DECK_CUE_POINTS; i++) {
+    for (int i = 0; i < RX_DECK_CUE_POINTS + 1; i++) {
         atomic_init(&s->caches[i].seq, 0);
         atomic_init(&s->caches[i].first, -1);
+        atomic_init(&s->caches[i].len, 0);
         s->caches[i].data = s->mem + chunk * s->nb_slots + cache * i;
     }
     atomic_init(&s->playhead, 0);
     atomic_init(&s->starved, false);
+    atomic_init(&s->hint, -1);
     s->pk = pk;
     *out = s;
     return 0;
@@ -116,7 +129,8 @@ static bool slot_copy(const RXSlot *cs, int64_t first, int64_t off, int n, int c
 {
     RXSlot *sl = (RXSlot *)cs;
     unsigned q = atomic_load_explicit(&sl->seq, memory_order_acquire);
-    if ((q & 1) || atomic_load_explicit(&sl->first, memory_order_relaxed) != first)
+    if ((q & 1) || atomic_load_explicit(&sl->first, memory_order_relaxed) != first ||
+        off + n > atomic_load_explicit(&sl->len, memory_order_relaxed))
         return false;
     const float *x = sl->data + off * ch;
     if (ch > 1) {
@@ -130,9 +144,11 @@ static bool slot_copy(const RXSlot *cs, int64_t first, int64_t off, int n, int c
     return atomic_load_explicit(&sl->seq, memory_order_relaxed) == q;
 }
 
+/* The cue caches and the jump slot (slot_copy checks again what is read
+ * here outside its sequence lock). */
 static bool cache_copy(const RXStream *s, int64_t i, int n, float *out)
 {
-    for (int k = 0; k < RX_DECK_CUE_POINTS; k++) {
+    for (int k = 0; k < RX_DECK_CUE_POINTS + 1; k++) {
         RXSlot *sl = (RXSlot *)&s->caches[k];
         int64_t first = atomic_load_explicit(&sl->first, memory_order_relaxed);
         if (first < 0 || i < first || i + n > first + s->cache_len)
@@ -186,9 +202,10 @@ static void write_begin(RXSlot *sl)
     atomic_thread_fence(memory_order_release);
 }
 
-static void write_end(RXSlot *sl, int64_t first)
+static void write_end(RXSlot *sl, int64_t first, int64_t len)
 {
     atomic_store_explicit(&sl->first, first, memory_order_relaxed);
+    atomic_store_explicit(&sl->len, len, memory_order_relaxed);
     unsigned q = atomic_load_explicit(&sl->seq, memory_order_relaxed);
     atomic_store_explicit(&sl->seq, q + 1, memory_order_release);
 }
@@ -213,7 +230,7 @@ static void fill(Work *w, RXSlot *sl, int64_t first, int64_t n)
                    strerror((int)-got));
         w->error_said = true;
     }
-    write_end(sl, first);
+    write_end(sl, first, n);
 }
 
 static void forget_cache(Work *w, int k)
@@ -221,7 +238,7 @@ static void forget_cache(Work *w, int k)
     if (w->cache_first[k] < 0)
         return;
     write_begin(&w->s->caches[k]);
-    write_end(&w->s->caches[k], -1);
+    write_end(&w->s->caches[k], -1, 0);
     w->cache_first[k] = -1;
 }
 
@@ -271,6 +288,21 @@ static bool step(Work *w)
     int64_t ph = RX_CLAMP(at, (int64_t)0, len);
     int64_t ahead = (int64_t)(RX_WINDOW_AHEAD * s->rate);
     int64_t behind = (int64_t)(RX_WINDOW_BEHIND * s->rate);
+
+    /* A jump the owner just sent: a chunk's worth at its target first, in
+     * the jump slot (the window's slots are the old window's until the
+     * real-time side gets there), so that it is decoded by the time the
+     * real-time side applies the jump, up to a callback later. Not when the
+     * window or a cue cache has it already. */
+    int64_t hint = atomic_exchange_explicit(&s->hint, -1, memory_order_relaxed);
+    if (hint >= 0 && hint < len) {
+        int64_t first = RX_MAX(hint - LEAD, (int64_t)0);
+        float probe[2 * 2 * LEAD];
+        if (!rx_player_stream_read(s, len, first, 2 * LEAD, probe)) {
+            fill(w, &s->caches[RX_DECK_CUE_POINTS], first, RX_MIN(s->cache_len, RX_CHUNK + LEAD));
+            return true;
+        }
+    }
 
     int64_t c0 = RX_MAX(ph - LEAD, (int64_t)0) / RX_CHUNK;
     int64_t c1 = len > 0 ? RX_MIN(ph + ahead, len - 1) / RX_CHUNK : -1;

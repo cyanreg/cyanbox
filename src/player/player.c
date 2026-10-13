@@ -766,6 +766,13 @@ static void seek_cmd(RXPlayer *p, int deck, double seconds, enum RXCmdType type)
         return;
     o->pos_frames = frames;
     o->pos_serial = o->sent;
+    /* The feed hears of it now and decodes there while the real-time side
+     * has yet to apply it: a callback's head start, usually enough for
+     * the deck not to wait at all */
+    if (o->stream) {
+        atomic_store_explicit(&o->stream->hint, (int64_t)frames, memory_order_relaxed);
+        sem_post(&p->feed[deck].wake);
+    }
     if (type == RX_CMD_PLAY_FROM) {
         if (o->scrubbing) {
             o->scrub_resume = true;

@@ -178,6 +178,7 @@ typedef struct RXCmd {
 typedef struct RXSlot {
     atomic_uint     seq;
     _Atomic int64_t first;      /* track frame of data[0], -1 when it holds nothing */
+    _Atomic int64_t len;        /* frames it holds from there */
     float          *data;       /* channels interleaved */
 } RXSlot;
 
@@ -190,12 +191,18 @@ struct RXStream {
     int        rate;
     int        nb_slots;        /* the window: chunk c in slot c % nb_slots */
     RXSlot    *slots;
-    int64_t    cache_len;       /* frames in a cue cache */
-    RXSlot     caches[RX_DECK_CUE_POINTS];
+    int64_t    cache_len;       /* frames a cue cache holds at most */
+    /* The cue caches, and last the jump slot: the target of the jump the
+     * owner sent last (`hint`), outside the window, whose slots the old
+     * window still holds until the real-time side gets there */
+    RXSlot     caches[RX_DECK_CUE_POINTS + 1];
     float     *mem;
     /* Real time -> feed */
     _Atomic int64_t playhead;   /* the read position */
     atomic_bool     starved;    /* the deck holds for frames the window lacks */
+    /* Owner -> feed: where a jump just sent will read, before the real-time
+     * side gets to it; -1 none */
+    _Atomic int64_t hint;
 };
 
 /* One deck's feed thread (feed.c). The owner hands it the stream to fill and

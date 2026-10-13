@@ -244,30 +244,42 @@ static void test_far_seek(const char *path)
     rx_deck_play(p, 0);
     render(p, NULL, RATE, true);
 
-    /* Nothing near 50 s is decoded: the deck holds, silent past the old
-     * sound's fade-out, and its position stays. */
+    /* A seek tells the feed at once, which usually has the target decoded
+     * before the next callback: whether it does or the deck waits a
+     * callback, the deck plays on from exactly 50 s, after the fade in. */
     int fade = (int)(RATE * RX_FADE_SECONDS);
     rx_deck_seek(p, 0, 50.0);
-    float out[2 * PERIOD];
-    render(p, out, PERIOD, false);
-    RXDeckState s = st(p);
-    if (s.frame == 50 * RATE) {
-        CHECK(s.playing && s.waiting, "%s: playing %d waiting %d", path, s.playing, s.waiting);
-        CHECK(silent(out + 2 * fade, PERIOD - fade), "%s: sound while holding", path);
-    } else {
-        /* The feed was quicker than one callback (it may be). */
-        fprintf(stderr, "%s: the feed decoded 50 s within a callback\n", path);
-    }
-
-    /* Decoded: on from exactly 50 s, after the fade in. */
-    settle(p);
-    int64_t from = st(p).frame;
     int n = RATE;
     float *x = malloc(sizeof(float) * 2 * n);
+    render(p, x, n, false);
+    int64_t lost = 50 * RATE + n - st(p).frame;
+    CHECK(lost >= 0 && lost < RATE / 4, "%s: %lld frames late after the seek", path,
+          (long long)lost);
+    render(p, NULL, PERIOD, true);
+    int64_t from = st(p).frame;
     render(p, x, n, true);
-    CHECK(mismatches(x + 2 * fade, n - fade, from + fade) == 0, "%s: after the seek, from %lld",
-          path, (long long)from);
-    CHECK(!st(p).waiting && st(p).frame == from + n, "%s: at %lld", path, (long long)st(p).frame);
+    CHECK(mismatches(x, n, from) == 0, "%s: after the seek, from %lld", path, (long long)from);
+
+    /* A loop wrapping back to where nothing is decoded (no cue point, no
+     * seek told the feed): the deck holds there, silent, its position kept,
+     * then plays on from there, fading in. */
+    rx_deck_play_from(p, 0, 40.0);
+    render(p, NULL, PERIOD, true);
+    rx_deck_set_loop(p, 0, 10.0, 40.0 + (double)PERIOD * 2 / RATE, true);
+    int64_t at = st(p).frame;
+    float out[2 * 4 * PERIOD];
+    render(p, out, 4 * PERIOD, false);
+    int64_t wrap = 40 * RATE + 2 * PERIOD - at;
+    RXDeckState s = st(p);
+    CHECK(s.playing && s.waiting && s.frame == 10 * RATE, "%s: after the wrap at %lld, waiting %d",
+          path, (long long)s.frame, s.waiting);
+    CHECK(mismatches(out, wrap, at) == 0, "%s: before the wrap", path);
+    CHECK(silent(out + 2 * wrap, 4 * PERIOD - wrap), "%s: sound while holding", path);
+    settle(p);
+    render(p, x, n, true);
+    CHECK(mismatches(x + 2 * fade, n - fade, 10 * RATE + fade) == 0, "%s: on from the wrap", path);
+    CHECK(!st(p).waiting && st(p).frame == 10 * RATE + n, "%s: at %lld", path,
+          (long long)st(p).frame);
     free(x);
     rx_player_destroy(p);
 }
