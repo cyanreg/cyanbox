@@ -4,7 +4,10 @@
 // src/lib/keymap.ts, transcribed from rekordbox's own preset file), plus
 // the browser's keys. There is one player, so the preset's shifted
 // second-player set is not bound. Keys are ignored while a text field has
-// the keyboard and, for the player, while a modal dialog is open.
+// the keyboard and, for the player and the browser, while a modal dialog
+// is open or a dialog window (Add, Export, the settings...) has the
+// focus: Space would play behind it, Delete take tracks out of a
+// playlist. Ctrl+Q, Ctrl+F, Ctrl+G and Ctrl+, act everywhere.
 //
 // CUE and the hot cue keys hold like the buttons: press on key down,
 // release on key up, so holding C at the cue point previews as on a CDJ.
@@ -82,7 +85,11 @@ void ui_keys(UiState *ui)
         return;
     }
     if (ctrl && pressed(ImGuiKey_F)) {
-        ui->focus_search = true;
+        // The Add dialog's finder while that dialog has the focus.
+        if (ui->dlg_add && ui->fb_focused)
+            ui->fb_find_focus = true;
+        else
+            ui->focus_search = true;
         return;
     }
     if (ctrl && pressed(ImGuiKey_G)) {
@@ -96,6 +103,11 @@ void ui_keys(UiState *ui)
         return;
     }
     if (ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel))
+        return;
+    // The window with the focus as of last frame (this runs before the
+    // windows of this one): a dialog's, or the main window's.
+    ImGuiWindow *focus = GImGui->NavWindow;
+    if (focus && focus->RootWindow && strcmp(focus->RootWindow->Name, "##rxbox") != 0)
         return;
 
     // The browser, or the player's cue list while a click on one of its
