@@ -12,7 +12,8 @@
  *
  * Every track starts after digital silence with a hit on beat 1. The cases
  * on where the music starts (docs/BEATS.md) vary that: longer silences,
- * fade-ins linear in dB from -60 dB, a noise floor, a stab on the "and"
+ * fade-ins linear in dB from -60 dB, a pad fading in before the first hit, a
+ * noise floor, a stab on the "and"
  * before bar 1 and a snare pickup on beat 4. For them the grid's first
  * beat, its number and the automatic cue are checked too.
  *
@@ -167,6 +168,9 @@ typedef struct Spec {
     /* Where the music starts. */
     double fade;                    /* a fade-in over this long from the first downbeat, linear
                                      * in dB from -60 dB */
+    double pad;                     /* a pad fading in over this long before the first downbeat,
+                                     * -60 to -24 dB, no drums under it: the music starts with
+                                     * the hit on beat 1 after it */
     double noise_db;                /* white noise through the track at this level (dB RMS) */
     int    pickup;                  /* PICKUP_*: what comes before bar 1 */
     double click;                   /* a one-sample click in the silence at this time */
@@ -318,6 +322,23 @@ static int synth(const Spec *sp, Track *t, Truth *truth)
             t->x[i] *= (float)pow(10.0, (-60.0 + 60.0 * (i - a) / (sp->fade * RATE)) / 20.0);
     }
 
+    /* A pad before the music: a soft chord fading in, linear in dB from
+     * -60 dB to -24 dB over `pad` seconds up to the first downbeat, no
+     * drums under it; the music then starts with its hit on beat 1, as
+     * pushover's "PASSIVE" does. */
+    if (sp->pad > 0.0) {
+        int64_t b = (int64_t)llround(sp->first_downbeat * RATE);
+        int64_t a = RX_MAX(b - (int64_t)llround(sp->pad * RATE), 0);
+        static const double hz[3] = { 220.0, 277.18, 329.63 };
+        for (int64_t i = a; i < b; i++) {
+            double g = 0.06 * pow(10.0, (-36.0 + 36.0 * (i - a) / (double)(b - a)) / 20.0);
+            double v = 0.0;
+            for (int k = 0; k < 3; k++)
+                v += sin(2.0 * M_PI * hz[k] * i / RATE);
+            t->x[i] += (float)(g * v / 3.0);
+        }
+    }
+
     float peak = 0.0f;
     for (int64_t i = 0; i < t->n; i++)
         peak = fmaxf(peak, fabsf(t->x[i]));
@@ -378,6 +399,8 @@ static const Spec cases[] = {
       .first_downbeat = 0.6, .bars = 40, .seed = 16, .fade = 4.0, .start_checks = true },
     { .name = "fade-in over 8 s from -60 dB", .style = STYLE_DNB, .bpm = 172.0,
       .first_downbeat = 0.35, .bars = 64, .seed = 17, .fade = 8.0, .start_checks = true },
+    { .name = "a pad fading in for 2 s, then the hit on beat 1", .style = STYLE_HOUSE, .bpm = 130.0,
+      .first_downbeat = 3.6, .bars = 40, .seed = 23, .pad = 2.0, .start_checks = true },
     { .name = "a -75 dB noise floor, then a hit on beat 1", .style = STYLE_HOUSE, .bpm = 127.0,
       .first_downbeat = 1.3, .bars = 40, .seed = 18, .noise_db = -75.0, .start_checks = true },
     { .name = "a click in the silence, then a hit on beat 1", .style = STYLE_HOUSE,
@@ -411,6 +434,7 @@ static const Want wants[] = {
     { RX_GRID_FLAG_TEMPO_CHANGE, RX_GRID_FLAG_UNSTEADY | RX_GRID_FLAG_PHASE_CUT },
     { RX_GRID_FLAG_PHASE_CUT, RX_GRID_FLAG_UNSTEADY | RX_GRID_FLAG_TEMPO_CHANGE },
     { RX_GRID_FLAG_TEMPO_CHANGE, RX_GRID_FLAG_UNSTEADY | RX_GRID_FLAG_PHASE_CUT },
+    { 0, CUTS | RX_GRID_FLAG_UNSTEADY },
     { 0, CUTS | RX_GRID_FLAG_UNSTEADY },
     { 0, CUTS | RX_GRID_FLAG_UNSTEADY },
     { 0, CUTS | RX_GRID_FLAG_UNSTEADY },

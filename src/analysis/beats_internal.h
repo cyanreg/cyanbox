@@ -95,6 +95,8 @@ typedef struct RXMusicStart {
     enum RXStartKind kind;
     double start;                   /* seconds: a hit's first sample, where a rise leaves
                                      * the floor; 0 when at once */
+    double intro;                   /* where a fade before a hit left the floor (= start
+                                     * when the start is not a hit after a fade) */
     double audible;                 /* where the level first crosses the start threshold */
     double floor_db;                /* level of the silence or floor before it (-200: digital) */
     double loud_db;                 /* the track's loud level (90th percentile of the frames) */

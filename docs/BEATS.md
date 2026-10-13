@@ -468,8 +468,21 @@ a beat of its grid, and a first version started it there: its bar 1 and
 cue stayed 0.7 s before anything can be heard, on the bar line the
 structure had preferred (1.10 against 0.84). Its kick drum enters at
 44.45 s, on beat 3 of those bars and on beat 1 of the bars from 1.979 s.
-The fade is over -60 dBFS (50 dB under the loud level) for good at 1.87 s,
-and the first beat after that, 1.979 s, is its beat 1 (below).
+The fade is over -60 dBFS (50 dB under the loud level) for good at 1.87 s.
+But the fade is only the way in, and the user heard at once what a first
+version missed: the music starts at the hit at 3.60 s, 22 dB over the pad
+within 5 ms, half a beat from the grid that version had fitted. So **a
+hit after a fade** is a start like a hit after silence: the first
+transient after the fade's origin (12 dB over four frames, at the music's
+level) that stands at least 10 dB over the loudest of the half second
+before it. It is a beat and beat 1 with the same weight (and once the grid
+is on that half of the beat the structure agrees, +0.93 against -0.18 on
+the other half; the hit's kick was 1.5 times the kick beats', so a hit
+counts from 1.2 times, not 2). A transient at the fade's origin is a fade
+with the beat under it (drums fading in, the synthetic fades), and a later
+one that is not clearly over what came before is a louder kick in such a
+fade; both stay a fade. The synthetic case: a pad fading in for two
+seconds, then the hit on beat 1.
 
 **The grid** begins at the first beat at or after the start, less 50 ms (a
 line a few ms early on a hit): `rx_grid_start_at` moves the first section's

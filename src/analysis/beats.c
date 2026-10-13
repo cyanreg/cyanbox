@@ -102,6 +102,7 @@ void rx_beat_result_free(RXBeatResult *r)
 #define START_ON_BEAT     0.10
 #define START_ON_BEAT_MAX 0.040
 #define HIT_KICK          2.0
+#define HIT_KICK_AFTER_FADE 1.2   /* after a fade the drop is the first transient at all */
 #define HIT_KICKS_CLEAR   1.0
 #define HIT_PHASE         2.5
 #define HIT_DOWNBEAT      2.0
@@ -439,7 +440,11 @@ static StartWitness start_witness(const Ctx *c, const RXFitSection *s, const Sec
      * a kick half a beat from it is a pickup (a kick and a crash on the
      * "and" before bar 1); where it does not (a two-step kick on the "and"s
      * as often as on the beats), the opening hit is the better witness. */
-    if (w.kick >= HIT_KICK && fabs(log(si->kick_ratio)) < HIT_KICKS_CLEAR) {
+    /* After a fade (a pad, a riser) the hit is the first transient at all,
+     * the drop; a pickup before it is rare, so less of a kick will do
+     * (pushover's "PASSIVE": 1.5 times the kick beats'). */
+    double need = ms->intro < ms->start ? HIT_KICK_AFTER_FADE : HIT_KICK;
+    if (w.kick >= need && fabs(log(si->kick_ratio)) < HIT_KICKS_CLEAR) {
         w.counts = true;
         w.phase = HIT_PHASE;
         w.down = HIT_DOWNBEAT;

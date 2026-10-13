@@ -37,7 +37,12 @@
  *    where it leaves the floor, not where it happens to cross a threshold:
  *    on pushover's "PASSIVE" the rise leaves the -96 dB dither at 1.03 s,
  *    23 ms before a beat, is 20 dB over it at 1.48 s and reaches -60 dB at
- *    1.75 s. */
+ *    1.75 s;
+ *  - but a fade may be only the way in: the first transient after its
+ *    origin that stands 10 dB over everything in the half second before
+ *    it is a hit, and the music starts there ("PASSIVE" again: a pad
+ *    fades in, the first beat is the hit at 3.6 s). The fade's origin is
+ *    kept as `intro`. */
 
 #include "beats_internal.h"
 
@@ -66,6 +71,14 @@
 #define HIT_PEAK     0.03           /* a hit's first sample: 3 % of its peak */
 #define SUSTAIN_S    0.200          /* the music stays over the threshold for a third of */
 #define SUSTAIN_PART 3              /* the next 200 ms: a click in a pregap does not */
+#define TRANSIENT_JUMP    12.0      /* a transient: the level rises this much over four frames */
+#define TRANSIENT_AFTER_S 1.0       /* looked for until this long after the rise is done */
+#define QUIET_BEFORE_S    0.5       /* the hit stands over the loudest of this much before it */
+#define QUIET_BELOW       10.0      /* by at least this */
+#define HIT_OVER_BEFORE   1.5       /* a hit after a fade begins where it is this much over the fade's peaks */
+#define ATTACK_FRAMES     2         /* a sound loudest this soon in its first 100 ms attacks
+                                     * like a hit (a kick fading in) */
+#define ATTACK_LOOK       15
 
 static double level_db(double e)
 {
@@ -119,6 +132,47 @@ static double common_level(const float *e, int a, int b, bool with_silence)
     if (best <= 0)
         return SILENT_DB;
     return HIST_LO + (best - 1) + 0.5;
+}
+
+/* Whether the sound starting at frame f attacks like a hit: the loudest
+ * of its first 100 ms comes within its first two frames and then decays.
+ * A kick fading in from -60 dB does; a pad or a riser, rising for seconds,
+ * is loudest at the end of any stretch. */
+static bool fast_attack(const float *e, int nf, int f)
+{
+    double peak = SILENT_DB;
+    int at = f;
+    for (int i = f; i <= RX_MIN(f + ATTACK_LOOK, nf - 1); i++) {
+        double l = smooth_db(e, nf, i);
+        if (l > peak) {
+            peak = l;
+            at = i;
+        }
+    }
+    return at - f <= ATTACK_FRAMES;
+}
+
+/* The first sample of the hit at frame fs: 3 % of its peak (a sine kick
+ * from zero phase is there within two samples), above the floor's noise
+ * and, after a fade, above the fade's own peaks of the 50 ms before. */
+static double hit_sample(const float *x, int64_t n, int fs, double floor_amp, bool after_fade)
+{
+    int64_t a = (int64_t)RX_MAX(fs - 2, 0) * FRAME;
+    int64_t b = RX_MIN((int64_t)(fs + 4) * FRAME + RX_BEAT_RATE * 3 / 100, n);
+    float peak = 0.0f;
+    for (int64_t i = a; i < b; i++)
+        peak = fmaxf(peak, fabsf(x[i]));
+    double amp = fmax(HIT_PEAK * peak, floor_amp);
+    if (after_fade) {
+        float before = 0.0f;
+        for (int64_t i = RX_MAX(a - 7 * FRAME, 0); i < a; i++)
+            before = fmaxf(before, fabsf(x[i]));
+        amp = fmax(amp, HIT_OVER_BEFORE * before);
+    }
+    int64_t at = a;
+    while (at < b && fabsf(x[at]) < amp)
+        at++;
+    return (double)at / RX_BEAT_RATE;
 }
 
 int rx_music_start(const float *x, int64_t n, RXMusicStart *out)
@@ -196,20 +250,11 @@ int rx_music_start(const float *x, int64_t n, RXMusicStart *out)
     out->rise = (fl - fs) * fsec;
     out->audible = fs * fsec;
 
+    const double floor_amp = pow(10.0, (base + START_ABOVE) / 20.0);
     if (out->jump_db >= HIT_JUMP) {
-        /* The hit's first sample: 3 % of its peak (a sine kick from zero
-         * phase is there within two samples), above the floor's noise. */
-        int64_t a = (int64_t)RX_MAX(fs - 2, 0) * FRAME;
-        int64_t b = RX_MIN((int64_t)(fs + 4) * FRAME + RX_BEAT_RATE * 3 / 100, n);
-        float peak = 0.0f;
-        for (int64_t i = a; i < b; i++)
-            peak = fmaxf(peak, fabsf(x[i]));
-        double amp = fmax(HIT_PEAK * peak, pow(10.0, (base + START_ABOVE) / 20.0));
-        int64_t at = a;
-        while (at < b && fabsf(x[at]) < amp)
-            at++;
         out->kind = RX_START_HIT;
-        out->start = (double)at / RX_BEAT_RATE;
+        out->start = hit_sample(x, n, fs, floor_amp, false);
+        out->intro = out->start;
     } else {
         /* Over a noise floor, where the rise becomes audible. Out of digital
          * silence, where it leaves the silence: its first sound, or where
@@ -223,6 +268,41 @@ int rx_music_start(const float *x, int64_t n, RXMusicStart *out)
             } else {
                 while (fo > 0 && e[fo - 1] > 0.0f)
                     fo--;
+            }
+        }
+        out->intro = fo * fsec;
+
+        /* A fade or a swell may be only the way in. pushover's "PASSIVE"
+         * fades a pad in from 1.9 s, and its first beat is the hit at
+         * 3.6 s, 22 dB over the pad within 5 ms: it is all there in the
+         * level. The first transient after the rise's origin (12 dB over
+         * four frames, 27 ms, at the music's level) that stands at least
+         * 10 dB over the loudest of the half second before it is that hit,
+         * and the music starts there. A sound that attacks like a hit at
+         * the origin itself is a fade with the beat under it (drums fading
+         * in: the synthetic fades) and is not searched; a later transient
+         * that is not clearly over what came before is a louder kick in
+         * such a fade. Both stay a fade. The rise out of digital silence
+         * is no transient. */
+        int f1 = -1;
+        int fstop = RX_MIN(nf - 3, fl + (int)(TRANSIENT_AFTER_S / fsec));
+        for (int f = RX_MAX(fo, 2); !fast_attack(e, nf, fo) && f < fstop; f++) {
+            double pre = smooth_db(e, nf, f - 2), post = smooth_db(e, nf, f + 2);
+            if (pre > SILENT_DB && post >= thr && post - pre >= TRANSIENT_JUMP) {
+                f1 = f;
+                break;
+            }
+        }
+        if (f1 > fo + 2) {
+            double post = smooth_db(e, nf, f1 + 2), before = SILENT_DB;
+            for (int f = RX_MAX(f1 - 2 - (int)(QUIET_BEFORE_S / fsec), 0); f <= f1 - 2; f++)
+                before = fmax(before, smooth_db(e, nf, f));
+            if (post - before >= QUIET_BELOW) {
+                out->kind = RX_START_HIT;
+                out->jump_db = post - before;
+                out->start = hit_sample(x, n, f1, floor_amp, true);
+                free(e);
+                return 0;
             }
         }
         out->kind = out->rise >= FADE_RISE ? RX_START_FADE : RX_START_SWELL;
