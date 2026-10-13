@@ -74,7 +74,6 @@
  *
  *   4 -> 5  the model's tagging: tags_version and the four ml_* measures.
  *
-<<<<<<< HEAD
  *   5 -> 6  grid_section.measured, for the beats of a dynamic grid. Every
  *           stored section is straight (0), so every grid is what it was.
  *   6 -> 7  the model picks the colour from a legend: ml_colors and

@@ -106,6 +106,16 @@ fi
 # Analysing again finds nothing to do.
 run analyze | grep -q "nothing to analyse" || fail "analyze redid finished work"
 
+# A track the analyser finds no grid and no key in (silence) is analysed
+# once: the next analyze has nothing to do.
+# (A library of its own, so the counts below stay the main one's.)
+mkdir -p "$dir/quiet"
+ffmpeg -v error -nostdin -y -f lavfi -i anullsrc=r=44100:cl=stereo -t 3 "$dir/quiet/quiet.wav"
+"$rxbox" --audio none -c "$dir/quiet-lib" add "$dir/quiet" > /dev/null ||
+    fail "add the silent track"
+"$rxbox" --audio none -c "$dir/quiet-lib" analyze | grep -q "nothing to analyse" ||
+    fail "a track with no grid is analysed again"
+
 run playlist create Warmup || fail "playlist create"
 run playlist add Warmup "$track" || fail "playlist add"
 run playlist list > "$dir/list.out" || fail "playlist list"

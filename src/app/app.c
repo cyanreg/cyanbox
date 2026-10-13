@@ -1009,9 +1009,14 @@ unsigned rx_app_analysis_needed(const RXApp *app, const RXTrack *t, unsigned wha
     unsigned stale = rx_app_analysis_stale(app, t);
     unsigned need = what & RX_ANALYSE_ALL;
     if (!force) {
-        if (rx_track_analysed(t) && !(stale & RX_ANALYSE_BEATS))
+        /* A stage the current analyser ran is done, whether it found a
+         * grid or a key or not (apply_analysis sets the version either
+         * way): run again, it would find nothing again, on every add,
+         * analyse and export. */
+        if ((rx_track_analysed(t) || t->beats_version >= RX_BEATS_VERSION) &&
+            !(stale & RX_ANALYSE_BEATS))
             need &= ~RX_ANALYSE_BEATS;
-        if (t->key[0] && !(stale & RX_ANALYSE_KEY))
+        if ((t->key[0] || t->key_version >= RX_KEY_VERSION) && !(stale & RX_ANALYSE_KEY))
             need &= ~RX_ANALYSE_KEY;
     }
     if (t->grid_locked && !force)
