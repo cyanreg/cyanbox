@@ -10,6 +10,12 @@
  * tempo changes. All noise comes from a fixed LCG: the tracks, and so the
  * results, are the same on every run.
  *
+ * Every track starts after digital silence with a hit on beat 1. The cases
+ * on where the music starts (docs/BEATS.md) vary that: longer silences,
+ * fade-ins linear in dB from -60 dB, a noise floor, a stab on the "and"
+ * before bar 1 and a snare pickup on beat 4. For them the grid's first
+ * beat, its number and the automatic cue are checked too.
+ *
  *   test_beats            run every case
  *   test_beats -v         print the details of every case
  *   test_beats -w N FILE  write case N as raw 44.1 kHz mono f32 (for
@@ -135,6 +141,8 @@ enum {
     STYLE_DNB,          /* kick on 1 and 3-and, snare on 2 and 4, hats in eighths */
     STYLE_HIPHOP,       /* kick 1 and 3, snare 2 and 4, eighth hats; slow */
     STYLE_TECHHOUSE,    /* four-on-the-floor, but loud open hats and bass on the off-beats */
+    STYLE_TWOSTEP,      /* UK garage: kick on 1, the "and" of 2 and the "and" of 3, snare on 2
+                         * and 4, hats on the "and"s: the kicks lean to the off-beat */
 };
 
 typedef struct Spec {
@@ -156,12 +164,27 @@ typedef struct Spec {
     int    intro_bars;              /* BAR_INTRO bars at the start */
     double jitter;                  /* Gaussian timing jitter of every hit, seconds */
     uint64_t seed;
+    /* Where the music starts. */
+    double fade;                    /* a fade-in over this long from the first downbeat, linear
+                                     * in dB from -60 dB */
+    double noise_db;                /* white noise through the track at this level (dB RMS) */
+    int    pickup;                  /* PICKUP_*: what comes before bar 1 */
+    double click;                   /* a one-sample click in the silence at this time */
+    bool   start_checks;            /* check the grid's first beat and the automatic cue */
 } Spec;
+
+enum {
+    PICKUP_NONE,
+    PICKUP_STAB,                    /* a chord stab on the "and" of 4 before bar 1, no kick */
+    PICKUP_SNARE,                   /* a snare on beat 4 before bar 1 */
+};
 
 typedef struct Truth {
     int    nb_secs;
     double start[4];        /* downbeat time of each section's first bar */
     double bpm[4];
+    double first_beat;      /* the grid's first beat: the first sound on a beat */
+    int    first_number;    /* and its number */
 } Truth;
 
 static int synth(const Spec *sp, Track *t, Truth *truth)
@@ -179,6 +202,16 @@ static int synth(const Spec *sp, Track *t, Truth *truth)
     truth->nb_secs = sp->change_bar && !sp->one_line ? 2 : 1;
     truth->start[0] = sp->first_downbeat;
     truth->bpm[0] = sp->bpm;
+    truth->first_beat = sp->first_downbeat - (sp->pickup == PICKUP_SNARE ? p1 : 0.0);
+    truth->first_number = sp->pickup == PICKUP_SNARE ? 4 : 1;
+    if (sp->pickup == PICKUP_STAB) {
+        /* A chord stab, 150 ms, on the "and" of the beat before bar 1. */
+        static const int stab[3] = { 0, 3, 7 };
+        for (int k = 0; k < 3; k++)
+            add_tone(t, sp->first_downbeat - 0.5 * p1, 0.15, midi_hz(60 + 9 + stab[k]), 0.15);
+    } else if (sp->pickup == PICKUP_SNARE) {
+        add_snare(t, sp->first_downbeat - p1, 1.0, &l);
+    }
     double start2 = sp->first_downbeat + 4.0 * p1 * sp->change_bar + sp->change_gap;
     if (sp->change_bar && !sp->one_line) {
         truth->start[1] = start2;
@@ -255,6 +288,15 @@ static int synth(const Spec *sp, Track *t, Truth *truth)
                 add_hat(t, tq, 0.5, &l);
                 add_hat(t, th, 0.5, &l);
                 break;
+            case STYLE_TWOSTEP:
+                if (q == 0)
+                    add_kick(t, tq, 1.0);
+                if (q == 1 || q == 2)
+                    add_kick(t, th, 1.0);
+                if (q == 1 || q == 3)
+                    add_snare(t, tq, 0.6, &l);
+                add_hat(t, th, 0.5, &l);
+                break;
             case STYLE_HIPHOP:
                 if (q == 0 || q == 2)
                     add_kick(t, tq, 1.0);
@@ -267,11 +309,31 @@ static int synth(const Spec *sp, Track *t, Truth *truth)
         }
     }
 
+    /* A fade-in: the gain rises linearly in dB from -60 dB at the first
+     * downbeat to 0 dB `fade` seconds later. */
+    if (sp->fade > 0.0) {
+        int64_t a = (int64_t)llround(sp->first_downbeat * RATE);
+        int64_t b = RX_MIN(a + (int64_t)llround(sp->fade * RATE), t->n);
+        for (int64_t i = a; i < b; i++)
+            t->x[i] *= (float)pow(10.0, (-60.0 + 60.0 * (i - a) / (sp->fade * RATE)) / 20.0);
+    }
+
     float peak = 0.0f;
     for (int64_t i = 0; i < t->n; i++)
         peak = fmaxf(peak, fabsf(t->x[i]));
     for (int64_t i = 0; i < t->n && peak > 0.0f; i++)
         t->x[i] *= 0.8f / peak;
+
+    /* A click in the silence (a CD's pregap has them), at full scale. */
+    if (sp->click > 0.0)
+        t->x[(int64_t)llround(sp->click * RATE)] = 0.9f;
+
+    /* A noise floor under everything, at an absolute level. */
+    if (sp->noise_db < 0.0) {
+        double g = pow(10.0, sp->noise_db / 20.0);
+        for (int64_t i = 0; i < t->n; i++)
+            t->x[i] += (float)(g * lcg_gauss(&l));
+    }
     return 0;
 }
 
@@ -304,6 +366,30 @@ static const Spec cases[] = {
     { .name = "re-entry 8 ms late at bar 32 (no cut: within the merge tolerance)",
       .style = STYLE_HOUSE, .bpm = 125.0, .first_downbeat = 0.4, .bars = 64, .change_bar = 32,
       .bpm2 = 125.0, .change_gap = 0.008, .one_line = true, .seed = 11 },
+    { .name = "0.5 s of silence, a hit on beat 1", .style = STYLE_HOUSE, .bpm = 126.0,
+      .first_downbeat = 0.5, .bars = 40, .seed = 12, .start_checks = true },
+    { .name = "1.7 s of silence, a hit on beat 1", .style = STYLE_HOUSE, .bpm = 128.0,
+      .first_downbeat = 1.7, .bars = 40, .seed = 13, .start_checks = true },
+    { .name = "3.3 s of silence, a hit on beat 1", .style = STYLE_TECHHOUSE, .bpm = 124.0,
+      .first_downbeat = 3.3, .bars = 40, .seed = 14, .start_checks = true },
+    { .name = "fade-in over 2 s from -60 dB", .style = STYLE_HOUSE, .bpm = 125.0,
+      .first_downbeat = 0.4, .bars = 40, .seed = 15, .fade = 2.0, .start_checks = true },
+    { .name = "fade-in over 4 s from -60 dB", .style = STYLE_HOUSE, .bpm = 130.0,
+      .first_downbeat = 0.6, .bars = 40, .seed = 16, .fade = 4.0, .start_checks = true },
+    { .name = "fade-in over 8 s from -60 dB", .style = STYLE_DNB, .bpm = 172.0,
+      .first_downbeat = 0.35, .bars = 64, .seed = 17, .fade = 8.0, .start_checks = true },
+    { .name = "a -75 dB noise floor, then a hit on beat 1", .style = STYLE_HOUSE, .bpm = 127.0,
+      .first_downbeat = 1.3, .bars = 40, .seed = 18, .noise_db = -75.0, .start_checks = true },
+    { .name = "a click in the silence, then a hit on beat 1", .style = STYLE_HOUSE,
+      .bpm = 126.0, .first_downbeat = 1.1, .bars = 40, .seed = 21, .click = 0.3,
+      .start_checks = true },
+    { .name = "two-step garage 134 after 0.72 s of silence", .style = STYLE_TWOSTEP,
+      .bpm = 134.0, .first_downbeat = 0.72, .bars = 48, .seed = 22, .start_checks = true },
+    { .name = "a stab on the \"and\" before bar 1", .style = STYLE_HOUSE, .bpm = 124.0,
+      .first_downbeat = 0.9, .bars = 40, .seed = 19, .pickup = PICKUP_STAB, .start_checks = true },
+    { .name = "a snare pickup on beat 4 before bar 1", .style = STYLE_HOUSE, .bpm = 128.0,
+      .first_downbeat = 1.2, .bars = 40, .seed = 20, .pickup = PICKUP_SNARE,
+      .start_checks = true },
 };
 
 typedef struct Want {
@@ -325,6 +411,17 @@ static const Want wants[] = {
     { RX_GRID_FLAG_TEMPO_CHANGE, RX_GRID_FLAG_UNSTEADY | RX_GRID_FLAG_PHASE_CUT },
     { RX_GRID_FLAG_PHASE_CUT, RX_GRID_FLAG_UNSTEADY | RX_GRID_FLAG_TEMPO_CHANGE },
     { RX_GRID_FLAG_TEMPO_CHANGE, RX_GRID_FLAG_UNSTEADY | RX_GRID_FLAG_PHASE_CUT },
+    { 0, CUTS | RX_GRID_FLAG_UNSTEADY },
+    { 0, CUTS | RX_GRID_FLAG_UNSTEADY },
+    { 0, CUTS | RX_GRID_FLAG_UNSTEADY },
+    { 0, CUTS | RX_GRID_FLAG_UNSTEADY },
+    { 0, CUTS | RX_GRID_FLAG_UNSTEADY },
+    { 0, CUTS | RX_GRID_FLAG_UNSTEADY },
+    { 0, CUTS | RX_GRID_FLAG_UNSTEADY },
+    { 0, CUTS | RX_GRID_FLAG_UNSTEADY },
+    { 0, CUTS | RX_GRID_FLAG_UNSTEADY },
+    { 0, CUTS | RX_GRID_FLAG_UNSTEADY },
+    { 0, CUTS | RX_GRID_FLAG_UNSTEADY },
     { 0, CUTS | RX_GRID_FLAG_UNSTEADY },
 };
 
@@ -372,10 +469,14 @@ static int check(int idx)
             d += p;
         if (fabs(d) > 0.003)
             FAILF(" phase[%d] off by %.2f ms", s, d * 1e3);
-        /* Downbeat: the first section's start is a downbeat; a later
-         * section's start must be its own first downbeat when it numbers
-         * itself (beat 1), or continue the count onto it (beat 0). */
-        double bars = (g->start - truth.start[s]) / (4.0 * p);
+        /* Downbeat: the first section's first downbeat (its start is its
+         * first beat, numbered) is on a bar line; a later section's start
+         * must be its own first downbeat when it numbers itself (beat 1),
+         * or continue the count onto it (beat 0). */
+        double down = g->start;
+        if (s == 0)
+            down += ((5 - (g->beat ? g->beat : 1)) % 4) * p;
+        double bars = (down - truth.start[s]) / (4.0 * p);
         bool on_bar = fabs(bars - round(bars)) * 4.0 * p < 0.010;
         if (s == 0 && !on_bar)
             FAILF(" downbeat off by %.2f beats", (bars - round(bars)) * 4.0);
@@ -418,6 +519,35 @@ static int check(int idx)
         }
         free(bt);
     }
+    /* Where the music starts: the grid's first beat is the first sound on
+     * a beat, numbered as such, nothing before it (no beat to snap to, no
+     * bar), and the automatic cue on the first downbeat. */
+    if (sp->start_checks) {
+        double p = 60.0 / truth.bpm[0];
+        if (rx_grid_beats(&r.grid, dur, &bt, &nbt) == 0 && nbt > 0) {
+            if (fabs(bt[0].time - truth.first_beat) > 0.005)
+                FAILF(" first beat %.4f (want %.4f)", bt[0].time, truth.first_beat);
+            if (bt[0].number != truth.first_number)
+                FAILF(" first beat numbered %d (want %d)", bt[0].number, truth.first_number);
+            free(bt);
+        } else {
+            FAILF(" no beats");
+        }
+        double before = truth.first_beat - 1.5 * p;
+        int bar = -1, beat = -1;
+        rx_grid_bar_of(&r.grid, before, &bar, &beat);
+        if (rx_grid_quantize(&r.grid, before) < truth.first_beat - 0.005 || bar || beat)
+            FAILF(" a beat before the first (bar %d.%d)", bar, beat);
+        RXTrack *tr = rx_track_new("/test/start.flac");
+        if (tr) {
+            tr->duration = dur;
+            rx_analysis_auto_cues(tr, &r);
+            if (tr->nb_cues != 1 || fabs(tr->cues[0].time - truth.start[0]) > 0.005)
+                FAILF(" auto cue at %.4f (want %.4f)", tr->nb_cues ? tr->cues[0].time : NAN,
+                      truth.start[0]);
+            rx_track_free(tr);
+        }
+    }
     const Want *w = &wants[idx];
     if ((r.flags & w->flags_set) != w->flags_set)
         FAILF(" flags 0x%x lack 0x%x", r.flags, w->flags_set);
@@ -426,9 +556,9 @@ static int check(int idx)
 
     printf("%s %s%s\n", fails ? "FAIL" : "ok  ", sp->name, why);
     if (verbose || fails) {
-        printf("      conf %.2f flags 0x%02x octave %.2f phase %.2f 2nd %.2f first %.3f\n",
+        printf("      conf %.2f flags 0x%02x octave %.2f phase %.2f 2nd %.2f start %.4f (%d)\n",
                r.confidence, r.flags, r.octave_margin, r.phase_margin, r.bpm_second_best,
-               r.first_onset);
+               r.music_start, (int)r.start_kind);
         for (int s = 0; s < r.grid.nb_sections; s++)
             printf("      section %d: start %.5f bpm %.4f beat %d\n", s, r.grid.sections[s].start,
                    r.grid.sections[s].bpm, r.grid.sections[s].beat);
@@ -566,7 +696,7 @@ static int check_analyse(void)
     RXTrack *tr = rx_track_new("/test/house124.flac");
     if (tr && a.beats.grid.nb_sections) {
         tr->duration = a.duration;
-        double first = a.beats.first_onset;
+        double first = a.beats.music_start;
         rx_analysis_auto_cues(tr, &a.beats);
         rx_analysis_auto_cues(tr, &a.beats);
         double want = truth.start[0];

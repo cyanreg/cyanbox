@@ -102,7 +102,7 @@ src/audio         decode.c probe.c mp3.c flac.c artwork.c             -> rx_audi
 src/core          model.c grid.c db.c library.c playlist.c config.c   -> rx_core_dep (common, audio)
                   notation.c wavestore.c core.h
 src/analysis      spectrum.c onset.c tempo.c grid_fit.c downbeat.c    -> rx_analysis_dep
-                  beats.c beats_internal.h key.c waveform.c
+                  start.c beats.c beats_internal.h key.c waveform.c
                   analysis.c
 src/formats       pdb.c anlz.c onelibrary.c sqlcipher.c sha512.h settings.c colors.c util.c (+ buf.h formats_priv.h nfc_tables.h) -> rx_formats_dep
                   colors.c util.c buf.h formats_priv.h nfc_tables.h

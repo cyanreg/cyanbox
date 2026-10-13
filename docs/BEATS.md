@@ -2,13 +2,15 @@
 
 How rxbox finds a track's beat grid, why each step is the way it is, and how
 well it works. The code is in `src/analysis/` (`spectrum.c`, `onset.c`,
-`tempo.c`, `grid_fit.c`, `downbeat.c`, `beats.c`, `analysis.c`, the private
-interface `beats_internal.h`); the tests in `tests/analysis/test_beats.c`; the
-evaluation tool in `tools/rxbox-eval.c` and `tests/analysis/py_beats.py`.
+`start.c`, `tempo.c`, `grid_fit.c`, `downbeat.c`, `beats.c`, `analysis.c`, the
+private interface `beats_internal.h`); the tests in
+`tests/analysis/test_beats.c`; the evaluation tool in `tools/rxbox-eval.c` and
+`tests/analysis/py_beats.py`.
 
 The result (`rxbox/analysis.h`, `RXBeatResult`) is what a DJ player wants: a
 piecewise-constant grid (one section per tempo or phase, each a start beat, a
-BPM and a beat number), a confidence, and flags saying what is uncertain.
+BPM and a beat number) that begins where the music begins, a confidence,
+flags saying what is uncertain, and where and how the music starts.
 
 ## What it does, in one page
 
@@ -32,10 +34,14 @@ BPM and a beat number), a confidence, and flags saying what is uncertain.
 7. **Family and octave, on the grid.** A close 3:2 or 4:3 family is fitted
    too and the grid whose beats land on hits wins. The octave (half, same,
    double) is judged by where the snares and kicks fall on the fitted beats.
-8. **Off-beat and downbeat.** Kicks and structure decide whether the grid is
-   on the beat or half a beat off; structure (novelty peaks at one to eight
-   bars), bass-note changes and the music's start vote for beat 1.
+8. **Off-beat and downbeat.** Kicks, structure and the music's start decide
+   whether the grid is on the beat or half a beat off; structure (novelty
+   peaks at one to eight bars), bass-note changes and the music's start vote
+   for beat 1.
 9. **Confidence and flags.**
+10. **Where the music starts**, measured on the level: after silence or a
+    noise floor, a hit or a rise. The grid's first beat is the first at or
+    after it, and the automatic cue the first downbeat.
 
 It costs about 290 ms of CPU for an average 4.5-minute track (383 ms per six
 minutes of audio), single-threaded, after decoding. dj's Python analyser took
@@ -222,7 +228,10 @@ after it a beat early (an acceptance trial found one at 2.2 ms on a Photon
 Maiden remix, flagged `tempo-change`). The line kept is the one with more
 attacks, if it holds both; otherwise the other one, if it does.
 
-**The exported beats.** A section's beats run up to the next section's
+**The exported beats.** The first section's start is the grid's first beat:
+there is none before it (`rxbox/model.h`), and the analyser puts it at the
+first beat at or after the start of the music (section 10). A section's
+beats run up to the next section's
 start, less the last one when it lies within half a period of that start
 (`rx_grid_beats` in `src/core/grid.c`, rbxport's SAME_HIT): that beat and
 the new section's first are the same hit. A section boundary that survives
@@ -334,16 +343,20 @@ before and after each beat (peaks, ½ of a scale); and the beat where the
 music starts, worth one scale. Tracks made for DJs start on a bar line: by
 structure alone, 59 of the 66 electronic tracks whose music starts on a beat
 had beat 1 there, and most of the other 7 were weak votes; with the start
-worth one scale, all 68 such tracks do.
+worth one scale, all 68 such tracks do. "Where the music starts" was dj's
+first loud onset; where the music starts after silence with a hit carrying
+a kick, or fades in on a beat, the start is now a witness of its own,
+outside the structure (section 10).
 
 **On the beat or off it?** Two witnesses as log evidence: the arbiter band
 (kicks on the beats against on the half beats, in a window reaching 30 ms
 back and 10 ms forward, since a kick's low band leads its click) and the
 structure (best beat position against best half-beat position, weighted 1.5:
 rbxport found structure right on 153 of 155 reference grids, the kick alone
-on 150). The grid moves half a beat only when the sum says so by a factor
-1.25; the envelopes are cut again where the beats now are and the section is
-refined again.
+on 150); and, where the music starts after silence, the start (section 10).
+The grid moves half a beat only when the sum says so by a factor 1.25; the
+envelopes are cut again where the beats now are and the section is refined
+again.
 
 **Beat 1** is the best of the four beat positions, never a half beat. A later
 section that starts on the previous one's grid continues its count (beat
@@ -407,6 +420,153 @@ consecutive attacks to measure the scatter, the spread alone decides.
 On the evaluation sample, 78 of 89 electronic tracks carry no flag at all,
 and 34 of the 61 others.
 
+## 10. Where the music starts (`start.c`, `beats.c`)
+
+Nearly every track in the library starts after some silence: of the 150
+sample tracks, 142 have at least 60 ms of digital silence or a noise floor
+before the music, mostly 0.1 to 1.4 s (a CD's pregap, an encoder's
+padding). Where the music starts, and how, now decides three things: where
+the grid begins, a witness for the half of the beat and for beat 1, and the
+automatic memory cue.
+
+**Measured on the level.** The onset signals are normalised to the whole
+track (section 2), so a fade-in's first seconds are nothing to them, and
+dj's rule for the start (the first frame of full-band flux above a quarter
+of its 99th percentile, `rx_onsets_first`) finds the first *loud* onset: on
+pushover's "PASSIVE feat. Shiina", a hit 3.6 s in and two seconds into the
+fade, half a beat off the grid. `start.c` reads the level of the 6.7 ms
+frames, smoothed over three (20 ms, so that a low note's cycle does not
+make a frame look silent):
+
+- the loud level: the 90th percentile of the frame levels;
+- the floor: the commonest level (1 dB bins) of the frames before the music
+  is surely playing (within 45 dB of the loud level), digital silence a
+  level of its own. A floor lies at least 60 dB under the loud level and
+  lasts at least 60 ms, or the music starts at once: an MP3's encoder delay
+  (25 ms with LAME) is no silence, and a track cut out of a mix would
+  "start" there with whatever is playing;
+- the threshold: after digital silence, 65 dB under the loud level, so
+  that a few ms of dither before the music (-90 to -100 dB) is not the
+  music while a fade from -60 dB is, from its first hit; over a noise floor
+  (dither, hiss), 20 dB over it and at least 50 dB under the loud level
+  (-60 dBFS on a loud master), where a fade becomes audible over the floor.
+  The level stays over it for a third of the next 200 ms: a click in a
+  pregap is no start;
+- **a hit**: two frames (13 ms) after the level crosses the threshold it is
+  25 dB over it. Its time is the first sample at 3 % of its peak, above the
+  floor's noise; a sine kick starting at zero phase is there within two
+  samples;
+- anything slower starts, out of digital silence, at its first sound (or
+  where it rises 6 dB out of a short dither before it); over a noise floor,
+  at the threshold. **A fade** takes a second or more to come within 15 dB
+  of the loud level, **a swell** (a riser, a reversed cymbal, a pad's
+  attack) less.
+
+Over a noise floor the start is where the fade is heard, not where it
+leaves the floor. "PASSIVE" leaves its -96 dB dither at 1.03 s, 23 ms before
+a beat of its grid, and a first version started it there: its bar 1 and
+cue stayed 0.7 s before anything can be heard, on the bar line the
+structure had preferred (1.10 against 0.84). Its kick drum enters at
+44.45 s, on beat 3 of those bars and on beat 1 of the bars from 1.979 s.
+The fade is over -60 dBFS (50 dB under the loud level) for good at 1.87 s,
+and the first beat after that, 1.979 s, is its beat 1 (below).
+
+**The grid** begins at the first beat at or after the start, less 50 ms (a
+line a few ms early on a hit): `rx_grid_start_at` moves the first section's
+start forward by whole beats, every later beat keeping its time and number,
+so bar 1 is the first downbeat at or after the start. dj, rbxport
+(`first_beat_secs`: "the first grid position at or after time zero, as
+rekordbox does") and rekordbox's own analysis extend the first tempo back to
+the start of the file, beats and a bar 1 in the silence; rxbox's grids no
+longer do (`rxbox/model.h`, `src/core/grid.c`). **The automatic cue** is the
+first downbeat at or after the start (it was the first after dj's first
+loud onset).
+
+**Witnesses.** Section 8 had the start as one vote of one scale inside the
+structure, at dj's first loud onset, and so only as a half-beat position.
+On AD:Garage "Feel Alive" (134 BPM, digital silence until the hit at
+0.7214 s) the hit sat half a beat from the fitted line; the kicks (log
+evidence +0.70: a two-step kick, on 1 and the "and" of 3 in the first bars,
+on several "and"s later) and the structure without the start (+0.79, times
+1.5) outweighed the vote; the grid stayed half a beat off (margin 1.12) with
+beat 1 in the silence, and for beat 1 the vote was wasted on a half-beat
+position. Now, for the section the start is in:
+
+- **An opening hit with a kick**, within a tenth of a beat (40 ms at most)
+  of a beat or a half beat of the line, where the kick band does not
+  itself mark one half of the beat by a factor e (log evidence under 1.0),
+  is log evidence of 2.5 for its half of the beat and, when on a beat after
+  the decision, a vote of two scales for beat 1. "With a kick": the kick
+  band, from 15 ms before the hit to 60 ms after it (a kick's body builds
+  after its click), rises at least twice as much as on the beats (or half
+  beats) that carry the kicks: an opening downbeat, kick, crash and bass at
+  once, not one more kick. Feel Alive's hit has 3.5 times the kick of its
+  kick beats; the grid moves half a beat (margin 1.86), its first beat and
+  beat 1 at 0.7230 s, 1.6 ms after the hit's first sample (the click band's
+  half-energy point, section 4).
+- **A hit without a kick does not count**: a stab or a vocal on the "and"
+  before bar 1 has none. AD:HOUSE 12 "Need Your Groove" opens with a chord
+  stab, 0.42 of its kick beats' kick, half a beat before a four-on-the-floor
+  kick (+1.34). Counted, it put the grid on the off-beat of every kick
+  (its strongest kick onsets 218 ms from the beats).
+- **Nor one with an ordinary kick**: counted from the kick beats' level up,
+  the witness moved three grids of the first 800 library tracks whose
+  opening kick is 1.10 to 1.28 of their kick beats': two for the worse (on
+  ADvantage "Encore" the strongest kicks went from 1.7 to 13.9 ms off the
+  beats, 69 % of them locked to the grid, then 25 %, and the beat-to-beat
+  scatter from 0.5 to 3.1 ms; on "Seimitsukensa" from Dance with Me the
+  confidence fell from 0.89 to 0.31), one unclear (Chromosomal
+  Reprogramming "Fragmentation": confidence up from 0.61 to 0.91, its
+  strongest kicks from the beats to the half beats). The opening hits
+  behind the other changes, Feel Alive and two Decade Archives tracks
+  whose phase cut the move removed ("Universe", "Ink Drops"), have 2.3 to
+  3.5 times their kick beats' kick.
+- **Nor where the kicks are clear**: a kick and a crash on the "and" before
+  bar 1 is a pickup. On AD:HOUSE 10 "Get It", AD:HOUSE 3 "KKE" and AD:HOUSE
+  11 "Kiss Like This" the opening hit carries a kick half a beat from a
+  kick band at +1.34, +1.40 and +1.14; counted, it moved their grids half a
+  beat, and their strongest kicks went from within 10 ms of the beats to
+  87 to 221 ms from them.
+- **A fade**: its first beat, the grid's first, is beat 1 unless the
+  structure prefers another by more than half a scale. dj's first loud
+  onset keeps its vote too, being more often than not where the drums come
+  in: as a full scale for the beat nearest the fade's first sound, the
+  fade's vote moved beat 1 on 7 of the first 400 library tracks, and where
+  the kick drum enters after the fade (the first four kicks a beat apart)
+  was a bar line on four of them: the old beat 1 on three, the fade's on
+  one. As log evidence of 1.0 for its half of the beat, the fade moved the
+  grids of six of the first 800 tracks:
+  better on two (on AD:HOUSE Winter 2 "nomophobia" the kick drum now
+  enters on a beat, on "プラチナ・パスポート" the strongest kicks moved from
+  89 ms to 5 ms off the beats), worse on two (the confidence of ADvantage
+  "Whiteout" fell from 1.00 to 0.89, of "Light & Shadow" from 0.35 to
+  0.00), unclear on two; it has no say on the phase.
+- Everything else (the music starts at once, a swell, a start between the
+  half beats of the line) votes as before: dj's first loud onset, one
+  scale inside the structure. A swell leads into the downbeat rather than
+  starting on it: on the sample, the old beat 1 is on the swell's start for
+  only 7 of 43 swells after 0.25 s of silence, and the first loud onset
+  after it (the downbeat it leads into) is what the old vote already took.
+
+**How strong, and what was measured.** The thresholds were set on the
+sample, the acceptance list and the first 800 tracks of the library (in
+path order), against the analyser before this section, with the kick entry
+(where the first four kicks a beat apart come in) and the locking of the
+strongest kick onsets to the grid as checks where nothing else could tell.
+On those 800 tracks the first version of the witnesses changed 17 grids
+(2 %): the tempo of none except a low-confidence live track (160.078 to
+160.093 after its half-beat move), two phase cuts that the move removed
+(Decade Archives "Universe", "Ink Drops"), the rest phase or beat 1, each
+listed above with what decided it. On the sample (150) and the acceptance
+list (58) that version left every tempo and section as it was; the sample
+changed beat 1 on three fades, the acceptance list nothing. Among the
+placed opening hits with a kick in those 800 tracks, the rest of the
+evidence (kicks and structure) agreed with the hit's half of the beat on
+about nine in ten; where it disagreed, the old analyser had mostly put the
+grid on the hit already through dj's start vote, and the witness changed
+the phase only where it is described above. A whole-library comparison of
+the final version was not finished (see "Known weaknesses").
+
 ## Parameters
 
 | Parameter | Value | Why |
@@ -432,6 +592,12 @@ and 34 of the 61 others.
 | Unsteady | spread > 6 ms and beat-to-beat scatter > 4 ms | live drums scatter 5-15 ms, sequencers < 1 |
 | No kicks | kick/full periodicity < 0.5 at 1× and 2× the beat rate, < 1 at ½× | two-step kicks cancel at the beat rate |
 | Low confidence | < 0.5 | |
+| Music start | floor: commonest level before the music is within 45 dB of the loud level (90th percentile); at least 60 dB under it and 60 ms long | dither and hiss are floors; an encoder delay is not |
+| Start threshold | after digital silence 65 dB under the loud level; over a noise floor 20 dB over it and at least 50 dB under the loud level; held for a third of 200 ms | a -60 dB fade counts from its first hit; a fade over dither from where it is heard; no clicks |
+| Hit | 25 dB over the threshold two frames on; time at 3 % of its peak | a jump within a frame or two |
+| Fade, swell | a rise to 15 dB under the loud level in a second or more, or less; out of digital silence from the first sound | a swell leads into a bar line |
+| Start witness | within 0.1 beat (40 ms) of a beat or half beat; a hit whose kick band is at least twice the kick beats', where the kicks leave the half of the beat open (log under 1.0): log 2.5 and 2 scales for beat 1; a fade's first beat: half a scale for beat 1 | measured on the library, section 10 |
+| Grid start | first beat at or after the start, less 50 ms | a line a few ms early on the hit |
 
 ## Evaluation
 
@@ -449,7 +615,10 @@ All pass: tempo within 0.05 BPM (all exact), phase within 3 ms (all within
 1.8 ms), downbeat right, sections and boundaries right (boundaries within
 1.3 ms), flags as required. Every grid is also expanded as a player gets it
 (`rx_grid_beats`): no two beats closer than half a period, and each section's
-first downbeat numbered 1.
+first downbeat numbered 1. Every track starts after digital silence with a
+hit on beat 1; the cases on where the music starts also check the grid's
+first beat (within 5 ms of the first sound on a beat), its number, that no
+beat, bar or snap lies before it, and the automatic cue.
 
 | Case | Result |
 | --- | --- |
@@ -466,6 +635,13 @@ first downbeat numbered 1.
 | re-entry 8 ms late at bar 32 (within the merge tolerance) | one section, no flags |
 | determinism; 48 kHz input | identical; within 0.5 ms of 44.1 kHz |
 | `rx_analyse` on stereo 48 kHz; auto cue | grid as mono, key "Am", cue on the first downbeat |
+| 0.5, 1.7, 3.3 s of silence, a hit on beat 1 | music starts at the hit's sample; first beat 1.3, 1.3, 0.9 ms before it, beat 1 |
+| fade-in over 2, 4, 8 s, linear in dB from -60 dB | a fade from its first hit; first beat on it, beat 1 |
+| a -75 dB noise floor, then a hit | the floor is no music; first beat on the hit, beat 1 |
+| a click in the silence, then a hit | the click is no start (it does not last) |
+| two-step garage 134 (kick on 1, the "and" of 2 and of 3) after 0.72 s | on the hit, beat 1 |
+| a chord stab on the "and" before bar 1 | music starts at the stab; the grid stays on the kicks, first beat bar 1 |
+| a snare pickup on beat 4 before bar 1 | first beat the pickup, numbered 4; bar 1 and the cue on the next |
 
 ### Against dj's analyser (`py_beats.py`)
 
@@ -655,6 +831,24 @@ changed only flags.
 - **Sub-millisecond phase** is relative to the half-energy point of the click
   band. rekordbox's own placement convention may differ by a millisecond or
   two; the interface's nudge covers it.
+- **Where the music starts** after silence is measured well; what the
+  start says about the beat is weaker evidence than it looks. A fade's
+  first beat decides beat 1 only within half a scale of the structure, a
+  hit without a strong kick says nothing, and a hit with one is outvoted
+  where the kicks are clear. Two-step garage, broken beats and any track
+  whose kick band leaves the half of the beat open now follow their
+  opening hit; a track that opens on an off-beat kick as heavy as a
+  downbeat, with an equally unclear kick band, would be moved wrongly.
+  Where the drums enter after a fade (the first kicks a beat apart) placed
+  beat 1 right more often than the fade or the structure on the tracks
+  checked by hand, but is not a witness yet.
+- **Not evaluated on the whole library.** The final thresholds were
+  measured on the first 800 library tracks and the sample; a full
+  before/after scan of the library (3192 files under 20 minutes) was
+  started and stopped unfinished.
+- **Grids before the music** are gone: a cue set in a track's leading
+  silence still has a beat index (the first section's line runs on for the
+  arithmetic), but no beat to snap to.
 - **Speed**: the STFT dominates. A 100 frames/s front end would cut it by a
   third; a Vulkan front end could take it off the CPU.
 
@@ -679,7 +873,13 @@ build-beats/tools/rxbox-eval -vv --dump-onsets build-beats/dump/x FILE
 `rxbox-eval` decodes with `rx_decode` (mono, the file's own rate, as
 `rx_analyse` sees it); `--ffmpeg` pipes from the ffmpeg command line at
 44.1 kHz exactly as dj decodes. `--bpm-range LO HI`, `--no-sections`,
-`--from CSV` (compare without analysing) are also there. The scripts used
+`--from CSV` (compare without analysing) are also there, and `--starts`
+measures only where the music starts (no beat analysis), one line per file.
+Its CSV has the start (`music_start`, `start_kind`, the threshold crossing,
+floor, loud level, rise), the grid's first beat and its number, its first
+downbeat and the automatic cue, and the start's section's evidence before
+its on/off-beat decision (kicks, structure, the start's witness, its half
+beat and offset, the structure's eight scores, the hit's kick). The scripts used
 for the hand checks (`judge.py`, `foldcmp.py`, `pattern.py`, `octfit.py`,
 `octacc.py`, `startbar.py`) were kept in `build-beats/eval/`, outside the
 source tree.

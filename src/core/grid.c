@@ -11,11 +11,22 @@
  * which keep an old-tempo beat three fifths of a period before a change
  * and drop one a two-hundredth before it. Such a beat and the next
  * section's first are the same hit, and it is the new tempo's (dj kept
- * both, two beats a few ms apart on the stick). The first section also
- * has every k < 0, back to the start of the track and beyond, and the last
- * section has every k >= 0. Every beat time anywhere in this file is computed as
+ * both, two beats a few ms apart on the stick). The last section has
+ * every k >= 0. Every beat time anywhere in this file is computed as
  * `start + (double)k * period` and nothing else, so the beat list, the
  * nearest beat, quantize and an integer beat index all agree to the bit.
+ *
+ * The first section's start is the grid's first beat: there is no beat
+ * before it. dj extended the first section back to the start of the track
+ * (its Grid.beats(), as rbxport does and as rekordbox's own analysis
+ * does), which put a grid and a bar 1 into a track's leading silence; the
+ * analyser now starts a grid where the music starts (docs/BEATS.md, "Where
+ * the music starts"). The index arithmetic (time to beat index and back,
+ * offsets in beats) still runs on the first section's line before its
+ * start, so a cue in the silence has a beat index like any other, but no
+ * beat is listed, numbered or snapped to there. A grid made by hand
+ * (rx_grid_init) starts at its first beat at or after time 0, which is
+ * what extending it back used to give.
  *
  * Numbering. Beats are counted along the grid with one running index; the
  * running index of a section's first beat is the previous section's plus
@@ -23,7 +34,9 @@
  * across a section boundary unless the section sets `beat`, which restarts
  * the count there. A bar starts at every beat whose number does not exceed
  * the previous beat's (normally number 1; a restart can also make a short
- * bar). Index 0 and bar 1 are the first downbeat at or after time 0.
+ * bar). Index 0 and bar 1 are the first downbeat of the grid at or after
+ * time 0; the beats of a pickup before it are in bar 0, and before the
+ * grid's first beat there is no bar at all.
  *
  * dj's sections always restarted at beat 1 and its "bar N" was plain
  * arithmetic over the beat list (first downbeat + 4 * (N - 1)). Here a bar
@@ -127,11 +140,11 @@ static Beat beat_at(const Sec *s, int64_t k)
     };
 }
 
-/* True when the section has its own last beat (k = n - 1); an inner
- * section shorter than a billionth of a beat has none. */
+/* True when the section has beats of its own; one that starts within half
+ * a period of the next (SAME_HIT) has none. */
 static bool has_last(const Sec *s)
 {
-    return s->index == 0 || s->n > 0;
+    return s->n > 0;
 }
 
 /* The last beat at or before the end of this section: its own, or the one
@@ -173,14 +186,22 @@ static void walk_init(const RXGrid *g, Sec *s)
 {
     const RXTempoSection *t = &g->sections[0];
     int bpb = bpb_of(g);
+    int ph = t->beat >= 1 && t->beat <= bpb ? t->beat : 1;
+    /* Nothing before the first section. Should it have no beat of its own
+     * (the next one starts within half a period), it passes its count on
+     * as if the beat before its start had been there. */
     *s = (Sec) {
-        .index  = 0,
-        .bpb    = bpb,
-        .start  = t->start,
-        .period = 60.0 / t->bpm,
-        .g      = 0,
-        .ph     = t->beat >= 1 && t->beat <= bpb ? t->beat : 1,
-        .bar    = 0,
+        .index       = 0,
+        .bpb         = bpb,
+        .start       = t->start,
+        .period      = 60.0 / t->bpm,
+        .g           = 0,
+        .ph          = ph,
+        .bar         = 0,
+        .prev_time   = -INFINITY,
+        .prev_g      = -1,
+        .prev_bar    = ph == 1 ? -1 : 0,
+        .prev_number = (ph + bpb - 2) % bpb + 1,
     };
     set_extent(g, s);
 }
@@ -256,28 +277,39 @@ static Beat next_section_beat(const RXGrid *g, Sec *s)
     return beat_at(s, 0);
 }
 
-/* The last beat at or before t and the first one after it. */
-static void locate(const RXGrid *g, double t, Beat *before, Beat *after)
+/* The last beat at or before t and the first one after it. False when
+ * there is no beat at or before t (t is before the grid's first beat):
+ * *before is then only a point on the first section's line, for the
+ * index arithmetic. */
+static bool locate(const RXGrid *g, double t, Beat *before, Beat *after)
 {
     Sec s;
     walk_to_time(g, t, &s);
 
+    /* Only the first section can hold a t before its start. */
     int64_t k = floor_k(&s, t);
-    if (k >= s.n || !has_last(&s)) {
+    if (k < 0) {
+        *before = beat_at(&s, k);
+        if (after)
+            *after = has_last(&s) ? beat_at(&s, 0) : next_section_beat(g, &s);
+        return false;
+    }
+    if (k >= s.n) {
         /* In the gap after this section's last beat. */
         *before = last_beat(&s);
         if (after)
             *after = next_section_beat(g, &s);
-        return;
+        return before->time > -INFINITY;
     }
 
     *before = beat_at(&s, k);
     if (!after)
-        return;
+        return true;
     if (k + 1 < s.n)
         *after = beat_at(&s, k + 1);
     else
         *after = next_section_beat(g, &s);
+    return true;
 }
 
 /* The reference point of the numbering, in running units: the first
@@ -292,9 +324,7 @@ static Ref grid_ref(const RXGrid *g)
     Sec s;
     walk_init(g, &s);
     while (1) {
-        int64_t lo = ceil_k(&s, 0.0);
-        if (s.index > 0 && lo < 0)
-            lo = 0;
+        int64_t lo = RX_MAX(ceil_k(&s, 0.0), (int64_t)0);
         if (lo < s.n) {
             int64_t kd = lo + floor_mod(-(s.ph - 1 + lo), s.bpb);
             if (kd < s.n) {
@@ -317,8 +347,9 @@ static double walk_time_to_index(const RXGrid *g, double t)
     Sec s;
     walk_to_time(g, t, &s);
     if (!s.last) {
+        /* (A first section without beats has no last one to start from.) */
         Beat lb = last_beat(&s);
-        if (t > lb.time)
+        if (t > lb.time && lb.time > -INFINITY)
             return (double)lb.g + (t - lb.time) / (s.end - lb.time);
     }
     int64_t k = floor_k(&s, t);
@@ -332,7 +363,7 @@ static double walk_index_to_time(const RXGrid *g, double x)
     walk_to_index(g, x, &s);
     if (!s.last) {
         Beat lb = last_beat(&s);
-        if (x > (double)lb.g)
+        if (x > (double)lb.g && lb.time > -INFINITY)
             return lb.time + (x - (double)lb.g) * (s.end - lb.time);
     }
     return s.start + (x - (double)s.g) * s.period;
@@ -391,10 +422,14 @@ int rx_grid_init(RXGrid *g, double start, double bpm)
     g->sections = malloc(sizeof(*g->sections));
     if (!g->sections)
         return RX_ERROR(ENOMEM);
+    /* `start` is a downbeat; the grid starts at the first beat of its line
+     * at or after time 0, which is what dj's grid extended back to. */
+    double period = 60.0 / bpm;
+    int64_t k = clamp_k(floor(start / period));
     g->sections[0] = (RXTempoSection) {
-        .start = start,
+        .start = start - (double)k * period,
         .bpm   = bpm,
-        .beat  = 1,
+        .beat  = (int)floor_mod(-k, 4) + 1,
     };
     g->nb_sections = 1;
     return 0;
@@ -534,9 +569,7 @@ int rx_grid_beats(const RXGrid *g, double duration, RXBeat **beats, int *nb)
         do {
             if (!has_last(&s))
                 continue;
-            int64_t lo = ceil_k(&s, 0.0);
-            if (s.index > 0 && lo < 0)
-                lo = 0;
+            int64_t lo = RX_MAX(ceil_k(&s, 0.0), (int64_t)0);
             int64_t hi = RX_MIN(s.n, ceil_k(&s, duration));
             if (pass == 0) {
                 i += RX_MAX(hi - lo, (int64_t)0);
@@ -579,8 +612,8 @@ double rx_grid_nearest_beat(const RXGrid *g, double t, int *number)
         return t;
     }
     Beat before, after;
-    locate(g, t, &before, &after);
-    Beat *b = after.time - t < t - before.time ? &after : &before;
+    bool has = locate(g, t, &before, &after);
+    Beat *b = !has || after.time - t < t - before.time ? &after : &before;
     if (number)
         *number = b->number;
     return b->time;
@@ -599,7 +632,8 @@ double rx_grid_beat_before(const RXGrid *g, double t)
     if (!rx_grid_valid(g) || !isfinite(t))
         return t;
     Beat before;
-    locate(g, t + AT_TOLERANCE, &before, NULL);
+    if (!locate(g, t + AT_TOLERANCE, &before, NULL))
+        return t;
     return before.time;
 }
 
@@ -653,8 +687,13 @@ void rx_grid_bar_of(const RXGrid *g, double t, int *bar, int *beat)
     Ref r = grid_ref(g);
     Beat before;
     /* A nanosecond of slack so a time computed onto a beat by another
-     * route than beat_time() is not counted in the beat before it. */
-    locate(g, t + 1e-9, &before, NULL);
+     * route than beat_time() is not counted in the beat before it. Before
+     * the grid's first beat there is no bar. */
+    if (!locate(g, t + 1e-9, &before, NULL)) {
+        *bar = 0;
+        *beat = 0;
+        return;
+    }
     *bar = (int)(before.bar - r.bar_down + 1);
     *beat = before.number;
 }
@@ -679,8 +718,8 @@ void rx_grid_set_bpm_at(RXGrid *g, double t, double bpm)
 static Beat nearest(const RXGrid *g, double t, Sec *s, int64_t *k)
 {
     Beat before, after;
-    locate(g, t, &before, &after);
-    Beat b = after.time - t < t - before.time ? after : before;
+    bool has = locate(g, t, &before, &after);
+    Beat b = !has || after.time - t < t - before.time ? after : before;
     walk_to_index(g, (double)b.g, s);
     *k = b.g - s->g;
     return b;
@@ -692,17 +731,10 @@ void rx_grid_set_downbeat(RXGrid *g, double t)
         return;
     Sec s;
     int64_t k;
-    Beat b = nearest(g, t, &s, &k);
-    RXTempoSection *sec = &g->sections[s.index];
-    if (s.index == 0) {
-        /* The first section extends both ways, so its start may be any of
-         * its beats: moving it onto the new downbeat keeps the usual form
-         * (start is a downbeat, beat 1) that the stick writers expect. */
-        sec->start = b.time;
-        sec->beat = 1;
-    } else {
-        sec->beat = (int)floor_mod(-k, s.bpb) + 1;
-    }
+    nearest(g, t, &s, &k);
+    /* The section's start stays where it is (the first section's is the
+     * grid's first beat); the count is what moves. */
+    g->sections[s.index].beat = (int)floor_mod(-k, s.bpb) + 1;
 }
 
 int rx_grid_split_at(RXGrid *g, double t)
@@ -715,10 +747,35 @@ int rx_grid_split_at(RXGrid *g, double t)
     if (k == 0)
         return s.index;
     /* Same tempo, the count continues: nothing moves until one side is
-     * edited. A split before the first section's start becomes the new
-     * first section, which must name its beat. */
-    int beat = b.time < g->sections[0].start ? b.number : 0;
-    return rx_grid_add_section(g, b.time, g->sections[s.index].bpm, beat);
+     * edited. (Every beat is at or after the first section's start.) */
+    return rx_grid_add_section(g, b.time, g->sections[s.index].bpm, 0);
+}
+
+int rx_grid_start_at(RXGrid *g, double t)
+{
+    if (!rx_grid_valid(g) || !isfinite(t))
+        return RX_ERROR(EINVAL);
+    Sec s;
+    walk_init(g, &s);
+    while (1) {
+        int64_t k = RX_MAX(ceil_k(&s, t), (int64_t)0);
+        if (k < s.n) {
+            /* The section holding the first beat at or after t starts on
+             * it, numbered as it was; the ones before it go. Later
+             * sections count on from the same beats as before. */
+            Beat b = beat_at(&s, k);
+            int drop = s.index;
+            memmove(g->sections, g->sections + drop,
+                    (size_t)(g->nb_sections - drop) * sizeof(*g->sections));
+            g->nb_sections -= drop;
+            g->sections[0].start = b.time;
+            g->sections[0].beat = b.number;
+            return 0;
+        }
+        if (!walk_next(g, &s))
+            break;
+    }
+    return 0;
 }
 
 int rx_grid_merge_at(RXGrid *g, double t)

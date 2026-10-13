@@ -13,6 +13,8 @@
  *     --dump-onsets BASE      for each file, BASE.<n>.onsets.csv (onset
  *                             signals) and BASE.<n>.beats.csv (beats,
  *                             attacks, grid)
+ *     --starts                only where the music starts (no beat analysis):
+ *                             one line per file, for scanning a library
  *     --bpm-range LO HI       restrict the tempo range
  *     --no-sections           one section only
  *     -v                      the analyser's diagnostics per file
@@ -29,7 +31,15 @@
  * from the ffmpeg command line at 44.1 kHz ("file:" prefix, so names
  * containing ':' work), exactly as dj decodes for its analysis, so that a
  * comparison with dj can see the same samples. The BPM tag, when a file
- * has one, is read with rx_probe and printed. */
+ * has one, is read with rx_probe and printed.
+ *
+ * Where the music starts (docs/BEATS.md): the CSV and -v give its time and
+ * kind (hit, fade, swell, at once), and the grid's first beat, its number,
+ * its first downbeat and the automatic cue (the first downbeat at or after
+ * the start), so that the start of the music can be checked against beat
+ * 1. The CSV's last columns are the evidence the start's section had
+ * before its on/off-beat decision, for tuning the witnesses without
+ * analysing again. */
 
 #include "rxbox/analysis.h"
 
@@ -158,7 +168,7 @@ typedef struct Result {
     double confidence;
     unsigned flags;
     char   flagstr[160];
-    double first_onset;
+    double music_start;
     double ms;
     double tag_bpm;
     double closest;             /* closest two beats of the expanded grid, in periods */
@@ -169,7 +179,48 @@ typedef struct Result {
     RXOctaveDecision oct;
     int    band;
     bool   shifted;
+    /* where the music starts, and the grid there */
+    int    start_kind;
+    double audible, floor_db, loud_db, jump_db, rise, start_kick_ratio;
+    double first_beat, first_down, cue;
+    int    first_number;
+    int    start_section;
+    double start_kick, start_struct, start_hit, start_off, start_t0, start_period;
+    long   start_half_beat;
+    double start_scores[8];
 } Result;
+
+static const char *kind_name(int k)
+{
+    return k == RX_START_HIT ? "hit" : k == RX_START_FADE ? "fade" :
+           k == RX_START_SWELL ? "swell" : "once";
+}
+
+/* The grid's first beat and its number, its first downbeat, and the
+ * automatic cue (rx_analysis_auto_cues' rule: the first downbeat at or
+ * after the start of the music, 50 ms of slack). */
+static void grid_start(Result *r, const RXGrid *g)
+{
+    r->first_beat = r->first_down = r->cue = NAN;
+    r->first_number = 0;
+    RXBeat *b = NULL;
+    int nb = 0;
+    if (rx_grid_beats(g, r->duration, &b, &nb) < 0 || !nb)
+        return;
+    r->first_beat = b[0].time;
+    r->first_number = b[0].number;
+    for (int i = 0; i < nb; i++) {
+        if (b[i].number != 1)
+            continue;
+        if (isnan(r->first_down))
+            r->first_down = b[i].time;
+        if (b[i].time >= r->music_start - 0.05) {
+            r->cue = b[i].time;
+            break;
+        }
+    }
+    free(b);
+}
 
 static double grid_bpm(const Result *r)
 {
@@ -238,6 +289,7 @@ typedef struct Job {
     bool               ffmpeg;
     bool               mem;
     bool               all;
+    bool               starts;
     unsigned           what;
 } Job;
 
@@ -414,10 +466,38 @@ static int analyse_all(Job *job, Result *r, RXBeatResult *br)
     return 0;
 }
 
+/* --starts: where the music starts, without the beat analysis. */
+static void start_one(Job *job, Result *r, const float *x, int64_t n, int rate)
+{
+    (void)job;
+    float *own = NULL;
+    int64_t n44 = n;
+    if (rate != RX_BEAT_RATE) {
+        if (rx_resample_mono(x, n, rate, RX_BEAT_RATE, &own, &n44) < 0)
+            return;
+        x = own;
+    }
+    RXMusicStart st;
+    double t0 = cpu_ms();
+    if (rx_music_start(x, n44, &st) == 0) {
+        r->ok = true;
+        r->music_start = st.start;
+        r->audible = st.audible;
+        r->start_kind = st.kind;
+        r->floor_db = st.floor_db;
+        r->loud_db = st.loud_db;
+        r->jump_db = st.jump_db;
+        r->rise = st.rise;
+    }
+    r->ms = cpu_ms() - t0;
+    free(own);
+}
+
 static void analyse_one(Job *job, int i)
 {
     Result *r = &job->res[i];
     r->path = job->paths[i];
+    r->start_section = -1;
     if (job->all) {
         RXBeatResult br;
         if (analyse_all(job, r, &br) < 0)
@@ -429,7 +509,9 @@ static void analyse_one(Job *job, int i)
         r->confidence = br.confidence;
         r->flags = br.flags;
         flags_to_str(br.flags, r->flagstr, sizeof(r->flagstr));
-        r->first_onset = br.first_onset;
+        r->music_start = br.music_start;
+        r->start_kind = br.start_kind;
+        grid_start(r, &br.grid);
         if (r->ok) {
             r->downbeat = nearest_downbeat(r, 0.0);
             double bar = 4 * 60.0 / r->secs[0].bpm;
@@ -462,6 +544,11 @@ static void analyse_one(Job *job, int i)
         rx_audio_free(&au);
     }
     r->duration = (double)n / rate;
+    if (job->starts) {
+        start_one(job, r, x, n, rate);
+        free(x);
+        return;
+    }
     r->tag_bpm = rx_str_ends(r->path, ".f32") ? 0.0 : read_tag_bpm(r->path);
 
     RXBeatResult br;
@@ -490,7 +577,26 @@ static void analyse_one(Job *job, int i)
     r->confidence = br.confidence;
     r->flags = br.flags;
     flags_to_str(br.flags, r->flagstr, sizeof(r->flagstr));
-    r->first_onset = br.first_onset;
+    r->music_start = br.music_start;
+    r->start_kind = br.start_kind;
+    grid_start(r, &br.grid);
+    if (!job->mem) {
+        r->audible = dbg.start.audible;
+        r->floor_db = dbg.start.floor_db;
+        r->loud_db = dbg.start.loud_db;
+        r->jump_db = dbg.start.jump_db;
+        r->rise = dbg.start.rise;
+        r->start_kick_ratio = dbg.start_kick_ratio;
+        r->start_section = dbg.start_section;
+        r->start_kick = dbg.start_kick;
+        r->start_struct = dbg.start_struct;
+        r->start_hit = dbg.start_hit;
+        r->start_half_beat = dbg.start_half_beat;
+        r->start_off = dbg.start_off;
+        r->start_t0 = dbg.start_t0;
+        r->start_period = dbg.start_period;
+        memcpy(r->start_scores, dbg.start_scores, sizeof(r->start_scores));
+    }
     r->octave_margin = br.octave_margin;
     r->phase_margin = br.phase_margin;
     r->second_bpm = br.bpm_second_best;
@@ -563,7 +669,10 @@ static void write_csv(const char *fn, const Result *res, int nb)
         fprintf(stderr, "%s: cannot write\n", fn);
         return;
     }
-    fprintf(f, "path,duration,bpm,sections,downbeat,confidence,flags,first_onset,ms,tag_bpm\n");
+    fprintf(f, "path,duration,bpm,sections,downbeat,confidence,flags,music_start,ms,tag_bpm,"
+               "start_kind,audible,floor_db,loud_db,rise,first_beat,first_number,first_down,"
+               "cue,start_section,start_kick,start_struct,start_hit,start_half_beat,start_off,"
+               "start_t0,start_period,start_scores,jump_db,start_kick_ratio\n");
     for (int i = 0; i < nb; i++) {
         const Result *r = &res[i];
         if (!r->ok)
@@ -571,11 +680,18 @@ static void write_csv(const char *fn, const Result *res, int nb)
         char secs[MAX_SECS * 40];
         sections_str(r, secs, sizeof(secs));
         csv_quote(f, r->path);
-        fprintf(f, ",%.3f,%.4f,%s,%.5f,%.3f,%s,%.3f,%.0f,", r->duration, grid_bpm(r), secs,
-                r->downbeat, r->confidence, r->flagstr, r->first_onset, r->ms);
+        fprintf(f, ",%.3f,%.4f,%s,%.5f,%.3f,%s,%.4f,%.0f,", r->duration, grid_bpm(r), secs,
+                r->downbeat, r->confidence, r->flagstr, r->music_start, r->ms);
         if (r->tag_bpm > 0)
             fprintf(f, "%g", r->tag_bpm);
-        fputc('\n', f);
+        fprintf(f, ",%s,%.4f,%.1f,%.1f,%.3f,%.5f,%d,%.5f,%.5f,%d,%.4f,%.4f,%.2f,%ld,%.5f,%.6f,%.7f,",
+                kind_name(r->start_kind), r->audible, r->floor_db, r->loud_db, r->rise,
+                r->first_beat, r->first_number, r->first_down, r->cue, r->start_section,
+                r->start_kick, r->start_struct, r->start_hit, r->start_half_beat, r->start_off,
+                r->start_t0, r->start_period);
+        for (int k = 0; k < 8; k++)
+            fprintf(f, "%s%.4f", k ? ";" : "", r->start_scores[k]);
+        fprintf(f, ",%.1f,%.3f\n", r->jump_db, r->start_kick_ratio);
     }
     fclose(f);
 }
@@ -669,7 +785,7 @@ static int read_csv(const char *fn, Result **out)
         r->downbeat = atof(fl[4]);
         r->confidence = atof(fl[5]);
         snprintf(r->flagstr, sizeof(r->flagstr), "%s", fl[6]);
-        r->first_onset = atof(fl[7]);
+        r->music_start = atof(fl[7]);
         r->ms = atof(fl[8]);
         r->tag_bpm = nf > 9 ? atof(fl[9]) : 0.0;
     }
@@ -780,7 +896,7 @@ static void usage(void)
     fprintf(stderr, "usage: rxbox-eval [-j N] [-l LIST] [--csv OUT] [--from CSV]\n"
                     "                  [--compare REF.csv]\n"
                     "                  [--dump-onsets BASE] [--bpm-range LO HI] [--no-sections]\n"
-                    "                  [--ffmpeg] [--all] [--what MASK] [--mem]\n"
+                    "                  [--ffmpeg] [--all] [--what MASK] [--mem] [--starts]\n"
                     "                  [-v|-vv] FILE...\n");
 }
 
@@ -817,6 +933,8 @@ int main(int argc, char **argv)
             job.mem = true;
         } else if (!strcmp(a, "--all")) {
             job.all = true;
+        } else if (!strcmp(a, "--starts")) {
+            job.starts = true;
         } else if (!strcmp(a, "--what") && i + 1 < argc) {
             job.all = true;
             job.what = (unsigned)atoi(argv[++i]);
@@ -884,6 +1002,22 @@ int main(int argc, char **argv)
         free(th);
     }
 
+    if (job.starts) {
+        /* One line per file: kind, start, threshold crossing, floor, loud
+         * level, jump, rise (tab-separated), path. */
+        for (int i = 0; i < nb; i++) {
+            const Result *r = &res[i];
+            if (!r->ok) {
+                printf("none\t-\t-\t-\t-\t-\t%s\n", r->path ? r->path : "?");
+                continue;
+            }
+            printf("%s\t%.4f\t%.4f\t%.1f\t%.1f\t%.1f\t%.3f\t%s\n", kind_name(r->start_kind),
+                   r->music_start, r->audible, r->floor_db, r->loud_db, r->jump_db, r->rise,
+                   r->path);
+        }
+        return 0;
+    }
+
     double tot_ms = 0.0, tot_dur = 0.0;
     int ok = 0;
     for (int i = 0; i < nb; i++) {
@@ -923,6 +1057,17 @@ int main(int argc, char **argv)
                r->phase_margin, r->shifted ? " (moved)" : "", r->kick_share, r->jitter * 1e3,
                r->scatter * 1e3, r->band, r->strong_on_grid, r->kick_delay * 1e3, r->full_on_grid,
                r->full_delay * 1e3);
+        printf("          start %.4f (%s", r->music_start, kind_name(r->start_kind));
+        if (r->start_kind != RX_START_AT_ONCE)
+            printf(", over the threshold at %.4f, floor %.1f dB, loud %.1f dB, jump %.1f dB, "
+                   "rise %.3f s", r->audible, r->floor_db, r->loud_db, r->jump_db, r->rise);
+        printf(")  first beat %.4f (beat %d)  beat 1 %.4f  cue %.4f\n", r->first_beat,
+               r->first_number, r->first_down, r->cue);
+        if (r->start_section >= 0)
+            printf("          start's section %d: kick %+.2f structure %+.2f hit %+.2f "
+                   "(half beat %ld, %+.1f ms; kick %.2f of the kick beats')\n",
+                   r->start_section, r->start_kick, r->start_struct, r->start_hit,
+                   r->start_half_beat, r->start_off * 1e3, r->start_kick_ratio);
     }
     if (ok && !from) {
         double sog = 0.0, sfg = 0.0, conf = 0.0;

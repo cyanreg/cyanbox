@@ -87,6 +87,23 @@ int  rx_env_window(RXEnvCtx *ctx, double t, float *env, double *centre);
  * sums to 1 (all zero in silence). out is [nb][12]. */
 int rx_bass_chroma(const float *x, int64_t n, const double *times, int nb, float *out);
 
+/* ------------------------------------------------------------- music start */
+
+/* Where the music starts, from the level of 6.7 ms frames of the 44.1 kHz
+ * signal (start.c). */
+typedef struct RXMusicStart {
+    enum RXStartKind kind;
+    double start;                   /* seconds: a hit's first sample, where a rise leaves
+                                     * the floor; 0 when at once */
+    double audible;                 /* where the level first crosses the start threshold */
+    double floor_db;                /* level of the silence or floor before it (-200: digital) */
+    double loud_db;                 /* the track's loud level (90th percentile of the frames) */
+    double jump_db;                 /* level two frames after the start over its threshold */
+    double rise;                    /* seconds from the start to within 15 dB of the loud level */
+} RXMusicStart;
+
+int rx_music_start(const float *x, int64_t n, RXMusicStart *out);
+
 /* ------------------------------------------------------------------ onsets */
 
 typedef struct RXOnsets {
@@ -108,7 +125,8 @@ void rx_superflux_frame(const float *ref, const float *cur, int mid0, int mid1, 
 /* Takes the spectrum's flux signals (they move into the onsets). */
 int  rx_onsets_compute(RXSpectrum *s, RXOnsets *o);
 void rx_onsets_free(RXOnsets *o);
-/* The first onset that is loud relative to the track (dj's rule). */
+/* The first onset that is loud relative to the track (dj's rule; where
+ * the music starts is start.c's). */
 double rx_onsets_first(const RXOnsets *o);
 /* Removes the local mean (one second), clips at zero, scales to unit
  * standard deviation. In place. */
@@ -271,9 +289,10 @@ typedef struct RXDownbeat {
 
 /* Votes for the bar position of the beats t0 + k * period in [start, end):
  * position 2j is beat j+1 of the bar that starts at t0; odd positions are
- * the half beats after them. */
+ * the half beats after them. `start_vote` (NAN: none) is where the music
+ * starts, a vote of one scale for the beat or half beat there. */
 int rx_downbeat_vote(const RXSpectrum *s, const float *x, int64_t n,
-                     double t0, double period, double start, double end, double first_onset,
+                     double t0, double period, double start, double end, double start_vote,
                      RXDownbeat *out);
 
 /* ------------------------------------------------------------ diagnostics */
@@ -294,6 +313,18 @@ typedef struct RXBeatDebug {
     double          scatter;        /* largest section beat-to-beat scatter (s) */
     int             band;           /* envelope band of the first section */
     bool            half_shift;     /* the grid was moved by half a beat */
+    /* Where the music starts, and the evidence of the section holding it
+     * (before its on/off-beat decision). */
+    RXMusicStart    start;
+    int             start_section;  /* -1: the music starts at once */
+    double          start_kick;     /* log evidence of the kicks for the line as it was */
+    double          start_struct;   /* of the structure (without the start's votes) */
+    double          start_hit;      /* of the hit after silence */
+    long            start_half_beat;/* the start's nearest half beat from t0 (even: a beat) */
+    double          start_off;      /* and its distance from it (s) */
+    double          start_t0, start_period;
+    double          start_scores[8];/* the structure's scores by half-beat position from t0 */
+    double          start_kick_ratio;/* a hit's kick band against the kick beats' */
 } RXBeatDebug;
 
 int  rx_analyse_beats_dbg(const float *mono, int64_t nb_samples, int rate,

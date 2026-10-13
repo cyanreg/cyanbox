@@ -13,12 +13,12 @@
 /* ------------------------------------------------------------------ grid */
 
 /* A stretch of the track at one tempo. `start` is the time of one of its
- * beats; beats extend forwards at 60/bpm until the next section and, for the
- * first section only, backwards to the start of the track. `beat` is the
- * beat number (1..beats_per_bar) of the beat at `start`, or 0 to continue
- * counting from the previous section. The first section's `beat` is always
- * 1..beats_per_bar (0 is read as 1), so for a one-section grid `start` is a
- * downbeat. */
+ * beats; beats extend forwards at 60/bpm until the next section. The first
+ * section's start is the grid's first beat: there is no beat before it
+ * (the analyser starts a grid where the music starts, docs/BEATS.md).
+ * `beat` is the beat number (1..beats_per_bar) of the beat at `start`, or
+ * 0 to continue counting from the previous section. The first section's
+ * `beat` is always 1..beats_per_bar (0 is read as 1). */
 typedef struct RXTempoSection {
     double start;        /* seconds */
     double bpm;
@@ -38,7 +38,9 @@ typedef struct RXBeat {
     double bpm;          /* tempo of the section this beat is in */
 } RXBeat;
 
-int    rx_grid_init(RXGrid *g, double start, double bpm);     /* one section, beat 1 at start */
+/* One section at `bpm` with a downbeat at `start`, from the first beat of
+ * that line at or after time 0: a grid made by hand covers the track. */
+int    rx_grid_init(RXGrid *g, double start, double bpm);
 int    rx_grid_copy(RXGrid *dst, const RXGrid *src);
 void   rx_grid_free(RXGrid *g);
 bool   rx_grid_valid(const RXGrid *g);                         /* >= 1 section, bpm 1..1000, sorted */
@@ -49,23 +51,28 @@ int    rx_grid_add_section(RXGrid *g, double start, double bpm, int beat);
 int    rx_grid_remove_section(RXGrid *g, int index);
 int    rx_grid_section_at(const RXGrid *g, double t);          /* index of the section containing t */
 
-/* Every beat in [0, duration): malloc'd array, count in *nb. */
+/* Every beat of the grid in [0, duration): malloc'd array, count in *nb. */
 int    rx_grid_beats(const RXGrid *g, double duration, RXBeat **beats, int *nb);
-/* Time of the beat nearest to t, and (optionally) its number. */
+/* Time of the beat nearest to t, and (optionally) its number. Before the
+ * grid's first beat, that beat. */
 double rx_grid_nearest_beat(const RXGrid *g, double t, int *number);
-/* Time of the grid beat at or before / strictly after t (by > 1 ms). */
+/* Time of the grid beat at or before / strictly after t (by > 1 ms).
+ * With no beat at or before t (before the grid's first), t itself. */
 double rx_grid_beat_before(const RXGrid *g, double t);
 double rx_grid_beat_after(const RXGrid *g, double t);
 /* t moved by `beats` grid beats (fractional allowed, negative = backwards).
  * The step follows the tempo of each section crossed. */
 double rx_grid_offset_beats(const RXGrid *g, double t, double beats);
-/* Fractional beat index of t counted from the first downbeat of the track
- * (which is beat 0; the beats before it are negative), and the inverse. */
+/* Fractional beat index of t counted from the first downbeat of the grid
+ * (which is beat 0; the beats before it are negative), and the inverse.
+ * Before the grid's first beat the first section's line continues, for
+ * this arithmetic only. */
 double rx_grid_time_to_beat(const RXGrid *g, double t);
 double rx_grid_beat_to_time(const RXGrid *g, double beat);
-/* Time of 1-based (bar, beat) counted from the first downbeat of the track. */
+/* Time of 1-based (bar, beat) counted from the first downbeat of the grid. */
 double rx_grid_bar_time(const RXGrid *g, int bar, int beat);
-/* Bar (1-based) and beat (1-based) of t; bars count from the first downbeat. */
+/* Bar (1-based) and beat (1-based) of t; bars count from the first downbeat
+ * (a pickup before it is bar 0). Before the grid's first beat: 0 and 0. */
 void   rx_grid_bar_of(const RXGrid *g, double t, int *bar, int *beat);
 /* Quantise t to the nearest beat (what QUANTIZE does on a CDJ). */
 double rx_grid_quantize(const RXGrid *g, double t);
@@ -73,12 +80,17 @@ double rx_grid_quantize(const RXGrid *g, double t);
 void   rx_grid_shift(RXGrid *g, double delta);
 /* Changes the tempo of the section containing t, keeping its start. */
 void   rx_grid_set_bpm_at(RXGrid *g, double t, double bpm);
-/* Makes the nearest beat to t the downbeat (beat 1) of its section. */
+/* Makes the nearest beat to t the downbeat (beat 1) of its section: the
+ * section's count moves, its start does not. */
 void   rx_grid_set_downbeat(RXGrid *g, double t);
 /* Makes the nearest beat to t the start of a new section at the same tempo
  * (split), or removes the section boundary nearest to t (merge). */
 int    rx_grid_split_at(RXGrid *g, double t);
 int    rx_grid_merge_at(RXGrid *g, double t);
+/* Starts the grid at its first beat at or after t: the sections before
+ * that beat's go, and its own starts on it with its number. No beat at or
+ * after t moves or changes its number. */
+int    rx_grid_start_at(RXGrid *g, double t);
 
 /* ------------------------------------------------------------------- cues */
 
