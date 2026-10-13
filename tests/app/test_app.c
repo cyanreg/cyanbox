@@ -18,12 +18,13 @@
  * keeps the track the deck has, the 30 s play record (not for a seek loop,
  * not twice), the end of a track: paused there in the collection, played
  * on into the next row of the playlist being viewed with no load (the
- * player moves on by itself), the next row of any view with PLAY MODE
- * continue, a track removed while loaded and analysed, waveforms of an
- * older format version made again, results of an older analyser made
- * again by "analyse all" and, unasked, by opening the library (a locked
- * grid kept both times), and tearing down with jobs in flight
- * (LeakSanitizer checks the rest).
+ * player moves on by itself), followed there when the view changes as the
+ * deck moves on (inside MASTER TEMPO's delay), the next row of any view
+ * with PLAY MODE continue, a track removed while loaded and analysed,
+ * waveforms of an older format version made again, results of an older
+ * analyser made again by "analyse all" and, unasked, by opening the
+ * library (a locked grid kept both times), and tearing down with jobs in
+ * flight (LeakSanitizer checks the rest).
  *
  * The player is the null backend in manual mode: the ticks advance it.
  *
@@ -262,6 +263,13 @@ static bool continued(RXApp *app)
     RXDeckState st;
     rx_deck_state(app->player, 0, &st);
     return app->decks[0].track == continue_to && !app->decks[0].loading_request && st.playing;
+}
+
+/* That track queued on the deck, its decode in. */
+static bool next_queued(RXApp *app)
+{
+    return continue_to && app->decks[0].next_track_id == continue_to->id &&
+           rx_deck_has_next(app->player, 0);
 }
 
 /* A My Setting in RXConfig, as the Player settings dialog sets it (the app
@@ -837,6 +845,48 @@ int main(int argc, char **argv)
                   "the playlist's last track stops at its end: playing %d at %f", st.playing,
                   st.position);
         }
+
+        /* The candidate changing as the deck moves on: with MASTER TEMPO
+         * on the deck reads a, queued after c, the shifter's delay (120
+         * ms) before a is heard. Leaving the playlist 60 ms before c's
+         * end cancels a when the deck plays it already: the view follows
+         * the deck into a all the same, and nothing is queued after it
+         * (the collection, PLAY MODE SINGLE). */
+        ret = rx_app_load_deck(&app, 0, c);
+        CHECK(ret == 0 && tick_until(&app, deck_loaded, 60) && app.decks[0].track == c,
+              "load c again");
+        CHECK(rx_deck_set_master_tempo(app.player, 0, true), "master tempo");
+        rx_deck_state(app.player, 0, &st);
+        adv = st.advanced;
+        rx_ctl_seek(&app.decks[0].ctl, c->duration - 0.5);
+        rx_ctl_play_pause(&app.decks[0].ctl);
+        continue_to = a_track;
+        CHECK(tick_until(&app, next_queued, 10), "a is not queued after c");
+        for (int i = 0; i < 100; i++) {
+            rx_player_null_advance(app.player, 480);
+            rx_app_tick(&app);
+            rx_deck_state(app.player, 0, &st);
+            if (st.position >= c->duration - 0.06)
+                break;
+        }
+        CHECK(app.decks[0].track == c && st.advanced == adv && st.playing && st.has_next &&
+              st.position >= c->duration - 0.06, "not at c's end: advanced %u (was %u), at %f",
+              st.advanced, adv, st.position);
+        app.current_playlist = NULL;
+        app.rows_dirty = true;
+        rx_app_tick(&app);
+        CHECK(tick_until(&app, continued, 5), "the view stayed on %p while the deck plays a",
+              (void *)app.decks[0].track);
+        rx_deck_state(app.player, 0, &st);
+        CHECK(st.advanced == adv + 1 && app.decks[0].ctl.track == a_track &&
+              !app.decks[0].next_track_id && !st.has_next,
+              "followed a: advanced %u (was %u), next %llu, has_next %d", st.advanced, adv,
+              (unsigned long long)app.decks[0].next_track_id, st.has_next);
+        if (a_track) {
+            rx_ctl_seek(&app.decks[0].ctl, a_track->duration - 0.5);
+            play_for(&app, 1.0, 0.01, 0, 0, 0);
+        }
+        CHECK(rx_deck_set_master_tempo(app.player, 0, false), "master tempo off");
 
         /* PLAY MODE CONTINUE: in any view, the next row, the first after
          * the last, the same way. */

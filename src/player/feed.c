@@ -50,9 +50,10 @@
  * A stream queued to follow the deck's (rx_deck_queue_next) is the feed's
  * second: once the first has nothing left to do, the feed decodes the
  * window ahead from the start of the second, with a decoder of its own,
- * so the deck plays on into it the frame after the first ends. The owner
- * then makes it the feed's stream (rx_player_feed_set), and the feed goes
- * on with that decoder from the chunks it has. */
+ * so the deck plays on into it the frame after the first ends. Once the
+ * real-time side says it reads it (the track id it publishes), the owner
+ * makes it the feed's stream (rx_player_feed_set), and the feed goes on
+ * with that decoder from the chunks it has. */
 
 #include "player_internal.h"
 
@@ -507,24 +508,16 @@ void rx_player_feed_stop(RXDeckFeed *f)
     f->lock_ok = f->sem_ok = false;
 }
 
-uint64_t rx_player_feed_set(RXDeckFeed *f, RXStream *s)
+uint64_t rx_player_feed_set(RXDeckFeed *f, RXStream *s, RXStream *next)
 {
     pthread_mutex_lock(&f->lock);
+    if (s != f->stream) {
+        /* The points were the old track's. */
+        f->nb_points = 0;
+        f->points_gen++;
+    }
     f->stream = s;
-    f->next = NULL;
-    uint64_t gen = ++f->gen;
-    /* The points were the old track's. */
-    f->nb_points = 0;
-    f->points_gen++;
-    pthread_mutex_unlock(&f->lock);
-    sem_post(&f->wake);
-    return gen;
-}
-
-uint64_t rx_player_feed_set_next(RXDeckFeed *f, RXStream *s)
-{
-    pthread_mutex_lock(&f->lock);
-    f->next = s;
+    f->next = next;
     uint64_t gen = ++f->gen;
     pthread_mutex_unlock(&f->lock);
     sem_post(&f->wake);
@@ -546,7 +539,13 @@ bool rx_player_feed_wait(RXDeckFeed *f, const RXStream *s, int64_t timeout_us)
 {
     pthread_mutex_lock(&f->lock);
     uint64_t gen = f->gen;
+    bool ours = f->stream == s;
     pthread_mutex_unlock(&f->lock);
+    /* A stream the feed does not fill is never settled: nothing to wait
+     * for (the owner gives the feed the stream the deck reads as soon as
+     * it knows of it). */
+    if (!ours)
+        return true;
     int64_t want = atomic_load_explicit(&((RXStream *)s)->playhead, memory_order_relaxed);
     int64_t t0 = rx_time_us();
     while (atomic_load_explicit(&f->acked, memory_order_acquire) != gen ||

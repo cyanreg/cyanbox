@@ -21,7 +21,14 @@
  * and the real-time thread says where it reads through the stream's
  * atomics. The command ring is single-producer (owner) / single-consumer
  * (real time). Nothing on the real-time side allocates, locks, logs or
- * does I/O; everything it needs is allocated before it runs. */
+ * does I/O; everything it needs is allocated before it runs.
+ *
+ * Tracks have ids: the deck serial of the LOAD or NEXT command that
+ * carried a track to the real-time side, unique on the deck, 0 for none.
+ * The owner decides which buffers it may free, and which track the deck
+ * plays, by id, never by timing: the real-time side publishes the id of
+ * the track it reads (and of one its de-click tail still reads), and the
+ * commands that only make sense for one track carry its id. */
 
 #ifndef RXBOX_PLAYER_INTERNAL_H
 #define RXBOX_PLAYER_INTERNAL_H
@@ -158,12 +165,17 @@ typedef struct RXStream RXStream;
 /* A command is copied into the ring by value. A load (and a next) carries
  * the buffer's fields rather than the RXAudio pointer, so the real-time
  * side never reads the owner's struct; or the stream a packet store plays
- * through. */
+ * through; and the track's id. A seek, a loop or a next carries the id of
+ * the track the owner meant it for (`track`), and the deck drops it when
+ * it no longer reads that track: it moved on into the next before the
+ * command came, and the frames, or the order, are the old track's. */
 typedef struct RXCmd {
     uint8_t      type;
     int8_t       deck;
     bool         flag;
     double       a, b;
+    uint64_t     track;     /* the track meant; 0 any */
+    uint64_t     id;        /* LOAD, NEXT: the track carried */
     const float *samples;
     RXStream    *stream;
     int          channels;
@@ -240,6 +252,17 @@ typedef struct RXGrain {
     int   age, len;         /* len == 0: idle */
 } RXGrain;
 
+/* A track as the real-time side reads it: a buffer (the owner's, read-only
+ * here) or a stream, and its id; id 0 is none. */
+typedef struct RXSource {
+    const float *samples;
+    RXStream    *stream;
+    int          channels;
+    int          rate;
+    int64_t      nb_frames;
+    uint64_t     id;
+} RXSource;
+
 /* MASTER TEMPO on the real-time side (deck.c has the why). Everything is
  * allocated by rx_player_create; st == NULL means the player has none. */
 typedef struct RXDeckMT {
@@ -250,31 +273,28 @@ typedef struct RXDeckMT {
     float  *ahead[2];       /* latency frames: what a restart starts from */
     float  *xf[2];          /* RX_MT_CHUNK frames: the old sound of a crossfade */
     int     xf_len, xf_left;
-    /* The read position, speed ratio (0 when stopped) and track (the deck's
-     * track_gen) of every frame fed, a ring of hist_mask + 1: what is heard
-     * now was fed `latency` ago. */
+    /* The read position, speed ratio (0 when stopped) and track (its id) of
+     * every frame fed, a ring of hist_mask + 1: what is heard now was fed
+     * `latency` ago. */
     RXPos    *hist;
     float    *hist_speed;
-    uint32_t *hist_gen;
+    uint64_t *hist_id;
     int64_t hist_mask;
     int64_t fed;            /* frames fed so far */
-    int64_t fill_until;     /* frames fed before this one count as fill_pos, fill_gen */
+    int64_t fill_until;     /* frames fed before this one count as fill_pos, fill_id */
     RXPos   fill_pos;
-    uint32_t fill_gen;
+    uint64_t fill_id;
     bool    on;             /* the shifter is in the deck's path */
-    /* A restart is due at the next render. was_on and *was are the deck as
-     * it sounded before the first command that asked for it. */
+    /* A restart is due at the next render. was_on: the shifter was in
+     * before the first command that asked for it; when it was not, out[]
+     * holds old_len frames of the dry voices as they would have played on,
+     * rendered by that command. */
     bool    restart, was_on;
-    struct RXDeckRT *was;
+    int     old_len;
 } RXDeckMT;
 
 typedef struct RXDeckRT {
-    /* The buffer: owned by the owner side, read-only here. Or the stream. */
-    const float *samples;
-    RXStream    *stream;
-    int          channels;
-    int          rate;
-    int64_t      nb_frames;
+    RXSource     src;           /* the track the main voice plays */
     bool         length_final;  /* a stream whose index is complete: nb_frames is its count */
     sem_t       *wake;          /* the deck's feed thread */
     int64_t      posted_chunk;  /* the read position's chunk the feed was last woken for */
@@ -283,14 +303,17 @@ typedef struct RXDeckRT {
     int          out_rate;      /* the device's, as of the last callback */
 
     /* The track queued to follow this one (RX_CMD_NEXT), taken over the
-     * frame after the last one of this: the same fields. */
-    bool         has_next;
-    const float *next_samples;
-    RXStream    *next_stream;
-    int          next_channels;
-    int          next_rate;
-    int64_t      next_nb_frames;
-    uint32_t     track_gen;     /* bumps each time the deck moves on to the next */
+     * frame after the last one of this; id 0 none. Its first frames are
+     * this one's frames past the end, and after the change the old one's
+     * last two are the new one's frames -2 and -1 (edge, stereo, when
+     * has_edge): the interpolator reads across the change as within one
+     * track. */
+    RXSource     next;
+    float        edge[4];
+    bool         has_edge;
+    /* The track the deck moved on from while its de-click tail still reads
+     * it (tail_old): the owner keeps it until the deck says it is done. */
+    RXSource     old;
 
     RXPos  pos;
     bool   playing;
@@ -306,6 +329,7 @@ typedef struct RXDeckRT {
     RXPos  tail_pos;
     double tail_inc;
     int    tail_left, tail_len;
+    bool   tail_old;            /* the tail reads `old`, not `src` */
 
     /* Scrubbing: the deck follows the pointer and plays grains. */
     bool    scrubbing, scrub_resume;
@@ -339,7 +363,9 @@ typedef struct RXDeckPub {
     atomic_bool      playing;
     atomic_bool      waiting;       /* playing, holding for the feed */
     _Atomic uint64_t serial;
-    _Atomic uint32_t track_gen;     /* the track the position is in (heard, like it) */
+    _Atomic uint64_t heard_id;      /* the track the position is in (heard, like it) */
+    _Atomic uint64_t read_id;       /* the track the deck reads */
+    _Atomic uint64_t old_id;        /* one its de-click tail still reads, 0 none */
     atomic_uint      level_l, level_r;  /* float bits */
 } RXDeckPub;
 
@@ -350,29 +376,36 @@ typedef struct RXDeckSnap {
     bool     playing;
     bool     waiting;
     uint64_t serial;
-    uint32_t track_gen;
+    uint64_t heard_id, read_id, old_id;
 } RXDeckSnap;
 
 /* ------------------------------------------------------------ owner side */
 
-typedef struct RXDeckOwner {
-    RXAudio  *audio;            /* loaded buffer, NULL when empty */
-    RXStream *stream;           /* or the loaded stream */
-    int       rate;             /* of what is loaded */
+/* A track the owner holds: its buffer, or its stream, the copy of the grid
+ * given with it, and its id (0: none). */
+typedef struct RXOwnTrack {
+    RXAudio  *audio;
+    RXStream *stream;
+    int       rate;
     int64_t   nb_frames;        /* its length (a stream's as last read) */
-    int64_t   points[RX_DECK_CUE_POINTS];   /* the cue points the feed has, in frames */
-    int       nb_points;
-    RXGrid   grid;              /* copy of the grid given at load */
-    /* The track queued to follow (rx_deck_queue_next), the same way; and
-     * the real-time side's track_gen the fields above describe: when the
-     * published one is past it, the deck has moved on to the next, and
-     * these fields follow (sync_next). */
-    RXAudio  *next_audio;
-    RXStream *next_stream;
-    int       next_rate;
-    int64_t   next_nb_frames;
-    RXGrid    next_grid;
-    uint32_t  track_gen;
+    RXGrid    grid;
+    uint64_t  id;
+} RXOwnTrack;
+
+typedef struct RXDeckOwner {
+    /* The track the state describes (the one heard); the one queued to
+     * follow it (rx_deck_queue_next); and the one the real-time side reads
+     * already while cur is still what is heard (it moved on into the next,
+     * or into one dropped too late, inside MASTER TEMPO's delay or before
+     * its callback published the move). See sync_deck in player.c. */
+    RXOwnTrack cur, next, ahead;
+    unsigned   advanced;        /* moves into a next, counted when heard */
+    int64_t    points[RX_DECK_CUE_POINTS];  /* the cue points the feed has, in frames */
+    int        nb_points;
+    /* What the deck's feed was last told to decode, and the generation
+     * that told it. */
+    RXStream  *feed_stream, *feed_next;
+    uint64_t   feed_gen;
     uint64_t sent;              /* commands pushed for this deck */
     /* The latest position and playing state the owner asked for, valid
      * while the deck's applied serial is below the command's serial. */
@@ -387,14 +420,19 @@ typedef struct RXDeckOwner {
     bool     master_tempo;      /* the deck's button: survives loads */
 } RXDeckOwner;
 
-/* A buffer or stream the owner let go of, freed once its deck has applied
- * `serial` and the deck's feed has moved to generation `gen`. */
+/* A track the owner let go of, freed once its deck has applied `serial`
+ * and reads it no more (neither its main voice nor its de-click tail: the
+ * published ids) and, a stream, once the deck's feed has moved to
+ * generation `gen` and is not told to decode it. A next dropped when the
+ * deck may have moved on into it already keeps `follows`, the id of the
+ * track it was queued after, until the deck shows it did not (then 0): if
+ * it did, it is the deck's track again (sync_deck). */
 typedef struct RXRelease {
-    RXAudio  *audio;
-    RXStream *stream;
-    int       deck;
-    uint64_t  serial;
-    uint64_t  gen;
+    RXOwnTrack t;
+    int        deck;
+    uint64_t   serial;
+    uint64_t   gen;
+    uint64_t   follows;
 } RXRelease;
 
 /* Backend state. */
@@ -475,10 +513,12 @@ void rx_player_deck_signal(RXDeckRT *d);
 double rx_player_deck_speed(const RXDeckRT *d);
 /* The position the listener hears: the read position, or with master tempo
  * on, the position of what the shifter is putting out now; and the track
- * (track_gen) it is in, which with the shifter on is the one before the
+ * (its id) it is in, which with the shifter on is the one before the
  * deck's for its delay after a change of track. */
 RXPos    rx_player_deck_heard(const RXDeckRT *d);
-uint32_t rx_player_deck_heard_gen(const RXDeckRT *d);
+uint64_t rx_player_deck_heard_id(const RXDeckRT *d);
+/* The track the de-click tail still reads when it is not the deck's; 0. */
+uint64_t rx_player_deck_old_id(const RXDeckRT *d);
 
 /* ---------------------------------------------------------------- feed.c */
 
@@ -488,16 +528,15 @@ void rx_player_stream_free(RXStream *s);
 /* Owner thread: starts and stops a deck's feed thread. */
 int  rx_player_feed_start(RXDeckFeed *f);
 void rx_player_feed_stop(RXDeckFeed *f);
-/* Owner thread: the stream the feed fills (NULL: none), returning its
- * generation; the stream it fills the start of once that has nothing left
- * (NULL: none), the same way (setting the stream drops the next, whether
- * it is the next, which the deck has moved on to, or not); the cue points
- * it keeps decoded. */
-uint64_t rx_player_feed_set(RXDeckFeed *f, RXStream *s);
-uint64_t rx_player_feed_set_next(RXDeckFeed *f, RXStream *s);
+/* Owner thread: the stream the feed fills (NULL: none) and the one whose
+ * start it fills once that has nothing left (NULL: none), returning the
+ * generation that tells it (a new stream drops the cue points); the cue
+ * points it keeps decoded. */
+uint64_t rx_player_feed_set(RXDeckFeed *f, RXStream *s, RXStream *next);
 void rx_player_feed_points(RXDeckFeed *f, const int64_t *frames, int nb);
 /* Owner thread, manual mode: waits (up to `timeout_us`) until the feed has
- * decoded everything around the read position the stream says. */
+ * decoded everything around the read position the stream says; at once
+ * when the feed does not fill that stream. */
 bool rx_player_feed_wait(RXDeckFeed *f, const RXStream *s, int64_t timeout_us);
 /* Real-time thread: frames [i, i + n) of the stream as stereo pairs into
  * out (a mono track on both sides, silence outside [0, nb_frames)); false

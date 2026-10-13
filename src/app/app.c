@@ -694,7 +694,12 @@ static void deck_view_reset(RXApp *app, int deck)
 }
 
 /* Drops the track queued to follow the deck's: its decode in flight, or
- * what the player holds of it. */
+ * what the player holds of it. The deck may have moved on into it already
+ * (it reached its end before the drop did; with MASTER TEMPO on, up to the
+ * shifter's delay before the move is heard): the player says so as long
+ * as it may (has_next), and until then the track stays the one to follow,
+ * so that the view follows the deck into it (continue_play) and nothing
+ * else is queued meanwhile. */
 static void cancel_next(RXApp *app, int deck)
 {
     RXAppPriv *priv = app->priv;
@@ -704,8 +709,11 @@ static void cancel_next(RXApp *app, int deck)
             rx_jobs_cancel(priv->io_jobs, priv->next_request[deck]);
         priv->next_request[deck] = 0;
     }
-    if (app->player)
+    if (app->player) {
         rx_deck_clear_next(app->player, deck);
+        if (rx_deck_has_next(app->player, deck))
+            return;
+    }
     dv->next_track_id = 0;
 }
 
@@ -954,6 +962,12 @@ static bool continue_play(RXApp *app, int deck)
             changed = true;
         }
     }
+    /* The player let go of the track to follow without moving on into it
+     * (a drop it took in time, a load): nothing follows any more. */
+    if (dv->next_track_id && !priv->next_request[deck] && !st.has_next) {
+        dv->next_track_id = 0;
+        changed = true;
+    }
 
     bool was = priv->was_playing[deck];
     priv->was_playing[deck] = st.loaded && st.playing;
@@ -979,8 +993,9 @@ static bool continue_play(RXApp *app, int deck)
         priv->ended_for[deck] = 0;
 
     if (dv->next_track_id && dv->next_track_id != want_id) {
+        uint64_t had = dv->next_track_id;
         cancel_next(app, deck);
-        changed = true;
+        changed |= dv->next_track_id != had;
     }
     bool near = loaded && st.duration > 0 && st.position >= st.duration - NEXT_LEAD_SECONDS;
     if (want && !dv->next_track_id && (near || priv->ended_for[deck])) {

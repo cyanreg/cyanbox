@@ -29,6 +29,13 @@ foreach t : [ 'engine', 'controls', 'pipewire' ]
     test(t, exe, suite: 'player', workdir: meson.project_source_root(), timeout: 120)
 endforeach
 
+# The next track against the owner's changes of mind, on the null backend's
+# own thread, in real time: about a minute.
+test('next_race',
+    executable('test_player_next_race', files('../../tests/player/test_next_race.c'),
+        include_directories: rx_inc, dependencies: [ rx_player_dep ]),
+    suite: 'player', workdir: meson.project_source_root(), timeout: 300)
+
 # Decks playing packet stores, with the feed thread decoding for real: the
 # test writes its WAV (and a FLAC with the ffmpeg CLI) under this directory.
 player_test_env = environment()

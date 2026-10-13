@@ -97,14 +97,12 @@ void *aligned_alloc(size_t align, size_t size)
 
 extern char **environ;
 
-/* A 60 s stereo WAV, 16-bit: a ramp on the left, its negative on the right,
- * each frame different from its neighbours, all well below the limiter. */
-static int write_wav(const char *path)
+/* A stereo 16-bit WAV of n frames at RATE, its header written. */
+static FILE *wav_open(const char *path, int64_t n)
 {
-    int64_t n = (int64_t)RATE * SECONDS;
     FILE *f = fopen(path, "wb");
     if (!f)
-        return -1;
+        return NULL;
     uint32_t data = (uint32_t)(n * 4);
     uint8_t h[44] = "RIFF....WAVEfmt \x10\0\0\0\x01\0\x02\0....\0\0\0\0\x04\0\x10\0data....";
     uint32_t v[] = { 36 + data, RATE, RATE * 4, data };
@@ -113,10 +111,37 @@ static int write_wav(const char *path)
     memcpy(h + 28, &v[2], 4);
     memcpy(h + 40, &v[3], 4);
     fwrite(h, 1, 44, f);
+    return f;
+}
+
+/* A 60 s stereo WAV, 16-bit: a ramp on the left, its negative on the right,
+ * each frame different from its neighbours, all well below the limiter. */
+static int write_wav(const char *path)
+{
+    int64_t n = (int64_t)RATE * SECONDS;
+    FILE *f = wav_open(path, n);
+    if (!f)
+        return -1;
     for (int64_t i = 0; i < n; i++) {
         int16_t s[2];
         s[0] = (int16_t)((i * 7) % 20000 - 10000);
         s[1] = (int16_t)-s[0];
+        fwrite(s, 2, 2, f);
+    }
+    return fclose(f) ? -1 : 0;
+}
+
+/* Frames [from, from + n) of one signal: a 441 Hz cosine at half scale on
+ * the left, its sine on the right, so frame RATE (a whole number of
+ * cycles) is a crest of the left. */
+static int write_cos_wav(const char *path, int64_t from, int64_t n)
+{
+    FILE *f = wav_open(path, n);
+    if (!f)
+        return -1;
+    for (int64_t i = 0; i < n; i++) {
+        double ph = 2.0 * M_PI * 441.0 * (double)(from + i) / RATE;
+        int16_t s[2] = { (int16_t)lrint(16384.0 * cos(ph)), (int16_t)lrint(16384.0 * sin(ph)) };
         fwrite(s, 2, 2, f);
     }
     return fclose(f) ? -1 : 0;
@@ -137,12 +162,12 @@ static bool to_flac(const char *wav, const char *flac)
 
 static RXAudio ref;
 
-static RXPlayer *make_player(void)
+static RXPlayer *make_player_at(int rate)
 {
     RXPlayerOptions opt;
     rx_player_options_default(&opt);
     opt.backend = RX_AUDIO_NULL;
-    opt.rate = RATE;
+    opt.rate = rate;
     opt.period = -PERIOD;
     RXPlayer *p = NULL;
     int ret = rx_player_create(&p, &opt);
@@ -152,9 +177,14 @@ static RXPlayer *make_player(void)
     return p;
 }
 
-static RXPlayer *load(const char *path)
+static RXPlayer *make_player(void)
 {
-    RXPlayer *p = make_player();
+    return make_player_at(RATE);
+}
+
+static RXPlayer *load_at(const char *path, int rate)
+{
+    RXPlayer *p = make_player_at(rate);
     RXPackets *pk = NULL;
     int ret = rx_packets_open(path, &pk);
     CHECK(ret >= 0, "open %s: %d", path, ret);
@@ -163,6 +193,11 @@ static RXPlayer *load(const char *path)
     ret = rx_deck_load_packets(p, 0, pk, NULL);
     CHECK(ret == 0, "load: %d", ret);
     return p;
+}
+
+static RXPlayer *load(const char *path)
+{
+    return load_at(path, RATE);
 }
 
 static RXDeckState st(RXPlayer *p)
@@ -179,7 +214,7 @@ static void settle(RXPlayer *p)
 {
     rx_player_mix(p, NULL, 0);
     st(p);
-    CHECK(rx_player_feed_wait(&p->feed[0], p->rt[0].stream, 10000000), "the feed is stuck");
+    CHECK(rx_player_feed_wait(&p->feed[0], p->rt[0].src.stream, 10000000), "the feed is stuck");
 }
 
 /* Renders n frames in callbacks, settling before each when asked. */
@@ -235,7 +270,7 @@ static void test_play_through(const char *path)
 
     /* What the window holds: no more than its span, however long the
      * track. */
-    const RXStream *sm = p->rt[0].stream;
+    const RXStream *sm = p->rt[0].src.stream;
     int held = 0;
     for (int i = 0; i < sm->nb_slots; i++)
         held += atomic_load(&sm->slots[i].first) >= 0;
@@ -428,7 +463,7 @@ static void test_no_allocation(const char *path)
 static void settle_next(RXPlayer *p)
 {
     static float probe[2 * 2 * RX_CHUNK];
-    RXStream *s = p->own[0].next_stream;
+    RXStream *s = p->own[0].next.stream;
     int64_t t0 = rx_time_us();
     while (!rx_player_stream_read(s, rx_packets_length(s->pk, NULL), 0, 2 * RX_CHUNK, probe)) {
         if (rx_time_us() - t0 > 10000000) {
@@ -517,10 +552,14 @@ static void test_next(const char *path)
     CHECK(fabs(s.position * RATE - (double)n) < 0.5, "position %f s", s.position);
     CHECK(mismatches(out + 2 * PERIOD, n - PERIOD, PERIOD) == 0, "played from its first frame");
 
-    /* Dropped: the deck stops at its end. */
+    /* Dropped: still pending until the deck has applied the drop (it might
+     * have moved on into it before), then gone; the deck stops at its
+     * end. */
     CHECK(rx_packets_open(path, &pk) >= 0, "open a fourth");
     CHECK(rx_deck_queue_next_packets(p, 0, pk, NULL) == 0, "queue a fourth");
     rx_deck_clear_next(p, 0);
+    CHECK(st(p).has_next, "dropped, not applied yet");
+    render(p, NULL, PERIOD, true);
     CHECK(!st(p).has_next, "dropped");
     rx_deck_play_from(p, 0, SECONDS - 0.1);
     render(p, NULL, RATE / 4, true);
@@ -529,6 +568,92 @@ static void test_next(const char *path)
           "stops at the end with nothing queued: %d at %f, advanced %u", s.playing, s.position,
           s.advanced);
     free(out);
+    rx_player_destroy(p);
+}
+
+/* A track and its next cut from one signal on a crest, on a device at
+ * another rate (48 kHz) and at tempos off 1.0 (1.06, 0.94): the
+ * interpolator reads the next's first frames past the end of the track,
+ * and the old one's last before the next's start, so the two play frame
+ * for frame as the signal does as one stream. Reading silence there
+ * instead put a frame pulled toward zero at every gapless change of a
+ * deck that resamples: a click. */
+static void test_next_junction(const char *whole, const char *first, const char *second)
+{
+    const int rates[] = { RATE, 48000 };
+    const double tempos[] = { 1.0, 1.06, 0.94 };
+    for (int ri = 0; ri < 2; ri++) {
+        int rate = rates[ri];
+        int n = rate / 4 / PERIOD * PERIOD;
+        float *one = calloc((size_t)2 * n, sizeof(float));
+        float *out = calloc((size_t)2 * n, sizeof(float));
+        if (!one || !out)
+            abort();
+        for (int ti = 0; ti < 3; ti++) {
+            double tempo = tempos[ti];
+            RXPlayer *p = load_at(whole, rate);
+            rx_deck_set_tempo(p, 0, tempo);
+            rx_deck_play_from(p, 0, 0.9);
+            render(p, one, n, true);
+            rx_player_destroy(p);
+
+            p = load_at(first, rate);
+            RXPackets *pk = NULL;
+            CHECK(rx_packets_open(second, &pk) >= 0, "open %s", second);
+            CHECK(rx_deck_queue_next_packets(p, 0, pk, NULL) == 0, "queue %s", second);
+            rx_deck_set_tempo(p, 0, tempo);
+            rx_deck_play_from(p, 0, 0.9);
+            settle(p);
+            settle_next(p);
+            render(p, out, n, true);
+            RXDeckState s = st(p);
+            CHECK(s.advanced == 1 && fabs(s.duration - 1.0) < 1e-9,
+                  "%d Hz, tempo %.2f: moved on %u, %f s", rate, tempo, s.advanced, s.duration);
+
+            double worst = 0.0;
+            for (int k = 0; k < 2 * n; k++)
+                worst = fmax(worst, fabs((double)out[k] - one[k]));
+            /* The output frame whose read position crossed the cut. */
+            int at = (int)ceil(0.1 * RATE / (tempo * RATE / rate));
+            CHECK(worst < 1e-6, "%d Hz, tempo %.2f: %g from the signal played whole", rate, tempo,
+                  worst);
+            printf("stream next junction at %d Hz, tempo %.2f: %.4f (whole %.4f), largest "
+                   "difference %g\n", rate, tempo, out[2 * at], one[2 * at], worst);
+            rx_player_destroy(p);
+        }
+        free(one);
+        free(out);
+    }
+}
+
+/* With MASTER TEMPO on, the deck reads the shifter's delay ahead of what
+ * is heard, so it reads the next while the old track is still heard. The
+ * owner hands the feed the stream the deck reads as soon as the deck
+ * reads it, and manual mode waits for the feed of the stream the deck
+ * reads: no advance waits on a feed still filling the old one (each one in
+ * that delay waited out the 10 s timeout). The move is heard once, and the
+ * next plays on from its start. */
+static void test_next_master_tempo(const char *path)
+{
+    RXPlayer *p = load(path);
+    CHECK(rx_deck_set_master_tempo(p, 0, true), "master tempo");
+    RXPackets *pk = NULL;
+    CHECK(rx_packets_open(path, &pk) >= 0, "open the next");
+    CHECK(rx_deck_queue_next_packets(p, 0, pk, NULL) == 0, "queue the next");
+    rx_deck_play_from(p, 0, SECONDS - 0.5);
+    unsigned adv0 = st(p).advanced;
+    int slow = 0, steps = RATE / PERIOD;
+    for (int i = 0; i < steps; i++) {
+        int64_t t0 = rx_time_us();
+        rx_player_null_advance(p, PERIOD);
+        slow += rx_time_us() - t0 > 1000000;
+    }
+    RXDeckState s = st(p);
+    CHECK(!slow, "%s: %d advances waited a second or more", path, slow);
+    double want = (double)steps * PERIOD / RATE - 0.5;
+    CHECK(s.advanced == adv0 + 1 && s.playing && !s.has_next && fabs(s.position - want) < 0.01,
+          "%s: moved on %u times, playing %d at %f s (want %f)", path, s.advanced - adv0,
+          s.playing, s.position, want);
     rx_player_destroy(p);
 }
 
@@ -576,10 +701,24 @@ int main(void)
         test_hot_cue(paths[i]);
         test_no_allocation(paths[i]);
         test_next(paths[i]);
+        test_next_master_tempo(paths[i]);
         test_reload(paths[i]);
     }
 
+    /* One signal, whole and cut in two on a crest. */
+    char *whole = rx_path_join(dir, "cos.wav");
+    char *first = rx_path_join(dir, "cos_a.wav");
+    char *second = rx_path_join(dir, "cos_n.wav");
+    if (whole && first && second && write_cos_wav(whole, 0, 2 * RATE) >= 0 &&
+        write_cos_wav(first, 0, RATE) >= 0 && write_cos_wav(second, RATE, RATE) >= 0)
+        test_next_junction(whole, first, second);
+    else
+        CHECK(false, "cannot write the cosine in %s", dir);
+
     rx_audio_free(&ref);
+    free(whole);
+    free(first);
+    free(second);
     free(wav);
     free(flac);
     free(dir);
