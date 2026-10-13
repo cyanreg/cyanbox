@@ -184,6 +184,11 @@ int  rx_settings_from_config(const RXConfig *cfg, RXSettingsFile files[4], int *
 typedef void (*rx_settings_list_cb)(void *opaque, const char *file, const char *name,
                                     const char *const *values, int nb_values, const char *deflt);
 void rx_settings_list(rx_settings_list_cb cb, void *opaque);
+/* The value rx_settings_list lists that `value` of the setting `name` in
+ * `file` stands for, as the encoder reads it ("on" and "1" are "true",
+ * "Touch & Release" is "touch_release", "+6" is "6"); NULL when it is none
+ * of them or the setting is unknown. The string is static. */
+const char *rx_settings_value(const char *file, const char *name, const char *value);
 void rx_kv_free(RXKv *kv, int nb);
 
 #endif /* RXBOX_FORMATS_H */

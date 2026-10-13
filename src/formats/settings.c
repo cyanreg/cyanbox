@@ -439,6 +439,39 @@ fail:
     return ret;
 }
 
+const char *rx_settings_value(const char *file, const char *name, const char *value)
+{
+    if (!file || !name || !value)
+        return NULL;
+    const File *f = find_file(file);
+    if (!f) {
+        /* The background colour, listed under the databases' names. */
+        if (strcmp(name, background_key))
+            return NULL;
+        char v[64], o[64];
+        normalise(value, v, sizeof(v));
+        for (size_t i = 0; i < RX_ARRAY_ELEMS(background_values); i++) {
+            normalise(background_values[i], o, sizeof(o));
+            if (!strcmp(o, v))
+                return background_values[i];
+        }
+        return NULL;
+    }
+    const Field *fl = find_field(f, name);
+    uint8_t byte;
+    if (!fl || lookup(fl, value, &byte) < 0)
+        return NULL;
+    /* The first name for the byte, as byte_name() and the list give it. */
+    for (int i = 0; fl->opts[i].name; i++) {
+        if (fl->opts[i].byte != byte)
+            continue;
+        if (fl->onoff && i < 2)
+            return i ? "true" : "false";
+        return fl->opts[i].name;
+    }
+    return NULL;
+}
+
 void rx_settings_list(rx_settings_list_cb cb, void *opaque)
 {
     for (size_t i = 0; i < RX_ARRAY_ELEMS(files); i++) {
