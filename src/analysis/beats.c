@@ -343,7 +343,7 @@ static double section_scatter(const RXBeatObs *beats, const RXFitSection *s)
  * (30, then 10 to 30 by the scatter, 5, 3 ms) so that the line cannot walk
  * from the kick onto a hat or a clap a little later, which a re-centred
  * search of constant width would let it do one step at a time. Returns
- * the band used. */
+ * the band used, or a negative error (an allocation failed). */
 static int refine_section(Ctx *c, RXFitSection *s, double *contrast)
 {
     double off = 0.0;
@@ -356,7 +356,10 @@ static int refine_section(Ctx *c, RXFitSection *s, double *contrast)
     for (int it = 0; it < 2; it++) {
         rx_measure_attacks(&c->envs, c->beats, s->first, s->last, band, s, tol);
         RXFitSection t = { 0 }, init = *s;
-        if (rx_fit_line(c->beats, s->first, s->last, &init, &t) == 0 && t.supported >= 8)
+        int ret = rx_fit_line(c->beats, s->first, s->last, &init, &t);
+        if (ret == RX_ERROR(ENOMEM))
+            return ret;
+        if (ret == 0 && t.supported >= 8)
             *s = t;
     }
     /* The fold measures a steady section best (it averages before it
@@ -898,14 +901,15 @@ static void strain_free(Strain *st, int nb)
  * would; but where a fill's accents or a conga's slaps land near the
  * beats among a sequencer's hits, the median reads the mixture and the
  * lower quartile the sequencer. The line's own small error of tempo
- * does not enter a second difference. -1 with fewer than
+ * does not enter a second difference. *out is -1 with fewer than
  * DYN_SEQ_TRIPLES such triples. */
-static double online_scatter(const RXBeatObs *tr, const RXFitSection *s)
+static int online_scatter(const RXBeatObs *tr, const RXFitSection *s, double *out)
 {
     int n = s->last - s->first + 1, m = 0;
     double *r = malloc((size_t)RX_MAX(n, 1) * sizeof(*r));
+    *out = -1.0;
     if (!r)
-        return -1.0;
+        return RX_ERROR(ENOMEM);
     const double half = 0.5 * s->period;
     for (int i = s->first + 1; i < s->last; i++) {
         if (tr[i].index - tr[i - 1].index != 1 || tr[i + 1].index - tr[i].index != 1)
@@ -925,13 +929,12 @@ static double online_scatter(const RXBeatObs *tr, const RXFitSection *s)
         if (on)
             r[m++] = fabs(tr[i + 1].attack - 2.0 * tr[i].attack + tr[i - 1].attack);
     }
-    double sc = -1.0;
     if (m >= DYN_SEQ_TRIPLES) {
         qsort(r, (size_t)m, sizeof(*r), cmp_dbl);
-        sc = r[m / 4] / (0.3186 * sqrt(6.0));
+        *out = r[m / 4] / (0.3186 * sqrt(6.0));
     }
     free(r);
-    return sc;
+    return 0;
 }
 
 /* The strain of section si: the attacks measured again around its
@@ -981,7 +984,8 @@ static int strain_read(Ctx *c, int si, Strain *st)
         return ret;
     st->bent = st->bend > fmax(DYN_BEND, DYN_BEND_NOISE * st->bend_noise) &&
                st->drift > DYN_BEND_DRIFT;
-    st->on_line = online_scatter(st->tr, &ts);
+    if ((ret = online_scatter(st->tr, &ts, &st->on_line)) < 0)
+        return ret;
     /* Live by its spread around the line, unless the attacks on the
      * line say a sequencer (a run off the line is then another element
      * being timed: Felicidade's fill, its breaks on the off-beat). */
@@ -1735,7 +1739,9 @@ static int decide_phase(Ctx *c, int i, SecInfo *si, const float *arbiter, const 
         if (ret < 0)
             return ret;
         double contrast;
-        *band = refine_section(c, s, &contrast);
+        if ((ret = refine_section(c, s, &contrast)) < 0)
+            return ret;
+        *band = ret;
         si->shifted = true;
         si->phase_evidence = -ev;
         si->kick_ratio = 1.0 / si->kick_ratio;
@@ -2271,7 +2277,10 @@ static int fit_grid(Ctx *c, double bpm, double lo, double hi)
         goto end;
     }
     for (int i = 0; i < c->nb_secs; i++) {
-        c->bands[i] = refine_section(c, &c->secs[i], &contrast);
+        if ((ret = refine_section(c, &c->secs[i], &contrast)) < 0)
+            goto end;
+        c->bands[i] = ret;
+        ret = 0;
         rx_debug("beats: section %d: beats %d-%d, %.4f BPM, t0 %.4f, band %d, contrast %.2f, "
                  "jitter %.1f ms\n", i, c->secs[i].first, c->secs[i].last,
                  60.0 / c->secs[i].period, c->secs[i].t0, c->bands[i], contrast,
