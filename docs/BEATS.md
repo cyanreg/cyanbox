@@ -829,6 +829,20 @@ longer do (`rxbox/model.h`, `src/core/grid.c`). **The automatic cue** is the
 first downbeat at or after the start (it was the first after dj's first
 loud onset).
 
+**Never before time 0.** Where the music starts at once there is no slack:
+the first beat is the line's first at or after 0, so a track whose first
+hit is its very first sample, on a line a few ms early, begins its grid on
+the second hit (a kick loop at 128 whose line sits 2.3 ms early: its
+first beat at 0.4665 s). On the acceptance list AD:Drum'n Bass 5's "Keeps
+Me High" and AD:HOUSE 7's "A Small Happiness", which start at once, have
+their line's beat 21 and 16 ms before 0. A beat before 0 is no beat on
+the players' timeline: `rx_grid_beats` lists none (`src/core/grid.c`), so
+the stick's PQTZ (its times unsigned milliseconds, docs/anlz.md 4.3), the
+automatic cue and the waveform would never see it, and rekordbox's own
+grids begin at the first position at or after zero (rbxport's
+`first_beat_secs`). Putting it at 0 instead would move the whole first
+section, every beat of it, by those few ms.
+
 **Witnesses.** Section 8 had the start as one vote of one scale inside the
 structure, at dj's first loud onset, and so only as a half-beat position.
 On AD:Garage "Feel Alive" (134 BPM, digital silence until the hit at
@@ -953,7 +967,7 @@ the final version was not finished (see "Known weaknesses").
 | Hit | 25 dB over the threshold two frames on; time at 3 % of its peak | a jump within a frame or two |
 | Fade, swell | a rise to 15 dB under the loud level in a second or more, or less; out of digital silence from the first sound | a swell leads into a bar line |
 | Start witness | within 0.1 beat (40 ms) of a beat or half beat; a hit whose kick band is at least twice the kick beats', where the kicks leave the half of the beat open (log under 1.0): log 2.5 and 2 scales for beat 1; a fade's first beat: half a scale for beat 1 | measured on the library, section 11 |
-| Grid start | first beat at or after the start, less 50 ms | a line a few ms early on the hit |
+| Grid start | first beat at or after the start, less 50 ms, never before 0 | a line a few ms early on the hit; no beat before the file |
 
 ## Evaluation
 

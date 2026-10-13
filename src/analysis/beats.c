@@ -2726,7 +2726,11 @@ static int analyse(const float *mono, int64_t nb_samples, int rate, RXSpectrum *
         g->measured = false;
         if (i == 0) {
             /* From its first beat at or after 0 (the music's start moves it
-             * on below), numbered from the downbeat. */
+             * on below), numbered from the downbeat. Not before 0, not even
+             * by a few ms where the music starts at once: the players'
+             * timeline has no beat there (rx_grid_beats lists none, and the
+             * stick's beat times are unsigned ms), and the whole line would
+             * have to move to put it at 0. */
             double d = isnan(own) ? s->t0 : own;
             long k = (long)floor(d / P);
             g->start = d - k * P;
