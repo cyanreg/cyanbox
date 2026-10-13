@@ -4,3 +4,4 @@ build-*/
 *.pyc
 __pycache__/
 .cache/
+subprojects/.wraplock

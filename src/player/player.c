@@ -26,7 +26,13 @@
  * published with release order after it, so once the owner reads a serial
  * at least that high with acquire order, freeing is safe. No second ring
  * is needed and nothing can overflow. The pending list is drained by every
- * owner-side call, rx_deck_state() included. */
+ * owner-side call, rx_deck_state() included.
+ *
+ * MASTER TEMPO: each deck's pitch shifter is made here on the owner thread
+ * and handed to the real-time side with the rest of RXDeckRT; after that
+ * only the real-time thread touches it (deck.c). The position published is
+ * the one the listener hears (rx_player_deck_heard): with the shifter on,
+ * that of the frame fed the shifter's delay ago, not the read position. */
 
 #include "rxbox/player.h"
 
@@ -79,12 +85,13 @@ static int64_t now_us(void)
  * the final release store orders them before the even value. */
 static void publish(RXDeckPub *pub, const RXDeckRT *d, int64_t time_us, int64_t span_us)
 {
+    RXPos pos = rx_player_deck_heard(d);
     unsigned seq = atomic_load_explicit(&pub->seq, memory_order_relaxed);
     atomic_store_explicit(&pub->seq, seq + 1, memory_order_relaxed);
     atomic_thread_fence(memory_order_release);
 
-    atomic_store_explicit(&pub->frame_i, d->pos.i, memory_order_relaxed);
-    atomic_store_explicit(&pub->frame_f, dbits(d->pos.f), memory_order_relaxed);
+    atomic_store_explicit(&pub->frame_i, pos.i, memory_order_relaxed);
+    atomic_store_explicit(&pub->frame_f, dbits(pos.f), memory_order_relaxed);
     atomic_store_explicit(&pub->speed, dbits(d->playing ? rx_player_deck_speed(d) : 0.0),
                           memory_order_relaxed);
     atomic_store_explicit(&pub->time_us, time_us, memory_order_relaxed);
@@ -358,6 +365,22 @@ int rx_player_create(RXPlayer **out, const RXPlayerOptions *opt)
         atomic_init(&p->pub[i].seq, 0);
     }
 
+    /* Without a shifter the player still plays, as a CDJ with MASTER TEMPO
+     * off; rx_deck_set_master_tempo then says no. */
+    p->master_tempo_ok = true;
+    for (int i = 0; i < RX_DECKS && p->master_tempo_ok; i++) {
+        int err = rx_player_deck_mt_alloc(&p->rt[i], p->opt.rate);
+        if (err < 0) {
+            rx_warn("player: no MASTER TEMPO, the pitch shifter could not be set up: %s",
+                    strerror(-err));
+            p->master_tempo_ok = false;
+        }
+    }
+    if (!p->master_tempo_ok) {
+        for (int i = 0; i < RX_DECKS; i++)
+            rx_player_deck_mt_free(&p->rt[i]);
+    }
+
     if (opt->backend == RX_AUDIO_NULL)
         ret = rx_player_null_open(p);
     else
@@ -392,6 +415,7 @@ void rx_player_destroy(RXPlayer *p)
         if (p->own[i].audio)
             release_audio(p, p->own[i].audio);
         free(p->own[i].grid.sections);
+        rx_player_deck_mt_free(&p->rt[i]);
     }
     free(p->sink);
     free(p->app_name);
@@ -629,7 +653,17 @@ void rx_deck_set_tempo(RXPlayer *p, int deck, double ratio)
 
 bool rx_deck_set_master_tempo(RXPlayer *p, int deck, bool on)
 {
-    return false;
+    if (!p || deck < 0 || deck >= RX_DECKS || (on && !p->master_tempo_ok))
+        return false;
+    RXCmd cmd = {
+        .type = RX_CMD_MASTER_TEMPO,
+        .deck = deck,
+        .flag = on,
+    };
+    if (push(p, cmd) < 0)
+        return false;
+    p->own[deck].master_tempo = on;
+    return true;
 }
 
 void rx_deck_set_loop(RXPlayer *p, int deck, double in, double out, bool enabled)
@@ -746,10 +780,11 @@ void rx_deck_state(const RXPlayer *cp, int deck, RXDeckState *out)
     RXDeckSnap s;
     snapshot(pub, &s);
 
-    out->tempo   = o->tempo;
-    out->serial  = s.serial;
-    out->level_l = bitsf(atomic_load_explicit(&pub->level_l, memory_order_relaxed));
-    out->level_r = bitsf(atomic_load_explicit(&pub->level_r, memory_order_relaxed));
+    out->tempo        = o->tempo;
+    out->master_tempo = o->master_tempo;
+    out->serial       = s.serial;
+    out->level_l      = bitsf(atomic_load_explicit(&pub->level_l, memory_order_relaxed));
+    out->level_r      = bitsf(atomic_load_explicit(&pub->level_r, memory_order_relaxed));
     if (!o->audio)
         return;
 

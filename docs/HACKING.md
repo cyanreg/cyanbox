@@ -7,8 +7,9 @@ through theirs.
 
 ## Language and style
 
-- C23 (`-std=c23`), GCC. The only C++ is `src/ui/` (Dear ImGui) and the
-  vendored code in `third_party/`. C++ files include C headers directly; every
+- C23 (`-std=c23`), GCC. The only C++ is `src/ui/` (Dear ImGui),
+  `src/player/stretch.cpp` (a C interface to Signalsmith Stretch's templates)
+  and the vendored code. C++ files include C headers directly; every
   C header is already `extern "C"`-safe through plain C declarations, so wrap
   the includes in `extern "C" { }` on the C++ side.
 - Every file starts with `/* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */`
@@ -107,7 +108,7 @@ src/formats       pdb.c anlz.c onelibrary.c sqlcipher.c sha512.h settings.c colo
                   colors.c util.c buf.h formats_priv.h nfc_tables.h
 src/export        plan.c export.c inspect.c stick.c export_priv.h     -> rx_export_dep
 src/player        player.c pipewire.c nullout.c deck.c controls.c     -> rx_player_dep (core)
-                  player_internal.h
+                  stretch.cpp stretch.h player_internal.h
 src/app           jobs.c app.c                                        -> rx_app_dep (everything above)
                   headless.c (src/gpu and src/ui stand-ins for rxbox-cli and test_app)
 src/gpu           window.c vk.c swapchain.c textures.c wave.c         (executable only)
@@ -118,12 +119,32 @@ src/cli.c         the subcommands; src/main.c
 tests/<module>/   meson tests, registered from src/<module>/meson.build with suite: '<module>'
 tools/            developer tools (analysis evaluation, dumpers)
 third_party/      imgui, vma (vendored, never edited); tomlc17 is kept for m3u/toml imports only
+subprojects/      signalsmith-stretch, signalsmith-linear (git submodules, never edited)
 docs/             OVERVIEW.md, this file, the format references from dj
 ```
 
 Each `src/<module>/meson.build` builds its own static library, declares
 `rx_<module>_dep`, and registers its tests with `test(..., suite: '<module>')`.
 Only edit your own module's `meson.build`.
+
+## Building
+
+MASTER TEMPO's pitch shifter, Signalsmith Stretch, and the FFT library it
+uses, signalsmith-linear, are git submodules in `subprojects/` (both MIT,
+header-only, compiled into the player statically). After cloning, and
+whenever a pull moves them:
+
+```sh
+git submodule update --init --recursive
+```
+
+The top-level `meson.build` reads them with meson's CMake module, so
+`cmake` is needed at configure time. Stretch's CMakeLists.txt would fetch
+signalsmith-linear over the network; `subprojects/cmake/` gives it a
+stand-in to find instead, and the headers come from the submodule, so a
+configure never downloads anything. To move either library, check out the
+new commit in its submodule (signalsmith-linear at the tag Stretch's
+CMakeLists.txt names) and commit the submodule.
 
 ## Working alongside other agents
 

@@ -60,6 +60,35 @@ pipewire_dep = dependency('libpipewire-0.3')
 wayland_client = dependency('wayland-client')
 glslang_prog = find_program('glslangValidator', 'glslang', required: true)
 
+# Signalsmith Stretch (MIT), the master tempo pitch shifter: header-only C++,
+# a git submodule in subprojects/ read through its own CMakeLists.txt. That
+# file would fetch signalsmith-linear (MIT, its FFT and STFT) over the network
+# with FetchContent; signalsmith-linear is a submodule too, pinned at the tag
+# Stretch asks for (0.6.4), and is its own CMake subproject here, because
+# meson drops include directories one subproject hands out from another's
+# tree. FetchContent is told to try find_package() first and finds the empty
+# stand-in in subprojects/cmake/, so it never downloads anything. Both are
+# INTERFACE targets: no library is built, the headers compile into the
+# player, statically.
+cmake = import('cmake')
+linear_opts = cmake.subproject_options()
+linear_opts.add_cmake_defines({ 'BUILD_SHARED_LIBS': false })
+linear_opts.set_override_option('default_library', 'static')
+linear_proj = cmake.subproject('signalsmith-linear', options: linear_opts)
+stretch_opts = cmake.subproject_options()
+stretch_opts.add_cmake_defines({
+    'FETCHCONTENT_TRY_FIND_PACKAGE_MODE': 'ALWAYS',
+    'FETCHCONTENT_FULLY_DISCONNECTED': true,
+    'signalsmith-linear_DIR': meson.project_source_root() / 'subprojects' / 'cmake',
+    'BUILD_SHARED_LIBS': false,
+})
+stretch_opts.set_override_option('default_library', 'static')
+stretch_proj = cmake.subproject('signalsmith-stretch', options: stretch_opts)
+stretch_dep = [
+    stretch_proj.dependency('signalsmith-stretch', include_type: 'system'),
+    linear_proj.dependency('signalsmith-linear', include_type: 'system'),
+]
+
 # Configure file
 #============================================================================
 conf = configuration_data()

@@ -13,9 +13,10 @@ through PipeWire. It is a preparation tool, not a mixer.
 
 ## Building
 
-You need meson (1.4 or later), ninja, GCC with C23 support (the build checks
-for `stdckdint.h`) and a C++17 compiler, `glslangValidator` (glslang) and
-`python3` for the shaders, and these libraries, by pkg-config name:
+You need meson (1.4 or later), ninja, `cmake` (meson reads one subproject
+through it), GCC with C23 support (the build checks for `stdckdint.h`) and a
+C++17 compiler, `glslangValidator` (glslang) and `python3` for the shaders,
+and these libraries, by pkg-config name:
 
 - `libavformat`, `libavcodec`, `libavutil`, `libswresample`, `libswscale` (FFmpeg)
 - `sqlite3`
@@ -23,10 +24,13 @@ for `stdckdint.h`) and a C++17 compiler, `glslangValidator` (glslang) and
 - `vulkan`, `sdl3`, `wayland-client`, `fontconfig` (the interface)
 
 Dear ImGui, the Vulkan Memory Allocator and tomlc17 are vendored in
-`third_party/`. The `ffmpeg` command is used only by the tests, to make test
-audio.
+`third_party/`. Signalsmith Stretch (the MASTER TEMPO pitch shifter) and
+signalsmith-linear are git submodules in `subprojects/`, both MIT and
+header-only, built in statically. The `ffmpeg` command is used only by the
+tests, to make test audio.
 
 ```sh
+git submodule update --init --recursive
 meson setup build
 ninja -C build
 meson test -C build

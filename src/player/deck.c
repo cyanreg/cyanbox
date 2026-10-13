@@ -35,7 +35,46 @@
  * Scrubbing plays grains: 60 ms Hann-windowed snippets at the pointer,
  * one every 30 ms while the pointer moves, quieter and low-passed. A
  * still pointer starts no new grains and falls silent, like a stopped
- * platter. */
+ * platter.
+ *
+ * MASTER TEMPO keeps the varispeed path and puts the pitch back after it:
+ * the deck's own sound (main voice and de-click tail) goes through a
+ * Signalsmith Stretch shifter (stretch.h) at a factor of 1 / (tempo +
+ * bend); the grains, which already play at the track's pitch, and the
+ * volume come after it. The shifter runs whenever the button is on, at
+ * tempo 1.0 too, so moving the slider never changes the timing; a stopped
+ * deck feeds it silence, which Stretch passes through cheaply.
+ *
+ * The shifter's output is `latency` frames behind its input (120 ms at 48
+ * kHz). Played straight, every jump, start and stop would be heard that
+ * late, so the deck reads ahead instead: while it plays with the shifter,
+ * the read position is `latency` frames ahead of what is heard, and every
+ * command that moves the playhead or a loop, or switches the button,
+ * restarts the shifter from the playhead the listener hears. The restart
+ * renders the next `latency` frames from there, wrapping loops as playback
+ * would, and hands them to Stretch's outputSeek, after which the next
+ * output frame is the new position at full level. (Its plain seek(), with
+ * the context ending at the target or a latency beyond it, keeps the old
+ * sound for 40 ms and crossfades over the next 50: measured with sines.)
+ * The old sound is not cut: the frames it would have played next are
+ * captured first (the shifter's coming output if it was on, the dry
+ * voices if it was off) and crossfaded out over the same 3 ms as any other
+ * jump. Switching the button off steps the read position back to what is
+ * heard and crossfades from the shifter to the dry path the same way;
+ * stepping back rather than accepting a jump of 120 ms is what keeps the
+ * music in time across the switch. A loop wrap is never a restart: it
+ * stays sample-exact in the input and the shifter only delays it. Tempo,
+ * bend and volume are not restarts either: the slider moves continuously,
+ * a new tempo is heard after the delay, the volume at once.
+ *
+ * What is heard is known exactly: the read position of every frame fed is
+ * kept in a ring, and the position the deck reports is the one fed
+ * `latency` frames ago, across loop wraps and tempo changes. A restart
+ * writes the frames it rendered ahead into the ring, so the report is the
+ * target of a jump at once and never before it; a stopped deck that is
+ * moved (a scrub) reports where it is. The factor for each block is the
+ * inverse of the speed the analysed material was rendered at (the frame
+ * `in_latency` back), so a tempo change is corrected when it is heard. */
 
 #include "player_internal.h"
 
@@ -175,12 +214,152 @@ static void seek(RXDeckRT *d, double frames, int rate)
         d->playing = false;
 }
 
+static bool can_play(const RXDeckRT *d)
+{
+    return !d->playing && d->samples && d->pos.i < d->nb_frames;
+}
+
 static void play(RXDeckRT *d, int rate)
 {
-    if (d->playing || !d->samples || d->pos.i >= d->nb_frames)
+    if (!can_play(d))
         return;
     d->playing = true;
     start_fade_in(d, rate);
+}
+
+/* ---------------------------------------------------------- master tempo */
+
+int rx_player_deck_mt_alloc(RXDeckRT *d, int rate)
+{
+    RXDeckMT *m = &d->mt;
+    int ret = rx_stretch_create(&m->st, 2, rate);
+    if (ret < 0)
+        return ret;
+    m->latency    = rx_stretch_latency(m->st);
+    m->in_latency = rx_stretch_input_latency(m->st);
+
+    /* The ring is read `latency` behind the newest frame, which a callback
+     * moves on by up to a chunk before the next read. */
+    int64_t ring = 1;
+    while (ring < (int64_t)m->latency + RX_MT_CHUNK + 1)
+        ring *= 2;
+    m->hist_mask = ring - 1;
+
+    bool ok = m->latency > 0;
+    for (int c = 0; c < 2; c++) {
+        m->in[c]    = calloc(RX_MT_CHUNK, sizeof(float));
+        m->out[c]   = calloc(RX_MT_CHUNK, sizeof(float));
+        m->xf[c]    = calloc(RX_MT_CHUNK, sizeof(float));
+        m->ahead[c] = calloc(RX_MAX(m->latency, 1), sizeof(float));
+        ok &= m->in[c] && m->out[c] && m->xf[c] && m->ahead[c];
+    }
+    m->hist       = calloc(ring, sizeof(*m->hist));
+    m->hist_speed = calloc(ring, sizeof(*m->hist_speed));
+    m->was        = calloc(1, sizeof(*m->was));
+    if (!ok || !m->hist || !m->hist_speed || !m->was) {
+        rx_player_deck_mt_free(d);
+        return RX_ERROR(ENOMEM);
+    }
+    return 0;
+}
+
+void rx_player_deck_mt_free(RXDeckRT *d)
+{
+    RXDeckMT *m = &d->mt;
+    if (m->st)
+        rx_stretch_destroy(m->st);
+    for (int c = 0; c < 2; c++) {
+        free(m->in[c]);
+        free(m->out[c]);
+        free(m->xf[c]);
+        free(m->ahead[c]);
+    }
+    free(m->hist);
+    free(m->hist_speed);
+    free(m->was);
+    *m = (RXDeckMT) { 0 };
+}
+
+RXPos rx_player_deck_heard(const RXDeckRT *d)
+{
+    /* With a restart due (a callback of no frames applies commands but
+     * renders nothing), mt_begin has put the deck at the heard position
+     * already and the ring is not filled yet. */
+    const RXDeckMT *m = &d->mt;
+    if (!m->on || m->restart)
+        return d->pos;
+    int64_t i = m->fed - m->latency;
+    if (i < m->fill_until)
+        return m->fill_pos;
+    return m->hist[i & m->hist_mask];
+}
+
+/* The tempo + bend a frame plays at; 0 for a stopped deck. */
+static float speed_ratio(const RXDeckRT *d)
+{
+    double s = d->tempo + d->bend;
+    return d->playing && s > 0.0 ? (float)s : 0.0f;
+}
+
+/* The shifter's factor for material played at `speed`: its inverse. A
+ * stopped deck is left alone, and the correction stops at two octaves
+ * either way (a tempo of 0.25 or 4, the slider's own limit). */
+static float pitch_factor(float speed)
+{
+    if (!(speed > 0.0f))
+        return 1.0f;
+    return 1.0f / RX_CLAMP(speed, 0.25f, 4.0f);
+}
+
+/* A command is about to move the playhead or a loop, or to switch the
+ * shifter in or out. From here to the end of the callback the deck's
+ * position is the one the listener hears (the read position is ahead of it
+ * while the shifter plays), and the next render restarts the shifter from
+ * it. The first such command of a callback records how the deck sounded:
+ * whether the shifter was in, and the dry voices if it was not. */
+static void mt_begin(RXDeckRT *d)
+{
+    RXDeckMT *m = &d->mt;
+    if (!m->st || m->restart)
+        return;
+    m->restart = true;
+    m->was_on = m->on;
+    if (m->on)
+        d->pos = rx_player_deck_heard(d);
+    else
+        *m->was = *d;
+}
+
+/* The commands that matter to the shifter only while it is in. */
+static void mt_touch(RXDeckRT *d)
+{
+    if (d->mt.on)
+        mt_begin(d);
+}
+
+/* A stopped deck moved without a restart (a scrub): it is heard there. */
+static void mt_moved(RXDeckRT *d)
+{
+    RXDeckMT *m = &d->mt;
+    if (!m->on || m->restart)
+        return;
+    m->fill_until = m->fed;
+    m->fill_pos   = d->pos;
+}
+
+/* A track change is a hard cut, with the shifter as without it: nothing of
+ * the old track sounds on, and its buffer is not read again. */
+static void mt_cut(RXDeckRT *d)
+{
+    RXDeckMT *m = &d->mt;
+    if (!m->st)
+        return;
+    m->restart = false;
+    m->xf_left = 0;
+    if (m->on)
+        rx_stretch_reset(m->st);
+    m->fill_until = m->fed;
+    m->fill_pos   = (RXPos) { 0 };
 }
 
 /* -------------------------------------------------------------- commands */
@@ -194,8 +373,9 @@ void rx_player_deck_apply(RXDeckRT *d, const RXCmd *cmd, int rate)
          * acknowledged; d->samples is the only pointer to it. The tail and
          * the grains are positions in the old track and must not go on in
          * the new one. A track change on a playing deck is a hard cut, as
-         * on a CDJ. */
+         * on a CDJ. MASTER TEMPO is the deck's and stays as it is. */
         silence_voices(d);
+        mt_cut(d);
         d->samples      = cmd->type == RX_CMD_LOAD ? cmd->samples : NULL;
         d->channels     = cmd->type == RX_CMD_LOAD ? cmd->channels : 0;
         d->rate         = cmd->type == RX_CMD_LOAD ? cmd->rate : 0;
@@ -209,15 +389,20 @@ void rx_player_deck_apply(RXDeckRT *d, const RXCmd *cmd, int rate)
         d->scrub_resume = false;
         break;
     case RX_CMD_PLAY:
-        if (d->scrubbing)
+        if (d->scrubbing) {
             d->scrub_resume = true;
-        else
+        } else {
+            if (can_play(d))
+                mt_touch(d);
             play(d, rate);
+        }
         break;
     case RX_CMD_PAUSE:
         if (d->scrubbing) {
             d->scrub_resume = false;
         } else {
+            if (d->playing)
+                mt_touch(d);
             start_tail(d, rate);
             d->playing = false;
         }
@@ -226,10 +411,12 @@ void rx_player_deck_apply(RXDeckRT *d, const RXCmd *cmd, int rate)
     case RX_CMD_PLAY_FROM:
         if (d->scrubbing) {
             d->pos = clamp_frames(d, cmd->a);
+            mt_moved(d);
             if (cmd->type == RX_CMD_PLAY_FROM)
                 d->scrub_resume = true;
             break;
         }
+        mt_touch(d);
         seek(d, cmd->a, rate);
         if (cmd->type == RX_CMD_PLAY_FROM)
             play(d, rate);
@@ -248,6 +435,7 @@ void rx_player_deck_apply(RXDeckRT *d, const RXCmd *cmd, int rate)
          * from seconds, and duration * rate can round a fraction of a frame
          * past nb_frames. A playhead landing exactly on nb_frames would then
          * not have crossed it, and the deck would stop instead of wrapping. */
+        mt_touch(d);
         d->loop_in  = clamp_frames(d, cmd->a);
         d->loop_out = clamp_frames(d, cmd->b);
         d->loop_len = rx_pos_sub(d->loop_out, d->loop_in);
@@ -258,16 +446,20 @@ void rx_player_deck_apply(RXDeckRT *d, const RXCmd *cmd, int rate)
         fold_into_loop(d);
         break;
     case RX_CMD_LOOP_ENABLE:
+        mt_touch(d);
         d->loop_enabled = d->loop_set && cmd->flag;
         fold_into_loop(d);
         break;
     case RX_CMD_LOOP_CLEAR:
+        mt_touch(d);
         d->loop_set = false;
         d->loop_enabled = false;
         break;
     case RX_CMD_SCRUB_BEGIN:
         if (d->scrubbing || !d->samples)
             break;
+        if (d->playing)
+            mt_touch(d);
         d->scrub_resume = d->playing;
         start_tail(d, rate);
         d->playing    = false;
@@ -276,18 +468,30 @@ void rx_player_deck_apply(RXDeckRT *d, const RXCmd *cmd, int rate)
         d->hop        = 0;
         break;
     case RX_CMD_SCRUB_TO:
-        if (d->scrubbing)
+        if (d->scrubbing) {
             d->pos = clamp_frames(d, cmd->a);
-        else
+            mt_moved(d);
+        } else {
+            mt_touch(d);
             seek(d, cmd->a, rate);
+        }
         break;
     case RX_CMD_SCRUB_END:
         if (!d->scrubbing)
             break;
         d->scrubbing = false;
-        if (d->scrub_resume)
+        if (d->scrub_resume) {
+            if (can_play(d))
+                mt_touch(d);
             play(d, rate);
+        }
         d->scrub_resume = false;
+        break;
+    case RX_CMD_MASTER_TEMPO:
+        if (d->mt.st && d->mt.on != cmd->flag) {
+            mt_begin(d);
+            d->mt.on = cmd->flag;
+        }
         break;
     }
     d->applied++;
@@ -313,6 +517,34 @@ static void advance(RXDeckRT *d, double inc)
     if (d->pos.i >= d->nb_frames) {
         d->pos = (RXPos) { .i = d->nb_frames };
         d->playing = false;
+    }
+}
+
+/* The deck's own sound for one frame: the main voice, faded in after a
+ * start or a jump, and the de-click tail. */
+static void voice(RXDeckRT *d, double inc, float *l, float *r)
+{
+    *l = 0.0f;
+    *r = 0.0f;
+
+    if (d->playing) {
+        fetch(d, d->pos, l, r);
+        if (d->fade_in > 0) {
+            float e = 1.0f - (float)d->fade_in / d->fade_len;
+            *l *= e;
+            *r *= e;
+            d->fade_in--;
+        }
+        advance(d, inc);
+    }
+
+    if (d->tail_left > 0) {
+        float sl, sr, e = (float)d->tail_left / d->tail_len;
+        fetch(d, d->tail_pos, &sl, &sr);
+        *l += sl * e;
+        *r += sr * e;
+        rx_pos_add(&d->tail_pos, d->tail_inc);
+        d->tail_left--;
     }
 }
 
@@ -369,10 +601,102 @@ static void grains(RXDeckRT *d, float *l, float *r, int glen, double ratio, floa
     *r += d->lp_r * RX_GRAIN_GAIN;
 }
 
+/* The next n frames the deck would have played as it sounded before this
+ * callback's restart, into m->out: the shifter's coming output if it was
+ * in (fed silence; what comes out in the next few milliseconds was decided
+ * by the blocks already analysed), the dry voices if it was not. A
+ * crossfade still under way carries on inside it. */
+static void mt_old_sound(RXDeckRT *d, int n, int rate)
+{
+    RXDeckMT *m = &d->mt;
+    if (m->was_on) {
+        for (int c = 0; c < 2; c++)
+            memset(m->in[c], 0, sizeof(float) * n);
+        const float *in[2] = { m->in[0], m->in[1] };
+        rx_stretch_process(m->st, in, m->out, n);
+    } else {
+        RXDeckRT *w = m->was;
+        double inc = increment(w, rate);
+        for (int k = 0; k < n; k++)
+            voice(w, inc, &m->out[0][k], &m->out[1][k]);
+    }
+
+    int at = m->xf_len - m->xf_left;
+    for (int k = 0; k < n && k < m->xf_left; k++) {
+        float e = 1.0f - (float)(m->xf_left - k) / m->xf_len;
+        for (int c = 0; c < 2; c++)
+            m->out[c][k] = m->xf[c][at + k] * (1.0f - e) + m->out[c][k] * e;
+    }
+}
+
+/* The restart the commands of this callback asked for (see mt_begin and
+ * the file comment). */
+static void mt_restart(RXDeckRT *d, int rate)
+{
+    RXDeckMT *m = &d->mt;
+    int n = RX_MIN(fade_frames(rate), RX_MT_CHUNK);
+    mt_old_sound(d, n, rate);
+    for (int c = 0; c < 2; c++)
+        memcpy(m->xf[c], m->out[c], sizeof(float) * n);
+    m->xf_len = m->xf_left = n;
+    m->restart = false;
+
+    /* The crossfade is the de-click now; a dry fade on top of it would
+     * dip the level. */
+    d->tail_left = 0;
+    d->fade_in   = 0;
+    rx_stretch_reset(m->st);
+    if (!m->on)
+        return;
+
+    if (!d->playing) {
+        m->fill_until = m->fed;
+        m->fill_pos   = d->pos;
+        return;
+    }
+
+    /* Read ahead: the next `latency` frames from the playhead, entered in
+     * the ring as if they had been fed already. */
+    double inc = increment(d, rate);
+    for (int k = 0; k < m->latency; k++) {
+        int64_t i = (m->fed - m->latency + k) & m->hist_mask;
+        m->hist[i]       = d->pos;
+        m->hist_speed[i] = speed_ratio(d);
+        voice(d, inc, &m->ahead[0][k], &m->ahead[1][k]);
+    }
+    m->fill_until = m->fed - m->latency;
+    rx_stretch_set_pitch(m->st, pitch_factor(m->hist_speed[(m->fed - m->in_latency) &
+                                                           m->hist_mask]));
+    const float *ahead[2] = { m->ahead[0], m->ahead[1] };
+    rx_stretch_seek(m->st, ahead, m->latency);
+}
+
+/* Feeds the next n frames of the deck through the shifter, into m->out. */
+static void mt_feed(RXDeckRT *d, int n, double inc)
+{
+    RXDeckMT *m = &d->mt;
+    for (int k = 0; k < n; k++) {
+        int64_t i = (m->fed + k) & m->hist_mask;
+        m->hist[i]       = d->pos;
+        m->hist_speed[i] = speed_ratio(d);
+        voice(d, inc, &m->in[0][k], &m->in[1][k]);
+    }
+    m->fed += n;
+
+    rx_stretch_set_pitch(m->st, pitch_factor(m->hist_speed[(m->fed - m->in_latency) &
+                                                           m->hist_mask]));
+    const float *in[2] = { m->in[0], m->in[1] };
+    rx_stretch_process(m->st, in, m->out, n);
+}
+
 void rx_player_deck_render(RXDeckRT *d, float *out, int frames, int rate)
 {
     if (frames <= 0)
         return;
+
+    RXDeckMT *m = &d->mt;
+    if (m->restart)
+        mt_restart(d, rate);
 
     float decay = expf(-frames / (RX_LEVEL_RELEASE_SECONDS * rate));
     float peak_l = 0.0f, peak_r = 0.0f;
@@ -388,39 +712,43 @@ void rx_player_deck_render(RXDeckRT *d, float *out, int frames, int rate)
         for (int i = 0; i < RX_GRAINS; i++)
             grain_work |= d->grains[i].len > 0;
 
-        for (int n = 0; n < frames; n++) {
-            float l = 0.0f, r = 0.0f;
+        /* In pieces the scratch buffers hold; the dry path goes frame by
+         * frame and is the same either way. */
+        for (int done = 0; done < frames;) {
+            int len = RX_MIN(frames - done, RX_MT_CHUNK);
+            if (m->on)
+                mt_feed(d, len, inc);
 
-            if (d->playing) {
-                fetch(d, d->pos, &l, &r);
-                if (d->fade_in > 0) {
-                    float e = 1.0f - (float)d->fade_in / d->fade_len;
-                    l *= e;
-                    r *= e;
-                    d->fade_in--;
+            for (int k = 0; k < len; k++) {
+                float l, r;
+                if (m->on) {
+                    l = m->out[0][k];
+                    r = m->out[1][k];
+                } else {
+                    voice(d, inc, &l, &r);
                 }
-                advance(d, inc);
+
+                if (m->xf_left > 0) {
+                    float e = 1.0f - (float)m->xf_left / m->xf_len;
+                    int i = m->xf_len - m->xf_left;
+                    l = l * e + m->xf[0][i] * (1.0f - e);
+                    r = r * e + m->xf[1][i] * (1.0f - e);
+                    m->xf_left--;
+                }
+
+                if (grain_work)
+                    grains(d, &l, &r, glen, ratio, lp);
+
+                int n = done + k;
+                float g = dg != 0.0f ? g0 + dg * (n + 1) : g0;
+                l *= g;
+                r *= g;
+                out[2 * n + 0] += l;
+                out[2 * n + 1] += r;
+                peak_l = fmaxf(peak_l, fabsf(l));
+                peak_r = fmaxf(peak_r, fabsf(r));
             }
-
-            if (d->tail_left > 0) {
-                float sl, sr, e = (float)d->tail_left / d->tail_len;
-                fetch(d, d->tail_pos, &sl, &sr);
-                l += sl * e;
-                r += sr * e;
-                rx_pos_add(&d->tail_pos, d->tail_inc);
-                d->tail_left--;
-            }
-
-            if (grain_work)
-                grains(d, &l, &r, glen, ratio, lp);
-
-            float g = dg != 0.0f ? g0 + dg * (n + 1) : g0;
-            l *= g;
-            r *= g;
-            out[2 * n + 0] += l;
-            out[2 * n + 1] += r;
-            peak_l = fmaxf(peak_l, fabsf(l));
-            peak_r = fmaxf(peak_r, fabsf(r));
+            done += len;
         }
     }
 
