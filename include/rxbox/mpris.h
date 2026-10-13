@@ -11,9 +11,10 @@
  *
  * Only the interface registers (src/cli.c, unless --no-mpris); the
  * subcommands never do. Everything runs on the owner thread: the
- * connection is a private one that rx_mpris_tick() polls without waiting,
- * so the bus never holds up a frame. Built only with libdbus (the meson
- * option mpris); without it these do nothing and create says ENOSYS. */
+ * connection is one of its own that rx_mpris_tick() polls without
+ * waiting, so the bus never holds up a frame. Built only with sd-bus
+ * (libsystemd, libelogind or basu; the meson option mpris); without it
+ * these do nothing and create says ENOSYS. */
 
 #include "config.h"
 #include "rxbox/app.h"

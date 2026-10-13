@@ -1,4 +1,4 @@
-# MPRIS 2 on the D-Bus session bus (src/app/mpris.c), through the system's
-# libdbus: auto builds it when dbus-1 is found.
+# MPRIS 2 on the D-Bus session bus (src/app/mpris.c), through sd-bus: auto
+# builds it when libsystemd, libelogind or basu is found.
 option('mpris', type: 'feature', value: 'auto',
-       description: 'MPRIS 2 (the deck on the D-Bus session bus) through libdbus')
+       description: 'MPRIS 2 (the deck on the D-Bus session bus) through sd-bus')

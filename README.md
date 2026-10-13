@@ -29,9 +29,10 @@ and these libraries, by pkg-config name:
   tagging model needs a GPU with 16- and 8-bit storage and about 7 GB of
   memory)
 - `sdl3`, `wayland-client`, `fontconfig` (the interface)
-- `dbus-1`, optional: libdbus, the system's D-Bus library (AFL-2.1 or GPL-2,
-  dual licensed, linked dynamically), for MPRIS (The interface, below); used
-  only when found
+- `libsystemd`, optional: its sd-bus, the D-Bus library, for MPRIS (The
+  interface, below); on a system without systemd, sd-bus from `libelogind`
+  or `basu` (the standalone sd-bus) instead. LGPL-2.1 or later, linked
+  dynamically; used only when found
 
 Dear ImGui, the Vulkan Memory Allocator and tomlc17 are vendored in
 `third_party/`. Signalsmith Stretch (the MASTER TEMPO pitch shifter) and
@@ -223,11 +224,12 @@ genre, length, rating, cover, the file's URL) and drive it: play, pause,
 stop (back to the cue point, as CUE), seek, the volume, next and previous
 (the row after or before the loaded track in the current view of the
 table), a library track opened by its `file://` URL (never one outside
-the library), and quit. It is built when libdbus (`dbus-1`) is found; the
-meson option `mpris` (`-Dmpris=disabled` leaves it out, `enabled` requires
-libdbus) decides. `--no-mpris` keeps the interface off the bus; the
-subcommands never go on it. Without a session bus, or with another rxbox
-holding the name, the interface says so once and runs without it.
+the library), and quit. It is built when sd-bus is found (`libsystemd`,
+else `libelogind` or `basu`); the meson option `mpris` (`-Dmpris=disabled`
+leaves it out, `enabled` requires sd-bus) decides. `--no-mpris` keeps the
+interface off the bus; the subcommands never go on it. Without a session
+bus, or with another rxbox holding the name, the interface says so once
+and runs without it.
 
 ## Exporting
 

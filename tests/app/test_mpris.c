@@ -6,7 +6,7 @@
  * dbus-broker-launch handed a socket bound there; skipped (77) without
  * either. The app is test_app's: no window, the null backend in manual
  * mode, a scratch library of two copies of the test WAV, one under a name
- * a URL must escape. A second libdbus connection is the client.
+ * a URL must escape. A second sd-bus connection is the client.
  *
  * It checks the name, Introspect, GetAll on both interfaces and Stopped
  * with nothing loaded; after a load the metadata (track id, length, URL,
@@ -29,13 +29,13 @@
 
 #include "rxbox/mpris.h"
 
-#include <ctype.h>
 #include <fcntl.h>
 #include <ftw.h>
 #include <math.h>
 #include <poll.h>
 #include <signal.h>
 #include <spawn.h>
+#include <stdarg.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <sys/socket.h>
@@ -44,7 +44,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#include <dbus/dbus.h>
+#include <systemd/sd-bus.h>
 
 extern char **environ;
 
@@ -52,6 +52,7 @@ extern char **environ;
 #define PATH   "/org/mpris/MediaPlayer2"
 #define ROOT   "org.mpris.MediaPlayer2"
 #define PLAYER "org.mpris.MediaPlayer2.Player"
+#define PROPS  "org.freedesktop.DBus.Properties"
 
 static int failures;
 
@@ -141,6 +142,26 @@ static char *find_program(const char *name)
     return NULL;
 }
 
+/* A D-Bus address of a unix socket: its file, or, when `abstract`, its
+ * abstract name, every byte but [-0-9A-Za-z_/.\*] as %XX (the
+ * specification's escaping). Allocating. */
+static char *socket_address(const char *path, bool abstract)
+{
+    char *address = malloc(sizeof("unix:abstract=") + 3 * strlen(path));
+    if (!address)
+        return NULL;
+    char *o = address + sprintf(address, "unix:%s=", abstract ? "abstract" : "path");
+    for (const unsigned char *p = (const unsigned char *)path; *p; p++) {
+        if ((*p >= '0' && *p <= '9') || (*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') ||
+            strchr("-_/.\\*", *p))
+            *o++ = (char)*p;
+        else
+            o += sprintf(o, "%%%02x", *p);
+    }
+    *o = '\0';
+    return address;
+}
+
 /* posix_spawn in a process group of its own. */
 static int spawn(const char *prog, char **argv, posix_spawn_file_actions_t *fa)
 {
@@ -198,7 +219,9 @@ static char *start_daemon(const char *prog, const char *listen)
  * systemd would hand it over: fd 3, LISTEN_FDS and LISTEN_PID, which only
  * a shell exec'ing it can set to its own pid; the LISTEN_ variables this
  * process may have inherited describe someone else's sockets). `path` is
- * the socket's file, or, when `abstract`, its abstract name. */
+ * the socket's file, or, when `abstract`, its abstract name. The launcher
+ * connects to the user bus too, for systemd's activation: it is given its
+ * own bus as that, so that nothing of the test reaches the session's. */
 static char *start_broker(const char *prog, const char *dir, const char *path, bool abstract)
 {
     struct sockaddr_un sa = { .sun_family = AF_UNIX };
@@ -232,16 +255,17 @@ static char *start_broker(const char *prog, const char *dir, const char *path, b
         "    <allow own=\"*\"/>\n"
         "  </policy>\n"
         "</busconfig>\n";
+    char *address = socket_address(path, abstract);
     char *conf = rx_path_join(dir, "bus.conf");
     char *log = rx_path_join(dir, "bus.log");
-    int ret = fd >= 0 && conf && log && rx_file_write(conf, conf_xml, strlen(conf_xml)) >= 0 ? 0
-                                                                                              : -1;
+    int ret = fd >= 0 && address && conf && log &&
+              rx_file_write(conf, conf_xml, strlen(conf_xml)) >= 0 ? 0 : -1;
     if (ret >= 0) {
         char *argv[] = {
             "/bin/sh", "-c",
-            "unset LISTEN_PIDFDID LISTEN_FDNAMES; export LISTEN_PID=$$ LISTEN_FDS=1; "
-            "exec \"$0\" --scope user --config-file \"$1\"",
-            (char *)prog, conf, NULL,
+            "unset LISTEN_PIDFDID LISTEN_FDNAMES; export LISTEN_PID=$$ LISTEN_FDS=1 "
+            "DBUS_SESSION_BUS_ADDRESS=\"$2\"; exec \"$0\" --scope user --config-file \"$1\"",
+            (char *)prog, conf, address, NULL,
         };
         posix_spawn_file_actions_t fa;
         posix_spawn_file_actions_init(&fa);
@@ -255,21 +279,18 @@ static char *start_broker(const char *prog, const char *dir, const char *path, b
         close(fd);
     free(conf);
     free(log);
-    if (ret < 0)
+    if (ret < 0) {
+        free(address);
         return NULL;
-
-    if (abstract)
-        return rx_asprintf("unix:abstract=%s", path);
-    char *escaped = dbus_address_escape_value(path);
-    char *address = escaped ? rx_asprintf("unix:path=%s", escaped) : NULL;
-    dbus_free(escaped);
+    }
     return address;
 }
 
 /* A bus on a socket in `dir`, or on an abstract socket when the path is
- * longer than libdbus takes (99 bytes, _DBUS_MAX_SUN_PATH_LENGTH: a deep
- * build directory); its address. NULL with *skip set when there is no
- * bus program to run. */
+ * longer than the bus programs take (99 bytes for dbus-daemon,
+ * _DBUS_MAX_SUN_PATH_LENGTH; 107 for bind() and sd-bus: a deep build
+ * directory); its address. NULL with *skip set when there is no bus
+ * program to run. */
 static char *start_bus(const char *dir, bool *skip)
 {
     *skip = false;
@@ -289,10 +310,7 @@ static char *start_bus(const char *dir, bool *skip)
 
     char *address = NULL;
     if (path && daemon) {
-        char *escaped = dbus_address_escape_value(path);
-        char *listen = escaped ? rx_asprintf("unix:%s=%s", abstract ? "abstract" : "path",
-                                             escaped) : NULL;
-        dbus_free(escaped);
+        char *listen = socket_address(path, abstract);
         address = listen ? start_daemon(daemon, listen) : NULL;
         free(listen);
     } else if (path) {
@@ -309,7 +327,7 @@ static char *start_bus(const char *dir, bool *skip)
 
 typedef struct Ctx {
     RXApp app;
-    DBusConnection *client;
+    sd_bus *client;
 } Ctx;
 
 /* The signals the client saw, in order. */
@@ -324,53 +342,41 @@ typedef struct Seen {
 static Seen seen[MAX_SEEN];
 static int nb_seen;
 
-static DBusHandlerResult client_filter(DBusConnection *conn, DBusMessage *msg, void *opaque)
+/* Every signal from PATH (the match is on the path). */
+static int on_signal(sd_bus_message *msg, void *opaque, sd_bus_error *err)
 {
-    const char *path = dbus_message_get_path(msg);
-    if (dbus_message_get_type(msg) != DBUS_MESSAGE_TYPE_SIGNAL || !path || strcmp(path, PATH) ||
-        nb_seen >= MAX_SEEN)
-        return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+    if (nb_seen >= MAX_SEEN)
+        return 0;
 
     Seen *s = &seen[nb_seen];
     *s = (Seen) { 0 };
-    if (dbus_message_is_signal(msg, PLAYER, "Seeked")) {
-        dbus_int64_t pos;
-        if (!dbus_message_get_args(msg, NULL, DBUS_TYPE_INT64, &pos, DBUS_TYPE_INVALID))
-            return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+    if (sd_bus_message_is_signal(msg, PLAYER, "Seeked")) {
+        if (sd_bus_message_read(msg, "x", &s->position) < 0)
+            return 0;
         snprintf(s->member, sizeof(s->member), "Seeked");
-        s->position = pos;
-    } else if (dbus_message_is_signal(msg, DBUS_INTERFACE_PROPERTIES, "PropertiesChanged") &&
-               dbus_message_has_signature(msg, "sa{sv}as")) {
-        DBusMessageIter it, a;
+    } else if (sd_bus_message_is_signal(msg, PROPS, "PropertiesChanged") &&
+               sd_bus_message_has_signature(msg, "sa{sv}as")) {
         const char *iface;
-        dbus_message_iter_init(msg, &it);
-        dbus_message_iter_get_basic(&it, &iface);
+        sd_bus_message_read(msg, "s", &iface);
         snprintf(s->member, sizeof(s->member), "PropertiesChanged");
         snprintf(s->changed, sizeof(s->changed), " %s: ", iface);
-        dbus_message_iter_next(&it);
-        dbus_message_iter_recurse(&it, &a);
-        while (dbus_message_iter_get_arg_type(&a) == DBUS_TYPE_DICT_ENTRY) {
-            DBusMessageIter e, v;
-            const char *name;
-            dbus_message_iter_recurse(&a, &e);
-            dbus_message_iter_get_basic(&e, &name);
+        sd_bus_message_enter_container(msg, 'a', "{sv}");
+        while (sd_bus_message_enter_container(msg, 'e', "sv") > 0) {
+            const char *name, *status;
+            sd_bus_message_read(msg, "s", &name);
             size_t len = strlen(s->changed);
             snprintf(s->changed + len, sizeof(s->changed) - len, "%s ", name);
-            dbus_message_iter_next(&e);
-            dbus_message_iter_recurse(&e, &v);
-            if (!strcmp(name, "PlaybackStatus") &&
-                dbus_message_iter_get_arg_type(&v) == DBUS_TYPE_STRING) {
-                const char *status;
-                dbus_message_iter_get_basic(&v, &status);
+            if (!strcmp(name, "PlaybackStatus") && sd_bus_message_read(msg, "v", "s", &status) > 0)
                 snprintf(s->status, sizeof(s->status), "%s", status);
-            }
-            dbus_message_iter_next(&a);
+            else
+                sd_bus_message_skip(msg, "v");
+            sd_bus_message_exit_container(msg);
         }
     } else {
-        return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+        return 0;
     }
     nb_seen++;
-    return DBUS_HANDLER_RESULT_HANDLED;
+    return 0;
 }
 
 /* One tick of everything: 10 ms of the deck when `play`, the app, MPRIS,
@@ -382,9 +388,8 @@ static void tick(Ctx *c, bool play)
     rx_app_tick(&c->app);
     rx_mpris_tick(&c->app);
     if (c->client) {
-        dbus_connection_read_write(c->client, 0);
-        while (dbus_connection_get_dispatch_status(c->client) == DBUS_DISPATCH_DATA_REMAINS)
-            dbus_connection_dispatch(c->client);
+        while (sd_bus_process(c->client, NULL) > 0)
+            ;
     }
     usleep(1000);
 }
@@ -411,165 +416,131 @@ static bool wait_until(Ctx *c, bool (*done)(Ctx *c), int seconds)
     return false;
 }
 
-/* A call from the client, the app ticking until its reply is in (a
+static int on_reply(sd_bus_message *reply, void *opaque, sd_bus_error *err)
+{
+    sd_bus_message **out = opaque;
+    *out = sd_bus_message_ref(reply);
+    return 0;
+}
+
+/* A call of iface.member on the app's object, with the arguments `types`
+ * says (sd_bus_message_append's), the app ticking until its reply is in (a
  * blocking call would wait for a tick that cannot come). The deck does
  * not play meanwhile, so what a call did to the playhead is exact however
- * long the bus takes. Takes `msg`. */
-static DBusMessage *call(Ctx *c, DBusMessage *msg)
+ * long the bus takes. NULL without a reply. */
+static sd_bus_message *vcall(Ctx *c, const char *iface, const char *member, const char *types,
+                             va_list args)
 {
-    DBusPendingCall *pc = NULL;
-    bool sent = msg && dbus_connection_send_with_reply(c->client, msg, &pc, 5000) && pc;
-    if (msg)
-        dbus_message_unref(msg);
-    if (!sent)
+    sd_bus_message *msg = NULL, *reply = NULL;
+    sd_bus_slot *slot = NULL;
+    int ret = sd_bus_message_new_method_call(c->client, &msg, NAME, PATH, iface, member);
+    if (ret >= 0 && types)
+        ret = sd_bus_message_appendv(msg, types, args);
+    if (ret >= 0)
+        ret = sd_bus_call_async(c->client, &slot, msg, on_reply, &reply, 5000000);
+    sd_bus_message_unref(msg);
+    if (ret < 0) {
+        fprintf(stderr, "%s.%s: %s\n", iface, member, strerror(-ret));
         return NULL;
+    }
     int64_t t0 = rx_time_us();
-    while (!dbus_pending_call_get_completed(pc) && rx_time_us() - t0 < 10000000)
+    while (!reply && rx_time_us() - t0 < 10000000)
         tick(c, false);
-    DBusMessage *reply = NULL;
-    if (dbus_pending_call_get_completed(pc))
-        reply = dbus_pending_call_steal_reply(pc);
-    else
-        dbus_pending_call_cancel(pc);
-    dbus_pending_call_unref(pc);
+    /* Cancels the callback if it never came. */
+    sd_bus_slot_unref(slot);
+    return reply;
+}
+
+static sd_bus_message *call(Ctx *c, const char *iface, const char *member, const char *types,
+                            ...)
+{
+    va_list args;
+    va_start(args, types);
+    sd_bus_message *reply = vcall(c, iface, member, types, args);
+    va_end(args);
     return reply;
 }
 
 /* The error a reply is, or "" for a method return; "no reply" for none. */
-static const char *reply_error(DBusMessage *reply)
+static const char *reply_error(sd_bus_message *reply)
 {
     if (!reply)
         return "no reply";
-    if (dbus_message_get_type(reply) == DBUS_MESSAGE_TYPE_ERROR)
-        return dbus_message_get_error_name(reply);
+    if (sd_bus_message_is_method_error(reply, NULL))
+        return sd_bus_message_get_error(reply)->name;
     return "";
 }
 
-/* Calls iface.member with the arguments of `msg` built by the caller;
- * returns the error name ("" for none) in `err`. */
-static void call_check(Ctx *c, DBusMessage *msg, char *err, size_t size)
-{
-    DBusMessage *reply = call(c, msg);
-    snprintf(err, size, "%s", reply_error(reply));
-    if (reply)
-        dbus_message_unref(reply);
-}
-
-static DBusMessage *method_call(const char *iface, const char *member)
-{
-    return dbus_message_new_method_call(NAME, PATH, iface, member);
-}
-
-/* A method without arguments; "" when it returned, else the error. */
-static const char *method(Ctx *c, const char *iface, const char *member)
+/* A call as call() makes it; "" when it returned, else the error. */
+static const char *method(Ctx *c, const char *iface, const char *member, const char *types, ...)
 {
     static char err[256];
-    call_check(c, method_call(iface, member), err, sizeof(err));
+    va_list args;
+    va_start(args, types);
+    sd_bus_message *reply = vcall(c, iface, member, types, args);
+    va_end(args);
+    snprintf(err, sizeof(err), "%s", reply_error(reply));
+    sd_bus_message_unref(reply);
     return err;
 }
 
-static const char *method_x(Ctx *c, const char *member, dbus_int64_t x)
+static const char *method_x(Ctx *c, const char *member, int64_t x)
 {
-    static char err[256];
-    DBusMessage *msg = method_call(PLAYER, member);
-    dbus_message_append_args(msg, DBUS_TYPE_INT64, &x, DBUS_TYPE_INVALID);
-    call_check(c, msg, err, sizeof(err));
-    return err;
+    return method(c, PLAYER, member, "x", x);
 }
 
-static const char *method_s(Ctx *c, const char *member, const char *s)
+static const char *set_position(Ctx *c, const char *track, int64_t x)
 {
-    static char err[256];
-    DBusMessage *msg = method_call(PLAYER, member);
-    dbus_message_append_args(msg, DBUS_TYPE_STRING, &s, DBUS_TYPE_INVALID);
-    call_check(c, msg, err, sizeof(err));
-    return err;
+    return method(c, PLAYER, "SetPosition", "ox", track, x);
 }
 
-static const char *set_position(Ctx *c, const char *track, dbus_int64_t x)
+/* Properties.Get: the reply, read into the variant, which must hold
+ * `sig`; NULL on an error. */
+static sd_bus_message *get(Ctx *c, const char *iface, const char *name, const char *sig)
 {
-    static char err[256];
-    DBusMessage *msg = method_call(PLAYER, "SetPosition");
-    dbus_message_append_args(msg, DBUS_TYPE_OBJECT_PATH, &track, DBUS_TYPE_INT64, &x,
-                             DBUS_TYPE_INVALID);
-    call_check(c, msg, err, sizeof(err));
-    return err;
-}
-
-/* Properties.Set with a basic value. */
-static const char *set_prop(Ctx *c, const char *iface, const char *name, int type,
-                            const char *sig, const void *value)
-{
-    static char err[256];
-    DBusMessage *msg = method_call(DBUS_INTERFACE_PROPERTIES, "Set");
-    DBusMessageIter it, v;
-    dbus_message_iter_init_append(msg, &it);
-    dbus_message_iter_append_basic(&it, DBUS_TYPE_STRING, &iface);
-    dbus_message_iter_append_basic(&it, DBUS_TYPE_STRING, &name);
-    dbus_message_iter_open_container(&it, DBUS_TYPE_VARIANT, sig, &v);
-    dbus_message_iter_append_basic(&v, type, value);
-    dbus_message_iter_close_container(&it, &v);
-    call_check(c, msg, err, sizeof(err));
-    return err;
-}
-
-/* Properties.Get: the reply, with *v inside the variant; NULL on an error. */
-static DBusMessage *get(Ctx *c, const char *iface, const char *name, DBusMessageIter *v)
-{
-    DBusMessage *msg = method_call(DBUS_INTERFACE_PROPERTIES, "Get");
-    dbus_message_append_args(msg, DBUS_TYPE_STRING, &iface, DBUS_TYPE_STRING, &name,
-                             DBUS_TYPE_INVALID);
-    DBusMessage *reply = call(c, msg);
-    DBusMessageIter it;
-    if (!reply || dbus_message_get_type(reply) != DBUS_MESSAGE_TYPE_METHOD_RETURN ||
-        !dbus_message_iter_init(reply, &it) ||
-        dbus_message_iter_get_arg_type(&it) != DBUS_TYPE_VARIANT) {
-        fprintf(stderr, "Get %s: %s\n", name, reply_error(reply));
-        if (reply)
-            dbus_message_unref(reply);
+    sd_bus_message *reply = call(c, PROPS, "Get", "ss", iface, name);
+    const char *err = reply_error(reply);
+    if (*err || sd_bus_message_enter_container(reply, 'v', sig) <= 0) {
+        fprintf(stderr, "Get %s: %s\n", name, *err ? err : "another type");
+        sd_bus_message_unref(reply);
         return NULL;
     }
-    dbus_message_iter_recurse(&it, v);
     return reply;
 }
 
-/* A basic property into `out` (dbus_bool_t, double, dbus_int64_t or a
+/* A basic property into `out` (int for a boolean, double, int64_t or a
  * const char * valid until the next call). */
-static bool get_basic(Ctx *c, const char *iface, const char *name, int type, void *out)
+static bool get_basic(Ctx *c, const char *iface, const char *name, char type, void *out)
 {
-    static DBusMessage *last;
-    if (last)
-        dbus_message_unref(last);
-    DBusMessageIter v;
-    last = get(c, iface, name, &v);
-    if (!last || dbus_message_iter_get_arg_type(&v) != type)
-        return false;
-    dbus_message_iter_get_basic(&v, out);
-    return true;
+    static sd_bus_message *last;
+    last = sd_bus_message_unref(last);
+    char sig[2] = { type, '\0' };
+    last = get(c, iface, name, sig);
+    return last && sd_bus_message_read_basic(last, type, out) > 0;
 }
 
 static int get_bool(Ctx *c, const char *iface, const char *name)
 {
-    dbus_bool_t b;
-    return get_basic(c, iface, name, DBUS_TYPE_BOOLEAN, &b) ? (int)b : -1;
+    int b;
+    return get_basic(c, iface, name, 'b', &b) ? b : -1;
 }
 
 static double get_double(Ctx *c, const char *iface, const char *name)
 {
     double d;
-    return get_basic(c, iface, name, DBUS_TYPE_DOUBLE, &d) ? d : NAN;
+    return get_basic(c, iface, name, 'd', &d) ? d : NAN;
 }
 
 static int64_t get_int64(Ctx *c, const char *iface, const char *name)
 {
-    dbus_int64_t x;
-    return get_basic(c, iface, name, DBUS_TYPE_INT64, &x) ? x : INT64_MIN;
+    int64_t x;
+    return get_basic(c, iface, name, 'x', &x) ? x : INT64_MIN;
 }
 
 static const char *get_string(Ctx *c, const char *iface, const char *name)
 {
     const char *s;
-    return get_basic(c, iface, name, DBUS_TYPE_STRING, &s) ? s : "(error)";
+    return get_basic(c, iface, name, 's', &s) ? s : "(error)";
 }
 
 static const char *status(Ctx *c)
@@ -580,51 +551,39 @@ static const char *status(Ctx *c)
 /* Whether the string array property holds `want`. */
 static bool get_strings_has(Ctx *c, const char *iface, const char *name, const char *want)
 {
-    DBusMessageIter v, a;
-    DBusMessage *reply = get(c, iface, name, &v);
+    sd_bus_message *reply = get(c, iface, name, "as");
     bool found = false;
-    if (reply && dbus_message_iter_get_arg_type(&v) == DBUS_TYPE_ARRAY &&
-        dbus_message_iter_get_element_type(&v) == DBUS_TYPE_STRING) {
-        dbus_message_iter_recurse(&v, &a);
-        while (!found && dbus_message_iter_get_arg_type(&a) == DBUS_TYPE_STRING) {
-            const char *s;
-            dbus_message_iter_get_basic(&a, &s);
+    if (reply && sd_bus_message_enter_container(reply, 'a', "s") > 0) {
+        const char *s;
+        while (!found && sd_bus_message_read_basic(reply, 's', &s) > 0)
             found = !strcmp(s, want);
-            dbus_message_iter_next(&a);
-        }
     }
-    if (reply)
-        dbus_message_unref(reply);
+    sd_bus_message_unref(reply);
     return found;
 }
 
 /* GetAll on `iface` names exactly `names`. */
 static bool get_all(Ctx *c, const char *iface, const char *const *names, int n)
 {
-    DBusMessage *msg = method_call(DBUS_INTERFACE_PROPERTIES, "GetAll");
-    dbus_message_append_args(msg, DBUS_TYPE_STRING, &iface, DBUS_TYPE_INVALID);
-    DBusMessage *reply = call(c, msg);
-    if (!reply || !dbus_message_has_signature(reply, "a{sv}")) {
-        fprintf(stderr, "GetAll %s: %s\n", iface, reply_error(reply));
-        if (reply)
-            dbus_message_unref(reply);
+    sd_bus_message *reply = call(c, PROPS, "GetAll", "s", iface);
+    const char *err = reply_error(reply);
+    if (*err || !sd_bus_message_has_signature(reply, "a{sv}") ||
+        sd_bus_message_enter_container(reply, 'a', "{sv}") <= 0) {
+        fprintf(stderr, "GetAll %s: %s\n", iface, *err ? err : "not a{sv}");
+        sd_bus_message_unref(reply);
         return false;
     }
-    DBusMessageIter it, a;
-    dbus_message_iter_init(reply, &it);
-    dbus_message_iter_recurse(&it, &a);
     int count = 0, found = 0;
-    while (dbus_message_iter_get_arg_type(&a) == DBUS_TYPE_DICT_ENTRY) {
-        DBusMessageIter e;
+    while (sd_bus_message_enter_container(reply, 'e', "sv") > 0) {
         const char *name;
-        dbus_message_iter_recurse(&a, &e);
-        dbus_message_iter_get_basic(&e, &name);
+        sd_bus_message_read(reply, "s", &name);
         for (int i = 0; i < n; i++)
             found += !strcmp(name, names[i]);
         count++;
-        dbus_message_iter_next(&a);
+        sd_bus_message_skip(reply, "v");
+        sd_bus_message_exit_container(reply);
     }
-    dbus_message_unref(reply);
+    sd_bus_message_unref(reply);
     if (count != n || found != n)
         fprintf(stderr, "GetAll %s: %d properties, %d of the %d expected\n", iface, count, found,
                 n);
@@ -637,53 +596,53 @@ typedef struct Meta {
     int     entries;
 } Meta;
 
-static void copy_string(DBusMessageIter *v, char *buf, size_t size)
+/* The basic value of `type` next in `msg`, a string, into `buf`. */
+static void copy_string(sd_bus_message *msg, char type, char *buf, size_t size)
 {
     const char *s;
-    dbus_message_iter_get_basic(v, &s);
-    snprintf(buf, size, "%s", s);
+    if (sd_bus_message_read_basic(msg, type, &s) > 0)
+        snprintf(buf, size, "%s", s);
 }
 
 static bool get_meta(Ctx *c, Meta *out)
 {
     *out = (Meta) { .length = -1 };
-    DBusMessageIter v, a;
-    DBusMessage *reply = get(c, PLAYER, "Metadata", &v);
-    if (!reply)
-        return false;
-    bool ok = dbus_message_iter_get_arg_type(&v) == DBUS_TYPE_ARRAY;
-    if (ok)
-        dbus_message_iter_recurse(&v, &a);
-    while (ok && dbus_message_iter_get_arg_type(&a) == DBUS_TYPE_DICT_ENTRY) {
-        DBusMessageIter e, val;
-        const char *key;
-        dbus_message_iter_recurse(&a, &e);
-        dbus_message_iter_get_basic(&e, &key);
-        dbus_message_iter_next(&e);
-        dbus_message_iter_recurse(&e, &val);
-        int type = dbus_message_iter_get_arg_type(&val);
-        if (!strcmp(key, "mpris:trackid") && type == DBUS_TYPE_OBJECT_PATH) {
-            copy_string(&val, out->trackid, sizeof(out->trackid));
-        } else if (!strcmp(key, "mpris:length") && type == DBUS_TYPE_INT64) {
-            dbus_int64_t x;
-            dbus_message_iter_get_basic(&val, &x);
-            out->length = x;
-        } else if (!strcmp(key, "xesam:url") && type == DBUS_TYPE_STRING) {
-            copy_string(&val, out->url, sizeof(out->url));
-        } else if (!strcmp(key, "xesam:title") && type == DBUS_TYPE_STRING) {
-            copy_string(&val, out->title, sizeof(out->title));
-        } else if (!strcmp(key, "mpris:artUrl") && type == DBUS_TYPE_STRING) {
-            copy_string(&val, out->art, sizeof(out->art));
-        } else if (!strcmp(key, "xesam:artist") && type == DBUS_TYPE_ARRAY) {
-            DBusMessageIter s;
-            dbus_message_iter_recurse(&val, &s);
-            if (dbus_message_iter_get_arg_type(&s) == DBUS_TYPE_STRING)
-                copy_string(&s, out->artist, sizeof(out->artist));
+    sd_bus_message *reply = get(c, PLAYER, "Metadata", "a{sv}");
+    bool ok = reply && sd_bus_message_enter_container(reply, 'a', "{sv}") > 0;
+    while (ok && sd_bus_message_enter_container(reply, 'e', "sv") > 0) {
+        const char *key, *type;
+        ok = sd_bus_message_read(reply, "s", &key) > 0 &&
+             sd_bus_message_peek_type(reply, NULL, &type) > 0 &&
+             sd_bus_message_enter_container(reply, 'v', type) > 0;
+        if (!ok)
+            break;
+        if (!strcmp(key, "mpris:trackid") && !strcmp(type, "o")) {
+            copy_string(reply, 'o', out->trackid, sizeof(out->trackid));
+        } else if (!strcmp(key, "mpris:length") && !strcmp(type, "x")) {
+            sd_bus_message_read_basic(reply, 'x', &out->length);
+        } else if (!strcmp(key, "xesam:url") && !strcmp(type, "s")) {
+            copy_string(reply, 's', out->url, sizeof(out->url));
+        } else if (!strcmp(key, "xesam:title") && !strcmp(type, "s")) {
+            copy_string(reply, 's', out->title, sizeof(out->title));
+        } else if (!strcmp(key, "mpris:artUrl") && !strcmp(type, "s")) {
+            copy_string(reply, 's', out->art, sizeof(out->art));
+        } else if (!strcmp(key, "xesam:artist") && !strcmp(type, "as") &&
+                   sd_bus_message_enter_container(reply, 'a', "s") > 0) {
+            /* The first artist; the rest read past. */
+            const char *s;
+            for (int i = 0; sd_bus_message_read_basic(reply, 's', &s) > 0; i++) {
+                if (!i)
+                    snprintf(out->artist, sizeof(out->artist), "%s", s);
+            }
+            sd_bus_message_exit_container(reply);
+        } else {
+            sd_bus_message_skip(reply, type);
         }
         out->entries++;
-        dbus_message_iter_next(&a);
+        sd_bus_message_exit_container(reply);
+        sd_bus_message_exit_container(reply);
     }
-    dbus_message_unref(reply);
+    sd_bus_message_unref(reply);
     return ok;
 }
 
@@ -755,13 +714,45 @@ static char *expect_url(const char *path)
         abort();
     char *o = url + sprintf(url, "file://");
     for (const unsigned char *p = (const unsigned char *)path; *p; p++) {
-        if ((*p < 128 && isalnum(*p)) || strchr("-._~/", *p))
+        if ((*p >= '0' && *p <= '9') || (*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') ||
+            strchr("-._~/", *p))
             *o++ = (char)*p;
         else
             o += sprintf(o, "%%%02X", *p);
     }
     *o = '\0';
     return url;
+}
+
+/* The client's own connection to the bus at `address`, seeing every
+ * signal from PATH; NULL when it cannot be made. */
+static sd_bus *client_open(const char *address)
+{
+    sd_bus *bus = NULL;
+    int ret = sd_bus_new(&bus);
+    if (ret >= 0)
+        ret = sd_bus_set_address(bus, address);
+    if (ret >= 0)
+        ret = sd_bus_set_bus_client(bus, true);
+    if (ret >= 0)
+        ret = sd_bus_start(bus);
+    if (ret >= 0)
+        ret = sd_bus_match_signal(bus, NULL, NULL, PATH, NULL, NULL, on_signal, NULL);
+    if (ret < 0) {
+        fprintf(stderr, "client: %s\n", strerror(-ret));
+        sd_bus_close(bus);
+        bus = sd_bus_unref(bus);
+    }
+    return bus;
+}
+
+static void client_close(Ctx *c)
+{
+    if (c->client) {
+        sd_bus_close(c->client);
+        sd_bus_unref(c->client);
+        c->client = NULL;
+    }
 }
 
 /* ----------------------------------------------------------------- the deck */
@@ -801,12 +792,15 @@ static RXTrack *track_named(RXApp *app, const char *base)
     return NULL;
 }
 
+/* Asked of the bus itself, which answers without the app's tick. */
 static bool name_owned(Ctx *c)
 {
-    DBusError err;
-    dbus_error_init(&err);
-    bool owned = dbus_bus_name_has_owner(c->client, NAME, &err);
-    dbus_error_free(&err);
+    sd_bus_message *reply = NULL;
+    int owned = 0;
+    if (sd_bus_call_method(c->client, "org.freedesktop.DBus", "/org/freedesktop/DBus",
+                           "org.freedesktop.DBus", "NameHasOwner", NULL, &reply, "s", NAME) >= 0)
+        sd_bus_message_read(reply, "b", &owned);
+    sd_bus_message_unref(reply);
     return owned;
 }
 
@@ -905,26 +899,17 @@ int main(int argc, char **argv)
     if (ret < 0)
         goto end;
 
-    DBusError err;
-    dbus_error_init(&err);
-    c->client = dbus_connection_open_private(address, &err);
-    if (c->client) {
-        dbus_connection_set_exit_on_disconnect(c->client, FALSE);
-        if (dbus_bus_register(c->client, &err))
-            dbus_bus_add_match(c->client, "type='signal',path='" PATH "'", &err);
-    }
-    CHECK(c->client && !dbus_error_is_set(&err), "client: %s", err.message);
-    dbus_error_free(&err);
+    c->client = client_open(address);
+    CHECK(c->client, "no client connection");
     if (!c->client)
         goto end;
-    dbus_connection_add_filter(c->client, client_filter, NULL, NULL);
 
     /* The name, the introspection, every property. */
     CHECK(name_owned(c), "nobody owns %s", NAME);
 
-    DBusMessage *reply = call(c, method_call(DBUS_INTERFACE_INTROSPECTABLE, "Introspect"));
+    sd_bus_message *reply = call(c, "org.freedesktop.DBus.Introspectable", "Introspect", NULL);
     const char *xml = NULL;
-    CHECK(reply && dbus_message_get_args(reply, NULL, DBUS_TYPE_STRING, &xml, DBUS_TYPE_INVALID),
+    CHECK(!*reply_error(reply) && sd_bus_message_read(reply, "s", &xml) > 0,
           "Introspect: %s", reply_error(reply));
     static const char *const root_props[] = {
         "CanQuit", "CanRaise", "HasTrackList", "Identity", "SupportedUriSchemes",
@@ -938,7 +923,7 @@ int main(int argc, char **argv)
     if (xml) {
         CHECK(strstr(xml, "<interface name=\"" ROOT "\">") &&
               strstr(xml, "<interface name=\"" PLAYER "\">") &&
-              strstr(xml, "<interface name=\"" DBUS_INTERFACE_PROPERTIES "\">") &&
+              strstr(xml, "<interface name=\"" PROPS "\">") &&
               strstr(xml, "<signal name=\"Seeked\">") && strstr(xml, "<method name=\"OpenUri\">"),
               "the introspection lacks an interface:\n%s", xml);
         for (size_t i = 0; i < RX_ARRAY_ELEMS(root_props); i++) {
@@ -952,8 +937,7 @@ int main(int argc, char **argv)
             CHECK(strstr(xml, want), "the introspection lacks %s", player_props[i]);
         }
     }
-    if (reply)
-        dbus_message_unref(reply);
+    sd_bus_message_unref(reply);
 
     CHECK(get_all(c, ROOT, root_props, RX_ARRAY_ELEMS(root_props)), "GetAll root");
     CHECK(get_all(c, PLAYER, player_props, RX_ARRAY_ELEMS(player_props)), "GetAll player");
@@ -977,9 +961,8 @@ int main(int argc, char **argv)
     Meta meta;
     CHECK(get_meta(c, &meta) && !strcmp(meta.trackid, "/org/mpris/MediaPlayer2/TrackList/NoTrack")
           && meta.entries == 1, "no track: trackid %s, %d entries", meta.trackid, meta.entries);
-    char errname[256];
-    call_check(c, method_call(PLAYER, "Frobnicate"), errname, sizeof(errname));
-    CHECK(!strcmp(errname, DBUS_ERROR_UNKNOWN_METHOD), "an unknown method: %s", errname);
+    const char *e = method(c, PLAYER, "Frobnicate", NULL);
+    CHECK(!strcmp(e, SD_BUS_ERROR_UNKNOWN_METHOD), "an unknown method: %s", e);
 
     /* A load: the metadata, Paused, the signal. */
     int mark = nb_seen;
@@ -1019,7 +1002,7 @@ int main(int argc, char **argv)
 
     /* Play. */
     mark = nb_seen;
-    const char *e = method(c, PLAYER, "Play");
+    e = method(c, PLAYER, "Play", NULL);
     CHECK(!*e, "Play: %s", e);
     CHECK(deck(c).playing, "the deck does not play after Play");
     CHECK(!strcmp(status(c), "Playing"), "after Play: %s", status(c));
@@ -1053,7 +1036,7 @@ int main(int argc, char **argv)
 
     /* Pause, then Stop from paused and from playing: the cue point. */
     mark = nb_seen;
-    CHECK(!*method(c, PLAYER, "Pause"), "Pause");
+    CHECK(!*method(c, PLAYER, "Pause", NULL), "Pause");
     CHECK(!deck(c).playing, "the deck plays after Pause");
     CHECK(wait_signal(c, mark, "PropertiesChanged", "PlaybackStatus", "Paused") >= 0,
           "no PropertiesChanged to Paused");
@@ -1061,14 +1044,14 @@ int main(int argc, char **argv)
     printf("cue point %.3f\n", cue);
     rx_ctl_seek(&c->app.decks[0].ctl, 6.0);
     steps(c, 3);
-    CHECK(!*method(c, PLAYER, "Stop"), "Stop");
+    CHECK(!*method(c, PLAYER, "Stop", NULL), "Stop");
     st = deck(c);
     CHECK(!st.playing && fabs(st.position - RX_MAX(cue, 0.0)) < 1e-3,
           "Stop from paused: at %.3f, playing %d", st.position, st.playing);
-    CHECK(!*method(c, PLAYER, "PlayPause"), "PlayPause");
+    CHECK(!*method(c, PLAYER, "PlayPause", NULL), "PlayPause");
     CHECK(deck(c).playing, "PlayPause did not play");
     steps(c, 30);
-    CHECK(!*method(c, PLAYER, "Stop"), "Stop");
+    CHECK(!*method(c, PLAYER, "Stop", NULL), "Stop");
     st = deck(c);
     CHECK(!st.playing && fabs(st.position - RX_MAX(cue, 0.0)) < 1e-3,
           "Stop from playing: at %.3f, playing %d", st.position, st.playing);
@@ -1087,11 +1070,11 @@ int main(int argc, char **argv)
 
     /* Next from a playing deck: b loads and plays, and the status stays
      * Playing through the swap. Nothing follows b. */
-    CHECK(!*method(c, PLAYER, "Play"), "Play");
+    CHECK(!*method(c, PLAYER, "Play", NULL), "Play");
     steps(c, 5);
     mark = nb_seen;
     want_track = b;
-    CHECK(!*method(c, PLAYER, "Next"), "Next");
+    CHECK(!*method(c, PLAYER, "Next", NULL), "Next");
     CHECK(wait_until(c, deck_playing_want, 60), "Next: the deck has %p, want b playing",
           (void *)c->app.decks[0].track);
     char *b_url = expect_url(b->path);
@@ -1109,15 +1092,15 @@ int main(int argc, char **argv)
           "no PropertiesChanged for the new track");
     CHECK(find_signal(mark, "PropertiesChanged", "PlaybackStatus", "Paused") < 0,
           "Paused while Next swapped the tracks");
-    CHECK(!*method(c, PLAYER, "Next"), "Next past the last row");
+    CHECK(!*method(c, PLAYER, "Next", NULL), "Next past the last row");
     steps(c, 10);
     CHECK(c->app.decks[0].track == b && !c->app.decks[0].loading_request && deck(c).playing,
           "Next past the last row changed the deck");
 
     /* Previous from a paused deck: a loads and waits. */
-    CHECK(!*method(c, PLAYER, "Pause"), "Pause");
+    CHECK(!*method(c, PLAYER, "Pause", NULL), "Pause");
     want_track = a;
-    CHECK(!*method(c, PLAYER, "Previous"), "Previous");
+    CHECK(!*method(c, PLAYER, "Previous", NULL), "Previous");
     CHECK(wait_until(c, deck_loaded, 60), "Previous: the deck has %p, want a",
           (void *)c->app.decks[0].track);
     steps(c, 10);
@@ -1126,40 +1109,35 @@ int main(int argc, char **argv)
     /* OpenUri: b by its URL, playing; a file not in the library and
      * another scheme are errors. */
     want_track = b;
-    e = method_s(c, "OpenUri", b_url);
+    e = method(c, PLAYER, "OpenUri", "s", b_url);
     CHECK(!*e, "OpenUri %s: %s", b_url, e);
     CHECK(wait_until(c, deck_playing_want, 60), "OpenUri: the deck has %p, want b playing",
           (void *)c->app.decks[0].track);
     char *gone = rx_asprintf("file://%s/nothing.wav", music);
-    e = method_s(c, "OpenUri", gone);
-    CHECK(!strcmp(e, DBUS_ERROR_FILE_NOT_FOUND), "OpenUri of a file not in the library: %s", e);
+    e = method(c, PLAYER, "OpenUri", "s", gone);
+    CHECK(!strcmp(e, SD_BUS_ERROR_FILE_NOT_FOUND), "OpenUri of a file not in the library: %s", e);
     free(gone);
-    e = method_s(c, "OpenUri", "http://example.com/a.mp3");
-    CHECK(!strcmp(e, DBUS_ERROR_NOT_SUPPORTED), "OpenUri http: %s", e);
+    e = method(c, PLAYER, "OpenUri", "s", "http://example.com/a.mp3");
+    CHECK(!strcmp(e, SD_BUS_ERROR_NOT_SUPPORTED), "OpenUri http: %s", e);
     CHECK(c->app.decks[0].track == b && deck(c).playing, "a refused OpenUri changed the deck");
 
     /* The volume; the read-only properties. */
     mark = nb_seen;
-    double volume = 0.5;
-    CHECK(!*set_prop(c, PLAYER, "Volume", DBUS_TYPE_DOUBLE, "d", &volume), "Set Volume");
+    CHECK(!*method(c, PROPS, "Set", "ssv", PLAYER, "Volume", "d", 0.5), "Set Volume");
     CHECK(get_double(c, PLAYER, "Volume") == 0.5, "Volume %f", get_double(c, PLAYER, "Volume"));
     CHECK(wait_signal(c, mark, "PropertiesChanged", "Volume", NULL) >= 0,
           "no PropertiesChanged for the volume");
-    volume = -1.0;
-    CHECK(!*set_prop(c, PLAYER, "Volume", DBUS_TYPE_DOUBLE, "d", &volume), "Set Volume -1");
+    CHECK(!*method(c, PROPS, "Set", "ssv", PLAYER, "Volume", "d", -1.0), "Set Volume -1");
     CHECK(get_double(c, PLAYER, "Volume") == 0.0, "Volume -1 is %f",
           get_double(c, PLAYER, "Volume"));
-    const char *loop = "Track";
-    CHECK(!strcmp(set_prop(c, PLAYER, "LoopStatus", DBUS_TYPE_STRING, "s", &loop),
-                  DBUS_ERROR_PROPERTY_READ_ONLY), "Set LoopStatus");
-    dbus_bool_t shuffle = TRUE;
-    CHECK(!strcmp(set_prop(c, PLAYER, "Shuffle", DBUS_TYPE_BOOLEAN, "b", &shuffle),
-                  DBUS_ERROR_PROPERTY_READ_ONLY), "Set Shuffle");
-    CHECK(!strcmp(set_prop(c, ROOT, "Identity", DBUS_TYPE_STRING, "s", &loop),
-                  DBUS_ERROR_PROPERTY_READ_ONLY), "Set Identity");
-    double rate = 2.0;
-    CHECK(!strcmp(set_prop(c, PLAYER, "Rate", DBUS_TYPE_DOUBLE, "d", &rate),
-                  DBUS_ERROR_INVALID_ARGS), "Set Rate 2");
+    CHECK(!strcmp(method(c, PROPS, "Set", "ssv", PLAYER, "LoopStatus", "s", "Track"),
+                  SD_BUS_ERROR_PROPERTY_READ_ONLY), "Set LoopStatus");
+    CHECK(!strcmp(method(c, PROPS, "Set", "ssv", PLAYER, "Shuffle", "b", true),
+                  SD_BUS_ERROR_PROPERTY_READ_ONLY), "Set Shuffle");
+    CHECK(!strcmp(method(c, PROPS, "Set", "ssv", ROOT, "Identity", "s", "Track"),
+                  SD_BUS_ERROR_PROPERTY_READ_ONLY), "Set Identity");
+    CHECK(!strcmp(method(c, PROPS, "Set", "ssv", PLAYER, "Rate", "d", 2.0),
+                  SD_BUS_ERROR_INVALID_ARGS), "Set Rate 2");
 
     /* Position never went out in a PropertiesChanged. */
     for (int i = 0; i < nb_seen; i++)
@@ -1168,13 +1146,16 @@ int main(int argc, char **argv)
            count_seen(0, "PropertiesChanged"), count_seen(0, "Seeked"));
 
     /* Raise does nothing, Quit asks the loop to end. */
-    CHECK(!*method(c, ROOT, "Raise"), "Raise");
+    CHECK(!*method(c, ROOT, "Raise", NULL), "Raise");
     CHECK(!c->app.quit, "quit before Quit");
-    CHECK(!*method(c, ROOT, "Quit"), "Quit");
+    CHECK(!*method(c, ROOT, "Quit", NULL), "Quit");
     CHECK(c->app.quit, "Quit did not quit");
 
     /* A second app finds the name taken, and one without a bus carries
-     * on: neither is on the bus. */
+     * on: neither is on the bus. Without a bus is without an address and
+     * without a socket in $XDG_RUNTIME_DIR (when its path fits a socket's:
+     * sd-bus refuses a longer one as E2BIG), then without either
+     * variable. */
     RXApp app2;
     ret = rx_app_create(&app2, root2, &po, NULL);
     CHECK(ret == 0, "the second app: %s", strerror(-ret));
@@ -1183,8 +1164,15 @@ int main(int argc, char **argv)
         CHECK(ret == RX_ERROR(EEXIST) && !app2.mpris, "the name was not refused: %s",
               strerror(-ret));
         unsetenv("DBUS_SESSION_BUS_ADDRESS");
+        if (strlen(run) + sizeof("/bus") <= sizeof(((struct sockaddr_un *)0)->sun_path)) {
+            ret = rx_mpris_create(&app2);
+            CHECK(ret == RX_ERROR(ENOENT) && !app2.mpris, "no bus in %s: %s", run,
+                  strerror(-ret));
+        }
+        unsetenv("XDG_RUNTIME_DIR");
         ret = rx_mpris_create(&app2);
         CHECK(ret == RX_ERROR(ENOENT) && !app2.mpris, "no bus: %s", strerror(-ret));
+        setenv("XDG_RUNTIME_DIR", run, 1);
         setenv("DBUS_SESSION_BUS_ADDRESS", address, 1);
         rx_mpris_tick(&app2);
         rx_app_destroy(&app2);
@@ -1205,9 +1193,7 @@ int main(int argc, char **argv)
     /* A bus that goes away ends MPRIS, not the app. */
     ret = rx_mpris_create(&c->app);
     CHECK(ret == 0, "on the bus again: %s", strerror(-ret));
-    dbus_connection_close(c->client);
-    dbus_connection_unref(c->client);
-    c->client = NULL;
+    client_close(c);
     bus_kill();
     t0 = rx_time_us();
     while (c->app.mpris && rx_time_us() - t0 < 5000000)
@@ -1220,10 +1206,7 @@ int main(int argc, char **argv)
     free(a_art_url);
 
 end:
-    if (c->client) {
-        dbus_connection_close(c->client);
-        dbus_connection_unref(c->client);
-    }
+    client_close(c);
     rx_app_destroy(&c->app);
     bus_kill();
     free(address);
