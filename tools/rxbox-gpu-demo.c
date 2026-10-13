@@ -17,7 +17,10 @@
  *                 draws that must leave their box black (no columns,
  *                 reversed or NaN columns, an infinite rectangle) or stay
  *                 inside it (insets larger than the rectangle), and the
- *                 gain (a quiet column drawn up to full height, or not)
+ *                 gain (a quiet column drawn up to full height, or not),
+ *                 and the horizontal rules: a spike and an attack drawn a
+ *                 quarter of a pixel off the grid, box-filtered or split,
+ *                 and the maximum kept where it should be
  *   --scroll      draw the zoomed detail rows (about 120 columns,
  *                 interpolated; 1.6 columns a pixel) of the spike pattern
  *                 over black and over white, moving 0.07 columns a
@@ -91,6 +94,7 @@ typedef struct Demo {
     RXWaveGpu *ref[NB_REF];
     RXWaveGpu *empty;               /* uploaded with no columns */
     RXWaveGpu *quiet;               /* one column, low band at 32 */
+    RXWaveGpu *spike, *attack;      /* ref_spike, ref_attack */
     uint64_t   tex;
     bool       check;
     bool       scroll;
@@ -209,6 +213,10 @@ static const uint8_t ref_quiet[]  = { 32, 0, 0 };
 static const uint8_t ref_lowmid[] = { 127, 64, 0 };
 /* Detail interpolation: 40 -> 60 ramps, 0 -> 100 is a sharp attack. */
 static const uint8_t ref_interp[] = { 40, 0, 0, 60, 0, 0, 0, 0, 0, 100, 0, 0 };
+/* The horizontal rules: one loud column (low at 100, a reach of 39.4 px)
+ * in the middle of 41 silent ones, and silence then a sharp attack. */
+static const uint8_t ref_spike[3 * 41] = { [3 * 20] = 100 };
+static const uint8_t ref_attack[] = { 0, 0, 0, 0, 0, 0, 100, 0, 0, 100, 0, 0 };
 
 typedef struct RefStrip {
     enum RXWaveKind kind;
@@ -343,6 +351,79 @@ static const struct {
     { "no gain: within 32/127",        7,  -8.0f, 0x0055E1 },
 };
 
+/* ------------------------------------------------------------- horizontal */
+
+/* Boxes right of the edge cases for the horizontal rules, sized in device
+ * pixels, a quarter of a pixel off the grid where that matters:
+ *   0: the spike, detail at 1 column a pixel: box-filtered, it is in two
+ *      pixels at 3/4 and 1/4;
+ *   1: the attack, detail at 0.1 columns a pixel: the pixel its vertical
+ *      edge runs through is 1/4 silence and 3/4 attack;
+ *   2: the spike at 4 columns a pixel, not detail (a row preview): the
+ *      maximum, in full;
+ *   3: the spike at 20.5 columns a pixel, detail: past 16, the maximum. */
+#define NB_HBOX 4
+
+static const struct {
+    bool   attack;      /* ref_attack, or ref_spike */
+    int    width;       /* device pixels */
+    double col0, per_px;
+    bool   detail;
+} hboxes[NB_HBOX] = {
+    { false, 40,  0.25,   1.0, true  },
+    { true,  40, -0.025,  0.1, true  },
+    { false, 10,  0.0,    4.0, false },
+    { false,  2,  0.0,   20.5, true  },
+};
+
+static float hbox_x(Demo *d, int box)
+{
+    float x = edge_x(NB_EDGES) + EDGE_GAP;
+    for (int i = 0; i < box; i++)
+        x += hboxes[i].width / rx_window_scale(d->w) + EDGE_GAP;
+    return x;
+}
+
+static void draw_hboxes(Demo *d)
+{
+    void *dl = rx_demo_foreground_draw_list();
+    float y = ref_y(d->w);
+    rx_demo_rect(dl, hbox_x(d, 0) - 4, y - 4, hbox_x(d, NB_HBOX) + 4, y + REF_H + 4, 0x000000FF);
+
+    for (int i = 0; i < NB_HBOX; i++) {
+        float x = hbox_x(d, i);
+        RXWaveDraw wd = {
+            .x0 = x,  .y0 = y,
+            .x1 = x + hboxes[i].width / rx_window_scale(d->w),  .y1 = y + REF_H,
+            .col0 = hboxes[i].col0,
+            .col1 = hboxes[i].col0 + hboxes[i].per_px * hboxes[i].width,
+            .mode   = RX_WAVE_CENTRED,
+            .detail = hboxes[i].detail,
+            .alpha  = 1.0f,
+        };
+        rx_wave_draw(d->w, dl, hboxes[i].attack ? d->attack : d->spike, &wd);
+    }
+}
+
+static const struct {
+    const char *what;
+    int box, px;        /* the box, and the device pixel in it */
+    float dy;           /* from the box's centre line */
+    uint32_t rgb;
+} hprobes[] = {
+    { "box filter: 3/4 of a spike",    0, 20, -20.0f, 0x0040A9 },
+    { "box filter: 1/4 of a spike",    0, 19, -20.0f, 0x001538 },
+    { "box filter: the spike's top",   0, 20, -38.0f, 0x0040A9 },
+    { "box filter: above the spike",   0, 20, -41.0f, 0x000000 },
+    { "box filter: silence line",      0,  5,   0.0f, 0xD2DCFA },
+    { "box filter: above the line",    0,  5,  -2.0f, 0x000000 },
+    { "attack split: 3/4 attack",      1, 20, -20.0f, 0x0040A9 },
+    { "attack split: before it",       1, 19, -20.0f, 0x000000 },
+    { "attack split: after it",        1, 21, -20.0f, 0x0055E1 },
+    { "not detail: the maximum",       2,  5, -20.0f, 0x0055E1 },
+    { "past 16 columns: the maximum",  3,  1, -20.0f, 0x0055E1 },
+};
+
 static void draw_reference(Demo *d)
 {
     void *dl = rx_demo_foreground_draw_list();
@@ -400,8 +481,8 @@ static const Probe probes[] = {
     { "overlaid low+mid core",    15, 12.0f,  40.0f, 0xB4690A },
     { "overlaid low envelope",    15, 12.0f, -30.0f, 0x0055E1 },
     { "dimmed low",               16, 12.0f,   0.5f, 0x002B71 },
-    /* Halfway through column 0 the level is 50, a reach of 19.7 px;
-     * without the ramp it would be 40, 15.7 px. */
+    /* At the probe's pixel centre, 12.5 px into column 0, the level is
+     * 50.4, a reach of 19.8 px; without the ramp it would be 40, 15.7 px. */
     { "detail ramp, inside",      17, 12.0f, -18.0f, 0x0055E1 },
     { "detail ramp, outside",     17, 12.0f, -21.0f, 0x000000 },
     { "sharp attack stays silent", 19, 12.0f, -10.0f, 0x000000 },
@@ -452,8 +533,15 @@ static int run_checks(Demo *d)
         failed += !probe(rgba, width, height, edge_probes[i].what, x, y, edge_probes[i].rgb);
     }
 
+    for (size_t i = 0; i < RX_ARRAY_ELEMS(hprobes); i++) {
+        int x = (int)lroundf(hbox_x(d, hprobes[i].box) * scale) + hprobes[i].px;
+        int y = (int)floorf((centre + hprobes[i].dy) * scale);
+        failed += !probe(rgba, width, height, hprobes[i].what, x, y, hprobes[i].rgb);
+    }
+
     free(rgba);
-    size_t total = RX_ARRAY_ELEMS(probes) + RX_ARRAY_ELEMS(edge_probes);
+    size_t total = RX_ARRAY_ELEMS(probes) + RX_ARRAY_ELEMS(edge_probes) +
+                   RX_ARRAY_ELEMS(hprobes);
     if (failed)
         rx_err("demo: %d of %zu pixel checks failed", failed, total);
     else
@@ -465,7 +553,11 @@ static int run_checks(Demo *d)
 
 /* What a smooth scroll leaves: the row's total coverage moves only by
  * rounding (the picture over whole periods is the same picture shifted),
- * and consecutive frames differ by about as much every time. */
+ * and consecutive frames differ by about as much every time. Box-filtered,
+ * the rows measure 0.003 and 0.022 % and 0.2 and 0.3 %; taking the
+ * maximum over whole columns at the left edge, they moved 0.52 and 0.00 %
+ * and 11 and 141 % (the 1.6 row unchanged in two frames of three, then a
+ * jump). */
 #define SCROLL_MAX_COV    0.001     /* (max - min) / mean of the coverage */
 #define SCROLL_MAX_UNEVEN 0.05      /* standard deviation / mean of the frame differences */
 
@@ -743,6 +835,7 @@ static void frame(Demo *d)
     if (d->check) {
         draw_reference(d);
         draw_edges(d);
+        draw_hboxes(d);
     }
     if (d->bench > 0.0)
         draw_bench(d);
@@ -848,9 +941,11 @@ int main(int argc, char **argv)
     d.tex = make_texture(d.w, 0);
     d.empty = rx_wave_upload(d.w, RX_WAVE_3BAND, NULL, 0);
     d.quiet = rx_wave_upload(d.w, RX_WAVE_3BAND, ref_quiet, 1);
+    d.spike = rx_wave_upload(d.w, RX_WAVE_3BAND, ref_spike, sizeof(ref_spike) / 3);
+    d.attack = rx_wave_upload(d.w, RX_WAVE_3BAND, ref_attack, sizeof(ref_attack) / 3);
 
     if (!d.band || !d.blue || !d.rgb || !d.spikes || !d.tex || ref_upload(&d) < 0 || !d.empty ||
-        rx_wave_columns(d.empty) != 0 || !d.quiet) {
+        rx_wave_columns(d.empty) != 0 || !d.quiet || !d.spike || !d.attack) {
         rx_err("demo: could not create the resources");
         ret = RX_ERROR(ENOMEM);
         goto end;
@@ -910,6 +1005,8 @@ end:;
         rx_wave_release(d.w, d.ref[i]);
     rx_wave_release(d.w, d.empty);
     rx_wave_release(d.w, d.quiet);
+    rx_wave_release(d.w, d.spike);
+    rx_wave_release(d.w, d.attack);
     rx_window_destroy(d.w);
     for (int i = 0; i < NB_SCROLL; i++)
         free(d.rows[i].prev);

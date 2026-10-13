@@ -35,9 +35,10 @@ gpu_sources = files(
     'imgui_glue.cpp',
 ) + gpu_shader_headers
 
-# The demo run as a test: 30 frames with a pixel check of the waveform
-# colours. It opens a window, so it only runs where the caller says a
-# private compositor is there (RXBOX_GPU_TEST=1 and WAYLAND_DISPLAY set);
+# The demo run as a test: a pixel check of the waveform colours and a
+# check that the detail waveform scrolls smoothly (tests/gpu/run_demo.sh).
+# It opens a window, so it only runs where the caller says a private
+# compositor is there (RXBOX_GPU_TEST=1 and WAYLAND_DISPLAY set);
 # otherwise it is skipped (exit 77). tools/ is configured after this file,
 # so the demo is found by path; build it by name first
 # (ninja -C build-gpu rxbox-gpu-demo).

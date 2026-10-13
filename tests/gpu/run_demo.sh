@@ -1,7 +1,8 @@
 #!/bin/sh
 # Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md.
 #
-# Runs rxbox-gpu-demo for 30 frames with its pixel check and a screenshot.
+# Runs rxbox-gpu-demo with its pixel check, its scroll check (which makes
+# the run 47 frames) and a screenshot.
 # It opens a window, so only where the caller has said a private compositor
 # is there: RXBOX_GPU_TEST=1 and WAYLAND_DISPLAY set (never the user's own
 # session; see docs/HACKING.md). Otherwise the test is skipped.
@@ -18,4 +19,4 @@ if [ ! -x "$1" ]; then
     exit 1
 fi
 
-exec "$1" --frames 30 --check --screenshot "$2" ${RXBOX_GPU_VALIDATION:+--validation}
+exec "$1" --frames 30 --check --scroll --screenshot "$2" ${RXBOX_GPU_VALIDATION:+--validation}
