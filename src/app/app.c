@@ -35,8 +35,9 @@
  *    own (a second connection to the same database): rx_export() wants a
  *    mutable library, and sharing the interface's would race with every
  *    edit made while it runs. What the tracks lack is analysed first here,
- *    through the normal jobs, and pending saves are flushed, so the
- *    export's handle finds everything in the database. That handle is a
+ *    through the normal jobs (the export waits for its own tracks'
+ *    analyses, not for the rest of the queue), and pending saves are
+ *    flushed, so the export's handle finds everything in the database. That handle is a
  *    snapshot the export thread opens as the dry run starts (reading the
  *    library and looking at every file take a while, and the interface
  *    goes on), in one read transaction, so an edit committed meanwhile is
@@ -205,6 +206,11 @@ struct RXAppPriv {
     bool       export_started;  /* the thread exists and must be joined */
     pthread_t  export_thread;
     char       export_last_stage[32];
+    uint64_t  *export_wait;     /* the export's tracks with an analysis in flight, sorted */
+    int        nb_export_wait;
+    int        export_wait_total;
+    bool       export_idle;     /* the jobs were seen with nothing pending (export_lost) */
+    int        export_idle_done;    /* app->analysing_done then */
 };
 
 /* ------------------------------------------------------------------ helpers */
@@ -1981,6 +1987,106 @@ static void export_log(RXApp *app, const char *fmt, ...)
     snprintf(log + len, cap - len, "%s\n", line);
 }
 
+static int export_cmp_id(const void *a, const void *b)
+{
+    uint64_t x = *(const uint64_t *)a, y = *(const uint64_t *)b;
+    return x < y ? -1 : x > y;
+}
+
+static void export_wait_free(RXAppPriv *priv)
+{
+    free(priv->export_wait);
+    priv->export_wait = NULL;
+    priv->nb_export_wait = priv->export_wait_total = 0;
+}
+
+/* What the analysing phase waits for: those of the export's tracks (`ids`)
+ * with an analysis in flight, queued by the export or before it, and
+ * nothing else (after an analyser upgrade the startup queue holds the
+ * whole library). */
+static int export_wait_for(RXApp *app, const RXArray *ids)
+{
+    RXAppPriv *priv = app->priv;
+    export_wait_free(priv);
+    uint64_t *in = malloc(RX_MAX(priv->inflight.nb, 1) * sizeof(*in));
+    uint64_t *w = malloc(RX_MAX(ids->nb, 1) * sizeof(*w));
+    if (!in || !w) {
+        free(in);
+        free(w);
+        return RX_ERROR(ENOMEM);
+    }
+    for (size_t i = 0; i < priv->inflight.nb; i++)
+        in[i] = ((const Inflight *)rx_array_at(&priv->inflight, i))->track_id;
+    if (priv->inflight.nb)
+        qsort(in, priv->inflight.nb, sizeof(*in), export_cmp_id);
+    int n = 0;
+    for (size_t i = 0; i < ids->nb; i++) {
+        const uint64_t *id = rx_array_at(ids, i);
+        if (priv->inflight.nb && bsearch(id, in, priv->inflight.nb, sizeof(*in), export_cmp_id))
+            w[n++] = *id;
+    }
+    free(in);
+    if (n)
+        qsort(w, (size_t)n, sizeof(*w), export_cmp_id);
+    int k = 0;
+    for (int i = 0; i < n; i++)
+        if (!k || w[k - 1] != w[i])
+            w[k++] = w[i];
+    priv->export_wait = w;
+    priv->nb_export_wait = priv->export_wait_total = k;
+    priv->export_idle = false;
+    return 0;
+}
+
+/* How many of them are still in flight; the others leave the list. */
+static int export_waiting(RXApp *app)
+{
+    RXAppPriv *priv = app->priv;
+    if (!priv->nb_export_wait)
+        return 0;
+    uint8_t *still = calloc((size_t)priv->nb_export_wait, 1);
+    if (!still)
+        return priv->nb_export_wait;
+    for (size_t i = 0; i < priv->inflight.nb; i++) {
+        const Inflight *f = rx_array_at(&priv->inflight, i);
+        const uint64_t *at = bsearch(&f->track_id, priv->export_wait, (size_t)priv->nb_export_wait,
+                                     sizeof(*priv->export_wait), export_cmp_id);
+        if (at)
+            still[at - priv->export_wait] = 1;
+    }
+    int k = 0;
+    for (int i = 0; i < priv->nb_export_wait; i++)
+        if (still[i])
+            priv->export_wait[k++] = priv->export_wait[i];
+    priv->nb_export_wait = k;
+    free(still);
+    return k;
+}
+
+/* Whether the analyses still waited for will never come back. The jobs
+ * post a result before they count it done (rxbox/jobs.h), so with nothing
+ * pending every result is in their mailbox, and a tick that then applies
+ * none (rx_app_tick drains before this) has seen the last: one whose post
+ * failed for memory is lost, and the export goes on without it rather
+ * than wait for ever. */
+static bool export_lost(RXApp *app, int waiting)
+{
+    RXAppPriv *priv = app->priv;
+    if (rx_jobs_pending(app->jobs) > 0) {
+        priv->export_idle = false;
+        return false;
+    }
+    if (!priv->export_idle || priv->export_idle_done != app->analysing_done) {
+        priv->export_idle = true;
+        priv->export_idle_done = app->analysing_done;
+        return false;
+    }
+    rx_warn("export: %d analys%s never came back", waiting, waiting == 1 ? "is" : "es");
+    export_log(app, "%d analys%s never came back; exporting without waiting", waiting,
+               waiting == 1 ? "is" : "es");
+    return true;
+}
+
 /* Export thread: progress to the mailbox, strings copied. */
 static bool export_progress(void *opaque, const char *stage, int done, int total, const char *item)
 {
@@ -2090,6 +2196,7 @@ static void export_finish(RXApp *app, int result)
     RXAppPriv *priv = app->priv;
     export_join(priv);
     export_snapshot_close(priv);
+    export_wait_free(priv);
     priv->export_phase = EXPORT_IDLE;
 
     typeof(app->export_state) *es = &app->export_state;
@@ -2314,14 +2421,17 @@ static bool export_tick(RXApp *app)
     }
 
     switch (priv->export_phase) {
-    case EXPORT_ANALYSING:
-        es->done = app->analysing_done;
-        es->total = app->analysing_total;
-        if (priv->inflight.nb)
+    case EXPORT_ANALYSING: {
+        int waiting = export_waiting(app);
+        es->done = priv->export_wait_total - waiting;
+        es->total = priv->export_wait_total;
+        if (waiting && !export_lost(app, waiting))
             return false;
+        export_wait_free(priv);
         flush_saves(app);
         export_run(app, true);
         return true;
+    }
     case EXPORT_CONFIRM:
         return false;
     default:
@@ -2379,6 +2489,7 @@ static void export_stop(RXApp *app)
     rx_cancel(&priv->export_cancel);
     export_join(priv);
     export_snapshot_close(priv);
+    export_wait_free(priv);
     priv->export_phase = EXPORT_IDLE;
     app->export_state.running = false;
     app->export_state.confirm = false;
@@ -2441,13 +2552,19 @@ int rx_app_start_export(RXApp *app)
 
     /* What goes on the stick is analysed first, here, so the export's
      * handle finds every grid and waveform in the database: the chosen
-     * playlists' tracks, every playlist's by default, or everything. */
-    int queued = 0;
+     * playlists' tracks, every playlist's by default, or everything. The
+     * export waits for those (export_wait_for), not for the rest of the
+     * queue. */
+    RXArray ids;
+    rx_array_init(&ids, sizeof(uint64_t));
+    bool oom = false;
     if (es->whole_library) {
         for (int i = 0; i < app->lib.nb_tracks; i++) {
             RXTrack *t = app->lib.tracks[i];
-            if (!t->missing && queue_analysis(app, t, RX_ANALYSE_ALL, false, false) > 0)
-                queued++;
+            if (t->missing)
+                continue;
+            queue_analysis(app, t, RX_ANALYSE_ALL, false, false);
+            oom |= !rx_array_push(&ids, &t->id);
         }
     } else {
         int nb = es->nb_playlists;
@@ -2463,11 +2580,19 @@ int rx_app_start_export(RXApp *app)
             const RXPlaylist *p = pls[i];
             for (int k = 0; p && k < p->nb; k++) {
                 RXTrack *t = rx_library_find_id(&app->lib, p->track_ids[k]);
-                if (t && !t->missing && queue_analysis(app, t, RX_ANALYSE_ALL, false, false) > 0)
-                    queued++;
+                if (!t || t->missing)
+                    continue;
+                queue_analysis(app, t, RX_ANALYSE_ALL, false, false);
+                oom |= !rx_array_push(&ids, &t->id);
             }
         }
         free(all);
+    }
+    int ret = oom ? RX_ERROR(ENOMEM) : export_wait_for(app, &ids);
+    rx_array_free(&ids);
+    if (ret < 0) {
+        es->running = false;
+        return ret;
     }
     flush_saves(app);
 
@@ -2475,8 +2600,9 @@ int rx_app_start_export(RXApp *app)
                es->compat ? " with the compatibility transcode" : "");
     priv->export_phase = EXPORT_ANALYSING;
     snprintf(es->stage, sizeof(es->stage), "analysis");
-    if (queued) {
-        export_log(app, "Analysing %d track%s first", queued, queued == 1 ? "" : "s");
+    if (priv->nb_export_wait) {
+        export_log(app, "Analysing %d track%s first", priv->nb_export_wait,
+                   priv->nb_export_wait == 1 ? "" : "s");
         rx_app_set_status(app, "Analysing before the export to %s", es->dest);
     }
     /* With nothing to wait for, the next tick starts the dry run. */

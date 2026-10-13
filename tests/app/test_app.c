@@ -10,7 +10,8 @@
  * running through its phases to the end, and reading and inspecting that
  * stick on a worker. Then the edges: an export answers exactly what its
  * dry run asked about although the library changed meanwhile, and asks
- * about a player's unsynced change and the files to delete at once; a
+ * about a player's unsynced change and the files to delete at once (after
+ * one dry run); an export does not wait for analyses of other tracks; a
  * stick read given up on is dropped; a dry run cancelled as it ends
  * exports nothing; an analysis of a file gone since it was added fails
  * with the track named in the status; a load the player cannot take
@@ -707,6 +708,21 @@ int main(int argc, char **argv)
           (unsigned long long)wanted);
     rx_app_cancel_stick(&app, wanted);
     CHECK(!app.stick_result, "a finished read given up on kept its result");
+
+    /* An export waits for its own tracks' analyses, not for the rest of
+     * the queue: with a's (not in it) in flight, the dry run starts at the
+     * next tick. Cancelled there. */
+    uint64_t ida = a->id;
+    CHECK(rx_app_analyse_tracks(&app, &ida, 1, RX_ANALYSE_ALL, true) == 1, "queue a's analysis");
+    ret = rx_app_start_export(&app);
+    CHECK(ret == 0, "start export: %s", strerror(-ret));
+    rx_app_tick(&app);
+    CHECK(strcmp(app.export_state.stage, "analysis") && app.analysing_total > 0,
+          "the export waited for an analysis not its own (stage %s, %d analysing)",
+          app.export_state.stage, app.analysing_total);
+    app.export_state.cancel = true;
+    CHECK(tick_until(&app, export_cancel_done, 60), "the cancelled export did not stop");
+    CHECK(tick_until(&app, analysis_done, 300), "a's analysis did not finish");
 
     /* A dry run cancelled after it got to its end: nothing was exported
      * and the real run never starts. The dry run is given time to finish
