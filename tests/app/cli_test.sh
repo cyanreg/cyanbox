@@ -4,9 +4,10 @@
 # The command line end to end, in a scratch directory: init a library, add a
 # generated 128 BPM FLAC, show its grid, give it a colour (a hue, by degrees
 # and by name), make a playlist, a dry-run export that says which colour
-# the stick gets, a real export to a directory and inspect it, settings,
-# results of an older analyser counted and analysed again, and the exit
-# codes. The FLAC carries a comment tag, which the library leaves out
+# the stick gets, a real export to a directory and inspect it, sync and
+# pull refusing a directory that is no stick, settings, results of an
+# older analyser counted and analysed again (by the export, not by its
+# dry run, which leaves the library as it was), and the exit codes. The FLAC carries a comment tag, which the library leaves out
 # unless import.comment says to take it.
 # Then the edges: init over a library, a relative --library, an id that
 # also names a directory, an unreadable file, output that cannot be
@@ -37,7 +38,7 @@ run() {
 }
 
 rm -rf "$dir"
-mkdir -p "$dir/music" "$dir/dry" "$dir/stick"
+mkdir -p "$dir/music" "$dir/dry" "$dir/stick" "$dir/stale"
 
 # 40 s of a 55 Hz kick on every beat at 128 BPM with a click on top.
 beat=0.46875
@@ -167,8 +168,12 @@ EOF
 
     # The export's analysis uses the same notion: a dry run on a library
     # whose waveforms an older analyser made, then on one whose stored
-    # waveforms are format version 1 (before the recalibrations), makes
-    # them again before it writes.
+    # waveforms are format version 1 (before the recalibrations), says it
+    # would make them again and leaves the library as it was (a dry run
+    # writes nothing); the export makes them again before it writes.
+    library_sum() {
+        cat "$lib/library.db" "$lib/library.db-wal" 2> /dev/null | cksum
+    }
     python3 - "$lib/library.db" <<'EOF' || fail "cannot make the waveforms old"
 import sqlite3, sys
 db = sqlite3.connect(sys.argv[1])
@@ -176,10 +181,13 @@ db.execute("UPDATE track SET waves_version = 0")
 db.commit()
 db.close()
 EOF
+    before=$(library_sum)
     run export --dry-run "$dir/dry" > "$dir/dry-stale.out" ||
         { cat "$dir/dry-stale.out"; fail "export --dry-run of stale waveforms"; }
-    grep -q "^analysing 1 track (1 made by an older analyser)" "$dir/dry-stale.out" ||
-        { cat "$dir/dry-stale.out"; fail "the export did not analyse waveforms of an older analyser"; }
+    grep -q "^1 track would be analysed first (1 made by an older analyser)" "$dir/dry-stale.out" ||
+        { cat "$dir/dry-stale.out"; fail "the dry run does not say it would analyse stale waveforms"; }
+    [ "$(library_sum)" = "$before" ] || fail "the dry run changed the library"
+    run analyze > /dev/null || fail "analyze of the stale waveforms"
     python3 - "$lib/library.db" <<'EOF' || fail "cannot make the waveforms an older format"
 import sqlite3, sys
 db = sqlite3.connect(sys.argv[1])
@@ -194,12 +202,19 @@ EOF
         fail "show does not say the waveforms are an older format"
     run check | grep -q "^1 track has results from an older analyser" ||
         fail "check does not count waveforms of an older format"
+    before=$(library_sum)
     run export --dry-run "$dir/dry" > "$dir/dry-stale.out" ||
         { cat "$dir/dry-stale.out"; fail "export --dry-run of an older waveform format"; }
     cat "$dir/dry-stale.out"
-    grep -q "^analysing 1 track (1 made by an older analyser)" "$dir/dry-stale.out" ||
-        fail "the export did not analyse waveforms of an older format"
+    grep -q "^1 track would be analysed first (1 made by an older analyser)" "$dir/dry-stale.out" ||
+        fail "the dry run does not say it would analyse waveforms of an older format"
+    [ "$(library_sum)" = "$before" ] || fail "the dry run changed the library"
     [ -z "$(ls -A "$dir/dry")" ] || fail "the dry run wrote to the stick"
+    run check | grep -q "^1 track has results from an older analyser" ||
+        fail "the dry run analysed the stale track"
+    run export "$dir/stale" > "$dir/stale.out" || { cat "$dir/stale.out"; fail "export of stale waveforms"; }
+    grep -q "^analysing 1 track (1 made by an older analyser)" "$dir/stale.out" ||
+        { cat "$dir/stale.out"; fail "the export did not analyse waveforms of an older format"; }
     run check | grep -q "^no track has results from an older analyser" ||
         fail "the export left the waveforms stale"
 else
