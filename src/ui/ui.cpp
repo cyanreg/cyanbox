@@ -1079,8 +1079,21 @@ static void status_bar(UiState *ui, ImVec2 a, ImVec2 b)
         ui_text(ui, dl, nullptr, fs, ImVec2(x, ty), UI_DIM, gpu);
         x -= PX(16);
     }
-    char tracks[48];
-    snprintf(tracks, sizeof(tracks), "%d tracks", app->lib.nb_tracks);
+    // The count and the files' size: what a stick with every track would
+    // hold (an export of playlists copies fewer; transcodes change sizes).
+    int64_t bytes = 0;
+    for (int i = 0; i < app->lib.nb_tracks; i++)
+        bytes += app->lib.tracks[i]->file_size;
+    char tracks[64];
+    if (bytes >= (int64_t)10 << 30)
+        snprintf(tracks, sizeof(tracks), "%d tracks \xC2\xB7 %.0f GB", app->lib.nb_tracks,
+                 bytes / 1073741824.0);
+    else if (bytes >= (int64_t)1 << 30)
+        snprintf(tracks, sizeof(tracks), "%d tracks \xC2\xB7 %.1f GB", app->lib.nb_tracks,
+                 bytes / 1073741824.0);
+    else
+        snprintf(tracks, sizeof(tracks), "%d tracks \xC2\xB7 %.0f MB", app->lib.nb_tracks,
+                 bytes / 1048576.0);
     x -= ui_text_width(ui, nullptr, fs, tracks);
     ui_text(ui, dl, nullptr, fs, ImVec2(x, ty), UI_DIM, tracks);
     char audio[160];

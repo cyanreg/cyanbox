@@ -294,7 +294,8 @@ DJ's own.
 Left: the last message (`rx_app_set_status`). Middle: analysis progress
 (`Analysing 12/340: Artist - Title`) with a thin bar; export progress
 likewise. Right: audio state (`PipeWire 48 kHz · rxbox-null`, `Audio: none`
-under `--audio none`, or the error in red), the library track count, the
+under `--audio none`, or the error in red), the library track count with the
+size of its files (`58 tracks · 1.7 GB`: what a stick with every track holds), the
 GPU name.
 
 ## Dialogs and menus
