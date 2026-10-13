@@ -108,10 +108,111 @@ int rx_library_index_of(const RXLibrary *lib, const RXTrack *t)
     return -1;
 }
 
+/* The tracks by path. rx_library_find_path is asked once per file when a
+ * folder is added (each file known: 20000 took 5 s scanning the list,
+ * on the interface's thread), per entry by the m3u import and by MPRIS: a
+ * hash of the paths, kept with the track list by every edit that adds,
+ * removes or moves a track (tracks_append, rx_library_remove,
+ * rx_library_relocate, close). Open addressing with linear probing, at
+ * most half full, deletion by backward shift (no tombstones). Without the
+ * memory to grow it the index goes and lookups scan the list. */
+struct RXPathIndex {
+    RXTrack **slot;
+    size_t    cap, nb;          /* cap a power of two */
+};
+
+static uint64_t path_hash(const char *s)
+{
+    /* FNV-1a */
+    uint64_t h = 0xCBF29CE484222325ull;
+    for (; *s; s++)
+        h = (h ^ (uint8_t)*s) * 0x100000001B3ull;
+    return h;
+}
+
+/* The slot holding `path`, or the empty one where it would go. */
+static size_t index_slot(const RXPathIndex *x, const char *path)
+{
+    size_t mask = x->cap - 1, i = (size_t)path_hash(path) & mask;
+    while (x->slot[i] && strcmp(x->slot[i]->path, path))
+        i = (i + 1) & mask;
+    return i;
+}
+
+static void index_free(RXLibrary *lib)
+{
+    if (lib->by_path)
+        free(lib->by_path->slot);
+    free(lib->by_path);
+    lib->by_path = NULL;
+}
+
+static int index_init(RXLibrary *lib)
+{
+    RXPathIndex *x = calloc(1, sizeof(*x));
+    if (x)
+        x->slot = calloc(x->cap = 256, sizeof(*x->slot));
+    if (!x || !x->slot) {
+        free(x);
+        return RX_ERROR(ENOMEM);
+    }
+    lib->by_path = x;
+    return 0;
+}
+
+static void index_put(RXLibrary *lib, RXTrack *t)
+{
+    RXPathIndex *x = lib->by_path;
+    if (!x || !t->path)
+        return;
+    if (2 * (x->nb + 1) > x->cap) {
+        RXPathIndex n = { .cap = 2 * x->cap };
+        if (!(n.slot = calloc(n.cap, sizeof(*n.slot)))) {
+            index_free(lib);
+            return;
+        }
+        for (size_t i = 0; i < x->cap; i++) {
+            if (x->slot[i])
+                n.slot[index_slot(&n, x->slot[i]->path)] = x->slot[i];
+        }
+        n.nb = x->nb;
+        free(x->slot);
+        *x = n;
+    }
+    size_t i = index_slot(x, t->path);
+    x->nb += !x->slot[i];
+    x->slot[i] = t;
+}
+
+static void index_remove(RXLibrary *lib, const RXTrack *t)
+{
+    RXPathIndex *x = lib->by_path;
+    if (!x || !t->path)
+        return;
+    size_t mask = x->cap - 1, i = index_slot(x, t->path);
+    if (x->slot[i] != t)
+        return;
+    x->slot[i] = NULL;
+    x->nb--;
+    /* The entries after it in its run move back over the hole unless
+     * their home slot lies between the hole and where they are. */
+    for (size_t j = (i + 1) & mask; x->slot[j]; j = (j + 1) & mask) {
+        size_t home = (size_t)path_hash(x->slot[j]->path) & mask;
+        bool stays = i <= j ? i < home && home <= j : i < home || home <= j;
+        if (stays)
+            continue;
+        x->slot[i] = x->slot[j];
+        x->slot[j] = NULL;
+        i = j;
+    }
+}
+
 RXTrack *rx_library_find_path(const RXLibrary *lib, const char *abs_path)
 {
     if (!abs_path)
         return NULL;
+    if (lib->by_path)
+        return lib->by_path->slot[index_slot(lib->by_path, abs_path)];
     for (int i = 0; i < lib->nb_tracks; i++) {
         if (lib->tracks[i]->path && !strcmp(lib->tracks[i]->path, abs_path))
             return lib->tracks[i];
@@ -148,6 +249,7 @@ static int tracks_append(RXLibrary *lib, RXTrack *t)
         lib->tracks = a;
     }
     lib->tracks[lib->nb_tracks++] = t;
+    index_put(lib, t);
     return 0;
 }
 
@@ -615,6 +717,8 @@ int rx_library_open(RXLibrary *lib, const char *root)
     free(dir);
     if (!lib->root)
         return RX_ERROR(ENOMEM);
+    if ((ret = index_init(lib)) < 0)
+        goto fail;
 
     char *path = rx_path_join(lib->root, "library.db");
     if (!path) {
@@ -667,6 +771,7 @@ void rx_library_close(RXLibrary *lib)
     for (int i = 0; i < lib->nb_tracks; i++)
         rx_track_free(lib->tracks[i]);
     free(lib->tracks);
+    index_free(lib);
     rx_config_free(&lib->cfg);
     rx_db_close(lib->db);
     free(lib->root);
@@ -783,6 +888,7 @@ typedef struct Probed {
     bool     comment;           /* import.comment, read on the owner's thread */
     char     container[32];
     int      err;
+    const char *album_first;    /* the path of its album's first file by name; NULL: no album */
 } Probed;
 
 /* Runs on a worker: touches only its own Probed and track. */
@@ -850,14 +956,18 @@ static RXTrack *known_track(RXLibrary *lib, const char *abs)
 }
 
 /* Inserts the probed tracks in one transaction, each in a savepoint of its
- * own so one bad row does not cost the others. Reports every one. */
+ * own so one bad row does not cost the others. Reports every one and
+ * takes every track, the transaction failing to start or commit included
+ * (all of them failed then). With nothing to insert (no file, or none
+ * that probed) it takes no write lock. */
 static int insert_batch(RXLibrary *lib, Probed *items, int nb, rx_add_cb cb, void *opaque)
 {
-    int ret = rx_db_begin(lib->db);
-    if (ret < 0)
-        return ret;
+    bool any = false;
+    for (int i = 0; i < nb; i++)
+        any |= items[i].err >= 0;
+    int ret = any ? rx_db_begin(lib->db) : 0;
     int64_t now = rx_time_now();
-    for (int i = 0; i < nb; i++) {
+    for (int i = 0; any && ret >= 0 && i < nb; i++) {
         Probed *p = &items[i];
         if (p->err < 0)
             continue;
@@ -874,7 +984,8 @@ static int insert_batch(RXLibrary *lib, Probed *items, int nb, rx_add_cb cb, voi
                 p->err = rx_db_commit(lib->db);
         }
     }
-    ret = rx_db_commit(lib->db);
+    if (any && ret >= 0)
+        ret = rx_db_commit(lib->db);
 
     int added = 0;
     for (int i = 0; i < nb; i++) {
@@ -1013,20 +1124,74 @@ static int list_dir(const char *dir, DirList *l)
     return 0;
 }
 
-/* A directory's files once probed, in the order of their disc and track
- * tags: numbered tracks by disc then number, files without a number after
- * them, equals and failures by name. */
+/* The album a probed file is of: its album tag with the album artist's, so
+ * that two albums of one name by two artists stay two (a compilation
+ * names one album artist over its tracks' artists). NULL: none. */
+static const RXMeta *album_of(const Probed *p)
+{
+    const RXMeta *m = p->err >= 0 ? &p->t->file_meta : NULL;
+    return m && m->album && *m->album ? m : NULL;
+}
+
+static int album_cmp(const RXMeta *a, const RXMeta *b)
+{
+    int c = strcmp(a->album, b->album);
+    return c ? c : strcmp(a->album_artist ? a->album_artist : "", b->album_artist ? b->album_artist : "");
+}
+
+static int cmp_album(const void *pa, const void *pb)
+{
+    const Probed *a = *(Probed *const *)pa, *b = *(Probed *const *)pb;
+    int c = album_cmp(album_of(a), album_of(b));
+    return c ? c : strcmp(a->t->path, b->t->path);
+}
+
+/* Sets each file's album_first: its album's files sorted together by
+ * name, the first one's path. */
+static int group_albums(Probed *items, int nb)
+{
+    Probed **v = malloc((size_t)RX_MAX(nb, 1) * sizeof(*v));
+    if (!v)
+        return RX_ERROR(ENOMEM);
+    int n = 0;
+    for (int i = 0; i < nb; i++) {
+        items[i].album_first = NULL;
+        if (album_of(&items[i]))
+            v[n++] = &items[i];
+    }
+    qsort(v, (size_t)n, sizeof(*v), cmp_album);
+    for (int i = 0; i < n; i++) {
+        bool same = i && !album_cmp(album_of(v[i]), album_of(v[i - 1]));
+        v[i]->album_first = same ? v[i - 1]->album_first : v[i]->t->path;
+    }
+    free(v);
+    return 0;
+}
+
+/* A directory's files once probed, album by album (each album where its
+ * first file is by name), an album in the order of its disc and track
+ * tags (numbered tracks by disc then number, files without a number after
+ * them, equals by name); files without an album tag, and failures, after
+ * the albums, by name. A folder of several albums goes in an album at a
+ * time, not their first tracks, then their second ones. */
 static int cmp_probed(const void *pa, const void *pb)
 {
     const Probed *a = pa, *b = pb;
-    const RXMeta *ma = a->err >= 0 ? &a->t->file_meta : NULL;
-    const RXMeta *mb = b->err >= 0 ? &b->t->file_meta : NULL;
-    int da = ma && ma->disc_number > 0 ? ma->disc_number : INT_MAX;
-    int db = mb && mb->disc_number > 0 ? mb->disc_number : INT_MAX;
+    if (!a->album_first != !b->album_first)
+        return a->album_first ? -1 : 1;
+    if (!a->album_first)
+        return strcmp(a->t->path, b->t->path);
+    /* Two albums have two first files. */
+    int c = strcmp(a->album_first, b->album_first);
+    if (c)
+        return c;
+    const RXMeta *ma = &a->t->file_meta, *mb = &b->t->file_meta;
+    int da = ma->disc_number > 0 ? ma->disc_number : INT_MAX;
+    int db = mb->disc_number > 0 ? mb->disc_number : INT_MAX;
     if (da != db)
         return da < db ? -1 : 1;
-    int na = ma && ma->track_number > 0 ? ma->track_number : INT_MAX;
-    int nb = mb && mb->track_number > 0 ? mb->track_number : INT_MAX;
+    int na = ma->track_number > 0 ? ma->track_number : INT_MAX;
+    int nb = mb->track_number > 0 ? mb->track_number : INT_MAX;
     if (na != nb)
         return na < nb ? -1 : 1;
     return strcmp(a->t->path, b->t->path);
@@ -1072,8 +1237,10 @@ static int add_dir(RXLibrary *lib, RXThreadPool *pool, const char *dir, rx_add_c
     if (ret >= 0) {
         probe_all(pool, items, nb);
         /* The order the ids are given in is the collection's order: a
-         * directory holding an album goes in as the album runs. */
-        qsort(items, (size_t)nb, sizeof(*items), cmp_probed);
+         * directory holding albums goes in as each album runs (without
+         * the memory to group them, by name). */
+        if (group_albums(items, nb) >= 0)
+            qsort(items, (size_t)nb, sizeof(*items), cmp_probed);
         ret = insert_batch(lib, items, nb, cb, opaque);
         added = RX_MAX(ret, 0);
     }
@@ -1181,6 +1348,7 @@ int rx_library_remove(RXLibrary *lib, RXTrack *t)
 
     rx_core_playlists_forget_track(lib, t->id);
     remove_cache_files(lib, t->id);
+    index_remove(lib, t);
     memmove(&lib->tracks[idx], &lib->tracks[idx + 1],
             (size_t)(lib->nb_tracks - idx - 1) * sizeof(*lib->tracks));
     lib->nb_tracks--;
@@ -1352,8 +1520,10 @@ int rx_library_relocate(RXLibrary *lib, RXTrack *t, const char *new_abs_path)
         free(path);
         return ret;
     }
+    index_remove(lib, t);
     free(t->path);
     t->path = path;
+    index_put(lib, t);
     t->missing = missing;
     lib->generation++;
     return 0;

@@ -9,7 +9,8 @@
  * into this test, as core does not link the formats module); the file's
  * comment left out on import unless import.comment asks for it; the
  * legend's settings and the model's colour probabilities, and a library
- * of schema 5 that gains them.
+ * of schema 5 that gains them; a library at either branch's schema 6,
+ * and one a newer rxbox migrates while this one opens it.
  * Waveforms are stored through the raw blob layer because the analysis
  * module (which packs them) is not linked here; rxbox/analysis.h is used
  * for its version constants and inline helper only. */
@@ -153,9 +154,37 @@ static void test_album_order(void)
         CHECK(lib.tracks[0]->meta.track_number == 1 && lib.tracks[2]->meta.track_number == 3);
         CHECK(lib.tracks[3]->meta.track_number == 0);
     }
+
+    /* A flat folder of two albums and two loose files goes in an album at
+     * a time, Zeta first (its first file by name is the folder's first),
+     * then Alpha, each as it runs, then the files without an album by
+     * name. Before, by track number over the folder: 02 03 01 04. */
+    char *two = path_in(dir, "two");
+    const struct {
+        const char *name, *album;
+        int track;
+    } mixed[] = {
+        { "01 x.wav", "Zeta", 2 }, { "02 y.wav", "Alpha", 1 }, { "03 z.wav", "Zeta", 1 },
+        { "04 w.wav", "Alpha", 2 }, { "05 v.wav", NULL, 1 }, { "00 u.wav", NULL, 0 },
+    };
+    for (size_t i = 0; i < RX_ARRAY_ELEMS(mixed); i++) {
+        char *p = path_in(two, mixed[i].name);
+        CHECK(test_write_wav_album(p, 0.1, 44100, 1, mixed[i].name, mixed[i].album,
+                                   mixed[i].track) == 0);
+        free(p);
+    }
+    CHECK(rx_library_add_path(&lib, two, NULL, NULL) == 6 && lib.nb_tracks == 11);
+    if (lib.nb_tracks == 11) {
+        const char *want[] = {
+            "/03 z.wav", "/01 x.wav", "/02 y.wav", "/04 w.wav", "/00 u.wav", "/05 v.wav",
+        };
+        for (int i = 0; i < 6; i++)
+            CHECK(rx_str_ends(lib.tracks[5 + i]->path, want[i]));
+    }
     rx_library_close(&lib);
 
     test_rm_rf(dir);
+    free(two);
     free(files);
     free(lroot);
     free(dir);
@@ -1335,6 +1364,262 @@ static void *open_thread(void *arg)
     return NULL;
 }
 
+/* A batch whose transaction cannot start (another writer holds the
+ * library) reports every file failed and keeps none of them: before,
+ * rx_library_add_file leaked the probed track and a folder's files were
+ * not reported. A folder whose files are all known takes no write lock:
+ * it adds nothing while another writer holds the library. */
+static void test_busy_add(void)
+{
+    char *dir = test_dir("library-busy");
+    char *files = path_in(dir, "music"), *lroot = path_in(dir, "lib");
+    char *a = path_in(files, "a.wav"), *b = path_in(files, "b.wav");
+    CHECK(test_write_wav(a, 0.1, 44100, 1, "A", NULL, NULL) == 0);
+    CHECK(test_write_wav(b, 0.1, 44100, 1, "B", NULL, NULL) == 0);
+    RXLibrary lib;
+    CHECK(rx_library_open(&lib, lroot) == 0);
+    sqlite3_busy_timeout(lib.db->db, 50);
+    char *db = path_in(lroot, "library.db");
+    sqlite3 *s;
+    CHECK(sqlite3_open(db, &s) == SQLITE_OK);
+    CHECK(sqlite3_exec(s, "BEGIN IMMEDIATE", NULL, NULL, NULL) == SQLITE_OK);
+
+    int err = 0;
+    CHECK(!rx_library_add_file(&lib, a, &err) && err == RX_ERROR(EBUSY));
+    AddLog log = { 0 };
+    CHECK(rx_library_add_path(&lib, files, add_cb, &log) == RX_ERROR(EBUSY));
+    CHECK(log.failed == 2 && !log.reported && lib.nb_tracks == 0);
+
+    CHECK(sqlite3_exec(s, "COMMIT", NULL, NULL, NULL) == SQLITE_OK);
+    log = (AddLog) { 0 };
+    CHECK(rx_library_add_path(&lib, files, add_cb, &log) == 2 && log.reported == 2 && lib.nb_tracks == 2);
+    CHECK(sqlite3_exec(s, "BEGIN IMMEDIATE", NULL, NULL, NULL) == SQLITE_OK);
+    log = (AddLog) { 0 };
+    CHECK(rx_library_add_path(&lib, files, add_cb, &log) == 0 && log.reported == 2 && !log.failed);
+    CHECK(sqlite3_exec(s, "COMMIT", NULL, NULL, NULL) == SQLITE_OK);
+    sqlite3_close(s);
+    rx_library_close(&lib);
+
+    test_rm_rf(dir);
+    free(db);
+    free(a);
+    free(b);
+    free(files);
+    free(lroot);
+    free(dir);
+}
+
+/* rx_config_set checks a value against its key and an empty one is the
+ * default; a row stored before it checked (an older `rxbox config` took
+ * anything) still opens, with the default and a warning, and an empty
+ * row is the default without one. A colour's description is at most
+ * RX_CONFIG_VIBE_MAX bytes. */
+static void test_config_set(void)
+{
+    RXConfig c;
+    rx_config_defaults(&c);
+    CHECK(rx_config_set(&c, "analysis.snap_bpm", "maybe") == RX_ERROR(EINVAL) && c.snap_bpm);
+    CHECK(rx_config_set(&c, "analysis.snap_bpm", "off") == 0 && !c.snap_bpm);
+    CHECK(rx_config_set(&c, "analysis.snap_bpm", "") == 0 && c.snap_bpm);
+    CHECK(rx_config_set(&c, "export.pdb", "no") == 0 && !c.export_pdb);
+    CHECK(rx_config_set(&c, "export.pdb", NULL) == 0 && c.export_pdb);
+    CHECK(rx_config_set(&c, "analysis.bpm_min", "fast") == RX_ERROR(EINVAL) && c.bpm_min == 0.0);
+    CHECK(rx_config_set(&c, "analysis.bpm_min", "-1") == RX_ERROR(EINVAL));
+    CHECK(rx_config_set(&c, "analysis.bpm_min", "85.5") == 0 && c.bpm_min == 85.5);
+    CHECK(rx_config_set(&c, "analysis.bpm_min", "") == 0 && c.bpm_min == 0.0);
+    CHECK(rx_config_set(&c, "analysis.what", "beats,tempo") == RX_ERROR(EINVAL));
+    CHECK(rx_config_set(&c, "analysis.what", "key") == 0 && c.analyse_what == RX_ANALYSE_KEY);
+    CHECK(rx_config_set(&c, "analysis.what", "") == 0 && c.analyse_what == RX_ANALYSE_ALL);
+    CHECK(rx_config_set(&c, "export.key_notation", "roman") == RX_ERROR(EINVAL));
+    CHECK(rx_config_set(&c, "export.key_notation", "open") == 0 && !strcmp(c.key_notation, "open"));
+    CHECK(rx_config_set(&c, "ui.detail_bars", "0") == RX_ERROR(EINVAL) && c.detail_bars == 12);
+    CHECK(rx_config_set(&c, "ui.detail_bars", "16") == 0 && c.detail_bars == 16);
+    CHECK(rx_config_set(&c, "ui.traffic_light", "loud") == RX_ERROR(EINVAL));
+    CHECK(rx_config_set(&c, "audio.sink", "sink") == 0 && !strcmp(c.audio_sink, "sink"));
+    CHECK(rx_config_set(&c, "audio.sink", "") == 0 && !c.audio_sink);
+    CHECK(rx_config_set(&c, "ui.layout", "x") == RX_ERROR(ENOENT));
+    CHECK(rx_config_set(&c, "player.quantize", "on") == RX_ERROR(ENOENT));
+    CHECK(rx_config_set(&c, "analysis.nothing", "1") == RX_ERROR(ENOENT));
+    CHECK(rx_config_takes("analysis.snap_bpm") && !rx_config_takes("ui.layout"));
+
+    char long_vibe[RX_CONFIG_VIBE_MAX + 2];
+    memset(long_vibe, 'x', sizeof(long_vibe) - 1);
+    long_vibe[sizeof(long_vibe) - 1] = '\0';
+    CHECK(rx_config_set(&c, "color.red", long_vibe) == RX_ERROR(E2BIG) && !c.vibes[1]);
+    long_vibe[RX_CONFIG_VIBE_MAX] = '\0';
+    CHECK(rx_config_set(&c, "color.red", long_vibe) == 0 && strlen(c.vibes[1]) == RX_CONFIG_VIBE_MAX);
+    CHECK(rx_config_set(&c, "color.red", "") == 0 && !c.vibes[1]);
+    rx_config_free(&c);
+
+    char *dir = test_dir("library-config");
+    RXLibrary lib;
+    CHECK(rx_library_open(&lib, dir) == 0);
+    CHECK(rx_library_setting_set(&lib, "analysis.snap_bpm", "") == 0);
+    CHECK(rx_library_setting_set(&lib, "analysis.auto_cues", "maybe") == 0);
+    CHECK(rx_library_setting_set(&lib, "ui.detail_bars", "8") == 0);
+    rx_library_close(&lib);
+    CHECK(rx_library_open(&lib, dir) == 0);
+    CHECK(lib.cfg.snap_bpm && lib.cfg.auto_cues && lib.cfg.detail_bars == 8);
+    rx_library_close(&lib);
+    test_rm_rf(dir);
+    free(dir);
+}
+
+/* rx_library_find_path keeps a hash of the paths (re-adding a folder of
+ * 20000 known files took 5 s scanning the list per file): it finds every
+ * track by its path through the index growing, tracks removed and moved,
+ * and the library opened again, and nothing by a path no track has. */
+static void test_find_path(void)
+{
+    char *dir = test_dir("library-paths");
+    char *files = path_in(dir, "music"), *lroot = path_in(dir, "lib");
+    enum { N = 700 };
+    for (int i = 0; i < N; i++) {
+        char *p = rx_asprintf("%s/%04d.wav", files, i);
+        CHECK(test_write_wav(p, 0.01, 8000, 1, NULL, NULL, NULL) == 0);
+        free(p);
+    }
+    RXLibrary lib;
+    CHECK(rx_library_open(&lib, lroot) == 0);
+    CHECK(rx_library_add_path(&lib, files, NULL, NULL) == N);
+    for (int round = 0; round < 2; round++) {
+        /* Every third goes, every fifth of the rest moves. */
+        for (int i = lib.nb_tracks - 1; round == 0 && i >= 0; i--) {
+            RXTrack *t = lib.tracks[i];
+            if (i % 3 == 0) {
+                CHECK(rx_library_remove(&lib, t) == 0);
+            } else if (i % 5 == 0) {
+                char *to = rx_asprintf("%s/moved/%d.wav", dir, i);
+                CHECK(rx_library_relocate(&lib, t, to) == 0);
+                free(to);
+            }
+        }
+        int found = 0, gone = 0;
+        for (int i = 0; i < lib.nb_tracks; i++)
+            found += rx_library_find_path(&lib, lib.tracks[i]->path) == lib.tracks[i];
+        for (int i = 0; i < N; i++) {
+            char *p = rx_asprintf("%s/%04d.wav", files, i);
+            RXTrack *t = rx_library_find_path(&lib, p);
+            gone += !t;
+            CHECK(!t || !strcmp(t->path, p));
+            free(p);
+        }
+        CHECK(found == lib.nb_tracks && lib.nb_tracks == N - (N + 2) / 3);
+        CHECK(gone == N - lib.nb_tracks + 93);
+        CHECK(!rx_library_find_path(&lib, "/nowhere.wav") && !rx_library_find_path(&lib, NULL));
+        rx_library_close(&lib);
+        CHECK(rx_library_open(&lib, lroot) == 0);
+    }
+    rx_library_close(&lib);
+    test_rm_rf(dir);
+    free(files);
+    free(lroot);
+    free(dir);
+}
+
+/* Two branches each made a schema 6, and one became 7 at the merge. A
+ * library at either 6 opens at 7 with every column and keeps its data:
+ * the measured beats' 6 gains the legend's columns, the legend's 6 (its
+ * columns there, measured not) gains measured, its probabilities kept.
+ * Before, the legend's 6 failed with "duplicate column name" at every
+ * open. */
+static void test_migrate_v6(void)
+{
+    for (int legend = 0; legend < 2; legend++) {
+        char *dir = test_dir(legend ? "library-v6-legend" : "library-v6-measured");
+        char *db = path_in(dir, "library.db");
+        RXLibrary lib;
+        CHECK(rx_library_open(&lib, dir) == 0);
+        rx_library_close(&lib);
+
+        sqlite3 *s;
+        CHECK(sqlite3_open(db, &s) == SQLITE_OK);
+        CHECK(sqlite3_exec(s, legend ? "ALTER TABLE grid_section DROP COLUMN measured;"
+                                       "INSERT INTO track (path, ml_colors, ml_legend) VALUES "
+                                       "('/gone/a.wav', X'0000003E0000003E0000003E0000003F"
+                                       "0000003E0000003E0000003E0000003E', 1234);"
+                                     : "ALTER TABLE track DROP COLUMN ml_colors;"
+                                       "ALTER TABLE track DROP COLUMN ml_legend;"
+                                       "INSERT INTO track (path) VALUES ('/gone/a.wav');",
+                              NULL, NULL, NULL) == SQLITE_OK);
+        CHECK(sqlite3_exec(s, "INSERT INTO grid_section (track_id, idx, start, bpm, beat) "
+                              "VALUES (last_insert_rowid(), 0, 0.5, 120, 1);"
+                              "PRAGMA user_version = 6", NULL, NULL, NULL) == SQLITE_OK);
+        sqlite3_close(s);
+
+        CHECK(rx_library_open(&lib, dir) == 0);
+        sqlite3_stmt *st;
+        sqlite3_prepare_v2(lib.db->db, "SELECT (SELECT user_version FROM pragma_user_version), "
+                           "(SELECT count(*) FROM pragma_table_info('grid_section') "
+                           " WHERE name = 'measured'), "
+                           "(SELECT count(*) FROM pragma_table_info('track') "
+                           " WHERE name IN ('ml_colors', 'ml_legend'))", -1, &st, NULL);
+        CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 7 &&
+              sqlite3_column_int(st, 1) == 1 && sqlite3_column_int(st, 2) == 2);
+        sqlite3_finalize(st);
+        CHECK(lib.nb_tracks == 1);
+        RXTrack *t = lib.nb_tracks == 1 ? lib.tracks[0] : NULL;
+        if (t) {
+            CHECK(t->grid.nb_sections == 1 && t->grid.sections[0].start == 0.5 &&
+                  !rx_grid_dynamic(&t->grid));
+            if (legend)
+                CHECK(t->ml_colors[0] == 0.125f && t->ml_colors[3] == 0.5f && t->ml_legend == 1234);
+            else
+                CHECK(isnan(t->ml_colors[0]) && !t->ml_legend);
+            /* A dynamic grid is kept from now on. */
+            rx_grid_add_beat(&t->grid, 2.0, 121.0, 0);
+            CHECK(rx_library_save_track(&lib, t) == 0);
+        }
+        CHECK(rx_library_check(&lib) == 0);
+        rx_library_close(&lib);
+        CHECK(rx_library_open(&lib, dir) == 0);
+        CHECK(lib.nb_tracks == 1 && lib.tracks[0]->grid.nb_sections == 2 &&
+              lib.tracks[0]->grid.sections[1].measured);
+        rx_library_close(&lib);
+
+        free(db);
+        test_rm_rf(dir);
+        free(dir);
+    }
+}
+
+/* A newer rxbox migrating the library while this one opens it (it holds
+ * the write lock at schema 99 as this one reads 6 and waits for the
+ * lock): this one sees 99 under the lock and refuses, as it does a
+ * library newer from the start. Before, it took 99 for done and opened
+ * a schema it does not know. */
+static void test_newer_meanwhile(void)
+{
+    char *dir = test_dir("library-newer-meanwhile");
+    char *db = path_in(dir, "library.db");
+    RXLibrary lib;
+    CHECK(rx_library_open(&lib, dir) == 0);
+    rx_library_close(&lib);
+
+    sqlite3 *s;
+    CHECK(sqlite3_open(db, &s) == SQLITE_OK);
+    CHECK(sqlite3_exec(s, "ALTER TABLE track DROP COLUMN ml_colors;"
+                          "ALTER TABLE track DROP COLUMN ml_legend;"
+                          "PRAGMA user_version = 6;"
+                          "BEGIN IMMEDIATE; PRAGMA user_version = 99", NULL, NULL, NULL) == SQLITE_OK);
+    pthread_barrier_t go;
+    pthread_barrier_init(&go, NULL, 2);
+    Opener o = { .root = dir, .go = &go };
+    pthread_t th;
+    pthread_create(&th, NULL, open_thread, &o);
+    pthread_barrier_wait(&go);
+    usleep(500000);
+    CHECK(sqlite3_exec(s, "COMMIT", NULL, NULL, NULL) == SQLITE_OK);
+    pthread_join(th, NULL);
+    pthread_barrier_destroy(&go);
+    CHECK(o.ret == RX_ERROR(EPROTO));
+    sqlite3_close(s);
+
+    free(db);
+    test_rm_rf(dir);
+    free(dir);
+}
+
 static void test_concurrent_create(void)
 {
     char *dir = test_dir("library-race");
@@ -1389,6 +1674,11 @@ int main(void)
     test_byte_paths();
     test_open_snapshot();
     test_concurrent_create();
+    test_migrate_v6();
+    test_newer_meanwhile();
+    test_busy_add();
+    test_find_path();
+    test_config_set();
 
     if (!test_failures)
         test_rm_rf(dir);

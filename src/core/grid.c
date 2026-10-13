@@ -896,14 +896,18 @@ int rx_grid_halve_at(RXGrid *g, double t)
         g->sections[i].bpm *= 0.5;
         return i;
     }
-    /* Every other beat from the passage's first stays; the count goes
-     * on from the first beat's number over the ones kept. The last beat
-     * goes too when it would leave the section after the passage half
-     * a new beat away (an odd count): the kept beat before it then
-     * spans two old beats to that section, one new one. */
+    /* Every other beat from the passage's first stays, each with the
+     * number it was given (a restart the count makes there is kept, and
+     * the first beat keeps its number); the count goes on over the ones
+     * kept. The last beat goes too when it would leave the section after
+     * the passage half a new beat away (an odd count): the kept beat
+     * before it then spans two old beats to that section, one new one.
+     * The first never goes: a passage of one beat keeps it (dropped, the
+     * section after it would take its place, at the grid's start with a
+     * count from 1). */
     bool next = b + 1 < g->nb_sections;
     int last = b;
-    if (next && (b - a) % 2 == 0)
+    if (next && b > a && (b - a) % 2 == 0)
         last = b - 1;
     for (int j = a; j <= last; j += 2) {
         double t1 = j + 2 <= last ? g->sections[j + 2].start
@@ -918,8 +922,6 @@ int rx_grid_halve_at(RXGrid *g, double t)
         double t1 = j + 2 <= last ? g->sections[j + 2].start
                   : next ? g->sections[b + 1].start : NAN;
         s.bpm = isnan(t1) ? 0.5 * s.bpm : 60.0 / (t1 - s.start);
-        if (j > a)
-            s.beat = 0;
         g->sections[o++] = s;
     }
     memmove(&g->sections[o], &g->sections[b + 1],
@@ -928,12 +930,11 @@ int rx_grid_halve_at(RXGrid *g, double t)
     return rx_grid_section_at(g, t);
 }
 
-int rx_grid_straighten_at(RXGrid *g, double t)
+/* The passage holding section i becomes one straight section. */
+static int straighten(RXGrid *g, int i)
 {
-    if (!rx_grid_valid(g) || !isfinite(t))
-        return RX_ERROR(EINVAL);
     int a, b;
-    if (!passage(g, rx_grid_section_at(g, t), &a, &b))
+    if (!passage(g, i, &a, &b))
         return RX_ERROR(ENOENT);
     /* The least-squares slope through the passage's beats (and the
      * section after it, which is the beat after its last) with the first
@@ -949,6 +950,13 @@ int rx_grid_straighten_at(RXGrid *g, double t)
         return RX_ERROR(EINVAL);
     straight_from(g, a, b, bpm);
     return a;
+}
+
+int rx_grid_straighten_at(RXGrid *g, double t)
+{
+    if (!rx_grid_valid(g) || !isfinite(t))
+        return RX_ERROR(EINVAL);
+    return straighten(g, rx_grid_section_at(g, t));
 }
 
 /* The section and k of the beat nearest to t. */
@@ -983,9 +991,20 @@ int rx_grid_split_at(RXGrid *g, double t)
     Beat b = nearest(g, t, &s, &k);
     if (k == 0)
         return s.index;
+    double bpm = g->sections[s.index].bpm;
+    /* A beat past the last measured beat of a grid that ends in a
+     * passage: the grid runs on from it at its tempo, and a section after
+     * it would make it one beat again and take every beat of the run-on
+     * before the split with it. The run-on becomes a straight section of
+     * its own first, from the beat after the measured one. */
+    if (s.measured && k > 1) {
+        int ret = rx_grid_add_section(g, beat_time(&s, 1), bpm, 0);
+        if (ret < 0)
+            return ret;
+    }
     /* Same tempo, the count continues: nothing moves until one side is
      * edited. (Every beat is at or after the first section's start.) */
-    return rx_grid_add_section(g, b.time, g->sections[s.index].bpm, 0);
+    return rx_grid_add_section(g, b.time, bpm, 0);
 }
 
 int rx_grid_start_at(RXGrid *g, double t)
@@ -1023,14 +1042,23 @@ int rx_grid_merge_at(RXGrid *g, double t)
         return RX_ERROR(EINVAL);
     /* In a dynamic passage the boundaries are the beats themselves: the
      * passage is straightened as a whole. */
+    bool valid = rx_grid_valid(g);
     int a, b;
-    if (rx_grid_valid(g) && isfinite(t) && passage(g, rx_grid_section_at(g, t), &a, &b))
-        return rx_grid_straighten_at(g, t);
+    if (valid && isfinite(t) && passage(g, rx_grid_section_at(g, t), &a, &b))
+        return straighten(g, rx_grid_section_at(g, t));
     int best = 1;
     for (int i = 2; i < g->nb_sections; i++) {
         if (fabs(g->sections[i].start - t) < fabs(g->sections[best].start - t))
             best = i;
     }
+    /* So is a passage's boundary nearest to t from outside it: its first
+     * beat, or the start of the straight section after its last. Removed,
+     * that one would leave the last measured beat to run on at its one
+     * interval's tempo through the whole section after (bar 60 of
+     * test_grid's dynamic grid 1.9 s early); the passage straightened
+     * joins its neighbours where they are. */
+    if (valid && (g->sections[best].measured || g->sections[best - 1].measured))
+        return straighten(g, g->sections[best].measured ? best : best - 1);
     int ret = rx_grid_remove_section(g, best);
     return ret < 0 ? ret : best - 1;
 }

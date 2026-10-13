@@ -115,8 +115,9 @@ void   rx_grid_set_bpm_at(RXGrid *g, double t, double bpm);
 /* Double or halve the tempo of the section containing t, keeping its
  * start (the deck's x2 and /2). On a dynamic passage the beats
  * themselves double (a beat at every midpoint, each at twice its local
- * tempo) or halve (every other beat from the passage's first goes, the
- * downbeats among the kept ones stay downbeats). */
+ * tempo) or halve (every other beat from the passage's first stays, each
+ * with the number it was given, the first always), and x2 then /2 gives
+ * the passage back. */
 int    rx_grid_double_at(RXGrid *g, double t);
 int    rx_grid_halve_at(RXGrid *g, double t);
 /* The dynamic passage containing t becomes one straight section through
@@ -129,10 +130,15 @@ int    rx_grid_straighten_at(RXGrid *g, double t);
 void   rx_grid_set_downbeat(RXGrid *g, double t);
 /* Makes the nearest beat to t the start of a new section at the same tempo
  * (split), or removes the section boundary nearest to t (merge). A split
- * on a measured beat changes nothing (every beat of a dynamic passage is
- * its own section already); a merge in a dynamic passage straightens it
- * (rx_grid_straighten_at), since the boundaries between its beats are
- * not the kind a DJ removes one by one. */
+ * moves no beat: on a measured beat it changes nothing (every beat of a
+ * dynamic passage is its own section already), and past the last
+ * measured beat of a grid ending in a passage the run-on becomes a
+ * straight section from the beat after it. A merge in a dynamic passage,
+ * or one whose nearest boundary is a passage's (its first beat, or the
+ * start of the section after its last), straightens the passage
+ * (rx_grid_straighten_at): the boundaries between its beats are not the
+ * kind a DJ removes one by one, and the last measured beat would run on
+ * at one interval's tempo through the section after. */
 int    rx_grid_split_at(RXGrid *g, double t);
 int    rx_grid_merge_at(RXGrid *g, double t);
 /* Starts the grid at its first beat at or after t: the sections before

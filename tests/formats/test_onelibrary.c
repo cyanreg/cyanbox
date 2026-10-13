@@ -3,9 +3,12 @@
 /* OneLibrary: dj's tests. The SQLCipher codec opens rekordbox 7.2.18's
  * exportLibrary.db with its -wal (every page HMAC verifies), whose schema
  * and browse rows equal ours; a wrong key is rejected; our own database
- * decrypts, passes SQLite's integrity check and holds what the plan said. */
+ * decrypts, passes SQLite's integrity check and holds what the plan said.
+ * A database with another schema than plain tables is refused, and
+ * SQLite's work on one is budgeted (hostile.h). */
 
 #include <stdio.h>
+#include <time.h>
 
 #include <libavutil/aes.h>
 #include <libavutil/hmac.h>
@@ -16,6 +19,7 @@
 #include "src/formats/buf.h"
 #include "src/formats/formats_priv.h"
 #include "src/formats/sha512.h"
+#include "tests/formats/hostile.h"
 #include "tests/formats/test.h"
 
 static int64_t query_int(sqlite3 *db, const char *sql)
@@ -510,6 +514,87 @@ static void bare_track(void)
     free(plain);
 }
 
+static double seconds(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec + 1e-9 * (double)ts.tv_nsec;
+}
+
+/* A database whose schema is not rekordbox's plain tables (hostile.h) is
+ * refused at once: before, `content` as a view over an endless recursive
+ * query kept every read running (the sync, inspect and the app's stick
+ * read never returned), and a generated column read 24 KB of file as
+ * 958 MB of titles. A damaged b-tree is refused; whatever a query costs,
+ * the connection stops it within its budget. */
+static void hostile_schema(void)
+{
+    static const struct {
+        const char *what, *sql;
+    } dbs[] = {
+        { "view",             HOSTILE_OL_VIEW },
+        { "view as a table",  HOSTILE_OL_VIEW_AS_TABLE },
+        { "trigger",          HOSTILE_OL_TRIGGER },
+        { "generated column", HOSTILE_OL_GENERATED },
+        /* Where SQLite has FTS5: a virtual table runs its module's code. */
+        { "virtual table",    "CREATE VIRTUAL TABLE content USING fts5(path, title);"
+                              "CREATE TABLE cue(cue_id integer primary key, content_id integer);" },
+    };
+    for (size_t i = 0; i < RX_ARRAY_ELEMS(dbs); i++) {
+        size_t n;
+        uint8_t *b = hostile_onelibrary(dbs[i].sql, &n);
+        if (!b) {
+            CHECK(i == 4);
+            continue;
+        }
+        double t0 = seconds();
+        sqlite3 *db;
+        CHECK_EQ(rx_onelibrary_open_plain(b, n, &db), RX_ERROR(EINVAL));
+        RXOneLibTrack *t;
+        int nt;
+        CHECK(rx_onelibrary_read(b, n, &t, &nt) < 0);
+        if (seconds() - t0 > 10.0) {
+            fprintf(stderr, "%s: refused after %.1f s\n", dbs[i].what, seconds() - t0);
+            failures++;
+        }
+        free(b);
+    }
+
+    /* Ours, with a page header wrecked: quick_check finds it. */
+    RXTrack tr = { 0 };
+    RXPlanTrack pt = {
+        .id       = 1,
+        .track    = &tr,
+        .usb_path = "/Contents/a.wav",
+        .anlz_dir = "/x",
+        .duration = 1.0,
+    };
+    RXPlan plan = { .tracks = &pt, .nb_tracks = 1 };
+    uint8_t *plain;
+    size_t plain_size;
+    CHECK_EQ(rx_onelibrary_build_plain(&plan, &plain, &plain_size), 0);
+    sqlite3 *db;
+    CHECK_EQ(rx_onelibrary_open_plain(plain, plain_size, &db), 0);
+    /* The budget: an endless query is interrupted, in its 64 M steps. */
+    double t0 = seconds();
+    sqlite3_stmt *st;
+    CHECK_EQ(sqlite3_prepare_v2(db, "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r) "
+                                    "SELECT count(*) FROM r", -1, &st, NULL), SQLITE_OK);
+    CHECK_EQ(sqlite3_step(st), SQLITE_INTERRUPT);
+    sqlite3_finalize(st);
+    /* Half a second here; the machine may be busy with other work. */
+    fprintf(stderr, "an endless query stopped after %.2f s\n", seconds() - t0);
+    CHECK(seconds() - t0 < 20.0);
+    sqlite3_close(db);
+    CHECK(plain_size > 3 * 4096);
+    if (plain_size > 3 * 4096) {
+        /* Page 2's b-tree page type. */
+        plain[4096] = 0x07;
+        CHECK_EQ(rx_onelibrary_open_plain(plain, plain_size, &db), RX_ERROR(EINVAL));
+    }
+    free(plain);
+}
+
 int main(void)
 {
     crypto_vectors();
@@ -517,5 +602,6 @@ int main(void)
     roundtrip();
     hostile_wal();
     bare_track();
+    hostile_schema();
     return test_result("onelibrary");
 }

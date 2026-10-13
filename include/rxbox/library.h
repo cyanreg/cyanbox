@@ -30,10 +30,11 @@
  *                  model's tagging, rxbox/ml.h: RX_ML_TAGS_VERSION, 0 never, and its
  *                  measures, NULL never; schema 5), ml_colors, ml_legend (the
  *                  probability it gave each of the eight colours, NULL none, and the
- *                  hash of the legend it picked from, 0 none; schema 6)
- *   grid_section   track_id, idx, start, bpm, beat
+ *                  hash of the legend it picked from, 0 none; schema 7)
+ *   grid_section   track_id, idx, start, bpm, beat, measured (1: one measured beat of
+ *                  a dynamic grid, RXTempoSection.measured; schema 6)
  *   cue            id, track_id, time, grid_beat, hot, loop_end, loop_beats, active, name, color
- *   track_tag      track_id, tag
+ *   track_tag      track_id, position, tag
  *   waveform       track_id, data (the packed tags, rx_waveforms_pack)
  *   artwork        track_id, jpeg, width, height (a 240 px thumbnail)
  *   play           track_id, played_at
@@ -106,15 +107,31 @@ typedef struct RXConfig {
 
 void rx_config_free(RXConfig *c);
 void rx_config_defaults(RXConfig *c);
+/* One of RXConfig's own settings by its key as the setting table holds it
+ * (analysis.*, import.comment, export.*, audio.sink, ml.model, color.*,
+ * ui.traffic_light, ui.detail_bars, ui.split_*): 0 when `value` is valid
+ * for the key and now in c, an empty one (or NULL) putting the default
+ * back; -EINVAL when it is not valid (-E2BIG for a description too long),
+ * c unchanged; -ENOENT for any other key (the My Settings player.*,
+ * mixer.*, device.* are rxbox/formats.h's to check, and other keys are
+ * the interface's own, free for rx_library_setting_set). */
+int  rx_config_set(RXConfig *c, const char *key, const char *value);
+/* What a key of RXConfig takes, in words ("true or false"); NULL for any
+ * other key. */
+const char *rx_config_takes(const char *key);
 /* The legend: the description of track colour `id` (1..8) and its setting
  * key ("color.pink"); NULL for another id. rx_config_vibe is the user's
  * words or the default's. */
 const char *rx_config_vibe(const RXConfig *c, int id);
 const char *rx_config_vibe_default(int id);
 const char *rx_config_vibe_key(int id);
+/* The longest description the tagger is given, in bytes: what the
+ * interface's field holds, and room in the model's question. */
+#define RX_CONFIG_VIBE_MAX 127
 /* Sets colour `id`'s description, trimmed; NULL, blank or the default's
  * own words go back to the default (and the row away at the next save).
- * -EINVAL for another id. */
+ * -EINVAL for another id, -E2BIG for one longer than RX_CONFIG_VIBE_MAX
+ * once trimmed. */
 int  rx_config_set_vibe(RXConfig *c, int id, const char *text);
 /* All eight, by id - 1, as rx_ml_tag takes them. */
 void rx_config_legend(const RXConfig *c, const char *legend[8]);
@@ -140,6 +157,7 @@ typedef struct RXPlaylistFolder {
 /* ------------------------------------------------------------------ library */
 
 typedef struct RXDb RXDb;       /* src/core/db.c: the sqlite3 handle and statements */
+typedef struct RXPathIndex RXPathIndex;   /* src/core/library.c: the tracks by path */
 
 typedef struct RXLibrary {
     char     *root;
@@ -149,6 +167,7 @@ typedef struct RXLibrary {
     int       nb_tracks;
     RXPlaylistFolder *root_folder;   /* playlist tree, owned */
     unsigned  generation;       /* bumped on every change; the interface watches it */
+    RXPathIndex *by_path;       /* rx_library_find_path's; kept by the library's own edits */
 } RXLibrary;
 
 /* Opens (creating when absent) the library at `root` (NULL = default),
@@ -178,11 +197,14 @@ int      rx_library_index_of(const RXLibrary *lib, const RXTrack *t);
  * flag is cleared when the file is back), or NULL with *err set. */
 RXTrack *rx_library_add_file(RXLibrary *lib, const char *path, int *err);
 /* Adds a file or everything under a directory with a known audio extension
- * (rx_is_audio_path), in one transaction per directory, the files of a
- * directory in the order of their disc and track tags (unnumbered ones
- * after, by name), so that an album goes in as it runs, then its
- * subdirectories by name. Calls `cb` per file added or skipped. Returns
- * the number added or a negative errno. */
+ * (rx_is_audio_path), in one transaction per directory, then its
+ * subdirectories by name. A directory's files go in album by album (an
+ * album is an album tag with its album artist's; the albums in the order
+ * of their first files by name), each album in the order of its disc and
+ * track tags (unnumbered ones after, by name), so that each album goes in
+ * as it runs even in a folder of several; files without an album tag go
+ * last, by name. Calls `cb` per file added or skipped. Returns the number
+ * added or a negative errno. */
 typedef void (*rx_add_cb)(void *opaque, const char *path, RXTrack *added, int err);
 int      rx_library_add_path(RXLibrary *lib, const char *path, rx_add_cb cb, void *opaque);
 bool     rx_is_audio_path(const char *path);

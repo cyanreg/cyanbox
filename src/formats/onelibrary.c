@@ -527,25 +527,129 @@ int rx_onelibrary_build(const RXPlan *plan, uint8_t **out, size_t *size)
 
 /* ------------------------------------------------------------- reading */
 
+/* A stick's exportLibrary.db is anyone's, and SQLite runs what a schema
+ * says: a view is a query (an endless recursive one kept every read of
+ * `content` running), a trigger is code, a generated column computes a
+ * value of any size from none (a megabyte title a row: 24 KB of file
+ * read as 958 MB). rekordbox's schema is plain tables and indexes
+ * (rx_onelibrary_schema), so the connection runs no views, triggers or
+ * functions of the schema (defensive, untrusted schema), and a database
+ * holding a view, a trigger, a virtual table or a generated column is
+ * refused. A crafted b-tree could still hand the same overflow pages to
+ * every row; quick_check finds a page used twice, so what the readers
+ * copy out is bounded by the file. And SQLite's own work on it is
+ * budgeted (BUDGET_*): a query that runs past it is interrupted. */
+
+/* Virtual machine steps a byte of database, and at least: the checks
+ * here, inspect's integrity check and the reads of inspect, the sync and
+ * rx_onelibrary_read took 4000 steps on rekordbox 7.2.18's fixture and
+ * one a byte on a 5000-track database of ours (2 MB); 256 a byte leaves
+ * room for a library with many histories, and stops an endless query
+ * within seconds. */
+#define BUDGET_PER_BYTE 256
+#define BUDGET_MIN      (64ull << 20)
+#define BUDGET_STEP     1000
+/* The longest value a read returns: the database's strings are names and
+ * paths. */
+#define VALUE_MAX       (1 << 20)
+
+typedef struct Budget {
+    sqlite3_uint64 left;
+} Budget;
+
+static int spend(void *opaque)
+{
+    Budget *b = opaque;
+    if (b->left < BUDGET_STEP)
+        return 1;
+    b->left -= BUDGET_STEP;
+    return 0;
+}
+
+static int query_count(sqlite3 *db, const char *sql, int64_t *n)
+{
+    sqlite3_stmt *st;
+    if (sqlite3_prepare_v2(db, sql, -1, &st, NULL) != SQLITE_OK)
+        return RX_ERROR(EINVAL);
+    int rc = sqlite3_step(st);
+    if (rc == SQLITE_ROW)
+        *n = sqlite3_column_int64(st, 0);
+    sqlite3_finalize(st);
+    return rc == SQLITE_ROW ? 0 : RX_ERROR(EINVAL);
+}
+
+/* Plain tables and indexes, whole: no view, trigger, virtual table or
+ * generated column, then no page used twice (the schema first: the
+ * check would compute generated columns). The tables' kinds are SQLite's
+ * own reading of their SQL, not what the type column claims. */
+static int check_plain(sqlite3 *db)
+{
+    int64_t other = -1, generated = -1;
+    int ret = query_count(db, "SELECT (SELECT count(*) FROM pragma_table_list "
+                              "        WHERE schema = 'main' AND type != 'table') + "
+                              "       (SELECT count(*) FROM sqlite_schema "
+                              "        WHERE type NOT IN ('table', 'index'))", &other);
+    if (ret >= 0)
+        ret = query_count(db, "SELECT count(*) FROM sqlite_schema AS s, "
+                              "pragma_table_xinfo(s.name) AS c "
+                              "WHERE s.type = 'table' AND c.hidden IN (2, 3)", &generated);
+    if (ret < 0 || other || generated) {
+        rx_warn("exportLibrary.db: not rekordbox's schema (views, triggers, virtual tables or "
+                "computed columns); not read");
+        return RX_ERROR(EINVAL);
+    }
+
+    sqlite3_stmt *st;
+    if (sqlite3_prepare_v2(db, "PRAGMA quick_check(1)", -1, &st, NULL) != SQLITE_OK)
+        return RX_ERROR(EINVAL);
+    int rc = sqlite3_step(st);
+    const char *res = rc == SQLITE_ROW ? (const char *)sqlite3_column_text(st, 0) : NULL;
+    bool ok = res && !strcmp(res, "ok");
+    if (!ok)
+        rx_warn("exportLibrary.db is damaged: %s", res ? res : sqlite3_errmsg(db));
+    sqlite3_finalize(st);
+    return ok ? 0 : RX_ERROR(EINVAL);
+}
+
 int rx_onelibrary_open_plain(const uint8_t *plain, size_t size, sqlite3 **db)
 {
     *db = NULL;
     if (size < 100)
         return RX_ERROR(EINVAL);
-    unsigned char *b = sqlite3_malloc64(size);
-    if (!b)
-        return RX_ERROR(ENOMEM);
-    memcpy(b, plain, size);
-    /* Memory databases cannot use WAL: legacy journal flags. */
-    b[18] = b[19] = 1;
     sqlite3 *d = NULL;
     if (sqlite3_open_v2(":memory:", &d, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, NULL) != SQLITE_OK) {
-        sqlite3_free(b);
         sqlite3_close(d);
         return RX_ERROR(ENOMEM);
     }
-    if (sqlite3_deserialize(d, "main", b, (sqlite3_int64)size, (sqlite3_int64)size,
-                            SQLITE_DESERIALIZE_FREEONCLOSE | SQLITE_DESERIALIZE_RESIZEABLE) != SQLITE_OK) {
+    Budget *budget = sqlite3_malloc(sizeof(*budget));
+    if (!budget) {
+        sqlite3_close(d);
+        return RX_ERROR(ENOMEM);
+    }
+    budget->left = RX_MAX(BUDGET_MIN, (sqlite3_uint64)size * BUDGET_PER_BYTE);
+    if (sqlite3_set_clientdata(d, "rx_budget", budget, sqlite3_free) != SQLITE_OK) {
+        sqlite3_free(budget);
+        sqlite3_close(d);
+        return RX_ERROR(ENOMEM);
+    }
+    sqlite3_progress_handler(d, BUDGET_STEP, spend, budget);
+    sqlite3_db_config(d, SQLITE_DBCONFIG_DEFENSIVE, 1, NULL);
+    sqlite3_db_config(d, SQLITE_DBCONFIG_TRUSTED_SCHEMA, 0, NULL);
+    sqlite3_db_config(d, SQLITE_DBCONFIG_ENABLE_VIEW, 0, NULL);
+    sqlite3_db_config(d, SQLITE_DBCONFIG_ENABLE_TRIGGER, 0, NULL);
+    sqlite3_limit(d, SQLITE_LIMIT_LENGTH, VALUE_MAX);
+
+    unsigned char *b = sqlite3_malloc64(size);
+    if (!b) {
+        sqlite3_close(d);
+        return RX_ERROR(ENOMEM);
+    }
+    memcpy(b, plain, size);
+    /* Memory databases cannot use WAL: legacy journal flags. */
+    b[18] = b[19] = 1;
+    unsigned flags = SQLITE_DESERIALIZE_FREEONCLOSE | SQLITE_DESERIALIZE_RESIZEABLE;
+    if (sqlite3_deserialize(d, "main", b, (sqlite3_int64)size, (sqlite3_int64)size, flags) != SQLITE_OK ||
+        check_plain(d) < 0) {
         sqlite3_close(d);
         return RX_ERROR(EINVAL);
     }
@@ -562,9 +666,12 @@ int rx_onelibrary_read(const uint8_t *plain, size_t size, RXOneLibTrack **tracks
     if (ret < 0)
         return ret;
     sqlite3_stmt *st = NULL;
-    const char *sql = "SELECT content_id, path, title, "
-                      "(SELECT count(*) FROM cue WHERE cue.content_id = content.content_id) "
-                      "FROM content ORDER BY content_id";
+    /* The cues counted once, grouped: a count per row scanned every cue
+     * for every track (cue.content_id has no index), 400 million steps
+     * for 5000 tracks. */
+    const char *sql = "SELECT c.content_id, c.path, c.title, coalesce(n.k, 0) FROM content AS c "
+                      "LEFT JOIN (SELECT content_id, count(*) AS k FROM cue GROUP BY content_id) AS n "
+                      "ON n.content_id = c.content_id ORDER BY c.content_id";
     if (sqlite3_prepare_v2(db, sql, -1, &st, NULL) != SQLITE_OK) {
         sqlite3_close(db);
         return RX_ERROR(EINVAL);

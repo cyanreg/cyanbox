@@ -16,6 +16,7 @@
 
 #include "src/formats/buf.h"
 #include "src/formats/formats_priv.h"
+#include "tests/formats/hostile.h"
 #include "tests/formats/test.h"
 
 static uint64_t rng = 0x9E3779B97F4A7C15ull;
@@ -357,6 +358,21 @@ static void fuzz_pdb(void)
     pdb_mutations(ext, ext_size, 500);
     free(pdb);
     free(ext);
+
+    /* The crafted files of test_pdb (hostile.h), small, and their
+     * neighbours: indexes listing one row in every slot, rows a byte
+     * apart, strings every row points at, chains that loop. */
+    uint8_t *h[4];
+    size_t hn[4];
+    h[0] = hostile_pdb_rows(1, HOSTILE_SLOTS, 0, &hn[0]);
+    h[1] = hostile_pdb_rows(1, 300, 1, &hn[1]);
+    h[2] = hostile_pdb_strings(2, &hn[2]);
+    h[3] = hostile_pdb_loop(&hn[3]);
+    for (int i = 0; i < 4; i++) {
+        if (h[i])
+            pdb_mutations(h[i], hn[i], 300);
+        free(h[i]);
+    }
 }
 
 static void fuzz_anlz(void)
@@ -453,6 +469,22 @@ static void fuzz_onelibrary(void)
     }
     free(db);
     free(wal);
+
+    /* The crafted schemas of test_onelibrary (hostile.h) and their
+     * neighbours: a view, one dressed as a table, a trigger, a generated
+     * column. */
+    static const char *const schemas[] = {
+        HOSTILE_OL_VIEW, HOSTILE_OL_VIEW_AS_TABLE, HOSTILE_OL_TRIGGER, HOSTILE_OL_GENERATED,
+    };
+    for (size_t i = 0; i < RX_ARRAY_ELEMS(schemas); i++) {
+        size_t n;
+        uint8_t *b = hostile_onelibrary(schemas[i], &n);
+        if (!b)
+            continue;
+        truncations(read_plain_db, b, n, 4093);
+        mutations(read_plain_db, b, n, 0, 300);
+        free(b);
+    }
 }
 
 int main(void)
