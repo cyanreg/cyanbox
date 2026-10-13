@@ -311,7 +311,7 @@ static void track_menu(UiState *ui)
 /* -------------------------------------------------------------------- cells */
 
 static void cell_text(UiState *ui, ImVec2 p, float w, float row_h, const char *text, ImU32 col,
-                      bool right, ImFont *font = nullptr, float size = 16.0f)
+                      bool right, ImFont *font = nullptr, float size = 18.0f)
 {
     if (!text || !text[0])
         return;
@@ -393,7 +393,7 @@ static void row_cells(UiState *ui, RXTrack *t, int row, float row_h, const uint6
         case COL_IDX:
             // The row's Selectable is submitted here by the caller.
             snprintf(buf, sizeof(buf), "%d", row + 1);
-            cell_text(ui, p, w, row_h, buf, sub, true, nullptr, 14.0f);
+            cell_text(ui, p, w, row_h, buf, sub, true, nullptr, 15.0f);
             break;
         case COL_PREVIEW: {
             bool analysing = false;
@@ -449,7 +449,7 @@ static void row_cells(UiState *ui, RXTrack *t, int row, float row_h, const uint6
                     ImGui::SetTooltip("File missing: %s\nRelocate it from the context menu.", t->path);
             }
             cell_text(ui, ImVec2(x, p.y), w - (x - p.x), row_h, ui_title(t), text, false, nullptr,
-                      17.0f);
+                      19.0f);
             break;
         }
         case COL_KEY: {
@@ -496,7 +496,7 @@ static void row_cells(UiState *ui, RXTrack *t, int row, float row_h, const uint6
             cell_text(ui, p, w, row_h, t->meta.album, text, false);
             break;
         case COL_PATH:
-            cell_text(ui, p, w, row_h, t->path, sub, false, nullptr, 14.0f);
+            cell_text(ui, p, w, row_h, t->path, sub, false, nullptr, 15.0f);
             break;
         case COL_PLAYS:
             if (t->play_count > 0) {
@@ -506,7 +506,7 @@ static void row_cells(UiState *ui, RXTrack *t, int row, float row_h, const uint6
             break;
         case COL_LAST_PLAYED:
             fmt_date(t->last_played, buf, sizeof(buf));
-            cell_text(ui, p, w, row_h, buf, sub, true, nullptr, 14.0f);
+            cell_text(ui, p, w, row_h, buf, sub, true, nullptr, 15.0f);
             break;
         }
     }
