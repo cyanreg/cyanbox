@@ -14,7 +14,9 @@
  * with the track named in the status; a load the player cannot take
  * keeps the track the deck has, the 30 s play record (not for a seek loop,
  * not twice), a track removed while loaded and analysed, waveforms of an
- * older format version made again, and tearing down with jobs in flight
+ * older format version made again, results of an older analyser made
+ * again by "analyse all" and, unasked, by opening the library (a locked
+ * grid kept both times), and tearing down with jobs in flight
  * (LeakSanitizer checks the rest).
  *
  * The player is the null backend in manual mode: the ticks advance it.
@@ -140,6 +142,26 @@ static int stale_waveforms(const char *root, uint64_t id)
     sqlite3_close(db);
     free(data);
     return rc == SQLITE_OK ? 0 : -1;
+}
+
+/* Runs `sql` on the library at `root`, which no app has open. */
+static int library_exec(const char *root, const char *sql)
+{
+    char *path = rx_path_join(root, "library.db");
+    sqlite3 *db = NULL;
+    int rc = path ? sqlite3_open(path, &db) : SQLITE_NOMEM;
+    free(path);
+    if (rc == SQLITE_OK)
+        rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
+    sqlite3_close(db);
+    return rc == SQLITE_OK ? 0 : -1;
+}
+
+/* b's grid as the test set it by hand: one section at 0.125 s, 127 BPM. */
+static bool hand_grid(const RXTrack *t)
+{
+    return t->grid.nb_sections == 1 && t->grid.sections[0].start == 0.125 &&
+           t->grid.sections[0].bpm == 127.0;
 }
 
 /* Plays a player that changed a My Settings value on the stick since the
@@ -614,8 +636,9 @@ int main(int argc, char **argv)
           !rx_library_find_id(&app.lib, a_id), "the deck still holds a removed track");
 
     /* A library analysed before the waveform recalibration: b's stored
-     * waveforms are format version 1. They are as good as none, so b is
-     * analysed for them again, and the deck that loads it gets new ones. */
+     * waveforms are format version 1. They are as good as none, so opening
+     * the library queues b for them, and the deck that loads it meanwhile
+     * gets the new ones. */
     uint64_t b_id = b->id;
     rx_app_destroy(&app);
     CHECK(stale_waveforms(root, b_id) == 0, "cannot make b's waveforms stale");
@@ -629,6 +652,9 @@ int main(int argc, char **argv)
         goto end;
     CHECK(rx_app_analysis_needed(&app, b, RX_ANALYSE_ALL, false) & RX_ANALYSE_WAVES,
           "stale waveforms need no analysis");
+    CHECK(rx_app_analysis_stale(&app, b) == RX_ANALYSE_WAVES && app.analysing_total == 1,
+          "opening did not queue waveforms of an older format (stale %#x, %d queued)",
+          rx_app_analysis_stale(&app, b), app.analysing_total);
     ret = rx_app_load_deck(&app, 0, b);
     CHECK(ret == 0 && tick_until(&app, deck_loaded, 60), "load b with stale waveforms");
     CHECK(tick_until(&app, analysis_done, 300), "the stale waveforms were not made again");
@@ -638,6 +664,98 @@ int main(int argc, char **argv)
     CHECK(!(rx_app_analysis_needed(&app, b, RX_ANALYSE_ALL, false) & RX_ANALYSE_WAVES),
           "the new waveforms still count as stale");
     rx_app_unload_deck(&app, 0);
+
+    /* Results an older analyser made (version 0, as a library from before
+     * the versions holds them) are as good as none: "Analyse all
+     * unanalysed", the "what is missing" path, analyses long.wav again for
+     * them, and they come back at the current versions. b's grid, set by
+     * hand and locked, is as old, and stays as it is at its version. */
+    c = track_named(&app, "long.wav");
+    CHECK(c && c->has_waveforms, "long.wav lost its waveforms");
+    if (!c)
+        goto end;
+    uint64_t c_id = c->id;
+    c->beats_version = c->key_version = c->waves_version = 0;
+    rx_app_save_track(&app, c);
+    rx_grid_free(&b->grid);
+    CHECK(rx_grid_init(&b->grid, 0.125, 127.0) >= 0, "b's grid by hand");
+    rx_track_resolve_cues(b);
+    b->grid_locked = true;
+    b->beats_version = 0;
+    rx_app_save_track(&app, b);
+    unsigned stale = rx_analysis_stale(c);
+    unsigned expect = RX_ANALYSE_WAVES | (rx_track_analysed(c) ? RX_ANALYSE_BEATS : 0u) |
+                      (c->key[0] ? RX_ANALYSE_KEY : 0u);
+    CHECK(stale == expect, "long.wav's stale stages are %#x, not %#x", stale, expect);
+    CHECK((rx_app_analysis_needed(&app, c, RX_ANALYSE_ALL, false) & stale) == stale,
+          "stale stages need no analysis: %#x", rx_app_analysis_needed(&app, c, RX_ANALYSE_ALL,
+                                                                       false));
+    CHECK(rx_analysis_stale(b) & RX_ANALYSE_BEATS, "b's old grid is not stale");
+    CHECK(!(rx_app_analysis_needed(&app, b, RX_ANALYSE_ALL, false) & RX_ANALYSE_BEATS),
+          "a locked grid needs beats");
+    CHECK(rx_app_analyse_all(&app, false) >= 1, "nothing queued for the stale results");
+    CHECK(tick_until(&app, analysis_done, 300), "the stale results were not analysed again");
+    CHECK(c->beats_version == RX_BEATS_VERSION && c->key_version == RX_KEY_VERSION &&
+          c->waves_version == RX_WAVES_VERSION, "long.wav is at versions %d, %d, %d",
+          c->beats_version, c->key_version, c->waves_version);
+    CHECK(!rx_analysis_stale(c), "long.wav is still stale");
+    CHECK(b->grid_locked && b->beats_version == 0 && hand_grid(b),
+          "the locked grid was analysed again (version %d, %d sections)", b->beats_version,
+          b->grid.nb_sections);
+
+    /* The same unasked after an upgrade: opening a library with long.wav's
+     * results at version 0 queues it, and only it (b's one stale result
+     * is its locked grid), with the status saying so. */
+    rx_app_destroy(&app);
+    char sql[160];
+    snprintf(sql, sizeof(sql), "UPDATE track SET beats_version = 0, key_version = 0, "
+             "waves_version = 0 WHERE id = %llu", (unsigned long long)c_id);
+    CHECK(library_exec(root, sql) == 0, "cannot make long.wav's results old");
+    ret = rx_app_create(&app, root, &po, NULL);
+    CHECK(ret == 0, "rx_app_create after the upgrade: %s", strerror(-ret));
+    if (ret < 0)
+        goto end;
+    b = rx_library_find_id(&app.lib, b_id);
+    c = rx_library_find_id(&app.lib, c_id);
+    CHECK(b && c, "b %p, long.wav %p", (void *)b, (void *)c);
+    if (!b || !c)
+        goto end;
+    printf("status: %s\n", app.status);
+    CHECK(app.analysing_total == 1 && strstr(app.status, "1 made by an older analyser"),
+          "opening queued %d tracks, status \"%s\"", app.analysing_total, app.status);
+    CHECK(tick_until(&app, analysis_done, 300), "the stale results were not analysed again");
+    CHECK(c->beats_version == RX_BEATS_VERSION && c->key_version == RX_KEY_VERSION &&
+          c->waves_version == RX_WAVES_VERSION, "long.wav is at versions %d, %d, %d",
+          c->beats_version, c->key_version, c->waves_version);
+    CHECK(b->grid_locked && b->beats_version == 0 && hand_grid(b),
+          "the locked grid was analysed on opening (version %d)", b->beats_version);
+
+    /* The export analyses what is stale before it writes: long.wav's
+     * waveforms, now of an older analyser, are made again first, to a
+     * fresh destination (nothing to prune, nothing unsynced). */
+    c->waves_version = 0;
+    rx_app_save_track(&app, c);
+    char *stick2 = rx_path_join(dir, "stick2");
+    if (!stick2 || rx_mkdir_p(stick2) < 0) {
+        CHECK(0, "cannot make the second stick's directory");
+    } else {
+        snprintf(app.export_state.dest, sizeof(app.export_state.dest), "%s", stick2);
+        app.export_state.whole_library = true;
+        app.export_state.prune = false;
+        app.export_state.ignore_unsynced = false;
+        CHECK(rx_app_start_export(&app) == 0, "export with a stale track");
+        CHECK(strstr(app.export_state.log, "Analysing 1 track first"),
+              "the export did not analyse the stale track first:\n%s", app.export_state.log);
+        CHECK(tick_until(&app, export_done, 300), "the export with a stale track did not finish");
+        CHECK(!app.export_state.confirm && app.export_state.result >= 0,
+              "export with a stale track: %s (confirm %d)\n%s",
+              strerror(-app.export_state.result), app.export_state.confirm,
+              app.export_state.log);
+        CHECK(c->waves_version == RX_WAVES_VERSION && !rx_app_analysis_stale(&app, c),
+              "the export left long.wav's waveforms at version %d", c->waves_version);
+        app.export_state.whole_library = false;
+    }
+    free(stick2);
 
     /* Torn down with an analysis and a decode in flight, and a decode the
      * deck moved on from. */

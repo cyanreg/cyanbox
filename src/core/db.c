@@ -3,7 +3,7 @@
 /* The library database: the SQLite connection, the schema and its
  * migrations, the cached statements, transactions and error mapping.
  *
- * Schema version 1 (PRAGMA user_version = 1, application_id = 'RXBX').
+ * Schema version 2 (PRAGMA user_version = 2, application_id = 'RXBX').
  * Tables are STRICT so a wrong type is an error instead of a silent
  * conversion, and every row that belongs to a track or a playlist goes
  * with it (ON DELETE CASCADE, foreign keys on for every connection).
@@ -22,6 +22,10 @@
  *                   rating color          the user's (files have none)
  *                   key key_confidence beats_per_bar grid_confidence grid_flags
  *                   grid_locked analysed  analysis results and their state
+ *                   beats_version key_version waves_version
+ *                             the analyser version (RX_*_VERSION, rxbox/analysis.h)
+ *                             each result was made by; 0: before versions were
+ *                             kept (schema 1), so older than any
  *                   added play_count last_played missing
  *   grid_section    track_id, idx (0-based order), start, bpm, beat
  *   cue             track_id, time, grid_beat (NULL: absolute), hot (-1 memory,
@@ -40,6 +44,7 @@
  * Migrations: `migrations[v]` takes a database from version v to v + 1, in
  * one transaction with the user_version bump. A database newer than this
  * build is refused rather than written with a schema we do not know.
+ *   1 -> 2  the three analyser version columns of track.
  *
  * Journal: WAL, synchronous = NORMAL (a crash loses at most the last
  * transactions, never consistency), and a busy timeout because the export
@@ -68,6 +73,7 @@ const char *const rx_track_edit_cols[RX_TRACK_EDIT_COLS] = {
     "year", "track_number", "disc_number",
     "rating", "color", "key", "key_confidence", "beats_per_bar",
     "grid_confidence", "grid_flags", "grid_locked", "analysed",
+    "beats_version", "key_version", "waves_version",
 };
 
 /* --------------------------------------------------------------- schema */
@@ -199,8 +205,17 @@ static const char schema_v1[] =
     "  value TEXT NOT NULL"
     ") STRICT, WITHOUT ROWID;";
 
+/* The analyser versions. Rows from before them get 0, which counts as
+ * older than any analyser that keeps a version: everything analysed by
+ * schema 1's rxbox is analysed again for what it has. */
+static const char schema_v2[] =
+    "ALTER TABLE track ADD COLUMN beats_version INTEGER NOT NULL DEFAULT 0;"
+    "ALTER TABLE track ADD COLUMN key_version   INTEGER NOT NULL DEFAULT 0;"
+    "ALTER TABLE track ADD COLUMN waves_version INTEGER NOT NULL DEFAULT 0;";
+
 static const char *const migrations[] = {
     schema_v1,          /* 0 -> 1 */
+    schema_v2,          /* 1 -> 2 */
 };
 
 /* ------------------------------------------------------------ statements */
@@ -523,6 +538,9 @@ static int check_identity(RXDb *db, int64_t *version)
 static int migrate(RXDb *db, int64_t version)
 {
     int64_t current = (int64_t)RX_ARRAY_ELEMS(migrations);
+    /* A new library goes through every migration; only an existing one is
+     * said to be upgraded. */
+    bool existing = version > 0;
     while (version < current) {
         int ret = rx_db_begin(db);
         if (ret < 0)
@@ -551,7 +569,7 @@ static int migrate(RXDb *db, int64_t version)
             version = now;
             continue;
         }
-        if (version > 0)
+        if (existing)
             rx_info("%s: library upgraded to schema %lld", db->path, (long long)(version + 1));
         version++;
     }

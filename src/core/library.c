@@ -27,6 +27,7 @@
 #include "rxbox/library.h"
 
 #include <dirent.h>
+#include <limits.h>
 #include <math.h>
 #include <stdio.h>
 #include <sys/stat.h>
@@ -193,6 +194,9 @@ static void bind_edit(RXDb *db, sqlite3_stmt *st, int p, const RXTrack *t)
     rx_db_bind_int(db, st, p++, t->grid_flags);
     rx_db_bind_int(db, st, p++, t->grid_locked);
     rx_db_bind_int(db, st, p++, t->analysed);
+    rx_db_bind_int(db, st, p++, t->beats_version);
+    rx_db_bind_int(db, st, p++, t->key_version);
+    rx_db_bind_int(db, st, p++, t->waves_version);
 }
 
 /* Sections, cues and My Tags: replaced as a whole. */
@@ -355,6 +359,9 @@ static int track_from_row(sqlite3_stmt *st, RXTrack **out)
     t->grid_flags = (unsigned)sqlite3_column_int64(st, c++);
     t->grid_locked = sqlite3_column_int(st, c++);
     t->analysed = sqlite3_column_int64(st, c++);
+    t->beats_version = sqlite3_column_int(st, c++);
+    t->key_version = sqlite3_column_int(st, c++);
+    t->waves_version = sqlite3_column_int(st, c++);
 
     if (err || !t->path) {
         rx_track_free(t);
@@ -1323,6 +1330,30 @@ int rx_core_waveform_blob_get(const RXLibrary *lib, uint64_t id, uint8_t **data,
     *data = copy;
     *size = n;
     return 0;
+}
+
+int rx_core_waveform_blob_head(const RXLibrary *lib, uint64_t id, uint8_t *head, size_t size)
+{
+    /* Incremental blob I/O reads the pages the bytes are on and no more:
+     * the rest of a blob of a few hundred kB stays on disk. track_id is
+     * the waveform table's rowid. A missing row is SQLITE_ERROR. */
+    sqlite3_blob *b = NULL;
+    int rc = sqlite3_blob_open(lib->db->db, "main", "waveform", "data", (sqlite3_int64)id, 0, &b);
+    if (rc == SQLITE_ERROR) {
+        sqlite3_blob_close(b);
+        return RX_ERROR(ENOENT);
+    }
+    if (rc != SQLITE_OK) {
+        sqlite3_blob_close(b);
+        return rx_db_error(lib->db, rc, "reading a waveform header");
+    }
+    int ret = 0;
+    if (size > INT_MAX || sqlite3_blob_bytes(b) < (int)size)
+        ret = RX_ERROR(EINVAL);
+    else if ((rc = sqlite3_blob_read(b, head, (int)size, 0)) != SQLITE_OK)
+        ret = rx_db_error(lib->db, rc, "reading a waveform header");
+    sqlite3_blob_close(b);
+    return ret;
 }
 
 bool rx_library_has_waveforms(const RXLibrary *lib, uint64_t id)

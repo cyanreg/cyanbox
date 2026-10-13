@@ -208,7 +208,9 @@ missing files, Quit),
 off/same key/related 1–3, detail waveform centred/half, grid tools),
 **Analysis** (analyse selection, analyse all
 unanalysed, re-analyse selection, analysis settings…), **Help** (about,
-keyboard map).
+keyboard map). "Unanalysed" includes results an older analyser made; the
+interface queues those by itself when it opens the library (README.md,
+Analysis), with the usual progress in the status bar.
 
 - **Analysis settings**: what to analyse (BPM/grid, key), BPM range presets
   (auto (default), 70–180, 98–195, 118–236, 58–115), integer snap, allow

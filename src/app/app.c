@@ -256,9 +256,9 @@ static void waves_seen(const RXApp *app, uint64_t id, bool stale)
 /* Waveforms stored in a format version the library no longer reads
  * (rx_waveforms_unpack's -EPROTO: made before the PWV6/PWV7
  * recalibration) are as good as none, and the track is analysed for them
- * again when it is next needed. A track's are looked at once: the deck
- * and the table's preview record what their loads find, the rest is a
- * load here. */
+ * again. A track's are looked at once: the deck and the table's preview
+ * record what their loads find, the rest is a look at the stored header
+ * here, cheap enough for the whole library at start. */
 static bool waves_stale(const RXApp *app, const RXTrack *t)
 {
     if (!t->has_waveforms)
@@ -269,9 +269,10 @@ static bool waves_stale(const RXApp *app, const RXTrack *t)
         if (c->track_id == t->id)
             return c->stale;
     }
-    RXWaveforms w = { 0 };
-    int ret = rx_library_waveforms_load(&app->lib, t->id, &w);
-    rx_waveforms_free(&w);
+    int ret = rx_library_waveforms_check(&app->lib, t->id);
+    if (ret == RX_ERROR(EPROTO))
+        rx_debug("track %llu: stored waveforms are an older format; recomputing",
+                 (unsigned long long)t->id);
     bool stale = ret == RX_ERROR(EPROTO);
     waves_seen(app, t->id, stale);
     return stale;
@@ -720,25 +721,37 @@ static void track_plays(RXApp *app, int deck)
 
 /* ----------------------------------------------------------------- analysis */
 
+unsigned rx_app_analysis_stale(const RXApp *app, const RXTrack *t)
+{
+    /* The version first: it costs nothing, the format is a read. */
+    unsigned stale = rx_analysis_stale(t);
+    if (!(stale & RX_ANALYSE_WAVES) && waves_stale(app, t))
+        stale |= RX_ANALYSE_WAVES;
+    return stale;
+}
+
 unsigned rx_app_analysis_needed(const RXApp *app, const RXTrack *t, unsigned what, bool force)
 {
     if (!t || t->missing)
         return 0;
 
+    /* A stale result is as good as none: the upgrade that bumped its
+     * version is there to replace it. A locked grid is kept all the
+     * same. */
+    unsigned stale = rx_app_analysis_stale(app, t);
     unsigned need = what & RX_ANALYSE_ALL;
     if (!force) {
-        if (rx_track_analysed(t))
+        if (rx_track_analysed(t) && !(stale & RX_ANALYSE_BEATS))
             need &= ~RX_ANALYSE_BEATS;
-        if (t->key[0])
+        if (t->key[0] && !(stale & RX_ANALYSE_KEY))
             need &= ~RX_ANALYSE_KEY;
     }
     if (t->grid_locked && !force)
         need &= ~RX_ANALYSE_BEATS;
 
-    /* The deck, the table preview and the stick all need the waveforms;
-     * stale ones (waves_stale) are none. Forced, they are made anyway. */
-    bool forced_waves = force && (need & RX_ANALYSE_WAVES);
-    if (!t->has_waveforms || (!forced_waves && waves_stale(app, t)))
+    /* The deck, the table preview and the stick all need the waveforms,
+     * so missing or stale ones are made whatever was asked. */
+    if (!t->has_waveforms || (stale & RX_ANALYSE_WAVES))
         need |= RX_ANALYSE_WAVES;
     else if (!force)
         need &= ~RX_ANALYSE_WAVES;
@@ -827,6 +840,25 @@ int rx_app_analyse_all(RXApp *app, bool force)
     return queued;
 }
 
+/* What an older analyser made, after an upgrade that bumped a stage's
+ * version or the waveform format (rx_app_analysis_stale): those stages of
+ * every track are queued, and only those (and waveforms the track lacks,
+ * which always count). Locked grids stay, as in any analysis that was not
+ * asked for by name. Returns how many tracks were queued. */
+static int queue_stale(RXApp *app)
+{
+    int queued = 0;
+    for (int i = 0; i < app->lib.nb_tracks; i++) {
+        RXTrack *t = app->lib.tracks[i];
+        if (t->missing)
+            continue;
+        unsigned stale = rx_app_analysis_stale(app, t);
+        if (stale && queue_analysis(app, t, stale, false, false) > 0)
+            queued++;
+    }
+    return queued;
+}
+
 /* override_lock: a forced analysis of one track replaces its locked grid
  * (the lock stays). */
 static int apply_analysis(RXApp *app, RXTrack *t, RXAnalysis *a, bool override_lock)
@@ -850,11 +882,22 @@ static int apply_analysis(RXApp *app, RXTrack *t, RXAnalysis *a, bool override_l
         t->grid_flags = a->beats.flags;
         grid_changed = true;
     }
+    /* The versions say which analyser made each result; they are set here
+     * and nowhere else, so a grid edited by hand keeps the version of the
+     * one it came from. A stage that ran and found nothing (no grid in a
+     * track too short, an undecidable key) keeps the result it had, at the
+     * current version all the same: the analysis is deterministic, so
+     * running it again would find nothing again, on every start. A locked
+     * grid the analysis did not replace keeps its version. */
+    if ((a->done & RX_ANALYSE_BEATS) && (!t->grid_locked || override_lock))
+        t->beats_version = RX_BEATS_VERSION;
 
     if ((a->done & RX_ANALYSE_KEY) && a->key.key[0]) {
         snprintf(t->key, sizeof(t->key), "%s", a->key.key);
         t->key_confidence = a->key.confidence;
     }
+    if (a->done & RX_ANALYSE_KEY)
+        t->key_version = RX_KEY_VERSION;
 
     /* The decode is the players' timeline: trust it over the probe. */
     if (a->duration > 0) {
@@ -887,6 +930,7 @@ static int apply_analysis(RXApp *app, RXTrack *t, RXAnalysis *a, bool override_l
             err = ret;
         } else {
             t->has_waveforms = true;
+            t->waves_version = RX_WAVES_VERSION;
             waves_seen(app, t->id, false);
         }
         gpu_forget_waves(app, t->id);
@@ -2188,15 +2232,24 @@ int rx_app_create(RXApp *app, const char *library_root, const RXPlayerOptions *p
     }
 
     rx_app_rebuild_rows(app);
+
+    /* After an upgrade, what the older analyser made is analysed again in
+     * the background, unasked, with the status bar's usual progress. */
+    int stale = queue_stale(app);
+    char again[96] = "";
+    if (stale > 0)
+        snprintf(again, sizeof(again), "; %d made by an older analyser, analysing %s again",
+                 stale, stale == 1 ? "it" : "them");
+
     int missing = 0;
     for (int i = 0; i < app->lib.nb_tracks; i++)
         missing += app->lib.tracks[i]->missing;
     if (missing)
-        rx_app_set_status(app, "%d tracks in %s, %d missing", app->lib.nb_tracks, app->lib.root,
-                          missing);
+        rx_app_set_status(app, "%d tracks in %s, %d missing%s", app->lib.nb_tracks, app->lib.root,
+                          missing, again);
     else
-        rx_app_set_status(app, "%d track%s in %s", app->lib.nb_tracks,
-                          app->lib.nb_tracks == 1 ? "" : "s", app->lib.root);
+        rx_app_set_status(app, "%d track%s in %s%s", app->lib.nb_tracks,
+                          app->lib.nb_tracks == 1 ? "" : "s", app->lib.root, again);
     return 0;
 
 fail:

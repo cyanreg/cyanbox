@@ -157,6 +157,11 @@ typedef struct RXTrack {
     unsigned grid_flags;            /* RX_GRID_FLAG_* from rxbox/analysis.h */
     bool   grid_locked;             /* analysis must not replace it */
     bool   has_waveforms;           /* the library holds its waveform bytes */
+    /* The analyser versions (RX_*_VERSION in rxbox/analysis.h) the grid,
+     * the key and the waveforms were made by; 0 before versions were
+     * kept. Set only when an analysis stores that result: a grid edited
+     * by hand keeps the version of the one it was edited from. */
+    int    beats_version, key_version, waves_version;
     RXCue *cues; int nb_cues;
 
     /* Stream properties from probing */
