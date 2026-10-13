@@ -71,8 +71,8 @@ run color 200 "$id" | grep -q "click128.flac: 200° (not one of the eight; the s
 run show "$id" | grep -q "^  colour: 200° (not one of the eight; the stick gets aqua)$" ||
     fail "show does not print the hue"
 run color none "$track" | grep -q ": none$" || fail "color none"
-run color purple "$track" | grep -q ": purple (dark, moody, hypnotic)$" || fail "color purple"
-run color 276 "$track" | grep -q ": purple (dark, moody, hypnotic)$" || fail "color 276 is purple"
+run color purple "$track" | grep -q ": purple (calm and dark, ambient)$" || fail "color purple"
+run color 276 "$track" | grep -q ": purple (calm and dark, ambient)$" || fail "color 276 is purple"
 run color 400 "$track" > /dev/null 2>&1 && fail "color took 400"
 run color cyan "$track" > /dev/null 2>&1 && fail "color took cyan"
 run colour aqua "$track" | grep -q ": aqua (calm, smooth)$" || fail "colour aqua"
@@ -81,7 +81,7 @@ run colour aqua "$track" | grep -q ": aqua (calm, smooth)$" || fail "colour aqua
 # puts one back. Only the eight colours are keys.
 run config > "$dir/config.out" || fail "config"
 grep -q "^color.pink = dark and intense, hard$" "$dir/config.out" || fail "config lists no color.pink"
-grep -q "^color.purple = dark, moody, hypnotic$" "$dir/config.out" || fail "config lists no color.purple"
+grep -q "^color.purple = calm and dark, ambient$" "$dir/config.out" || fail "config lists no color.purple"
 run config color.aqua "  still water " | grep -q "^color.aqua = still water$" ||
     fail "config color.aqua"
 run config color.aqua | grep -q "^color.aqua = still water$" || fail "config color.aqua reads back"

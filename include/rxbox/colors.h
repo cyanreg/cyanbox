@@ -45,7 +45,7 @@ uint32_t    rx_track_color_rgb(int id);                           /* 0xRRGGBB, a
 #define RX_TRACK_VIBE_GREEN  "groovy and relaxed, warm"
 #define RX_TRACK_VIBE_AQUA   "calm, smooth"
 #define RX_TRACK_VIBE_BLUE   "deep, melancholic"
-#define RX_TRACK_VIBE_PURPLE "dark, moody, hypnotic"
+#define RX_TRACK_VIBE_PURPLE "calm and dark, ambient"
 
 /* A track's colour in the library is a hue (RXMeta.hue: the HSV hue angle
  * in degrees, 0 <= hue < 360, 0 red, 60 yellow, 120 green, 180 cyan, 240

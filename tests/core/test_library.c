@@ -709,7 +709,7 @@ static void test_legend(void)
     static const char *const defaults[RX_TRACK_COLORS] = {
         "dark and intense, hard", "intense, peak time", "energetic and bright, driving",
         "bright, uplifting", "groovy and relaxed, warm", "calm, smooth", "deep, melancholic",
-        "dark, moody, hypnotic",
+        "calm and dark, ambient",
     };
     for (int id = 1; id <= RX_TRACK_COLORS; id++) {
         CHECK_STR(rx_config_vibe(cfg, id), defaults[id - 1]);

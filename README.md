@@ -132,7 +132,7 @@ one per colour. By default:
 | green | groovy and relaxed, warm |
 | aqua | calm, smooth |
 | blue | deep, melancholic |
-| purple | dark, moody, hypnotic |
+| purple | calm and dark, ambient |
 
 The model is asked which description fits the track best and gives each a
 probability; the colour is the most probable, so the eight colours are its

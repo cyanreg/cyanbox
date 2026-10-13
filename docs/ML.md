@@ -98,7 +98,7 @@ D. bright, uplifting
 E. groovy and relaxed, warm
 F. calm, smooth
 G. deep, melancholic
-H. dark, moody, hypnotic
+H. calm and dark, ambient
 Answer with the letter only.
 ```
 
@@ -156,8 +156,8 @@ geometric mean is purple 0.30, red 0.21, orange 0.19, pink 0.16, yellow
 0.08, green 0.05, blue 0.013, aqua 0.011. Dividing a track's colour
 probabilities by this prior and renormalising (a contextual calibration)
 was tried on the 58 tracks and held against what the model itself says of
-them: the rank correlation of the colour's intensity (aqua, blue, green,
-purple, yellow, orange, red, pink, calm to hard) with its intensity
+them: the rank correlation of the colour's intensity (purple, aqua, blue,
+green, yellow, orange, red, pink, calm to hard) with its intensity
 measure and of the colour's mood (pink, purple, blue, red, aqua, green,
 orange, yellow, dark to bright) with its mood measure; the picks its mood
 words contradict (an intense colour for "calm, peaceful", a dark one for

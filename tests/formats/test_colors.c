@@ -152,7 +152,7 @@ int main(void)
     CHECK_STR(vibes[0], "dark and intense, hard");
     CHECK_STR(vibes[1], "intense, peak time");
     CHECK_STR(vibes[4], "groovy and relaxed, warm");
-    CHECK_STR(vibes[7], "dark, moody, hypnotic");
+    CHECK_STR(vibes[7], "calm and dark, ambient");
 
     /* The command line's hues: degrees, a name, none. */
     double hue = 0;
