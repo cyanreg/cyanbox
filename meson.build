@@ -105,6 +105,9 @@ subdir('third_party')
 # and registers its own tests (suite: '<module>').
 #============================================================================
 subdir('src/common')
+# The compute context first (a library the analysis uses); the window's
+# sources from the same directory go into the executables below.
+subdir('src/gpu')
 subdir('src/audio')
 subdir('src/core')
 subdir('src/analysis')
@@ -116,7 +119,6 @@ subdir('src/app')
 # Everything without a window, for the CLI, the tests and the tools.
 rxbox_dep = rx_app_dep
 
-subdir('src/gpu')
 subdir('src/ui')
 
 executable('rxbox',

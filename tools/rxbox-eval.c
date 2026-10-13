@@ -26,6 +26,19 @@
  *     --mem                   print resident memory after decoding and the peak
  *                             after the analysis (meaningful with -j 1)
  *
+ *     --cache DIR             keep each file's decoded audio (16-bit mono 44.1 kHz)
+ *                             and its front end's arrays in DIR, and use them on
+ *                             the next run: only the decisions run again
+ *     --device NAME           the GPU for the front end (a part of its name)
+ *     --no-gpu                the front end on the CPU (as RXBOX_ANALYSIS_GPU=0)
+ *
+ * The spectral front end runs on the GPU when there is one (rxbox/compute.h;
+ * RXBOX_ANALYSIS_GPU=1 makes its absence an error). Each file's time is
+ * split into decoding (or loading from the cache), the front end (the
+ * STFT) and the decisions (everything after it, the envelopes around the
+ * beats included), in wall-clock time, printed with -v and summed at the
+ * end, with the cache's hits.
+ *
  * Audio is decoded by rx_decode, mono at the file's own rate, as
  * rx_analyse sees it (the analyser resamples). With --ffmpeg it is piped
  * from the ffmpeg command line at 44.1 kHz ("file:" prefix, so names
@@ -49,10 +62,15 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <sys/vfs.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
+#include <linux/magic.h>
+
+#include "rxbox/compute.h"
 #include "src/analysis/beats_internal.h"
 
 /* ------------------------------------------------------------- decoding */
@@ -154,6 +172,220 @@ static double read_tag_bpm(const char *path)
     return bpm;
 }
 
+/* ---------------------------------------------------------------- cache */
+
+/* --cache DIR: per input file, the decoded mono 44.1 kHz audio as 16-bit
+ * PCM and the spectral front end's arrays (what rx_spectrum_compute makes,
+ * as floats, exactly), so that a second run over the same files skips
+ * decoding and the transforms and runs only what comes after them. A file
+ * is found by a hash of its path, size, modification time (ns), the
+ * decoder (rx_decode or --ffmpeg) and RX_FRONTEND_VERSION, and its header
+ * repeats them all: a changed file, another decoder or a new front end is
+ * a miss, and the entry is written again. About 6 MB a minute of audio:
+ * 5.3 MB of PCM and 0.7 MB of the front end's arrays (21 and 3 MB for a
+ * four-minute track).
+ *
+ * A run that fills the cache analyses the 16-bit copy it stores, not the
+ * float decode, so that every run with the cache sees the same samples and
+ * an unchanged analyser gives the same results from the first run on. A
+ * mono mix of 16-bit stereo has one more bit than that; the copy is within
+ * -96 dB of it, which can move the results the way the GPU's rounding
+ * does (docs/BEATS.md, section 1), no more. The envelopes around the
+ * beats are still cut on a hit: where they are cut depends on the beats. */
+
+#define CACHE_FORMAT 1
+
+typedef struct CacheHead {
+    char     magic[4];              /* "RXFC" */
+    uint32_t format, frontend, decoder;
+    int64_t  size, mtime_ns;
+    int64_t  n;                     /* samples at 44.1 kHz */
+    int32_t  nb_frames, path_len;
+    double   duration, fps;
+} CacheHead;
+
+static bool file_id(const char *path, int64_t *size, int64_t *mtime_ns)
+{
+    struct stat st;
+    if (stat(path, &st) < 0)
+        return false;
+    *size = st.st_size;
+    *mtime_ns = (int64_t)st.st_mtim.tv_sec * 1000000000 + st.st_mtim.tv_nsec;
+    return true;
+}
+
+static char *cache_name(const char *dir, const char *path, int64_t size, int64_t mtime_ns,
+                        uint32_t decoder)
+{
+    /* FNV-1a over everything that identifies the entry. */
+    uint64_t h = 0xcbf29ce484222325ULL;
+    const uint32_t fe = RX_FRONTEND_VERSION;
+    const struct { const void *p; size_t n; } parts[] = {
+        { path, strlen(path) }, { &size, sizeof(size) }, { &mtime_ns, sizeof(mtime_ns) },
+        { &decoder, sizeof(decoder) }, { &fe, sizeof(fe) },
+    };
+    for (size_t k = 0; k < RX_ARRAY_ELEMS(parts); k++) {
+        const uint8_t *b = parts[k].p;
+        for (size_t i = 0; i < parts[k].n; i++)
+            h = (h ^ b[i]) * 0x100000001b3ULL;
+    }
+    return rx_asprintf("%s/%016llx.rxfc", dir, (unsigned long long)h);
+}
+
+/* The arrays of a spectrum, in the order they are stored, and their
+ * lengths. */
+#define NB_SPEC 5
+static void spec_arrays(RXSpectrum *s, float **arr[NB_SPEC], size_t len[NB_SPEC])
+{
+    arr[0] = &s->prof;
+    arr[1] = &s->kick;
+    arr[2] = &s->flux_full;
+    arr[3] = &s->flux_mid;
+    arr[4] = &s->flux_high;
+    const size_t nf = (size_t)s->nb_frames;
+    len[0] = nf * RX_BEAT_NPROF;
+    len[1] = len[2] = len[3] = len[4] = nf;
+}
+
+/* Loads the entry of `path`; false when there is none (or it is not
+ * this file's, or damaged). */
+static bool cache_load(const char *dir, const char *path, uint32_t decoder, float **x, int64_t *n,
+                       double *duration, RXSpectrum *spec)
+{
+    int64_t size, mtime;
+    if (!file_id(path, &size, &mtime))
+        return false;
+    char *name = cache_name(dir, path, size, mtime, decoder);
+    uint8_t *blob = NULL;
+    size_t blob_size = 0;
+    int ret = name ? rx_file_read(name, &blob, &blob_size) : RX_ERROR(ENOMEM);
+    free(name);
+    if (ret < 0)
+        return false;
+
+    CacheHead h;
+    bool ok = blob_size >= sizeof(h);
+    if (ok) {
+        memcpy(&h, blob, sizeof(h));
+        ok = !memcmp(h.magic, "RXFC", 4) && h.format == CACHE_FORMAT &&
+             h.frontend == RX_FRONTEND_VERSION && h.decoder == decoder && h.size == size &&
+             h.mtime_ns == mtime && h.n >= 0 && h.nb_frames >= 0 && h.path_len >= 0 &&
+             (size_t)h.path_len == strlen(path);
+    }
+    size_t off = sizeof(h) + (ok ? (size_t)h.path_len : 0);
+    off = RX_ALIGN(off, 8);
+    if (ok)
+        ok = !memcmp(blob + sizeof(h), path, h.path_len);
+    RXSpectrum s = { .nb_frames = ok ? h.nb_frames : 0 };
+    float **arr[NB_SPEC];
+    size_t len[NB_SPEC];
+    spec_arrays(&s, arr, len);
+    size_t need = off + RX_ALIGN((size_t)(ok ? h.n : 0) * sizeof(int16_t), 8);
+    for (int k = 0; k < NB_SPEC; k++)
+        need += len[k] * sizeof(float);
+    need += sizeof(s.mel_hz);
+    ok = ok && need == blob_size;
+
+    float *xs = ok ? malloc((size_t)RX_MAX(h.n, 1) * sizeof(*xs)) : NULL;
+    ok = ok && xs;
+    for (int k = 0; ok && k < NB_SPEC; k++) {
+        *arr[k] = malloc(RX_MAX(len[k], 1) * sizeof(float));
+        ok = *arr[k] != NULL;
+    }
+    if (!ok) {
+        free(xs);
+        rx_spectrum_free(&s);
+        free(blob);
+        return false;
+    }
+
+    const int16_t *pcm = (const int16_t *)(blob + off);
+    for (int64_t i = 0; i < h.n; i++)
+        xs[i] = pcm[i] / 32768.0f;
+    off += RX_ALIGN((size_t)h.n * sizeof(int16_t), 8);
+    for (int k = 0; k < NB_SPEC; k++) {
+        memcpy(*arr[k], blob + off, len[k] * sizeof(float));
+        off += len[k] * sizeof(float);
+    }
+    memcpy(s.mel_hz, blob + off, sizeof(s.mel_hz));
+    s.fps = h.fps;
+    free(blob);
+
+    *x = xs;
+    *n = h.n;
+    *duration = h.duration;
+    *spec = s;
+    return true;
+}
+
+/* Rounds the signal to 16 bits in place, as the cache stores it. */
+static void quantize16(float *x, int64_t n)
+{
+    for (int64_t i = 0; i < n; i++) {
+        long q = lrintf(x[i] * 32768.0f);
+        x[i] = (int16_t)RX_CLAMP(q, -32768L, 32767L) / 32768.0f;
+    }
+}
+
+static int cache_store(const char *dir, const char *path, uint32_t decoder, const float *x,
+                       int64_t n, double duration, RXSpectrum *spec)
+{
+    int64_t size, mtime;
+    if (!file_id(path, &size, &mtime))
+        return RX_ERROR(ENOENT);
+    CacheHead h = {
+        .magic     = { 'R', 'X', 'F', 'C' },
+        .format    = CACHE_FORMAT,
+        .frontend  = RX_FRONTEND_VERSION,
+        .decoder   = decoder,
+        .size      = size,
+        .mtime_ns  = mtime,
+        .n         = n,
+        .nb_frames = spec->nb_frames,
+        .path_len  = (int32_t)strlen(path),
+        .duration  = duration,
+        .fps       = spec->fps,
+    };
+    float **arr[NB_SPEC];
+    size_t len[NB_SPEC];
+    spec_arrays(spec, arr, len);
+    size_t off = RX_ALIGN(sizeof(h) + (size_t)h.path_len, 8);
+    size_t total = off + RX_ALIGN((size_t)n * sizeof(int16_t), 8);
+    for (int k = 0; k < NB_SPEC; k++)
+        total += len[k] * sizeof(float);
+    total += sizeof(spec->mel_hz);
+    uint8_t *blob = calloc(1, total);
+    if (!blob)
+        return RX_ERROR(ENOMEM);
+
+    memcpy(blob, &h, sizeof(h));
+    memcpy(blob + sizeof(h), path, h.path_len);
+    int16_t *pcm = (int16_t *)(blob + off);
+    for (int64_t i = 0; i < n; i++)
+        pcm[i] = (int16_t)RX_CLAMP(lrintf(x[i] * 32768.0f), -32768L, 32767L);
+    off += RX_ALIGN((size_t)n * sizeof(int16_t), 8);
+    for (int k = 0; k < NB_SPEC; k++) {
+        memcpy(blob + off, *arr[k], len[k] * sizeof(float));
+        off += len[k] * sizeof(float);
+    }
+    memcpy(blob + off, spec->mel_hz, sizeof(spec->mel_hz));
+
+    char *name = cache_name(dir, path, size, mtime, decoder);
+    int ret = name ? rx_file_write_atomic(name, blob, total) : RX_ERROR(ENOMEM);
+    free(name);
+    free(blob);
+    return ret;
+}
+
+/* The cache is meant for a disk: on a tmpfs it costs RAM. */
+static void cache_check_dir(const char *dir)
+{
+    struct statfs fs;
+    if (statfs(dir, &fs) == 0 && fs.f_type == TMPFS_MAGIC)
+        fprintf(stderr, "rxbox-eval: %s is on a tmpfs: the cache takes RAM there (about 24 MB "
+                        "per four-minute track)\n", dir);
+}
+
 /* ----------------------------------------------------------- results */
 
 #define MAX_SECS 64
@@ -169,7 +401,9 @@ typedef struct Result {
     unsigned flags;
     char   flagstr[160];
     double music_start;
-    double ms;
+    double ms;                  /* CPU time of the front end and the decisions */
+    double dec_ms, fe_ms, beats_ms;     /* wall time of decoding, the front end, the decisions */
+    bool   cached;              /* decoded audio and front end from --cache */
     double tag_bpm;
     double closest;             /* closest two beats of the expanded grid, in periods */
     /* diagnostics */
@@ -286,6 +520,7 @@ typedef struct Job {
     atomic_int         next;
     RXAnalysisOptions  opt;
     const char        *dump;
+    const char        *cache;
     bool               ffmpeg;
     bool               mem;
     bool               all;
@@ -523,32 +758,55 @@ static void analyse_one(Job *job, int i)
     }
     float *x = NULL;
     int64_t n = 0;
-    int rate = 44100;
-    RXAudio au = { 0 };
-    if (job->ffmpeg || rx_str_ends(r->path, ".f32")) {
-        if (decode_ffmpeg(r->path, &x, &n) < 0) {
-            fprintf(stderr, "%s: decoding failed\n", r->path);
+    int rate = RX_BEAT_RATE;
+    RXSpectrum spec = { 0 };
+    const uint32_t decoder = job->ffmpeg || rx_str_ends(r->path, ".f32");
+    int64_t t0 = rx_time_us();
+    r->cached = !job->starts && job->cache &&
+                cache_load(job->cache, r->path, decoder, &x, &n, &r->duration, &spec);
+    if (!r->cached) {
+        if (decoder) {
+            if (decode_ffmpeg(r->path, &x, &n) < 0) {
+                fprintf(stderr, "%s: decoding failed\n", r->path);
+                return;
+            }
+        } else {
+            /* As rx_analyse sees it: mono at the file's own rate, on the
+             * players' timeline. */
+            RXAudio au = { 0 };
+            if (rx_decode(r->path, 1, 0, &au) < 0) {
+                fprintf(stderr, "%s: decoding failed\n", r->path);
+                return;
+            }
+            x = au.samples;
+            au.samples = NULL;
+            n = au.nb_frames;
+            rate = au.rate;
+            rx_audio_free(&au);
+        }
+        r->duration = (double)n / rate;
+        if (job->starts) {
+            start_one(job, r, x, n, rate);
+            free(x);
             return;
         }
-    } else {
-        /* As rx_analyse sees it: mono at the file's own rate, on the
-         * players' timeline; the analyser resamples. */
-        if (rx_decode(r->path, 1, 0, &au) < 0) {
-            fprintf(stderr, "%s: decoding failed\n", r->path);
-            return;
+        /* At 44.1 kHz, resampled as the analyser itself would. */
+        if (rate != RX_BEAT_RATE) {
+            float *x44 = NULL;
+            int64_t n44 = 0;
+            int ret = rx_resample_mono(x, n, rate, RX_BEAT_RATE, &x44, &n44);
+            free(x);
+            if (ret < 0) {
+                fprintf(stderr, "%s: resampling failed\n", r->path);
+                return;
+            }
+            x = x44;
+            n = n44;
         }
-        x = au.samples;
-        au.samples = NULL;
-        n = au.nb_frames;
-        rate = au.rate;
-        rx_audio_free(&au);
+        if (job->cache)
+            quantize16(x, n);
     }
-    r->duration = (double)n / rate;
-    if (job->starts) {
-        start_one(job, r, x, n, rate);
-        free(x);
-        return;
-    }
+    r->dec_ms = (rx_time_us() - t0) / 1000.0;
     r->tag_bpm = rx_str_ends(r->path, ".f32") ? 0.0 : read_tag_bpm(r->path);
 
     RXBeatResult br;
@@ -556,9 +814,24 @@ static void analyse_one(Job *job, int i)
     double peak0 = peak_mb();
     peak_reset();
     double rss0 = rss_mb();
-    double t0 = cpu_ms();
-    int ret = rx_analyse_beats_dbg(x, n, rate, &job->opt, &br, job->mem ? NULL : &dbg);
-    r->ms = cpu_ms() - t0;
+    double c0 = cpu_ms();
+    if (!r->cached) {
+        int64_t t1 = rx_time_us();
+        int ret = rx_spectrum_compute(x, n, job->opt.compute, &spec);
+        r->fe_ms = (rx_time_us() - t1) / 1000.0;
+        if (ret < 0) {
+            fprintf(stderr, "%s: the front end failed (%d)\n", r->path, ret);
+            free(x);
+            return;
+        }
+        if (job->cache && (ret = cache_store(job->cache, r->path, decoder, x, n, r->duration,
+                                             &spec)) < 0)
+            fprintf(stderr, "%s: not cached: %s\n", r->path, strerror(-ret));
+    }
+    int64_t t2 = rx_time_us();
+    int ret = rx_analyse_beats_spec(x, n, &spec, &job->opt, &br, job->mem ? NULL : &dbg);
+    r->beats_ms = (rx_time_us() - t2) / 1000.0;
+    r->ms = cpu_ms() - c0;
     if (job->mem) {
         printf("memory: decoded %.0f MB resident (peak %.0f), peak after analysis %.0f MB: "
                "analysis %.0f MB above its input  %s\n", rss0, peak0, peak_mb(),
@@ -897,6 +1170,7 @@ static void usage(void)
                     "                  [--compare REF.csv]\n"
                     "                  [--dump-onsets BASE] [--bpm-range LO HI] [--no-sections]\n"
                     "                  [--ffmpeg] [--all] [--what MASK] [--mem] [--starts]\n"
+                    "                  [--cache DIR] [--device NAME] [--no-gpu]\n"
                     "                  [-v|-vv] FILE...\n");
 }
 
@@ -904,7 +1178,8 @@ int main(int argc, char **argv)
 {
     Job job = { 0 };
     rx_analysis_options_default(&job.opt);
-    const char *csv = NULL, *from = NULL, *ref = NULL, *list = NULL;
+    const char *csv = NULL, *from = NULL, *ref = NULL, *list = NULL, *device = NULL;
+    bool no_gpu = false;
     int threads = (int)RX_MAX(sysconf(_SC_NPROCESSORS_ONLN) / 2, 1);
     bool verbose = false;
     char **paths = malloc(argc * sizeof(*paths));
@@ -940,6 +1215,12 @@ int main(int argc, char **argv)
             job.what = (unsigned)atoi(argv[++i]);
         } else if (!strcmp(a, "--no-sections")) {
             job.opt.allow_sections = false;
+        } else if (!strcmp(a, "--cache") && i + 1 < argc) {
+            job.cache = argv[++i];
+        } else if (!strcmp(a, "--device") && i + 1 < argc) {
+            device = argv[++i];
+        } else if (!strcmp(a, "--no-gpu")) {
+            no_gpu = true;
         } else if (!strcmp(a, "-v")) {
             verbose = true;
         } else if (!strcmp(a, "-vv")) {
@@ -951,6 +1232,28 @@ int main(int argc, char **argv)
         } else {
             paths[np++] = (char *)a;
         }
+    }
+
+    /* The front end's GPU, shared by the threads. */
+    RXCompute *gpu = NULL;
+    if (!from && !job.starts && !no_gpu && rx_compute_mode() != RX_COMPUTE_OFF) {
+        RXComputeOptions co;
+        rx_compute_options_default(&co);
+        co.device = device;
+        int ret = rx_compute_create(&gpu, &co);
+        if (ret < 0 && rx_compute_mode() == RX_COMPUTE_REQUIRED) {
+            fprintf(stderr, "rxbox-eval: RXBOX_ANALYSIS_GPU=1, but there is no GPU (%s)\n",
+                    strerror(-ret));
+            return 1;
+        }
+    }
+    job.opt.compute = gpu;
+    if (job.cache) {
+        if (rx_mkdir_p(job.cache) < 0) {
+            fprintf(stderr, "%s: cannot create the cache directory\n", job.cache);
+            return 1;
+        }
+        cache_check_dir(job.cache);
     }
 
     Result *res = NULL;
@@ -1046,6 +1349,8 @@ int main(int argc, char **argv)
                r->closest < 0.5 ? "  NEAR-DUPLICATE BEATS" : "");
         if (!verbose || from)
             continue;
+        printf("          time: %s %.0f ms, front end %.0f ms, decisions %.0f ms (wall)\n",
+               r->cached ? "from the cache" : "decoding", r->dec_ms, r->fe_ms, r->beats_ms);
         printf("          2nd %.2f  octave x%g margin %.2f:", r->second_bpm, r->oct.factor,
                r->oct.margin);
         for (int l = 0; l < 3; l++)
@@ -1089,10 +1394,33 @@ int main(int argc, char **argv)
                ok, tot_ms / ok, tot_ms / (tot_dur / 60.0), conf / ok, 100.0 * sog / ok,
                100.0 * sfg / ok, agree, 100.0 * agree / ok);
         printf("grids with two beats closer than half a period: %d\n", dups);
+        double dec = 0.0, fe = 0.0, dm = 0.0;
+        int hits = 0;
+        for (int i = 0; i < nb; i++) {
+            if (!res[i].ok)
+                continue;
+            dec += res[i].dec_ms;
+            fe += res[i].fe_ms;
+            dm += res[i].beats_ms;
+            hits += res[i].cached;
+        }
+        printf("per file, wall: decoding (or the cache) %.0f ms, front end %.0f ms (%s), "
+               "decisions %.0f ms\n",
+               dec / ok, fe / ok, gpu ? rx_compute_device_name(gpu) : "CPU", dm / ok);
+        if (job.cache)
+            printf("cache %s: %d of %d files from it\n", job.cache, hits, ok);
     }
     if (csv)
         write_csv(csv, res, nb);
     if (ref)
         compare(res, nb, ref);
+    if (gpu) {
+        int errors = rx_compute_validation_errors(gpu);
+        rx_compute_destroy(&gpu);
+        if (errors) {
+            fprintf(stderr, "rxbox-eval: %d Vulkan validation errors\n", errors);
+            return 1;
+        }
+    }
     return 0;
 }

@@ -154,16 +154,19 @@ int rx_beat_envs(RXEnvCtx *ctx, const RXBeatObs *beats, int nb, RXBeatEnvs *out)
         return RX_ERROR(ENOMEM);
     }
     out->nb = nb;
-    for (int i = 0; i < nb; i++) {
-        int ret = rx_env_window(ctx, beats[i].time,
-                                out->env + (size_t)i * RX_NB_BANDS * RX_ENV_LEN,
-                                &out->centre[i]);
-        if (ret < 0) {
-            rx_beat_envs_free(out);
-            return ret;
-        }
+    /* All at once: on the GPU a window is one workgroup of a batch. */
+    double *t = malloc((size_t)RX_MAX(nb, 1) * sizeof(*t));
+    if (!t) {
+        rx_beat_envs_free(out);
+        return RX_ERROR(ENOMEM);
     }
-    return 0;
+    for (int i = 0; i < nb; i++)
+        t[i] = beats[i].time;
+    int ret = rx_env_windows(ctx, t, nb, out->env, out->centre);
+    free(t);
+    if (ret < 0)
+        rx_beat_envs_free(out);
+    return ret;
 }
 
 void rx_beat_envs_free(RXBeatEnvs *e)

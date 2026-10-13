@@ -4,7 +4,8 @@
  * (spectrum.c, onset.c, tempo.c, grid_fit.c, downbeat.c, beats.c) and
  * analysis.c. Nothing here is part of rxbox/analysis.h; the stages are
  * split into files so that each can be read, tested and replaced on its
- * own (the spectral front end in particular could move to Vulkan compute).
+ * own. The spectral front end's transforms run on the GPU when the options
+ * carry a compute context (spectrum.c); nothing after it knows.
  *
  * Time conventions: every time is in seconds of the analysed signal, which
  * is the input resampled to 44.1 kHz with no delay, so it is also seconds
@@ -43,10 +44,18 @@ typedef struct RXSpectrum {
     double mel_hz[RX_BEAT_NMELS];   /* centre of each band */
 } RXSpectrum;
 
+/* The version of what rx_spectrum_compute and the envelopes produce: bump
+ * it whenever their output changes, so that stored front-end results
+ * (rxbox-eval --cache) are made again. The GPU's output is the same
+ * version: it agrees with the CPU's to float rounding. */
+#define RX_FRONTEND_VERSION 1
+
 /* Centred Hann STFT, triangular mel bands (30 Hz .. 16 kHz, like dj) on
  * the power spectrum, square-rooted back to an amplitude per band and
- * compressed as dj's log1p(1000 * amplitude / (N/4)). */
-int  rx_spectrum_compute(const float *x, int64_t n, RXSpectrum *s);
+ * compressed as dj's log1p(1000 * amplitude / (N/4)). With `gpu`, the
+ * transforms and the band energies run there (rxbox/compute.h) and only
+ * the profile sums and the flux here; the CPU takes over if it fails. */
+int  rx_spectrum_compute(const float *x, int64_t n, RXCompute *gpu, RXSpectrum *s);
 void rx_spectrum_free(RXSpectrum *s);
 
 /* Resamples mono float with libswresample, time-aligned (output sample 0
@@ -73,11 +82,16 @@ enum {
 #define RX_ENV_LEN     (2 * RX_ENV_HALF + 1)
 
 typedef struct RXEnvCtx RXEnvCtx;
-int  rx_env_alloc(RXEnvCtx **ctx, const float *x, int64_t n);
+/* With `gpu`, the windows are transformed there (in batches: call
+ * rx_env_windows with every window needed at once); the CPU takes over if
+ * it fails. */
+int  rx_env_alloc(RXEnvCtx **ctx, const float *x, int64_t n, RXCompute *gpu);
 void rx_env_free(RXEnvCtx **ctx);
 /* env[b * RX_ENV_LEN + i] is band b at time centre + (i - RX_ENV_HALF) / RX_ENV_RATE,
  * where centre is `t` rounded to a multiple of 1 / RX_ENV_RATE (returned). */
 int  rx_env_window(RXEnvCtx *ctx, double t, float *env, double *centre);
+/* The same for t[0 .. nb): window i at env + i * RX_NB_BANDS * RX_ENV_LEN. */
+int  rx_env_windows(RXEnvCtx *ctx, const double *t, int nb, float *env, double *centre);
 
 /* The bass's pitch class around each of `nb` instants: a 12-bin chroma of
  * 30..250 Hz from a 0.74 s window starting a sixteenth of a second after
@@ -331,6 +345,11 @@ typedef struct RXBeatDebug {
 
 int  rx_analyse_beats_dbg(const float *mono, int64_t nb_samples, int rate,
                           const RXAnalysisOptions *opt, RXBeatResult *out, RXBeatDebug *dbg);
+/* The same on a 44.1 kHz signal whose spectrum is already computed
+ * (rx_spectrum_compute on x; rxbox-eval's cache): `spec` is taken over
+ * and freed. Everything after the front end, exactly as above. */
+int  rx_analyse_beats_spec(const float *x, int64_t n, RXSpectrum *spec,
+                           const RXAnalysisOptions *opt, RXBeatResult *out, RXBeatDebug *dbg);
 void rx_beat_debug_free(RXBeatDebug *dbg);
 
 #endif /* RXBOX_ANALYSIS_BEATS_INTERNAL_H */

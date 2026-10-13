@@ -2202,6 +2202,10 @@ int rx_app_create(RXApp *app, const char *library_root, const RXPlayerOptions *p
     ret = rx_jobs_create(&app->jobs, (int)RX_MAX(cpus - 1, 1));
     if (ret < 0)
         goto fail;
+    /* The analyses run on the GPU the window was asked for (--device), or
+     * on the CPU only (--no-gpu). */
+    if (window_opt)
+        rx_jobs_set_gpu(app->jobs, !window_opt->cpu_analysis, window_opt->device);
     ret = rx_jobs_create(&priv->io_jobs, IO_THREADS);
     if (ret < 0)
         goto fail;

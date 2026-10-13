@@ -21,7 +21,10 @@ and these libraries, by pkg-config name:
 - `libavformat`, `libavcodec`, `libavutil`, `libswresample`, `libswscale` (FFmpeg)
 - `sqlite3`
 - `libpipewire-0.3`
-- `vulkan`, `sdl3`, `wayland-client`, `fontconfig` (the interface)
+- `vulkan` (the interface, and the analysis, whose spectral front end runs
+  on a GPU when there is one: Vulkan 1.3 with buffer device addresses; with
+  no device the analysis runs on the CPU and gives the same results)
+- `sdl3`, `wayland-client`, `fontconfig` (the interface)
 
 Dear ImGui, the Vulkan Memory Allocator and tomlc17 are vendored in
 `third_party/`. Signalsmith Stretch (the MASTER TEMPO pitch shifter) and
@@ -101,7 +104,11 @@ start after that upgrade analyses the whole library again.
 | `playlist export NAME FILE.m3u8` | write a playlist as an m3u8 file |
 
 `rxbox --help` has the full list of options. The subcommands open no window
-and no audio device.
+and no audio device. Analysing (`add`, `analyze`, the interface) runs the
+beat analyser's transforms on the GPU when there is one, without a window:
+`--device NAME` picks the GPU whose name contains NAME (or
+`RXBOX_GPU_DEVICE`), `--no-gpu` (or `RXBOX_ANALYSIS_GPU=0`) keeps everything
+on the CPU, with the same results.
 
 ## The interface
 
@@ -117,7 +124,8 @@ rxbox --audio none                  # no audio device at all
 
 `--audio-sink NAME` (or the `audio.sink` setting) connects the player to that
 PipeWire node and nowhere else; without it the session manager picks the
-default output. `--device NAME` prefers the GPU whose name contains NAME.
+default output. `--device NAME` prefers the GPU whose name contains NAME,
+for the window and for the analysis.
 The status bar shows the audio output (`PipeWire 48 kHz · <sink>`, or
 `Audio: none`), the number of tracks and the GPU. The layout and every
 control are described in `docs/UI.md`.
