@@ -25,7 +25,9 @@ typedef struct RXJobs RXJobs;
 
 enum RXJobKind {
     RX_JOB_ANALYSE,     /* decode + analyse: result->analysis */
-    RX_JOB_DECODE,      /* decode for a deck: result->audio */
+    RX_JOB_DECODE,      /* a track for a deck: result->packets (rx_packets_open), or
+                           result->audio for a file whose packets cannot place their
+                           samples (Matroska), decoded whole */
     RX_JOB_ARTWORK,     /* cover art RGBA: result->rgba, and result->jpeg */
     RX_JOB_STICK_READ,  /* rx_stick_read + rx_stick_diff: result->stick, result->sync_items */
     RX_JOB_INSPECT,     /* rx_inspect: result->report, result->problems */
@@ -40,6 +42,7 @@ typedef struct RXJobResult {
     double     seconds;         /* wall time the job took */
     RXAnalysis *analysis;       /* owned by the receiver */
     RXAudio    *audio;          /* owned by the receiver */
+    RXPackets  *packets;        /* RX_JOB_DECODE: owned by the receiver */
     uint8_t    *rgba; int width, height;
     uint8_t    *jpeg; size_t jpeg_size;   /* RX_JOB_ARTWORK: the library's 240 px thumbnail
                                              (rx_image_jpeg_square), NULL if it failed */
