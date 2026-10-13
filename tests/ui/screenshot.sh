@@ -121,10 +121,12 @@ cues = [
 for c in cues:
     db.execute("INSERT INTO cue (track_id, time, grid_beat, hot, loop_end, loop_beats, active, name, color)"
                " VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?)", (tid, c[0], c[1], c[2], c[3], c[4], c[5], c[6]))
-db.execute("UPDATE track SET rating = 4, color = 'orange' WHERE id = ?", (tid,))
+db.execute("UPDATE track SET rating = 4 WHERE id = ?", (tid,))
 db.commit()
 EOF
 fi
+# Its colour, a hue: orange's.
+rx color orange "$ID" > /dev/null
 
 # The fourth track goes missing.
 rm -f "$AUDIO/04-techno.flac"

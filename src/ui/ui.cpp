@@ -454,11 +454,15 @@ bool ui_hue_picker(UiState *ui, const char *id, double *hue, float width, bool *
                     PX(1));
     }
     if (set) {
+        // A handle in the hue itself, ringed white and black so it reads
+        // on every colour of the strip.
         float x = a.x + w * (float)(*hue / 360.0);
-        ImVec2 ma(x - PX(3), a.y - PX(2)), mb(x + PX(3), b.y + PX(2));
-        dl->AddRectFilled(ma, mb, ui_rgb(rx_track_hue_rgb(*hue)), PX(2));
-        dl->AddRect(ma, mb, UI_BLACK, PX(2), PX(3));
-        dl->AddRect(ma, mb, UI_TEXT, PX(2), PX(1.5f));
+        dl->AddRectFilled(ImVec2(x - PX(5), a.y - PX(3)), ImVec2(x + PX(5), b.y + PX(3)), UI_BLACK,
+                          PX(3));
+        dl->AddRectFilled(ImVec2(x - PX(4), a.y - PX(2)), ImVec2(x + PX(4), b.y + PX(2)), UI_TEXT,
+                          PX(2));
+        dl->AddRectFilled(ImVec2(x - PX(2.5f), a.y - PX(0.5f)), ImVec2(x + PX(2.5f), b.y + PX(0.5f)),
+                          ui_rgb(rx_track_hue_rgb(*hue)), PX(1));
     }
     ImGui::PopID();
     return changed;
