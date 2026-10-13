@@ -21,16 +21,16 @@
  *
  * Buffer release: every track the owner hands the deck has an id (the
  * deck serial of the command that carried it), and the deck publishes,
- * with the serial, the id of the track it reads. A track let go of
- * (loaded over, unloaded, dropped from the queue, moved on from) waits in
- * a pending list with the serial of the command that let go of it, and is
- * freed once a published serial is at least that and the published id is
- * not its own: the command took it out of the deck's hands (the deck had
- * no other pointer to it), and the deck no longer plays it. Both are
- * published with release order after the fact, so once the owner reads
- * them with acquire order, freeing is safe. No second ring is needed and
- * nothing can overflow. The pending list is drained by every owner-side
- * call, rx_deck_state() included.
+ * with the serial, the id of the track it reads and of one its de-click
+ * tail still reads. A track let go of (loaded over, unloaded, dropped from
+ * the queue, moved on from) waits in a pending list with the serial of
+ * the command that let go of it, and is freed once a published serial is
+ * at least that and neither published id is its own: the command took it
+ * out of the deck's hands (the deck had no other pointer to it), and the
+ * deck no longer plays it. Both are published with release order after
+ * the fact, so once the owner reads them with acquire order, freeing is
+ * safe. No second ring is needed and nothing can overflow. The pending
+ * list is drained by every owner-side call, rx_deck_state() included.
  *
  * Packet stores: a deck loaded with one plays a stream (feed.c), which the
  * deck's feed thread decodes into. The owner tells the feed which stream
@@ -134,6 +134,7 @@ static void publish(RXDeckPub *pub, const RXDeckRT *d, int64_t time_us, int64_t 
     atomic_store_explicit(&pub->serial, d->applied, memory_order_relaxed);
     atomic_store_explicit(&pub->heard_id, rx_player_deck_heard_id(d), memory_order_relaxed);
     atomic_store_explicit(&pub->read_id, d->src.id, memory_order_relaxed);
+    atomic_store_explicit(&pub->old_id, rx_player_deck_old_id(d), memory_order_relaxed);
 
     atomic_store_explicit(&pub->seq, seq + 2, memory_order_release);
 
@@ -164,6 +165,7 @@ static void snapshot(const RXDeckPub *cpub, RXDeckSnap *s)
                 .serial   = atomic_load_explicit(&pub->serial, memory_order_relaxed),
                 .heard_id = atomic_load_explicit(&pub->heard_id, memory_order_relaxed),
                 .read_id  = atomic_load_explicit(&pub->read_id, memory_order_relaxed),
+                .old_id   = atomic_load_explicit(&pub->old_id, memory_order_relaxed),
             };
             atomic_thread_fence(memory_order_acquire);
             if (atomic_load_explicit(&pub->seq, memory_order_relaxed) == s1) {
@@ -397,7 +399,7 @@ static void sync_deck(RXPlayer *p, int deck, const RXDeckSnap *s)
 /* A pending track the deck can no longer reach. */
 static bool releasable(RXPlayer *p, const RXRelease *r, const RXDeckSnap *s)
 {
-    if (s->serial < r->serial || s->read_id == r->t.id)
+    if (s->serial < r->serial || s->read_id == r->t.id || s->old_id == r->t.id)
         return false;
     if (!r->t.stream)
         return true;

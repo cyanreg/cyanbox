@@ -27,8 +27,8 @@
  * carried a track to the real-time side, unique on the deck, 0 for none.
  * The owner decides which buffers it may free, and which track the deck
  * plays, by id, never by timing: the real-time side publishes the id of
- * the track it reads, and the commands that only make sense for one track
- * carry its id. */
+ * the track it reads (and of one its de-click tail still reads), and the
+ * commands that only make sense for one track carry its id. */
 
 #ifndef RXBOX_PLAYER_INTERNAL_H
 #define RXBOX_PLAYER_INTERNAL_H
@@ -303,8 +303,17 @@ typedef struct RXDeckRT {
     int          out_rate;      /* the device's, as of the last callback */
 
     /* The track queued to follow this one (RX_CMD_NEXT), taken over the
-     * frame after the last one of this; id 0 none. */
+     * frame after the last one of this; id 0 none. Its first frames are
+     * this one's frames past the end, and after the change the old one's
+     * last two are the new one's frames -2 and -1 (edge, stereo, when
+     * has_edge): the interpolator reads across the change as within one
+     * track. */
     RXSource     next;
+    float        edge[4];
+    bool         has_edge;
+    /* The track the deck moved on from while its de-click tail still reads
+     * it (tail_old): the owner keeps it until the deck says it is done. */
+    RXSource     old;
 
     RXPos  pos;
     bool   playing;
@@ -320,6 +329,7 @@ typedef struct RXDeckRT {
     RXPos  tail_pos;
     double tail_inc;
     int    tail_left, tail_len;
+    bool   tail_old;            /* the tail reads `old`, not `src` */
 
     /* Scrubbing: the deck follows the pointer and plays grains. */
     bool    scrubbing, scrub_resume;
@@ -355,6 +365,7 @@ typedef struct RXDeckPub {
     _Atomic uint64_t serial;
     _Atomic uint64_t heard_id;      /* the track the position is in (heard, like it) */
     _Atomic uint64_t read_id;       /* the track the deck reads */
+    _Atomic uint64_t old_id;        /* one its de-click tail still reads, 0 none */
     atomic_uint      level_l, level_r;  /* float bits */
 } RXDeckPub;
 
@@ -365,7 +376,7 @@ typedef struct RXDeckSnap {
     bool     playing;
     bool     waiting;
     uint64_t serial;
-    uint64_t heard_id, read_id;
+    uint64_t heard_id, read_id, old_id;
 } RXDeckSnap;
 
 /* ------------------------------------------------------------ owner side */
@@ -410,12 +421,12 @@ typedef struct RXDeckOwner {
 } RXDeckOwner;
 
 /* A track the owner let go of, freed once its deck has applied `serial`
- * and reads it no more (the published id) and, a stream, once the deck's
- * feed has moved to generation `gen` and is not told to decode it. A next
- * dropped when the deck may have moved on into it already keeps
- * `follows`, the id of the track it was queued after, until the deck
- * shows it did not (then 0): if it did, it is the deck's track again
- * (sync_deck). */
+ * and reads it no more (neither its main voice nor its de-click tail: the
+ * published ids) and, a stream, once the deck's feed has moved to
+ * generation `gen` and is not told to decode it. A next dropped when the
+ * deck may have moved on into it already keeps `follows`, the id of the
+ * track it was queued after, until the deck shows it did not (then 0): if
+ * it did, it is the deck's track again (sync_deck). */
 typedef struct RXRelease {
     RXOwnTrack t;
     int        deck;
@@ -506,6 +517,8 @@ double rx_player_deck_speed(const RXDeckRT *d);
  * deck's for its delay after a change of track. */
 RXPos    rx_player_deck_heard(const RXDeckRT *d);
 uint64_t rx_player_deck_heard_id(const RXDeckRT *d);
+/* The track the de-click tail still reads when it is not the deck's; 0. */
+uint64_t rx_player_deck_old_id(const RXDeckRT *d);
 
 /* ---------------------------------------------------------------- feed.c */
 

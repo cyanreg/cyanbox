@@ -97,14 +97,12 @@ void *aligned_alloc(size_t align, size_t size)
 
 extern char **environ;
 
-/* A 60 s stereo WAV, 16-bit: a ramp on the left, its negative on the right,
- * each frame different from its neighbours, all well below the limiter. */
-static int write_wav(const char *path)
+/* A stereo 16-bit WAV of n frames at RATE, its header written. */
+static FILE *wav_open(const char *path, int64_t n)
 {
-    int64_t n = (int64_t)RATE * SECONDS;
     FILE *f = fopen(path, "wb");
     if (!f)
-        return -1;
+        return NULL;
     uint32_t data = (uint32_t)(n * 4);
     uint8_t h[44] = "RIFF....WAVEfmt \x10\0\0\0\x01\0\x02\0....\0\0\0\0\x04\0\x10\0data....";
     uint32_t v[] = { 36 + data, RATE, RATE * 4, data };
@@ -113,10 +111,37 @@ static int write_wav(const char *path)
     memcpy(h + 28, &v[2], 4);
     memcpy(h + 40, &v[3], 4);
     fwrite(h, 1, 44, f);
+    return f;
+}
+
+/* A 60 s stereo WAV, 16-bit: a ramp on the left, its negative on the right,
+ * each frame different from its neighbours, all well below the limiter. */
+static int write_wav(const char *path)
+{
+    int64_t n = (int64_t)RATE * SECONDS;
+    FILE *f = wav_open(path, n);
+    if (!f)
+        return -1;
     for (int64_t i = 0; i < n; i++) {
         int16_t s[2];
         s[0] = (int16_t)((i * 7) % 20000 - 10000);
         s[1] = (int16_t)-s[0];
+        fwrite(s, 2, 2, f);
+    }
+    return fclose(f) ? -1 : 0;
+}
+
+/* Frames [from, from + n) of one signal: a 441 Hz cosine at half scale on
+ * the left, its sine on the right, so frame RATE (a whole number of
+ * cycles) is a crest of the left. */
+static int write_cos_wav(const char *path, int64_t from, int64_t n)
+{
+    FILE *f = wav_open(path, n);
+    if (!f)
+        return -1;
+    for (int64_t i = 0; i < n; i++) {
+        double ph = 2.0 * M_PI * 441.0 * (double)(from + i) / RATE;
+        int16_t s[2] = { (int16_t)lrint(16384.0 * cos(ph)), (int16_t)lrint(16384.0 * sin(ph)) };
         fwrite(s, 2, 2, f);
     }
     return fclose(f) ? -1 : 0;
@@ -137,12 +162,12 @@ static bool to_flac(const char *wav, const char *flac)
 
 static RXAudio ref;
 
-static RXPlayer *make_player(void)
+static RXPlayer *make_player_at(int rate)
 {
     RXPlayerOptions opt;
     rx_player_options_default(&opt);
     opt.backend = RX_AUDIO_NULL;
-    opt.rate = RATE;
+    opt.rate = rate;
     opt.period = -PERIOD;
     RXPlayer *p = NULL;
     int ret = rx_player_create(&p, &opt);
@@ -152,9 +177,14 @@ static RXPlayer *make_player(void)
     return p;
 }
 
-static RXPlayer *load(const char *path)
+static RXPlayer *make_player(void)
 {
-    RXPlayer *p = make_player();
+    return make_player_at(RATE);
+}
+
+static RXPlayer *load_at(const char *path, int rate)
+{
+    RXPlayer *p = make_player_at(rate);
     RXPackets *pk = NULL;
     int ret = rx_packets_open(path, &pk);
     CHECK(ret >= 0, "open %s: %d", path, ret);
@@ -163,6 +193,11 @@ static RXPlayer *load(const char *path)
     ret = rx_deck_load_packets(p, 0, pk, NULL);
     CHECK(ret == 0, "load: %d", ret);
     return p;
+}
+
+static RXPlayer *load(const char *path)
+{
+    return load_at(path, RATE);
 }
 
 static RXDeckState st(RXPlayer *p)
@@ -536,6 +571,61 @@ static void test_next(const char *path)
     rx_player_destroy(p);
 }
 
+/* A track and its next cut from one signal on a crest, on a device at
+ * another rate (48 kHz) and at tempos off 1.0 (1.06, 0.94): the
+ * interpolator reads the next's first frames past the end of the track,
+ * and the old one's last before the next's start, so the two play frame
+ * for frame as the signal does as one stream. Reading silence there
+ * instead put a frame pulled toward zero at every gapless change of a
+ * deck that resamples: a click. */
+static void test_next_junction(const char *whole, const char *first, const char *second)
+{
+    const int rates[] = { RATE, 48000 };
+    const double tempos[] = { 1.0, 1.06, 0.94 };
+    for (int ri = 0; ri < 2; ri++) {
+        int rate = rates[ri];
+        int n = rate / 4 / PERIOD * PERIOD;
+        float *one = calloc((size_t)2 * n, sizeof(float));
+        float *out = calloc((size_t)2 * n, sizeof(float));
+        if (!one || !out)
+            abort();
+        for (int ti = 0; ti < 3; ti++) {
+            double tempo = tempos[ti];
+            RXPlayer *p = load_at(whole, rate);
+            rx_deck_set_tempo(p, 0, tempo);
+            rx_deck_play_from(p, 0, 0.9);
+            render(p, one, n, true);
+            rx_player_destroy(p);
+
+            p = load_at(first, rate);
+            RXPackets *pk = NULL;
+            CHECK(rx_packets_open(second, &pk) >= 0, "open %s", second);
+            CHECK(rx_deck_queue_next_packets(p, 0, pk, NULL) == 0, "queue %s", second);
+            rx_deck_set_tempo(p, 0, tempo);
+            rx_deck_play_from(p, 0, 0.9);
+            settle(p);
+            settle_next(p);
+            render(p, out, n, true);
+            RXDeckState s = st(p);
+            CHECK(s.advanced == 1 && fabs(s.duration - 1.0) < 1e-9,
+                  "%d Hz, tempo %.2f: moved on %u, %f s", rate, tempo, s.advanced, s.duration);
+
+            double worst = 0.0;
+            for (int k = 0; k < 2 * n; k++)
+                worst = fmax(worst, fabs((double)out[k] - one[k]));
+            /* The output frame whose read position crossed the cut. */
+            int at = (int)ceil(0.1 * RATE / (tempo * RATE / rate));
+            CHECK(worst < 1e-6, "%d Hz, tempo %.2f: %g from the signal played whole", rate, tempo,
+                  worst);
+            printf("stream next junction at %d Hz, tempo %.2f: %.4f (whole %.4f), largest "
+                   "difference %g\n", rate, tempo, out[2 * at], one[2 * at], worst);
+            rx_player_destroy(p);
+        }
+        free(one);
+        free(out);
+    }
+}
+
 /* With MASTER TEMPO on, the deck reads the shifter's delay ahead of what
  * is heard, so it reads the next while the old track is still heard. The
  * owner hands the feed the stream the deck reads as soon as the deck
@@ -615,7 +705,20 @@ int main(void)
         test_reload(paths[i]);
     }
 
+    /* One signal, whole and cut in two on a crest. */
+    char *whole = rx_path_join(dir, "cos.wav");
+    char *first = rx_path_join(dir, "cos_a.wav");
+    char *second = rx_path_join(dir, "cos_n.wav");
+    if (whole && first && second && write_cos_wav(whole, 0, 2 * RATE) >= 0 &&
+        write_cos_wav(first, 0, RATE) >= 0 && write_cos_wav(second, RATE, RATE) >= 0)
+        test_next_junction(whole, first, second);
+    else
+        CHECK(false, "cannot write the cosine in %s", dir);
+
     rx_audio_free(&ref);
+    free(whole);
+    free(first);
+    free(second);
     free(wav);
     free(flac);
     free(dir);

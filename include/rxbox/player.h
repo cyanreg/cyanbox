@@ -113,11 +113,12 @@ bool rx_deck_loaded(const RXPlayer *p, int deck);
  * its first frame, the step's fraction kept, with no fade, silence or
  * command in between (the two play as one piece of audio); the loop goes
  * with the old track, the tempo and MASTER TEMPO stay. A deck playing a
- * packet store has the start of the next decoded ahead of time. The
- * owner learns of the move from RXDeckState.advanced, after which the
- * state (duration, position) is the next track's and what was loaded is
- * released. Queueing again replaces the queued track; a load, an unload
- * or rx_deck_clear_next drops it.
+ * packet store has the start of the next decoded ahead of time, and the
+ * interpolator reads across the change, so a deck that resamples plays
+ * the two as one signal too. The owner learns of the move from
+ * RXDeckState.advanced, after which the state (duration, position) is the
+ * next track's and what was loaded is released. Queueing again replaces
+ * the queued track; a load, an unload or rx_deck_clear_next drops it.
  *
  * The deck may move on at any callback, and with MASTER TEMPO on it reads
  * the next the shifter's delay (120 ms) before the move is heard: so

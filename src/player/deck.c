@@ -93,10 +93,17 @@
  * frame of the track it plays, goes on in the next one from its first
  * frame, keeping the fraction of the step it had left, so the two play as
  * one piece of audio: no fade, no silence, no command in between. The
- * step is recomputed for every frame, so a next at another rate plays at
- * the right speed from its first frame. The loop goes with the old track;
- * so does the de-click tail, which would otherwise read the old track's
- * positions out of the new one.
+ * interpolator reads across the change as within one track: while a next
+ * is queued, the frames past the end of the track are the next's first
+ * ones, and after the change the next's frames -2 and -1 are the old
+ * track's last two (kept in `edge`), so a deck that resamples (another
+ * device rate, a tempo off 1.0) puts no sample at the junction that the
+ * two tracks played as one buffer would not have. The step is recomputed
+ * for every frame, so a next at another rate plays at the right speed
+ * from its first frame. The loop goes with the old track; a de-click
+ * tail under way (a seek to the end, a jump just before it) plays out in
+ * the old track (`old`), which the owner keeps while the deck publishes
+ * its id; the scrub grains, quiet and short, stop.
  *
  * Every track has the owner's id (the serial of the command that brought
  * it, player_internal.h). The deck publishes the one it reads, so
@@ -179,12 +186,44 @@ static bool src_read(const RXSource *s, int64_t i, int n, float *out)
     return true;
 }
 
-/* The deck's track at position p. False when a stream does not have the
- * frames decoded (yet): every voice reads through here, so all of them see
- * the same frames, and the same gaps. */
-static bool fetch(RXDeckRT *d, RXPos p, float *l, float *r)
+/* The interpolator's frames i - 1 to i + 2 of `s`, as stereo pairs: past
+ * its end, the first frames of `after` (the track the deck plays on into;
+ * NULL: silence), before its start, `before` (frames -2 and -1: the last
+ * two of the track the deck came from; NULL: silence). */
+static bool frames4(const RXSource *s, const RXSource *after, const float *before, int64_t i,
+                    float *x)
 {
-    const RXSource *s = &d->src;
+    int64_t lo = i - 1;
+    if (lo >= 0 && lo + 4 <= s->nb_frames)
+        return src_read(s, lo, 4, x);
+
+    int k = 0;
+    for (; k < 4 && lo + k < 0; k++) {
+        int64_t j = lo + k + 2;
+        bool have = before && j >= 0;
+        x[2 * k]     = have ? before[2 * j] : 0.0f;
+        x[2 * k + 1] = have ? before[2 * j + 1] : 0.0f;
+    }
+    int in = (int)RX_CLAMP(s->nb_frames - (lo + k), (int64_t)0, (int64_t)(4 - k));
+    if (in > 0 && !src_read(s, lo + k, in, x + 2 * k))
+        return false;
+    k += in;
+    if (k == 4)
+        return true;
+    if (after)
+        return src_read(after, lo + k - s->nb_frames, 4 - k, x + 2 * k);
+    for (; k < 4; k++)
+        x[2 * k] = x[2 * k + 1] = 0.0f;
+    return true;
+}
+
+/* Track `s` at position p, read on into `after` and back into `before`
+ * (frames4). False when a stream does not have the frames decoded (yet):
+ * every voice reads through here, so all of them see the same frames, and
+ * the same gaps. */
+static bool fetch_from(RXDeckRT *d, const RXSource *s, const RXSource *after,
+                       const float *before, RXPos p, float *l, float *r)
+{
     int64_t i = p.i;
     float t = (float)p.f;
 
@@ -200,13 +239,29 @@ static bool fetch(RXDeckRT *d, RXPos p, float *l, float *r)
     }
 
     float x[8];
-    if (!src_read(s, i - 1, 4, x)) {
+    if (!frames4(s, after, before, i, x)) {
         d->starved = true;
         return false;
     }
     *l = hermite(x[0], x[2], x[4], x[6], t);
     *r = hermite(x[1], x[3], x[5], x[7], t);
     return true;
+}
+
+/* The deck's track at p, as it plays on into the next. */
+static bool fetch(RXDeckRT *d, RXPos p, float *l, float *r)
+{
+    return fetch_from(d, &d->src, d->next.id ? &d->next : NULL, d->has_edge ? d->edge : NULL, p,
+                      l, r);
+}
+
+/* Where the de-click tail plays: the deck's track, or the one it moved on
+ * from while the tail sounded, which went on into the deck's. */
+static bool fetch_tail(RXDeckRT *d, float *l, float *r)
+{
+    if (d->tail_old)
+        return fetch_from(d, &d->old, &d->src, NULL, d->tail_pos, l, r);
+    return fetch(d, d->tail_pos, l, r);
 }
 
 /* ---------------------------------------------------------------- voices */
@@ -229,6 +284,7 @@ static void start_tail(RXDeckRT *d, int rate)
     d->tail_inc  = increment(d, rate);
     d->tail_len  = fade_frames(rate);
     d->tail_left = d->tail_len;
+    d->tail_old  = false;
 }
 
 static void start_fade_in(RXDeckRT *d, int rate)
@@ -275,6 +331,22 @@ static void take_next(RXDeckRT *d)
     if (d->src.rate > 0 && d->next.rate != d->src.rate)
         frames *= (double)d->next.rate / d->src.rate;
 
+    /* The old track's last two frames are the next's frames -2 and -1. A
+     * stream has them decoded: the main voice has just played them, or
+     * the deck jumped to the end, and silence will do for a jump. */
+    if (!src_read(&d->src, d->src.nb_frames - 2, 2, d->edge))
+        memset(d->edge, 0, sizeof(d->edge));
+    d->has_edge = true;
+    /* The tail's positions are the old track's: one under way plays out
+     * there (the owner keeps the track while the deck says so). The
+     * grains' are too: quiet and short, they stop. */
+    if (d->tail_left > 0 && !d->tail_old) {
+        d->old = d->src;
+        d->tail_old = true;
+    }
+    for (int i = 0; i < RX_GRAINS; i++)
+        d->grains[i].len = 0;
+
     d->src          = d->next;
     d->next         = (RXSource) { 0 };
     d->length_final = !d->src.stream;
@@ -283,8 +355,6 @@ static void take_next(RXDeckRT *d)
     d->pos          = rx_pos_from(frames);
     d->loop_set     = false;
     d->loop_enabled = false;
-    /* The tail's positions are the old track's. */
-    d->tail_left    = 0;
 }
 
 static void seek(RXDeckRT *d, double frames, int rate)
@@ -392,6 +462,11 @@ uint64_t rx_player_deck_heard_id(const RXDeckRT *d)
     if (i < m->fill_until)
         return m->fill_id;
     return m->hist_id[i & m->hist_mask];
+}
+
+uint64_t rx_player_deck_old_id(const RXDeckRT *d)
+{
+    return d->tail_left > 0 && d->tail_old ? d->old.id : 0;
 }
 
 /* The frames fed from here on count as the deck's position and track. */
@@ -533,6 +608,8 @@ void rx_player_deck_apply(RXDeckRT *d, const RXCmd *cmd, int rate)
         silence_voices(d);
         d->src          = source_of(cmd);
         d->next         = (RXSource) { 0 };
+        d->old          = (RXSource) { 0 };
+        d->has_edge     = false;
         d->length_final = !d->src.stream;
         d->posted_chunk = -1;
         d->holding      = false;
@@ -718,7 +795,7 @@ static void voice(RXDeckRT *d, float *l, float *r)
 
     if (d->tail_left > 0) {
         float sl, sr, e = (float)d->tail_left / d->tail_len;
-        if (fetch(d, d->tail_pos, &sl, &sr)) {
+        if (fetch_tail(d, &sl, &sr)) {
             *l += sl * e;
             *r += sr * e;
         }
