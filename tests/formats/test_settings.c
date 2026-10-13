@@ -155,12 +155,37 @@ static void listed_values(void)
     CHECK(!rx_settings_value("export.pdb, exportLibrary.db", "background_color", "teal"));
 }
 
+/* What the interface follows: the library's value in its listed form, else
+ * the default, the tempo range's being +-6 % (not rekordbox's +-10 %). */
+static void settings_get(void)
+{
+    RXKv player[3] = { { "quantize", "off" }, { "beat_jump_beats", "1/2" }, { "time_mode", "12" } };
+    RXKv device[2] = { { "overview_waveform", "Full" }, { "background_color", "Pink" } };
+    RXConfig cfg = { .player = player, .nb_player = 3, .device = device, .nb_device = 2 };
+    CHECK_STR(rx_settings_get(&cfg, "player.quantize"), "false");
+    CHECK_STR(rx_settings_get(&cfg, "player.beat_jump_beats"), "1/2");
+    CHECK_STR(rx_settings_get(&cfg, "player.time_mode"), "remain");
+    CHECK_STR(rx_settings_get(&cfg, "player.tempo_range"), "6");
+    CHECK_STR(rx_settings_get(&cfg, "player.auto_cue_level"), "memory");
+    CHECK_STR(rx_settings_get(&cfg, "player.hot_cue_color"), "false");
+    CHECK_STR(rx_settings_get(&cfg, "device.overview_waveform"), "full");
+    CHECK_STR(rx_settings_get(&cfg, "device.waveform_color"), "blue");
+    CHECK_STR(rx_settings_get(&cfg, "device.key_display"), "classic");
+    CHECK_STR(rx_settings_get(&cfg, "device.background_color"), "pink");
+    CHECK_STR(rx_settings_get(&cfg, "mixer.channel_fader_curve"), "linear");
+    CHECK_STR(rx_settings_get(NULL, "player.quantize"), "true");
+    CHECK(!rx_settings_get(&cfg, "player.bogus"));
+    CHECK(!rx_settings_get(&cfg, "ui.traffic_light"));
+    CHECK(!rx_settings_get(&cfg, "device.quantize"));
+}
+
 int main(void)
 {
     match_rekordbox();
     errors();
     from_config();
     listed_values();
+    settings_get();
     int count = 0;
     rx_settings_list(list_cb, &count);
     /* 22 + 7 + 13 + 4 dj settings, plus the background colour. */

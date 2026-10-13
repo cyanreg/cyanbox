@@ -421,8 +421,8 @@ static void damaged_stick(void)
     rx_stick_state_free(&s);
 
     /* MYSETTING.DAT with quantize stored as a byte no rekordbox writes,
-     * and a real change of the tempo range. */
-    RXKv kv[1] = { { "tempo_range", "6" } };
+     * and a real change of the tempo range (from the default ±6 %). */
+    RXKv kv[1] = { { "tempo_range", "16" } };
     CHECK_EQ(rx_settings_encode("MYSETTING.DAT", kv, 1, &b, &n), 0);
     b[0x68 + 10] = 0x99;
     char *ms = rx_stick_file(stick, "/PIONEER/MYSETTING.DAT");

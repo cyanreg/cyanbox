@@ -101,9 +101,12 @@ music = ["music"]
 waveform_color = "3band"
 [player]
 quantize = true
+tempo_range = "6"
 EOF
 echo "setting device.waveform_color 3band" >> "$W/spec"
 echo "setting player.quantize true" >> "$W/spec"
+# Given to both: rxbox's default tempo range is ±6 %, dj's rekordbox's ±10 %.
+echo "setting player.tempo_range 6" >> "$W/spec"
 
 mkdir -p "$W/stick-dj" "$W/stick-rx"
 echo "== dj export"
