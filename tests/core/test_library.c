@@ -9,7 +9,8 @@
  * into this test, as core does not link the formats module); the file's
  * comment left out on import unless import.comment asks for it; the
  * legend's settings and the model's colour probabilities, and a library
- * of schema 5 that gains them.
+ * of schema 5 that gains them; a library at either branch's schema 6,
+ * and one a newer rxbox migrates while this one opens it.
  * Waveforms are stored through the raw blob layer because the analysis
  * module (which packs them) is not linked here; rxbox/analysis.h is used
  * for its version constants and inline helper only. */
@@ -1335,6 +1336,107 @@ static void *open_thread(void *arg)
     return NULL;
 }
 
+/* Two branches each made a schema 6, and one became 7 at the merge. A
+ * library at either 6 opens at 7 with every column and keeps its data:
+ * the measured beats' 6 gains the legend's columns, the legend's 6 (its
+ * columns there, measured not) gains measured, its probabilities kept.
+ * Before, the legend's 6 failed with "duplicate column name" at every
+ * open. */
+static void test_migrate_v6(void)
+{
+    for (int legend = 0; legend < 2; legend++) {
+        char *dir = test_dir(legend ? "library-v6-legend" : "library-v6-measured");
+        char *db = path_in(dir, "library.db");
+        RXLibrary lib;
+        CHECK(rx_library_open(&lib, dir) == 0);
+        rx_library_close(&lib);
+
+        sqlite3 *s;
+        CHECK(sqlite3_open(db, &s) == SQLITE_OK);
+        CHECK(sqlite3_exec(s, legend ? "ALTER TABLE grid_section DROP COLUMN measured;"
+                                       "INSERT INTO track (path, ml_colors, ml_legend) VALUES "
+                                       "('/gone/a.wav', X'0000003E0000003E0000003E0000003F"
+                                       "0000003E0000003E0000003E0000003E', 1234);"
+                                     : "ALTER TABLE track DROP COLUMN ml_colors;"
+                                       "ALTER TABLE track DROP COLUMN ml_legend;"
+                                       "INSERT INTO track (path) VALUES ('/gone/a.wav');",
+                              NULL, NULL, NULL) == SQLITE_OK);
+        CHECK(sqlite3_exec(s, "INSERT INTO grid_section (track_id, idx, start, bpm, beat) "
+                              "VALUES (last_insert_rowid(), 0, 0.5, 120, 1);"
+                              "PRAGMA user_version = 6", NULL, NULL, NULL) == SQLITE_OK);
+        sqlite3_close(s);
+
+        CHECK(rx_library_open(&lib, dir) == 0);
+        sqlite3_stmt *st;
+        sqlite3_prepare_v2(lib.db->db, "SELECT (SELECT user_version FROM pragma_user_version), "
+                           "(SELECT count(*) FROM pragma_table_info('grid_section') WHERE name = 'measured'), "
+                           "(SELECT count(*) FROM pragma_table_info('track') "
+                           " WHERE name IN ('ml_colors', 'ml_legend'))", -1, &st, NULL);
+        CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 7 &&
+              sqlite3_column_int(st, 1) == 1 && sqlite3_column_int(st, 2) == 2);
+        sqlite3_finalize(st);
+        CHECK(lib.nb_tracks == 1);
+        RXTrack *t = lib.nb_tracks == 1 ? lib.tracks[0] : NULL;
+        if (t) {
+            CHECK(t->grid.nb_sections == 1 && t->grid.sections[0].start == 0.5 && !rx_grid_dynamic(&t->grid));
+            if (legend)
+                CHECK(t->ml_colors[0] == 0.125f && t->ml_colors[3] == 0.5f && t->ml_legend == 1234);
+            else
+                CHECK(isnan(t->ml_colors[0]) && !t->ml_legend);
+            /* A dynamic grid is kept from now on. */
+            rx_grid_add_beat(&t->grid, 2.0, 121.0, 0);
+            CHECK(rx_library_save_track(&lib, t) == 0);
+        }
+        CHECK(rx_library_check(&lib) == 0);
+        rx_library_close(&lib);
+        CHECK(rx_library_open(&lib, dir) == 0);
+        CHECK(lib.nb_tracks == 1 && lib.tracks[0]->grid.nb_sections == 2 &&
+              lib.tracks[0]->grid.sections[1].measured);
+        rx_library_close(&lib);
+
+        free(db);
+        test_rm_rf(dir);
+        free(dir);
+    }
+}
+
+/* A newer rxbox migrating the library while this one opens it (it holds
+ * the write lock at schema 99 as this one reads 6 and waits for the
+ * lock): this one sees 99 under the lock and refuses, as it does a
+ * library newer from the start. Before, it took 99 for done and opened
+ * a schema it does not know. */
+static void test_newer_meanwhile(void)
+{
+    char *dir = test_dir("library-newer-meanwhile");
+    char *db = path_in(dir, "library.db");
+    RXLibrary lib;
+    CHECK(rx_library_open(&lib, dir) == 0);
+    rx_library_close(&lib);
+
+    sqlite3 *s;
+    CHECK(sqlite3_open(db, &s) == SQLITE_OK);
+    CHECK(sqlite3_exec(s, "ALTER TABLE track DROP COLUMN ml_colors;"
+                          "ALTER TABLE track DROP COLUMN ml_legend;"
+                          "PRAGMA user_version = 6;"
+                          "BEGIN IMMEDIATE; PRAGMA user_version = 99", NULL, NULL, NULL) == SQLITE_OK);
+    pthread_barrier_t go;
+    pthread_barrier_init(&go, NULL, 2);
+    Opener o = { .root = dir, .go = &go };
+    pthread_t th;
+    pthread_create(&th, NULL, open_thread, &o);
+    pthread_barrier_wait(&go);
+    usleep(500000);
+    CHECK(sqlite3_exec(s, "COMMIT", NULL, NULL, NULL) == SQLITE_OK);
+    pthread_join(th, NULL);
+    pthread_barrier_destroy(&go);
+    CHECK(o.ret == RX_ERROR(EPROTO));
+    sqlite3_close(s);
+
+    free(db);
+    test_rm_rf(dir);
+    free(dir);
+}
+
 static void test_concurrent_create(void)
 {
     char *dir = test_dir("library-race");
@@ -1389,6 +1491,8 @@ int main(void)
     test_byte_paths();
     test_open_snapshot();
     test_concurrent_create();
+    test_migrate_v6();
+    test_newer_meanwhile();
 
     if (!test_failures)
         test_rm_rf(dir);

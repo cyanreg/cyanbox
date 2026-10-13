@@ -30,10 +30,11 @@
  *                  model's tagging, rxbox/ml.h: RX_ML_TAGS_VERSION, 0 never, and its
  *                  measures, NULL never; schema 5), ml_colors, ml_legend (the
  *                  probability it gave each of the eight colours, NULL none, and the
- *                  hash of the legend it picked from, 0 none; schema 6)
- *   grid_section   track_id, idx, start, bpm, beat
+ *                  hash of the legend it picked from, 0 none; schema 7)
+ *   grid_section   track_id, idx, start, bpm, beat, measured (1: one measured beat of
+ *                  a dynamic grid, RXTempoSection.measured; schema 6)
  *   cue            id, track_id, time, grid_beat, hot, loop_end, loop_beats, active, name, color
- *   track_tag      track_id, tag
+ *   track_tag      track_id, position, tag
  *   waveform       track_id, data (the packed tags, rx_waveforms_pack)
  *   artwork        track_id, jpeg, width, height (a 240 px thumbnail)
  *   play           track_id, played_at

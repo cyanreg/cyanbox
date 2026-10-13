@@ -57,7 +57,13 @@
  *
  * Migrations: `migrations[v]` takes a database from version v to v + 1, in
  * one transaction with the user_version bump. A database newer than this
- * build is refused rather than written with a schema we do not know.
+ * build is refused rather than written with a schema we do not know, also
+ * when a newer rxbox migrates it while this one is (the version is read
+ * again under the write lock). A step that adds columns adds only those
+ * the table lacks, and after migrating every column of every step must be
+ * there; a missing one is added (check_columns): two branches defined a
+ * schema 6 (below, the second became 7), and a library migrated by the
+ * other is at a number whose columns are not this build's.
  *   1 -> 2  the three analyser version columns of track.
  *
  *   2 -> 3  the tables as they are; a grid's first section stopped
@@ -78,6 +84,8 @@
  *           stored section is straight (0), so every grid is what it was.
  *   6 -> 7  the model picks the colour from a legend: ml_colors and
  *           ml_legend. A track tagged before keeps its hue and measures.
+ *           (Its branch numbered this 5 -> 6: a library at that 6 has
+ *           these columns and lacks measured, which check_columns adds.)
  *
  * Journal: WAL, synchronous = NORMAL (a crash loses at most the last
  * transactions, never consistency), and a busy timeout because the export
@@ -244,13 +252,20 @@ static const char schema_v1[] =
     "  value TEXT NOT NULL"
     ") STRICT, WITHOUT ROWID;";
 
+/* A column a migration adds: only when its table lacks it (migrate), so a
+ * library that has it already from another branch's migration goes on. */
+typedef struct Column {
+    const char *table, *name, *decl;
+} Column;
+
 /* The analyser versions. Rows from before them get 0, which counts as
  * older than any analyser that keeps a version: everything analysed by
  * schema 1's rxbox is analysed again for what it has. */
-static const char schema_v2[] =
-    "ALTER TABLE track ADD COLUMN beats_version INTEGER NOT NULL DEFAULT 0;"
-    "ALTER TABLE track ADD COLUMN key_version   INTEGER NOT NULL DEFAULT 0;"
-    "ALTER TABLE track ADD COLUMN waves_version INTEGER NOT NULL DEFAULT 0;";
+static const Column columns_v2[] = {
+    { "track", "beats_version", "INTEGER NOT NULL DEFAULT 0" },
+    { "track", "key_version",   "INTEGER NOT NULL DEFAULT 0" },
+    { "track", "waves_version", "INTEGER NOT NULL DEFAULT 0" },
+};
 
 /* The first section's start goes back by k = floor(start / period) whole
  * periods (start - k * period, as grid.c computes a beat), and its beat
@@ -272,11 +287,13 @@ static const char schema_v3[] =
  * standard formula, in the same order of operations as rx_rgb_hue in
  * src/formats/colors.c, which core does not link; tests/core checks the
  * two agree. A name the old column should never have held is no colour.
- * The old column goes. */
+ * The old column goes (and this runs while it is there). */
 #define SQL_INT_(x) #x
 #define SQL_INT(x) SQL_INT_(x)
+static const Column columns_v4[] = {
+    { "track", "hue", "REAL CHECK (hue >= 0 AND hue < 360)" },
+};
 static const char schema_v4[] =
-    "ALTER TABLE track ADD COLUMN hue REAL CHECK (hue >= 0 AND hue < 360);"
     "WITH palette(name, rgb) AS (VALUES"
     "  ('pink', "   SQL_INT(RX_TRACK_RGB_PINK)   "), ('red', "    SQL_INT(RX_TRACK_RGB_RED)    "),"
     "  ('orange', " SQL_INT(RX_TRACK_RGB_ORANGE) "), ('yellow', " SQL_INT(RX_TRACK_RGB_YELLOW) "),"
@@ -297,33 +314,48 @@ static const char schema_v4[] =
 
 /* The model's tagging (rxbox/ml.h): which version of it tagged the track,
  * 0 for never, and its four measures, NULL until it has. */
-static const char schema_v5[] =
-    "ALTER TABLE track ADD COLUMN tags_version INTEGER NOT NULL DEFAULT 0;"
-    "ALTER TABLE track ADD COLUMN ml_club      REAL;"
-    "ALTER TABLE track ADD COLUMN ml_intensity REAL;"
-    "ALTER TABLE track ADD COLUMN ml_valence   REAL;"
-    "ALTER TABLE track ADD COLUMN ml_vocals    REAL;";
+static const Column columns_v5[] = {
+    { "track", "tags_version", "INTEGER NOT NULL DEFAULT 0" },
+    { "track", "ml_club",      "REAL" },
+    { "track", "ml_intensity", "REAL" },
+    { "track", "ml_valence",   "REAL" },
+    { "track", "ml_vocals",    "REAL" },
+};
 
 /* A dynamic grid's beats (rxbox/model.h): a section that is one measured
  * beat. The sections there were are all straight. */
-static const char schema_v6[] =
-    "ALTER TABLE grid_section ADD COLUMN measured INTEGER NOT NULL DEFAULT 0;";
+static const Column columns_v6[] = {
+    { "grid_section", "measured", "INTEGER NOT NULL DEFAULT 0" },
+};
 
 /* The colour the model picks from the legend (rxbox/ml.h): the
  * probability of each of the eight colours, NULL until a tagging gave
  * them, and the hash of the legend asked, 0 for none. */
-static const char schema_v7[] =
-    "ALTER TABLE track ADD COLUMN ml_colors BLOB;"
-    "ALTER TABLE track ADD COLUMN ml_legend INTEGER NOT NULL DEFAULT 0;";
+static const Column columns_v7[] = {
+    { "track", "ml_colors", "BLOB" },
+    { "track", "ml_legend", "INTEGER NOT NULL DEFAULT 0" },
+};
 
-static const char *const migrations[] = {
-    schema_v1,          /* 0 -> 1 */
-    schema_v2,          /* 1 -> 2 */
-    schema_v3,          /* 2 -> 3 */
-    schema_v4,          /* 3 -> 4 */
-    schema_v5,          /* 4 -> 5 */
-    schema_v6,          /* 5 -> 6 */
-    schema_v7,          /* 6 -> 7 */
+/* One step: its columns first, then its SQL, which runs only while
+ * `table` has the column `while_column` when that is set. */
+typedef struct Migration {
+    const Column *add;
+    int           nb_add;
+    const char   *sql;
+    const char   *table, *while_column;
+} Migration;
+
+#define COLUMNS(c) .add = (c), .nb_add = (int)RX_ARRAY_ELEMS(c)
+
+static const Migration migrations[] = {
+    { .sql = schema_v1 },                                       /* 0 -> 1 */
+    { COLUMNS(columns_v2) },                                    /* 1 -> 2 */
+    { .sql = schema_v3 },                                       /* 2 -> 3 */
+    { COLUMNS(columns_v4), .sql = schema_v4,                    /* 3 -> 4 */
+      .table = "track", .while_column = "color" },
+    { COLUMNS(columns_v5) },                                    /* 4 -> 5 */
+    { COLUMNS(columns_v6) },                                    /* 5 -> 6 */
+    { COLUMNS(columns_v7) },                                    /* 6 -> 7 */
 };
 
 /* ------------------------------------------------------------ statements */
@@ -643,6 +675,102 @@ static int check_identity(RXDb *db, int64_t *version)
     return 0;
 }
 
+static int has_column(RXDb *db, const char *table, const char *column, bool *has)
+{
+    static const char sql[] = "SELECT count(*) FROM pragma_table_info(?1) WHERE name = ?2";
+    sqlite3_stmt *st = rx_db_prepare(db, sql);
+    if (!st)
+        return RX_ERROR(EIO);
+    rx_db_bind_text(db, st, 1, table);
+    rx_db_bind_text(db, st, 2, column);
+    int ret = rx_db_row(db, st, sql);
+    *has = ret > 0 && sqlite3_column_int64(st, 0) > 0;
+    sqlite3_finalize(st);
+    return ret < 0 ? ret : 0;
+}
+
+/* Adds the columns the table lacks; *added counts them. */
+static int add_columns(RXDb *db, const Column *c, int nb, int *added)
+{
+    for (int i = 0; i < nb; i++) {
+        bool has;
+        int ret = has_column(db, c[i].table, c[i].name, &has);
+        if (ret < 0)
+            return ret;
+        if (has)
+            continue;
+        char sql[256];
+        snprintf(sql, sizeof(sql), "ALTER TABLE %s ADD COLUMN %s %s", c[i].table, c[i].name, c[i].decl);
+        if ((ret = rx_db_exec(db, sql)) < 0)
+            return ret;
+        if (added)
+            (*added)++;
+    }
+    return 0;
+}
+
+static int run_migration(RXDb *db, const Migration *m)
+{
+    int ret = add_columns(db, m->add, m->nb_add, NULL);
+    if (ret < 0 || !m->sql)
+        return ret;
+    bool run = true;
+    if (m->while_column && (ret = has_column(db, m->table, m->while_column, &run)) < 0)
+        return ret;
+    return run ? rx_db_exec(db, m->sql) : 0;
+}
+
+/* The columns every migration adds, after migrating. Two branches each
+ * defined a schema 6 (the measured beats, the colour legend; the second
+ * became 7 at the merge): a library migrated by the other one is at a
+ * version whose columns are not this build's, and a step it skipped
+ * left its columns out. They are added here (each is plain data with a
+ * default), and then must all be there. */
+static int check_columns(RXDb *db)
+{
+    int missing = 0;
+    for (size_t m = 0; m < RX_ARRAY_ELEMS(migrations); m++) {
+        for (int i = 0; i < migrations[m].nb_add; i++) {
+            bool has;
+            int ret = has_column(db, migrations[m].add[i].table, migrations[m].add[i].name, &has);
+            if (ret < 0)
+                return ret;
+            missing += !has;
+        }
+    }
+    if (!missing)
+        return 0;
+
+    int added = 0;
+    int ret = rx_db_begin(db);
+    for (size_t m = 0; ret >= 0 && m < RX_ARRAY_ELEMS(migrations); m++)
+        ret = add_columns(db, migrations[m].add, migrations[m].nb_add, &added);
+    if (ret >= 0)
+        ret = rx_db_commit(db);
+    else
+        rx_db_rollback(db);
+    if (ret < 0) {
+        rx_err("%s: the library lacks columns of its schema and they could not be added", db->path);
+        return ret;
+    }
+    if (added)
+        rx_info("%s: added %d column%s its schema lacked", db->path, added, added == 1 ? "" : "s");
+    for (size_t m = 0; m < RX_ARRAY_ELEMS(migrations); m++) {
+        for (int i = 0; i < migrations[m].nb_add; i++) {
+            bool has;
+            ret = has_column(db, migrations[m].add[i].table, migrations[m].add[i].name, &has);
+            if (ret < 0)
+                return ret;
+            if (!has) {
+                rx_err("%s: column %s.%s missing", db->path, migrations[m].add[i].table,
+                       migrations[m].add[i].name);
+                return RX_ERROR(EPROTO);
+            }
+        }
+    }
+    return 0;
+}
+
 static int migrate(RXDb *db, int64_t version)
 {
     int64_t current = (int64_t)RX_ARRAY_ELEMS(migrations);
@@ -654,14 +782,21 @@ static int migrate(RXDb *db, int64_t version)
         if (ret < 0)
             return ret;
         /* Again under the write lock: another process opening the same new
-         * library at the same moment may have created it meanwhile. */
+         * library at the same moment may have created it meanwhile, or a
+         * newer rxbox taken it past this build's schema. */
         int64_t now = version;
         ret = pragma_int(db, "PRAGMA user_version", &now);
+        if (ret >= 0 && now > current) {
+            rx_db_rollback(db);
+            rx_err("%s was migrated by a newer rxbox meanwhile (schema %lld, this build knows %lld); "
+                   "not touching it", db->path, (long long)now, (long long)current);
+            return RX_ERROR(EPROTO);
+        }
         if (ret >= 0 && now == version) {
             char bump[96];
             snprintf(bump, sizeof(bump), "PRAGMA user_version = %lld; PRAGMA application_id = %d",
                      (long long)(version + 1), RX_DB_APPLICATION_ID);
-            ret = rx_db_exec(db, migrations[version]);
+            ret = run_migration(db, &migrations[version]);
             if (ret >= 0)
                 ret = rx_db_exec(db, bump);
         }
@@ -681,7 +816,7 @@ static int migrate(RXDb *db, int64_t version)
             rx_info("%s: library upgraded to schema %lld", db->path, (long long)(version + 1));
         version++;
     }
-    return 0;
+    return check_columns(db);
 }
 
 /* WAL is a property of the file. Switching needs the database to itself:
