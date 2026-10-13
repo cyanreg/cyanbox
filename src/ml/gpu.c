@@ -784,6 +784,18 @@ void ml_buf_free(MLGpu *g, MLBuf *b)
     *b = (MLBuf) { 0 };
 }
 
+uint64_t ml_gpu_allocated(MLGpu *g)
+{
+    VmaBudget budgets[VK_MAX_MEMORY_HEAPS];
+    vmaGetHeapBudgets(g->vma, budgets);
+    const VkPhysicalDeviceMemoryProperties *mp = NULL;
+    vmaGetMemoryProperties(g->vma, &mp);
+    uint64_t total = 0;
+    for (uint32_t i = 0; i < mp->memoryHeapCount; i++)
+        total += budgets[i].statistics.allocationBytes;
+    return total;
+}
+
 int ml_buf_invalidate(MLGpu *g, MLBuf *b)
 {
     if (!b->map)

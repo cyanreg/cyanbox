@@ -44,6 +44,16 @@
  * computed from the measures (intensity and mood as an angle on the
  * colour wheel), which the stick then quantised to the nearest of its
  * eight without the model's say.
+ *
+ * The colour question's length is the legend's, which the user writes:
+ * the context left beside the audio for the questions is measured from
+ * the questions themselves (with the longest answers they are allowed),
+ * so a long legend cuts a long track shorter rather than leave its
+ * question no room; a legend that would take more than a quarter of the
+ * context is refused. A colour is only as good as the model's answering
+ * with a letter: the letters hold 99.7 % of the answer or more on every
+ * track measured (docs/ML.md), and under half the tag fails rather than
+ * keep eight renormalised scraps.
  */
 
 #include "rxbox/ml.h"
@@ -52,6 +62,8 @@
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
+
+#include "ml_priv.h"
 
 /* ------------------------------------------------------------- questions */
 
@@ -87,6 +99,14 @@ static const char *const q_vocals =
     "Are there vocals in this track? If yes, say who sings and in what language, in a few words.";
 static const char *const q_mood = "Describe the mood of this track in at most three words.";
 static const char *const q_color = "Which of these descriptions fits this music best?";
+
+/* The longest answers rx_ml_tag lets the model give, in tokens. */
+#define GENRE_TOKENS  24
+#define VOCALS_TOKENS 40
+#define MOOD_TOKENS   16
+
+/* The letters' share of the colour's answer below which it is no answer. */
+#define MIN_LETTER_MASS 0.5f
 
 /* --------------------------------------------------------------- answers */
 
@@ -195,31 +215,48 @@ static char *mood_of(const char *answer)
 
 /* --------------------------------------------------------- multiple choice */
 
-int rx_ml_pick(RXML *ml, const char *question, const char *const *options, int nb,
-               float *probs, float *mass)
-{
-    static const char *const letters[26] = {
-        "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
-        "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z",
-    };
-    if (nb < 2 || nb > 26)
-        return RX_ERROR(EINVAL);
+static const char *const letters[26] = {
+    "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
+    "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z",
+};
 
-    /* "Question?\nA. first\nB. second\n...\nAnswer with the letter only." */
+/* "Question?\nA. first\nB. second\n...\nAnswer with the letter only.",
+ * malloc'd. */
+static char *pick_prompt(const char *question, const char *const *options, int nb)
+{
     size_t size = strlen(question) + 64;
     for (int i = 0; i < nb; i++)
         size += strlen(options[i]) + 8;
     char *prompt = malloc(size);
     if (!prompt)
-        return RX_ERROR(ENOMEM);
+        return NULL;
     size_t n = (size_t)snprintf(prompt, size, "%s\n", question);
     for (int i = 0; i < nb; i++)
         n += (size_t)snprintf(prompt + n, size - n, "%s. %s\n", letters[i], options[i]);
     snprintf(prompt + n, size - n, "Answer with the letter only.");
+    return prompt;
+}
 
+int rx_ml_pick(RXML *ml, const char *question, const char *const *options, int nb,
+               float *probs, float *mass)
+{
+    if (nb < 2 || nb > 26)
+        return RX_ERROR(EINVAL);
+    char *prompt = pick_prompt(question, options, nb);
+    if (!prompt)
+        return RX_ERROR(ENOMEM);
     int ret = rx_ml_choose(ml, prompt, NULL, letters, nb, probs, mass);
     free(prompt);
     return ret;
+}
+
+/* Rotation r of the legend: description (r + k) mod N under the k-th
+ * letter. */
+static void rotate(const char *const legend[RX_TRACK_COLORS], int r,
+                   const char *opts[RX_TRACK_COLORS])
+{
+    for (int k = 0; k < RX_TRACK_COLORS; k++)
+        opts[k] = legend[(r + k) % RX_TRACK_COLORS];
 }
 
 int rx_ml_color(RXML *ml, const char *const legend[RX_TRACK_COLORS], int orders,
@@ -235,8 +272,7 @@ int rx_ml_color(RXML *ml, const char *const legend[RX_TRACK_COLORS], int orders,
          * and every place once. */
         const char *opts[N];
         float p[N], m;
-        for (int k = 0; k < N; k++)
-            opts[k] = legend[(r + k) % N];
+        rotate(legend, r, opts);
         int ret = rx_ml_pick(ml, q_color, opts, N, p, &m);
         if (ret < 0)
             return ret;
@@ -302,11 +338,60 @@ static float unit(double z)
     return (float)(1.0 / (1.0 + exp(-1.7 * z)));
 }
 
+/* The most context any of rx_ml_tag's questions takes after the audio,
+ * with its answer: the colour question, in its every rotation, grows with
+ * the legend. */
+static int question_room(RXML *ml, const char *const legend[RX_TRACK_COLORS])
+{
+    int room = 0, ret;
+    for (int i = 0; i < NB_YES; i++) {
+        if ((ret = ml_question_tokens(ml, yes_q[i].q, NULL)) < 0)
+            return ret;
+        room = RX_MAX(room, ret);
+    }
+    static const struct {
+        const char *const *q;
+        int answer;
+    } asks[] = {
+        { &q_genre, GENRE_TOKENS }, { &q_vocals, VOCALS_TOKENS }, { &q_mood, MOOD_TOKENS },
+    };
+    for (size_t i = 0; i < RX_ARRAY_ELEMS(asks); i++) {
+        if ((ret = ml_question_tokens(ml, *asks[i].q, NULL)) < 0)
+            return ret;
+        room = RX_MAX(room, ret + asks[i].answer);
+    }
+    for (int r = 0; r < RX_ML_COLOR_ORDERS; r++) {
+        const char *opts[RX_TRACK_COLORS];
+        rotate(legend, r, opts);
+        char *prompt = pick_prompt(q_color, opts, RX_TRACK_COLORS);
+        if (!prompt)
+            return RX_ERROR(ENOMEM);
+        ret = ml_question_tokens(ml, prompt, NULL);
+        free(prompt);
+        if (ret < 0)
+            return ret;
+        room = RX_MAX(room, ret);
+    }
+    return room;
+}
+
 int rx_ml_tag(RXML *ml, const float *pcm, int64_t nb_samples,
               const char *const legend[RX_TRACK_COLORS], RXMLTags *tags, RXCancel *cancel)
 {
     *tags = (RXMLTags) { 0 };
-    int ret = rx_ml_listen(ml, pcm, nb_samples, cancel);
+    int room = question_room(ml, legend);
+    if (room < 0)
+        return room;
+    /* A quarter of the context: the audio keeps three quarters, about
+     * eight minutes. The interface's fields (127 bytes a colour) stay
+     * well under it in any script. */
+    if (room > ml_max_context(ml) / 4) {
+        rx_err("ml: the colour legend is too long: its question takes %d tokens, at most %d "
+               "fit beside the audio (shorten the settings color.pink ... color.purple)",
+               room, ml_max_context(ml) / 4);
+        return RX_ERROR(E2BIG);
+    }
+    int ret = ml_listen(ml, pcm, nb_samples, room, cancel);
     if (ret < 0)
         return ret;
 
@@ -324,17 +409,23 @@ int rx_ml_tag(RXML *ml, const float *pcm, int64_t nb_samples,
     double club = z[Y_CLUB];
     double val = (z[Y_HAPPY] - z[Y_DARK] - z[Y_MELANCHOLIC]) / 3.0;
 
-    if ((ret = rx_ml_color(ml, legend, RX_ML_COLOR_ORDERS, tags->colors, NULL)) < 0)
+    float mass;
+    if ((ret = rx_ml_color(ml, legend, RX_ML_COLOR_ORDERS, tags->colors, &mass)) < 0)
         return ret;
+    if (!(mass >= MIN_LETTER_MASS)) {
+        rx_err("ml: the letters held only %.0f %% of the model's answer to the colour "
+               "question; the legend's words may not read as a list to it", mass * 100.0);
+        return RX_ERROR(EIO);
+    }
     tags->color = ret;
     tags->legend = rx_ml_legend_hash(legend);
     if (rx_cancelled(cancel))
         return RX_ERROR(ECANCELED);
 
     char *genre = NULL, *vocals = NULL, *mood = NULL;
-    if ((ret = rx_ml_ask(ml, q_genre, 24, &genre)) < 0 ||
-        (ret = rx_ml_ask(ml, q_vocals, 40, &vocals)) < 0 ||
-        (ret = rx_ml_ask(ml, q_mood, 16, &mood)) < 0)
+    if ((ret = rx_ml_ask(ml, q_genre, GENRE_TOKENS, &genre)) < 0 ||
+        (ret = rx_ml_ask(ml, q_vocals, VOCALS_TOKENS, &vocals)) < 0 ||
+        (ret = rx_ml_ask(ml, q_mood, MOOD_TOKENS, &mood)) < 0)
         goto end;
 
     tags->genre = genre_of(genre);

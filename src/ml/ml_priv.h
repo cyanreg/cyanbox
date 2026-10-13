@@ -129,6 +129,8 @@ void ml_gpu_copy(MLGpu *g, const MLBuf *src, VkDeviceSize src_off, const MLBuf *
 void ml_gpu_fill(MLGpu *g, const MLBuf *dst, VkDeviceSize off, VkDeviceSize size, uint32_t v);
 int  ml_gpu_run(MLGpu *g);
 void ml_gpu_discard(MLGpu *g);
+/* The bytes of GPU memory allocated, all buffers together. */
+uint64_t ml_gpu_allocated(MLGpu *g);
 void ml_gpu_profile_print(MLGpu *g);
 
 /* ----------------------------------------------------------------- GGUF */
@@ -212,5 +214,17 @@ int  ml_tok_encode(const MLTokenizer *t, const char *text, int32_t **ids, int *n
 /* The bytes of token `id`, appended to *out (NUL-terminated). */
 int  ml_tok_decode(const MLTokenizer *t, int32_t id, char **out, size_t *len, size_t *cap);
 int32_t ml_tok_id(const MLTokenizer *t, const char *token);
+
+/* ---------------------------------------------------------------- moss.c */
+
+/* rx_ml_listen with `room` tokens of the context left for the questions
+ * after the audio and their answers (QUESTION_ROOM at least): the audio is
+ * cut until they fit. */
+int ml_listen(RXML *ml, const float *pcm, int64_t n, int room, RXCancel *cancel);
+/* The tokens `question` (and the answer's start, `prefix`, may be NULL)
+ * takes asked after the audio, as rx_ml_ask, rx_ml_choose and rx_ml_pick
+ * ask it. */
+int ml_question_tokens(RXML *ml, const char *question, const char *prefix);
+int ml_max_context(const RXML *ml);
 
 #endif /* RXBOX_ML_PRIV_H */
