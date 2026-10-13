@@ -693,7 +693,8 @@ static int check_frontend(RXCompute *gpu)
             rx_env_alloc(&c2, t.x, t.n, gpu) >= 0) {
             for (int i = 0; i < nb; i++)
                 tm[i] = truth.start[0] + i * p;
-            if (rx_env_windows(c1, tm, nb, ea, ca) >= 0 && rx_env_windows(c2, tm, nb, eb, cb) >= 0 &&
+            if (rx_env_windows(c1, tm, nb, ea, ca) >= 0 &&
+                rx_env_windows(c2, tm, nb, eb, cb) >= 0 &&
                 !memcmp(ca, cb, (size_t)nb * sizeof(*ca)))
                 de = rel_diff(ea, eb, (size_t)nb * len);
         }

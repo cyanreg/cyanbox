@@ -259,9 +259,11 @@ static int slot_reserve(Plan *p, Slot *s, size_t in, size_t out)
     return 0;
 }
 
-/* Records a slot's work around the dispatch `record` makes: the copy of
- * its input into device memory when needed, the barriers, the timestamps.
- * Returns the address the shader reads its input from. */
+/* Begins a slot's command buffer: the barrier after its last use, the
+ * first timestamp, the copy of its input into device memory when needed,
+ * the pipeline. The caller pushes its constants and dispatches, and
+ * slot_submit ends it. Returns the address the shader reads its input
+ * from. */
 static VkDeviceAddress slot_begin(Plan *p, int i, size_t in_bytes)
 {
     Slot *s = &p->slots[i];
@@ -610,7 +612,8 @@ int rx_compute_env_run(RXComputeEnvPlan *plan, const float *x, int64_t n, const 
         Slot *s = &p->slots[head];
         if ((ret = slot_wait(p, head)) < 0)
             break;
-        memcpy(out + (size_t)s->first * per_win, s->out.map, (size_t)s->nb * per_win * sizeof(float));
+        memcpy(out + (size_t)s->first * per_win, s->out.map,
+               (size_t)s->nb * per_win * sizeof(float));
         head = (head + 1) % 2;
         inflight--;
     }

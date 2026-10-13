@@ -38,6 +38,17 @@ rx_compute_lib = static_library('rx_compute',
 rx_compute_dep = declare_dependency(link_with: rx_compute_lib,
                                     dependencies: [ rx_common_dep, vulkan_dep, vma_dep ])
 
+# The kernels against av_tx in double precision at every size they take.
+# Needs a Vulkan device but no window; skipped (77) without one.
+test('compute',
+    executable('test_compute', '../../tests/gpu/test_compute.c',
+        include_directories: rx_inc,
+        dependencies: [ rx_compute_dep, libavutil ],
+    ),
+    suite: 'gpu',
+    timeout: 300,
+)
+
 gpu_shader_headers = []
 foreach sh : [ [ 'wave.vert', 'wave_vert', 'vert' ], [ 'wave.frag', 'wave_frag', 'frag' ] ]
     spv = custom_target(sh[1] + '_spv',
