@@ -237,16 +237,6 @@ static void track_menu(UiState *ui)
     if (!t)
         return;
     int n = app->nb_selection;
-    char head[160];
-    if (n > 1)
-        snprintf(head, sizeof(head), "%d tracks", n);
-    else
-        rx_track_display(t, head, sizeof(head));
-    ImGui::TextDisabled("%s", head);
-    ImGui::Separator();
-
-    if (ImGui::MenuItem("Load", "Enter", false, !t->missing))
-        ui_load(ui, t);
     if (ImGui::BeginMenu("Analyse", !t->missing)) {
         if (ImGui::MenuItem("BPM and grid"))
             analyse_selection(ui, RX_ANALYSE_BEATS | RX_ANALYSE_WAVES, false);
@@ -290,12 +280,6 @@ static void track_menu(UiState *ui)
             }
         }
         ImGui::EndMenu();
-    }
-    if (ImGui::MenuItem("Show in folder")) {
-        // No file manager is assumed: the path goes to the status bar and
-        // the clipboard.
-        ImGui::SetClipboardText(t->path);
-        rx_app_set_status(app, "%s (copied)", t->path);
     }
     if (t->missing && ImGui::MenuItem("Relocate..."))
         ui_open_relocate(ui, t);
