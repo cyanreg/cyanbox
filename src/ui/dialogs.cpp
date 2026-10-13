@@ -1,9 +1,9 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
-// The dialogs: the confirmations (replace a playing track, remove from the
-// library), Relocate, Analysis settings, Export, Sync from USB, Inspect
-// USB, the Add browser (a plain directory lister: there is no native file
-// dialog under a bare Wayland compositor), the keyboard map and About.
+// The dialogs: the confirmation of a removal from the library, Relocate,
+// Analysis settings, Export, Sync from USB, Inspect USB, the Add browser (a
+// plain directory lister: there is no native file dialog under a bare
+// Wayland compositor), the keyboard map and About.
 //
 // Export follows the app's flow (rxbox/app.h export_state): Export starts
 // a dry run; when it finds stick files to prune or player changes not yet
@@ -115,38 +115,6 @@ static bool volume_picker(UiState *ui, char *path, size_t size)
 }
 
 /* ------------------------------------------------------------ confirmations */
-
-static void confirm_load(UiState *ui)
-{
-    if (ui->want_confirm_load) {
-        ImGui::OpenPopup("Replace the playing track?");
-        ui->want_confirm_load = false;
-    }
-    centre_next(ui, 0, 0);
-    if (!ImGui::BeginPopupModal("Replace the playing track?", nullptr,
-                                ImGuiWindowFlags_AlwaysAutoResize))
-        return;
-    ui_settle_centred();
-    RXTrack *t = rx_library_find_id(&ui->app->lib, ui->confirm_track);
-    char name[256] = "";
-    if (t)
-        rx_track_display(t, name, sizeof(name));
-    ImGui::Text("The player is playing. Load \"%s\" anyway?", name);
-    ImGui::Spacing();
-    // Enter on a row asks in the frame it was pressed: that press is not
-    // the answer, nor is a key held down and repeating.
-    bool keys = !ImGui::IsWindowAppearing();
-    if (ImGui::Button("Load", ImVec2(PX(110), 0)) ||
-        (keys && ImGui::IsKeyPressed(ImGuiKey_Enter, false))) {
-        ui_load_confirmed(ui);
-        ImGui::CloseCurrentPopup();
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Cancel", ImVec2(PX(110), 0)) ||
-        (keys && ImGui::IsKeyPressed(ImGuiKey_Escape, false)))
-        ImGui::CloseCurrentPopup();
-    ImGui::EndPopup();
-}
 
 static void confirm_remove(UiState *ui)
 {
@@ -1164,7 +1132,6 @@ static void about_dialog(UiState *ui)
 
 void ui_dialogs(UiState *ui)
 {
-    confirm_load(ui);
     confirm_remove(ui);
     relocate(ui);
     analysis_settings(ui);

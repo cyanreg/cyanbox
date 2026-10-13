@@ -12,8 +12,8 @@
 // Selection is rekordbox's: click selects one, Ctrl toggles, Shift selects
 // the range from the last click; the focused row (the keyboard's, Enter
 // loads it) has a 1 px outline. A double-click loads the track into the
-// player, never replacing a playing one without asking. Rows drag as a
-// list of track ids onto the player or a playlist.
+// player (a playing one is paused and replaced). Rows drag as a list of
+// track ids onto the player or a playlist.
 
 #include "ui_internal.h"
 

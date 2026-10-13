@@ -130,9 +130,9 @@ cannot be loaded or analysed, and offers Relocate… in its context menu;
 an unanalysed row shows `—` for BPM/key and a thin flat preview; a row being
 analysed shows a small spinner in the Preview cell.
 
-Actions: double-click loads the track into the player (a playing track
-is never replaced without confirmation); drag onto the player panel loads
-it; context menu: Load, Analyse (BPM/grid, key, both; force),
+Actions: double-click loads the track into the player at once (a playing
+track is paused and replaced; the new one waits at its auto-cue); drag
+onto the player panel loads it; context menu: Load, Analyse (BPM/grid, key, both; force),
 Remove from playlist, Remove from library, Edit info, Show in folder
 (prints the path to the status bar and copies it), Set colour, Set rating.
 Keyboard: up/down move the focus, Enter loads the focused track, Delete

@@ -193,10 +193,6 @@ struct UiState {
     RXPlaylistFolder *move_to;
     int       move_pos;
 
-    // Load confirmation (a playing track is never replaced unasked).
-    bool      want_confirm_load;
-    uint64_t  confirm_track;
-
     // Remove from library confirmation.
     bool      want_confirm_remove;
     std::vector<uint64_t> remove_ids;
@@ -303,10 +299,8 @@ bool ui_swatch(UiState *ui, const char *id, uint32_t rgb, bool selected, float s
 bool ui_hot_cue_colour_menu(UiState *ui, const char *current, char out[RX_COLOR_MAX]);
 bool ui_track_colour_menu(UiState *ui, const char *current, char out[RX_COLOR_MAX]);
 
-// Track loading with the rekordbox rule: a playing track is never replaced
-// without asking.
+// Loads a track into the player, pausing it first when it plays.
 void ui_load(UiState *ui, RXTrack *t);
-void ui_load_confirmed(UiState *ui);
 void ui_want_frames(UiState *ui, int n);
 void ui_save_config(UiState *ui);
 

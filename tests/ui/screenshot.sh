@@ -19,9 +19,9 @@
 # Then the variants, each a run with input given at set frames
 # (RXBOX_UI_EVENTS) and the state the interface logs with the screenshot
 # checked: CUE held while the window loses the keyboard is let go; Enter on
-# another track while one plays asks first (the key press that asked is not
-# the answer), and a second Enter loads it; the Add browser on a folder it
-# cannot read says so.
+# another track while one plays loads it at once (the playing one pauses,
+# the new one waits at its auto-cue, no question asked); the Add browser on
+# a folder it cannot read says so.
 #
 # usage: screenshot.sh RXBOX OUTDIR
 
@@ -163,15 +163,11 @@ fi
 variant cue-focus "70:down:C,72:up:C,80:down:C,88:up:C,88:focus-out" \
     "track $ID playing 0 position 0\.00 "
 
-# Enter on the next row while the deck plays: the question, not the load.
-variant enter-asks "70:down:DownArrow,71:up:DownArrow,75:down:Enter,76:up:Enter" \
-    "track $ID playing 1 .*popup 1"
-
-# A second Enter answers it: the deck stops and the other track loads.
+# Enter on the next row while the deck plays: the deck pauses and the other
+# track loads, paused at its auto-cue; nothing asks.
 FRAMES=160
 export RXBOX_UI_SCREENSHOT_FRAME=140
-variant enter-confirms \
-    "70:down:DownArrow,71:up:DownArrow,75:down:Enter,76:up:Enter,90:down:Enter,91:up:Enter" \
+variant enter-loads "70:down:DownArrow,71:up:DownArrow,75:down:Enter,76:up:Enter" \
     "track $ID2 playing 0 .*popup 0"
 unset FRAMES RXBOX_UI_SCREENSHOT_FRAME
 

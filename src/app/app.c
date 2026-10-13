@@ -634,8 +634,8 @@ int rx_app_load_deck(RXApp *app, int deck, RXTrack *t)
         return RX_ERROR(ENOENT);
     }
 
-    /* Replacing a playing track is the interface's decision (it asks, then
-     * pauses and calls again). */
+    /* Replacing a playing track is the interface's decision (it pauses
+     * the deck, then calls again). */
     RXDeckState st;
     rx_deck_state(app->player, deck, &st);
     if (st.playing)

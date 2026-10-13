@@ -437,7 +437,9 @@ static bool deck_playing(UiState *ui, int deck)
     return st.loaded && st.playing;
 }
 
-// rekordbox never replaces a playing track without asking.
+// A load replaces whatever the player holds, playing or not: the app
+// refuses to swap a playing deck (rx_app_load_deck says EBUSY), so the
+// player pauses first and the new track waits at its auto-cue.
 void ui_load(UiState *ui, RXTrack *t)
 {
     if (!t)
@@ -446,24 +448,8 @@ void ui_load(UiState *ui, RXTrack *t)
         rx_app_set_status(ui->app, "%s is missing: relocate it first", ui_title(t));
         return;
     }
-    if (deck_playing(ui, 0)) {
-        ui->want_confirm_load = true;
-        ui->confirm_track = t->id;
-        return;
-    }
-    load_now(ui, 0, t);
-}
-
-// The answer to the question: the app never replaces a playing track
-// (rx_app_load_deck says EBUSY), so the player stops first.
-void ui_load_confirmed(UiState *ui)
-{
-    RXApp *app = ui->app;
-    RXTrack *t = rx_library_find_id(&app->lib, ui->confirm_track);
-    if (!t)
-        return;
     if (deck_playing(ui, 0))
-        rx_deck_pause(app->player, 0);
+        rx_deck_pause(ui->app->player, 0);
     load_now(ui, 0, t);
 }
 
