@@ -85,7 +85,9 @@ uint64_t rx_jobs_stick_read(RXJobs *j, const char *library_root, const char *mou
 uint64_t rx_jobs_inspect(RXJobs *j, const char *mount);
 /* Tagging with the model (rxbox/ml.h), only ever on request: it holds the
  * GPU for seconds a track, and up to 7 GB of its memory while it is open.
- * rx_jobs_tag appends a track to the pool's one tag queue, and one job
+ * rx_jobs_tag appends a track to the pool's one tag queue, with the legend
+ * its colour is picked from (RX_TRACK_COLORS descriptions by colour id - 1,
+ * copied; NULL: the defaults, rx_config_vibe_default), and one job
  * drains it: it opens the model (`model`, its GGUF file, on the GPU
  * rx_jobs_set_gpu named), decodes and tags the tracks one at a time in the
  * order they came, takes the tracks appended while it runs into the same
@@ -95,7 +97,8 @@ uint64_t rx_jobs_inspect(RXJobs *j, const char *mount);
  * be opened posts one with track_id 0 and drops the queue. A batch that
  * is running keeps the model it opened. Returns the batch's request id,
  * the same for all its tracks, or a negative errno. */
-uint64_t rx_jobs_tag(RXJobs *j, const char *model, uint64_t track_id, const char *path);
+uint64_t rx_jobs_tag(RXJobs *j, const char *model, const char *const *legend, uint64_t track_id,
+                     const char *path);
 /* The tag batch: false when none is queued or running; else the tracks
  * done and asked for in it so far, and the one being tagged (0 while the
  * model loads). Any pointer may be NULL. */

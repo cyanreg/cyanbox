@@ -28,7 +28,9 @@
  *                  the grid, key and waveforms: RX_*_VERSION, 0 before schema 2),
  *                  tags_version, ml_club, ml_intensity, ml_valence, ml_vocals (the
  *                  model's tagging, rxbox/ml.h: RX_ML_TAGS_VERSION, 0 never, and its
- *                  measures, NULL never; schema 5)
+ *                  measures, NULL never; schema 5), ml_colors, ml_legend (the
+ *                  probability it gave each of the eight colours, NULL none, and the
+ *                  hash of the legend it picked from, 0 none; schema 6)
  *   grid_section   track_id, idx, start, bpm, beat
  *   cue            id, track_id, time, grid_beat, hot, loop_end, loop_beats, active, name, color
  *   track_tag      track_id, tag
@@ -89,6 +91,12 @@ typedef struct RXConfig {
     char *ml_model;             /* the model's GGUF file for tagging (rxbox/ml.h), NULL:
                                    $RXBOX_ML_MODEL, else models/ (rx_app_ml_model) */
 
+    /* color.*: the legend, what each track colour stands for, by colour id
+     * - 1 (color.pink .. color.purple, rxbox/colors.h); the tagging model
+     * picks the colour whose words fit a track best. NULL: the default,
+     * RX_TRACK_VIBE_*. Read through rx_config_vibe. */
+    char *vibes[8];
+
     /* ui.* */
     char  traffic_light[12];    /* the browser's key highlight (rx_key_reach_name): off,
                                    same, related1, related2, related3 (default) */
@@ -98,6 +106,18 @@ typedef struct RXConfig {
 
 void rx_config_free(RXConfig *c);
 void rx_config_defaults(RXConfig *c);
+/* The legend: the description of track colour `id` (1..8) and its setting
+ * key ("color.pink"); NULL for another id. rx_config_vibe is the user's
+ * words or the default's. */
+const char *rx_config_vibe(const RXConfig *c, int id);
+const char *rx_config_vibe_default(int id);
+const char *rx_config_vibe_key(int id);
+/* Sets colour `id`'s description, trimmed; NULL, blank or the default's
+ * own words go back to the default (and the row away at the next save).
+ * -EINVAL for another id. */
+int  rx_config_set_vibe(RXConfig *c, int id, const char *text);
+/* All eight, by id - 1, as rx_ml_tag takes them. */
+void rx_config_legend(const RXConfig *c, const char *legend[8]);
 /* Where the library is: $RXBOX_LIBRARY, else ~/.local/share/rxbox. Allocating. */
 char *rx_library_default_root(void);
 

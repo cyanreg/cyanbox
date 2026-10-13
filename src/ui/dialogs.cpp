@@ -239,6 +239,60 @@ static const BpmPreset BPM_PRESETS[] = {
     { "58 - 115", 58, 115 },
 };
 
+// The legend: a swatch, the colour's name and its words per row, edited in
+// place and saved when a field is left. A field shows RXConfig's words
+// unless it is being typed in.
+static bool legend_section(UiState *ui, RXConfig *cfg)
+{
+    bool changed = false;
+    ImGui::SeparatorText("Track colours");
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + PX(360));
+    ImGui::TextDisabled("Analyse tags gives a track the colour whose words fit it best: say "
+                        "what can be heard (energy, brightness, darkness, groove).");
+    ImGui::PopTextWrapPos();
+    float name_w = ImGui::CalcTextSize("purple").x + PX(8);
+    for (int id = 1; id <= RX_TRACK_COLORS; id++) {
+        ImGui::PushID(id);
+        char *buf = ui->vibe_buf[id - 1];
+        ImGui::AlignTextToFramePadding();
+        ImVec2 p = ImGui::GetCursorScreenPos();
+        float s = PX(14), fh = ImGui::GetFrameHeight();
+        ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(p.x, p.y + (fh - s) * 0.5f),
+                                                  ImVec2(p.x + s, p.y + (fh + s) * 0.5f),
+                                                  ui_rgb(rx_track_color_rgb(id)), PX(2));
+        ImGui::Dummy(ImVec2(s, fh));
+        ImGui::SameLine();
+        float x = ImGui::GetCursorPosX();
+        ImGui::TextUnformatted(rx_track_color_name(id));
+        ImGui::SameLine(x + name_w);
+        ImGui::SetNextItemWidth(PX(300));
+        if (ImGui::GetActiveID() != ImGui::GetID("##vibe"))
+            snprintf(buf, sizeof(ui->vibe_buf[0]), "%s", rx_config_vibe(cfg, id));
+        ImGui::InputText("##vibe", buf, sizeof(ui->vibe_buf[0]));
+        if (ImGui::IsItemDeactivatedAfterEdit() && rx_config_set_vibe(cfg, id, buf) >= 0)
+            changed = true;
+        char tip[192];
+        snprintf(tip, sizeof(tip), "%s; by default \"%s\"", rx_config_vibe_key(id),
+                 rx_config_vibe_default(id));
+        ui_tooltip(tip);
+        ImGui::PopID();
+    }
+    bool defaults = true;
+    for (int id = 1; id <= RX_TRACK_COLORS; id++)
+        defaults &= !cfg->vibes[id - 1];
+    ImGui::BeginDisabled(defaults);
+    if (ImGui::Button("Reset to defaults")) {
+        for (int id = 1; id <= RX_TRACK_COLORS; id++)
+            rx_config_set_vibe(cfg, id, NULL);
+        changed = true;
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextDisabled("Tagged tracks keep their colour until tagged again.");
+    return changed;
+}
+
 static void analysis_settings(UiState *ui)
 {
     if (!ui->dlg_analysis)
@@ -284,10 +338,11 @@ static void analysis_settings(UiState *ui)
     ImGui::SetItemTooltip("Split the grid where the tempo or phase really changes.");
     ImGui::SeparatorText("Cues");
     changed |= ImGui::Checkbox("Memory cue at the first downbeat", &cfg->auto_cues);
-    if (changed)
-        ui_save_config(ui);
     ImGui::Spacing();
     ImGui::TextDisabled("Applies to the next analysis.");
+    changed |= legend_section(ui, cfg);
+    if (changed)
+        ui_save_config(ui);
     ImGui::End();
 }
 

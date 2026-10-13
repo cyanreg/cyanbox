@@ -250,9 +250,14 @@ typedef struct RXTrack {
      * and its four measures, 0 to 1 (NAN never tagged): club music,
      * intensity (calm .. intense), valence (dark .. bright), vocals (1
      * heard, 0 instrumental). The genre, hue and comment it gave are in
-     * meta, where the user edits them. */
+     * meta, where the user edits them. ml_colors is the probability it
+     * gave each of the eight track colours (by colour id - 1, rxbox/colors.h;
+     * NAN when not tagged so, as before tagging version 2) and ml_legend
+     * the hash of the legend it was asked with (rx_ml_legend_hash, 0 none). */
     int    tags_version;
     float  ml_club, ml_intensity, ml_valence, ml_vocals;
+    float  ml_colors[8];
+    uint32_t ml_legend;
 
     /* Stream properties from probing */
     double  duration;               /* seconds, on the players' timeline */

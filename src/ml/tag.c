@@ -1,6 +1,6 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
-/* rx_ml_tag (rxbox/ml.h): a genre, a hue and a comment from the model's
+/* rx_ml_tag (rxbox/ml.h): a genre, a colour and a comment from the model's
  * answers about a track.
  *
  * What the model can and cannot tell was measured on the author's library
@@ -15,7 +15,8 @@
  *    "chill-out", which agree at |r| 0.9), whether it is club music, and
  *    mood ("happy", "dark", "melancholic"). Each answer is taken as its
  *    log-odds, centred and scaled by its mean and spread over that
- *    library, so the biases cancel and the three are on one scale.
+ *    library, so the biases cancel and the three are on one scale. They
+ *    are the measures the library keeps.
  *  - Its genre is the right family (house, trance, techno, hard dance,
  *    jazz, J-pop) more often than the right subgenre: it hears bossa nova
  *    as jazz or samba, and electro house as J-core or big room. It is kept
@@ -25,21 +26,24 @@
  *    into the comment. A yes/no question about vocals, oddly, is answered
  *    "no" nearly always.
  *
- * The hue is the direction of the track on the plane of mood (dark to
- * bright) and intensity (calm to intense): Russell's circumplex of affect,
- * laid on the colour wheel with its usual associations, warm for intense
- * and cool for calm. Intense is red; intense and bright, orange and
- * yellow; bright and relaxed, green; calm, cyan; calm and sad, blue; dark,
- * violet; dark and intense, magenta. It is continuous in both, so similar
- * tracks get similar hues, and it does not depend on any library but the
- * one the constants were measured on. Near the middle of the plane, where
- * the direction is undefined and a small change would turn it round, it
- * fades into the hue of the average track (orange). Club music or not is
- * measured and kept, but left out of the hue: the genre says it. On the
- * library above, the hue of a whole track and of 150 s of its middle are
- * within 15 degrees of each other for half of the tracks and within 40 for
- * nine in ten; the rest are tracks whose middle is more intense than their
- * intro and outro, so rx_ml_tag listens to the whole track.
+ * The colour is the model's choice among the legend's eight descriptions
+ * (one per rekordbox colour, in the user's words), asked as a multiple-
+ * choice question with a letter per description and scored, not sampled:
+ * the probabilities of the eight letters as the first token of the
+ * answer, read from the logits of one forward pass. So the quantisation
+ * to eight colours is the model's, and the probabilities say how sure it
+ * is. A model asked multiple choice favours some letters and places in
+ * the list whatever they say (docs/ML.md measures how much), so the
+ * question is asked in every rotation of the list, each description once
+ * under each letter, and the answers combined by their geometric mean:
+ * what is left is the descriptions' own pull. That pull (with no audio
+ * the model leans to purple, red and orange, away from aqua and blue) is
+ * left in: divided out, it tipped the bright tracks from orange to yellow
+ * without the colours agreeing better with the model's own measures and
+ * words (docs/ML.md has the numbers). This replaced a continuous hue
+ * computed from the measures (intensity and mood as an angle on the
+ * colour wheel), which the stick then quantised to the nearest of its
+ * eight without the model's say.
  */
 
 #include "rxbox/ml.h"
@@ -82,39 +86,7 @@ static const char *const q_genre =
 static const char *const q_vocals =
     "Are there vocals in this track? If yes, say who sings and in what language, in a few words.";
 static const char *const q_mood = "Describe the mood of this track in at most three words.";
-
-/* ------------------------------------------------------------------- hue */
-
-static double wrap(double h)
-{
-    h = fmod(h, 360.0);
-    return h < 0.0 ? h + 360.0 : h;
-}
-
-/* The signed angle from a to b the shorter way, in (-180, 180]. */
-static double arc(double a, double b)
-{
-    double d = wrap(b - a);
-    return d > 180.0 ? d - 360.0 : d;
-}
-
-/* The average track's hue, and the distance from the middle (in standard
- * deviations) within which a track fades into it. */
-#define NEUTRAL_HUE    30.0
-#define NEUTRAL_RADIUS 0.6
-
-/* The hue for intensity i and mood v, both in the library's standard
- * deviations from its average: the angle on their plane, intense (straight
- * up) at 0 degrees, bright (right) at 90, calm (down) at 180, dark (left)
- * at 270. */
-static double hue_of(double i, double v)
-{
-    double h = wrap(90.0 - atan2(i, v) * (180.0 / M_PI));
-    double r = hypot(i, v);
-    if (r < NEUTRAL_RADIUS)
-        h = wrap(NEUTRAL_HUE + arc(NEUTRAL_HUE, h) * r / NEUTRAL_RADIUS);
-    return h;
-}
+static const char *const q_color = "Which of these descriptions fits this music best?";
 
 /* --------------------------------------------------------------- answers */
 
@@ -221,6 +193,95 @@ static char *mood_of(const char *answer)
     return m;
 }
 
+/* --------------------------------------------------------- multiple choice */
+
+int rx_ml_pick(RXML *ml, const char *question, const char *const *options, int nb,
+               float *probs, float *mass)
+{
+    static const char *const letters[26] = {
+        "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
+        "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z",
+    };
+    if (nb < 2 || nb > 26)
+        return RX_ERROR(EINVAL);
+
+    /* "Question?\nA. first\nB. second\n...\nAnswer with the letter only." */
+    size_t size = strlen(question) + 64;
+    for (int i = 0; i < nb; i++)
+        size += strlen(options[i]) + 8;
+    char *prompt = malloc(size);
+    if (!prompt)
+        return RX_ERROR(ENOMEM);
+    size_t n = (size_t)snprintf(prompt, size, "%s\n", question);
+    for (int i = 0; i < nb; i++)
+        n += (size_t)snprintf(prompt + n, size - n, "%s. %s\n", letters[i], options[i]);
+    snprintf(prompt + n, size - n, "Answer with the letter only.");
+
+    int ret = rx_ml_choose(ml, prompt, NULL, letters, nb, probs, mass);
+    free(prompt);
+    return ret;
+}
+
+int rx_ml_color(RXML *ml, const char *const legend[RX_TRACK_COLORS], int orders,
+                float probs[RX_TRACK_COLORS], float *mass)
+{
+    enum { N = RX_TRACK_COLORS };
+    orders = RX_CLAMP(orders, 1, N);
+    double lp[N] = { 0 };
+    float mass_sum = 0.0f;
+    for (int r = 0; r < orders; r++) {
+        /* Rotation r lists description (r + k) mod N under the k-th
+         * letter: over all N rotations each description has every letter
+         * and every place once. */
+        const char *opts[N];
+        float p[N], m;
+        for (int k = 0; k < N; k++)
+            opts[k] = legend[(r + k) % N];
+        int ret = rx_ml_pick(ml, q_color, opts, N, p, &m);
+        if (ret < 0)
+            return ret;
+        for (int k = 0; k < N; k++)
+            lp[(r + k) % N] += log(fmax(p[k], 1e-30));
+        mass_sum += m;
+    }
+    /* The geometric mean, renormalised: the model's preference for a
+     * letter or a place multiplies the probability of whatever stands
+     * there, and over every rotation each description has had each
+     * letter's factor once, so the factors cancel in the product. (The
+     * plain mean leaves the favoured letters' share in; on the acceptance
+     * tracks it also picked less consistently, docs/ML.md.) */
+    double mx = -INFINITY, z = 0.0;
+    for (int i = 0; i < N; i++)
+        mx = fmax(mx, lp[i] / orders);
+    for (int i = 0; i < N; i++)
+        z += exp(lp[i] / orders - mx);
+    int best = 0;
+    for (int i = 0; i < N; i++) {
+        probs[i] = (float)(exp(lp[i] / orders - mx) / z);
+        if (probs[i] > probs[best])
+            best = i;
+    }
+    rx_debug("ml: colour %d (%.2f); the letters held %.2f of the answer", best + 1, probs[best],
+             mass_sum / orders);
+    if (mass)
+        *mass = mass_sum / orders;
+    return best + 1;
+}
+
+uint32_t rx_ml_legend_hash(const char *const legend[RX_TRACK_COLORS])
+{
+    uint32_t h = 2166136261u;
+    for (int i = 0; i < RX_TRACK_COLORS; i++) {
+        /* Each description with its end, so "a" "bc" is not "ab" "c". */
+        const char *s = legend[i] ? legend[i] : "";
+        do {
+            h ^= (unsigned char)*s;
+            h *= 16777619u;
+        } while (*s++);
+    }
+    return h ? h : 1;
+}
+
 /* --------------------------------------------------------------- tagging */
 
 void rx_ml_tags_free(RXMLTags *t)
@@ -241,7 +302,8 @@ static float unit(double z)
     return (float)(1.0 / (1.0 + exp(-1.7 * z)));
 }
 
-int rx_ml_tag(RXML *ml, const float *pcm, int64_t nb_samples, RXMLTags *tags, RXCancel *cancel)
+int rx_ml_tag(RXML *ml, const float *pcm, int64_t nb_samples,
+              const char *const legend[RX_TRACK_COLORS], RXMLTags *tags, RXCancel *cancel)
 {
     *tags = (RXMLTags) { 0 };
     int ret = rx_ml_listen(ml, pcm, nb_samples, cancel);
@@ -262,6 +324,13 @@ int rx_ml_tag(RXML *ml, const float *pcm, int64_t nb_samples, RXMLTags *tags, RX
     double club = z[Y_CLUB];
     double val = (z[Y_HAPPY] - z[Y_DARK] - z[Y_MELANCHOLIC]) / 3.0;
 
+    if ((ret = rx_ml_color(ml, legend, RX_ML_COLOR_ORDERS, tags->colors, NULL)) < 0)
+        return ret;
+    tags->color = ret;
+    tags->legend = rx_ml_legend_hash(legend);
+    if (rx_cancelled(cancel))
+        return RX_ERROR(ECANCELED);
+
     char *genre = NULL, *vocals = NULL, *mood = NULL;
     if ((ret = rx_ml_ask(ml, q_genre, 24, &genre)) < 0 ||
         (ret = rx_ml_ask(ml, q_vocals, 40, &vocals)) < 0 ||
@@ -278,11 +347,10 @@ int rx_ml_tag(RXML *ml, const float *pcm, int64_t nb_samples, RXMLTags *tags, RX
         ret = RX_ERROR(ENOMEM);
         goto end;
     }
-    tags->hue = hue_of(in, val);
     tags->intensity = unit(in);
     tags->club = unit(club);
     tags->valence = unit(val);
-    rx_debug("ml: intensity %+.2f club %+.2f mood %+.2f -> hue %.0f", in, club, val, tags->hue);
+    rx_debug("ml: intensity %+.2f club %+.2f mood %+.2f, colour %d", in, club, val, tags->color);
 
 end:
     free(genre);

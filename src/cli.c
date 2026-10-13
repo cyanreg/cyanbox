@@ -83,12 +83,13 @@ static const char usage_text[] =
     "  show TRACK...            print the colour, the resolved grid, key, cues,\n"
     "                           analyser versions and the model's tags\n"
     "  tag TRACK...             tag the tracks with the model on the GPU (models/, or\n"
-    "                           the setting ml.model): a colour (hue) and a comment, and\n"
-    "                           a genre where none was typed\n"
-    "  color HUE TRACK...       set the tracks' colour: a hue in degrees (0-360: 0 red,\n"
-    "                           120 green, 240 blue), one of pink red orange yellow\n"
-    "                           green aqua blue purple (its hue), or none; the stick\n"
-    "                           gets the nearest of those eight\n"
+    "                           the setting ml.model): one of the eight colours, the one\n"
+    "                           whose words (the settings color.pink ... color.purple)\n"
+    "                           fit best, a comment, and a genre where none was typed\n"
+    "  color COLOUR TRACK...    set the tracks' colour: one of pink red orange yellow\n"
+    "                           green aqua blue purple, none, or a hue in degrees\n"
+    "                           (0-360: 0 red, 120 green, 240 blue; the stick gets the\n"
+    "                           nearest of the eight)\n"
     "  export STICK             write the settings, every playlist and their tracks to a\n"
     "                           mounted stick (files already there are not copied again)\n"
     "      --all                every track in the library, not only those in playlists\n"
@@ -109,7 +110,8 @@ static const char usage_text[] =
     "  settings                 list the My Settings names and values\n"
     "  config [KEY [VALUE]]     show or change a setting (analysis.bpm_min,\n"
     "                           import.comment, export.key_notation, player.quantize,\n"
-    "                           ml.model ...)\n"
+    "                           ml.model, color.red ...; \"\" puts a colour's words back\n"
+    "                           to the default)\n"
     "  init [DIR]               create a library (default: the library directory)\n"
     "  playlist list            list the playlists\n"
     "  playlist create NAME     create a playlist (\"Folder/Name\" creates the folders)\n"
@@ -1148,6 +1150,63 @@ static void print_version(const char *stage, int version, int current, bool stal
     printf("%s", sep);
 }
 
+/* "red (intense, peak time)" for one of the eight colours, in the legend's
+ * words; "200° (not one of the eight; the stick gets aqua)" for a hue
+ * between them (an older library's); "none". */
+static const char *fmt_colour(const RXConfig *cfg, double hue, char *buf, size_t size)
+{
+    int id = rx_track_color_of_hue(hue);
+    if (id) {
+        snprintf(buf, size, "%s (%s)", rx_track_color_name(id), rx_config_vibe(cfg, id));
+        return buf;
+    }
+    int near = rx_track_color_nearest_hue(hue);
+    if (!near)
+        return "none";
+    char deg[32];
+    snprintf(deg, sizeof(deg), "%.1f", fmod(hue, 360.0));
+    size_t n = strlen(deg);
+    if (n > 2 && !strcmp(deg + n - 2, ".0"))
+        deg[n - 2] = '\0';
+    snprintf(buf, size, "%s\xC2\xB0 (not one of the eight; the stick gets %s)", deg,
+             rx_track_color_name(near));
+    return buf;
+}
+
+/* The colour after the model's pick in its probabilities. */
+static int runner_up(const float *p, int best)
+{
+    int second = best == 1 ? 2 : 1;
+    for (int i = 1; i <= RX_TRACK_COLORS; i++) {
+        if (i != best && p[i - 1] > p[second - 1])
+            second = i;
+    }
+    return second;
+}
+
+/* "red 0.62 (intense, peak time), then orange 0.21": the model's pick, in
+ * the legend's words when it was asked with the legend there is now. */
+static const char *fmt_pick(const RXConfig *cfg, const float *p, uint32_t legend, char *buf,
+                            size_t size)
+{
+    int best = 1;
+    for (int i = 2; i <= RX_TRACK_COLORS; i++) {
+        if (p[i - 1] > p[best - 1])
+            best = i;
+    }
+    int second = runner_up(p, best);
+    const char *now[RX_TRACK_COLORS];
+    rx_config_legend(cfg, now);
+    if (legend == rx_ml_legend_hash(now))
+        snprintf(buf, size, "%s %.2f (%s), then %s %.2f", rx_track_color_name(best), p[best - 1],
+                 now[best - 1], rx_track_color_name(second), p[second - 1]);
+    else
+        snprintf(buf, size, "%s %.2f, then %s %.2f (asked with other words)",
+                 rx_track_color_name(best), p[best - 1], rx_track_color_name(second),
+                 p[second - 1]);
+    return buf;
+}
+
 static void show_track(const RXApp *app, const RXTrack *t)
 {
     char a[32], b[32], bpm[32];
@@ -1165,8 +1224,8 @@ static void show_track(const RXApp *app, const RXTrack *t)
     if (t->meta.album && t->meta.album[0])
         printf("  [%s]", t->meta.album);
     printf("  %s\n", rx_fmt_time(t->duration, a, sizeof(a)));
-    char hue[32];
-    printf("  colour: %s\n", rx_hue_format(t->meta.hue, hue, sizeof(hue)));
+    char colour[192];
+    printf("  colour: %s\n", fmt_colour(&app->lib.cfg, t->meta.hue, colour, sizeof(colour)));
     printf("  %s, %d Hz, %d channel%s", t->codec[0] ? t->codec : "?", t->sample_rate,
            t->channels, t->channels == 1 ? "" : "s");
     if (t->bit_depth)
@@ -1232,8 +1291,19 @@ static void show_track(const RXApp *app, const RXTrack *t)
         printf("  tags:");
         print_version("version", t->tags_version, RX_ML_TAGS_VERSION,
                       t->tags_version < RX_ML_TAGS_VERSION, ":");
+        if (!isnan(t->ml_colors[0])) {
+            char pick[320];
+            printf(" %s;", fmt_pick(&app->lib.cfg, t->ml_colors, t->ml_legend, pick,
+                                    sizeof(pick)));
+        }
         printf(" intensity %.2f, club %.2f, mood %.2f, %s\n", t->ml_intensity, t->ml_club,
                t->ml_valence, t->ml_vocals >= 0.5f ? "vocals" : "instrumental");
+        if (!isnan(t->ml_colors[0])) {
+            printf("  colours:");
+            for (int i = 0; i < RX_TRACK_COLORS; i++)
+                printf("%s %s %.2f", i ? "," : "", rx_track_color_names[i], t->ml_colors[i]);
+            printf("\n");
+        }
     } else {
         printf("  tags: none (rxbox tag)\n");
     }
@@ -1324,8 +1394,9 @@ end:
     return code;
 }
 
-/* A track's colour is a hue (rxbox/model.h); a palette name stands for its
- * entry's hue, so `rxbox color aqua` puts aqua on the stick. */
+/* A track's colour is a hue (rxbox/model.h); each of the eight names stands
+ * for its colour's hue, so `rxbox color aqua` puts aqua on the stick, as
+ * the model's pick and the interface's swatches do. */
 static int cmd_color(Cli *cli, int argc, char **argv)
 {
     RXArray args;
@@ -1352,8 +1423,8 @@ static int cmd_color(Cli *cli, int argc, char **argv)
     const char *arg = *(char **)rx_array_at(&args, 0);
     double hue;
     if (rx_parse_hue(arg, &hue) < 0) {
-        code = usage_error(cli, "color: %s is not a hue in degrees (0-360), a colour name "
-                           "(pink red orange yellow green aqua blue purple) or none", arg);
+        code = usage_error(cli, "color: %s is not a colour name (pink red orange yellow green "
+                           "aqua blue purple), none or a hue in degrees (0-360)", arg);
         goto end;
     }
 
@@ -1368,7 +1439,7 @@ static int cmd_color(Cli *cli, int argc, char **argv)
         if (resolve_tracks(lib, *(char **)rx_array_at(&args, i), &tracks) < 0)
             code = EXIT_FAIL;
     }
-    char buf[32];
+    char buf[192];
     for (size_t i = 0; i < tracks.nb; i++) {
         RXTrack *t = *(RXTrack **)rx_array_at(&tracks, i);
         double old = t->meta.hue;
@@ -1379,7 +1450,7 @@ static int cmd_color(Cli *cli, int argc, char **argv)
             code = fail("cannot set the colour of %s: %s", t->path, strerror(-ret));
             continue;
         }
-        printf("%s: %s\n", t->path, rx_hue_format(t->meta.hue, buf, sizeof(buf)));
+        printf("%s: %s\n", t->path, fmt_colour(&lib->cfg, t->meta.hue, buf, sizeof(buf)));
     }
     rx_array_free(&tracks);
 
@@ -1389,9 +1460,11 @@ end:
     return code;
 }
 
-/* rxbox-ml -t's line, after analyze's count: the measures, the genre the
- * model hears (and the user's, when that stays) and the comment. */
-static void print_tagged(int n, int total, const RXTrack *t, const RXJobResult *r, int err)
+/* rxbox-ml -t's line, after analyze's count: the colour the model picked
+ * and its runner-up, the measures, the genre the model hears (and the
+ * user's, when that stays) and the comment. */
+static void print_tagged(const RXConfig *cfg, int n, int total, const RXTrack *t,
+                         const RXJobResult *r, int err)
 {
     if (err < 0) {
         printf("[%d/%d] FAILED %s: %s\n", n, total, t->path, strerror(-err));
@@ -1400,8 +1473,10 @@ static void print_tagged(int n, int total, const RXTrack *t, const RXJobResult *
     const RXMLTags *g = r->tags;
     char name[256];
     rx_track_display(t, name, sizeof(name));
-    printf("[%d/%d] %s: hue %5.1f | intensity %.2f club %.2f mood %.2f | %s", n, total, name,
-           g->hue, g->intensity, g->club, g->valence, g->genre ? g->genre : "-");
+    char pick[320];
+    printf("[%d/%d] %s: %s | intensity %.2f club %.2f mood %.2f | %s", n, total, name,
+           fmt_pick(cfg, g->colors, g->legend, pick, sizeof(pick)), g->intensity, g->club,
+           g->valence, g->genre ? g->genre : "-");
     if (g->genre && t->meta.genre && strcmp(g->genre, t->meta.genre))
         printf(" (the genre stays %s)", t->meta.genre);
     printf(" | %s (%.1f s)\n", g->comment ? g->comment : "", r->seconds);
@@ -1496,7 +1571,7 @@ static int cmd_tag(Cli *cli, int argc, char **argv)
             int err = r->err < 0 ? r->err : r->tags ? 0 : RX_ERROR(EINVAL);
             if (!err)
                 err = rx_app_apply_tags(app, t, r->tags);
-            print_tagged(++done, queued, t, r, err);
+            print_tagged(&app->lib.cfg, ++done, queued, t, r, err);
             fflush(stdout);
             failed += err < 0;
         }
@@ -2054,14 +2129,23 @@ static int cmd_config(Cli *cli, int argc, char **argv)
 
     static const char *const sections[] = {
         "analysis.", "import.", "export.", "player.", "mixer.", "device.", "audio.", "ml.", "ui.",
+        "color.",
     };
+    /* color.<name>: one of the eight colours, its words in the legend. */
+    int vibe = 0;
+    for (int id = 1; key && id <= RX_TRACK_COLORS && !vibe; id++)
+        vibe = !strcmp(key, rx_config_vibe_key(id)) ? id : 0;
     if (key) {
         bool known = false;
         for (size_t i = 0; i < RX_ARRAY_ELEMS(sections); i++)
             known |= rx_str_starts(key, sections[i]);
         if (!known)
             return usage_error(cli, "config: keys start with analysis., import., export., player., "
-                               "mixer., device., audio., ml. or ui.");
+                               "mixer., device., audio., ml., ui. or color.");
+        if (rx_str_starts(key, "color.") && !vibe)
+            return usage_error(cli, "config: the colours are color.pink, color.red, color.orange, "
+                               "color.yellow, color.green, color.aqua, color.blue and "
+                               "color.purple");
     }
 
     int code = open_library(cli, false);
@@ -2069,7 +2153,21 @@ static int cmd_config(Cli *cli, int argc, char **argv)
         return code;
     RXLibrary *lib = &cli->app.lib;
 
-    if (key && value) {
+    if (key && value && vibe) {
+        /* As the settings dialog keeps it: trimmed, and no row for the
+         * default's own words or none. */
+        int ret = rx_config_set_vibe(&lib->cfg, vibe, value);
+        if (ret >= 0)
+            ret = rx_library_setting_set(lib, key, lib->cfg.vibes[vibe - 1]);
+        if (ret < 0)
+            code = fail("cannot set %s: %s", key, strerror(-ret));
+        else
+            printf("%s = %s%s\n", key, rx_config_vibe(&lib->cfg, vibe),
+                   lib->cfg.vibes[vibe - 1] ? "" : " (the default)");
+    } else if (key && vibe) {
+        printf("%s = %s%s\n", key, rx_config_vibe(&lib->cfg, vibe),
+               lib->cfg.vibes[vibe - 1] ? "" : " (the default)");
+    } else if (key && value) {
         int ret = rx_library_setting_set(lib, key, value);
         if (ret < 0)
             code = fail("cannot set %s: %s", key, strerror(-ret));
@@ -2124,6 +2222,8 @@ static int cmd_config(Cli *cli, int argc, char **argv)
         printf("ml.model = %s\n", c->ml_model ? c->ml_model : "(models/" RX_APP_ML_MODEL ")");
         printf("ui.traffic_light = %s\n", c->traffic_light);
         printf("ui.detail_bars = %d\n", c->detail_bars);
+        for (int id = 1; id <= RX_TRACK_COLORS; id++)
+            printf("%s = %s\n", rx_config_vibe_key(id), rx_config_vibe(c, id));
     }
     cli_close(cli);
     return code;

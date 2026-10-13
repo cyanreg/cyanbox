@@ -32,6 +32,21 @@ uint32_t    rx_track_color_rgb(int id);                           /* 0xRRGGBB, a
 #define RX_TRACK_RGB_BLUE   0x0050F8
 #define RX_TRACK_RGB_PURPLE 0x9808F8
 
+/* The legend: what each track colour stands for, by default (the settings
+ * color.pink ... color.purple change it, rxbox/library.h). The tagging
+ * model gives a track the colour whose description fits it best
+ * (rxbox/ml.h), so each says what can be heard in the music: its energy,
+ * brightness, darkness, groove. Macros, as the RGB above, so the settings
+ * in core and the model's tools take them without linking this module. */
+#define RX_TRACK_VIBE_PINK   "dark and intense, hard"
+#define RX_TRACK_VIBE_RED    "intense, peak time"
+#define RX_TRACK_VIBE_ORANGE "energetic and bright, driving"
+#define RX_TRACK_VIBE_YELLOW "bright, uplifting"
+#define RX_TRACK_VIBE_GREEN  "groovy and relaxed, warm"
+#define RX_TRACK_VIBE_AQUA   "calm, smooth"
+#define RX_TRACK_VIBE_BLUE   "deep, melancholic"
+#define RX_TRACK_VIBE_PURPLE "dark, moody, hypnotic"
+
 /* A track's colour in the library is a hue (RXMeta.hue: the HSV hue angle
  * in degrees, 0 <= hue < 360, 0 red, 60 yellow, 120 green, 180 cyan, 240
  * blue, 300 magenta); the stick still carries one of the eight. Each
@@ -41,6 +56,10 @@ double      rx_track_color_hue(int id);                           /* -1 for 0/un
 /* The entry whose hue is nearest to `hue` by circular distance, 1..8; 0
  * when `hue` is none (below 0 or not a number). Hues of 360 and over wrap. */
 int         rx_track_color_nearest_hue(double hue);
+/* The entry whose hue `hue` is, to a hundredth of a degree, 1..8: a colour
+ * picked from the eight (by hand or by the model). 0 for none and for a
+ * hue between them, which an older library may hold. */
+int         rx_track_color_of_hue(double hue);
 /* The RGB a hue is drawn in: full saturation at the value the track
  * colours above are drawn at (0xF8). 0 for none. */
 uint32_t    rx_track_hue_rgb(double hue);

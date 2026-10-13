@@ -7,7 +7,9 @@
  * results then older than the analyser; a library of schema 3 whose
  * colour names become hues, checked against src/formats/colors.c (built
  * into this test, as core does not link the formats module); the file's
- * comment left out on import unless import.comment asks for it.
+ * comment left out on import unless import.comment asks for it; the
+ * legend's settings and the model's colour probabilities, and a library
+ * of schema 5 that gains them.
  * Waveforms are stored through the raw blob layer because the analysis
  * module (which packs them) is not linked here; rxbox/analysis.h is used
  * for its version constants and inline helper only. */
@@ -75,10 +77,12 @@ static double hue_column(const RXLibrary *lib, uint64_t id)
 }
 
 /* Takes a library back to schema 5: without schema 6's measured-beat
- * column. */
+ * column and schema 7's colour probabilities and legend. */
 static int back_to_schema5(sqlite3 *db)
 {
-    return sqlite3_exec(db, "ALTER TABLE grid_section DROP COLUMN measured", NULL, NULL, NULL);
+    return sqlite3_exec(db, "ALTER TABLE grid_section DROP COLUMN measured;"
+                            "ALTER TABLE track DROP COLUMN ml_colors;"
+                            "ALTER TABLE track DROP COLUMN ml_legend;", NULL, NULL, NULL);
 }
 
 /* Takes a library back to schema 3's track table: without schema 5's
@@ -133,7 +137,7 @@ static void test_create_and_add(void)
 
     sqlite3_stmt *st;
     sqlite3_prepare_v2(lib.db->db, "PRAGMA user_version", -1, &st, NULL);
-    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 6);
+    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 7);
     sqlite3_finalize(st);
     sqlite3_prepare_v2(lib.db->db, "PRAGMA journal_mode", -1, &st, NULL);
     CHECK(sqlite3_step(st) == SQLITE_ROW && !strcmp((const char *)sqlite3_column_text(st, 0), "wal"));
@@ -539,7 +543,7 @@ static void test_grid_migration(void)
     CHECK(a && a->grid.nb_sections == 2 && a->grid.sections[0].start == 0.3125);
     sqlite3_stmt *st;
     sqlite3_prepare_v2(lib.db->db, "PRAGMA user_version", -1, &st, NULL);
-    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 6);
+    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 7);
     sqlite3_finalize(st);
     rx_library_close(&lib);
 }
@@ -572,7 +576,7 @@ static void test_measured_migration(void)
     CHECK(rx_library_open(&lib, dir) == 0);
     sqlite3_stmt *st;
     sqlite3_prepare_v2(lib.db->db, "PRAGMA user_version", -1, &st, NULL);
-    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 6);
+    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 7);
     sqlite3_finalize(st);
     a = rx_library_find_path(&lib, a_path);
     CHECK(a && a->grid.nb_sections == 2 && !rx_grid_dynamic(&a->grid));
@@ -644,6 +648,149 @@ static void test_colour_migration(void)
     sqlite3_prepare_v2(lib.db->db, "SELECT count(*) FROM pragma_table_info('track') WHERE name = 'color'",
                        -1, &st, NULL);
     CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 0);
+    sqlite3_finalize(st);
+    CHECK(rx_library_check(&lib) == 0);
+    rx_library_close(&lib);
+
+    free(db);
+    test_rm_rf(dir);
+    free(dir);
+}
+
+/* The legend: eight descriptions, the defaults until the user writes
+ * others, stored as color.<name> rows only when they differ; and the
+ * model's colour probabilities and legend hash, kept with the track. */
+static void test_legend(void)
+{
+    char *dir = test_dir("library-legend");
+    RXLibrary lib;
+    CHECK(rx_library_open(&lib, dir) == 0);
+    RXConfig *cfg = &lib.cfg;
+    static const char *const defaults[RX_TRACK_COLORS] = {
+        "dark and intense, hard", "intense, peak time", "energetic and bright, driving",
+        "bright, uplifting", "groovy and relaxed, warm", "calm, smooth", "deep, melancholic",
+        "dark, moody, hypnotic",
+    };
+    for (int id = 1; id <= RX_TRACK_COLORS; id++) {
+        CHECK_STR(rx_config_vibe(cfg, id), defaults[id - 1]);
+        CHECK_STR(rx_config_vibe_default(id), defaults[id - 1]);
+        CHECK(!cfg->vibes[id - 1]);
+        char *key = rx_asprintf("color.%s", rx_track_color_names[id - 1]);
+        CHECK_STR(rx_config_vibe_key(id), key);
+        free(key);
+    }
+    CHECK(!rx_config_vibe(cfg, 0) && !rx_config_vibe(cfg, 9) && !rx_config_vibe_key(9));
+    CHECK(rx_config_set_vibe(cfg, 0, "x") == RX_ERROR(EINVAL));
+
+    /* Trimmed; the default's own words, blank and NULL are the default. */
+    CHECK(rx_config_set_vibe(cfg, 2, "  pounding, relentless \n") == 0);
+    CHECK_STR(cfg->vibes[1], "pounding, relentless");
+    CHECK(rx_config_set_vibe(cfg, 6, " calm, smooth ") == 0 && !cfg->vibes[5]);
+    CHECK(rx_config_set_vibe(cfg, 7, "   ") == 0 && !cfg->vibes[6]);
+    CHECK(rx_config_set_vibe(cfg, 8, "hypnotic, deep, rolling") == 0);
+    const char *legend[RX_TRACK_COLORS];
+    rx_config_legend(cfg, legend);
+    CHECK_STR(legend[1], "pounding, relentless");
+    CHECK_STR(legend[7], "hypnotic, deep, rolling");
+    CHECK_STR(legend[0], defaults[0]);
+    CHECK(rx_library_config_save(&lib) == 0);
+    char *v = NULL;
+    CHECK(rx_library_setting_get(&lib, "color.red", &v) == 0 && v && !strcmp(v, "pounding, relentless"));
+    free(v);
+    CHECK(rx_library_setting_get(&lib, "color.aqua", &v) == RX_ERROR(ENOENT));
+
+    /* The model's colour: eight probabilities and the legend's hash, NAN
+     * and 0 (NULL in the column) for a track it never coloured. */
+    CHECK(rx_library_add_path(&lib, music, NULL, NULL) == 3);
+    RXTrack *a = lib.nb_tracks ? lib.tracks[0] : NULL, *b = lib.nb_tracks > 1 ? lib.tracks[1] : NULL;
+    CHECK(a && b);
+    if (!a || !b) {
+        rx_library_close(&lib);
+        return;
+    }
+    for (int i = 0; i < RX_TRACK_COLORS; i++)
+        CHECK(isnan(a->ml_colors[i]));
+    CHECK(!a->ml_legend);
+    static const float p[RX_TRACK_COLORS] = {
+        0.01f, 0.625f, 0.21f, 0.05f, 0.03f, 0.0125f, 0.02f, 0.0425f,
+    };
+    memcpy(a->ml_colors, p, sizeof(p));
+    a->ml_legend = 0xDEADBEEFu;
+    a->tags_version = 2;
+    CHECK(rx_library_save_track(&lib, a) == 0);
+    /* A rewrite of everything keeps them (and binds the blob in time). */
+    a->meta.rating = 3;
+    CHECK(rx_library_save_track(&lib, a) == 0);
+    rx_library_close(&lib);
+
+    CHECK(rx_library_open(&lib, dir) == 0);
+    cfg = &lib.cfg;
+    CHECK_STR(rx_config_vibe(cfg, 2), "pounding, relentless");
+    CHECK_STR(rx_config_vibe(cfg, 8), "hypnotic, deep, rolling");
+    CHECK_STR(rx_config_vibe(cfg, 6), defaults[5]);
+    a = rx_library_find_id(&lib, 1);
+    b = rx_library_find_id(&lib, 2);
+    CHECK(a && b);
+    if (a && b) {
+        CHECK(!memcmp(a->ml_colors, p, sizeof(p)) && a->ml_legend == 0xDEADBEEFu);
+        CHECK(a->tags_version == 2 && a->meta.rating == 3);
+        CHECK(isnan(b->ml_colors[0]) && !b->ml_legend);
+    }
+    sqlite3_stmt *st;
+    sqlite3_prepare_v2(lib.db->db, "SELECT length(ml_colors), ml_legend FROM track ORDER BY id",
+                       -1, &st, NULL);
+    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 32 &&
+          sqlite3_column_int64(st, 1) == 0xDEADBEEF);
+    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_type(st, 0) == SQLITE_NULL &&
+          sqlite3_column_int64(st, 1) == 0);
+    sqlite3_finalize(st);
+
+    /* Back to the defaults: the rows go. A row of blanks reads as the
+     * default too. */
+    CHECK(rx_config_set_vibe(cfg, 2, NULL) == 0 && rx_config_set_vibe(cfg, 8, "") == 0);
+    CHECK(rx_library_config_save(&lib) == 0);
+    CHECK(rx_library_setting_get(&lib, "color.red", &v) == RX_ERROR(ENOENT));
+    CHECK(rx_library_setting_get(&lib, "color.purple", &v) == RX_ERROR(ENOENT));
+    CHECK(rx_library_setting_set(&lib, "color.green", "  ") == 0);
+    rx_library_close(&lib);
+    CHECK(rx_library_open(&lib, dir) == 0);
+    for (int id = 1; id <= RX_TRACK_COLORS; id++)
+        CHECK(!lib.cfg.vibes[id - 1] && !strcmp(rx_config_vibe(&lib.cfg, id), defaults[id - 1]));
+    rx_library_close(&lib);
+
+    test_rm_rf(dir);
+    free(dir);
+}
+
+/* Schema 7: a library tagged by schema 5 gains the colour probabilities
+ * (none yet) and the legend (none), and keeps its tagging. */
+static void test_migrate_v5(void)
+{
+    char *dir = test_dir("library-v5");
+    char *db = path_in(dir, "library.db");
+    RXLibrary lib;
+    CHECK(rx_library_open(&lib, dir) == 0);
+    rx_library_close(&lib);
+
+    sqlite3 *s;
+    CHECK(sqlite3_open(db, &s) == SQLITE_OK);
+    CHECK(back_to_schema5(s) == SQLITE_OK);
+    CHECK(sqlite3_exec(s, "INSERT INTO track (path, hue, tags_version, ml_club, ml_intensity, "
+                          "ml_valence, ml_vocals) VALUES ('/gone/a.wav', 30, 1, 0.5, 0.75, 0.25, 1);"
+                          "PRAGMA user_version = 5", NULL, NULL, NULL) == SQLITE_OK);
+    sqlite3_close(s);
+
+    CHECK(rx_library_open(&lib, dir) == 0);
+    CHECK(lib.nb_tracks == 1);
+    if (lib.nb_tracks == 1) {
+        const RXTrack *t = lib.tracks[0];
+        CHECK(t->meta.hue == 30.0 && t->tags_version == 1 && t->ml_intensity == 0.75f);
+        CHECK(t->ml_club == 0.5f && t->ml_valence == 0.25f && t->ml_vocals == 1.0f);
+        CHECK(isnan(t->ml_colors[0]) && isnan(t->ml_colors[7]) && !t->ml_legend);
+    }
+    sqlite3_stmt *st;
+    sqlite3_prepare_v2(lib.db->db, "PRAGMA user_version", -1, &st, NULL);
+    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 7);
     sqlite3_finalize(st);
     CHECK(rx_library_check(&lib) == 0);
     rx_library_close(&lib);
@@ -852,7 +999,7 @@ static void test_migrate_v1(void)
     CHECK(rx_library_open(&lib, dir) == 0);
     sqlite3_stmt *st;
     sqlite3_prepare_v2(lib.db->db, "PRAGMA user_version", -1, &st, NULL);
-    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 6);
+    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 7);
     sqlite3_finalize(st);
     CHECK(lib.nb_tracks == 2);
     a = rx_library_find_path(&lib, a_path);
@@ -1191,6 +1338,8 @@ int main(void)
     test_grid_migration();
     test_measured_migration();
     test_colour_migration();
+    test_legend();
+    test_migrate_v5();
     test_comment_import();
     test_missing_relocate_remove();
     test_migrate_v1();

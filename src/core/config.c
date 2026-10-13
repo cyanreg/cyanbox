@@ -17,6 +17,9 @@
  *   ml.model                       the model's GGUF file for tagging tracks
  *                                  (rxbox/ml.h; unset: $RXBOX_ML_MODEL, else
  *                                  models/ beside the executable)
+ *   color.pink ... color.purple    the legend: the words the tagging model
+ *                                  picks a track's colour by (rxbox/ml.h);
+ *                                  unset: RX_TRACK_VIBE_* (rxbox/colors.h)
  *   ui.detail_bars  ui.split_player  ui.split_tree  ui.traffic_light
  *
  * Booleans are "true"/"false", numbers their shortest exact decimal form,
@@ -38,6 +41,7 @@
 #include <stdio.h>
 
 #include "rxbox/analysis.h"
+#include "rxbox/colors.h"
 #include "rxbox/notation.h"
 
 void rx_config_defaults(RXConfig *c)
@@ -74,11 +78,76 @@ void rx_config_free(RXConfig *c)
     free(c->device_name);
     free(c->audio_sink);
     free(c->ml_model);
+    for (int i = 0; i < RX_TRACK_COLORS; i++)
+        free(c->vibes[i]);
     kv_free(&c->player, &c->nb_player);
     kv_free(&c->mixer, &c->nb_mixer);
     kv_free(&c->device, &c->nb_device);
     rx_config_defaults(c);
 }
+
+/* -------------------------------------------------------------- legend */
+
+/* The keys spell rekordbox's colour names out: rx_track_color_names is the
+ * formats module's, which core does not link. */
+static const char *const vibe_keys[RX_TRACK_COLORS] = {
+    "color.pink", "color.red", "color.orange", "color.yellow",
+    "color.green", "color.aqua", "color.blue", "color.purple",
+};
+
+static const char *const vibe_defaults[RX_TRACK_COLORS] = {
+    RX_TRACK_VIBE_PINK,  RX_TRACK_VIBE_RED,  RX_TRACK_VIBE_ORANGE, RX_TRACK_VIBE_YELLOW,
+    RX_TRACK_VIBE_GREEN, RX_TRACK_VIBE_AQUA, RX_TRACK_VIBE_BLUE,   RX_TRACK_VIBE_PURPLE,
+};
+
+static_assert(RX_ARRAY_ELEMS(((RXConfig *)0)->vibes) == RX_TRACK_COLORS,
+              "a description per track colour");
+
+const char *rx_config_vibe_default(int id)
+{
+    return id >= 1 && id <= RX_TRACK_COLORS ? vibe_defaults[id - 1] : NULL;
+}
+
+const char *rx_config_vibe_key(int id)
+{
+    return id >= 1 && id <= RX_TRACK_COLORS ? vibe_keys[id - 1] : NULL;
+}
+
+const char *rx_config_vibe(const RXConfig *c, int id)
+{
+    if (id < 1 || id > RX_TRACK_COLORS)
+        return NULL;
+    return c->vibes[id - 1] ? c->vibes[id - 1] : vibe_defaults[id - 1];
+}
+
+int rx_config_set_vibe(RXConfig *c, int id, const char *text)
+{
+    if (id < 1 || id > RX_TRACK_COLORS)
+        return RX_ERROR(EINVAL);
+    if (!text)
+        text = "";
+    while (*text == ' ' || *text == '\t')
+        text++;
+    size_t n = strlen(text);
+    while (n && (text[n - 1] == ' ' || text[n - 1] == '\t' || text[n - 1] == '\n'))
+        n--;
+    char *v = NULL;
+    if (n && (strlen(vibe_defaults[id - 1]) != n || strncmp(text, vibe_defaults[id - 1], n))) {
+        if (!(v = strndup(text, n)))
+            return RX_ERROR(ENOMEM);
+    }
+    free(c->vibes[id - 1]);
+    c->vibes[id - 1] = v;
+    return 0;
+}
+
+void rx_config_legend(const RXConfig *c, const char *legend[RX_TRACK_COLORS])
+{
+    for (int i = 0; i < RX_TRACK_COLORS; i++)
+        legend[i] = rx_config_vibe(c, i + 1);
+}
+
+/* ------------------------------------------------------------------ root */
 
 char *rx_library_default_root(void)
 {
@@ -252,6 +321,11 @@ static int apply_setting(RXConfig *c, const char *key, const char *value)
         return set_string(&c->audio_sink, value);
     } else if (!strcmp(key, "ml.model")) {
         return set_string(&c->ml_model, value);
+    } else if (rx_str_starts(key, "color.")) {
+        for (int i = 0; i < RX_TRACK_COLORS; i++) {
+            if (!strcmp(key, vibe_keys[i]))
+                return rx_config_set_vibe(c, i + 1, value);
+        }
     } else if (!strcmp(key, "ui.traffic_light")) {
         if (rx_key_reach_parse(value) < 0)
             bad_value(key, value);
@@ -358,6 +432,9 @@ int rx_library_config_save(RXLibrary *lib)
         return ret;
     for (size_t i = 0; ret >= 0 && i < RX_ARRAY_ELEMS(rows); i++)
         ret = put(lib, rows[i].key, rows[i].value);
+    /* A description at its default has no row. */
+    for (int i = 0; ret >= 0 && i < RX_TRACK_COLORS; i++)
+        ret = put(lib, vibe_keys[i], c->vibes[i]);
     if (ret >= 0)
         ret = put_group(lib, "player", c->player, c->nb_player);
     if (ret >= 0)

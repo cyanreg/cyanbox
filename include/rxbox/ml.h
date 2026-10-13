@@ -24,6 +24,7 @@
  *   RXBOX_GPU_VALIDATION=1 the Khronos validation layer
  *   RXBOX_ML_PROFILE=1     time every kernel, printed at close */
 
+#include "rxbox/colors.h"
 #include "rxbox/common.h"
 #include "rxbox/thread.h"
 
@@ -75,43 +76,70 @@ int  rx_ml_rank(RXML *ml, const char *question, const char *prefix,
 /* GPU and wall time of the last listen and of all questions since, in ms. */
 void rx_ml_times(const RXML *ml, double *listen_ms, double *ask_ms);
 
+/* Multiple choice: `question`, then `options` one a line as "A. ...",
+ * "B. ..." in the order given, then "Answer with the letter only." The
+ * answer is scored, not sampled: probs[i] is the probability the model
+ * gives option i's letter as the first token of its answer, from one
+ * forward pass, renormalised over the letters (the share of the whole
+ * distribution they held goes to *mass, may be NULL). 2 to 26 options. */
+int  rx_ml_pick(RXML *ml, const char *question, const char *const *options, int nb,
+                float *probs, float *mass);
+
 /* ------------------------------------------------------------- tagging */
 
 /* What the model says about a track, for the library: a genre, a colour and
- * a comment. The colour is a hue (rxbox's track colour: 0 red, 120 green,
- * 180 cyan, 240 blue) that places the track by mood and intensity, as the
- * angle on their plane:
+ * a comment.
  *
- *     0 red      intense
- *    45 orange   intense and bright
- *    90 yellow   bright
- *   135 green    bright and relaxed
- *   180 cyan     calm
- *   225 blue     calm and sad
- *   270 violet   dark
- *   315 magenta  dark and intense
+ * The colour is one of rekordbox's eight (rxbox/colors.h, ids 1 to 8 in its
+ * order: pink red orange yellow green aqua blue purple), each standing for
+ * a description of the music, the legend, which the user edits (the
+ * settings color.pink ... color.purple; RX_TRACK_VIBE_* by default). The
+ * model is asked which of the eight descriptions fits the track best
+ * (rx_ml_color), so the colour is its choice among them, and the
+ * probability of each is kept beside it. The descriptions are listed in
+ * every rotation of their order and the answers combined, so no letter or
+ * place in the list is favoured (src/ml/tag.c, docs/ML.md).
  *
- * continuously, so similar tracks get similar hues (src/ml/tag.c says how
- * the two are measured). The measures are kept as well, 0 to 1, for the
- * interface to show.
+ * The measures are kept as well, 0 to 1, for the interface to show:
+ * intensity, club, mood (valence) and vocals.
  *
- * Results change when the prompts or the mapping do: RX_ML_TAGS_VERSION goes
- * up, and a library re-tags what an older version made. */
-#define RX_ML_TAGS_VERSION 1
+ * Results change when the prompts or the scoring do: RX_ML_TAGS_VERSION goes
+ * up, and the library shows what an older version made as older. A legend
+ * edited since a track was tagged shows by its hash (rx_ml_legend_hash). */
+#define RX_ML_TAGS_VERSION 2
+
+/* The orders rx_ml_tag asks the colour question in: every rotation. */
+#define RX_ML_COLOR_ORDERS RX_TRACK_COLORS
 
 typedef struct RXMLTags {
-    char  *genre;               /* "Progressive House", "J-Pop" ..., NULL when none */
-    char  *comment;             /* "Female vocals, Japanese. Bright, uplifting." */
-    double hue;                 /* 0 <= hue < 360 */
-    float  club;                /* made for a dance floor */
-    float  intensity;           /* calm .. intense */
-    float  valence;             /* dark, sad .. bright, happy */
-    float  vocals;              /* 1 when the model hears vocals, else 0 */
+    char    *genre;                         /* "Progressive House", "J-Pop" ..., NULL when none */
+    char    *comment;                       /* "Female vocals, Japanese. Bright, uplifting." */
+    int      color;                         /* 1..RX_TRACK_COLORS: the description that fits best */
+    float    colors[RX_TRACK_COLORS];       /* the probability of each, by id - 1; they sum to 1 */
+    uint32_t legend;                        /* rx_ml_legend_hash of the descriptions asked */
+    float    club;                          /* made for a dance floor */
+    float    intensity;                     /* calm .. intense */
+    float    valence;                       /* dark, sad .. bright, happy */
+    float    vocals;                        /* 1 when the model hears vocals, else 0 */
 } RXMLTags;
 
-/* Listens to the track (rx_ml_listen) and asks what the tags need. */
-int  rx_ml_tag(RXML *ml, const float *pcm, int64_t nb_samples, RXMLTags *tags,
-               RXCancel *cancel);
+/* Listens to the track (rx_ml_listen) and asks what the tags need; the
+ * colour from `legend`, RX_TRACK_COLORS descriptions by colour id - 1. */
+int  rx_ml_tag(RXML *ml, const float *pcm, int64_t nb_samples,
+               const char *const legend[RX_TRACK_COLORS], RXMLTags *tags, RXCancel *cancel);
 void rx_ml_tags_free(RXMLTags *tags);
+
+/* The colour question about the audio listened to: which of the legend's
+ * descriptions fits best, asked in `orders` orders (1: as given; up to
+ * RX_TRACK_COLORS, each a rotation of the list by one more place). probs[]
+ * gets the geometric mean of the orders' probabilities, renormalised, by
+ * colour id - 1; the mean share of the answer the letters held goes to
+ * *mass (may be NULL). Returns the id of the most probable. */
+int  rx_ml_color(RXML *ml, const char *const legend[RX_TRACK_COLORS], int orders,
+                 float probs[RX_TRACK_COLORS], float *mass);
+
+/* A hash of the legend's text (FNV-1a over the descriptions), never 0: a
+ * track tagged under another legend has another. */
+uint32_t rx_ml_legend_hash(const char *const legend[RX_TRACK_COLORS]);
 
 #endif /* RXBOX_ML_H */
