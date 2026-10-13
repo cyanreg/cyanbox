@@ -4,9 +4,10 @@
 // top to bottom: the title row (sleeve, title/artist, key/BPM/time/bar
 // readouts), the overview and detail waveforms (waveform_view.cpp), the
 // control row and the grid tools strip. The control row shows every group
-// at once, with no modes or tabs: transport, the HOT CUE pads over the beat
-// jump strip, the BEAT LOOP pads over the loop strip, the MEMORY buttons,
-// one list of every cue, tempo.
+// at once, with no modes or tabs, in one row of pads so that the height it
+// does not need goes to the detail waveform: transport, the HOT CUE pads
+// over the beat jump strip, the BEAT LOOP pads over the loop strip, the
+// MEMORY buttons, one list of every cue, tempo.
 //
 // Every control is one call into the deck controls (rxbox/player.h): the
 // engine owns the CDJ rules (what CUE does when held at the cue point, when
@@ -26,14 +27,23 @@ static const char *const LOOP_LABELS[8] = { "1/4", "1/2", "1", "2", "4", "8", "1
 // The beat jump strip under the hot cue pads, in beats.
 static const double JUMP_PADS[8] = { -32, -16, -8, -4, 4, 8, 16, 32 };
 
-// The control row's grid in logical pixels: each group's caps label in the
-// top band, the pads under it, the 24 px strips on the bottom line, which
-// the transport row, the last MEMORY button and MASTER TEMPO share.
+// The control row's grid in logical pixels (UI_CONTROL_ROW_H tall): each
+// group's caps label in the top band, one row of pads under it, the 24 px
+// strips on the bottom line, which the transport row, the lower MEMORY
+// buttons and MASTER TEMPO share. Pads are PAD_W_MIN to PAD_W_MAX wide by
+// the room (control_row).
 static const float ROW_LABEL_H = 18;
 static const float ROW_BOTTOM  = 2;
-static const float PAD_H       = 40;
+static const float PAD_H       = 36;
+static const float PAD_GAP     = 4;
+static const float PAD_W_MIN   = 48;
+static const float PAD_W_MAX   = 64;
 static const float STRIP_H     = 24;
 static const float GROUP_GAP   = 16;
+static const float MEM_W       = 96;
+static const float MEM_H       = 26;
+static const float CUE_ROW_H   = 22;
+static const float LIST_MIN_W  = 240;
 
 // Flags from the analysis worth a DJ's attention (rxbox/analysis.h).
 static const unsigned GRID_WARN_FLAGS = RX_GRID_FLAG_OCTAVE_UNCERTAIN | RX_GRID_FLAG_PHASE_UNCERTAIN |
@@ -320,10 +330,13 @@ static void transport(UiState *ui, int deck, ImVec2 a, ImVec2 b, const RXDeckSta
     RXDeckCtl *c = &dv->ctl;
     bool has = c->track && st.loaded;
     float w = b.x - a.x;
-    float d = ImMin((w - PX(8)) * 0.5f, PX(56));
-    // The round buttons sit level with the pads beside them, the Q and beat
-    // jump row on the strips' line at the bottom.
-    float top = a.y + PX(ROW_LABEL_H) + floorf((PX(PAD_H * 2 + 4) - d) * 0.5f);
+    float rh = PX(STRIP_H);
+    float ry = b.y - PX(ROW_BOTTOM) - rh;
+    // The round buttons are centred on the pads beside them, as large as
+    // the room above the Q and beat jump row (on the strips' line) allows.
+    float d = ImMin(ImMin((w - PX(8)) * 0.5f, ry - PX(6) - a.y), PX(56));
+    float pad_c = a.y + PX(ROW_LABEL_H + PAD_H * 0.5f);
+    float top = floorf(ImClamp(pad_c - d * 0.5f, a.y, ry - PX(6) - d));
 
     // CUE: press and release go to the engine (hold at the cue point plays
     // while held; elsewhere while paused it sets the cue point).
@@ -360,8 +373,6 @@ static void transport(UiState *ui, int deck, ImVec2 a, ImVec2 b, const RXDeckSta
 
     // Q, then the beat jump pair with the size between; the arrows repeat
     // while held, as the keys do.
-    float rh = PX(STRIP_H);
-    float ry = b.y - PX(ROW_BOTTOM) - rh;
     float qw = PX(26), aw = PX(20);
     float sw = w - qw - aw * 2 - PX(8);
     ImGui::SetCursorScreenPos(ImVec2(a.x, ry));
@@ -523,6 +534,9 @@ static void hot_cue_pad(UiState *ui, int deck, int slot, ImVec2 p, ImVec2 size)
     ImVec2 q(p.x + size.x, p.y + size.y);
     float r = PX(4);
     char letter[2] = { (char)('A' + slot), 0 };
+    // The letter at the top left, the name or position under it: both fit
+    // the 36 px pad at 15 and 10.5 px.
+    ImVec2 lp(p.x + PX(6), p.y + PX(2));
     if (cue) {
         uint32_t rgb = ui_hot_cue_rgb(cue);
         ImU32 fill = ui_rgb(rgb, down ? 1.0f : hovered ? 0.92f : 0.82f);
@@ -530,26 +544,26 @@ static void hot_cue_pad(UiState *ui, int deck, int slot, ImVec2 p, ImVec2 size)
         dl->AddRectFilled(p, q, fill, r);
         if (down)
             dl->AddRect(p, q, UI_TEXT, r, PX(2));
-        ui_text(ui, dl, ui->font_bold, 16.0f, ImVec2(p.x + PX(7), p.y + PX(3)), ink, letter);
+        ui_text(ui, dl, ui->font_bold, 15.0f, lp, ink, letter);
         char pos[48];
         const char *sub = cue->name[0] ? cue->name : ui_fmt_time(cue->time, pos, sizeof(pos), true);
-        ui_text(ui, dl, nullptr, 11.0f, ImVec2(p.x + PX(7), q.y - PX(16)), ui_alpha(ink, 0.85f), sub,
-                size.x - PX(12));
+        ui_text(ui, dl, nullptr, 10.5f, ImVec2(p.x + PX(6), q.y - PX(15)), ui_alpha(ink, 0.85f), sub,
+                size.x - PX(9));
         if (rx_cue_is_loop(cue) && !hovered)
-            ui_icon(dl, UI_ICON_LOOP, ImVec2(q.x - PX(19), p.y + PX(4)),
-                    ImVec2(q.x - PX(5), p.y + PX(18)), ink);
+            ui_icon(dl, UI_ICON_LOOP, ImVec2(q.x - PX(16), p.y + PX(4)),
+                    ImVec2(q.x - PX(4), p.y + PX(16)), ink);
     } else {
         ImU32 fill = down ? IM_COL32(0x33, 0x33, 0x33, 0xFF) : IM_COL32(0x17, 0x17, 0x17, 0xFF);
         ImU32 edge = hovered ? IM_COL32(0x55, 0x55, 0x55, 0xFF) : IM_COL32(0x2C, 0x2C, 0x2C, 0xFF);
         ImU32 ink = t ? UI_FAINT : IM_COL32(0x33, 0x33, 0x33, 0xFF);
         dl->AddRectFilled(p, q, fill, r);
         dl->AddRect(p, q, edge, r);
-        ui_text(ui, dl, ui->font_bold, 16.0f, ImVec2(p.x + PX(7), p.y + PX(3)), ink, letter);
+        ui_text(ui, dl, ui->font_bold, 15.0f, lp, ink, letter);
     }
 
     // The corner x on a set pad (drawn over it; the overlap lets it win).
     if (cue && hovered) {
-        ImVec2 xs(PX(16), PX(16));
+        ImVec2 xs(PX(14), PX(14));
         ImVec2 xp(q.x - xs.x - PX(2), p.y + PX(2));
         ImGui::SetCursorScreenPos(xp);
         char xid[16];
@@ -587,11 +601,11 @@ static bool mode_pad(UiState *ui, const char *id, ImVec2 p, ImVec2 size, const c
                 lit ? UI_ACCENT : hot ? IM_COL32(0x60, 0x60, 0x60, 0xFF) : IM_COL32(0x30, 0x30, 0x30, 0xFF),
                 r);
     ImU32 ink = !enabled ? UI_FAINT : lit ? UI_BLACK : UI_TEXT;
-    float label_y = sub ? -PX(6) : 0;
-    ui_text_centre(ui, dl, ui->font_bold, 15.0f, ImVec2(p.x, p.y + label_y), ImVec2(q.x, q.y + label_y),
+    float label_y = sub ? -PX(5) : 0;
+    ui_text_centre(ui, dl, ui->font_bold, 14.0f, ImVec2(p.x, p.y + label_y), ImVec2(q.x, q.y + label_y),
                    ink, label);
     if (sub)
-        ui_text_centre(ui, dl, nullptr, 11.0f, ImVec2(p.x, q.y - PX(16)), ImVec2(q.x, q.y - PX(3)),
+        ui_text_centre(ui, dl, nullptr, 10.0f, ImVec2(p.x, q.y - PX(14)), ImVec2(q.x, q.y - PX(2)),
                        ui_alpha(ink, 0.7f), sub);
     return pressed && enabled;
 }
@@ -604,21 +618,25 @@ static void group_label(UiState *ui, ImDrawList *dl, ImVec2 a, const char *text)
     ui_text(ui, dl, ui->font_bold, 10.5f, ImVec2(a.x, a.y + PX(2)), UI_DIM, text);
 }
 
-// HOT CUE: pads A-H in two rows of four, the beat jump strip under them.
-// The strip's buttons repeat while held, as the arrows do.
+// The width of a group of eight pads in one row.
+static float pads_width(UiState *ui, float pad_w)
+{
+    return pad_w * 8 + PX(PAD_GAP) * 7;
+}
+
+// HOT CUE: pads A-H in one row, the beat jump strip under them. The
+// strip's buttons repeat while held, as the arrows do.
 static void hot_cue_group(UiState *ui, int deck, ImVec2 a, ImVec2 b, float pad_w,
                           const RXDeckState &st)
 {
     RXDeckCtl *c = &ui->app->decks[deck].ctl;
     bool has = c->track && st.loaded;
     ImDrawList *dl = ImGui::GetWindowDrawList();
-    float gap = PX(4), pad_h = PX(PAD_H);
-    float w = pad_w * 4 + gap * 3;
+    float w = pads_width(ui, pad_w);
     group_label(ui, dl, a, "HOT CUE");
     float py = a.y + PX(ROW_LABEL_H);
     for (int i = 0; i < 8; i++)
-        hot_cue_pad(ui, deck, i, ImVec2(a.x + (i % 4) * (pad_w + gap), py + (i / 4) * (pad_h + gap)),
-                    ImVec2(pad_w, pad_h));
+        hot_cue_pad(ui, deck, i, ImVec2(a.x + i * (pad_w + PX(PAD_GAP)), py), ImVec2(pad_w, PX(PAD_H)));
 
     float sh = PX(STRIP_H), sy = b.y - PX(ROW_BOTTOM) - sh;
     float sg = PX(3);
@@ -647,7 +665,7 @@ static void hot_cue_group(UiState *ui, int deck, ImVec2 a, ImVec2 b, float pad_w
     }
 }
 
-// BEAT LOOP: the auto loop pads, the pad of the running loop lit
+// BEAT LOOP: the auto loop pads in one row, the pad of the running loop lit
 // (RXDeckCtl.last_hot_loop_beats), and the loop strip under them. Storing
 // a loop as a memory loop is MEMORY's, next to it.
 static void loop_group(UiState *ui, int deck, ImVec2 a, ImVec2 b, float pad_w, const RXDeckState &st)
@@ -655,16 +673,15 @@ static void loop_group(UiState *ui, int deck, ImVec2 a, ImVec2 b, float pad_w, c
     RXDeckCtl *c = &ui->app->decks[deck].ctl;
     bool has = c->track && st.loaded;
     ImDrawList *dl = ImGui::GetWindowDrawList();
-    float gap = PX(4), pad_h = PX(PAD_H);
-    float w = pad_w * 4 + gap * 3;
+    float w = pads_width(ui, pad_w);
     group_label(ui, dl, a, "BEAT LOOP");
     float py = a.y + PX(ROW_LABEL_H);
     for (int i = 0; i < 8; i++) {
         bool lit = c->looping && fabs(c->last_hot_loop_beats - LOOP_PADS[i]) < 1e-6;
         char id[16];
         snprintf(id, sizeof(id), "##loop%d", i);
-        ImVec2 p(a.x + (i % 4) * (pad_w + gap), py + (i / 4) * (pad_h + gap));
-        if (mode_pad(ui, id, p, ImVec2(pad_w, pad_h), LOOP_LABELS[i], i < 2 ? "beat" : "beats", lit,
+        ImVec2 p(a.x + i * (pad_w + PX(PAD_GAP)), py);
+        if (mode_pad(ui, id, p, ImVec2(pad_w, PX(PAD_H)), LOOP_LABELS[i], i < 2 ? "beat" : "beats", lit,
                      has))
             rx_ctl_auto_loop(c, LOOP_PADS[i]);
     }
@@ -704,27 +721,28 @@ static void loop_group(UiState *ui, int deck, ImVec2 a, ImVec2 b, float pad_w, c
     }
 }
 
-// MEMORY: store the cue point (or the active loop), call the memory cue
-// before or after the playhead (it becomes the cue point), delete the one
-// the playhead is on. The buttons spread over the group's height.
+// MEMORY: store the cue point (or the active loop), delete the memory cue
+// the playhead is on, call the one before or after the playhead (it
+// becomes the cue point). A 2x2 block: the upper pair level with the pads,
+// the lower on the strips' line.
 static void memory_group(UiState *ui, int deck, ImVec2 a, ImVec2 b, const RXDeckState &st)
 {
     RXDeckCtl *c = &ui->app->decks[deck].ctl;
     bool has = c->track && st.loaded;
     ImDrawList *dl = ImGui::GetWindowDrawList();
     group_label(ui, dl, a, "MEMORY");
-    float top = a.y + PX(ROW_LABEL_H), bottom = b.y - PX(ROW_BOTTOM);
-    float bh = PX(26), bw = b.x - a.x;
-    float step = (bottom - top - bh) / 3;
+    float bw = floorf((b.x - a.x - PX(PAD_GAP)) * 0.5f), bh = PX(MEM_H);
+    float y0 = a.y + PX(ROW_LABEL_H) + floorf((PX(PAD_H) - bh) * 0.5f);
+    float y1 = b.y - PX(ROW_BOTTOM) - bh;
     struct { const char *id; const char *label; UiIcon icon; bool after; const char *tip; } btn[4] = {
         { "mset", "MEMORY", UI_ICON_NONE, false,
           "Store the cue point, or the active loop, as a memory cue (M)" },
+        { "mdel", "DELETE", UI_ICON_NONE, false, "Delete the memory cue at the playhead (X)" },
         { "mprev", "CUE", UI_ICON_LEFT, false, "Call the previous memory cue (B)" },
         { "mnext", "CUE", UI_ICON_RIGHT, true, "Call the next memory cue (N)" },
-        { "mdel", "DELETE", UI_ICON_NONE, false, "Delete the memory cue at the playhead (X)" },
     };
     for (int i = 0; i < 4; i++) {
-        ImGui::SetCursorScreenPos(ImVec2(a.x, floorf(top + i * step)));
+        ImGui::SetCursorScreenPos(ImVec2(i & 1 ? b.x - bw : a.x, i < 2 ? y0 : y1));
         UiButton mb = {};
         mb.label = btn[i].label;
         mb.icon = btn[i].icon;
@@ -734,9 +752,9 @@ static void memory_group(UiState *ui, int deck, ImVec2 a, ImVec2 b, const RXDeck
         if (ui_button(ui, btn[i].id, ImVec2(bw, bh), mb)) {
             switch (i) {
             case 0: rx_ctl_memory_set(c); break;
-            case 1: rx_ctl_memory_prev(c); break;
-            case 2: rx_ctl_memory_next(c); break;
-            case 3: rx_ctl_memory_delete(c); break;
+            case 1: rx_ctl_memory_delete(c); break;
+            case 2: rx_ctl_memory_prev(c); break;
+            case 3: rx_ctl_memory_next(c); break;
             }
         }
         ui_tooltip(btn[i].tip);
@@ -808,8 +826,10 @@ static void cue_row_menu(UiState *ui, int deck, int index, CueEdit *edit)
 
 // Every cue of the track in one list, by time (the track keeps them
 // sorted): memory cues with their colour dot, hot cues with their lettered
-// badge. A click calls the cue (a hot cue as its pad does, press and
-// release); a double-click edits the name in place.
+// badge, in 22 px rows that scroll. A click calls the cue (a hot cue as
+// its pad does, press and release); a double-click edits the name in
+// place. The bar.beat column shows only when the name keeps some room
+// beside it.
 static void cue_list(UiState *ui, int deck, ImVec2 a, ImVec2 b, double pos)
 {
     RXApp *app = ui->app;
@@ -843,8 +863,9 @@ static void cue_list(UiState *ui, int deck, ImVec2 a, ImVec2 b, double pos)
     ImGui::BeginChild("##cuelist", ImVec2(lb.x - la.x, lb.y - la.y), ImGuiChildFlags_None, 0);
     ImDrawList *ldl = ImGui::GetWindowDrawList();
     ImVec2 o = ImGui::GetCursorScreenPos();
-    float rh = PX(24), fs = 13.0f;
+    float rh = PX(CUE_ROW_H), fs = 12.5f;
     float lw = ImGui::GetContentRegionAvail().x;
+    bool show_bar = lw >= PX(290);
     int nb = t ? t->nb_cues : 0;
     CueEdit edit = { -1, -1, -1, "" };
 
@@ -879,17 +900,17 @@ static void cue_list(UiState *ui, int deck, ImVec2 a, ImVec2 b, double pos)
 
         float cy = (p.y + q.y) * 0.5f;
         float fy = floorf(cy - PX(fs) * 0.5f - PX(1));
-        float x = p.x + PX(8);
+        float x = p.x + PX(7);
         if (hot) {
             uint32_t rgb = ui_hot_cue_rgb(cue);
-            ImVec2 b0(x, cy - PX(8)), b1(x + PX(16), cy + PX(8));
+            ImVec2 b0(x, floorf(cy - PX(7.5f))), b1(b0.x + PX(15), b0.y + PX(15));
             ldl->AddRectFilled(b0, b1, ui_rgb(rgb), PX(2));
             char letter[2] = { rx_cue_letter(cue), 0 };
-            ui_text_centre(ui, ldl, ui->font_bold, 11.5f, b0, b1, ui_text_on(rgb), letter);
+            ui_text_centre(ui, ldl, ui->font_bold, 11.0f, b0, b1, ui_text_on(rgb), letter);
         } else {
-            ldl->AddCircleFilled(ImVec2(x + PX(8), cy), PX(5), ui_rgb(ui_memory_cue_rgb(cue)), 16);
+            ldl->AddCircleFilled(ImVec2(x + PX(7.5f), cy), PX(4.5f), ui_rgb(ui_memory_cue_rgb(cue)), 16);
         }
-        x += PX(28);
+        x += PX(23);
         char buf[64];
         double lb_beats = cue_loop_beats(t, cue);
         if (rx_cue_is_loop(cue)) {
@@ -901,21 +922,23 @@ static void cue_list(UiState *ui, int deck, ImVec2 a, ImVec2 b, double pos)
         }
         ImU32 ink = engaged ? UI_ACCENT : UI_TEXT;
         ui_text(ui, ldl, ui->font_bold, fs, ImVec2(x, fy), ink, buf);
-        x += PX(84);
-        ui_text(ui, ldl, nullptr, fs, ImVec2(x, fy), ink, ui_fmt_time(cue->time, buf, sizeof(buf), true));
-        x += PX(72);
-        if (rx_track_analysed(t)) {
-            int bar = 0, beat = 0;
-            rx_grid_bar_of(&t->grid, cue->time, &bar, &beat);
-            snprintf(buf, sizeof(buf), "%d.%d", bar, beat);
-            ui_text(ui, ldl, nullptr, fs, ImVec2(x, fy), UI_DIM, buf);
-        }
         x += PX(60);
+        ui_text(ui, ldl, nullptr, fs, ImVec2(x, fy), ink, ui_fmt_time(cue->time, buf, sizeof(buf), true));
+        x += PX(50);
+        if (show_bar) {
+            if (rx_track_analysed(t)) {
+                int bar = 0, beat = 0;
+                rx_grid_bar_of(&t->grid, cue->time, &bar, &beat);
+                snprintf(buf, sizeof(buf), "%d.%d", bar, beat);
+                ui_text(ui, ldl, nullptr, fs, ImVec2(x, fy), UI_DIM, buf);
+            }
+            x += PX(40);
+        }
 
         // Right side: ACTIVE (memory loops) and the x.
-        float rx = q.x - PX(6);
-        ImVec2 xs(PX(22), PX(18));
-        ImGui::SetCursorScreenPos(ImVec2(rx - xs.x, cy - xs.y * 0.5f));
+        float rx = q.x - PX(5);
+        ImVec2 xs(PX(20), PX(16));
+        ImGui::SetCursorScreenPos(ImVec2(rx - xs.x, floorf(cy - xs.y * 0.5f)));
         UiButton xb = {};
         xb.icon = UI_ICON_CROSS;
         xb.fill = IM_COL32(0x22, 0x22, 0x22, 0xFF);
@@ -923,19 +946,20 @@ static void cue_list(UiState *ui, int deck, ImVec2 a, ImVec2 b, double pos)
         if (ui_button(ui, "x", xs, xb))
             edit.del = i;
         ui_tooltip(hot ? "Delete the hot cue" : "Delete the memory cue");
-        rx -= xs.x + PX(6);
+        rx -= xs.x + PX(5);
         if (!hot && rx_cue_is_loop(cue)) {
             // An active memory loop engages when the playhead reaches it.
-            ImVec2 as(PX(60), PX(18));
-            ImGui::SetCursorScreenPos(ImVec2(rx - as.x, cy - as.y * 0.5f));
+            ImVec2 as(PX(50), PX(16));
+            ImGui::SetCursorScreenPos(ImVec2(rx - as.x, floorf(cy - as.y * 0.5f)));
             UiButton ab = {};
             ab.label = "ACTIVE";
             ab.lit = cue->active;
+            ab.font = 10.0f;
             ab.rounding = -1;
             if (ui_button(ui, "active", as, ab))
                 rx_ctl_memory_set_active(c, i, !cue->active);
             ui_tooltip("Active loop: engages when the playhead reaches it");
-            rx -= as.x + PX(8);
+            rx -= as.x + PX(6);
         }
 
         // Name, edited in place after a double-click or Rename. A hot cue's
@@ -943,13 +967,13 @@ static void cue_list(UiState *ui, int deck, ImVec2 a, ImVec2 b, double pos)
         // drawn: the edit re-adds the cue.
         float nw = rx - x - PX(4);
         if (ud->edit_cue == i) {
-            ImGui::SetCursorScreenPos(ImVec2(x, cy - PX(10)));
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(PX(4), PX(1)));
+            ImGui::SetCursorScreenPos(ImVec2(x, floorf(cy - ImGui::GetFrameHeight() * 0.5f)));
             ImGui::SetNextItemWidth(ImMax(nw, PX(80)));
             if (ud->edit_focus) {
                 ImGui::SetKeyboardFocusHere();
                 ud->edit_focus = false;
             }
-            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(PX(4), PX(2)));
             ImGuiInputTextFlags nf = ImGuiInputTextFlags_EnterReturnsTrue |
                                      ImGuiInputTextFlags_AutoSelectAll;
             bool enter = ImGui::InputText("##name", ud->name_buf, sizeof(ud->name_buf), nf);
@@ -971,9 +995,9 @@ static void cue_list(UiState *ui, int deck, ImVec2 a, ImVec2 b, double pos)
         ImGui::PopID();
     }
     if (t && !nb)
-        ldl->AddText(ImGui::GetFont(), PX(13), ImVec2(o.x + PX(10), o.y + PX(8)), UI_FAINT,
+        ldl->AddText(ImGui::GetFont(), PX(12), ImVec2(o.x + PX(8), o.y + PX(6)), UI_FAINT,
                      "No cues. CUE while paused sets the cue point; MEMORY (M) stores it; "
-                     "a pad stores a hot cue.", nullptr, lw - PX(20));
+                     "a pad stores a hot cue.", nullptr, lw - PX(16));
     ImGui::SetCursorScreenPos(ImVec2(o.x, o.y + nb * rh));
     ImGui::Dummy(ImVec2(0, 0));
     ImGui::EndChild();
@@ -997,8 +1021,9 @@ static void cue_list(UiState *ui, int deck, ImVec2 a, ImVec2 b, double pos)
 // not jump the tempo. Beside it the range, the readout, RESET and MASTER
 // TEMPO, which asks the player to keep the pitch (rx_deck_set_master_tempo
 // may refuse: the button then stays off, and lights only from the deck's
-// state). The column lines up with the other groups' content. The range is
-// not kept: every start is at +-6 %, as a CDJ switched on is.
+// state). With no caps label of its own the group takes the row's whole
+// height, MT on the strips' line. The range is not kept: every start is at
+// +-6 %, as a CDJ switched on is.
 static void tempo(UiState *ui, int deck, ImVec2 a, ImVec2 b, const RXDeckState &st)
 {
     RXApp *app = ui->app;
@@ -1008,11 +1033,11 @@ static void tempo(UiState *ui, int deck, ImVec2 a, ImVec2 b, const RXDeckState &
     double range = UI_TEMPO_RANGES[ud->tempo_range];
     double pct = (st.tempo - 1.0) * 100.0;
     double step = range <= 6 ? 0.02 : range <= 16 ? 0.05 : 0.5;
-    float top = a.y + PX(ROW_LABEL_H), bottom = b.y - PX(ROW_BOTTOM);
+    float top = a.y + PX(1), bottom = b.y - PX(ROW_BOTTOM);
 
     float sw = PX(26);
     ImVec2 s0(a.x, top), s1(a.x + sw, bottom);
-    float pad = PX(9);
+    float pad = PX(8);
     float ty0 = s0.y + pad, ty1 = s1.y - pad, cy = (ty0 + ty1) * 0.5f, half = (ty1 - ty0) * 0.5f;
     ImGui::SetCursorScreenPos(s0);
     if (!has)
@@ -1064,7 +1089,7 @@ static void tempo(UiState *ui, int deck, ImVec2 a, ImVec2 b, const RXDeckState &
     // Range, readout, reset, master tempo.
     float cx = s1.x + PX(6);
     float cw = b.x - cx;
-    float rh = PX(22), mh = PX(26);
+    float rh = PX(20), zh = PX(18), mh = PX(STRIP_H);
     char label[16];
     if (range >= 100)
         snprintf(label, sizeof(label), "WIDE");
@@ -1084,17 +1109,17 @@ static void tempo(UiState *ui, int deck, ImVec2 a, ImVec2 b, const RXDeckState &
 
     char val[24];
     snprintf(val, sizeof(val), "%+.2f%%", fabs(pct) < 0.005 ? 0.0 : pct);
-    ui_text_centre(ui, dl, ui->font_bold, 14.0f, ImVec2(cx, top + PX(24)), ImVec2(cx + cw, top + PX(42)),
+    ui_text_centre(ui, dl, ui->font_bold, 14.0f, ImVec2(cx, top + PX(21)), ImVec2(cx + cw, top + PX(37)),
                    fabs(pct) >= 0.005 ? UI_ACCENT : UI_TEXT, val);
-    ui_text_centre(ui, dl, ui->font_bold, 10.5f, ImVec2(cx, top + PX(41)), ImVec2(cx + cw, top + PX(54)),
+    ui_text_centre(ui, dl, ui->font_bold, 10.5f, ImVec2(cx, top + PX(35)), ImVec2(cx + cw, top + PX(46)),
                    UI_DIM, "TEMPO");
 
-    ImGui::SetCursorScreenPos(ImVec2(cx, bottom - mh - PX(6) - rh));
+    ImGui::SetCursorScreenPos(ImVec2(cx, bottom - mh - PX(4) - zh));
     UiButton zb = {};
     zb.label = "RESET";
     zb.disabled = !has || pct == 0;
     zb.rounding = -1;
-    if (ui_button(ui, "reset", ImVec2(cw, rh), zb))
+    if (ui_button(ui, "reset", ImVec2(cw, zh), zb))
         set_tempo(ui, deck, 0);
     ui_tooltip("Tempo back to 0");
 
@@ -1121,13 +1146,16 @@ static void tempo(UiState *ui, int deck, ImVec2 a, ImVec2 b, const RXDeckState &
 
 // The control row, every group at once, 16 px apart: transport, HOT CUE,
 // BEAT LOOP, MEMORY, the cue list, tempo. The groups between transport and
-// tempo share what those leave: the pads grow from 60 to 84 px wide while
-// the list keeps 240 px; narrower than that the list gives way, and past
-// it the groups are clipped short of tempo rather than drawn over it.
+// tempo share what those leave: the sixteen pads take up to 64 px each
+// while the list keeps 240 px, and the list has whatever is left over.
+// Narrower, the pads shrink first, down to 48 px; then the list gives way,
+// and past it the groups are clipped short of tempo rather than drawn over
+// it. At 1600 wide that is pads of 49 px and a list of 248, at 1920 pads
+// of 64 and a list of 328.
 static void control_row(UiState *ui, int deck, ImVec2 a, ImVec2 b, const RXDeckState &st)
 {
-    float gg = PX(GROUP_GAP), gap = PX(4);
-    float tw = PX(120), tempo_w = PX(96), mem_w = PX(96), list_min = PX(240);
+    float gg = PX(GROUP_GAP), gap = PX(PAD_GAP);
+    float tw = PX(120), tempo_w = PX(96), mem_w = PX(MEM_W) * 2 + gap, list_min = PX(LIST_MIN_W);
     transport(ui, deck, a, ImVec2(a.x + tw, b.y), st);
     tempo(ui, deck, ImVec2(b.x - tempo_w, a.y), b, st);
 
@@ -1135,17 +1163,23 @@ static void control_row(UiState *ui, int deck, ImVec2 a, ImVec2 b, const RXDeckS
     if (gx1 <= gx0)
         return;
     float room = gx1 - gx0;
-    float pad_w = floorf(ImClamp((room - gg * 3 - mem_w - list_min) / 8 - gap, PX(60), PX(84)));
-    float pads_w = pad_w * 4 + gap * 3;
+    float pads_room = room - gg * 3 - mem_w - list_min - gap * 7 * 2;
+    float pad_w = floorf(ImClamp(pads_room / 16, PX(PAD_W_MIN), PX(PAD_W_MAX)));
+    float pads_w = pads_width(ui, pad_w);
     ImGui::PushClipRect(ImVec2(gx0, a.y), ImVec2(gx1, b.y), true);
     float x = gx0;
     hot_cue_group(ui, deck, ImVec2(x, a.y), ImVec2(x + pads_w, b.y), pad_w, st);
     x += pads_w + gg;
     loop_group(ui, deck, ImVec2(x, a.y), ImVec2(x + pads_w, b.y), pad_w, st);
     x += pads_w + gg;
+    // With no room left for the list (about 1400 px wide), MEMORY narrows
+    // into what there is, its labels shrinking, before anything is clipped.
+    bool list = gx1 - (x + mem_w + gg) >= PX(80);
+    if (!list)
+        mem_w = ImClamp(gx1 - x, PX(120), mem_w);
     memory_group(ui, deck, ImVec2(x, a.y), ImVec2(x + mem_w, b.y), st);
     x += mem_w + gg;
-    if (gx1 - x >= PX(80))
+    if (list)
         cue_list(ui, deck, ImVec2(x, a.y), ImVec2(gx1, b.y), st.position);
     ImGui::PopClipRect();
 }
@@ -1367,7 +1401,8 @@ void ui_deck_panel(UiState *ui, int deck, ImVec2 size)
     float pad = PX(6), gap = PX(4);
     float x0 = a.x + pad, x1 = b.x - pad;
     float y = a.y + pad;
-    float title_h = PX(64), over_h = PX(64), ctrl_h = PX(140), strip_h = dv->grid_edit ? PX(32) : 0;
+    float title_h = PX(UI_TITLE_ROW_H), over_h = PX(UI_OVERVIEW_H), ctrl_h = PX(UI_CONTROL_ROW_H);
+    float strip_h = dv->grid_edit ? PX(UI_GRID_STRIP_H) : 0;
     float detail_h = (b.y - pad) - y - title_h - over_h - ctrl_h - gap * 3;
     if (strip_h > 0)
         detail_h -= strip_h + gap;

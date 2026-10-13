@@ -1235,12 +1235,13 @@ bool rx_ui_frame(RXApp *app)
 
     // The player keeps room for every row (title, overview, the control
     // row, the grid strip when shown) and a detail of at least 80 px. By
-    // default it takes half the body, or its natural height with a 160 px
-    // detail when that is more; whatever it has beyond its fixed rows goes
-    // to the detail waveform (ui_deck_panel). The browser keeps at least a
-    // few rows.
-    float fixed = PX(64 + 64 + 140 + 5 * 4 + 12) + (app->decks[0].grid_edit ? PX(32 + 4) : 0);
-    float natural = fixed + PX(160), smallest = fixed + PX(80);
+    // default it takes half the body, or its natural height with a
+    // UI_DETAIL_NATURAL detail when that is more; whatever it has beyond
+    // its fixed rows goes to the detail waveform (ui_deck_panel). The
+    // browser keeps at least a few rows.
+    float fixed = PX(UI_TITLE_ROW_H + UI_OVERVIEW_H + UI_CONTROL_ROW_H + 5 * 4 + 12) +
+                  (app->decks[0].grid_edit ? PX(UI_GRID_STRIP_H + 4) : 0);
+    float natural = fixed + PX(UI_DETAIL_NATURAL), smallest = fixed + PX(80);
     float max_deck = ImMax(body_h - PX(200), smallest);
     float want = ui->deck_split < 0 ? ImMax(natural, floorf(0.5f * body_h))
                                     : floorf(ui->deck_split * body_h);

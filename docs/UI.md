@@ -27,8 +27,11 @@ like draw no title bar either. Default
 ```
 
 The player takes half the body by default, or its natural height (every
-row with a 160 px detail waveform) when that is more, so at 1600×900 it
-keeps its natural height and at 1920×1080 the detail grows. Whatever the
+row with a 204 px detail waveform) when that is more, so at 1600×900 it
+keeps its natural height and at 1920×1080 the detail grows. The natural
+height is what it was with two rows of pads (a 140 px control row and a
+160 px detail): the 44 px the one-row control row saves went to the
+detail waveform. Whatever the
 player has beyond its fixed rows goes to the detail waveform. The deck
 band / browser split and the tree / table split are draggable (ImGui
 splitters) and remembered in the library's `ui.split_player` and
@@ -66,7 +69,7 @@ The full width of the window. Rows, top to bottom:
    `#FF8C00` at 30 %; the active one brighter), the played part dimmed to
    55 %, the playhead (1 px white line, 2 px when playing). Click seeks;
    drag scrubs. The 1-second ticks are not drawn.
-3. **Detail waveform** (160 at the player's natural height; it takes all
+3. **Detail waveform** (204 at the player's natural height; it takes all
    the height the player has beyond its other rows): the detail tag
    (PWV7/PWV3/PWV5) scrolling under a fixed centre playhead (2 px, white, with a small triangle at the
    top and bottom). Shows `zoom_bars` bars (default 12; steps 0.25 0.5 1 2 4 8
@@ -78,51 +81,61 @@ The full width of the window. Rows, top to bottom:
    edges in solid orange. Dragging scrubs (the engine plays grains); the wheel
    zooms. Right-click opens the cue context menu (set memory cue here, set hot
    cue A–H here, delete, colour, name).
-4. **Control row** (height 140). There are no modes or tabs: every group
+4. **Control row** (height 96: the 18 px labels, one 36 px row of pads,
+   16 px, the 24 px strips, 2 px). There are no modes or tabs: every group
    is shown at once, left to right, 16 px apart. Each group but transport
    and tempo has a small dim caps label at its top (10.5 px bold); the pads
-   sit under the labels, and the 24 px strips, the transport row, the last
-   MEMORY button and `MT` share the bottom line.
+   sit under the labels, and the 24 px strips, the transport row, the lower
+   MEMORY buttons and `MT` share the bottom line.
    - **Transport** (120 wide): `CUE` (round, orange ring, lit while a cue
      point exists; pressed = down) and `PLAY/PAUSE` (round, green ring, lit
-     when playing) level with the pads; under them `Q` quantize toggle
+     when playing), 56 across, centred on the pads; under them `Q` quantize toggle
      (green when on) and the beat jump pair `◄ ►` with the size button
      between (`4Beats` default; click cycles Fine/4Beats/8Beats/16Beats/
      8Bars/16Bars/32Bars; right-click picks from a menu). The arrows jump
      on the press and, held, again every 120 ms after 300 ms.
-   - **HOT CUE**: pads A–H in two rows of four, 40 tall. Empty: dark with
+   - **HOT CUE**: pads A–H in one row of eight, 36 tall, 48 to 64 wide by
+     the room (below). Empty: dark with
      the dim letter. Set: filled in the cue's colour (default per slot,
-     `rx_hot_cue_default_rgb`) with the letter (16 px) and the name or
-     position (`1:02.5`, 11 px); a hot loop shows a loop glyph. Press =
+     `rx_hot_cue_default_rgb`) with the letter (15 px) over the name or
+     position (`1:02.5`, 10.5 px); a hot loop shows a loop glyph. Press =
      set/call per the engine rules; shift-click or the pad's `×` (top-right
      corner on hover) deletes; right-click = colour and name. Under them
      the beat jump strip: `−32 −16 −8 −4 +4 +8 +16 +32` beats (with
      `◄`/`►` when they fit), repeating while held like the arrows.
-   - **BEAT LOOP**: `1/4 1/2 1 2 4 8 16 32` beat loops in two rows of four,
-     the pad of the running loop lit orange; under them the loop strip
-     `IN`, `OUT`, `EXIT`/`RELOOP`, `÷2`, `×2`.
-   - **MEMORY**: a column of four buttons 96 wide: `MEMORY` (store the cue
-     point or the active loop, `M`), `◄ CUE` and `CUE ►` (call the
-     previous / next memory cue, `B` / `N`), `DELETE` (the one at the
-     playhead, `X`).
-   - **CUES**: every cue of the track in one list sorted by time, rows 24
-     tall in 13 px: memory cues with their colour dot, hot cues with their
-     lettered badge, then the type (`CUE`, `LOOP 4`), position, bar.beat,
-     the name (a double-click or the row menu's Rename edits it in place;
+   - **BEAT LOOP**: `1/4 1/2 1 2 4 8 16 32` beat loops in one row of eight
+     like the hot cues, the pad of the running loop lit orange; under them
+     the loop strip `IN`, `OUT`, `EXIT`/`RELOOP`, `÷2`, `×2`.
+   - **MEMORY**: a 2×2 block of 96×26 buttons, the upper pair level with
+     the pads, the lower on the strips' line: `MEMORY` (store the cue
+     point or the active loop, `M`), `DELETE` (the memory cue at the
+     playhead, `X`); `◄ CUE` and `CUE ►` (call the previous / next memory
+     cue, `B` / `N`).
+   - **CUES**: every cue of the track in one list sorted by time, rows 22
+     tall in 12.5 px that scroll: memory cues with their colour dot, hot
+     cues with their lettered badge, then the type (`CUE`, `LOOP 4`),
+     position, bar.beat (only when the list is at least 290 wide), the
+     name (a double-click or the row menu's Rename edits it in place;
      a hot cue's goes through the controls as the pad popup's does), an
      `ACTIVE` toggle for memory loops, a `×`. Clicking a row calls the cue
      (a hot cue as its pad: press and release; a memory cue with
      `rx_ctl_memory_call`); right-click: rename, colour, delete. The count
      at the top right reads `3/10 memory · 2/8 hot`. The list takes the
      width the other groups leave, at least 240: the pads are
-     `clamp((room − 16·3 − 96 − 240) / 8 − 4, 60, 84)` wide, where room is
-     the space between transport and tempo. Narrower than that the list
-     shrinks, and the groups are clipped short of tempo, never drawn over
-     it.
-   - **Tempo** (96 wide): vertical slider ±6/±10/±16/WIDE (range button
+     `clamp((room − 16·3 − 196 − 240 − 2·7·4) / 16, 48, 64)` wide, where
+     room is the space between transport and tempo, so they are 64 while
+     the room allows (1920 wide: pads of 64, a list of 328) and shrink
+     first (1600 wide: pads of 49, a list of 248). Once the pads are at 48
+     the list shrinks; with less than 80 for it (below about 1400 wide) it
+     is not drawn and MEMORY narrows into what is left, its labels
+     shrinking. Narrower still, the groups are clipped short of tempo,
+     never drawn over it.
+   - **Tempo** (96 wide, the row's full height, having no caps label):
+     vertical slider ±6/±10/±16/WIDE (range button
      cycles; the range always starts at ±6 %, as a CDJ switched on does:
      it is not kept in the layout, and an older layout's `TempoRange=` is
-     ignored), 0 detent, the percentage readout (`+0.00%`), `RESET`, and
+     ignored), 0 detent, the percentage readout (`+0.00%`) over its
+     `TEMPO` caps, `RESET`, and, on the strips' line,
      `MT` (MASTER TEMPO, key lock: the pitch stays while the tempo
      changes), lit orange while the deck reports `master_tempo`. Its wish
      is kept in the layout (`MasterTempo=`) and given to the player on the
