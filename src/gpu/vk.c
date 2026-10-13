@@ -453,6 +453,18 @@ static int create_device(RXWindow *w)
 
 static int create_frames(RXWindow *w)
 {
+    /* Timestamps only measure (the demo's frame times); a queue without
+     * them just goes without. */
+    uint32_t nb_qf = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties(w->phys, &nb_qf, NULL);
+    VkQueueFamilyProperties *qf = calloc(RX_MAX(nb_qf, 1), sizeof(*qf));
+    if (!qf)
+        return RX_ERROR(ENOMEM);
+    vkGetPhysicalDeviceQueueFamilyProperties(w->phys, &nb_qf, qf);
+    uint32_t ts_bits = w->qfam < nb_qf ? qf[w->qfam].timestampValidBits : 0;
+    free(qf);
+    w->ts_mask = ts_bits >= 64 ? UINT64_MAX : ts_bits ? (UINT64_C(1) << ts_bits) - 1 : 0;
+
     for (int i = 0; i < RX_FRAMES_IN_FLIGHT; i++) {
         RXFrame *f = &w->frames[i];
 
@@ -491,6 +503,17 @@ static int create_frames(RXWindow *w)
         res = vkCreateSemaphore(w->dev, &sinfo, NULL, &f->acquired);
         if (res != VK_SUCCESS)
             return rx_vk_ret2err(res);
+
+        if (w->ts_mask) {
+            VkQueryPoolCreateInfo qinfo = {
+                .sType      = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
+                .queryType  = VK_QUERY_TYPE_TIMESTAMP,
+                .queryCount = 2,
+            };
+            res = vkCreateQueryPool(w->dev, &qinfo, NULL, &f->times);
+            if (res != VK_SUCCESS)
+                return rx_vk_ret2err(res);
+        }
     }
 
     return 0;
@@ -554,6 +577,8 @@ void rx_vk_destroy(RXWindow *w)
 
         for (int i = 0; i < RX_FRAMES_IN_FLIGHT; i++) {
             RXFrame *f = &w->frames[i];
+            if (f->times)
+                vkDestroyQueryPool(w->dev, f->times, NULL);
             if (f->acquired)
                 vkDestroySemaphore(w->dev, f->acquired, NULL);
             if (f->fence)
