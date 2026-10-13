@@ -23,7 +23,9 @@
  *
  *     --ffmpeg                decode with the ffmpeg command line instead of rx_decode
  *     --all                   run the whole rx_analyse (native channels, waveforms
- *                             and key too), as the app does; beat results only
+ *                             and key too), as the app does; the CSV adds the
+ *                             key, its confidence and tuning, and a hash of the
+ *                             packed waveforms
  *     --what MASK             with --all: only these stages (1 beats, 2 key, 4 waveforms)
  *     --mem                   print resident memory after decoding and the peak
  *                             after the analysis (meaningful with -j 1)
@@ -410,6 +412,12 @@ typedef struct Result {
     double ms;                  /* CPU time of the front end and the decisions */
     double dec_ms, fe_ms, beats_ms;     /* wall time of decoding, the front end, the decisions */
     bool   cached;              /* decoded audio and front end from --cache */
+    /* --all: the key and the waveforms (FNV-1a of rx_waveforms_pack's blob) */
+    bool   has_key, has_waves;
+    char   key[RX_KEY_MAX];
+    double key_confidence, key_tuning;
+    int    wave_columns;
+    uint64_t wave_hash;
     double tag_bpm;
     double closest;             /* closest two beats of the expanded grid, in periods */
     /* diagnostics */
@@ -742,7 +750,24 @@ static int analyse_all(Job *job, Result *r, RXBeatResult *br)
                peak_mb() - rss0, rx_path_base(r->path));
     if (ret < 0) {
         fprintf(stderr, "%s: analysis failed (%d)\n", r->path, ret);
+        rx_analysis_free(&an);
         return -1;
+    }
+    if (an.done & RX_ANALYSE_KEY) {
+        r->has_key = true;
+        snprintf(r->key, sizeof(r->key), "%s", an.key.key);
+        r->key_confidence = an.key.confidence;
+        r->key_tuning = an.key.tuning_cents;
+    }
+    uint8_t *blob = NULL;
+    size_t size = 0;
+    if ((an.done & RX_ANALYSE_WAVES) && rx_waveforms_pack(&an.waves, &blob, &size) >= 0) {
+        r->has_waves = true;
+        r->wave_columns = an.waves.nb_detail;
+        r->wave_hash = 0xcbf29ce484222325ULL;
+        for (size_t i = 0; i < size; i++)
+            r->wave_hash = (r->wave_hash ^ blob[i]) * 0x100000001b3ULL;
+        free(blob);
     }
     *br = an.beats;
     an.beats = (RXBeatResult) { 0 };
@@ -995,7 +1020,8 @@ static void write_csv(const char *fn, const Result *res, int nb)
                "start_kind,audible,floor_db,loud_db,rise,first_beat,first_number,first_down,"
                "cue,start_section,start_kick,start_struct,start_hit,start_half_beat,start_off,"
                "start_t0,start_period,start_scores,jump_db,start_kick_ratio,dynamic_beats,"
-               "dynamic_bpm_lo,dynamic_bpm_hi\n");
+               "dynamic_bpm_lo,dynamic_bpm_hi,key,key_confidence,key_tuning,wave_columns,"
+               "wave_hash\n");
     for (int i = 0; i < nb; i++) {
         const Result *r = &res[i];
         if (!r->ok)
@@ -1014,8 +1040,17 @@ static void write_csv(const char *fn, const Result *res, int nb)
                 r->start_t0, r->start_period);
         for (int k = 0; k < 8; k++)
             fprintf(f, "%s%.4f", k ? ";" : "", r->start_scores[k]);
-        fprintf(f, ",%.1f,%.3f,%d,%.3f,%.3f\n", r->jump_db, r->start_kick_ratio, r->nb_dynamic,
+        fprintf(f, ",%.1f,%.3f,%d,%.3f,%.3f,", r->jump_db, r->start_kick_ratio, r->nb_dynamic,
                 r->bpm_lo, r->bpm_hi);
+        /* To the last bit: a change to the key or the waveforms shows */
+        if (r->has_key)
+            fprintf(f, "%s,%.17g,%.17g", r->key, r->key_confidence, r->key_tuning);
+        else
+            fputs(",,", f);
+        if (r->has_waves)
+            fprintf(f, ",%d,%016llx\n", r->wave_columns, (unsigned long long)r->wave_hash);
+        else
+            fputs(",,\n", f);
     }
     fclose(f);
 }
