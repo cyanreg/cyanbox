@@ -151,7 +151,10 @@ static int open_beneath(int dir, const char *rel, int flags, mode_t mode)
     int fd = openat(at, p, flags | O_NOFOLLOW | O_CLOEXEC, mode);
     ret = fd < 0 ? RX_ERROR(errno) : 0;
     struct stat st;
-    if (ret >= 0 && fstat(fd, &st) < 0)
+    /* A link opened as a directory is refused as openat2 refuses it. */
+    if (ret == RX_ERROR(ENOTDIR) && !fstatat(at, p, &st, AT_SYMLINK_NOFOLLOW) && S_ISLNK(st.st_mode))
+        ret = RX_ERROR(ELOOP);
+    else if (ret >= 0 && fstat(fd, &st) < 0)
         ret = RX_ERROR(errno);
     else if (ret >= 0 && st.st_dev != root.st_dev)
         ret = RX_ERROR(EXDEV);
