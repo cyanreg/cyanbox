@@ -19,7 +19,14 @@
  *    layer.
  *  - One command buffer, recorded and submitted by the one thread using
  *    the model; a dispatch is followed by a global barrier only where the
- *    caller says one depends on another (ml_gpu_barrier).
+ *    caller says one depends on another (ml_gpu_barrier). Every submission
+ *    ends with one more, to the host's reads and to the next submission's
+ *    dispatches and copies: ml_gpu_run waits for the timeline, which orders
+ *    the work but makes none of its writes visible.
+ *  - A wait that fails (a minute without an answer, or the device lost)
+ *    waits for the device to go idle, so that nothing the submission uses
+ *    is freed or recorded again under it, and the context is not used
+ *    again: every later run fails with -EIO.
  *  - No descriptors: every shader takes its buffers as device addresses in
  *    its push constants, so one pipeline layout serves all. */
 
@@ -817,12 +824,51 @@ static void read_times(MLGpu *g)
     g->nb_times = 0;
 }
 
-int ml_gpu_run(MLGpu *g)
+void ml_gpu_discard(MLGpu *g)
 {
     if (!g->recording)
-        return 0;
+        return;
     vkEndCommandBuffer(g->cmd);
+    vkResetCommandBuffer(g->cmd, 0);
     g->recording = false;
+    g->nb_times = 0;
+}
+
+int ml_gpu_run(MLGpu *g)
+{
+    if (g->lost) {
+        ml_gpu_discard(g);
+        return RX_ERROR(EIO);
+    }
+    if (!g->recording)
+        return 0;
+
+    VkMemoryBarrier2 mb = {
+        .sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
+        .srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_COPY_BIT |
+                         VK_PIPELINE_STAGE_2_CLEAR_BIT,
+        .srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT,
+        .dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_COPY_BIT |
+                         VK_PIPELINE_STAGE_2_CLEAR_BIT | VK_PIPELINE_STAGE_2_HOST_BIT,
+        .dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                         VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
+                         VK_ACCESS_2_TRANSFER_READ_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT |
+                         VK_ACCESS_2_HOST_READ_BIT,
+    };
+    VkDependencyInfo dep = {
+        .sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+        .memoryBarrierCount = 1,
+        .pMemoryBarriers    = &mb,
+    };
+    vkCmdPipelineBarrier2(g->cmd, &dep);
+    VkResult res = vkEndCommandBuffer(g->cmd);
+    g->recording = false;
+    if (res != VK_SUCCESS) {
+        rx_warn("ml: recording failed: %s", vk_strerror(res));
+        vkResetCommandBuffer(g->cmd, 0);
+        g->nb_times = 0;
+        return ret2err(res);
+    }
 
     uint64_t v = g->submitted + 1;
     VkSemaphoreSubmitInfo signal = {
@@ -842,10 +888,11 @@ int ml_gpu_run(MLGpu *g)
         .signalSemaphoreInfoCount = 1,
         .pSignalSemaphoreInfos    = &signal,
     };
-    VkResult res = vkQueueSubmit2(g->queue, 1, &info, VK_NULL_HANDLE);
+    res = vkQueueSubmit2(g->queue, 1, &info, VK_NULL_HANDLE);
     if (res != VK_SUCCESS) {
         rx_warn("ml: submission failed: %s", vk_strerror(res));
         vkResetCommandBuffer(g->cmd, 0);
+        g->nb_times = 0;
         return ret2err(res);
     }
     g->submitted = v;
@@ -860,7 +907,15 @@ int ml_gpu_run(MLGpu *g)
     };
     res = vkWaitSemaphores(g->dev, &winfo, UINT64_C(60000000000));
     if (res != VK_SUCCESS) {
-        rx_warn("ml: waiting for the GPU failed: %s", vk_strerror(res));
+        /* The command buffer may still be running, or never end: wait
+         * until the device is idle (a hung GPU is reset by its driver,
+         * and the wait ends with the device lost) before its buffers can
+         * be freed, and use the context no more. */
+        rx_err("ml: waiting for the GPU failed: %s; the model stops", vk_strerror(res));
+        vkDeviceWaitIdle(g->dev);
+        g->lost = true;
+        vkResetCommandBuffer(g->cmd, 0);
+        g->nb_times = 0;
         return ret2err(res);
     }
     read_times(g);

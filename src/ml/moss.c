@@ -1098,8 +1098,10 @@ int rx_ml_listen(RXML *ml, const float *pcm, int64_t n, RXCancel *cancel)
         return RX_ERROR(E2BIG);
 
     int nb_audio = encode(ml, pcm, n, cancel);
-    if (nb_audio < 0)
+    if (nb_audio < 0) {
+        ml_gpu_discard(&ml->g);
         return nb_audio;
+    }
 
     Tokens t = { 0 };
     int ret;
@@ -1117,6 +1119,8 @@ int rx_ml_listen(RXML *ml, const float *pcm, int64_t n, RXCancel *cancel)
 
 end:
     tok_free(&t);
+    if (ret < 0)
+        ml_gpu_discard(&ml->g);
     ml->listen_ms = (rx_time_us() - t0) * 1e-3;
     ml->ask_ms = 0.0;
     return ret;
@@ -1189,6 +1193,8 @@ int rx_ml_ask(RXML *ml, const char *question, int max_tokens, char **answer)
 end:
     free(out);
     tok_free(&t);
+    if (ret < 0)
+        ml_gpu_discard(&ml->g);
     ml->ask_ms += (rx_time_us() - t0) * 1e-3;
     return ret;
 }
@@ -1249,6 +1255,8 @@ int rx_ml_choose(RXML *ml, const char *question, const char *prefix,
 end:
     free(ids);
     tok_free(&t);
+    if (ret < 0)
+        ml_gpu_discard(&ml->g);
     ml->ask_ms += (rx_time_us() - t0) * 1e-3;
     return ret;
 }
@@ -1327,6 +1335,8 @@ int rx_ml_rank(RXML *ml, const char *question, const char *prefix,
 end:
     free(first);
     tok_free(&t);
+    if (ret < 0)
+        ml_gpu_discard(&ml->g);
     ml->ask_ms += (rx_time_us() - t0) * 1e-3;
     return ret;
 }

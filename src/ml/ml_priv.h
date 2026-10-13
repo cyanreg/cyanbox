@@ -94,6 +94,7 @@ typedef struct MLGpu {
     VkCommandPool pool;
     VkCommandBuffer cmd;
     bool recording;
+    bool lost;                  /* a wait failed: nothing runs any more (-EIO) */
 
     /* Per-kernel GPU time, when RXBOX_ML_PROFILE=1: a timestamp after
      * every dispatch, read back at each wait. */
@@ -114,8 +115,10 @@ int  ml_buf_invalidate(MLGpu *g, MLBuf *b);
 int  ml_buf_flush(MLGpu *g, MLBuf *b, VkDeviceSize size);
 
 /* Recording: dispatches go into the one command buffer, begun on first
- * use; ml_gpu_run submits it and waits. Between dispatches that depend on
- * each other, ml_gpu_barrier. */
+ * use; ml_gpu_run submits it and waits, after which what it wrote is
+ * visible to the host and to later submissions. Between dispatches that
+ * depend on each other, ml_gpu_barrier. ml_gpu_discard drops what was
+ * recorded and not run (an error part way). */
 void ml_gpu_dispatch(MLGpu *g, enum MLKernel k, const void *push, size_t size,
                      uint32_t x, uint32_t y, uint32_t z);
 void ml_gpu_barrier(MLGpu *g);
@@ -123,6 +126,7 @@ void ml_gpu_copy(MLGpu *g, const MLBuf *src, VkDeviceSize src_off, const MLBuf *
                  VkDeviceSize dst_off, VkDeviceSize size);
 void ml_gpu_fill(MLGpu *g, const MLBuf *dst, VkDeviceSize off, VkDeviceSize size, uint32_t v);
 int  ml_gpu_run(MLGpu *g);
+void ml_gpu_discard(MLGpu *g);
 void ml_gpu_profile_print(MLGpu *g);
 
 /* ----------------------------------------------------------------- GGUF */
