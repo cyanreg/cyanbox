@@ -95,7 +95,6 @@ typedef struct RXApp {
 
     /* Interface preferences (persisted in the library's ui.* settings) */
     int        wave_palette;        /* 0 3band, 1 blue, 2 rgb */
-    bool       show_demo;           /* ImGui demo window (debug) */
     bool       dirty;               /* the next frame must be drawn */
     bool       quit;
 

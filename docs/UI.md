@@ -195,7 +195,7 @@ browser: a simple directory lister with a path field, since there is no
 native dialog), Export to USB…, Sync from USB…, Inspect USB…, Rescan
 missing files, Quit),
 **View** (waveform colour 3Band/Blue/RGB, key notation, detail waveform
-centred/half, grid tools, ImGui demo), **Analysis** (analyse selection, analyse all
+centred/half, grid tools), **Analysis** (analyse selection, analyse all
 unanalysed, re-analyse selection, analysis settings…), **Help** (about,
 keyboard map).
 

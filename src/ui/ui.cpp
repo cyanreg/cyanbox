@@ -15,7 +15,7 @@
 // RXBOX_UI_AUTOLOAD=<id> loads that track on the first frame and starts it
 // once it is loaded (RXBOX_UI_AUTOLOAD_AT=<seconds>: from there);
 // RXBOX_UI_SHOW=<list> opens panels and dialogs on the first frame (grid,
-// half, export, sync, inspect, analysis, add, keys, about, demo);
+// half, export, sync, inspect, analysis, add, keys, about);
 // RXBOX_UI_SCREENSHOT=<png> saves frame 100 (RXBOX_UI_SCREENSHOT_FRAME=<n>:
 // frame n) through rx_window_screenshot_next(), which writes it once it is
 // presented, and the run goes on; a run that ends before that frame
@@ -745,8 +745,6 @@ static void menu_bar(UiState *ui)
             app->decks[0].grid_edit = !app->decks[0].grid_edit;
             layout_changed(ui);
         }
-        ImGui::Separator();
-        ImGui::MenuItem("ImGui demo", nullptr, &app->show_demo);
         ImGui::EndMenu();
     }
 
@@ -1119,8 +1117,6 @@ static void autoshow(UiState *ui)
         ui->dlg_keys = true;
     if (shown(ui, "about"))
         ui->dlg_about = true;
-    if (shown(ui, "demo"))
-        app->show_demo = true;
 }
 
 static void autoload_tick(UiState *ui)
@@ -1271,8 +1267,6 @@ bool rx_ui_frame(RXApp *app)
     ImGui::End();
 
     ui_dialogs(ui);
-    if (app->show_demo)
-        ImGui::ShowDemoWindow(&app->show_demo);
     if (io.WantSaveIniSettings)
         save_layout(ui);
 
