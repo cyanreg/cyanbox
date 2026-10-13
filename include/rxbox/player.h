@@ -89,7 +89,11 @@ void rx_deck_seek(RXPlayer *p, int deck, double seconds);
 void rx_deck_play_from(RXPlayer *p, int deck, double seconds);
 /* 1.0 = original speed; the tempo slider's ratio. */
 void rx_deck_set_tempo(RXPlayer *p, int deck, double ratio);
-/* Reserved: pitch-preserving tempo. v1 ignores it and reports false. */
+/* MASTER TEMPO: the deck keeps its pitch while the tempo changes (the
+ * varispeed output is shifted back by 1/speed with Rubber Band's live
+ * shifter on the real-time thread). A property of the deck that survives
+ * loads. Returns false when the player has no shifter (creation failed),
+ * in which case the deck stays as a CDJ with MASTER TEMPO off. */
 bool rx_deck_set_master_tempo(RXPlayer *p, int deck, bool on);
 /* Loop between in and out seconds. `enabled` starts looping right away. */
 void rx_deck_set_loop(RXPlayer *p, int deck, double in, double out, bool enabled);
@@ -112,6 +116,7 @@ typedef struct RXDeckState {
     double position;        /* seconds on the track's timeline */
     double duration;
     double tempo;           /* ratio */
+    bool   master_tempo;    /* pitch kept while the tempo changes */
     bool   loop_enabled;
     double loop_in, loop_out;   /* < 0 when no loop is set */
     float  level_l, level_r;    /* recent peak, 0..1 */
