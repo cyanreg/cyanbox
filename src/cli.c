@@ -1890,7 +1890,10 @@ static int cmd_pull(Cli *cli, int argc, char **argv)
     };
     int ret = rx_pull(&cli->app.lib, stick, progress_cb, &ctx);
     progress_end_line(&ctx);
-    if (ret < 0) {
+    if (ret == RX_ERROR(ENOENT)) {
+        code = fail("%s holds no export.pdb, exportLibrary.db or My Settings: not a stick, or not "
+                    "mounted there", stick);
+    } else if (ret < 0) {
         code = fail("cannot pull cues from %s: %s", stick, strerror(-ret));
     } else {
         printf("updated %d track%s from %s\n", ret, ret == 1 ? "" : "s", stick);
@@ -1977,7 +1980,11 @@ static int cmd_sync(Cli *cli, int argc, char **argv)
     RXSyncItem *items = NULL;
     int nb = 0;
     int ret = rx_stick_read(lib, stick, &state);
-    if (ret < 0) {
+    if (ret == RX_ERROR(ENOENT)) {
+        code = fail("%s holds no export.pdb, exportLibrary.db or My Settings: not a stick, or not "
+                    "mounted there", stick);
+        goto end;
+    } else if (ret < 0) {
         code = fail("cannot read %s: %s", stick, strerror(-ret));
         goto end;
     }

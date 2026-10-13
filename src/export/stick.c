@@ -1199,6 +1199,14 @@ int rx_stick_read(const RXLibrary *lib, const char *mount, RXStickState *out)
         rx_kv_free(kv, nk);
     }
 
+    /* Neither database nor a settings file: not a stick (a mistyped mount
+     * point, or a stick not mounted yet), which must not pass for one
+     * with nothing to sync. */
+    if (!out->has_pdb && !out->has_onelibrary && !p->nb_files) {
+        ret = RX_ERROR(ENOENT);
+        goto fail;
+    }
+
     out->tracks = states.data;
     out->nb_track_states = (int)states.nb;
     states.data = NULL;

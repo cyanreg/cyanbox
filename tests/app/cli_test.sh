@@ -124,6 +124,15 @@ cat "$dir/export.out"
 cat "$dir/inspect.out"
 grep -q "no problems" "$dir/inspect.out" || fail "inspect found problems"
 
+# sync and pull of a directory that holds no stick (a mistyped mount
+# point) fail; they do not report a stick with nothing to sync.
+run sync "$dir/stick" | grep -q "^nothing to sync" || fail "sync after the export"
+for c in sync pull; do
+    run "$c" "$dir/dry" > "$dir/nostick.out" 2>&1 && fail "$c of a directory that is not a stick"
+    grep -q "not a stick" "$dir/nostick.out" || { cat "$dir/nostick.out"; fail "$c does not say why"; }
+done
+run sync --apply "$dir/dry" > /dev/null 2>&1 && fail "sync --apply of a directory that is not a stick"
+
 run settings | grep -q "quantize" || fail "settings"
 run check > "$dir/check.out" || { cat "$dir/check.out"; fail "check"; }
 grep -q "^OK" "$dir/check.out" || fail "check"

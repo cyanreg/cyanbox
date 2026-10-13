@@ -11,6 +11,8 @@
  *    in case alone on a case-sensitive staging directory;
  *  - leave what a cancelled run wrote unsynced, or call a run cancelled
  *    during its last sync cancelled;
+ *  - take a directory with no database or settings file for a stick with
+ *    nothing to sync;
  *  - start copying when a database cannot be built (a name too long for
  *    export.pdb is found before anything is written);
  *  - leave a sync record describing databases other than those written;
@@ -868,6 +870,46 @@ static void cancel_syncs(void)
     free(b);
 }
 
+/* A directory with neither database nor settings file is no stick: the
+ * sync says so instead of finding nothing to sync (a mistyped mount
+ * point). One with only My Settings (saved on a player onto a blank
+ * stick) is read; the export writes to an empty one as to a new stick. */
+static void not_a_stick(void)
+{
+    RXLibrary lib = { 0 };
+    char *libdir = at("lib-none"), *dir = at("not-a-stick"), *song = at("music-none/song.wav");
+    char *ms = at("not-a-stick/PIONEER/MYSETTING.DAT");
+    rx_mkdir_p(dir);
+    CHECK_EQ(rx_library_open(&lib, libdir), 0);
+    add_track(&lib, song, "Artist", -1);
+    RXStickState s;
+    CHECK_EQ(rx_stick_read(&lib, dir, &s), RX_ERROR(ENOENT));
+    CHECK_EQ(rx_pull(&lib, dir, NULL, NULL), RX_ERROR(ENOENT));
+
+    RXKv kv[1] = { { "tempo_range", "16" } };
+    uint8_t *b;
+    size_t n;
+    CHECK_EQ(rx_settings_encode("MYSETTING.DAT", kv, 1, &b, &n), 0);
+    char *pio = at("not-a-stick/PIONEER");
+    rx_mkdir_p(pio);
+    free(pio);
+    CHECK_EQ(rx_file_write_atomic(ms, b, n), 0);
+    free(b);
+    CHECK_EQ(count_kind(&lib, dir, RX_SYNC_SETTING, NULL), 1);
+    CHECK_EQ(unlink(ms), 0);
+
+    Stages st = { 0 };
+    CHECK_EQ(export_to(&lib, dir, false, &st), 0);
+    CHECK_EQ(st.copy, 1);
+    CHECK_EQ(rx_stick_read(&lib, dir, &s), 0);
+    rx_stick_state_free(&s);
+    rx_library_close(&lib);
+    free(libdir);
+    free(dir);
+    free(song);
+    free(ms);
+}
+
 int main(void)
 {
     const char *base = getenv("RX_TEST_DIR");
@@ -886,6 +928,7 @@ int main(void)
     links_inside();
     case_names();
     cancel_syncs();
+    not_a_stick();
 
     if (!failures)
         sh("rm -rf '%s'", root);

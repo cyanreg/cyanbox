@@ -156,6 +156,8 @@ typedef struct RXStickState {
     struct RXStickPriv *priv;         /* the reader's own state for the diff (the export's sync record, history lists) */
 } RXStickState;
 
+/* -ENOENT when `mount` holds neither database nor a My Settings file: not
+ * a stick (a mistyped mount point), never a stick with nothing to sync. */
 int  rx_stick_read(const RXLibrary *lib, const char *mount, RXStickState *out);
 void rx_stick_state_free(RXStickState *s);
 int  rx_stick_diff(const RXLibrary *lib, const RXStickState *s, RXSyncItem **items, int *nb);

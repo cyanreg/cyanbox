@@ -1098,10 +1098,13 @@ static int checks(Ctx *c, const RXPlan *plan)
 
     /* What a player left on the stick and the library does not have yet
      * would be lost: export.pdb and exportLibrary.db are rebuilt, the ANLZ
-     * cue lists rewritten. */
+     * cue lists rewritten. A stick with no database and no settings file
+     * (a new one) has nothing to lose. */
     RXStickState s;
     r = rx_stick_read(c->lib, c->dest, &s);
-    if (r >= 0) {
+    if (r == RX_ERROR(ENOENT)) {
+        r = 0;
+    } else if (r >= 0) {
         RXSyncItem *items;
         int nb;
         if ((r = rx_stick_diff(c->lib, &s, &items, &nb)) >= 0) {
