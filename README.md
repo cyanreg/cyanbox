@@ -150,6 +150,13 @@ line `rxbox export STICK`.
   what would be copied and deleted and writes nothing.
 - `--compat` (or the dialog's checkbox) transcodes AAC and hi-res files to
   16-bit/44.1 kHz FLAC on the stick.
+- The players' My Settings (quantize, auto cue level, tempo range, the
+  mixer's fader curves, the waveform colour...) go on the stick for the
+  sections the library has values for; the players apply them when you LOAD
+  My Settings. `rxbox settings` lists the names and values and
+  `rxbox config player.NAME VALUE` sets one; in the interface, File → Player
+  settings (`Ctrl+,`) shows every one of them in Player, Mixer and Device
+  tabs and changes them in the library at once.
 
 ## Syncing after a gig
 

@@ -250,8 +250,8 @@ GPU name.
 
 A menu bar at the very top: **File** (Add files/folders… (ImGui file
 browser: a simple directory lister with a path field, since there is no
-native dialog), Export to USB…, Sync from USB…, Inspect USB…, Rescan
-missing files, Quit),
+native dialog), Export to USB…, Sync from USB…, Inspect USB…, Player
+settings… (`Ctrl+,`), Rescan missing files, Quit),
 **View** (waveform colour 3Band/Blue/RGB, key notation, Traffic Light
 off/same key/related 1–3, detail waveform centred/half, grid tools),
 **Analysis** (analyse selection, analyse all
@@ -263,13 +263,38 @@ Analysis), with the usual progress in the status bar.
 - **Analysis settings**: what to analyse (BPM/grid, key), BPM range presets
   (auto (default), 70–180, 98–195, 118–236, 58–115), integer snap, allow
   tempo sections, add memory cue at first downbeat.
+- **Player settings**: rekordbox's My Settings, which the export writes to
+  the stick for the players to LOAD under their own settings (the device
+  ones apply as the player reads the stick). Three tabs grouped as
+  `rxbox settings` groups them: Player (MYSETTING.DAT and MYSETTING2.DAT),
+  Mixer (DJMMYSETTING.DAT) and Device (DEVSETTING.DAT and the background
+  colour the databases carry). Every field `rx_settings_list` gives, so one
+  added to settings.c appears by itself, in two columns of a label and a
+  combo, the first half of a tab down the left; every tab is as tall as the
+  Player tab's 15 rows, so the dialog keeps its size. Names and values are
+  written out (`lcd_brightness` is LCD Brightness, `touch_release` Touch &
+  Release, `steep_top` Steep top, on/off On/Off), with the units the
+  listing leaves out (-36 dB, ±6 %, WIDE, 16 beats, Type 1); the Sync
+  dialog's setting rows use the same words. A field not at its default has
+  its label in orange; hovering it shows its key (`player.quantize`) and
+  default; the combo's list marks the default. The values are the
+  library's (`player.<name>`, `mixer.<name>`, `device.<name>`, the field's
+  default when there is none): a pick is saved at once, in RXConfig and the
+  setting table, as `rxbox config` would write it, and the status bar says
+  so (`Player setting Quantize: Off`). A value the export would refuse
+  (`rxbox config` takes anything) shows in red. Reset to defaults sets the
+  tab's fields that are not at their defaults back to them; their rows
+  stay, holding the defaults, so the next export replaces the stick's files
+  rather than leaving them. The dialog keeps nothing of its own.
 - **Export**: destination path (with a list of mounted removable volumes
   read from /proc/mounts under /run/media and /media), whole library or
   selected playlists, prune, compatibility transcode, then a progress view
   with the stage, item, bar and a log; cancel; the result summary.
 - **Sync from USB**: pick the mount, read the stick, then a table of the
   differences the player left (hot cues set/cleared, memory cues added/
-  removed, plays from the history, settings changed), one checkbox per row
+  removed, plays from the history, My Settings changed, named as Player
+  settings names them: `Mixer settings`, `Channel Fader Curve: Linear ->
+  Steep top`), one checkbox per row
   (all accepted by default), Apply, and a summary.
 - **Keyboard map** (read-only list).
 - **About**.
@@ -297,6 +322,7 @@ rekordbox's Export preset for player 1 (no shifted second-player set):
 | Ctrl+G | Toggle grid tools |
 | A S D F G H J K L ; | Memory cue 1–10 |
 | Ctrl+F | Search |
+| Ctrl+, | Player settings (the My Settings the export writes) |
 | ↑ ↓ | Move the focus in the track table; after a click on a cue, move the cue list's selection |
 | Enter | Load the focused track |
 | Delete | Remove the selected tracks from the playlist; after a click on a cue, delete that cue (a hot cue or a memory cue) instead |
