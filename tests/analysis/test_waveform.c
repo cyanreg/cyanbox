@@ -3,9 +3,9 @@
 /* The waveform encoders against dj's: every tag byte of rx_waveforms_compute
  * is compared with the reference bytes gen_fixtures.py wrote for the same
  * float32 samples (tests/data/analysis), plus the column count rule, the
- * firmware minimums, the three-band level distributions, and the packed
- * form (the library's blob and the .rxw file): round trip, damaged data
- * refused.
+ * firmware minimums, the three-band rules, and the packed form (the
+ * library's blob and the .rxw file): round trip, damaged data refused,
+ * older versions stale.
  *
  * PWAV, PWV2, PWV3, PWV4, PWV5 and PWVC are dj.analysis.waveform.compute's
  * bytes, with two deliberate differences (docs/OVERVIEW.md section 3,
@@ -14,20 +14,21 @@
  * writes lower values. The same two clamps are applied to dj's bytes before
  * comparing, and the number of bytes they changed is printed.
  *
- * PWV6 and PWV7 in the fixtures are NOT dj's: they are rxbox's
- * per-band recalibration (src/analysis/waveform.c has the
- * measurements against rekordbox's own files), computed by gen_fixtures.py's
- * three_band() from dj's envelopes and gains. test_three_band() checks the
- * property the recalibration is for without fixtures: on a loud, bright,
- * bass-led master the high and mid bands reach past the low band in few
- * overview columns, as in rekordbox's files, where dj's rule had them do so
- * in most.
+ * PWV6 and PWV7 in the fixtures are NOT dj's: they are rbxport's rules
+ * (src/analysis/waveform.c), computed by gen_fixtures.py's three_band() on
+ * whole numpy arrays, which the streaming C must match byte for byte. The
+ * rules themselves are checked without fixtures: test_crossovers() on pure
+ * tones against the filters' exact responses, test_overview_level() the
+ * overview's normalisation to the track's level, test_peak() the detail's
+ * peak per column.
  *
  * With arguments, `test_waveform SIGNAL.f32 TAGS` compares one pair (the
  * real-track check: gen_fixtures.py --real writes those). */
 
+#include <complex.h>
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <unistd.h>
 
 #include "rxbox/analysis.h"
@@ -211,9 +212,8 @@ static double kick(double t)
  * reese (harmonics 3..24 of 55 Hz, slowly swelling) filling the mid band,
  * kicks on 1 and 3, a snare body on 2 and 4, sixteenth hats made of twenty
  * inharmonic partials from 3 to 15 kHz over a faint wash, all saturated
- * with tanh to a hot, dense level. Its balance is that of the loud drum &
- * bass track of the acceptance list under dj's rule: high >= low in most
- * PWV6 columns (0.75 here, 0.97 there), mid >= low in half (0.55, 0.81). */
+ * with tanh to a hot, dense level: something in every band, all the time,
+ * at different rhythms. */
 static float *loud_master(int rate, double secs, int64_t *nb)
 {
     static const double snare[5] = { 180, 330, 670, 1230, 1870 };
@@ -247,77 +247,201 @@ static float *loud_master(int rate, double secs, int64_t *nb)
     return x;
 }
 
-static void band_means(const uint8_t *v, int64_t n, double mean[3])
+static float *tones(int rate, const double *freq, int nb_freq, double secs, double amp,
+                    int64_t *nb)
 {
-    for (int j = 0; j < 3; j++) {
-        double sum = 0.0;
-        for (int64_t i = 0; i < n; i++)
-            sum += v[i * 3 + j];
-        mean[j] = n ? sum / n : 0.0;
-    }
+    int64_t seg = (int64_t)(secs * rate), n = seg * nb_freq;
+    float *x = malloc(sizeof(*x) * n);
+    if (!x)
+        return NULL;
+    for (int s = 0; s < nb_freq; s++)
+        for (int64_t i = 0; i < seg; i++)
+            x[s * seg + i] = (float)(amp * sin(2 * M_PI * freq[s] * (double)i / rate));
+    *nb = n;
+    return x;
 }
 
-/* The fraction of PWV6 columns where band `j` reaches as far as the low
- * band: drawn over it, that column shows no blue. */
-static double reach_fraction(const uint8_t *pwv6, int j)
+/* rbxport's one-pole low-pass at fc, (1 - c) / (1 - c e^-jw) with
+ * c = exp(-2 pi fc / rate), at f Hz. */
+static double complex onepole(double fc, double f, int rate)
 {
-    int nb = 0;
-    for (int k = 0; k < RX_WAVE_PWV6_COLUMNS; k++)
-        nb += pwv6[k * 3 + j] >= pwv6[k * 3];
-    return (double)nb / RX_WAVE_PWV6_COLUMNS;
+    double c = exp(-2 * M_PI * fc / rate);
+    return (1 - c) / (1 - c * cexp(-I * 2 * M_PI * f / rate));
 }
 
-/* The three-band levels, statistically, without fixtures. rekordbox's own
- * files (the two demo tracks, see src/analysis/waveform.c) have high >= low
- * in 28-32 % of PWV6 columns and mid >= low in 25-32 %, a high band whose
- * mean is 0.55..0.66 of the low band's in PWV6 and ~0.13 in PWV7. On the
- * loud master dj's rule gives 0.75 and 0.55 of the columns and 1.38 and
- * 0.39 of the mean (an overview cream almost everywhere), rxbox's 0.05,
- * 0.04, 0.53 and 0.22; the bounds sit between. The 60 Hz / 5 kHz signal
- * checks each band stays where it belongs. */
-static int test_three_band(void)
+/* The PWV7 bytes of a steady tone of amplitude `amp` at f Hz: the low band
+ * is the 200 Hz low-pass, the mid what lies between it and the 2 kHz one,
+ * the high what lies above; each band's peak to 0..255 truncated, halved. */
+static void tone_pwv7(double f, double amp, int rate, unsigned out[3])
 {
-    int fails = 0;
+    double complex lo = onepole(200, f, rate), below = onepole(2000, f, rate);
+    double level[3] = { cabs(lo), cabs(below - lo), cabs(1 - below) };
+    for (int j = 0; j < 3; j++)
+        out[j] = (unsigned)(255 * fmin(amp * level[j], 1.0)) >> 1;
+}
+
+/* The crossovers on pure tones: 100 Hz, 1 kHz and 8 kHz, 2 s each.
+ *
+ * In the detail every band takes the tone's level through its filters,
+ * which are one-pole and so leaky: a tone shows most in its own band, but a
+ * 1 kHz tone reaches the high band at about half its mid (the levels are
+ * in the output). The bytes are checked against the filters' exact
+ * responses: a sampled peak can only fall short of the true one, by a byte
+ * or two at 8 kHz.
+ *
+ * In the overview the mid and high bands are Butterworth, and every band is
+ * normalised over the whole track, so in each tone's stretch its own band
+ * is at least three times either other one, and the farthest band (low at
+ * 8 kHz, high at 100 Hz) about nothing. */
+static int test_crossovers(void)
+{
+    static const double freq[3] = { 100, 1000, 8000 };
+    int fails = 0, rate = 44100;
     int64_t nb;
-    float *x = loud_master(44100, 20.0, &nb);
+    float *x = tones(rate, freq, 3, 2.0, 0.5, &nb);
     if (!x)
         return 1;
     RXWaveforms w;
-    CHECK(rx_waveforms_compute(x, nb, 44100, &w) == 0);
+    CHECK(rx_waveforms_compute(x, nb, rate, &w) == 0 && w.nb_detail == 900);
     free(x);
-    double m6[3], m7[3];
-    band_means(w.pwv6, RX_WAVE_PWV6_COLUMNS, m6);
-    band_means(w.pwv7, w.nb_detail, m7);
-    double hl = reach_fraction(w.pwv6, 2), ml = reach_fraction(w.pwv6, 1);
-    printf("three-band on the loud master: PWV6 means %.1f %.1f %.1f (high/low %.2f), "
-           "high >= low in %.2f, mid >= low in %.2f of the columns; "
-           "PWV7 means %.1f %.1f %.1f (high/low %.2f)\n", m6[0], m6[1], m6[2], m6[2] / m6[0],
-           hl, ml, m7[0], m7[1], m7[2], m7[2] / m7[0]);
-    CHECK(hl < 0.4);
-    CHECK(ml < 0.4);
-    CHECK(m6[2] < 0.8 * m6[0]);
-    CHECK(m7[2] < 0.3 * m7[0]);
-    /* rekordbox's PWV6 stays below ~100 on real music (rbxport, 80 tracks) */
-    for (int i = 0; i < RX_WAVE_PWV6_COLUMNS * 3; i++)
-        CHECK(w.pwv6[i] <= 100);
-    rx_waveforms_free(&w);
-
-    /* 60 Hz then 5 kHz: no high band in the first half; in the second, the
-     * low band fading as its envelope releases (0.97 a column), then gone */
-    if (signal_load(DATA_DIR "cols48k.f32", &x, &nb) < 0)
+    if (w.nb_detail != 900) {
+        rx_waveforms_free(&w);
         return fails + 1;
-    CHECK(rx_waveforms_compute(x, nb, 48000, &w) == 0);
-    free(x);
-    for (int k = 20; k < 580; k++) {
-        CHECK(w.pwv6[k * 3 + 2] == 0);
-        CHECK(w.pwv6[k * 3 + 0] > 20);
-        CHECK(w.pwv6[(600 + k) * 3 + 2] > 20);
-        if (k >= 100)
-            CHECK(4 * w.pwv6[(600 + k) * 3 + 0] < w.pwv6[(600 + k) * 3 + 2]);
-        if (k >= 300)
-            CHECK(w.pwv6[(600 + k) * 3 + 0] == 0);
+    }
+    for (int s = 0; s < 3; s++) {
+        unsigned e[3];
+        tone_pwv7(freq[s], 0.5, rate, e);
+        const uint8_t *d = &w.pwv7[(s * 300 + 150) * 3], *o = &w.pwv6[(s * 400 + 200) * 3];
+        printf("%5.0f Hz at 0.5: PWV7 %3u %3u %3u (filters %3u %3u %3u), PWV6 %3u %3u %3u\n",
+               freq[s], d[0], d[1], d[2], e[0], e[1], e[2], o[0], o[1], o[2]);
+        /* Past the first 10 columns, where the filters settle */
+        for (int k = s * 300 + 10; k < s * 300 + 300; k++) {
+            for (int j = 0; j < 3; j++) {
+                unsigned v = w.pwv7[k * 3 + j];
+                CHECK(v <= e[j] && v + 2 >= e[j]);
+            }
+            CHECK(w.pwv7[k * 3 + s] >= w.pwv7[k * 3 + (s + 1) % 3] * 3 / 2);
+            CHECK(w.pwv7[k * 3 + s] >= w.pwv7[k * 3 + (s + 2) % 3] * 3 / 2);
+        }
+        /* Past the trailing average, short of the next tone */
+        for (int k = s * 400 + 2; k < s * 400 + 399; k++) {
+            CHECK(w.pwv6[k * 3 + s] >= 3 * w.pwv6[k * 3 + (s + 1) % 3]);
+            CHECK(w.pwv6[k * 3 + s] >= 3 * w.pwv6[k * 3 + (s + 2) % 3]);
+        }
+    }
+    for (int k = 2; k < 399; k++) {
+        CHECK(w.pwv6[k * 3 + 2] <= 1);
+        CHECK(w.pwv6[(800 + k) * 3 + 0] <= 4);
     }
     rx_waveforms_free(&w);
+    return fails;
+}
+
+/* The mean of every column's RMS, as the overview's level: the target its
+ * bands are normalised to is 92 times this. Computed here from the
+ * samples on the detail column grid. */
+static double mean_rms(const float *x, int64_t nb, int rate)
+{
+    int64_t n = (int64_t)ceil((double)(nb * 150) / rate), start = 0, frames = 0;
+    double level = 0.0;
+    for (int64_t k = 0; k < n; k++) {
+        int64_t end = RX_MIN((int64_t)floor((double)((k + 1) * rate) / 150 + 0.5), nb);
+        double s = 0.0;
+        for (int64_t i = start; i < end; i++)
+            s += (double)x[i] * x[i];
+        if (end > start) {
+            level += sqrt(s / (double)(end - start));
+            frames++;
+        }
+        start = end;
+    }
+    return frames ? level / frames : 0.0;
+}
+
+/* The overview's normalisation: on the loud master, 6 dB down so that
+ * nothing reaches full scale, every band's mean over the 1200 columns is 92
+ * times the mean column RMS (within rounding and the trailing average's
+ * edge), and the overview of the same music at half that level is half as
+ * high, where rekordbox-style per-band peak gains would draw both the same.
+ * The detail is linear: half the level, half the bytes. */
+static int test_overview_level(void)
+{
+    int fails = 0, rate = 44100;
+    int64_t nb;
+    float *x = loud_master(rate, 20.0, &nb);
+    if (!x)
+        return 1;
+    RXWaveforms w, h;
+    for (int64_t i = 0; i < nb; i++)
+        x[i] *= 0.5f;
+    CHECK(rx_waveforms_compute(x, nb, rate, &w) == 0);
+    double target = 92 * mean_rms(x, nb, rate);
+    for (int64_t i = 0; i < nb; i++)
+        x[i] *= 0.5f;
+    CHECK(rx_waveforms_compute(x, nb, rate, &h) == 0);
+    free(x);
+
+    double mean[3] = { 0 };
+    int top = 0;
+    for (int k = 0; k < RX_WAVE_PWV6_COLUMNS; k++) {
+        for (int j = 0; j < 3; j++) {
+            mean[j] += w.pwv6[k * 3 + j] / (double)RX_WAVE_PWV6_COLUMNS;
+            top = RX_MAX(top, w.pwv6[k * 3 + j]);
+            CHECK(abs(2 * h.pwv6[k * 3 + j] - w.pwv6[k * 3 + j]) <= 1);
+        }
+    }
+    printf("overview of the loud master: target %.2f, band means %.2f %.2f %.2f, max %d\n",
+           target, mean[0], mean[1], mean[2], top);
+    CHECK(top < 127);
+    for (int j = 0; j < 3; j++)
+        CHECK(fabs(mean[j] - target) < 0.6);
+    for (int64_t i = 0; i < (int64_t)w.nb_detail * 3; i++)
+        CHECK(abs(2 * h.pwv7[i] - w.pwv7[i]) <= 2);
+    rx_waveforms_free(&w);
+    rx_waveforms_free(&h);
+    return fails;
+}
+
+/* The detail takes each band's peak over the column, not its energy: a
+ * 60-sample 8 kHz burst (Hann-shaped, so the filters follow it without an
+ * onset transient) in a column of 294 shows at the level of a steady tone
+ * in the high band, where a mean over the column would be under a tenth of
+ * that and an RMS under a third, and nothing in the columns either side.
+ * Past full scale the byte stays at 127. */
+static int test_peak(void)
+{
+    int fails = 0, rate = 44100;
+    float *x = calloc(rate, sizeof(*x));
+    if (!x)
+        return 1;
+    /* Column 75 is [22050, 22344) */
+    for (int i = 0; i < 60; i++) {
+        double hann = 0.5 - 0.5 * cos(2 * M_PI * i / 60);
+        x[22150 + i] = (float)(0.8 * hann * sin(2 * M_PI * 8000 * i / rate));
+    }
+    RXWaveforms w;
+    CHECK(rx_waveforms_compute(x, rate, rate, &w) == 0 && w.nb_detail == 150);
+    unsigned e[3];
+    tone_pwv7(8000, 0.8, rate, e);
+    printf("an 8 kHz burst of 60 samples at 0.8: PWV7 %u %u %u (a steady tone %u %u %u)\n",
+           w.pwv7[75 * 3], w.pwv7[75 * 3 + 1], w.pwv7[75 * 3 + 2], e[0], e[1], e[2]);
+    CHECK(w.pwv7[75 * 3 + 2] <= e[2] + 2 && w.pwv7[75 * 3 + 2] + 4 >= e[2]);
+    for (int j = 0; j < 3; j++)
+        CHECK(w.pwv7[74 * 3 + j] == 0 && w.pwv7[76 * 3 + j] <= 1);
+    rx_waveforms_free(&w);
+
+    /* 100 Hz at 1.5: its low band is 1.34, so 127; its mid 0.6 */
+    for (int i = 0; i < rate; i++)
+        x[i] = (float)(1.5 * sin(2 * M_PI * 100 * i / rate));
+    CHECK(rx_waveforms_compute(x, rate, rate, &w) == 0 && w.nb_detail == 150);
+    tone_pwv7(100, 1.5, rate, e);
+    CHECK(e[0] == 127 && e[1] < 127);
+    for (int k = 10; k < 150; k++) {
+        CHECK(w.pwv7[k * 3] == 127);
+        CHECK(w.pwv7[k * 3 + 1] <= e[1] && w.pwv7[k * 3 + 1] + 2 >= e[1]);
+    }
+    rx_waveforms_free(&w);
+    free(x);
     return fails;
 }
 
@@ -339,9 +463,26 @@ static int test_rules(void)
         CHECK((w.pwav[i] & 31) == 2);
     for (int i = 0; i < RX_WAVE_PWV2_COLUMNS; i++)
         CHECK(w.pwv2[i] == 1);
+    /* and no three-band level: every band's mean is under rbxport's 1e-6 */
+    for (int i = 0; i < RX_WAVE_PWV6_COLUMNS * 3; i++)
+        CHECK(w.pwv6[i] == 0);
+    for (int i = 0; i < w.nb_detail * 3; i++)
+        CHECK(w.pwv7[i] == 0);
     rx_waveforms_free(&w);
+    /* No samples: one empty column, and an overview of nothing */
     CHECK(rx_waveforms_compute(z, 0, 44100, &w) == 0 && w.nb_detail == 1);
+    for (int i = 0; i < RX_WAVE_PWV6_COLUMNS * 3; i++)
+        CHECK(w.pwv6[i] == 0);
     rx_waveforms_free(&w);
+    /* Fewer samples than overview columns: those between samples are empty */
+    z[5] = 0.5f;
+    CHECK(rx_waveforms_compute(z, 10, 44100, &w) == 0 && w.nb_detail == 1);
+    int lit = 0;
+    for (int i = 0; i < RX_WAVE_PWV6_COLUMNS * 3; i++)
+        lit += w.pwv6[i] > 0;
+    CHECK(lit > 0 && w.pwv7[2] > 0);
+    rx_waveforms_free(&w);
+    z[5] = 0.0f;
     CHECK(rx_waveforms_compute(z, 100, 0, &w) == RX_ERROR(EINVAL));
     free(z);
 
@@ -411,7 +552,7 @@ static int test_pack(void)
         return fails + 1;
     }
     CHECK(size == 24 + 400 + 100 + 7200 + 3600 + (size_t)w.nb_detail * 6);
-    CHECK(!memcmp(data, "RXWV", 4) && le32(data + 4) == 3 && le32(data + 8) == (uint32_t)w.nb_detail &&
+    CHECK(!memcmp(data, "RXWV", 4) && le32(data + 4) == 4 && le32(data + 8) == (uint32_t)w.nb_detail &&
           le32(data + 12) == 44100);
     CHECK(rx_waveforms_unpack(data, size, &r) == 0);
     CHECK(same_waves(&r, &w));
@@ -432,14 +573,15 @@ static int test_pack(void)
     CHECK(rx_waveforms_unpack(data, size, &r) == RX_ERROR(EINVAL));
     data[0] = 'R';
     /* Another version is stale, not damaged: -EPROTO, so the app recomputes.
-     * Versions 1 and 2 hold older three-band levels (dj's, then squared). */
-    put32(data + 4, 1);
-    CHECK(rx_waveforms_unpack(data, size, &r) == RX_ERROR(EPROTO) && !r.pwv3);
-    put32(data + 4, 2);
-    CHECK(rx_waveforms_unpack(data, size, &r) == RX_ERROR(EPROTO) && !r.pwv3);
+     * Versions 1 to 3 hold older three-band levels (dj's, then two fits to
+     * rekordbox's bytes) in the same layout as version 4. */
+    for (uint32_t v = 0; v < 6; v++) {
+        if (v == 4)
+            continue;
+        put32(data + 4, v);
+        CHECK(rx_waveforms_unpack(data, size, &r) == RX_ERROR(EPROTO) && !r.pwv3);
+    }
     put32(data + 4, 4);
-    CHECK(rx_waveforms_unpack(data, size, &r) == RX_ERROR(EPROTO));
-    put32(data + 4, 3);
     put32(data + 8, (uint32_t)w.nb_detail + 1);
     CHECK(rx_waveforms_unpack(data, size, &r) == RX_ERROR(EINVAL));
     put32(data + 8, 0);
@@ -504,11 +646,15 @@ static int test_cache(void)
     CHECK(rx_file_write_atomic(path, buf, size) == 0);
     CHECK(rx_waveforms_load(path, &r) == RX_ERROR(EINVAL));
     buf[8]--;
-    /* A version 1 file (dj's three-band levels) is stale: -EPROTO */
+    /* A version 1 file (dj's three-band levels) or version 3 one (the last
+     * fit to rekordbox's) is stale: -EPROTO */
     buf[4] = 1;
     CHECK(rx_file_write_atomic(path, buf, size) == 0);
     CHECK(rx_waveforms_load(path, &r) == RX_ERROR(EPROTO) && !r.pwv3);
     buf[4] = 3;
+    CHECK(rx_file_write_atomic(path, buf, size) == 0);
+    CHECK(rx_waveforms_load(path, &r) == RX_ERROR(EPROTO) && !r.pwv3);
+    buf[4] = 4;
     buf[0] = 'X';
     CHECK(rx_file_write_atomic(path, buf, size) == 0);
     CHECK(rx_waveforms_load(path, &r) == RX_ERROR(EINVAL));
@@ -532,7 +678,7 @@ int main(int argc, char **argv)
     };
     int fails = 0;
     printf("fixtures (byte differences per tag; dj's bytes after the firmware minimums,\n"
-           "PWV6/PWV7 rxbox's calibration):\n");
+           "PWV6/PWV7 rbxport's rules):\n");
     for (size_t i = 0; i < RX_ARRAY_ELEMS(signals); i++) {
         char f32[256], tags[256];
         snprintf(f32, sizeof(f32), DATA_DIR "%s.f32", signals[i]);
@@ -543,7 +689,9 @@ int main(int argc, char **argv)
         fails += diff != 0;
     }
     fails += test_rules();
-    fails += test_three_band();
+    fails += test_crossovers();
+    fails += test_overview_level();
+    fails += test_peak();
     fails += test_pack();
     fails += test_cache();
     if (fails) {
