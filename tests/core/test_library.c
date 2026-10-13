@@ -121,6 +121,46 @@ static void make_music(void)
     free(p);
 }
 
+/* A directory goes in as the album runs: by the track tags, not the file
+ * names; files without a number after the numbered ones, by name. */
+static void test_album_order(void)
+{
+    char *dir = test_dir("library-album");
+    char *files = path_in(dir, "album"), *lroot = path_in(dir, "lib");
+    const struct {
+        const char *name;
+        int track;
+    } tracks[] = {
+        { "a-side.wav", 3 }, { "b-side.wav", 1 }, { "bonus.wav", 0 }, { "c-side.wav", 2 },
+        { "alt.wav", 0 },
+    };
+    for (size_t i = 0; i < RX_ARRAY_ELEMS(tracks); i++) {
+        char *p = path_in(files, tracks[i].name);
+        CHECK(test_write_wav_album(p, 0.1, 44100, 1, tracks[i].name, "The Album", tracks[i].track) == 0);
+        free(p);
+    }
+
+    RXLibrary lib;
+    CHECK(rx_library_open(&lib, lroot) == 0);
+    CHECK(rx_library_add_path(&lib, files, NULL, NULL) == 5 && lib.nb_tracks == 5);
+    if (lib.nb_tracks == 5) {
+        const char *want[] = { "/b-side.wav", "/c-side.wav", "/a-side.wav", "/alt.wav", "/bonus.wav" };
+        for (int i = 0; i < 5; i++) {
+            CHECK(lib.tracks[i]->id == (uint64_t)i + 1);
+            CHECK(rx_str_ends(lib.tracks[i]->path, want[i]));
+            CHECK_STR(lib.tracks[i]->meta.album, "The Album");
+        }
+        CHECK(lib.tracks[0]->meta.track_number == 1 && lib.tracks[2]->meta.track_number == 3);
+        CHECK(lib.tracks[3]->meta.track_number == 0);
+    }
+    rx_library_close(&lib);
+
+    test_rm_rf(dir);
+    free(files);
+    free(lroot);
+    free(dir);
+}
+
 static void test_create_and_add(void)
 {
     RXLibrary lib;
@@ -1332,6 +1372,7 @@ int main(void)
     make_music();
 
     test_create_and_add();
+    test_album_order();
     test_edit_and_reopen();
     test_settings_migration();
     test_refresh();

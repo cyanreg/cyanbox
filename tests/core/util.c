@@ -70,9 +70,10 @@ int test_write_wav(const char *path, double seconds, int rate, int channels,
     return test_write_wav_comment(path, seconds, rate, channels, title, artist, date, NULL);
 }
 
-int test_write_wav_comment(const char *path, double seconds, int rate, int channels,
-                           const char *title, const char *artist, const char *date,
-                           const char *comment)
+/* The WAV with INFO tags given as id and value pairs (a NULL value: left
+ * out). */
+static int write_wav(const char *path, double seconds, int rate, int channels,
+                     const char *const ids[], const char *const values[], int nb_tags)
 {
     char *dir = rx_strdup(path);
     *strrchr(dir, '/') = '\0';
@@ -84,8 +85,11 @@ int test_write_wav_comment(const char *path, double seconds, int rate, int chann
         return RX_ERROR(errno);
     uint32_t frames = (uint32_t)(seconds * rate);
     uint32_t data = frames * (uint32_t)channels * 2;
-    uint32_t list = title || artist || date || comment ?
-                    4 + info_size(title) + info_size(artist) + info_size(date) + info_size(comment) : 0;
+    uint32_t list = 0;
+    for (int i = 0; i < nb_tags; i++)
+        list += info_size(values[i]);
+    if (list)
+        list += 4;
 
     fwrite("RIFF", 1, 4, f);
     put_le(f, 4 + 8 + 16 + (list ? 8 + list : 0) + 8 + data, 4);
@@ -101,10 +105,8 @@ int test_write_wav_comment(const char *path, double seconds, int rate, int chann
         fwrite("LIST", 1, 4, f);
         put_le(f, list, 4);
         fwrite("INFO", 1, 4, f);
-        put_info(f, "INAM", title);
-        put_info(f, "IART", artist);
-        put_info(f, "ICRD", date);
-        put_info(f, "ICMT", comment);
+        for (int i = 0; i < nb_tags; i++)
+            put_info(f, ids[i], values[i]);
     }
     fwrite("data", 1, 4, f);
     put_le(f, data, 4);
@@ -114,6 +116,25 @@ int test_write_wav_comment(const char *path, double seconds, int rate, int chann
             put_le(f, (uint16_t)v, 2);
     }
     return fclose(f) ? RX_ERROR(EIO) : 0;
+}
+
+int test_write_wav_comment(const char *path, double seconds, int rate, int channels,
+                           const char *title, const char *artist, const char *date,
+                           const char *comment)
+{
+    const char *const ids[] = { "INAM", "IART", "ICRD", "ICMT" };
+    const char *const values[] = { title, artist, date, comment };
+    return write_wav(path, seconds, rate, channels, ids, values, 4);
+}
+
+int test_write_wav_album(const char *path, double seconds, int rate, int channels,
+                         const char *title, const char *album, int track)
+{
+    char number[16];
+    snprintf(number, sizeof(number), "%d", track);
+    const char *const ids[] = { "INAM", "IPRD", "IPRT" };
+    const char *const values[] = { title, album, track > 0 ? number : NULL };
+    return write_wav(path, seconds, rate, channels, ids, values, 3);
 }
 
 int test_done(const char *name)

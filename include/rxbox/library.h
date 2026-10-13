@@ -178,8 +178,11 @@ int      rx_library_index_of(const RXLibrary *lib, const RXTrack *t);
  * flag is cleared when the file is back), or NULL with *err set. */
 RXTrack *rx_library_add_file(RXLibrary *lib, const char *path, int *err);
 /* Adds a file or everything under a directory with a known audio extension
- * (rx_is_audio_path), in one transaction per directory. Calls `cb` per file
- * added or skipped. Returns the number added or a negative errno. */
+ * (rx_is_audio_path), in one transaction per directory, the files of a
+ * directory in the order of their disc and track tags (unnumbered ones
+ * after, by name), so that an album goes in as it runs, then its
+ * subdirectories by name. Calls `cb` per file added or skipped. Returns
+ * the number added or a negative errno. */
 typedef void (*rx_add_cb)(void *opaque, const char *path, RXTrack *added, int err);
 int      rx_library_add_path(RXLibrary *lib, const char *path, rx_add_cb cb, void *opaque);
 bool     rx_is_audio_path(const char *path);

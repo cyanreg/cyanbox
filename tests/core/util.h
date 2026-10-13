@@ -53,6 +53,10 @@ int test_write_wav(const char *path, double seconds, int rate, int channels,
 int test_write_wav_comment(const char *path, double seconds, int rate, int channels,
                            const char *title, const char *artist, const char *date,
                            const char *comment);
+/* A track of an album: INAM title, IPRD album and IPRT track number (which
+ * libavformat reads as "album" and "track"; 0: no track number). */
+int test_write_wav_album(const char *path, double seconds, int rate, int channels,
+                         const char *title, const char *album, int track);
 /* Exit status: 0, or 1 with a summary when anything failed. */
 int test_done(const char *name);
 

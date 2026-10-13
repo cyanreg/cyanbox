@@ -1013,6 +1013,25 @@ static int list_dir(const char *dir, DirList *l)
     return 0;
 }
 
+/* A directory's files once probed, in the order of their disc and track
+ * tags: numbered tracks by disc then number, files without a number after
+ * them, equals and failures by name. */
+static int cmp_probed(const void *pa, const void *pb)
+{
+    const Probed *a = pa, *b = pb;
+    const RXMeta *ma = a->err >= 0 ? &a->t->file_meta : NULL;
+    const RXMeta *mb = b->err >= 0 ? &b->t->file_meta : NULL;
+    int da = ma && ma->disc_number > 0 ? ma->disc_number : INT_MAX;
+    int db = mb && mb->disc_number > 0 ? mb->disc_number : INT_MAX;
+    if (da != db)
+        return da < db ? -1 : 1;
+    int na = ma && ma->track_number > 0 ? ma->track_number : INT_MAX;
+    int nb = mb && mb->track_number > 0 ? mb->track_number : INT_MAX;
+    if (na != nb)
+        return na < nb ? -1 : 1;
+    return strcmp(a->t->path, b->t->path);
+}
+
 static int add_dir(RXLibrary *lib, RXThreadPool *pool, const char *dir, rx_add_cb cb, void *opaque)
 {
     DirList l;
@@ -1052,6 +1071,9 @@ static int add_dir(RXLibrary *lib, RXThreadPool *pool, const char *dir, rx_add_c
     int added = 0;
     if (ret >= 0) {
         probe_all(pool, items, nb);
+        /* The order the ids are given in is the collection's order: a
+         * directory holding an album goes in as the album runs. */
+        qsort(items, (size_t)nb, sizeof(*items), cmp_probed);
         ret = insert_batch(lib, items, nb, cb, opaque);
         added = RX_MAX(ret, 0);
     }
