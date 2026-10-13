@@ -22,6 +22,12 @@
  *    alone, never for another thread's work and never on a fence it would
  *    have to reset. Command pools belong to the plans (compute_dsp.c), one
  *    per thread of use, so recording needs no lock. VMA locks itself.
+ *  - A wait that fails (a minute without an answer, or the device lost)
+ *    waits for the whole device to go idle, under the queue's lock, before
+ *    it returns: the caller frees the buffers that submission uses, which
+ *    the GPU might otherwise still write. The context is then lost: every
+ *    later submission fails with -EIO, and the analyses go on on the
+ *    CPU.
  *  - No descriptors: every shader takes its buffers as device addresses in
  *    its push constants, as the waveform shader does, so one pipeline
  *    layout serves all and there are no descriptor pools to manage.
@@ -498,6 +504,7 @@ int rx_compute_create(RXCompute **out, const RXComputeOptions *opt)
     if (!c)
         return RX_ERROR(ENOMEM);
     atomic_init(&c->validation_errors, 0);
+    atomic_init(&c->lost, false);
     int ret = pthread_mutex_init(&c->qlock, NULL);
     if (ret) {
         free(c);
@@ -738,6 +745,10 @@ int rx_compute_pipeline(RXCompute *c, enum RXComputeKernel kernel, int log2n, Vk
 int rx_compute_submit(RXCompute *c, VkCommandBuffer cmd, uint64_t *value)
 {
     pthread_mutex_lock(&c->qlock);
+    if (atomic_load(&c->lost)) {
+        pthread_mutex_unlock(&c->qlock);
+        return RX_ERROR(EIO);
+    }
     uint64_t v = c->submitted + 1;
     VkSemaphoreSubmitInfo signal = {
         .sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
@@ -782,7 +793,16 @@ int rx_compute_wait(RXCompute *c, uint64_t value)
     };
     VkResult res = vkWaitSemaphores(c->dev, &info, timeout_ns);
     if (res != VK_SUCCESS) {
-        rx_warn("compute: waiting for the GPU failed: %s", rx_compute_strerror(res));
+        /* The submission may still be running, or never end (a hung GPU
+         * is reset by its driver, and then the device is lost): nothing it
+         * uses may be freed before the device is idle. vkDeviceWaitIdle
+         * needs the queue to itself. */
+        if (!atomic_exchange(&c->lost, true))
+            rx_err("compute: waiting for the GPU failed: %s; the GPU is not used again",
+                   rx_compute_strerror(res));
+        pthread_mutex_lock(&c->qlock);
+        vkDeviceWaitIdle(c->dev);
+        pthread_mutex_unlock(&c->qlock);
         return rx_compute_ret2err(res);
     }
     return 0;

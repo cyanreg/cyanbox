@@ -56,6 +56,7 @@ struct RXCompute {
     pthread_mutex_t qlock;
     VkSemaphore timeline;
     uint64_t submitted;             /* under qlock */
+    atomic_bool lost;               /* a wait failed: no more submissions (compute.c) */
 
     /* One layout for every kernel (push constants only, no descriptors),
      * and the pipelines by kernel and transform size, made on first use. */
@@ -91,8 +92,10 @@ int  rx_cbuf_flush(RXCompute *c, RXCBuf *b, VkDeviceSize size);
 int  rx_compute_pipeline(RXCompute *c, enum RXComputeKernel kernel, int log2n, VkPipeline *out);
 
 /* Submits one recorded command buffer; *value is the timeline value that
- * says it has completed. */
+ * says it has completed. -EIO once a wait has failed. */
 int  rx_compute_submit(RXCompute *c, VkCommandBuffer cmd, uint64_t *value);
+/* Waits for a submission. On an error the device is idle when it returns
+ * (nothing is running any more), so the submission's buffers can go. */
 int  rx_compute_wait(RXCompute *c, uint64_t value);
 
 int  rx_compute_ret2err(VkResult res);
