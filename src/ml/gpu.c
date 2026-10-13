@@ -14,6 +14,14 @@
  *    F16), 8- and 16-bit storage (Q4_K's bytes and halves), 64-bit
  *    integers (address arithmetic), subgroup arithmetic and shuffles, and
  *    48 kB of shared memory (the attention's tiles).
+ *  - Three kernels count on the subgroup's size: gemv.comp sums a row's 64
+ *    lanes in subgroups of 16 to 64 (its shared memory has room for four,
+ *    and a subgroup must not straddle two rows), attn.comp and
+ *    attn_dec.comp share sums among 8 neighbouring lanes by shuffles. A
+ *    device whose sizes all lie in 16 to 64 (AMD's 32 and 64) runs them as
+ *    its driver likes; one that may pick fewer (Intel's 8) is given a size
+ *    (Vulkan 1.3's subgroup size control), and one that cannot be is not
+ *    used. Those three ask for full subgroups where the device has them.
  *  - A compute-only queue family when there is one, as the compute context
  *    does: the desktop's graphics are not held up behind a transformer
  *    layer.
@@ -267,10 +275,21 @@ static int create_instance(MLGpu *g, bool validation)
 
 #define NEED_SHARED (48 * 1024)
 
-/* Why a device cannot run the model, or NULL; `qfam` gets the queue family
- * to use. */
+/* The subgroup sizes gemv.comp works with (see the top of the file). */
+#define SUB_MIN 16
+#define SUB_MAX 64
+
+/* What a device is set up with beyond the defaults. */
+typedef struct DevChoice {
+    uint32_t qfam;
+    uint32_t sub_size;          /* the size the subgroup kernels require, 0: any it picks */
+    bool full_sub;              /* computeFullSubgroups */
+} DevChoice;
+
+/* Why a device cannot run the model, or NULL; `c` gets the queue family
+ * to use and how the subgroup kernels are run. */
 static const char *device_unusable(VkPhysicalDevice pd, const VkPhysicalDeviceProperties *props,
-                                   uint32_t *qfam)
+                                   DevChoice *c)
 {
     if (props->apiVersion < VK_API_VERSION_1_3)
         return "Vulkan 1.3 is required";
@@ -304,8 +323,12 @@ static const char *device_unusable(VkPhysicalDevice pd, const VkPhysicalDevicePr
     if (!f2.features.shaderInt64)
         return "no 64-bit integers in shaders";
 
+    VkPhysicalDeviceVulkan13Properties p13 = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_PROPERTIES,
+    };
     VkPhysicalDeviceSubgroupProperties sub = {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES,
+        .pNext = &p13,
     };
     VkPhysicalDeviceProperties2 p2 = {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,
@@ -316,8 +339,22 @@ static const char *device_unusable(VkPhysicalDevice pd, const VkPhysicalDevicePr
                                         VK_SUBGROUP_FEATURE_ARITHMETIC_BIT |
                                         VK_SUBGROUP_FEATURE_SHUFFLE_BIT;
     if (!(sub.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) ||
-        (sub.supportedOperations & need) != need || sub.subgroupSize < 4)
+        (sub.supportedOperations & need) != need)
         return "no subgroup arithmetic and shuffles";
+
+    /* Subgroups of 16 to 64 lanes: any the device has, or one it is told
+     * to use. Sizes are powers of two. */
+    c->sub_size = 0;
+    c->full_sub = f13.computeFullSubgroups;
+    if (p13.minSubgroupSize < SUB_MIN || p13.maxSubgroupSize > SUB_MAX) {
+        uint32_t size = RX_MAX(p13.minSubgroupSize, SUB_MIN);
+        if (!f13.subgroupSizeControl ||
+            !(p13.requiredSubgroupSizeStages & VK_SHADER_STAGE_COMPUTE_BIT) ||
+            size > RX_MIN(p13.maxSubgroupSize, SUB_MAX) ||
+            (uint64_t)size * p13.maxComputeWorkgroupSubgroups < 256)
+            return "no subgroups of 16 to 64 lanes";
+        c->sub_size = size;
+    }
 
     const VkPhysicalDeviceLimits *l = &props->limits;
     if (l->maxComputeSharedMemorySize < NEED_SHARED)
@@ -346,7 +383,7 @@ static const char *device_unusable(VkPhysicalDevice pd, const VkPhysicalDevicePr
     if (any < 0)
         return "no compute queue";
 
-    *qfam = (uint32_t)(only >= 0 ? only : any);
+    c->qfam = (uint32_t)(only >= 0 ? only : any);
     return NULL;
 }
 
@@ -378,11 +415,11 @@ static int pick_device(MLGpu *g, const char *want)
     bool named = false;
     for (uint32_t i = 0; i < nb; i++) {
         VkPhysicalDeviceProperties props;
-        uint32_t qfam = 0;
+        DevChoice choice = { 0 };
 
         vkGetPhysicalDeviceProperties(devs[i], &props);
         bool match = want && rx_str_contains_fold(props.deviceName, want);
-        const char *why = device_unusable(devs[i], &props, &qfam);
+        const char *why = device_unusable(devs[i], &props, &choice);
         if (!why && props.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU && !match)
             why = "a CPU implementation (used only when named)";
         if (why) {
@@ -399,7 +436,9 @@ static int pick_device(MLGpu *g, const char *want)
             named = match;
             g->phys = devs[i];
             g->props = props;
-            g->qfam = qfam;
+            g->qfam = choice.qfam;
+            g->sub_size = choice.sub_size;
+            g->full_sub = choice.full_sub;
         }
     }
     free(devs);
@@ -440,10 +479,18 @@ static int create_pipelines(MLGpu *g)
         if (res != VK_SUCCESS)
             return ret2err(res);
 
+        bool sub = k == ML_K_GEMV_Q4K || k == ML_K_ATTN || k == ML_K_ATTN_DEC;
+        VkPipelineShaderStageRequiredSubgroupSizeCreateInfo size = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_REQUIRED_SUBGROUP_SIZE_CREATE_INFO,
+            .requiredSubgroupSize = g->sub_size,
+        };
         VkComputePipelineCreateInfo pinfo = {
             .sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
             .stage  = {
                 .sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                .pNext  = sub && g->sub_size ? &size : NULL,
+                .flags  = sub && g->full_sub ?
+                          VK_PIPELINE_SHADER_STAGE_CREATE_REQUIRE_FULL_SUBGROUPS_BIT : 0,
                 .stage  = VK_SHADER_STAGE_COMPUTE_BIT,
                 .module = mod,
                 .pName  = "main",
@@ -463,8 +510,10 @@ static int create_pipelines(MLGpu *g)
 static int create_device(MLGpu *g)
 {
     VkPhysicalDeviceVulkan13Features f13 = {
-        .sType            = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
-        .synchronization2 = VK_TRUE,
+        .sType                = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
+        .synchronization2     = VK_TRUE,
+        .subgroupSizeControl  = g->sub_size != 0,
+        .computeFullSubgroups = g->full_sub,
     };
     VkPhysicalDeviceVulkan12Features f12 = {
         .sType                   = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
@@ -605,9 +654,10 @@ int ml_gpu_create(MLGpu *g, const char *device, bool validation)
     if ((ret = create_device(g)) < 0)
         goto fail;
 
-    rx_debug("ml: %s, Vulkan %u.%u, queue family %u%s", g->props.deviceName,
+    rx_debug("ml: %s, Vulkan %u.%u, queue family %u%s, subgroups of %u%s", g->props.deviceName,
              VK_API_VERSION_MAJOR(g->props.apiVersion), VK_API_VERSION_MINOR(g->props.apiVersion),
-             g->qfam, g->ts_mask ? "" : " (no timestamps)");
+             g->qfam, g->ts_mask ? "" : " (no timestamps)", g->sub_size,
+             g->sub_size ? "" : " (the driver's)");
     return 0;
 
 fail:

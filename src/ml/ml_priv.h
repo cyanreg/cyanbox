@@ -83,6 +83,8 @@ typedef struct MLGpu {
     VkQueue queue;
     VmaAllocator vma;
     uint64_t ts_mask;           /* the queue's valid timestamp bits, 0 = none */
+    uint32_t sub_size;          /* the subgroup size gemv and attention require, 0: any */
+    bool full_sub;              /* and full subgroups (gpu.c says why) */
 
     VkSemaphore timeline;
     uint64_t submitted;
