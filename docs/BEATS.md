@@ -439,7 +439,13 @@ the GPU front end: the decisions stay in C on both paths, and the two
 agree on every synthetic grid, dynamic ones included.
 
 **What it costs.** On the 58 acceptance tracks from the harness's cache
-(the front end on the RX 6900 XT, `-j 4`): TIMING_PLACEHOLDER
+(the front end on the RX 6900 XT, `-j 2`, the machine otherwise quiet):
+108 ms of CPU per file with the dynamic pass against 103 without it in
+the same binary (the strain of every section; the re-tracking, attacks,
+envelope cuts and walk of the dynamic stretches only), 126 against 123 ms
+of wall time for the decisions; the baseline binary of the day took 115
+and 133 in the same session. About 5 % on the decisions, well inside the
+doubling the feature was allowed.
 
 ## 7. Phase and snapping (`beats.c`, `grid_fit.c`)
 
