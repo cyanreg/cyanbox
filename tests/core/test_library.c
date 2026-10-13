@@ -169,12 +169,15 @@ static void test_album_order(void)
     };
     for (size_t i = 0; i < RX_ARRAY_ELEMS(mixed); i++) {
         char *p = path_in(two, mixed[i].name);
-        CHECK(test_write_wav_album(p, 0.1, 44100, 1, mixed[i].name, mixed[i].album, mixed[i].track) == 0);
+        CHECK(test_write_wav_album(p, 0.1, 44100, 1, mixed[i].name, mixed[i].album,
+                                   mixed[i].track) == 0);
         free(p);
     }
     CHECK(rx_library_add_path(&lib, two, NULL, NULL) == 6 && lib.nb_tracks == 11);
     if (lib.nb_tracks == 11) {
-        const char *want[] = { "/03 z.wav", "/01 x.wav", "/02 y.wav", "/04 w.wav", "/00 u.wav", "/05 v.wav" };
+        const char *want[] = {
+            "/03 z.wav", "/01 x.wav", "/02 y.wav", "/04 w.wav", "/00 u.wav", "/05 v.wav",
+        };
         for (int i = 0; i < 6; i++)
             CHECK(rx_str_ends(lib.tracks[5 + i]->path, want[i]));
     }
@@ -1547,7 +1550,8 @@ static void test_migrate_v6(void)
         CHECK(rx_library_open(&lib, dir) == 0);
         sqlite3_stmt *st;
         sqlite3_prepare_v2(lib.db->db, "SELECT (SELECT user_version FROM pragma_user_version), "
-                           "(SELECT count(*) FROM pragma_table_info('grid_section') WHERE name = 'measured'), "
+                           "(SELECT count(*) FROM pragma_table_info('grid_section') "
+                           " WHERE name = 'measured'), "
                            "(SELECT count(*) FROM pragma_table_info('track') "
                            " WHERE name IN ('ml_colors', 'ml_legend'))", -1, &st, NULL);
         CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 7 &&
@@ -1556,7 +1560,8 @@ static void test_migrate_v6(void)
         CHECK(lib.nb_tracks == 1);
         RXTrack *t = lib.nb_tracks == 1 ? lib.tracks[0] : NULL;
         if (t) {
-            CHECK(t->grid.nb_sections == 1 && t->grid.sections[0].start == 0.5 && !rx_grid_dynamic(&t->grid));
+            CHECK(t->grid.nb_sections == 1 && t->grid.sections[0].start == 0.5 &&
+                  !rx_grid_dynamic(&t->grid));
             if (legend)
                 CHECK(t->ml_colors[0] == 0.125f && t->ml_colors[3] == 0.5f && t->ml_legend == 1234);
             else

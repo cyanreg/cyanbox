@@ -917,6 +917,12 @@ static bool same_beats(const RXBeat *a, int na, const RXBeat *b, int nb, double 
     }
 }
 
+/* Nothing before lo moved or was renumbered, nothing from hi on moved. */
+static bool same_outside(const RXBeat *a, int na, const RXBeat *b, int nb, double lo, double hi)
+{
+    return same_beats(a, na, b, nb, -INFINITY, lo, true) && same_beats(a, na, b, nb, hi, INFINITY, false);
+}
+
 /* The beat of the list at time t (to a nanosecond), or NULL. */
 static const RXBeat *beat_at_time(const RXBeat *b, int nb, double t)
 {
@@ -1012,7 +1018,7 @@ static bool prop_halve(const RXGrid *g, const RXBeat *b0, int n0, double end, do
     if (ok && in_passage(g, i, &a, &b)) {
         next = b + 1 < g->nb_sections;
         double lo = g->sections[a].start, hi = next ? g->sections[b + 1].start : INFINITY;
-        ok = same_beats(b0, n0, b1, n1, -INFINITY, lo, true) && same_beats(b0, n0, b1, n1, hi, INFINITY, false);
+        ok = same_outside(b0, n0, b1, n1, lo, hi);
         /* Kept: a, a + 2 ... up to the last, or the one before it when
          * that would leave the section after half a beat away; never
          * fewer than the first. Without a section after, the last kept
@@ -1037,7 +1043,7 @@ static bool prop_halve(const RXGrid *g, const RXBeat *b0, int n0, double end, do
     } else if (ok) {
         next = i + 1 < g->nb_sections;
         double lo = g->sections[i].start, hi = next ? g->sections[i + 1].start : INFINITY;
-        ok = same_beats(b0, n0, b1, n1, -INFINITY, lo, true) && same_beats(b0, n0, b1, n1, hi, INFINITY, false);
+        ok = same_outside(b0, n0, b1, n1, lo, hi);
         const RXBeat *was = beat_at_time(b0, n0, lo), *now = beat_at_time(b1, n1, lo);
         ok = ok && (!was || (now && now->number == was->number));
     }
@@ -1082,7 +1088,7 @@ static bool prop_merge(const RXGrid *g, const RXBeat *b0, int n0, double end, do
     } else if (ok) {
         double lo = g->sections[best].start - 60.0 / g->sections[best - 1].bpm;
         double hi = best + 1 < g->nb_sections ? g->sections[best + 1].start : INFINITY;
-        ok = same_beats(b0, n0, b1, n1, -INFINITY, lo, true) && same_beats(b0, n0, b1, n1, hi, INFINITY, false);
+        ok = same_outside(b0, n0, b1, n1, lo, hi);
     }
     free(b1);
     rx_grid_free(&s);

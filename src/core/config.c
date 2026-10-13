@@ -363,7 +363,9 @@ int rx_config_set(RXConfig *c, const char *key, const char *value)
     case K_BPM:
         if (!reset && (!parse_double(value, &d) || d < 0 || d > 1000))
             return RX_ERROR(EINVAL);
-        *(!strcmp(key, "analysis.bpm_min") ? &c->bpm_min : &c->bpm_max) = reset ? 0.0 : d;
+        if (reset)
+            d = 0.0;
+        *(!strcmp(key, "analysis.bpm_min") ? &c->bpm_min : &c->bpm_max) = d;
         return 0;
     case K_WHAT:
         if (!reset && !parse_what(value, &what))
@@ -397,7 +399,9 @@ int rx_config_set(RXConfig *c, const char *key, const char *value)
     case K_SPLIT:
         if (!reset && (!parse_double(value, &d) || d < 0 || d > 1e6))
             return RX_ERROR(EINVAL);
-        *(!strcmp(key, "ui.split_player") ? &c->split_player : &c->split_tree) = reset ? 0.0f : (float)d;
+        if (reset)
+            d = 0.0;
+        *(!strcmp(key, "ui.split_player") ? &c->split_player : &c->split_tree) = (float)d;
         return 0;
     }
     return RX_ERROR(ENOENT);

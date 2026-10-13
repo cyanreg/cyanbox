@@ -562,7 +562,13 @@ static void hostile_schema(void)
 
     /* Ours, with a page header wrecked: quick_check finds it. */
     RXTrack tr = { 0 };
-    RXPlanTrack pt = { .id = 1, .track = &tr, .usb_path = "/Contents/a.wav", .anlz_dir = "/x", .duration = 1.0 };
+    RXPlanTrack pt = {
+        .id       = 1,
+        .track    = &tr,
+        .usb_path = "/Contents/a.wav",
+        .anlz_dir = "/x",
+        .duration = 1.0,
+    };
     RXPlan plan = { .tracks = &pt, .nb_tracks = 1 };
     uint8_t *plain;
     size_t plain_size;

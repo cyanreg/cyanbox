@@ -1133,13 +1133,16 @@ static const RXMeta *album_of(const Probed *p)
     return m && m->album && *m->album ? m : NULL;
 }
 
+static int album_cmp(const RXMeta *a, const RXMeta *b)
+{
+    int c = strcmp(a->album, b->album);
+    return c ? c : strcmp(a->album_artist ? a->album_artist : "", b->album_artist ? b->album_artist : "");
+}
+
 static int cmp_album(const void *pa, const void *pb)
 {
     const Probed *a = *(Probed *const *)pa, *b = *(Probed *const *)pb;
-    const RXMeta *ma = album_of(a), *mb = album_of(b);
-    int c = strcmp(ma->album, mb->album);
-    if (!c)
-        c = strcmp(ma->album_artist ? ma->album_artist : "", mb->album_artist ? mb->album_artist : "");
+    int c = album_cmp(album_of(a), album_of(b));
     return c ? c : strcmp(a->t->path, b->t->path);
 }
 
@@ -1158,9 +1161,7 @@ static int group_albums(Probed *items, int nb)
     }
     qsort(v, (size_t)n, sizeof(*v), cmp_album);
     for (int i = 0; i < n; i++) {
-        const RXMeta *m = album_of(v[i]), *prev = i ? album_of(v[i - 1]) : NULL;
-        bool same = prev && !strcmp(m->album, prev->album) &&
-                    !strcmp(m->album_artist ? m->album_artist : "", prev->album_artist ? prev->album_artist : "");
+        bool same = i && !album_cmp(album_of(v[i]), album_of(v[i - 1]));
         v[i]->album_first = same ? v[i - 1]->album_first : v[i]->t->path;
     }
     free(v);
