@@ -13,7 +13,8 @@
  * exports nothing; an analysis of a file gone since it was added fails
  * with the track named in the status; a load the player cannot take
  * keeps the track the deck has, the 30 s play record (not for a seek loop,
- * not twice), a track removed while loaded and analysed, waveforms of an
+ * not twice), the end of a track under PLAY MODE single and continue (the
+ * next row loads and plays), a track removed while loaded and analysed, waveforms of an
  * older format version made again, results of an older analyser made
  * again by "analyse all" and, unasked, by opening the library (a locked
  * grid kept both times), and tearing down with jobs in flight
@@ -246,6 +247,34 @@ static bool stick_done(RXApp *app)
 static bool export_cancel_done(RXApp *app)
 {
     return !app->export_state.running;
+}
+
+/* PLAY MODE CONTINUE's track loaded and playing. */
+static RXTrack *continue_to;
+
+static bool continued(RXApp *app)
+{
+    RXDeckState st;
+    rx_deck_state(app->player, 0, &st);
+    return app->decks[0].track == continue_to && !app->decks[0].loading_request && st.playing;
+}
+
+/* A My Setting in RXConfig, as the Player settings dialog sets it (the app
+ * reads RXConfig; the table is only what the next open reads). */
+static void set_my_setting(RXKv **kv, int *nb, const char *key, const char *value)
+{
+    for (int i = 0; i < *nb; i++) {
+        if (strcmp((*kv)[i].key, key))
+            continue;
+        free((*kv)[i].value);
+        (*kv)[i].value = rx_strdup(value);
+        return;
+    }
+    RXKv *n = realloc(*kv, (size_t)(*nb + 1) * sizeof(*n));
+    if (!n)
+        abort();
+    *kv = n;
+    n[(*nb)++] = (RXKv) { rx_strdup(key), rx_strdup(value) };
 }
 
 static RXTrack *track_named(RXApp *app, const char *base)
@@ -596,6 +625,32 @@ int main(int argc, char **argv)
         rx_ctl_seek(&app.decks[0].ctl, 0.0);
         play_for(&app, 35.0, 0.1, 0, 0, 0);
         CHECK(c->play_count == 1, "one load, played on: %d plays", c->play_count);
+
+        /* PLAY MODE: SINGLE, the default, stays paused on the end;
+         * CONTINUE loads the next row of the view and plays it, the first
+         * after the last. */
+        rx_ctl_seek(&app.decks[0].ctl, c->duration - 0.5);
+        play_for(&app, 1.0, 0.01, 0, 0, 0);
+        RXDeckState st;
+        rx_deck_state(app.player, 0, &st);
+        CHECK(app.decks[0].track == c && !st.playing && st.position > c->duration - 0.06 &&
+              !app.decks[0].loading_request, "single: track %p, playing %d at %f",
+              (void *)app.decks[0].track, st.playing, st.position);
+        set_my_setting(&app.lib.cfg.player, &app.lib.cfg.nb_player, "play_mode", "continue");
+        rx_app_rebuild_rows(&app);
+        int at = -1;
+        for (int i = 0; i < app.nb_rows; i++) {
+            if (app.lib.tracks[app.rows[i]] == c)
+                at = i;
+        }
+        continue_to = at >= 0 ? app.lib.tracks[app.rows[(at + 1) % app.nb_rows]] : NULL;
+        CHECK(continue_to && continue_to != c, "no row after long.wav");
+        rx_ctl_seek(&app.decks[0].ctl, c->duration - 0.5);
+        rx_ctl_play_pause(&app.decks[0].ctl);
+        play_for(&app, 1.0, 0.01, 0, 0, 0);
+        CHECK(tick_until(&app, continued, 60), "continue: track %p, want %p",
+              (void *)app.decks[0].track, (void *)continue_to);
+        set_my_setting(&app.lib.cfg.player, &app.lib.cfg.nb_player, "play_mode", "single");
         rx_app_unload_deck(&app, 0);
     }
 

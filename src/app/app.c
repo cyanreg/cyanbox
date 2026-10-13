@@ -74,6 +74,9 @@
 /* A forward step of the playhead longer than this, and longer than the
  * time since the last tick allows, is a seek or a jump, not playing. */
 #define PLAY_MAX_STEP       0.5
+/* A deck that stops this close to the end played to the end (the player
+ * pauses it on the last frame). */
+#define END_SLACK           0.05
 /* Workers for decoding and artwork. */
 #define IO_THREADS       2
 /* Artwork jobs scale to this; it is also the library thumbnail's size. */
@@ -154,6 +157,8 @@ struct RXAppPriv {
     double   play_last_pos[RX_DECKS];       /* position at the last tick, < 0 none */
     int64_t  play_last_us[RX_DECKS];
     bool     play_recorded[RX_DECKS];
+    bool     was_playing[RX_DECKS];         /* at the last tick (continue_play) */
+    bool     play_on_load[RX_DECKS];        /* the load in flight plays once in */
 
     RXArray  gpu;               /* GpuEntry, the browser's cache */
     int      gpu_budget;
@@ -177,17 +182,47 @@ struct RXAppPriv {
 
 /* ------------------------------------------------------------------ helpers */
 
-/* The waveform palette is the players' WAVEFORM COLOR (device.waveform_color,
- * rxbox/formats.h rx_settings_get): what the stick will show is what the
- * deck and the table show. */
+/* The players' My Settings that act on the app: what an export would write
+ * (rx_settings_get), read when they are needed, so a change in the Player
+ * settings dialog or a sync takes effect at once. */
+static bool my_setting_is(const RXConfig *cfg, const char *key, const char *value)
+{
+    const char *v = rx_settings_get(cfg, key);
+    return v && !strcmp(v, value);
+}
+
+/* The waveform palette is the players' WAVEFORM COLOR (device.waveform_color):
+ * what the stick will show is what the deck and the table show. */
 static int palette_of(const RXConfig *cfg)
 {
-    const char *name = rx_settings_get(cfg, "device.waveform_color");
-    if (name && !strcmp(name, "blue"))
+    if (my_setting_is(cfg, "device.waveform_color", "blue"))
         return 1;
-    if (name && !strcmp(name, "rgb"))
+    if (my_setting_is(cfg, "device.waveform_color", "rgb"))
         return 2;
     return 0;
+}
+
+/* QUANTIZE BEAT VALUE: the part of a beat QUANTIZE snaps to. */
+static double quantize_beats_of(const RXConfig *cfg)
+{
+    const char *v = rx_settings_get(cfg, "player.quantize_beat_value");
+    if (v && !strcmp(v, "1/2"))
+        return 0.5;
+    if (v && !strcmp(v, "1/4"))
+        return 0.25;
+    if (v && !strcmp(v, "1/8"))
+        return 0.125;
+    return 1.0;
+}
+
+/* AUTO CUE and AUTO CUE LEVEL: where a load leaves the deck. */
+static RXAutoCue auto_cue_of(const RXConfig *cfg)
+{
+    if (my_setting_is(cfg, "player.auto_cue", "false"))
+        return RX_AUTO_CUE_OFF;
+    if (my_setting_is(cfg, "player.auto_cue_level", "memory"))
+        return RX_AUTO_CUE_MEMORY;
+    return RX_AUTO_CUE_LEVEL;
 }
 
 static void analysis_options(const RXConfig *cfg, RXAnalysisOptions *opt)
@@ -671,6 +706,9 @@ int rx_app_load_deck(RXApp *app, int deck, RXTrack *t)
         rx_jobs_cancel(io, dv->loading_request);
     dv->loading_request = 0;
     dv->loading_track_id = 0;
+    /* A load asked for here waits at its cue; PLAY MODE CONTINUE says
+     * otherwise after this returns (continue_play). */
+    app->priv->play_on_load[deck] = false;
 
     uint64_t req = rx_jobs_decode(io, t->id, t->path, deck);
     if ((int64_t)req < 0) {
@@ -740,6 +778,54 @@ static void track_plays(RXApp *app, int deck)
                           track_name(dv->track, name, sizeof(name)), strerror(-ret));
     }
     app->rows_dirty = true;
+}
+
+/* The track PLAY MODE CONTINUE plays after `t`: the next row of the current
+ * view in the table's order (the first when `t` is not in the view),
+ * wrapping at the end, past missing files. NULL when there is none. */
+static RXTrack *next_in_view(RXApp *app, const RXTrack *t)
+{
+    if (app->rows_dirty || app->rows_generation != app->lib.generation || !app->rows)
+        rx_app_rebuild_rows(app);
+    int n = app->nb_rows;
+    int idx = rx_library_index_of(&app->lib, t);
+    int at = -1;
+    for (int i = 0; i < n && at < 0; i++) {
+        if ((int)app->rows[i] == idx)
+            at = i;
+    }
+    for (int k = 1; k <= n; k++) {
+        RXTrack *next = app->lib.tracks[app->rows[(at + k) % n]];
+        if (!next->missing)
+            return next;
+    }
+    return NULL;
+}
+
+/* PLAY MODE (player.play_mode; manual p.75): with CONTINUE, a track that
+ * plays to its end is followed by the next one of the current view, which
+ * loads and plays. With SINGLE, the factory setting, the deck stays paused
+ * on the end, where the player leaves it. The end is a deck that was
+ * playing at the last tick and now stands on its last frames, stopped. */
+static bool continue_play(RXApp *app, int deck)
+{
+    RXAppPriv *priv = app->priv;
+    RXDeckView *dv = &app->decks[deck];
+    RXDeckState st;
+    rx_deck_state(app->player, deck, &st);
+    bool was = priv->was_playing[deck];
+    priv->was_playing[deck] = st.loaded && st.playing;
+    if (!was || st.playing || !st.loaded || st.scrubbing || !dv->track || dv->loading_request ||
+        !(st.duration > 0) || st.position < st.duration - END_SLACK)
+        return false;
+    if (!my_setting_is(&app->lib.cfg, "player.play_mode", "continue"))
+        return false;
+
+    RXTrack *next = next_in_view(app, dv->track);
+    if (!next || rx_app_load_deck(app, deck, next) < 0)
+        return false;
+    priv->play_on_load[deck] = true;
+    return true;
 }
 
 /* ----------------------------------------------------------------- analysis */
@@ -1155,8 +1241,13 @@ static void handle_decode(RXApp *app, RXJobResult *r)
 
     dv->track = t;
     app->priv->deck_track_id[deck] = t->id;
+    dv->ctl.auto_cue = auto_cue_of(&app->lib.cfg);
     rx_ctl_load(&dv->ctl, t);
     deck_load_waves(app, deck);
+    if (app->priv->play_on_load[deck]) {
+        app->priv->play_on_load[deck] = false;
+        rx_deck_play(app->player, deck);
+    }
 
     /* rekordbox analyses a track on load when it has not been: here only
      * what is missing, the waveforms among them. */
@@ -2408,10 +2499,15 @@ bool rx_app_tick(RXApp *app)
         changed = true;
     }
 
+    double quantize_beats = quantize_beats_of(&app->lib.cfg);
     for (int d = 0; d < RX_DECKS; d++) {
         RXDeckView *dv = &app->decks[d];
-        if (app->player)
+        dv->ctl.quantize_beats = quantize_beats;
+        if (app->player) {
             rx_ctl_tick(&dv->ctl);
+            if (continue_play(app, d))
+                changed = true;
+        }
         track_plays(app, d);
 
         if (dv->track && priv->uploaded_palette[d] != app->wave_palette) {
