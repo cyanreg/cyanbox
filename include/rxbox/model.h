@@ -197,6 +197,15 @@ typedef struct RXTrack {
     int    beats_version, key_version, waves_version;
     RXCue *cues; int nb_cues;
 
+    /* What the model said of the track (rxbox/ml.h), only ever when the
+     * user asked: the RX_ML_TAGS_VERSION of the tagging (0 never tagged)
+     * and its four measures, 0 to 1 (NAN never tagged): club music,
+     * intensity (calm .. intense), valence (dark .. bright), vocals (1
+     * heard, 0 instrumental). The genre, hue and comment it gave are in
+     * meta, where the user edits them. */
+    int    tags_version;
+    float  ml_club, ml_intensity, ml_valence, ml_vocals;
+
     /* Stream properties from probing */
     double  duration;               /* seconds, on the players' timeline */
     int64_t total_samples;          /* on the players' timeline, at sample_rate */

@@ -1,0 +1,59 @@
+// Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md.
+
+// Element-wise steps, by op:
+//   ACT_GELU     a = gelu(a)
+//   ACT_SWIGLU   a = silu(a) * b              (the gated MLPs: a gate, b up)
+//   ACT_ADD      a += b
+//   ACT_ADD_ROWS a[row] += b[idx[row]] where idx[row] >= 0 (the deepstack:
+//                rows of the audio's features into the audio tokens' rows)
+//   ACT_ADD_TILE a[i] += b[i % period]       (positions, chunk after chunk)
+// over `count` elements; rows are `n` long.
+
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#include "common.glsl"
+
+layout(local_size_x = 256) in;
+
+#define ACT_GELU     0u
+#define ACT_SWIGLU   1u
+#define ACT_ADD      2u
+#define ACT_ADD_ROWS 3u
+#define ACT_ADD_TILE 4u
+
+layout(push_constant, std430) uniform Push {
+    uint64_t a, b, idx;
+    uint count;
+    uint n;
+    uint period;
+    uint op;
+} pc;
+
+void main()
+{
+    uint i = gl_GlobalInvocationID.x + gl_GlobalInvocationID.y * gl_NumWorkGroups.x * 256u;
+    if (i >= pc.count)
+        return;
+    F32 a = F32(pc.a);
+    F32 b = F32(pc.b);
+    switch (pc.op) {
+    case ACT_GELU:
+        a.v[i] = gelu(a.v[i]);
+        break;
+    case ACT_SWIGLU:
+        a.v[i] = silu(a.v[i]) * b.v[i];
+        break;
+    case ACT_ADD:
+        a.v[i] += b.v[i];
+        break;
+    case ACT_ADD_ROWS: {
+        int r = I32(pc.idx).v[i / pc.n];
+        if (r >= 0)
+            a.v[i] += b.v[uint(r) * pc.n + i % pc.n];
+        break;
+    }
+    case ACT_ADD_TILE:
+        a.v[i] += b.v[i % pc.period];
+        break;
+    }
+}

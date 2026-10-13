@@ -16,13 +16,16 @@
  * The analysis' spectral front end runs on a GPU when there is one
  * (rxbox/compute.h, through the jobs pool): --device NAME picks it, as it
  * picks the window's, and --no-gpu keeps the analysis on the CPU. Neither
- * needs a display.
+ * needs a display. `tag` runs the model (rxbox/ml.h) through the same
+ * batch the interface uses (rx_app_tag_tracks), on --device's GPU too,
+ * and applies each result as it comes, one line per track.
  *
  * Arguments: options and names mix in any order after the command; `--`
  * ends the options, so every argument after it is a name, even one that
  * starts with '-'. An option's value is never empty. A usage error names
  * the problem, prints the command's usage line, and exits 1. */
 
+#include <ctype.h>
 #include <errno.h>
 #include <limits.h>
 #include <math.h>
@@ -36,6 +39,7 @@
 #include "rxbox/colors.h"
 #include "rxbox/export.h"
 #include "rxbox/formats.h"
+#include "rxbox/ml.h"
 #include "rxbox/notation.h"
 
 int rx_cli_main(int argc, char **argv);
@@ -74,8 +78,11 @@ static const char usage_text[] =
     "      -f, --force          re-analyse what is there too (a locked grid only when\n"
     "                           the track is named)\n"
     "      -w, --what LIST      any of beats,key,waves (default: all)\n"
-    "  show TRACK...            print the colour, the resolved grid, key, cues and\n"
-    "                           analyser versions\n"
+    "  show TRACK...            print the colour, the resolved grid, key, cues,\n"
+    "                           analyser versions and the model's tags\n"
+    "  tag TRACK...             tag the tracks with the model on the GPU (models/, or\n"
+    "                           the setting ml.model): a colour (hue) and a comment, and\n"
+    "                           a genre where none was typed\n"
     "  color HUE TRACK...       set the tracks' colour: a hue in degrees (0-360: 0 red,\n"
     "                           120 green, 240 blue), one of pink red orange yellow\n"
     "                           green aqua blue purple (its hue), or none; the stick\n"
@@ -97,7 +104,8 @@ static const char usage_text[] =
     "                           tracks an older analyser analysed\n"
     "  settings                 list the My Settings names and values\n"
     "  config [KEY [VALUE]]     show or change a setting (analysis.bpm_min,\n"
-    "                           import.comment, export.key_notation, player.quantize ...)\n"
+    "                           import.comment, export.key_notation, player.quantize,\n"
+    "                           ml.model ...)\n"
     "  init [DIR]               create a library (default: the library directory)\n"
     "  playlist list            list the playlists\n"
     "  playlist create NAME     create a playlist (\"Folder/Name\" creates the folders)\n"
@@ -1188,6 +1196,22 @@ static void show_track(const RXApp *app, const RXTrack *t)
     print_version("key", t->key_version, RX_KEY_VERSION, stale & RX_ANALYSE_KEY, ",");
     print_version("waves", t->waves_version, RX_WAVES_VERSION, stale & RX_ANALYSE_WAVES, "\n");
 
+    /* The model's words go where the user edits them; its measures are
+     * its own. */
+    if (t->meta.genre && t->meta.genre[0])
+        printf("  genre: %s\n", t->meta.genre);
+    if (t->meta.comment && t->meta.comment[0])
+        printf("  comment: %s\n", t->meta.comment);
+    if (t->tags_version > 0) {
+        printf("  tags:");
+        print_version("version", t->tags_version, RX_ML_TAGS_VERSION,
+                      t->tags_version < RX_ML_TAGS_VERSION, ":");
+        printf(" intensity %.2f, club %.2f, mood %.2f, %s\n", t->ml_intensity, t->ml_club,
+               t->ml_valence, t->ml_vocals >= 0.5f ? "vocals" : "instrumental");
+    } else {
+        printf("  tags: none (rxbox tag)\n");
+    }
+
     if (!t->nb_cues)
         printf("  cues: none\n");
     for (int i = 0; i < t->nb_cues; i++) {
@@ -1333,6 +1357,131 @@ static int cmd_color(Cli *cli, int argc, char **argv)
     }
     rx_array_free(&tracks);
 
+end:
+    rx_array_free(&args);
+    cli_close(cli);
+    return code;
+}
+
+/* rxbox-ml -t's line, after analyze's count: the measures, the genre the
+ * model hears (and the user's, when that stays) and the comment. */
+static void print_tagged(int n, int total, const RXTrack *t, const RXJobResult *r, int err)
+{
+    if (err < 0) {
+        printf("[%d/%d] FAILED %s: %s\n", n, total, t->path, strerror(-err));
+        return;
+    }
+    const RXMLTags *g = r->tags;
+    char name[256];
+    rx_track_display(t, name, sizeof(name));
+    printf("[%d/%d] %s: hue %5.1f | intensity %.2f club %.2f mood %.2f | %s", n, total, name,
+           g->hue, g->intensity, g->club, g->valence, g->genre ? g->genre : "-");
+    if (g->genre && t->meta.genre && strcmp(g->genre, t->meta.genre))
+        printf(" (the genre stays %s)", t->meta.genre);
+    printf(" | %s (%.1f s)\n", g->comment ? g->comment : "", r->seconds);
+}
+
+/* The interface's tagging: the tracks join one batch, which loads the
+ * model once and unloads it after the last. */
+static int cmd_tag(Cli *cli, int argc, char **argv)
+{
+    RXArray args;
+    rx_array_init(&args, sizeof(char *));
+    int code = EXIT_OK;
+    for (int i = 1; i < argc; i++) {
+        int r = common_option(cli, argc, argv, &i);
+        if (r < 0) {
+            code = EXIT_USAGE;
+            goto end;
+        }
+        if (r > 0)
+            continue;
+        if (is_option(cli, argv[i])) {
+            code = usage_error(cli, "tag: unknown option %s", argv[i]);
+            goto end;
+        }
+        rx_array_push(&args, &argv[i]);
+    }
+    if (!args.nb) {
+        code = usage_error(cli, "tag: which tracks?");
+        goto end;
+    }
+
+    code = open_library(cli, false);
+    if (code)
+        goto end;
+    RXApp *app = &cli->app;
+
+    RXArray ids;
+    rx_array_init(&ids, sizeof(uint64_t));
+    RXArray tracks;
+    rx_array_init(&tracks, sizeof(RXTrack *));
+    for (size_t i = 0; i < args.nb; i++) {
+        if (resolve_tracks(&app->lib, *(char **)rx_array_at(&args, i), &tracks) < 0)
+            code = EXIT_FAIL;
+    }
+    for (size_t i = 0; i < tracks.nb; i++) {
+        RXTrack *t = *(RXTrack **)rx_array_at(&tracks, i);
+        if (t->missing) {
+            fail("%s: the file is missing", t->path);
+            code = EXIT_FAIL;
+        } else if (!rx_array_push(&ids, &t->id)) {
+            code = fail("out of memory");
+        }
+    }
+    rx_array_free(&tracks);
+    if (!ids.nb)
+        goto out;
+
+    /* One worker is all the batch takes. */
+    int ret = rx_jobs_create(&app->jobs, 1);
+    if (ret < 0) {
+        code = fail("cannot start the tagging thread: %s", strerror(-ret));
+        goto out;
+    }
+    rx_jobs_set_gpu(app->jobs, true, cli->device);
+    int queued = rx_app_tag_tracks(app, ids.data, (int)ids.nb);
+    if (queued < 0) {
+        /* The status bar's message, in the CLI's lower case. */
+        code = fail("%c%s", tolower((unsigned char)app->status[0]), app->status + 1);
+        goto out;
+    }
+    printf("tagging %d track%s\n", queued, queued == 1 ? "" : "s");
+    fflush(stdout);
+
+    int done = 0, failed = 0;
+    while (done < queued) {
+        RXJobResult *r = rx_jobs_wait(app->jobs, 1000);
+        if (!r) {
+            /* The batch posts every result before it ends. */
+            if (!rx_jobs_tag_progress(app->jobs, NULL, NULL, NULL) &&
+                !(r = rx_jobs_poll(app->jobs)))
+                break;
+            if (!r)
+                continue;
+        }
+        if (r->kind == RX_JOB_TAG && !r->track_id) {
+            fail("cannot load the model: %s", strerror(-r->err));
+            rx_job_result_free(r);
+            break;
+        }
+        RXTrack *t = r->kind == RX_JOB_TAG ? rx_library_find_id(&app->lib, r->track_id) : NULL;
+        if (t) {
+            int err = r->err < 0 ? r->err : r->tags ? 0 : RX_ERROR(EINVAL);
+            if (!err)
+                err = rx_app_apply_tags(app, t, r->tags);
+            print_tagged(++done, queued, t, r, err);
+            fflush(stdout);
+            failed += err < 0;
+        }
+        rx_job_result_free(r);
+    }
+    failed += queued - done;
+    if (failed)
+        code = EXIT_FAIL;
+
+out:
+    rx_array_free(&ids);
 end:
     rx_array_free(&args);
     cli_close(cli);
@@ -1864,7 +2013,7 @@ static int cmd_config(Cli *cli, int argc, char **argv)
     }
 
     static const char *const sections[] = {
-        "analysis.", "import.", "export.", "player.", "mixer.", "device.", "audio.", "ui.",
+        "analysis.", "import.", "export.", "player.", "mixer.", "device.", "audio.", "ml.", "ui.",
     };
     if (key) {
         bool known = false;
@@ -1872,7 +2021,7 @@ static int cmd_config(Cli *cli, int argc, char **argv)
             known |= rx_str_starts(key, sections[i]);
         if (!known)
             return usage_error(cli, "config: keys start with analysis., import., export., player., "
-                               "mixer., device., audio. or ui.");
+                               "mixer., device., audio., ml. or ui.");
     }
 
     int code = open_library(cli, false);
@@ -1932,6 +2081,7 @@ static int cmd_config(Cli *cli, int argc, char **argv)
         print_kv("mixer", c->mixer, c->nb_mixer);
         print_kv("device", c->device, c->nb_device);
         printf("audio.sink = %s\n", c->audio_sink ? c->audio_sink : "(the default)");
+        printf("ml.model = %s\n", c->ml_model ? c->ml_model : "(models/" RX_APP_ML_MODEL ")");
         printf("ui.traffic_light = %s\n", c->traffic_light);
         printf("ui.detail_bars = %d\n", c->detail_bars);
     }
@@ -2112,6 +2262,7 @@ static const struct {
     { "analyze",  cmd_analyze,  "analyze [-f] [-w beats,key,waves] [TRACK...]" },
     { "analyse",  cmd_analyze,  "analyse [-f] [-w beats,key,waves] [TRACK...]" },
     { "show",     cmd_show,     "show TRACK..." },
+    { "tag",      cmd_tag,      "tag TRACK..." },
     { "color",    cmd_color,    "color HUE|NAME|none TRACK..." },
     { "colour",   cmd_color,    "colour HUE|NAME|none TRACK..." },
     { "export",   cmd_export,   "export [--all | -p NAME...] [--prune] [--compat] "

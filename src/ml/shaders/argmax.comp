@@ -1,0 +1,50 @@
+// Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md.
+
+// The most likely next token: the index of the largest logit (the first
+// of equals), into dst[0]. One workgroup.
+
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#include "common.glsl"
+
+layout(local_size_x = 1024) in;
+
+layout(push_constant, std430) uniform Push {
+    uint64_t logits;
+    uint64_t dst;
+    uint n;
+} pc;
+
+shared float bv[1024];
+shared uint bi[1024];
+
+void main()
+{
+    uint tid = gl_LocalInvocationIndex;
+    F32 x = F32(pc.logits);
+    float best = -1e38;
+    uint idx = 0xffffffffu;
+    for (uint i = tid; i < pc.n; i += 1024u) {
+        float v = x.v[i];
+        if (v > best) {
+            best = v;
+            idx = i;
+        }
+    }
+    bv[tid] = best;
+    bi[tid] = idx;
+    barrier();
+    for (uint s = 512u; s > 0u; s >>= 1) {
+        if (tid < s) {
+            float o = bv[tid + s];
+            uint oi = bi[tid + s];
+            if (o > bv[tid] || (o == bv[tid] && oi < bi[tid])) {
+                bv[tid] = o;
+                bi[tid] = oi;
+            }
+        }
+        barrier();
+    }
+    if (tid == 0u)
+        U32(pc.dst).v[0] = bi[0];
+}

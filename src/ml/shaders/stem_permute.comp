@@ -1,0 +1,29 @@
+// Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md.
+
+// The last convolution's output, [chunk][16 mels][50 frames][480], to the
+// stem projection's input, [chunk * 50 + frame][480 * 16]: PyTorch's
+// permute(0, 3, 1, 2).flatten(2) of [chunk][480][16][50].
+
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#include "common.glsl"
+
+layout(local_size_x = 256) in;
+
+layout(push_constant, std430) uniform Push {
+    uint64_t src;
+    uint64_t dst;
+    uint nb_chunks;
+} pc;
+
+void main()
+{
+    uint i = gl_GlobalInvocationID.x + gl_GlobalInvocationID.y * gl_NumWorkGroups.x * 256u;
+    if (i >= pc.nb_chunks * 50u * 7680u)
+        return;
+    uint f = i % 16u;
+    uint c = (i / 16u) % 480u;
+    uint t = (i / 7680u) % 50u;
+    uint b = i / (7680u * 50u);
+    F32(pc.dst).v[i] = F32(pc.src).v[((b * 16u + f) * 50u + t) * 480u + c];
+}

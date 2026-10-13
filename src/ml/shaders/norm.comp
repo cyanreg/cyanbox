@@ -1,0 +1,70 @@
+// Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md.
+
+// A norm of each row: LayerNorm (the encoder: mean and variance, weight
+// and bias) or, with RMS, RMSNorm (Qwen3: the root of the mean square,
+// weight only). A workgroup a row; the sums are f32, in two passes for
+// LayerNorm as PyTorch's.
+
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#include "common.glsl"
+
+layout(local_size_x = 256) in;
+
+layout(push_constant, std430) uniform Push {
+    uint64_t x, weight, bias, y;
+    uint n;                 // the row's length
+    uint ldx, ldy;
+    float eps;
+} pc;
+
+shared float part[256];
+
+float block_sum(float v)
+{
+    uint tid = gl_LocalInvocationIndex;
+    v = subgroupAdd(v);
+    if (subgroupElect())
+        part[gl_SubgroupID] = v;
+    barrier();
+    float s = 0.0;
+    for (uint i = 0u; i < gl_NumSubgroups; i++)
+        s += part[i];
+    barrier();
+    return s;
+}
+
+void main()
+{
+    uint tid = gl_LocalInvocationIndex;
+    uint row = gl_WorkGroupID.x;
+    F32 x = F32(pc.x);
+    F32 y = F32(pc.y);
+    F32 w = F32(pc.weight);
+    uint xo = row * pc.ldx, yo = row * pc.ldy;
+
+#ifdef RMS
+    float ss = 0.0;
+    for (uint i = tid; i < pc.n; i += 256u) {
+        float v = x.v[xo + i];
+        ss += v * v;
+    }
+    float r = inversesqrt(block_sum(ss) / float(pc.n) + pc.eps);
+    for (uint i = tid; i < pc.n; i += 256u)
+        y.v[yo + i] = x.v[xo + i] * r * w.v[i];
+#else
+    float s = 0.0;
+    for (uint i = tid; i < pc.n; i += 256u)
+        s += x.v[xo + i];
+    float mean = block_sum(s) / float(pc.n);
+    float ss = 0.0;
+    for (uint i = tid; i < pc.n; i += 256u) {
+        float d = x.v[xo + i] - mean;
+        ss += d * d;
+    }
+    float r = inversesqrt(block_sum(ss) / float(pc.n) + pc.eps);
+    F32 b = F32(pc.bias);
+    for (uint i = tid; i < pc.n; i += 256u)
+        y.v[yo + i] = (x.v[xo + i] - mean) * r * w.v[i] + b.v[i];
+#endif
+}

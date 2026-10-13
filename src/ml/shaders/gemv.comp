@@ -1,0 +1,98 @@
+// Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md.
+
+// Y = X W^T (+ Y) for a few rows of X (M <= 8) and Q4_K weights: the
+// decoder's steps, where gemm.comp's 128-row tiles would be nearly all
+// waste. It reads every weight once, so it runs at the memory's speed.
+//
+// A workgroup does four rows of W (outputs), 64 invocations each. A row is
+// cut into items of 16 bytes of nibbles, 32 weights: an item is the same
+// 16 positions of the two sub-blocks that share their bytes (low nibbles,
+// then high ones).
+//
+// Dispatch: (ceil(N / 4), 1). K is a multiple of 256, ldx of 4.
+
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#include "common.glsl"
+
+layout(local_size_x = 256) in;
+
+#define MAXM 8
+#define FLAG_ADD 2u
+
+layout(push_constant, std430) uniform Push {
+    uint64_t x, w, bias, y;
+    uint M, N, K;
+    uint ldx, ldy;
+    uint flags;
+} pc;
+
+shared float red[4][MAXM][4];
+
+void main()
+{
+    uint tid = gl_LocalInvocationIndex;
+    uint lane = tid % 64u, row = tid / 64u;
+    uint n = gl_WorkGroupID.x * 4u + row;
+    uint nb = pc.K / 256u;
+    uint M = min(pc.M, uint(MAXM));
+
+    float acc[MAXM];
+    for (uint m = 0u; m < MAXM; m++)
+        acc[m] = 0.0;
+
+    if (n < pc.N) {
+        U32x4 wq = U32x4(pc.w);
+        F32x4 x4 = F32x4(pc.x);
+        for (uint it = lane; it < nb * 8u; it += 64u) {
+            uint kb = it / 8u, u = it % 8u;
+            uint j = u / 2u, h = u % 2u;
+            uint blk = (n * nb + kb) * 9u;
+            uvec4 hd = wq.v[blk];
+            uvec4 qs = wq.v[blk + 1u + u];
+            vec2 dm0 = q4k_scale_min(hd, 2u * j);
+            vec2 dm1 = q4k_scale_min(hd, 2u * j + 1u);
+            vec4 lo[4], hi[4];
+            for (uint i = 0u; i < 4u; i++) {
+                uint wd = qs[i];
+                lo[i] = vec4(float(wd & 15u), float((wd >> 8) & 15u),
+                             float((wd >> 16) & 15u), float((wd >> 24) & 15u)) * dm0.x - dm0.y;
+                hi[i] = vec4(float((wd >> 4) & 15u), float((wd >> 12) & 15u),
+                             float((wd >> 20) & 15u), float((wd >> 28) & 15u)) * dm1.x - dm1.y;
+            }
+            // The weights' positions in the row: 64 j + 16 h (+ 32 for hi).
+            uint k = kb * 256u + 64u * j + 16u * h;
+            for (uint m = 0u; m < M; m++) {
+                uint base = (m * pc.ldx + k) / 4u;
+                float s = 0.0;
+                for (uint i = 0u; i < 4u; i++) {
+                    s += dot(lo[i], x4.v[base + i]);
+                    s += dot(hi[i], x4.v[base + 8u + i]);
+                }
+                acc[m] += s;
+            }
+        }
+    }
+
+    // 64 lanes to one sum: in the subgroup, then across subgroups (16 to
+    // 64 lanes wide) through shared memory.
+    uint sg = lane / gl_SubgroupSize;
+    for (uint m = 0u; m < M; m++) {
+        float s = subgroupAdd(acc[m]);
+        if (subgroupElect())
+            red[row][m][sg] = s;
+    }
+    barrier();
+    if (lane == 0u && n < pc.N) {
+        F32 y = F32(pc.y);
+        for (uint m = 0u; m < M; m++) {
+            float v = 0.0;
+            for (uint i = 0u; i < 64u / gl_SubgroupSize; i++)
+                v += red[row][m][i];
+            uint idx = m * pc.ldy + n;
+            if ((pc.flags & FLAG_ADD) != 0u)
+                v += y.v[idx];
+            y.v[idx] = v;
+        }
+    }
+}

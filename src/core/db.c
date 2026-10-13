@@ -3,7 +3,7 @@
 /* The library database: the SQLite connection, the schema and its
  * migrations, the cached statements, transactions and error mapping.
  *
- * Schema version 4 (PRAGMA user_version = 4, application_id = 'RXBX').
+ * Schema version 5 (PRAGMA user_version = 5, application_id = 'RXBX').
  * Tables are STRICT so a wrong type is an error instead of a silent
  * conversion, and every row that belongs to a track or a playlist goes
  * with it (ON DELETE CASCADE, foreign keys on for every connection).
@@ -29,6 +29,10 @@
  *                             the analyser version (RX_*_VERSION, rxbox/analysis.h)
  *                             each result was made by; 0: before versions were
  *                             kept (schema 1), so older than any
+ *                   tags_version ml_club ml_intensity ml_valence ml_vocals
+ *                             the model's tagging (rxbox/ml.h), asked for by
+ *                             the user: RX_ML_TAGS_VERSION (0 never) and its
+ *                             measures, 0 to 1, NULL when never tagged
  *                   added play_count last_played missing
  *   grid_section    track_id, idx (0-based order), start, bpm, beat
  *   cue             track_id, time, grid_beat (NULL: absolute), hot (-1 memory,
@@ -60,6 +64,8 @@
  *           own hue, so the stick gets the same colour as before. Cue
  *           colours are the players' palette still. Comments imported
  *           from files before are kept; only new imports leave them out.
+ *
+ *   4 -> 5  the model's tagging: tags_version and the four ml_* measures.
  *
  * Journal: WAL, synchronous = NORMAL (a crash loses at most the last
  * transactions, never consistency), and a busy timeout because the export
@@ -93,6 +99,7 @@ const char *const rx_track_edit_cols[RX_TRACK_EDIT_COLS] = {
     "rating", "hue", "key", "key_confidence", "beats_per_bar",
     "grid_confidence", "grid_flags", "grid_locked", "analysed",
     "beats_version", "key_version", "waves_version",
+    "tags_version", "ml_club", "ml_intensity", "ml_valence", "ml_vocals",
 };
 
 /* --------------------------------------------------------------- schema */
@@ -275,11 +282,21 @@ static const char schema_v4[] =
     "WHERE color != '';"
     "ALTER TABLE track DROP COLUMN color;";
 
+/* The model's tagging (rxbox/ml.h): which version of it tagged the track,
+ * 0 for never, and its four measures, NULL until it has. */
+static const char schema_v5[] =
+    "ALTER TABLE track ADD COLUMN tags_version INTEGER NOT NULL DEFAULT 0;"
+    "ALTER TABLE track ADD COLUMN ml_club      REAL;"
+    "ALTER TABLE track ADD COLUMN ml_intensity REAL;"
+    "ALTER TABLE track ADD COLUMN ml_valence   REAL;"
+    "ALTER TABLE track ADD COLUMN ml_vocals    REAL;";
+
 static const char *const migrations[] = {
     schema_v1,          /* 0 -> 1 */
     schema_v2,          /* 1 -> 2 */
     schema_v3,          /* 2 -> 3 */
     schema_v4,          /* 3 -> 4 */
+    schema_v5,          /* 4 -> 5 */
 };
 
 /* ------------------------------------------------------------ statements */

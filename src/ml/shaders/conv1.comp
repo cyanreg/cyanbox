@@ -1,0 +1,61 @@
+// Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md.
+
+// The encoder's first convolution: 1 to 480 channels, 3x3, stride 2,
+// padding 1, then GELU, over chunks of 400 mel frames (MOSS-Audio's
+// encoder cuts the features into chunks of 2 * n_window frames, the last
+// one shorter, zero-padded to 400, and convolves each on its own).
+//
+// The input is the features, [frame][mel]; chunk c covers frames
+// [400 c, 400 c + len) and is zero after them. The output is channel-last,
+// [chunk][64 mels][200 frames][480], what the next convolution's gather
+// reads.
+
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#include "common.glsl"
+
+layout(local_size_x = 256) in;
+
+#define C 480
+
+layout(push_constant, std430) uniform Push {
+    uint64_t mel;           // [nb_frames][128]
+    uint64_t weight;        // F16 [480][3][3]
+    uint64_t bias;          // [480]
+    uint64_t dst;
+    uint nb_frames;
+    uint chunk0;            // the first chunk of this batch
+    uint nb_chunks;         // in this batch
+} pc;
+
+void main()
+{
+    uint i = gl_GlobalInvocationID.x + gl_GlobalInvocationID.y * gl_NumWorkGroups.x * 256u;
+    uint count = pc.nb_chunks * 64u * 200u * C;
+    if (i >= count)
+        return;
+    uint o = i % C;
+    uint pos = i / C;
+    uint to = pos % 200u;
+    uint fo = (pos / 200u) % 64u;
+    uint b = pos / (200u * 64u);
+
+    uint first = (pc.chunk0 + b) * 400u;
+    uint len = min(400u, pc.nb_frames - first);
+    F32 mel = F32(pc.mel);
+    F16 w = F16(pc.weight);
+
+    float acc = F32(pc.bias).v[o];
+    for (int kh = 0; kh < 3; kh++) {
+        int f = int(2u * fo) + kh - 1;
+        if (f < 0 || f >= 128)
+            continue;
+        for (int kw = 0; kw < 3; kw++) {
+            int t = int(2u * to) + kw - 1;
+            if (t < 0 || t >= int(len))
+                continue;
+            acc += float(w.v[o * 9u + uint(kh * 3 + kw)]) * mel.v[(first + uint(t)) * 128u + uint(f)];
+        }
+    }
+    F32(pc.dst).v[i] = gelu(acc);
+}

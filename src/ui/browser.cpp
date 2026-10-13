@@ -256,6 +256,19 @@ static RXPlaylist *playlist_menu(RXPlaylistFolder *f)
     return picked;
 }
 
+// The tracks a menu item acts on, as Add to playlist takes them: the
+// selection when the clicked track is in it, else that track alone.
+static std::vector<uint64_t> menu_tracks(UiState *ui, const RXTrack *t)
+{
+    RXApp *app = ui->app;
+    std::vector<uint64_t> ids;
+    if (ui_is_selected(ui, t->id))
+        ids.assign(app->selection, app->selection + app->nb_selection);
+    else
+        ids.push_back(t->id);
+    return ids;
+}
+
 static void track_menu(UiState *ui)
 {
     RXApp *app = ui->app;
@@ -274,6 +287,12 @@ static void track_menu(UiState *ui)
         if (ImGui::MenuItem("Force re-analysis"))
             analyse_selection(ui, RX_ANALYSE_ALL, true);
         ImGui::EndMenu();
+    }
+    // The model listens to each track for its genre, colour and comment:
+    // seconds a track on the GPU, so only ever when asked for here.
+    if (ImGui::MenuItem("Analyse tags", nullptr, false, !t->missing)) {
+        std::vector<uint64_t> ids = menu_tracks(ui, t);
+        rx_app_tag_tracks(app, ids.data(), (int)ids.size());
     }
     ImGui::Separator();
     if (ImGui::BeginMenu("Set colour")) {
@@ -317,11 +336,7 @@ static void track_menu(UiState *ui)
     ImGui::Separator();
     // Every playlist, folders as submenus, in the tree's order.
     if (ImGui::BeginMenu("Add to playlist", app->lib.root_folder != nullptr)) {
-        std::vector<uint64_t> ids;
-        if (ui_is_selected(ui, t->id))
-            ids.assign(app->selection, app->selection + app->nb_selection);
-        else
-            ids.push_back(t->id);
+        std::vector<uint64_t> ids = menu_tracks(ui, t);
         if (RXPlaylist *p = playlist_menu(app->lib.root_folder))
             ui_add_to_playlist(ui, p, ids);
         ImGui::EndMenu();
@@ -856,6 +871,25 @@ static void info_commit_tags(UiState *ui, RXTrack *t)
     rx_app_save_track(ui->app, t);
 }
 
+// What the model said of the track beyond the genre, colour and comment
+// it wrote (src/ml/tag.c): the tagging's version and its measures, 0 to 1.
+static void tags_line(const RXTrack *t, float label_w)
+{
+    ImGui::TextDisabled("Tags");
+    ImGui::SameLine(label_w);
+    if (t->tags_version <= 0) {
+        ImGui::TextDisabled("none (Analyse tags)");
+        return;
+    }
+    // A group, so the lines it wraps into start under its first.
+    ImGui::BeginGroup();
+    ImGui::TextWrapped("v%d%s \xC2\xB7 intensity %.2f \xC2\xB7 club %.2f \xC2\xB7 mood %.2f "
+                       "\xC2\xB7 %s", t->tags_version,
+                       t->tags_version < RX_ML_TAGS_VERSION ? " (older)" : "", t->ml_intensity,
+                       t->ml_club, t->ml_valence, t->ml_vocals >= 0.5f ? "vocals" : "instrumental");
+    ImGui::EndGroup();
+}
+
 static void fact(const char *name, const char *value)
 {
     ImGui::TextDisabled("%s", name);
@@ -936,6 +970,8 @@ void ui_info_panel(UiState *ui, ImVec2 size)
         if (ImGui::IsItemDeactivatedAfterEdit())
             info_commit(ui, t, f);
         ImGui::PopID();
+        if (f == F_COMMENT)
+            tags_line(t, label_w);
     }
     ImGui::AlignTextToFramePadding();
     ImGui::TextDisabled("My Tags");

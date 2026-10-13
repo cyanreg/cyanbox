@@ -20,7 +20,8 @@
 // RXBOX_UI_AUTOLOAD=<id> loads that track on the first frame and starts it
 // once it is loaded (RXBOX_UI_AUTOLOAD_AT=<seconds>: from there);
 // RXBOX_UI_SHOW=<list> opens panels and dialogs on the first frame (grid,
-// half, export, sync, inspect, analysis, settings, add, keys, about);
+// half, export, sync, inspect, analysis, settings, add, keys, about), and
+// `tags` asks for the autoloaded track's tags from the model;
 // RXBOX_UI_SCREENSHOT=<png> saves frame 100 (RXBOX_UI_SCREENSHOT_FRAME=<n>:
 // frame n) through rx_window_screenshot_next(), which writes it once it is
 // presented, and the run goes on; a run that ends before that frame
@@ -1042,6 +1043,14 @@ static void menu_bar(UiState *ui)
                     rx_app_analyse_track(app, t, app->lib.cfg.analyse_what, true);
             }
         }
+        // The model's genre, colour and comment: asked for here or in the
+        // track menu, never by "Analyse all" (seconds a track on the GPU).
+        ImGui::Separator();
+        if (ImGui::MenuItem("Analyse tags of selection", nullptr, false, any))
+            rx_app_tag_tracks(app, app->selection, app->nb_selection);
+        if (ImGui::MenuItem("Stop tagging", nullptr, false,
+                            rx_app_tag_progress(app, nullptr, nullptr, nullptr)))
+            rx_app_cancel_tags(app);
         ImGui::Separator();
         if (ImGui::MenuItem("Analysis settings..."))
             ui->dlg_analysis = true;
@@ -1116,6 +1125,8 @@ static void status_bar(UiState *ui, ImVec2 a, ImVec2 b)
     float mid_w = ImMin(right_edge - mid_x, PX(380));
     char mid[320] = "";
     float frac = -1;
+    int tag_done = 0, tag_total = 0;
+    uint64_t tag_current = 0;
     if (app->export_state.running) {
         const auto &es = app->export_state;
         snprintf(mid, sizeof(mid), "Export %s %d/%d  %s", es.stage, es.done, es.total, es.item);
@@ -1134,6 +1145,17 @@ static void status_bar(UiState *ui, ImVec2 a, ImVec2 b)
         snprintf(mid, sizeof(mid), "Analysing %d/%d%s%s", app->analysing_done + 1, app->analysing_total,
                  name[0] ? ": " : "", name);
         frac = (float)app->analysing_done / app->analysing_total;
+    } else if (rx_app_tag_progress(app, &tag_done, &tag_total, &tag_current)) {
+        // The track being tagged; none while the model loads, or unloads
+        // after the last.
+        char name[200];
+        snprintf(name, sizeof(name), "%s the model", tag_done < tag_total ? "loading" : "unloading");
+        RXTrack *t = tag_current ? rx_library_find_id(&app->lib, tag_current) : nullptr;
+        if (t)
+            rx_track_display(t, name, sizeof(name));
+        snprintf(mid, sizeof(mid), "Tagging %d/%d: %s", ImMin(tag_done + 1, tag_total), tag_total,
+                 name);
+        frac = tag_total > 0 ? (float)tag_done / tag_total : 0;
     }
     if (mid[0] && mid_w > PX(60)) {
         ui_spinner(dl, ImVec2(mid_x + PX(6), (a.y + b.y) * 0.5f), PX(4.5f), UI_ACCENT);
@@ -1550,6 +1572,8 @@ static void autoload_tick(UiState *ui)
         }
         load_now(ui, 0, t);
         ud->autoplay = true;
+        if (shown(ui, "tags"))
+            rx_app_tag_tracks(app, &t->id, 1);
     }
     if (!ud->autoplay || dv->loading_request || !dv->ctl.track || !app->player)
         return;
@@ -1701,6 +1725,8 @@ bool rx_ui_frame(RXApp *app)
         ui->pending_frames = 0;
     }
     if (app->analysing_total > 0 && app->analysing_done < app->analysing_total)
+        more = true;
+    if (rx_app_tag_progress(app, nullptr, nullptr, nullptr))
         more = true;
     // Input this frame may have opened or resized something that settles
     // over the next two frames (ImGui sizes new windows on their second).

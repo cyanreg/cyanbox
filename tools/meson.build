@@ -14,3 +14,10 @@ executable('rxbox-gpu-demo', 'rxbox-gpu-demo.c', gpu_sources,
     include_directories: rx_inc,
     dependencies: [ rx_common_dep, vulkan_dep, sdl3_dep, wayland_client, imgui_dep, vma_dep ] + gpu_deps,
 )
+
+# rxbox-ml: listens to files with the model and prints its answers to
+# questions, for trying prompts out (ml module).
+executable('rxbox-ml', 'rxbox-ml.c',
+    include_directories: rx_inc,
+    dependencies: [ rx_ml_dep, rx_audio_dep, m_dep ],
+)

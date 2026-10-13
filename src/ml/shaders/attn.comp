@@ -1,0 +1,217 @@
+// Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md.
+
+// The decoder's causal attention over its cache (Qwen3: 32 query heads, 8
+// key-value heads, 128 dimensions): queries at positions [pos0, pos0 + nq)
+// attend to keys [0, their own position]. Flash attention: a workgroup is
+// 64 queries of one head; it walks the keys 32 at a time with an online
+// softmax, so the scores never leave shared memory.
+//
+// Both products are tiled in registers as gemm.comp's are: an invocation
+// holds 2 rows x 4 keys of the scores and 2 rows x 16 dimensions of the
+// output, and the eight invocations that share a pair of rows share its
+// maximum and sum through subgroup shuffles. The queries go into shared
+// memory as f16 (pre-scaled), like the cache's keys and values; the scores
+// and sums are f32. Rows of shared memory are swizzled (column ^ row & 7)
+// so the rows read at once fall in different banks.
+//
+// With nsplit > 1 the keys are cut into nsplit runs, one a workgroup (z),
+// and each writes its part (output, maximum, sum) for COMBINE: a few
+// queries over a long context would otherwise be a few workgroups.
+
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#include "common.glsl"
+
+layout(local_size_x = 256) in;
+
+#define D    128
+#define D4   (D / 4)
+#define BR   64
+#define BC   32
+#define PART (D + 2)
+
+layout(push_constant, std430) uniform Push {
+    uint64_t q, o;              // [nq][nb_q * 128] f32
+    uint64_t kc, vc;            // F16 [nb_kv][max_ctx][128]
+    uint64_t part;              // [nsplit][nq][nb_q][PART]
+    uint nq;
+    uint pos0;
+    uint max_ctx;
+    uint nb_q, nb_kv;
+    uint nsplit;
+    uint split_len;             // keys a split (a multiple of BC)
+    float scale;
+} pc;
+
+#ifndef COMBINE
+
+#define SW(r, c) ((c) ^ ((r) & 7u))
+
+shared f16vec4 Qs[BR][D4];
+shared f16vec4 Ks[BC][D4];
+shared f16vec4 Vs[BC][D4];
+shared float Ps[BR][BC];
+
+void main()
+{
+    uint tid = gl_LocalInvocationIndex;
+    uint tx = tid % 8u, ty = tid / 8u;          // rows ty, ty + 32; keys tx + 8 j
+    uint qb = gl_WorkGroupID.x, h = gl_WorkGroupID.y, split = gl_WorkGroupID.z;
+    uint kvh = h / (pc.nb_q / pc.nb_kv);
+    uint width = pc.nb_q * D;
+
+    F32x4 q4 = F32x4(pc.q);
+    for (uint e = tid; e < BR * D4; e += 256u) {
+        uint r = e / D4, d4 = e % D4;
+        uint qi = qb * BR + r;
+        vec4 v = qi < pc.nq ? q4.v[(qi * width + h * D) / 4u + d4] * pc.scale : vec4(0.0);
+        Qs[r][SW(r, d4)] = f16vec4(v);
+    }
+
+    uint qpos[2] = { pc.pos0 + qb * BR + ty, pc.pos0 + qb * BR + ty + 32u };
+    uint last = pc.pos0 + min(qb * BR + BR, pc.nq) - 1u;   // the block's last query
+    uint kbeg = split * pc.split_len;
+    uint kend = min(last + 1u, kbeg + pc.split_len);
+
+    F16x4 kc = F16x4(pc.kc);
+    F16x4 vc = F16x4(pc.vc);
+    uint cache = kvh * pc.max_ctx * D4;
+
+    float mx[2] = { -1e30, -1e30 }, l[2] = { 0.0, 0.0 };
+    vec4 acc[2][4];
+    for (uint i = 0u; i < 2u; i++) {
+        for (uint k = 0u; k < 4u; k++)
+            acc[i][k] = vec4(0.0);
+    }
+
+    for (uint k0 = kbeg; k0 < kend; k0 += BC) {
+        barrier();
+        for (uint e = tid; e < BC * D4; e += 256u) {
+            uint c = e / D4, d4 = e % D4;
+            bool in_ = k0 + c < kend;
+            Ks[c][SW(c, d4)] = in_ ? kc.v[cache + (k0 + c) * D4 + d4] : f16vec4(0.0);
+            Vs[c][SW(c, d4)] = in_ ? vc.v[cache + (k0 + c) * D4 + d4] : f16vec4(0.0);
+        }
+        barrier();
+
+        float s[2][4];
+        for (uint i = 0u; i < 2u; i++) {
+            for (uint j = 0u; j < 4u; j++)
+                s[i][j] = 0.0;
+        }
+        for (uint d4 = 0u; d4 < D4; d4++) {
+            vec4 qv[2], kv[4];
+            for (uint i = 0u; i < 2u; i++) {
+                uint r = ty + 32u * i;
+                qv[i] = vec4(Qs[r][SW(r, d4)]);
+            }
+            for (uint j = 0u; j < 4u; j++) {
+                uint c = tx + 8u * j;
+                kv[j] = vec4(Ks[c][SW(c, d4)]);
+            }
+            for (uint i = 0u; i < 2u; i++) {
+                for (uint j = 0u; j < 4u; j++) {
+                    s[i][j] = fma(qv[i].x, kv[j].x, s[i][j]);
+                    s[i][j] = fma(qv[i].y, kv[j].y, s[i][j]);
+                    s[i][j] = fma(qv[i].z, kv[j].z, s[i][j]);
+                    s[i][j] = fma(qv[i].w, kv[j].w, s[i][j]);
+                }
+            }
+        }
+
+        for (uint i = 0u; i < 2u; i++) {
+            float smax = -1e30;
+            for (uint j = 0u; j < 4u; j++) {
+                uint key = k0 + tx + 8u * j;
+                if (key > qpos[i] || key >= kend)
+                    s[i][j] = -1e30;
+                smax = max(smax, s[i][j]);
+            }
+            smax = max(smax, subgroupShuffleXor(smax, 1u));
+            smax = max(smax, subgroupShuffleXor(smax, 2u));
+            smax = max(smax, subgroupShuffleXor(smax, 4u));
+            float mn = max(mx[i], smax);
+            float corr = exp(mx[i] - mn);
+            float psum = 0.0;
+            uint r = ty + 32u * i;
+            for (uint j = 0u; j < 4u; j++) {
+                float p = s[i][j] > -1e29 ? exp(s[i][j] - mn) : 0.0;
+                uint c = tx + 8u * j;
+                Ps[r][c ^ (r & 31u)] = p;
+                psum += p;
+            }
+            psum += subgroupShuffleXor(psum, 1u);
+            psum += subgroupShuffleXor(psum, 2u);
+            psum += subgroupShuffleXor(psum, 4u);
+            l[i] = l[i] * corr + psum;
+            mx[i] = mn;
+            for (uint k = 0u; k < 4u; k++)
+                acc[i][k] *= corr;
+        }
+        barrier();
+
+        for (uint c = 0u; c < BC; c++) {
+            vec4 vv[4];
+            for (uint k = 0u; k < 4u; k++)
+                vv[k] = vec4(Vs[c][SW(c, tx + 8u * k)]);
+            for (uint i = 0u; i < 2u; i++) {
+                uint r = ty + 32u * i;
+                float p = Ps[r][c ^ (r & 31u)];
+                for (uint k = 0u; k < 4u; k++)
+                    acc[i][k] += p * vv[k];
+            }
+        }
+    }
+
+    for (uint i = 0u; i < 2u; i++) {
+        uint qi = qb * BR + ty + 32u * i;
+        if (qi >= pc.nq)
+            continue;
+        if (pc.nsplit == 1u) {
+            F32x4 o4 = F32x4(pc.o);
+            float inv = 1.0 / l[i];
+            for (uint k = 0u; k < 4u; k++)
+                o4.v[(qi * width + h * D) / 4u + tx + 8u * k] = acc[i][k] * inv;
+        } else {
+            F32 part = F32(pc.part);
+            uint base = ((split * pc.nq + qi) * pc.nb_q + h) * PART;
+            for (uint k = 0u; k < 4u; k++) {
+                for (uint c = 0u; c < 4u; c++)
+                    part.v[base + (tx + 8u * k) * 4u + c] = acc[i][k][c];
+            }
+            if (tx == 0u) {
+                part.v[base + D] = mx[i];
+                part.v[base + D + 1u] = l[i];
+            }
+        }
+    }
+}
+
+#else
+
+// One workgroup of 128 a (query, head): the splits merged and normalised.
+// A split that holds none of the query's keys has the empty maximum and a
+// weight of 0.
+
+void main()
+{
+    uint d = gl_LocalInvocationIndex;
+    uint qi = gl_WorkGroupID.x, h = gl_WorkGroupID.y;
+    if (d >= D)
+        return;
+    F32 part = F32(pc.part);
+    uint stride = pc.nq * pc.nb_q * PART;
+    uint base = (qi * pc.nb_q + h) * PART;
+    float mx = -1e30;
+    for (uint s = 0u; s < pc.nsplit; s++)
+        mx = max(mx, part.v[base + s * stride + D]);
+    float l = 0.0, o = 0.0;
+    for (uint s = 0u; s < pc.nsplit; s++) {
+        float w = exp(part.v[base + s * stride + D] - mx);
+        l += w * part.v[base + s * stride + D + 1u];
+        o += w * part.v[base + s * stride + d];
+    }
+    F32(pc.o).v[qi * pc.nb_q * D + h * D + d] = o / l;
+}
+
+#endif

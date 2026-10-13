@@ -3,9 +3,10 @@
 rx_app_lib = static_library('rx_app',
     files('jobs.c', 'app.c'),
     include_directories: rx_inc,
-    dependencies: [ rx_export_dep, rx_player_dep ],
+    dependencies: [ rx_export_dep, rx_player_dep, rx_ml_dep ],
 )
-rx_app_dep = declare_dependency(link_with: rx_app_lib, dependencies: [ rx_export_dep, rx_player_dep ])
+rx_app_dep = declare_dependency(link_with: rx_app_lib,
+                                dependencies: [ rx_export_dep, rx_player_dep, rx_ml_dep ])
 
 # rxbox-cli: the command line without src/gpu and src/ui (headless.c stands
 # in for them), for the CLI test: it needs no display and does not wait for

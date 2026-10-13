@@ -255,6 +255,8 @@ Actions: double-click loads the track into the player at once (over a
 playing track the new one plays on from its auto-cue; over a paused one it
 waits there); drag
 onto the player panel loads it; context menu: Analyse (BPM/grid, key, both; force),
+Analyse tags (the model's genre, colour and comment, docs/ML.md: for the
+selection, or the clicked track when it is not selected),
 Add to playlist (every playlist, folders as submenus), Remove from playlist,
 Remove from library, Set colour, Set rating (and Relocate… for a missing file).
 Keyboard: up/down move the focus, Enter loads the focused track, Delete
@@ -286,16 +288,24 @@ without a hue the strip is dimmed. The row menu's Set colour opens the
 same strip and gives the hue to every selected track. A track's colour is
 drawn as its hue at full saturation and the palette's value (`0xF8`).
 The comment starts empty: rxbox leaves a file's comment tag out when it
-adds the track (setting `import.comment` takes it), so the field is the
-DJ's own.
+adds the track (setting `import.comment` takes it), so the field is free
+for Analyse tags, which writes the model's comment there ("Male vocals,
+English. Uplifting, energetic, anthemic."), with the hue, and the genre
+when the genre field holds no genre the user typed. Under the Comment
+field a **Tags** line shows what else the model said: the tagging's
+version (`v1`, "older" once the tagging changes) and its measures, 0 to
+1: intensity (calm to intense), club, mood (dark to bright), and vocals
+or instrumental; "none" for a track never tagged.
 
 ## Status bar
 
 Left: the last message (`rx_app_set_status`). Middle: analysis progress
 (`Analysing 12/340: Artist - Title`) with a thin bar; export progress
-likewise. Right: audio state (`PipeWire 48 kHz · rxbox-null`, `Audio: none`
-under `--audio none`, or the error in red), the library track count with the
-size of its files (`58 tracks · 1.7 GB`: what a stick with every track holds), the
+likewise, and tagging's (`Tagging 3/12: Artist - Title`, `loading the
+model` before its first track) when no analysis is running. Right: audio
+state (`PipeWire 48 kHz · rxbox-null`, `Audio: none` under `--audio none`, or
+the error in red), the library track count with the size of its files
+(`58 tracks · 1.7 GB`: what a stick with every track holds), the
 GPU name.
 
 ## Dialogs and menus
@@ -312,10 +322,16 @@ those settings and a pick sets them, as the Player settings dialog's
 Device tab does, so they reach the stick too; Open Key is the command
 line's `export.key_notation` only),
 **Analysis** (analyse selection, analyse all
-unanalysed, re-analyse selection, analysis settings…), **Help** (about,
+unanalysed, re-analyse selection, analyse tags of selection, stop tagging,
+analysis settings…), **Help** (about,
 keyboard map). "Unanalysed" includes results an older analyser made; the
 interface queues those by itself when it opens the library (README.md,
-Analysis), with the usual progress in the status bar.
+Analysis), with the usual progress in the status bar. Tags never are:
+the model runs only for Analyse tags (here or in the track menu), never
+for analyse all, a new track, the start or an export. The tracks asked
+for join one batch that loads the model once, tags them one at a time
+and unloads it after the last; Stop tagging drops the rest and unloads
+it at once.
 
 - **Analysis settings**: what to analyse (BPM/grid, key), BPM range presets
   (auto (default), 70–180, 98–195, 118–236, 58–115), integer snap, allow

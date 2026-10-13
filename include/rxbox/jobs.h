@@ -4,7 +4,8 @@
 #define RXBOX_JOBS_H
 
 /* Background work for the interface and the CLI: analysing tracks,
- * decoding tracks for the decks, cover art and reading sticks, on a pool,
+ * decoding tracks for the decks, cover art, reading sticks and tagging
+ * tracks with the model, on a pool,
  * with results handed back to the owner thread through a mailbox. Jobs
  * never touch the owner's library; the owner applies results (library
  * writes, deck load). A stick read, which compares the stick with the
@@ -20,6 +21,7 @@
 #include "rxbox/analysis.h"
 #include "rxbox/audio.h"
 #include "rxbox/export.h"
+#include "rxbox/ml.h"
 
 typedef struct RXJobs RXJobs;
 
@@ -31,6 +33,9 @@ enum RXJobKind {
     RX_JOB_ARTWORK,     /* cover art RGBA: result->rgba, and result->jpeg */
     RX_JOB_STICK_READ,  /* rx_stick_read + rx_stick_diff: result->stick, result->sync_items */
     RX_JOB_INSPECT,     /* rx_inspect: result->report, result->problems */
+    RX_JOB_TAG,         /* the model's tags of one track of the tag batch: result->tags;
+                           track_id 0: the batch stopped before its tracks (the model
+                           would not open), err says why */
 };
 
 typedef struct RXJobResult {
@@ -52,6 +57,7 @@ typedef struct RXJobResult {
     char       *report;         /* RX_JOB_INSPECT: the report's lines, also on error; owned by
                                    the receiver */
     int         problems;       /* RX_JOB_INSPECT: rx_inspect's count */
+    RXMLTags   *tags;           /* RX_JOB_TAG: owned by the receiver */
 } RXJobResult;
 
 int  rx_jobs_create(RXJobs **j, int threads);
@@ -77,7 +83,28 @@ uint64_t rx_jobs_artwork(RXJobs *j, uint64_t track_id, const char *path, int max
  * same database (so the owner saves pending edits first). */
 uint64_t rx_jobs_stick_read(RXJobs *j, const char *library_root, const char *mount);
 uint64_t rx_jobs_inspect(RXJobs *j, const char *mount);
-/* Drops a request not yet started; a running one finishes and is reported. */
+/* Tagging with the model (rxbox/ml.h), only ever on request: it holds the
+ * GPU for seconds a track, and up to 7 GB of its memory while it is open.
+ * rx_jobs_tag appends a track to the pool's one tag queue, and one job
+ * drains it: it opens the model (`model`, its GGUF file, on the GPU
+ * rx_jobs_set_gpu named), decodes and tags the tracks one at a time in the
+ * order they came, takes the tracks appended while it runs into the same
+ * batch, and closes the model once the queue is empty or the batch is
+ * cancelled, so there is never more than one model open. Each track posts
+ * an RX_JOB_TAG result (but one cancelled half way); a model that cannot
+ * be opened posts one with track_id 0 and drops the queue. A batch that
+ * is running keeps the model it opened. Returns the batch's request id,
+ * the same for all its tracks, or a negative errno. */
+uint64_t rx_jobs_tag(RXJobs *j, const char *model, uint64_t track_id, const char *path);
+/* The tag batch: false when none is queued or running; else the tracks
+ * done and asked for in it so far, and the one being tagged (0 while the
+ * model loads). Any pointer may be NULL. */
+bool     rx_jobs_tag_progress(RXJobs *j, int *done, int *total, uint64_t *current);
+
+/* Drops a request not yet started; a running one finishes and is reported.
+ * The tag batch's request is the exception: it stops the batch, the track
+ * being tagged included, and empties its queue; cancel_all and destroy do
+ * the same to it. */
 void     rx_jobs_cancel(RXJobs *j, uint64_t request);
 void     rx_jobs_cancel_all(RXJobs *j);
 

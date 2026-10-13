@@ -150,6 +150,7 @@ src/export    stick plan, writer, inspect, pull
 src/player    PipeWire stream, the player, lock-free command queue, the decks' decoding threads, cue/loop/quantize controls, MASTER TEMPO, null backend for tests
 src/gpu       SDL3 window (Wayland), Vulkan device + VMA, swapchain, Wayland frame-callback pacing, ImGui glue, waveform shader;
               the compute context without a window and the analysis' STFT and envelope shaders (rx_compute)
+src/ml        MOSS-Audio-4B on Vulkan compute, a device of its own: a track's genre, hue and comment, only when asked (docs/ML.md)
 src/ui        Dear ImGui screens (C++, as are only vendored code and the player's Signalsmith Stretch interface)
 src/cli.c     the subcommands
 ```
@@ -335,5 +336,6 @@ Implemented by subagents against the interfaces in `include/rxbox/`:
 | formats+export | pdb, ANLZ, OneLibrary, settings, colours, plan, stick writer, inspect, stick sync |
 | player | PipeWire, decks, controls, MASTER TEMPO, null backend |
 | gpu | window, Vulkan, VMA, frame callback, ImGui glue, waveform shader; compute context and the analysis' front-end shaders |
+| ml | MOSS-Audio on Vulkan compute: a track's genre, hue and comment, on request only, one batch and one model at a time (docs/ML.md) |
 | ui | the screens |
 | cli/tests | subcommands, meson tests, headless run |

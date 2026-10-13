@@ -50,6 +50,9 @@ typedef struct RXApp {
 
     /* Analysis queue state shown in the status bar */
     int        analysing_total, analysing_done;
+    /* The tag batch on `jobs` (rx_app_tag_tracks), 0 before the first; its
+     * progress is the jobs' (rx_app_tag_progress). */
+    uint64_t   tag_request;
     char       status[256];         /* last message */
     int64_t    status_time;         /* when it was set (rx_time_us) */
     unsigned   last_error_count;
@@ -156,6 +159,34 @@ void rx_app_cancel_stick(RXApp *app, uint64_t request);
 /* Applies a finished analysis to a track: grid (unless locked), key,
  * waveforms, auto cues; saves the track. */
 int  rx_app_apply_analysis(RXApp *app, RXTrack *t, RXAnalysis *a);
+
+/* Tagging with the model (rxbox/ml.h, rx_jobs_tag), only ever when the
+ * user asks: never on add, at startup, in analyse all or before an
+ * export. The tracks join the one batch on app->jobs, which loads the
+ * model once, tags them one at a time and unloads it when there is
+ * nothing left. Needs only app->lib and app->jobs (the CLI's app too).
+ * Returns how many tracks were queued (missing files are not), or a
+ * negative errno with the status set: -ENOENT when there is no model
+ * file (rx_app_ml_model). */
+int  rx_app_tag_tracks(RXApp *app, const uint64_t *ids, int n);
+/* Stops the batch: the track being tagged and the queue are dropped, the
+ * model is unloaded. */
+void rx_app_cancel_tags(RXApp *app);
+/* rx_jobs_tag_progress of the batch: false when none runs. */
+bool rx_app_tag_progress(RXApp *app, int *done, int *total, uint64_t *current);
+/* What a result writes, through the library: the hue and the comment
+ * always (the comment field is the machine's), the genre into the user's
+ * override only when that is empty (a genre the user typed stays; the
+ * file's tag is never touched), the four measures and
+ * RX_ML_TAGS_VERSION. Saves the track. */
+int  rx_app_apply_tags(RXApp *app, RXTrack *t, const RXMLTags *tags);
+/* The model's file: the setting ml.model when set, else $RXBOX_ML_MODEL,
+ * else models/RX_APP_ML_MODEL in the executable's directory, its parent
+ * (a build directory inside the source tree) or the current directory.
+ * -ENOENT when it is not there: *path is then the file the setting or the
+ * environment named, or NULL when models/ was looked in. Allocating. */
+#define RX_APP_ML_MODEL "moss-audio-4b-instruct-q4_k.gguf"
+int  rx_app_ml_model(const RXApp *app, char **path);
 /* Re-checks which audio files are missing; returns how many changed. */
 int  rx_app_rescan(RXApp *app);
 /* For the browser: a track's cover thumbnail texture and its preview in the
