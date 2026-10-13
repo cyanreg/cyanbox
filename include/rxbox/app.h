@@ -19,6 +19,10 @@ typedef struct RXDeckView {
     RXTrack   *track;               /* loaded track (library's), or NULL */
     uint64_t   loading_request;     /* rx_jobs_decode in flight, 0 none */
     uint64_t   loading_track_id;
+    /* The track queued to follow (the next row of the playlist being
+     * viewed; with PLAY MODE CONTINUE of any view), being decoded or on
+     * the deck, which plays on into it at the end with no gap; 0 none. */
+    uint64_t   next_track_id;
     RXWaveforms waves;              /* from the library; nb_detail == 0 when none */
     RXWaveGpu *wave_preview;        /* PWV6 / PWAV / PWV4 per palette */
     RXWaveGpu *wave_detail;         /* PWV7 / PWV3 / PWV5 */

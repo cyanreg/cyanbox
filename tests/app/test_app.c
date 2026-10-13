@@ -13,8 +13,10 @@
  * exports nothing; an analysis of a file gone since it was added fails
  * with the track named in the status; a load the player cannot take
  * keeps the track the deck has, the 30 s play record (not for a seek loop,
- * not twice), the end of a track under PLAY MODE single and continue (the
- * next row loads and plays), a track removed while loaded and analysed, waveforms of an
+ * not twice), the end of a track: paused there in the collection, played
+ * on into the next row of the playlist being viewed with no load (the
+ * player moves on by itself), the next row of any view with PLAY MODE
+ * continue, a track removed while loaded and analysed, waveforms of an
  * older format version made again, results of an older analyser made
  * again by "analyse all" and, unasked, by opening the library (a locked
  * grid kept both times), and tearing down with jobs in flight
@@ -249,7 +251,7 @@ static bool export_cancel_done(RXApp *app)
     return !app->export_state.running;
 }
 
-/* PLAY MODE CONTINUE's track loaded and playing. */
+/* The track the deck should have moved on to, playing. */
 static RXTrack *continue_to;
 
 static bool continued(RXApp *app)
@@ -626,30 +628,76 @@ int main(int argc, char **argv)
         play_for(&app, 35.0, 0.1, 0, 0, 0);
         CHECK(c->play_count == 1, "one load, played on: %d plays", c->play_count);
 
-        /* PLAY MODE: SINGLE, the default, stays paused on the end;
-         * CONTINUE loads the next row of the view and plays it, the first
-         * after the last. */
+        /* The end of a track. In the collection, with PLAY MODE SINGLE
+         * (the default), the deck stays paused on the end, nothing
+         * queued. */
         rx_ctl_seek(&app.decks[0].ctl, c->duration - 0.5);
         play_for(&app, 1.0, 0.01, 0, 0, 0);
         RXDeckState st;
         rx_deck_state(app.player, 0, &st);
         CHECK(app.decks[0].track == c && !st.playing && st.position > c->duration - 0.06 &&
-              !app.decks[0].loading_request, "single: track %p, playing %d at %f",
-              (void *)app.decks[0].track, st.playing, st.position);
+              !app.decks[0].loading_request && !app.decks[0].next_track_id,
+              "single: track %p, playing %d at %f, next %llu", (void *)app.decks[0].track,
+              st.playing, st.position, (unsigned long long)app.decks[0].next_track_id);
+
+        /* The playlist being viewed holds c then a: a is queued to follow
+         * as c plays its last seconds, and the deck plays on into it by
+         * itself (no load: the player moves on, the view follows), from
+         * its start; at a's end, the playlist's last, it stops. */
+        RXTrack *a_track = track_named(&app, "a.wav");
+        RXPlaylist *run = rx_library_playlist_create(&app.lib, app.lib.root_folder, "Run");
+        CHECK(run && a_track && rx_library_playlist_add(&app.lib, run, c, -1) >= 0 &&
+              rx_library_playlist_add(&app.lib, run, a_track, -1) >= 0, "the Run playlist");
+        app.current_playlist = run;
+        app.sort_column = -1;
+        app.rows_dirty = true;
+        rx_app_tick(&app);
+        CHECK(app.nb_rows == 2 && app.lib.tracks[app.rows[0]] == c, "Run rows %d", app.nb_rows);
+        unsigned adv = st.advanced;
+        rx_ctl_seek(&app.decks[0].ctl, c->duration - 0.5);
+        rx_ctl_play_pause(&app.decks[0].ctl);
+        rx_app_tick(&app);
+        CHECK(a_track && app.decks[0].next_track_id == a_track->id, "a is queued to follow: %llu",
+              (unsigned long long)app.decks[0].next_track_id);
+        continue_to = a_track;
+        CHECK(tick_until(&app, continued, 60), "the playlist's next: track %p, want %p",
+              (void *)app.decks[0].track, (void *)continue_to);
+        rx_deck_state(app.player, 0, &st);
+        CHECK(st.advanced == adv + 1 && st.playing && st.position < 1.5,
+              "moved on by itself, from the start: advanced %u (was %u), playing %d at %f",
+              st.advanced, adv, st.playing, st.position);
+        CHECK(app.decks[0].ctl.track == a_track && !app.decks[0].next_track_id,
+              "the controls follow, nothing queued yet");
+        if (a_track) {
+            rx_ctl_seek(&app.decks[0].ctl, a_track->duration - 0.5);
+            play_for(&app, 1.0, 0.01, 0, 0, 0);
+            rx_deck_state(app.player, 0, &st);
+            CHECK(app.decks[0].track == a_track && !st.playing &&
+                  st.position > a_track->duration - 0.06 && !app.decks[0].next_track_id,
+                  "the playlist's last track stops at its end: playing %d at %f", st.playing,
+                  st.position);
+        }
+
+        /* PLAY MODE CONTINUE: in any view, the next row, the first after
+         * the last, the same way. */
+        app.current_playlist = NULL;
+        app.rows_dirty = true;
         set_my_setting(&app.lib.cfg.player, &app.lib.cfg.nb_player, "play_mode", "continue");
         rx_app_rebuild_rows(&app);
         int at = -1;
         for (int i = 0; i < app.nb_rows; i++) {
-            if (app.lib.tracks[app.rows[i]] == c)
+            if (app.lib.tracks[app.rows[i]] == a_track)
                 at = i;
         }
         continue_to = at >= 0 ? app.lib.tracks[app.rows[(at + 1) % app.nb_rows]] : NULL;
-        CHECK(continue_to && continue_to != c, "no row after long.wav");
-        rx_ctl_seek(&app.decks[0].ctl, c->duration - 0.5);
-        rx_ctl_play_pause(&app.decks[0].ctl);
-        play_for(&app, 1.0, 0.01, 0, 0, 0);
+        CHECK(continue_to && continue_to != a_track, "no row after a.wav");
+        if (a_track) {
+            rx_ctl_seek(&app.decks[0].ctl, a_track->duration - 0.5);
+            rx_ctl_play_pause(&app.decks[0].ctl);
+        }
         CHECK(tick_until(&app, continued, 60), "continue: track %p, want %p",
               (void *)app.decks[0].track, (void *)continue_to);
+        CHECK(!app.decks[0].loading_request, "no load was needed");
         set_my_setting(&app.lib.cfg.player, &app.lib.cfg.nb_player, "play_mode", "single");
         rx_app_unload_deck(&app, 0);
     }

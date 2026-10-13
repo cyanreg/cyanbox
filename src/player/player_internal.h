@@ -149,13 +149,16 @@ enum RXCmdType {
     RX_CMD_SCRUB_END,
     RX_CMD_MASTER_VOLUME,   /* a = gain; deck = -1 */
     RX_CMD_MASTER_TEMPO,    /* flag */
+    RX_CMD_NEXT,            /* the track to follow this one, as a load; neither
+                               samples nor stream: none */
 };
 
 typedef struct RXStream RXStream;
 
-/* A command is copied into the ring by value. A load carries the buffer's
- * fields rather than the RXAudio pointer, so the real-time side never reads
- * the owner's struct; or the stream a packet store plays through. */
+/* A command is copied into the ring by value. A load (and a next) carries
+ * the buffer's fields rather than the RXAudio pointer, so the real-time
+ * side never reads the owner's struct; or the stream a packet store plays
+ * through. */
 typedef struct RXCmd {
     uint8_t      type;
     int8_t       deck;
@@ -205,10 +208,11 @@ struct RXStream {
     _Atomic int64_t hint;
 };
 
-/* One deck's feed thread (feed.c). The owner hands it the stream to fill and
- * the cue points under `lock`, and wakes it; it says which stream
- * generation it has moved to, after which it no longer touches the streams
- * before. */
+/* One deck's feed thread (feed.c). The owner hands it the stream to fill,
+ * the stream queued to follow it (whose start it decodes once the first
+ * has nothing left to do) and the cue points under `lock`, and wakes it;
+ * it says which generation of the two it has moved to, after which it no
+ * longer touches the streams of the generations before. */
 typedef struct RXDeckFeed {
     pthread_t thread;
     bool      started;
@@ -218,6 +222,7 @@ typedef struct RXDeckFeed {
     bool      lock_ok;
     /* under lock */
     RXStream *stream;
+    RXStream *next;
     uint64_t  gen;
     bool      quit;
     int64_t   points[RX_DECK_CUE_POINTS];
@@ -245,14 +250,17 @@ typedef struct RXDeckMT {
     float  *ahead[2];       /* latency frames: what a restart starts from */
     float  *xf[2];          /* RX_MT_CHUNK frames: the old sound of a crossfade */
     int     xf_len, xf_left;
-    /* The read position and speed ratio (0 when stopped) of every frame fed,
-     * a ring of hist_mask + 1: what is heard now was fed `latency` ago. */
-    RXPos  *hist;
-    float  *hist_speed;
+    /* The read position, speed ratio (0 when stopped) and track (the deck's
+     * track_gen) of every frame fed, a ring of hist_mask + 1: what is heard
+     * now was fed `latency` ago. */
+    RXPos    *hist;
+    float    *hist_speed;
+    uint32_t *hist_gen;
     int64_t hist_mask;
     int64_t fed;            /* frames fed so far */
-    int64_t fill_until;     /* frames fed before this one count as fill_pos */
+    int64_t fill_until;     /* frames fed before this one count as fill_pos, fill_gen */
     RXPos   fill_pos;
+    uint32_t fill_gen;
     bool    on;             /* the shifter is in the deck's path */
     /* A restart is due at the next render. was_on and *was are the deck as
      * it sounded before the first command that asked for it. */
@@ -273,6 +281,16 @@ typedef struct RXDeckRT {
     bool         starved;       /* this callback missed frames not decoded yet */
     bool         holding;       /* the main voice holds for them */
     int          out_rate;      /* the device's, as of the last callback */
+
+    /* The track queued to follow this one (RX_CMD_NEXT), taken over the
+     * frame after the last one of this: the same fields. */
+    bool         has_next;
+    const float *next_samples;
+    RXStream    *next_stream;
+    int          next_channels;
+    int          next_rate;
+    int64_t      next_nb_frames;
+    uint32_t     track_gen;     /* bumps each time the deck moves on to the next */
 
     RXPos  pos;
     bool   playing;
@@ -321,6 +339,7 @@ typedef struct RXDeckPub {
     atomic_bool      playing;
     atomic_bool      waiting;       /* playing, holding for the feed */
     _Atomic uint64_t serial;
+    _Atomic uint32_t track_gen;     /* the track the position is in (heard, like it) */
     atomic_uint      level_l, level_r;  /* float bits */
 } RXDeckPub;
 
@@ -331,6 +350,7 @@ typedef struct RXDeckSnap {
     bool     playing;
     bool     waiting;
     uint64_t serial;
+    uint32_t track_gen;
 } RXDeckSnap;
 
 /* ------------------------------------------------------------ owner side */
@@ -343,6 +363,16 @@ typedef struct RXDeckOwner {
     int64_t   points[RX_DECK_CUE_POINTS];   /* the cue points the feed has, in frames */
     int       nb_points;
     RXGrid   grid;              /* copy of the grid given at load */
+    /* The track queued to follow (rx_deck_queue_next), the same way; and
+     * the real-time side's track_gen the fields above describe: when the
+     * published one is past it, the deck has moved on to the next, and
+     * these fields follow (sync_next). */
+    RXAudio  *next_audio;
+    RXStream *next_stream;
+    int       next_rate;
+    int64_t   next_nb_frames;
+    RXGrid    next_grid;
+    uint32_t  track_gen;
     uint64_t sent;              /* commands pushed for this deck */
     /* The latest position and playing state the owner asked for, valid
      * while the deck's applied serial is below the command's serial. */
@@ -444,8 +474,11 @@ void rx_player_deck_signal(RXDeckRT *d);
 /* Track frames per second of output the deck advances by. */
 double rx_player_deck_speed(const RXDeckRT *d);
 /* The position the listener hears: the read position, or with master tempo
- * on, the position of what the shifter is putting out now. */
-RXPos rx_player_deck_heard(const RXDeckRT *d);
+ * on, the position of what the shifter is putting out now; and the track
+ * (track_gen) it is in, which with the shifter on is the one before the
+ * deck's for its delay after a change of track. */
+RXPos    rx_player_deck_heard(const RXDeckRT *d);
+uint32_t rx_player_deck_heard_gen(const RXDeckRT *d);
 
 /* ---------------------------------------------------------------- feed.c */
 
@@ -456,8 +489,12 @@ void rx_player_stream_free(RXStream *s);
 int  rx_player_feed_start(RXDeckFeed *f);
 void rx_player_feed_stop(RXDeckFeed *f);
 /* Owner thread: the stream the feed fills (NULL: none), returning its
- * generation; the cue points it keeps decoded. */
+ * generation; the stream it fills the start of once that has nothing left
+ * (NULL: none), the same way (setting the stream drops the next, whether
+ * it is the next, which the deck has moved on to, or not); the cue points
+ * it keeps decoded. */
 uint64_t rx_player_feed_set(RXDeckFeed *f, RXStream *s);
+uint64_t rx_player_feed_set_next(RXDeckFeed *f, RXStream *s);
 void rx_player_feed_points(RXDeckFeed *f, const int64_t *frames, int nb);
 /* Owner thread, manual mode: waits (up to `timeout_us`) until the feed has
  * decoded everything around the read position the stream says. */

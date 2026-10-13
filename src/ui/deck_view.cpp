@@ -292,6 +292,16 @@ static void title_row(UiState *ui, int deck, ImVec2 a, ImVec2 b, const RXDeckSta
     if (t) {
         ui_text(ui, dl, ui->font_bold, 26.0f, ImVec2(tx, ty), UI_TEXT, ui_title(t), max_w);
         ui_text(ui, dl, nullptr, 15.0f, ImVec2(tx, ty + PX(29)), UI_DIM, ui_artist(t), max_w);
+        // What follows at the end (the next row of the playlist being
+        // viewed), after the artist when there is room for it.
+        RXTrack *next = dv->next_track_id ? rx_library_find_id(&app->lib, dv->next_track_id)
+                                          : nullptr;
+        float nx = tx + ui_text_width(ui, nullptr, 15.0f, ui_artist(t)) + PX(24);
+        if (next && loaded && x - PX(12) - nx > PX(140)) {
+            std::string s = std::string("NEXT  ") + ui_title(next);
+            ui_text(ui, dl, nullptr, 13.0f, ImVec2(nx, ty + PX(31)), UI_FAINT, s.c_str(),
+                    x - PX(12) - nx);
+        }
     } else {
         ui_text(ui, dl, ui->font_bold, 26.0f, ImVec2(tx, ty), UI_FAINT, "No track loaded", max_w);
         ui_text(ui, dl, nullptr, 15.0f, ImVec2(tx, ty + PX(29)), UI_FAINT,

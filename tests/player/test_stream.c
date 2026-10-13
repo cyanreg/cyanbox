@@ -18,9 +18,11 @@
  * Checked: the window refilled while 30 s play through it; a seek far
  * away holds, silent, and plays on from there once decoded; a loop
  * shorter than the window behind wraps sample-exactly; a long loop and a
- * hot cue jump are served at once from the cue caches, unsettled; and the
+ * hot cue jump are served at once from the cue caches, unsettled; the
  * real-time side allocates nothing (a counting malloc around the mix)
- * through seeks, holds, loops, scrubs and MASTER TEMPO. */
+ * through seeks, holds, loops, scrubs and MASTER TEMPO; and a track
+ * queued to follow plays on from the frame after the last, sample-exact
+ * on both sides of the change. */
 
 #include "rxbox/player.h"
 
@@ -29,6 +31,7 @@
 #include <stdio.h>
 #include <sys/wait.h>
 #include <time.h>
+#include <unistd.h>
 
 #include "src/player/player_internal.h"
 
@@ -169,10 +172,13 @@ static RXDeckState st(RXPlayer *p)
     return s;
 }
 
-/* The commands applied, then everything around the playhead decoded. */
+/* The commands applied (and the owner's side of a change of track they
+ * made, which tells the feed), then everything around the playhead
+ * decoded. */
 static void settle(RXPlayer *p)
 {
     rx_player_mix(p, NULL, 0);
+    st(p);
     CHECK(rx_player_feed_wait(&p->feed[0], p->rt[0].stream, 10000000), "the feed is stuck");
 }
 
@@ -248,12 +254,17 @@ static void test_far_seek(const char *path)
 
     /* A seek tells the feed at once, which usually has the target decoded
      * before the next callback: whether it does or the deck waits a
-     * callback, the deck plays on from exactly 50 s, after the fade in. */
+     * callback, the deck plays on from exactly 50 s, after the fade in.
+     * The callbacks here run at the pace of a device, so the feed is given
+     * the time it has on one, whatever else the machine does. */
     int fade = (int)(RATE * RX_FADE_SECONDS);
     rx_deck_seek(p, 0, 50.0);
     int n = RATE;
     float *x = malloc(sizeof(float) * 2 * n);
-    render(p, x, n, false);
+    for (int done = 0; done < n; done += PERIOD) {
+        rx_player_mix(p, x + 2 * done, RX_MIN(n - done, PERIOD));
+        usleep(PERIOD * 1000000 / RATE);
+    }
     int64_t lost = 50 * RATE + n - st(p).frame;
     CHECK(lost >= 0 && lost < RATE / 4, "%s: %lld frames late after the seek", path,
           (long long)lost);
@@ -264,12 +275,16 @@ static void test_far_seek(const char *path)
 
     /* A loop wrapping back to where nothing is decoded (no cue point, no
      * seek told the feed): the deck holds there, silent, its position kept,
-     * then plays on from there, fading in. */
+     * then plays on from there, fading in. The feed is kept from its work
+     * (its lock held: it blocks on it when woken) while the callbacks run,
+     * so the wrap always finds the frames missing, as on a machine where
+     * the feed is a callback late. */
     rx_deck_play_from(p, 0, 40.0);
     render(p, NULL, PERIOD, true);
     rx_deck_set_loop(p, 0, 10.0, 40.0 + (double)PERIOD * 2 / RATE, true);
     int64_t at = st(p).frame;
     float out[2 * 4 * PERIOD];
+    pthread_mutex_lock(&p->feed[0].lock);
     render(p, out, 4 * PERIOD, false);
     int64_t wrap = 40 * RATE + 2 * PERIOD - at;
     RXDeckState s = st(p);
@@ -277,6 +292,7 @@ static void test_far_seek(const char *path)
           path, (long long)s.frame, s.waiting);
     CHECK(mismatches(out, wrap, at) == 0, "%s: before the wrap", path);
     CHECK(silent(out + 2 * wrap, 4 * PERIOD - wrap), "%s: sound while holding", path);
+    pthread_mutex_unlock(&p->feed[0].lock);
     settle(p);
     render(p, x, n, true);
     CHECK(mismatches(x + 2 * fade, n - fade, 10 * RATE + fade) == 0, "%s: on from the wrap", path);
@@ -407,6 +423,115 @@ static void test_no_allocation(const char *path)
     rx_player_destroy(p);
 }
 
+/* Waits for the feed to have the first two chunks of the stream queued to
+ * follow the deck's, which it decodes once the deck's has nothing left. */
+static void settle_next(RXPlayer *p)
+{
+    static float probe[2 * 2 * RX_CHUNK];
+    RXStream *s = p->own[0].next_stream;
+    int64_t t0 = rx_time_us();
+    while (!rx_player_stream_read(s, rx_packets_length(s->pk, NULL), 0, 2 * RX_CHUNK, probe)) {
+        if (rx_time_us() - t0 > 10000000) {
+            CHECK(false, "the start of the next track is not decoded");
+            return;
+        }
+        sem_post(&p->feed[0].wake);
+        usleep(50);
+    }
+}
+
+/* Renders n frames in callbacks, the owner's side (rx_deck_state: a
+ * change of track is noticed and the feed told) and the feed settled
+ * before each. */
+static void render_synced(RXPlayer *p, float *out, int64_t n)
+{
+    for (int64_t done = 0; done < n; done += PERIOD) {
+        st(p);
+        settle(p);
+        rx_player_mix(p, out + 2 * done, PERIOD);
+    }
+}
+
+/* The track queued to follow (rx_deck_queue_next_packets): a second copy
+ * of the track, queued while the first plays its last half second, plays
+ * on from the frame after the first's last, every output frame the
+ * track's own on both sides of the change, with no silence; the state is
+ * the next's once the change is heard, with nothing queued; the first's
+ * stream is let go of. Then, stopped at the end of a track with nothing
+ * queued, PLAY takes a track queued after the stop; and a queued track
+ * dropped (rx_deck_clear_next) leaves the deck stopping at its end. */
+static void test_next(const char *path)
+{
+    RXPlayer *p = load(path);
+    RXPackets *pk = NULL;
+    CHECK(rx_deck_queue_next_packets(p, 0, NULL, NULL) == RX_ERROR(EINVAL), "no packets");
+    CHECK(rx_packets_open(path, &pk) >= 0, "open the next");
+    CHECK(rx_deck_queue_next_packets(p, 0, pk, NULL) == 0, "queue the next");
+    CHECK(st(p).has_next, "a next is queued");
+
+    int64_t total = (int64_t)RATE * SECONDS;
+    int64_t before = RATE / 2;                  /* of the first track */
+    int64_t n = 345 * PERIOD;                   /* 2 s, in whole callbacks */
+    float *out = calloc((size_t)2 * n, sizeof(float));
+    if (!out)
+        abort();
+    rx_deck_play_from(p, 0, (double)(total - before) / RATE);
+    settle(p);
+    settle_next(p);
+    unsigned adv0 = st(p).advanced;
+    render_synced(p, out, n);
+    RXDeckState s = st(p);
+    CHECK(s.advanced == adv0 + 1, "moved on once: %u then %u", adv0, s.advanced);
+    CHECK(s.playing && !s.has_next, "playing the next, nothing queued: %d %d", s.playing,
+          s.has_next);
+    CHECK(fabs(s.position * RATE - (double)(n - before)) < 0.5, "position in the next: %f s",
+          s.position);
+    /* Past the start's fade in. */
+    CHECK(mismatches(out + 2 * PERIOD, before - PERIOD, total - before + PERIOD) == 0,
+          "the first track's last frames");
+    CHECK(mismatches(out + 2 * before, n - before, 0) == 0, "the next from its first frame");
+    CHECK(!silent(out + 2 * (before - 64), 128), "no silence at the change");
+    for (int i = 0; i < 200 && p->nb_releases; i++) {
+        usleep(100);
+        st(p);
+    }
+    CHECK(p->nb_releases == 0, "the first track's stream released: %d pending", p->nb_releases);
+
+    /* Stopped at the end with nothing queued; PLAY takes a track queued
+     * after the stop, fading in as any start does. */
+    rx_deck_seek(p, 0, (double)SECONDS);
+    render(p, NULL, PERIOD, true);
+    s = st(p);
+    CHECK(!s.playing && s.position == SECONDS, "stopped at the end: %d at %f", s.playing,
+          s.position);
+    CHECK(rx_packets_open(path, &pk) >= 0, "open a third");
+    CHECK(rx_deck_queue_next_packets(p, 0, pk, NULL) == 0, "queue after the stop");
+    settle(p);
+    settle_next(p);
+    adv0 = s.advanced;
+    rx_deck_play(p, 0);
+    render_synced(p, out, n);
+    s = st(p);
+    CHECK(s.advanced == adv0 + 1 && s.playing, "PLAY took the next: %u then %u, playing %d",
+          adv0, s.advanced, s.playing);
+    CHECK(fabs(s.position * RATE - (double)n) < 0.5, "position %f s", s.position);
+    CHECK(mismatches(out + 2 * PERIOD, n - PERIOD, PERIOD) == 0, "played from its first frame");
+
+    /* Dropped: the deck stops at its end. */
+    CHECK(rx_packets_open(path, &pk) >= 0, "open a fourth");
+    CHECK(rx_deck_queue_next_packets(p, 0, pk, NULL) == 0, "queue a fourth");
+    rx_deck_clear_next(p, 0);
+    CHECK(!st(p).has_next, "dropped");
+    rx_deck_play_from(p, 0, SECONDS - 0.1);
+    render(p, NULL, RATE / 4, true);
+    s = st(p);
+    CHECK(!s.playing && s.position == SECONDS && s.advanced == adv0 + 1,
+          "stops at the end with nothing queued: %d at %f, advanced %u", s.playing, s.position,
+          s.advanced);
+    free(out);
+    rx_player_destroy(p);
+}
+
 /* Loads replacing loads while the feed works, and a teardown with a
  * stream in the release list: no crash, nothing left (LeakSanitizer). */
 static void test_reload(const char *path)
@@ -450,6 +575,7 @@ int main(void)
         test_loops(paths[i]);
         test_hot_cue(paths[i]);
         test_no_allocation(paths[i]);
+        test_next(paths[i]);
         test_reload(paths[i]);
     }
 

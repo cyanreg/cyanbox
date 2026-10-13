@@ -189,9 +189,14 @@ auto cue on and the level MEMORY (the defaults) to the first memory cue
 (or 0); with a level in dB to the grid's first beat, which the analyser
 puts where the music starts, as a CDJ finds it by the level (the dB value
 itself is not evaluated); with auto cue off it stays at 0. At the end of a
-track the deck stops there (`player.play_mode` single, the default); with
-play mode continue the next track of the current view (the row after it
-in the table's order, the first after the last) loads and plays.
+track: when a playlist is being viewed and the track is in it, the deck
+plays on into the row after it with no gap (the next track is queued on
+the player 30 s ahead and taken over at the last sample, as one piece of
+audio; the title row shows it as NEXT after the artist), and stops after
+the playlist's last track; in any other view the deck stops there
+(`player.play_mode` single, the default), or with play mode continue
+plays on into the next row of the view the same way, the first after the
+last.
 
 ## Browser
 
@@ -373,8 +378,9 @@ it at once.
   master tempo and time mode (the deck's state at startup), the quantize
   beat value (what quantize snaps to), auto cue and its level (where a
   load cues), hot cue colour (pads and badges in the cues' colours or the
-  default pad colours) and play mode (continue plays the next track of the
-  view at the end). An older library's `ui.wave_palette`, and the key
+  default pad colours) and play mode (continue plays on into the next
+  track of any view at the end; a playlist being viewed always plays
+  through). An older library's `ui.wave_palette`, and the key
   notation its View menu kept in `export.key_notation`, become
   `device.waveform_color` and `device.key_display` once when it opens.
   Everything else is written to the stick only, meaning nothing to rxbox:

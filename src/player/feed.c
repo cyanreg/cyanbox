@@ -45,7 +45,14 @@
  * The real-time side reads every frame through rx_player_stream_read: the
  * interpolator's four frames, the de-click tail, the grains and master
  * tempo's read-ahead (deck.c). Frames that are not there: the main voice
- * holds, silent, and keeps its position; the others play silence. */
+ * holds, silent, and keeps its position; the others play silence.
+ *
+ * A stream queued to follow the deck's (rx_deck_queue_next) is the feed's
+ * second: once the first has nothing left to do, the feed decodes the
+ * window ahead from the start of the second, with a decoder of its own,
+ * so the deck plays on into it the frame after the first ends. The owner
+ * then makes it the feed's stream (rx_player_feed_set), and the feed goes
+ * on with that decoder from the chunks it has. */
 
 #include "player_internal.h"
 
@@ -183,7 +190,8 @@ bool rx_player_stream_read(const RXStream *s, int64_t nb_frames, int64_t i, int 
 
 /* ------------------------------------------------------------------ feed */
 
-/* What the feed thread keeps for the stream it fills. */
+/* What the feed thread keeps for the stream it fills, and for the one
+ * queued to follow it. */
 typedef struct Work {
     RXDeckFeed      *f;
     RXStream        *s;
@@ -192,6 +200,9 @@ typedef struct Work {
     int64_t          cache_first[RX_DECK_CUE_POINTS];  /* -1 unused */
     bool             cache_done[RX_DECK_CUE_POINTS];
     bool             error_said;
+    RXStream        *next_s;
+    RXPacketDecoder *next_dec;
+    bool             next_error_said;
 } Work;
 
 static void write_begin(RXSlot *sl)
@@ -216,21 +227,27 @@ static bool holds(const RXSlot *sl, int64_t first)
     return atomic_load_explicit(&((RXSlot *)sl)->first, memory_order_relaxed) == first;
 }
 
-static void fill(Work *w, RXSlot *sl, int64_t first, int64_t n)
+static void fill_with(RXStream *s, RXPacketDecoder *dec, bool *error_said, RXSlot *sl,
+                      int64_t first, int64_t n)
 {
-    RXStream *s = w->s;
-    atomic_store_explicit(&w->f->settled, -1, memory_order_relaxed);
     write_begin(sl);
-    int64_t got = rx_packets_decode(w->dec, first, n, sl->data, s->channels);
+    int64_t got = rx_packets_decode(dec, first, n, sl->data, s->channels);
     if (got < 0) {
         /* Silence rather than a deck waiting for ever. */
         memset(sl->data, 0, sizeof(float) * (size_t)n * s->channels);
-        if (!w->error_said)
+        if (!*error_said)
             rx_err("player: cannot decode the track at %.1f s: %s", (double)first / s->rate,
                    strerror((int)-got));
-        w->error_said = true;
+        *error_said = true;
     }
     write_end(sl, first, n);
+}
+
+/* Into the deck's stream. */
+static void fill(Work *w, RXSlot *sl, int64_t first, int64_t n)
+{
+    atomic_store_explicit(&w->f->settled, -1, memory_order_relaxed);
+    fill_with(w->s, w->dec, &w->error_said, sl, first, n);
 }
 
 static void forget_cache(Work *w, int k)
@@ -338,6 +355,28 @@ static bool step(Work *w)
     return false;
 }
 
+/* The stream queued to follow, once the deck's has nothing left: the
+ * window ahead from its first frame, a chunk at a time, so the deck
+ * plays on into it at once. The rest of it is decoded once it is the
+ * deck's stream, from these chunks on. */
+static bool step_next(Work *w)
+{
+    RXStream *s = w->next_s;
+    if (!s || !w->next_dec)
+        return false;
+    int64_t len = rx_packets_length(s->pk, NULL);
+    int64_t ahead = (int64_t)(RX_WINDOW_AHEAD * s->rate);
+    int64_t c1 = len > 0 ? RX_MIN(ahead, len - 1) / RX_CHUNK : -1;
+    for (int64_t c = 0; c <= c1; c++) {
+        RXSlot *sl = &s->slots[c % s->nb_slots];
+        if (!holds(sl, c * RX_CHUNK)) {
+            fill_with(s, w->next_dec, &w->next_error_said, sl, c * RX_CHUNK, RX_CHUNK);
+            return true;
+        }
+    }
+    return false;
+}
+
 static void wait_wake(RXDeckFeed *f, bool busy)
 {
     if (busy) {
@@ -371,6 +410,7 @@ static void *feed_main(void *arg)
         pthread_mutex_lock(&f->lock);
         bool quit = f->quit;
         RXStream *s = f->stream;
+        RXStream *next = f->next;
         uint64_t gen = f->gen;
         bool new_points = f->points_gen != w.points_gen;
         int nb = f->nb_points;
@@ -381,31 +421,53 @@ static void *feed_main(void *arg)
             break;
 
         if (s != w.s) {
+            /* The stream queued to follow, now the deck's: its decoder
+             * and the chunks it has go on. */
+            RXPacketDecoder *dec = NULL;
+            if (s && s == w.next_s) {
+                dec = w.next_dec;
+                w.next_dec = NULL;
+                w.next_s = NULL;
+            }
             rx_packets_decoder_free(w.dec);
-            w.dec = NULL;
+            w.dec = dec;
             w.s = s;
             w.error_said = false;
             for (int k = 0; k < RX_DECK_CUE_POINTS; k++)
                 w.cache_first[k] = -1;
             new_points = true;
-            if (s) {
+            if (s && !w.dec) {
                 int ret = rx_packets_decoder(s->pk, &w.dec);
                 if (ret < 0)
                     rx_err("player: no decoder for the track: %s", strerror(-ret));
             }
             atomic_store_explicit(&f->settled, -1, memory_order_relaxed);
         }
+        if (next != w.next_s) {
+            rx_packets_decoder_free(w.next_dec);
+            w.next_dec = NULL;
+            w.next_s = next;
+            w.next_error_said = false;
+            if (next) {
+                int ret = rx_packets_decoder(next->pk, &w.next_dec);
+                if (ret < 0)
+                    rx_err("player: no decoder for the next track: %s", strerror(-ret));
+            }
+        }
         /* From here on the streams before this generation are not touched. */
         atomic_store_explicit(&f->acked, gen, memory_order_release);
         if (!w.s || !w.dec) {
-            busy = false;
+            busy = step_next(&w);
             continue;
         }
         if (new_points)
             take_points(&w, points, nb);
         busy = step(&w);
+        if (!busy)
+            busy = step_next(&w);
     }
     rx_packets_decoder_free(w.dec);
+    rx_packets_decoder_free(w.next_dec);
     return NULL;
 }
 
@@ -449,10 +511,21 @@ uint64_t rx_player_feed_set(RXDeckFeed *f, RXStream *s)
 {
     pthread_mutex_lock(&f->lock);
     f->stream = s;
+    f->next = NULL;
     uint64_t gen = ++f->gen;
     /* The points were the old track's. */
     f->nb_points = 0;
     f->points_gen++;
+    pthread_mutex_unlock(&f->lock);
+    sem_post(&f->wake);
+    return gen;
+}
+
+uint64_t rx_player_feed_set_next(RXDeckFeed *f, RXStream *s)
+{
+    pthread_mutex_lock(&f->lock);
+    f->next = s;
+    uint64_t gen = ++f->gen;
     pthread_mutex_unlock(&f->lock);
     sem_post(&f->wake);
     return gen;

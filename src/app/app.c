@@ -23,6 +23,10 @@
  *    real-time thread and the deck's decoding thread have let go of it); on
  *    failure it stays ours to free. The job only opens the store, a few
  *    milliseconds, so LOADING shows for about as long as a frame takes.
+ *    The track to follow the deck's (the next row of the playlist being
+ *    viewed, continue_play) is decoded the same way ahead of the end and
+ *    queued on the deck (rx_deck_queue_next), which plays on into it with
+ *    no gap; the view follows once the player says it has moved on.
  *  - The deck view's waveforms are its own copy, read from the library;
  *    their GPU uploads, the deck's artwork texture and the browser cache's
  *    textures and previews belong to this file and are released through
@@ -82,6 +86,11 @@
 /* A deck that stops this close to the end played to the end (the player
  * pauses it on the last frame). */
 #define END_SLACK           0.05
+/* The track to follow the deck's is queued on the deck this long before
+ * the end (continue_play): its packet store in memory, and its first
+ * seconds decoded, well ahead of the end, without holding a second
+ * track's store for the whole of the first. */
+#define NEXT_LEAD_SECONDS   30.0
 /* Workers for decoding and artwork. */
 #define IO_THREADS       2
 /* Artwork jobs scale to this; it is also the library thumbnail's size. */
@@ -164,7 +173,12 @@ struct RXAppPriv {
     int64_t  play_last_us[RX_DECKS];
     bool     play_recorded[RX_DECKS];
     bool     was_playing[RX_DECKS];         /* at the last tick (continue_play) */
-    bool     play_on_load[RX_DECKS];        /* the load in flight plays once in */
+    bool     ended[RX_DECKS];               /* played to its end and stands stopped there */
+    uint64_t next_request[RX_DECKS];        /* the decode of the track queued to follow, in
+                                               flight on io_jobs; 0 none */
+    uint64_t next_failed_id[RX_DECKS];      /* a track whose decode or queueing failed: not
+                                               asked for again while it stays the candidate */
+    unsigned deck_advanced[RX_DECKS];       /* RXDeckState.advanced as last seen */
 
     RXArray  gpu;               /* GpuEntry, the browser's cache */
     int      gpu_budget;
@@ -666,6 +680,22 @@ static void deck_view_reset(RXApp *app, int deck)
     }
 }
 
+/* Drops the track queued to follow the deck's: its decode in flight, or
+ * what the player holds of it. */
+static void cancel_next(RXApp *app, int deck)
+{
+    RXAppPriv *priv = app->priv;
+    RXDeckView *dv = &app->decks[deck];
+    if (priv) {
+        if (priv->io_jobs && priv->next_request[deck])
+            rx_jobs_cancel(priv->io_jobs, priv->next_request[deck]);
+        priv->next_request[deck] = 0;
+    }
+    if (app->player)
+        rx_deck_clear_next(app->player, deck);
+    dv->next_track_id = 0;
+}
+
 /* Empties the deck: cancels its loads, unloads the player, drops the
  * waveforms and the artwork. */
 static void deck_clear(RXApp *app, int deck)
@@ -677,12 +707,32 @@ static void deck_clear(RXApp *app, int deck)
         rx_jobs_cancel(priv->io_jobs, dv->loading_request);
     dv->loading_request = 0;
     dv->loading_track_id = 0;
+    cancel_next(app, deck);
+    if (priv)
+        priv->ended[deck] = false;
 
     if (app->player) {
         rx_ctl_unload(&dv->ctl);
         rx_deck_unload(app->player, deck);
     }
     deck_view_reset(app, deck);
+}
+
+/* The deck's cover: the library's thumbnail, or a job for the file's. */
+static void deck_fetch_artwork(RXApp *app, int deck, const RXTrack *t)
+{
+    RXDeckView *dv = &app->decks[deck];
+    if (!app->window)
+        return;
+    uint8_t *rgba = NULL;
+    int w = 0, h = 0;
+    if (artwork_from_library(app, t->id, &rgba, &w, &h) >= 0) {
+        deck_set_artwork(app, dv, rgba, w, h);
+        free(rgba);
+    } else {
+        uint64_t req = rx_jobs_artwork(app->priv->io_jobs, t->id, t->path, ART_SIZE);
+        dv->artwork_request = (int64_t)req > 0 ? req : 0;
+    }
 }
 
 int rx_app_load_deck(RXApp *app, int deck, RXTrack *t)
@@ -712,9 +762,9 @@ int rx_app_load_deck(RXApp *app, int deck, RXTrack *t)
         rx_jobs_cancel(io, dv->loading_request);
     dv->loading_request = 0;
     dv->loading_track_id = 0;
-    /* A load asked for here waits at its cue; PLAY MODE CONTINUE says
-     * otherwise after this returns (continue_play). */
-    app->priv->play_on_load[deck] = false;
+    /* A new start: what was to follow the old track goes. */
+    cancel_next(app, deck);
+    app->priv->ended[deck] = false;
 
     uint64_t req = rx_jobs_decode(io, t->id, t->path, deck);
     if ((int64_t)req < 0) {
@@ -786,13 +836,20 @@ static void track_plays(RXApp *app, int deck)
     app->rows_dirty = true;
 }
 
-/* The track PLAY MODE CONTINUE plays after `t`: the next row of the current
- * view in the table's order (the first when `t` is not in the view),
- * wrapping at the end, past missing files. NULL when there is none. */
-static RXTrack *next_in_view(RXApp *app, const RXTrack *t)
+/* The track that follows `t` when the deck plays it to the end. The row
+ * after it in the playlist being viewed, when it is in it: auditioning a
+ * playlist plays it through, and stops after its last track (ours). With
+ * PLAY MODE CONTINUE (player.play_mode; manual p.75) also in every other
+ * view: the next row of the current view in the table's order (the first
+ * when `t` is not in the view), wrapping at the end. Past missing files.
+ * NULL when there is none. */
+static RXTrack *next_candidate(RXApp *app, const RXTrack *t)
 {
     if (app->rows_dirty || app->rows_generation != app->lib.generation || !app->rows)
         rx_app_rebuild_rows(app);
+    bool wrap = my_setting_is(&app->lib.cfg, "player.play_mode", "continue");
+    if (!wrap && !app->current_playlist)
+        return NULL;
     int n = app->nb_rows;
     int idx = rx_library_index_of(&app->lib, t);
     int at = -1;
@@ -800,38 +857,123 @@ static RXTrack *next_in_view(RXApp *app, const RXTrack *t)
         if ((int)app->rows[i] == idx)
             at = i;
     }
+    if (at < 0 && !wrap)
+        return NULL;
     for (int k = 1; k <= n; k++) {
-        RXTrack *next = app->lib.tracks[app->rows[(at + k) % n]];
+        int i = at + k;
+        if (i >= n) {
+            if (!wrap)
+                return NULL;
+            i %= n;
+        }
+        RXTrack *next = app->lib.tracks[app->rows[i]];
         if (!next->missing)
             return next;
     }
     return NULL;
 }
 
-/* PLAY MODE (player.play_mode; manual p.75): with CONTINUE, a track that
- * plays to its end is followed by the next one of the current view, which
- * loads and plays. With SINGLE, the factory setting, the deck stays paused
- * on the end, where the player leaves it. The end is a deck that was
- * playing at the last tick and now stands on its last frames, stopped. */
+/* The deck has moved on to the track queued after its own
+ * (RXDeckState.advanced): the view follows; the playhead plays on. */
+static void take_over(RXApp *app, int deck, RXTrack *t)
+{
+    RXDeckView *dv = &app->decks[deck];
+    deck_view_reset(app, deck);
+    if (!t) {
+        /* Gone from the library since it was queued: the deck plays what
+         * cannot be shown. */
+        rx_app_set_status(app, "The next track left the library meanwhile");
+        deck_clear(app, deck);
+        return;
+    }
+    char name[256];
+    track_name(t, name, sizeof(name));
+    dv->track = t;
+    app->priv->deck_track_id[deck] = t->id;
+    dv->ctl.auto_cue = auto_cue_of(&app->lib.cfg);
+    rx_ctl_continue(&dv->ctl, t);
+    deck_load_waves(app, deck);
+    queue_analysis(app, t, RX_ANALYSE_ALL, false, false);
+    deck_fetch_artwork(app, deck, t);
+    rx_app_set_status(app, "Playing %s", name);
+}
+
+/* The track to follow: decoded on the io queue as a load is, handed to
+ * the player when it comes (handle_next). */
+static void queue_next_track(RXApp *app, int deck, const RXTrack *t)
+{
+    RXAppPriv *priv = app->priv;
+    uint64_t req = rx_jobs_decode(priv->io_jobs, t->id, t->path, deck);
+    if ((int64_t)req < 0) {
+        rx_warn("cannot queue the next track: %s", strerror((int)-(int64_t)req));
+        return;
+    }
+    priv->next_request[deck] = req;
+    app->decks[deck].next_track_id = t->id;
+}
+
+/* What follows the deck's track (next_candidate) is kept queued on the
+ * deck (rx_deck_queue_next) from NEXT_LEAD_SECONDS before the end, so the
+ * deck plays on into it with no gap, and the view follows the deck's move
+ * (take_over). The candidate goes with the view: a view that changes
+ * changes what is queued. A deck that reaches its end before the next is
+ * in (a seek into the last second, the decode in flight) stops there and
+ * plays on when it comes. With nothing to follow, the deck stays paused
+ * on the end, where the player leaves it (PLAY MODE SINGLE). The end is a
+ * deck that was playing at the last tick and now stands on its last
+ * frames, stopped. */
 static bool continue_play(RXApp *app, int deck)
 {
     RXAppPriv *priv = app->priv;
     RXDeckView *dv = &app->decks[deck];
+    bool changed = false;
+
     RXDeckState st;
     rx_deck_state(app->player, deck, &st);
+    if (st.advanced != priv->deck_advanced[deck]) {
+        priv->deck_advanced[deck] = st.advanced;
+        if (dv->next_track_id) {
+            RXTrack *t = rx_library_find_id(&app->lib, dv->next_track_id);
+            dv->next_track_id = 0;
+            priv->ended[deck] = false;
+            take_over(app, deck, t);
+            rx_deck_state(app->player, deck, &st);
+            changed = true;
+        }
+    }
+
     bool was = priv->was_playing[deck];
     priv->was_playing[deck] = st.loaded && st.playing;
-    if (!was || st.playing || !st.loaded || st.scrubbing || !dv->track || dv->loading_request ||
-        !(st.duration > 0) || st.position < st.duration - END_SLACK)
-        return false;
-    if (!my_setting_is(&app->lib.cfg, "player.play_mode", "continue"))
-        return false;
+    bool loaded = st.loaded && dv->track && !dv->loading_request;
+    bool at_end = loaded && st.duration > 0 && st.position >= st.duration - END_SLACK;
+    if (was && !st.playing && at_end && !st.scrubbing)
+        priv->ended[deck] = true;
+    else if (!loaded || st.playing || !at_end)
+        priv->ended[deck] = false;
 
-    RXTrack *next = next_in_view(app, dv->track);
-    if (!next || rx_app_load_deck(app, deck, next) < 0)
-        return false;
-    priv->play_on_load[deck] = true;
-    return true;
+    RXTrack *want = loaded ? next_candidate(app, dv->track) : NULL;
+    /* One that failed is not asked for again until the candidate changes. */
+    if (want && want->id == priv->next_failed_id[deck])
+        want = NULL;
+    else
+        priv->next_failed_id[deck] = 0;
+    uint64_t want_id = want ? want->id : 0;
+    if (dv->next_track_id && dv->next_track_id != want_id) {
+        cancel_next(app, deck);
+        changed = true;
+    }
+    bool near = loaded && st.duration > 0 && st.position >= st.duration - NEXT_LEAD_SECONDS;
+    if (want && !dv->next_track_id && (near || priv->ended[deck])) {
+        queue_next_track(app, deck, want);
+        changed = true;
+    }
+    if (priv->ended[deck] && st.has_next) {
+        /* PLAY on a deck stopped at its end takes the next. */
+        rx_deck_play(app->player, deck);
+        priv->ended[deck] = false;
+        changed = true;
+    }
+    return changed;
 }
 
 /* ----------------------------------------------------------------- analysis */
@@ -1390,6 +1532,55 @@ static void handle_tags(RXApp *app, RXJobResult *r)
     }
 }
 
+/* The decode of the track queued to follow the deck's: handed to the
+ * player, which plays on into it at the end; a deck already stopped at
+ * its end plays on now. */
+static void handle_next(RXApp *app, RXJobResult *r, int deck)
+{
+    RXAppPriv *priv = app->priv;
+    RXDeckView *dv = &app->decks[deck];
+    priv->next_request[deck] = 0;
+
+    RXTrack *t = rx_library_find_id(&app->lib, dv->next_track_id);
+    if (!t || !app->player || !dv->track || dv->loading_request) {
+        dv->next_track_id = 0;
+        return;
+    }
+    char name[256];
+    track_name(t, name, sizeof(name));
+    int ret = r->err < 0 ? r->err : (r->packets || r->audio ? 0 : RX_ERROR(EINVAL));
+    if (ret == 0) {
+        const RXGrid *grid = rx_grid_valid(&t->grid) ? &t->grid : NULL;
+        if (r->packets) {
+            RXPackets *pk = r->packets;
+            r->packets = NULL;
+            ret = rx_deck_queue_next_packets(app->player, deck, pk, grid);
+            if (ret < 0)
+                rx_packets_free(pk);
+        } else {
+            RXAudio *audio = r->audio;
+            r->audio = NULL;
+            ret = rx_deck_queue_next(app->player, deck, audio, grid);
+            if (ret < 0) {
+                rx_audio_free(audio);
+                free(audio);
+            }
+        }
+    }
+    if (ret < 0) {
+        /* Not asked for again and again: the deck will stop at its end. */
+        priv->next_failed_id[deck] = dv->next_track_id;
+        dv->next_track_id = 0;
+        app->last_error_count++;
+        rx_app_set_status(app, "Cannot queue %s to follow: %s", name, strerror(-ret));
+        return;
+    }
+    if (priv->ended[deck]) {
+        rx_deck_play(app->player, deck);
+        priv->ended[deck] = false;
+    }
+}
+
 static void handle_decode(RXApp *app, RXJobResult *r)
 {
     int deck = r->deck;
@@ -1397,6 +1588,10 @@ static void handle_decode(RXApp *app, RXJobResult *r)
         return;
     RXDeckView *dv = &app->decks[deck];
 
+    if (r->request && r->request == app->priv->next_request[deck]) {
+        handle_next(app, r, deck);
+        return;
+    }
     /* A result for a request the deck has moved on from is dropped. */
     if (!r->request || r->request != dv->loading_request)
         return;
@@ -1457,26 +1652,11 @@ static void handle_decode(RXApp *app, RXJobResult *r)
     dv->ctl.auto_cue = auto_cue_of(&app->lib.cfg);
     rx_ctl_load(&dv->ctl, t);
     deck_load_waves(app, deck);
-    if (app->priv->play_on_load[deck]) {
-        app->priv->play_on_load[deck] = false;
-        rx_deck_play(app->player, deck);
-    }
 
     /* rekordbox analyses a track on load when it has not been: here only
      * what is missing, the waveforms among them. */
     queue_analysis(app, t, RX_ANALYSE_ALL, false, false);
-
-    if (app->window) {
-        uint8_t *rgba = NULL;
-        int w = 0, h = 0;
-        if (artwork_from_library(app, t->id, &rgba, &w, &h) >= 0) {
-            deck_set_artwork(app, dv, rgba, w, h);
-            free(rgba);
-        } else {
-            uint64_t req = rx_jobs_artwork(app->priv->io_jobs, t->id, t->path, ART_SIZE);
-            dv->artwork_request = (int64_t)req > 0 ? req : 0;
-        }
-    }
+    deck_fetch_artwork(app, deck, t);
 
     rx_app_set_status(app, "Loaded %s", name);
 }
@@ -2747,9 +2927,11 @@ bool rx_app_tick(RXApp *app)
         RXDeckView *dv = &app->decks[d];
         dv->ctl.quantize_beats = quantize_beats;
         if (app->player) {
-            rx_ctl_tick(&dv->ctl);
+            /* The deck's move to the next track first: the controls then
+             * tick on the track the deck plays. */
             if (continue_play(app, d))
                 changed = true;
+            rx_ctl_tick(&dv->ctl);
         }
         track_plays(app, d);
 

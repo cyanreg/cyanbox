@@ -8,7 +8,8 @@
  * the master volume and the limiter, and MASTER TEMPO: the pitch kept at
  * another tempo, the position reported where it is heard, a jump heard in
  * the very next block, sample-exact loops through the shifter, no click
- * when the button is switched, and the button surviving a track change.
+ * when the button is switched, the button surviving a track change, and
+ * a buffer queued to follow, taken at the end and reported when heard.
  *
  * The track is synthetic: 44.1 kHz stereo, 60 s, a one-sample click on
  * every beat at 128 BPM whose height encodes the beat number (negated on
@@ -1068,6 +1069,82 @@ static void test_mt_flag(void)
     rx_player_destroy(p);
 }
 
+/* (g) A buffer queued to follow (rx_deck_queue_next), with the button on:
+ * the deck reads on into it at the end of its track; the move is reported
+ * when it is heard, the shifter's delay later, with the position in the
+ * new track from then on, and the old buffer is released once the move is
+ * known; a pause inside the delay lands at the start of the new track;
+ * a load drops what was queued. */
+static void test_next_buffer(void)
+{
+    nb_released = 0;
+    RXPlayer *p = make_player(MT_RATE);
+    RXAudio *a = make_track(2, 10.0), *b = make_track(2, 10.0);
+    CHECK(rx_deck_queue_next(p, 0, b, NULL) == RX_ERROR(ENOENT), "nothing loaded to follow");
+    rx_deck_load(p, 0, a, NULL);
+    rx_deck_set_master_tempo(p, 0, true);
+    CHECK(rx_deck_queue_next(p, 0, b, NULL) == 0, "queue b");
+    CHECK(st(p).has_next && rx_deck_audio(p, 0) == a, "a plays, b is queued");
+    int lat = mt_latency(p);
+    unsigned adv0 = st(p).advanced;
+
+    /* Up to the read side's move (the real-time deck's own count). */
+    rx_deck_play_from(p, 0, 10.0 - 0.25);
+    int steps = 0;
+    while (p->rt[0].track_gen == adv0 && steps < 1000) {
+        rx_player_null_advance(p, PERIOD);
+        steps++;
+    }
+    CHECK(p->rt[0].track_gen == adv0 + 1, "the read side moved on after %d steps", steps);
+    RXDeckState s = st(p);
+    CHECK(s.advanced == adv0 && rx_deck_audio(p, 0) == a && nb_released == 0,
+          "not heard yet: advanced %u, released %d", s.advanced, nb_released);
+    int since = 0;
+    while (st(p).advanced == adv0 && since < 4 * lat) {
+        rx_player_null_advance(p, PERIOD);
+        since += PERIOD;
+    }
+    s = st(p);
+    CHECK(s.advanced == adv0 + 1, "heard");
+    CHECK(since >= lat - PERIOD && since <= lat + PERIOD, "heard %d frames after the read, delay %d",
+          since, lat);
+    CHECK(rx_deck_audio(p, 0) == b && !s.has_next, "b is the deck's buffer, nothing queued");
+    CHECK(s.playing && s.position < 3.0 * PERIOD / MT_RATE, "at the start of b: %f", s.position);
+    CHECK(s.duration == 10.0, "b's duration: %f", s.duration);
+    rx_player_null_advance(p, PERIOD);
+    st(p);
+    CHECK(nb_released == 1 && released[0] == a, "a released: %d", nb_released);
+
+    /* A pause inside the delay lands at the start of the new track. */
+    RXAudio *c = make_track(2, 10.0);
+    CHECK(rx_deck_queue_next(p, 0, c, NULL) == 0, "queue c");
+    rx_deck_play_from(p, 0, 10.0 - 0.25);
+    adv0 = st(p).advanced;
+    steps = 0;
+    while (p->rt[0].track_gen == adv0 && steps < 1000) {
+        rx_player_null_advance(p, PERIOD);
+        steps++;
+    }
+    CHECK(p->rt[0].track_gen == adv0 + 1, "the read side moved on to c");
+    rx_deck_pause(p, 0);
+    rx_player_null_advance(p, PERIOD);
+    s = st(p);
+    CHECK(!s.playing && s.advanced == adv0 + 1 && s.position == 0.0 && rx_deck_audio(p, 0) == c,
+          "paused at the start of c: advanced %u (want %u), position %f", s.advanced, adv0 + 1,
+          s.position);
+
+    /* A load drops what was queued. */
+    RXAudio *d = make_track(2, 10.0), *e = make_track(2, 10.0);
+    CHECK(rx_deck_queue_next(p, 0, d, NULL) == 0, "queue d");
+    int before = nb_released;
+    rx_deck_load(p, 0, e, NULL);
+    CHECK(!st(p).has_next && rx_deck_audio(p, 0) == e, "a load drops the queued track");
+    rx_player_null_advance(p, PERIOD);
+    st(p);
+    CHECK(nb_released == before + 2, "c and d released: %d", nb_released - before);
+    rx_player_destroy(p);
+}
+
 int main(void)
 {
     test_positions();
@@ -1092,6 +1169,7 @@ int main(void)
     test_mt_seek_exact();
     test_mt_toggle();
     test_mt_flag();
+    test_next_buffer();
 
     if (failures) {
         fprintf(stderr, "%d failures\n", failures);

@@ -28,7 +28,9 @@
  * Loading hands an RXAudio or an RXPackets to the player, which owns it
  * until the deck is unloaded or loaded again; the old one is released only
  * after the real-time thread (and the deck's decoding thread) have
- * acknowledged the swap, so freeing is always safe.
+ * acknowledged the swap, so freeing is always safe. A second one may be
+ * queued to follow (rx_deck_queue_next): the deck plays on into it at the
+ * end of its track, sample-exactly, as one piece of audio.
  *
  * Backends: PipeWire (pw_stream, 48 kHz float stereo, target node from
  * options), or the null backend, which runs the same callback on a timer
@@ -105,6 +107,21 @@ int  rx_deck_load_packets(RXPlayer *p, int deck, RXPackets *pk, const RXGrid *gr
 void rx_deck_set_cue_points(RXPlayer *p, int deck, const double *seconds, int nb);
 void rx_deck_unload(RXPlayer *p, int deck);
 bool rx_deck_loaded(const RXPlayer *p, int deck);
+/* The track to follow the loaded one, taken like a load (the player owns
+ * it from here, on success; -ENOENT when nothing is loaded): when the
+ * deck plays past the last frame of its track it goes on in this one from
+ * its first frame, the step's fraction kept, with no fade, silence or
+ * command in between (the two play as one piece of audio); the loop goes
+ * with the old track, the tempo and MASTER TEMPO stay. A deck playing a
+ * packet store has the start of the next decoded ahead of time. The
+ * owner learns of the move from RXDeckState.advanced, after which the
+ * state (duration, position) is the next track's and what was loaded is
+ * released. Queueing again replaces the queued track; a load, an unload
+ * or rx_deck_clear_next drops it. */
+int  rx_deck_queue_next(RXPlayer *p, int deck, RXAudio *audio, const RXGrid *grid);
+int  rx_deck_queue_next_packets(RXPlayer *p, int deck, RXPackets *pk, const RXGrid *grid);
+void rx_deck_clear_next(RXPlayer *p, int deck);
+bool rx_deck_has_next(const RXPlayer *p, int deck);
 /* The buffer a deck plays (valid until unload; read-only); NULL for a
  * packet store. */
 const RXAudio *rx_deck_audio(const RXPlayer *p, int deck);
@@ -153,6 +170,10 @@ typedef struct RXDeckState {
     float  level_l, level_r;    /* recent peak, 0..1 */
     int64_t frame;          /* position in track frames */
     uint64_t serial;        /* bumps on every command the RT thread applied */
+    unsigned advanced;      /* bumps each time the deck moved on to a queued track
+                               (rx_deck_queue_next): from then on the state is that
+                               track's. With MASTER TEMPO on, when the move is heard. */
+    bool   has_next;        /* a track is queued to follow */
 } RXDeckState;
 
 void rx_deck_state(const RXPlayer *p, int deck, RXDeckState *out);
@@ -229,6 +250,11 @@ void rx_ctl_init(RXDeckCtl *c, RXPlayer *p, int deck, rx_ctl_changed_cb changed,
  * the cue point and the paused playhead at the first memory cue, the
  * start, or the grid's first beat). */
 void rx_ctl_load(RXDeckCtl *c, RXTrack *track);
+/* The deck moved on to `track` by itself (rx_deck_queue_next,
+ * RXDeckState.advanced): binds it without touching the playhead, which
+ * plays on from its start; the cue point goes where a load's auto cue
+ * would put it. */
+void rx_ctl_continue(RXDeckCtl *c, RXTrack *track);
 void rx_ctl_unload(RXDeckCtl *c);
 void rx_ctl_tick(RXDeckCtl *c);
 

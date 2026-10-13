@@ -267,6 +267,22 @@ static void send_cue_points(RXDeckCtl *c)
  * music starts, and the analyser starts the grid there (rxbox/model.h,
  * RXTempoSection; docs/BEATS.md), so the grid's first beat stands for it:
  * the dB value itself is not evaluated. AUTO CUE off: the start. */
+static double auto_cue_point(const RXDeckCtl *c, const RXTrack *track)
+{
+    double cue = 0.0;
+    const RXGrid *g = grid(c);
+    if (c->auto_cue == RX_AUTO_CUE_LEVEL && g) {
+        cue = RX_MAX(g->sections[0].start, 0.0);
+        if (track->duration > 0.0)
+            cue = RX_MIN(cue, track->duration);
+    } else if (c->auto_cue == RX_AUTO_CUE_MEMORY) {
+        int first = rx_track_memory_cue_nth(track, 1);
+        if (first >= 0)
+            cue = track->cues[first].time;
+    }
+    return cue;
+}
+
 void rx_ctl_load(RXDeckCtl *c, RXTrack *track)
 {
     reset(c);
@@ -274,20 +290,23 @@ void rx_ctl_load(RXDeckCtl *c, RXTrack *track)
     if (!track)
         return;
 
-    c->cue_point = 0.0;
-    const RXGrid *g = grid(c);
-    if (c->auto_cue == RX_AUTO_CUE_LEVEL && g) {
-        c->cue_point = RX_MAX(g->sections[0].start, 0.0);
-        if (track->duration > 0.0)
-            c->cue_point = RX_MIN(c->cue_point, track->duration);
-    } else if (c->auto_cue == RX_AUTO_CUE_MEMORY) {
-        int first = rx_track_memory_cue_nth(track, 1);
-        if (first >= 0)
-            c->cue_point = track->cues[first].time;
-    }
+    c->cue_point = auto_cue_point(c, track);
     rx_deck_clear_loop(c->player, c->deck);
     rx_deck_seek(c->player, c->deck, c->cue_point);
     c->_last_position = c->cue_point;
+    send_cue_points(c);
+}
+
+void rx_ctl_continue(RXDeckCtl *c, RXTrack *track)
+{
+    reset(c);
+    c->track = track;
+    if (!track)
+        return;
+    /* The cue point where a load would have put it; the playhead plays
+     * on from the start (the deck dropped the loop with the old track). */
+    c->cue_point = auto_cue_point(c, track);
+    c->_last_position = 0.0;
     send_cue_points(c);
 }
 

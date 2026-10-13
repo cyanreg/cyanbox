@@ -258,7 +258,8 @@ line `rxbox export STICK`.
   overview and detail, and the previews in the track table, half or full),
   the key display (classic or Camelot keys everywhere), the waveform
   position, hot cue colours, auto cue, the quantize beat value, play mode
-  (continue plays the next track of the view), and the deck's state at
+  (continue plays on into the next track of any view at the end; a
+  playlist being viewed always plays through, gaplessly), and the deck's state at
   startup (quantize, beat jump size, tempo range, master tempo, time mode;
   the deck's buttons change only the running deck). The View menu's
   waveform colour and key notation set those settings. The rest (jog, LCD,

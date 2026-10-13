@@ -86,7 +86,24 @@
  * target of a jump at once and never before it; a stopped deck that is
  * moved (a scrub) reports where it is. The factor for each block is the
  * inverse of the speed the analysed material was rendered at (the frame
- * `in_latency` back), so a tempo change is corrected when it is heard. */
+ * `in_latency` back), so a tempo change is corrected when it is heard.
+ *
+ * The next track (RX_CMD_NEXT, rx_deck_queue_next): the owner may queue a
+ * second buffer or stream, and the main voice, on stepping past the last
+ * frame of the track it plays, goes on in the next one from its first
+ * frame, keeping the fraction of the step it had left, so the two play as
+ * one piece of audio: no fade, no silence, no command in between. The
+ * loop goes with the old track; so does the de-click tail, which would
+ * otherwise read the old track's positions out of the new one. The deck's
+ * track_gen counts the changes, and the ring keeps it with every frame fed
+ * so that, with the shifter in, the change is reported when it is heard,
+ * `latency` after it was read; a command that restarts the shifter inside
+ * that delay restarts from the start of the new track, the old one's last
+ * frames being what the restart's crossfade lets go of (its buffer may be
+ * gone by then). A seek to the end of a track with a next queued goes on
+ * into it when playing, and PLAY on a deck stopped at the end of its
+ * track takes the next. The step is recomputed for every frame, so a next
+ * at another rate plays at the right speed from its first frame. */
 
 #include "player_internal.h"
 
@@ -235,25 +252,62 @@ static void fold_into_loop(RXDeckRT *d)
     rx_pos_add(&d->pos, over);
 }
 
+/* The end of the track: the main voice goes on in the next one, the frame
+ * after the last, the fraction of its step kept (scaled when the rates
+ * differ). */
+static void take_next(RXDeckRT *d)
+{
+    RXPos over = rx_pos_sub(d->pos, (RXPos) { .i = d->nb_frames });
+    double frames = rx_pos_get(over);
+    if (!(frames >= 0.0))
+        frames = 0.0;
+    if (d->rate > 0 && d->next_rate != d->rate)
+        frames *= (double)d->next_rate / d->rate;
+
+    d->samples      = d->next_samples;
+    d->stream       = d->next_stream;
+    d->channels     = d->next_channels;
+    d->rate         = d->next_rate;
+    d->nb_frames    = d->next_nb_frames;
+    d->next_samples = NULL;
+    d->next_stream  = NULL;
+    d->has_next     = false;
+    d->length_final = !d->stream;
+    d->posted_chunk = -1;
+    d->holding      = false;
+    d->pos          = rx_pos_from(frames);
+    d->loop_set     = false;
+    d->loop_enabled = false;
+    /* The tail's positions are the old track's. */
+    d->tail_left    = 0;
+    d->track_gen++;
+}
+
 static void seek(RXDeckRT *d, double frames, int rate)
 {
     start_tail(d, rate);
     if (d->playing)
         start_fade_in(d, rate);
     d->pos = clamp_frames(d, frames);
-    if (d->pos.i >= d->nb_frames)
-        d->playing = false;
+    if (d->pos.i >= d->nb_frames) {
+        if (d->has_next && d->playing)
+            take_next(d);
+        else
+            d->playing = false;
+    }
 }
 
 static bool can_play(const RXDeckRT *d)
 {
-    return !d->playing && loaded(d) && d->pos.i < d->nb_frames;
+    return !d->playing && loaded(d) && (d->pos.i < d->nb_frames || d->has_next);
 }
 
 static void play(RXDeckRT *d, int rate)
 {
     if (!can_play(d))
         return;
+    if (d->pos.i >= d->nb_frames)
+        take_next(d);
     d->playing = true;
     start_fade_in(d, rate);
 }
@@ -286,8 +340,9 @@ int rx_player_deck_mt_alloc(RXDeckRT *d, int rate)
     }
     m->hist       = calloc(ring, sizeof(*m->hist));
     m->hist_speed = calloc(ring, sizeof(*m->hist_speed));
+    m->hist_gen   = calloc(ring, sizeof(*m->hist_gen));
     m->was        = calloc(1, sizeof(*m->was));
-    if (!ok || !m->hist || !m->hist_speed || !m->was) {
+    if (!ok || !m->hist || !m->hist_speed || !m->hist_gen || !m->was) {
         rx_player_deck_mt_free(d);
         return RX_ERROR(ENOMEM);
     }
@@ -307,6 +362,7 @@ void rx_player_deck_mt_free(RXDeckRT *d)
     }
     free(m->hist);
     free(m->hist_speed);
+    free(m->hist_gen);
     free(m->was);
     *m = (RXDeckMT) { 0 };
 }
@@ -323,6 +379,26 @@ RXPos rx_player_deck_heard(const RXDeckRT *d)
     if (i < m->fill_until)
         return m->fill_pos;
     return m->hist[i & m->hist_mask];
+}
+
+uint32_t rx_player_deck_heard_gen(const RXDeckRT *d)
+{
+    const RXDeckMT *m = &d->mt;
+    if (!m->on || m->restart)
+        return d->track_gen;
+    int64_t i = m->fed - m->latency;
+    if (i < m->fill_until)
+        return m->fill_gen;
+    return m->hist_gen[i & m->hist_mask];
+}
+
+/* The frames fed from here on count as the deck's position and track. */
+static void mt_fill_from_here(RXDeckRT *d)
+{
+    RXDeckMT *m = &d->mt;
+    m->fill_until = m->fed;
+    m->fill_pos   = d->pos;
+    m->fill_gen   = d->track_gen;
 }
 
 /* The tempo + bend a frame plays at; 0 for a stopped deck. */
@@ -353,12 +429,21 @@ static void mt_begin(RXDeckRT *d)
     RXDeckMT *m = &d->mt;
     if (!m->st || m->restart)
         return;
+    /* Read before the restart is set: with it set, heard is the read
+     * position (a restart due means the ring is not filled yet). */
+    RXPos heard = rx_player_deck_heard(d);
+    bool same_track = rx_player_deck_heard_gen(d) == d->track_gen;
     m->restart = true;
     m->was_on = m->on;
-    if (m->on)
-        d->pos = rx_player_deck_heard(d);
-    else
+    if (m->on) {
+        /* What is heard may still be the track before this one (the
+         * deck moved on inside the shifter's delay): the restart then
+         * starts this one, and the old track's last frames go with the
+         * crossfade. Its buffer may be released already. */
+        d->pos = same_track ? heard : (RXPos) { 0 };
+    } else {
         *m->was = *d;
+    }
 }
 
 /* The commands that matter to the shifter only while it is in. */
@@ -374,8 +459,7 @@ static void mt_moved(RXDeckRT *d)
     RXDeckMT *m = &d->mt;
     if (!m->on || m->restart)
         return;
-    m->fill_until = m->fed;
-    m->fill_pos   = d->pos;
+    mt_fill_from_here(d);
 }
 
 /* A track change is a hard cut, with the shifter as without it: nothing of
@@ -391,6 +475,7 @@ static void mt_cut(RXDeckRT *d)
         rx_stretch_reset(m->st);
     m->fill_until = m->fed;
     m->fill_pos   = (RXPos) { 0 };
+    m->fill_gen   = d->track_gen;
 }
 
 /* -------------------------------------------------------------- commands */
@@ -405,7 +490,9 @@ void rx_player_deck_apply(RXDeckRT *d, const RXCmd *cmd, int rate)
          * acknowledged; d->samples is the only pointer to it. The tail and
          * the grains are positions in the old track and must not go on in
          * the new one. A track change on a playing deck is a hard cut, as
-         * on a CDJ. MASTER TEMPO is the deck's and stays as it is. */
+         * on a CDJ. MASTER TEMPO is the deck's and stays as it is. A load
+         * is a new start: the track queued after the old one goes too
+         * (the owner releases it). */
         silence_voices(d);
         mt_cut(d);
         d->samples      = cmd->type == RX_CMD_LOAD ? cmd->samples : NULL;
@@ -423,6 +510,19 @@ void rx_player_deck_apply(RXDeckRT *d, const RXCmd *cmd, int rate)
         d->loop_enabled = false;
         d->scrubbing    = false;
         d->scrub_resume = false;
+        d->has_next     = false;
+        d->next_samples = NULL;
+        d->next_stream  = NULL;
+        break;
+    case RX_CMD_NEXT:
+        /* Replaces the queued track (the owner releases the old one once
+         * this is acknowledged); nothing else changes until the end. */
+        d->next_samples   = cmd->samples;
+        d->next_stream    = cmd->stream;
+        d->next_channels  = cmd->channels;
+        d->next_rate      = cmd->rate;
+        d->next_nb_frames = cmd->nb_frames;
+        d->has_next       = (cmd->samples || cmd->stream) && cmd->rate > 0;
         break;
     case RX_CMD_PLAY:
         if (d->scrubbing) {
@@ -548,11 +648,16 @@ static void advance(RXDeckRT *d, double inc)
         while (rx_pos_cmp(d->pos, d->loop_out) >= 0);
     }
 
-    /* The end of the track pauses the deck there (PLAY MODE SINGLE, the
-     * CDJ-3000's factory setting, manual p.75). */
+    /* The end of the track: on into the next one when there is one, else
+     * the deck pauses there (PLAY MODE SINGLE, the CDJ-3000's factory
+     * setting, manual p.75). */
     if (d->pos.i >= d->nb_frames) {
-        d->pos = (RXPos) { .i = d->nb_frames };
-        d->playing = false;
+        if (d->has_next) {
+            take_next(d);
+        } else {
+            d->pos = (RXPos) { .i = d->nb_frames };
+            d->playing = false;
+        }
     }
 }
 
@@ -560,8 +665,9 @@ static void advance(RXDeckRT *d, double inc)
  * start or a jump, and the de-click tail. A main voice whose frames are
  * not decoded yet holds where it is, silent, its fade in kept for when
  * they come (a voice cut off by the hold fades in again); the tail plays
- * silence for frames that are not there. */
-static void voice(RXDeckRT *d, double inc, float *l, float *r)
+ * silence for frames that are not there. The step is the deck's as of
+ * this frame: a next track at another rate changes it mid-callback. */
+static void voice(RXDeckRT *d, float *l, float *r)
 {
     *l = 0.0f;
     *r = 0.0f;
@@ -577,7 +683,7 @@ static void voice(RXDeckRT *d, double inc, float *l, float *r)
                 *r *= e;
                 d->fade_in--;
             }
-            advance(d, inc);
+            advance(d, increment(d, d->out_rate));
         } else {
             *l = *r = 0.0f;
             d->holding = true;
@@ -664,9 +770,9 @@ static void mt_old_sound(RXDeckRT *d, int n, int rate)
         rx_stretch_process(m->st, in, m->out, n);
     } else {
         RXDeckRT *w = m->was;
-        double inc = increment(w, rate);
+        w->out_rate = rate;
         for (int k = 0; k < n; k++)
-            voice(w, inc, &m->out[0][k], &m->out[1][k]);
+            voice(w, &m->out[0][k], &m->out[1][k]);
     }
 
     int at = m->xf_len - m->xf_left;
@@ -698,19 +804,18 @@ static void mt_restart(RXDeckRT *d, int rate)
         return;
 
     if (!d->playing) {
-        m->fill_until = m->fed;
-        m->fill_pos   = d->pos;
+        mt_fill_from_here(d);
         return;
     }
 
     /* Read ahead: the next `latency` frames from the playhead, entered in
      * the ring as if they had been fed already. */
-    double inc = increment(d, rate);
     for (int k = 0; k < m->latency; k++) {
         int64_t i = (m->fed - m->latency + k) & m->hist_mask;
         m->hist[i]       = d->pos;
         m->hist_speed[i] = speed_ratio(d);
-        voice(d, inc, &m->ahead[0][k], &m->ahead[1][k]);
+        m->hist_gen[i]   = d->track_gen;
+        voice(d, &m->ahead[0][k], &m->ahead[1][k]);
     }
     m->fill_until = m->fed - m->latency;
     rx_stretch_set_pitch(m->st, pitch_factor(m->hist_speed[(m->fed - m->in_latency) &
@@ -720,14 +825,15 @@ static void mt_restart(RXDeckRT *d, int rate)
 }
 
 /* Feeds the next n frames of the deck through the shifter, into m->out. */
-static void mt_feed(RXDeckRT *d, int n, double inc)
+static void mt_feed(RXDeckRT *d, int n)
 {
     RXDeckMT *m = &d->mt;
     for (int k = 0; k < n; k++) {
         int64_t i = (m->fed + k) & m->hist_mask;
         m->hist[i]       = d->pos;
         m->hist_speed[i] = speed_ratio(d);
-        voice(d, inc, &m->in[0][k], &m->in[1][k]);
+        m->hist_gen[i]   = d->track_gen;
+        voice(d, &m->in[0][k], &m->in[1][k]);
     }
     m->fed += n;
 
@@ -761,7 +867,6 @@ void rx_player_deck_render(RXDeckRT *d, float *out, int frames, int rate)
     float peak_l = 0.0f, peak_r = 0.0f;
 
     if (loaded(d)) {
-        double inc   = increment(d, rate);
         double ratio = (double)d->rate / rate;
         int    glen  = (int)(rate * RX_GRAIN_SECONDS);
         float  lp    = 1.0f - expf(-2.0f * (float)M_PI * RX_GRAIN_LOWPASS_HZ / rate);
@@ -776,7 +881,7 @@ void rx_player_deck_render(RXDeckRT *d, float *out, int frames, int rate)
         for (int done = 0; done < frames;) {
             int len = RX_MIN(frames - done, RX_MT_CHUNK);
             if (m->on)
-                mt_feed(d, len, inc);
+                mt_feed(d, len);
 
             for (int k = 0; k < len; k++) {
                 float l, r;
@@ -784,7 +889,7 @@ void rx_player_deck_render(RXDeckRT *d, float *out, int frames, int rate)
                     l = m->out[0][k];
                     r = m->out[1][k];
                 } else {
-                    voice(d, inc, &l, &r);
+                    voice(d, &l, &r);
                 }
 
                 if (m->xf_left > 0) {
