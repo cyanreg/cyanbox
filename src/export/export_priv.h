@@ -69,8 +69,9 @@ char *rx_plan_usb_stem(const RXTrack *t);
  * stem, or its first 40 characters with a "-N" collision suffix): a guard
  * when a stick's track ids may not be ours. */
 bool rx_plan_usb_name_matches(const RXTrack *t, const char *stick_path);
-/* Lower-cases ASCII and the common Latin, Greek and Cyrillic capitals, for
- * FAT's case-insensitive names (dj compared with str.lower()). */
+/* A path's key under FAT's and exFAT's case-insensitive names: up-cased
+ * as exFAT's default up-case table does (plan.c); two paths with one key
+ * are one file on the stick. */
 char *rx_plan_fold_case(const char *s);
 /* The background colour setting ([device] background_color): 0 default,
  * 1..8 pink..purple. */

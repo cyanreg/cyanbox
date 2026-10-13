@@ -68,17 +68,23 @@ static void usb_paths(void)
     CHECK(!rx_plan_usb_name_matches(&t, "/Contents/A/B/y.mp3"));
     CHECK(!rx_plan_usb_name_matches(&t, "/Contents/A/B/x-a.mp3"));
 
+    /* The key is the name up-cased as exFAT does. */
     char *fc = rx_plan_fold_case("ÄBC/Ωmega");
-    CHECK_STR(fc, "äbc/ωmega");
+    CHECK_STR(fc, "ÄBC/ΩMEGA");
     free(fc);
 
-    /* FAT and exFAT compare names without case. Latin Extended-A has its
-     * capitals on odd code points in U+0139..U+0148 and U+0179..U+017E
-     * (Ł ł, Ń ń, Ž ž); Ÿ's small letter is U+00FF. Two names that differ
-     * only there are one file on the stick. */
+    /* FAT and exFAT compare names without case, exFAT with its up-case
+     * table (the specification's, which every formatter writes): Latin
+     * Extended-A with its capitals on odd code points in U+0139..U+0148 and
+     * U+0179..U+017E (Ł ł, Ž ž), Ÿ and U+00FF, and beyond what dj's
+     * str.lower() covered here: Ș ș (Romanian), the DŽ digraph, Vietnamese,
+     * full width, Armenian, Georgian, circled letters. Two names that
+     * differ only there are one file on the stick. */
     static const char *const same[][2] = {
         { "Łódź", "łódź" }, { "Žena", "žena" }, { "ŃŇĽĹĻĿŹŻŽ", "ńňľĺļŀźżž" }, { "Ÿ", "ÿ" },
-        { "ĀĒĪŌŪ", "āēīōū" }, { "ΆΈΉΊΌΎΏ", "άέήίόύώ" }, { "ЀЁЂ", "ѐёђ" },
+        { "ĀĒĪŌŪ", "āēīōū" }, { "ΆΈΉΊΌΎΏ", "άέήίόύώ" }, { "ЀЁЂ", "ѐёђ" }, { "ΣΑΣ", "σας" },
+        { "Șerban", "șerban" }, { "ȚARA", "țara" }, { "Ǆ", "ǆ" }, { "ẠẢẤỸ", "ạảấỹ" },
+        { "ＡＢＣ", "ａｂｃ" }, { "ԱԲ", "աբ" }, { "ႠႡ", "ⴀⴁ" }, { "ⒶⓏ", "ⓐⓩ" },
     };
     for (size_t i = 0; i < RX_ARRAY_ELEMS(same); i++) {
         char *a = rx_plan_fold_case(same[i][0]), *b = rx_plan_fold_case(same[i][1]);
@@ -86,14 +92,24 @@ static void usb_paths(void)
         free(a);
         free(b);
     }
-    /* And different letters stay different. */
-    char *l = rx_plan_fold_case("ł"), *n = rx_plan_fold_case("Ń");
-    CHECK(l && n && strcmp(l, n));
-    free(l);
-    free(n);
+    /* And different letters stay different, where exFAT keeps them apart
+     * too: the title-case digraph, dotless i, the Kelvin sign, and letters
+     * beyond the BMP, which it compares as they are. */
+    static const char *const apart[][2] = {
+        { "ł", "Ń" }, { "ǅ", "ǆ" }, { "ı", "i" }, { "\u212A", "k" }, { "\U00010400", "\U00010428" },
+    };
+    for (size_t i = 0; i < RX_ARRAY_ELEMS(apart); i++) {
+        char *a = rx_plan_fold_case(apart[i][0]), *b = rx_plan_fold_case(apart[i][1]);
+        CHECK(a && b && strcmp(a, b));
+        free(a);
+        free(b);
+    }
     t = track("/m/žena.mp3", "A", NULL, "B");
     const char *used3[] = { "/Contents/A/B/Žena.mp3" };
     check_path(&t, NULL, used3, 1, "/Contents/A/B/žena-1.mp3");
+    t = track("/m/song.wav", "șerban", NULL, "Album");
+    const char *used4[] = { "/Contents/Șerban/Album/song.wav" };
+    check_path(&t, NULL, used4, 1, "/Contents/șerban/Album/song-1.wav");
 
     /* The extension comes from the file copied: ASCII letters and digits
      * only, as every audio extension is, so nothing FAT refuses (":", "?",
