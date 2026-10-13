@@ -137,11 +137,12 @@ Plus: an optional "maximum compatibility" transcode (AAC and hi-res FLAC to
 ```
 src/core      model, grid arithmetic, the SQLite library (tracks, cues, waveforms, playlists, settings), notation
 src/audio     libavformat/libavcodec decode to memory on the players' timeline, probe, tags, artwork, MP3/FLAC scanners
-src/analysis  spectral front end (libavutil av_tx), onset, tempo, grid, downbeat, key, waveforms
+src/analysis  spectral front end (libavutil av_tx, or the GPU), onset, tempo, grid, downbeat, key, waveforms
 src/formats   export.pdb, ANLZ read/write, OneLibrary (sqlite3 + SQLCipher pages), My Settings, colours
 src/export    stick plan, writer, inspect, pull
 src/player    PipeWire stream, the player, lock-free command queue, cue/loop/quantize controls, MASTER TEMPO, null backend for tests
-src/gpu       SDL3 window (Wayland), Vulkan device + VMA, swapchain, Wayland frame-callback pacing, ImGui glue, waveform shader
+src/gpu       SDL3 window (Wayland), Vulkan device + VMA, swapchain, Wayland frame-callback pacing, ImGui glue, waveform shader;
+              the compute context without a window and the analysis' STFT and envelope shaders (rx_compute)
 src/ui        Dear ImGui screens (C++, as are only vendored code and the player's Signalsmith Stretch interface)
 src/cli.c     the subcommands
 ```
@@ -191,11 +192,21 @@ Decisions and why:
   a `--audio none` backend drives the clock without a device, which is what the
   tests and the headless runs use. Nothing is ever routed to the Focusrite
   while testing.
-- **Analysis on the CPU first**, multithreaded across tracks (12 cores here).
-  Decoding dominates; the STFT/mel/onset front end is under a second a track
-  with `av_tx`. The front end sits behind one interface so a Vulkan compute
-  (or VkFFT) version can replace it; the user is happy to go there once the
-  CPU version is validated.
+- **Analysis multithreaded across tracks, its front end on the GPU.** The
+  jobs pool analyses many tracks at once (12 cores here). The beat
+  analyser's spectral front end (the STFT, its mel and kick bands, and the
+  band envelopes around beats) runs as Vulkan compute shaders when there is
+  a device (`rxbox/compute.h`, docs/BEATS.md section 1), on a compute
+  context of its own that the pool's workers share: no window, so the CLI
+  and the tests use it too, and the interface's is separate from the
+  window's device (the frame loop keeps its queue to itself). The GPU only
+  turns tables the C code builds into band energies; every decision stays
+  in C, and the results equal the CPU path's to float rounding (the same
+  grids on every synthetic track). Own shaders rather than VkFFT: window,
+  transform, power and band sums fit one workgroup per frame with no
+  intermediate buffers and no shader compilation at run time. Without a
+  device, or with `--no-gpu`, everything runs on the CPU (`av_tx`), the
+  same results. Decoding and the waveforms now take longer than the beats.
 - **The library is SQLite.** One file, WAL mode, foreign keys, every edit a
   transaction, schema versioned for migrations. The whole track list is
   also held in memory (a few thousand rows), written through, so the
@@ -307,6 +318,6 @@ Implemented by subagents against the interfaces in `include/rxbox/`:
 | analysis/beats+key | the new grid analyser, key detection, evaluation harness over ~/Music |
 | formats+export | pdb, ANLZ, OneLibrary, settings, colours, plan, stick writer, inspect, stick sync |
 | player | PipeWire, decks, controls, MASTER TEMPO, null backend |
-| gpu | window, Vulkan, VMA, frame callback, ImGui glue, waveform shader |
+| gpu | window, Vulkan, VMA, frame callback, ImGui glue, waveform shader; compute context and the analysis' front-end shaders |
 | ui | the screens |
 | cli/tests | subcommands, meson tests, headless run |

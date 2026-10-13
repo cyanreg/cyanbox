@@ -4,7 +4,8 @@
  * (spectrum.c, onset.c, tempo.c, grid_fit.c, downbeat.c, beats.c) and
  * analysis.c. Nothing here is part of rxbox/analysis.h; the stages are
  * split into files so that each can be read, tested and replaced on its
- * own (the spectral front end in particular could move to Vulkan compute).
+ * own. The spectral front end's transforms run on the GPU when the options
+ * carry a compute context (spectrum.c); nothing after it knows.
  *
  * Time conventions: every time is in seconds of the analysed signal, which
  * is the input resampled to 44.1 kHz with no delay, so it is also seconds

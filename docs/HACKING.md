@@ -101,7 +101,7 @@ src/audio         decode.c probe.c mp3.c flac.c artwork.c             -> rx_audi
                   transcode.c internal.h
 src/core          model.c grid.c db.c library.c playlist.c config.c   -> rx_core_dep (common, audio)
                   notation.c wavestore.c core.h
-src/analysis      spectrum.c onset.c tempo.c grid_fit.c downbeat.c    -> rx_analysis_dep
+src/analysis      spectrum.c onset.c tempo.c grid_fit.c downbeat.c    -> rx_analysis_dep (core, compute)
                   start.c beats.c beats_internal.h key.c waveform.c
                   analysis.c
 src/formats       pdb.c anlz.c onelibrary.c sqlcipher.c sha512.h settings.c colors.c util.c (+ buf.h formats_priv.h nfc_tables.h) -> rx_formats_dep
@@ -111,7 +111,9 @@ src/player        player.c pipewire.c nullout.c deck.c controls.c     -> rx_play
                   stretch.cpp stretch.h player_internal.h
 src/app           jobs.c app.c                                        -> rx_app_dep (everything above)
                   headless.c (src/gpu and src/ui stand-ins for rxbox-cli and test_app)
-src/gpu           window.c vk.c swapchain.c textures.c wave.c         (executable only)
+src/gpu           compute.c compute_dsp.c compute_priv.h              -> rx_compute_dep (common; Vulkan, VMA)
+                  shaders/fft.glsl stft.comp env.comp                 (no window: CLI, tests, tools)
+                  window.c vk.c swapchain.c textures.c wave.c         (executable only)
                   imgui_glue.cpp gpu_priv.h gpu_demo.h shaders/
 src/ui            ui.cpp deck_view.cpp waveform_view.cpp browser.cpp  (C++)
                   tree.cpp dialogs.cpp keys.cpp ui_internal.h
@@ -175,6 +177,11 @@ Several agents implement modules at the same time in this tree. So:
   in a comment and in the test.
 - Audio tests use the null backend (`RX_AUDIO_NULL`). Never open the user's
   audio devices from a test.
+- The analysis tests run the GPU front end too when there is a Vulkan
+  device (no window or compositor needed); `RXBOX_ANALYSIS_GPU=0` or `1`
+  forces the CPU or the GPU path, `RXBOX_GPU_DEVICE=NAME` picks the GPU,
+  `RXBOX_GPU_VALIDATION=1` adds the Khronos validation layer. A change to
+  the front end's output bumps `RX_FRONTEND_VERSION` (beats_internal.h).
 
 ## Running the interface while developing
 

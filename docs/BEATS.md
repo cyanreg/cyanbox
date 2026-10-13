@@ -45,7 +45,9 @@ flags saying what is uncertain, and where and how the music starts.
 
 It costs about 290 ms of CPU for an average 4.5-minute track (383 ms per six
 minutes of audio), single-threaded, after decoding. dj's Python analyser took
-5 s for the same.
+5 s for the same. With a GPU the STFT and the envelopes run there (section 1)
+and the CPU's share falls to about a third: 656 ms to 204 ms per file on the
+58 acceptance tracks, on a busy machine ("Speed").
 
 ## 1. Spectral front end (`spectrum.c`)
 
@@ -59,7 +61,7 @@ minutes of audio), single-threaded, after decoding. dj's Python analyser took
 - **The kick band** is summed from the bins themselves (bins 1-7, the ends at
   half weight), finer than the lowest mel triangles, which straddle kick and
   bass.
-- **av_tx everywhere.** Its fast codelets stop at 2^17 complex points (2^18
+- **av_tx on the CPU.** Its fast codelets stop at 2^17 complex points (2^18
   real); above that it falls back to a naive O(n²) DFT (found the hard way: a
   2^20-point transform took minutes). Every transform here stays within
   that. The STFT is about two thirds of the analyser's time, nearly all of
@@ -82,8 +84,60 @@ minutes of audio), single-threaded, after decoding. dj's Python analyser took
   signal block-averaged to 2756 Hz, where a 2048-point transform resolves
   1.35 Hz, enough to tell bass notes apart, which 21.5 Hz bins cannot.
 
-The front end is behind `rx_spectrum_compute` / `rx_env_window`; a Vulkan
-version could replace it without touching the rest.
+**On the GPU.** Given a compute context (`RXAnalysisOptions.compute`,
+`rxbox/compute.h`; the jobs pool, the CLI and `rxbox-eval` make one when
+there is a Vulkan 1.3 device, `--no-gpu` or `RXBOX_ANALYSIS_GPU=0` says not
+to, `--device` or `RXBOX_GPU_DEVICE` picks one), the STFT and the envelopes
+run as compute shaders (`src/gpu/shaders/`). One workgroup per frame
+windows 2048 samples into shared memory, transforms them (a Stockham
+radix-4 FFT of 1024 complex points; twiddles computed on the CPU in double
+precision), takes the power, the 64 mel sums and the kick band, and
+compresses them as above; one workgroup per window and band tapers 8192
+samples, transforms them, applies the band's gains, transforms back and
+takes the smoothed energies (compensated sums, where the CPU sums in
+double). The signal goes up 4096 frames at a time and the windows in
+batches of 256, two in flight, so the GPU never holds a whole track; the
+envelopes are asked for in batches (every tracked beat, a shifted section,
+the beats that strayed from the grid). Should the GPU fail, the CPU takes
+over. Measured on one core before anything moved: the STFT was a third to
+a half of the beat analyser's time, the envelopes around beats another
+third on a track that needs 1700 windows (a quarter on one that needs
+470); the bass chroma, 2 %, and the key's transforms (a small part of its
+0.1 s) stay on the CPU, as do the waveforms (IIR filters, sequential).
+
+Only this fixed, algorithm-neutral part runs there. The GPU is handed the
+tables `spectrum.c` builds (the window, the mel and kick weights, the taper,
+the band masks) and returns band energies; the profile sums, the flux and
+everything after them (onsets, tempo, tracking, attacks, sections, phase,
+downbeat, confidence, flags) stay plain C on both paths, exactly as they
+were. Changing the analyser never means changing a shader; changing the
+front end's tables changes both paths at once.
+
+**The same results.** The two paths agree to float rounding, not bit for
+bit: the transforms round differently in their last bits. `test_beats`
+runs every synthetic track on both when there is a device: each must pass
+on its own, and the two grids must be the same (sections, BPMs, beat
+numbers, flags and where the music starts identical, the starts within
+0.1 ms). Measured on the RX 6900 XT (RADV) and the Iris Xe (ANV): all 22
+the same, the starts within 0.3 ns, the BPMs identical. The front end's
+arrays are compared directly, within 1e-5 of each array's largest value:
+an fp32 FFT of 2^11 points is accurate to about eleven float epsilons of a
+frame's largest bin, and the log compression turns a relative error of an
+amplitude into an absolute error no larger, so the bands, and the fluxes
+summed from them, differ by about 1e-6 of their largest values; both GPUs
+stay under 1e-6 (envelopes under 2e-7). `RXBOX_ANALYSIS_GPU=0` or `1`
+forces either path in the test, the tools and the app;
+`RXBOX_GPU_VALIDATION=1` runs the GPU half under the Khronos validation
+layer (with synchronisation checks; it reports nothing).
+
+On the 58 acceptance tracks (`rxbox-eval -j 2`, once on each path), 56
+grids were identical to the CSV's precision, flags and starts of the music
+included. Two first beats moved: AZKi's エントロピー by 10 µs (the fifth
+decimal rounding the other way) and Orange Pekoe's Adagio, a live
+recording, by 30 µs: its line before the on/off-beat decision sat on the
+other half of the beat on the GPU (the tracker near a tie), and that
+decision moved it back, so both grids end on the same beats at the same
+BPM, with confidence 0.999 instead of 0.988.
 
 ## 2. Onsets (`onset.c`)
 
@@ -609,7 +663,15 @@ VIVACE, ADvantage, AD-Progressive House 4), 30 J-pop and anime FLAC with live
 drums (Orange Pekoe, yanaginagi, AZKi, D4DJ Photon Maiden, ReoNa, Yutaka
 Yokokura) and 30 Opus from `music_temp` (10 from AD:Drum'n Bass 5).
 
+To iterate on the decisions without decoding and transforming every file
+on every run, give `rxbox-eval` a cache on a disk: `--cache DIR` keeps each
+file's decoded audio and front end, and later runs only analyse
+("Reproducing the evaluation").
+
 ### Synthetic tracks (`test_beats`, exact answers)
+
+Every case runs on the CPU's front end and, when there is a device, on the
+GPU's, with the same answers and the same grids (section 1).
 
 All pass: tempo within 0.05 BPM (all exact), phase within 3 ms (all within
 1.8 ms), downbeat right, sections and boundaries right (boundaries within
@@ -688,13 +750,33 @@ Where they disagree, independent evidence says:
 
 ### Speed
 
-Single-threaded, on the 150 tracks (mean 4.5 min): 290 ms CPU per track
+**On the CPU**, single-threaded, on the 150 tracks (mean 4.5 min): 290 ms CPU per track
 (median 266, worst 827 ms when the grid is fitted three times), 64 ms per
 minute of audio, with the machine otherwise quiet; 368 ms (median 274) with
 other builds running beside it. dj: 4.98 s per track. Per six-minute track, roughly:
 spectrum 165 ms (two thirds of it av_tx), onsets 15, tempo 14, tracking,
 envelopes, attacks, sections and refinement 110, octave and family refits
 when needed 100 each, phase, downbeat and bass 11, confidence 5.
+
+**With the GPU** (section 1). On two 3.3-minute FLAC tracks, one core for
+everything, the machine busy with other builds (the fastest of five runs;
+the RX 6900 XT sits behind Thunderbolt here, so its time is mostly the
+transfers, while the Iris Xe shares the CPU's memory):
+
+| | Feel Alive (garage, 1726 windows) | PASSIVE (470 windows) |
+| --- | --- | --- |
+| beat analyser, CPU path | 600 ms | 347 ms |
+| beat analyser, RX 6900 XT | 174 ms (142 ms CPU) | 113 ms (93 ms CPU) |
+| beat analyser, Iris Xe | 286 ms (201 ms CPU) | 134 ms (89 ms CPU) |
+| GPU time (timestamps): STFT, envelopes, 6900 XT | 18.7, 27.1 ms | 18.3, 7.5 ms |
+| GPU time: STFT, envelopes, Iris Xe | 64, 51 ms | 42, 11 ms |
+
+What is left on the CPU is the decisions (and copying the signal up). On
+the 58 acceptance tracks (`-j 2`, the RX 6900 XT): 204 ms CPU per file
+against 656 on the CPU path (54 against 172 ms per minute of audio), the
+front end 47 ms of wall time per file against 377. A context costs 80-190
+ms to make, and its pipelines 160-450 ms to compile the first time they
+are used (once per process; Mesa caches them on disk).
 
 ### Memory
 
@@ -849,8 +931,10 @@ changed only flags.
 - **Grids before the music** are gone: a cue set in a track's leading
   silence still has a beat index (the first section's line runs on for the
   arithmetic), but no beat to snap to.
-- **Speed**: the STFT dominates. A 100 frames/s front end would cut it by a
-  third; a Vulkan front end could take it off the CPU.
+- **Speed**: on the CPU the STFT dominates; a 100 frames/s front end would
+  cut it by a third. With a GPU it does not: the decisions are what is
+  left, and decoding and the waveforms take longer than the whole beat
+  analysis.
 
 ## Reproducing the evaluation
 
@@ -868,11 +952,30 @@ build-beats/tools/rxbox-eval -v -j 8 -l build-beats/eval/sample.txt \
 
 # one track in detail: stage timings, sections, octave, the onset signals
 build-beats/tools/rxbox-eval -vv --dump-onsets build-beats/dump/x FILE
+
+# iterating on the decisions: the first run fills the cache, later ones read it
+build-beats/tools/rxbox-eval -j 8 -l build-beats/eval/sample.txt --cache ~/rxbox-cache \
+    --csv build-beats/eval/rx.csv
 ```
 
 `rxbox-eval` decodes with `rx_decode` (mono, the file's own rate, as
 `rx_analyse` sees it); `--ffmpeg` pipes from the ffmpeg command line at
-44.1 kHz exactly as dj decodes. `--bpm-range LO HI`, `--no-sections`,
+44.1 kHz exactly as dj decodes. Its front end runs on the GPU when there is
+one (`--device`, `--no-gpu`); each file's wall time is split into decoding,
+the front end and the decisions (`-v`, and summed at the end).
+
+**Iterating without decoding again**: `--cache DIR` keeps, per file, the
+decoded mono 44.1 kHz audio as 16-bit PCM and the front end's arrays
+(exactly), found by the file's path, size, modification time, the decoder
+and `RX_FRONTEND_VERSION`, so that a second run over the same list skips
+decoding and the STFT and only runs the decisions; it prints how many files
+came from it. About 6 MB a minute of audio (21 MB of PCM and 3 MB of arrays
+for a four-minute track), in whatever directory is named: put it on a disk,
+never under /tmp (a tmpfs is RAM; the tool warns). A run that fills the
+cache analyses the 16-bit copy it stores, so every run with the cache sees
+the same samples; against a run without it only levels below -96 dB move
+(on a test track the same grid, flags and start, confidence 0.964 against
+0.965). Bump `RX_FRONTEND_VERSION` when the front end's output changes. `--bpm-range LO HI`, `--no-sections`,
 `--from CSV` (compare without analysing) are also there, and `--starts`
 measures only where the music starts (no beat analysis), one line per file.
 Its CSV has the start (`music_start`, `start_kind`, the threshold crossing,
