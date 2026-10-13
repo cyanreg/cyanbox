@@ -106,7 +106,7 @@ struct UiDeck {
     int      nb_beats;
 
     bool     time_remaining;   // time readout shows remaining (T)
-    int      tempo_range;      // index into UI_TEMPO_RANGES
+    int      tempo_range;      // index into UI_TEMPO_RANGES, 0 at every start (not kept)
     int      jump_size;        // index into UI_JUMP_SIZES
     bool     master_tempo;     // MASTER TEMPO as last asked for (the layout keeps it)
 

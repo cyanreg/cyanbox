@@ -997,7 +997,8 @@ static void cue_list(UiState *ui, int deck, ImVec2 a, ImVec2 b, double pos)
 // not jump the tempo. Beside it the range, the readout, RESET and MASTER
 // TEMPO, which asks the player to keep the pitch (rx_deck_set_master_tempo
 // may refuse: the button then stays off, and lights only from the deck's
-// state). The column lines up with the other groups' content.
+// state). The column lines up with the other groups' content. The range is
+// not kept: every start is at +-6 %, as a CDJ switched on is.
 static void tempo(UiState *ui, int deck, ImVec2 a, ImVec2 b, const RXDeckState &st)
 {
     RXApp *app = ui->app;
@@ -1078,9 +1079,8 @@ static void tempo(UiState *ui, int deck, ImVec2 a, ImVec2 b, const RXDeckState &
         double nr = UI_TEMPO_RANGES[ud->tempo_range];
         if (fabs(pct) > nr)
             set_tempo(ui, deck, pct > 0 ? nr : -nr);
-        ImGui::MarkIniSettingsDirty();
     }
-    ui_tooltip("Tempo range");
+    ui_tooltip("Tempo range (every start at \xC2\xB1" "6%)");
 
     char val[24];
     snprintf(val, sizeof(val), "%+.2f%%", fabs(pct) < 0.005 ? 0.0 : pct);

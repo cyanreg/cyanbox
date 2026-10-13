@@ -631,13 +631,13 @@ static void ini_line(ImGuiContext *, ImGuiSettingsHandler *h, void *, const char
         dv->grid_edit = i != 0;
     else if (sscanf(line, "Jump=%d", &i) == 1)
         ud->jump_size = ImClamp(i, 0, UI_NB_JUMP - 1);
-    else if (sscanf(line, "TempoRange=%d", &i) == 1)
-        ud->tempo_range = ImClamp(i, 0, UI_NB_TEMPO_RANGES - 1);
     else if (sscanf(line, "MasterTempo=%d", &i) == 1)
         ud->master_tempo = i != 0;
     // Older layouts' ShowInfo= (the info panel is always shown now), Pads=
     // and CueList= (the pad mode and cue list tabs, gone since every group
-    // is shown at once) fall through, ignored.
+    // is shown at once) fall through, ignored. So does TempoRange=: every
+    // start selects +-6 %, as a CDJ does when switched on, so a range once
+    // cycled to WIDE does not stay there for good.
 }
 
 static void ini_write(ImGuiContext *, ImGuiSettingsHandler *h, ImGuiTextBuffer *out)
@@ -647,8 +647,8 @@ static void ini_write(ImGuiContext *, ImGuiSettingsHandler *h, ImGuiTextBuffer *
     UiDeck *ud = &ui->decks[0];
     out->appendf("[rxbox][ui]\n");
     out->appendf("DetailHalf=%d\n", ui->detail_half);
-    out->appendf("GridTools=%d\nJump=%d\nTempoRange=%d\nMasterTempo=%d\n\n", dv->grid_edit,
-                 ud->jump_size, ud->tempo_range, ud->master_tempo);
+    out->appendf("GridTools=%d\nJump=%d\nMasterTempo=%d\n\n", dv->grid_edit, ud->jump_size,
+                 ud->master_tempo);
 }
 
 static void layout_changed(UiState *ui)

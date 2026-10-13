@@ -120,7 +120,9 @@ The full width of the window. Rows, top to bottom:
      shrinks, and the groups are clipped short of tempo, never drawn over
      it.
    - **Tempo** (96 wide): vertical slider ±6/±10/±16/WIDE (range button
-     cycles), 0 detent, the percentage readout (`+0.00%`), `RESET`, and
+     cycles; the range always starts at ±6 %, as a CDJ switched on does:
+     it is not kept in the layout, and an older layout's `TempoRange=` is
+     ignored), 0 detent, the percentage readout (`+0.00%`), `RESET`, and
      `MT` (MASTER TEMPO, key lock: the pitch stays while the tempo
      changes), lit orange while the deck reports `master_tempo`. Its wish
      is kept in the layout (`MasterTempo=`) and given to the player on the
