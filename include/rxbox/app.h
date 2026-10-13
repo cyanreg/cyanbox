@@ -111,6 +111,7 @@ typedef struct RXApp {
 
     void      *ui;                  /* src/ui private state */
     struct RXAppPriv *priv;         /* src/app/app.c private state */
+    struct RXMpris *mpris;          /* src/app/mpris.c (rxbox/mpris.h); NULL off the bus */
 } RXApp;
 
 /* Lifecycle (src/app.c). player_opt NULL: the null audio backend. Creating

@@ -29,6 +29,9 @@ and these libraries, by pkg-config name:
   tagging model needs a GPU with 16- and 8-bit storage and about 7 GB of
   memory)
 - `sdl3`, `wayland-client`, `fontconfig` (the interface)
+- `dbus-1`, optional: libdbus, the system's D-Bus library (AFL-2.1 or GPL-2,
+  dual licensed, linked dynamically), for MPRIS (The interface, below); used
+  only when found
 
 Dear ImGui, the Vulkan Memory Allocator and tomlc17 are vendored in
 `third_party/`. Signalsmith Stretch (the MASTER TEMPO pitch shifter) and
@@ -196,6 +199,7 @@ rxbox                               # the default library, the default PipeWire 
 rxbox --library ~/dj/library        # another library
 rxbox --audio-sink alsa_output.usb-headphones   # play to this PipeWire node
 rxbox --audio none                  # no audio device at all
+rxbox --no-mpris                    # stay off the D-Bus session bus
 ```
 
 `--audio-sink NAME` (or the `audio.sink` setting) connects the player to that
@@ -211,6 +215,19 @@ plays to its end is followed by the row after it with no gap (the next
 track is queued on the player half a minute ahead and taken over at the
 last sample), and the deck stops after the playlist's last track. The
 title row shows what follows as NEXT.
+
+The player is an MPRIS 2 media player on the D-Bus session bus
+(`org.mpris.MediaPlayer2.rxbox`), so media keys, `playerctl` and a
+desktop's media controls show the loaded track (title, artist, album,
+genre, length, rating, cover, the file's URL) and drive it: play, pause,
+stop (back to the cue point, as CUE), seek, the volume, next and previous
+(the row after or before the loaded track in the current view of the
+table), a library track opened by its `file://` URL (never one outside
+the library), and quit. It is built when libdbus (`dbus-1`) is found; the
+meson option `mpris` (`-Dmpris=disabled` leaves it out, `enabled` requires
+libdbus) decides. `--no-mpris` keeps the interface off the bus; the
+subcommands never go on it. Without a session bus, or with another rxbox
+holding the name, the interface says so once and runs without it.
 
 ## Exporting
 

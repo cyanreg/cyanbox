@@ -1,0 +1,4 @@
+# MPRIS 2 on the D-Bus session bus (src/app/mpris.c), through the system's
+# libdbus: auto builds it when dbus-1 is found.
+option('mpris', type: 'feature', value: 'auto',
+       description: 'MPRIS 2 (the deck on the D-Bus session bus) through libdbus')

@@ -63,6 +63,7 @@
 #include "rxbox/analysis.h"
 #include "rxbox/export.h"
 #include "rxbox/formats.h"
+#include "rxbox/mpris.h"
 #include "rxbox/notation.h"
 
 /* Job results applied per tick: an analysis writes the track and its
@@ -2813,6 +2814,9 @@ void rx_app_destroy(RXApp *app)
     if (!priv)
         return;
 
+    /* Off the bus before anything a call reaches goes. */
+    rx_mpris_destroy(app);
+
     /* The export has a library handle of its own; cancel it and wait. */
     export_stop(app);
 
@@ -2978,6 +2982,7 @@ int rx_app_run(RXApp *app)
 
     while (!app->quit) {
         rx_app_tick(app);
+        rx_mpris_tick(app);
 
         /* An export waiting for the answer to its question is not busy. */
         bool busy = rx_jobs_pending(app->jobs) > 0 || rx_jobs_pending(priv->io_jobs) > 0 ||

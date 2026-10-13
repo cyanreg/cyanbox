@@ -1,12 +1,20 @@
 # app: background jobs and the application state shared by the CLI and the
 # interface. Tests: suite 'app'.
+
+# MPRIS (rxbox/mpris.h) only with libdbus (the mpris option); without it the
+# header's stand-ins do nothing.
+rx_app_sources = files('jobs.c', 'app.c')
+rx_app_deps = [ rx_export_dep, rx_player_dep, rx_ml_dep ]
+if dbus_dep.found()
+    rx_app_sources += files('mpris.c')
+    rx_app_deps += dbus_dep
+endif
 rx_app_lib = static_library('rx_app',
-    files('jobs.c', 'app.c'),
+    rx_app_sources,
     include_directories: rx_inc,
-    dependencies: [ rx_export_dep, rx_player_dep, rx_ml_dep ],
+    dependencies: rx_app_deps,
 )
-rx_app_dep = declare_dependency(link_with: rx_app_lib,
-                                dependencies: [ rx_export_dep, rx_player_dep, rx_ml_dep ])
+rx_app_dep = declare_dependency(link_with: rx_app_lib, dependencies: rx_app_deps)
 
 # rxbox-cli: the command line without src/gpu and src/ui (headless.c stands
 # in for them), for the CLI test: it needs no display and does not wait for
@@ -49,6 +57,16 @@ if ffmpeg_prog.found()
     test('app', test_app,
         args: [ app_click_wav, meson.current_build_dir() / 'test-app', app_long_wav ],
         suite: 'app', timeout: 300)
+
+    # MPRIS against a private bus of the test's own (a dbus-daemon, else a
+    # dbus-broker; skipped without either), never the session's.
+    if dbus_dep.found()
+        test_mpris = executable('test_mpris', files('../../tests/app/test_mpris.c', 'headless.c'),
+            include_directories: rx_inc, dependencies: [ rx_app_dep ])
+        test('mpris', test_mpris,
+            args: [ app_click_wav, meson.current_build_dir() / 'test-mpris' ],
+            suite: 'app', timeout: 300)
+    endif
 
     test('cli', find_program('../../tests/app/cli_test.sh'),
         args: [ rxbox_cli, meson.current_build_dir() / 'test-cli' ],
