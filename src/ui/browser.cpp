@@ -47,7 +47,8 @@ static const ImGuiTableColumnFlags ALWAYS = ImGuiTableColumnFlags_NoHide;
 // Title and Artist are fixed (260 and 170, resizable): stretched they ran
 // far wider than their text. The row preview stretches over what the
 // others leave instead, at least about 100 px (table()), so a wider window
-// shows a wider waveform. `#` is the view's own order and cannot be
+// shows a wider waveform. The artwork cell is rbxport's 80 (70 and the
+// padding: src/lib/columns.ts). `#` is the view's own order and cannot be
 // hidden, nor can the title. There is no colour, genre or hot cue column:
 // the info panel beside the table shows and edits colour and genre, the
 // player's cue list the cues. Nor is there a Date Added column (the
@@ -55,7 +56,7 @@ static const ImGuiTableColumnFlags ALWAYS = ImGuiTableColumnFlags_NoHide;
 static const UiColSpec COLS[COL_N] = {
     { "#",            40, -1,            FIXED | ALWAYS | ImGuiTableColumnFlags_DefaultSort, true },
     { "Preview",       1, NO_SORT,       STRETCH | UNSORTED, false },
-    { "Artwork",      40, NO_SORT,       FIXED | UNSORTED, false },
+    { "Artwork",      70, NO_SORT,       FIXED | UNSORTED, false },
     { "Track Title", 260, RX_COL_TITLE,  FIXED | ALWAYS, false },
     { "Key",          52, RX_COL_KEY,    FIXED, false },
     { "BPM",          62, RX_COL_BPM,    FIXED, true },
@@ -407,14 +408,34 @@ static void row_cells(UiState *ui, RXTrack *t, int row, float row_h, const uint6
             // track whose flag is off (a folder image found later); app.c
             // looks once per track and reads the file only when the flag
             // says there is art.
-            float s = ImMin(row_h - PX(4), w);
-            ImVec2 a(p.x + (w - s) * 0.5f, p.y + (row_h - s) * 0.5f), b(a.x + s, a.y + s);
+            //
+            // The sleeve fills the whole cell, padding included, cropped as
+            // rbxport crops it (src/views/browser/TrackTable.module.css,
+            // .artworkImage: object-fit cover, object-position center top):
+            // scaled to cover the cell, the full width kept and the bottom
+            // cut off, so the top of the cover shows. The thumbnail is
+            // square (app.c makes it so), which the UVs assume. Without
+            // art, the record square of the column's width, anchored at the
+            // top and cut by the row the same way (.record there).
+            float pad = ImGui::GetStyle().CellPadding.x;
+            ImVec2 a(p.x - pad, p.y), b(p.x + w + pad, p.y + row_h);
+            float cw = b.x - a.x, ch = b.y - a.y;
             uint64_t tex = rx_app_artwork_texture(app, t);
-            if (tex)
-                dl->AddImage(ImTextureRef((ImTextureID)tex), a, b, ImVec2(0, 0), ImVec2(1, 1),
+            if (tex && cw > 0 && ch > 0) {
+                ImVec2 uv0(0, 0), uv1(1, 1);
+                if (cw >= ch) {
+                    uv1.y = ch / cw;
+                } else {
+                    uv0.x = 0.5f - cw / ch * 0.5f;
+                    uv1.x = 0.5f + cw / ch * 0.5f;
+                }
+                dl->AddImage(ImTextureRef((ImTextureID)tex), a, b, uv0, uv1,
                              dim ? IM_COL32(0xFF, 0xFF, 0xFF, 0x60) : IM_COL32_WHITE);
-            else
-                ui_record_icon(dl, a, b);
+            } else if (cw > 0 && ch > 0) {
+                dl->PushClipRect(a, b, true);
+                ui_record_icon(dl, a, ImVec2(b.x, a.y + cw));
+                dl->PopClipRect();
+            }
             if (!tex && rx_app_artwork_pending(app, t))
                 ui->previews_pending = true;
             break;
@@ -509,8 +530,8 @@ static void table(UiState *ui, ImVec2 size)
     }
     float inner = ImMax(size.x - ImGui::GetStyle().ScrollbarSize, PX(fixed_w));
     // A new id with the column set (no Date Added; Title and Artist fixed,
-    // the preview stretched): a layout saved for the old one would have
-    // kept the old widths.
+    // the preview stretched, the artwork wider): a layout saved for the old
+    // one would have kept the 40 px artwork and the old widths.
     if (!ImGui::BeginTable("##tracklist", COL_N, flags, size, inner)) {
         ImGui::PopStyleVar();
         return;

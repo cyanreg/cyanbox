@@ -159,8 +159,13 @@ virtualised with the clipper): default columns in order: `#`, Preview
 (the PWV6 stacked-half waveform via `rx_wave_draw` in
 `RX_WAVE_HALF_STACKED`, its 1200 columns scaled to the cell; the one
 column that stretches, taking the width the others leave: about 170 px at
-1600×900, 490 at 1920×1080), Artwork (36 px
-thumbnail, textures cached per track with an LRU of ~400), Track Title
+1600×900, 490 at 1920×1080), Artwork (rbxport's 80 px column: the sleeve
+fills the cell edge to edge, the row's full height, cropped as rbxport's
+`object-fit: cover; object-position: center top` crops it, so the cover
+keeps its full width and shows its top part, 80×40 of a square thumbnail
+scaled to 80; without art, rbxport's record the column's width, anchored
+at the top and cut by the row; textures cached per track with an LRU of
+~400; the player's title-row sleeve stays square), Track Title
 (260 px), Key, BPM, Time, Rating (five stars, click sets), Artist
 (170 px), Year; Album, Location, Plays and Last Played exist but are
 hidden by default (the header's context menu shows them). Track Title
