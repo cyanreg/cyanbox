@@ -375,98 +375,54 @@ bool ui_track_colour_menu(UiState *ui, const char *current, char out[RX_COLOR_MA
     return picked;
 }
 
-// The strip is the spectrum at the value hues are drawn at, in six linear
-// blends between the pure hues: between two of them only one channel
-// moves, so the blend is the HSV sweep itself. Ticks under it mark the
-// eight palette hues; the stick's colour changes halfway between two. The
-// right end is red again, so a drag there stops just short of 360 rather
-// than jump the marker to the left end.
-bool ui_hue_picker(UiState *ui, const char *id, double *hue, float width, bool *commit)
+// The eight swatches in rekordbox's order (the legend's), after "none".
+// A swatch is as wide as a ninth of the line allows, 12 to 20 px, so the
+// row fits the info panel's field column and the menu alike.
+bool ui_colour_picker(UiState *ui, const char *id, double *hue, float width)
 {
-    *commit = false;
-    bool changed = false;
+    const RXConfig *cfg = &ui->app->lib.cfg;
+    bool picked = false;
     ImGui::PushID(id);
-    ImDrawList *dl = ImGui::GetWindowDrawList();
-
-    // What the stick gets, and "none" at the end of the line.
-    float x0 = ImGui::GetCursorPosX();
+    float gap = PX(4);
     float w = width > 0 ? PX(width) : ImGui::GetContentRegionAvail().x;
-    float sw = PX(18), fh = ImGui::GetFrameHeight();
-    int entry = rx_track_color_nearest_hue(*hue);
-    ImGui::AlignTextToFramePadding();
-    if (entry) {
-        ImGui::BeginGroup();
-        ImVec2 p = ImGui::GetCursorScreenPos();
-        float s = PX(12);
-        ImVec2 a(p.x, p.y + (fh - s) * 0.5f);
-        dl->AddRectFilled(a, ImVec2(a.x + s, a.y + s), ui_rgb(rx_track_color_rgb(entry)), PX(2));
-        ImGui::Dummy(ImVec2(s, fh));
-        ImGui::SameLine();
-        ImGui::TextUnformatted(rx_track_color_names[entry - 1]);
-        ImGui::SameLine();
-        ImGui::TextDisabled("%.0f\xC2\xB0", fmod(*hue, 360.0));
-        ImGui::EndGroup();
-        ui_tooltip("The stick gets the nearest of rekordbox's eight colours");
-    } else {
-        ImGui::TextDisabled("none");
-    }
-    ImGui::SameLine();
-    if (ImGui::GetCursorPosX() < x0 + w - sw)
-        ImGui::SetCursorPosX(x0 + w - sw);
-    if (ui_swatch(ui, "##none", 0, !entry, 18) && entry) {
+    float size = ImClamp((w - 8 * gap) / 9 / ui->s, 12.0f, 20.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(gap, gap));
+    int current = rx_track_color_of_hue(*hue);
+    if (ui_swatch(ui, "##none", 0, !rx_hue_valid(*hue), size)) {
         *hue = RX_HUE_NONE;
-        changed = *commit = true;
+        picked = true;
     }
     ui_tooltip("No colour");
-
-    // The strip, on a line of its own.
-    if (width <= 0)
-        w = ImGui::GetContentRegionAvail().x;
-    w = ImMax(w, PX(60));
-    float bar_h = PX(14), tick_h = PX(4);
-    ImGui::InvisibleButton("##strip", ImVec2(w, bar_h + tick_h));
-    ImVec2 a = ImGui::GetItemRectMin();
-    ImVec2 b(a.x + w, a.y + bar_h);
-    if (ImGui::IsItemActive()) {
-        double h = ImClamp((ImGui::GetIO().MousePos.x - a.x) / w, 0.0f, 1.0f) * 360.0;
-        h = ImMin(h, 359.9);
-        if (h != *hue) {
-            *hue = h;
-            changed = true;
-        }
-    }
-    if (ImGui::IsItemDeactivated())
-        *commit = true;
-    if (ImGui::IsItemHovered())
-        ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-
-    bool set = rx_hue_valid(*hue);
-    float alpha = set ? 1.0f : 0.45f;
-    for (int i = 0; i < 6; i++) {
-        float xa = a.x + w * (float)i / 6.0f, xb = a.x + w * (float)(i + 1) / 6.0f;
-        ImU32 ca = ui_rgb(rx_track_hue_rgb(60.0 * i), alpha);
-        ImU32 cb = ui_rgb(rx_track_hue_rgb(60.0 * (i + 1)), alpha);
-        dl->AddRectFilledMultiColor(ImVec2(xa, a.y), ImVec2(xb, b.y), ca, cb, cb, ca);
-    }
-    dl->AddRect(a, b, UI_FAINT, 0.0f, PX(1));
     for (int i = 1; i <= RX_TRACK_COLORS; i++) {
-        float x = a.x + w * (float)(rx_track_color_hue(i) / 360.0);
-        dl->AddLine(ImVec2(x, b.y + PX(1)), ImVec2(x, b.y + tick_h), i == entry ? UI_TEXT : UI_FAINT,
-                    PX(1));
+        char sid[16], tip[192];
+        snprintf(sid, sizeof(sid), "##c%d", i);
+        ImGui::SameLine();
+        if (ui_swatch(ui, sid, rx_track_color_rgb(i), i == current, size)) {
+            *hue = rx_track_color_hue(i);
+            picked = true;
+        }
+        snprintf(tip, sizeof(tip), "%s: %s", rx_track_color_name(i), rx_config_vibe(cfg, i));
+        ui_tooltip(tip);
     }
-    if (set) {
-        // A handle in the hue itself, ringed white and black so it reads
-        // on every colour of the strip.
-        float x = a.x + w * (float)(*hue / 360.0);
-        dl->AddRectFilled(ImVec2(x - PX(5), a.y - PX(3)), ImVec2(x + PX(5), b.y + PX(3)), UI_BLACK,
-                          PX(3));
-        dl->AddRectFilled(ImVec2(x - PX(4), a.y - PX(2)), ImVec2(x + PX(4), b.y + PX(2)), UI_TEXT,
-                          PX(2));
-        dl->AddRectFilled(ImVec2(x - PX(2.5f), a.y - PX(0.5f)), ImVec2(x + PX(2.5f), b.y + PX(0.5f)),
-                          ui_rgb(rx_track_hue_rgb(*hue)), PX(1));
-    }
+    ImGui::PopStyleVar();
     ImGui::PopID();
-    return changed;
+    return picked;
+}
+
+const char *ui_colour_text(UiState *ui, double hue, char *buf, size_t size)
+{
+    int id = rx_track_color_of_hue(hue);
+    if (id) {
+        snprintf(buf, size, "%s \xC2\xB7 %s", rx_track_color_name(id),
+                 rx_config_vibe(&ui->app->lib.cfg, id));
+        return buf;
+    }
+    int near = rx_track_color_nearest_hue(hue);
+    if (!near)
+        return "none";
+    snprintf(buf, size, "%.0f\xC2\xB0, between the eight (%s on the stick)", fmod(hue, 360.0),
+             rx_track_color_name(near));
+    return buf;
 }
 
 bool ui_button(UiState *ui, const char *id, ImVec2 size, const UiButton &b)

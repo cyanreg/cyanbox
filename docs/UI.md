@@ -283,29 +283,34 @@ separated), file facts (type, size, rate, bit depth, bit rate, duration,
 grid, key in the players' key display, plays, path). Edits save on focus
 loss as overrides in the library (the file's own tags are kept).
 
-The colour is a hue (`RXMeta.hue`): the HSV hue angle in degrees, 0 to
-360 (0 red, 60 yellow, 120 green, 180 cyan, 240 blue, 300 magenta), or
-none. The Colour row names the colour the stick will get, the nearest of
-rekordbox's eight by hue (pink 300°, red 0°, orange 33.6°, yellow 53.7°,
-green 120°, aqua 193.5°, blue 220.6°, purple 276°, the hues of the RGB
-rekordbox draws them in), as a swatch of that colour, its name and the
-hue in degrees, with a "none" button at the end of the line. Under it a
-strip across the panel shows the whole spectrum with a marker at the
-track's hue and ticks at the eight palette hues (the stick's colour
-changes halfway between two): a click or a drag sets the hue, the track
-follows the drag and the library saves it when the strip is let go;
-without a hue the strip is dimmed. The row menu's Set colour opens the
-same strip and gives the hue to every selected track. A track's colour is
-drawn as its hue at full saturation and the palette's value (`0xF8`).
+The colour is one of rekordbox's eight or none, each standing for the
+words of the legend (README.md, Tags; settings `color.pink` ...
+`color.purple`), and is kept as that colour's hue (`RXMeta.hue`: pink
+300°, red 0°, orange 33.6°, yellow 53.7°, green 120°, aqua 193.5°, blue
+220.6°, purple 276°, the hues of the RGB rekordbox draws them in). The
+Colour row shows a square of the track's colour, its name and the
+legend's words for it (`red · intense, peak time`); under them nine
+swatches as wide as the field column allows (12 to 20 px): none, then the
+eight in rekordbox's order, each with its name and words as a tooltip,
+the track's own outlined. A click sets the colour and the library saves
+it. A track whose hue is not one of the eight (an older rxbox set hues on
+a strip) is drawn in that hue, named by its degrees and the colour the
+stick gets (`200°, between the eight (aqua on the stick)`), and no swatch
+is outlined. The row menu's Set colour shows the same swatches and gives
+the colour clicked to every selected track. A track's colour is drawn as
+its hue at full saturation and the palette's value (`0xF8`).
 The comment starts empty: rxbox leaves a file's comment tag out when it
 adds the track (setting `import.comment` takes it), so the field is free
 for Analyse tags, which writes the model's comment there ("Male vocals,
-English. Uplifting, energetic, anthemic."), with the hue, and the genre
+English. Uplifting, energetic, anthemic."), with the colour, and the genre
 when the genre field holds no genre the user typed. Under the Comment
 field a **Tags** line shows what else the model said: the tagging's
-version (`v1`, "older" once the tagging changes) and its measures, 0 to
-1: intensity (calm to intense), club, mood (dark to bright), and vocals
-or instrumental; "none" for a track never tagged.
+version (`v2`, "older" once the tagging changes), the colour it picked
+with its probability and the legend's words it picked by, then the
+runner-up (`red 0.62 (intense, peak time), then orange 0.21`; "asked with
+other words" once the legend has changed), and its measures, 0 to 1:
+intensity (calm to intense), club, mood (dark to bright), and vocals or
+instrumental; "none" for a track never tagged.
 
 ## Status bar
 
@@ -347,7 +352,11 @@ it at once.
 
 - **Analysis settings**: what to analyse (BPM/grid, key), BPM range presets
   (auto (default), 70–180, 98–195, 118–236, 58–115), integer snap, allow
-  tempo sections, add memory cue at first downbeat.
+  tempo sections, add memory cue at first downbeat; then Track colours,
+  the legend: a row per colour (its swatch, its name and a field with its
+  words, the key `color.<name>` and the default as the tooltip), saved
+  when a field is left, and Reset to defaults. Analyse tags picks by these
+  words; a tagged track keeps its colour until it is tagged again.
 - **Player settings**: rekordbox's My Settings, which the export writes to
   the stick for the players to LOAD under their own settings (the device
   ones apply as the player reads the stick). Three tabs grouped as

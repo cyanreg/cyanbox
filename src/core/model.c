@@ -177,6 +177,8 @@ RXTrack *rx_track_new(const char *path)
     t->meta.hue = RX_HUE_NONE;
     t->file_meta.hue = RX_HUE_NONE;
     t->ml_club = t->ml_intensity = t->ml_valence = t->ml_vocals = NAN;
+    for (size_t i = 0; i < RX_ARRAY_ELEMS(t->ml_colors); i++)
+        t->ml_colors[i] = NAN;
     if (path) {
         t->path = rx_strdup(path);
         if (!t->path) {

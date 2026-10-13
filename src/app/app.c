@@ -1304,6 +1304,9 @@ int rx_app_tag_tracks(RXApp *app, const uint64_t *ids, int n)
         return ret;
     }
 
+    /* The legend as it is now goes with each track (the batch copies it). */
+    const char *legend[RX_TRACK_COLORS];
+    rx_config_legend(&app->lib.cfg, legend);
     int queued = 0, missing = 0;
     const RXTrack *first = NULL;
     for (int i = 0; i < n; i++) {
@@ -1314,7 +1317,7 @@ int rx_app_tag_tracks(RXApp *app, const uint64_t *ids, int n)
             missing++;
             continue;
         }
-        uint64_t req = rx_jobs_tag(app->jobs, model, t->id, t->path);
+        uint64_t req = rx_jobs_tag(app->jobs, model, legend, t->id, t->path);
         if ((int64_t)req < 0) {
             ret = (int)(int64_t)req;
             break;
@@ -1371,7 +1374,14 @@ int rx_app_apply_tags(RXApp *app, RXTrack *t, const RXMLTags *tags)
         ret = rx_meta_set(&t->meta.comment, tags->comment ? tags->comment : "");
     if (ret < 0)
         return ret;
-    t->meta.hue = rx_hue_wrap(tags->hue);
+    /* The colour the model picked is stored as that colour's hue, as one
+     * picked by hand is: the stick gets the same colour. */
+    if (tags->color >= 1 && tags->color <= RX_TRACK_COLORS)
+        t->meta.hue = rx_track_color_hue(tags->color);
+    static_assert(RX_ARRAY_ELEMS(t->ml_colors) == RX_ARRAY_ELEMS(tags->colors),
+                  "a probability per track colour");
+    memcpy(t->ml_colors, tags->colors, sizeof(t->ml_colors));
+    t->ml_legend = tags->legend;
     t->ml_club = tags->club;
     t->ml_intensity = tags->intensity;
     t->ml_valence = tags->valence;
@@ -1516,8 +1526,23 @@ static void handle_tags(RXApp *app, RXJobResult *r)
 
     const RXMLTags *tags = r->tags;
     int ret = rx_app_apply_tags(app, t, tags);
-    rx_info("tagged %s in %.1f s: hue %.1f, %s, %s", t->path, r->seconds, tags->hue,
-            tags->genre ? tags->genre : "no genre", tags->comment ? tags->comment : "");
+    /* "red (intense, peak time)", in the words the model was asked with:
+     * the legend's now, unless it was edited since. */
+    const char *legend[RX_TRACK_COLORS];
+    rx_config_legend(&app->lib.cfg, legend);
+    const char *cname = rx_track_color_name(tags->color);
+    const char *vibe = tags->legend == rx_ml_legend_hash(legend) ?
+                       rx_config_vibe(&app->lib.cfg, tags->color) : NULL;
+    char colour[160];
+    if (!cname)
+        snprintf(colour, sizeof(colour), "no colour");
+    else if (vibe)
+        snprintf(colour, sizeof(colour), "%s (%s)", cname, vibe);
+    else
+        snprintf(colour, sizeof(colour), "%s", cname);
+    rx_info("tagged %s in %.1f s: %s %.2f, %s, %s", t->path, r->seconds, colour,
+            cname ? tags->colors[tags->color - 1] : 0.0f, tags->genre ? tags->genre : "no genre",
+            tags->comment ? tags->comment : "");
     if (ret < 0) {
         app->last_error_count++;
         rx_app_set_status(app, "Tagged %s, but saving failed: %s", name, strerror(-ret));
@@ -1525,11 +1550,11 @@ static void handle_tags(RXApp *app, RXJobResult *r)
     } else if (held) {
         /* The failure before it stays. */
     } else if (tags->genre && t->meta.genre && strcmp(t->meta.genre, tags->genre)) {
-        rx_app_set_status(app, "Tagged %s in %.1f s: hue %.0f; the genre stays %s (the model "
-                          "hears %s)", name, r->seconds, tags->hue, t->meta.genre, tags->genre);
+        rx_app_set_status(app, "Tagged %s in %.1f s: %s; the genre stays %s (the model "
+                          "hears %s)", name, r->seconds, colour, t->meta.genre, tags->genre);
     } else {
-        rx_app_set_status(app, "Tagged %s in %.1f s: %s, hue %.0f", name, r->seconds,
-                          tags->genre ? tags->genre : "no genre", tags->hue);
+        rx_app_set_status(app, "Tagged %s in %.1f s: %s, %s", name, r->seconds,
+                          tags->genre ? tags->genre : "no genre", colour);
     }
 }
 
@@ -2518,11 +2543,17 @@ static SortVal sort_value(const RXTrack *t, int column)
         v.num = t->meta.rating;
         v.known = true;
         return v;
-    case RX_COL_COLOR:
-        /* Around the colour wheel from red; no colour last. */
-        v.num = t->meta.hue;
-        v.known = rx_hue_valid(t->meta.hue);
+    case RX_COL_COLOR: {
+        /* In the legend's order, pink to purple, no colour last. A hue
+         * between the eight (an older library's) goes with the colour the
+         * stick gets, after that colour's own, in the order of the hue. */
+        int id = rx_track_color_nearest_hue(t->meta.hue);
+        v.num = id * 1000.0;
+        if (id && !rx_track_color_of_hue(t->meta.hue))
+            v.num += 500.0 + fmod(t->meta.hue - rx_track_color_hue(id) + 540.0, 360.0) - 180.0;
+        v.known = id > 0;
         return v;
+    }
     case RX_COL_CUES: {
         int hot = 0;
         for (int i = 0; i < t->nb_cues; i++)

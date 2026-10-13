@@ -108,11 +108,21 @@ typedef struct Job {
     RXAnalysisOptions opt;
 } Job;
 
-/* A track waiting in the tag queue. */
+/* A track waiting in the tag queue, with the legend it was asked with (a
+ * legend edited meanwhile applies to the tracks asked for after the edit). */
 typedef struct TagItem {
     uint64_t track_id;
     char *path;
+    char *legend[RX_TRACK_COLORS];
 } TagItem;
+
+static void tag_item_free(TagItem *it)
+{
+    free(it->path);
+    for (int i = 0; i < RX_TRACK_COLORS; i++)
+        free(it->legend[i]);
+    *it = (TagItem) { 0 };
+}
 
 typedef struct Slot {
     uint64_t track_id;              /* atomic; 0 when idle */
@@ -183,7 +193,7 @@ static void job_unlink(RXJobs *j, Job *job)
 static void tag_drop(RXJobs *j)
 {
     for (size_t i = 0; i < j->tag_queue.nb; i++)
-        free(((TagItem *)rx_array_at(&j->tag_queue, i))->path);
+        tag_item_free(rx_array_at(&j->tag_queue, i));
     j->tag_total -= (int)j->tag_queue.nb;
     rx_array_clear(&j->tag_queue);
 }
@@ -433,7 +443,8 @@ static int tag_one(RXJobs *j, RXML *ml, const TagItem *it, RXJobResult *r)
         rx_audio_free(&audio);
         return RX_ERROR(ENOMEM);
     }
-    ret = rx_ml_tag(ml, audio.samples, audio.nb_frames, tags, &j->tag_cancel);
+    ret = rx_ml_tag(ml, audio.samples, audio.nb_frames, (const char *const *)it->legend, tags,
+                    &j->tag_cancel);
     rx_audio_free(&audio);
     if (ret < 0) {
         free(tags);
@@ -491,7 +502,7 @@ static void run_tag(Job *job)
             int ret = rx_ml_open(&ml, job->path, &o);
             if (ret < 0) {
                 rx_err("jobs: cannot load the model %s: %s", job->path, strerror(-ret));
-                free(it.path);
+                tag_item_free(&it);
                 /* The failure is posted and the queue dropped under the
                  * lock, so a track asked for after it starts a new batch
                  * and is not lost with this one. */
@@ -540,7 +551,7 @@ static void run_tag(Job *job)
         else
             j->tag_done++;
         pthread_mutex_unlock(&j->lock);
-        free(it.path);
+        tag_item_free(&it);
     }
 
     free(device);
@@ -887,7 +898,8 @@ uint64_t rx_jobs_inspect(RXJobs *j, const char *mount)
     return submit(j, job);
 }
 
-uint64_t rx_jobs_tag(RXJobs *j, const char *model, uint64_t track_id, const char *path)
+uint64_t rx_jobs_tag(RXJobs *j, const char *model, const char *const *legend, uint64_t track_id,
+                     const char *path)
 {
     if (!model || !model[0] || !path)
         return (uint64_t)(int64_t)RX_ERROR(EINVAL);
@@ -895,10 +907,15 @@ uint64_t rx_jobs_tag(RXJobs *j, const char *model, uint64_t track_id, const char
         .track_id = track_id,
         .path     = rx_strdup(path),
     };
+    bool copied = true;
+    for (int i = 0; i < RX_TRACK_COLORS; i++) {
+        const char *v = legend && legend[i] ? legend[i] : rx_config_vibe_default(i + 1);
+        copied &= !!(it.legend[i] = rx_strdup(v));
+    }
     /* The job a new batch would need, made before the lock is taken. */
     Job *job = job_new(RX_JOB_TAG, 0, model);
-    if (!it.path || !job) {
-        free(it.path);
+    if (!it.path || !copied || !job) {
+        tag_item_free(&it);
         job_free(job);
         return (uint64_t)(int64_t)RX_ERROR(ENOMEM);
     }
@@ -913,13 +930,13 @@ uint64_t rx_jobs_tag(RXJobs *j, const char *model, uint64_t track_id, const char
     if (queued && j->tag_job) {
         uint64_t request = j->tag_job->request;
         pthread_mutex_unlock(&j->lock);
-        free(it.path);
+        tag_item_free(&it);
         job_free(job);
         return request;
     }
     if (!rx_array_push(&j->tag_queue, &it)) {
         pthread_mutex_unlock(&j->lock);
-        free(it.path);
+        tag_item_free(&it);
         job_free(job);
         return (uint64_t)(int64_t)RX_ERROR(ENOMEM);
     }

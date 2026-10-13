@@ -177,7 +177,43 @@ static void bind_file(RXDb *db, sqlite3_stmt *st, int p, const RXTrack *t, const
         rx_db_bind_int(db, st, p++, *meta_int(&t->file_meta, i));
 }
 
-static void bind_edit(RXDb *db, sqlite3_stmt *st, int p, const RXTrack *t)
+/* The model's colour probabilities as the ml_colors column holds them:
+ * eight little-endian float32 by colour id. False when the track has none
+ * (NAN), which binds NULL. */
+#define NB_COLORS   ((int)RX_ARRAY_ELEMS(((RXTrack *)0)->ml_colors))
+#define COLORS_SIZE (NB_COLORS * 4)
+
+static bool pack_colors(const RXTrack *t, uint8_t *out)
+{
+    for (int i = 0; i < NB_COLORS; i++) {
+        if (isnan(t->ml_colors[i]))
+            return false;
+        uint32_t v;
+        memcpy(&v, &t->ml_colors[i], 4);
+        for (int b = 0; b < 4; b++)
+            out[i * 4 + b] = (uint8_t)(v >> (8 * b));
+    }
+    return true;
+}
+
+static void column_colors(sqlite3_stmt *st, int col, float *colors)
+{
+    const uint8_t *b = sqlite3_column_blob(st, col);
+    bool ok = b && sqlite3_column_bytes(st, col) == COLORS_SIZE;
+    for (int i = 0; i < NB_COLORS; i++) {
+        uint32_t v = 0;
+        for (int k = 0; ok && k < 4; k++)
+            v |= (uint32_t)b[i * 4 + k] << (8 * k);
+        memcpy(&colors[i], &v, 4);
+        if (!ok)
+            colors[i] = NAN;
+    }
+}
+
+/* `colors` holds the ml_colors blob until the statement has run (SQLite
+ * binds it without a copy). */
+static void bind_edit(RXDb *db, sqlite3_stmt *st, int p, const RXTrack *t,
+                      uint8_t colors[COLORS_SIZE])
 {
     for (int i = 0; i < NB_TAG_STR; i++) {
         const char *v = *meta_str(&t->meta, i), *f = *meta_str(&t->file_meta, i);
@@ -212,6 +248,11 @@ static void bind_edit(RXDb *db, sqlite3_stmt *st, int p, const RXTrack *t)
     rx_db_bind_double(db, st, p++, t->ml_intensity);
     rx_db_bind_double(db, st, p++, t->ml_valence);
     rx_db_bind_double(db, st, p++, t->ml_vocals);
+    if (pack_colors(t, colors))
+        rx_db_bind_blob(db, st, p++, colors, COLORS_SIZE);
+    else
+        rx_db_bind_null(db, st, p++);
+    rx_db_bind_int(db, st, p++, t->ml_legend);
 }
 
 static float column_measure(sqlite3_stmt *st, int col)
@@ -388,6 +429,8 @@ static int track_from_row(sqlite3_stmt *st, RXTrack **out)
     t->ml_intensity = column_measure(st, c++);
     t->ml_valence = column_measure(st, c++);
     t->ml_vocals = column_measure(st, c++);
+    column_colors(st, c++, t->ml_colors);
+    t->ml_legend = (uint32_t)sqlite3_column_int64(st, c++);
 
     if (err || !t->path) {
         rx_track_free(t);
@@ -772,8 +815,9 @@ static int insert_track(RXLibrary *lib, RXTrack *t, const char *container)
     rx_db_bind_text(db, st, 1, t->path);
     rx_db_bind_int(db, st, 2, t->added);
     rx_db_bind_int(db, st, 3, t->missing);
+    uint8_t colors[COLORS_SIZE];
     bind_file(db, st, 4, t, container);
-    bind_edit(db, st, 4 + RX_TRACK_FILE_COLS, t);
+    bind_edit(db, st, 4 + RX_TRACK_FILE_COLS, t, colors);
     int ret = rx_db_done(db, st, t->path);
     if (ret < 0)
         return ret;
@@ -1133,8 +1177,9 @@ int rx_library_save_track(RXLibrary *lib, RXTrack *t)
     if (ret < 0)
         return ret;
     sqlite3_stmt *st = rx_db_stmt(lib->db, RX_STMT_TRACK_EDIT);
+    uint8_t colors[COLORS_SIZE];
     rx_db_bind_int(lib->db, st, 1, (int64_t)t->id);
-    bind_edit(lib->db, st, 2, t);
+    bind_edit(lib->db, st, 2, t, colors);
     ret = rx_db_done(lib->db, st, t->path);
     if (ret >= 0)
         ret = write_children(lib, t);

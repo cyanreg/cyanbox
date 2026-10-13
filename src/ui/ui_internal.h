@@ -284,6 +284,7 @@ struct UiState {
     bool      settings_focus;  // bring Player settings to the front (Ctrl+, while open)
     std::vector<UiSetting> settings;   // every My Settings field (ui_settings)
     int       bpm_preset;
+    char      vibe_buf[RX_TRACK_COLORS][128];   // the legend's fields in Analysis settings
     std::string fb_path;
     char      fb_edit[1024];
     std::vector<UiFileEntry> fb_entries;
@@ -377,16 +378,20 @@ void ui_tooltip(const char *text);
 bool ui_swatch(UiState *ui, const char *id, uint32_t rgb, bool selected, float size);
 // The colour menus: hot cue colours (rekordbox's sixteen) and the eight
 // track colours, which memory cues take (a track's own colour is a hue:
-// ui_hue_picker). Return true when one was picked into `out` ("" = none).
+// ui_colour_picker). Return true when one was picked into `out` ("" = none).
 bool ui_hot_cue_colour_menu(UiState *ui, const char *current, char out[RX_COLOR_MAX]);
 bool ui_track_colour_menu(UiState *ui, const char *current, char out[RX_COLOR_MAX]);
-// A track's hue (rxbox/model.h), `width` logical pixels wide (0: what is
-// left of the line): the colour the stick gets (the nearest of rekordbox's
-// eight) and a "none" button, then a strip of the spectrum under it with a
-// marker at `*hue`. A click or drag on the strip sets `*hue`; true on every
-// frame it changes. `*commit` is set when an edit is finished (the strip
-// let go, or "none" clicked): the caller saves then.
-bool ui_hue_picker(UiState *ui, const char *id, double *hue, float width, bool *commit);
+// A track's colour (rxbox/model.h: a hue, one of the eight's when picked
+// here or by the model), in `width` logical pixels (0: what is left of the
+// line): a "none" swatch and the eight track colours, each with its name
+// and the legend's words as a tooltip. The one the hue is is outlined;
+// none is when the hue is between them, as an older library may hold, and
+// the track is drawn in that hue still. True when one is clicked (its own too, for a selection):
+// *hue is then its hue, or RX_HUE_NONE; the caller saves.
+bool ui_colour_picker(UiState *ui, const char *id, double *hue, float width);
+// "red · intense, peak time" (the legend's words), "200°, between the
+// eight (aqua on the stick)" or "none".
+const char *ui_colour_text(UiState *ui, double hue, char *buf, size_t size);
 
 // My Settings as people read them, for the Player settings dialog and the
 // Sync dialog's rows alike: "lcd_brightness" is "LCD Brightness",

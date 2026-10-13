@@ -4,7 +4,9 @@
  * library in a scratch directory, two copies of a 128 BPM WAV added and
  * analysed through the jobs, the analysis applied (grid, waveforms, the
  * automatic cue), what still needs analysing, the rows (search, sort, a
- * playlist), loading the deck, rescanning, an export to a directory
+ * playlist), the model's tags applied (a made-up result: the colour it
+ * picked from the legend, its probabilities) and the colour sort, loading
+ * the deck, rescanning, an export to a directory
  * running through its phases to the end, and reading and inspecting that
  * stick on a worker. Then the edges: an export answers exactly what its
  * dry run asked about although the library changed meanwhile, and asks
@@ -288,6 +290,100 @@ static RXTrack *track_named(RXApp *app, const char *base)
     return NULL;
 }
 
+/* The rows in order, as tracks. */
+static bool rows_are(RXApp *app, const RXTrack *first, const RXTrack *second)
+{
+    rx_app_rebuild_rows(app);
+    return app->nb_rows == 2 && app->lib.tracks[app->rows[0]] == first &&
+           app->lib.tracks[app->rows[1]] == second;
+}
+
+/* What a tagging writes, from a result made up here (the model is not run):
+ * the colour it picked as that colour's hue, its eight probabilities and
+ * the legend's hash; the genre unless the user typed one; then the table
+ * sorted by colour, in the legend's order with no colour last. */
+static void test_tags(RXApp *app, RXTrack *a, RXTrack *b)
+{
+    const char *legend[RX_TRACK_COLORS];
+    rx_config_legend(&app->lib.cfg, legend);
+    uint32_t hash = rx_ml_legend_hash(legend);
+    CHECK(hash && hash == rx_ml_legend_hash(legend), "the legend's hash %08x", hash);
+    const char *other[RX_TRACK_COLORS];
+    memcpy(other, legend, sizeof(other));
+    other[3] = "bright, uplifting, euphoric";
+    CHECK(rx_ml_legend_hash(other) != hash, "an edited legend hashes the same");
+    other[3] = legend[3];
+    other[2] = "energetic and bright";
+    other[3] = "driving, bright, uplifting";
+    CHECK(rx_ml_legend_hash(other) != hash, "words moved between colours hash the same");
+
+    RXMLTags tags = {
+        .genre     = (char *)"Tech House",
+        .comment   = (char *)"Instrumental. Dark, driving.",
+        .color     = 2,
+        .colors    = { 0.04f, 0.61f, 0.21f, 0.05f, 0.03f, 0.01f, 0.02f, 0.03f },
+        .legend    = hash,
+        .club      = 0.9f,
+        .intensity = 0.8f,
+        .valence   = 0.3f,
+        .vocals    = 0.0f,
+    };
+    int ret = rx_app_apply_tags(app, a, &tags);
+    CHECK(ret == 0, "apply_tags: %s", strerror(-ret));
+    CHECK(a->meta.hue == rx_track_color_hue(2) && rx_track_color_of_hue(a->meta.hue) == 2,
+          "the model's red is the hue %f", a->meta.hue);
+    CHECK(!memcmp(a->ml_colors, tags.colors, sizeof(tags.colors)) && a->ml_legend == hash,
+          "the probabilities and the legend");
+    CHECK(a->tags_version == RX_ML_TAGS_VERSION && a->ml_club == 0.9f && a->ml_intensity == 0.8f &&
+          a->ml_valence == 0.3f && a->ml_vocals == 0.0f, "the measures");
+    CHECK(a->meta.genre && !strcmp(a->meta.genre, "Tech House"), "genre %s", a->meta.genre);
+    CHECK(a->meta.comment && !strcmp(a->meta.comment, tags.comment), "comment %s", a->meta.comment);
+
+    /* A genre the user typed stays; the colour follows the model's pick. */
+    rx_meta_set(&a->meta.genre, "Garage");
+    tags.color = 8;
+    ret = rx_app_apply_tags(app, a, &tags);
+    CHECK(ret == 0 && a->meta.genre && !strcmp(a->meta.genre, "Garage"), "genre %s",
+          a->meta.genre);
+    CHECK(rx_track_color_of_hue(a->meta.hue) == 8, "purple: %f", a->meta.hue);
+
+    /* The sort: no colour last in both directions; pink (hue 300) before
+     * red (hue 0), the legend's order rather than the hue's; a hue
+     * between the eight after the colour the stick gets for it. */
+    app->sort_column = RX_COL_COLOR;
+    app->sort_descending = false;
+    b->meta.hue = RX_HUE_NONE;
+    CHECK(rows_are(app, a, b), "no colour sorts last");
+    app->sort_descending = true;
+    CHECK(rows_are(app, a, b), "no colour sorts last, descending");
+    app->sort_descending = false;
+    a->meta.hue = rx_track_color_hue(2);
+    b->meta.hue = rx_track_color_hue(1);
+    CHECK(rows_are(app, b, a), "pink before red");
+    app->sort_descending = true;
+    CHECK(rows_are(app, a, b), "red before pink, descending");
+    app->sort_descending = false;
+    a->meta.hue = rx_track_color_hue(8);
+    b->meta.hue = 280.0;
+    CHECK(rows_are(app, a, b), "purple before a hue near it");
+    b->meta.hue = 240.0;
+    CHECK(rows_are(app, b, a), "a hue nearest blue before purple");
+
+    /* As they were for the rest. */
+    a->meta.hue = b->meta.hue = RX_HUE_NONE;
+    rx_meta_set(&a->meta.genre, a->file_meta.genre);
+    rx_meta_set(&a->meta.comment, a->file_meta.comment);
+    a->tags_version = 0;
+    a->ml_legend = 0;
+    a->ml_club = a->ml_intensity = a->ml_valence = a->ml_vocals = NAN;
+    for (int i = 0; i < RX_TRACK_COLORS; i++)
+        a->ml_colors[i] = NAN;
+    CHECK(rx_library_save_track(&app->lib, a) == 0 && rx_library_save_track(&app->lib, b) == 0,
+          "saving a and b");
+    app->sort_column = -1;
+    rx_app_rebuild_rows(app);
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 4) {
@@ -398,6 +494,7 @@ int main(int argc, char **argv)
     app.sort_descending = false;
     rx_app_rebuild_rows(&app);
     CHECK(app.nb_rows == 2 && app.lib.tracks[app.rows[0]] == a, "sort by path");
+    test_tags(&app, a, b);
 
     /* A playlist shows its own tracks in its order. */
     RXPlaylist *p = rx_library_playlist_create(&app.lib, app.lib.root_folder, "Test");

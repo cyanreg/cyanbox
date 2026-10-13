@@ -24,7 +24,10 @@
  * In the library a track's colour is a hue instead of one of the eight;
  * the export writes the entry whose hue, computed from that RGB, is
  * nearest around the circle, so each of the eight hues comes back as its
- * own entry and anything between goes to the closer neighbour. */
+ * own entry and anything between goes to the closer neighbour. The
+ * interface's swatches and the tagging model set one of the eight hues;
+ * rx_track_color_of_hue tells those from a hue between them, which an
+ * older library may hold. */
 
 #include "rxbox/colors.h"
 
@@ -222,6 +225,15 @@ int rx_track_color_nearest_hue(double hue)
         }
     }
     return best;
+}
+
+int rx_track_color_of_hue(double hue)
+{
+    int id = rx_track_color_nearest_hue(hue);
+    if (!id)
+        return 0;
+    double d = fabs(fmod(hue, 360.0) - rx_track_color_hue(id));
+    return RX_MIN(d, 360.0 - d) < 0.01 ? id : 0;
 }
 
 uint32_t rx_track_hue_rgb(double hue)

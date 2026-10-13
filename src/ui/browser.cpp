@@ -296,13 +296,10 @@ static void track_menu(UiState *ui)
     }
     ImGui::Separator();
     if (ImGui::BeginMenu("Set colour")) {
-        // The info panel's hue strip. The focused track follows a drag;
-        // every selected one takes the hue when the strip is let go.
+        // The info panel's swatches; every selected track takes the one
+        // clicked. The outline is the focused track's colour.
         double hue = t->meta.hue;
-        bool commit;
-        if (ui_hue_picker(ui, "##menuhue", &hue, 240, &commit))
-            t->meta.hue = hue;
-        if (commit) {
+        if (ui_colour_picker(ui, "##menucolour", &hue, 220)) {
             for (int i = 0; i < app->nb_selection; i++) {
                 RXTrack *s = rx_library_find_id(&app->lib, app->selection[i]);
                 if (!s)
@@ -872,8 +869,10 @@ static void info_commit_tags(UiState *ui, RXTrack *t)
 }
 
 // What the model said of the track beyond the genre, colour and comment
-// it wrote (src/ml/tag.c): the tagging's version and its measures, 0 to 1.
-static void tags_line(const RXTrack *t, float label_w)
+// it wrote (src/ml/tag.c): the tagging's version, the colour it picked
+// with its probability, in the legend's words, and the runner-up, then
+// its measures, 0 to 1. A colour picked with words since edited says so.
+static void tags_line(UiState *ui, const RXTrack *t, float label_w)
 {
     ImGui::TextDisabled("Tags");
     ImGui::SameLine(label_w);
@@ -881,12 +880,33 @@ static void tags_line(const RXTrack *t, float label_w)
         ImGui::TextDisabled("none (Analyse tags)");
         return;
     }
+    char pick[256] = "";
+    if (!isnan(t->ml_colors[0])) {
+        int best = 1;
+        for (int i = 2; i <= RX_TRACK_COLORS; i++) {
+            if (t->ml_colors[i - 1] > t->ml_colors[best - 1])
+                best = i;
+        }
+        int second = best == 1 ? 2 : 1;
+        for (int i = 1; i <= RX_TRACK_COLORS; i++) {
+            if (i != best && t->ml_colors[i - 1] > t->ml_colors[second - 1])
+                second = i;
+        }
+        const char *legend[RX_TRACK_COLORS];
+        rx_config_legend(&ui->app->lib.cfg, legend);
+        bool same = t->ml_legend == rx_ml_legend_hash(legend);
+        snprintf(pick, sizeof(pick), " \xC2\xB7 %s %.2f (%s), then %s %.2f",
+                 rx_track_color_name(best), t->ml_colors[best - 1],
+                 same ? legend[best - 1] : "asked with other words", rx_track_color_name(second),
+                 t->ml_colors[second - 1]);
+    }
     // A group, so the lines it wraps into start under its first.
     ImGui::BeginGroup();
-    ImGui::TextWrapped("v%d%s \xC2\xB7 intensity %.2f \xC2\xB7 club %.2f \xC2\xB7 mood %.2f "
+    ImGui::TextWrapped("v%d%s%s \xC2\xB7 intensity %.2f \xC2\xB7 club %.2f \xC2\xB7 mood %.2f "
                        "\xC2\xB7 %s", t->tags_version,
-                       t->tags_version < RX_ML_TAGS_VERSION ? " (older)" : "", t->ml_intensity,
-                       t->ml_club, t->ml_valence, t->ml_vocals >= 0.5f ? "vocals" : "instrumental");
+                       t->tags_version < RX_ML_TAGS_VERSION ? " (older)" : "", pick,
+                       t->ml_intensity, t->ml_club, t->ml_valence,
+                       t->ml_vocals >= 0.5f ? "vocals" : "instrumental");
     ImGui::EndGroup();
 }
 
@@ -971,7 +991,7 @@ void ui_info_panel(UiState *ui, ImVec2 size)
             info_commit(ui, t, f);
         ImGui::PopID();
         if (f == F_COMMENT)
-            tags_line(t, label_w);
+            tags_line(ui, t, label_w);
     }
     ImGui::AlignTextToFramePadding();
     ImGui::TextDisabled("My Tags");
@@ -989,18 +1009,33 @@ void ui_info_panel(UiState *ui, ImVec2 size)
     ImGui::PushID("inforating");
     rating_cell(ui, t, rp, PX(80), ImGui::GetFrameHeight(), false);
     ImGui::PopID();
-    // The colour is a hue: beside the label the colour the stick gets,
-    // under it the strip across the panel. A drag shows on the track at
-    // once and is saved when it is let go.
+    // The colour: beside the label a square of it as the track is drawn,
+    // its name and the legend's words for it; under them the swatches,
+    // which set and save it.
     ImGui::AlignTextToFramePadding();
     ImGui::TextDisabled("Colour");
     ImGui::SameLine(label_w);
-    double hue = t->meta.hue;
-    bool commit;
-    if (ui_hue_picker(ui, "##infohue", &hue, 0, &commit))
-        t->meta.hue = hue;
-    if (commit)
-        rx_app_save_track(app, t);
+    {
+        ImGui::BeginGroup();
+        char text[192];
+        uint32_t rgb = rx_track_hue_rgb(t->meta.hue);
+        if (rgb) {
+            ImVec2 p = ImGui::GetCursorScreenPos();
+            float s = PX(12), fh = ImGui::GetFrameHeight();
+            ImVec2 a(p.x, p.y + (fh - s) * 0.5f);
+            ImGui::GetWindowDrawList()->AddRectFilled(a, ImVec2(a.x + s, a.y + s), ui_rgb(rgb),
+                                                      PX(2));
+            ImGui::Dummy(ImVec2(s, fh));
+            ImGui::SameLine();
+        }
+        ImGui::TextWrapped("%s", ui_colour_text(ui, t->meta.hue, text, sizeof(text)));
+        double hue = t->meta.hue;
+        if (ui_colour_picker(ui, "##infocolour", &hue, 0)) {
+            t->meta.hue = hue;
+            rx_app_save_track(app, t);
+        }
+        ImGui::EndGroup();
+    }
 
     ImGui::Spacing();
     ImGui::Separator();

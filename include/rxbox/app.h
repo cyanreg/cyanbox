@@ -181,11 +181,12 @@ int  rx_app_tag_tracks(RXApp *app, const uint64_t *ids, int n);
 void rx_app_cancel_tags(RXApp *app);
 /* rx_jobs_tag_progress of the batch: false when none runs. */
 bool rx_app_tag_progress(RXApp *app, int *done, int *total, uint64_t *current);
-/* What a result writes, through the library: the hue and the comment
- * always (the comment field is the machine's), the genre into the user's
- * override only when that is empty (a genre the user typed stays; the
- * file's tag is never touched), the four measures and
- * RX_ML_TAGS_VERSION. Saves the track. */
+/* What a result writes, through the library: the colour the model picked
+ * (as that colour's hue, rx_track_color_hue) and the comment always (the
+ * comment field is the machine's), the genre into the user's override only
+ * when that is empty (a genre the user typed stays; the file's tag is
+ * never touched), the eight colours' probabilities and the legend's hash,
+ * the four measures and RX_ML_TAGS_VERSION. Saves the track. */
 int  rx_app_apply_tags(RXApp *app, RXTrack *t, const RXMLTags *tags);
 /* The model's file: the setting ml.model when set, else $RXBOX_ML_MODEL,
  * else models/RX_APP_ML_MODEL in the executable's directory, its parent

@@ -125,6 +125,35 @@ int main(void)
     CHECK_EQ(rx_track_color_nearest_hue(NAN), 0);
     CHECK_EQ(rx_track_hue_rgb(-1.0), 0);
 
+    /* A colour picked from the eight (the model's or a swatch's) is its
+     * hue, and that hue is the colour again; a hue between them, which an
+     * older library may hold, is none of them, and neither is no colour. */
+    for (int id = 1; id <= RX_TRACK_COLORS; id++) {
+        CHECK_EQ(rx_track_color_of_hue(rx_track_color_hue(id)), id);
+        CHECK_EQ(rx_track_color_of_hue(rx_track_color_hue(id) + 360.0), id);
+        CHECK_EQ(rx_track_color_of_hue(rx_track_color_hue(id) + 0.5), 0);
+        CHECK_EQ(rx_track_color_nearest_hue(rx_track_color_hue(id) + 0.5), id);
+        double hue = -1;
+        CHECK_EQ(rx_parse_hue(rx_track_color_names[id - 1], &hue), 0);
+        CHECK_EQ(rx_track_color_of_hue(hue), id);
+    }
+    /* A hue stored by the database comes back within a hair of its own. */
+    CHECK_EQ(rx_track_color_of_hue(193.548387096774), 6);
+    CHECK_EQ(rx_track_color_of_hue(359.999), 2);
+    CHECK_EQ(rx_track_color_of_hue(200.0), 0);
+    CHECK_EQ(rx_track_color_of_hue(-1.0), 0);
+    CHECK_EQ(rx_track_color_of_hue(NAN), 0);
+
+    /* The legend's defaults, in the colours' order. */
+    static const char *const vibes[RX_TRACK_COLORS] = {
+        RX_TRACK_VIBE_PINK, RX_TRACK_VIBE_RED,   RX_TRACK_VIBE_ORANGE, RX_TRACK_VIBE_YELLOW,
+        RX_TRACK_VIBE_GREEN, RX_TRACK_VIBE_AQUA, RX_TRACK_VIBE_BLUE,   RX_TRACK_VIBE_PURPLE,
+    };
+    CHECK_STR(vibes[0], "dark and intense, hard");
+    CHECK_STR(vibes[1], "intense, peak time");
+    CHECK_STR(vibes[4], "groovy and relaxed, warm");
+    CHECK_STR(vibes[7], "dark, moody, hypnotic");
+
     /* The command line's hues: degrees, a name, none. */
     double hue = 0;
     CHECK_EQ(rx_parse_hue("200", &hue), 0);

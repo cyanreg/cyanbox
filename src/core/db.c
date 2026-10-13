@@ -3,7 +3,7 @@
 /* The library database: the SQLite connection, the schema and its
  * migrations, the cached statements, transactions and error mapping.
  *
- * Schema version 5 (PRAGMA user_version = 5, application_id = 'RXBX').
+ * Schema version 6 (PRAGMA user_version = 6, application_id = 'RXBX').
  * Tables are STRICT so a wrong type is an error instead of a silent
  * conversion, and every row that belongs to a track or a playlist goes
  * with it (ON DELETE CASCADE, foreign keys on for every connection).
@@ -33,6 +33,11 @@
  *                             the model's tagging (rxbox/ml.h), asked for by
  *                             the user: RX_ML_TAGS_VERSION (0 never) and its
  *                             measures, 0 to 1, NULL when never tagged
+ *                   ml_colors ml_legend
+ *                             the probability the model gave each of the
+ *                             eight track colours (8 little-endian float32
+ *                             by colour id, NULL when it gave none) and the
+ *                             hash of the legend it chose from (0 none)
  *                   added play_count last_played missing
  *   grid_section    track_id, idx (0-based order), start, bpm, beat
  *   cue             track_id, time, grid_beat (NULL: absolute), hot (-1 memory,
@@ -67,6 +72,9 @@
  *
  *   4 -> 5  the model's tagging: tags_version and the four ml_* measures.
  *
+ *   5 -> 6  the model picks the colour from a legend: ml_colors and
+ *           ml_legend. A track tagged before keeps its hue and measures.
+ *
  * Journal: WAL, synchronous = NORMAL (a crash loses at most the last
  * transactions, never consistency), and a busy timeout because the export
  * job opens a second connection from its own thread. */
@@ -100,6 +108,7 @@ const char *const rx_track_edit_cols[RX_TRACK_EDIT_COLS] = {
     "grid_confidence", "grid_flags", "grid_locked", "analysed",
     "beats_version", "key_version", "waves_version",
     "tags_version", "ml_club", "ml_intensity", "ml_valence", "ml_vocals",
+    "ml_colors", "ml_legend",
 };
 
 /* --------------------------------------------------------------- schema */
@@ -291,12 +300,20 @@ static const char schema_v5[] =
     "ALTER TABLE track ADD COLUMN ml_valence   REAL;"
     "ALTER TABLE track ADD COLUMN ml_vocals    REAL;";
 
+/* The colour the model picks from the legend (rxbox/ml.h): the
+ * probability of each of the eight colours, NULL until a tagging gave
+ * them, and the hash of the legend asked, 0 for none. */
+static const char schema_v6[] =
+    "ALTER TABLE track ADD COLUMN ml_colors BLOB;"
+    "ALTER TABLE track ADD COLUMN ml_legend INTEGER NOT NULL DEFAULT 0;";
+
 static const char *const migrations[] = {
     schema_v1,          /* 0 -> 1 */
     schema_v2,          /* 1 -> 2 */
     schema_v3,          /* 2 -> 3 */
     schema_v4,          /* 3 -> 4 */
     schema_v5,          /* 4 -> 5 */
+    schema_v6,          /* 5 -> 6 */
 };
 
 /* ------------------------------------------------------------ statements */

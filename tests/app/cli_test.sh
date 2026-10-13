@@ -61,15 +61,36 @@ awk -v b="$bpm" 'BEGIN { exit !(b > 127.5 && b < 128.5) }' || fail "the grid is 
 id=$(sed -n 's/^  id \([0-9]*\).*/\1/p' "$dir/show.out")
 run show "$id" | grep -q "click128.flac" || fail "show by id"
 
-# The colour is a hue in degrees; show prints it with the colour the stick
-# gets. A name stands for that colour's hue, none clears it.
+# The colour is one of rekordbox's eight, named with the legend's words
+# for it; a hue in degrees between them (an older library may hold one)
+# shows the colour the stick gets. none clears it.
 grep -q "^  colour: none$" "$dir/show.out" || fail "a new track has a colour"
-run color 200 "$id" | grep -q "click128.flac: 200° (aqua)$" || fail "color 200"
-run show "$id" | grep -q "^  colour: 200° (aqua)$" || fail "show does not print the hue"
+grep -q "^  tags: none" "$dir/show.out" || fail "a new track has tags"
+run color 200 "$id" | grep -q "click128.flac: 200° (not one of the eight; the stick gets aqua)$" ||
+    fail "color 200"
+run show "$id" | grep -q "^  colour: 200° (not one of the eight; the stick gets aqua)$" ||
+    fail "show does not print the hue"
 run color none "$track" | grep -q ": none$" || fail "color none"
-run color purple "$track" | grep -q ": 276° (purple)$" || fail "color purple"
+run color purple "$track" | grep -q ": purple (dark, moody, hypnotic)$" || fail "color purple"
+run color 276 "$track" | grep -q ": purple (dark, moody, hypnotic)$" || fail "color 276 is purple"
 run color 400 "$track" > /dev/null 2>&1 && fail "color took 400"
-run colour aqua "$track" | grep -q ": 193.5° (aqua)$" || fail "colour aqua"
+run color cyan "$track" > /dev/null 2>&1 && fail "color took cyan"
+run colour aqua "$track" | grep -q ": aqua (calm, smooth)$" || fail "colour aqua"
+
+# The legend: eight settings, the defaults until changed, trimmed; ""
+# puts one back. Only the eight colours are keys.
+run config > "$dir/config.out" || fail "config"
+grep -q "^color.pink = dark and intense, hard$" "$dir/config.out" || fail "config lists no color.pink"
+grep -q "^color.purple = dark, moody, hypnotic$" "$dir/config.out" || fail "config lists no color.purple"
+run config color.aqua "  still water " | grep -q "^color.aqua = still water$" ||
+    fail "config color.aqua"
+run config color.aqua | grep -q "^color.aqua = still water$" || fail "config color.aqua reads back"
+run show "$id" | grep -q "^  colour: aqua (still water)$" || fail "show does not use the legend"
+run config color.aqua "" | grep -q "^color.aqua = calm, smooth (the default)$" ||
+    fail "config color.aqua \"\" did not reset it"
+run config color.aqua | grep -q "^color.aqua = calm, smooth (the default)$" ||
+    fail "config color.aqua is not back to the default"
+run config color.cyan x > /dev/null 2>&1 && fail "config took color.cyan"
 
 # The file's comment tag was read and left out: the comment is the user's.
 run config | grep -q "^import.comment = false$" || fail "config does not list import.comment"

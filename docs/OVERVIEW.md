@@ -98,7 +98,10 @@ analysed with dj, and the user does not want the compatibility.
 
 A track's colour is a hue in degrees (the HSV hue angle, 0 red, 120 green,
 240 blue), not one of rekordbox's eight names; the stick gets the palette
-colour nearest to it (`rxbox/colors.h`). The comment is the user's: a
+colour nearest to it (`rxbox/colors.h`). The interface and the tagging
+model pick one of the eight and store its hue: the model by which of a
+legend of descriptions, one per colour and the user's to edit, fits the
+track best. The comment is the user's: a
 file's comment tag is left out on import unless the `import.comment`
 setting asks for it, so the field starts empty for the DJ and for tagging
 later. rxbox never writes to the audio files.
@@ -150,7 +153,7 @@ src/export    stick plan, writer, inspect, pull
 src/player    PipeWire stream, the player, lock-free command queue, the decks' decoding threads, cue/loop/quantize controls, MASTER TEMPO, null backend for tests
 src/gpu       SDL3 window (Wayland), Vulkan device + VMA, swapchain, Wayland frame-callback pacing, ImGui glue, waveform shader;
               the compute context without a window and the analysis' STFT and envelope shaders (rx_compute)
-src/ml        MOSS-Audio-4B on Vulkan compute, a device of its own: a track's genre, hue and comment, only when asked (docs/ML.md)
+src/ml        MOSS-Audio-4B on Vulkan compute, a device of its own: a track's genre, colour and comment, only when asked (docs/ML.md)
 src/ui        Dear ImGui screens (C++, as are only vendored code and the player's Signalsmith Stretch interface)
 src/cli.c     the subcommands
 ```
@@ -336,6 +339,6 @@ Implemented by subagents against the interfaces in `include/rxbox/`:
 | formats+export | pdb, ANLZ, OneLibrary, settings, colours, plan, stick writer, inspect, stick sync |
 | player | PipeWire, decks, controls, MASTER TEMPO, null backend |
 | gpu | window, Vulkan, VMA, frame callback, ImGui glue, waveform shader; compute context and the analysis' front-end shaders |
-| ml | MOSS-Audio on Vulkan compute: a track's genre, hue and comment, on request only, one batch and one model at a time (docs/ML.md) |
+| ml | MOSS-Audio on Vulkan compute: a track's genre, colour and comment, on request only, one batch and one model at a time (docs/ML.md) |
 | ui | the screens |
 | cli/tests | subcommands, meson tests, headless run |

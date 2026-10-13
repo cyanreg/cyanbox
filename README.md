@@ -63,13 +63,17 @@ the library, greyed out, until the file comes back or is relocated. A
 track's library id is also its id on every stick, so players keep their
 cached data across exports.
 
-A track's colour is a hue: the HSV hue angle in degrees, 0 to 360 (0 red,
-60 yellow, 120 green, 180 cyan, 240 blue, 300 magenta), or none. The stick
-only knows rekordbox's eight colours, so an export writes the one nearest
-to the hue: pink 300°, red 0°, orange 33.6°, yellow 53.7°, green 120°,
-aqua 193.5°, blue 220.6°, purple 276° (the hues of the colours rekordbox
-draws). A library from before hues keeps its colours: each name became its
-colour's hue.
+A track's colour is one of rekordbox's eight, pink, red, orange, yellow,
+green, aqua, blue and purple, or none. Each colour stands for what a track
+of that colour sounds like, in words you choose: the legend, the settings
+`color.pink` ... `color.purple` (Settings below), by which the tagging
+model picks a track's colour (Tags below). The library keeps a colour as
+its hue, the HSV hue angle of the colour rekordbox draws (pink 300°, red
+0°, orange 33.6°, yellow 53.7°, green 120°, aqua 193.5°, blue 220.6°,
+purple 276°). A hue between those, which an older rxbox let you set with
+a strip of hues, stays as it is and is drawn as it is; an export writes
+the nearest of the eight for it. A library from before hues keeps its
+colours: each name became its colour's hue.
 
 The comment field is the tagging's. rxbox reads a file's tags when it adds
 the track but leaves the comment tag out, so the comment starts empty, and
@@ -103,21 +107,45 @@ start after that upgrade analyses the whole library again.
 ## Tags
 
 rxbox can listen to a track with MOSS-Audio-4B (OpenMOSS, Apache-2.0), an
-audio-language model, on the GPU, and tag it: a colour (a hue placing the
-track by mood and intensity: red intense, yellow bright, green bright and
-relaxed, cyan calm, blue calm and sad, violet dark, magenta dark and
-intense), a comment (who sings, in what language, and the mood in three
-words: "Male vocals, English. Uplifting, energetic, anthemic.") and a
-genre ("Hardstyle"; the family more often than the subgenre). It only
-ever runs when you ask: the track menu's Analyse tags (the selection, or
-the track clicked), Analysis → Analyse tags of selection, or
+audio-language model, on the GPU, and tag it: a colour, a comment (who
+sings, in what language, and the mood in three words: "Male vocals,
+English. Uplifting, energetic, anthemic.") and a genre ("Hardstyle"; the
+family more often than the subgenre).
+
+The colour is the model's choice among the legend's eight descriptions,
+one per colour. By default:
+
+| colour | its words |
+| --- | --- |
+| pink | dark and intense, hard |
+| red | intense, peak time |
+| orange | energetic and bright, driving |
+| yellow | bright, uplifting |
+| green | groovy and relaxed, warm |
+| aqua | calm, smooth |
+| blue | deep, melancholic |
+| purple | dark, moody, hypnotic |
+
+The model is asked which description fits the track best and gives each a
+probability; the colour is the most probable, so the eight colours are its
+own division of the music, not a measure cut into eight afterwards. Say
+what can be heard (energy, brightness, darkness, groove): it hears music,
+not where a track goes in a set. Change the words in Analysis settings or
+with `rxbox config color.red "..."`, and the next tagging picks by them;
+tracks tagged before keep their colour until they are tagged again, and
+`rxbox show` and the info panel say when a colour was picked with words
+since changed.
+
+It only ever runs when you ask: the track menu's Analyse tags (the
+selection, or the track clicked), Analysis → Analyse tags of selection, or
 `rxbox tag TRACK...`; never when a track is added, at startup, in Analyse
 all or before an export. A result always writes the colour and the
 comment; the genre goes in only when you have not typed one (the file's
-own genre tag is kept apart, as all its tags are). The model's measures
-behind the colour (intensity, club, mood, vocals, 0 to 1) and the version
-of the tagging are kept too: `rxbox show` prints them, the info panel has
-them on its Tags line.
+own genre tag is kept apart, as all its tags are). The eight colours'
+probabilities, the model's measures (intensity, club, mood, vocals, 0 to
+1) and the version of the tagging are kept too: `rxbox show` prints them,
+the info panel has the colour's probability and the runner-up on its Tags
+line.
 
 Tracks asked for join one batch: the model is loaded once (3.5 s, 4 GB
 of the GPU's memory, up to 7 GB while it listens), tags them one at a
@@ -141,9 +169,9 @@ directory finds it) and in the current directory. The setting `ml.model`
 | --- | --- |
 | `add PATH...` | add audio files or folders to the library and analyse them |
 | `analyze [TRACK...]` | analyse what is missing or was made by an older analyser (the whole library by default); `-f` re-analyses, `-w beats,key,waves` limits it |
-| `show TRACK...` | print the colour (the hue and what the stick gets), the resolved grid, key, cues, analyser versions, genre, comment and tags |
-| `tag TRACK...` | tag the tracks with the model (Tags above): colour, comment and, unless you typed one, genre; one line per track |
-| `color HUE TRACK...` | set the tracks' colour: degrees (0-360), a colour name (`aqua`: its hue) or `none` |
+| `show TRACK...` | print the colour (its name and the legend's words for it), the resolved grid, key, cues, analyser versions, genre, comment and tags (the eight colours' probabilities) |
+| `tag TRACK...` | tag the tracks with the model (Tags above): colour, comment and, unless you typed one, genre; one line per track, with the colour's probability and the runner-up |
+| `color COLOUR TRACK...` | set the tracks' colour: a colour name (`aqua`), `none`, or degrees (0-360; the stick gets the nearest colour) |
 | `export STICK` | write the settings, every playlist and their tracks to a mounted stick (`--all`, `-p NAME`, `--prune`, `--compat`, `--ignore-unsynced`, `-n`) |
 | `inspect STICK` | re-read and validate a stick |
 | `sync STICK [--apply]` | list the cues, plays and settings a player saved on the stick that the library lacks; `--apply` takes them |
@@ -186,6 +214,7 @@ The settings live in the library. `rxbox config` lists them and
 | `export.device_name` | the stick's label | the name the players show for the stick |
 | `audio.sink` | the default output | the PipeWire node to play to |
 | `ml.model` | `models/moss-audio-4b-instruct-q4_k.gguf` | the tagging model's file (also `$RXBOX_ML_MODEL`) |
+| `color.pink` ... `color.purple` | the legend (Tags) | what each track colour stands for, in the words the tagging model picks by; `""` puts the default back |
 | `ui.traffic_light` | `related3` | the browser's key highlight (View → Traffic Light) |
 | `ui.detail_bars` | `12` | how many bars the detail waveform shows (the deck's zoom, remembered) |
 
