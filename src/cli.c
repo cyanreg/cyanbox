@@ -97,7 +97,7 @@ static const char usage_text[] =
     "                           tracks an older analyser analysed\n"
     "  settings                 list the My Settings names and values\n"
     "  config [KEY [VALUE]]     show or change a setting (analysis.bpm_min,\n"
-    "                           export.key_notation, player.quantize ...)\n"
+    "                           import.comment, export.key_notation, player.quantize ...)\n"
     "  init [DIR]               create a library (default: the library directory)\n"
     "  playlist list            list the playlists\n"
     "  playlist create NAME     create a playlist (\"Folder/Name\" creates the folders)\n"
@@ -1864,15 +1864,15 @@ static int cmd_config(Cli *cli, int argc, char **argv)
     }
 
     static const char *const sections[] = {
-        "analysis.", "export.", "player.", "mixer.", "device.", "audio.", "ui.",
+        "analysis.", "import.", "export.", "player.", "mixer.", "device.", "audio.", "ui.",
     };
     if (key) {
         bool known = false;
         for (size_t i = 0; i < RX_ARRAY_ELEMS(sections); i++)
             known |= rx_str_starts(key, sections[i]);
         if (!known)
-            return usage_error(cli, "config: keys start with analysis., export., player., mixer., "
-                               "device., audio. or ui.");
+            return usage_error(cli, "config: keys start with analysis., import., export., player., "
+                               "mixer., device., audio. or ui.");
     }
 
     int code = open_library(cli, false);
@@ -1921,6 +1921,7 @@ static int cmd_config(Cli *cli, int argc, char **argv)
                 snprintf(what + len, sizeof(what) - len, "%s%s", len ? "," : "", what_names[i].name);
         }
         printf("analysis.what = %s\n", what);
+        printf("import.comment = %s\n", c->import_comment ? "true" : "false");
         printf("export.key_notation = %s\n", c->key_notation);
         printf("export.pdb = %s\n", c->export_pdb ? "true" : "false");
         printf("export.onelibrary = %s\n", c->export_onelibrary ? "true" : "false");

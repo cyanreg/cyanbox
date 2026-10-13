@@ -152,7 +152,8 @@ static inline double rx_hue_wrap(double hue)
  * overrides separately (an override column is NULL when the file's value
  * is used); a track carries both so an edit never loses the file's tag.
  * Rating, hue and My Tags are the library's only: file_meta leaves them
- * at none. */
+ * at none. The file's comment tag is not imported unless the setting
+ * import.comment says so (rxbox/library.h): the comment is the user's. */
 typedef struct RXMeta {
     char *title, *artist, *album, *album_artist, *genre, *label, *remixer,
          *composer, *original_artist, *comment;

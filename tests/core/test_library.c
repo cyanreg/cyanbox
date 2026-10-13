@@ -6,10 +6,11 @@
  * and foreign key checks; a library of schema 1 migrated, its analysis
  * results then older than the analyser; a library of schema 3 whose
  * colour names become hues, checked against src/formats/colors.c (built
- * into this test, as core does not link the formats module). Waveforms
- * are stored through the raw blob layer because the analysis module
- * (which packs them) is not linked here; rxbox/analysis.h is used for its
- * version constants and inline helper only. */
+ * into this test, as core does not link the formats module); the file's
+ * comment left out on import unless import.comment asks for it.
+ * Waveforms are stored through the raw blob layer because the analysis
+ * module (which packs them) is not linked here; rxbox/analysis.h is used
+ * for its version constants and inline helper only. */
 
 #include "rxbox/library.h"
 
@@ -112,6 +113,7 @@ static void test_create_and_add(void)
     CHECK(lib.cfg.export_pdb && lib.cfg.export_onelibrary && lib.cfg.detail_bars == 12);
     CHECK(!strcmp(lib.cfg.traffic_light, "related3"));
     CHECK(!lib.cfg.nb_player && !lib.cfg.nb_mixer && !lib.cfg.nb_device);
+    CHECK(!lib.cfg.import_comment);
 
     sqlite3_stmt *st;
     sqlite3_prepare_v2(lib.db->db, "PRAGMA user_version", -1, &st, NULL);
@@ -561,6 +563,70 @@ static void test_colour_migration(void)
     rx_library_close(&lib);
 
     free(db);
+    test_rm_rf(dir);
+    free(dir);
+}
+
+/* The comment is the user's: the file's comment tag is read and left out
+ * of the library unless import.comment is set, adding a file or a folder
+ * and re-reading one; a comment the library already holds stays. */
+static void test_comment_import(void)
+{
+    char *dir = test_dir("library-comment");
+    char *files = path_in(dir, "music"), *libdir = path_in(dir, "lib");
+    char *a_path = path_in(files, "a.wav"), *b_path = path_in(files, "sub/b.wav");
+    CHECK(test_write_wav_comment(a_path, 0.2, 44100, 2, "A", "Artist", NULL, "from the file") == 0);
+    CHECK(test_write_wav_comment(b_path, 0.2, 44100, 2, "B", "Artist", NULL, "b's comment") == 0);
+
+    RXLibrary lib;
+    CHECK(rx_library_open(&lib, libdir) == 0);
+    CHECK(!lib.cfg.import_comment);
+    int err;
+    RXTrack *a = rx_library_add_file(&lib, a_path, &err);
+    CHECK(a && !a->file_meta.comment && !a->meta.comment);
+    CHECK(a && !strcmp(a->meta.title, "A") && !strcmp(a->meta.artist, "Artist"));
+    if (a) {
+        /* Re-read: still not taken. */
+        CHECK(rx_library_refresh_track(&lib, a) == 0 && !a->file_meta.comment && !a->meta.comment);
+        sqlite3_stmt *st;
+        sqlite3_prepare_v2(lib.db->db, "SELECT count(*) FROM track WHERE file_comment IS NULL "
+                                       "AND comment IS NULL", -1, &st, NULL);
+        CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 1);
+        sqlite3_finalize(st);
+        /* The field is free for the user. */
+        rx_meta_set(&a->meta.comment, "mine");
+        CHECK(rx_library_save_track(&lib, a) == 0);
+    }
+
+    /* Asked for: a folder's files bring their comments. */
+    lib.cfg.import_comment = true;
+    CHECK(rx_library_config_save(&lib) == 0);
+    rx_library_close(&lib);
+    CHECK(rx_library_open(&lib, libdir) == 0);
+    CHECK(lib.cfg.import_comment);
+    char *sub = path_in(files, "sub");
+    CHECK(rx_library_add_path(&lib, sub, NULL, NULL) == 1);
+    free(sub);
+    RXTrack *b = rx_library_find_path(&lib, b_path);
+    CHECK(b && b->file_meta.comment && !strcmp(b->file_meta.comment, "b's comment"));
+    CHECK(b && b->meta.comment && !strcmp(b->meta.comment, "b's comment"));
+    a = rx_library_find_path(&lib, a_path);
+    CHECK(a && a->meta.comment && !strcmp(a->meta.comment, "mine") && !a->file_meta.comment);
+
+    /* Off again: re-reading b keeps the comment it brought, as a library
+     * from before keeps the comments it imported. */
+    lib.cfg.import_comment = false;
+    if (b) {
+        CHECK(rx_library_refresh_track(&lib, b) == 0);
+        CHECK(b->file_meta.comment && !strcmp(b->file_meta.comment, "b's comment"));
+        CHECK(b->meta.comment && !strcmp(b->meta.comment, "b's comment"));
+    }
+    rx_library_close(&lib);
+
+    free(a_path);
+    free(b_path);
+    free(files);
+    free(libdir);
     test_rm_rf(dir);
     free(dir);
 }
@@ -1038,6 +1104,7 @@ int main(void)
     test_refresh();
     test_grid_migration();
     test_colour_migration();
+    test_comment_import();
     test_missing_relocate_remove();
     test_migrate_v1();
     test_refusals();

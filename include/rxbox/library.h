@@ -63,6 +63,11 @@ typedef struct RXConfig {
     unsigned analyse_what;      /* RXAnalyseWhat the interface's Analyse asks for,
                                    default RX_ANALYSE_ALL */
 
+    /* import.* */
+    bool   import_comment;      /* take the file's comment tag when a track is added
+                                   (or its file re-read); default false: the comment
+                                   is the user's, and starts empty */
+
     /* export.* */
     char   key_notation[8];     /* classic (default), camelot, open */
     bool   export_pdb, export_onelibrary;   /* both default true */
@@ -139,7 +144,9 @@ RXTrack *rx_library_find_path(const RXLibrary *lib, const char *abs_path);
 int      rx_library_index_of(const RXLibrary *lib, const RXTrack *t);
 
 /* Adds one audio file: probes it, fills file_meta from its tags (the tag
- * names dj's library.track_from_probe used), inserts it. Returns the track
+ * names dj's library.track_from_probe used; the comment only when
+ * cfg.import_comment is set, the file itself is never written), inserts
+ * it. Returns the track
  * (the existing one if the path is already in the library; its `missing`
  * flag is cleared when the file is back), or NULL with *err set. */
 RXTrack *rx_library_add_file(RXLibrary *lib, const char *path, int *err);
@@ -156,7 +163,8 @@ int      rx_library_remove(RXLibrary *lib, RXTrack *t);
  * key, grid, cues, locked, the analyser versions) in one transaction.
  * Call after any edit. */
 int      rx_library_save_track(RXLibrary *lib, RXTrack *t);
-/* Re-probes a track whose file changed (mtime); keeps grid/key/cues. */
+/* Re-probes a track whose file changed (mtime); keeps grid/key/cues.
+ * Without cfg.import_comment the comment the library holds stays as it is. */
 int      rx_library_refresh_track(RXLibrary *lib, RXTrack *t);
 /* Records a play now (play_count, last_played, the play table). */
 int      rx_library_record_play(RXLibrary *lib, RXTrack *t);

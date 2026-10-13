@@ -6,6 +6,9 @@
  *
  *   analysis.bpm_min  analysis.bpm_max  analysis.snap_bpm  analysis.auto_cues
  *   analysis.allow_sections  analysis.what
+ *   import.comment                 take the file's comment tag on import
+ *                                  (default false: the comment field is the
+ *                                  user's and starts empty)
  *   export.key_notation  export.pdb  export.onelibrary  export.compat_transcode
  *   export.device_name
  *   player.<name>  mixer.<name>  device.<name>     My Settings, names as
@@ -221,6 +224,9 @@ static int apply_setting(RXConfig *c, const char *key, const char *value)
     } else if (!strcmp(key, "analysis.what")) {
         if (!parse_what(value, &c->analyse_what))
             bad_value(key, value);
+    } else if (!strcmp(key, "import.comment")) {
+        if (!parse_bool(value, &c->import_comment))
+            bad_value(key, value);
     } else if (!strcmp(key, "export.key_notation")) {
         if (strcmp(value, "classic") && strcmp(value, "camelot") && strcmp(value, "open"))
             bad_value(key, value);
@@ -326,6 +332,7 @@ int rx_library_config_save(RXLibrary *lib)
         { "analysis.auto_cues",      c->auto_cues ? "true" : "false" },
         { "analysis.allow_sections", c->allow_sections ? "true" : "false" },
         { "analysis.what",           fmt_what(c->analyse_what, what, sizeof(what)) },
+        { "import.comment",          c->import_comment ? "true" : "false" },
         { "export.key_notation",     c->key_notation },
         { "export.pdb",              c->export_pdb ? "true" : "false" },
         { "export.onelibrary",       c->export_onelibrary ? "true" : "false" },

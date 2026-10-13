@@ -17,6 +17,13 @@
  * unless the user had changed that field. Rating, colour (a hue) and My
  * Tags exist only in the library.
  *
+ * The comment is the user's too: the file's comment tag is read with the
+ * rest and dropped before the row is written, unless the setting
+ * import.comment asks for it, so the field starts empty and is free for
+ * the user and for tagging later. The file is never written. Re-reading a
+ * file keeps the comment the library holds (a library from before this
+ * keeps the comments it imported then).
+ *
  * Adding a directory probes its files in parallel on a thread pool (the
  * probe is a file open and a header parse, I/O bound, a few ms each) and
  * inserts them in one transaction per directory, in name order, so ids
@@ -648,8 +655,9 @@ static int parse_leading_int(const char *s)
     return (int)v;
 }
 
-/* The tag names of dj's library.track_from_probe, in its order. */
-static int fill_from_probe(RXTrack *t, const RXProbe *p)
+/* The tag names of dj's library.track_from_probe, in its order. The
+ * comment only when `comment` (import.comment) asks for it. */
+static int fill_from_probe(RXTrack *t, const RXProbe *p, bool comment)
 {
     RXMeta m = { .hue = RX_HUE_NONE };
     int ret = 0;
@@ -682,6 +690,8 @@ static int fill_from_probe(RXTrack *t, const RXProbe *p)
     };
     for (size_t i = 0; ret >= 0 && i < RX_ARRAY_ELEMS(strs); i++) {
         const char *const *n = strs[i].names;
+        if (strs[i].field == &m.comment && !comment)
+            continue;
         ret = rx_meta_set(strs[i].field, rx_probe_tag(p, n[0], n[1], n[2], n[3], NULL));
     }
     if (ret < 0) {
@@ -709,6 +719,7 @@ static int fill_from_probe(RXTrack *t, const RXProbe *p)
 
 typedef struct Probed {
     RXTrack *t;
+    bool     comment;           /* import.comment, read on the owner's thread */
     char     container[32];
     int      err;
 } Probed;
@@ -722,7 +733,7 @@ static void probe_job(void *arg)
     if (pj->err < 0)
         return;
     snprintf(pj->container, sizeof(pj->container), "%s", p.container);
-    pj->err = fill_from_probe(pj->t, &p);
+    pj->err = fill_from_probe(pj->t, &p, pj->comment);
     rx_probe_free(&p);
 }
 
@@ -849,7 +860,7 @@ RXTrack *rx_library_add_file(RXLibrary *lib, const char *path, int *err)
         return NULL;
     }
 
-    Probed p = { .t = rx_track_new(abs) };
+    Probed p = { .t = rx_track_new(abs), .comment = lib->cfg.import_comment };
     free(abs);
     if (!p.t) {
         *err = RX_ERROR(ENOMEM);
@@ -967,6 +978,7 @@ static int add_dir(RXLibrary *lib, RXThreadPool *pool, const char *dir, rx_add_c
             continue;
         }
         items[nb].t = rx_track_new(abs);
+        items[nb].comment = lib->cfg.import_comment;
         free(abs);
         if (!items[nb].t) {
             ret = RX_ERROR(ENOMEM);
@@ -1133,7 +1145,7 @@ int rx_library_refresh_track(RXLibrary *lib, RXTrack *t)
         return RX_ERROR(ENOENT);
     }
 
-    Probed p = { .t = rx_track_new(t->path) };
+    Probed p = { .t = rx_track_new(t->path), .comment = lib->cfg.import_comment };
     if (!p.t)
         return RX_ERROR(ENOMEM);
     probe_job(&p);
@@ -1142,6 +1154,10 @@ int rx_library_refresh_track(RXLibrary *lib, RXTrack *t)
         rx_warn("cannot read %s: %s", t->path, strerror(-ret));
         goto end;
     }
+    /* The file's comment was not read: the one the library holds (none,
+     * or one an older rxbox imported) stays. */
+    if (!p.comment && (ret = rx_meta_set(&p.t->file_meta.comment, t->file_meta.comment)) < 0)
+        goto end;
 
     ret = rx_db_begin(lib->db);
     if (ret < 0)

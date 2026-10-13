@@ -67,6 +67,13 @@ static void put_info(FILE *f, const char *id, const char *s)
 int test_write_wav(const char *path, double seconds, int rate, int channels,
                    const char *title, const char *artist, const char *date)
 {
+    return test_write_wav_comment(path, seconds, rate, channels, title, artist, date, NULL);
+}
+
+int test_write_wav_comment(const char *path, double seconds, int rate, int channels,
+                           const char *title, const char *artist, const char *date,
+                           const char *comment)
+{
     char *dir = rx_strdup(path);
     *strrchr(dir, '/') = '\0';
     rx_mkdir_p(dir);
@@ -77,7 +84,8 @@ int test_write_wav(const char *path, double seconds, int rate, int channels,
         return RX_ERROR(errno);
     uint32_t frames = (uint32_t)(seconds * rate);
     uint32_t data = frames * (uint32_t)channels * 2;
-    uint32_t list = title || artist || date ? 4 + info_size(title) + info_size(artist) + info_size(date) : 0;
+    uint32_t list = title || artist || date || comment ?
+                    4 + info_size(title) + info_size(artist) + info_size(date) + info_size(comment) : 0;
 
     fwrite("RIFF", 1, 4, f);
     put_le(f, 4 + 8 + 16 + (list ? 8 + list : 0) + 8 + data, 4);
@@ -96,6 +104,7 @@ int test_write_wav(const char *path, double seconds, int rate, int channels,
         put_info(f, "INAM", title);
         put_info(f, "IART", artist);
         put_info(f, "ICRD", date);
+        put_info(f, "ICMT", comment);
     }
     fwrite("data", 1, 4, f);
     put_le(f, data, 4);

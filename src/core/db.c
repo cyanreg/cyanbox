@@ -16,7 +16,9 @@
  *                   sample_rate channels bit_rate bit_depth has_artwork
  *                             the file facts from the last probe
  *                   file_*    the tags as read from the file (title .. comment,
- *                             year, track_number, disc_number)
+ *                             year, track_number, disc_number); file_comment
+ *                             stays NULL unless the setting import.comment
+ *                             asks for the file's comment
  *                   title .. comment, year, track_number, disc_number
  *                             the user's overrides; NULL = use the file's
  *                   rating hue            the user's (files have none); hue in
@@ -56,7 +58,8 @@
  *   3 -> 4  a track's colour became a hue: track.color (one of rekordbox's
  *           eight names) gives way to track.hue, each name its colour's
  *           own hue, so the stick gets the same colour as before. Cue
- *           colours are the players' palette still.
+ *           colours are the players' palette still. Comments imported
+ *           from files before are kept; only new imports leave them out.
  *
  * Journal: WAL, synchronous = NORMAL (a crash loses at most the last
  * transactions, never consistency), and a busy timeout because the export

@@ -6,7 +6,8 @@
 # and by name), make a playlist, a dry-run export that says which colour
 # the stick gets, a real export to a directory and inspect it, settings,
 # results of an older analyser counted and analysed again, and the exit
-# codes.
+# codes. The FLAC carries a comment tag, which the library leaves out
+# unless import.comment says to take it.
 # Then the edges: init over a library, a relative --library, an id that
 # also names a directory, an unreadable file, output that cannot be
 # written. No audio device and no window are used.
@@ -42,7 +43,8 @@ mkdir -p "$dir/music" "$dir/dry" "$dir/stick"
 beat=0.46875
 ffmpeg -v error -nostdin -y -f lavfi \
     -i "aevalsrc=exprs='0.8*sin(2*PI*55*mod(t,$beat))*exp(-mod(t,$beat)*25)+0.2*sin(2*PI*2000*t)*exp(-mod(t,$beat)*200)':s=44100:d=40" \
-    -ac 2 -c:a flac -metadata title="Click 128" -metadata artist="rxbox test" "$track"
+    -ac 2 -c:a flac -metadata title="Click 128" -metadata artist="rxbox test" \
+    -metadata comment="from the file" "$track"
 
 run init > "$dir/init.out" || fail "init"
 [ -f "$lib/library.db" ] || fail "init made no library.db"
@@ -68,6 +70,17 @@ run color none "$track" | grep -q ": none$" || fail "color none"
 run color purple "$track" | grep -q ": 276° (purple)$" || fail "color purple"
 run color 400 "$track" > /dev/null 2>&1 && fail "color took 400"
 run colour aqua "$track" | grep -q ": 193.5° (aqua)$" || fail "colour aqua"
+
+# The file's comment tag was read and left out: the comment is the user's.
+run config | grep -q "^import.comment = false$" || fail "config does not list import.comment"
+if python3 -c "import sqlite3" 2> /dev/null; then
+    python3 - "$lib/library.db" <<'EOF' || fail "the file's comment went into the library"
+import sqlite3, sys
+db = sqlite3.connect(sys.argv[1])
+n = db.execute("SELECT count(*) FROM track WHERE file_comment IS NULL AND comment IS NULL").fetchone()[0]
+sys.exit(0 if n == 1 else 1)
+EOF
+fi
 
 # Analysing again finds nothing to do.
 run analyze | grep -q "nothing to analyse" || fail "analyze redid finished work"
@@ -252,6 +265,22 @@ if ! [ -r "$dir/music/locked.flac" ]; then
 fi
 chmod 644 "$dir/music/locked.flac"
 set -e
+
+# Asked for, the file's comment comes with a new track again.
+run config import.comment true > /dev/null || fail "config import.comment true"
+mkdir -p "$dir/music2"
+cp "$track" "$dir/music2/again.flac"
+run add "$dir/music2" > /dev/null || fail "add with import.comment"
+if python3 -c "import sqlite3" 2> /dev/null; then
+    python3 - "$lib/library.db" <<'EOF' || fail "import.comment true did not take the comment"
+import sqlite3, sys
+db = sqlite3.connect(sys.argv[1])
+rows = db.execute("SELECT path, file_comment FROM track ORDER BY id").fetchall()
+ok = [c for p, c in rows if p.endswith("/again.flac")] == ["from the file"]
+ok = ok and [c for p, c in rows if p.endswith("/click128.flac")] == [None]
+sys.exit(0 if ok else 1)
+EOF
+fi
 
 rm -rf "$dir"
 echo "cli: OK"
