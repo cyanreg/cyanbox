@@ -5,6 +5,7 @@ rx_audio_lib = static_library('rx_audio',
         'decode.c',
         'flac.c',
         'mp3.c',
+        'packets.c',
         'probe.c',
         'transcode.c',
     ),
@@ -19,7 +20,7 @@ rx_audio_dep = declare_dependency(link_with: rx_audio_lib,
 audio_test_env = environment()
 audio_test_env.set('RX_TEST_DIR', meson.current_build_dir() / 'test-media')
 
-foreach t : [ 'mp3', 'decode', 'artwork', 'transcode', 'dj' ]
+foreach t : [ 'mp3', 'decode', 'packets', 'artwork', 'transcode', 'dj' ]
     test('audio_' + t,
         executable('test_audio_' + t,
             '../../tests/audio/test_' + t + '.c',

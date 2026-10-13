@@ -106,6 +106,51 @@ int  rx_audio_to_mono(const RXAudio *in, RXAudio *out);
 int  rx_audio_resample(const RXAudio *in, int rate, RXAudio *out);
 void rx_audio_free(RXAudio *a);
 
+/* ------------------------------------------------------------ packet store */
+
+/* A track demuxed into memory, not decoded, from which any stretch decodes
+ * on demand: what a deck plays from (rxbox/player.h), so that loading costs
+ * a read of the file, not a decode of all of it, and memory the size of
+ * its audio packets, not of the decoded floats. Frames are on the players'
+ * timeline and are rx_decode(path, 0, 0)'s: exactly for MP3 and lossless
+ * codecs, and as close as a decoder starting cold gets for Opus, Vorbis and
+ * AAC after a jump (src/audio/packets.c says how close).
+ *
+ * Threads: the store is handed from thread to thread, never shared, except
+ * that rx_packets_length may be called from any thread at any time, the
+ * real-time one included (two atomic loads). */
+typedef struct RXPackets RXPackets;
+
+/* Opens path and indexes its first packets; rx_packets_index or a decode
+ * does the rest. -ENOTSUP when the packets cannot place their samples
+ * exactly (Matroska keeps milliseconds): rx_decode such a file whole. */
+int  rx_packets_open(const char *path, RXPackets **pk);
+void rx_packets_free(RXPackets *pk);
+/* Indexes up to max_packets more: 1 once the whole file is indexed (the
+ * length is then exact), 0 while more remains, < 0 on a read error, where
+ * the index then ends. */
+int  rx_packets_index(RXPackets *pk, int max_packets);
+/* The track's length in frames: what the container states until the index
+ * is complete, then the count (*exact true). */
+int64_t rx_packets_length(const RXPackets *pk, bool *exact);
+int  rx_packets_rate(const RXPackets *pk);
+int  rx_packets_channels(const RXPackets *pk);
+/* Bytes the packets and their index take. */
+size_t rx_packets_memory(const RXPackets *pk);
+
+typedef struct RXPacketDecoder RXPacketDecoder;
+/* A decoder over pk, used on the thread that holds pk. */
+int  rx_packets_decoder(RXPackets *pk, RXPacketDecoder **d);
+void rx_packets_decoder_free(RXPacketDecoder *d);
+/* Frames [start, start + n) into dst, interleaved, the first `channels`
+ * channels (0: all), silence outside the track and where a packet does not
+ * decode. A call starting where the last one ended carries on; any other
+ * starts a decoder again from enough packets before it. Indexes as far as
+ * it needs. Returns the frames inside the track (fewer than n at its end)
+ * or a negative errno. */
+int64_t rx_packets_decode(RXPacketDecoder *d, int64_t start, int64_t n, float *dst,
+                          int channels);
+
 /* ----------------------------------------------------------------- artwork */
 
 /* The track's cover: the embedded picture (attached picture stream) when
