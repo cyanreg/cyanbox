@@ -993,13 +993,9 @@ static void menu_bar(UiState *ui)
         }
         if (ImGui::MenuItem("Analyse all unanalysed"))
             rx_app_analyse_all(app, false);
-        if (ImGui::MenuItem("Re-analyse selection", nullptr, false, any)) {
-            for (int i = 0; i < app->nb_selection; i++) {
-                RXTrack *t = rx_library_find_id(&app->lib, app->selection[i]);
-                if (t)
-                    rx_app_analyse_track(app, t, app->lib.cfg.analyse_what, true);
-            }
-        }
+        if (ImGui::MenuItem("Re-analyse selection", nullptr, false, any))
+            rx_app_analyse_tracks(app, app->selection, app->nb_selection,
+                                  app->lib.cfg.analyse_what, true);
         // The model's genre, colour and comment: asked for here or in the
         // track menu, never by "Analyse all" (seconds a track on the GPU).
         ImGui::Separator();

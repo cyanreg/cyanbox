@@ -1079,8 +1079,22 @@ int rx_app_analyse_track(RXApp *app, RXTrack *t, unsigned what, bool force)
         return RX_ERROR(ENOENT);
     }
     /* One track, asked for explicitly: forcing it replaces even a locked
-     * grid (the deck's RE-ANALYSE, the table's "Analyse (force)"). */
+     * grid (the deck's RE-ANALYSE). */
     return queue_analysis(app, t, what, force, force);
+}
+
+int rx_app_analyse_tracks(RXApp *app, const uint64_t *ids, int n, unsigned what, bool force)
+{
+    /* A locked grid is replaced only when its track is named: one track
+     * selected. A selection of many (Ctrl+A among them) keeps every locked
+     * grid, as Analyse all does. */
+    int queued = 0;
+    for (int i = 0; i < n; i++) {
+        RXTrack *t = rx_library_find_id(&app->lib, ids[i]);
+        if (t && !t->missing && queue_analysis(app, t, what, force, force && n == 1) > 0)
+            queued++;
+    }
+    return queued;
 }
 
 int rx_app_analyse_all(RXApp *app, bool force)

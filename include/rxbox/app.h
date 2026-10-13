@@ -136,7 +136,12 @@ int  rx_app_run(RXApp *app);
 /* Actions the interface and the CLI share (src/app.c). */
 int  rx_app_load_deck(RXApp *app, int deck, RXTrack *t);
 void rx_app_unload_deck(RXApp *app, int deck);
+/* One track, named: forced, even its locked grid is analysed again. */
 int  rx_app_analyse_track(RXApp *app, RXTrack *t, unsigned what, bool force);
+/* A selection: forced, every result is analysed again but a locked grid,
+ * unless the selection is the one track (README: a locked grid is replaced
+ * only when its track is named). Returns how many were queued. */
+int  rx_app_analyse_tracks(RXApp *app, const uint64_t *ids, int n, unsigned what, bool force);
 int  rx_app_analyse_all(RXApp *app, bool force);     /* everything not yet analysed, or stale */
 /* Which stages (RXAnalyseWhat) of a track are stale: made by an older
  * analyser (rx_analysis_stale: the version is below the current one), or,

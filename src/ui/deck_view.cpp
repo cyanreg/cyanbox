@@ -1395,7 +1395,7 @@ static void grid_strip(UiState *ui, int deck, ImVec2 a, ImVec2 b, const RXDeckSt
         { "2", "Halve the BPM of this section (a dynamic passage: every other beat)", 36,
           grid && !locked, false, UI_ICON_DIVIDE },
         { "LOCK", "Lock the grid: analysis will not replace it", 54, has, locked, UI_ICON_NONE },
-        { "RE-ANALYSE", "Analyse this track again (a locked grid is kept)", 96, has, false,
+        { "RE-ANALYSE", "Analyse this track again, its grid too even when locked", 96, has, false,
          UI_ICON_NONE },
     };
     int clicked = -1;

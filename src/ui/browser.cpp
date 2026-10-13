@@ -220,13 +220,7 @@ bool ui_accept_tracks(UiState *ui, std::vector<uint64_t> &ids)
 static void analyse_selection(UiState *ui, unsigned what, bool force)
 {
     RXApp *app = ui->app;
-    int queued = 0;
-    for (int i = 0; i < app->nb_selection; i++) {
-        RXTrack *t = rx_library_find_id(&app->lib, app->selection[i]);
-        if (t && !t->missing && rx_app_analyse_track(app, t, what, force) >= 0)
-            queued++;
-    }
-    if (queued == 0)
+    if (rx_app_analyse_tracks(app, app->selection, app->nb_selection, what, force) <= 0)
         rx_app_set_status(app, "Nothing to analyse");
 }
 

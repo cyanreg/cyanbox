@@ -96,7 +96,9 @@ sections (`docs/BEATS.md`, "Dynamic grids"). After that,
 `rxbox analyze` and Analysis → Analyse all unanalysed in the interface
 analyse only what a track lacks; `-f` (Re-analyse in the interface) does it
 all again. A locked grid is never replaced unless you name the track:
-`rxbox analyze --force TRACK`, or RE-ANALYSE on the deck.
+`rxbox analyze --force TRACK`, RE-ANALYSE on the deck, or a forced
+re-analysis with that one track selected (a selection of several keeps
+its locked grids).
 
 The library keeps the version of the analyser that made each track's grid,
 key and waveforms. When a new rxbox improves one of them, that version goes

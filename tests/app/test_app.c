@@ -934,6 +934,14 @@ int main(int argc, char **argv)
     CHECK(b->grid_locked && b->beats_version == 0 && hand_grid(b),
           "the locked grid was analysed again (version %d, %d sections)", b->beats_version,
           b->grid.nb_sections);
+    /* A forced re-analysis of a selection of two keeps the locked grid
+     * too: only a track named on its own (the deck's RE-ANALYSE) loses it. */
+    uint64_t both[2] = { b->id, c->id };
+    CHECK(rx_app_analyse_tracks(&app, both, 2, RX_ANALYSE_ALL, true) == 2, "forced selection");
+    CHECK(tick_until(&app, analysis_done, 300), "the forced selection was not analysed");
+    CHECK(b->grid_locked && b->beats_version == 0 && hand_grid(b),
+          "a forced selection replaced the locked grid (version %d, %d sections)",
+          b->beats_version, b->grid.nb_sections);
 
     /* The same unasked after an upgrade: opening a library with long.wav's
      * results at version 0 queues it, and only it (b's one stale result
