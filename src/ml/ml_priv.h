@@ -180,7 +180,9 @@ typedef struct MLGguf {
 } MLGguf;
 
 /* Reads the header and the tensor table (the metadata, tokenizer
- * included, is kept; the weights are not read). */
+ * included, is kept; the weights are not read). -EINVAL for a table whose
+ * tensors are not each inside the file, apart from the others and aligned,
+ * or whose sizes overflow. */
 int  ml_gguf_open(MLGguf *f, const char *path);
 /* Streams every tensor onto the GPU through a small staging buffer: the
  * weights never sit in system memory. */

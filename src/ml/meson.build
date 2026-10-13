@@ -65,3 +65,15 @@ test('ml_kernels',
     suite: 'ml',
     timeout: 300,
 )
+
+# The model file's header against crafted files that must be refused (a
+# zero alignment, sizes that overflow, offsets that wrap, tensors of the
+# wrong shape). No GPU: the refusals all come before the device.
+test('ml_gguf',
+    executable('test_ml_gguf', '../../tests/ml/test_gguf.c',
+        include_directories: [ rx_inc, include_directories('.') ],
+        dependencies: [ rx_ml_dep ],
+    ),
+    suite: 'ml',
+    timeout: 60,
+)

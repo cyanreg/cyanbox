@@ -19,17 +19,30 @@
  *    1 GB (well under every device's maxBufferSize), each a copy of a run
  *    of consecutive tensors. A tensor's address is its segment's plus its
  *    offset in it; nothing is repacked, so a piece of the file is one
- *    copy. */
+ *    copy.
+ *  - The header is not trusted: the GPU reads a tensor wherever its offset
+ *    and size say, with no bounds check of its own, so every size is
+ *    checked for overflow, every tensor must lie inside the file, apart
+ *    from the others and on the file's alignment (a power of two, as ggml's
+ *    gguf.cpp requires), and moss.c checks each one's shape and size
+ *    against the model's before it is used. */
 
 #include "ml_priv.h"
 
 #include <fcntl.h>
+#include <stdckdint.h>
 #include <stdio.h>
 #include <unistd.h>
 
 #define SEG_MAX    (UINT64_C(1) << 30)
 #define PIECE      (UINT64_C(64) << 20)
 #define DIRECT_ALIGN 4096
+/* general.alignment: ggml writes 32. More than this is no alignment
+ * anything needs, only a way to make the arithmetic overflow. */
+#define MAX_ALIGN  (UINT64_C(1) << 20)
+/* The kernels read the weights 16 bytes at a time (shaders/common.glsl,
+ * U32x4 and F32x4), at the tensor's offset from its segment's start. */
+#define GPU_ALIGN  16
 
 enum {
     GGUF_U8 = 0, GGUF_I8, GGUF_U16, GGUF_I16, GGUF_U32, GGUF_I32, GGUF_F32, GGUF_BOOL,
@@ -176,17 +189,69 @@ static int rd_value(Reader *r, MLValue *v)
     return 0;
 }
 
-static uint64_t tensor_size(const MLTensor *t)
+/* The tensor's bytes, or an error if they do not fit in 64 bits. */
+static int tensor_size(const MLTensor *t, uint64_t *size)
 {
     uint64_t n = 1;
-    for (int i = 0; i < t->nb_dims; i++)
-        n *= (uint64_t)t->ne[i];
-    switch (t->type) {
-    case ML_TYPE_F32:  return n * 4;
-    case ML_TYPE_F16:  return n * 2;
-    case ML_TYPE_Q4_K: return n / ML_QK_K * ML_Q4K_BYTES;
+    for (int i = 0; i < t->nb_dims; i++) {
+        if (ckd_mul(&n, n, (uint64_t)t->ne[i]))
+            return RX_ERROR(EINVAL);
     }
-    return 0;
+    uint64_t per = 4, block = 1;
+    switch (t->type) {
+    case ML_TYPE_F32:  per = 4; break;
+    case ML_TYPE_F16:  per = 2; break;
+    case ML_TYPE_Q4_K: per = ML_Q4K_BYTES; block = ML_QK_K; break;
+    }
+    return ckd_mul(size, n / block, per) ? RX_ERROR(EINVAL) : 0;
+}
+
+static int cmp_offset(const void *a, const void *b)
+{
+    const MLTensor *x = *(const MLTensor *const *)a, *y = *(const MLTensor *const *)b;
+    return x->offset < y->offset ? -1 : x->offset > y->offset;
+}
+
+/* The tensors' place in the file: on the alignment, inside the file, apart
+ * from each other. */
+static int check_layout(MLGguf *f, const char *path, uint64_t align)
+{
+    off_t end = lseek(f->fd, 0, SEEK_END);
+    if (end < 0 || f->data_offset > (uint64_t)end) {
+        rx_err("ml: %s ends before its tensors' data", path);
+        return RX_ERROR(EINVAL);
+    }
+    uint64_t room = (uint64_t)end - f->data_offset;
+    for (int i = 0; i < f->nb_tensors; i++) {
+        const MLTensor *t = &f->tensors[i];
+        if (t->offset % align || t->offset % GPU_ALIGN) {
+            rx_err("ml: %s: tensor %s at %llu is not aligned to %llu bytes", path, t->name,
+                   (unsigned long long)t->offset,
+                   (unsigned long long)RX_MAX(align, (uint64_t)GPU_ALIGN));
+            return RX_ERROR(EINVAL);
+        }
+        /* Compared so that nothing can wrap around. */
+        if (t->offset > room || t->size > room - t->offset) {
+            rx_err("ml: %s: tensor %s runs past the end of the file", path, t->name);
+            return RX_ERROR(EINVAL);
+        }
+    }
+
+    const MLTensor **order = calloc(RX_MAX(f->nb_tensors, 1), sizeof(*order));
+    if (!order)
+        return RX_ERROR(ENOMEM);
+    for (int i = 0; i < f->nb_tensors; i++)
+        order[i] = &f->tensors[i];
+    qsort(order, f->nb_tensors, sizeof(*order), cmp_offset);
+    int ret = 0;
+    for (int i = 1; i < f->nb_tensors && ret >= 0; i++) {
+        if (order[i]->offset < order[i - 1]->offset + order[i - 1]->size) {
+            rx_err("ml: %s: tensors %s and %s overlap", path, order[i - 1]->name, order[i]->name);
+            ret = RX_ERROR(EINVAL);
+        }
+    }
+    free(order);
+    return ret;
 }
 
 int ml_gguf_open(MLGguf *f, const char *path)
@@ -248,6 +313,12 @@ int ml_gguf_open(MLGguf *f, const char *path)
             uint64_t ne;
             if ((ret = rd_u64(r, &ne)) < 0)
                 goto fail;
+            if (!ne || ne > INT64_MAX) {
+                rx_err("ml: %s: tensor %s has a dimension of %llu", path, t->name,
+                       (unsigned long long)ne);
+                ret = RX_ERROR(EINVAL);
+                goto fail;
+            }
             t->ne[d] = (int64_t)ne;
         }
         if ((ret = rd_u32(r, &type)) < 0 || (ret = rd_u64(r, &t->offset)) < 0)
@@ -262,22 +333,25 @@ int ml_gguf_open(MLGguf *f, const char *path)
             ret = RX_ERROR(EINVAL);
             goto fail;
         }
-        t->size = tensor_size(t);
-    }
-
-    uint64_t align = (uint64_t)ml_gguf_int(f, "general.alignment", 32);
-    uint64_t here = r->pos + r->off;
-    f->data_offset = RX_ALIGN(here, align);
-
-    off_t end = lseek(f->fd, 0, SEEK_END);
-    for (int i = 0; i < f->nb_tensors; i++) {
-        const MLTensor *t = &f->tensors[i];
-        if (f->data_offset + t->offset + t->size > (uint64_t)end) {
-            rx_err("ml: %s: tensor %s runs past the end of the file", path, t->name);
+        if ((ret = tensor_size(t, &t->size)) < 0 || t->size > SEG_MAX) {
+            rx_err("ml: %s: tensor %s is too large", path, t->name);
             ret = RX_ERROR(EINVAL);
             goto fail;
         }
     }
+
+    /* 0 would divide by zero in RX_ALIGN; ggml refuses anything but a
+     * power of two. */
+    int64_t align = ml_gguf_int(f, "general.alignment", 32);
+    if (align < 1 || (uint64_t)align > MAX_ALIGN || (align & (align - 1))) {
+        rx_err("ml: %s has an alignment of %lld", path, (long long)align);
+        ret = RX_ERROR(EINVAL);
+        goto fail;
+    }
+    uint64_t here = r->pos + r->off;
+    f->data_offset = RX_ALIGN(here, (uint64_t)align);
+    if ((ret = check_layout(f, path, (uint64_t)align)) < 0)
+        goto fail;
 
     free(r);
     return 0;
@@ -289,12 +363,6 @@ fail:
 }
 
 /* ----------------------------------------------------------------- upload */
-
-static int cmp_offset(const void *a, const void *b)
-{
-    const MLTensor *x = *(const MLTensor *const *)a, *y = *(const MLTensor *const *)b;
-    return x->offset < y->offset ? -1 : x->offset > y->offset;
-}
 
 /* Reads [off, off + size) of the file into dst (at least size rounded up to
  * DIRECT_ALIGN, page aligned); returns where in dst `off` landed. */
@@ -351,7 +419,7 @@ int ml_gguf_upload(MLGguf *f, MLGpu *g)
             s = f->nb_segs++;
             seg_start[s] = t->offset;
         }
-        seg_end[s] = t->offset + t->size;
+        seg_end[s] = RX_MAX(seg_end[s], t->offset + t->size);
         seg_of[i] = s;
     }
     for (int s = 0; s < f->nb_segs; s++) {

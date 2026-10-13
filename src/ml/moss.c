@@ -129,8 +129,11 @@ struct RXML {
 
 /* ----------------------------------------------------------------- tensors */
 
-static const MLTensor *tensor(RXML *ml, const char *fmt, int i, enum MLType type,
-                              int64_t ne0, int64_t ne1)
+/* The tensor `fmt` (with i), of exactly this type, shape and size: the
+ * kernels read as much of it as the shape says, unchecked. The sizes past
+ * a tensor's own dimensions are 1 (gguf.c), so the four say everything. */
+static const MLTensor *tensor4(RXML *ml, const char *fmt, int i, enum MLType type,
+                               int64_t ne0, int64_t ne1, int64_t ne2, int64_t ne3)
 {
     char name[96];
     snprintf(name, sizeof(name), fmt, i);
@@ -139,13 +142,24 @@ static const MLTensor *tensor(RXML *ml, const char *fmt, int i, enum MLType type
         rx_err("ml: the model has no tensor %s", name);
         return NULL;
     }
-    if (t->type != type || t->ne[0] != ne0 || t->ne[1] != ne1) {
-        rx_err("ml: tensor %s is type %d, %lld x %lld; expected type %d, %lld x %lld", name,
-               t->type, (long long)t->ne[0], (long long)t->ne[1], type, (long long)ne0,
-               (long long)ne1);
+    uint64_t n = (uint64_t)(ne0 * ne1 * ne2 * ne3);
+    uint64_t size = type == ML_TYPE_Q4_K ? n / ML_QK_K * ML_Q4K_BYTES :
+                    n * (type == ML_TYPE_F16 ? 2 : 4);
+    if (t->type != type || t->ne[0] != ne0 || t->ne[1] != ne1 || t->ne[2] != ne2 ||
+        t->ne[3] != ne3 || t->size != size) {
+        rx_err("ml: tensor %s is type %d, %lld x %lld x %lld x %lld; expected type %d, "
+               "%lld x %lld x %lld x %lld", name, t->type, (long long)t->ne[0],
+               (long long)t->ne[1], (long long)t->ne[2], (long long)t->ne[3], type,
+               (long long)ne0, (long long)ne1, (long long)ne2, (long long)ne3);
         return NULL;
     }
     return t;
+}
+
+static const MLTensor *tensor(RXML *ml, const char *fmt, int i, enum MLType type,
+                              int64_t ne0, int64_t ne1)
+{
+    return tensor4(ml, fmt, i, type, ne0, ne1, 1, 1);
 }
 
 #define T_(dst, ...) do { if (!((dst) = tensor(ml, __VA_ARGS__))) return RX_ERROR(EINVAL); } while (0)
@@ -154,7 +168,14 @@ static int find_tensors(RXML *ml)
 {
     T_(ml->mel_filters, "audio.mel_filters", 0, ML_TYPE_F32, N_MEL, N_FFT / 2 + 1);
     T_(ml->mel_window, "audio.mel_window", 0, ML_TYPE_F32, N_FFT, 1);
-    T_(ml->conv1_w, "enc.conv1.weight", 0, ML_TYPE_F16, 3, 3);
+    if (!(ml->conv1_w = tensor4(ml, "enc.conv1.weight", 0, ML_TYPE_F16, 3, 3, 1, C_DIM)))
+        return RX_ERROR(EINVAL);
+    /* conv2 and conv3 are read once, by permute_convs: checked here, before
+     * the weights go up. */
+    for (int i = 2; i <= 3; i++) {
+        if (!tensor4(ml, "enc.conv%d.weight", i, ML_TYPE_F16, 3, 3, C_DIM, C_DIM))
+            return RX_ERROR(EINVAL);
+    }
     T_(ml->conv1_b, "enc.conv1.bias", 0, ML_TYPE_F32, C_DIM, 1);
     T_(ml->conv2_b, "enc.conv2.bias", 0, ML_TYPE_F32, C_DIM, 1);
     T_(ml->conv3_b, "enc.conv3.bias", 0, ML_TYPE_F32, C_DIM, 1);
@@ -420,8 +441,9 @@ static int make_tables(RXML *ml)
 static int permute_convs(RXML *ml)
 {
     for (int i = 0; i < 2; i++) {
-        const MLTensor *w = tensor(ml, "enc.conv%d.weight", i + 2, ML_TYPE_F16, 3, 3);
-        if (!w || w->ne[2] != C_DIM || w->ne[3] != C_DIM)
+        const MLTensor *w = tensor4(ml, "enc.conv%d.weight", i + 2, ML_TYPE_F16, 3, 3, C_DIM,
+                                    C_DIM);
+        if (!w)
             return RX_ERROR(EINVAL);
         int ret = ml_buf_create(&ml->g, &ml->conv_w[i], w->size, ML_MEM_DEVICE);
         if (ret < 0)
