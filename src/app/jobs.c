@@ -551,6 +551,18 @@ static void run_tag(Job *job)
         else
             j->tag_done++;
         pthread_mutex_unlock(&j->lock);
+
+        /* EIO: the model's device stopped answering (a wait failed, the
+         * device was lost) or its answer was not a number. It runs nothing
+         * more once lost, so it is closed and the next track opens it
+         * again: the batch goes on if the GPU recovered, and ends with one
+         * message where it cannot be opened, rather than failing every
+         * track left. */
+        if (ret == RX_ERROR(EIO) && ml) {
+            rx_warn("jobs: the model failed on %s; it is loaded again for the next track",
+                    it.path);
+            rx_ml_close(&ml);
+        }
         tag_item_free(&it);
     }
 
