@@ -37,10 +37,12 @@
  *    edit made while it runs. What the tracks lack is analysed first here,
  *    through the normal jobs, and pending saves are flushed, so the
  *    export's handle finds everything in the database. That handle is a
- *    snapshot opened here, on the thread that makes every edit, so no edit
- *    lands half way through its reading; the dry run and the real run use
- *    the same one, so what the interface asked about (the files to delete)
- *    is what the real run does, whatever was edited meanwhile. Progress
+ *    snapshot the export thread opens as the dry run starts (reading the
+ *    library and looking at every file take a while, and the interface
+ *    goes on), in one read transaction, so an edit committed meanwhile is
+ *    in it whole or not at all; the dry run and the real run use the same
+ *    one, so what the interface asked about (the files to delete) is what
+ *    the real run does, whatever was edited meanwhile. Progress
  *    comes back as malloc'd messages (strings copied) through a mailbox;
  *    the only other shared state is the cancel flag and the finished
  *    flag/result, published with release/acquire.
@@ -139,10 +141,13 @@ typedef struct ExportMsg {
 } ExportMsg;
 
 /* Owned by the main thread; the export thread reads the inputs, writes
- * `result`, then sets `finished` last. The library is the export's
- * snapshot (RXAppPriv.export_lib), the thread's alone while it runs. */
+ * `result` (and `opened`), then sets `finished` last. The library is the
+ * export's snapshot (RXAppPriv.export_lib), the thread's alone while it
+ * runs; with `root` set the thread opens it first. */
 typedef struct ExportJob {
     RXLibrary *lib;
+    char    *root;              /* the library to open as the snapshot; NULL: open already */
+    bool     opened;            /* the thread opened the snapshot (export_join takes it over) */
     char    *dest;
     int64_t *playlists;         /* ids of the selected playlists */
     int      nb_playlists;
@@ -1920,6 +1925,7 @@ static void export_job_free(ExportJob *ej)
 {
     if (!ej)
         return;
+    free(ej->root);
     free(ej->dest);
     free(ej->playlists);
     free(ej);
@@ -2029,8 +2035,12 @@ static void *export_main(void *arg)
     ExportJob *ej = arg;
     RXPlaylist **playlists = NULL;
 
+    /* The snapshot, opened here: reading the library and looking at every
+     * file takes a while, and the interface goes on meanwhile. */
     int ret = 0;
-    if (ej->nb_playlists)
+    if (ej->root && (ret = rx_library_open(ej->lib, ej->root)) >= 0)
+        ej->opened = true;
+    if (ret >= 0 && ej->nb_playlists)
         ret = resolve_playlists(ej->lib, ej, &playlists);
     if (ret >= 0) {
         RXExportOptions opt;
@@ -2052,13 +2062,16 @@ static void *export_main(void *arg)
     return NULL;
 }
 
-/* Joins the export thread and drops its job. */
+/* Joins the export thread and drops its job; a snapshot the thread opened
+ * is the app's from here on. */
 static void export_join(RXAppPriv *priv)
 {
     if (priv->export_started) {
         pthread_join(priv->export_thread, NULL);
         priv->export_started = false;
     }
+    if (priv->export_job && priv->export_job->opened)
+        priv->export_lib_open = true;
     export_drain(priv);
     export_job_free(priv->export_job);
     priv->export_job = NULL;
@@ -2107,19 +2120,15 @@ static void export_run(RXApp *app, bool dry_run)
     RXAppPriv *priv = app->priv;
     typeof(app->export_state) *es = &app->export_state;
 
-    /* The snapshot both runs export, taken once pending saves are written
-     * (export_tick) and before anything can be edited again. */
-    if (!priv->export_lib_open) {
-        int ret = rx_library_open(&priv->export_lib, app->lib.root);
-        if (ret < 0) {
-            export_finish(app, ret);
-            return;
-        }
-        priv->export_lib_open = true;
+    /* The snapshot both runs export: the dry run's thread opens it once
+     * pending saves are written (export_tick), the real run exports the
+     * same one. An edit committed while it is read is in it whole or not
+     * at all (rx_library_open reads in one transaction). */
+    bool open = !priv->export_lib_open;
+    if (open)
         priv->export_generation = app->lib.generation;
-    } else if (!dry_run && priv->export_generation != app->lib.generation) {
+    else if (!dry_run && priv->export_generation != app->lib.generation)
         export_log(app, "Changes made since the check are not in this export");
-    }
 
     ExportJob *ej = calloc(1, sizeof(*ej));
     if (!ej) {
@@ -2127,6 +2136,7 @@ static void export_run(RXApp *app, bool dry_run)
         return;
     }
     ej->lib = &priv->export_lib;
+    ej->root = open ? rx_strdup(app->lib.root) : NULL;
     ej->dest = rx_strdup(es->dest);
     if (priv->nb_export_playlists) {
         ej->playlists = calloc(priv->nb_export_playlists, sizeof(*ej->playlists));
@@ -2136,7 +2146,7 @@ static void export_run(RXApp *app, bool dry_run)
             ej->nb_playlists = priv->nb_export_playlists;
         }
     }
-    if (!ej->dest || (priv->nb_export_playlists && !ej->playlists)) {
+    if (!ej->dest || (open && !ej->root) || (priv->nb_export_playlists && !ej->playlists)) {
         export_job_free(ej);
         export_finish(app, RX_ERROR(ENOMEM));
         return;
