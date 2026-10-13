@@ -1516,15 +1516,7 @@ static int grid_confidence(const Ctx *c, const int *bands, double *out)
         free(offs);
         return 0;
     }
-    for (int i = 1; i < nt; i++) {
-        double v = tmp[i];
-        int j = i - 1;
-        while (j >= 0 && tmp[j] > v) {
-            tmp[j + 1] = tmp[j];
-            j--;
-        }
-        tmp[j + 1] = v;
-    }
+    qsort(tmp, (size_t)nt, sizeof(*tmp), cmp_dbl);
     double med = tmp[nt / 2];
     free(tmp);
     /* dj weighted a window by its contrast less half the median. Capped
