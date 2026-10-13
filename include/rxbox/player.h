@@ -10,19 +10,25 @@
  * function here. Commands go to the real-time thread through a lock-free
  * single-producer/single-consumer ring; the real-time thread never
  * allocates, locks, or touches files, and publishes positions through
- * atomics that rx_deck_state() reads. A deck plays a whole track decoded
- * in memory (RXAudio, native rate, interleaved float); the real-time
- * thread resamples to the device rate with a cubic interpolator, which is
- * also how tempo changes play: pitch follows tempo, as on a CDJ with
- * MASTER TEMPO off. With it on, the deck's output is shifted back by
+ * atomics that rx_deck_state() reads. A deck plays a track's packet store
+ * (RXPackets: the file's packets in memory, rxbox/audio.h), which a thread
+ * of the deck's own decodes around the playhead and at the cue points as
+ * it plays, so a track is ready as soon as its first packets are read; or
+ * a whole decoded track (RXAudio, native rate, interleaved float). Where
+ * the decoded audio does not reach yet (just after a jump far away), a
+ * playing deck holds, silent, until it does. The real-time thread
+ * resamples to the device rate with a cubic interpolator, which is also
+ * how tempo changes play: pitch follows tempo, as on a CDJ with MASTER
+ * TEMPO off. With it on, the deck's output is shifted back by
  * 1 / (tempo + bend) (Signalsmith Stretch), reading ahead by the
  * shifter's delay so that jumps, starts and stops are still heard at once
  * and the position reported is the one heard. Loops wrap sample-exactly
  * inside the callback.
  *
- * Loading hands an RXAudio to the player, which owns it until the deck is
- * unloaded or loaded again; the old buffer is released only after the
- * real-time thread has acknowledged the swap, so freeing is always safe.
+ * Loading hands an RXAudio or an RXPackets to the player, which owns it
+ * until the deck is unloaded or loaded again; the old one is released only
+ * after the real-time thread (and the deck's decoding thread) have
+ * acknowledged the swap, so freeing is always safe.
  *
  * Backends: PipeWire (pw_stream, 48 kHz float stereo, target node from
  * options), or the null backend, which runs the same callback on a timer
@@ -34,6 +40,10 @@
 #include "rxbox/audio.h"
 
 #define RX_DECKS 1
+/* Cue points a deck keeps decoded (rx_deck_set_cue_points): the start, the
+ * cue point, the loop in point, eight hot cues and ten memory cues, and a
+ * few to spare. */
+#define RX_DECK_CUE_POINTS 24
 
 enum RXAudioBackend {
     RX_AUDIO_PIPEWIRE = 0,
@@ -51,7 +61,8 @@ typedef struct RXPlayerOptions {
     /* Called on the owner thread when the player lets go of a buffer it was
      * given, once the real-time thread can no longer read it (or at
      * destroy). NULL: rx_audio_free() and free(), so the RXAudio struct
-     * itself must then come from malloc. */
+     * itself must then come from malloc. Packet stores are always freed by
+     * the player (rx_packets_free). */
     void      (*release)(void *opaque, RXAudio *audio);
     void       *release_opaque;
 } RXPlayerOptions;
@@ -71,7 +82,10 @@ bool rx_player_running(const RXPlayer *p);
 const char *rx_player_error(const RXPlayer *p);
 void rx_player_set_master_volume(RXPlayer *p, float gain);   /* 0..1 */
 /* Advances the null backend by `frames` synchronously (tests only; no-op
- * on PipeWire and on a null backend with its own thread, period >= 0). */
+ * on PipeWire and on a null backend with its own thread, period >= 0).
+ * Before each callback it waits for a deck playing a packet store to have
+ * the audio around its playhead decoded, as a device on a machine that
+ * keeps up would find it, so the tests see the same output every run. */
 void rx_player_null_advance(RXPlayer *p, int frames);
 
 /* ------------------------------------------------------------------- decks */
@@ -79,9 +93,20 @@ void rx_player_null_advance(RXPlayer *p, int frames);
 /* Takes ownership of `audio` on success (see RXPlayerOptions.release); on
  * error the caller keeps it. The grid is copied (NULL = none). */
 int  rx_deck_load(RXPlayer *p, int deck, RXAudio *audio, const RXGrid *grid);
+/* The same for a packet store, which the deck decodes as it plays: from
+ * here on the deck's thread holds it (the player frees it). */
+int  rx_deck_load_packets(RXPlayer *p, int deck, RXPackets *pk, const RXGrid *grid);
+/* The places a jump may go to on the deck (the start, the cue point, the
+ * loop in point, the hot and memory cues), at most RX_DECK_CUE_POINTS, in
+ * seconds. A deck playing a packet store keeps half a second decoded at
+ * each, so a cue, a hot cue or a loop going back plays at once while the
+ * decoder moves there. Cheap to call with the same points again (every
+ * frame: the controls do). */
+void rx_deck_set_cue_points(RXPlayer *p, int deck, const double *seconds, int nb);
 void rx_deck_unload(RXPlayer *p, int deck);
 bool rx_deck_loaded(const RXPlayer *p, int deck);
-/* The buffer a deck plays (valid until unload; read-only). */
+/* The buffer a deck plays (valid until unload; read-only); NULL for a
+ * packet store. */
 const RXAudio *rx_deck_audio(const RXPlayer *p, int deck);
 
 void rx_deck_play(RXPlayer *p, int deck);
@@ -116,6 +141,8 @@ void rx_deck_scrub_end(RXPlayer *p, int deck);
 typedef struct RXDeckState {
     bool   loaded;
     bool   playing;
+    bool   waiting;         /* playing, but holding (silent) until the audio at the playhead
+                               is decoded: just after a jump far from where the deck was */
     bool   scrubbing;
     double position;        /* seconds on the track's timeline */
     double duration;

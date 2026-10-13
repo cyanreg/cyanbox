@@ -210,6 +210,28 @@ static void reset(RXDeckCtl *c)
 /* Auto cue: the cue point goes to the memory cue nearest the start, or the
  * start (manual p.74, AUTO CUE LEVEL "MEMORY", the factory setting), and
  * the deck waits there. */
+/* Where the buttons here can jump to: the deck keeps those places decoded,
+ * so CUE, a hot cue, CALL, RELOOP or a loop wrapping back play at once
+ * (rx_deck_set_cue_points). In order of how often a DJ goes there, should
+ * they not all fit. */
+static void send_cue_points(RXDeckCtl *c)
+{
+    double points[RX_DECK_CUE_POINTS];
+    int n = 0;
+    points[n++] = 0.0;
+    if (c->cue_point >= 0.0)
+        points[n++] = c->cue_point;
+    if (c->loop_in >= 0.0)
+        points[n++] = c->loop_in;
+    for (int hot = 1; hot >= 0; hot--) {
+        for (int i = 0; i < c->track->nb_cues && n < RX_DECK_CUE_POINTS; i++) {
+            if (rx_cue_is_hot(&c->track->cues[i]) == hot)
+                points[n++] = c->track->cues[i].time;
+        }
+    }
+    rx_deck_set_cue_points(c->player, c->deck, points, n);
+}
+
 void rx_ctl_load(RXDeckCtl *c, RXTrack *track)
 {
     reset(c);
@@ -222,6 +244,7 @@ void rx_ctl_load(RXDeckCtl *c, RXTrack *track)
     rx_deck_clear_loop(c->player, c->deck);
     rx_deck_seek(c->player, c->deck, c->cue_point);
     c->_last_position = c->cue_point;
+    send_cue_points(c);
 }
 
 void rx_ctl_unload(RXDeckCtl *c)
@@ -261,6 +284,7 @@ void rx_ctl_tick(RXDeckCtl *c)
     RXDeckState s = state(c);
     engage_active_loops(c, &s);
     c->_last_position = s.position;
+    send_cue_points(c);
 }
 
 /* ------------------------------------------------------------- transport */
