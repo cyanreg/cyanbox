@@ -56,6 +56,7 @@
 #define FLOOR_BELOW  60.0           /* a floor lies at least this far under the loud level */
 #define START_ABOVE  20.0           /* the music starts this far above its floor */
 #define START_BELOW  65.0           /* and at most this far under the loud level */
+#define AUDIBLE_BELOW 50.0          /* over a noise floor: within this of the loud level */
 #define HIT_JUMP     25.0           /* a hit: this far over the start's threshold two frames on */
 #define RISE_WITHIN  15.0           /* a rise ends within this of the loud level */
 #define RISE_MAX_S   30.0           /* (measured up to here) */
@@ -167,7 +168,13 @@ int rx_music_start(const float *x, int64_t n, RXMusicStart *out)
     const int min_floor = (int)ceil(MIN_FLOOR_S / fsec);
     double base = fq >= min_floor ? common_level(e, 0, fq, true) : 0.0;
     int fs = 0;
-    double thr = fmax(base + START_ABOVE, loud - START_BELOW);
+    /* After digital silence the first sound is the music; over a noise
+     * floor (dither, hiss) a fade is music once it is audible over it, 50 dB
+     * under the loud level (-60 dBFS on a loud master): below that a
+     * listener hears the floor. */
+    const bool digital = base <= SILENT_DB;
+    double thr = digital ? loud - START_BELOW
+                         : fmax(base + START_ABOVE, loud - AUDIBLE_BELOW);
     if (fq >= min_floor && base <= loud - FLOOR_BELOW) {
         while (fs < nf && (smooth_db(e, nf, fs) < thr || !sustained(e, nf, fs, thr)))
             fs++;
@@ -204,16 +211,19 @@ int rx_music_start(const float *x, int64_t n, RXMusicStart *out)
         out->kind = RX_START_HIT;
         out->start = (double)at / RX_BEAT_RATE;
     } else {
-        /* Where the rise leaves the floor. Without audible frames before
-         * it (out of digital silence), its first sound. */
-        double fl0 = common_level(e, 0, fs, false);
+        /* Over a noise floor, where the rise becomes audible. Out of digital
+         * silence, where it leaves the silence: its first sound, or where
+         * it rises out of the dither that some masters put before it. */
         int fo = fs;
-        if (fl0 > SILENT_DB) {
-            while (fo > 0 && smooth_db(e, nf, fo - 1) > fl0 + ORIGIN_ABOVE)
-                fo--;
-        } else {
-            while (fo > 0 && e[fo - 1] > 0.0f)
-                fo--;
+        if (digital) {
+            double fl0 = common_level(e, 0, fs, false);
+            if (fl0 > SILENT_DB) {
+                while (fo > 0 && smooth_db(e, nf, fo - 1) > fl0 + ORIGIN_ABOVE)
+                    fo--;
+            } else {
+                while (fo > 0 && e[fo - 1] > 0.0f)
+                    fo--;
+            }
         }
         out->kind = out->rise >= FADE_RISE ? RX_START_FADE : RX_START_SWELL;
         out->start = fo * fsec;

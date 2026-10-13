@@ -105,7 +105,7 @@ void rx_beat_result_free(RXBeatResult *r)
 #define HIT_KICKS_CLEAR   1.0
 #define HIT_PHASE         2.5
 #define HIT_DOWNBEAT      2.0
-#define FADE_DOWNBEAT     0.25
+#define FADE_DOWNBEAT     0.5
 /* The grid's first beat may lie this much before the music's start (a
  * line a few ms early on the hit; a fade's start is a frame's estimate). */
 #define START_SLACK       0.050
@@ -408,21 +408,21 @@ static StartWitness start_witness(const Ctx *c, const RXFitSection *s, const Sec
     if ((ms->kind != RX_START_HIT && ms->kind != RX_START_FADE) || w.at < si->start ||
         w.at >= si->end)
         return w;
-    const double P = s->period;
-    double off;
-    half_beat(s, w.at, &off);
-    if (fabs(off) > fmin(START_ON_BEAT * P, START_ON_BEAT_MAX))
-        return w;
-    /* Whether a fade is on beat 1 the first loud onset knows better
-     * (where the drums come in after it), so it keeps its vote and the
-     * origin only breaks a tie. Nor does the origin say much about the
-     * half of the beat (docs/BEATS.md): it has no say there. */
+    /* A fade: the grid's first beat, the first at or after it, is beat 1
+     * unless the structure says otherwise by more than half a scale. The
+     * first loud onset keeps its vote (where the drums come in after the
+     * fade), and the fade says nothing about the half of the beat. */
     if (ms->kind == RX_START_FADE) {
         w.counts = true;
         w.onset_too = true;
         w.down = FADE_DOWNBEAT;
         return w;
     }
+    const double P = s->period;
+    double off;
+    half_beat(s, w.at, &off);
+    if (fabs(off) > fmin(START_ON_BEAT * P, START_ON_BEAT_MAX))
+        return w;
     /* The kick band from 15 ms before the hit to 60 ms after it (a kick's
      * body builds after its click), against its level on the beats or the
      * half beats, whichever carry the kicks. A stab or a vocal on the "and"
@@ -550,7 +550,11 @@ static int decide_phase(Ctx *c, int i, SecInfo *si, const float *arbiter, const 
     /* The start's vote for beat 1, when it is on a beat of the line as it
      * now is. */
     bool voted = false;
-    if (w.counts) {
+    if (w.counts && ms->kind == RX_START_FADE) {
+        long k = (long)ceil((w.at - START_SLACK - s->t0) / P - 1e-9);
+        si->db.scores[position(2 * k)] += w.down;
+        voted = true;
+    } else if (w.counts) {
         long j = half_beat(s, w.at, &hoff);
         if (!(j & 1)) {
             si->db.scores[position(j)] += w.down;
