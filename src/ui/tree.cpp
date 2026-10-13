@@ -112,7 +112,7 @@ static void commit_rename(UiState *ui)
     ui->rename_target = nullptr;
 }
 
-static void add_tracks(UiState *ui, RXPlaylist *p, const std::vector<uint64_t> &ids)
+void ui_add_to_playlist(UiState *ui, RXPlaylist *p, const std::vector<uint64_t> &ids)
 {
     RXApp *app = ui->app;
     int added = 0;
@@ -305,7 +305,7 @@ static void draw_playlist(UiState *ui, RXPlaylist *p, RXPlaylistFolder *parent, 
         std::vector<uint64_t> ids;
         TreeNodePayload n;
         if (ui_accept_tracks(ui, ids))
-            add_tracks(ui, p, ids);
+            ui_add_to_playlist(ui, p, ids);
         else if (accept_node(n) && n.ptr != p)
             reparent(ui, n, parent, index);
         ImGui::EndDragDropTarget();

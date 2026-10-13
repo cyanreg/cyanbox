@@ -169,7 +169,7 @@ static void settings_get(void)
     CHECK_STR(rx_settings_get(&cfg, "player.auto_cue_level"), "memory");
     CHECK_STR(rx_settings_get(&cfg, "player.hot_cue_color"), "false");
     CHECK_STR(rx_settings_get(&cfg, "device.overview_waveform"), "full");
-    CHECK_STR(rx_settings_get(&cfg, "device.waveform_color"), "blue");
+    CHECK_STR(rx_settings_get(&cfg, "device.waveform_color"), "3band");
     CHECK_STR(rx_settings_get(&cfg, "device.key_display"), "classic");
     CHECK_STR(rx_settings_get(&cfg, "device.background_color"), "pink");
     CHECK_STR(rx_settings_get(&cfg, "mixer.channel_fader_curve"), "linear");

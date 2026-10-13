@@ -255,8 +255,8 @@ Actions: double-click loads the track into the player at once (over a
 playing track the new one plays on from its auto-cue; over a paused one it
 waits there); drag
 onto the player panel loads it; context menu: Analyse (BPM/grid, key, both; force),
-Remove from playlist, Remove from library, Set colour, Set rating (and
-Relocate… for a missing file).
+Add to playlist (every playlist, folders as submenus), Remove from playlist,
+Remove from library, Set colour, Set rating (and Relocate… for a missing file).
 Keyboard: up/down move the focus, Enter loads the focused track, Delete
 removes it from the playlist (unless a click on the player's cue list
 has given that list the keyboard: then they act on the cues, until a
