@@ -31,12 +31,13 @@ const UiKeyRow ui_key_rows[] = {
     { "Left / Right", "Beat jump back / forward (hold to repeat)" },
     { "Ctrl+Left / Ctrl+Right", "Shift the beat grid 5 ms earlier / later, once per press" },
     { "Ctrl+G", "Grid tools" },
-    { "Up / Down", "Move the focus in the track list" },
+    { "Up / Down", "Move the focus in the track list (the selection in the cue list after a "
+                   "click on a cue)" },
     { "Enter", "Load the focused track" },
-    { "Delete", "Remove the selection from the playlist" },
+    { "Delete", "Remove the selection from the playlist; after a click on a cue, delete that cue" },
     { "Ctrl+A", "Select every track in the list" },
     { "Ctrl+F", "Search" },
-    { "Esc", "Clear the search / close a dialog" },
+    { "Esc", "Clear the search / close a dialog / give Delete back to the track list" },
     { "Ctrl+Q", "Quit" },
 };
 const int ui_nb_key_rows = (int)(sizeof(ui_key_rows) / sizeof(ui_key_rows[0]));
@@ -91,17 +92,37 @@ void ui_keys(UiState *ui)
     if (ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel))
         return;
 
-    // The browser.
+    // The browser, or the player's cue list while a click on one of its
+    // rows has given it the keyboard: then Delete deletes the selected cue
+    // and Up/Down move the selection, until Escape, a click in the table or
+    // another track gives them back to the table.
     if (!ctrl && !alt) {
-        if (ImGui::IsKeyPressed(ImGuiKey_UpArrow))
-            ui_move_focus(ui, -1);
-        if (ImGui::IsKeyPressed(ImGuiKey_DownArrow))
-            ui_move_focus(ui, 1);
+        bool cues = ui_cue_list_has_keys(ui, 0);
+        if (cues && pressed(ImGuiKey_Escape)) {
+            ui_cue_list_release(ui, 0);
+            cues = false;
+        }
+        if (ImGui::IsKeyPressed(ImGuiKey_UpArrow)) {
+            if (cues)
+                ui_cue_list_move(ui, 0, -1);
+            else
+                ui_move_focus(ui, -1);
+        }
+        if (ImGui::IsKeyPressed(ImGuiKey_DownArrow)) {
+            if (cues)
+                ui_cue_list_move(ui, 0, 1);
+            else
+                ui_move_focus(ui, 1);
+        }
         if (pressed(ImGuiKey_Enter) || pressed(ImGuiKey_KeypadEnter)) {
             ui_load(ui, ui_focus_track(ui));
         }
-        if (pressed(ImGuiKey_Delete))
-            ui_remove_from_playlist(ui);
+        if (pressed(ImGuiKey_Delete)) {
+            if (cues)
+                ui_cue_list_delete(ui, 0);
+            else
+                ui_remove_from_playlist(ui);
+        }
     }
 
     // The player.

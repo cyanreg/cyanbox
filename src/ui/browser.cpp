@@ -659,6 +659,11 @@ static void table(UiState *ui, ImVec2 size)
     if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows) && !io.WantTextInput &&
         ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_A))
         select_all(ui);
+    // A click anywhere in the table, rows or header, takes the keyboard
+    // back from the player's cue list: Delete is the playlist's again.
+    if (ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) &&
+        (ImGui::IsMouseClicked(ImGuiMouseButton_Left) || ImGui::IsMouseClicked(ImGuiMouseButton_Right)))
+        ui_cue_list_release(ui, 0);
 
     ImGui::EndTable();
     ImGui::PopStyleVar();

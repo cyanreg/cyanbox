@@ -9,6 +9,10 @@
 // over the beat jump strip, the BEAT LOOP pads over the loop strip, the
 // MEMORY buttons, one list of every cue, tempo.
 //
+// The cue list keeps a selection: a click on a row selects the cue (and
+// calls it), and while the list has the selection Delete deletes that cue
+// rather than taking tracks out of the playlist (keys.cpp asks here).
+//
 // Every control is one call into the deck controls (rxbox/player.h): the
 // engine owns the CDJ rules (what CUE does when held at the cue point, when
 // a hot cue sets or calls, quantise), so nothing here second-guesses them.
@@ -783,6 +787,89 @@ static void delete_cue(UiState *ui, int deck, int index)
     rx_app_save_track(ui->app, t);
 }
 
+// The selection is kept by what the cue is, not by its index: the list is
+// sorted by time and a cue set or deleted elsewhere (a pad, M, X) moves
+// the rows under it.
+static void cue_select(UiState *ui, int deck, const RXTrack *t, int index)
+{
+    UiDeck *ud = &ui->decks[deck];
+    const RXCue *c = &t->cues[index];
+    ud->cue_focus = true;
+    ud->cue_selected = true;
+    ud->cue_track = t->id;
+    ud->cue_hot = c->hot;
+    ud->cue_time = c->time;
+    ud->cue_end = c->loop_end;
+}
+
+// The selected cue's index, -1 when none. Another track in the player
+// takes the keyboard back from the list; a cue gone (deleted, or a grid
+// edit moved it) leaves the list the keyboard with nothing selected.
+static int cue_selected_index(UiState *ui, int deck)
+{
+    UiDeck *ud = &ui->decks[deck];
+    const RXTrack *t = ui->app->decks[deck].ctl.track;
+    if (ud->cue_focus && (!t || t->id != ud->cue_track))
+        ud->cue_focus = ud->cue_selected = false;
+    if (!ud->cue_focus || !ud->cue_selected)
+        return -1;
+    int index = -1;
+    if (ud->cue_hot >= 0) {
+        index = rx_track_hot_cue(t, ud->cue_hot);
+    } else {
+        for (int i = 0; i < t->nb_cues && index < 0; i++) {
+            const RXCue *c = &t->cues[i];
+            if (!rx_cue_is_hot(c) && c->time == ud->cue_time && c->loop_end == ud->cue_end)
+                index = i;
+        }
+    }
+    if (index < 0)
+        ud->cue_selected = false;
+    return index;
+}
+
+bool ui_cue_list_has_keys(UiState *ui, int deck)
+{
+    cue_selected_index(ui, deck);
+    return ui->decks[deck].cue_focus;
+}
+
+void ui_cue_list_release(UiState *ui, int deck)
+{
+    ui->decks[deck].cue_focus = false;
+    ui->decks[deck].cue_selected = false;
+}
+
+// Delete: the selected cue goes and the list keeps the keyboard with
+// nothing selected, so a second press neither deletes the next cue nor
+// takes the track out of the playlist.
+void ui_cue_list_delete(UiState *ui, int deck)
+{
+    UiDeck *ud = &ui->decks[deck];
+    int index = cue_selected_index(ui, deck);
+    if (index < 0)
+        return;
+    ud->cue_selected = false;
+    if (ud->edit_cue >= index)
+        ud->edit_cue = -1;
+    delete_cue(ui, deck, index);
+    ui_want_frames(ui, 2);
+}
+
+// Up/Down move the selection without calling the cue (a click calls it).
+void ui_cue_list_move(UiState *ui, int deck, int dir)
+{
+    UiDeck *ud = &ui->decks[deck];
+    const RXTrack *t = ui->app->decks[deck].ctl.track;
+    if (!t || t->nb_cues <= 0)
+        return;
+    int index = cue_selected_index(ui, deck);
+    index = index < 0 ? (dir > 0 ? 0 : t->nb_cues - 1) : ImClamp(index + dir, 0, t->nb_cues - 1);
+    cue_select(ui, deck, t, index);
+    ud->cue_scroll = true;
+    ui_want_frames(ui, 2);
+}
+
 // What the cue list's rows asked for that changes the list: done once it
 // has been drawn, since a hot cue edit re-adds the cue (and may move the
 // array) and a deletion shifts the rows.
@@ -826,10 +913,10 @@ static void cue_row_menu(UiState *ui, int deck, int index, CueEdit *edit)
 
 // Every cue of the track in one list, by time (the track keeps them
 // sorted): memory cues with their colour dot, hot cues with their lettered
-// badge, in 22 px rows that scroll. A click calls the cue (a hot cue as
-// its pad does, press and release); a double-click edits the name in
-// place. The bar.beat column shows only when the name keeps some room
-// beside it.
+// badge, in 22 px rows that scroll. A click selects the cue and calls it
+// (a hot cue as its pad does, press and release); a double-click edits the
+// name in place. The cue at the playhead has an orange bar at its left.
+// The bar.beat column shows only when the name keeps some room beside it.
 static void cue_list(UiState *ui, int deck, ImVec2 a, ImVec2 b, double pos)
 {
     RXApp *app = ui->app;
@@ -867,6 +954,7 @@ static void cue_list(UiState *ui, int deck, ImVec2 a, ImVec2 b, double pos)
     float lw = ImGui::GetContentRegionAvail().x;
     bool show_bar = lw >= PX(290);
     int nb = t ? t->nb_cues : 0;
+    int sel = cue_selected_index(ui, deck);
     CueEdit edit = { -1, -1, -1, "" };
 
     for (int i = 0; i < nb; i++) {
@@ -877,11 +965,18 @@ static void cue_list(UiState *ui, int deck, ImVec2 a, ImVec2 b, double pos)
         if (i & 1)
             ldl->AddRectFilled(p, q, IM_COL32(0xFF, 0xFF, 0xFF, 0x06));
         ImGui::SetCursorScreenPos(p);
-        bool at_head = fabs(cue->time - pos) < 0.02;
         bool engaged = !hot && c->active_memory_loop == i && c->looping;
-        if (ImGui::Selectable("##row", at_head,
-                              ImGuiSelectableFlags_AllowOverlap | ImGuiSelectableFlags_AllowDoubleClick,
-                              ImVec2(lw, rh))) {
+        // The selected row stays blue under the pointer that just clicked
+        // it (ImGui would draw it in the plain hover grey).
+        if (i == sel)
+            ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImGui::GetColorU32(ImGuiCol_HeaderActive));
+        bool clicked = ImGui::Selectable("##row", i == sel,
+                                         ImGuiSelectableFlags_AllowOverlap |
+                                         ImGuiSelectableFlags_AllowDoubleClick, ImVec2(lw, rh));
+        if (i == sel)
+            ImGui::PopStyleColor();
+        if (clicked) {
+            cue_select(ui, deck, t, i);
             if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
                 ud->edit_cue = i;
                 ud->edit_focus = true;
@@ -893,10 +988,16 @@ static void cue_list(UiState *ui, int deck, ImVec2 a, ImVec2 b, double pos)
                 rx_ctl_memory_call(c, i);
             }
         }
+        if (ImGui::IsItemClicked(ImGuiMouseButton_Right))
+            cue_select(ui, deck, t, i);
+        if (i == sel && ud->cue_scroll)
+            ImGui::ScrollToItem(ImGuiScrollFlags_KeepVisibleEdgeY);
         if (ImGui::BeginPopupContextItem("##rowmenu")) {
             cue_row_menu(ui, deck, i, &edit);
             ImGui::EndPopup();
         }
+        if (fabs(cue->time - pos) < 0.02)
+            ldl->AddRectFilled(p, ImVec2(p.x + PX(2), q.y), UI_ACCENT);
 
         float cy = (p.y + q.y) * 0.5f;
         float fy = floorf(cy - PX(fs) * 0.5f - PX(1));
@@ -945,7 +1046,8 @@ static void cue_list(UiState *ui, int deck, ImVec2 a, ImVec2 b, double pos)
         xb.rounding = -1;
         if (ui_button(ui, "x", xs, xb))
             edit.del = i;
-        ui_tooltip(hot ? "Delete the hot cue" : "Delete the memory cue");
+        ui_tooltip(hot ? "Delete the hot cue (Delete when selected)"
+                       : "Delete the memory cue (Delete when selected)");
         rx -= xs.x + PX(5);
         if (!hot && rx_cue_is_loop(cue)) {
             // An active memory loop engages when the playhead reaches it.
@@ -994,6 +1096,7 @@ static void cue_list(UiState *ui, int deck, ImVec2 a, ImVec2 b, double pos)
         }
         ImGui::PopID();
     }
+    ud->cue_scroll = false;
     if (t && !nb)
         ldl->AddText(ImGui::GetFont(), PX(12), ImVec2(o.x + PX(8), o.y + PX(6)), UI_FAINT,
                      "No cues. CUE while paused sets the cue point; MEMORY (M) stores it; "

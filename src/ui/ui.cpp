@@ -23,7 +23,9 @@
 // the tests look at (the loaded track, playing, a popup open) is logged
 // with it. RXBOX_UI_EVENTS=<frame>:<event>,... gives ImGui input at those
 // frames: down:<key> and up:<key> (ImGui's key names: C, Enter,
-// DownArrow...), focus-out and focus-in.
+// DownArrow...), focus-out and focus-in, click:<x>:<y> (the pointer moved
+// there, in logical pixels, and the left button pressed and let go two
+// frames later).
 
 #include "ui_internal.h"
 
@@ -478,6 +480,9 @@ void ui_load(UiState *ui, RXTrack *t)
     }
     if (deck_playing(ui, 0))
         rx_deck_pause(ui->app->player, 0);
+    // The cue list's selection was the old track's: Delete is the table's
+    // again (the list also lets go when it sees another track loaded).
+    ui_cue_list_release(ui, 0);
     load_now(ui, 0, t);
 }
 
@@ -931,6 +936,12 @@ static void parse_test_events(UiState *ui, const char *spec)
             continue;
         if (!strcmp(what, "focus-out") || !strcmp(what, "focus-in")) {
             ev.type = what[6] == 'o' ? 2 : 3;
+        } else if (!strcmp(what, "click")) {
+            ev.type = 4;
+            if (sscanf(key, "%f:%f", &ev.x, &ev.y) != 2) {
+                rx_warn("RXBOX_UI_EVENTS: click wants x:y, not %s", key);
+                continue;
+            }
         } else if (!strcmp(what, "down") || !strcmp(what, "up")) {
             ev.type = what[0] == 'd' ? 0 : 1;
             ev.key = ImGuiKey_None;
@@ -950,15 +961,25 @@ static void parse_test_events(UiState *ui, const char *spec)
     }
 }
 
-// Queued now, seen by the next frame's NewFrame().
+// Queued now, seen by the next frame's NewFrame(). A click moves the
+// pointer at its frame and presses two frames later, as a hand does: an
+// item that allows overlap (the cue list's rows) is only hovered once the
+// pointer has been over it for a frame. The press and the release land on
+// successive frames: ImGui trickles queued input.
 static void test_events(UiState *ui)
 {
     ImGuiIO &io = ImGui::GetIO();
     for (const UiTestEvent &ev : ui->test_events) {
+        if (ev.type == 4 && ev.frame + 2 == ui->frame_no) {
+            io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+            io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+        }
         if (ev.frame != ui->frame_no)
             continue;
         if (ev.type <= 1)
             io.AddKeyEvent(ev.key, ev.type == 0);
+        else if (ev.type == 4)
+            io.AddMousePosEvent(PX(ev.x), PX(ev.y));
         else
             io.AddFocusEvent(ev.type == 3);
     }
@@ -970,9 +991,10 @@ static void log_test_state(UiState *ui)
     RXDeckState st;
     ui_deck_position(ui, 0, &st);
     bool popup = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
-    rx_info("ui test: frame %d track %llu playing %d position %.2f popup %d", ui->frame_no,
-            (unsigned long long)(app->decks[0].track ? app->decks[0].track->id : 0), st.playing,
-            st.position, popup);
+    const RXTrack *t = app->decks[0].track;
+    rx_info("ui test: frame %d track %llu playing %d position %.2f popup %d cues %d cue-keys %d",
+            ui->frame_no, (unsigned long long)(t ? t->id : 0), st.playing, st.position, popup,
+            t ? t->nb_cues : 0, ui_cue_list_has_keys(ui, 0));
 }
 
 /* ------------------------------------------------------------- entry points */

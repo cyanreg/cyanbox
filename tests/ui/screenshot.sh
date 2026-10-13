@@ -21,7 +21,9 @@
 # checked: CUE held while the window loses the keyboard is let go; Enter on
 # another track while one plays loads it at once (the playing one pauses,
 # the new one waits at its auto-cue, no question asked); the Add browser on
-# a folder it cannot read says so.
+# a folder it cannot read says so; Delete after a click on a cue in the
+# player's cue list deletes that cue and nothing else (with
+# RXBOX_UI_SWAYSOCK only: the click needs a known size).
 #
 # usage: screenshot.sh RXBOX OUTDIR
 
@@ -182,4 +184,16 @@ if [ "$(id -u)" != 0 ]; then
         shoot "$OUT/variant-add-noperm.png"
     ) || { chmod 755 "$OUT/home/Music"; exit 1; }
     chmod 755 "$OUT/home/Music"
+fi
+
+# Delete on a selected cue: a click on the cue list's first row (the
+# memory cue at 0, where the list sits at 1600x900) selects it, Delete
+# deletes it and only it (nine cues, eight left: a second Delete finds
+# nothing selected and leaves the rest alone), Escape gives the keyboard
+# back to the track list. The click needs a known layout, so only with
+# RXBOX_UI_SWAYSOCK to size the output.
+if [ -n "${RXBOX_UI_SWAYSOCK:-}" ]; then
+    SWAYSOCK=$RXBOX_UI_SWAYSOCK swaymsg -q output '*' resolution 1600x900
+    variant cue-delete "70:click:1320:409,75:down:Delete,76:up:Delete,80:down:Delete,81:up:Delete,85:down:Escape,86:up:Escape" \
+        "track $ID .*cues 8 cue-keys 0"
 fi

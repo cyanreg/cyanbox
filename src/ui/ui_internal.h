@@ -139,6 +139,18 @@ struct UiDeck {
     int      edit_cue;         // cue list row whose name is edited, -1
     bool     edit_focus;
 
+    // The cue list's selection. While cue_focus is set the list has the
+    // keyboard: Delete deletes the selected cue, Up/Down move the
+    // selection. A click in the track table, Escape or another track takes
+    // it back. The cue is kept by what it is (deck_view.cpp, cue_select).
+    bool     cue_focus;
+    bool     cue_selected;     // a row is selected (cue_focus outlives its deletion)
+    bool     cue_scroll;       // scroll the list to the selected row
+    uint64_t cue_track;        // the track the selection belongs to
+    int      cue_hot;          // the selected hot cue's slot, -1 a memory cue
+    double   cue_time;         // the selected memory cue's time and loop end
+    double   cue_end;
+
     // Grid tools.
     char     bpm_buf[16];
     bool     bpm_active;
@@ -162,8 +174,9 @@ struct UiFileEntry {
 // An input event the test hook gives ImGui at a frame (RXBOX_UI_EVENTS).
 struct UiTestEvent {
     int      frame;
-    int      type;             // 0 key down, 1 key up, 2 focus out, 3 focus in
+    int      type;             // 0 key down, 1 key up, 2 focus out, 3 focus in, 4 click
     ImGuiKey key;
+    float    x, y;             // a click's position, logical pixels
 };
 
 struct UiState {
@@ -332,6 +345,12 @@ double ui_deck_position(UiState *ui, int deck, RXDeckState *st);
 void ui_grid_edited(UiState *ui, int deck);
 void ui_jump(UiState *ui, int deck, int dir);
 void ui_shift_grid(UiState *ui, int deck, double seconds);
+// The cue list's keyboard (keys.cpp): whether the list has it, giving it
+// back to the table, Delete on the selected cue, Up/Down.
+bool ui_cue_list_has_keys(UiState *ui, int deck);
+void ui_cue_list_release(UiState *ui, int deck);
+void ui_cue_list_delete(UiState *ui, int deck);
+void ui_cue_list_move(UiState *ui, int deck, int dir);
 
 /* ------------------------------------------------------ waveform_view.cpp */
 

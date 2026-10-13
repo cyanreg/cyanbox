@@ -117,9 +117,20 @@ The full width of the window. Rows, top to bottom:
      position, bar.beat (only when the list is at least 290 wide), the
      name (a double-click or the row menu's Rename edits it in place;
      a hot cue's goes through the controls as the pad popup's does), an
-     `ACTIVE` toggle for memory loops, a `×`. Clicking a row calls the cue
-     (a hot cue as its pad: press and release; a memory cue with
-     `rx_ctl_memory_call`); right-click: rename, colour, delete. The count
+     `ACTIVE` toggle for memory loops, a `×`. Clicking a row selects it
+     (blue, as the table's rows) and calls the cue (a hot cue as its pad:
+     press and release; a memory cue with `rx_ctl_memory_call`); the cue at
+     the playhead has an orange bar at its left. While a row is selected
+     the list has the keyboard: `Delete` deletes that cue (a hot cue
+     through `rx_ctl_hot_cue_delete`, a memory cue as the row's `×`)
+     instead of taking tracks out of the playlist, and `↑`/`↓` move the
+     selection (without calling). After a Delete nothing is selected but
+     the list keeps the keyboard, so a second Delete neither deletes the
+     next cue nor removes a track. A click in the track table, `Esc` or
+     another track loaded gives the keyboard back to the table. The
+     selection follows the cue (its hot cue slot, or a memory cue's
+     position), not the row, as cues come and go. Right-click: select,
+     then rename, colour, delete. The count
      at the top right reads `3/10 memory · 2/8 hot`. The list takes the
      width the other groups leave, at least 240: the pads are
      `clamp((room − 16·3 − 196 − 240 − 2·7·4) / 16, 48, 64)` wide, where
@@ -214,7 +225,10 @@ onto the player panel loads it; context menu: Load, Analyse (BPM/grid, key, both
 Remove from playlist, Remove from library, Show in folder
 (prints the path to the status bar and copies it), Set colour, Set rating.
 Keyboard: up/down move the focus, Enter loads the focused track, Delete
-removes it from the playlist.
+removes it from the playlist (unless a click on the player's cue list
+has given that list the keyboard: then they act on the cues, until a
+click in the table, `Esc` or another track). A click anywhere in the
+table, rows or header, takes the keyboard back from the cue list.
 
 **Info panel**: always shown right of the table (260 wide, at most 40 %
 of the browser's width), the focused track's editable fields: title,
@@ -281,7 +295,10 @@ rekordbox's Export preset for player 1 (no shifted second-player set):
 | Ctrl+G | Toggle grid tools |
 | A S D F G H J K L ; | Memory cue 1–10 |
 | Ctrl+F | Search |
+| ↑ ↓ | Move the focus in the track table; after a click on a cue, move the cue list's selection |
 | Enter | Load the focused track |
+| Delete | Remove the selected tracks from the playlist; after a click on a cue, delete that cue (a hot cue or a memory cue) instead |
+| Esc | Clear the search; give Delete and ↑ ↓ back to the track table |
 | Ctrl+Q | Quit |
 
 Hot cue pads D–H have no default keys (rekordbox binds none).
