@@ -313,6 +313,26 @@ static char *query_text(sqlite3 *db, const char *sql)
     return v;
 }
 
+static int cmp_track_path(const void *a, const void *b)
+{
+    const RXPdbRawTrack *x = *(const RXPdbRawTrack *const *)a, *y = *(const RXPdbRawTrack *const *)b;
+    return strcmp(x->strings[RX_PDB_STR_FILE_PATH], y->strings[RX_PDB_STR_FILE_PATH]);
+}
+
+/* The first of the sorted tracks whose path is `path`, or NULL. */
+static const RXPdbRawTrack *find_track_path(const RXPdbRawTrack **v, int n, const char *path)
+{
+    int lo = 0, hi = n;
+    while (lo < hi) {
+        int mid = lo + (hi - lo) / 2;
+        if (strcmp(v[mid]->strings[RX_PDB_STR_FILE_PATH], path) < 0)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    return lo < n && !strcmp(v[lo]->strings[RX_PDB_STR_FILE_PATH], path) ? v[lo] : NULL;
+}
+
 static void check_onelibrary(Report *r, const char *stick, const RXPdbRawTrack *t, int nb, bool have_pdb)
 {
     uint8_t *data, *wal = NULL, *plain;
@@ -337,6 +357,15 @@ static void check_onelibrary(Report *r, const char *stick, const RXPdbRawTrack *
     if (!integrity || strcmp(integrity, "ok"))
         problem(r, "exportLibrary.db integrity: %s", integrity ? integrity : "(none)");
 
+    /* The pdb's tracks by path, for a lookup per row rather than a scan:
+     * a stick of thousands of tracks made the check quadratic. */
+    const RXPdbRawTrack **by_path = nb > 0 ? malloc(sizeof(*by_path) * (size_t)nb) : NULL;
+    int nb_by_path = by_path ? nb : 0;
+    for (int i = 0; i < nb_by_path; i++)
+        by_path[i] = &t[i];
+    if (nb_by_path)
+        qsort(by_path, (size_t)nb_by_path, sizeof(*by_path), cmp_track_path);
+
     sqlite3_stmt *st;
     int n = 0, same = 0;
     if (sqlite3_prepare_v2(db, "SELECT path, isHotCueAutoLoadOn FROM content", -1, &st, NULL) == SQLITE_OK) {
@@ -344,15 +373,21 @@ static void check_onelibrary(Report *r, const char *stick, const RXPdbRawTrack *
             const char *path = (const char *)sqlite3_column_text(st, 0);
             int autoload = sqlite3_column_int(st, 1);
             n++;
-            for (int i = 0; path && i < nb; i++) {
-                if (strcmp(t[i].strings[RX_PDB_STR_FILE_PATH], path))
-                    continue;
+            const RXPdbRawTrack *m = NULL;
+            if (path && by_path) {
+                m = find_track_path(by_path, nb_by_path, path);
+            } else {
+                /* Out of memory for the index: the plain scan. */
+                for (int i = 0; path && i < nb && !m; i++)
+                    if (!strcmp(t[i].strings[RX_PDB_STR_FILE_PATH], path))
+                        m = &t[i];
+            }
+            if (m) {
                 same++;
-                bool on = !strcmp(t[i].strings[RX_PDB_STR_AUTOLOAD_HOTCUES], "ON");
+                bool on = !strcmp(m->strings[RX_PDB_STR_AUTOLOAD_HOTCUES], "ON");
                 if (on != (autoload != 0))
                     problem(r, "%s: hot cue auto load is %s in export.pdb, %s in exportLibrary.db", path,
                             on ? "on" : "off", autoload ? "on" : "off");
-                break;
             }
             if (path && !have_pdb && !stick_exists(stick, path))
                 problem(r, "missing audio %s", path);
@@ -374,6 +409,7 @@ static void check_onelibrary(Report *r, const char *stick, const RXPdbRawTrack *
     say(r, "exportLibrary.db: %d tracks, integrity %s%s", n, integrity ? integrity : "?",
         have_pdb ? (agree ? ", same tracks as export.pdb" : ", DIFFERENT tracks from export.pdb") : "");
     free(integrity);
+    free(by_path);
     sqlite3_close(db);
     free(plain);
 }

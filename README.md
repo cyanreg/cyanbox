@@ -21,7 +21,7 @@ C++17 compiler, `glslangValidator` (glslang) and `python3` for the shaders,
 and these libraries, by pkg-config name:
 
 - `libavformat`, `libavcodec`, `libavutil`, `libswresample`, `libswscale` (FFmpeg)
-- `sqlite3`
+- `sqlite3` (3.44 or later)
 - `libpipewire-0.3`
 - `vulkan` (the interface, and the analysis, whose spectral front end runs
   on a GPU when there is one: Vulkan 1.3 with buffer device addresses; with
@@ -209,8 +209,12 @@ on the CPU, with the same results.
 
 ## Settings
 
-The settings live in the library. `rxbox config` lists them and
-`rxbox config KEY VALUE` changes one. Besides the players' My Settings
+The settings live in the library. `rxbox config` lists them,
+`rxbox config KEY VALUE` changes one and `rxbox config KEY ""` puts its
+default back. A value a key cannot take (a number that is not one, a My
+Setting outside its choices, which are listed) or a key rxbox does not
+know is refused; only `ui.*` keys of the interface's own are taken as
+they come. Besides the players' My Settings
 (`player.*`, `mixer.*`, `device.*`; see Exporting):
 
 | Key | Default | What it does |

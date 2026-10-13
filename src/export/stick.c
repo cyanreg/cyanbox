@@ -925,10 +925,30 @@ static int onelibrary_rows(sqlite3 *db, RXArray *rows, RXArray *hist)
         sqlite3_finalize(st);
     }
     /* history(history_id, sequenceNo, name, attribute, parent) and
-     * history_content(history_id, content_id, sequenceNo). */
+     * history_content(history_id, content_id, sequenceNo). The entries are
+     * read in one query, in list order, and each list takes its run: one
+     * query a list scanned history_content whole each time (it has no
+     * index), quadratic in a long-used stick's history. */
+    RXArray pairs;              /* uint32_t[2]: history_id, content_id */
+    rx_array_init(&pairs, sizeof(uint32_t[2]));
+    if (sqlite3_prepare_v2(db, "SELECT history_id, content_id FROM history_content "
+                           "ORDER BY history_id, sequenceNo", -1, &st, NULL) == SQLITE_OK) {
+        while (sqlite3_step(st) == SQLITE_ROW) {
+            uint32_t pair[2] = { (uint32_t)sqlite3_column_int64(st, 0),
+                                 (uint32_t)sqlite3_column_int64(st, 1) };
+            if (!rx_array_push(&pairs, pair))
+                break;
+        }
+        sqlite3_finalize(st);
+    }
+    const uint32_t (*pr)[2] = pairs.data;
+    size_t np = pairs.nb;
+
     if (sqlite3_prepare_v2(db, "SELECT history_id, name FROM history ORDER BY sequenceNo, history_id",
-                           -1, &st, NULL) != SQLITE_OK)
+                           -1, &st, NULL) != SQLITE_OK) {
+        rx_array_free(&pairs);
         return 0;
+    }
     while (sqlite3_step(st) == SQLITE_ROW) {
         const char *name = (const char *)sqlite3_column_text(st, 1);
         HistList h = {
@@ -936,19 +956,22 @@ static int onelibrary_rows(sqlite3 *db, RXArray *rows, RXArray *hist)
             .id     = (uint32_t)sqlite3_column_int64(st, 0),
             .name   = rx_strdup(name ? name : ""),
         };
-        sqlite3_stmt *e;
-        if (sqlite3_prepare_v2(db, "SELECT content_id FROM history_content WHERE history_id = ? "
-                               "ORDER BY sequenceNo", -1, &e, NULL) == SQLITE_OK) {
-            sqlite3_bind_int64(e, 1, h.id);
-            RXArray ids;
-            rx_array_init(&ids, sizeof(uint32_t));
-            while (sqlite3_step(e) == SQLITE_ROW) {
-                uint32_t id = (uint32_t)sqlite3_column_int64(e, 0);
-                rx_array_push(&ids, &id);
-            }
-            sqlite3_finalize(e);
-            h.track_ids = ids.data;
-            h.nb = (int)ids.nb;
+        /* The first entry of this list: pairs are sorted by list id. */
+        size_t lo = 0, hi = np;
+        while (lo < hi) {
+            size_t mid = lo + (hi - lo) / 2;
+            if (pr[mid][0] < h.id)
+                lo = mid + 1;
+            else
+                hi = mid;
+        }
+        size_t end = lo;
+        while (end < np && pr[end][0] == h.id)
+            end++;
+        if (end > lo && (h.track_ids = malloc(sizeof(*h.track_ids) * (end - lo)))) {
+            for (size_t k = lo; k < end; k++)
+                h.track_ids[k - lo] = pr[k][1];
+            h.nb = (int)(end - lo);
         }
         if (!h.name || !h.nb || !rx_array_push(hist, &h)) {
             free(h.name);
@@ -956,6 +979,7 @@ static int onelibrary_rows(sqlite3 *db, RXArray *rows, RXArray *hist)
         }
     }
     sqlite3_finalize(st);
+    rx_array_free(&pairs);
     return 0;
 }
 

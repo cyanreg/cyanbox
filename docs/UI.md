@@ -408,7 +408,8 @@ it at once.
   default when there is none): a pick is saved at once, in RXConfig and the
   setting table, as `rxbox config` would write it, and the status bar says
   so (`Player setting Quantize: Off`). A value the export would refuse
-  (`rxbox config` takes anything) shows in red. Reset to defaults sets the
+  (one stored by an older rxbox, before `rxbox config` checked values)
+  shows in red. Reset to defaults sets the
   tab's fields that are not at their defaults back to them; their rows
   stay, holding the defaults, so the next export replaces the stick's files
   rather than leaving them. The dialog keeps nothing of its own.
