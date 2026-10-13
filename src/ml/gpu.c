@@ -210,22 +210,39 @@ static int create_instance(MLGpu *g, bool validation)
         return RX_ERROR(ENODEV);
     }
 
-    const char *exts[1];
+    const char *exts[2];
     uint32_t nb_exts = 0;
     const char *layers[1];
     uint32_t nb_layers = 0;
-    bool debug_utils = false;
+    bool debug_utils = false, features = false;
     if (validation) {
-        if (have_layer("VK_LAYER_KHRONOS_validation"))
+        if (have_layer("VK_LAYER_KHRONOS_validation")) {
             layers[nb_layers++] = "VK_LAYER_KHRONOS_validation";
-        else
+            features = have_instance_ext("VK_LAYER_KHRONOS_validation",
+                                         VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME);
+            if (features)
+                exts[nb_exts++] = VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME;
+        } else {
             rx_warn("ml: VK_LAYER_KHRONOS_validation is not installed");
+        }
         debug_utils = have_instance_ext(NULL, VK_EXT_DEBUG_UTILS_EXTENSION_NAME) ||
                       (nb_layers && have_instance_ext("VK_LAYER_KHRONOS_validation",
                                                       VK_EXT_DEBUG_UTILS_EXTENSION_NAME));
         if (debug_utils)
             exts[nb_exts++] = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
     }
+
+    /* Synchronisation validation too, as the compute context has: the
+     * barriers between dispatches, copies and the host's reads are what
+     * the model's recording gets wrong if it gets anything wrong. */
+    const VkValidationFeatureEnableEXT enables[] = {
+        VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT,
+    };
+    VkValidationFeaturesEXT vfeat = {
+        .sType                         = VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT,
+        .enabledValidationFeatureCount = RX_ARRAY_ELEMS(enables),
+        .pEnabledValidationFeatures    = enables,
+    };
 
     VkApplicationInfo app = {
         .sType              = VK_STRUCTURE_TYPE_APPLICATION_INFO,
@@ -237,6 +254,7 @@ static int create_instance(MLGpu *g, bool validation)
     };
     VkInstanceCreateInfo info = {
         .sType                   = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
+        .pNext                   = features ? &vfeat : NULL,
         .pApplicationInfo        = &app,
         .enabledLayerCount       = nb_layers,
         .ppEnabledLayerNames     = nb_layers ? layers : NULL,
@@ -266,7 +284,7 @@ static int create_instance(MLGpu *g, bool validation)
             create(g->inst, &dinfo, NULL, &g->messenger);
     }
     if (nb_layers)
-        rx_info("ml: validation enabled");
+        rx_info("ml: validation enabled%s", features ? " (with synchronisation checks)" : "");
 
     return 0;
 }
