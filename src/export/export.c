@@ -1361,8 +1361,11 @@ int rx_export(RXLibrary *lib, const char *dest, const RXExportOptions *opt_in, r
     if (ret < 0)
         goto out;
 
-    /* Transcodes first: the plan probes what is copied. */
-    bool compat = opt->compat_transcode || lib->cfg.compat_transcode;
+    /* Transcodes first: the plan probes what is copied. The option alone
+     * decides: the setting is only its default, which the callers (the
+     * dialog's checkbox, --compat and --no-compat) start from, so an
+     * export asked for without it gets none. */
+    bool compat = opt->compat_transcode;
     if ((ret = transcodes(&c, tracks, nb_tracks, compat)) < 0 || c.cancelled)
         goto out;
     if ((ret = rx_plan_build_cb(lib, tracks, nb_tracks, opt->playlists,

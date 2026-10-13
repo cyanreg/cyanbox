@@ -72,7 +72,8 @@ typedef struct RXExportOptions {
     const RXPlaylist *const *playlists; int nb_playlists;   /* NULL: every playlist; else only these */
     bool prune;                 /* delete files on the stick that are no longer exported */
     bool ignore_unsynced;       /* export even if the stick has changes not synced back */
-    bool compat_transcode;      /* AAC and hi-res FLAC -> 16/44.1 FLAC (overrides the config) */
+    bool compat_transcode;      /* AAC and hi-res FLAC -> 16/44.1 FLAC; the caller folds in the
+                                   export.compat_transcode setting (its default) */
     bool dry_run;               /* plan and check, report every copy/prune/rewrite, write nothing */
     bool force_analysis;        /* re-analyse everything first */
     const char *device_name;    /* NULL: the config's, else the stick's label */

@@ -27,7 +27,7 @@
 static char root[512], music[600], libdir[600], stick[600];
 
 typedef struct Stages {
-    int copy, skip, prune, check, rewrite;
+    int copy, skip, prune, check, rewrite, transcode;
     int anlz, art;              /* tracks and artworks with a file written (an item) */
     int anlz_steps;             /* tracks looked at */
     bool quiet;
@@ -46,6 +46,8 @@ static bool on_progress(void *opaque, const char *stage, int done, int total, co
         s->rewrite++;
     else if (!strcmp(stage, "check"))
         s->check++;
+    else if (!strcmp(stage, "transcode") && item && total > 0)
+        s->transcode++;
     else if (!strcmp(stage, "analysis files") && total > 0)
         s->anlz_steps++, s->anlz += !!item;
     else if (!strcmp(stage, "artwork") && total > 0)
@@ -199,9 +201,9 @@ static int setup_library(RXLibrary *lib)
 
     kv_add(&lib->cfg.player, &lib->cfg.nb_player, "quantize", "true");
     kv_add(&lib->cfg.device, &lib->cfg.nb_device, "waveform_color", "3band");
-    /* The compatibility transcode is on by default; off here, so four.m4a
-     * goes as AAC and only five.opus is transcoded (check_stick). */
-    lib->cfg.compat_transcode = false;
+    /* The compatibility transcode setting stays on (the default): the
+     * export's option alone decides, and main() exports without it, so
+     * four.m4a goes as AAC and only five.opus is transcoded (check_stick). */
     CHECK_EQ(rx_library_config_save(lib), 0);
     return 0;
 }
@@ -402,6 +404,20 @@ int main(void)
     RXExportOptions opt;
     rx_export_options_default(&opt);
     Stages st = { 0 };
+    /* With the transcode asked for, a dry run lists one.flac's (ffmpeg
+     * makes it 24-bit), four.m4a's (AAC) and five.opus's; without it, the
+     * setting's being on adds neither of the first two. */
+    CHECK(lib.cfg.compat_transcode);
+    opt.dry_run = opt.compat_transcode = true;
+    st = (Stages) { .quiet = true };
+    CHECK_EQ(rx_export(&lib, stick, &opt, on_progress, &st), 0);
+    CHECK_EQ(st.transcode, 3);
+    opt.compat_transcode = false;
+    st = (Stages) { .quiet = true };
+    CHECK_EQ(rx_export(&lib, stick, &opt, on_progress, &st), 0);
+    CHECK_EQ(st.transcode, 1);
+    opt.dry_run = false;
+    st = (Stages) { 0 };
     CHECK_EQ(rx_export(&lib, stick, &opt, on_progress, &st), 0);
     CHECK_EQ(st.copy, 5);
     CHECK_EQ(st.anlz_steps, 5);
