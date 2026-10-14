@@ -2581,7 +2581,8 @@ static int link_serve(Cli *cli, const RXLinkOptions *opt)
     int ret = rx_link_start(&link, &o);
     free(root);
     if (ret < 0)
-        return fail("cannot serve on %s: %s", o.interface, strerror(-ret));
+        return fail("cannot serve on %s: %s", o.interface, ret == RX_ERROR(EPROTONOSUPPORT) ?
+                    "not Ethernet (Link runs on Ethernet only)" : strerror(-ret));
     /* The ids players report are the library's: a connection of our own
      * to name them (read only, as the service's). */
     int code = open_library(cli, false);

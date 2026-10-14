@@ -45,8 +45,7 @@ static const char *interface_text(const RXLinkInterface &i, char *buf, size_t si
     char a[16];
     snprintf(a, sizeof(a), "%u.%u.%u.%u", i.addr >> 24, i.addr >> 16 & 0xFF, i.addr >> 8 & 0xFF,
              i.addr & 0xFF);
-    snprintf(buf, size, "%s  %s/%d%s%s", i.name, a, i.prefix, i.running ? "" : "  (no link)",
-             i.wireless ? "  (Wi-Fi)" : "");
+    snprintf(buf, size, "%s  %s/%d%s", i.name, a, i.prefix, i.running ? "" : "  (no link)");
     return buf;
 }
 
@@ -117,6 +116,9 @@ static void error_text(const char *ifname, int err, char *buf, size_t size)
         break;
     case EADDRNOTAVAIL:
         snprintf(buf, size, "%s has no IPv4 address yet.", ifname);
+        break;
+    case EPROTONOSUPPORT:
+        snprintf(buf, size, "%s is not Ethernet: Link runs on Ethernet only.", ifname);
         break;
     case EACCES:
     case EPERM:
@@ -282,7 +284,7 @@ void ui_link_window(UiState *ui)
     if (cur)
         interface_text(*cur, preview, sizeof(preview));
     else if (chosen && *chosen)
-        snprintf(preview, sizeof(preview), "%s  (not up)", chosen);
+        snprintf(preview, sizeof(preview), "%s  (not an Ethernet interface that is up)", chosen);
     else
         snprintf(preview, sizeof(preview), "Choose the players' network...");
     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);

@@ -1,6 +1,9 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
-/* The interface and its sockets (net.h). Every socket is tied to the
+/* The interface and its sockets (net.h). Link runs on Ethernet only, the
+ * players' own network (docs/LINK.md): an interface that is not Ethernet
+ * is refused, the loopback excepted, which reaches no player and carries
+ * the tests. Every socket is tied to the
  * interface with SO_BINDTODEVICE, which Linux allows without privileges
  * on an unbound socket since 5.7; where a kernel refuses it, IP_PKTINFO's
  * arrival interface still drops datagrams from any other (rx_link_recv),
@@ -11,12 +14,14 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <ifaddrs.h>
+#include <net/if_arp.h>
 #include <netinet/in.h>
 #include <netpacket/packet.h>
 #include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -43,6 +48,47 @@ int rx_link_addr_parse(const char *s, uint32_t *out)
     return 0;
 }
 
+/* Wi-Fi, which Linux gives Ethernet's link type: the wireless request
+ * answers for it, and sysfs names it so too (sysfs shows the host's
+ * interfaces even in another network namespace; the request asks the
+ * namespace the socket is in). */
+static bool is_wireless(const char *name)
+{
+    char path[64];
+    struct stat st;
+    snprintf(path, sizeof(path), "/sys/class/net/%s/wireless", name);
+    if (!stat(path, &st))
+        return true;
+    snprintf(path, sizeof(path), "/sys/class/net/%s/phy80211", name);
+    if (!stat(path, &st))
+        return true;
+    /* SIOCGIWNAME (linux/wireless.h, which cannot be included with
+     * net/if.h); its struct iwreq is a name and 16 bytes, which an ifreq
+     * holds. */
+    int fd = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+    if (fd < 0)
+        return false;
+    struct ifreq wr = { 0 };
+    snprintf(wr.ifr_name, sizeof(wr.ifr_name), "%s", name);
+    bool wireless = ioctl(fd, 0x8B01, &wr) == 0;
+    close(fd);
+    return wireless;
+}
+
+/* Ethernet: the link type of the interface's packet entry ARPHRD_ETHER,
+ * and not Wi-Fi. A USB Ethernet adapter is Ethernet; a tunnel, WireGuard
+ * or the loopback is not. */
+static bool is_ethernet(const struct ifaddrs *ifs, const char *name)
+{
+    for (const struct ifaddrs *i = ifs; i; i = i->ifa_next) {
+        if (!i->ifa_addr || i->ifa_addr->sa_family != AF_PACKET || strcmp(i->ifa_name, name))
+            continue;
+        const struct sockaddr_ll *ll = (const struct sockaddr_ll *)i->ifa_addr;
+        return ll->sll_hatype == ARPHRD_ETHER && !is_wireless(name);
+    }
+    return false;
+}
+
 /* A point-to-point or loopback interface has no broadcast address of its
  * own: the address with the host bits set stands in. */
 int rx_link_if_find(RXLinkIf *out, const char *name, const char *address, const char *broadcast)
@@ -54,11 +100,12 @@ int rx_link_if_find(RXLinkIf *out, const char *name, const char *address, const 
     struct ifaddrs *ifs;
     if (getifaddrs(&ifs) < 0)
         return RX_ERROR(errno);
-    bool found = false, inet = false, has_bcast = false;
+    bool found = false, inet = false, has_bcast = false, loopback = false;
     for (struct ifaddrs *i = ifs; i; i = i->ifa_next) {
         if (!i->ifa_addr || strcmp(i->ifa_name, name))
             continue;
         found = true;
+        loopback |= (i->ifa_flags & IFF_LOOPBACK) != 0;
         if (i->ifa_addr->sa_family == AF_INET && !inet) {
             inet = true;
             out->addr = ipv4_of(i->ifa_addr);
@@ -73,10 +120,15 @@ int rx_link_if_find(RXLinkIf *out, const char *name, const char *address, const 
                 memcpy(out->mac, ll->sll_addr, 6);
         }
     }
+    bool ethernet = found && !loopback && is_ethernet(ifs, name);
     freeifaddrs(ifs);
     if (!found) {
         rx_err("link: no network interface \"%s\"", name);
         return RX_ERROR(ENODEV);
+    }
+    if (!loopback && !ethernet) {
+        rx_err("link: \"%s\" is not Ethernet: Link runs on Ethernet only", name);
+        return RX_ERROR(EPROTONOSUPPORT);
     }
     if (!inet) {
         rx_err("link: interface \"%s\" has no IPv4 address", name);
@@ -98,10 +150,11 @@ int rx_link_if_find(RXLinkIf *out, const char *name, const char *address, const 
     return out->index ? 0 : RX_ERROR(ENODEV);
 }
 
-static bool usable(const struct ifaddrs *i)
+static bool usable(const struct ifaddrs *ifs, const struct ifaddrs *i)
 {
     return i->ifa_addr && i->ifa_addr->sa_family == AF_INET && (i->ifa_flags & IFF_UP) &&
-           !(i->ifa_flags & IFF_LOOPBACK) && strlen(i->ifa_name) < IFNAMSIZ;
+           !(i->ifa_flags & IFF_LOOPBACK) && strlen(i->ifa_name) < IFNAMSIZ &&
+           is_ethernet(ifs, i->ifa_name);
 }
 
 static int interface_order(const void *a, const void *b)
@@ -109,8 +162,6 @@ static int interface_order(const void *a, const void *b)
     const RXLinkInterface *x = a, *y = b;
     if (x->running != y->running)
         return x->running ? -1 : 1;
-    if (x->wireless != y->wireless)
-        return x->wireless ? 1 : -1;
     return strcmp(x->name, y->name);
 }
 
@@ -121,12 +172,12 @@ int rx_link_interfaces(RXLinkInterface *out, int max)
         return RX_ERROR(errno);
     int nb = 0;
     for (struct ifaddrs *i = ifs; i; i = i->ifa_next) {
-        if (!usable(i))
+        if (!usable(ifs, i))
             continue;
         /* The first IPv4 address of each, as rx_link_if_find takes. */
         bool seen = false;
         for (struct ifaddrs *k = ifs; k != i && !seen; k = k->ifa_next)
-            seen = usable(k) && !strcmp(k->ifa_name, i->ifa_name);
+            seen = usable(ifs, k) && !strcmp(k->ifa_name, i->ifa_name);
         if (seen)
             continue;
         if (nb < max) {
@@ -137,10 +188,6 @@ int rx_link_interfaces(RXLinkInterface *out, int max)
             uint32_t mask = i->ifa_netmask ? ipv4_of(i->ifa_netmask) : 0xFFFFFFFF;
             o->prefix = __builtin_popcount(mask);
             o->running = i->ifa_flags & IFF_RUNNING;
-            char path[64];
-            struct stat st;
-            snprintf(path, sizeof(path), "/sys/class/net/%s/wireless", i->ifa_name);
-            o->wireless = stat(path, &st) == 0;
         }
         nb++;
     }

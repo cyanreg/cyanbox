@@ -207,9 +207,10 @@ Link is on:
   file, no directory of the host. Writes from players (cues, grid) are
   refused until they are a decision of their own.
 - **When**: off by default, on only while the Link switch is.
-- **Where**: one chosen interface; a datagram or connection that arrives
-  on another is dropped (`IP_PKTINFO`). The best network is one with only
-  the players on it: a direct cable or a switch of their own.
+- **Where**: one chosen Ethernet interface (no other kind is accepted: not
+  Wi-Fi, not a tunnel); a datagram or connection that arrives on another
+  is dropped (`IP_PKTINFO`). The best network is one with only the players
+  on it: a direct cable or a switch of their own.
 - **From whom**: the database server and NFS answer only addresses that
   are players on Link (they send keep-alives on 50000). UDP sources can
   be forged, so this is a fence against casual access, not
@@ -250,14 +251,14 @@ Link is on:
   rebuild. The app owns the library: what players send back
   (loads, plays; later cues) goes to the app as job results, the way the
   export's do.
-- **Off by default**, bound to one chosen interface (`link.interface`):
-  a Link switch and panel in the interface (the players seen, what each
-  has loaded, playing or not), and `rxbox link serve -i IF` running
-  the server in the foreground from the CLI. The interface offers it only
-  when started with `--pro-link`; without it there is no Link menu and
-  nothing is ever bound (rx_app_link_start refuses). The switch is off
-  at every start and waits for an interface to be chosen: rxbox never
-  guesses which network to open the library to.
+- **Off by default**, bound to one chosen Ethernet interface
+  (`link.interface`): a Link switch and panel in the interface (the
+  players seen, what each has loaded, playing or not), and `rxbox link
+  serve -i IF` running the server in the foreground from the CLI. The
+  interface offers it only when started with `--pro-link`; without it
+  there is no Link menu and nothing is ever bound (rx_app_link_start
+  refuses). The switch is off at every start and waits for an interface to
+  be chosen: rxbox never guesses which network to open the library to.
 - **The app's side** (src/app/link.c): the service starts and stops on a
   thread of its own (a start reads the library and plans over all of it;
   a stop waits for a request in progress), each tick copies its state

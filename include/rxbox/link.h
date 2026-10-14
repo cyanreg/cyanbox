@@ -89,24 +89,26 @@ enum RXLinkState {
     RX_LINK_UP,                 /* on the link with a number */
 };
 
-/* A network interface Link could serve on: up, with an IPv4 address, not
- * the loopback. */
+/* An interface Link could serve on: Ethernet (a USB adapter's too; not
+ * Wi-Fi, not a tunnel), up, with an IPv4 address. Link runs on Ethernet
+ * only: rx_link_start refuses any other interface (-EPROTONOSUPPORT) but
+ * the loopback, which reaches no player and carries the tests. */
 typedef struct RXLinkInterface {
     char     name[16];
     uint32_t addr;              /* its first IPv4 address, host order */
     int      prefix;            /* the netmask's length */
     bool     running;           /* has a carrier (a cable in, a link up) */
-    bool     wireless;          /* Wi-Fi (players are wired) */
 } RXLinkInterface;
 
-/* The interfaces, the ones with a carrier first, wired before wireless,
- * then by name: the count, up to `max` filled. */
+/* The interfaces, the ones with a carrier first, then by name: the
+ * count, up to `max` filled. */
 int  rx_link_interfaces(RXLinkInterface *out, int max);
 
 /* Starts the service thread: binds every port on the interface, opens the
  * library, builds what it serves. Errors are negative errno values
  * (-EADDRINUSE when rekordbox or another rxbox holds the ports, -ENODEV
- * for an unknown interface). */
+ * for an unknown interface, -EPROTONOSUPPORT for one that is not
+ * Ethernet). */
 int  rx_link_start(RXLink **out, const RXLinkOptions *o);
 /* Stops and frees; *l is NULL after. Safe on NULL. */
 void rx_link_stop(RXLink **l);

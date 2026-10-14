@@ -411,19 +411,19 @@ for join one batch that loads the model once, tags them one at a time
 and unloads it after the last; Stop tagging drops the rest and unloads
 it at once.
 
-- **PRO DJ LINK** (`--pro-link` only; docs/LINK.md): the switch, "Serve the
-  library to players", and the network interface it serves on (chosen
-  here, `link.interface`, and only while off; the ones with a link first,
-  Wi-Fi last). The switch waits until an interface is chosen: while on,
-  anything on that network can read the library's audio, and the window
-  says so. Below, where it stands (off, waiting for a player, joining, on
-  the link as device 17, or why it would not start: the ports taken by
-  rekordbox, no such interface, no IPv4 address) and the devices on the
-  link: number, name, what each player has loaded (a track of ours by
-  title, else its source and track number), its tempo at its pitch, and
-  Playing or Paused, ON AIR, MASTER, SYNC, and for a track of ours the
-  seconds of it played so far, then "counted" once its play was recorded
-  (30 s, as the deck's).
+- **PRO DJ LINK** (`--pro-link` only; docs/LINK.md): the switch, "Serve
+  the library to players", and the Ethernet interface it serves on (chosen
+  here, `link.interface`, and only while off; only Ethernet ones are
+  listed, those with a link first). The switch waits until an interface is
+  chosen: while on, anything on that network can read the library's audio,
+  and the window says so. Below, where it stands (off, waiting for a
+  player, joining, on the link as device 17, or why it would not start:
+  the ports taken by rekordbox, no such interface, no IPv4 address) and
+  the devices on the link: number, name, what each player has loaded (a
+  track of ours by title, else its source and track number), its tempo at
+  its pitch, and Playing or Paused, ON AIR, MASTER, SYNC, and for a track
+  of ours the seconds of it played so far, then "counted" once its play
+  was recorded (30 s, as the deck's).
 - **Analysis settings**: what to analyse (BPM/grid, key), BPM range presets
   (auto (default), 70–180, 98–195, 118–236, 58–115), integer snap, allow
   tempo sections, add memory cue at first downbeat; then Track colours,
