@@ -168,14 +168,18 @@ void rx_app_save_track(RXApp *app, RXTrack *t);      /* to the library now */
 void rx_app_set_status(RXApp *app, const char *fmt, ...) RX_PRINTF(2, 3);
 void rx_app_rebuild_rows(RXApp *app);
 /* The albums for the tree: every album name that two tracks or more
- * share, in the order the table sorts names, each with its track count,
- * after None (the name "", first, when it has tracks): the tracks without
- * an album and those whose album no other track has. Made when the
- * library has changed since the last call; valid until the next one.
- * Returns the count, None included. */
+ * share, each with its track count and its artist (the album artist of
+ * its first track that has one, else the artist all its tracks share,
+ * else none), by artist in the order the table sorts names, each
+ * artist's albums together by name, the albums of no artist last; after
+ * None (the name "", first, when it has tracks): the tracks without an
+ * album and those whose album no other track has. Made when the library
+ * has changed since the last call; valid until the next one. Returns the
+ * count, None included. */
 typedef struct RXAlbum {
     const char *name;
     int         nb;
+    const char *artist;         /* NULL none */
 } RXAlbum;
 int  rx_app_albums(RXApp *app, const RXAlbum **albums);
 /* Shows the album `name` (copied; "": None; NULL: the album view is

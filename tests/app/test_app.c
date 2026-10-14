@@ -626,6 +626,38 @@ int main(int argc, char **argv)
             CHECK(n == 2 && !strcmp(albums[0].name, "AD:HOUSE 3") &&
                   !strcmp(albums[1].name, "AD:HOUSE 10"), "3 before 10: %s first",
                   n ? albums[0].name : "none");
+            /* By artist: x's album artist names AD:HOUSE 3's, the artist
+             * a and b share AD:HOUSE 10's, which comes first. */
+            char *artist_a = a->meta.artist, *artist_b = b->meta.artist;
+            a->meta.artist = rx_strdup("Diverse System");
+            b->meta.artist = rx_strdup("diverse system");
+            free(x->meta.album_artist);
+            x->meta.album_artist = rx_strdup("Zed");
+            CHECK(rx_library_save_track(&app.lib, a) == 0 &&
+                  rx_library_save_track(&app.lib, b) == 0 &&
+                  rx_library_save_track(&app.lib, x) == 0, "saving the artists");
+            n = rx_app_albums(&app, &albums);
+            CHECK(n == 2 && !strcmp(albums[0].name, "AD:HOUSE 10") && albums[0].artist &&
+                  !strcmp(albums[0].artist, "Diverse System") && albums[1].artist &&
+                  !strcmp(albums[1].artist, "Zed"), "by artist: %s (%s) first",
+                  n ? albums[0].name : "none", n && albums[0].artist ? albums[0].artist : "none");
+            /* a and b share no artist: their album has none, and goes last. */
+            free(b->meta.artist);
+            b->meta.artist = rx_strdup("Other");
+            CHECK(rx_library_save_track(&app.lib, b) == 0, "saving b's artist");
+            n = rx_app_albums(&app, &albums);
+            CHECK(n == 2 && !strcmp(albums[0].name, "AD:HOUSE 3") &&
+                  !strcmp(albums[1].name, "AD:HOUSE 10") && !albums[1].artist,
+                  "no artist last: %s first", n ? albums[0].name : "none");
+            free(a->meta.artist);
+            free(b->meta.artist);
+            a->meta.artist = artist_a;
+            b->meta.artist = artist_b;
+            free(x->meta.album_artist);
+            x->meta.album_artist = NULL;
+            CHECK(rx_library_save_track(&app.lib, a) == 0 &&
+                  rx_library_save_track(&app.lib, b) == 0 &&
+                  rx_library_save_track(&app.lib, x) == 0, "saving the artists back");
             /* The album view follows the tags: a leaves AD:HOUSE 10 for an
              * album of its own, and b is alone in it. */
             rx_app_show_album(&app, "AD:HOUSE 10");

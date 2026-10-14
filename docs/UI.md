@@ -232,9 +232,13 @@ last.
 
 **Playlist tree** (left, 220 default): `Collection` at the top (every
 track), `Albums` under it (closed by default: every album tag two
-tracks or more share, in natural order (a number in a name counts as a
-number: `AD:HOUSE 3` before `AD:HOUSE 10`; case is ignored), with its
-track count, the count beside `Albums` being theirs; first `None`, when
+tracks or more share, with its track count, the count beside `Albums`
+being theirs, in one flat list by artist, each artist's albums together:
+the artists, then an artist's albums by name, in natural order (a number
+in a name counts as a number: `AD:HOUSE 3` before `AD:HOUSE 10`; case is
+ignored); an album's artist is the album artist of its first track that
+has one, else the artist all its tracks share, and the albums with
+neither come last; first `None`, when
 it has any, the tracks without an album and those whose album no other
 track has (a single), in the collection's order; click one and the table
 shows its tracks in disc and track order, like a playlist, but nothing

@@ -1,11 +1,10 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
 // The playlist tree on the browser's left: Collection (every track), the
-// Albums (every album tag two tracks or more share, alphabetically, each a
-// view of its tracks in disc and track order, after None, the tracks of no
-// album or of one no other track has: nothing is added to, renamed or
-// exported there),
-// then the library's folders and playlists. A click shows a playlist; the
+// Albums (every album tag two tracks or more share, by artist and then
+// name, each a view of its tracks in disc and track order, after None, the
+// tracks of no album or of one no other track has: nothing is added to,
+// renamed or exported there), then the library's folders and playlists. A click shows a playlist; the
 // context menu creates, renames (in place, as rekordbox does) and deletes
 // (after a confirmation). Tracks dragged from the table onto a playlist
 // are appended to it; playlists and folders dragged within the tree move
@@ -467,8 +466,9 @@ void ui_tree(UiState *ui, ImVec2 size)
     float lx = a.x + ImGui::GetTreeNodeToLabelSpacing() - PX(14);
     node_label(ui, ImVec2(lx, a.y), b, 0, "Collection", app->lib.nb_tracks, sel);
 
-    // Albums: every album of the library, alphabetically, each shown like
-    // a playlist of its tracks in disc and track order, and None first
+    // Albums: every album of the library, one flat list by artist and then
+    // name (rx_app_albums), each shown like a playlist of its tracks in
+    // disc and track order, and None first
     // (the album "": the tracks without an album or with one no other
     // track has, in the collection's order). Nothing can be dropped on
     // one, nothing renames or deletes one, and the export does not know
