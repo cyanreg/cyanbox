@@ -107,10 +107,15 @@ src/analysis      spectrum.c onset.c tempo.c grid_fit.c downbeat.c    -> rx_anal
 src/formats       pdb.c anlz.c onelibrary.c sqlcipher.c sha512.h settings.c colors.c util.c (+ buf.h formats_priv.h nfc_tables.h) -> rx_formats_dep
                   colors.c util.c buf.h formats_priv.h nfc_tables.h
 src/export        plan.c export.c inspect.c stick.c export_priv.h     -> rx_export_dep
+src/link          packet.c presence.c (UDP presence) dbmsg.c catalog.c -> rx_link_dep (export, analysis)
+                  dbserver.c dbclient.c (the database server) vtree.c
+                  nfs.c nfsclient.c (NFS over a virtual tree) net.c
+                  service.c (the threads) client.c (the fake player)
+                  wire.c link_priv.h (docs/LINK.md)
 src/player        player.c pipewire.c nullout.c deck.c feed.c         -> rx_player_dep (core)
                   controls.c stretch.cpp stretch.h player_internal.h
 src/app           jobs.c app.c                                        -> rx_app_dep (everything above,
-                                                                       ml for the tag batch)
+                                                                       ml for the tag batch, link)
                   headless.c (src/gpu and src/ui stand-ins for rxbox-cli and test_app)
                   mpris.c (MPRIS on the D-Bus session bus, with sd-bus: -Dmpris)
 src/gpu           vkdev.c vkdev.h (the Vulkan set-up all three share) -> rx_vkdev_dep (common; Vulkan, VMA)

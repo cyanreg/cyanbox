@@ -27,6 +27,7 @@
 
 #include <ctype.h>
 #include <errno.h>
+#include <signal.h>
 #include <limits.h>
 #include <math.h>
 #include <stdio.h>
@@ -39,6 +40,7 @@
 #include "rxbox/colors.h"
 #include "rxbox/export.h"
 #include "rxbox/formats.h"
+#include "rxbox/link.h"
 #include "rxbox/ml.h"
 #include "rxbox/mpris.h"
 #include "rxbox/notation.h"
@@ -125,6 +127,19 @@ static const char usage_text[] =
     "                           make a playlist from an m3u8 file\n"
     "  playlist export NAME FILE.m3u8\n"
     "                           write a playlist as an m3u8 file\n"
+    "  link serve -i IF         serve the library to players on network interface IF\n"
+    "                           (PRO DJ LINK, as rekordbox's Link Export) until\n"
+    "                           interrupted, listing the players heard\n"
+    "      -i, --interface IF   the network interface the players are on\n"
+    "      --any-peer           answer any address, not only players heard (diagnostics)\n"
+    "      --start              join without waiting for a player (diagnostics)\n"
+    "  link browse -i IF [HOST] browse a library served on the network as a player does\n"
+    "                           (a fake CDJ-3000): menus, one track's metadata,\n"
+    "                           analysis and file; HOST, else the computer source heard\n"
+    "      -n, --number N       the player number to use (default 3)\n"
+    "      -t, --track ID       the track to load (default the first)\n"
+    "      --quiet              do not announce on the link (needs HOST)\n"
+    "      --hold SEC           stay on the link SEC seconds after loading, playing\n"
     "\n"
     "  A TRACK is an audio file in the library (any path to it), a folder (every\n"
     "  library track under it) or a library id.\n"
@@ -2513,6 +2528,182 @@ static int run_interface(Cli *cli)
     return EXIT_OK;
 }
 
+/* ------------------------------------------------------------------ link */
+
+static bool player_same(const RXLinkPlayer *a, const RXLinkPlayer *b)
+{
+    return a->number == b->number && a->addr == b->addr && a->has_status == b->has_status &&
+           a->track_device == b->track_device && a->track_slot == b->track_slot &&
+           a->track_id == b->track_id && a->playing == b->playing;
+}
+
+static void print_player(const RXLinkPlayer *p, int ours, const RXLibrary *lib)
+{
+    printf("  %2d %-20s %u.%u.%u.%u", p->number, p->name, p->addr >> 24, p->addr >> 16 & 0xFF,
+           p->addr >> 8 & 0xFF, p->addr & 0xFF);
+    if (p->has_status && p->track_id) {
+        printf("  %s track %u from %d", p->playing ? "playing" : "loaded", p->track_id,
+               p->track_device);
+        RXTrack *t = ours && p->track_device == ours ? rx_library_find_id(lib, p->track_id) : NULL;
+        if (t) {
+            char name[512];
+            rx_track_display(t, name, sizeof(name));
+            printf(" (%s)", name);
+        }
+    }
+    putchar('\n');
+}
+
+/* Serves until SIGINT or SIGTERM, printing the devices whenever they
+ * change. */
+static int link_serve(Cli *cli, const RXLinkOptions *opt)
+{
+    char *root = library_root(cli);
+    if (!root)
+        return fail("out of memory");
+    RXLinkOptions o = *opt;
+    o.library = root;
+    sigset_t sigs;
+    sigemptyset(&sigs);
+    sigaddset(&sigs, SIGINT);
+    sigaddset(&sigs, SIGTERM);
+    pthread_sigmask(SIG_BLOCK, &sigs, NULL);
+
+    RXLink *link;
+    int ret = rx_link_start(&link, &o);
+    free(root);
+    if (ret < 0)
+        return fail("cannot serve on %s: %s", o.interface, strerror(-ret));
+    /* The ids players report are the library's: a connection of our own
+     * to name them (read only, as the service's). */
+    int code = open_library(cli, false);
+    if (code) {
+        rx_link_stop(&link);
+        return code;
+    }
+    printf("serving on %s; Ctrl-C stops\n", o.interface);
+    fflush(stdout);
+
+    RXLinkPlayer seen[64], now[64];
+    int nb_seen = 0;
+    enum RXLinkState state = RX_LINK_WAITING;
+    while (1) {
+        struct timespec ts = { .tv_sec = 0, .tv_nsec = 250000000 };
+        if (sigtimedwait(&sigs, NULL, &ts) >= 0)
+            break;
+        int number;
+        enum RXLinkState st = rx_link_state(link, &number);
+        if (st != state) {
+            static const char *const names[] = { "waiting for a player", "joining", "up" };
+            if (st == RX_LINK_UP)
+                printf("link up as device %d\n", number);
+            else
+                printf("link %s\n", names[st]);
+            state = st;
+        }
+        int nb = RX_MIN(rx_link_players(link, now, 64), 64);
+        bool same = nb == nb_seen;
+        for (int i = 0; same && i < nb; i++)
+            same = player_same(&now[i], &seen[i]);
+        if (!same) {
+            printf("devices:%s\n", nb ? "" : " none");
+            for (int i = 0; i < nb; i++)
+                print_player(&now[i], number, &cli->app.lib);
+            memcpy(seen, now, (size_t)nb * sizeof(*now));
+            nb_seen = nb;
+        }
+        fflush(stdout);
+    }
+    rx_link_stop(&link);
+    printf("stopped\n");
+    return EXIT_OK;
+}
+
+
+/* A fake player against a server: what rbxport's browse example does, and
+ * the after-load requests. */
+static int link_browse(const RXLinkClientOptions *o, uint32_t track, long hold)
+{
+    RXLinkClient *c;
+    int ret = rx_link_client_start(&c, o);
+    if (ret < 0)
+        return fail("cannot start a player on %s: %s", o->interface, strerror(-ret));
+    printf("player %d on %s, waiting for a source\n", o->number, o->interface);
+    fflush(stdout);
+    uint32_t addr;
+    int number;
+    if ((ret = rx_link_client_wait_source(c, 20000, &addr, &number)) < 0) {
+        rx_link_client_stop(&c);
+        return fail("no computer source answered on %s", o->interface);
+    }
+    ret = rx_link_client_browse(c, track, print_line, NULL);
+    fflush(stdout);
+    if (ret >= 0 && hold > 0)
+        sleep((unsigned)hold);
+    rx_link_client_stop(&c);
+    if (ret < 0)
+        return fail("browsing failed: %s", strerror(-ret));
+    return EXIT_OK;
+}
+
+static int cmd_link(Cli *cli, int argc, char **argv)
+{
+    RXLinkOptions opt;
+    rx_link_options_default(&opt);
+    RXLinkClientOptions copt;
+    rx_link_client_options_default(&copt);
+    long number = 3, track = 0, hold = 0;
+    const char *sub = NULL, *host = NULL;
+    for (int i = 1; i < argc; i++) {
+        const char *val;
+        int r = common_option(cli, argc, argv, &i);
+        if (r < 0)
+            return EXIT_USAGE;
+        if (r > 0)
+            continue;
+        if ((r = opt_value(cli, argc, argv, &i, "-i", "--interface", &val))) {
+            if (r < 0)
+                return usage_error(cli, "link: --interface needs a network interface");
+            opt.interface = val;
+        } else if (opt_flag(cli, argv[i], NULL, "--any-peer")) {
+            opt.any_peer = true;
+        } else if (opt_flag(cli, argv[i], NULL, "--start")) {
+            opt.start_up = true;
+        } else if (opt_flag(cli, argv[i], NULL, "--quiet")) {
+            copt.quiet = true;
+        } else if ((r = opt_value(cli, argc, argv, &i, "-n", "--number", &val))) {
+            if (r < 0 || !parse_count(val, 6, &number) || number < 1)
+                return usage_error(cli, "link: --number takes a player number, 1 to 6");
+        } else if ((r = opt_value(cli, argc, argv, &i, NULL, "--hold", &val))) {
+            if (r < 0 || !parse_count(val, 86400, &hold))
+                return usage_error(cli, "link: --hold takes seconds");
+        } else if ((r = opt_value(cli, argc, argv, &i, "-t", "--track", &val))) {
+            if (r < 0 || !parse_count(val, UINT32_MAX, &track))
+                return usage_error(cli, "link: --track takes a track id");
+        } else if (is_option(cli, argv[i])) {
+            return usage_error(cli, "link: unknown option %s", argv[i]);
+        } else if (!sub) {
+            sub = argv[i];
+        } else if (!host && !strcmp(sub, "browse")) {
+            host = argv[i];
+        } else {
+            return usage_error(cli, "link: one command at a time");
+        }
+    }
+    if (!sub || (strcmp(sub, "serve") && strcmp(sub, "browse")))
+        return usage_error(cli, "link: serve or browse");
+    if (!opt.interface)
+        return usage_error(cli, "link %s: which network interface (-i)?", sub);
+    if (!strcmp(sub, "serve"))
+        return link_serve(cli, &opt);
+    if (copt.quiet && !host)
+        return usage_error(cli, "link browse: --quiet needs the server's address");
+    copt.interface = opt.interface;
+    copt.server = host;
+    copt.number = (int)number;
+    return link_browse(&copt, (uint32_t)track, hold);
+}
+
 static const struct {
     const char *name;
     int (*fn)(Cli *cli, int argc, char **argv);
@@ -2536,6 +2727,8 @@ static const struct {
     { "settings", cmd_settings, "settings" },
     { "init",     cmd_init,     "init [DIR]" },
     { "playlist", cmd_playlist, "playlist list|create|add|remove|delete|import|export ..." },
+    { "link",     cmd_link,     "link serve -i IF [--any-peer] [--start] | "
+                                "link browse -i IF [-n N] [-t ID] [--hold SEC] [--quiet] [HOST]" },
 };
 
 static int cli_run(int argc, char **argv)

@@ -1,6 +1,6 @@
-# PRO DJ LINK: serving the library to players (plan)
+# PRO DJ LINK: serving the library to players
 
-Status: a plan, nothing implemented. What rekordbox calls **Link Export**:
+What rekordbox calls **Link Export**:
 the computer joins the players' network as `rekordbox`, appears on their
 SOURCE screen, and a player browses rxbox's library, loads a track and
 plays it with its grid, cues and waveforms, with no stick. The players
@@ -9,6 +9,55 @@ and count as plays.
 
 The players: those with an Ethernet port that speak standard PRO DJ LINK,
 such as the CDJ-3000 and the CDJ-3000X, over Ethernet and nothing else.
+
+## Status (2026-10-14)
+
+Steps 1 to 5 of the order of work below are written and tested without a
+player: `src/link` serves the library from the CLI (`rxbox link serve -i
+IF`), and `rxbox link browse -i IF [HOST]` is a fake CDJ-3000 that joins,
+browses, loads a track and reads it as a player does. Not yet: the
+interface's Link switch and panel and play counting (step 6), a run
+against a player on Ethernet (step 7), writes from the deck (step 8).
+
+What has been run against what:
+
+| Server | Client | Network | Result |
+| --- | --- | --- | --- |
+| rxbox | rxbox's fake player | loopback, ports of their own (`test_loopback`) | join, browse, every track's bytes (transcodes too), the player's status, the fences, a library change |
+| rxbox | rxbox's fake player | two network namespaces, rekordbox's ports (`tests/link/netns_test.sh`) | the same through the CLI, real broadcasts |
+| rxbox | rbxport's `browse` example | two network namespaces | root, sort, tracks, playlists, metadata, track info, grid, preview, the file over NFS |
+| rbxport's `serve` (its emulator fixture) | rxbox's fake player | two network namespaces | the same; rbxport reads our CDJ status (loaded, playing) |
+
+rbxport's client was written against rekordbox and a CDJ-3000 in an
+emulator, and its server answers as rekordbox does (its captures); each
+side of rxbox agreeing with the other side of rbxport is the check that
+rxbox does not only agree with itself. The two servers' replies have the
+same shapes; where they differ, rbxport's capture decided (the metadata
+rows' order) or the difference is a preference (rekordbox shows the
+comment beside a title, rxbox the artist; rekordbox's root menu holds the
+categories its user chose).
+
+The codecs' own tests check captured bytes (rbxport's captures of
+rekordbox 7.2.11 and a CDJ-3000, an XDJ-700's NFS handles, the
+djl-analysis' examples) and run under a fuzzer with AddressSanitizer and
+UndefinedBehaviorSanitizer (`fuzz-presence`, `fuzz-db`, `fuzz-nfs`).
+
+**Running it by hand.** `tests/link/netns.sh SERVER -- CLIENT` makes a
+private two-host network (user and network namespaces, a veth pair,
+169.254.1.1 and .2; no root, nothing reaches another network) and runs a
+server on one host and a client on the other. rbxport's examples build
+with `CARGO_TARGET_DIR=build/rbxport-target cargo build --release -p
+rbl-link --example browse --example serve --example emu_fixture` in its
+tree; `emu_fixture DIR` makes its three-track library and
+`RBXPORT_OPTIONS=DIR/options.json serve rxa` serves it.
+
+**Known limits.** A track info request for a track whose transcode is not
+made yet makes it there and then, on the service thread: the database and
+NFS wait for it (seconds), presence does not (its own thread, so the
+keep-alives go on). HISTORY lists each track by the day it was last
+played (the library has no reader for the play table yet). A player
+reading a file is not told when the library changes under it; handles
+name tracks by id, so it keeps reading.
 
 ## Sources and how far they are proven
 
@@ -189,7 +238,7 @@ Link is on:
   export's do.
 - **Off by default**, bound to one chosen interface (`link.interface`):
   a Link switch and panel in the interface (the players seen, what each
-  has loaded, playing or not), and `rxbox link [--interface IF]` running
+  has loaded, playing or not), and `rxbox link serve -i IF` running
   the server in the foreground from the CLI.
 - **Exposure**: as in "Security". A host firewall must let UDP 50000,
   50002, 50111 and 2049 and the TCP database ports in on that interface.

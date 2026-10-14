@@ -123,6 +123,8 @@ subdir('src/core')
 subdir('src/analysis')
 subdir('src/formats')
 subdir('src/export')
+# link: PRO DJ LINK, the library served to players (docs/LINK.md).
+subdir('src/link')
 subdir('src/player')
 subdir('src/app')
 

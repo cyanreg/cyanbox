@@ -4,7 +4,7 @@
 # MPRIS (rxbox/mpris.h) only with sd-bus (the mpris option); without it the
 # header's stand-ins do nothing.
 rx_app_sources = files('jobs.c', 'app.c')
-rx_app_deps = [ rx_export_dep, rx_player_dep, rx_ml_dep ]
+rx_app_deps = [ rx_export_dep, rx_link_dep, rx_player_dep, rx_ml_dep ]
 if sdbus_dep.found()
     rx_app_sources += files('mpris.c')
     rx_app_deps += sdbus_dep
@@ -68,6 +68,13 @@ if ffmpeg_prog.found()
             args: [ app_click_wav, meson.current_build_dir() / 'test-mpris' ],
             suite: 'app', timeout: 300)
     endif
+
+    # Link through the CLI on a private two-host network of user and
+    # network namespaces (tests/link/netns.sh): rekordbox's own ports,
+    # nothing outside the namespaces; skipped where they are not allowed.
+    test('netns', find_program('../../tests/link/netns_test.sh'),
+        args: [ rxbox_cli, app_click_wav, meson.current_build_dir() / 'test-netns' ],
+        depends: [ rxbox_cli ], suite: 'link', timeout: 300)
 
     test('cli', find_program('../../tests/app/cli_test.sh'),
         args: [ rxbox_cli, meson.current_build_dir() / 'test-cli' ],
