@@ -428,17 +428,13 @@ bool ui_colour_picker(UiState *ui, const char *id, double *hue, float width)
 
 const char *ui_colour_text(UiState *ui, double hue, char *buf, size_t size)
 {
+    // One of the eight, or none: the library keeps no other colour
+    // (src/core/clean.c removes one between them when it opens).
     int id = rx_track_color_of_hue(hue);
-    if (id) {
-        snprintf(buf, size, "%s \xC2\xB7 %s", rx_track_color_name(id),
-                 rx_config_vibe(&ui->app->lib.cfg, id));
-        return buf;
-    }
-    int near = rx_track_color_nearest_hue(hue);
-    if (!near)
+    if (!id)
         return "none";
-    snprintf(buf, size, "%.0f\xC2\xB0, between the eight (%s on the stick)", fmod(hue, 360.0),
-             rx_track_color_name(near));
+    snprintf(buf, size, "%s \xC2\xB7 %s", rx_track_color_name(id),
+             rx_config_vibe(&ui->app->lib.cfg, id));
     return buf;
 }
 

@@ -27,10 +27,12 @@
  * rx_config_set checks a value for its key (`rxbox config` refuses one that
  * does not parse, rather than storing a row every command then warns of);
  * an empty value is the key's default. A row that does not parse all the
- * same (an older rxbox stored any) is logged and the default kept, so a
- * bad row never stops the library from opening. Other keys are free for
- * rx_library_setting_get/set (the interface's column layout and such) and
- * are left alone by rx_library_config_save.
+ * same (an older rxbox stored any) leaves the default in place and is
+ * removed once the library has opened (rx_core_config_clean), as is a
+ * key rxbox does not know: a bad row never stops the library from
+ * opening, and does not stay. The interface's ui.* keys and the sync's
+ * sync.* records are free for rx_library_setting_get/set and left alone
+ * by rx_library_config_save.
  *
  * The interface's waveform colour and key notation are the players'
  * device.waveform_color and device.key_display (one setting for rxbox and
@@ -407,6 +409,8 @@ int rx_config_set(RXConfig *c, const char *key, const char *value)
     return RX_ERROR(ENOENT);
 }
 
+static int put(RXLibrary *lib, const char *key, const char *value);
+
 /* One row of the setting table at load: a value that is not valid for
  * its key is said and the default kept, so a bad row never stops the
  * library from opening; a key that is none of RXConfig's is someone
@@ -420,13 +424,71 @@ static int apply_setting(RXConfig *c, const char *key, const char *value)
     if (rx_str_starts(key, "device."))
         return kv_push(&c->device, &c->nb_device, key + 7, value);
 
+    /* A value the key does not take is the default here, and its row goes
+     * once the library has opened (rx_core_config_clean says so). */
     int ret = rx_config_set(c, key, value);
-    if (ret == RX_ERROR(EINVAL) || ret == RX_ERROR(E2BIG)) {
-        rx_warn("setting %s = \"%s\" is not valid (it takes %s); using the default", key, value,
-                rx_config_takes(key));
+    if (ret == RX_ERROR(EINVAL) || ret == RX_ERROR(E2BIG))
         ret = 0;
-    }
     return ret == RX_ERROR(ENOENT) ? 0 : ret;
+}
+
+/* The keys rxbox knows besides RXConfig's and My Settings: the interface's
+ * own (its layout, under ui.) and the stick sync's records (sync.). */
+static bool free_key(const char *key)
+{
+    return rx_str_starts(key, "ui.") || rx_str_starts(key, "sync.");
+}
+
+int rx_core_config_clean(RXLibrary *lib, int *removed)
+{
+    *removed = 0;
+    sqlite3_stmt *st = rx_db_prepare(lib->db, "SELECT key, value FROM setting ORDER BY key");
+    if (!st)
+        return RX_ERROR(EIO);
+    RXArray gone;
+    rx_array_init(&gone, sizeof(char *));
+    int ret;
+    while ((ret = rx_db_row(lib->db, st, "checking settings")) > 0) {
+        const char *key = (const char *)sqlite3_column_text(st, 0);
+        const char *value = (const char *)sqlite3_column_text(st, 1);
+        if (!key || rx_str_starts(key, "player.") || rx_str_starts(key, "mixer.") ||
+            rx_str_starts(key, "device.") || free_key(key))
+            continue;
+        RXConfig scratch;
+        rx_config_defaults(&scratch);
+        int r = rx_config_set(&scratch, key, value ? value : "");
+        rx_config_free(&scratch);
+        if (r >= 0)
+            continue;
+        if (r == RX_ERROR(ENOENT))
+            rx_info("settings: %s is no setting rxbox knows; removed", key);
+        else
+            rx_info("settings: %s = \"%s\" is not valid (it takes %s); removed, the default "
+                    "stands", key, value ? value : "", rx_config_takes(key));
+        char *k = rx_strdup(key);
+        if (!k || !rx_array_push(&gone, &k)) {
+            free(k);
+            ret = RX_ERROR(ENOMEM);
+            break;
+        }
+    }
+    sqlite3_finalize(st);
+
+    if (ret >= 0 && gone.nb) {
+        ret = rx_db_begin(lib->db);
+        for (size_t i = 0; ret >= 0 && i < gone.nb; i++)
+            ret = put(lib, *(char **)rx_array_at(&gone, i), NULL);
+        if (ret >= 0)
+            ret = rx_db_commit(lib->db);
+        else
+            rx_db_rollback(lib->db);
+        if (ret >= 0)
+            *removed = (int)gone.nb;
+    }
+    for (size_t i = 0; i < gone.nb; i++)
+        free(*(char **)rx_array_at(&gone, i));
+    rx_array_free(&gone);
+    return ret;
 }
 
 int rx_core_config_load(RXLibrary *lib)

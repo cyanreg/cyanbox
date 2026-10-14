@@ -69,6 +69,17 @@ missing stays in the library, greyed out, until the file comes back or is
 relocated. A track's library id is also its id on every stick, so players
 keep their cached data across exports.
 
+The library's cleaning: what the library holds that is not valid, or
+that rxbox does not know, is removed when it opens, not kept and worked
+around, and the log says what went. A colour that is none of the eight
+(no colour), a grid that is not valid (no grid: the next start analyses
+the track again), a cue at an impossible time or slot, a loop that does
+not end after it starts, a second hot cue on one slot, a key that is no
+key, colour probabilities that are not probabilities, a setting whose value its key does not take (its default
+stands) and a setting key rxbox does not know (the interface's `ui.*`
+and the sync's `sync.*` records are its own). A library on read-only
+media opens as it is, cleaned in memory only.
+
 A track's colour is one of rekordbox's eight, pink, red, orange, yellow,
 green, aqua, blue and purple, or none. Each colour stands for what a track
 of that colour sounds like, in words you choose: the legend, the settings
@@ -76,10 +87,12 @@ of that colour sounds like, in words you choose: the legend, the settings
 model picks a track's colour (Tags below). The library keeps a colour as
 its hue, the HSV hue angle of the colour rekordbox draws (pink 300°, red
 0°, orange 33.6°, yellow 53.7°, green 120°, aqua 193.5°, blue 220.6°,
-purple 276°). A hue between those, which an older rxbox let you set with
-a strip of hues, stays as it is and is drawn as it is; an export writes
-the nearest of the eight for it. A library from before hues keeps its
-colours: each name became its colour's hue.
+purple 276°). A track has one of the eight or none: a hue between them
+(an older rxbox's tagging gave one, and its strip of hues set one) is
+removed when the library opens, as is anything else the library holds
+that is not valid (the library's cleaning, above), and the command line
+refuses one. A library from before hues keeps its colours: each
+name became its colour's hue.
 
 The comment field is the tagging's. rxbox reads a file's tags when it adds
 the track but leaves the comment tag out, so the comment starts empty, and

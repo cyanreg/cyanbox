@@ -96,10 +96,11 @@ id on every stick, so players keep their cached artwork and waveforms across
 exports. dj's sidecar files are not read or written: nothing was ever
 analysed with dj, and the user does not want the compatibility.
 
-A track's colour is a hue in degrees (the HSV hue angle, 0 red, 120 green,
-240 blue), not one of rekordbox's eight names; the stick gets the palette
-colour nearest to it (`rxbox/colors.h`). The interface and the tagging
-model pick one of the eight and store its hue: the model by which of a
+A track's colour is one of rekordbox's eight, kept as its hue in degrees
+(the HSV hue angle of the RGB rekordbox draws it in, `rxbox/colors.h`), or
+none; a hue between them is removed when the library opens, as anything
+else it holds that is not valid. The interface and the tagging model pick
+one of the eight and store its hue: the model by which of a
 legend of descriptions, one per colour and the user's to edit, fits the
 track best. The comment is the user's: a
 file's comment tag is left out on import unless the `import.comment`

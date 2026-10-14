@@ -268,7 +268,12 @@ int rx_parse_hue(const char *s, double *hue)
         end++;
     if (*end)
         return RX_ERROR(EINVAL);
-    *hue = v == 360 ? 0.0 : v;
+    /* Degrees only where they name one of the eight: a colour between
+     * them is not one the library keeps (src/core/clean.c). */
+    int named = rx_track_color_of_hue(v == 360 ? 0.0 : v);
+    if (!named)
+        return RX_ERROR(EINVAL);
+    *hue = rx_track_color_hue(named);
     return 0;
 }
 

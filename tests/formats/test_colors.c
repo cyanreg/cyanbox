@@ -154,12 +154,13 @@ int main(void)
     CHECK_STR(vibes[4], "groovy and relaxed, warm");
     CHECK_STR(vibes[7], "calm and dark, ambient");
 
-    /* The command line's hues: degrees, a name, none. */
+    /* The command line's colours: a name, one of the eight in degrees,
+     * none; never a hue between them. */
     double hue = 0;
-    CHECK_EQ(rx_parse_hue("200", &hue), 0);
-    CHECK(hue == 200.0);
-    CHECK_EQ(rx_parse_hue(" 33.5\xC2\xB0 ", &hue), 0);
-    CHECK(hue == 33.5);
+    CHECK_EQ(rx_parse_hue("200", &hue), RX_ERROR(EINVAL));
+    CHECK_EQ(rx_parse_hue(" 33.5\xC2\xB0 ", &hue), RX_ERROR(EINVAL));
+    CHECK_EQ(rx_parse_hue(" 276\xC2\xB0 ", &hue), 0);
+    CHECK(hue == rx_track_color_hue(8));
     CHECK_EQ(rx_parse_hue("360", &hue), 0);
     CHECK(hue == 0.0);
     CHECK_EQ(rx_parse_hue("Aqua", &hue), 0);

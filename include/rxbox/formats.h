@@ -196,6 +196,15 @@ const char *rx_settings_value(const char *file, const char *name, const char *va
  * follows, so that it shows what the players will. NULL for a key that is
  * no My Setting. The string is static. */
 const char *rx_settings_get(const RXConfig *cfg, const char *key);
+/* A My Setting `key` ("player.quantize") exists and takes `value`. */
+bool rx_settings_valid(const char *key, const char *value);
+/* Removes the library's My Settings that are not valid (no such setting,
+ * or a value it does not take), saying each: an invalid entry is removed,
+ * not kept. Called after rx_library_open by the CLI and the app (the
+ * library's own cleaning, src/core/clean.c, does the rest; core does not
+ * link these tables). Returns how many went, or a negative errno when the
+ * library could not be written (they are gone from memory all the same). */
+int  rx_settings_clean(RXLibrary *lib);
 void rx_kv_free(RXKv *kv, int nb);
 
 #endif /* RXBOX_FORMATS_H */

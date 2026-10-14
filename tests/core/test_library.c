@@ -275,7 +275,7 @@ static void test_edit_and_reopen(void)
     rx_meta_set(&a->meta.comment, "hand edited");
     a->meta.track_number = 7;
     a->meta.rating = 4;
-    a->meta.hue = 193.25;
+    a->meta.hue = rx_track_color_hue(6);   /* aqua: a colour the library keeps */
     rx_meta_add_tag(&a->meta, "Situation/Peak Time");
     rx_meta_add_tag(&a->meta, "vocal");
     snprintf(a->key, sizeof(a->key), "Am");
@@ -364,7 +364,7 @@ static void test_edit_and_reopen(void)
     CHECK_STR(a->meta.comment, "hand edited");
     CHECK(!a->file_meta.comment);
     CHECK(a->meta.track_number == 7 && a->file_meta.track_number == 0);
-    CHECK(a->meta.rating == 4 && a->meta.hue == 193.25);
+    CHECK(a->meta.rating == 4 && a->meta.hue == rx_track_color_hue(6));
     CHECK(rx_library_find_id(&lib, 2)->meta.hue == RX_HUE_NONE);
     {
         const RXGrid *bg = &rx_library_find_id(&lib, 2)->grid;
@@ -403,7 +403,7 @@ static void test_edit_and_reopen(void)
     CHECK(rx_library_find_id(&lib, 2)->meta.rating == 2);
 
     /* The hue column holds degrees, 360 being 0 again, or NULL. */
-    CHECK(hue_column(&lib, 1) == 193.25 && isnan(hue_column(&lib, 2)));
+    CHECK(hue_column(&lib, 1) == rx_track_color_hue(6) && isnan(hue_column(&lib, 2)));
     b = rx_library_find_id(&lib, 2);
     b->meta.hue = 360.0;
     CHECK(rx_library_save_track(&lib, b) == 0 && hue_column(&lib, 2) == 0.0);
@@ -845,7 +845,7 @@ static void test_migrate_v5(void)
     CHECK(sqlite3_open(db, &s) == SQLITE_OK);
     CHECK(back_to_schema5(s) == SQLITE_OK);
     CHECK(sqlite3_exec(s, "INSERT INTO track (path, hue, tags_version, ml_club, ml_intensity, "
-                          "ml_valence, ml_vocals) VALUES ('/gone/a.wav', 30, 1, 0.5, 0.75, 0.25, 1);"
+                          "ml_valence, ml_vocals) VALUES ('/gone/a.wav', 300, 1, 0.5, 0.75, 0.25, 1);"
                           "PRAGMA user_version = 5", NULL, NULL, NULL) == SQLITE_OK);
     sqlite3_close(s);
 
@@ -853,7 +853,7 @@ static void test_migrate_v5(void)
     CHECK(lib.nb_tracks == 1);
     if (lib.nb_tracks == 1) {
         const RXTrack *t = lib.tracks[0];
-        CHECK(t->meta.hue == 30.0 && t->tags_version == 1 && t->ml_intensity == 0.75f);
+        CHECK(t->meta.hue == 300.0 && t->tags_version == 1 && t->ml_intensity == 0.75f);
         CHECK(t->ml_club == 0.5f && t->ml_valence == 0.25f && t->ml_vocals == 1.0f);
         CHECK(isnan(t->ml_colors[0]) && isnan(t->ml_colors[7]) && !t->ml_legend);
     }
@@ -863,6 +863,88 @@ static void test_migrate_v5(void)
     sqlite3_finalize(st);
     CHECK(rx_library_check(&lib) == 0);
     rx_library_close(&lib);
+
+    free(db);
+    test_rm_rf(dir);
+    free(dir);
+}
+
+/* The library's cleaning (src/core/clean.c): what it holds that is not
+ * valid, or not known, goes when it opens, and stays gone; what is valid
+ * is left alone. Planted by SQL as an older rxbox, or a hand, could leave
+ * it (the schema's checks refuse a tempo of 0 and a slot outside -1..7
+ * already). */
+static void test_clean(void)
+{
+    char *dir = test_dir("library-clean");
+    char *db = path_in(dir, "library.db");
+    RXLibrary lib;
+    CHECK(rx_library_open(&lib, dir) == 0);
+    rx_library_close(&lib);
+
+    sqlite3 *s;
+    CHECK(sqlite3_open(db, &s) == SQLITE_OK);
+    const char *sql =
+        /* a: everything wrong; b: everything right. */
+        "INSERT INTO track (id, path, duration, hue, rating, key, key_version, beats_version, "
+        "ml_colors, ml_legend) VALUES (1, '/gone/a.wav', 100, 317, 4, 'Xm#', 1, 5, "
+        "X'0000004000000040000000400000004000000040000000400000004000000040', 77);"
+        "INSERT INTO track (id, path, duration, hue, rating, key, key_version) "
+        "VALUES (2, '/gone/b.wav', 100, 120, 3, 'Am', 1);"
+        "INSERT INTO grid_section (track_id, idx, start, bpm) VALUES (1, 0, 0.5, 5000);"
+        "INSERT INTO grid_section (track_id, idx, start, bpm) VALUES (2, 0, 0.5, 128);"
+        "INSERT INTO cue (track_id, time, hot) VALUES (1, 10, -1);"           /* kept */
+        "INSERT INTO cue (track_id, time, hot) VALUES (1, -5, -1);"           /* before 0 */
+        "INSERT INTO cue (track_id, time, hot, loop_end) VALUES (1, 10, -1, 5);" /* ends first */
+        "INSERT INTO cue (track_id, time, hot) VALUES (1, 20, 0);"            /* kept */
+        "INSERT INTO cue (track_id, time, hot) VALUES (1, 30, 0);"            /* slot taken */
+        "INSERT INTO cue (track_id, time, hot, loop_end) VALUES (2, 10, -1, 12);"
+        "INSERT OR REPLACE INTO setting VALUES ('analysis.snap_bpm', 'maybe');"
+        "INSERT OR REPLACE INTO setting VALUES ('bogus.key', '1');"
+        "INSERT OR REPLACE INTO setting VALUES ('ui.columns', 'title');"
+        "INSERT OR REPLACE INTO setting VALUES ('sync.history.x', '1:0');"
+        "INSERT OR REPLACE INTO setting VALUES ('export.pdb', 'false');";
+    CHECK(sqlite3_exec(s, sql, NULL, NULL, NULL) == SQLITE_OK);
+    sqlite3_close(s);
+
+    for (int pass = 0; pass < 2; pass++) {
+        /* The second open finds it as the first left it. */
+        CHECK(rx_library_open(&lib, dir) == 0);
+        CHECK(lib.nb_tracks == 2);
+        RXTrack *a = rx_library_find_id(&lib, 1), *b = rx_library_find_id(&lib, 2);
+        CHECK(a && b);
+        if (a && b) {
+            CHECK(a->meta.hue == RX_HUE_NONE);
+            CHECK(a->meta.rating == 4);
+            CHECK(!a->key[0] && a->key_version == 0);
+            CHECK(a->grid.nb_sections == 0 && a->beats_version == 1);
+            CHECK(rx_analysis_stale(a) & RX_ANALYSE_BEATS);
+            CHECK(isnan(a->ml_colors[0]) && isnan(a->ml_colors[7]) && !a->ml_legend);
+            CHECK(a->nb_cues == 2);
+            if (a->nb_cues == 2) {
+                CHECK(a->cues[0].time == 10.0 && a->cues[0].hot == -1 && !rx_cue_is_loop(&a->cues[0]));
+                CHECK(a->cues[1].time == 20.0 && a->cues[1].hot == 0);
+            }
+            CHECK(b->meta.hue == 120.0 && b->meta.rating == 3 && !strcmp(b->key, "Am"));
+            CHECK(b->grid.nb_sections == 1 && b->grid.sections[0].bpm == 128.0);
+            CHECK(b->nb_cues == 1 && rx_cue_is_loop(&b->cues[0]));
+        }
+        char *v = NULL;
+        CHECK(rx_library_setting_get(&lib, "analysis.snap_bpm", &v) == RX_ERROR(ENOENT));
+        CHECK(lib.cfg.snap_bpm);
+        CHECK(rx_library_setting_get(&lib, "bogus.key", &v) == RX_ERROR(ENOENT));
+        CHECK(rx_library_setting_get(&lib, "ui.columns", &v) == 0 && v && !strcmp(v, "title"));
+        free(v);
+        v = NULL;
+        CHECK(rx_library_setting_get(&lib, "sync.history.x", &v) == 0 && v);
+        free(v);
+        v = NULL;
+        CHECK(rx_library_setting_get(&lib, "export.pdb", &v) == 0 && v && !strcmp(v, "false"));
+        free(v);
+        CHECK(!lib.cfg.export_pdb);
+        CHECK(rx_library_check(&lib) == 0);
+        rx_library_close(&lib);
+    }
 
     free(db);
     test_rm_rf(dir);
@@ -1666,6 +1748,7 @@ int main(void)
     test_colour_migration();
     test_legend();
     test_migrate_v5();
+    test_clean();
     test_comment_import();
     test_missing_relocate_remove();
     test_migrate_v1();

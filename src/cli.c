@@ -318,6 +318,9 @@ static int open_library(Cli *cli, bool create)
     }
     free(root);
     cli->lib_open = true;
+    /* My Settings that are not valid go, as the rest of what is not
+     * (rx_library_open's cleaning). */
+    rx_settings_clean(&cli->app.lib);
     return EXIT_OK;
 }
 
@@ -1178,25 +1181,13 @@ static void print_version(const char *stage, int version, int current, bool stal
 }
 
 /* "red (intense, peak time)" for one of the eight colours, in the legend's
- * words; "200° (not one of the eight; the stick gets aqua)" for a hue
- * between them (an older library's); "none". */
+ * words; "none" (the library keeps no other: src/core/clean.c). */
 static const char *fmt_colour(const RXConfig *cfg, double hue, char *buf, size_t size)
 {
     int id = rx_track_color_of_hue(hue);
-    if (id) {
-        snprintf(buf, size, "%s (%s)", rx_track_color_name(id), rx_config_vibe(cfg, id));
-        return buf;
-    }
-    int near = rx_track_color_nearest_hue(hue);
-    if (!near)
+    if (!id)
         return "none";
-    char deg[32];
-    snprintf(deg, sizeof(deg), "%.1f", fmod(hue, 360.0));
-    size_t n = strlen(deg);
-    if (n > 2 && !strcmp(deg + n - 2, ".0"))
-        deg[n - 2] = '\0';
-    snprintf(buf, size, "%s\xC2\xB0 (not one of the eight; the stick gets %s)", deg,
-             rx_track_color_name(near));
+    snprintf(buf, size, "%s (%s)", rx_track_color_name(id), rx_config_vibe(cfg, id));
     return buf;
 }
 
@@ -1450,8 +1441,8 @@ static int cmd_color(Cli *cli, int argc, char **argv)
     const char *arg = *(char **)rx_array_at(&args, 0);
     double hue;
     if (rx_parse_hue(arg, &hue) < 0) {
-        code = usage_error(cli, "color: %s is not a colour name (pink red orange yellow green "
-                           "aqua blue purple), none or a hue in degrees (0-360)", arg);
+        code = usage_error(cli, "color: %s is none of the eight colours (pink red orange yellow "
+                           "green aqua blue purple, or their hues in degrees) nor none", arg);
         goto end;
     }
 

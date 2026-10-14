@@ -614,9 +614,9 @@ Colour ids as displayed: 0 none, 1 Pink, 2 Red, 3 Orange, 4 Yellow, 5 Green, 6 A
 8 Purple (the id, not the name, selects the colour). Page header bytes 0x18..0x27 [RB]:
 `08 00 01 24 480f 7c00 0800 0000 0000 0000`.
 
-rxbox: the library keeps a track's colour as a hue in degrees (0 red ... 300 magenta), and
-the track row's `color_id` (and OneLibrary's `content.color_id`) is the id whose hue is
-nearest by circular distance. Each id's hue is the HSV hue of the RGB rekordbox 7.2.19 draws
+rxbox: the library keeps a track's colour as the hue in degrees of one of the eight (or none),
+and the track row's `color_id` (and OneLibrary's `content.color_id`) is the id whose hue it
+is. Each id's hue is the HSV hue of the RGB rekordbox 7.2.19 draws
 it in: Pink F870F8 300°, Red F80000 0°, Orange F8A030 33.6°, Yellow F8E330 53.7°, Green
 00E000 120°, Aqua 00C0F8 193.5°, Blue 0050F8 220.6°, Purple 9808F8 276°
 (`src/formats/colors.c`, `rx_track_color_nearest_hue`). No hue: 0.

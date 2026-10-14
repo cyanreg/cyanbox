@@ -357,8 +357,8 @@ static void test_tags(RXApp *app, RXTrack *a, RXTrack *b)
     CHECK(rx_track_color_of_hue(a->meta.hue) == 8, "purple: %f", a->meta.hue);
 
     /* The sort: no colour last in both directions; pink (hue 300) before
-     * red (hue 0), the legend's order rather than the hue's; a hue
-     * between the eight after the colour the stick gets for it. */
+     * red (hue 0), the legend's order rather than the hue's; blue before
+     * purple (the library keeps no hue between the eight). */
     app->sort_column = RX_COL_COLOR;
     app->sort_descending = false;
     b->meta.hue = RX_HUE_NONE;
@@ -373,10 +373,8 @@ static void test_tags(RXApp *app, RXTrack *a, RXTrack *b)
     CHECK(rows_are(app, a, b), "red before pink, descending");
     app->sort_descending = false;
     a->meta.hue = rx_track_color_hue(8);
-    b->meta.hue = 280.0;
-    CHECK(rows_are(app, a, b), "purple before a hue near it");
-    b->meta.hue = 240.0;
-    CHECK(rows_are(app, b, a), "a hue nearest blue before purple");
+    b->meta.hue = rx_track_color_hue(7);
+    CHECK(rows_are(app, b, a), "blue before purple");
 
     /* As they were for the rest. */
     a->meta.hue = b->meta.hue = RX_HUE_NONE;

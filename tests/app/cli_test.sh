@@ -64,14 +64,11 @@ id=$(sed -n 's/^  id \([0-9]*\).*/\1/p' "$dir/show.out")
 run show "$id" | grep -q "click128.flac" || fail "show by id"
 
 # The colour is one of rekordbox's eight, named with the legend's words
-# for it; a hue in degrees between them (an older library may hold one)
-# shows the colour the stick gets. none clears it.
+# for it, or none: a hue between them is refused (and one an older library
+# holds is removed when it opens). none clears it.
 grep -q "^  colour: none$" "$dir/show.out" || fail "a new track has a colour"
 grep -q "^  tags: none" "$dir/show.out" || fail "a new track has tags"
-run color 200 "$id" | grep -q "click128.flac: 200° (not one of the eight; the stick gets aqua)$" ||
-    fail "color 200"
-run show "$id" | grep -q "^  colour: 200° (not one of the eight; the stick gets aqua)$" ||
-    fail "show does not print the hue"
+run color 200 "$id" > /dev/null 2>&1 && fail "color took 200, between the eight"
 run color none "$track" | grep -q ": none$" || fail "color none"
 run color purple "$track" | grep -q ": purple (calm and dark, ambient)$" || fail "color purple"
 run color 276 "$track" | grep -q ": purple (calm and dark, ambient)$" || fail "color 276 is purple"
@@ -93,6 +90,28 @@ run config color.aqua "" | grep -q "^color.aqua = calm, smooth (the default)$" |
 run config color.aqua | grep -q "^color.aqua = calm, smooth (the default)$" ||
     fail "config color.aqua is not back to the default"
 run config color.cyan x > /dev/null 2>&1 && fail "config took color.cyan"
+
+# What the library holds that is not valid goes when it opens: a My
+# Setting with a value it does not take, one that does not exist, a
+# setting rxbox does not know (planted as an older rxbox could have).
+if python3 -c "import sqlite3" 2> /dev/null; then
+    python3 - "$lib/library.db" <<'EOF2' || fail "cannot plant the invalid settings"
+import sqlite3, sys
+db = sqlite3.connect(sys.argv[1])
+db.executemany("INSERT OR REPLACE INTO setting VALUES (?, ?)",
+               [("player.quantize", "sideways"), ("player.no_such_thing", "on"),
+                ("bogus.key", "1")])
+db.commit()
+EOF2
+    run config > "$dir/clean.out" 2> "$dir/clean.err" || fail "config after planting"
+    grep -q "player.quantize = \"sideways\" is no value it takes; removed" "$dir/clean.err" ||
+        fail "the invalid My Setting was not removed: $(cat "$dir/clean.err")"
+    grep -q "player.no_such_thing is no My Setting; removed" "$dir/clean.err" ||
+        fail "the unknown My Setting was not removed"
+    grep -q "bogus.key is no setting rxbox knows; removed" "$dir/clean.err" ||
+        fail "the unknown setting was not removed"
+    run config 2>&1 | grep -q "sideways\|no_such_thing\|bogus" && fail "they came back"
+fi
 long=$(printf '%0128d' 0)
 run config color.red "$long" > /dev/null 2>&1 && fail "config took a 128-byte description"
 

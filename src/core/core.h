@@ -112,6 +112,13 @@ void rx_db_rollback(RXDb *db);
  * load's read transaction, in one of its own. */
 int  rx_core_config_load(RXLibrary *lib);
 int  rx_core_config_migrate(RXLibrary *lib);
+/* Removes setting rows whose value their key does not take and keys
+ * rxbox does not know (not RXConfig's, not My Settings, not the
+ * interface's ui.* or the sync's sync.*), counting them in *removed. */
+int  rx_core_config_clean(RXLibrary *lib, int *removed);
+/* What the library removes when it opens (clean.c): entries that are not
+ * valid or not known. Never fails the open. */
+int  rx_core_clean(RXLibrary *lib);
 /* The playlist tree (playlist.c): load at open, free at close. When a
  * track is removed, drop_track renumbers the entries of the playlists that
  * held it, inside the caller's transaction, and forget_track removes it

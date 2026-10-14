@@ -688,12 +688,8 @@ static int load_tracks(RXLibrary *lib)
     if (ret >= 0)
         ret = load_waveform_flags(lib);
 
-    for (int i = 0; ret >= 0 && i < lib->nb_tracks; i++) {
-        RXTrack *t = lib->tracks[i];
-        if (t->grid.nb_sections && !rx_grid_valid(&t->grid))
-            rx_warn("track %llu (%s): its grid is not valid (sections out of order or a "
-                    "tempo out of range); check the grid", (unsigned long long)t->id, t->path);
-    }
+    /* A grid that is not valid is removed once the library has opened
+     * (clean.c). */
     return ret;
 }
 
@@ -754,6 +750,8 @@ int rx_library_open(RXLibrary *lib, const char *root)
     /* A library that cannot be written keeps its old keys and opens. */
     if (rx_core_config_migrate(lib) < 0)
         rx_warn("could not move the old interface settings to the device settings");
+    /* What is not valid, or not known, goes (clean.c). */
+    rx_core_clean(lib);
 
     lib->generation = 1;
     return 0;

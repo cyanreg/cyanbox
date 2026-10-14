@@ -63,9 +63,11 @@ int         rx_track_color_of_hue(double hue);
 /* The RGB a hue is drawn in: full saturation at the value the track
  * colours above are drawn at (0xF8). 0 for none. */
 uint32_t    rx_track_hue_rgb(double hue);
-/* A hue as the command line takes it: degrees 0..360 (360 is 0; a "°"
- * after the number is allowed), one of the eight names (that entry's hue),
- * or "none" / "" (-1). -EINVAL otherwise. */
+/* A colour as the command line takes it: one of the eight names (that
+ * entry's hue), that entry's hue in degrees (276 is purple; 360 is 0; a
+ * "°" after the number is allowed), or "none" / "" (-1). -EINVAL for
+ * anything else, a hue between the eight included: the library keeps
+ * none (src/core/clean.c removes one it finds). */
 int         rx_parse_hue(const char *s, double *hue);
 /* "193.5° (aqua)": the degrees to a tenth and the entry the stick gets; "none". */
 const char *rx_hue_format(double hue, char *buf, size_t size);

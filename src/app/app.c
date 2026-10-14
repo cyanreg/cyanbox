@@ -2706,13 +2706,9 @@ static SortVal sort_value(const RXTrack *t, int column)
         v.known = true;
         return v;
     case RX_COL_COLOR: {
-        /* In the legend's order, pink to purple, no colour last. A hue
-         * between the eight (an older library's) goes with the colour the
-         * stick gets, after that colour's own, in the order of the hue. */
-        int id = rx_track_color_nearest_hue(t->meta.hue);
-        v.num = id * 1000.0;
-        if (id && !rx_track_color_of_hue(t->meta.hue))
-            v.num += 500.0 + fmod(t->meta.hue - rx_track_color_hue(id) + 540.0, 360.0) - 180.0;
+        /* In the legend's order, pink to purple, no colour last. */
+        int id = rx_track_color_of_hue(t->meta.hue);
+        v.num = id;
         v.known = id > 0;
         return v;
     }
@@ -3029,6 +3025,9 @@ int rx_app_create(RXApp *app, const char *library_root, const RXPlayerOptions *p
         goto fail;
     }
     priv->lib_open = true;
+    /* My Settings that are not valid go, as the rest of what is not
+     * (rx_library_open's cleaning). */
+    rx_settings_clean(&app->lib);
     const RXConfig *cfg = &app->lib.cfg;
 
     /* One core stays with the interface and the audio. */

@@ -188,12 +188,13 @@ void rx_cue_attach_to_grid(RXCue *c, const RXGrid *grid);
 /* A track's colour is a hue: the HSV/HSL hue angle in degrees,
  * 0 <= hue < 360, with 0 red, 60 yellow, 120 green, 180 cyan (rekordbox's
  * aqua is near it), 240 blue, 300 magenta (rekordbox's pink is near it);
- * RX_HUE_NONE (-1) for no colour. The interface draws it at full
- * saturation and its usual value (rx_track_hue_rgb, rxbox/colors.h). The
- * stick carries one of rekordbox's eight colours: the export writes the
- * one whose hue (the HSV hue of its RGB) is nearest by circular distance
- * (rx_track_color_nearest_hue). A zeroed RXMeta has the hue 0, red:
- * rx_meta_free and rx_track_new set it to none. */
+ * RX_HUE_NONE (-1) for no colour. It is one of rekordbox's eight (the HSV
+ * hue of the RGB it draws them in, rxbox/colors.h) or none: the library
+ * removes any other when it opens (src/core/clean.c), and nothing sets
+ * one. The interface draws it at full saturation and its usual value
+ * (rx_track_hue_rgb); the stick carries the colour it is
+ * (rx_track_color_nearest_hue finds it). A zeroed RXMeta has the hue 0,
+ * red: rx_meta_free and rx_track_new set it to none. */
 #define RX_HUE_NONE (-1.0)
 static inline bool rx_hue_valid(double hue) { return hue >= 0.0 && hue < 360.0; }
 /* Into [0, 360) (360 is 0 again); none for a hue below 0 or not a number. */

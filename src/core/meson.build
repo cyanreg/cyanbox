@@ -4,6 +4,7 @@
 # where waveforms are stored (see the comment there).
 rx_core_lib = static_library('rx_core',
     files(
+        'clean.c',
         'config.c',
         'db.c',
         'grid.c',

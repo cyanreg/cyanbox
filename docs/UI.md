@@ -325,10 +325,9 @@ legend's words for it (`red · intense, peak time`); under them nine
 swatches as wide as the field column allows (12 to 20 px): none, then the
 eight in rekordbox's order, each with its name and words as a tooltip,
 the track's own outlined. A click sets the colour and the library saves
-it. A track whose hue is not one of the eight (an older rxbox set hues on
-a strip) is drawn in that hue, named by its degrees and the colour the
-stick gets (`200°, between the eight (aqua on the stick)`), and no swatch
-is outlined. The row menu's Set colour shows the same swatches and gives
+it. A track has one of the eight or none: a hue between them, which an
+older rxbox's tagging and strip set, is removed when the library opens.
+The row menu's Set colour shows the same swatches and gives
 the colour clicked to every selected track. A track's colour is drawn as
 its hue at full saturation and the palette's value (`0xF8`).
 The comment starts empty: rxbox leaves a file's comment tag out when it

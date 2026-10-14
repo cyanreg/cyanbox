@@ -483,6 +483,80 @@ const char *rx_settings_value(const char *file, const char *name, const char *va
     return byte_listed(fl, byte);
 }
 
+bool rx_settings_valid(const char *key, const char *value)
+{
+    if (!key || !value)
+        return false;
+    const File *in[2] = { NULL, NULL };
+    const char *name;
+    if (rx_str_starts(key, "player.")) {
+        name = key + 7;
+        in[0] = find_file("MYSETTING.DAT");
+        in[1] = find_file("MYSETTING2.DAT");
+    } else if (rx_str_starts(key, "mixer.")) {
+        name = key + 6;
+        in[0] = find_file("DJMMYSETTING.DAT");
+    } else if (rx_str_starts(key, "device.")) {
+        name = key + 7;
+        in[0] = find_file("DEVSETTING.DAT");
+    } else {
+        return false;
+    }
+    if (!strcmp(name, background_key) && in[0] && !strcmp(in[0]->name, "DEVSETTING.DAT"))
+        return rx_settings_value("", name, value) != NULL;
+    for (int i = 0; i < 2 && in[i]; i++) {
+        if (find_field(in[i], name))
+            return rx_settings_value(in[i]->name, name, value) != NULL;
+    }
+    return false;
+}
+
+/* The My Settings of one group that are valid, the others said and
+ * dropped; true when any went. */
+static bool clean_group(const char *prefix, RXKv **kv, int *nb, int *removed)
+{
+    int kept = 0;
+    bool any = false;
+    for (int i = 0; i < *nb; i++) {
+        RXKv *e = &(*kv)[i];
+        char key[96];
+        snprintf(key, sizeof(key), "%s.%s", prefix, e->key ? e->key : "");
+        if (e->key && rx_settings_valid(key, e->value ? e->value : "")) {
+            (*kv)[kept++] = *e;
+            continue;
+        }
+        if (e->key && rx_settings_get(NULL, key))
+            rx_info("settings: %s = \"%s\" is no value it takes; removed, the default stands", key,
+                    e->value ? e->value : "");
+        else
+            rx_info("settings: %s is no My Setting; removed", key);
+        free(e->key);
+        free(e->value);
+        (*removed)++;
+        any = true;
+    }
+    *nb = kept;
+    return any;
+}
+
+int rx_settings_clean(RXLibrary *lib)
+{
+    RXConfig *c = &lib->cfg;
+    int removed = 0;
+    bool any = clean_group("player", &c->player, &c->nb_player, &removed);
+    any |= clean_group("mixer", &c->mixer, &c->nb_mixer, &removed);
+    any |= clean_group("device", &c->device, &c->nb_device, &removed);
+    if (!any)
+        return 0;
+    int ret = rx_library_config_save(lib);
+    if (ret < 0) {
+        rx_warn("settings: the My Settings that are not valid could not be removed: %s",
+                strerror(-ret));
+        return ret;
+    }
+    return removed;
+}
+
 const char *rx_settings_get(const RXConfig *cfg, const char *key)
 {
     if (!key)
