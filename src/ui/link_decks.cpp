@@ -370,6 +370,16 @@ static void deck_cell(UiState *ui, int index, ImVec2 a, ImVec2 b)
     plate(tx, ty, tx + ImMax(w1, w2), ly + PX(LINE_SIZE));
     dl->ChannelsMerge();
 
+    // A white triangle at the foot of the playhead, over everything, so
+    // the place shows where the cover or the text hides the line.
+    if (t && pos >= 0 && t->duration > 0) {
+        float px = floorf(a.x + (float)(pos / t->duration) * width), s = PX(7);
+        ImVec2 p[3] = { ImVec2(px - s, b.y - PX(1)), ImVec2(px + s, b.y - PX(1)),
+                        ImVec2(px, b.y - PX(1) - s * 1.3f) };
+        dl->AddTriangleFilled(p[0], p[1], p[2], UI_TEXT);
+        dl->AddTriangle(p[0], p[1], p[2], IM_COL32(0, 0, 0, 0xC0), PX(1));
+    }
+
     // Outlined orange while the player plays.
     dl->AddRect(a, b, d.playing && loaded ? UI_ACCENT : IM_COL32(0x2A, 0x2A, 0x2A, 0xFF), PX(3), PX(1.5f));
 
