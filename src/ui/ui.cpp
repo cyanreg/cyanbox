@@ -20,7 +20,8 @@
 // RXBOX_UI_AUTOLOAD=<id> loads that track on the first frame and starts it
 // once it is loaded (RXBOX_UI_AUTOLOAD_AT=<seconds>: from there);
 // RXBOX_UI_SHOW=<list> opens panels and dialogs on the first frame (grid,
-// half, export, sync, inspect, analysis, settings, add, keys, about, link), and
+// half, export, sync, inspect, analysis, settings, add, keys, about, link,
+// remove-missing), and
 // `tags` asks for the autoloaded track's tags from the model;
 // RXBOX_UI_SCREENSHOT=<png> saves frame 100 (RXBOX_UI_SCREENSHOT_FRAME=<n>:
 // frame n) through rx_window_screenshot_next(), which writes it once it is
@@ -919,6 +920,8 @@ static void menu_bar(UiState *ui)
             else
                 rx_app_set_status(app, "No change in missing files");
         }
+        if (ImGui::MenuItem("Remove missing tracks..."))
+            ui_open_remove_missing(ui);
         ImGui::Separator();
         if (ImGui::MenuItem("Quit", "Ctrl+Q")) {
             app->quit = true;
@@ -1308,6 +1311,15 @@ static void log_test_state(UiState *ui)
                      : app->current_album[0] ? app->current_album
                                              : "None";
     rx_info("ui test: view \"%s\"", view);
+    // File > Remove missing tracks: what it lists, the folders gone, and
+    // where its Remove button is (logical pixels, for a click).
+    if (ui->remove_missing) {
+        int gone = 0;
+        for (const auto &g : ui->remove_gone)
+            gone += g.second;
+        rx_info("ui test: remove-missing %zu gone %d button %.0f %.0f", ui->remove_ids.size(), gone,
+                ui->remove_button.x / ui->s, ui->remove_button.y / ui->s);
+    }
     if (ui->tree_find[0]) {
         int c = ui->tree_hit;
         rx_info("ui test: tree find \"%s\" matches %zu cursor \"%s\"", ui->tree_find,
@@ -1579,6 +1591,8 @@ static void autoshow(UiState *ui)
         ui->dlg_keys = true;
     if (shown(ui, "about"))
         ui->dlg_about = true;
+    if (shown(ui, "remove-missing"))
+        ui_open_remove_missing(ui);
     if (shown(ui, "link"))
         ui_open_link(ui);
 }

@@ -135,6 +135,92 @@ static bool volume_picker(UiState *ui, char *path, size_t size)
 
 /* ------------------------------------------------------------ confirmations */
 
+// The first folder of `path` that is not there ("" when its own folder
+// is): a drive not plugged in, a folder moved or renamed.
+static std::string first_gone(const char *path)
+{
+    std::string p = path;
+    size_t end = p.rfind('/');
+    for (size_t at = p.find('/', 1); at != std::string::npos && at <= end; at = p.find('/', at + 1)) {
+        std::string dir = p.substr(0, at);
+        struct stat st;
+        if (stat(dir.c_str(), &st) < 0 || !S_ISDIR(st.st_mode))
+            return dir;
+    }
+    return "";
+}
+
+void ui_open_remove_missing(UiState *ui)
+{
+    RXApp *app = ui->app;
+    if (rx_app_rescan(app) < 0)
+        return;
+    ui->remove_ids.clear();
+    ui->remove_gone.clear();
+    for (int i = 0; i < app->lib.nb_tracks; i++) {
+        const RXTrack *t = app->lib.tracks[i];
+        if (!t->missing)
+            continue;
+        ui->remove_ids.push_back(t->id);
+        std::string gone = first_gone(t->path);
+        if (gone.empty())
+            continue;
+        auto g = std::find_if(ui->remove_gone.begin(), ui->remove_gone.end(),
+                              [&](const auto &x) { return x.first == gone; });
+        if (g != ui->remove_gone.end())
+            g->second++;
+        else
+            ui->remove_gone.emplace_back(gone, 1);
+    }
+    if (ui->remove_ids.empty()) {
+        rx_app_set_status(app, "No track is missing its file");
+        return;
+    }
+    std::sort(ui->remove_gone.begin(), ui->remove_gone.end(),
+              [](const auto &a, const auto &b) { return a.second > b.second; });
+    ui->remove_missing = true;
+    ui->want_confirm_remove = true;
+}
+
+// The missing tracks the question is about, and the folders gone with
+// them, which say the files may well be fine on a drive not plugged in.
+static void missing_list(UiState *ui)
+{
+    RXApp *app = ui->app;
+    int n = (int)ui->remove_ids.size();
+    ImGui::Text("Remove %d track%s whose file%s cannot be found?", n, n == 1 ? "" : "s",
+                n == 1 ? "" : "s");
+    float row = ImGui::GetTextLineHeightWithSpacing();
+    ImGui::BeginChild("##missing", ImVec2(PX(620), row * (float)std::min(n, 8) + PX(10)),
+                      ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar);
+    ImGuiListClipper clip;
+    clip.Begin(n);
+    while (clip.Step()) {
+        for (int i = clip.DisplayStart; i < clip.DisplayEnd; i++) {
+            const RXTrack *t = rx_library_find_id(&app->lib, ui->remove_ids[(size_t)i]);
+            ImGui::TextUnformatted(t ? t->path : "?");
+        }
+    }
+    ImGui::EndChild();
+    if (!ui->remove_gone.empty()) {
+        int k = 0;
+        for (const auto &g : ui->remove_gone)
+            k += g.second;
+        ImGui::Spacing();
+        bool one = ui->remove_gone.size() == 1;
+        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(UI_ACCENT), "%d of them %s in %s gone too:",
+                           k, k == 1 ? "is" : "are", one ? "a folder that is" : "folders that are");
+        size_t shown = std::min(ui->remove_gone.size(), (size_t)4);
+        for (size_t i = 0; i < shown; i++)
+            ImGui::BulletText("%s (%d)", ui->remove_gone[i].first.c_str(), ui->remove_gone[i].second);
+        if (ui->remove_gone.size() > shown)
+            ImGui::BulletText("and %zu more", ui->remove_gone.size() - shown);
+        ImGui::TextDisabled("A drive not plugged in, or a folder moved? Plug it in and rescan,\n"
+                            "or relocate the tracks, to keep their cues and grids.");
+    }
+    ImGui::TextDisabled("Cues, grids and playlist entries go with them.");
+}
+
 static void confirm_remove(UiState *ui)
 {
     RXApp *app = ui->app;
@@ -147,10 +233,16 @@ static void confirm_remove(UiState *ui)
         return;
     ui_settle_centred();
     int n = (int)ui->remove_ids.size();
-    ImGui::Text("Remove %d track%s from the library?", n, n == 1 ? "" : "s");
-    ImGui::TextDisabled("Cues, grids and playlist entries go with them. The audio files stay.");
+    if (ui->remove_missing) {
+        missing_list(ui);
+    } else {
+        ImGui::Text("Remove %d track%s from the library?", n, n == 1 ? "" : "s");
+        ImGui::TextDisabled("Cues, grids and playlist entries go with them. The audio files stay.");
+    }
     ImGui::Spacing();
-    if (ImGui::Button("Remove", ImVec2(PX(110), 0))) {
+    bool remove = ImGui::Button("Remove", ImVec2(PX(110), 0));
+    ui->remove_button = (ImGui::GetItemRectMin() + ImGui::GetItemRectMax()) * 0.5f;
+    if (remove) {
         int removed = 0;
         for (uint64_t id : ui->remove_ids) {
             RXTrack *t = rx_library_find_id(&app->lib, id);
@@ -164,6 +256,8 @@ static void confirm_remove(UiState *ui)
                 removed++;
         }
         ui->remove_ids.clear();
+        ui->remove_gone.clear();
+        ui->remove_missing = false;
         app->nb_selection = 0;
         app->focus_track = 0;
         rx_app_rebuild_rows(app);
@@ -173,6 +267,8 @@ static void confirm_remove(UiState *ui)
     ImGui::SameLine();
     if (ImGui::Button("Cancel", ImVec2(PX(110), 0)) || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
         ui->remove_ids.clear();
+        ui->remove_gone.clear();
+        ui->remove_missing = false;
         ImGui::CloseCurrentPopup();
     }
     ImGui::EndPopup();

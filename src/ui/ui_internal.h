@@ -314,9 +314,14 @@ struct UiState {
     RXPlaylistFolder *move_to;
     int       move_pos;
 
-    // Remove from library confirmation.
+    // Remove from library confirmation; for File > Remove missing tracks,
+    // the tracks listed and the folders gone with them (a drive not
+    // mounted reads as every file on it missing).
     bool      want_confirm_remove;
+    bool      remove_missing;
     std::vector<uint64_t> remove_ids;
+    std::vector<std::pair<std::string, int>> remove_gone;  // a folder gone, its tracks
+    ImVec2    remove_button;          // where Remove was drawn (the UI test's log)
 
     // Relocate (a missing track's new path).
     bool      want_relocate;
@@ -524,6 +529,8 @@ void ui_open_inspect(UiState *ui);
 void ui_open_sync(UiState *ui);
 void ui_open_settings(UiState *ui);
 void ui_open_relocate(UiState *ui, RXTrack *t);
+// File > Remove missing tracks: rescans, then asks (confirm_remove).
+void ui_open_remove_missing(UiState *ui);
 void ui_dialogs_shutdown(UiState *ui);
 // A dialog's first frame: centred, w x h logical pixels (0: its own size).
 void ui_centre_next(UiState *ui, float w, float h);

@@ -389,7 +389,9 @@ cannot serve`), which opens the PRO DJ LINK window when clicked.
 A menu bar at the very top: **File** (Add files/folders… (ImGui file
 browser: a simple directory lister with a path field, since there is no
 native dialog, and a finder, below), Export to USB…, Sync from USB…, Inspect USB…, Player
-settings… (`Ctrl+,`), Rescan missing files, Quit),
+settings… (`Ctrl+,`), Rescan missing files, Remove missing tracks… (rescans,
+then lists the tracks whose files are not found and asks; when their folders
+are gone too it names them, as a drive not plugged in looks the same), Quit),
 **View** (waveform colour 3Band/Blue/RGB, key notation Classic/
 Alphanumeric, Traffic Light off/same key/related 1–3, detail waveform
 centred/half, grid tools; the waveform colour and the key notation are the

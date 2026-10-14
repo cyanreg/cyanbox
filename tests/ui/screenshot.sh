@@ -29,9 +29,12 @@
 # RXBOX_UI_SWAYSOCK only: the click needs a known size). Then the Player
 # settings dialog, shot open, and a value picked in it with two clicks,
 # which must land in the library's setting table (the clicks with
-# RXBOX_UI_SWAYSOCK only). Last, the interface following two of those
+# RXBOX_UI_SWAYSOCK only). Then the interface following two of those
 # settings: the overview type for the overview and the row previews, and
-# the key display for the deck's KEY.
+# the key display for the deck's KEY. Last, File > Remove missing tracks
+# (RXBOX_UI_SHOW=remove-missing): it lists the fourth track and a fifth
+# whose folder is gone too, names that folder, and a click on Remove takes
+# both out of the library, the rest kept.
 #
 # usage: screenshot.sh RXBOX OUTDIR
 
@@ -299,3 +302,29 @@ variant settings-default "" "track $ID .*overview half previews half key $classi
 rx config device.overview_waveform full > /dev/null
 rx config device.key_display alphanumeric > /dev/null
 variant settings-follow "" "track $ID .*overview centred previews centred key $camelot\$"
+
+# File > Remove missing tracks: a fifth track, in a folder of its own that
+# then goes, as a drive not plugged in would. The dialog lists it and the
+# fourth (missing since the start) and counts one in a folder gone; the
+# log says where its Remove button is, and a click there (in a run of the
+# same size) removes both. The other three stay, the loaded first among
+# them.
+mkdir -p "$OUT/gone"
+cp "$AUDIO/02-dnb.flac" "$OUT/gone/05-gone.flac"
+rx add "$OUT/gone/05-gone.flac" > "$OUT/add-gone.log" 2>&1 || { cat "$OUT/add-gone.log"; exit 1; }
+rm -rf "$OUT/gone"
+(
+    export RXBOX_UI_SHOW=remove-missing
+    variant remove-missing-ask "" "remove-missing 2 gone 1 button [0-9]+ [0-9]+"
+    xy=$(sed -n 's/.*remove-missing 2 gone 1 button \([0-9]*\) \([0-9]*\).*/\1:\2/p' \
+         "$OUT/variant-remove-missing-ask.png.log" | tail -n 1)
+    variant remove-missing "70:click:$xy" "track $ID .*popup 0"
+) || exit 1
+left=$(rx show "$AUDIO/01-house.flac" "$AUDIO/02-dnb.flac" "$AUDIO/03-jpop.flac" 2>&1 | grep -c '^  id ' || true)
+[ "$left" = 3 ] || { echo "FAIL: remove-missing: want the three tracks there kept, have $left"; exit 1; }
+for gone in "$AUDIO/04-techno.flac" "$OUT/gone/05-gone.flac"; do
+    if rx show "$gone" 2>&1 | grep -q '^  id '; then
+        echo "FAIL: remove-missing: $gone is still in the library"; rx show "$gone"; exit 1
+    fi
+done
+echo "remove-missing: the two missing tracks removed, three kept"
