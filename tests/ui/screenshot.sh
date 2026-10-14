@@ -23,7 +23,8 @@
 # another track while one plays loads it at once (the playing one pauses
 # for the swap, the new one plays on, no question asked); the Add browser on
 # a folder it cannot read says so; its finder finds what is typed under
-# the folder and ticks the row Enter is pressed on; Delete after a click on a cue in the
+# the folder and ticks the row Enter is pressed on; the tree's finder
+# lists what it finds and opens the one Enter is pressed on; Delete after a click on a cue in the
 # player's cue list deletes that cue and nothing else (with
 # RXBOX_UI_SWAYSOCK only: the click needs a known size). Then the Player
 # settings dialog, shot open, and a value picked in it with two clicks,
@@ -232,6 +233,17 @@ touch "$m/AD:HOUSE 11 [FLAC]/2.01 - Felicidade.flac" "$m/AD:HOUSE 11 [FLAC]/2.02
         'find "felic" matches 4 of 8 best "Bossa/Felicidade \(live\)\.mp3" cursor "AD:HOUSE 11 \[FLAC\]/2\.01 - Felicidade\.flac" picked 1'
 )
 rm -rf "$OUT/findhome"
+
+# The tree's finder: Ctrl+P gives it the keyboard; "pea" finds the
+# playlist in the folder Peak (as "Peak/Main room") and nothing else, the
+# list shown in the tree's place. Enter on "main" opens that playlist, on
+# "tones" the album, and the field empties.
+variant tree-find "40:down:Ctrl,41:down:P,43:up:P,44:up:Ctrl,50:text:pea" \
+    'tree find "pea" matches 1 cursor "Peak/Main room"'
+variant tree-find-playlist "40:down:Ctrl,41:down:P,43:up:P,44:up:Ctrl,50:text:main,70:down:Enter,72:up:Enter" \
+    'view "Main room"'
+variant tree-find-album "40:down:Ctrl,41:down:P,43:up:P,44:up:Ctrl,50:text:tones,70:down:Enter,72:up:Enter" \
+    'view "rxbox test tones"'
 
 # Delete on a selected cue: a click on the cue list's first row (the
 # memory cue at 0, where the list sits at 1600x900) selects it, Delete

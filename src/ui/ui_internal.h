@@ -224,6 +224,19 @@ struct UiTestEvent {
     std::string text;          // typed text ('+' for a space)
 };
 
+// A match of the tree's finder (tree.cpp): Collection, an album (None's
+// name is ""), or a playlist; `text` what was matched and is shown, the
+// context (the album's artist, the playlist's folders) up to its last '/'.
+struct UiTreeHit {
+    enum Kind { COLLECTION, ALBUM, PLAYLIST } kind;
+    std::string text;
+    std::string album;
+    RXPlaylist *playlist;
+    RXPlaylistFolder *parent;
+    int count;
+    int score;
+};
+
 struct UiState {
     RXApp *app;
     float  s;                  // layout scale (see top of file)
@@ -281,6 +294,19 @@ struct UiState {
     bool      create_pending, create_folder;
     RXPlaylistFolder *create_in;
     RXPlaylistFolder *reveal;  // opened, with every folder above it, at the next tree draw
+    // The finder above the tree: what is typed, its matches best first (made
+    // again when it or the library changes), the one Enter opens; after a
+    // pick, the row the tree scrolls to (an album's opens Albums).
+    char      tree_find[128];
+    bool      tree_find_focus;     // Ctrl+P: the field takes the keyboard
+    std::vector<UiTreeHit> tree_hits;
+    std::string tree_hits_query;
+    unsigned  tree_hits_generation;
+    int       tree_hit;
+    bool      tree_hit_scroll;
+    bool      tree_reveal_album;
+    std::string tree_reveal_album_name;
+    RXPlaylist *tree_reveal_playlist;
     unsigned  bytes_generation;    // lib.generation the status bar's size is for, 0 none
     int64_t   bytes_total;
     bool      move_pending, move_folder;

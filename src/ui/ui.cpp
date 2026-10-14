@@ -27,10 +27,10 @@
 // presented, and the run goes on; a run that ends before that frame
 // (--frames below it) saves its last frame at shutdown instead. The state
 // the tests look at (the loaded track, playing, a popup open, how the
-// overview and the row previews were drawn, the deck's KEY readout) is
-// logged with it. RXBOX_UI_EVENTS=<frame>:<event>,... gives ImGui input at those
-// frames: down:<key> and up:<key> (ImGui's key names: C, Enter,
-// DownArrow...), focus-out and focus-in, click:<x>:<y> (the pointer moved
+// overview and the row previews were drawn, the deck's KEY readout, the
+// view the table shows) is logged with it. RXBOX_UI_EVENTS=<frame>:<event>,...
+// gives ImGui input at those frames: down:<key> and up:<key> (ImGui's key
+// names: C, Enter, DownArrow...; Ctrl the modifier), focus-out and focus-in, click:<x>:<y> (the pointer moved
 // there, in logical pixels, and the left button pressed and let go two
 // frames later), text:<characters> (typed, '+' for a space).
 
@@ -1212,8 +1212,9 @@ static void parse_test_events(UiState *ui, const char *spec)
             }
         } else if (!strcmp(what, "down") || !strcmp(what, "up")) {
             ev.type = what[0] == 'd' ? 0 : 1;
-            ev.key = ImGuiKey_None;
-            for (int k = ImGuiKey_NamedKey_BEGIN; k < ImGuiKey_NamedKey_END; k++) {
+            // "Ctrl" is the modifier, which ImGui takes as a key of its own.
+            ev.key = !strcmp(key, "Ctrl") ? ImGuiMod_Ctrl : ImGuiKey_None;
+            for (int k = ImGuiKey_NamedKey_BEGIN; !ev.key && k < ImGuiKey_NamedKey_END; k++) {
                 if (!strcmp(ImGui::GetKeyName((ImGuiKey)k), key))
                     ev.key = (ImGuiKey)k;
             }
@@ -1278,6 +1279,20 @@ static void log_test_state(UiState *ui)
             ui->frame_no, (unsigned long long)(t ? t->id : 0), st.playing, st.position, popup,
             t ? t->nb_cues : 0, ui_cue_list_has_keys(ui, 0), mode_drawn(ui->overview_mode_drawn),
             mode_drawn(ui->preview_mode_drawn), ui->key_drawn[0] ? ui->key_drawn : "-");
+    // The view the table shows, and the tree's finder: what is typed, its
+    // matches and the one Enter opens.
+    const char *view = app->current_playlist ? app->current_playlist->name
+                     : !app->current_album   ? "Collection"
+                     : app->current_album[0] ? app->current_album
+                                             : "None";
+    rx_info("ui test: view \"%s\"", view);
+    if (ui->tree_find[0]) {
+        int c = ui->tree_hit;
+        rx_info("ui test: tree find \"%s\" matches %zu cursor \"%s\"", ui->tree_find,
+                ui->tree_hits.size(),
+                c >= 0 && (size_t)c < ui->tree_hits.size() ? ui->tree_hits[(size_t)c].text.c_str()
+                                                           : "");
+    }
     // The Add dialog's finder: the query, its matches, the best one, the
     // row the cursor is on and what is ticked.
     if (ui->finder && ui->fb_find[0]) {

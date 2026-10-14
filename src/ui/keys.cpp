@@ -7,7 +7,7 @@
 // the keyboard and, for the player and the browser, while a modal dialog
 // is open or a dialog window (Add, Export, the settings...) has the
 // focus: Space would play behind it, Delete take tracks out of a
-// playlist. Ctrl+Q, Ctrl+F, Ctrl+G and Ctrl+, act everywhere.
+// playlist. Ctrl+Q, Ctrl+F, Ctrl+P, Ctrl+G and Ctrl+, act everywhere.
 //
 // CUE and the hot cue keys hold like the buttons: press on key down,
 // release on key up, so holding C at the cue point previews as on a CDJ.
@@ -41,6 +41,7 @@ const UiKeyRow ui_key_rows[] = {
     { "Delete", "Remove the selection from the playlist; after a click on a cue, delete that cue" },
     { "Ctrl+A", "Select every track in the list" },
     { "Ctrl+F", "Search" },
+    { "Ctrl+P", "Find a playlist or album" },
     { "Ctrl+,", "Player settings (the My Settings the export writes)" },
     { "Esc", "Clear the search / close the dialog with the focus / give Delete back to the "
             "track list" },
@@ -92,6 +93,10 @@ void ui_keys(UiState *ui)
             ui->fb_find_focus = true;
         else
             ui->focus_search = true;
+        return;
+    }
+    if (ctrl && pressed(ImGuiKey_P)) {
+        ui->tree_find_focus = true;
         return;
     }
     if (ctrl && pressed(ImGuiKey_G)) {

@@ -252,7 +252,16 @@ then the folders and playlists from the library. Click selects the view.
 Right-click: new playlist, new folder (the folder it goes in opens),
 rename, delete (with confirm); m3u8 import and export are on the command
 line (`rxbox playlist import` / `export`). Drag tracks from the table onto a playlist to
-add; drag playlists and folders within the tree to move them.
+add; drag playlists and folders within the tree to move them. Names are
+16 px, counts 12.5, icons 15. Above the tree a finder (`Ctrl+P`, "Find a
+playlist or album"): what is typed is matched fuzzily, as the Add
+dialog's finder matches (`rx_fuzzy_match`), against Collection, None,
+every album as `artist/album` and every playlist as `folder/playlist`, and
+while it holds text the tree shows the matches instead, best first, the
+context dimmed and the letters matched lit green; ↑ ↓ (and Page Up/Down)
+move along them, Enter or a click opens the one picked, as a click in the
+tree would, and the tree comes back with it shown (Albums or its folders
+opened, scrolled to it); `Esc` empties the field.
 
 **Search field** above the table: filters the current view on title,
 artist, album, genre, comment, file name with `rx_str_contains_fold`
@@ -512,6 +521,7 @@ rekordbox's Export preset for player 1 (no shifted second-player set):
 | A S D F G H J K L ; | Memory cue 1–10 |
 | Ctrl+A | Select every track in the table |
 | Ctrl+F | Search |
+| Ctrl+P | Find a playlist or album (the tree's finder) |
 | Ctrl+, | Player settings (the My Settings the export writes) |
 | ↑ ↓ | Move the focus in the track table; after a click on a cue, move the cue list's selection |
 | Enter | Load the focused track |
@@ -524,8 +534,8 @@ act on the player and the table only while the main window has the
 focus: with a dialog focused (Add, Export, the settings and the rest) or
 a text field active they do nothing, so Space does not play and Delete
 does not take tracks out of a playlist behind a dialog. Ctrl+Q, Ctrl+F
-(the Add dialog's finder while that dialog has the focus), Ctrl+G and
-Ctrl+, act everywhere but in a text field.
+(the Add dialog's finder while that dialog has the focus), Ctrl+P, Ctrl+G
+and Ctrl+, act everywhere but in a text field.
 
 ## Drawing rules worth repeating
 
