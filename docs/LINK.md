@@ -78,9 +78,13 @@ CDJ-2000 v4.33, a CDJ-2000NXS2 v1.87; 2026-10-15) showed:
   first 2 s after a load, then at about the rate it plays (140 to 180
   kB/s), and nothing of the tracks after it.
 - The older cue list (`0x2104`) gives a pre-nexus deck its memory cues
-  and hot cues A to C (a hot loop D is left out: those decks have three).
-  A CDJ-900 has no hot cue keys at all (its firmware's key table marks
-  them "2000 only") and ignores them; a CDJ-2000 has them.
+  and hot cues A to C (a hot loop D is left out: those decks have three),
+  memory cues first: a CDJ-2000 takes the first <memory count> records
+  as memory cues and the next <hot count> as hot cues, whatever their
+  flags say (with hot cues first it filed A as a memory cue). A CDJ-900
+  has no hot cue keys at all (its firmware's key table marks them "2000
+  only") and ignores them; a CDJ-2000 has them, but loads them only after
+  a CALL with its HOT CUE AUTO LOAD off.
 - A CDJ-2000's key menu has two levels of its own: `0x100b`, the keys
   (not `0x1014`), and `0x110b`, a key's tracks (given the related keys'
   rows, it took them for a leaf and asked nothing more). It reads a WAV

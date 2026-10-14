@@ -1450,10 +1450,20 @@ static void test_library(RXLibrary *lib, RXPlan *plan, RXCatalog **cat)
     CHECK(r.kind == RX_DB_CUES_REPLY && r.nb_args == 9 && rx_dbmsg_num(&r, 2) == 3 * 36 &&
           rx_dbmsg_num(&r, 4) == 0x24 && rx_dbmsg_num(&r, 5) == 1 && rx_dbmsg_num(&r, 6) == 2 &&
           rx_dbmsg_num(&r, 7) == 24);
-    if (r.nb_args == 9 && r.args[3].len >= 36) {
-        RXRd rd = rx_rd(r.args[3].p, r.args[3].len);
-        uint32_t flags = rx_rd_u32le(&rd);
-        CHECK_EQ(flags, 0x10101);   /* the hot cue A loop first */
+    /* The memory cues first, then the hot cues (a CDJ-2000 files the first
+     * <memory count> as memory cues whatever their flags), and the times
+     * in the same order. */
+    if (r.nb_args == 9 && r.args[3].len >= 3 * 36 && r.args[8].len >= 24) {
+        RXRd rd = rx_rd(r.args[3].p, r.args[3].len), td = rx_rd(r.args[8].p, r.args[8].len);
+        for (int i = 0; i < 3; i++) {
+            uint32_t word[9];
+            for (int k = 0; k < 9; k++)
+                word[k] = rx_rd_u32le(&rd);
+            uint32_t in_ms = rx_rd_u32le(&td);
+            rx_rd_u32le(&td);
+            CHECK_EQ(word[0] >> 16 & 0xff, i < 2 ? 0u : 1u);
+            CHECK_EQ(word[3], (uint32_t)((uint64_t)in_ms * 3 / 20));
+        }
     }
     CHECK_EQ(rx_dbclient_request(c, RX_DB_CUES, 8, (const uint32_t[]) { bravo }, 1, &r), 0);
     CHECK(rx_dbmsg_num(&r, 2) == 36 && rx_dbmsg_num(&r, 5) == 0 && rx_dbmsg_num(&r, 6) == 1);

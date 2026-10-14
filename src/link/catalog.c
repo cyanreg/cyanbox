@@ -2086,27 +2086,35 @@ int rx_catalog_cues(RXCatalog *c, uint32_t track, RXWr *records, RXWr *times,
      * blob, in and out, eight bytes a cue (rbxport). No out is ff.. here
      * as in the extended list (assumed). The 1/150 s are floored, not
      * rounded: a cue on a kick then starts at most 6.7 ms early, never
-     * up to 3.3 ms into its attack. */
-    for (int i = 0; i < nb; i++) {
-        const RXPlanCue *q = v[i];
-        if (q->hot >= 3)
-            continue;
-        bool loop = q->loop_end > q->time;
-        uint32_t in = ms_of(q->time), out = loop ? ms_of(q->loop_end) : 0xffffffff;
-        uint32_t slot = q->hot >= 0 ? (uint32_t)q->hot + 1 : 0;
-        const uint32_t words[9] = {
-            0x100 | loop | slot << 16, 0, 0, (uint32_t)((uint64_t)in * 3 / 20),
-            loop ? (uint32_t)((uint64_t)out * 3 / 20) : 0xffffffff, 0,
-            0, 0, 0,
-        };
-        for (int k = 0; k < 9; k++)
-            rx_wr_u32le(records, words[k]);
-        rx_wr_u32le(times, in);
-        rx_wr_u32le(times, out);
-        if (slot)
-            (*hot)++;
-        else
-            (*memory)++;
+     * up to 3.3 ms into its attack.
+     *
+     * The memory cues come first, then the hot cues: a CDJ-2000 (4.33)
+     * takes the first <memory count> records for memory cues and the next
+     * <hot count> for hot cues, whatever their flags say; sent hot cues
+     * first, it filed hot cue A as a memory cue and its A key did
+     * nothing (an emulated one's memory, 2026-10-15). */
+    for (int pass = 0; pass < 2; pass++) {
+        for (int i = 0; i < nb; i++) {
+            const RXPlanCue *q = v[i];
+            if (q->hot >= 3 || (q->hot >= 0) != (pass == 1))
+                continue;
+            bool loop = q->loop_end > q->time;
+            uint32_t in = ms_of(q->time), out = loop ? ms_of(q->loop_end) : 0xffffffff;
+            uint32_t slot = q->hot >= 0 ? (uint32_t)q->hot + 1 : 0;
+            const uint32_t words[9] = {
+                0x100 | loop | slot << 16, 0, 0, (uint32_t)((uint64_t)in * 3 / 20),
+                loop ? (uint32_t)((uint64_t)out * 3 / 20) : 0xffffffff, 0,
+                0, 0, 0,
+            };
+            for (int k = 0; k < 9; k++)
+                rx_wr_u32le(records, words[k]);
+            rx_wr_u32le(times, in);
+            rx_wr_u32le(times, out);
+            if (slot)
+                (*hot)++;
+            else
+                (*memory)++;
+        }
     }
     free(v);
     return 0;
