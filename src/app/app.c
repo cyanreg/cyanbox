@@ -2634,7 +2634,8 @@ int rx_app_start_export(RXApp *app)
 
 typedef struct RowKey {
     uint32_t index;             /* in lib->tracks */
-    int      pos;               /* natural order: playlist position or library order */
+    int      pos;               /* playlist position or library order */
+    uint32_t number;            /* `#`: the place in the view's own order, from 1 */
 } RowKey;
 
 typedef struct SortCtx {
@@ -2764,8 +2765,8 @@ static int compare_rows(const void *pa, const void *pb, void *opaque)
         if (c)
             return c;
     }
-    /* Stable: equal rows keep their natural order. */
-    return (ra->pos > rb->pos) - (ra->pos < rb->pos);
+    /* Stable: equal rows keep the view's own order. */
+    return (ra->number > rb->number) - (ra->number < rb->number);
 }
 
 #define MAX_SEARCH_WORDS 16
@@ -2874,12 +2875,26 @@ void rx_app_rebuild_rows(RXApp *app)
             continue;
         if (album && !in_album(t, album))
             continue;
-        if (nb_words && !track_matches(t, words, nb_words))
-            continue;
         keys[nb++] = (RowKey) {
             .index = pl ? (uint32_t)rx_library_index_of(lib, t) : (uint32_t)i,
             .pos   = i,
         };
+    }
+
+    /* The view's own order, which `#` numbers before the search and the
+     * sort: an album's is its own, not the library's. */
+    if (album)
+        qsort_r(keys, nb, sizeof(*keys), compare_album_rows, lib);
+    for (int i = 0; i < nb; i++)
+        keys[i].number = (uint32_t)i + 1;
+
+    if (nb_words) {
+        int kept = 0;
+        for (int i = 0; i < nb; i++) {
+            if (track_matches(lib->tracks[keys[i].index], words, nb_words))
+                keys[kept++] = keys[i];
+        }
+        nb = kept;
     }
 
     SortCtx ctx = {
@@ -2889,16 +2904,6 @@ void rx_app_rebuild_rows(RXApp *app)
     };
     if (ctx.column >= 0 && ctx.column < RX_COL_COUNT) {
         qsort_r(keys, nb, sizeof(*keys), compare_rows, &ctx);
-    } else if (album) {
-        /* An album's natural order is its own, not the library's. */
-        qsort_r(keys, nb, sizeof(*keys), compare_album_rows, lib);
-        if (ctx.descending) {
-            for (int i = 0; i < nb / 2; i++) {
-                RowKey tmp = keys[i];
-                keys[i] = keys[nb - 1 - i];
-                keys[nb - 1 - i] = tmp;
-            }
-        }
     } else if (ctx.descending) {
         for (int i = 0; i < nb / 2; i++) {
             RowKey tmp = keys[i];
@@ -2907,17 +2912,26 @@ void rx_app_rebuild_rows(RXApp *app)
         }
     }
 
-    uint32_t *rows = realloc(app->rows, RX_MAX(nb, 1) * sizeof(*rows));
-    if (!rows) {
+    /* New arrays, so a failure leaves the old rows and numbers whole. */
+    uint32_t *rows = malloc(RX_MAX(nb, 1) * sizeof(*rows));
+    uint32_t *numbers = malloc(RX_MAX(nb, 1) * sizeof(*numbers));
+    if (!rows || !numbers) {
+        free(rows);
+        free(numbers);
         free(keys);
         rx_err("out of memory building the track table");
         return;
     }
-    for (int i = 0; i < nb; i++)
+    for (int i = 0; i < nb; i++) {
         rows[i] = keys[i].index;
+        numbers[i] = keys[i].number;
+    }
     free(keys);
 
+    free(app->rows);
+    free(app->row_numbers);
     app->rows = rows;
+    app->row_numbers = numbers;
     app->nb_rows = nb;
     app->rows_generation = lib->generation;
     app->rows_dirty = false;
@@ -3157,6 +3171,8 @@ void rx_app_destroy(RXApp *app)
 
     free(app->rows);
     app->rows = NULL;
+    free(app->row_numbers);
+    app->row_numbers = NULL;
     app->nb_rows = 0;
     free(app->current_album);
     app->current_album = NULL;

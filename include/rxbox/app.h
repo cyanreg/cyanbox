@@ -54,6 +54,10 @@ typedef struct RXApp {
     uint64_t  *selection; int nb_selection;    /* selected track ids */
     uint64_t   focus_track;         /* the keyboard focus row */
     uint32_t  *rows; int nb_rows;   /* library indices of the current view, sorted and filtered */
+    /* Each row's `#`: the track's place in the view's own order (the
+     * library's, the playlist's, the album's), from 1, whatever the sort
+     * and the search. */
+    uint32_t  *row_numbers;
     unsigned   rows_generation;     /* lib.generation the rows were built for */
     bool       rows_dirty;
 

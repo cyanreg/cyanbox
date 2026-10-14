@@ -250,7 +250,10 @@ artist, album, genre, comment, file name with `rx_str_contains_fold`
 
 **Track table** (ImGui table, resizable/reorderable/sortable columns,
 virtualised with the clipper; text columns sort in natural order, a
-number in a name counting as a number, case ignored): default columns in order: `#`, Preview
+number in a name counting as a number, case ignored): default columns in order: `#` (the
+track's place in the view's own order, the collection's, the playlist's or
+the album's, which it keeps whatever the sort and the search; sorting by
+it, descending, starts at the last), Preview
 (the preview tag of the players' waveform colour, PWAV, PWV4 or PWV6 as
 the overview has it, via `rx_wave_draw`, its columns scaled to the cell,
 and drawn as the overview is: the stacked half, or centred with both

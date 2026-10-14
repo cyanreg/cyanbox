@@ -8,7 +8,9 @@
 // follow rekordbox's (rbxport src/lib/columns.ts: widths, the fixed `#`),
 // and their order, widths and visibility persist with the rest of the
 // layout. Sorting writes app->sort_column and lets app.c rebuild the rows;
-// `#` is the view's own order (sort_column -1, descending reverses it).
+// `#` is the view's own order (sort_column -1, descending reverses it),
+// and each row's number its place in that order (app->row_numbers): a
+// track keeps its number whatever the sort and the search.
 //
 // Selection is rekordbox's: click selects one, Ctrl toggles, Shift selects
 // the range from the last click; the focused row (the keyboard's, Enter
@@ -425,8 +427,10 @@ static void row_cells(UiState *ui, RXTrack *t, int row, float row_h, const uint6
         float w = ImGui::GetContentRegionAvail().x;
         switch (c) {
         case COL_IDX:
-            // The row's Selectable is submitted here by the caller.
-            snprintf(buf, sizeof(buf), "%d", row + 1);
+            // The row's Selectable is submitted here by the caller. The
+            // number is the track's place in the view's own order, so it
+            // stays with the track whatever the sort and the search.
+            snprintf(buf, sizeof(buf), "%u", app->row_numbers ? app->row_numbers[row] : (unsigned)row + 1);
             cell_text(ui, p, w, row_h, buf, sub, true, nullptr, 15.0f);
             break;
         case COL_PREVIEW: {

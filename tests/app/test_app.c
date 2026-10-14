@@ -484,12 +484,25 @@ int main(int argc, char **argv)
     CHECK(rx_app_load_deck(&app, 0, a) == RX_ERROR(ENOENT), "a missing file loaded");
     a->missing = false;
 
-    /* Rows: everything, a search on the file name, a sort. */
+    /* Rows: everything, a search on the file name, a sort. `#` is each
+     * track's place in the view's own order, whatever the sort and the
+     * search. */
     rx_app_tick(&app);
     CHECK(app.nb_rows == 2, "%d rows", app.nb_rows);
+    uint32_t num_a = (uint32_t)rx_library_index_of(&app.lib, a) + 1;
+    uint32_t num_b = (uint32_t)rx_library_index_of(&app.lib, b) + 1;
+    CHECK(app.row_numbers[0] == 1 && app.row_numbers[1] == 2, "numbered %u, %u",
+          app.row_numbers[0], app.row_numbers[1]);
+    app.sort_descending = true;
+    rx_app_rebuild_rows(&app);
+    CHECK(app.nb_rows == 2 && app.row_numbers[0] == 2 && app.row_numbers[1] == 1,
+          "descending numbered %u, %u", app.row_numbers[0], app.row_numbers[1]);
+    app.sort_descending = false;
     snprintf(app.search, sizeof(app.search), "B.WAV");
     rx_app_rebuild_rows(&app);
     CHECK(app.nb_rows == 1 && app.lib.tracks[app.rows[0]] == b, "search: %d rows", app.nb_rows);
+    CHECK(app.nb_rows == 1 && app.row_numbers[0] == num_b, "the search numbered b %u, not %u",
+          app.row_numbers[0], num_b);
     snprintf(app.search, sizeof(app.search), "a.wav nothing");
     rx_app_rebuild_rows(&app);
     CHECK(app.nb_rows == 0, "two words must both match: %d rows", app.nb_rows);
@@ -498,6 +511,8 @@ int main(int argc, char **argv)
     app.sort_descending = true;
     rx_app_rebuild_rows(&app);
     CHECK(app.nb_rows == 2 && app.lib.tracks[app.rows[0]] == b, "sort by path descending");
+    CHECK(app.nb_rows == 2 && app.row_numbers[0] == num_b && app.row_numbers[1] == num_a,
+          "sorted by path numbered %u, %u", app.row_numbers[0], app.row_numbers[1]);
     app.sort_descending = false;
     rx_app_rebuild_rows(&app);
     CHECK(app.nb_rows == 2 && app.lib.tracks[app.rows[0]] == a, "sort by path");
@@ -513,6 +528,8 @@ int main(int argc, char **argv)
         rx_app_tick(&app);
         CHECK(app.nb_rows == 1 && app.lib.tracks[app.rows[0]] == b, "playlist rows %d",
               app.nb_rows);
+        CHECK(app.nb_rows == 1 && app.row_numbers[0] == 1, "b numbered %u in the playlist",
+              app.row_numbers[0]);
         app.current_playlist = NULL;
         app.rows_dirty = true;
         rx_app_tick(&app);
@@ -538,6 +555,16 @@ int main(int argc, char **argv)
         CHECK(app.current_album && !app.current_playlist && app.nb_rows == 2 &&
               app.lib.tracks[app.rows[0]] == b && app.lib.tracks[app.rows[1]] == a,
               "album rows %d, in track order", app.nb_rows);
+        /* Numbered in the album's order, kept through a sort. */
+        CHECK(app.nb_rows == 2 && app.row_numbers[0] == 1 && app.row_numbers[1] == 2,
+              "the album numbered %u, %u", app.row_numbers[0], app.row_numbers[1]);
+        app.sort_column = RX_COL_PATH;
+        rx_app_rebuild_rows(&app);
+        CHECK(app.nb_rows == 2 && app.lib.tracks[app.rows[0]] == a && app.row_numbers[0] == 2 &&
+              app.row_numbers[1] == 1, "the album by path numbered %u, %u", app.row_numbers[0],
+              app.row_numbers[1]);
+        app.sort_column = -1;
+        rx_app_rebuild_rows(&app);
         free(b->meta.album);
         b->meta.album = rx_strdup("Alpha");
         CHECK(rx_library_save_track(&app.lib, b) == 0, "saving b's album");
