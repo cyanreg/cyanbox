@@ -655,8 +655,11 @@ static void test_clean(void)
         "INSERT OR REPLACE INTO setting VALUES ('sync.history.x', '1:0');"
         "INSERT OR REPLACE INTO setting VALUES ('export.pdb', 'false');"
         /* Text in NFD, as tags written on macOS hold it: b's title
-         * "ヘ+゙ージュ" and artist "Cafe+́", a cue's name, a playlist's. */
-        "UPDATE track SET title = 'ヘ\xe3\x82\x99ージュ', artist = 'Cafe\xcc\x81' WHERE id = 2;"
+         * "ヘ+゙ージュ" and artist "Cafe+́", its file's title (the tag as
+         * read, which the track's save does not write), a cue's name, a
+         * playlist's. */
+        "UPDATE track SET title = 'ヘ\xe3\x82\x99ージュ', artist = 'Cafe\xcc\x81', "
+        "file_title = 'ヘ\xe3\x82\x99ージュ' WHERE id = 2;"
         "UPDATE cue SET name = 'シ\xe3\x82\x99ャ' WHERE track_id = 2;"
         "INSERT INTO playlist (parent_id, name, is_folder, position) "
         "VALUES (NULL, 'おやすみヘ\xe3\x82\x99ージュ', 0, 0);";
@@ -698,6 +701,7 @@ static void test_clean(void)
             /* NFC, as the second open finds it in the database too. */
             CHECK(b->meta.title && !strcmp(b->meta.title, "ベージュ"));
             CHECK(b->meta.artist && !strcmp(b->meta.artist, "Café"));
+            CHECK(b->file_meta.title && !strcmp(b->file_meta.title, "ベージュ"));
             CHECK(b->nb_cues == 1 && !strcmp(b->cues[0].name, "ジャ"));
         }
         bool named = false;
@@ -721,11 +725,17 @@ static void test_clean(void)
         rx_library_close(&lib);
     }
 
-    /* The database keeps the playlist's name NFC too. */
+    /* The database keeps the playlist's name NFC too, and the file's
+     * title: an open does not convert them again and again. */
     CHECK(sqlite3_open(db, &s) == SQLITE_OK);
     sqlite3_stmt *st = NULL;
     CHECK(sqlite3_prepare_v2(s, "SELECT count(*) FROM playlist WHERE name = 'おやすみベージュ'", -1,
                              &st, NULL) == SQLITE_OK && sqlite3_step(st) == SQLITE_ROW &&
+          sqlite3_column_int(st, 0) == 1);
+    sqlite3_finalize(st);
+    st = NULL;
+    CHECK(sqlite3_prepare_v2(s, "SELECT count(*) FROM track WHERE id = 2 AND file_title = 'ベージュ'",
+                             -1, &st, NULL) == SQLITE_OK && sqlite3_step(st) == SQLITE_ROW &&
           sqlite3_column_int(st, 0) == 1);
     sqlite3_finalize(st);
     sqlite3_close(s);

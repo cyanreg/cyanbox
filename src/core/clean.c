@@ -97,13 +97,17 @@ static bool cue_known(const RXTrack *t, const RXCue *c)
 }
 
 typedef struct Counts {
-    int colours, grids, cues, keys, probabilities, texts, tracks;
+    int colours, grids, cues, keys, probabilities, tracks;  /* tracks: with any of these */
+    int texts, nfc_tracks;                                   /* made NFC, and of how many */
 } Counts;
 
-/* Removes what `t` holds that is not valid; true when anything went. */
-static bool clean_track(RXTrack *t, Counts *n)
+/* Removes what `t` holds that is not valid and makes its texts NFC; true
+ * when anything changed, *file_tags when its file's tags did (which the
+ * track's save does not write). */
+static bool clean_track(RXTrack *t, Counts *n, bool *file_tags)
 {
     bool changed = false;
+    *file_tags = false;
     unsigned long long id = (unsigned long long)t->id;
 
     if (!hue_known(t->meta.hue)) {
@@ -175,6 +179,9 @@ static bool clean_track(RXTrack *t, Counts *n)
         changed = true;
     }
 
+    if (changed)
+        n->tracks++;
+
     int texts = rx_meta_normalise(&t->meta), file_texts = rx_meta_normalise(&t->file_meta);
     for (int i = 0; i < t->nb_cues; i++) {
         char *name = t->cues[i].name[0] && rx_utf8_valid(t->cues[i].name) &&
@@ -190,12 +197,34 @@ static bool clean_track(RXTrack *t, Counts *n)
         rx_debug("library: track %llu: %d text%s made NFC", id, RX_MAX(texts, 0) + RX_MAX(file_texts, 0),
                  RX_MAX(texts, 0) + RX_MAX(file_texts, 0) == 1 ? "" : "s");
         n->texts += RX_MAX(texts, 0) + RX_MAX(file_texts, 0);
+        n->nfc_tracks++;
+        *file_tags = file_texts > 0;
         changed = true;
     }
-
-    if (changed)
-        n->tracks++;
     return changed;
+}
+
+/* A track's file tags, the texts, as the database keeps them: what
+ * rx_library_save_track does not write (they change only when the file
+ * is read again). In the caller's transaction. */
+static int save_file_tags(RXLibrary *lib, sqlite3_stmt **st, const RXTrack *t)
+{
+    if (!*st && sqlite3_prepare_v2(lib->db->db,
+                                   "UPDATE track SET file_title = ?2, file_artist = ?3, "
+                                   "file_album = ?4, file_album_artist = ?5, file_genre = ?6, "
+                                   "file_label = ?7, file_remixer = ?8, file_composer = ?9, "
+                                   "file_original_artist = ?10, file_comment = ?11 WHERE id = ?1",
+                                   -1, st, NULL) != SQLITE_OK)
+        return RX_ERROR(EIO);
+    const RXMeta *m = &t->file_meta;
+    const char *v[10] = { m->title, m->artist, m->album, m->album_artist, m->genre, m->label,
+                          m->remixer, m->composer, m->original_artist, m->comment };
+    sqlite3_bind_int64(*st, 1, (sqlite3_int64)t->id);
+    for (int i = 0; i < 10; i++)
+        sqlite3_bind_text(*st, 2 + i, v[i], -1, SQLITE_TRANSIENT);
+    int ret = sqlite3_step(*st) == SQLITE_DONE ? 0 : RX_ERROR(EIO);
+    sqlite3_reset(*st);
+    return ret;
 }
 
 /* The playlists' and folders' names as the database keeps them, NFC (the
@@ -233,16 +262,19 @@ int rx_core_clean(RXLibrary *lib)
     Counts n = { 0 };
     int failed = 0;
     bool open = false;
+    sqlite3_stmt *file_st = NULL;
     for (int i = 0; i < lib->nb_tracks; i++) {
         RXTrack *t = lib->tracks[i];
-        if (!clean_track(t, &n))
+        bool file_tags;
+        if (!clean_track(t, &n, &file_tags))
             continue;
         /* One transaction for every track the open cleans. */
         if (!open && rx_db_begin(lib->db) >= 0)
             open = true;
-        if (rx_library_save_track(lib, t) < 0)
+        if (rx_library_save_track(lib, t) < 0 || (file_tags && save_file_tags(lib, &file_st, t) < 0))
             failed++;
     }
+    sqlite3_finalize(file_st);
     if (open && rx_db_commit(lib->db) < 0) {
         rx_db_rollback(lib->db);
         failed = n.tracks;
@@ -261,16 +293,16 @@ int rx_core_clean(RXLibrary *lib)
     int names = clean_playlist_names(lib);
     if (n.texts || names)
         rx_info("library: %d text%s of %d track%s and %d playlist name%s made NFC", n.texts,
-                n.texts == 1 ? "" : "s", n.tracks, n.tracks == 1 ? "" : "s", names,
+                n.texts == 1 ? "" : "s", n.nfc_tracks, n.nfc_tracks == 1 ? "" : "s", names,
                 names == 1 ? "" : "s");
 
     if (n.tracks || covers || settings) {
-        rx_info("library: removed what was not valid: %d colour%s none of the eight, %d grid%s, "
-                "%d cue%s, %d key%s, %d set%s of colour probabilities (%d track%s), %d cover%s "
-                "no track has, %d setting%s",
-                n.colours, n.colours == 1 ? "" : "s", n.grids, n.grids == 1 ? "" : "s", n.cues,
-                n.cues == 1 ? "" : "s", n.keys, n.keys == 1 ? "" : "s", n.probabilities,
-                n.probabilities == 1 ? "" : "s", n.tracks, n.tracks == 1 ? "" : "s", covers,
+        rx_info("library: removed what was not valid, from %d track%s: %d colour%s none of the "
+                "eight, %d grid%s, %d cue%s, %d key%s, %d set%s of colour probabilities; and %d "
+                "cover%s no track has, %d setting%s",
+                n.tracks, n.tracks == 1 ? "" : "s", n.colours, n.colours == 1 ? "" : "s", n.grids,
+                n.grids == 1 ? "" : "s", n.cues, n.cues == 1 ? "" : "s", n.keys,
+                n.keys == 1 ? "" : "s", n.probabilities, n.probabilities == 1 ? "" : "s", covers,
                 covers == 1 ? "" : "s", settings, settings == 1 ? "" : "s");
     }
     if (failed)
