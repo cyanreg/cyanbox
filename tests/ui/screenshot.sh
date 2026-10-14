@@ -31,7 +31,9 @@
 # which must land in the library's setting table (the clicks with
 # RXBOX_UI_SWAYSOCK only). Then the interface following two of those
 # settings: the overview type for the overview and the row previews, and
-# the key display for the deck's KEY. Last, File > Remove missing tracks
+# the key display for the deck's KEY. Then the Link decks' panel with
+# made-up players, and the track menu's "Load in deck" items under the
+# players' Eject/Load Lock. Last, File > Remove missing tracks
 # (RXBOX_UI_SHOW=remove-missing): it lists the fourth track and a fifth
 # whose folder is gone too, names that folder, and a click on Remove takes
 # both out of the library, the rest kept.
@@ -302,6 +304,21 @@ variant settings-default "" "track $ID .*overview half previews half key $classi
 rx config device.overview_waveform full > /dev/null
 rx config device.key_display alphanumeric > /dev/null
 variant settings-follow "" "track $ID .*overview centred previews centred key $camelot\$"
+
+# The Link decks (RXBOX_UI_LINK_DECKS: players made up, no network): two
+# share the deck's panel. With the players' Eject/Load Lock on, a right
+# click on the first row (at 1600x900) opens the track menu, whose "Load
+# in deck" items offer deck 1, which plays, greyed out, and deck 2 not.
+(
+    export RXBOX_UI_LINK_DECKS="1:CDJ-900:$ID:pa:-1,2:CDJ-2000NXS2:$ID2:m:40"
+    variant link-decks "" "link decks 2"
+    if [ -n "${RXBOX_UI_SWAYSOCK:-}" ]; then
+        SWAYSOCK=$RXBOX_UI_SWAYSOCK swaymsg -q output '*' resolution 1600x900
+        rx config player.eject_lock true > /dev/null
+        variant link-load-locked "60:rclick:600:551" 'load menu locked "1"'
+        rx config player.eject_lock false > /dev/null
+    fi
+) || exit 1
 
 # File > Remove missing tracks: a fifth track, in a folder of its own that
 # then goes, as a drive not plugged in would. The dialog lists it and the

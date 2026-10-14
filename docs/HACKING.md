@@ -130,7 +130,8 @@ src/ml            gpu.c gguf.c tokenizer.c moss.c tag.c               -> rx_ml_d
                   ml_priv.h kernels.h shaders/*.comp common.glsl      (MOSS-Audio, its own VkDevice;
                                                                        docs/ML.md, tests in suite ml)
 src/ui            ui.cpp deck_view.cpp waveform_view.cpp browser.cpp  (C++)
-                  tree.cpp dialogs.cpp keys.cpp link_view.cpp ui_internal.h
+                  tree.cpp dialogs.cpp keys.cpp link_view.cpp link_decks.cpp
+                  finder.cpp ui_internal.h
 src/cli.c         the subcommands; src/main.c
 tests/<module>/   meson tests, registered from src/<module>/meson.build with suite: '<module>'
 tools/            developer tools (analysis evaluation, dumpers; rxbox-ml and ml_check.py

@@ -274,6 +274,8 @@ static void track_menu(UiState *ui)
     if (!t)
         return;
     int n = app->nb_selection;
+    // To a player on the link (with players there).
+    ui_link_load_menu(ui, t);
     if (ImGui::BeginMenu("Analyse", !t->missing)) {
         if (ImGui::MenuItem("BPM and grid"))
             analyse_selection(ui, RX_ANALYSE_BEATS | RX_ANALYSE_WAVES, false);

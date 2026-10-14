@@ -17,6 +17,8 @@
 // starts as the players will.
 //
 // The headless test hooks are environment variables read here:
+// RXBOX_UI_LINK_DECKS=<players> makes up players on the link for the Link
+// decks' panel (link_decks.cpp);
 // RXBOX_UI_AUTOLOAD=<id> loads that track on the first frame and starts it
 // once it is loaded (RXBOX_UI_AUTOLOAD_AT=<seconds>: from there);
 // RXBOX_UI_SHOW=<list> opens panels and dialogs on the first frame (grid,
@@ -33,7 +35,8 @@
 // gives ImGui input at those frames: down:<key> and up:<key> (ImGui's key
 // names: C, Enter, DownArrow...; Ctrl the modifier), focus-out and focus-in, click:<x>:<y> (the pointer moved
 // there, in logical pixels, and the left button pressed and let go two
-// frames later), text:<characters> (typed, '+' for a space).
+// frames later; rclick:<x>:<y> the right one), text:<characters> (typed,
+// '+' for a space).
 
 #include "ui_internal.h"
 
@@ -568,6 +571,11 @@ int ui_setting_key(const char *key, const char **name)
 // players print in capitals.
 const char *ui_setting_label(const char *name, char *buf, size_t size)
 {
+    // The one the players name otherwise than its key.
+    if (!strcmp(name, "eject_lock")) {
+        snprintf(buf, size, "Eject/Load Lock");
+        return buf;
+    }
     static const struct { const char *word, *text; } words[] = {
         { "lcd", "LCD" }, { "midi", "MIDI" }, { "eq", "EQ" }, { "fx", "FX" }, { "cdj", "CDJ" },
     };
@@ -606,7 +614,11 @@ const char *ui_setting_value(const char *name, const char *value, char *buf, siz
     if (!value)
         value = "";
     if (!strcmp(value, "true") || !strcmp(value, "false")) {
-        snprintf(buf, size, "%s", value[0] == 't' ? "On" : "Off");
+        // EJECT/LOAD LOCK says LOCK and UNLOCK on the players.
+        if (!strcmp(name, "eject_lock"))
+            snprintf(buf, size, "%s", value[0] == 't' ? "Lock" : "Unlock");
+        else
+            snprintf(buf, size, "%s", value[0] == 't' ? "On" : "Off");
         return buf;
     }
     if (value[0] && strspn(value, "-0123456789/") == strlen(value)) {
@@ -1229,8 +1241,8 @@ static void parse_test_events(UiState *ui, const char *spec)
             ev.type = 5;
             ev.text = key;
             std::replace(ev.text.begin(), ev.text.end(), '+', ' ');
-        } else if (!strcmp(what, "click")) {
-            ev.type = 4;
+        } else if (!strcmp(what, "click") || !strcmp(what, "rclick")) {
+            ev.type = what[0] == 'r' ? 6 : 4;
             if (sscanf(key, "%f:%f", &ev.x, &ev.y) != 2) {
                 rx_warn("RXBOX_UI_EVENTS: click wants x:y, not %s", key);
                 continue;
@@ -1264,9 +1276,10 @@ static void test_events(UiState *ui)
 {
     ImGuiIO &io = ImGui::GetIO();
     for (const UiTestEvent &ev : ui->test_events) {
-        if (ev.type == 4 && ev.frame + 2 == ui->frame_no) {
-            io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
-            io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+        if ((ev.type == 4 || ev.type == 6) && ev.frame + 2 == ui->frame_no) {
+            ImGuiMouseButton button = ev.type == 6 ? ImGuiMouseButton_Right : ImGuiMouseButton_Left;
+            io.AddMouseButtonEvent(button, true);
+            io.AddMouseButtonEvent(button, false);
         }
         if (ev.frame != ui->frame_no)
             continue;
@@ -1274,7 +1287,7 @@ static void test_events(UiState *ui)
             io.AddKeyEvent(ev.key, ev.type == 0);
         else if (ev.type == 5)
             io.AddInputCharactersUTF8(ev.text.c_str());
-        else if (ev.type == 4)
+        else if (ev.type == 4 || ev.type == 6)
             io.AddMousePosEvent(PX(ev.x), PX(ev.y));
         else
             io.AddFocusEvent(ev.type == 3);
@@ -1311,6 +1324,10 @@ static void log_test_state(UiState *ui)
                      : app->current_album[0] ? app->current_album
                                              : "None";
     rx_info("ui test: view \"%s\"", view);
+    if (ui->link_decks_drawn)
+        rx_info("ui test: link decks %d", ui->link_decks_drawn);
+    if (ui->link_menu_frame && ui->frame_no - ui->link_menu_frame <= 2)
+        rx_info("ui test: load menu locked \"%s\"", ui->link_menu_locked.c_str());
     // File > Remove missing tracks: what it lists, the folders gone, and
     // where its Remove button is (logical pixels, for a click).
     if (ui->remove_missing) {
@@ -1521,6 +1538,9 @@ int rx_ui_init(RXApp *app)
     const char *events = getenv("RXBOX_UI_EVENTS");
     if (events && events[0])
         parse_test_events(ui, events);
+    const char *link_decks = getenv("RXBOX_UI_LINK_DECKS");
+    if (link_decks && link_decks[0])
+        ui->link_decks_fake = link_decks;
     return 0;
 }
 
@@ -1545,6 +1565,7 @@ void rx_ui_shutdown(RXApp *app)
         rx_library_config_save(&app->lib);
     }
     ui_dialogs_shutdown(ui);
+    ui_link_decks_shutdown(ui);
     ui_deck_shutdown(ui);
     free(app->selection);
     app->selection = nullptr;
@@ -1649,6 +1670,7 @@ bool rx_ui_frame(RXApp *app)
 
     follow_settings(ui);
     autoload_tick(ui);
+    ui_link_decks_test_tick(ui);
     if (!ui->test_events.empty())
         test_events(ui);
     // The screenshot hook: this is the frame to keep; the window saves it
@@ -1704,8 +1726,12 @@ bool rx_ui_frame(RXApp *app)
                                     : floorf(ui->deck_split * body_h);
     float deck_h = ImClamp(want, smallest, max_deck);
 
+    // With players on the link, they take the deck's place.
     ImGui::SetCursorScreenPos(ImVec2(origin.x + gap, origin.y + gap));
-    ui_deck_panel(ui, 0, ImVec2(avail.x - gap * 2, deck_h - gap));
+    if (ui_link_decks_shown(ui))
+        ui_link_decks_panel(ui, ImVec2(avail.x - gap * 2, deck_h - gap));
+    else
+        ui_deck_panel(ui, 0, ImVec2(avail.x - gap * 2, deck_h - gap));
 
     bool released = false;
     float dy = splitter(ui, "##split_player", ImVec2(origin.x, origin.y + deck_h),

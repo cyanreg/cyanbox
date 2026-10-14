@@ -229,6 +229,34 @@ the playlist's last track; in any other view the deck stops there
 plays on into the next row of the view the same way, the first after the
 last.
 
+### Link decks
+
+With `--pro-link` and players on the link, the panel shows them instead
+(src/ui/link_decks.cpp), on the same background: one strip a player,
+by number, the width shared equally and each at most half of it, so two
+fill it; one alone takes its side (odd numbers left, even right). A strip
+has the player's number (red when on air) and the sleeve, title and
+artist in a title row tinted by its side; under it the player's name, its
+state (PLAYING or PAUSED, ON AIR, MASTER, SYNC) and the readouts KEY
+(dropped when the strip is narrow), BPM at the player's pitch (in orange,
+the pitch after the label, when off zero) and REMAIN; the overview, the
+part played shaded, the playhead on it; and the detail waveform, eight
+bars around the playhead (fewer on a narrow strip, at least 16 px a beat),
+with the grid's beats and the cues. The frame glows orange while the
+player plays. A track not of ours is named by its id and where it is
+from, with no waveform.
+
+Where the player is comes from its status: the beat number on the track's
+grid, the one Link serves it, carried forward between statuses (about five
+a second) at its pitch and kept within the beat the last one named. A
+pre-nexus player (CDJ-900, CDJ-2000) sends no beat number: its strip says
+so and shows no playhead.
+
+Tracks dropped on a strip, and the track menu's "Load in deck N" items,
+go to that player as a load command, as rekordbox's drag onto a deck; a
+deck that plays is greyed out in the menu (and refuses the drop) while the
+players' Eject/Load Lock (`player.eject_lock`) is on.
+
 ## Browser
 
 **Playlist tree** (left, 220 default): `Collection` at the top (every
@@ -322,7 +350,8 @@ analysed shows a small spinner in the Preview cell.
 Actions: double-click loads the track into the player at once (over a
 playing track the new one plays on from its auto-cue; over a paused one it
 waits there); drag
-onto the player panel loads it; context menu: Analyse (BPM/grid, key, both; force),
+onto the player panel loads it; context menu: with players on the link,
+Load in deck N for each (Link decks, above), then Analyse (BPM/grid, key, both; force),
 Analyse tags (the model's genre, colour and comment, docs/ML.md: for the
 selection, or the clicked track when it is not selected),
 Add to playlist (every playlist, folders as submenus), Remove from playlist,

@@ -146,6 +146,16 @@ int rx_app_link_start(RXApp *app, const RXLinkOptions *o)
     return 0;
 }
 
+int rx_app_link_load(RXApp *app, int index, uint64_t track_id)
+{
+    RXAppLink *l = app->link;
+    if (!l || !l->set || !app->link_state.on || index < 0 || index >= app->link_state.nb_devices ||
+        track_id > UINT32_MAX)
+        return RX_ERROR(ENOENT);
+    const RXLinkPlayer *p = &app->link_state.devices[index];
+    return rx_link_set_load(l->set, app->link_state.device_if[index], p->number, (uint32_t)track_id);
+}
+
 void rx_app_link_stop(RXApp *app)
 {
     RXAppLink *l = app->link;

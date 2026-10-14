@@ -125,6 +125,18 @@ static const double UI_TEMPO_RANGES[] = { 6, 10, 16, 100 };
 
 /* -------------------------------------------------------------------- state */
 
+// A Link deck as its panel follows it (link_decks.cpp): where the player
+// is in its track, carried forward between its statuses.
+#define UI_LINK_DECKS 16           // by player number
+struct UiLinkDeck {
+    uint32_t track_id = 0;         // the estimate's track, 0 none
+    double   pos = -1;             // seconds, < 0 unknown
+    int64_t  pos_us = 0;           // rx_time_us when pos was
+    RXBeat  *beats = nullptr;      // the track's grid beats, as Link serves them
+    int      nb_beats = 0;
+    uint64_t beats_track = 0;      // the track they are of
+};
+
 struct UiDeck {
     // Beats of the loaded grid, rebuilt when the grid changes.
     uint64_t beats_sig;
@@ -218,7 +230,8 @@ struct UiSetting {
 // An input event the test hook gives ImGui at a frame (RXBOX_UI_EVENTS).
 struct UiTestEvent {
     int      frame;
-    int      type;             // 0 key down, 1 key up, 2 focus out, 3 focus in, 4 click, 5 text
+    int      type;             // 0 key down, 1 key up, 2 focus out, 3 focus in, 4 click, 5 text,
+                               // 6 right click
     ImGuiKey key;
     float    x, y;             // a click's position, logical pixels
     std::string text;          // typed text ('+' for a space)
@@ -313,6 +326,17 @@ struct UiState {
     void     *move_ptr;
     RXPlaylistFolder *move_to;
     int       move_pos;
+
+    // The Link decks' panel (link_decks.cpp): per player number; how many
+    // the last frame drew (the test hooks' log); RXBOX_UI_LINK_DECKS's
+    // made-up players, when it given, from when and at which first beats.
+    UiLinkDeck link_decks[UI_LINK_DECKS];
+    int       link_decks_drawn;
+    int       link_menu_frame;        // the frame the track menu's deck items were last drawn
+    std::string link_menu_locked;     // the decks they offered greyed out (numbers, spaced)
+    std::string link_decks_fake;
+    int64_t   link_decks_fake_us;
+    int       link_decks_fake_beat[RX_APP_LINK_DEVICES];
 
     // Remove from library confirmation; for File > Remove missing tracks,
     // the tracks listed and the folders gone with them (a drive not
@@ -543,6 +567,14 @@ void ui_escape_closes(bool *open);
 // Ethernet interfaces served and the devices on them. None of it is drawn
 // without --pro-link.
 void ui_link_window(UiState *ui);
+// The Link decks (link_decks.cpp): whether players are on the link, the
+// panel that shows them in the deck's place, the track menu's "Load in
+// deck" items (and a separator after them), the test hook's players.
+bool ui_link_decks_shown(UiState *ui);
+void ui_link_decks_panel(UiState *ui, ImVec2 size);
+void ui_link_load_menu(UiState *ui, RXTrack *t);
+void ui_link_decks_test_tick(UiState *ui);
+void ui_link_decks_shutdown(UiState *ui);
 void ui_open_link(UiState *ui);
 // The status bar's word on it ("Link: 2 players"), and its colour.
 const char *ui_link_summary(UiState *ui, char *buf, size_t size, ImU32 *col);
