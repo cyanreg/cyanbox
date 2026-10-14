@@ -273,6 +273,20 @@ static void deck_cell(UiState *ui, int index, ImVec2 a, ImVec2 b)
         ui_record_icon(dl, p0, p1);
     float tx = p1.x + PX(12);
 
+    // The text goes on dark plates over the waveform, one a block, drawn in
+    // a channel under it as each block's size is known.
+    dl->ChannelsSplit(2);
+    dl->ChannelsSetCurrent(1);
+    float pad_x = PX(6), pad_y = PX(3);
+    auto plate = [&](float x0, float y0, float x1, float y1) {
+        if (x1 <= x0)
+            return;
+        dl->ChannelsSetCurrent(0);
+        dl->AddRectFilled(ImVec2(x0 - pad_x, y0 - pad_y), ImVec2(x1 + pad_x, y1 + pad_y),
+                          IM_COL32(0, 0, 0, 0xA8), PX(4));
+        dl->ChannelsSetCurrent(1);
+    };
+
     // Right-aligned, from the edge: the time left, the tempo, the key,
     // each while the title keeps some room.
     char remain[16], bpm[16], key[16] = "";
@@ -298,6 +312,7 @@ static void deck_cell(UiState *ui, int index, ImVec2 a, ImVec2 b)
         readout(ui, dl, x, ry, reads[i].label, reads[i].value, reads[i].col);
         x -= rw + PX(20);
     }
+    plate(x + PX(20), ry, b.x - PX(10), ry + PX(LABEL_SIZE + 3 + VALUE_SIZE));
 
     // The title over the artist; the player's state over its model beside
     // them before the readouts, or on a cell too narrow for that, in the
@@ -328,27 +343,32 @@ static void deck_cell(UiState *ui, int index, ImVec2 a, ImVec2 b)
     bool room = word(state, scol);
     room = room && (!d.on_air || word("ON AIR", UI_RED));
     room = room && (!d.master || word("MASTER", UI_ACCENT));
-    if (beside)
+    if (beside) {
         stext(ui, dl, nullptr, LINE_SIZE, ImVec2(sx, ly), UI_DIM, model, sw);
-    else if (room && right - cx > PX(30))
+        plate(sx, sy, sx + sw, ly + PX(LINE_SIZE));
+    } else if (room && right - cx > PX(30)) {
         stext(ui, dl, nullptr, STATE_SIZE, ImVec2(cx, sy), UI_DIM, model, right - cx);
-
-    if (t) {
-        stext(ui, dl, ui->font_bold, TITLE_SIZE, ImVec2(tx, ty), UI_TEXT, ui_title(t), max_w);
-        if (beside)
-            stext(ui, dl, nullptr, LINE_SIZE, ImVec2(tx, ly), UI_DIM, ui_artist(t), max_w);
-    } else {
-        if (loaded && d.track_device == d.number)
-            snprintf(buf, sizeof(buf), "Track %u from its %s", d.track_id, slot_name(d.track_slot));
-        else if (loaded)
-            snprintf(buf, sizeof(buf), "Track %u from device %d's %s", d.track_id, d.track_device,
-                     slot_name(d.track_slot));
-        stext(ui, dl, ui->font_bold, TITLE_SIZE, ImVec2(tx, ty), UI_FAINT,
-                !d.has_status ? "Waiting for its status" : loaded ? buf : "No track loaded", max_w);
-        if (beside)
-            stext(ui, dl, nullptr, LINE_SIZE, ImVec2(tx, ly), UI_FAINT,
-                    loaded ? "Not one of rxbox's tracks" : "Drop a track here", max_w);
+        cx += ImMin(ui_text_width(ui, nullptr, STATE_SIZE, model), right - cx) + space;
     }
+
+    // The title over the artist (or the state), on one plate.
+    if (loaded && d.track_device == d.number)
+        snprintf(buf, sizeof(buf), "Track %u from its %s", d.track_id, slot_name(d.track_slot));
+    else if (loaded)
+        snprintf(buf, sizeof(buf), "Track %u from device %d's %s", d.track_id, d.track_device,
+                 slot_name(d.track_slot));
+    const char *line1 = t ? ui_title(t) : !d.has_status ? "Waiting for its status"
+                      : loaded ? buf : "No track loaded";
+    const char *line2 = t ? ui_artist(t) : loaded ? "Not one of rxbox's tracks" : "Drop a track here";
+    ImU32 col1 = t ? UI_TEXT : UI_FAINT, col2 = t ? UI_DIM : UI_FAINT;
+    stext(ui, dl, ui->font_bold, TITLE_SIZE, ImVec2(tx, ty), col1, line1, max_w);
+    float w1 = ImMin(ui_text_width(ui, ui->font_bold, TITLE_SIZE, line1), max_w), w2 = cx - space - tx;
+    if (beside) {
+        stext(ui, dl, nullptr, LINE_SIZE, ImVec2(tx, ly), col2, line2, max_w);
+        w2 = ImMin(ui_text_width(ui, nullptr, LINE_SIZE, line2), max_w);
+    }
+    plate(tx, ty, tx + ImMax(w1, w2), ly + PX(LINE_SIZE));
+    dl->ChannelsMerge();
 
     // Outlined orange while the player plays.
     dl->AddRect(a, b, d.playing && loaded ? UI_ACCENT : IM_COL32(0x2A, 0x2A, 0x2A, 0xFF), PX(3), PX(1.5f));

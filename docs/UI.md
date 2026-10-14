@@ -240,7 +240,7 @@ of it, so two fill it; one alone takes its side (odd numbers left, even
 right); with none, the row says so. A cell has the track's overview for
 its background, drawn as the deck's overview is (the part played at 55 %
 brightness and a red playhead, when the player says where it is), and
-over it, shadowed, the player's number, the
+over it, on dark plates (one a block of text), the player's number, the
 cover, the title over the artist, the player's state (PLAYING or PAUSED,
 ON AIR, MASTER) over its model, and right-aligned REMAIN, BPM at the
 player's pitch (orange off zero) and KEY, spaced by their widths; a cell
