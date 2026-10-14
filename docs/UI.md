@@ -27,11 +27,11 @@ like draw no title bar either. Default
 ```
 
 The player takes half the body by default, or its natural height (every
-row with a 204 px detail waveform) when that is more, so at 1600×900 it
+row with a 220 px detail waveform) when that is more, so at 1600×900 it
 keeps its natural height and at 1920×1080 the detail grows. The natural
 height is what it was with two rows of pads (a 140 px control row and a
-160 px detail): the 44 px the one-row control row saves went to the
-detail waveform. Whatever the
+160 px detail): the 44 px the one-row control row saves, and the 16 px the
+overview gave up, went to the detail waveform. Whatever the
 player has beyond its fixed rows goes to the detail waveform. The deck
 band / browser split and the tree / table split are draggable (ImGui
 splitters) and remembered in the library's `ui.split_player` and
@@ -60,7 +60,8 @@ The full width of the window. Rows, top to bottom:
    (elapsed / remaining, starting as the players' time mode says,
    remaining by default; clicking or `T` toggles the running deck's), the
    bar.beat counter (`17.3`), and the `GRID` button.
-2. **Overview waveform** (height 64): the whole track. The preview tag of
+2. **Overview waveform** (height 48, the 16 px it had more going to the
+   detail): the whole track. The preview tag of
    the players' waveform colour (`device.waveform_color`: PWAV for blue,
    the default; PWV4 for RGB; PWV6 for 3-band) drawn with `rx_wave_draw`
    as the players' overview type says (`device.overview_waveform`). Half,
@@ -78,7 +79,7 @@ The full width of the window. Rows, top to bottom:
    `#FF8C00` at 25 %, the active one at 45 %), the played part dimmed to
    55 %, the playhead (1 px white line, 2 px when playing). Click seeks;
    drag scrubs. The 1-second ticks are not drawn.
-3. **Detail waveform** (204 at the player's natural height; it takes all
+3. **Detail waveform** (220 at the player's natural height; it takes all
    the height the player has beyond its other rows): the detail tag
    (PWV7/PWV3/PWV5) scrolling under a fixed playhead (2 px, white, with a
    small triangle at the top and bottom): at the centre, or 15 % from the

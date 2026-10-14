@@ -107,15 +107,16 @@ static const double UI_TEMPO_RANGES[] = { 6, 10, 16, 100 };
 // The player panel's rows (logical pixels; deck_view.cpp lays them out,
 // ui.cpp sizes the panel from them). The control row is one row of pads:
 // the 18 px caps labels, 36 px pads, 16 px, the 24 px strips and 2 px
-// under them. The detail waveform takes the rest; at the player's natural
-// height it is 204, which keeps the panel as tall as it was with two rows
-// of pads (a 140 px control row and a 160 px detail): what the pads gave
-// up went to the waveform.
+// under them. The overview, looked at less than the detail, is 48 (it was
+// 64). The detail waveform takes the rest; at the player's natural height
+// it is 220, which keeps the panel as tall as it was with two rows of pads
+// (a 140 px control row and a 160 px detail): what the pads and the
+// overview gave up went to the detail.
 #define UI_TITLE_ROW_H     64
-#define UI_OVERVIEW_H      64
+#define UI_OVERVIEW_H      48
 #define UI_CONTROL_ROW_H   96
 #define UI_GRID_STRIP_H    32
-#define UI_DETAIL_NATURAL  204
+#define UI_DETAIL_NATURAL  220
 
 // Where the detail's playhead sits with the players' WAVEFORM CURRENT
 // POSITION at LEFT (device.waveform_position), as a fraction of the width
