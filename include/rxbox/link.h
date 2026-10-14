@@ -213,10 +213,11 @@ int  rx_link_client_fetch(RXLinkClient *c, const char *path, uint8_t **data, siz
 /* What our status says is loaded (as set, or as a load command from the
  * source left it): its device, slot and track id, 0 for none. */
 void rx_link_client_loaded(RXLinkClient *c, int *device, int *slot, uint32_t *track_id);
-/* Plays the loaded track, `track`, from its start: its beat grid asked of
- * the source, our status then says the beat number and tempo as it plays,
- * as a nexus player's does, and stops at its end. The number of beats, or
- * a negative errno (the source has no grid for it, or is gone). */
+/* The loaded track, `track`, from its start: its beat grid asked of the
+ * source, our status then says the beat number and tempo as it plays, as a
+ * nexus player's does, and it stops at its end; playing or paused as we
+ * were (a load does not start a player). The number of beats, or a
+ * negative errno (the source has no grid for it, or is gone). */
 int  rx_link_client_play(RXLinkClient *c, uint32_t track);
 
 /* What a player does with a source, reported a line at a time: the root

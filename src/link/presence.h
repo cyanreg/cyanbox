@@ -95,10 +95,12 @@ int  rx_presence_players(const RXPresence *p, RXLinkPlayer *out, int max);
 void rx_presence_set_loaded(RXPresence *p, int track_device, int slot, uint32_t track_id,
                             bool playing);
 void rx_presence_loaded(const RXPresence *p, int *device, int *slot, uint32_t *track_id);
-/* RX_PRESENCE_PLAYER: the fake player plays its loaded track from `now`,
- * whose beats these are (the beat grid's times in ms and tempos x100):
- * its status says the beat number reached and the tempo there, as a
- * nexus player's does, until two seconds past the last, where it stops. */
+/* RX_PRESENCE_PLAYER: the fake player's loaded track from its start at
+ * `now`, whose beats these are (the beat grid's times in ms and tempos
+ * x100), playing or paused as it was: a load does not start a player (an
+ * emulated CDJ-900 kept a paused deck paused and a playing one playing).
+ * Its status says the beat number reached and the tempo there, as a
+ * nexus player's does; playing, it stops two seconds past the last. */
 int  rx_presence_play(RXPresence *p, const uint32_t *beat_ms, const uint16_t *bpm_x100, int nb,
                       int64_t now);
 

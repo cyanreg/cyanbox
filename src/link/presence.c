@@ -1125,7 +1125,6 @@ int rx_presence_play(RXPresence *p, const uint32_t *beat_ms, const uint16_t *bpm
     p->nb_beats = RX_MAX(nb, 0);
     p->play_from = now;
     p->stopped_ms = 0;
-    p->playing = p->track_device != 0;
     return 0;
 }
 

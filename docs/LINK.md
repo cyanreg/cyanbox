@@ -23,7 +23,8 @@ and `rxbox link browse -i IF [HOST]` is a fake CDJ-3000 (or any model:
 `--name CDJ-2000NXS2`) that joins, browses, loads a track and reads it as
 a player does; with `--hold` it then stays, playing: its status says the
 beat number and tempo from the track's grid, and a track the source tells
-it to load is played the same way. Step 7 has begun:
+it to load is taken as a player does: from its start, playing on if it
+was playing, paused if not (a load never starts a player). Step 7 has begun:
 two CDJ-900s on Ethernet (2026-10-14) joined, mounted the library,
 browsed it and played its MP3s from it. Not yet: a WAV played on one
 (section 4), a CDJ-3000, writes from the deck (step 8).

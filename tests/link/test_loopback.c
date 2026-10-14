@@ -282,8 +282,10 @@ int main(void)
 
     /* Told to load another track, the player does (a load command, as
      * rekordbox sends for a track dragged onto a deck), and its status
-     * says so; a player not on the link cannot be told. */
+     * says so; a player not on the link cannot be told. Paused, it stays
+     * paused: a load never starts a player. */
     CHECK(other && other != loaded);
+    rx_link_client_set_loaded(player, 17, 4, loaded, false);
     CHECK_EQ(rx_link_load(link, 2, other), 0);
     CHECK_EQ(rx_link_load(link, 5, other), RX_ERROR(ENOENT));
     bool switched = false;
@@ -295,6 +297,18 @@ int main(void)
                         seen[i].track_id == other && seen[i].status_us > 0;
     }
     CHECK(switched);
+    /* Its beats from the track's grid: the status names a beat (the
+     * start's), still paused. */
+    CHECK(rx_link_client_play(player, other) > 0);
+    bool placed = false;
+    for (int k = 0; k < 100 && !placed; k++) {
+        usleep(20000);
+        nb = rx_link_players(link, seen, 8);
+        for (int i = 0; i < nb && i < 8; i++)
+            placed |= seen[i].number == 2 && seen[i].track_id == other && seen[i].beat >= 0 &&
+                      !seen[i].playing && seen[i].bpm > 0;
+    }
+    CHECK(placed);
 
     /* A host that never joined the link: no database, no files. */
     RXLinkClientOptions qo = co;

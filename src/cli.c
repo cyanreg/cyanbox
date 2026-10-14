@@ -147,9 +147,10 @@ static const char usage_text[] =
     "      --quiet              do not announce on the link (needs HOST)\n"
     "      --hold SEC           wait for a source that long (20 s at least); once\n"
     "                           loaded, stay on the link SEC seconds, playing: the\n"
-    "                           beat number and tempo from the track's grid, and any\n"
-    "                           track the source tells it to load (Load in deck)\n"
-    "                           played the same way\n"
+    "                           beat number and tempo from the track's grid, to its\n"
+    "                           end; a track the source tells it to load (Load in\n"
+    "                           deck) is taken as a player does: from its start,\n"
+    "                           playing on if it was playing, paused if not\n"
     "\n"
     "  A TRACK is an audio file in the library (any path to it), a folder (every\n"
     "  library track under it) or a library id.\n"
@@ -2683,8 +2684,9 @@ static int link_serve(Cli *cli, const RXLinkOptions *opt)
 
 /* A fake player against a server: what rbxport's browse example does, and
  * the after-load requests. */
-// Holding: plays what is loaded, the first track and every one the
-// source tells it to load, until `hold` seconds have passed.
+// Holding: follows what is loaded, the first track and every one the
+// source tells it to load (playing or paused as it was), until `hold`
+// seconds have passed.
 static void link_hold(RXLinkClient *c, long hold)
 {
     int64_t end = rx_time_us() + (int64_t)hold * 1000000;
@@ -2696,9 +2698,9 @@ static void link_hold(RXLinkClient *c, long hold)
         if (id && id != played) {
             int nb = rx_link_client_play(c, id);
             if (nb >= 0)
-                printf("playing track %u (%d beats)\n", id, nb);
+                printf("track %u loaded (%d beats)\n", id, nb);
             else
-                printf("track %u: no beat grid (%s); playing without beat numbers\n", id,
+                printf("track %u loaded, no beat grid (%s): no beat numbers\n", id,
                        strerror(-nb));
             fflush(stdout);
             played = id;
