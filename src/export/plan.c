@@ -17,7 +17,10 @@
  *    rekordbox's eight by circular hue distance;
  *  - the cover is the embedded picture or the album folder's image
  *    (rx_artwork_raw), deduplicated by a SHA-1 of its bytes so an album's
- *    tracks share one artwork row (dj hashed the image the same way).
+ *    tracks share one artwork row (dj hashed the image the same way);
+ *  - a plan for Link (RX_PLAN_STORED) reads no audio: the files are
+ *    described from what the library stored when it probed them and the
+ *    covers come from the library's thumbnails, one row per stored cover.
  *
  * Stick paths follow rekordbox's layout (docs/pdb.md 1.2):
  * /Contents/<Artist>/<Album>/<file>, the stem cut to 43 characters, FAT-
@@ -27,7 +30,10 @@
 #include "rxbox/formats.h"
 
 #include <ctype.h>
+#include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -582,13 +588,28 @@ static int tag_column(const char *tag, char **name)
     return 4;
 }
 
+/* An MP3's rate without its frames read (a stored probe): the container's
+ * average, which counts the tags too, taken as the standard rate it is
+ * within 3 % of (a CBR file's); else as it is (a VBR file's average). */
+static int mp3_kbps(int bit_rate)
+{
+    static const int rates[] = { 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160,
+                                 192, 224, 256, 320 };
+    int kbps = (int)lrint(bit_rate / 1000.0);
+    for (size_t i = 0; i < RX_ARRAY_ELEMS(rates); i++)
+        if (abs(kbps - rates[i]) <= rates[i] * 3 / 100)
+            return rates[i];
+    return kbps;
+}
+
 /* dj's _bitrate(): kbps and bit depth the way rekordbox fills them
  * (docs/pdb.md track row 0x30). */
 static void bitrate(RXPlanTrack *pt)
 {
     const RXProbe *p = &pt->probe;
     if (!strcmp(p->codec, "mp3")) {
-        pt->bit_rate = p->mp3.valid && p->mp3.bitrate_kbps ? p->mp3.bitrate_kbps : p->bit_rate / 1000;
+        pt->bit_rate = p->mp3.valid && p->mp3.bitrate_kbps ? p->mp3.bitrate_kbps
+                                                           : mp3_kbps(p->bit_rate);
         pt->bit_depth = 16;
     } else if (!strcmp(p->codec, "aac")) {
         pt->bit_rate = (int)((double)pt->file_size * 8 / RX_MAX(p->duration, 1e-3) / 1000);
@@ -728,31 +749,17 @@ static bool plan_has(const RXPlan *p, uint64_t id)
 }
 
 typedef struct Artwork {
-    StrMap   ids;                /* SHA-1 hex -> artwork id */
+    StrMap   ids;                /* SHA-1 hex, or "library <id>" -> artwork id */
     RXArray  arr;                /* RXPlanArtwork */
 } Artwork;
 
-static uint32_t artwork_for(Artwork *aw, const RXTrack *t, rx_progress_cb cb, void *opaque)
+/* The artwork row of the cover `raw` (an image file's bytes), known by
+ * `key`: made the first time the key is seen, 0 when it does not decode
+ * (once). Takes `raw`. */
+static uint32_t artwork_add(Artwork *aw, const char *key, uint8_t *raw, size_t size,
+                            const RXTrack *t, rx_progress_cb cb, void *opaque)
 {
-    uint8_t *raw;
-    size_t size;
-    char codec[16];
-    if (rx_artwork_raw(t->path, &raw, &size, codec) < 0)
-        return 0;
-    uint8_t md[20];
-    char hex[2 * sizeof(md) + 1];
-    struct AVSHA *sha = av_sha_alloc();
-    if (!sha) {
-        free(raw);
-        return 0;
-    }
-    av_sha_init(sha, 160);
-    av_sha_update(sha, raw, size);
-    av_sha_final(sha, md);
-    av_free(sha);
-    for (size_t i = 0; i < sizeof(md); i++)
-        snprintf(hex + 2 * i, 3, "%02x", md[i]);
-    uint32_t *known = strmap_get(&aw->ids, hex);
+    uint32_t *known = strmap_get(&aw->ids, key);
     if (known) {
         free(raw);
         return *known;
@@ -777,14 +784,14 @@ static uint32_t artwork_for(Artwork *aw, const RXTrack *t, rx_progress_cb cb, vo
                strerror(-ret));
         free(a.jpeg80);
         free(a.jpeg240);
-        strmap_put(&aw->ids, hex, 0);
+        strmap_put(&aw->ids, key, 0);
         return 0;
     }
     char *dir = rx_plan_artwork_dir(a.id);
     a.path80 = dir ? rx_asprintf("%s/a%u.jpg", dir, a.id) : NULL;
     a.path240 = dir ? rx_asprintf("%s/a%u_m.jpg", dir, a.id) : NULL;
     free(dir);
-    if (!a.path80 || !a.path240 || strmap_put(&aw->ids, hex, a.id) < 0 || !rx_array_push(&aw->arr, &a)) {
+    if (!a.path80 || !a.path240 || strmap_put(&aw->ids, key, a.id) < 0 || !rx_array_push(&aw->arr, &a)) {
         free(a.path80);
         free(a.path240);
         free(a.jpeg80);
@@ -792,6 +799,52 @@ static uint32_t artwork_for(Artwork *aw, const RXTrack *t, rx_progress_cb cb, vo
         return 0;
     }
     return a.id;
+}
+
+/* The track's cover read from its file, by a SHA-1 of its bytes. */
+static uint32_t artwork_for(Artwork *aw, const RXTrack *t, rx_progress_cb cb, void *opaque)
+{
+    uint8_t *raw;
+    size_t size;
+    char codec[16];
+    if (rx_artwork_raw(t->path, &raw, &size, codec) < 0)
+        return 0;
+    uint8_t md[20];
+    char hex[2 * sizeof(md) + 1];
+    struct AVSHA *sha = av_sha_alloc();
+    if (!sha) {
+        free(raw);
+        return 0;
+    }
+    av_sha_init(sha, 160);
+    av_sha_update(sha, raw, size);
+    av_sha_final(sha, md);
+    av_free(sha);
+    for (size_t i = 0; i < sizeof(md); i++)
+        snprintf(hex + 2 * i, 3, "%02x", md[i]);
+    return artwork_add(aw, hex, raw, size, t, cb, opaque);
+}
+
+/* The track's cover as the library stores it (its 240 px thumbnail, one
+ * per cover however many tracks share it), by the library's cover id; a
+ * track whose cover has no thumbnail yet (the interface makes one when it
+ * first shows the track) has it read from its file. */
+static uint32_t artwork_stored(Artwork *aw, const RXLibrary *lib, const RXTrack *t,
+                               rx_progress_cb cb, void *opaque)
+{
+    int64_t cover = rx_library_artwork_id(lib, t->id);
+    if (cover <= 0)
+        return t->has_artwork ? artwork_for(aw, t, cb, opaque) : 0;
+    char key[40];
+    snprintf(key, sizeof(key), "library %lld", (long long)cover);
+    uint32_t *known = strmap_get(&aw->ids, key);
+    if (known)
+        return *known;
+    uint8_t *jpeg;
+    size_t size;
+    if (rx_library_artwork_load(lib, t->id, &jpeg, &size, NULL, NULL) < 0)
+        return artwork_for(aw, t, cb, opaque);
+    return artwork_add(aw, key, jpeg, size, t, cb, opaque);
 }
 
 /* Folders first, then playlists, as RXPlaylistFolder holds them (the
@@ -877,25 +930,67 @@ static int walk_playlists(const RXPlaylistFolder *f, uint32_t parent, RXPlan *pl
     return 0;
 }
 
+/* What the library stored when it probed the track's file (RXTrack's
+ * stream properties), when the file is still the one probed: the same
+ * size and modification time. No tags, frame tables or artwork: what a
+ * plan that reads no audio needs, the type, rate, depth, length and size.
+ * The container is not stored; a PCM file's is told by its name. */
+static bool stored_probe(const RXTrack *t, RXProbe *p, int64_t *file_size)
+{
+    struct stat st;
+    if (!t->codec[0] || t->sample_rate <= 0 || t->file_size <= 0 || !t->mtime ||
+        stat(t->path, &st) < 0 || st.st_size != t->file_size || (int64_t)st.st_mtime != t->mtime)
+        return false;
+    *p = (RXProbe) {
+        .duration      = t->duration,
+        .total_samples = t->total_samples,
+        .sample_rate   = t->sample_rate,
+        .channels      = t->channels,
+        .bit_rate      = t->bit_rate,
+        .bit_depth     = t->bit_depth,
+        .has_artwork   = t->has_artwork,
+    };
+    snprintf(p->codec, sizeof(p->codec), "%s", t->codec);
+    const char *ext = strrchr(rx_path_base(t->path), '.');
+    bool aiff = ext && (!strcasecmp(ext, ".aif") || !strcasecmp(ext, ".aiff") ||
+                        !strcasecmp(ext, ".aifc"));
+    snprintf(p->container, sizeof(p->container), "%s",
+             aiff ? "aiff" : rx_str_starts(t->codec, "pcm_") ? "wav" : t->codec);
+    *file_size = st.st_size;
+    return true;
+}
+
 /* A dry run's source for a track whose transcode is not made yet: the
  * cache file it would be, described from the original as the transcode
  * would be (16-bit FLAC at most at max_rate, rx_transcode_flac); its size
  * a typical FLAC's 60 % of PCM, for the free-space check. Nothing is
- * written. */
-static int dry_source(const RXLibrary *lib, const RXTrack *t, bool compat, RXPlanTrack *pt)
+ * written. `stored`: the original as the library stored it, unless it
+ * changed since (stored_probe); a transcode made already is then
+ * described the same way, its size its own. */
+static int dry_source(const RXLibrary *lib, const RXTrack *t, bool compat, bool stored,
+                      RXPlanTrack *pt)
 {
     char *cache;
     int max_rate = 0;
     int ret = rx_plan_transcode_path(lib, t, compat, false, &cache, &max_rate);
-    if (ret <= 0 || rx_plan_transcode_fresh(t, cache)) {
+    if (ret < 0)
+        return ret;
+    int64_t size = 0;
+    bool fresh = ret > 0 && rx_plan_transcode_fresh(t, cache);
+    bool known = stored && stored_probe(t, &pt->probe, &size);
+    if (ret == 0 && known) {
+        pt->source = rx_strdup(t->path);
+        pt->file_size = size;
+        return pt->source ? 0 : RX_ERROR(ENOMEM);
+    }
+    if (ret == 0 || (fresh && !known)) {
         free(cache);
-        if (ret < 0)
-            return ret;
+        rx_probe_free(&pt->probe);
         ret = rx_plan_transcode(lib, t, compat, &pt->source);
         return ret < 0 ? ret : rx_probe(pt->source, &pt->probe);
     }
     pt->source = cache;
-    if ((ret = rx_probe(t->path, &pt->probe)) < 0)
+    if (!known && (ret = rx_probe(t->path, &pt->probe)) < 0)
         return ret;
     RXProbe *p = &pt->probe;
     rx_flac_info_free(&p->flac);
@@ -907,15 +1002,17 @@ static int dry_source(const RXLibrary *lib, const RXTrack *t, bool compat, RXPla
         p->sample_rate = max_rate;
     }
     p->bit_depth = 16;
-    pt->file_size = (int64_t)(0.6 * p->duration * p->sample_rate * RX_MAX(p->channels, 1) * 2);
+    pt->file_size = fresh ? rx_file_size(cache)
+                  : (int64_t)(0.6 * p->duration * p->sample_rate * RX_MAX(p->channels, 1) * 2);
     return 0;
 }
 
 int rx_plan_build_cb(const RXLibrary *lib, RXTrack *const *tracks, int nb_tracks,
                      const RXPlaylist *const *playlists, int nb_playlists,
-                     const char *device_name, bool compat_transcode, bool dry, RXPlan *out,
-                     rx_progress_cb cb, void *opaque)
+                     const char *device_name, bool compat_transcode, enum RXPlanMode mode,
+                     RXPlan *out, rx_progress_cb cb, void *opaque)
 {
+    bool dry = mode != RX_PLAN_EXPORT;
     *out = (RXPlan) { 0 };
     int ret = 0;
     RXTrack **sorted = malloc((size_t)RX_MAX(nb_tracks, 1) * sizeof(*sorted));
@@ -978,7 +1075,7 @@ int rx_plan_build_cb(const RXLibrary *lib, RXTrack *const *tracks, int nb_tracks
         }
 
         if (dry) {
-            if ((ret = dry_source(lib, t, compat_transcode, pt)) < 0) {
+            if ((ret = dry_source(lib, t, compat_transcode, mode == RX_PLAN_STORED, pt)) < 0) {
                 report(cb, opaque, "%s: cannot read %s (%s)", disp, t->path, strerror(-ret));
                 goto fail;
             }
@@ -1094,7 +1191,8 @@ int rx_plan_build_cb(const RXLibrary *lib, RXTrack *const *tracks, int nb_tracks
             pt->tag_ids[pt->nb_tag_ids++] = id;
         }
 
-        pt->artwork_id = artwork_for(&aw, t, cb, opaque);
+        pt->artwork_id = mode == RX_PLAN_STORED ? artwork_stored(&aw, lib, t, cb, opaque)
+                                                : artwork_for(&aw, t, cb, opaque);
 
         if ((ret = rx_grid_copy(&pt->grid, &t->grid)) < 0)
             goto fail;
@@ -1203,5 +1301,5 @@ int rx_plan_build(const RXLibrary *lib, RXTrack *const *tracks, int nb_tracks,
                   const char *device_name, bool compat_transcode, RXPlan *out)
 {
     return rx_plan_build_cb(lib, tracks, nb_tracks, playlists, nb_playlists, device_name,
-                            compat_transcode, false, out, NULL, NULL);
+                            compat_transcode, RX_PLAN_EXPORT, out, NULL, NULL);
 }

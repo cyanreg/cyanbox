@@ -58,7 +58,8 @@ tree; `emu_fixture DIR` makes its three-track library and
 **Known limits.** A track info request for a track whose transcode is not
 made yet makes it there and then, on the service thread: the database and
 NFS wait for it (seconds), presence does not (its own thread, so the
-keep-alives go on). HISTORY lists each track by the day it was last
+keep-alives go on), and stopping Link (quitting) waits for it too.
+HISTORY lists each track by the day it was last
 played (the library has no reader for the play table yet). A player
 reading a file is not told when the library changes under it; handles
 name tracks by id, so it keeps reading.
@@ -235,9 +236,18 @@ Link is on:
 - **The library on the service thread**: its own connection and its own
   `RXLibrary`, as the export job opens one, loaded again when the app says
   the library changed; and the export plan over the whole library
-  (`rx_plan_build`), which the database server's paths and the virtual
-  tree both come from, made again with it. A handle names a track by id,
-  so a player reading a file keeps reading it across a rebuild. The app owns the library: what players send back
+  (`rx_plan_build_cb`), which the database server's paths and the virtual
+  tree both come from, made again with it. That plan reads no audio
+  (`RX_PLAN_STORED`): each file is described from what the library stored
+  when it probed it (a `stat` says it is still that file; one changed
+  since is probed), each cover is the library's thumbnail, and the frame
+  tables the analysis needs (an MP3's PVBR, a FLAC's PVB2) are read from
+  one file when a player asks for its analysis. A plan that probed every
+  file, as the export's dry run does, took over a minute on a library of
+  1,400 tracks, every time the library changed, and stopping waited for
+  it; this one takes 0.4 s, and a stop interrupts it. A handle names a
+  track by id, so a player reading a file keeps reading it across a
+  rebuild. The app owns the library: what players send back
   (loads, plays; later cues) goes to the app as job results, the way the
   export's do.
 - **Off by default**, bound to one chosen interface (`link.interface`):

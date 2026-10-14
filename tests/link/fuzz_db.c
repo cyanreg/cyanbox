@@ -505,8 +505,8 @@ int main(void)
         return 1;
     }
     RXPlan plan;
-    ret = rx_plan_build_cb(&lib, lib.tracks, lib.nb_tracks, NULL, 0, NULL, false, true, &plan,
-                           NULL, NULL);
+    ret = rx_plan_build_cb(&lib, lib.tracks, lib.nb_tracks, NULL, 0, NULL, false,
+                           RX_PLAN_STORED, &plan, NULL, NULL);
     if (ret < 0 || add_artwork(&plan) < 0) {
         fprintf(stderr, "fuzz_db: cannot plan: %s\n", strerror(-ret));
         rx_library_close(&lib);

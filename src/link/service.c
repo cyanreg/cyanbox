@@ -235,10 +235,20 @@ static void served_free(Served *s)
     *s = (Served) { 0 };
 }
 
+/* A build stops as soon as the service does: a library of thousands of
+ * tracks takes a moment even without reading audio. */
+static bool still_wanted(void *opaque, const char *stage, int done, int total, const char *item)
+{
+    RXLink *l = opaque;
+    return !atomic_load(&l->stop);
+}
+
 /* The library opened again, the plan over all of it, the catalog and the
  * tree over the plan. Tracks whose file is gone are left out (a player
- * could not read them); a dry plan makes no transcodes: the catalog makes
- * one when a player asks for the track (docs/LINK.md, section 4). */
+ * could not read them). The plan reads no audio (RX_PLAN_STORED: the
+ * library's probes and thumbnails, a stat per file) and makes no
+ * transcodes: the catalog makes one when a player asks for the track
+ * (docs/LINK.md, section 4). */
 static int served_build(RXLink *l, Served *s)
 {
     *s = (Served) { 0 };
@@ -272,7 +282,7 @@ static int served_build(RXLink *l, Served *s)
             tracks[nb++] = lib->tracks[i];
     }
     ret = rx_plan_build_cb(lib, tracks, nb, (const RXPlaylist *const *)pls, nb_pls, l->name,
-                           lib->cfg.compat_transcode, true, s->plan, NULL, NULL);
+                           lib->cfg.compat_transcode, RX_PLAN_STORED, s->plan, still_wanted, l);
     if (ret < 0) {
         free(s->plan);
         s->plan = NULL;
@@ -330,6 +340,8 @@ static void reload(RXLink *l)
     int64_t t0 = rx_time_us();
     Served s;
     int ret = served_build(l, &s);
+    if (ret == RX_ERROR(ECANCELED))
+        return;
     if (ret < 0) {
         rx_warn("link: the library changed but cannot be read again: %s", strerror(-ret));
         return;

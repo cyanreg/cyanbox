@@ -1575,7 +1575,8 @@ int rx_export(RXLibrary *lib, const char *dest, const RXExportOptions *opt_in, r
         goto out;
     if ((ret = rx_plan_build_cb(lib, tracks, nb_tracks, opt->playlists,
                                 opt->playlists ? opt->nb_playlists : 0, opt->device_name, compat,
-                                opt->dry_run, &plan, cb, opaque)) < 0)
+                                opt->dry_run ? RX_PLAN_DRY : RX_PLAN_EXPORT, &plan, cb,
+                                opaque)) < 0)
         goto out;
     if (!opt->device_name && !lib->cfg.device_name) {
         char label[64];

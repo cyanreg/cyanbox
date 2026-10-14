@@ -25,12 +25,14 @@
  * (77) without, after the rest has run. */
 
 #include <arpa/inet.h>
+#include <fcntl.h>
 #include <math.h>
 #include <netinet/in.h>
 #include <pthread.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -1277,11 +1279,17 @@ static void test_library(RXLibrary *lib, RXPlan *plan, RXCatalog **cat)
     uint32_t album = n ? rows[0].id : 0;
     rx_dbrows_free(&rows, n);
 
-    /* The analysis, against the ANLZ files the export would write. */
+    /* The analysis, against the ANLZ files the export would write: from
+     * the file's whole probe (its FLAC seek points, PVB2, which Link's
+     * plan leaves to the catalog to read). */
     RXWaveforms w;
     CHECK_EQ(rx_library_waveforms_load(lib, alpha, &w), 0);
+    RXPlanTrack whole = *pa;
+    CHECK_EQ(rx_probe(pa->source, &whole.probe), 0);
+    CHECK(whole.probe.flac.valid && !pa->probe.flac.valid);
     RXAnlzFiles files;
-    CHECK_EQ(rx_anlz_build(pa, &w, &files), 0);
+    CHECK_EQ(rx_anlz_build(&whole, &w, &files), 0);
+    rx_probe_free(&whole.probe);
     RXAnlzTag *ext_tags = NULL, *dat_tags = NULL, *ex2_tags = NULL;
     int next = 0, ndat = 0, nex2 = 0;
     CHECK_EQ(rx_anlz_parse(files.ext, files.ext_size, &ext_tags, &next), 0);
@@ -1331,8 +1339,8 @@ static void test_library(RXLibrary *lib, RXPlan *plan, RXCatalog **cat)
     free(blob);
 
     static const struct { const char *fourcc, *ext; } tags[] = {
-        { "PWV4", "EXT" }, { "PWV5", "EXT" }, { "PQT2", "EXT" }, { "PWV6", "2EX" }, { "PWV7", "2EX" },
-        { "PWVC", "2EX" }, { "PQTZ", "DAT" }, { "PWAV", "DAT" },
+        { "PWV4", "EXT" }, { "PWV5", "EXT" }, { "PQT2", "EXT" }, { "PVB2", "EXT" },
+        { "PWV6", "2EX" }, { "PWV7", "2EX" }, { "PWVC", "2EX" }, { "PQTZ", "DAT" }, { "PWAV", "DAT" },
     };
     for (size_t i = 0; i < RX_ARRAY_ELEMS(tags); i++) {
         CHECK_EQ(rx_dbclient_tag(c, alpha, tags[i].fourcc, tags[i].ext, &blob, &bn), 0);
@@ -1361,13 +1369,17 @@ static void test_library(RXLibrary *lib, RXPlan *plan, RXCatalog **cat)
     free(ex2_tags);
     rx_waveforms_free(&w);
 
-    /* VBR: the PVBR words little-endian; an MP3's last is its samples. */
+    /* VBR: the PVBR words little-endian; an MP3's last is its samples,
+     * from its frames, which Link's plan does not read: the catalog does
+     * when a player asks. */
     CHECK_EQ(rx_dbclient_blob(c, RX_DB_VBR, bravo, &blob, &bn), 0);
     CHECK_EQ(bn, 1604);
+    RXMp3Info mp3;
+    CHECK(!pb->probe.mp3.valid && rx_mp3_scan(pb->source, &mp3) >= 0 && mp3.valid);
     if (bn == 1604) {
         uint32_t trailer = (uint32_t)blob[1600] | (uint32_t)blob[1601] << 8 |
                            (uint32_t)blob[1602] << 16 | (uint32_t)blob[1603] << 24;
-        CHECK(pb->probe.mp3.valid && trailer == (uint32_t)(pb->probe.mp3.nb_frames * pb->probe.mp3.frame_samples));
+        CHECK(trailer && trailer == (uint32_t)(mp3.nb_frames * mp3.frame_samples));
     }
     free(blob);
 
@@ -1779,6 +1791,89 @@ static void test_large(void)
     mem_free(&m);
 }
 
+/* ------------------------------------------------------- the stored plan */
+
+static void same_track(const RXPlanTrack *a, const RXPlanTrack *b)
+{
+    CHECK_STR(a->source, b->source);
+    CHECK_STR(a->usb_path, b->usb_path);
+    CHECK_EQ(a->file_type, b->file_type);
+    CHECK_EQ(a->file_size, b->file_size);
+    CHECK_EQ(a->sample_rate, b->sample_rate);
+    CHECK_EQ(a->bit_rate, b->bit_rate);
+    CHECK_EQ(a->bit_depth, b->bit_depth);
+    CHECK_EQ(a->total_samples, b->total_samples);
+    CHECK(fabs(a->duration - b->duration) < 1e-9);
+    CHECK_EQ(!a->artwork_id, !b->artwork_id);
+}
+
+static void same_plans(RXLibrary *lib)
+{
+    RXPlan dry, stored;
+    CHECK_EQ(rx_plan_build_cb(lib, lib->tracks, lib->nb_tracks, NULL, 0, NULL, false, RX_PLAN_DRY,
+                              &dry, NULL, NULL), 0);
+    CHECK_EQ(rx_plan_build_cb(lib, lib->tracks, lib->nb_tracks, NULL, 0, NULL, false,
+                              RX_PLAN_STORED, &stored, NULL, NULL), 0);
+    CHECK_EQ(dry.nb_tracks, stored.nb_tracks);
+    for (int i = 0; i < dry.nb_tracks && i < stored.nb_tracks; i++)
+        same_track(&dry.tracks[i], &stored.tracks[i]);
+    rx_plan_free(&dry);
+    rx_plan_free(&stored);
+}
+
+/* The colour at the centre of an artwork's 240 px JPEG: 'r' or 'b'. */
+static char cover_colour(const RXPlan *p, uint32_t track_id)
+{
+    const RXPlanTrack *pt = plan_track(p, track_id);
+    const RXPlanArtwork *a = NULL;
+    for (int i = 0; pt && i < p->nb_artworks; i++)
+        if (p->artworks[i].id == pt->artwork_id)
+            a = &p->artworks[i];
+    uint8_t *rgba = NULL;
+    int w = 0, h = 0;
+    if (!a || rx_image_decode(a->jpeg240, a->size240, &rgba, &w, &h) < 0)
+        return 0;
+    const uint8_t *px = rgba + ((size_t)(h / 2) * w + w / 2) * 4;
+    char c = px[0] > px[2] ? 'r' : 'b';
+    free(rgba);
+    return c;
+}
+
+/* Link's plan reads no audio (RX_PLAN_STORED): each track described as
+ * the export's dry run, which probes every file, describes it (a
+ * transcode not made yet, charlie's Opus, included); a cover from the
+ * library's thumbnail when it has one, else from the file (the folder's
+ * orange front.jpg); a file changed since the library probed it probed
+ * again. */
+static void test_stored(RXLibrary *lib)
+{
+    same_plans(lib);
+
+    RXTrack *alpha = by_file(lib, "alpha.flac"), *delta = by_file(lib, "delta.wav");
+    uint8_t blue[16 * 16 * 4];
+    for (size_t i = 0; i < sizeof(blue); i += 4) {
+        blue[i] = 0x10;
+        blue[i + 1] = 0x20;
+        blue[i + 2] = 0xF0;
+        blue[i + 3] = 0xFF;
+    }
+    uint8_t *jpeg = NULL;
+    size_t size = 0;
+    CHECK_EQ(rx_image_jpeg_square(blue, 16, 16, 240, 90, &jpeg, &size), 0);
+    CHECK_EQ(rx_library_artwork_save(lib, alpha->id, jpeg, size, 240, 240), 0);
+    free(jpeg);
+    RXPlan p;
+    CHECK_EQ(rx_plan_build_cb(lib, lib->tracks, lib->nb_tracks, NULL, 0, NULL, false,
+                              RX_PLAN_STORED, &p, NULL, NULL), 0);
+    CHECK_EQ(cover_colour(&p, (uint32_t)alpha->id), 'b');
+    CHECK_EQ(cover_colour(&p, (uint32_t)delta->id), 'r');
+    rx_plan_free(&p);
+
+    struct timespec later[2] = { { .tv_nsec = UTIME_OMIT }, { .tv_sec = delta->mtime + 60 } };
+    CHECK_EQ(utimensat(AT_FDCWD, delta->path, later, 0), 0);
+    same_plans(lib);
+}
+
 /* ---------------------------------------------------------------- main */
 
 int main(void)
@@ -1805,9 +1900,10 @@ int main(void)
         sh("rm -rf '%s'", root);
         return failures ? test_result("test_db") : 77;
     }
+    test_stored(&lib);
     RXPlan plan;
-    CHECK_EQ(rx_plan_build_cb(&lib, lib.tracks, lib.nb_tracks, NULL, 0, NULL, false, true, &plan,
-                              NULL, NULL), 0);
+    CHECK_EQ(rx_plan_build_cb(&lib, lib.tracks, lib.nb_tracks, NULL, 0, NULL, false,
+                              RX_PLAN_STORED, &plan, NULL, NULL), 0);
     RXCatalog *cat = NULL;
     CHECK_EQ(rx_catalog_new(&cat, &lib, &plan), 0);
     if (!ret && cat) {

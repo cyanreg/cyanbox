@@ -116,15 +116,32 @@ bool rx_plan_transcode_fresh(const RXTrack *t, const char *cache);
 /* Makes sure the transcode exists and is newer than the track's file. */
 int  rx_plan_transcode(const RXLibrary *lib, const RXTrack *t, bool compat, char **source);
 
+/* How a plan learns about the files. */
+enum RXPlanMode {
+    /* The export's: transcodes made, every file probed (its frame tables
+     * too), every cover read from its file. */
+    RX_PLAN_EXPORT = 0,
+    /* The export's dry run: nothing made, a track whose transcode is not
+     * made yet described from its original as the transcode would be;
+     * every file probed, every cover read. */
+    RX_PLAN_DRY,
+    /* As dry, but reading no audio: each file described from what the
+     * library stored when it probed it (a stat says it is still that
+     * file; one changed since is probed), each cover from the library's
+     * thumbnail (a cover without one from its file), no frame tables.
+     * Link's, made again at every library change (docs/LINK.md): a
+     * library of a thousand tracks in a fraction of a second instead of a
+     * read of every file. */
+    RX_PLAN_STORED,
+};
+
 /* rx_plan_build (rxbox/formats.h) with a "prepare" item per track (1-based) and every
  * warning (unknown colour, unreadable artwork, playlist entry not
- * exported) reported through `cb`; returning false from it cancels. A dry
- * plan transcodes nothing: a track whose transcode is not made yet is
- * described from its original as the transcode would be. */
+ * exported) reported through `cb`; returning false from it cancels. */
 int  rx_plan_build_cb(const RXLibrary *lib, RXTrack *const *tracks, int nb_tracks,
                       const RXPlaylist *const *playlists, int nb_playlists,
-                      const char *device_name, bool compat_transcode, bool dry, RXPlan *out,
-                      rx_progress_cb cb, void *opaque);
+                      const char *device_name, bool compat_transcode, enum RXPlanMode mode,
+                      RXPlan *out, rx_progress_cb cb, void *opaque);
 
 /* Reads back a stick and validates what dj's `inspect` did plus the rbxport
  * checks: ANLZ embedded path matches the audio, folder matches the path

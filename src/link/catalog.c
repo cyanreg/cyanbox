@@ -1649,10 +1649,24 @@ static Analysis *analysis_of(RXCatalog *c, uint32_t id)
             old = a;
     }
     analysis_clear(old);
-    const RXPlanTrack *pt = c->t[ti].pt;
+    /* The frame tables Link's plan leaves out (RX_PLAN_STORED reads no
+     * audio) and the analysis needs (anlz.c): an MP3's frame count for its
+     * PVBR, a FLAC's seek points for its PVB2, read from this one file now
+     * that a player asks for it. */
+    RXPlanTrack full = *c->t[ti].pt;
+    RXFlacInfo flac = { 0 };
+    if (!strcmp(full.probe.codec, "mp3") && !full.probe.mp3.valid) {
+        RXMp3Info mp3;
+        if (rx_mp3_scan(full.source, &mp3) >= 0)
+            full.probe.mp3 = mp3;
+    } else if (!strcmp(full.probe.codec, "flac") && !full.probe.flac.valid &&
+               rx_file_exists(full.source) && rx_flac_scan(full.source, &flac) >= 0) {
+        full.probe.flac = flac;
+    }
     RXWaveforms w = { 0 };
     bool waves = c->lib && c->lib->db && rx_library_waveforms_load(c->lib, id, &w) >= 0;
-    int ret = rx_anlz_build(pt, waves ? &w : NULL, &old->files);
+    int ret = rx_anlz_build(&full, waves ? &w : NULL, &old->files);
+    rx_flac_info_free(&flac);
     if (waves)
         rx_waveforms_free(&w);
     if (ret < 0) {
