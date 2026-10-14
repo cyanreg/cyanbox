@@ -176,6 +176,24 @@ static const char *slot_name(int slot)
 #define STATE_SIZE  21.0f
 #define NUMBER_SIZE 44.0f
 
+// Text with a dark shadow, readable over the waveform.
+static void stext(UiState *ui, ImDrawList *dl, ImFont *font, float size, ImVec2 pos, ImU32 col,
+                  const char *text, float max_w = 0.0f)
+{
+    float o = PX(1.5f);
+    ui_text(ui, dl, font, size, ImVec2(pos.x + o, pos.y + o), IM_COL32(0, 0, 0, 0xE0), text, max_w);
+    ui_text(ui, dl, font, size, pos, col, text, max_w);
+}
+
+static void stext_right(UiState *ui, ImDrawList *dl, ImFont *font, float size, ImVec2 right_top,
+                        ImU32 col, const char *text)
+{
+    float o = PX(1.5f);
+    ui_text_right(ui, dl, font, size, ImVec2(right_top.x + o, right_top.y + o),
+                  IM_COL32(0, 0, 0, 0xE0), text);
+    ui_text_right(ui, dl, font, size, right_top, col, text);
+}
+
 // How wide a readout is: its label's width or its value's.
 static float readout_w(UiState *ui, const char *label, const char *value)
 {
@@ -187,13 +205,14 @@ static float readout_w(UiState *ui, const char *label, const char *value)
 static void readout(UiState *ui, ImDrawList *dl, float right, float y, const char *label,
                     const char *value, ImU32 col)
 {
-    ui_text_right(ui, dl, ui->font_bold, LABEL_SIZE, ImVec2(right, y), UI_DIM, label);
-    ui_text_right(ui, dl, ui->font_bold, VALUE_SIZE, ImVec2(right, y + PX(LABEL_SIZE + 3)), col,
+    stext_right(ui, dl, ui->font_bold, LABEL_SIZE, ImVec2(right, y), UI_DIM, label);
+    stext_right(ui, dl, ui->font_bold, VALUE_SIZE, ImVec2(right, y + PX(LABEL_SIZE + 3)), col,
                   value);
 }
 
-// The track's overview behind a cell, dimmed under the text, the part
-// played shaded and the playhead on it.
+// The track's overview behind a cell, drawn as the deck's overview is
+// (the players' overview type), the part played dimmed as there and the
+// playhead on it in red.
 static void background(UiState *ui, const RXTrack *t, double pos, ImVec2 a, ImVec2 b)
 {
     RXApp *app = ui->app;
@@ -209,19 +228,20 @@ static void background(UiState *ui, const RXTrack *t, double pos, ImVec2 a, ImVe
         d.y1 = b.y - PX(3);
         d.col0 = 0;
         d.col1 = rx_wave_columns(g);
-        d.mode = RX_WAVE_CENTRED;
+        d.mode = ui->overview_full ? RX_WAVE_CENTRED : RX_WAVE_HALF_STACKED;
         d.gain = 1.0f;
-        d.alpha = 0.6f;
+        d.alpha = 1.0f;
+        if (pos >= 0 && t->duration > 0) {
+            d.dim = 0.45f;
+            d.dim_until = pos / t->duration * rx_wave_columns(g);
+        }
         rx_wave_draw(app->window, dl, g, &d);
     } else if (t->has_waveforms) {
         ui->previews_pending = true;
     }
-    // Dark enough under the text to read it.
-    dl->AddRectFilled(a, b, IM_COL32(0, 0, 0, 0x98), PX(3));
     if (pos >= 0 && t->duration > 0) {
-        float x = floorf(a.x + (float)(pos / t->duration) * (b.x - a.x)) + 0.5f;
-        dl->AddRectFilled(a, ImVec2(x, b.y), IM_COL32(0, 0, 0, 0x50), PX(3));
-        dl->AddLine(ImVec2(x, a.y), ImVec2(x, b.y), UI_TEXT, PX(2));
+        float x = floorf(a.x + (float)(pos / t->duration) * (b.x - a.x));
+        dl->AddRectFilled(ImVec2(x - PX(1), a.y), ImVec2(x + PX(1), b.y), UI_RED);
     }
 }
 
@@ -301,7 +321,7 @@ static void deck_cell(UiState *ui, int index, ImVec2 a, ImVec2 b)
         float ww = ui_text_width(ui, ui->font_bold, STATE_SIZE, w);
         if (cx + ww > right)
             return false;
-        ui_text(ui, dl, ui->font_bold, STATE_SIZE, ImVec2(cx, sy), col, w);
+        stext(ui, dl, ui->font_bold, STATE_SIZE, ImVec2(cx, sy), col, w);
         cx += ww + space;
         return true;
     };
@@ -309,24 +329,24 @@ static void deck_cell(UiState *ui, int index, ImVec2 a, ImVec2 b)
     room = room && (!d.on_air || word("ON AIR", UI_RED));
     room = room && (!d.master || word("MASTER", UI_ACCENT));
     if (beside)
-        ui_text(ui, dl, nullptr, LINE_SIZE, ImVec2(sx, ly), UI_DIM, model, sw);
+        stext(ui, dl, nullptr, LINE_SIZE, ImVec2(sx, ly), UI_DIM, model, sw);
     else if (room && right - cx > PX(30))
-        ui_text(ui, dl, nullptr, STATE_SIZE, ImVec2(cx, sy), UI_DIM, model, right - cx);
+        stext(ui, dl, nullptr, STATE_SIZE, ImVec2(cx, sy), UI_DIM, model, right - cx);
 
     if (t) {
-        ui_text(ui, dl, ui->font_bold, TITLE_SIZE, ImVec2(tx, ty), UI_TEXT, ui_title(t), max_w);
+        stext(ui, dl, ui->font_bold, TITLE_SIZE, ImVec2(tx, ty), UI_TEXT, ui_title(t), max_w);
         if (beside)
-            ui_text(ui, dl, nullptr, LINE_SIZE, ImVec2(tx, ly), UI_DIM, ui_artist(t), max_w);
+            stext(ui, dl, nullptr, LINE_SIZE, ImVec2(tx, ly), UI_DIM, ui_artist(t), max_w);
     } else {
         if (loaded && d.track_device == d.number)
             snprintf(buf, sizeof(buf), "Track %u from its %s", d.track_id, slot_name(d.track_slot));
         else if (loaded)
             snprintf(buf, sizeof(buf), "Track %u from device %d's %s", d.track_id, d.track_device,
                      slot_name(d.track_slot));
-        ui_text(ui, dl, ui->font_bold, TITLE_SIZE, ImVec2(tx, ty), UI_FAINT,
+        stext(ui, dl, ui->font_bold, TITLE_SIZE, ImVec2(tx, ty), UI_FAINT,
                 !d.has_status ? "Waiting for its status" : loaded ? buf : "No track loaded", max_w);
         if (beside)
-            ui_text(ui, dl, nullptr, LINE_SIZE, ImVec2(tx, ly), UI_FAINT,
+            stext(ui, dl, nullptr, LINE_SIZE, ImVec2(tx, ly), UI_FAINT,
                     loaded ? "Not one of rxbox's tracks" : "Drop a track here", max_w);
     }
 
@@ -359,7 +379,7 @@ void ui_link_decks_row(UiState *ui, ImVec2 a, ImVec2 b)
     ui->link_decks_drawn = n;
     if (!n) {
         ImDrawList *dl = ImGui::GetWindowDrawList();
-        ui_text(ui, dl, nullptr, LINE_SIZE, ImVec2(a.x + PX(12), floorf((a.y + b.y) * 0.5f - PX(14))),
+        stext(ui, dl, nullptr, LINE_SIZE, ImVec2(a.x + PX(12), floorf((a.y + b.y) * 0.5f - PX(14))),
                 UI_FAINT, app->link_state.on ? "No player on the link" : "PRO DJ LINK is off");
         return;
     }

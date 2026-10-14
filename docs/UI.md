@@ -238,8 +238,9 @@ the deck as without it, for editing a track before it goes to a player. One
 cell a player, by number, the width shared equally and each at most half
 of it, so two fill it; one alone takes its side (odd numbers left, even
 right); with none, the row says so. A cell has the track's overview for
-its background (dimmed, the part played shaded and the playhead on it
-when the player says where it is), and over it the player's number, the
+its background, drawn as the deck's overview is (the part played at 55 %
+brightness and a red playhead, when the player says where it is), and
+over it, shadowed, the player's number, the
 cover, the title over the artist, the player's state (PLAYING or PAUSED,
 ON AIR, MASTER) over its model, and right-aligned REMAIN, BPM at the
 player's pitch (orange off zero) and KEY, spaced by their widths; a cell
