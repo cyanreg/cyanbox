@@ -71,7 +71,7 @@ uint32_t rx_catalog_menu_find(const RXCatMenu *m, uint32_t id);
  * Orders"), 0 the default. */
 #define RX_CAT_COLUMN_DEFAULT 0
 void rx_catalog_render(RXCatalog *c, const RXCatMenu *m, uint32_t offset, uint32_t count,
-                       int column, bool extended, bool ascii, uint32_t txid, RXWr *w);
+                       int column, bool extended, bool latin1, uint32_t txid, RXWr *w);
 
 /* Artwork as JPEG: by its artwork id (`item` false; the older form, the
  * id the older item layout carries), or by a menu item's own id (a track,

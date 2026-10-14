@@ -205,54 +205,16 @@ static uint32_t text_bytes(const char *s)
     return 2 * ((uint32_t)rx_link_utf16_units(s ? s : "") + 1);
 }
 
-/* Typographic punctuation as ASCII, for a player whose display has no
- * glyph for it (rx_dbmsg_item_ascii); NULL when there is none to fold. */
-static char *ascii_fold(const char *s)
-{
-    if (!s)
-        return NULL;
-    bool any = false;
-    for (const unsigned char *p = (const unsigned char *)s; *p && !any; p++)
-        any = *p >= 0x80;
-    if (!any)
-        return NULL;
-    char *out = malloc(3 * strlen(s) + 1);
-    if (!out)
-        return NULL;
-    size_t o = 0;
-    bool folded = false;
-    for (const char *p = s; *p;) {
-        uint32_t c = rx_utf8_next(&p);
-        const char *as = c == 0x2018 || c == 0x2019 || c == 0x201A || c == 0x201B || c == 0x2032 ? "'"
-                       : c == 0x201C || c == 0x201D || c == 0x201E || c == 0x201F || c == 0x2033 ? "\""
-                       : (c >= 0x2010 && c <= 0x2015) || c == 0x2212 ? "-"
-                       : c == 0x2026 ? "..." : NULL;
-        if (as) {
-            size_t n = strlen(as);
-            memcpy(out + o, as, n);
-            o += n;
-            folded = true;
-        } else {
-            o += (size_t)rx_utf8_put(out + o, c);
-        }
-    }
-    out[o] = 0;
-    if (!folded) {
-        free(out);
-        return NULL;
-    }
-    return out;
-}
-
 void rx_dbmsg_item(RXWr *w, uint32_t txid, const RXDbItem *it, bool extended)
 {
-    rx_dbmsg_item_ascii(w, txid, it, extended, false);
+    rx_dbmsg_item_latin1(w, txid, it, extended, false);
 }
 
-void rx_dbmsg_item_ascii(RXWr *w, uint32_t txid, const RXDbItem *it, bool extended, bool ascii)
+void rx_dbmsg_item_latin1(RXWr *w, uint32_t txid, const RXDbItem *it, bool extended, bool latin1)
 {
-    char *f1 = ascii ? ascii_fold(it->text) : NULL, *f2 = ascii ? ascii_fold(it->text2) : NULL;
-    char *f3 = ascii ? ascii_fold(it->text3) : NULL;
+    char *f1 = latin1 ? rx_utf8_latin1(it->text) : NULL;
+    char *f2 = latin1 ? rx_utf8_latin1(it->text2) : NULL;
+    char *f3 = latin1 ? rx_utf8_latin1(it->text3) : NULL;
     const char *t1 = f1 ? f1 : it->text ? it->text : "", *t2 = f2 ? f2 : it->text2 ? it->text2 : "";
     const char *t3 = f3 ? f3 : it->text3 ? it->text3 : "";
     RXDbMsg m = { .txid = txid, .kind = RX_DB_MENU_ITEM, .nb_args = extended ? 16 : 12 };

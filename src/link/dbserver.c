@@ -70,16 +70,16 @@ struct RXDbSession {
      * answered as rekordbox answers one (sixteen-argument items); else
      * as the djl-analysis describes (twelve). */
     bool      extended;
-    bool      ascii;            /* a CDJ-900's: rx_dbmsg_item_ascii */
+    bool      latin1;           /* a CDJ-900's: rx_dbmsg_item_latin1 */
     uint8_t  *in;
     size_t    in_len, in_cap;
     Menu      menus[NB_MENUS];
     uint64_t  clock;
 };
 
-void rx_dbsession_set_ascii(RXDbSession *s, bool ascii)
+void rx_dbsession_set_latin1(RXDbSession *s, bool latin1)
 {
-    s->ascii = ascii;
+    s->latin1 = latin1;
 }
 
 int rx_dbsession_new(RXDbSession **out, RXCatalog *const *cat, int our_number)
@@ -306,7 +306,7 @@ static void render(RXDbSession *s, RXWr *w, const RXDbMsg *q, RXCatalog *c)
         column = slot->m.sort;
     numbers(w, q->txid, RX_DB_MENU_HEADER, 1, offset);
     if (slot && c && count)
-        rx_catalog_render(c, &slot->m, offset, count, column, s->extended, s->ascii, q->txid, w);
+        rx_catalog_render(c, &slot->m, offset, count, column, s->extended, s->latin1, q->txid, w);
     rx_dbmsg_numbers(w, q->txid, RX_DB_MENU_FOOTER, NULL, 0);
 }
 

@@ -1724,13 +1724,13 @@ static bool item_of(RXCatalog *c, const RXCatMenu *m, uint32_t i, int column, bo
 }
 
 void rx_catalog_render(RXCatalog *c, const RXCatMenu *m, uint32_t offset, uint32_t count,
-                       int column, bool extended, bool ascii, uint32_t txid, RXWr *w)
+                       int column, bool extended, bool latin1, uint32_t txid, RXWr *w)
 {
     for (uint32_t i = offset; c && i < m->nb && i - offset < count; i++) {
         RXDbItem it;
         Texts tx;
         if (item_of(c, m, i, column, extended, &it, &tx))
-            rx_dbmsg_item_ascii(w, txid, &it, extended, ascii);
+            rx_dbmsg_item_latin1(w, txid, &it, extended, latin1);
     }
 }
 

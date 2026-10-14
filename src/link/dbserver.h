@@ -53,9 +53,9 @@ typedef struct RXDbSession RXDbSession;
  * device number we are on the link. */
 int  rx_dbsession_new(RXDbSession **out, RXCatalog *const *cat, int our_number);
 void rx_dbsession_free(RXDbSession **s);
-/* Texts with typographic punctuation folded to ASCII, for a player that
- * shows only Latin-1 (rx_dbmsg_item_ascii). */
-void rx_dbsession_set_ascii(RXDbSession *s, bool ascii);
+/* Texts as Latin-1 (romaji and all), for a player that shows only Latin-1
+ * (rx_dbmsg_item_latin1). */
+void rx_dbsession_set_latin1(RXDbSession *s, bool latin1);
 /* Bytes that arrived on the connection: whole requests are answered, the
  * replies appended to `out`, a partial one kept for the next call.
  * Returns 0, or a negative errno when the connection is to be closed (a

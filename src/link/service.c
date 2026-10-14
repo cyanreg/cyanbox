@@ -453,12 +453,12 @@ static void conn_accept(RXLink *l, enum ConnKind kind)
             close(fd);
             return;
         }
-        /* A CDJ-900 shows only Latin-1: its typographic punctuation as
-         * ASCII, by the name its keep-alives give. */
+        /* A CDJ-900 shows only Latin-1: its texts as Latin-1, romaji and
+         * all, by the name its keep-alives give. */
         pthread_mutex_lock(&l->lock);
         for (int i = 0; i < l->nb_players; i++)
             if (l->players[i].addr == peer && !strcmp(l->players[i].name, "CDJ-900"))
-                rx_dbsession_set_ascii(c->s, true);
+                rx_dbsession_set_latin1(c->s, true);
         pthread_mutex_unlock(&l->lock);
     }
     l->nb_conns++;

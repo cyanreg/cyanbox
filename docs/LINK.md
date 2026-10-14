@@ -55,10 +55,16 @@ CDJ-2000 v4.33, a CDJ-2000NXS2 v1.87; 2026-10-15) showed:
   hold it) reached a CDJ-2000 as two characters. The library keeps all
   its text in NFC now (src/common/utf8.c; existing text is converted as
   it opens, src/core/clean.c), so the stick and Link give out NFC.
-- A CDJ-900 shows Latin-1 only, everything else as '?' (CJK too, as it
-  does for rekordbox). For its sessions (by the keep-alive's name)
-  typographic quotes, dashes and the ellipsis go as ASCII
-  (rx_dbmsg_item_ascii): "Don’t" as "Don't", not "Don?t".
+- A CDJ-900 shows Latin-1 only, everything else as '?': "Don’t" as
+  "Don?t", kana and kanji all '?' (its main processor hands the display
+  8-bit names). For its sessions (by the keep-alive's name) every text
+  goes as Latin-1 (rx_dbmsg_item_latin1, rx_utf8_latin1): Japanese as
+  romaji, kanji read by MeCab when rxbox has it and a dictionary
+  ("悦びの印" as "Yorokobi no Shirushi", "ごーいん！" as "Gooin!"),
+  typographic and CJK punctuation as its nearest Latin-1, other scripts
+  through ICU. Names with readings of their own come out by their
+  ordinary readings (小鳥遊 is not "Takanashi"); a kanji the dictionary
+  has no reading for stays a '?'.
 - A CDJ-900 accepts the WAV made as it is read (16-bit stereo, 44.1 or
   48 kHz, the plain 44-byte header): a LOOKUP per path component, a
   GETATTR, 2 kB at 0 for the header, then 9408-byte READs (four CD

@@ -310,10 +310,11 @@ typedef struct RXDbItem {
 } RXDbItem;
 
 void rx_dbmsg_item(RXWr *w, uint32_t txid, const RXDbItem *it, bool extended);
-/* The same with `ascii`: typographic quotes, dashes and the ellipsis as
- * ASCII (' " - ...), for a CDJ-900, whose display turns what is not
- * Latin-1 into '?' (an emulated one, 2026-10-15: "Don’t" as "Don?t"). */
-void rx_dbmsg_item_ascii(RXWr *w, uint32_t txid, const RXDbItem *it, bool extended, bool ascii);
+/* The same with `latin1`: the texts as rx_utf8_latin1 makes them (romaji,
+ * Latin-1 punctuation), for a CDJ-900, whose display turns what is not
+ * Latin-1 into '?' (an emulated one, 2026-10-15: "Don’t" as "Don?t", kana
+ * and kanji all '?'). */
+void rx_dbmsg_item_latin1(RXWr *w, uint32_t txid, const RXDbItem *it, bool extended, bool latin1);
 
 /* An item read back by a client: the same fields with its texts in
  * UTF-8, allocated. */

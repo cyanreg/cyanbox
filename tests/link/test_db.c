@@ -215,21 +215,22 @@ static void item_bytes(const RXDbItem *it, uint32_t txid, const char *hex, const
     rx_wr_free(&w);
 }
 
-/* An item's texts with typographic punctuation folded for a CDJ-900, the
- * rest as they are; without the flag, all as they are. */
-static void test_ascii(void)
+/* An item's texts as Latin-1 for a CDJ-900 (rx_utf8_latin1: punctuation,
+ * kana; what is Latin-1 already as it is); without the flag, all as they
+ * are. */
+static void test_latin1(void)
 {
-    RXDbItem it = { .id = 1, .text = "Don’t “stop” ‐ now…", .text2 = "凛々咲 ☆ é",
-                    .text3 = "‘a’ – b — c", .type = RX_DB_ITEM_TITLE };
-    for (int ascii = 0; ascii < 2; ascii++) {
+    RXDbItem it = { .id = 1, .text = "Don’t “stop” ‐ now…", .text2 = "☆ é",
+                    .text3 = "ごーいん！", .type = RX_DB_ITEM_TITLE };
+    for (int latin1 = 0; latin1 < 2; latin1++) {
         RXWr w = rx_wr_dyn();
-        rx_dbmsg_item_ascii(&w, 7, &it, true, ascii);
+        rx_dbmsg_item_latin1(&w, 7, &it, true, latin1);
         RXDbMsg m;
         RXDbRow row;
         CHECK(rx_dbmsg_parse(w.p, w.len, 1 << 16, &m) > 0 && rx_dbrow_parse(&m, &row) == 0);
-        CHECK_STR(row.text, ascii ? "Don't \"stop\" - now..." : it.text);
+        CHECK_STR(row.text, latin1 ? "Don't \"stop\" - now..." : it.text);
         CHECK_STR(row.text2, it.text2);
-        CHECK_STR(row.text3, ascii ? "'a' - b - c" : it.text3);
+        CHECK_STR(row.text3, latin1 ? "Gooin!" : it.text3);
         rx_dbrow_free(&row);
         rx_wr_free(&w);
     }
@@ -1993,7 +1994,7 @@ static void test_link_plan(RXLibrary *lib)
 int main(void)
 {
     test_codec();
-    test_ascii();
+    test_latin1();
     test_capture();
     test_large();
 
