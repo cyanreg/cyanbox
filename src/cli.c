@@ -145,10 +145,11 @@ static const char usage_text[] =
     "      -t, --track ID       the track to load (default the first)\n"
     "      --name NAME          the model it says it is (default CDJ-3000)\n"
     "      --quiet              do not announce on the link (needs HOST)\n"
-    "      --hold SEC           wait for a source that long; once loaded, stay on the\n"
-    "                           link SEC seconds, playing: the beat number and tempo\n"
-    "                           from the track's grid, and any track the source\n"
-    "                           tells it to load (Load in deck) played the same way\n"
+    "      --hold SEC           wait for a source that long (20 s at least); once\n"
+    "                           loaded, stay on the link SEC seconds, playing: the\n"
+    "                           beat number and tempo from the track's grid, and any\n"
+    "                           track the source tells it to load (Load in deck)\n"
+    "                           played the same way\n"
     "\n"
     "  A TRACK is an audio file in the library (any path to it), a folder (every\n"
     "  library track under it) or a library id.\n"
@@ -2716,7 +2717,7 @@ static int link_browse(const RXLinkClientOptions *o, uint32_t track, long hold)
     fflush(stdout);
     uint32_t addr;
     int number;
-    int wait_ms = hold > 0 ? (int)RX_MIN(hold * 1000, (long)INT32_MAX) : 20000;
+    int wait_ms = (int)RX_MIN(RX_MAX(hold * 1000, 20000L), (long)INT32_MAX);
     if ((ret = rx_link_client_wait_source(c, wait_ms, &addr, &number)) < 0) {
         rx_link_client_stop(&c);
         return fail("no computer source answered on %s", o->interface);
