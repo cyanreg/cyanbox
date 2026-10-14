@@ -16,6 +16,10 @@
 # the client exits; the script exits with the client's status. -w is how
 # long the server gets to start (default 1 second). Used by the link
 # suite and by hand to run rxbox against rbxport's client and server.
+#
+# Everything runs in a PID namespace of its own too, so that whatever the
+# commands start ends with the script: a server command of several
+# commands is a shell whose children a kill of it would leave running.
 
 set -u
 wait_s=1
@@ -34,7 +38,7 @@ if [ -z "$server" ] || [ -z "$client" ]; then
     echo "usage: $0 [-w SECONDS] SERVER-COMMAND -- CLIENT-COMMAND" >&2
     exit 1
 fi
-if ! unshare -rn true 2>/dev/null; then
+if ! unshare -rnmp --fork --mount-proc true 2>/dev/null; then
     echo "netns: no unprivileged user namespaces here" >&2
     exit 77
 fi
@@ -44,7 +48,7 @@ trap 'rm -f "$log"' EXIT
 
 export RXA=rxa RXB=rxb ADDR_A=169.254.1.1 ADDR_B=169.254.1.2 SERVER="$server" CLIENT="$client" \
        WAIT_S="$wait_s" LOG="$log"
-unshare -rn --kill-child bash -c '
+unshare -rnmp --fork --mount-proc --kill-child bash -c '
     ip link set lo up
     # Host B: a namespace of its own, held by a process until the end.
     unshare -n sleep 100000 &
