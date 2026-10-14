@@ -1637,6 +1637,18 @@ bool rx_library_has_waveforms(const RXLibrary *lib, uint64_t id)
     return t && t->has_waveforms;
 }
 
+/* The id of the cover whose thumbnail is these bytes, 0 when none. */
+static int64_t artwork_find(RXLibrary *lib, const uint8_t *jpeg, size_t size)
+{
+    sqlite3_stmt *st = rx_db_stmt(lib->db, RX_STMT_ART_FIND);
+    rx_db_bind_int(lib->db, st, 1, (int64_t)size);
+    rx_db_bind_blob(lib->db, st, 2, jpeg, size);
+    int ret = rx_db_row(lib->db, st, "looking for artwork");
+    int64_t found = ret > 0 ? sqlite3_column_int64(st, 0) : ret;
+    sqlite3_reset(st);
+    return found;
+}
+
 int rx_library_artwork_save(RXLibrary *lib, uint64_t id, const uint8_t *jpeg, size_t size,
                             int width, int height)
 {
@@ -1644,15 +1656,47 @@ int rx_library_artwork_save(RXLibrary *lib, uint64_t id, const uint8_t *jpeg, si
         return RX_ERROR(ENOENT);
     if (!jpeg || !size || width <= 0 || height <= 0)
         return RX_ERROR(EINVAL);
-    sqlite3_stmt *st = rx_db_stmt(lib->db, RX_STMT_ART_PUT);
-    rx_db_bind_int(lib->db, st, 1, (int64_t)id);
-    rx_db_bind_blob(lib->db, st, 2, jpeg, size);
-    rx_db_bind_int(lib->db, st, 3, width);
-    rx_db_bind_int(lib->db, st, 4, height);
-    int ret = rx_db_done(lib->db, st, "saving artwork");
+    int ret = rx_db_begin(lib->db);
+    if (ret < 0)
+        return ret;
+    /* A cover another track has already is that track's row; the cover
+     * this track had goes with its last track (artwork_relinked). */
+    int64_t art = artwork_find(lib, jpeg, size);
+    if (!art) {
+        sqlite3_stmt *st = rx_db_stmt(lib->db, RX_STMT_ART_PUT);
+        rx_db_bind_int(lib->db, st, 1, (int64_t)size);
+        rx_db_bind_blob(lib->db, st, 2, jpeg, size);
+        rx_db_bind_int(lib->db, st, 3, width);
+        rx_db_bind_int(lib->db, st, 4, height);
+        ret = rx_db_done(lib->db, st, "saving artwork");
+        art = ret < 0 ? ret : sqlite3_last_insert_rowid(lib->db->db);
+    }
+    if (art > 0) {
+        sqlite3_stmt *st = rx_db_stmt(lib->db, RX_STMT_ART_LINK);
+        rx_db_bind_int(lib->db, st, 1, (int64_t)id);
+        rx_db_bind_int(lib->db, st, 2, art);
+        ret = rx_db_done(lib->db, st, "linking artwork");
+    } else {
+        ret = (int)art;
+    }
+    if (ret < 0) {
+        rx_db_rollback(lib->db);
+        return ret;
+    }
+    ret = rx_db_commit(lib->db);
     if (ret >= 0)
         lib->generation++;
     return ret;
+}
+
+int64_t rx_library_artwork_id(const RXLibrary *lib, uint64_t id)
+{
+    sqlite3_stmt *st = rx_db_stmt(lib->db, RX_STMT_ART_ID);
+    rx_db_bind_int(lib->db, st, 1, (int64_t)id);
+    int ret = rx_db_row(lib->db, st, "reading the artwork id");
+    int64_t art = ret > 0 ? sqlite3_column_int64(st, 0) : ret;
+    sqlite3_reset(st);
+    return art;
 }
 
 int rx_library_artwork_load(const RXLibrary *lib, uint64_t id, uint8_t **jpeg, size_t *size,

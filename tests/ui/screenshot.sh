@@ -7,6 +7,7 @@
 # loaded and playing (RXBOX_UI_AUTOLOAD) and saves frame 100
 # (RXBOX_UI_SCREENSHOT; --frames 120 bounds the run). Audio goes nowhere
 # (--audio none), and the player stays off the session bus (--no-mpris).
+# The first two tracks have one cover, which the library then holds once.
 #
 # It never runs on the user's session: it needs RXBOX_UI_TEST=1 and a
 # WAYLAND_DISPLAY of a private compositor (docs/HACKING.md, "Running the
@@ -57,7 +58,8 @@ rx() {
     "$RXBOX" -c "$LIB" "$@"
 }
 
-# A cover for the first track: a gradient, embedded as the attached picture.
+# A cover for the first two tracks: a gradient, embedded as the attached
+# picture.
 ffmpeg -nostdin -v error -y -f lavfi -i "gradients=s=320x320:c0=0xff8c00:c1=0x1f3b73:x0=0:y0=0:x1=320:y1=320:d=1" \
     -frames:v 1 "$OUT/cover.png"
 
@@ -85,7 +87,7 @@ synth() {
 }
 
 synth 01-house 128 48 "Warehouse Tool (Extended Mix)" "Test Tones" "House" "$OUT/cover.png"
-synth 02-dnb 174 36 "Rolling Amen" "Breaks Unit" "Drum & Bass"
+synth 02-dnb 174 36 "Rolling Amen" "Breaks Unit" "Drum & Bass" "$OUT/cover.png"
 synth 03-jpop 100 36 "夜明けのビート" "テスト・トーンズ" "J-Pop"
 synth 04-techno 135 30 "Missing In Action" "Gone Away" "Techno"
 
@@ -164,6 +166,21 @@ if [ -n "${RXBOX_UI_SWAYSOCK:-}" ]; then
     done
 else
     shoot "$OUT/rxbox.png"
+fi
+
+# The table showed both covered tracks, whose thumbnails the library
+# stores as it makes them: one cover, two tracks linked to it.
+if command -v python3 > /dev/null; then
+    python3 - "$LIB/library.db" <<'EOF' || exit 1
+import sqlite3, sys
+db = sqlite3.connect(sys.argv[1])
+covers, links = db.execute("SELECT (SELECT count(*) FROM artwork), "
+                           "(SELECT count(DISTINCT artwork_id) || '/' || count(*) "
+                           " FROM track_artwork)").fetchone()
+print(f"covers: {covers}, track links (distinct/all) {links}")
+if (covers, links) != (1, "1/2"):
+    sys.exit("FAIL: want one cover for the two covered tracks")
+EOF
 fi
 
 # The track plays from 13.5 s and its cue point is the memory cue at 0. C

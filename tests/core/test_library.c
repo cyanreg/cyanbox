@@ -10,7 +10,9 @@
  * comment left out on import unless import.comment asks for it; the
  * legend's settings and the model's colour probabilities, and a library
  * of schema 5 that gains them; a library at either branch's schema 6,
- * and one a newer rxbox migrates while this one opens it.
+ * and one a newer rxbox migrates while this one opens it; covers stored
+ * once, going with their last track, and a library of schema 7 whose
+ * per-track covers become shared ones.
  * Waveforms are stored through the raw blob layer because the analysis
  * module (which packs them) is not linked here; rxbox/analysis.h is used
  * for its version constants and inline helper only. */
@@ -206,7 +208,7 @@ static void test_create_and_add(void)
 
     sqlite3_stmt *st;
     sqlite3_prepare_v2(lib.db->db, "PRAGMA user_version", -1, &st, NULL);
-    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 7);
+    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 8);
     sqlite3_finalize(st);
     sqlite3_prepare_v2(lib.db->db, "PRAGMA journal_mode", -1, &st, NULL);
     CHECK(sqlite3_step(st) == SQLITE_ROW && !strcmp((const char *)sqlite3_column_text(st, 0), "wal"));
@@ -612,7 +614,7 @@ static void test_grid_migration(void)
     CHECK(a && a->grid.nb_sections == 2 && a->grid.sections[0].start == 0.3125);
     sqlite3_stmt *st;
     sqlite3_prepare_v2(lib.db->db, "PRAGMA user_version", -1, &st, NULL);
-    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 7);
+    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 8);
     sqlite3_finalize(st);
     rx_library_close(&lib);
 }
@@ -645,7 +647,7 @@ static void test_measured_migration(void)
     CHECK(rx_library_open(&lib, dir) == 0);
     sqlite3_stmt *st;
     sqlite3_prepare_v2(lib.db->db, "PRAGMA user_version", -1, &st, NULL);
-    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 7);
+    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 8);
     sqlite3_finalize(st);
     a = rx_library_find_path(&lib, a_path);
     CHECK(a && a->grid.nb_sections == 2 && !rx_grid_dynamic(&a->grid));
@@ -859,7 +861,7 @@ static void test_migrate_v5(void)
     }
     sqlite3_stmt *st;
     sqlite3_prepare_v2(lib.db->db, "PRAGMA user_version", -1, &st, NULL);
-    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 7);
+    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 8);
     sqlite3_finalize(st);
     CHECK(rx_library_check(&lib) == 0);
     rx_library_close(&lib);
@@ -1077,7 +1079,8 @@ static void test_missing_relocate_remove(void)
     CHECK(!rx_library_find_id(&lib, 1) && lib.nb_tracks == 2);
     CHECK(!rx_file_exists(cache));
     CHECK(pl->nb == 1 && pl->track_ids[0] == 3);
-    static const char *const tables[] = { "cue", "grid_section", "track_tag", "waveform", "artwork", "play", "playlist_entry" };
+    static const char *const tables[] = { "cue", "grid_section", "track_tag", "waveform",
+                                          "track_artwork", "play", "playlist_entry" };
     for (size_t i = 0; i < RX_ARRAY_ELEMS(tables); i++) {
         if (count_rows(&lib, tables[i], 1) != 0) {
             fprintf(stderr, "%s still has rows of a removed track\n", tables[i]);
@@ -1150,7 +1153,7 @@ static void test_migrate_v1(void)
     CHECK(rx_library_open(&lib, dir) == 0);
     sqlite3_stmt *st;
     sqlite3_prepare_v2(lib.db->db, "PRAGMA user_version", -1, &st, NULL);
-    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 7);
+    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 8);
     sqlite3_finalize(st);
     CHECK(lib.nb_tracks == 2);
     a = rx_library_find_path(&lib, a_path);
@@ -1636,7 +1639,7 @@ static void test_migrate_v6(void)
                            " WHERE name = 'measured'), "
                            "(SELECT count(*) FROM pragma_table_info('track') "
                            " WHERE name IN ('ml_colors', 'ml_legend'))", -1, &st, NULL);
-        CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 7 &&
+        CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 8 &&
               sqlite3_column_int(st, 1) == 1 && sqlite3_column_int(st, 2) == 2);
         sqlite3_finalize(st);
         CHECK(lib.nb_tracks == 1);
@@ -1663,6 +1666,143 @@ static void test_migrate_v6(void)
         test_rm_rf(dir);
         free(dir);
     }
+}
+
+/* The number of rows of a table. */
+static int table_rows(const RXLibrary *lib, const char *table)
+{
+    char *sql = rx_asprintf("SELECT count(*) FROM %s", table);
+    sqlite3_stmt *st;
+    int n = -1;
+    if (sqlite3_prepare_v2(lib->db->db, sql, -1, &st, NULL) == SQLITE_OK) {
+        if (sqlite3_step(st) == SQLITE_ROW)
+            n = sqlite3_column_int(st, 0);
+        sqlite3_finalize(st);
+    }
+    free(sql);
+    return n;
+}
+
+static bool artwork_is(const RXLibrary *lib, uint64_t id, const uint8_t *want, size_t want_size)
+{
+    uint8_t *data = NULL;
+    size_t size = 0;
+    int w = 0, h = 0;
+    int ret = rx_library_artwork_load(lib, id, &data, &size, &w, &h);
+    bool ok = ret == 0 && size == want_size && !memcmp(data, want, size) && w == 240 && h == 240;
+    free(data);
+    return ok;
+}
+
+/* A cover is stored once: the same thumbnail for another track is linked
+ * to the stored one, and a cover goes with the last track that has it,
+ * whether the track is removed or given another cover. */
+static void test_artwork_shared(void)
+{
+    char *dir = test_dir("library-artwork");
+    char *db = path_in(dir, "library.db");
+    RXLibrary lib;
+    CHECK(rx_library_open(&lib, dir) == 0);
+    rx_library_close(&lib);
+    sqlite3 *s;
+    CHECK(sqlite3_open(db, &s) == SQLITE_OK);
+    CHECK(sqlite3_exec(s, "INSERT INTO track (id, path) VALUES (1, '/gone/a.wav'), "
+                          "(2, '/gone/b.wav'), (3, '/gone/c.wav')", NULL, NULL, NULL) == SQLITE_OK);
+    sqlite3_close(s);
+
+    static const uint8_t album[] = { 0xFF, 0xD8, 0xFF, 0xE0, 1, 2, 3, 0xFF, 0xD9 };
+    static const uint8_t single[] = { 0xFF, 0xD8, 0xFF, 0xE0, 4, 5, 6, 0xFF, 0xD9 };
+    CHECK(rx_library_open(&lib, dir) == 0);
+    CHECK(rx_library_artwork_id(&lib, 1) == 0);
+    CHECK(rx_library_artwork_save(&lib, 1, album, sizeof(album), 240, 240) == 0);
+    CHECK(rx_library_artwork_save(&lib, 2, album, sizeof(album), 240, 240) == 0);
+    CHECK(rx_library_artwork_save(&lib, 3, single, sizeof(single), 240, 240) == 0);
+    CHECK(table_rows(&lib, "artwork") == 2 && table_rows(&lib, "track_artwork") == 3);
+    int64_t a1 = rx_library_artwork_id(&lib, 1), a3 = rx_library_artwork_id(&lib, 3);
+    CHECK(a1 > 0 && a3 > 0 && a1 != a3 && rx_library_artwork_id(&lib, 2) == a1);
+    CHECK(artwork_is(&lib, 2, album, sizeof(album)) && artwork_is(&lib, 3, single, sizeof(single)));
+    /* Saved again: the same row. */
+    CHECK(rx_library_artwork_save(&lib, 1, album, sizeof(album), 240, 240) == 0);
+    CHECK(table_rows(&lib, "artwork") == 2 && rx_library_artwork_id(&lib, 1) == a1);
+
+    /* 1 takes 3's cover: the album's stays for 2. Then 2 does: it goes. */
+    CHECK(rx_library_artwork_save(&lib, 1, single, sizeof(single), 240, 240) == 0);
+    CHECK(table_rows(&lib, "artwork") == 2 && rx_library_artwork_id(&lib, 1) == a3);
+    CHECK(rx_library_artwork_save(&lib, 2, single, sizeof(single), 240, 240) == 0);
+    CHECK(table_rows(&lib, "artwork") == 1 && rx_library_artwork_id(&lib, 2) == a3);
+
+    /* Removed tracks: the cover goes with the last. */
+    CHECK(rx_library_remove(&lib, rx_library_find_id(&lib, 3)) == 0);
+    CHECK(rx_library_remove(&lib, rx_library_find_id(&lib, 1)) == 0);
+    CHECK(table_rows(&lib, "artwork") == 1 && artwork_is(&lib, 2, single, sizeof(single)));
+    CHECK(rx_library_remove(&lib, rx_library_find_id(&lib, 2)) == 0);
+    CHECK(table_rows(&lib, "artwork") == 0 && table_rows(&lib, "track_artwork") == 0);
+    CHECK(rx_library_check(&lib) == 0);
+    rx_library_close(&lib);
+
+    /* A cover no track has, put there by hand: gone at the next open. */
+    CHECK(sqlite3_open(db, &s) == SQLITE_OK);
+    CHECK(sqlite3_exec(s, "INSERT INTO artwork (size, jpeg, width, height) "
+                          "VALUES (3, X'FFD8D9', 240, 240)", NULL, NULL, NULL) == SQLITE_OK);
+    sqlite3_close(s);
+    CHECK(rx_library_open(&lib, dir) == 0);
+    CHECK(table_rows(&lib, "artwork") == 0);
+    rx_library_close(&lib);
+
+    free(db);
+    test_rm_rf(dir);
+    free(dir);
+}
+
+/* Schema 7 kept a cover per track: opening it keeps one row per distinct
+ * cover, each track linked to its own. */
+static void test_migrate_v7(void)
+{
+    char *dir = test_dir("library-v7");
+    char *db = path_in(dir, "library.db");
+    RXLibrary lib;
+    CHECK(rx_library_open(&lib, dir) == 0);
+    rx_library_close(&lib);
+    sqlite3 *s;
+    CHECK(sqlite3_open(db, &s) == SQLITE_OK);
+    CHECK(sqlite3_exec(s,
+                       "DROP TRIGGER artwork_unlinked; DROP TRIGGER artwork_relinked;"
+                       "DROP TABLE track_artwork; DROP TABLE artwork;"
+                       "CREATE TABLE artwork ("
+                       "  track_id INTEGER PRIMARY KEY REFERENCES track(id) ON DELETE CASCADE,"
+                       "  jpeg     BLOB NOT NULL,"
+                       "  width    INTEGER NOT NULL,"
+                       "  height   INTEGER NOT NULL"
+                       ") STRICT;"
+                       "INSERT INTO track (id, path) VALUES (1, '/gone/a.wav'), (2, '/gone/b.wav'),"
+                       "  (3, '/gone/c.wav'), (4, '/gone/d.wav');"
+                       "INSERT INTO artwork VALUES (1, X'FFD8010203FFD9', 240, 240),"
+                       "  (2, X'FFD8010203FFD9', 240, 240), (3, X'FFD8040506FFD9', 240, 240),"
+                       "  (4, X'FFD8010203FFD9', 240, 240);"
+                       "PRAGMA user_version = 7", NULL, NULL, NULL) == SQLITE_OK);
+    sqlite3_close(s);
+
+    CHECK(rx_library_open(&lib, dir) == 0);
+    sqlite3_stmt *st;
+    sqlite3_prepare_v2(lib.db->db, "PRAGMA user_version", -1, &st, NULL);
+    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 8);
+    sqlite3_finalize(st);
+    CHECK(table_rows(&lib, "artwork") == 2 && table_rows(&lib, "track_artwork") == 4);
+    static const uint8_t album[] = { 0xFF, 0xD8, 1, 2, 3, 0xFF, 0xD9 };
+    static const uint8_t single[] = { 0xFF, 0xD8, 4, 5, 6, 0xFF, 0xD9 };
+    int64_t a = rx_library_artwork_id(&lib, 1);
+    CHECK(a > 0 && rx_library_artwork_id(&lib, 2) == a && rx_library_artwork_id(&lib, 4) == a &&
+          rx_library_artwork_id(&lib, 3) != a);
+    CHECK(artwork_is(&lib, 4, album, sizeof(album)) && artwork_is(&lib, 3, single, sizeof(single)));
+    /* Then as any: the covers go with their last tracks. */
+    CHECK(rx_library_remove(&lib, rx_library_find_id(&lib, 3)) == 0);
+    CHECK(table_rows(&lib, "artwork") == 1);
+    CHECK(rx_library_check(&lib) == 0);
+    rx_library_close(&lib);
+
+    free(db);
+    test_rm_rf(dir);
+    free(dir);
 }
 
 /* A newer rxbox migrating the library while this one opens it (it holds
@@ -1758,6 +1898,8 @@ int main(void)
     test_open_snapshot();
     test_concurrent_create();
     test_migrate_v6();
+    test_artwork_shared();
+    test_migrate_v7();
     test_newer_meanwhile();
     test_busy_add();
     test_find_path();

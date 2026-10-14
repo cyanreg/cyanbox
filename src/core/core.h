@@ -44,7 +44,10 @@ enum RXStmtId {
     RX_STMT_TAG_INSERT,         /* ?1 track_id ?2 position ?3 tag */
     RX_STMT_WAVE_PUT,           /* ?1 track_id ?2 data */
     RX_STMT_WAVE_GET,           /* ?1 track_id -> data */
-    RX_STMT_ART_PUT,            /* ?1 track_id ?2 jpeg ?3 width ?4 height */
+    RX_STMT_ART_FIND,           /* ?1 size ?2 jpeg -> id */
+    RX_STMT_ART_PUT,            /* ?1 size ?2 jpeg ?3 width ?4 height */
+    RX_STMT_ART_LINK,           /* ?1 track_id ?2 artwork_id */
+    RX_STMT_ART_ID,             /* ?1 track_id -> artwork_id */
     RX_STMT_ART_GET,            /* ?1 track_id -> jpeg width height */
     RX_STMT_SETTING_GET,        /* ?1 key -> value */
     RX_STMT_SETTING_PUT,        /* ?1 key ?2 value */

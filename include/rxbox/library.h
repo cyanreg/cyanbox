@@ -234,8 +234,15 @@ bool rx_library_has_waveforms(const RXLibrary *lib, uint64_t id);
  * they are, -EPROTO when another version (load would refuse them: make
  * them again), -EINVAL when not waveforms at all, -ENOENT when none. */
 int  rx_library_waveforms_check(const RXLibrary *lib, uint64_t id);
+/* A track's cover thumbnail. Stored once however many tracks have it:
+ * saving the same bytes for another track links it to the stored one,
+ * and a cover goes with the last track that has it (removed, or given
+ * another cover). */
 int  rx_library_artwork_save(RXLibrary *lib, uint64_t id, const uint8_t *jpeg, size_t size, int width, int height);
 int  rx_library_artwork_load(const RXLibrary *lib, uint64_t id, uint8_t **jpeg, size_t *size, int *width, int *height);
+/* The id of a track's cover, which the tracks sharing it share: > 0, 0
+ * when the track has none, or a negative errno. */
+int64_t rx_library_artwork_id(const RXLibrary *lib, uint64_t id);
 
 /* Settings. */
 int  rx_library_config_save(RXLibrary *lib);          /* writes lib->cfg to the setting table */

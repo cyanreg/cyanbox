@@ -121,13 +121,22 @@ enum GpuState {
 
 typedef struct GpuEntry {
     uint64_t   track_id;
-    uint64_t   texture;
+    uint64_t   texture;         /* the cover's, shared (artwork_id), or its own */
+    int64_t    artwork_id;      /* the library's cover the texture is of; 0 its own */
     RXWaveGpu *preview;
     uint64_t   art_request;     /* io job in flight */
     uint8_t    art_state;
     uint8_t    wave_state;
     uint64_t   used;            /* tick when last asked for */
 } GpuEntry;
+
+/* A library cover on the GPU, for every browser entry whose track has it
+ * (an album's tracks have one): made once, gone with the last entry. */
+typedef struct CoverTexture {
+    int64_t  artwork_id;
+    uint64_t texture;
+    int      refs;
+} CoverTexture;
 
 /* What a load of a track's stored waveforms found (waves_stale). */
 typedef struct WaveCheck {
@@ -189,6 +198,7 @@ struct RXAppPriv {
     unsigned deck_advanced[RX_DECKS];       /* RXDeckState.advanced as last seen */
 
     RXArray  gpu;               /* GpuEntry, the browser's cache */
+    RXArray  covers;            /* CoverTexture: the entries' covers, one per library cover */
     int      gpu_budget;
     RXArray  albums;            /* RXAlbum, the names copies: the tree's list (rx_app_albums) */
     unsigned albums_generation; /* lib.generation it was made for; 0 none */
@@ -407,17 +417,65 @@ static void deck_changed(void *opaque, int deck)
 
 /* -------------------------------------------------------- browser GPU cache */
 
+/* The texture of a library cover for one more entry: the one made,
+ * else one made of `rgba` when given, else of the library's thumbnail. 0
+ * when none could be made. */
+static uint64_t cover_ref(RXApp *app, int64_t artwork_id, uint64_t track_id,
+                          const uint8_t *rgba, int w, int h)
+{
+    RXAppPriv *priv = app->priv;
+    for (size_t i = 0; i < priv->covers.nb; i++) {
+        CoverTexture *c = rx_array_at(&priv->covers, i);
+        if (c->artwork_id == artwork_id) {
+            c->refs++;
+            return c->texture;
+        }
+    }
+    uint64_t texture = 0;
+    if (rgba) {
+        texture = rx_texture_create(app->window, rgba, w, h);
+    } else {
+        uint8_t *own = NULL;
+        if (artwork_from_library(app, track_id, &own, &w, &h) >= 0)
+            texture = rx_texture_create(app->window, own, w, h);
+        free(own);
+    }
+    CoverTexture c = { artwork_id, texture, 1 };
+    if (texture && !rx_array_push(&priv->covers, &c)) {
+        rx_texture_destroy(app->window, texture);
+        texture = 0;
+    }
+    return texture;
+}
+
+static void cover_unref(RXApp *app, int64_t artwork_id)
+{
+    RXAppPriv *priv = app->priv;
+    for (size_t i = 0; i < priv->covers.nb; i++) {
+        CoverTexture *c = rx_array_at(&priv->covers, i);
+        if (c->artwork_id != artwork_id)
+            continue;
+        if (--c->refs <= 0) {
+            if (app->window)
+                rx_texture_destroy(app->window, c->texture);
+            rx_array_remove(&priv->covers, i);
+        }
+        return;
+    }
+}
+
 static void gpu_entry_release(RXApp *app, GpuEntry *e)
 {
-    if (app->window) {
-        if (e->texture)
-            rx_texture_destroy(app->window, e->texture);
-        if (e->preview)
-            rx_wave_release(app->window, e->preview);
-    }
+    if (e->artwork_id)
+        cover_unref(app, e->artwork_id);
+    else if (e->texture && app->window)
+        rx_texture_destroy(app->window, e->texture);
+    if (e->preview && app->window)
+        rx_wave_release(app->window, e->preview);
     if (e->art_request && app->priv->io_jobs)
         rx_jobs_cancel(app->priv->io_jobs, e->art_request);
     e->texture = 0;
+    e->artwork_id = 0;
     e->preview = NULL;
     e->art_request = 0;
 }
@@ -475,17 +533,18 @@ uint64_t rx_app_artwork_texture(RXApp *app, const RXTrack *t)
     e->used = priv->tick;
 
     /* The library's thumbnail whatever the track says (an older library
-     * may hold one for a track whose flag is off); else the file's art,
-     * when the track has some. Either way once: GPU_DONE without a
-     * texture is the answer "none" until the entry is recycled. */
+     * may hold one for a track whose flag is off), on the GPU once for
+     * every track that has the cover; else the file's art, when the track
+     * has some. Either way once: GPU_DONE without a texture is the answer
+     * "none" until the entry is recycled. */
     if (e->art_state == GPU_UNKNOWN && priv->gpu_budget > 0) {
         priv->gpu_budget--;
-        uint8_t *rgba = NULL;
-        int w = 0, h = 0;
-        if (artwork_from_library(app, t->id, &rgba, &w, &h) >= 0) {
-            e->texture = rx_texture_create(app->window, rgba, w, h);
+        int64_t art = rx_library_artwork_id(&app->lib, t->id);
+        if (art > 0)
+            e->texture = cover_ref(app, art, t->id, NULL, 0, 0);
+        if (e->texture) {
+            e->artwork_id = art;
             e->art_state = GPU_DONE;
-            free(rgba);
         } else if (t->has_artwork && !t->missing) {
             uint64_t req = rx_jobs_artwork(priv->io_jobs, t->id, t->path, ART_SIZE);
             e->art_request = (int64_t)req > 0 ? req : 0;
@@ -583,6 +642,7 @@ static void gpu_cache_free(RXApp *app)
     for (size_t i = 0; i < priv->gpu.nb; i++)
         gpu_entry_release(app, rx_array_at(&priv->gpu, i));
     rx_array_free(&priv->gpu);
+    rx_array_free(&priv->covers);
 }
 
 /* --------------------------------------------------------------------- deck */
@@ -1769,14 +1829,23 @@ static void handle_artwork(RXApp *app, RXJobResult *r)
             deck_set_artwork(app, dv, r->rgba, r->width, r->height);
     }
 
+    /* The browser's entry takes the cover's texture, shared with the
+     * tracks that have it, when the library stored it. */
+    int64_t art = t && ok ? rx_library_artwork_id(&app->lib, t->id) : 0;
     for (size_t i = 0; i < priv->gpu.nb; i++) {
         GpuEntry *e = rx_array_at(&priv->gpu, i);
         if (!e->art_request || e->art_request != r->request)
             continue;
         e->art_request = 0;
         e->art_state = GPU_DONE;
-        if (ok && app->window)
+        if (!ok || !app->window)
+            continue;
+        if (art > 0) {
+            e->texture = cover_ref(app, art, t->id, r->rgba, r->width, r->height);
+            e->artwork_id = e->texture ? art : 0;
+        } else {
             e->texture = rx_texture_create(app->window, r->rgba, r->width, r->height);
+        }
     }
 }
 
@@ -3212,6 +3281,7 @@ int rx_app_create(RXApp *app, const char *library_root, const RXPlayerOptions *p
     rx_array_init(&priv->inflight, sizeof(Inflight));
     rx_array_init(&priv->saves, sizeof(uint64_t));
     rx_array_init(&priv->gpu, sizeof(GpuEntry));
+    rx_array_init(&priv->covers, sizeof(CoverTexture));
     rx_array_init(&priv->wave_checks, sizeof(WaveCheck));
     rx_array_init(&priv->albums, sizeof(RXAlbum));
     for (int d = 0; d < RX_DECKS; d++) {

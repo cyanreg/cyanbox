@@ -89,7 +89,9 @@ The library is one SQLite database, `library.db`, in a directory
 (`$RXBOX_LIBRARY`, `-c DIR`, default `~/.local/share/rxbox`). It holds
 everything: file facts and tags, the user's overrides, grid, key, cues,
 rating, colour, My Tags, play counts and history, the waveform bytes, the
-artwork thumbnail, playlists and folders, and the settings. A track whose
+artwork thumbnails (each cover once, however many tracks have it: an
+album's tracks share one, and a cover goes with its last track),
+playlists and folders, and the settings. A track whose
 file is missing stays in the library, greyed out, until the file returns or
 is relocated. Every track has an id that never changes; that id is the track
 id on every stick, so players keep their cached artwork and waveforms across

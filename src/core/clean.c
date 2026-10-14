@@ -21,6 +21,9 @@
  *    analyze`) finds it again.
  *  - Colour probabilities that are not probabilities: none, the legend's
  *    hash with them.
+ *  - A cover (artwork) no track has: gone. The triggers remove a cover
+ *    with its last track; this takes what they could not have seen (a
+ *    library edited by hand, one from before them).
  *  - Settings: config.c's rx_core_config_clean (a value its key does not
  *    take, a key rxbox does not know), and for My Settings the formats
  *    module's rx_settings_clean, called by the CLI and the app after the
@@ -192,17 +195,25 @@ int rx_core_clean(RXLibrary *lib)
         failed = n.tracks;
     }
 
+    int covers = 0;
+    if (rx_db_exec(lib->db, "DELETE FROM artwork WHERE NOT EXISTS "
+                            "(SELECT 1 FROM track_artwork WHERE artwork_id = artwork.id)") >= 0)
+        covers = sqlite3_changes(lib->db->db);
+    else
+        rx_warn("library: the covers no track has could not be removed");
+
     int settings = 0;
     if (rx_core_config_clean(lib, &settings) < 0)
         rx_warn("library: the settings that are not valid could not be removed");
 
-    if (n.tracks || settings) {
+    if (n.tracks || covers || settings) {
         rx_info("library: removed what was not valid: %d colour%s none of the eight, %d grid%s, "
-                "%d cue%s, %d key%s, %d set%s of colour probabilities (%d track%s), %d setting%s",
+                "%d cue%s, %d key%s, %d set%s of colour probabilities (%d track%s), %d cover%s "
+                "no track has, %d setting%s",
                 n.colours, n.colours == 1 ? "" : "s", n.grids, n.grids == 1 ? "" : "s", n.cues,
                 n.cues == 1 ? "" : "s", n.keys, n.keys == 1 ? "" : "s", n.probabilities,
-                n.probabilities == 1 ? "" : "s", n.tracks, n.tracks == 1 ? "" : "s", settings,
-                settings == 1 ? "" : "s");
+                n.probabilities == 1 ? "" : "s", n.tracks, n.tracks == 1 ? "" : "s", covers,
+                covers == 1 ? "" : "s", settings, settings == 1 ? "" : "s");
     }
     if (failed)
         rx_warn("library: %d track%s could not be saved cleaned (read-only?); they are clean "

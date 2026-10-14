@@ -3,7 +3,7 @@
 /* The library database: the SQLite connection, the schema and its
  * migrations, the cached statements, transactions and error mapping.
  *
- * Schema version 7 (PRAGMA user_version = 7, application_id = 'RXBX').
+ * Schema version 8 (PRAGMA user_version = 8, application_id = 'RXBX').
  * Tables are STRICT so a wrong type is an error instead of a silent
  * conversion, and every row that belongs to a track or a playlist goes
  * with it (ON DELETE CASCADE, foreign keys on for every connection).
@@ -47,7 +47,12 @@
  *                   absolute end), active, name, color
  *   track_tag       track_id, position, tag (My Tags, in order, unique per track)
  *   waveform        track_id, data (rx_waveforms_pack)
- *   artwork         track_id, jpeg, width, height
+ *   artwork         id, size (of jpeg, the key it is found by), jpeg, width,
+ *                   height: a cover's thumbnail, once however many tracks
+ *                   have it
+ *   track_artwork   track_id, artwork_id: the track's cover. A cover goes
+ *                   with its last track (the triggers artwork_unlinked and
+ *                   artwork_relinked): the rows that name it are its count
  *   play            track_id, played_at (one row per play)
  *   playlist        id (AUTOINCREMENT), parent_id (NULL: root), name, is_folder,
  *                   position (dense among all children of the parent)
@@ -86,6 +91,11 @@
  *           ml_legend. A track tagged before keeps its hue and measures.
  *           (Its branch numbered this 5 -> 6: a library at that 6 has
  *           these columns and lacks measured, which check_columns adds.)
+ *   7 -> 8  a cover is stored once: artwork, one row per track until
+ *           then, becomes one row per distinct thumbnail (the same bytes)
+ *           and track_artwork links each track to its own. An album's
+ *           tracks have the same thumbnail (the same picture, made the
+ *           same way), so an album is one row.
  *
  * Journal: WAL, synchronous = NORMAL (a crash loses at most the last
  * transactions, never consistency), and a busy timeout because the export
@@ -336,6 +346,40 @@ static const Column columns_v7[] = {
     { "track", "ml_legend", "INTEGER NOT NULL DEFAULT 0" },
 };
 
+/* A cover once (artwork), each track linked to its own (track_artwork);
+ * a cover no track has any more goes. Runs while artwork is still one row
+ * per track. */
+static const char schema_v8[] =
+    "ALTER TABLE artwork RENAME TO artwork_v7;"
+    "CREATE TABLE artwork ("
+    "  id     INTEGER PRIMARY KEY,"
+    "  size   INTEGER NOT NULL,"
+    "  jpeg   BLOB NOT NULL,"
+    "  width  INTEGER NOT NULL,"
+    "  height INTEGER NOT NULL"
+    ") STRICT;"
+    "CREATE INDEX artwork_size ON artwork(size);"
+    "CREATE TABLE track_artwork ("
+    "  track_id   INTEGER PRIMARY KEY REFERENCES track(id) ON DELETE CASCADE,"
+    "  artwork_id INTEGER NOT NULL REFERENCES artwork(id)"
+    ") STRICT;"
+    "CREATE INDEX track_artwork_artwork ON track_artwork(artwork_id);"
+    "CREATE TRIGGER artwork_unlinked AFTER DELETE ON track_artwork BEGIN"
+    "  DELETE FROM artwork WHERE id = old.artwork_id AND"
+    "    NOT EXISTS (SELECT 1 FROM track_artwork WHERE artwork_id = old.artwork_id);"
+    "END;"
+    "CREATE TRIGGER artwork_relinked AFTER UPDATE OF artwork_id ON track_artwork BEGIN"
+    "  DELETE FROM artwork WHERE id = old.artwork_id AND"
+    "    NOT EXISTS (SELECT 1 FROM track_artwork WHERE artwork_id = old.artwork_id);"
+    "END;"
+    "INSERT INTO artwork (size, jpeg, width, height)"
+    "  SELECT length(jpeg), jpeg, width, height FROM artwork_v7"
+    "  GROUP BY jpeg ORDER BY min(track_id);"
+    "INSERT INTO track_artwork (track_id, artwork_id)"
+    "  SELECT o.track_id, a.id FROM artwork_v7 o"
+    "  JOIN artwork a ON a.size = length(o.jpeg) AND a.jpeg = o.jpeg;"
+    "DROP TABLE artwork_v7;";
+
 /* One step: its columns first, then its SQL, which runs only while
  * `table` has the column `while_column` when that is set. */
 typedef struct Migration {
@@ -356,6 +400,7 @@ static const Migration migrations[] = {
     { COLUMNS(columns_v5) },                                    /* 4 -> 5 */
     { COLUMNS(columns_v6) },                                    /* 5 -> 6 */
     { COLUMNS(columns_v7) },                                    /* 6 -> 7 */
+    { .sql = schema_v8, .table = "artwork", .while_column = "track_id" },  /* 7 -> 8 */
 };
 
 /* ------------------------------------------------------------ statements */
@@ -378,11 +423,15 @@ static const char *const fixed_sql[RX_STMT_NB] = {
     [RX_STMT_WAVE_PUT]        = "INSERT INTO waveform (track_id, data) VALUES (?1, ?2) "
                                 "ON CONFLICT (track_id) DO UPDATE SET data = excluded.data",
     [RX_STMT_WAVE_GET]        = "SELECT data FROM waveform WHERE track_id = ?1",
-    [RX_STMT_ART_PUT]         = "INSERT INTO artwork (track_id, jpeg, width, height) "
-                                "VALUES (?1, ?2, ?3, ?4) ON CONFLICT (track_id) DO UPDATE SET "
-                                "jpeg = excluded.jpeg, width = excluded.width, "
-                                "height = excluded.height",
-    [RX_STMT_ART_GET]         = "SELECT jpeg, width, height FROM artwork WHERE track_id = ?1",
+    [RX_STMT_ART_FIND]        = "SELECT id FROM artwork WHERE size = ?1 AND jpeg = ?2",
+    [RX_STMT_ART_PUT]         = "INSERT INTO artwork (size, jpeg, width, height) "
+                                "VALUES (?1, ?2, ?3, ?4)",
+    [RX_STMT_ART_LINK]        = "INSERT INTO track_artwork (track_id, artwork_id) VALUES (?1, ?2) "
+                                "ON CONFLICT (track_id) DO UPDATE SET "
+                                "artwork_id = excluded.artwork_id",
+    [RX_STMT_ART_ID]          = "SELECT artwork_id FROM track_artwork WHERE track_id = ?1",
+    [RX_STMT_ART_GET]         = "SELECT a.jpeg, a.width, a.height FROM track_artwork t "
+                                "JOIN artwork a ON a.id = t.artwork_id WHERE t.track_id = ?1",
     [RX_STMT_SETTING_GET]     = "SELECT value FROM setting WHERE key = ?1",
     [RX_STMT_SETTING_PUT]     = "INSERT INTO setting (key, value) VALUES (?1, ?2) "
                                 "ON CONFLICT (key) DO UPDATE SET value = excluded.value",
