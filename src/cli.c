@@ -114,8 +114,8 @@ static const char usage_text[] =
     "  config [KEY [VALUE]]     show or change a setting (analysis.bpm_min,\n"
     "                           import.comment, export.key_notation,\n"
     "                           export.background_color, player.quantize,\n"
-    "                           link.interface, ml.model, color.red ...; \"\" puts a\n"
-    "                           colour's words back to the default)\n"
+    "                           ml.model, color.red ...; \"\" puts a colour's words back\n"
+    "                           to the default)\n"
     "  init [DIR]               create a library (default: the library directory)\n"
     "  playlist list            list the playlists\n"
     "  playlist create NAME     create a playlist (\"Folder/Name\" creates the folders)\n"
@@ -128,12 +128,13 @@ static const char usage_text[] =
     "                           make a playlist from an m3u8 file\n"
     "  playlist export NAME FILE.m3u8\n"
     "                           write a playlist as an m3u8 file\n"
-    "  link serve -i IF         serve the library to players on network interface IF\n"
-    "                           (PRO DJ LINK, as rekordbox's Link Export) until\n"
-    "                           interrupted, listing the players heard\n"
-    "      -i, --interface IF   the network interface the players are on\n"
+    "  link serve [-i IF]       serve the library to players (PRO DJ LINK, as\n"
+    "                           rekordbox's Link Export) on every Ethernet interface,\n"
+    "                           as they come and go, until interrupted, listing the\n"
+    "                           players heard\n"
+    "      -i, --interface IF   only on this interface\n"
     "      --any-peer           answer any address, not only players heard (diagnostics)\n"
-    "      --start              join without waiting for a player (diagnostics)\n"
+    "      --wait               join only once a player is heard, as rekordbox does\n"
     "  link browse -i IF [HOST] browse a library served on the network as a player does\n"
     "                           (a fake CDJ-3000): menus, one track's metadata,\n"
     "                           analysis and file; HOST, else the computer source heard\n"
@@ -162,10 +163,9 @@ static const char usage_text[] =
     "  --audio-sink NAME        the PipeWire node to play to\n"
     "  --validation             enable the Vulkan validation layer\n"
     "  --no-mpris               stay off the D-Bus session bus (no MPRIS media controls)\n"
-    "  --pro-link               offer PRO DJ LINK: the Link menu's switch serves the\n"
-    "                           library to players on a network interface (off at\n"
-    "                           start); without it the interface never opens a Link\n"
-    "                           socket\n"
+    "  --pro-link               serve the library to players (PRO DJ LINK) on every\n"
+    "                           Ethernet interface while the interface runs; without\n"
+    "                           it no Link socket is ever opened\n"
     "  --frames N               draw N frames, then exit (tests)\n";
 
 /* ------------------------------------------------------------------ helpers */
@@ -2258,8 +2258,8 @@ static int cmd_config(Cli *cli, int argc, char **argv)
     }
 
     static const char *const sections[] = {
-        "analysis.", "import.", "export.", "player.", "mixer.", "device.", "audio.", "link.", "ml.",
-        "ui.", "color.",
+        "analysis.", "import.", "export.", "player.", "mixer.", "device.", "audio.", "ml.", "ui.",
+        "color.",
     };
     /* color.<name>: one of the eight colours, its words in the legend. */
     int vibe = 0;
@@ -2271,7 +2271,7 @@ static int cmd_config(Cli *cli, int argc, char **argv)
             known |= rx_str_starts(key, sections[i]);
         if (!known)
             return usage_error(cli, "config: keys start with analysis., import., export., player., "
-                               "mixer., device., audio., link., ml., ui. or color.");
+                               "mixer., device., audio., ml., ui. or color.");
         if (rx_str_starts(key, "color.") && !vibe)
             return usage_error(cli, "config: the colours are color.pink, color.red, color.orange, "
                                "color.yellow, color.green, color.aqua, color.blue and "
@@ -2360,7 +2360,6 @@ static int cmd_config(Cli *cli, int argc, char **argv)
         print_kv("mixer", c->mixer, c->nb_mixer);
         print_kv("device", c->device, c->nb_device);
         printf("audio.sink = %s\n", c->audio_sink ? c->audio_sink : "(the default)");
-        printf("link.interface = %s\n", c->link_interface ? c->link_interface : "(none)");
         printf("ml.model = %s\n", c->ml_model ? c->ml_model : "(models/" RX_APP_ML_MODEL ")");
         printf("ui.traffic_light = %s\n", c->traffic_light);
         printf("ui.detail_bars = %d\n", c->detail_bars);
@@ -2525,8 +2524,11 @@ static int run_interface(Cli *cli)
     /* The deck on the session bus; without one it runs on as it is. */
     if (!cli->no_mpris)
         rx_mpris_create(app);
-    /* Link only when asked for, and then only while its switch is on. */
+    /* Link only when asked for, and then from the start, on every
+     * Ethernet interface. */
     app->link_state.enabled = cli->pro_link;
+    if (cli->pro_link)
+        rx_app_link_start(app, NULL);
     ret = rx_app_run(app);
     rx_app_destroy(app);
     free(app);
@@ -2564,6 +2566,16 @@ static void print_player(const RXLinkPlayer *p, int ours, const RXLibrary *lib)
 
 /* Serves until SIGINT or SIGTERM, printing the devices whenever they
  * change. */
+static bool served_same(const RXLinkServed *a, const RXLinkServed *b)
+{
+    return !strcmp(a->interface, b->interface) && a->addr == b->addr &&
+           a->running == b->running && a->err == b->err && a->state == b->state &&
+           a->number == b->number;
+}
+
+/* Served on every Ethernet interface, or on the one -i names, until
+ * interrupted: each interface's state and the devices said as they
+ * change. */
 static int link_serve(Cli *cli, const RXLinkOptions *opt)
 {
     char *root = library_root(cli);
@@ -2577,53 +2589,76 @@ static int link_serve(Cli *cli, const RXLinkOptions *opt)
     sigaddset(&sigs, SIGTERM);
     pthread_sigmask(SIG_BLOCK, &sigs, NULL);
 
-    RXLink *link;
-    int ret = rx_link_start(&link, &o);
-    free(root);
-    if (ret < 0)
-        return fail("cannot serve on %s: %s", o.interface, ret == RX_ERROR(EPROTONOSUPPORT) ?
-                    "not Ethernet (Link runs on Ethernet only)" : strerror(-ret));
     /* The ids players report are the library's: a connection of our own
-     * to name them (read only, as the service's). */
+     * to name them (read only, as the services'). */
     int code = open_library(cli, false);
     if (code) {
-        rx_link_stop(&link);
+        free(root);
         return code;
     }
-    printf("serving on %s; Ctrl-C stops\n", o.interface);
+    RXLinkSet *set;
+    int ret = rx_link_set_start(&set, &o);
+    free(root);
+    if (ret < 0)
+        return fail("cannot serve: %s", strerror(-ret));
+    printf("serving on %s; Ctrl-C stops\n", o.interface ? o.interface : "every Ethernet interface");
     fflush(stdout);
 
+    RXLinkServed was[8];
+    int nb_was = 0;
     RXLinkPlayer seen[64], now[64];
-    int nb_seen = 0;
-    enum RXLinkState state = RX_LINK_WAITING;
+    int nb_seen = 0, where[64];
     while (1) {
         struct timespec ts = { .tv_sec = 0, .tv_nsec = 250000000 };
         if (sigtimedwait(&sigs, NULL, &ts) >= 0)
             break;
-        int number;
-        enum RXLinkState st = rx_link_state(link, &number);
-        if (st != state) {
-            static const char *const names[] = { "waiting for a player", "joining", "up" };
-            if (st == RX_LINK_UP)
-                printf("link up as device %d\n", number);
+        RXLinkServed ifs[8];
+        int nb_ifs = RX_MIN(rx_link_set_interfaces(set, ifs, 8), 8);
+        for (int i = 0; i < nb_ifs; i++) {
+            int k = 0;
+            while (k < nb_was && strcmp(was[k].interface, ifs[i].interface))
+                k++;
+            if (k < nb_was && served_same(&was[k], &ifs[i]))
+                continue;
+            const RXLinkServed *v = &ifs[i];
+            if (!v->running && v->err)
+                printf("%s: cannot serve: %s\n", v->interface, v->err == RX_ERROR(EPROTONOSUPPORT)
+                       ? "not Ethernet (Link runs on Ethernet only)" : strerror(-v->err));
+            else if (!v->running)
+                printf("%s: starting\n", v->interface);
+            else if (v->state == RX_LINK_UP)
+                printf("link up as device %d on %s\n", v->number, v->interface);
             else
-                printf("link %s\n", names[st]);
-            state = st;
+                printf("%s: %s\n", v->interface, v->state == RX_LINK_JOINING ? "joining"
+                                                                            : "waiting for a player");
         }
-        int nb = RX_MIN(rx_link_players(link, now, 64), 64);
+        for (int k = 0; k < nb_was; k++) {
+            int i = 0;
+            while (i < nb_ifs && strcmp(was[k].interface, ifs[i].interface))
+                i++;
+            if (i == nb_ifs)
+                printf("%s: gone\n", was[k].interface);
+        }
+        memcpy(was, ifs, (size_t)nb_ifs * sizeof(*ifs));
+        nb_was = nb_ifs;
+
+        int nb = RX_MIN(rx_link_set_players(set, now, where, 64), 64);
         bool same = nb == nb_seen;
         for (int i = 0; same && i < nb; i++)
             same = player_same(&now[i], &seen[i]);
         if (!same) {
             printf("devices:%s\n", nb ? "" : " none");
-            for (int i = 0; i < nb; i++)
-                print_player(&now[i], number, &cli->app.lib);
+            for (int i = 0; i < nb; i++) {
+                const RXLinkServed *v = where[i] < nb_ifs ? &ifs[where[i]] : NULL;
+                print_player(&now[i], v && v->state == RX_LINK_UP ? v->number : 0,
+                             &cli->app.lib);
+            }
             memcpy(seen, now, (size_t)nb * sizeof(*now));
             nb_seen = nb;
         }
         fflush(stdout);
     }
-    rx_link_stop(&link);
+    rx_link_set_stop(&set);
     printf("stopped\n");
     return EXIT_OK;
 }
@@ -2676,8 +2711,8 @@ static int cmd_link(Cli *cli, int argc, char **argv)
             opt.interface = val;
         } else if (opt_flag(cli, argv[i], NULL, "--any-peer")) {
             opt.any_peer = true;
-        } else if (opt_flag(cli, argv[i], NULL, "--start")) {
-            opt.start_up = true;
+        } else if (opt_flag(cli, argv[i], NULL, "--wait")) {
+            opt.start_up = false;
         } else if (opt_flag(cli, argv[i], NULL, "--quiet")) {
             copt.quiet = true;
         } else if ((r = opt_value(cli, argc, argv, &i, "-n", "--number", &val))) {
@@ -2701,10 +2736,10 @@ static int cmd_link(Cli *cli, int argc, char **argv)
     }
     if (!sub || (strcmp(sub, "serve") && strcmp(sub, "browse")))
         return usage_error(cli, "link: serve or browse");
-    if (!opt.interface)
-        return usage_error(cli, "link %s: which network interface (-i)?", sub);
     if (!strcmp(sub, "serve"))
         return link_serve(cli, &opt);
+    if (!opt.interface)
+        return usage_error(cli, "link %s: which network interface (-i)?", sub);
     if (copt.quiet && !host)
         return usage_error(cli, "link browse: --quiet needs the server's address");
     copt.interface = opt.interface;
@@ -2736,7 +2771,7 @@ static const struct {
     { "settings", cmd_settings, "settings" },
     { "init",     cmd_init,     "init [DIR]" },
     { "playlist", cmd_playlist, "playlist list|create|add|remove|delete|import|export ..." },
-    { "link",     cmd_link,     "link serve -i IF [--any-peer] [--start] | "
+    { "link",     cmd_link,     "link serve [-i IF] [--any-peer] [--wait] | "
                                 "link browse -i IF [-n N] [-t ID] [--hold SEC] [--quiet] [HOST]" },
 };
 

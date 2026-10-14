@@ -180,6 +180,9 @@ int main(void)
 
     RXLinkOptions so;
     rx_link_options_default(&so);
+    /* The wait for a player, which rxbox can do as rekordbox does (the
+     * service's default is to join at once: test_link). */
+    so.start_up = false;
     so.library = libdir;
     so.interface = "lo";
     so.broadcast = "127.0.0.2";
@@ -191,7 +194,7 @@ int main(void)
         return test_result("test_loopback");
     RXLinkPorts sp;
     rx_link_bound_ports(link, &sp);
-    /* Nothing is announced into an empty network (docs/LINK.md). */
+    /* Waiting, nothing is announced into an empty network. */
     usleep(300000);
     CHECK_EQ(rx_link_state(link, NULL), RX_LINK_WAITING);
 

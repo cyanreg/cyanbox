@@ -1,17 +1,12 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
-// The PRO DJ LINK window (rxbox --pro-link): the switch, the network
-// interface it serves on, and the devices on the link, each with what it
-// has loaded, whether it plays and, for a track of ours, how far its play
-// has been counted. The state is the app's (app->link_state, copied from
-// the service every tick by src/app/link.c); this draws it and asks for
-// changes. Without --pro-link nothing here is drawn and the switch does
-// nothing (rx_app_link_start refuses).
-//
-// The interface is the user's choice, never a guess: while Link is on,
-// anyone on that network can read the library's audio (docs/LINK.md,
-// "Security"), so the window says so and the switch waits until an
-// interface is chosen.
+// The PRO DJ LINK window (rxbox --pro-link): the Ethernet interfaces
+// served, each with where it stands, and the devices on them, each with
+// what it has loaded, whether it plays and, for a track of ours, how far
+// its play has been counted. The state is the app's (app->link_state,
+// copied from the set of services every tick by src/app/link.c); Link
+// serves on every Ethernet interface from the start, so this only shows
+// it. Without --pro-link nothing here is drawn.
 
 #include "ui_internal.h"
 
@@ -19,91 +14,41 @@
 #include <stdio.h>
 #include <string.h>
 
-// The interface list is read again when the window opens and every few
-// seconds while it is open (a cable plugged in).
-#define IFS_REFRESH_US 3000000
-
-static void read_interfaces(UiState *ui)
-{
-    RXLinkInterface ifs[32];
-    int nb = rx_link_interfaces(ifs, 32);
-    ui->link_ifs.assign(ifs, ifs + (nb > 0 ? (nb < 32 ? nb : 32) : 0));
-    ui->link_ifs_time = rx_time_us();
-}
-
-static const RXLinkInterface *interface_named(UiState *ui, const char *name)
-{
-    for (const RXLinkInterface &i : ui->link_ifs) {
-        if (name && !strcmp(i.name, name))
-            return &i;
-    }
-    return nullptr;
-}
-
-static const char *interface_text(const RXLinkInterface &i, char *buf, size_t size)
-{
-    char a[16];
-    snprintf(a, sizeof(a), "%u.%u.%u.%u", i.addr >> 24, i.addr >> 16 & 0xFF, i.addr >> 8 & 0xFF,
-             i.addr & 0xFF);
-    snprintf(buf, size, "%s  %s/%d%s", i.name, a, i.prefix, i.running ? "" : "  (no link)");
-    return buf;
-}
-
 void ui_open_link(UiState *ui)
 {
-    if (!ui->app->link_state.enabled)
-        return;
-    ui->dlg_link = true;
-    read_interfaces(ui);
-}
-
-void ui_link_switch(UiState *ui, bool on)
-{
-    RXApp *app = ui->app;
-    if (!app->link_state.enabled)
-        return;
-    if (!on) {
-        rx_app_link_stop(app);
-        return;
-    }
-    const char *name = app->lib.cfg.link_interface;
-    if (!name || !*name) {
-        ui_open_link(ui);
-        rx_app_set_status(app, "Choose the network interface the players are on");
-        return;
-    }
-    RXLinkOptions o;
-    rx_link_options_default(&o);
-    o.interface = name;
-    int ret = rx_app_link_start(app, &o);
-    if (ret < 0 && ret != RX_ERROR(EBUSY) && ret != RX_ERROR(EALREADY))
-        rx_app_set_status(app, "PRO DJ LINK cannot start on %s: %s", name, strerror(-ret));
+    if (ui->app->link_state.enabled)
+        ui->dlg_link = true;
 }
 
 const char *ui_link_summary(UiState *ui, char *buf, size_t size, ImU32 *col)
 {
     const auto &ls = ui->app->link_state;
+    int players = 0, up = 0, failed = 0;
+    for (int i = 0; i < ls.nb_devices; i++)
+        players += ls.devices[i].type == RX_LINK_DEVICE_PLAYER;
+    for (int i = 0; i < ls.nb_interfaces; i++) {
+        up += ls.interfaces[i].running;
+        failed += !ls.interfaces[i].running && ls.interfaces[i].err;
+    }
     *col = UI_DIM;
-    if (ls.busy) {
-        snprintf(buf, size, "Link: %s", ls.on ? "stopping" : "starting");
-    } else if (!ls.on) {
+    if (!ls.on) {
         snprintf(buf, size, "Link: off");
-        if (ls.err)
-            *col = UI_RED;
-    } else {
-        int players = 0;
-        for (int i = 0; i < ls.nb_devices; i++)
-            players += ls.devices[i].type == RX_LINK_DEVICE_PLAYER;
-        if (ls.state != RX_LINK_UP && !players)
-            snprintf(buf, size, "Link: waiting on %s", ls.interface);
-        else
-            snprintf(buf, size, "Link: %d player%s", players, players == 1 ? "" : "s");
+    } else if (players) {
+        snprintf(buf, size, "Link: %d player%s", players, players == 1 ? "" : "s");
         *col = UI_ACCENT;
+    } else if (up) {
+        snprintf(buf, size, "Link: on %d network%s", up, up == 1 ? "" : "s");
+        *col = UI_ACCENT;
+    } else if (failed) {
+        snprintf(buf, size, "Link: cannot serve");
+        *col = UI_RED;
+    } else {
+        snprintf(buf, size, "Link: no Ethernet");
     }
     return buf;
 }
 
-// Why a start failed, in the user's terms.
+// Why a service would not start, in the user's terms.
 static void error_text(const char *ifname, int err, char *buf, size_t size)
 {
     switch (-err) {
@@ -163,8 +108,8 @@ static void devices_table(UiState *ui)
     RXApp *app = ui->app;
     const auto &ls = app->link_state;
     if (!ls.nb_devices) {
-        ImGui::TextDisabled("No player heard yet. A player shows up here once it is on the same");
-        ImGui::TextDisabled("network and turned on; rxbox joins the link when it hears the first.");
+        ImGui::TextDisabled("No player heard yet: a player shows up here once it is switched on");
+        ImGui::TextDisabled("on one of these networks.");
         return;
     }
     ImGuiTableFlags tf = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV |
@@ -189,11 +134,16 @@ static void devices_table(UiState *ui)
         char a[16];
         snprintf(a, sizeof(a), "%u.%u.%u.%u", d.addr >> 24, d.addr >> 16 & 0xFF,
                  d.addr >> 8 & 0xFF, d.addr & 0xFF);
+        const RXLinkServed *on = ls.device_if[i] < ls.nb_interfaces
+                                 ? &ls.interfaces[ls.device_if[i]] : nullptr;
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("%s %d at %s", type_name(d.type), d.number, a);
+            ImGui::SetTooltip("%s %d at %s, on %s", type_name(d.type), d.number, a,
+                              on ? on->interface : "?");
 
         ImGui::TableSetColumnIndex(2);
-        bool ours = ls.state == RX_LINK_UP && d.track_device == ls.number && d.track_id;
+        // Ours: loaded from our number on the device's own network.
+        bool ours = on && on->running && on->state == RX_LINK_UP && d.track_device == on->number &&
+                    d.track_id;
         if (d.type != RX_LINK_DEVICE_PLAYER) {
             ImGui::TextDisabled("%s", a);
         } else if (!d.has_status) {
@@ -251,11 +201,9 @@ static void devices_table(UiState *ui)
 void ui_link_window(UiState *ui)
 {
     RXApp *app = ui->app;
-    auto &ls = app->link_state;
+    const auto &ls = app->link_state;
     if (!ls.enabled || !ui->dlg_link)
         return;
-    if (rx_time_us() - ui->link_ifs_time > IFS_REFRESH_US)
-        read_interfaces(ui);
     ui_centre_next(ui, 720, 360);
     if (!ImGui::Begin("PRO DJ LINK", &ui->dlg_link,
                       ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings)) {
@@ -264,78 +212,39 @@ void ui_link_window(UiState *ui)
     }
     ui_escape_closes(&ui->dlg_link);
 
-    // The switch.
-    const char *chosen = app->lib.cfg.link_interface;
-    // Busy is a change under way: starting while off, stopping while on.
-    bool on = ls.on != ls.busy;
-    bool want = on;
-    ImGui::BeginDisabled(ls.busy || (!ls.on && (!chosen || !*chosen)));
-    if (ImGui::Checkbox("Serve the library to players", &want) && want != on)
-        ui_link_switch(ui, want);
-    ImGui::EndDisabled();
-
-    // The interface, chosen while off.
-    ImGui::SameLine(0, PX(24));
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted("on");
-    ImGui::SameLine();
-    const RXLinkInterface *cur = interface_named(ui, chosen);
-    char preview[96];
-    if (cur)
-        interface_text(*cur, preview, sizeof(preview));
-    else if (chosen && *chosen)
-        snprintf(preview, sizeof(preview), "%s  (not an Ethernet interface that is up)", chosen);
-    else
-        snprintf(preview, sizeof(preview), "Choose the players' network...");
-    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-    ImGui::BeginDisabled(ls.on || ls.busy);
-    if (ImGui::BeginCombo("##link_if", preview)) {
-        if (ImGui::IsWindowAppearing())
-            read_interfaces(ui);
-        if (ui->link_ifs.empty())
-            ImGui::TextDisabled("No network interface is up.");
-        for (const RXLinkInterface &i : ui->link_ifs) {
-            char text[96];
-            bool sel = chosen && !strcmp(chosen, i.name);
-            if (ImGui::Selectable(interface_text(i, text, sizeof(text)), sel) && !sel) {
-                rx_config_set(&app->lib.cfg, "link.interface", i.name);
-                ui_save_config(ui);
-                chosen = app->lib.cfg.link_interface;
-                ls.err = 0;
-            }
+    // Each Ethernet interface: where it stands there.
+    if (!ls.on)
+        ImGui::TextDisabled("Off.");
+    else if (!ls.nb_interfaces)
+        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(UI_ACCENT),
+                           "No Ethernet interface is up with an address: rxbox serves on one as "
+                           "soon as it is.");
+    for (int i = 0; i < ls.nb_interfaces; i++) {
+        const RXLinkServed &s = ls.interfaces[i];
+        char a[16], line[256];
+        snprintf(a, sizeof(a), "%u.%u.%u.%u", s.addr >> 24, s.addr >> 16 & 0xFF,
+                 s.addr >> 8 & 0xFF, s.addr & 0xFF);
+        ImU32 col = UI_ACCENT;
+        if (!s.running && s.err) {
+            error_text(s.interface, s.err, line, sizeof(line));
+            snprintf(line + strlen(line), sizeof(line) - strlen(line), " Trying again.");
+            col = UI_RED;
+        } else if (!s.running) {
+            snprintf(line, sizeof(line), "%s (%s): starting...", s.interface, a);
+        } else if (s.state == RX_LINK_UP) {
+            snprintf(line, sizeof(line), "%s (%s): on the link as rekordbox, device %d.",
+                     s.interface, a, s.number);
+            col = UI_PLAY;
+        } else {
+            snprintf(line, sizeof(line), "%s (%s): joining the link...", s.interface, a);
         }
-        ImGui::EndCombo();
+        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(col), "%s", line);
     }
-    ImGui::EndDisabled();
-    if ((ls.on || ls.busy) && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-        ImGui::SetTooltip("Switch Link off to change the interface.");
-
-    // Where it stands.
-    char line[256];
-    ImU32 col = UI_DIM;
-    if (ls.busy) {
-        snprintf(line, sizeof(line), "%s...", ls.on ? "Stopping" : "Starting");
-    } else if (!ls.on && ls.err) {
-        error_text(ls.interface, ls.err, line, sizeof(line));
-        col = UI_RED;
-    } else if (!ls.on) {
-        snprintf(line, sizeof(line), "Off. Players see nothing of this computer.");
-    } else if (ls.state == RX_LINK_UP) {
-        snprintf(line, sizeof(line), "On the link as rekordbox, device %d, on %s.", ls.number,
-                 ls.interface);
-        col = UI_PLAY;
-    } else if (ls.state == RX_LINK_JOINING) {
-        snprintf(line, sizeof(line), "Joining the link on %s...", ls.interface);
-        col = UI_ACCENT;
-    } else {
-        snprintf(line, sizeof(line), "Waiting for a player on %s.", ls.interface);
-        col = UI_ACCENT;
-    }
-    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(col), "%s", line);
     ImGui::PushTextWrapPos(0);
-    ImGui::TextDisabled("While on, anything on this network can read the library's audio, "
-                        "artwork and analysis (never other files, never writes). Use a network "
-                        "with only the players on it: a cable or a switch of their own.");
+    ImGui::TextDisabled("rxbox serves on every Ethernet interface while it runs with --pro-link. "
+                        "Anything on those networks can read the library's audio, artwork and "
+                        "analysis (never other files, never writes): the best network has only "
+                        "the players on it, a cable or a switch of their own.");
     ImGui::PopTextWrapPos();
     ImGui::Separator();
 

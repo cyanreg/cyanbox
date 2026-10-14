@@ -1,23 +1,20 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
-/* PRO DJ LINK in the app (rxbox/app.h, rx_app_link_start): the service of
- * rxbox/link.h started and stopped on a thread of its own, since a start
- * reads the library and builds the export plan over all of it, and a stop
- * waits for a request in progress (a transcode takes seconds): the
- * interface waits for neither. Each tick copies the service's state into
- * app->link_state, counts plays from the players' status, and tells the
- * service when the library has changed, once it has settled.
+/* PRO DJ LINK in the app (rxbox/app.h, rx_app_link_start): a set of
+ * services (rxbox/link.h RXLinkSet), one on every Ethernet interface,
+ * started with the app when it runs with --pro-link and serving from then
+ * on; the set's own thread starts and stops them as interfaces come and
+ * go, so the interface never waits for that. Each tick copies the set's
+ * state into app->link_state, counts plays from the players' status, and
+ * tells the services when the library has changed, once it has settled.
  *
- * Only with --pro-link (link_state.enabled), and on only while the switch
- * is, which is off at every start (docs/LINK.md, "Security"). What the
- * players send back is applied here, on the owner thread: the service
- * never writes the library. */
+ * What the players send back is applied here, on the owner thread: the
+ * services never write the library. */
 
 #include "applink.h"
 
 #include <errno.h>
-#include <pthread.h>
-#include <stdatomic.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -29,29 +26,20 @@
 #define RELOAD_QUIET_US   2000000
 #define RELOAD_LONGEST_US 30000000
 
+/* A player's count, by the interface it is on and its number there
+ * (numbers repeat from one network to another). */
 typedef struct Counter {
-    int number;                 /* the device's; 0 a free slot */
+    char interface[16];
+    int  number;                /* 0 a free slot */
     bool used;                  /* seen in this tick's devices */
     RXLinkPlays plays;
 } Counter;
 
 typedef struct RXAppLink {
-    RXLink *link;
-    /* The start or stop in progress: the thread, what it was asked and
-     * the start's result, which it writes before setting `done`. */
-    pthread_t thread;
-    bool started;
-    bool stopping;
-    bool stop_after;            /* switched off while starting: stop when done */
-    atomic_bool done;
-    int result;
-    RXLinkOptions opt;
-    char *library, *interface, *name, *broadcast;
-
-    unsigned generation;        /* lib.generation the service read last */
+    RXLinkSet *set;
+    unsigned generation;        /* lib.generation the services read last */
     unsigned seen_generation;   /* the last one seen, since changed_us */
     int64_t changed_us, first_change_us;
-
     Counter counters[RX_APP_LINK_DEVICES];
 } RXAppLink;
 
@@ -116,130 +104,75 @@ bool rx_link_plays_feed(RXLinkPlays *p, const RXLinkPlayer *pl, int ours, int64_
     p->recorded = true;
     return true;
 }
-
 /* -------------------------------------------------------- start and stop */
-
-static void options_free(RXAppLink *l)
-{
-    free(l->library);
-    free(l->interface);
-    free(l->name);
-    free(l->broadcast);
-    l->library = l->interface = l->name = l->broadcast = NULL;
-}
 
 static void state_clear(RXApp *app)
 {
-    RXAppLink *l = app->link;
     app->link_state.on = false;
-    app->link_state.state = RX_LINK_WAITING;
-    app->link_state.number = 0;
+    app->link_state.nb_interfaces = 0;
     app->link_state.nb_devices = 0;
-    for (int i = 0; i < RX_APP_LINK_DEVICES; i++)
-        l->counters[i].number = 0;
-}
-
-static void *worker(void *arg)
-{
-    RXAppLink *l = arg;
-    if (l->stopping)
-        rx_link_stop(&l->link);
-    else
-        l->result = rx_link_start(&l->link, &l->opt);
-    atomic_store(&l->done, true);
-    return NULL;
-}
-
-static int run(RXApp *app, bool stopping)
-{
-    RXAppLink *l = app->link;
-    l->stopping = stopping;
-    atomic_store(&l->done, false);
-    int ret = pthread_create(&l->thread, NULL, worker, l);
-    if (ret)
-        return RX_ERROR(ret);
-    l->started = true;
-    app->link_state.busy = true;
-    app->dirty = true;
-    return 0;
 }
 
 int rx_app_link_start(RXApp *app, const RXLinkOptions *o)
 {
     if (!app->link_state.enabled)
         return RX_ERROR(EPERM);
-    if (!o || !o->interface || !*o->interface)
-        return RX_ERROR(EINVAL);
-    if (app->link_state.busy)
-        return RX_ERROR(EBUSY);
     if (app->link_state.on)
         return RX_ERROR(EALREADY);
     if (!app->link && !(app->link = calloc(1, sizeof(*app->link))))
         return RX_ERROR(ENOMEM);
-
     RXAppLink *l = app->link;
-    options_free(l);
-    l->opt = *o;
-    const char *library = o->library ? o->library : app->lib.root;
-    l->library = library ? rx_strdup(library) : NULL;
-    l->interface = rx_strdup(o->interface);
-    l->name = o->name ? rx_strdup(o->name) : NULL;
-    l->broadcast = o->broadcast ? rx_strdup(o->broadcast) : NULL;
-    if ((library && !l->library) || !l->interface || (o->name && !l->name) ||
-        (o->broadcast && !l->broadcast)) {
-        options_free(l);
-        return RX_ERROR(ENOMEM);
+    RXLinkOptions opt;
+    if (o)
+        opt = *o;
+    else
+        rx_link_options_default(&opt);
+    if (!opt.library)
+        opt.library = app->lib.root;
+    int ret = rx_link_set_start(&l->set, &opt);
+    if (ret < 0) {
+        app->last_error_count++;
+        rx_app_set_status(app, "PRO DJ LINK cannot start: %s", strerror(-ret));
+        return ret;
     }
-    l->opt.library = l->library;
-    l->opt.interface = l->interface;
-    l->opt.name = l->name;
-    l->opt.broadcast = l->broadcast;
-
-    snprintf(app->link_state.interface, sizeof(app->link_state.interface), "%s", o->interface);
-    app->link_state.err = 0;
-    l->stop_after = false;
-    l->generation = l->seen_generation = app->lib.generation;
-    l->first_change_us = 0;
+    *l = (RXAppLink) {
+        .set = l->set,
+        .generation = app->lib.generation,
+        .seen_generation = app->lib.generation,
+    };
     state_clear(app);
-    int ret = run(app, false);
-    if (ret < 0)
-        app->link_state.err = ret;
-    return ret;
+    app->link_state.on = true;
+    app->dirty = true;
+    return 0;
 }
 
 void rx_app_link_stop(RXApp *app)
 {
     RXAppLink *l = app->link;
-    if (!l)
+    if (!l || !l->set)
         return;
-    if (app->link_state.busy) {
-        if (!l->stopping)
-            l->stop_after = true;
-        return;
-    }
-    if (!l->link)
-        return;
-    if (run(app, true) < 0) {
-        /* No thread for it: here, then. */
-        rx_link_stop(&l->link);
-        state_clear(app);
-    }
+    rx_link_set_stop(&l->set);
+    for (int i = 0; i < RX_APP_LINK_DEVICES; i++)
+        l->counters[i].number = 0;
+    state_clear(app);
+    app->dirty = true;
 }
 
 /* ------------------------------------------------------------------ tick */
 
-static Counter *counter_of(RXAppLink *l, int number)
+static Counter *counter_of(RXAppLink *l, const char *interface, int number)
 {
     Counter *free_slot = NULL;
     for (int i = 0; i < RX_APP_LINK_DEVICES; i++) {
         Counter *c = &l->counters[i];
-        if (c->number == number)
+        if (c->number == number && !strcmp(c->interface, interface))
             return c;
         if (!c->number && !free_slot)
             free_slot = c;
     }
     /* Never NULL: there are as many slots as devices kept. */
     free_slot->number = number;
+    snprintf(free_slot->interface, sizeof(free_slot->interface), "%s", interface);
     rx_link_plays_reset(&free_slot->plays);
     return free_slot;
 }
@@ -262,7 +195,7 @@ static void record(RXApp *app, const RXLinkPlayer *p)
     app->rows_dirty = true;
 }
 
-/* What the panel shows of a device. */
+/* What the window shows of a device. */
 static bool shown_same(const RXLinkPlayer *a, const RXLinkPlayer *b)
 {
     return a->number == b->number && a->type == b->type && a->addr == b->addr &&
@@ -273,23 +206,35 @@ static bool shown_same(const RXLinkPlayer *a, const RXLinkPlayer *b)
            a->pitch == b->pitch;
 }
 
-/* The service's state into link_state, plays counted on the way; true
- * when what is shown changed. */
+static bool served_same(const RXLinkServed *a, const RXLinkServed *b)
+{
+    return !strcmp(a->interface, b->interface) && a->addr == b->addr &&
+           a->running == b->running && a->err == b->err && a->state == b->state &&
+           a->number == b->number;
+}
+
+/* The set's state into link_state, plays counted on the way; true when
+ * what is shown changed. */
 static bool follow(RXApp *app, int64_t now)
 {
     RXAppLink *l = app->link;
-    int number = 0;
-    enum RXLinkState state = rx_link_state(l->link, &number);
+    RXLinkServed ifs[RX_APP_LINK_IFS];
+    int nb_ifs = RX_MIN(rx_link_set_interfaces(l->set, ifs, RX_APP_LINK_IFS), RX_APP_LINK_IFS);
     RXLinkPlayer dev[RX_APP_LINK_DEVICES];
-    int nb = RX_MIN(rx_link_players(l->link, dev, RX_APP_LINK_DEVICES), RX_APP_LINK_DEVICES);
-    int ours = state == RX_LINK_UP ? number : 0;
+    int where[RX_APP_LINK_DEVICES];
+    int nb = RX_MIN(rx_link_set_players(l->set, dev, where, RX_APP_LINK_DEVICES),
+                    RX_APP_LINK_DEVICES);
 
     double played[RX_APP_LINK_DEVICES];
     bool counted[RX_APP_LINK_DEVICES];
     for (int i = 0; i < RX_APP_LINK_DEVICES; i++)
         l->counters[i].used = false;
     for (int i = 0; i < nb; i++) {
-        Counter *c = counter_of(l, dev[i].number);
+        /* Our number on the device's own network: its loads of a track
+         * of ours name that number. */
+        const RXLinkServed *s = where[i] < nb_ifs ? &ifs[where[i]] : NULL;
+        int ours = s && s->running && s->state == RX_LINK_UP ? s->number : 0;
+        Counter *c = counter_of(l, s ? s->interface : "", dev[i].number);
         c->used = true;
         if (rx_link_plays_feed(&c->plays, &dev[i], ours, now))
             record(app, &dev[i]);
@@ -303,14 +248,17 @@ static bool follow(RXApp *app, int64_t now)
     }
 
     typeof(app->link_state) *ls = &app->link_state;
-    bool same = state == ls->state && number == ls->number && nb == ls->nb_devices;
+    bool same = nb_ifs == ls->nb_interfaces && nb == ls->nb_devices;
+    for (int i = 0; i < nb_ifs && same; i++)
+        same = served_same(&ifs[i], &ls->interfaces[i]);
     for (int i = 0; i < nb && same; i++)
-        same = shown_same(&dev[i], &ls->devices[i]) && counted[i] == ls->counted[i] &&
-               (int)played[i] == (int)ls->played[i];
-    ls->state = state;
-    ls->number = number;
+        same = shown_same(&dev[i], &ls->devices[i]) && where[i] == ls->device_if[i] &&
+               counted[i] == ls->counted[i] && (int)played[i] == (int)ls->played[i];
+    ls->nb_interfaces = nb_ifs;
+    memcpy(ls->interfaces, ifs, (size_t)nb_ifs * sizeof(*ifs));
     ls->nb_devices = nb;
     memcpy(ls->devices, dev, (size_t)nb * sizeof(*dev));
+    memcpy(ls->device_if, where, (size_t)nb * sizeof(*where));
     memcpy(ls->played, played, (size_t)nb * sizeof(*played));
     memcpy(ls->counted, counted, (size_t)nb * sizeof(*counted));
     return !same;
@@ -332,7 +280,7 @@ static void follow_library(RXApp *app, int64_t now)
     }
     if (now - l->changed_us < RELOAD_QUIET_US && now - l->first_change_us < RELOAD_LONGEST_US)
         return;
-    rx_link_library_changed(l->link);
+    rx_link_set_library_changed(l->set);
     l->generation = gen;
     l->first_change_us = 0;
 }
@@ -340,56 +288,17 @@ static void follow_library(RXApp *app, int64_t now)
 bool rx_app_link_tick(RXApp *app)
 {
     RXAppLink *l = app->link;
-    if (!l)
+    if (!l || !l->set)
         return false;
-    bool changed = false;
-    if (l->started) {
-        if (!atomic_load(&l->done))
-            return false;
-        pthread_join(l->thread, NULL);
-        l->started = false;
-        app->link_state.busy = false;
-        changed = true;
-        if (l->stopping) {
-            state_clear(app);
-            rx_app_set_status(app, "PRO DJ LINK off");
-        } else if (l->result < 0) {
-            state_clear(app);
-            app->link_state.err = l->result;
-            app->last_error_count++;
-            rx_app_set_status(app, "PRO DJ LINK cannot start on %s: %s", l->interface,
-                              strerror(-l->result));
-        } else {
-            app->link_state.on = true;
-            rx_app_set_status(app, "PRO DJ LINK on %s, waiting for players", l->interface);
-        }
-        if (l->stop_after) {
-            l->stop_after = false;
-            rx_app_link_stop(app);
-            return true;
-        }
-    }
-    if (!l->link)
-        return changed;
-
     int64_t now = rx_time_us();
-    if (follow(app, now))
-        changed = true;
+    bool changed = follow(app, now);
     follow_library(app, now);
     return changed;
 }
 
 void rx_app_link_destroy(RXApp *app)
 {
-    RXAppLink *l = app->link;
-    if (!l)
-        return;
-    if (l->started)
-        pthread_join(l->thread, NULL);
-    rx_link_stop(&l->link);
-    options_free(l);
-    free(l);
+    rx_app_link_stop(app);
+    free(app->link);
     app->link = NULL;
-    app->link_state.on = app->link_state.busy = false;
-    app->link_state.nb_devices = 0;
 }

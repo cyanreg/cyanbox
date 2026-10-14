@@ -14,7 +14,9 @@
 #include "rxbox/gpu.h"
 #include "rxbox/link.h"
 
-/* The devices on the link the app keeps a copy of (link_state). */
+/* The interfaces Link serves and the devices on them that the app keeps
+ * a copy of (link_state). */
+#define RX_APP_LINK_IFS     8
 #define RX_APP_LINK_DEVICES 16
 
 /* Per-deck interface state that outlives a frame. */
@@ -117,21 +119,19 @@ typedef struct RXApp {
     uint64_t   stick_request;       /* in flight, 0 none */
     RXJobResult *stick_result;
 
-    /* PRO DJ LINK (src/app/link.c, docs/LINK.md): the library served to the
-     * players on one network interface while the switch is on, and plays
-     * counted from what they say they play. Only with --pro-link: src/cli.c
-     * sets `enabled` before rx_app_run; without it the interface offers none
-     * of it and rx_app_link_start refuses, so nothing is ever bound. The
-     * rest is the service's state, copied here every tick while it runs. */
+    /* PRO DJ LINK (src/app/link.c, docs/LINK.md): the library served on
+     * every Ethernet interface from the start, and plays counted from what
+     * the players say they play. Only with --pro-link: src/cli.c sets
+     * `enabled` and starts it; without it the interface offers none of it
+     * and rx_app_link_start refuses, so nothing is ever bound. The rest is
+     * the set's state (rxbox/link.h RXLinkSet), copied here every tick. */
     struct {
         bool     enabled;
-        bool     on;                /* serving (the switch is on and the start worked) */
-        bool     busy;              /* starting or stopping, on a thread */
-        int      err;               /* why the last start failed, 0 none */
-        char     interface[16];     /* what it serves on, or last tried to */
-        enum RXLinkState state;
-        int      number;            /* our device number once up */
+        bool     on;                /* the set runs */
+        RXLinkServed interfaces[RX_APP_LINK_IFS];   /* served or tried, by name */
+        int      nb_interfaces;
         RXLinkPlayer devices[RX_APP_LINK_DEVICES];
+        int      device_if[RX_APP_LINK_DEVICES];    /* each one's index in interfaces */
         int      nb_devices;
         /* Per device: the seconds of its load (a track of ours) played so
          * far, distinct audio as the deck counts it, and whether that load
@@ -260,18 +260,17 @@ int  rx_app_apply_tags(RXApp *app, RXTrack *t, const RXMLTags *tags);
  * environment named, or NULL when models/ was looked in. Allocating. */
 #define RX_APP_ML_MODEL "moss-audio-4b-instruct-q4_k.gguf"
 int  rx_app_ml_model(const RXApp *app, char **path);
-/* PRO DJ LINK on (src/app/link.c): the service starts on a thread with
- * `o` (its interface required; its library, when NULL, the app's), and
- * link_state.busy says so until the next ticks see it done: then `on`, or
- * `err` says why not. While it runs, each tick copies its state into
- * link_state, counts a play of a track of ours that a player has played
- * 30 s of (rx_library_record_play, as the deck's), and, a little after the
- * library last changed, has the service read it again. -EPERM without
- * --pro-link (link_state.enabled false), -EBUSY while starting or
- * stopping, -EALREADY when on. */
+/* PRO DJ LINK on (src/app/link.c): served on every Ethernet interface, as
+ * they come and go (o NULL), or as `o` says (the tests: one interface,
+ * ports of their own; its library, when NULL, the app's), by a set
+ * (rxbox/link.h RXLinkSet) whose thread starts the services. While it
+ * runs, each tick copies its state into link_state, counts a play of a
+ * track of ours that a player has played 30 s of (rx_library_record_play,
+ * as the deck's), and, a little after the library last changed, has the
+ * services read it again. -EPERM without --pro-link (link_state.enabled
+ * false), -EALREADY when on. */
 int  rx_app_link_start(RXApp *app, const RXLinkOptions *o);
-/* Off, on a thread (busy until done); a start in progress is stopped as
- * soon as it is done. */
+/* Off: every service stopped (it waits for a request in progress). */
 void rx_app_link_stop(RXApp *app);
 /* Re-checks which audio files are missing; returns how many changed. */
 int  rx_app_rescan(RXApp *app);

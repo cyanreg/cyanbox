@@ -326,8 +326,6 @@ struct UiState {
     // Dialogs.
     bool      dlg_analysis, dlg_export, dlg_keys, dlg_about, dlg_add, dlg_inspect, dlg_sync;
     bool      dlg_settings, dlg_link;
-    std::vector<RXLinkInterface> link_ifs;     // the Link window's interface list
-    int64_t   link_ifs_time;   // when it was read (rx_time_us), 0 never
     bool      settings_focus;  // bring Player settings to the front (Ctrl+, while open)
     std::vector<UiSetting> settings;   // every My Settings field (ui_settings)
     int       bpm_preset;
@@ -535,13 +533,10 @@ void ui_escape_closes(bool *open);
 /* ----------------------------------------------------------- link_view.cpp */
 
 // PRO DJ LINK (rxbox --pro-link; app->link_state): the window with the
-// switch, the interface and the devices on the link, and the switch itself
-// for the Link menu. None of it is drawn without --pro-link.
+// Ethernet interfaces served and the devices on them. None of it is drawn
+// without --pro-link.
 void ui_link_window(UiState *ui);
 void ui_open_link(UiState *ui);
-// On: serves on the interface link.interface names (none chosen yet: the
-// window opens to choose one). Off: stops.
-void ui_link_switch(UiState *ui, bool on);
 // The status bar's word on it ("Link: 2 players"), and its colour.
 const char *ui_link_summary(UiState *ui, char *buf, size_t size, ImU32 *col);
 

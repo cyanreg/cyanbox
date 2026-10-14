@@ -15,7 +15,7 @@ link_nfs_src      = files('vtree.c', 'nfs.c', 'nfsclient.c')
 
 rx_link_lib = static_library('rx_link',
     link_wire_src + link_presence_src + link_db_src + link_nfs_src +
-    files('net.c', 'service.c', 'client.c'),
+    files('net.c', 'service.c', 'set.c', 'client.c'),
     include_directories: rx_inc,
     dependencies: [ rx_export_dep, rx_analysis_dep, threads_dep ],
 )

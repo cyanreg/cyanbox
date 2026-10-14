@@ -4,11 +4,13 @@
  * statuses made here, on a clock of the test's own: 30 s of a track's
  * beats played forward is a play, once per load; a loop, a seek, a pause,
  * a track of another source and a load of another track are not; without
- * beat numbers the time it played counts, at its pitch. Then the switch
- * on the loopback with the fake player of rxbox/link.h: refused without
- * --pro-link (link_state.enabled), started on a thread, the player seen
- * joining, loading a track of ours and playing it, the play recorded in
- * the library after 30 s, a stop, and a stop asked for while starting.
+ * beat numbers the time it played counts, at its pitch. Then Link in the
+ * app on the loopback with the fake player of rxbox/link.h: refused
+ * without --pro-link (link_state.enabled), started by the set's thread
+ * and on the link at once, before any player; the player seen joining,
+ * loading a track of ours and playing it, the play recorded in the
+ * library after 30 s, the library read again, a stop, and a stop right
+ * after a start, while the set is still starting the service.
  *
  * Usage: test_link FILE.wav SCRATCH_DIR */
 
@@ -121,8 +123,12 @@ static bool tick_until(RXApp *app, bool (*done)(RXApp *app), int seconds)
     return false;
 }
 
-static bool settled(RXApp *app)     { return !app->link_state.busy; }
-static bool up(RXApp *app)          { return app->link_state.state == RX_LINK_UP; }
+static bool up(RXApp *app)
+{
+    const typeof(app->link_state) *ls = &app->link_state;
+    return ls->nb_interfaces == 1 && ls->interfaces[0].running &&
+           ls->interfaces[0].state == RX_LINK_UP;
+}
 
 static bool sees_player(RXApp *app)
 {
@@ -224,16 +230,17 @@ static void test_app(const char *wav, const char *dir)
 
     /* Without --pro-link nothing starts. */
     CHECK_EQ(rx_app_link_start(&app, &so), RX_ERROR(EPERM));
-    CHECK(!app.link && !app.link_state.busy);
+    CHECK(!app.link && !app.link_state.on);
 
+    /* On the link at once, as device 17, with no player yet. */
     app.link_state.enabled = true;
     CHECK_EQ(rx_app_link_start(&app, &so), 0);
-    CHECK(app.link_state.busy);
-    CHECK_EQ(rx_app_link_start(&app, &so), RX_ERROR(EBUSY));
-    CHECK(tick_until(&app, settled, 30));
-    CHECK(app.link_state.on && !app.link_state.err);
+    CHECK(app.link_state.on);
     CHECK_EQ(rx_app_link_start(&app, &so), RX_ERROR(EALREADY));
-    CHECK_STR(app.link_state.interface, "lo");
+    CHECK(tick_until(&app, up, 15));
+    CHECK_STR(app.link_state.interfaces[0].interface, "lo");
+    CHECK_EQ(app.link_state.interfaces[0].number, 17);
+    CHECK_EQ(app.link_state.nb_devices, 0);
 
     RXLinkClientOptions co;
     rx_link_client_options_default(&co);
@@ -246,10 +253,8 @@ static void test_app(const char *wav, const char *dir)
     RXLinkClient *player = NULL;
     CHECK_EQ(rx_link_client_start(&player, &co), 0);
 
-    /* The player is seen, we join as 17, its load of our track shows,
-     * playing, and 30 s of it is a play. */
-    CHECK(tick_until(&app, up, 15));
-    CHECK_EQ(app.link_state.number, 17);
+    /* The player is seen, its load of our track shows, playing, and 30 s
+     * of it is a play. */
     CHECK(tick_until(&app, sees_player, 15));
     if (player)
         rx_link_client_set_loaded(player, 17, 4, loaded_id, true);
@@ -269,16 +274,14 @@ static void test_app(const char *wav, const char *dir)
 
     /* Off. */
     rx_app_link_stop(&app);
-    CHECK(app.link_state.busy);
-    CHECK(tick_until(&app, settled, 30));
-    CHECK(!app.link_state.on && !app.link_state.nb_devices);
+    CHECK(!app.link_state.on && !app.link_state.nb_devices && !app.link_state.nb_interfaces);
     rx_link_client_stop(&player);
 
-    /* Off while starting: on, then off again by itself. */
+    /* Off right after on: the set's thread may be starting the service. */
     CHECK_EQ(rx_app_link_start(&app, &so), 0);
+    usleep(1000);
     rx_app_link_stop(&app);
-    CHECK(tick_until(&app, settled, 30));
-    CHECK(!app.link_state.on && !app.link_state.busy);
+    CHECK(!app.link_state.on);
 
     /* On again and torn down with the app. */
     CHECK_EQ(rx_app_link_start(&app, &so), 0);

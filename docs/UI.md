@@ -381,8 +381,8 @@ state (`PipeWire 48 kHz · rxbox-null`, `Audio: none` under `--audio none`, or
 the error in red), the library track count with the size of its files
 (`58 tracks · 1.7 GB`: what a stick with every track holds), the
 GPU name. With `--pro-link`, Link's word before the audio state (`Link:
-off`, `Link: waiting on eth0`, `Link: 2 players`; red after a start that
-failed), which opens the PRO DJ LINK window when clicked.
+2 players`, `Link: on 1 network`, `Link: no Ethernet`, or in red `Link:
+cannot serve`), which opens the PRO DJ LINK window when clicked.
 
 ## Dialogs and menus
 
@@ -400,8 +400,8 @@ line's `export.key_notation` only),
 **Analysis** (analyse selection, analyse all
 unanalysed, re-analyse selection, analyse tags of selection, stop tagging,
 analysis settings…), **Help** (about,
-keyboard map), and with `--pro-link` **Link** before Help (Serve to
-players, the switch; Players and settings…, the PRO DJ LINK window).
+keyboard map), and with `--pro-link` **Link** before Help (Players…, the
+PRO DJ LINK window).
 "Unanalysed" includes results an older analyser made; the
 interface queues those by itself when it opens the library (README.md,
 Analysis), with the usual progress in the status bar. Tags never are:
@@ -411,15 +411,14 @@ for join one batch that loads the model once, tags them one at a time
 and unloads it after the last; Stop tagging drops the rest and unloads
 it at once.
 
-- **PRO DJ LINK** (`--pro-link` only; docs/LINK.md): the switch, "Serve
-  the library to players", and the Ethernet interface it serves on (chosen
-  here, `link.interface`, and only while off; only Ethernet ones are
-  listed, those with a link first). The switch waits until an interface is
-  chosen: while on, anything on that network can read the library's audio,
-  and the window says so. Below, where it stands (off, waiting for a
-  player, joining, on the link as device 17, or why it would not start:
-  the ports taken by rekordbox, no such interface, no IPv4 address) and
-  the devices on the link: number, name, what each player has loaded (a
+- **PRO DJ LINK** (`--pro-link` only; docs/LINK.md): Link serves on every
+  Ethernet interface from the start, so the window only shows it: each
+  interface served, with its address and where it stands (starting,
+  joining, on the link as device 17, or in red why it would not start and
+  that it is tried again: the ports taken by rekordbox, no IPv4 address),
+  or that no Ethernet interface is up; that anything on those networks
+  can read the library's audio; and the devices on them: number, name
+  (its interface in the tooltip), what each player has loaded (a
   track of ours by title, else its source and track number), its tempo at
   its pitch, and Playing or Paused, ON AIR, MASTER, SYNC, and for a track
   of ours the seconds of it played so far, then "counted" once its play

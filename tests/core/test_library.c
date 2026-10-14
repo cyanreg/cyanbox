@@ -1217,8 +1217,6 @@ static void test_config_set(void)
     CHECK(rx_config_set(&c, "ui.traffic_light", "loud") == RX_ERROR(EINVAL));
     CHECK(rx_config_set(&c, "audio.sink", "sink") == 0 && !strcmp(c.audio_sink, "sink"));
     CHECK(rx_config_set(&c, "audio.sink", "") == 0 && !c.audio_sink);
-    CHECK(rx_config_set(&c, "link.interface", "eth0") == 0 && !strcmp(c.link_interface, "eth0"));
-    CHECK(rx_config_set(&c, "link.interface", "") == 0 && !c.link_interface);
     CHECK(rx_config_set(&c, "ui.layout", "x") == RX_ERROR(ENOENT));
     CHECK(rx_config_set(&c, "player.quantize", "on") == RX_ERROR(ENOENT));
     CHECK(rx_config_set(&c, "analysis.nothing", "1") == RX_ERROR(ENOENT));

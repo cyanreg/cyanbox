@@ -69,7 +69,7 @@ if ffmpeg_prog.found()
             suite: 'app', timeout: 300)
     endif
 
-    # Link in the app on the loopback: the switch, the fake player's load
+    # Link in the app on the loopback: started with it, the fake player's load
     # and its play counted (30 s of it).
     test_link = executable('test_link', files('../../tests/app/test_link.c', 'headless.c'),
         include_directories: rx_inc, dependencies: [ rx_app_dep ])

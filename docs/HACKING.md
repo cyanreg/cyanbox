@@ -110,7 +110,8 @@ src/export        plan.c export.c inspect.c stick.c export_priv.h     -> rx_expo
 src/link          packet.c presence.c (UDP presence) dbmsg.c catalog.c -> rx_link_dep (export, analysis)
                   dbserver.c dbclient.c (the database server) vtree.c
                   nfs.c nfsclient.c (NFS over a virtual tree) net.c
-                  service.c (the threads) client.c (the fake player)
+                  service.c (one interface's threads) set.c (every Ethernet
+                  interface) client.c (the fake player)
                   wire.c link_priv.h (docs/LINK.md)
 src/player        player.c pipewire.c nullout.c deck.c feed.c         -> rx_player_dep (core)
                   controls.c stretch.cpp stretch.h player_internal.h

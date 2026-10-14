@@ -13,10 +13,11 @@ such as the CDJ-3000 and the CDJ-3000X, over Ethernet and nothing else.
 ## Status (2026-10-14)
 
 Steps 1 to 6 of the order of work below are written and tested without a
-player: `src/link` serves the library from the CLI (`rxbox link serve -i
-IF`) and from the interface (`rxbox --pro-link`: the Link menu's switch
-and the PRO DJ LINK window, src/app/link.c and src/ui/link_view.cpp), the
-interface counts a track of ours that a player plays for 30 s as a play,
+player: `src/link` serves the library on every Ethernet interface, as
+they come and go, from the CLI (`rxbox link serve`) and from the
+interface for as long as it runs with `--pro-link` (the PRO DJ LINK
+window, src/app/link.c and src/ui/link_view.cpp), the interface counts a
+track of ours that a player plays for 30 s as a play,
 and `rxbox link browse -i IF [HOST]` is a fake CDJ-3000 that joins,
 browses, loads a track and reads it as a player does. Not yet: a run
 against a player on Ethernet (step 7), writes from the deck (step 8).
@@ -26,8 +27,8 @@ What has been run against what:
 | Server | Client | Network | Result |
 | --- | --- | --- | --- |
 | rxbox | rxbox's fake player | loopback, ports of their own (`test_loopback`) | join, browse, every track's bytes (transcodes too), the player's status, the fences, a library change |
-| rxbox | rxbox's fake player | two network namespaces, rekordbox's ports (`tests/link/netns_test.sh`) | the same through the CLI, real broadcasts |
-| rxbox's app | rxbox's fake player | loopback (`test_link`) | the switch (refused without `--pro-link`), the player and its load seen, 30 s of play recorded, the library read again after it, off, off while starting |
+| rxbox | rxbox's fake player | two network namespaces, rekordbox's ports (`tests/link/netns_test.sh`) | the same through the CLI, real broadcasts; the Ethernet interface found by the server, two served at once on the same ports, one of them only once its address came |
+| rxbox's app | rxbox's fake player | loopback (`test_link`) | refused without `--pro-link`, on the link before any player, the player and its load seen, 30 s of play recorded, the library read again after it, off, off right after on |
 | rxbox's interface | rxbox's fake player | two network namespaces, by hand | the window: on the link as 17, the player's load by title, playing, its play counted |
 | rxbox | rbxport's `browse` example | two network namespaces | root, sort, tracks, playlists, metadata, track info, grid, preview, the file over NFS |
 | rbxport's `serve` (its emulator fixture) | rxbox's fake player | two network namespaces | the same; rbxport reads our CDJ status (loaded, playing) |
@@ -85,8 +86,12 @@ Every port is above 1024: nothing needs root.
 
 ### 1. Presence (UDP 50000 and 50002)
 
-- **Joining.** Nothing is announced into an empty network: the link comes
-  up on the first keep-alive heard from a player or mixer. Then three
+- **Joining.** At once, when a service starts (`start_up`, the default):
+  rxbox has its number and is on the players' SOURCE lists before the
+  first of them is switched on, and nothing depends on hearing one first;
+  a join that fails is tried again. rekordbox instead waits for the first
+  keep-alive of a player or mixer, which rxbox can do too (`rxbox link
+  serve --wait`, and the tests of that wait). Then three
   first-stage claims 100 ms apart, a probe of each of the six numbers
   rekordbox reserves (17, 18, 41, 42, 43, 44) every 100 ms, six rounds,
   skipping any a device answers for; rekordbox settles on 17 or 18. Once
@@ -206,11 +211,14 @@ Link is on:
   metadata, artwork and analysis, all read-only. No host path, no other
   file, no directory of the host. Writes from players (cues, grid) are
   refused until they are a decision of their own.
-- **When**: off by default, on only while the Link switch is.
-- **Where**: one chosen Ethernet interface (no other kind is accepted: not
-  Wi-Fi, not a tunnel); a datagram or connection that arrives on another
-  is dropped (`IP_PKTINFO`). The best network is one with only the players
-  on it: a direct cable or a switch of their own.
+- **When**: never without `--pro-link` (or `rxbox link serve`); with it,
+  for as long as rxbox runs.
+- **Where**: every Ethernet interface that is up with an address, each
+  served by a service of its own (no other kind is accepted: not Wi-Fi,
+  not a tunnel); a datagram or connection that arrives on another
+  interface than its service's is dropped (`IP_PKTINFO`). The best network
+  is one with only the players on it: a direct cable or a switch of their
+  own.
 - **From whom**: the database server and NFS answer only addresses that
   are players on Link (they send keep-alives on 50000). UDP sources can
   be forged, so this is a fence against casual access, not
@@ -251,18 +259,22 @@ Link is on:
   rebuild. The app owns the library: what players send back
   (loads, plays; later cues) goes to the app as job results, the way the
   export's do.
-- **Off by default**, bound to one chosen Ethernet interface
-  (`link.interface`): a Link switch and panel in the interface (the
-  players seen, what each has loaded, playing or not), and `rxbox link
-  serve -i IF` running the server in the foreground from the CLI. The
-  interface offers it only when started with `--pro-link`; without it
-  there is no Link menu and nothing is ever bound (rx_app_link_start
-  refuses). The switch is off at every start and waits for an interface to
-  be chosen: rxbox never guesses which network to open the library to.
-- **The app's side** (src/app/link.c): the service starts and stops on a
-  thread of its own (a start reads the library and plans over all of it;
-  a stop waits for a request in progress), each tick copies its state
-  for the window, and the library is read again 2 s after its last change
+- **Every Ethernet interface** (`src/link/set.c`, `RXLinkSet`): a service
+  per interface, each bound to its own; they bind the same ports, which
+  Linux allows on different devices. A thread of the set's own looks at
+  the interfaces every 2 s: a service starts on one that has come up with
+  an address (a cable plugged in), stops on one gone or without it, and
+  starts again when the address changed; one that would not start (the
+  ports held there by another program) is tried again every 10 s.
+- **With `--pro-link`**, from the start, for as long as the interface
+  runs: the PRO DJ LINK window shows each interface served and the
+  devices on them. Without it there is no Link menu and nothing is ever
+  bound (rx_app_link_start refuses). `rxbox link serve` does the same in
+  the foreground from the CLI (`-i IF`: one interface only).
+- **The app's side** (src/app/link.c): the set starts and stops the
+  services on its thread (a start reads the library and plans over all
+  of it; a stop waits for a request in progress), each tick copies its
+  state for the window, and the library is read again 2 s after its last change
   (30 s at most while changes keep coming: an analysis queue). Plays are
   counted there, on the owner thread, from each player's status as the
   deck counts its own: 30 s of distinct audio of one load, a beat at a

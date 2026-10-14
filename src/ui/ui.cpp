@@ -20,8 +20,7 @@
 // RXBOX_UI_AUTOLOAD=<id> loads that track on the first frame and starts it
 // once it is loaded (RXBOX_UI_AUTOLOAD_AT=<seconds>: from there);
 // RXBOX_UI_SHOW=<list> opens panels and dialogs on the first frame (grid,
-// half, export, sync, inspect, analysis, settings, add, keys, about, link;
-// link-on switches PRO DJ LINK on, which still needs --pro-link), and
+// half, export, sync, inspect, analysis, settings, add, keys, about, link), and
 // `tags` asks for the autoloaded track's tags from the model;
 // RXBOX_UI_SCREENSHOT=<png> saves frame 100 (RXBOX_UI_SCREENSHOT_FRAME=<n>:
 // frame n) through rx_window_screenshot_next(), which writes it once it is
@@ -1022,13 +1021,9 @@ static void menu_bar(UiState *ui)
         ImGui::EndMenu();
     }
 
-    // PRO DJ LINK, only with --pro-link.
+    // PRO DJ LINK, only with --pro-link: it serves from the start.
     if (app->link_state.enabled && ImGui::BeginMenu("Link")) {
-        const auto &ls = app->link_state;
-        bool on = ls.on != ls.busy;
-        if (ImGui::MenuItem("Serve to players", nullptr, on, !ls.busy))
-            ui_link_switch(ui, !on);
-        if (ImGui::MenuItem("Players and settings..."))
+        if (ImGui::MenuItem("Players..."))
             ui_open_link(ui);
         ImGui::EndMenu();
     }
@@ -1586,9 +1581,6 @@ static void autoshow(UiState *ui)
         ui->dlg_about = true;
     if (shown(ui, "link"))
         ui_open_link(ui);
-    // Tests: Link switched on, as its switch does (--pro-link still needed).
-    if (shown(ui, "link-on"))
-        ui_link_switch(ui, true);
 }
 
 static void autoload_tick(UiState *ui)

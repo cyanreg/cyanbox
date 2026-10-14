@@ -144,6 +144,7 @@ void rx_link_options_default(RXLinkOptions *o)
 {
     *o = (RXLinkOptions) {
         .name = "rekordbox",
+        .start_up = true,
         .ports = {
             .announce = RX_LINK_PORT_ANNOUNCE,
             .status   = RX_LINK_PORT_STATUS,

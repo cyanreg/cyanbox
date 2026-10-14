@@ -10,10 +10,11 @@
  * read the audio over NFS version 2 from a virtual tree that holds the
  * library's tracks and nothing of the host.
  *
- * One service thread does all of it, with its own connection to the
- * library, which it reads and never writes. Off until started; bound to
- * one network interface, and answering only the players heard on it
- * (docs/LINK.md, "Security"). */
+ * A service (RXLink) serves one Ethernet interface: a thread of its own
+ * with its own connection to the library, which it reads and never
+ * writes, answering only the players heard on that interface
+ * (docs/LINK.md, "Security"). A set (RXLinkSet) runs one on every
+ * Ethernet interface that is up with an address, as they come and go. */
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -34,7 +35,8 @@ typedef struct RXLinkPorts {
 
 typedef struct RXLinkOptions {
     const char *library;        /* the library's directory, NULL = the default one */
-    const char *interface;      /* the network interface ("eth0"); required */
+    const char *interface;      /* the Ethernet interface ("eth0"); required by
+                                   rx_link_start, NULL for a set: every one */
     const char *name;           /* the name players show, at most 20 bytes; "rekordbox" */
     /* Where presence goes: the interface's broadcast address, unless this
      * names another (the tests' loopback: "127.0.0.1"). */
@@ -43,8 +45,10 @@ typedef struct RXLinkOptions {
      * heard on the link: diagnostics only (a client such as rbxport's
      * browse example, which never announces itself). */
     bool any_peer;
-    /* Serve right away, as if a player had been heard: diagnostics and
-     * tests (docs/LINK.md: nothing is announced into an empty network). */
+    /* Join the link at once (the default): rxbox has its number and is on
+     * the players' SOURCE lists before the first of them is switched on,
+     * and does not depend on hearing one first. False waits for a player's
+     * keep-alive, as rekordbox does (the tests of that wait). */
     bool start_up;
     RXLinkPorts ports;          /* ours */
     RXLinkPorts peer_ports;     /* the players' (announce and status only) */
@@ -122,6 +126,42 @@ int  rx_link_players(RXLink *l, RXLinkPlayer *out, int max);
 void rx_link_library_changed(RXLink *l);
 /* The ports bound (with any 0 asked for filled in). */
 void rx_link_bound_ports(RXLink *l, RXLinkPorts *out);
+
+/* ------------------------------------------------------------- the set */
+
+/* Link on every Ethernet interface (rx_link_interfaces), or on the one
+ * the options name: a service each, all with the same options. A thread
+ * of the set's own looks at the interfaces every two seconds and starts a
+ * service on one that has come up with an IPv4 address, stops the one on
+ * an interface gone or without its address, and starts it again when the
+ * address changed; a service that would not start (the ports held there
+ * by another program) is tried again ten seconds later. Starting and
+ * stopping happen on that thread: the owner waits for neither. */
+typedef struct RXLinkSet RXLinkSet;
+
+/* One interface the set serves, or tries to. */
+typedef struct RXLinkServed {
+    char     interface[16];
+    uint32_t addr;              /* its IPv4 address, host order */
+    bool     running;           /* served; false while starting, or after a failure */
+    int      err;               /* why it would not start (tried again), else 0 */
+    enum RXLinkState state;     /* when running */
+    int      number;            /* our device number there, once up */
+} RXLinkServed;
+
+/* Starts the set's thread; o->interface NULL: every Ethernet interface.
+ * The options are copied. */
+int  rx_link_set_start(RXLinkSet **out, const RXLinkOptions *o);
+/* Stops every service and the thread; *s is NULL after. Safe on NULL. */
+void rx_link_set_stop(RXLinkSet **s);
+/* The interfaces served or tried, by name: the count, up to `max` filled. */
+int  rx_link_set_interfaces(RXLinkSet *s, RXLinkServed *out, int max);
+/* The devices heard on all of them, each interface's in rx_link_players'
+ * order, in the order of rx_link_set_interfaces; `where` (may be NULL)
+ * gets each one's index in that list. The count, up to `max` filled. */
+int  rx_link_set_players(RXLinkSet *s, RXLinkPlayer *out, int *where, int max);
+/* rx_link_library_changed for every service. */
+void rx_link_set_library_changed(RXLinkSet *s);
 
 /* ------------------------------------------------------------ fake player */
 
