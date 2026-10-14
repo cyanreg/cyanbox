@@ -309,7 +309,10 @@ start, for as long as it runs, taking up an interface as soon as it is up
 with an address (a cable plugged in) and joining the link at once, before
 any player is on; the PRO DJ LINK window (Link → Players…) shows each
 interface and the players and what each plays; a track of ours that a
-player plays for 30 s is counted as a play, as on the deck. While it runs,
+player plays for 30 s is counted as a play, as on the deck. A player
+streams a track as it plays it, not the whole file first: an emulated
+CDJ-2000NXS2 read about 630 kB in the first 2 s after a load, then about
+as fast as it plays (docs/LINK.md). While it runs,
 anything on those networks can read the library's audio, artwork and
 analysis (never other files, and nothing can be written), so use a network
 with only the players on it. `rxbox link serve` serves from the command

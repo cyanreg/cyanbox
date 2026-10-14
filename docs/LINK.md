@@ -70,9 +70,13 @@ CDJ-2000 v4.33, a CDJ-2000NXS2 v1.87; 2026-10-15) showed:
 - A CDJ-900 accepts the WAV made as it is read (16-bit stereo, 44.1 or
   48 kHz, the plain 44-byte header): a LOOKUP per path component, a
   GETATTR, 2 kB at 0 for the header, then 9408-byte READs (four CD
-  sectors). How fast it reads ahead is not known yet: the emulated one
-  read whole tracks at once, likely because its emulated DSP reports no
-  buffer levels.
+  sectors). The emulated one went on to read whole tracks at once, even
+  ones it had not loaded; that is the emulation, whose DSP model reports
+  no buffer levels, not the player (a real one has 64 MB of memory, less
+  than a long WAV). A player streams a track as it plays it: an emulated
+  CDJ-2000NXS2, whose DSP code is the real one, read about 630 kB in the
+  first 2 s after a load, then at about the rate it plays (140 to 180
+  kB/s), and nothing of the tracks after it.
 - A CDJ-2000's key menu has two levels of its own: `0x100b`, the keys
   (not `0x1014`), and `0x110b`, a key's tracks (given the related keys'
   rows, it took them for a leaf and asked nothing more). It reads a WAV
@@ -302,10 +306,11 @@ a player loads the track: no tags, no cover, no Xing/LAME frame, and the
 encoder's delay cut from the start of the audio fed to it, so the file as
 a player decodes it lines up with the source and the grid and cues stay
 right (`test_transcode` checks the clicks of its signal to 2 samples).
-A CDJ-900 played the library's own MP3s at once; whether it plays the
-WAVs now that their type is named has not been tried on one yet.
+A CDJ-900 played the library's own MP3s at once; the WAVs, now that their
+type is named, have played on an emulated one but not yet on a real one.
 
-The USB export is not changed by any of this: it keeps FLAC.
+The USB export is not changed by any of this: what the stick gets is its
+own choice (`export.format`, README.md).
 
 ## Security
 
