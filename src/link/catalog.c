@@ -2084,7 +2084,9 @@ int rx_catalog_cues(RXCatalog *c, uint32_t track, RXWr *records, RXWr *times,
      * letter (1 to 3) in its first three bytes, in and out in 1/150 s at
      * 12 and 16, the rest zeros. Its millisecond times go in the second
      * blob, in and out, eight bytes a cue (rbxport). No out is ff.. here
-     * as in the extended list (assumed). */
+     * as in the extended list (assumed). The 1/150 s are floored, not
+     * rounded: a cue on a kick then starts at most 6.7 ms early, never
+     * up to 3.3 ms into its attack. */
     for (int i = 0; i < nb; i++) {
         const RXPlanCue *q = v[i];
         if (q->hot >= 3)
