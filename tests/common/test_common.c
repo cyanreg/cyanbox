@@ -19,6 +19,8 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "config.h"
+
 static int failures;
 
 #define CHECK(cond, ...)                                              \
@@ -382,6 +384,80 @@ static void test_nfc(void)
     }
 }
 
+/* Latin-1 for a CDJ-900 (src/common/latin1.c): romaji, joins, っ, ん, ー,
+ * halfwidth kana, punctuation, and text left alone. */
+static void test_latin1(void)
+{
+    static const struct { const char *in, *out; } v[] = {
+        { "ごーいん！", "Gooin!" },
+        { "ジョン・レノン", "Jon Renon" },
+        { "キャッチ", "Kyatchi" },
+        { "ちょっと", "Chotto" },
+        { "パーティー", "Paatii" },
+        { "ヴァイオリン", "Vaiorin" },
+        { "フィーバー", "Fiibaa" },
+        { "ディスコ", "Disuko" },
+        { "ウィンター", "Wintaa" },
+        { "シェイク", "Sheiku" },
+        { "きんえん", "Kin'en" },
+        { "しんや", "Shin'ya" },
+        { "あっ", "A" },
+        { "っぽい", "Ppoi" },
+        { "ﾊﾟｰﾃｨｰ", "Paatii" },
+        { "ｶﾞｯﾂ", "Gattsu" },
+        { "テスト、テスト。", "Tesuto, Tesuto." },
+        { "（Remix）", "(Remix)" },
+        { "Don’t “stop” — now…", "Don't \"stop\" - now..." },
+        { "【MV】「あい」", "[MV] \"Ai\"" },
+        { "Witchsmith（きまぐれ）", "Witchsmith (Kimagure)" },
+        { "ごーいん！ごーいん", "Gooin! Gooin" },
+        { "まなざし(Remix)", "Manazashi (Remix)" },
+        { "《ああ》〜", "\xc2\xab" "Aa\xc2\xbb~" },
+        { "Pちゃん", "Pchan" },
+        { "A ー B", "A - B" },
+        { "Pettit Rabbit's　Mix", "Pettit Rabbit's Mix" },
+    };
+    for (size_t i = 0; i < RX_ARRAY_ELEMS(v); i++) {
+        char *l = rx_utf8_latin1(v[i].in);
+        CHECK(l && !strcmp(l, v[i].out), "latin1 %zu: %s -> %s", i, v[i].in, l ? l : "(null)");
+        free(l);
+    }
+#if RXBOX_ICU
+    /* Other scripts through ICU, Latin-1 kept, the rest folded. */
+    char *g = rx_utf8_latin1("Ελλάδα Москва Łódź ♥");
+    CHECK(g && !strcmp(g, "Ell\xc3\xa1" "da Moskva L\xc3\xb3" "dz ♥"), "latin1 icu: %s", g ? g : "(null)");
+    free(g);
+#endif
+
+    /* Kanji: through MeCab and IPADIC when there are (Debian's
+     * mecab-ipadic-utf8), as they are otherwise. */
+    static const struct { const char *in, *read, *as_is; } k[] = {
+        { "ずっと真夜中でいいのに。", "Zutto Mayonaka de Iinoni.", "Zutto真夜中deiinoni." },
+        { "下さい", "Kudasai", "下sai" },
+        { "悦びの印", "Yorokobi no Shirushi", "悦bino印" },
+        { "Fairytaleは終わらない", "Fairytale wa Owaranai", "Fairytaleha終waranai" },
+        { "素直になれないんだ (Remix)", "Sunao ni Narenainda (Remix)", "素直ninarenainda (Remix)" },
+        { "インターネットが遅いさん", "Intaanetto ga Osoi-san", "Intaanettoga遅isan" },
+        { "クラゲの商店街", "Kurage no Shoutengai", "Kurageno商店街" },
+        { "愛MAX", "Ai MAX", "愛MAX" },
+    };
+    bool reads = rx_utf8_latin1_reads_kanji();
+    if (!reads)
+        fprintf(stderr, "test_common: no MeCab dictionary, kanji checked as they are\n");
+    for (size_t i = 0; i < RX_ARRAY_ELEMS(k); i++) {
+        char *l = rx_utf8_latin1(k[i].in);
+        const char *want = reads ? k[i].read : k[i].as_is;
+        CHECK(!strcmp(l ? l : k[i].in, want), "latin1 kanji %zu: %s -> %s", i, k[i].in, l ? l : "(same)");
+        free(l);
+    }
+
+    /* Nothing to change: NULL. */
+    static const char *const same[] = { "Let me down (mitama. mashup)", "Café crème ☆", "", NULL };
+    for (int i = 0; same[i]; i++)
+        CHECK(!rx_utf8_latin1(same[i]), "latin1 changed %s", same[i]);
+    CHECK(!rx_utf8_latin1(NULL), "latin1 NULL");
+}
+
 int main(void)
 {
     snprintf(dir, sizeof(dir), "/tmp/rxbox-test-common-XXXXXX");
@@ -397,6 +473,7 @@ int main(void)
     test_fuzzy();
     test_natural();
     test_nfc();
+    test_latin1();
 
     if (nftw(dir, remove_entry, 16, FTW_DEPTH | FTW_PHYS) < 0)
         fprintf(stderr, "could not remove %s\n", dir);

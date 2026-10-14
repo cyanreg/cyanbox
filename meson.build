@@ -65,6 +65,13 @@ glslang_prog = find_program('glslangValidator', 'glslang', required: true)
 # whichever is found first (LGPL-2.1 or later, linked dynamically); only
 # when one is found (-Dmpris=enabled requires one, disabled leaves it out).
 sdbus_dep    = dependency('libsystemd', 'libelogind', 'basu', required: get_option('mpris'))
+# Romaji for players that show Latin-1 only (src/common/latin1.c): MeCab
+# (BSD, of its three licences; linked dynamically) reads kanji with its
+# system dictionary, found at run time (IPADIC: Debian's mecab-ipadic-utf8,
+# NAIST's licence); ICU (the Unicode licence) romanises other scripts. Each
+# only when found (-Dmecab=enabled / -Dicu=enabled require it).
+mecab_dep    = cc.find_library('mecab', has_headers: [ 'mecab.h' ], required: get_option('mecab'))
+icu_dep      = dependency('icu-i18n', required: get_option('icu'))
 
 # Signalsmith Stretch (MIT), the master tempo pitch shifter: header-only C++,
 # a git submodule in subprojects/ read through its own CMakeLists.txt. That
@@ -100,6 +107,8 @@ stretch_dep = [
 conf = configuration_data()
 conf.set_quoted('RXBOX_VERSION', meson.project_version())
 conf.set10('RXBOX_MPRIS', sdbus_dep.found())
+conf.set10('RXBOX_MECAB', mecab_dep.found())
+conf.set10('RXBOX_ICU', icu_dep.found())
 configure_file(output: 'config.h', configuration: conf)
 
 rx_inc = include_directories('include', '.')

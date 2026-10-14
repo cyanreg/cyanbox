@@ -2,3 +2,9 @@
 # builds it when libsystemd, libelogind or basu is found.
 option('mpris', type: 'feature', value: 'auto',
        description: 'MPRIS 2 (the deck on the D-Bus session bus) through sd-bus')
+# Romaji for players that show Latin-1 only (src/common/latin1.c): kanji
+# through MeCab, other scripts through ICU; auto builds each when found.
+option('mecab', type: 'feature', value: 'auto',
+       description: 'kanji read as romaji through MeCab, for players that show Latin-1 only')
+option('icu', type: 'feature', value: 'auto',
+       description: 'other scripts as Latin through ICU, for players that show Latin-1 only')

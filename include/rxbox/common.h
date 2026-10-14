@@ -70,6 +70,15 @@ char    *rx_utf8_nfc(const char *s);
 bool     rx_utf8_is_nfc(const char *s);
 /* Whether s is UTF-8 throughout. */
 bool     rx_utf8_valid(const char *s);
+/* s for a display that shows Latin-1 only (a CDJ-900's; src/common/latin1.c):
+ * Japanese as romaji (kanji through MeCab, when there is a dictionary),
+ * other scripts through ICU, fullwidth ASCII as ASCII, typographic and CJK
+ * punctuation as its nearest Latin-1, the rest as it is. Allocated; NULL
+ * when nothing changes (or out of memory). Thread-safe. */
+char    *rx_utf8_latin1(const char *s);
+/* Whether rx_utf8_latin1 reads kanji: built with MeCab, its dictionary
+ * found (loads it, the first time). */
+bool     rx_utf8_latin1_reads_kanji(void);
 
 /* Duplicates (NULL in -> NULL out). Returns NULL on ENOMEM. */
 char *rx_strdup(const char *s);

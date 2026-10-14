@@ -97,6 +97,7 @@ The style is the one of the user's libcraw and avtransport, exactly:
 ```
 include/rxbox/    module interfaces (owned by the architecture, edit with care)
 src/common        common.c log.c thread.c utf8.c nfc_tables.h         -> rx_common_dep
+                  latin1.c (romaji: MeCab, ICU)
 src/audio         decode.c probe.c mp3.c flac.c artwork.c             -> rx_audio_dep (common)
                   encode.c transcode.c packets.c internal.h
 src/core          model.c grid.c db.c library.c playlist.c config.c   -> rx_core_dep (common, audio)

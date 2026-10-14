@@ -33,6 +33,13 @@ and these libraries, by pkg-config name:
   interface, below); on a system without systemd, sd-bus from `libelogind`
   or `basu` (the standalone sd-bus) instead. LGPL-2.1 or later, linked
   dynamically; used only when found
+- `libmecab` (MeCab, no pkg-config file; BSD of its three licences) and
+  `icu-i18n` (ICU), optional: for players that show Latin-1 only (the
+  CDJ-900), Japanese titles go as romaji, kanji read by MeCab with its
+  system dictionary (Debian: `libmecab-dev` and `mecab-ipadic-utf8`), and
+  other scripts as Latin through ICU. Each used only when found
+  (`-Dmecab`, `-Dicu`); without MeCab or its dictionary, kana still go as
+  romaji and kanji as they are
 
 Dear ImGui, the Vulkan Memory Allocator and tomlc17 are vendored in
 `third_party/`. Signalsmith Stretch (the MASTER TEMPO pitch shifter) and
