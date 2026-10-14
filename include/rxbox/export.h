@@ -99,6 +99,33 @@ void rx_export_options_default(RXExportOptions *o);
 int  rx_export(RXLibrary *lib, const char *dest, const RXExportOptions *opt,
                rx_progress_cb cb, void *opaque);
 
+/* The plan's sources, for whoever serves the library's files as the
+ * export would copy them (the export, and Link: docs/LINK.md, section 4). */
+
+/* Codecs every player decodes (dj's PLAYABLE); anything else goes to the
+ * stick as FLAC. */
+bool rx_plan_codec_playable(const char *codec);
+/* Whether a track goes to the stick transcoded (1), and the cache file it
+ * goes to (NULL when not). Compatibility mode also converts AAC (nobody
+ * knows what players do with its priming) and FLAC above 16 bit/48 kHz.
+ * `create` makes the cache directory; a dry run passes false. */
+int  rx_plan_transcode_path(const RXLibrary *lib, const RXTrack *t, bool compat, bool create,
+                            char **cache_path, int *max_rate);
+/* The transcode exists and is newer than the track's file. */
+bool rx_plan_transcode_fresh(const RXTrack *t, const char *cache);
+/* Makes sure the transcode exists and is newer than the track's file. */
+int  rx_plan_transcode(const RXLibrary *lib, const RXTrack *t, bool compat, char **source);
+
+/* rx_plan_build (rxbox/formats.h) with a "prepare" item per track (1-based) and every
+ * warning (unknown colour, unreadable artwork, playlist entry not
+ * exported) reported through `cb`; returning false from it cancels. A dry
+ * plan transcodes nothing: a track whose transcode is not made yet is
+ * described from its original as the transcode would be. */
+int  rx_plan_build_cb(const RXLibrary *lib, RXTrack *const *tracks, int nb_tracks,
+                      const RXPlaylist *const *playlists, int nb_playlists,
+                      const char *device_name, bool compat_transcode, bool dry, RXPlan *out,
+                      rx_progress_cb cb, void *opaque);
+
 /* Reads back a stick and validates what dj's `inspect` did plus the rbxport
  * checks: ANLZ embedded path matches the audio, folder matches the path
  * hash, fixed track-row values, both libraries agree on hot-cue auto load,
