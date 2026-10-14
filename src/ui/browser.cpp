@@ -629,9 +629,14 @@ static void table(UiState *ui, ImVec2 size)
             bool sel = ui_is_selected(ui, t->id);
             bool in_player = loaded && t->id == loaded->id;
             ImVec2 rp = ImGui::GetCursorScreenPos();
+            // Without the half item spacing a Selectable adds above and
+            // below: rows tile with no gap anyway, and with it a row's fill
+            // and outline reach 2 px into its neighbours (a selected row
+            // under the player's track covered the bottom of its outline).
             ImGuiSelectableFlags sf = ImGuiSelectableFlags_SpanAllColumns |
                                       ImGuiSelectableFlags_AllowOverlap |
-                                      ImGuiSelectableFlags_AllowDoubleClick;
+                                      ImGuiSelectableFlags_AllowDoubleClick |
+                                      ImGuiSelectableFlags_NoPadWithHalfSpacing;
             // The player's track selected: a dark amber under its orange
             // outline, not the selection's blue, which clashes with it.
             if (in_player) {
