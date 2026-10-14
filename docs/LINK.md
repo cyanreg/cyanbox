@@ -88,9 +88,9 @@ gave it. What rekordbox serves is not a standard NFS server:
   version 1 and **NFS version 2** behind it, NFS on 2049.
 - **Names are UTF-16LE**, in mount paths and file names alike.
 - **Read-only**: every write procedure answers `NFSERR_ROFS`.
-- rekordbox exports the whole root `/`. rbxport allows only the library's
-  folders: each track's path cut at its third component, so a
-  38 000-track library comes to a handful of roots. rxbox does the same.
+- rekordbox exports the whole root `/` and answers any host path; rbxport
+  narrows that to the library's folders. rxbox exports nothing of the
+  host at all (below, "A virtual tree").
 
 **Can an off-the-shelf NFS server do it? No.**
 
@@ -113,6 +113,22 @@ So rxbox writes its own, as rbxport did (its whole NFS crate is about
 as pure functions from a request datagram to a reply datagram, testable
 without a socket.
 
+**A virtual tree.** A player does not browse the NFS server: it asks the
+mount program for its exports, mounts one, and walks, name by name, the
+path the database server's track-info reply gave it, then reads the file
+(rbxport's test client, `rbl-fakecdj`, and alphatheta-connect's, written
+against real players, do exactly this). The path is ours to choose. So
+the export is one virtual root whose only contents are the library's
+tracks, at the paths the export plan already gives them on a stick
+(`RXPlanTrack.usb_path`, `/Contents/Artist/Album/01 Track.flac`), each
+file standing for the plan's `source`: the track's file, or its
+transcode in the cache (section 4), with the plan's size. No host path
+appears in the protocol, and nothing but the library's audio can be
+named, so nothing else can be read. A file handle is an index into that
+tree with a random per-session tag: a handle from another session is
+stale, any other is refused. Reads open the source by the library's own
+path, never by a name a player sent.
+
 ### 4. Files players cannot decode
 
 A player reads the file as it is. What the export transcodes is served
@@ -123,6 +139,41 @@ in the library's cache (`rx_plan_transcode`), made when Link starts for
 the tracks that need one, or at the latest before the track-info reply
 names it.
 
+## Security
+
+PRO DJ LINK has no authentication and no encryption: the database server
+answers any connection, NFS version 2 takes a client's word for who it is
+(AUTH_UNIX), and all of it is plain UDP and TCP. That cannot be fixed on
+our side without the players' cooperation, so the design keeps what an
+attacker on that network can reach to what a player needs, for as long as
+Link is on:
+
+- **What can be read**: the library's audio files (the virtual tree), its
+  metadata, artwork and analysis, all read-only. No host path, no other
+  file, no directory of the host. Writes from players (cues, grid) are
+  refused until they are a decision of their own.
+- **When**: off by default, on only while the Link switch is.
+- **Where**: one chosen interface; a datagram or connection that arrives
+  on another is dropped (`IP_PKTINFO`). The best network is one with only
+  the players on it: a direct cable or a switch of their own.
+- **From whom**: the database server and NFS answer only addresses that
+  are players on Link (they send keep-alives on 50000). UDP sources can
+  be forged, so this is a fence against casual access, not
+  authentication; TCP's cannot be, so it holds for the database server.
+- **What is parsed**: every datagram and message is read by a bounded
+  reader that checks each length against what arrived before it reads,
+  allocates nothing from a length a peer sent, and answers what it does
+  not know with an error. Only the procedures players use exist: portmap
+  NULL, GETPORT and DUMP (no SET or UNSET: nothing registers with us),
+  mount NULL, MNT, UMNT and EXPORT, NFS NULL, GETATTR, LOOKUP, READ,
+  READDIR and STATFS; every write is `NFSERR_ROFS`, everything else
+  `PROC_UNAVAIL`. The codecs are pure functions, run under a fuzzer
+  (random and mutated datagrams, with AddressSanitizer and
+  UndefinedBehaviorSanitizer) as part of the tests.
+- **Amplification**: replies to unknown or malformed requests are no
+  larger than the request; READ answers only handles from a mount made
+  from the same address.
+
 ## In rxbox
 
 - **`src/link`**, a library like the others: the codecs (packets,
@@ -130,49 +181,66 @@ names it.
   thread polling the sockets.
 - **The library on the service thread**: its own connection and its own
   `RXLibrary`, as the export job opens one, loaded again when the app says
-  the library changed. The app owns the library: what players send back
+  the library changed; and the export plan over the whole library
+  (`rx_plan_build`), which the database server's paths and the virtual
+  tree both come from, made again with it. A handle names a track by id,
+  so a player reading a file keeps reading it across a rebuild. The app owns the library: what players send back
   (loads, plays; later cues) goes to the app as job results, the way the
   export's do.
 - **Off by default**, bound to one chosen interface (`link.interface`):
   a Link switch and panel in the interface (the players seen, what each
   has loaded, playing or not), and `rxbox link [--interface IF]` running
   the server in the foreground from the CLI.
-- **Exposure**: read-only, only the library's folders, only the chosen
-  interface. A host firewall must let UDP 50000, 50002, 50111 and 2049
-  and the TCP database ports in on that interface.
+- **Exposure**: as in "Security". A host firewall must let UDP 50000,
+  50002, 50111 and 2049 and the TCP database ports in on that interface.
 
 ## Order of work
 
-1. **A hardware check before any code** (an hour): a CDJ-3000 or
-   CDJ-3000X on Ethernet beside rekordbox: what does `tcpdump` see on that
-   interface?
-2. **The codecs**, with their tests: packets, database messages, XDR, RPC
-   and NFS, checked against captured bytes and the published layouts.
+All of it can be built and tested before a player is at hand: the
+protocol facts are published and measured (rbxport's captures, Deep
+Symmetry's analysis), and the tests below stand in for the hardware.
+
+1. **The codecs**, with their tests and the fuzzer: packets, database
+   messages, XDR, RPC and NFS, checked against captured bytes and the
+   published layouts.
+2. **The virtual tree** over the export plan, and the NFS server on it.
 3. **Presence**: join, keep-alive and status, tested against an in-tree
-   fake player on loopback; on hardware, rxbox appears on SOURCE.
-4. **Load and play**: the database server's root menu, all tracks,
-   playlists, metadata, artwork, track info, grid, waveforms and cues, and
-   the NFS server. On hardware, a track loads and plays.
+   fake player on loopback.
+4. **Load**: the database server's root menu, all tracks, playlists,
+   metadata, artwork, track info, grid, waveforms and cues; the fake
+   player browses, loads and reads a track's bytes back over NFS.
 5. **The rest of browsing**: categories, search, sort, history, keys, the
    after-load requests.
 6. **Status in rxbox**: the Link panel; plays counted from the players'
    status.
-7. **Later**: writes from the deck (cues, grid), several interfaces.
+7. **With the hardware**: a CDJ-3000 or CDJ-3000X on Ethernet (what does
+   `tcpdump` see), then the checklist below.
+8. **Later**: writes from the deck (cues, grid), several interfaces.
 
-Roughly 12 000 to 15 000 lines of C with the tests; steps 2 to 4 are the
-first half and give the first track playing from rxbox.
+Roughly 12 000 to 15 000 lines of C with the tests; steps 1 to 4 are the
+first half and give the first track loaded from rxbox by the fake player.
 
 ## Tests
 
 - The codecs: round trips and the captured bytes as fixed vectors.
 - Loopback integration: an in-tree fake player (as rbxport's
   `rbl-fakecdj`) that joins, browses, asks for track info, mounts and
-  reads a file over NFS and compares the bytes.
+  reads a file over NFS and compares the bytes; and asks for host paths,
+  `..`, forged and stale handles, and gets nothing.
+- Our server tested only by our own client would agree with itself. So
+  the fixtures are other people's bytes: rbxport's captures of rekordbox
+  talking to a CDJ-3000, and Deep Symmetry's documented examples; and, as
+  a check run by hand, clients written against real players
+  (alphatheta-connect's, Deep Symmetry's beat-link) pointed at rxbox.
+- The fuzzer over every codec, under the sanitizers.
 - Hardware: a checklist like rbxport's `link-testing.md` catalog, per
   model and firmware, the visible result recorded apart from the packets.
 
 ## Open questions
 
+- That a player takes a path that is not a host path (`/Contents/…`): it
+  only walks it, by every client written against players, but no player
+  has been shown one.
 - Whether players take a library they did not see on the network before
   as reliably as rekordbox (rbxport: yes on a CDJ-3000 in the emulator).
 - How much of the browse menu tree players depend on, against what can
