@@ -759,8 +759,9 @@ void ui_browser(UiState *ui, ImVec2 size)
     float hh = PX(30);
     ImGui::SetCursorScreenPos(ImVec2(a.x + PX(8), a.y));
     const char *view = app->current_playlist ? app->current_playlist->name
-                     : app->current_album    ? app->current_album
-                                             : "Collection";
+                     : !app->current_album   ? "Collection"
+                     : app->current_album[0] ? app->current_album
+                                             : "None";
     char count[64];
     snprintf(count, sizeof(count), "%d track%s", app->nb_rows, app->nb_rows == 1 ? "" : "s");
     float ty = a.y + (hh - PX(13.5f)) * 0.5f - PX(1);

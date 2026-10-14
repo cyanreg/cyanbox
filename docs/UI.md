@@ -231,9 +231,12 @@ last.
 ## Browser
 
 **Playlist tree** (left, 220 default): `Collection` at the top (every
-track), `Albums` under it (closed by default: every album tag in the
-library, in natural order (a number in a name counts as a number:
-`AD:HOUSE 3` before `AD:HOUSE 10`; case is ignored), with its track count; click one and the table
+track), `Albums` under it (closed by default: every album tag two
+tracks or more share, in natural order (a number in a name counts as a
+number: `AD:HOUSE 3` before `AD:HOUSE 10`; case is ignored), with its
+track count, the count beside `Albums` being theirs; first `None`, when
+it has any, the tracks without an album and those whose album no other
+track has (a single), in the collection's order; click one and the table
 shows its tracks in disc and track order, like a playlist, but nothing
 can be dropped on an album, nothing renames or deletes one, and the
 export does not know them: they are the tags' view of the collection;

@@ -536,70 +536,122 @@ int main(int argc, char **argv)
     }
 
     /* An album is a view of the tracks tagged with it, in track order,
-     * listed alphabetically among the albums; leaving it goes back to the
-     * collection. */
+     * listed alphabetically among the albums of two tracks or more, after
+     * None (the tracks of no album, or of one no other track has); leaving
+     * it goes back to the collection. Two more tracks, x and y, only for
+     * this (no analysis), removed at the end. */
     {
-        free(a->meta.album);
-        free(b->meta.album);
-        a->meta.album = rx_strdup("Zeta");
-        b->meta.album = rx_strdup("Zeta");
-        a->meta.track_number = 2;
-        b->meta.track_number = 1;
-        CHECK(rx_library_save_track(&app.lib, a) == 0 && rx_library_save_track(&app.lib, b) == 0,
-              "saving the album tags");
-        const RXAlbum *albums = NULL;
-        int n = rx_app_albums(&app, &albums);
-        CHECK(n == 1 && albums && !strcmp(albums[0].name, "Zeta") && albums[0].nb == 2,
-              "albums: %d", n);
-        rx_app_show_album(&app, "Zeta");
-        CHECK(app.current_album && !app.current_playlist && app.nb_rows == 2 &&
-              app.lib.tracks[app.rows[0]] == b && app.lib.tracks[app.rows[1]] == a,
-              "album rows %d, in track order", app.nb_rows);
-        /* Numbered in the album's order, kept through a sort. */
-        CHECK(app.nb_rows == 2 && app.row_numbers[0] == 1 && app.row_numbers[1] == 2,
-              "the album numbered %u, %u", app.row_numbers[0], app.row_numbers[1]);
-        app.sort_column = RX_COL_PATH;
-        rx_app_rebuild_rows(&app);
-        CHECK(app.nb_rows == 2 && app.lib.tracks[app.rows[0]] == a && app.row_numbers[0] == 2 &&
-              app.row_numbers[1] == 1, "the album by path numbered %u, %u", app.row_numbers[0],
-              app.row_numbers[1]);
-        app.sort_column = -1;
-        rx_app_rebuild_rows(&app);
-        free(b->meta.album);
-        b->meta.album = rx_strdup("Alpha");
-        CHECK(rx_library_save_track(&app.lib, b) == 0, "saving b's album");
-        n = rx_app_albums(&app, &albums);
-        CHECK(n == 2 && !strcmp(albums[0].name, "Alpha") && !strcmp(albums[1].name, "Zeta"),
-              "albums alphabetically: %d", n);
-        /* In natural order: a number in a name counts as a number. */
-        free(b->meta.album);
-        b->meta.album = rx_strdup("AD:HOUSE 10");
-        free(a->meta.album);
-        a->meta.album = rx_strdup("AD:HOUSE 3");
-        CHECK(rx_library_save_track(&app.lib, a) == 0 && rx_library_save_track(&app.lib, b) == 0,
-              "saving the numbered albums");
-        n = rx_app_albums(&app, &albums);
-        CHECK(n == 2 && !strcmp(albums[0].name, "AD:HOUSE 3") &&
-              !strcmp(albums[1].name, "AD:HOUSE 10"), "3 before 10: %s first",
-              n ? albums[0].name : "none");
-        free(a->meta.album);
-        a->meta.album = rx_strdup("Zeta");
-        free(b->meta.album);
-        b->meta.album = rx_strdup("Alpha");
-        CHECK(rx_library_save_track(&app.lib, a) == 0 && rx_library_save_track(&app.lib, b) == 0,
-              "saving the albums back");
-        rx_app_tick(&app);
-        CHECK(app.nb_rows == 1 && app.lib.tracks[app.rows[0]] == a, "the album view follows the tags");
-        /* One album whatever the case of its tag. */
-        free(b->meta.album);
-        b->meta.album = rx_strdup("zeta");
-        CHECK(rx_library_save_track(&app.lib, b) == 0, "saving b's album");
-        n = rx_app_albums(&app, &albums);
-        CHECK(n == 1 && albums[0].nb == 2, "Zeta and zeta are one album: %d", n);
-        rx_app_tick(&app);
-        CHECK(app.nb_rows == 2, "both in the album view: %d", app.nb_rows);
-        rx_app_show_album(&app, NULL);
-        CHECK(!app.current_album && app.nb_rows == 2, "back to the collection: %d rows", app.nb_rows);
+        char *x_wav = rx_path_join(dir, "x.wav"), *y_wav = rx_path_join(dir, "y.wav");
+        int err = 0;
+        RXTrack *x = NULL, *y = NULL;
+        if (x_wav && y_wav && copy_file(wav, x_wav) == 0 && copy_file(wav, y_wav) == 0) {
+            x = rx_library_add_file(&app.lib, x_wav, &err);
+            y = rx_library_add_file(&app.lib, y_wav, &err);
+        }
+        CHECK(x && y, "adding x and y: %s", strerror(-err));
+        free(x_wav);
+        free(y_wav);
+        if (x && y) {
+            free(a->meta.album);
+            free(b->meta.album);
+            a->meta.album = rx_strdup("Zeta");
+            b->meta.album = rx_strdup("Zeta");
+            a->meta.track_number = 2;
+            b->meta.track_number = 1;
+            CHECK(rx_library_save_track(&app.lib, a) == 0 &&
+                  rx_library_save_track(&app.lib, b) == 0,
+                  "saving the album tags");
+            /* x has no album, y one no other track has: None, first. */
+            free(y->meta.album);
+            y->meta.album = rx_strdup("Solo");
+            CHECK(rx_library_save_track(&app.lib, y) == 0, "saving y's album");
+            const RXAlbum *albums = NULL;
+            int n = rx_app_albums(&app, &albums);
+            CHECK(n == 2 && albums && !strcmp(albums[0].name, "") && albums[0].nb == 2 &&
+                  !strcmp(albums[1].name, "Zeta") && albums[1].nb == 2, "albums: %d, %s first", n,
+                  n ? albums[0].name : "none");
+            rx_app_show_album(&app, "");
+            CHECK(app.current_album && !app.current_playlist && app.nb_rows == 2 &&
+                  app.lib.tracks[app.rows[0]] == x && app.lib.tracks[app.rows[1]] == y,
+                  "None rows %d, in the library's order", app.nb_rows);
+            CHECK(app.nb_rows == 2 && app.row_numbers[0] == 1 && app.row_numbers[1] == 2,
+                  "None numbered %u, %u", app.row_numbers[0], app.row_numbers[1]);
+            rx_app_show_album(&app, "Zeta");
+            CHECK(app.current_album && !app.current_playlist && app.nb_rows == 2 &&
+                  app.lib.tracks[app.rows[0]] == b && app.lib.tracks[app.rows[1]] == a,
+                  "album rows %d, in track order", app.nb_rows);
+            /* Numbered in the album's order, kept through a sort. */
+            CHECK(app.nb_rows == 2 && app.row_numbers[0] == 1 && app.row_numbers[1] == 2,
+                  "the album numbered %u, %u", app.row_numbers[0], app.row_numbers[1]);
+            app.sort_column = RX_COL_PATH;
+            rx_app_rebuild_rows(&app);
+            CHECK(app.nb_rows == 2 && app.lib.tracks[app.rows[0]] == a && app.row_numbers[0] == 2 &&
+                  app.row_numbers[1] == 1, "the album by path numbered %u, %u", app.row_numbers[0],
+                  app.row_numbers[1]);
+            app.sort_column = -1;
+            rx_app_rebuild_rows(&app);
+            /* y joins Zeta: None is x alone. */
+            free(y->meta.album);
+            y->meta.album = rx_strdup("zeta");
+            CHECK(rx_library_save_track(&app.lib, y) == 0, "saving y's album");
+            n = rx_app_albums(&app, &albums);
+            CHECK(n == 2 && albums[0].nb == 1 && albums[1].nb == 3, "None %d, Zeta %d",
+                  n ? albums[0].nb : 0, n > 1 ? albums[1].nb : 0);
+            /* Every track in an album of two: no None. */
+            free(x->meta.album);
+            x->meta.album = rx_strdup("Alpha");
+            free(y->meta.album);
+            y->meta.album = rx_strdup("Alpha");
+            CHECK(rx_library_save_track(&app.lib, x) == 0 &&
+                  rx_library_save_track(&app.lib, y) == 0,
+                  "saving x's and y's album");
+            n = rx_app_albums(&app, &albums);
+            CHECK(n == 2 && !strcmp(albums[0].name, "Alpha") && !strcmp(albums[1].name, "Zeta"),
+                  "albums alphabetically, no None: %d, %s first", n, n ? albums[0].name : "none");
+            /* In natural order: a number in a name counts as a number. */
+            free(a->meta.album);
+            a->meta.album = rx_strdup("AD:HOUSE 10");
+            free(b->meta.album);
+            b->meta.album = rx_strdup("AD:HOUSE 10");
+            free(x->meta.album);
+            x->meta.album = rx_strdup("AD:HOUSE 3");
+            free(y->meta.album);
+            y->meta.album = rx_strdup("AD:HOUSE 3");
+            CHECK(rx_library_save_track(&app.lib, a) == 0 &&
+                  rx_library_save_track(&app.lib, b) == 0 &&
+                  rx_library_save_track(&app.lib, x) == 0 &&
+                  rx_library_save_track(&app.lib, y) == 0,
+                  "saving the numbered albums");
+            n = rx_app_albums(&app, &albums);
+            CHECK(n == 2 && !strcmp(albums[0].name, "AD:HOUSE 3") &&
+                  !strcmp(albums[1].name, "AD:HOUSE 10"), "3 before 10: %s first",
+                  n ? albums[0].name : "none");
+            /* The album view follows the tags: a leaves AD:HOUSE 10 for an
+             * album of its own, and b is alone in it. */
+            rx_app_show_album(&app, "AD:HOUSE 10");
+            free(a->meta.album);
+            a->meta.album = rx_strdup("Zeta");
+            CHECK(rx_library_save_track(&app.lib, a) == 0, "saving a's album");
+            rx_app_tick(&app);
+            CHECK(app.nb_rows == 1 && app.lib.tracks[app.rows[0]] == b,
+                  "the album view follows the tags");
+            /* One album whatever the case of its tag. */
+            free(b->meta.album);
+            b->meta.album = rx_strdup("zeta");
+            CHECK(rx_library_save_track(&app.lib, b) == 0, "saving b's album");
+            n = rx_app_albums(&app, &albums);
+            CHECK(n == 2 && !strcmp(albums[1].name, "Zeta") && albums[1].nb == 2,
+                  "Zeta and zeta are one album: %d", n);
+            rx_app_show_album(&app, "Zeta");
+            CHECK(app.nb_rows == 2, "both in the album view: %d", app.nb_rows);
+            rx_app_show_album(&app, NULL);
+            CHECK(!app.current_album && app.nb_rows == 4, "back to the collection: %d rows",
+                  app.nb_rows);
+            CHECK(rx_library_remove(&app.lib, x) == 0 && rx_library_remove(&app.lib, y) == 0,
+                  "removing x and y");
+            rx_app_tick(&app);
+            CHECK(app.nb_rows == 2, "x and y removed: %d rows", app.nb_rows);
+        }
     }
 
     /* The deck: decoded on the io queue, waveforms from the library. */

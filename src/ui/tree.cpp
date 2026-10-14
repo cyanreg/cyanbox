@@ -1,8 +1,10 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
 // The playlist tree on the browser's left: Collection (every track), the
-// Albums (every album tag, alphabetically, each a view of its tracks in
-// disc and track order: nothing is added to, renamed or exported there),
+// Albums (every album tag two tracks or more share, alphabetically, each a
+// view of its tracks in disc and track order, after None, the tracks of no
+// album or of one no other track has: nothing is added to, renamed or
+// exported there),
 // then the library's folders and playlists. A click shows a playlist; the
 // context menu creates, renames (in place, as rekordbox does) and deletes
 // (after a confirmation). Tracks dragged from the table onto a playlist
@@ -466,18 +468,22 @@ void ui_tree(UiState *ui, ImVec2 size)
     node_label(ui, ImVec2(lx, a.y), b, 0, "Collection", app->lib.nb_tracks, sel);
 
     // Albums: every album of the library, alphabetically, each shown like
-    // a playlist of its tracks in disc and track order. Nothing can be
-    // dropped on one, nothing renames or deletes one, and the export does
-    // not know them: they are the tags' view of the collection.
+    // a playlist of its tracks in disc and track order, and None first
+    // (the album "": the tracks without an album or with one no other
+    // track has, in the collection's order). Nothing can be dropped on
+    // one, nothing renames or deletes one, and the export does not know
+    // them: they are the tags' view of the collection. The count beside
+    // Albums is of albums, None aside.
     const RXAlbum *albums = nullptr;
     int nb_albums = rx_app_albums(app, &albums);
+    int nb_named = nb_albums - (nb_albums > 0 && !albums[0].name[0]);
     ImGuiTreeNodeFlags afl = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick |
                              ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_FramePadding;
     bool albums_open = ImGui::TreeNodeEx("##albums", afl);
     a = ImGui::GetItemRectMin();
     b = ImGui::GetItemRectMax();
     node_label(ui, ImVec2(a.x + ImGui::GetTreeNodeToLabelSpacing(), a.y), b, 3, "Albums",
-               nb_albums, false);
+               nb_named, false);
     if (albums_open) {
         // Only the rows in view are drawn: a library has thousands.
         ImGuiListClipper clip;
@@ -503,7 +509,8 @@ void ui_tree(UiState *ui, ImVec2 size)
                 }
                 float llx = la.x + ImGui::GetTreeNodeToLabelSpacing() - PX(14);
                 if (i < nb_albums)
-                    node_label(ui, ImVec2(llx, la.y), lb, 3, albums[i].name, albums[i].nb, asel);
+                    node_label(ui, ImVec2(llx, la.y), lb, 3,
+                               albums[i].name[0] ? albums[i].name : "None", albums[i].nb, asel);
                 ImGui::PopID();
             }
         }
