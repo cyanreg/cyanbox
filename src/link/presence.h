@@ -93,6 +93,11 @@ int  rx_presence_players(const RXPresence *p, RXLinkPlayer *out, int max);
 void rx_presence_set_loaded(RXPresence *p, int track_device, int slot, uint32_t track_id,
                             bool playing);
 
+/* RX_PRESENCE_COMPUTER: tells `player` to load our track `track_id` (a
+ * load command, 19, as from rekordbox: our collection's slot, type 1).
+ * -EAGAIN before we are up, -ENOENT when there is no such player. */
+int  rx_presence_load(RXPresence *p, int player, uint32_t track_id);
+
 /* RX_PRESENCE_COMPUTER: the counts the media response gives a player (the
  * library's tracks and playlists; 0 until set, at most 65535 each). */
 void rx_presence_set_media(RXPresence *p, int nb_tracks, int nb_playlists);

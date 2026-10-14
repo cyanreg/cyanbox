@@ -536,6 +536,41 @@ static void status_packets(void)
     CHECK(rx_pkt_status_parse(&s, old, 0xcb) < 0);
 }
 
+/* The load command, byte for byte as beat-link sends it (the bytes an
+ * emulated CDJ-900 and CDJ-2000NXS2 loaded from): rxbox (17) tells player
+ * 3 to load track 2158 of its own collection; and the answer. */
+static void load_command(void)
+{
+    WR(w);
+    RXPktLoad l = { .name = "rxbox", .number = 17, .target = 3, .device = 17, .slot = 4,
+                    .type = 1, .id = 2158 };
+    rx_pkt_load_track(&w, &l);
+    /* beat-link's payload after the name: 01 00 17 00 34 17, then the
+     * source, slot and type at 9, the id at 0x0d, 32 at 0x14, the target
+     * less one at 0x21. */
+    uint8_t want[0x58 - 0x1f] = { 0x01, 0x00, 17, 0x00, 0x34, 17 };
+    want[0x09] = 17;
+    want[0x0a] = 4;
+    want[0x0b] = 1;
+    want[0x0f] = 0x08;
+    want[0x10] = 0x6e;
+    want[0x14] = 0x32;
+    want[0x21] = 2;
+    CHECK_EQ(w.len, 0x58);
+    CHECK_EQ(w_buf[0x0a], RX_ST_LOAD_TRACK);
+    CHECK(!memcmp(w_buf + 0x1f, want, sizeof(want)));
+    RXPktLoad back;
+    CHECK_EQ(rx_pkt_load_track_parse(&back, w_buf, w.len), 0);
+    CHECK(back.number == 17 && back.target == 3 && back.device == 17 && back.slot == 4 &&
+          back.type == 1 && back.id == 2158 && !strcmp(back.name, "rxbox"));
+    CHECK(rx_pkt_load_track_parse(&back, w_buf, 0x50) < 0);
+
+    WR(a);
+    rx_pkt_load_ack(&a, "CDJ-2000NXS2", 3);
+    static const uint8_t nxs2[] = { 0x01, 0x00, 0x03, 0x00, 0x04, 0x03, 0x01, 0x00, 0x00 };
+    CHECK(a.len == 0x28 && a_buf[0x0a] == RX_ST_LOAD_ACK && !memcmp(a_buf + 0x1f, nxs2, sizeof(nxs2)));
+}
+
 static void questions(void)
 {
     /* Media queries from both firmwares, and rekordbox's answers. */
@@ -1392,6 +1427,7 @@ int main(void)
     keep_alives();
     claims();
     status_packets();
+    load_command();
     questions();
     malformed();
     join_timeline();

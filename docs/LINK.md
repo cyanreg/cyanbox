@@ -87,6 +87,16 @@ CDJ-2000 v4.33, a CDJ-2000NXS2 v1.87; 2026-10-15) showed:
   as the CDJ-900 does. FILE NAME lists by the file's name now, not the
   title.
 
+Controlling the players (2026-10-15, beat-link's packets sent to the
+emulated players): the load command (`19` to the player's status port:
+load track N of device D's slot S, as rekordbox does for a track dragged
+onto a deck) worked on the CDJ-900 and the CDJ-2000NXS2, which answers
+with a `1a`; rxbox sends it (`rx_link_load`, the interface's Load in
+deck), and its fake player obeys it. Fader start (`02` on 50001) did
+nothing on either; the on-air flags (`03`) only on the NXS2. Nothing else
+of a deck can be worked from the network: not its play button, pitch,
+jog, cues or loops.
+
 What has been run against what:
 
 | Server | Client | Network | Result |

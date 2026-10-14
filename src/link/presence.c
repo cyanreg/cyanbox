@@ -795,7 +795,7 @@ static void announce_in(RXPresence *p, uint32_t from, const uint8_t *buf, size_t
     }
 }
 
-static void hear_status(RXPresence *p, uint32_t from, const uint8_t *buf, size_t len)
+static void hear_status(RXPresence *p, uint32_t from, const uint8_t *buf, size_t len, int64_t now)
 {
     RXPktStatus s;
     if (rx_pkt_status_parse(&s, buf, len) < 0)
@@ -817,6 +817,7 @@ static void hear_status(RXPresence *p, uint32_t from, const uint8_t *buf, size_t
     l->bpm = s.bpm_x100 / 100.0;
     l->pitch = s.pitch;
     l->beat = s.beat;
+    l->status_us = now;
     d->bar_beat = s.bar_beat;
     /* rekordbox greets a player on its first status too, if its keep-alive
      * did not get there first (rbxport's beacon) [ASSUME]. */
@@ -863,7 +864,26 @@ static void status_in(RXPresence *p, uint32_t from, const uint8_t *buf, size_t l
         return;
     }
     if (h.kind == RX_ST_CDJ || h.kind == RX_ST_MIXER) {
-        hear_status(p, from, buf, len);
+        hear_status(p, from, buf, len, now);
+        return;
+    }
+    /* A load command for the fake player: it loads what it names, as a
+     * player does, and answers as an NXS2 does. Whoever sends it, as long
+     * as it is on the link. */
+    if (h.kind == RX_ST_LOAD_TRACK && p->c.role == RX_PRESENCE_PLAYER) {
+        RXPktLoad l;
+        if (rx_pkt_load_track_parse(&l, buf, len) < 0 || l.target != p->number ||
+            !rx_presence_is_peer(p, from))
+            return;
+        rx_presence_set_loaded(p, l.device, l.slot, l.id, p->playing);
+        uint8_t ack[RX_PKT_MAX];
+        RXWr aw = rx_wr(ack, sizeof(ack));
+        rx_pkt_load_ack(&aw, p->c.name, p->number);
+        emit(p, RX_LINK_STATUS, from, &aw);
+        return;
+    }
+    if (h.kind == RX_ST_LOAD_ACK && p->c.role == RX_PRESENCE_COMPUTER) {
+        rx_debug("link: %s (%d) took the load", h.name, h.number);
         return;
     }
     if (p->c.role == RX_PRESENCE_COMPUTER)
@@ -1044,6 +1064,26 @@ void rx_presence_set_loaded(RXPresence *p, int track_device, int slot, uint32_t 
     p->track_slot = RX_CLAMP(slot, 0, 0xff);
     p->track_id = track_id;
     p->playing = playing;
+}
+
+int rx_presence_load(RXPresence *p, int player, uint32_t track_id)
+{
+    if (p->c.role != RX_PRESENCE_COMPUTER || p->stage != ST_UP)
+        return RX_ERROR(EAGAIN);
+    Device *d = find(p, player);
+    if (!d || d->d.type != RX_LINK_DEVICE_PLAYER)
+        return RX_ERROR(ENOENT);
+    RXPktLoad l = {
+        .number = p->number, .target = player,
+        .device = p->number, .slot = RX_SLOT_REKORDBOX, .type = 1, .id = track_id,
+    };
+    snprintf(l.name, sizeof(l.name), "%s", p->c.name);
+    uint8_t out[RX_PKT_MAX];
+    RXWr w = rx_wr(out, sizeof(out));
+    rx_pkt_load_track(&w, &l);
+    emit(p, RX_LINK_STATUS, d->d.addr, &w);
+    rx_debug("link: asked %s (%d) to load track %u", d->d.name, player, track_id);
+    return 0;
 }
 
 void rx_presence_set_media(RXPresence *p, int nb_tracks, int nb_playlists)

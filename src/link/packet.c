@@ -681,6 +681,56 @@ void rx_pkt_settings_query(RXWr *w, const char *name, int number)
     st_finish(w, start);
 }
 
+int rx_pkt_load_track_parse(RXPktLoad *l, const uint8_t *buf, size_t len)
+{
+    RXRd r;
+    RXPktHeader h;
+    if (!body(&r, &h, RX_LINK_STATUS, RX_ST_LOAD_TRACK, buf, len) || h.len < 0x58)
+        return RX_ERROR(EINVAL);
+    *l = (RXPktLoad) {
+        .number = h.number,
+        .device = rx_rd_at_u8(&r, 0x28),
+        .slot   = rx_rd_at_u8(&r, 0x29),
+        .type   = rx_rd_at_u8(&r, 0x2a),
+        .id     = rx_rd_at_u32(&r, 0x2c),
+        .target = rx_rd_at_u8(&r, 0x40) + 1,
+    };
+    memcpy(l->name, h.name, sizeof(l->name));
+    return 0;
+}
+
+void rx_pkt_load_track(RXWr *w, const RXPktLoad *l)
+{
+    /* The sender's number at 0x24, the track's device, slot and type at
+     * 0x28, its id (big-endian) at 0x2c, 32 at 0x33 [UNKNOWN] and the
+     * target's number less one at 0x40, the rest zeros (beat-link). */
+    size_t start = st_header(w, RX_ST_LOAD_TRACK, 0x00, l->name, l->number);
+    uint8_t *b = rx_wr_room(w, 0x58 - 0x24);
+    if (b) {
+        memset(b, 0, 0x58 - 0x24);
+        b[0x24 - 0x24] = (uint8_t)l->number;
+        b[0x28 - 0x24] = (uint8_t)l->device;
+        b[0x29 - 0x24] = (uint8_t)l->slot;
+        b[0x2a - 0x24] = (uint8_t)l->type;
+        b[0x2c - 0x24] = (uint8_t)(l->id >> 24);
+        b[0x2d - 0x24] = (uint8_t)(l->id >> 16);
+        b[0x2e - 0x24] = (uint8_t)(l->id >> 8);
+        b[0x2f - 0x24] = (uint8_t)l->id;
+        b[0x33 - 0x24] = 0x32;
+        b[0x40 - 0x24] = (uint8_t)(l->target - 1);
+    }
+    st_finish(w, start);
+}
+
+void rx_pkt_load_ack(RXWr *w, const char *name, int number)
+{
+    size_t start = st_header(w, RX_ST_LOAD_ACK, 0x00, name, number);
+    rx_wr_u8(w, (uint8_t)number);
+    rx_wr_u8(w, 0x01);
+    rx_wr_u16(w, 0);
+    st_finish(w, start);
+}
+
 void rx_pkt_settings(RXWr *w, const char *name, int number, const uint8_t devsetting[32])
 {
     /* 0x48 bytes (rbxport's capture): our number, 04, two zeros, then the

@@ -265,7 +265,7 @@ int main(void)
         free(data);
         free(path);
     }
-    uint32_t loaded = nb_rows ? rows[nb_rows - 1].id : 0;
+    uint32_t loaded = nb_rows ? rows[nb_rows - 1].id : 0, other = nb_rows ? rows[0].id : 0;
     rx_dbrows_free(&rows, nb_rows);
 
     /* What the player says it plays reaches the server. */
@@ -279,6 +279,22 @@ int main(void)
                        seen[i].track_device == 17 && seen[i].track_id == loaded;
     }
     CHECK(playing);
+
+    /* Told to load another track, the player does (a load command, as
+     * rekordbox sends for a track dragged onto a deck), and its status
+     * says so; a player not on the link cannot be told. */
+    CHECK(other && other != loaded);
+    CHECK_EQ(rx_link_load(link, 2, other), 0);
+    CHECK_EQ(rx_link_load(link, 5, other), RX_ERROR(ENOENT));
+    bool switched = false;
+    for (int k = 0; k < 100 && !switched; k++) {
+        usleep(20000);
+        nb = rx_link_players(link, seen, 8);
+        for (int i = 0; i < nb && i < 8; i++)
+            switched |= seen[i].number == 2 && seen[i].track_device == 17 &&
+                        seen[i].track_id == other && seen[i].status_us > 0;
+    }
+    CHECK(switched);
 
     /* A host that never joined the link: no database, no files. */
     RXLinkClientOptions qo = co;

@@ -312,6 +312,15 @@ int rx_link_set_players(RXLinkSet *s, RXLinkPlayer *out, int *where, int max)
     return n;
 }
 
+int rx_link_set_load(RXLinkSet *s, int where, int player, uint32_t track_id)
+{
+    pthread_mutex_lock(&s->lock);
+    int ret = where >= 0 && where < s->nb && s->served[where].link
+            ? rx_link_load(s->served[where].link, player, track_id) : RX_ERROR(ENOENT);
+    pthread_mutex_unlock(&s->lock);
+    return ret;
+}
+
 void rx_link_set_library_changed(RXLinkSet *s)
 {
     atomic_store(&s->reload, true);

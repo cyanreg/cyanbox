@@ -867,6 +867,14 @@ int rx_link_players(RXLink *l, RXLinkPlayer *out, int max)
     return n;
 }
 
+int rx_link_load(RXLink *l, int player, uint32_t track_id)
+{
+    pthread_mutex_lock(&l->plock);
+    int ret = rx_presence_load(l->pres, player, track_id);
+    pthread_mutex_unlock(&l->plock);
+    return ret;
+}
+
 void rx_link_library_changed(RXLink *l)
 {
     atomic_store(&l->reload, true);

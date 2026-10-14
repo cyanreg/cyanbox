@@ -58,6 +58,7 @@ enum RXStatusKind {
     RX_ST_IDENTITY_QUERY = 0x10,
     RX_ST_IDENTITY       = 0x11,
     RX_ST_GREETING       = 0x16,
+    RX_ST_LOAD_TRACK     = 0x19,
     RX_ST_LOAD_ACK       = 0x1a,
     RX_ST_MIXER          = 0x29,    /* a mixer's status, and rekordbox's */
     RX_ST_SETTINGS_QUERY = 0x46,
@@ -226,5 +227,24 @@ void rx_pkt_identity(RXWr *w, const char *name, int number, const char *computer
  * (docs/settings.md section 6), its integers big-endian here. */
 void rx_pkt_settings_query(RXWr *w, const char *name, int number);
 void rx_pkt_settings(RXWr *w, const char *name, int number, const uint8_t devsetting[32]);
+
+/* A load command (19, 0x58 bytes), as beat-link's VirtualCdj sends it
+ * (sendLoadTrackCommand), to the target's status port: the player
+ * `target` loads track `id` of type `type` from slot `slot` of device
+ * `device`, as for a track dragged onto it in rekordbox. An emulated
+ * CDJ-900 (4.32) and CDJ-2000NXS2 (1.87) loaded and played what it named
+ * (2026-10-15); the NXS2 answers with a 1a. */
+typedef struct RXPktLoad {
+    char     name[21];
+    int      number;                /* the sender's */
+    int      target;
+    int      device, slot, type;
+    uint32_t id;
+} RXPktLoad;
+int  rx_pkt_load_track_parse(RXPktLoad *l, const uint8_t *buf, size_t len);
+void rx_pkt_load_track(RXWr *w, const RXPktLoad *l);
+/* The answer (1a, 0x28 bytes): the player's number, then 01 (an NXS2's,
+ * [ASSUME] that it says the load was taken). */
+void rx_pkt_load_ack(RXWr *w, const char *name, int number);
 
 #endif /* RXBOX_LINK_PACKET_H */
