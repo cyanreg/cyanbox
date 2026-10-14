@@ -10,7 +10,8 @@
 // its overview, and the detail waveform around where the player is.
 //
 // That place is the beat number of the player's status on the track's
-// grid (the beats Link serves it: rx_grid_beats, anlz.c PQTZ), carried
+// grid (the beats Link serves it: rx_grid_beats, anlz.c PQTZ; 0 before
+// the first), carried
 // forward between statuses (about five a second) at the pitch it plays
 // at and kept within the beat the last one named. A pre-nexus player (a
 // CDJ-900, a CDJ-2000) sends no beat number: its place is not shown.
@@ -123,7 +124,7 @@ static double position(UiState *ui, const RXLinkPlayer &d, const RXTrack *t)
 {
     UiLinkDeck *ld = &ui->link_decks[d.number];
     int64_t now = rx_time_us();
-    if (!t || d.beat < 1 || !rx_track_analysed(t)) {
+    if (!t || d.beat < 0 || !rx_track_analysed(t)) {
         ld->pos = -1;
         return -1;
     }
@@ -139,9 +140,14 @@ static double position(UiState *ui, const RXLinkPlayer &d, const RXTrack *t)
         ld->pos = -1;
         return -1;
     }
-    const RXBeat *bt = &ld->beats[d.beat - 1];
-    double b0 = bt->time;
-    double b1 = d.beat < ld->nb_beats ? ld->beats[d.beat].time : b0 + 60.0 / ImMax(bt->bpm, 1.0);
+    // Beat 0 is before the grid's first beat (a track loaded and played
+    // from its start, as an NXS2 says).
+    double b0 = 0, b1 = ld->nb_beats ? ld->beats[0].time : t->duration;
+    if (d.beat > 0) {
+        const RXBeat *bt = &ld->beats[d.beat - 1];
+        b0 = bt->time;
+        b1 = d.beat < ld->nb_beats ? ld->beats[d.beat].time : b0 + 60.0 / ImMax(bt->bpm, 1.0);
+    }
     double rate = d.playing ? 1.0 + d.pitch / 100.0 : 0.0;
     if (ld->pos >= 0 && ld->track_id == d.track_id)
         ld->pos += (double)(now - ld->pos_us) * 1e-6 * rate;
@@ -323,7 +329,7 @@ static void deck_strip(UiState *ui, int index, ImVec2 a, ImVec2 b)
     readout(ui, dl, x, ry, "REMAIN", buf, t && pos >= 0 ? UI_TEXT : UI_FAINT);
     x -= PX(104);
     char pitch[24] = "";
-    if (d.has_status && d.bpm > 0) {
+    if (loaded && d.bpm > 0) {
         snprintf(buf, sizeof(buf), "%.2f", d.bpm * (1.0 + d.pitch / 100.0));
         if (fabs(d.pitch) > 0.005)
             snprintf(pitch, sizeof(pitch), "%+.2f%%", d.pitch);

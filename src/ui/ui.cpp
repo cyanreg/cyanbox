@@ -1275,6 +1275,11 @@ static void parse_test_events(UiState *ui, const char *spec)
 static void test_events(UiState *ui)
 {
     ImGuiIO &io = ImGui::GetIO();
+    // Frames keep coming until the last event has been given: an idle
+    // window draws none, and events are counted in frames.
+    for (const UiTestEvent &ev : ui->test_events)
+        if (ev.frame + 2 >= ui->frame_no)
+            ui_want_frames(ui, 2);
     for (const UiTestEvent &ev : ui->test_events) {
         if ((ev.type == 4 || ev.type == 6) && ev.frame + 2 == ui->frame_no) {
             ImGuiMouseButton button = ev.type == 6 ? ImGuiMouseButton_Right : ImGuiMouseButton_Left;
