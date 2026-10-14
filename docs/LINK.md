@@ -92,7 +92,7 @@ What has been run against what:
 | Server | Client | Network | Result |
 | --- | --- | --- | --- |
 | rxbox | two CDJ-900s | Ethernet, a switch, 169.254.0.0/16 | join, mount, browse, the library's MP3s played; WAVs decoded as MP3 until the file type was named |
-| rxbox | emulated CDJ-900, CDJ-2000, CDJ-2000NXS2 (Pioneer's firmware in QEMU) | a bridge, 169.254.0.0/16 | join, mount, browse every category, metadata, waveforms, cues, a load streamed over NFS; the lapse, NFD, CDJ-900 punctuation and CDJ-2000 KEY findings above |
+| rxbox | emulated CDJ-900, CDJ-2000, CDJ-2000NXS2 (Pioneer's firmware in QEMU) | a bridge, 169.254.0.0/16 | join, mount, browse every category, metadata, waveforms, cues, a load streamed over NFS; the lapse, NFD, CDJ-900 punctuation and CDJ-2000 KEY findings above; FLAC, MP3, AAC and 16- and 24-bit WAV sources played on the NXS2, with tempo, jog, memory loops, and hot cues A to D in their colours (the pads jump, the hot loop loops); the load command (`0x19`) on the CDJ-900 and the NXS2; no cue writes attempted from an NXS2 |
 | rxbox | rxbox's fake player | loopback, ports of their own (`test_loopback`) | join, browse, every track's bytes (transcodes too), the player's status, the fences, a library change |
 | rxbox | rxbox's fake player | two network namespaces, rekordbox's ports (`tests/link/netns_test.sh`) | the same through the CLI, real broadcasts; the Ethernet interface found by the server, two served at once on the same ports, one of them only once its address came |
 | rxbox's app | rxbox's fake player | loopback (`test_link`) | refused without `--pro-link`, on the link before any player, the player and its load seen, 30 s of play recorded, the library read again after it, off, off right after on |
