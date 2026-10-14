@@ -206,7 +206,7 @@ static void node_label(UiState *ui, ImVec2 a, ImVec2 b, int icon, const char *na
                        bool selected)
 {
     ImDrawList *dl = ImGui::GetWindowDrawList();
-    float s = PX(12);
+    float s = PX(14);
     float cy = (a.y + b.y) * 0.5f;
     ImU32 ic = selected ? UI_ACCENT : UI_DIM;
     ImVec2 ip(a.x, cy - s * 0.5f);
@@ -222,10 +222,10 @@ static void node_label(UiState *ui, ImVec2 a, ImVec2 b, int icon, const char *na
     float nw = 0;
     if (count >= 0) {
         snprintf(num, sizeof(num), "%d", count);
-        nw = ui_text_width(ui, nullptr, 11.0f, num) + PX(6);
-        ui_text_right(ui, dl, nullptr, 11.0f, ImVec2(b.x - PX(4), cy - PX(6.5f)), UI_FAINT, num);
+        nw = ui_text_width(ui, nullptr, 12.0f, num) + PX(6);
+        ui_text_right(ui, dl, nullptr, 12.0f, ImVec2(b.x - PX(4), cy - PX(7.0f)), UI_FAINT, num);
     }
-    ui_text(ui, dl, selected ? ui->font_bold : nullptr, 13.0f, ImVec2(a.x + s + PX(6), cy - PX(7.5f)),
+    ui_text(ui, dl, selected ? ui->font_bold : nullptr, 15.0f, ImVec2(a.x + s + PX(6), cy - PX(8.5f)),
             selected ? UI_TEXT : IM_COL32(0xC8, 0xC8, 0xC8, 0xFF), name, b.x - a.x - s - PX(10) - nw);
 }
 
@@ -436,7 +436,7 @@ void ui_tree(UiState *ui, ImVec2 size)
     ImDrawList *dl = ImGui::GetWindowDrawList();
     ImVec2 wa = ImGui::GetWindowPos();
     dl->AddRectFilled(wa, ImVec2(wa.x + size.x, wa.y + size.y), UI_PANEL, PX(4));
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(PX(4), PX(4)));
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(PX(4), PX(5)));
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(PX(4), PX(1)));
     ImGui::PushStyleColor(ImGuiCol_Header, IM_COL32(0x2E, 0x2E, 0x2E, 0xFF));
 
