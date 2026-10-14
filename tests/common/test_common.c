@@ -412,6 +412,7 @@ static void test_latin1(void)
         { "Witchsmith（きまぐれ）", "Witchsmith (Kimagure)" },
         { "ごーいん！ごーいん", "Gooin! Gooin" },
         { "まなざし(Remix)", "Manazashi (Remix)" },
+        { "Nyan loves you♡ - ∞", "Nyan loves you<3 - oo" },
         { "《ああ》〜", "\xc2\xab" "Aa\xc2\xbb~" },
         { "Pちゃん", "Pchan" },
         { "A ー B", "A - B" },
@@ -424,8 +425,8 @@ static void test_latin1(void)
     }
 #if RXBOX_ICU
     /* Other scripts through ICU, Latin-1 kept, the rest folded. */
-    char *g = rx_utf8_latin1("Ελλάδα Москва Łódź ♥");
-    CHECK(g && !strcmp(g, "Ell\xc3\xa1" "da Moskva L\xc3\xb3" "dz ♥"), "latin1 icu: %s", g ? g : "(null)");
+    char *g = rx_utf8_latin1("Ελλάδα Москва Łódź ✓");
+    CHECK(g && !strcmp(g, "Ell\xc3\xa1" "da Moskva L\xc3\xb3" "dz ✓"), "latin1 icu: %s", g ? g : "(null)");
     free(g);
 #endif
 
@@ -440,6 +441,8 @@ static void test_latin1(void)
         { "インターネットが遅いさん", "Intaanetto ga Osoi-san", "Intaanettoga遅isan" },
         { "クラゲの商店街", "Kurage no Shoutengai", "Kurageno商店街" },
         { "愛MAX", "Ai MAX", "愛MAX" },
+        { "雨模様 (feat.秋奈)", "Ame Moyou (feat.Akina)", "雨模様 (feat.秋奈)" },
+        { "夜一夜の戰", "Yoru Ichiya no Sen", "夜一夜no戰" },
     };
     bool reads = rx_utf8_latin1_reads_kanji();
     if (!reads)

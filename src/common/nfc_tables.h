@@ -1,6 +1,7 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
-/* Unicode 16.0 tables for NFC (utf8.c), generated with Python's
+/* Unicode 16.0 tables for NFC (utf8.c; the data © Unicode, Inc., Unicode
+ * License v3, in third_party/unicode/LICENSE), generated with Python's
  * unicodedata (unidata 16.0.0): every canonical decomposition (code point,
  * first, second or 0), the primary composites (first, second, composite,
  * composition exclusions left out), and the runs of non-zero canonical

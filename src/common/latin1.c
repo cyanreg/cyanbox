@@ -22,12 +22,16 @@
  *   Shirushi", "Sunao ni Narenainda", "Osoi-san"); a word it has no
  *   reading for (a name, mostly) kanji by kanji. Kana alone are not given
  *   to it: it cuts words it does not know into nonsense (いんどあ as
- *   いん ど あ). Without MeCab or a dictionary, kanji are left as they are;
+ *   いん ど あ). A kanji the dictionary cannot read alone either (rare
+ *   ones, old forms: 紡, 戰) gets its first on'yomi from Unicode's Unihan
+ *   (kanji_readings.h), and joins the noun next to it, as in a name (秋奈
+ *   "Akina"). Without MeCab or a dictionary, kanji are left as they are;
  * - any other script (Greek, Cyrillic, Hangul, Latin beyond Latin-1) goes
  *   through ICU's Any-Latin, folded to ASCII where it is still not Latin-1
  *   (Москва as Moskva, Łódź as Lódz), when rxbox is built with ICU; never
  *   kanji, which it reads as Mandarin;
- * - the rest is left as it is (☆, which a CDJ-900 shows, ♥, ∞). */
+ * - ♡ and ♥ become <3, ∞ oo; the rest is left as it is (☆, which a
+ *   CDJ-900 shows). */
 
 #include "rxbox/common.h"
 
@@ -40,6 +44,8 @@
 
 #if RXBOX_MECAB
 #include <mecab.h>
+
+#include "src/common/kanji_readings.h"
 #endif
 #if RXBOX_ICU
 #include <unicode/ustring.h>
@@ -318,6 +324,8 @@ static const char *mark(uint32_t c)
     case 0x300B: return "\xC2\xBB";                     /* » */
     case 0x301C: case 0x301D: case 0x301E: return "~";
     case 0x30FB: case 0xFF65: return " ";
+    case 0x2661: case 0x2665: return "<3";              /* ♡ ♥ */
+    case 0x221E: return "oo";                           /* ∞ */
     case 0xFF62: return "\"";                           /* halfwidth 「 」 */
     case 0xFF63: return "\"";
     }
@@ -430,6 +438,8 @@ typedef struct Word {
     size_t      len;
     char       *roman;          /* lowercase romaji; NULL: the surface as it is */
     enum Join   join;
+    bool        kanji_noun;     /* a noun all in kanji (MeCab's unknown words are nouns) */
+    bool        unread;         /* kanji MeCab has no reading for */
 } Word;
 
 /* Field i of a MeCab feature (IPADIC: part of speech, three subdivisions,
@@ -464,9 +474,32 @@ static enum Join join_of(const char *pos, const char *pos1, const char *pos2, co
     return J_WORD;
 }
 
+static bool all_kanji(const char *s, size_t len)
+{
+    for (const char *p = s; p < s + len;)
+        if (!kanji(rx_utf8_next(&p)))
+            return false;
+    return len > 0;
+}
+
+/* A kanji's Unihan reading (kanji_readings.h), NULL when it has none. */
+static const char *unihan(uint32_t c)
+{
+    size_t lo = 0, hi = NB_KANJI_READINGS;
+    while (lo < hi) {
+        size_t mid = (lo + hi) / 2;
+        if (kanji_cp[mid] < c)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    return lo < NB_KANJI_READINGS && kanji_cp[lo] == c ? kanji_pool + kanji_reading[lo] : NULL;
+}
+
 /* A word MeCab has no reading for (a name, mostly): each kanji by its own
- * reading, 々 the one before it again, what has none as it is. With the
- * lock held, the run's nodes done with. NULL when out of memory. */
+ * reading (MeCab's for it alone, else Unihan's), 々 the one before it
+ * again, what has none as it is. With the lock held, the run's nodes done
+ * with. NULL when out of memory. */
 static char *by_kanji(const char *s, size_t len)
 {
     Out o = { 0 };
@@ -483,6 +516,9 @@ static char *by_kanji(const char *s, size_t len)
                 n = n->next;
             if (n && n->length == (size_t)(p - at) && field(n->feature, 7, reading, sizeof(reading)))
                 r = romaji(reading, strlen(reading));
+            const char *u = r ? NULL : unihan(c);
+            if (u)
+                r = rx_strdup(u);
         } else {
             r = romaji(at, (size_t)(p - at));
         }
@@ -532,7 +568,8 @@ static bool read_run(Out *o, const char *run, size_t len)
         field(n->feature, 2, pos2, sizeof(pos2));
         Word *x = &w[nb++];
         *x = (Word) { .surface = n->surface, .len = n->length,
-                      .join = prefix ? J_JOIN : join_of(pos, pos1, pos2, prev, prev1) };
+                      .join = prefix ? J_JOIN : join_of(pos, pos1, pos2, prev, prev1),
+                      .kanji_noun = !strcmp(pos, "名詞") && all_kanji(n->surface, n->length) };
         prefix = !strcmp(pos, "接頭詞");
         /* a particle by its sound: は wa, へ e */
         bool particle = !strcmp(pos, "助詞");
@@ -540,6 +577,7 @@ static bool read_run(Out *o, const char *run, size_t len)
             x->roman = romaji(reading, strlen(reading));
         if (!x->roman)
             x->roman = romaji(n->surface, n->length);
+        x->unread = !x->roman;
         snprintf(prev, sizeof(prev), "%s", pos);
         snprintf(prev1, sizeof(prev1), "%s", pos1);
     }
@@ -550,6 +588,10 @@ static bool read_run(Out *o, const char *run, size_t len)
 
     for (int i = 0; i < nb; i++) {
         enum Join j = w[i].join;
+        /* unread kanji next to a noun in kanji: one name (秋奈 Akina) */
+        if (i && j == J_WORD &&
+            ((w[i].unread && w[i - 1].kanji_noun) || (w[i - 1].unread && w[i].kanji_noun)))
+            j = J_JOIN;
         bool after = alnum(last_byte(o)), start = word_start(o);
         if (!i && !after && (j == J_JOIN || j == J_HYPHEN))
             j = J_WORD;
