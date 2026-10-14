@@ -2,8 +2,9 @@
 
 /* Private to src/gpu: the window's state and the calls the files of the
  * module make into each other. window.c owns SDL, the Wayland frame
- * callback and the public entry points; vk.c the instance, the device,
- * VMA, buffers, deferred destruction and staged uploads; swapchain.c the
+ * callback and the public entry points; vk.c the device (set up by
+ * vkdev.c, as the compute context's and the model's are, but its own),
+ * buffers, deferred destruction and staged uploads; swapchain.c the
  * swapchain, the frames in flight, recording, presenting and the
  * screenshot; textures.c and wave.c the two kinds of user resources;
  * imgui_glue.cpp everything that has to be C++.
@@ -25,6 +26,8 @@
 #pragma GCC diagnostic ignored "-Wundef"
 #include "vk_mem_alloc.h"
 #pragma GCC diagnostic pop
+
+#include "vkdev.h"
 
 struct SDL_Window;
 union SDL_Event;
@@ -134,23 +137,14 @@ struct RXWindow {
     float content_scale;            /* the user's UI scale on top of that */
 
     /* Vulkan (vk.c) */
-    VkInstance inst;
-    VkDebugUtilsMessengerEXT messenger;
-    int validation_errors;
+    RXVkDev vk;
     VkSurfaceKHR surface;
-    VkPhysicalDevice phys;
-    VkPhysicalDeviceProperties props;
-    VkDevice dev;
-    uint32_t qfam;
-    VkQueue queue;
-    VmaAllocator vma;
 
     RXFrame  frames[RX_FRAMES_IN_FLIGHT];
     uint32_t frame_idx;
     uint64_t serial;                /* submissions made; the next one is serial + 1 */
     uint64_t completed;             /* every submission up to this one has finished */
     int frames_drawn;
-    uint64_t ts_mask;               /* the queue's valid timestamp bits */
     double gpu_ms;                  /* the rendering of the last finished frame, 0 = unknown */
 
     RXArray garbage;                /* RXDeferred */
@@ -202,8 +196,6 @@ void rx_window_frame_skipped(RXWindow *w);
 
 int  rx_vk_create(RXWindow *w);
 void rx_vk_destroy(RXWindow *w);
-int  rx_vk_ret2err(VkResult res);
-const char *rx_vk_strerror(VkResult res);
 
 int  rx_vk_buffer_create(RXWindow *w, RXVkBuffer *b, VkDeviceSize size,
                          VkBufferUsageFlags usage, enum RXMemUsage mem);

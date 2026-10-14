@@ -52,9 +52,9 @@ static void destroy_images(RXWindow *w)
 {
     for (uint32_t i = 0; i < w->nb_images; i++) {
         if (w->views && w->views[i])
-            vkDestroyImageView(w->dev, w->views[i], NULL);
+            vkDestroyImageView(w->vk.dev, w->views[i], NULL);
         if (w->rendered && w->rendered[i])
-            vkDestroySemaphore(w->dev, w->rendered[i], NULL);
+            vkDestroySemaphore(w->vk.dev, w->rendered[i], NULL);
     }
     free(w->images);
     free(w->views);
@@ -68,14 +68,14 @@ static void destroy_images(RXWindow *w)
 static int pick_format(RXWindow *w, VkSurfaceFormatKHR *out)
 {
     uint32_t nb = 0;
-    VkResult res = vkGetPhysicalDeviceSurfaceFormatsKHR(w->phys, w->surface, &nb, NULL);
+    VkResult res = vkGetPhysicalDeviceSurfaceFormatsKHR(w->vk.phys, w->surface, &nb, NULL);
     if (res != VK_SUCCESS || !nb)
         return res != VK_SUCCESS ? rx_vk_ret2err(res) : RX_ERROR(ENODEV);
 
     VkSurfaceFormatKHR *fmts = calloc(nb, sizeof(*fmts));
     if (!fmts)
         return RX_ERROR(ENOMEM);
-    vkGetPhysicalDeviceSurfaceFormatsKHR(w->phys, w->surface, &nb, fmts);
+    vkGetPhysicalDeviceSurfaceFormatsKHR(w->vk.phys, w->surface, &nb, fmts);
 
     static const VkFormat prefer[] = {
         VK_FORMAT_B8G8R8A8_UNORM,
@@ -121,11 +121,11 @@ static int pick_format(RXWindow *w, VkSurfaceFormatKHR *out)
 static VkPresentModeKHR pick_present_mode(RXWindow *w)
 {
     uint32_t nb = 0;
-    vkGetPhysicalDeviceSurfacePresentModesKHR(w->phys, w->surface, &nb, NULL);
+    vkGetPhysicalDeviceSurfacePresentModesKHR(w->vk.phys, w->surface, &nb, NULL);
     VkPresentModeKHR *modes = calloc(RX_MAX(nb, 1), sizeof(*modes));
     if (!modes)
         return VK_PRESENT_MODE_FIFO_KHR;
-    vkGetPhysicalDeviceSurfacePresentModesKHR(w->phys, w->surface, &nb, modes);
+    vkGetPhysicalDeviceSurfacePresentModesKHR(w->vk.phys, w->surface, &nb, modes);
 
     bool mailbox = false;
     for (uint32_t i = 0; i < nb; i++)
@@ -139,7 +139,7 @@ static VkPresentModeKHR pick_present_mode(RXWindow *w)
 int rx_swapchain_create(RXWindow *w)
 {
     VkSurfaceCapabilitiesKHR caps;
-    VkResult res = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(w->phys, w->surface, &caps);
+    VkResult res = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(w->vk.phys, w->surface, &caps);
     if (res != VK_SUCCESS) {
         rx_err("gpu: surface capabilities: %s", rx_vk_strerror(res));
         return rx_vk_ret2err(res);
@@ -208,16 +208,16 @@ int rx_swapchain_create(RXWindow *w)
         .oldSwapchain     = old,
     };
     VkSwapchainKHR sc = VK_NULL_HANDLE;
-    res = vkCreateSwapchainKHR(w->dev, &info, NULL, &sc);
+    res = vkCreateSwapchainKHR(w->vk.dev, &info, NULL, &sc);
 
     /* Whatever happened, the old swapchain is retired now. Its images may
      * still be read by frames in flight and its semaphores waited on by
      * presents, so everything of it goes only once the device is idle. */
     if (old) {
-        vkDeviceWaitIdle(w->dev);
+        vkDeviceWaitIdle(w->vk.dev);
         rx_vk_poll_completed(w);
         destroy_images(w);
-        vkDestroySwapchainKHR(w->dev, old, NULL);
+        vkDestroySwapchainKHR(w->vk.dev, old, NULL);
         w->swapchain = VK_NULL_HANDLE;
     }
     if (res != VK_SUCCESS) {
@@ -227,7 +227,7 @@ int rx_swapchain_create(RXWindow *w)
     w->swapchain = sc;
 
     uint32_t nb = 0;
-    vkGetSwapchainImagesKHR(w->dev, sc, &nb, NULL);
+    vkGetSwapchainImagesKHR(w->vk.dev, sc, &nb, NULL);
     w->images   = calloc(nb, sizeof(*w->images));
     w->views    = calloc(nb, sizeof(*w->views));
     w->rendered = calloc(nb, sizeof(*w->rendered));
@@ -235,7 +235,7 @@ int rx_swapchain_create(RXWindow *w)
         destroy_images(w);
         return RX_ERROR(ENOMEM);
     }
-    vkGetSwapchainImagesKHR(w->dev, sc, &nb, w->images);
+    vkGetSwapchainImagesKHR(w->vk.dev, sc, &nb, w->images);
     w->nb_images = nb;
 
     for (uint32_t i = 0; i < nb; i++) {
@@ -250,14 +250,14 @@ int rx_swapchain_create(RXWindow *w)
                 .layerCount = 1,
             },
         };
-        res = vkCreateImageView(w->dev, &vinfo, NULL, &w->views[i]);
+        res = vkCreateImageView(w->vk.dev, &vinfo, NULL, &w->views[i]);
         if (res != VK_SUCCESS)
             return rx_vk_ret2err(res);
 
         VkSemaphoreCreateInfo sinfo = {
             .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
         };
-        res = vkCreateSemaphore(w->dev, &sinfo, NULL, &w->rendered[i]);
+        res = vkCreateSemaphore(w->vk.dev, &sinfo, NULL, &w->rendered[i]);
         if (res != VK_SUCCESS)
             return rx_vk_ret2err(res);
     }
@@ -278,13 +278,13 @@ int rx_swapchain_create(RXWindow *w)
 
 void rx_swapchain_destroy(RXWindow *w)
 {
-    if (!w->dev)
+    if (!w->vk.dev)
         return;
 
-    vkDeviceWaitIdle(w->dev);
+    vkDeviceWaitIdle(w->vk.dev);
     destroy_images(w);
     if (w->swapchain)
-        vkDestroySwapchainKHR(w->dev, w->swapchain, NULL);
+        vkDestroySwapchainKHR(w->vk.dev, w->swapchain, NULL);
     w->swapchain = VK_NULL_HANDLE;
     if (w->cap.buf)
         rx_vk_defer_unreserve(w, 1);
@@ -409,7 +409,7 @@ static VkResult acquire(RXWindow *w, RXFrame *f, uint32_t *idx)
 {
     /* A finite timeout: a compositor holding every buffer must not hang
      * the loop. The semaphore is left unsignalled on a timeout. */
-    return vkAcquireNextImageKHR(w->dev, w->swapchain, 1000000000ull, f->acquired,
+    return vkAcquireNextImageKHR(w->vk.dev, w->swapchain, 1000000000ull, f->acquired,
                                  VK_NULL_HANDLE, idx);
 }
 
@@ -440,7 +440,7 @@ int rx_swapchain_frame(RXWindow *w, void *draw_data, bool capture)
 
     /* The slot's last submission must be done before its command buffer,
      * its acquire semaphore and ImGui's vertex buffers for it are reused. */
-    VkResult res = vkWaitForFences(w->dev, 1, &f->fence, VK_TRUE, UINT64_MAX);
+    VkResult res = vkWaitForFences(w->vk.dev, 1, &f->fence, VK_TRUE, UINT64_MAX);
     if (res != VK_SUCCESS) {
         rx_err("gpu: waiting for a frame: %s", rx_vk_strerror(res));
         return rx_vk_ret2err(res);
@@ -453,10 +453,10 @@ int rx_swapchain_frame(RXWindow *w, void *draw_data, bool capture)
     /* The slot's last frame is done, so its timestamps are there. */
     if (f->timed) {
         uint64_t ts[2];
-        if (vkGetQueryPoolResults(w->dev, f->times, 0, 2, sizeof(ts), ts, sizeof(ts[0]),
+        if (vkGetQueryPoolResults(w->vk.dev, f->times, 0, 2, sizeof(ts), ts, sizeof(ts[0]),
                                   VK_QUERY_RESULT_64_BIT) == VK_SUCCESS)
-            w->gpu_ms = (double)((ts[1] - ts[0]) & w->ts_mask) *
-                        w->props.limits.timestampPeriod * 1e-6;
+            w->gpu_ms = (double)((ts[1] - ts[0]) & w->vk.ts_mask) *
+                        w->vk.props.limits.timestampPeriod * 1e-6;
         f->timed = false;
     }
 
@@ -488,8 +488,8 @@ int rx_swapchain_frame(RXWindow *w, void *draw_data, bool capture)
         capture = false;
     capture &= w->can_capture;
 
-    vkResetFences(w->dev, 1, &f->fence);
-    vkResetCommandPool(w->dev, f->pool, 0);
+    vkResetFences(w->vk.dev, 1, &f->fence);
+    vkResetCommandPool(w->vk.dev, f->pool, 0);
 
     VkCommandBufferBeginInfo binfo = {
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
@@ -577,7 +577,7 @@ int rx_swapchain_frame(RXWindow *w, void *draw_data, bool capture)
         .signalSemaphoreInfoCount = 1,
         .pSignalSemaphoreInfos    = &signal,
     };
-    res = vkQueueSubmit2(w->queue, 1, &submit, f->fence);
+    res = vkQueueSubmit2(w->vk.queue, 1, &submit, f->fence);
     if (res != VK_SUCCESS) {
         rx_err("gpu: submitting a frame: %s", rx_vk_strerror(res));
         return RX_ERROR(EIO);
@@ -601,7 +601,7 @@ int rx_swapchain_frame(RXWindow *w, void *draw_data, bool capture)
         .pSwapchains        = &w->swapchain,
         .pImageIndices      = &idx,
     };
-    res = vkQueuePresentKHR(w->queue, &pinfo);
+    res = vkQueuePresentKHR(w->vk.queue, &pinfo);
     if (capture)
         w->cap_serial = serial;
     w->last_present_serial = serial;
@@ -635,7 +635,7 @@ int rx_swapchain_readback(RXWindow *w, uint8_t **rgba, int *width, int *height)
     for (int i = 0; i < RX_FRAMES_IN_FLIGHT; i++) {
         RXFrame *f = &w->frames[i];
         if (f->serial == w->cap_serial)
-            vkWaitForFences(w->dev, 1, &f->fence, VK_TRUE, UINT64_MAX);
+            vkWaitForFences(w->vk.dev, 1, &f->fence, VK_TRUE, UINT64_MAX);
     }
     rx_vk_poll_completed(w);
 

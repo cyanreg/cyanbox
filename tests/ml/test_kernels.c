@@ -682,7 +682,7 @@ int main(int argc, char **argv)
         printf("no device for the model: skipped\n");
         return 77;
     }
-    printf("device: %s\n", gpu.props.deviceName);
+    printf("device: %s\n", gpu.vk.props.deviceName);
 
     if (bench) {
         test_gemm(false, 2048, 1280, 1280, FLAG_BIAS, true);
@@ -729,7 +729,7 @@ int main(int argc, char **argv)
 
     /* With RXBOX_GPU_VALIDATION=1: what the layer found fails the test, as
      * test_compute's does. */
-    int errors = atomic_load(&gpu.validation_errors);
+    int errors = rx_vkdev_validation_errors(&gpu.vk);
     if (errors) {
         printf("FAIL %d Vulkan validation errors\n", errors);
         failures++;

@@ -513,7 +513,7 @@ int rx_ml_open(RXML **out, const char *path, const RXMLOptions *opt)
         goto fail;
     if ((ret = ml_gpu_create(&ml->g, opt->device, opt->validation)) < 0)
         goto fail;
-    rx_info("ml: %s on %s", path, ml->g.props.deviceName);
+    rx_info("ml: %s on %s", path, ml->g.vk.props.deviceName);
     if ((ret = ml_gguf_upload(&ml->f, &ml->g)) < 0)
         goto fail;
     if ((ret = permute_convs(ml)) < 0 || (ret = make_tables(ml)) < 0)
@@ -542,9 +542,9 @@ void rx_ml_close(RXML **pml)
     RXML *ml = *pml;
     if (!ml)
         return;
-    if (ml->g.dev) {
+    if (ml->g.vk.dev) {
         ml_gpu_profile_print(&ml->g);
-        vkDeviceWaitIdle(ml->g.dev);
+        vkDeviceWaitIdle(ml->g.vk.dev);
         Scratch *all[] = {
             &ml->pcm, &ml->mel, &ml->maxbits, &ml->c1, &ml->c2, &ml->c3, &ml->stem,
             &ml->ex, &ml->eh, &ml->eq, &ml->ek, &ml->ev, &ml->eo, &ml->ef,
@@ -563,7 +563,7 @@ void rx_ml_close(RXML **pml)
         ml_buf_free(&ml->g, &ml->conv_w[0]);
         ml_buf_free(&ml->g, &ml->conv_w[1]);
     }
-    ml_gguf_close(&ml->f, ml->g.dev ? &ml->g : NULL);
+    ml_gguf_close(&ml->f, ml->g.vk.dev ? &ml->g : NULL);
     ml_tok_free(&ml->tok);
     ml_gpu_destroy(&ml->g);
     free(ml);
@@ -572,7 +572,7 @@ void rx_ml_close(RXML **pml)
 
 const char *rx_ml_device_name(const RXML *ml)
 {
-    return ml->g.props.deviceName;
+    return ml->g.vk.props.deviceName;
 }
 
 void rx_ml_times(const RXML *ml, double *listen_ms, double *ask_ms)

@@ -156,7 +156,8 @@ src/formats   export.pdb, ANLZ read/write, OneLibrary (sqlite3 + SQLCipher pages
 src/export    stick plan, writer, inspect, pull
 src/player    PipeWire stream, the player, lock-free command queue, the decks' decoding threads, cue/loop/quantize controls, MASTER TEMPO, null backend for tests
 src/gpu       SDL3 window (Wayland), Vulkan device + VMA, swapchain, Wayland frame-callback pacing, ImGui glue, waveform shader;
-              the compute context without a window and the analysis' STFT and envelope shaders (rx_compute)
+              the compute context without a window and the analysis' STFT and envelope shaders (rx_compute);
+              the Vulkan set-up the window, the compute context and the model share, each a device of its own (rx_vkdev)
 src/ml        MOSS-Audio-4B on Vulkan compute, a device of its own: a track's genre, colour and comment, only when asked (docs/ML.md)
 src/ui        Dear ImGui screens (C++, as are only vendored code and the player's Signalsmith Stretch interface)
 src/cli.c     the subcommands

@@ -1,10 +1,9 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
 /* Private to the compute context (rxbox/compute.h): compute.c owns the
- * instance, the device, the queue, VMA, the timeline semaphore and the
- * pipelines; compute_dsp.c the plans that run the shaders. Nothing here is
- * shared with the window's code (gpu_priv.h): the two never share a
- * VkDevice. */
+ * device (set up as the window's and the model's are, vkdev.h, but its
+ * own), the timeline semaphore and the pipelines; compute_dsp.c the plans
+ * that run the shaders. */
 
 #ifndef RXBOX_GPU_COMPUTE_PRIV_H
 #define RXBOX_GPU_COMPUTE_PRIV_H
@@ -14,13 +13,7 @@
 #include <pthread.h>
 #include <stdatomic.h>
 
-#include <vulkan/vulkan.h>
-
-/* VMA tests extension macros that only exist on Windows with #if. */
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wundef"
-#include "vk_mem_alloc.h"
-#pragma GCC diagnostic pop
+#include "vkdev.h"
 
 /* Every shader runs 256 invocations a workgroup; the FFT's register
  * arrays (shaders/fft.glsl) are sized for that and a transform of at most
@@ -39,16 +32,7 @@ enum RXComputeKernel {
 };
 
 struct RXCompute {
-    VkInstance inst;
-    VkDebugUtilsMessengerEXT messenger;
-    atomic_int validation_errors;
-    VkPhysicalDevice phys;
-    VkPhysicalDeviceProperties props;
-    VkDevice dev;
-    uint32_t qfam;
-    VkQueue queue;
-    VmaAllocator vma;
-    uint64_t ts_mask;               /* the queue's valid timestamp bits, 0 = none */
+    RXVkDev vk;
 
     /* Submissions: one queue, so vkQueueSubmit2 is serialised by `qlock`;
      * submission i signals `timeline` to i, and whoever submitted it waits
@@ -97,8 +81,5 @@ int  rx_compute_submit(RXCompute *c, VkCommandBuffer cmd, uint64_t *value);
 /* Waits for a submission. On an error the device is idle when it returns
  * (nothing is running any more), so the submission's buffers can go. */
 int  rx_compute_wait(RXCompute *c, uint64_t value);
-
-int  rx_compute_ret2err(VkResult res);
-const char *rx_compute_strerror(VkResult res);
 
 #endif /* RXBOX_GPU_COMPUTE_PRIV_H */

@@ -113,11 +113,12 @@ src/app           jobs.c app.c                                        -> rx_app_
                                                                        ml for the tag batch)
                   headless.c (src/gpu and src/ui stand-ins for rxbox-cli and test_app)
                   mpris.c (MPRIS on the D-Bus session bus, with sd-bus: -Dmpris)
-src/gpu           compute.c compute_dsp.c compute_priv.h              -> rx_compute_dep (common; Vulkan, VMA)
+src/gpu           vkdev.c vkdev.h (the Vulkan set-up all three share) -> rx_vkdev_dep (common; Vulkan, VMA)
+                  compute.c compute_dsp.c compute_priv.h              -> rx_compute_dep (vkdev)
                   shaders/fft.glsl stft.comp env.comp                 (no window: CLI, tests, tools)
                   window.c vk.c swapchain.c textures.c wave.c         (executable only)
                   imgui_glue.cpp gpu_priv.h gpu_demo.h shaders/
-src/ml            gpu.c gguf.c tokenizer.c moss.c tag.c               -> rx_ml_dep (common; Vulkan, VMA)
+src/ml            gpu.c gguf.c tokenizer.c moss.c tag.c               -> rx_ml_dep (vkdev)
                   ml_priv.h kernels.h shaders/*.comp common.glsl      (MOSS-Audio, its own VkDevice;
                                                                        docs/ML.md, tests in suite ml)
 src/ui            ui.cpp deck_view.cpp waveform_view.cpp browser.cpp  (C++)

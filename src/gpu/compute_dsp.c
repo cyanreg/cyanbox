@@ -108,9 +108,9 @@ static void plan_uninit(Plan *p)
     }
     rx_cbuf_free(c, &p->tables);
     if (p->times)
-        vkDestroyQueryPool(c->dev, p->times, NULL);
+        vkDestroyQueryPool(c->vk.dev, p->times, NULL);
     if (p->pool)
-        vkDestroyCommandPool(c->dev, p->pool, NULL);
+        vkDestroyCommandPool(c->vk.dev, p->pool, NULL);
     memset(p, 0, sizeof(*p));
 }
 
@@ -129,11 +129,11 @@ static int plan_init(Plan *p, RXCompute *c, enum RXComputeKernel kernel, int nff
     VkCommandPoolCreateInfo pinfo = {
         .sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
         .flags            = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
-        .queueFamilyIndex = c->qfam,
+        .queueFamilyIndex = c->vk.qfam,
     };
-    VkResult res = vkCreateCommandPool(c->dev, &pinfo, NULL, &p->pool);
+    VkResult res = vkCreateCommandPool(c->vk.dev, &pinfo, NULL, &p->pool);
     if (res != VK_SUCCESS)
-        return rx_compute_ret2err(res);
+        return rx_vk_ret2err(res);
     VkCommandBuffer cmds[2];
     VkCommandBufferAllocateInfo cinfo = {
         .sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
@@ -141,21 +141,21 @@ static int plan_init(Plan *p, RXCompute *c, enum RXComputeKernel kernel, int nff
         .level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
         .commandBufferCount = 2,
     };
-    res = vkAllocateCommandBuffers(c->dev, &cinfo, cmds);
+    res = vkAllocateCommandBuffers(c->vk.dev, &cinfo, cmds);
     if (res != VK_SUCCESS)
-        return rx_compute_ret2err(res);
+        return rx_vk_ret2err(res);
     p->slots[0].cmd = cmds[0];
     p->slots[1].cmd = cmds[1];
 
-    if (c->ts_mask) {
+    if (c->vk.ts_mask) {
         VkQueryPoolCreateInfo qinfo = {
             .sType      = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
             .queryType  = VK_QUERY_TYPE_TIMESTAMP,
             .queryCount = 4,
         };
-        res = vkCreateQueryPool(c->dev, &qinfo, NULL, &p->times);
+        res = vkCreateQueryPool(c->vk.dev, &qinfo, NULL, &p->times);
         if (res != VK_SUCCESS)
-            return rx_compute_ret2err(res);
+            return rx_vk_ret2err(res);
     }
     return 0;
 }
@@ -305,7 +305,7 @@ static int slot_submit(Plan *p, int i, size_t in_bytes)
         vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, p->times, 2 * i + 1);
     VkResult res = vkEndCommandBuffer(cmd);
     if (res != VK_SUCCESS)
-        return rx_compute_ret2err(res);
+        return rx_vk_ret2err(res);
     int ret = rx_cbuf_flush(p->c, &s->in, in_bytes);
     if (ret < 0)
         return ret;
@@ -321,10 +321,10 @@ static int slot_wait(Plan *p, int i)
     s->value = 0;
     if (p->times) {
         uint64_t ts[2];
-        if (vkGetQueryPoolResults(p->c->dev, p->times, 2 * i, 2, sizeof(ts), ts, sizeof(ts[0]),
+        if (vkGetQueryPoolResults(p->c->vk.dev, p->times, 2 * i, 2, sizeof(ts), ts, sizeof(ts[0]),
                                   VK_QUERY_RESULT_64_BIT) == VK_SUCCESS)
-            p->gpu_ms += (double)((ts[1] - ts[0]) & p->c->ts_mask) *
-                         p->c->props.limits.timestampPeriod * 1e-6;
+            p->gpu_ms += (double)((ts[1] - ts[0]) & p->c->vk.ts_mask) *
+                         p->c->vk.props.limits.timestampPeriod * 1e-6;
     }
     return rx_cbuf_invalidate(p->c, &s->out);
 }

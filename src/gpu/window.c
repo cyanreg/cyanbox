@@ -397,7 +397,7 @@ double rx_window_gpu_ms(const RXWindow *w)
 
 int rx_window_validation_errors(const RXWindow *w)
 {
-    return w->validation_errors;
+    return rx_vkdev_validation_errors(&w->vk);
 }
 
 bool rx_window_frame_pending(const RXWindow *w)
@@ -549,13 +549,13 @@ void rx_window_destroy(RXWindow *w)
      * unregister from ImGui, so they go before its backend does; the
      * swapchain before the surface (in rx_vk_destroy), and all of it
      * before SDL takes the wl_surface away. */
-    if (w->dev) {
-        vkDeviceWaitIdle(w->dev);
+    if (w->vk.dev) {
+        vkDeviceWaitIdle(w->vk.dev);
         rx_textures_destroy_all(w);
         rx_vk_collect(w, true);
     }
     rx_imgui_shutdown(w);
-    if (w->dev) {
+    if (w->vk.dev) {
         rx_wave_pipeline_destroy(w);
         rx_swapchain_destroy(w);
     }

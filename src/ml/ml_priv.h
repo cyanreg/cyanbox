@@ -5,11 +5,11 @@
  * constants in kernels.h), the tokenizer (tokenizer.c), the network
  * (moss.c) and the tags made from its answers (tag.c).
  *
- * The model owns its VkDevice rather than share rxbox/compute.h's: that
- * context is made for the beat analysis' STFT alone and torn down after
- * it, where these weights (4 GB) stay on the GPU for as long as the model
- * is open, and the shaders need 16-bit floats and 8-bit storage, which the
- * compute context does not enable. */
+ * The model owns its VkDevice rather than share rxbox/compute.h's (or the
+ * window's), set up as theirs are (src/gpu/vkdev.h): its weights (4 GB)
+ * go with it when the model closes after a batch, a device lost to a
+ * hung kernel takes no other with it, and its shaders need 16-bit floats
+ * and 8-bit storage, which the compute context does not enable. */
 
 #ifndef RXBOX_ML_PRIV_H
 #define RXBOX_ML_PRIV_H
@@ -18,13 +18,7 @@
 
 #include <stdatomic.h>
 
-#include <vulkan/vulkan.h>
-
-/* VMA tests extension macros that only exist on Windows with #if. */
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wundef"
-#include "vk_mem_alloc.h"
-#pragma GCC diagnostic pop
+#include "src/gpu/vkdev.h"
 
 /* ------------------------------------------------------------------ the GPU */
 
@@ -73,16 +67,7 @@ enum MLMem {
 };
 
 typedef struct MLGpu {
-    VkInstance inst;
-    VkDebugUtilsMessengerEXT messenger;
-    atomic_int validation_errors;
-    VkPhysicalDevice phys;
-    VkPhysicalDeviceProperties props;
-    VkDevice dev;
-    uint32_t qfam;
-    VkQueue queue;
-    VmaAllocator vma;
-    uint64_t ts_mask;           /* the queue's valid timestamp bits, 0 = none */
+    RXVkDev vk;
     uint32_t sub_size;          /* the subgroup size gemv and attention require, 0: any */
     bool full_sub;              /* and full subgroups (gpu.c says why) */
 

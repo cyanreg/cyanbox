@@ -219,11 +219,11 @@ extern "C" int rx_imgui_init(RXWindow *w)
 
     ImGui_ImplVulkan_InitInfo info = {};
     info.ApiVersion         = VK_API_VERSION_1_3;
-    info.Instance           = w->inst;
-    info.PhysicalDevice     = w->phys;
-    info.Device             = w->dev;
-    info.QueueFamily        = w->qfam;
-    info.Queue              = w->queue;
+    info.Instance           = w->vk.inst;
+    info.PhysicalDevice     = w->vk.phys;
+    info.Device             = w->vk.dev;
+    info.QueueFamily        = w->vk.qfam;
+    info.Queue              = w->vk.queue;
     info.DescriptorPoolSize = RX_IMGUI_POOL_SIZE;
     info.MinImageCount      = 2;
     info.ImageCount         = RX_FRAMES_IN_FLIGHT;

@@ -1,7 +1,9 @@
 # Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md.
 #
-# Two things live here. The compute context (compute.c, compute_dsp.c and
-# the compute shaders; rxbox/compute.h) is a library, rx_compute: the
+# Three things live here. The Vulkan set-up that the window, the compute
+# context and the model share (vkdev.c) is a library, rx_vkdev, which the
+# other two and src/ml link. The compute context (compute.c, compute_dsp.c
+# and the compute shaders; rxbox/compute.h) is a library, rx_compute: the
 # analysis runs its spectral front end on it, and the CLI, the tools and
 # the tests use it without a window, so it is configured before the
 # analysis. The window (Vulkan, VMA, ImGui glue and the waveform shader) is
@@ -9,8 +11,15 @@
 # into a library, so gpu_sources carries the generated shader headers too.
 # Shaders are compiled to SPIR-V with glslang (Vulkan 1.3 target) and
 # embedded as C arrays by shaders/spv_embed.py.
+rx_vkdev_lib = static_library('rx_vkdev', files('vkdev.c'),
+    include_directories: rx_inc,
+    dependencies: [ rx_common_dep, vulkan_dep, vma_dep ],
+)
+rx_vkdev_dep = declare_dependency(link_with: rx_vkdev_lib,
+                                  dependencies: [ rx_common_dep, vulkan_dep, vma_dep ])
+
 fontconfig_dep = dependency('fontconfig')
-gpu_deps = [ fontconfig_dep, libavcodec, libavutil ]
+gpu_deps = [ fontconfig_dep, libavcodec, libavutil, rx_vkdev_dep ]
 
 gpu_python = find_program('python3')
 gpu_spv_embed = files('shaders/spv_embed.py')
@@ -33,10 +42,9 @@ endforeach
 rx_compute_lib = static_library('rx_compute',
     files('compute.c', 'compute_dsp.c'), compute_shader_headers,
     include_directories: rx_inc,
-    dependencies: [ rx_common_dep, vulkan_dep, vma_dep ],
+    dependencies: [ rx_vkdev_dep ],
 )
-rx_compute_dep = declare_dependency(link_with: rx_compute_lib,
-                                    dependencies: [ rx_common_dep, vulkan_dep, vma_dep ])
+rx_compute_dep = declare_dependency(link_with: rx_compute_lib, dependencies: [ rx_vkdev_dep ])
 
 # The kernels against av_tx in double precision at every size they take.
 # Needs a Vulkan device but no window; skipped (77) without one.

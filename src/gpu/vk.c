@@ -1,16 +1,15 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
-/* The Vulkan device: instance, physical device choice, logical device and
- * queue, the VMA allocator, buffers, the frames-in-flight slots, deferred
- * destruction and staged uploads. Taken from libcraw's tests/vkdev.c and
- * lib/vk_buffer.c, cut down to what an interface needs.
+/* The Vulkan device: what a window's device must have (the instance, the
+ * choice of device, the device, its queue and VMA are set up by vkdev.c,
+ * as the compute context's and the model's are), buffers, the
+ * frames-in-flight slots, deferred destruction and staged uploads. Taken
+ * from libcraw's lib/vk_buffer.c, cut down to what an interface needs.
  *
  * Vulkan 1.3 is the floor: dynamic rendering (no render pass objects),
  * synchronization2 barriers and submits, and buffer device addresses (the
  * waveform shader reads its column buffer through a pointer in its push
- * constants). The loader is linked (vulkan_dep), so the global prototypes
- * are used; VMA, built with dynamic entry points only, is handed
- * vkGetInstanceProcAddr and vkGetDeviceProcAddr.
+ * constants).
  *
  * Destruction is deferred by submission number rather than by frame slot:
  * every submission gets the next serial, a resource released while the
@@ -39,226 +38,15 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
 
-/* ------------------------------------------------------------------ errors */
-
-int rx_vk_ret2err(VkResult res)
-{
-    switch (res) {
-    case VK_SUCCESS:
-        return 0;
-    case VK_ERROR_OUT_OF_HOST_MEMORY:
-    case VK_ERROR_OUT_OF_DEVICE_MEMORY:
-    case VK_ERROR_OUT_OF_POOL_MEMORY:
-    case VK_ERROR_FRAGMENTED_POOL:
-        return RX_ERROR(ENOMEM);
-    case VK_ERROR_DEVICE_LOST:
-        return RX_ERROR(EIO);
-    case VK_ERROR_INITIALIZATION_FAILED:
-    case VK_ERROR_INCOMPATIBLE_DRIVER:
-    case VK_ERROR_SURFACE_LOST_KHR:
-    case VK_ERROR_EXTENSION_NOT_PRESENT:
-    case VK_ERROR_FEATURE_NOT_PRESENT:
-    case VK_ERROR_LAYER_NOT_PRESENT:
-        return RX_ERROR(ENODEV);
-    case VK_TIMEOUT:
-    case VK_NOT_READY:
-        return RX_ERROR(EAGAIN);
-    default:
-        return RX_ERROR(EINVAL);
-    }
-}
-
-const char *rx_vk_strerror(VkResult res)
-{
-    switch (res) {
-    case VK_SUCCESS:                      return "success";
-    case VK_NOT_READY:                    return "not ready";
-    case VK_TIMEOUT:                      return "timeout";
-    case VK_SUBOPTIMAL_KHR:               return "suboptimal";
-    case VK_ERROR_OUT_OF_HOST_MEMORY:     return "out of host memory";
-    case VK_ERROR_OUT_OF_DEVICE_MEMORY:   return "out of device memory";
-    case VK_ERROR_INITIALIZATION_FAILED:  return "initialization failed";
-    case VK_ERROR_DEVICE_LOST:            return "device lost";
-    case VK_ERROR_LAYER_NOT_PRESENT:      return "layer not present";
-    case VK_ERROR_EXTENSION_NOT_PRESENT:  return "extension not present";
-    case VK_ERROR_FEATURE_NOT_PRESENT:    return "feature not present";
-    case VK_ERROR_INCOMPATIBLE_DRIVER:    return "incompatible driver";
-    case VK_ERROR_SURFACE_LOST_KHR:       return "surface lost";
-    case VK_ERROR_OUT_OF_DATE_KHR:        return "out of date";
-    case VK_ERROR_NATIVE_WINDOW_IN_USE_KHR: return "native window in use";
-    default:                              return "error";
-    }
-}
-
-/* -------------------------------------------------------------- validation */
-
-static VKAPI_ATTR VkBool32 VKAPI_CALL debug_cb(VkDebugUtilsMessageSeverityFlagBitsEXT sev,
-                                               VkDebugUtilsMessageTypeFlagsEXT type,
-                                               const VkDebugUtilsMessengerCallbackDataEXT *data,
-                                               void *opaque)
-{
-    RXWindow *w = opaque;
-
-    if (sev & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
-        w->validation_errors++;
-        rx_err("vulkan: %s", data->pMessage);
-    } else if (sev & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
-        rx_warn("vulkan: %s", data->pMessage);
-    } else {
-        rx_debug("vulkan: %s", data->pMessage);
-    }
-
-    return VK_FALSE;
-}
-
-static bool have_layer(const char *name)
-{
-    uint32_t nb = 0;
-    if (vkEnumerateInstanceLayerProperties(&nb, NULL) != VK_SUCCESS || !nb)
-        return false;
-
-    VkLayerProperties *props = calloc(nb, sizeof(*props));
-    if (!props)
-        return false;
-
-    bool found = false;
-    if (vkEnumerateInstanceLayerProperties(&nb, props) == VK_SUCCESS) {
-        for (uint32_t i = 0; i < nb && !found; i++)
-            found = !strcmp(props[i].layerName, name);
-    }
-
-    free(props);
-    return found;
-}
-
-static bool have_instance_ext(const char *layer, const char *name)
-{
-    uint32_t nb = 0;
-    if (vkEnumerateInstanceExtensionProperties(layer, &nb, NULL) != VK_SUCCESS || !nb)
-        return false;
-
-    VkExtensionProperties *props = calloc(nb, sizeof(*props));
-    if (!props)
-        return false;
-
-    bool found = false;
-    if (vkEnumerateInstanceExtensionProperties(layer, &nb, props) == VK_SUCCESS) {
-        for (uint32_t i = 0; i < nb && !found; i++)
-            found = !strcmp(props[i].extensionName, name);
-    }
-
-    free(props);
-    return found;
-}
-
-/* ---------------------------------------------------------------- instance */
-
-static int create_instance(RXWindow *w)
-{
-    Uint32 nb_sdl = 0;
-    const char *const *sdl_exts = SDL_Vulkan_GetInstanceExtensions(&nb_sdl);
-    if (!sdl_exts) {
-        rx_err("gpu: SDL_Vulkan_GetInstanceExtensions: %s", SDL_GetError());
-        return RX_ERROR(ENODEV);
-    }
-
-    /* SDL's list (surface + wayland_surface) plus the debug extensions. */
-    const char **exts = calloc(nb_sdl + 2, sizeof(*exts));
-    if (!exts)
-        return RX_ERROR(ENOMEM);
-    uint32_t nb_exts = 0;
-    for (Uint32 i = 0; i < nb_sdl; i++)
-        exts[nb_exts++] = sdl_exts[i];
-
-    const char *layers[1];
-    uint32_t nb_layers = 0;
-    bool debug_utils = false, features = false;
-    if (w->opts.validation) {
-        if (have_layer("VK_LAYER_KHRONOS_validation")) {
-            layers[nb_layers++] = "VK_LAYER_KHRONOS_validation";
-            features = have_instance_ext("VK_LAYER_KHRONOS_validation",
-                                         VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME);
-            if (features)
-                exts[nb_exts++] = VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME;
-        } else {
-            rx_warn("gpu: VK_LAYER_KHRONOS_validation is not installed");
-        }
-        debug_utils = have_instance_ext(NULL, VK_EXT_DEBUG_UTILS_EXTENSION_NAME) ||
-                      (nb_layers && have_instance_ext("VK_LAYER_KHRONOS_validation",
-                                                      VK_EXT_DEBUG_UTILS_EXTENSION_NAME));
-        if (debug_utils)
-            exts[nb_exts++] = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
-    }
-
-    /* Synchronisation validation as well as the core checks: the barriers
-     * and the frames-in-flight logic are what this module gets wrong if
-     * it gets anything wrong. */
-    const VkValidationFeatureEnableEXT enables[] = {
-        VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT,
-    };
-    VkValidationFeaturesEXT vfeat = {
-        .sType                         = VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT,
-        .enabledValidationFeatureCount = RX_ARRAY_ELEMS(enables),
-        .pEnabledValidationFeatures    = enables,
-    };
-
-    VkApplicationInfo app = {
-        .sType              = VK_STRUCTURE_TYPE_APPLICATION_INFO,
-        .pApplicationName   = "rxbox",
-        .applicationVersion = 1,
-        .pEngineName        = "rxbox",
-        .engineVersion      = 1,
-        .apiVersion         = VK_API_VERSION_1_3,
-    };
-    VkInstanceCreateInfo info = {
-        .sType                   = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
-        .pNext                   = features ? &vfeat : NULL,
-        .pApplicationInfo        = &app,
-        .enabledLayerCount       = nb_layers,
-        .ppEnabledLayerNames     = nb_layers ? layers : NULL,
-        .enabledExtensionCount   = nb_exts,
-        .ppEnabledExtensionNames = exts,
-    };
-    VkResult res = vkCreateInstance(&info, NULL, &w->inst);
-    free(exts);
-    if (res != VK_SUCCESS) {
-        rx_err("gpu: unable to create a Vulkan instance: %s", rx_vk_strerror(res));
-        return rx_vk_ret2err(res);
-    }
-
-    if (debug_utils) {
-        PFN_vkCreateDebugUtilsMessengerEXT create = (PFN_vkCreateDebugUtilsMessengerEXT)
-            vkGetInstanceProcAddr(w->inst, "vkCreateDebugUtilsMessengerEXT");
-        VkDebugUtilsMessengerCreateInfoEXT dinfo = {
-            .sType           = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
-            .messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT |
-                               VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT,
-            .messageType     = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
-                               VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
-                               VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT,
-            .pfnUserCallback = debug_cb,
-            .pUserData       = w,
-        };
-        if (create)
-            create(w->inst, &dinfo, NULL, &w->messenger);
-    }
-
-    if (nb_layers)
-        rx_info("gpu: validation enabled%s", features ? " (with synchronisation checks)" : "");
-
-    return 0;
-}
-
 /* ------------------------------------------------------------------ device */
 
-/* Why a device cannot run the interface, or NULL if it can; `qfam` gets a
- * queue family that draws and presents to the window's surface. */
-static const char *device_unusable(RXWindow *w, VkPhysicalDevice pd,
+/* Why a device cannot run the interface, or NULL if it can (RXVkDevCheck,
+ * `opaque` the window); `qfam` gets a queue family that draws and
+ * presents to the window's surface. */
+static const char *device_unusable(void *opaque, VkPhysicalDevice pd,
                                    const VkPhysicalDeviceProperties *props, uint32_t *qfam)
 {
-    if (props->apiVersion < VK_API_VERSION_1_3)
-        return "Vulkan 1.3 is required";
-
+    RXWindow *w = opaque;
     VkPhysicalDeviceVulkan13Features f13 = {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
     };
@@ -278,20 +66,10 @@ static const char *device_unusable(RXWindow *w, VkPhysicalDevice pd,
     if (!f12.bufferDeviceAddress)
         return "no bufferDeviceAddress";
 
-    uint32_t nb = 0;
-    vkEnumerateDeviceExtensionProperties(pd, NULL, &nb, NULL);
-    VkExtensionProperties *exts = calloc(RX_MAX(nb, 1), sizeof(*exts));
-    if (!exts)
-        return "out of memory";
-    vkEnumerateDeviceExtensionProperties(pd, NULL, &nb, exts);
-    bool swapchain = false;
-    for (uint32_t i = 0; i < nb && !swapchain; i++)
-        swapchain = !strcmp(exts[i].extensionName, VK_KHR_SWAPCHAIN_EXTENSION_NAME);
-    free(exts);
-    if (!swapchain)
+    if (!rx_vkdev_has_ext(pd, VK_KHR_SWAPCHAIN_EXTENSION_NAME))
         return "no VK_KHR_swapchain";
 
-    nb = 0;
+    uint32_t nb = 0;
     vkGetPhysicalDeviceQueueFamilyProperties(pd, &nb, NULL);
     VkQueueFamilyProperties *qf = calloc(RX_MAX(nb, 1), sizeof(*qf));
     if (!qf)
@@ -328,74 +106,6 @@ static const char *device_unusable(RXWindow *w, VkPhysicalDevice pd,
     return NULL;
 }
 
-static int type_score(VkPhysicalDeviceType type)
-{
-    switch (type) {
-    case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:   return 4;
-    case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU: return 3;
-    case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU:    return 2;
-    case VK_PHYSICAL_DEVICE_TYPE_CPU:            return 1;
-    default:                                     return 0;
-    }
-}
-
-/* The first suitable device of the best type: discrete before integrated
- * before software. A device named by options.device (a case-insensitive
- * substring) wins over all of them; when none matches, the choice falls
- * back to the usual order with a warning rather than failing. */
-static int pick_device(RXWindow *w)
-{
-    uint32_t nb = 0;
-    VkResult res = vkEnumeratePhysicalDevices(w->inst, &nb, NULL);
-    if (res != VK_SUCCESS || !nb) {
-        rx_err("gpu: no Vulkan devices");
-        return RX_ERROR(ENODEV);
-    }
-
-    VkPhysicalDevice *devs = calloc(nb, sizeof(*devs));
-    if (!devs)
-        return RX_ERROR(ENOMEM);
-    vkEnumeratePhysicalDevices(w->inst, &nb, devs);
-
-    const char *want = w->device && w->device[0] ? w->device : NULL;
-    int best_score = -1;
-    bool named = false;
-    for (uint32_t i = 0; i < nb; i++) {
-        VkPhysicalDeviceProperties props;
-        uint32_t qfam = 0;
-
-        vkGetPhysicalDeviceProperties(devs[i], &props);
-        const char *why = device_unusable(w, devs[i], &props, &qfam);
-        if (why) {
-            rx_debug("gpu: %s: %s", props.deviceName, why);
-            if (want && strcasestr(props.deviceName, want))
-                rx_warn("gpu: %s cannot be used: %s", props.deviceName, why);
-            continue;
-        }
-
-        bool match = want && strcasestr(props.deviceName, want);
-        int score = type_score(props.deviceType) + (match ? 100 : 0);
-        rx_debug("gpu: %s: usable, score %d", props.deviceName, score);
-        if (score > best_score) {
-            best_score = score;
-            named = match;
-            w->phys = devs[i];
-            w->props = props;
-            w->qfam = qfam;
-        }
-    }
-    free(devs);
-
-    if (best_score < 0) {
-        rx_err("gpu: no Vulkan 1.3 device can draw to this window");
-        return RX_ERROR(ENODEV);
-    }
-    if (want && !named)
-        rx_warn("gpu: no usable device matches \"%s\"", want);
-
-    return 0;
-}
-
 static int create_device(RXWindow *w)
 {
     VkPhysicalDeviceVulkan13Features f13 = {
@@ -413,65 +123,14 @@ static int create_device(RXWindow *w)
         .pNext = &f12,
     };
 
-    const float prio = 1.0f;
-    VkDeviceQueueCreateInfo qinfo = {
-        .sType            = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
-        .queueFamilyIndex = w->qfam,
-        .queueCount       = 1,
-        .pQueuePriorities = &prio,
-    };
     const char *exts[] = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
-    VkDeviceCreateInfo info = {
-        .sType                   = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
-        .pNext                   = &f2,
-        .queueCreateInfoCount    = 1,
-        .pQueueCreateInfos       = &qinfo,
-        .enabledExtensionCount   = RX_ARRAY_ELEMS(exts),
-        .ppEnabledExtensionNames = exts,
-    };
-    VkResult res = vkCreateDevice(w->phys, &info, NULL, &w->dev);
-    if (res != VK_SUCCESS) {
-        rx_err("gpu: unable to create a device on %s: %s", w->props.deviceName,
-               rx_vk_strerror(res));
-        return rx_vk_ret2err(res);
-    }
-    vkGetDeviceQueue(w->dev, w->qfam, 0, &w->queue);
-
-    VmaVulkanFunctions fn = {
-        .vkGetInstanceProcAddr = vkGetInstanceProcAddr,
-        .vkGetDeviceProcAddr   = vkGetDeviceProcAddr,
-    };
-    VmaAllocatorCreateInfo vinfo = {
-        .flags            = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT,
-        .physicalDevice   = w->phys,
-        .device           = w->dev,
-        .pVulkanFunctions = &fn,
-        .instance         = w->inst,
-        .vulkanApiVersion = VK_API_VERSION_1_3,
-    };
-    res = vmaCreateAllocator(&vinfo, &w->vma);
-    if (res != VK_SUCCESS) {
-        rx_err("gpu: unable to create the VMA allocator: %s", rx_vk_strerror(res));
-        return rx_vk_ret2err(res);
-    }
-
-    return 0;
+    return rx_vkdev_device(&w->vk, &f2, exts, RX_ARRAY_ELEMS(exts));
 }
 
 static int create_frames(RXWindow *w)
 {
-    /* Timestamps only measure (the demo's frame times); a queue without
-     * them just goes without. */
-    uint32_t nb_qf = 0;
-    vkGetPhysicalDeviceQueueFamilyProperties(w->phys, &nb_qf, NULL);
-    VkQueueFamilyProperties *qf = calloc(RX_MAX(nb_qf, 1), sizeof(*qf));
-    if (!qf)
-        return RX_ERROR(ENOMEM);
-    vkGetPhysicalDeviceQueueFamilyProperties(w->phys, &nb_qf, qf);
-    uint32_t ts_bits = w->qfam < nb_qf ? qf[w->qfam].timestampValidBits : 0;
-    free(qf);
-    w->ts_mask = ts_bits >= 64 ? UINT64_MAX : ts_bits ? (UINT64_C(1) << ts_bits) - 1 : 0;
-
+    /* Timestamps only measure (the demo's frame times): a queue without
+     * them (vk.ts_mask 0) just goes without. */
     for (int i = 0; i < RX_FRAMES_IN_FLIGHT; i++) {
         RXFrame *f = &w->frames[i];
 
@@ -479,9 +138,9 @@ static int create_frames(RXWindow *w)
         VkCommandPoolCreateInfo pinfo = {
             .sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
             .flags            = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT,
-            .queueFamilyIndex = w->qfam,
+            .queueFamilyIndex = w->vk.qfam,
         };
-        VkResult res = vkCreateCommandPool(w->dev, &pinfo, NULL, &f->pool);
+        VkResult res = vkCreateCommandPool(w->vk.dev, &pinfo, NULL, &f->pool);
         if (res != VK_SUCCESS)
             return rx_vk_ret2err(res);
 
@@ -491,7 +150,7 @@ static int create_frames(RXWindow *w)
             .level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
             .commandBufferCount = 1,
         };
-        res = vkAllocateCommandBuffers(w->dev, &cinfo, &f->cmd);
+        res = vkAllocateCommandBuffers(w->vk.dev, &cinfo, &f->cmd);
         if (res != VK_SUCCESS)
             return rx_vk_ret2err(res);
 
@@ -500,24 +159,24 @@ static int create_frames(RXWindow *w)
             .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
             .flags = VK_FENCE_CREATE_SIGNALED_BIT,
         };
-        res = vkCreateFence(w->dev, &finfo, NULL, &f->fence);
+        res = vkCreateFence(w->vk.dev, &finfo, NULL, &f->fence);
         if (res != VK_SUCCESS)
             return rx_vk_ret2err(res);
 
         VkSemaphoreCreateInfo sinfo = {
             .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
         };
-        res = vkCreateSemaphore(w->dev, &sinfo, NULL, &f->acquired);
+        res = vkCreateSemaphore(w->vk.dev, &sinfo, NULL, &f->acquired);
         if (res != VK_SUCCESS)
             return rx_vk_ret2err(res);
 
-        if (w->ts_mask) {
+        if (w->vk.ts_mask) {
             VkQueryPoolCreateInfo qinfo = {
                 .sType      = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
                 .queryType  = VK_QUERY_TYPE_TIMESTAMP,
                 .queryCount = 2,
             };
-            res = vkCreateQueryPool(w->dev, &qinfo, NULL, &f->times);
+            res = vkCreateQueryPool(w->vk.dev, &qinfo, NULL, &f->times);
             if (res != VK_SUCCESS)
                 return rx_vk_ret2err(res);
         }
@@ -532,18 +191,40 @@ int rx_vk_create(RXWindow *w)
     rx_array_init(&w->uploads, sizeof(RXUpload));
     rx_array_init(&w->textures, sizeof(RXTexture));
 
-    int ret = create_instance(w);
-    if (ret < 0)
+    /* SDL's instance extensions: surface and wayland_surface. */
+    Uint32 nb_sdl = 0;
+    const char *const *sdl_exts = SDL_Vulkan_GetInstanceExtensions(&nb_sdl);
+    if (!sdl_exts) {
+        rx_err("gpu: SDL_Vulkan_GetInstanceExtensions: %s", SDL_GetError());
+        return RX_ERROR(ENODEV);
+    }
+    RXVkDevOptions vo = {
+        .tag         = "gpu",
+        .validation  = w->opts.validation,
+        .performance = true,
+        .exts        = sdl_exts,
+        .nb_exts     = nb_sdl,
+        .device      = w->device,
+        .cpu         = true,
+        .check       = device_unusable,
+        .opaque      = w,
+    };
+    int ret = rx_vkdev_instance(&w->vk, &vo);
+    if (ret < 0) {
+        rx_err("gpu: unable to create a Vulkan 1.3 instance: %s", strerror(-ret));
         return ret;
+    }
 
-    if (!SDL_Vulkan_CreateSurface(w->win, w->inst, NULL, &w->surface)) {
+    if (!SDL_Vulkan_CreateSurface(w->win, w->vk.inst, NULL, &w->surface)) {
         rx_err("gpu: SDL_Vulkan_CreateSurface: %s", SDL_GetError());
         return RX_ERROR(ENODEV);
     }
 
-    ret = pick_device(w);
-    if (ret < 0)
+    ret = rx_vkdev_pick(&w->vk, &vo);
+    if (ret < 0) {
+        rx_err("gpu: no Vulkan 1.3 device can draw to this window");
         return ret;
+    }
 
     ret = create_device(w);
     if (ret < 0)
@@ -555,16 +236,16 @@ int rx_vk_create(RXWindow *w)
         return ret;
     }
 
-    rx_info("gpu: %s, Vulkan %u.%u, queue family %u", w->props.deviceName,
-            VK_API_VERSION_MAJOR(w->props.apiVersion),
-            VK_API_VERSION_MINOR(w->props.apiVersion), w->qfam);
+    rx_info("gpu: %s, Vulkan %u.%u, queue family %u", w->vk.props.deviceName,
+            VK_API_VERSION_MAJOR(w->vk.props.apiVersion),
+            VK_API_VERSION_MINOR(w->vk.props.apiVersion), w->vk.qfam);
 
     return 0;
 }
 
 const char *rx_window_gpu_name(const RXWindow *w)
 {
-    return w->props.deviceName;
+    return w->vk.props.deviceName;
 }
 
 static void free_upload(RXWindow *w, RXUpload *up)
@@ -574,8 +255,8 @@ static void free_upload(RXWindow *w, RXUpload *up)
 
 void rx_vk_destroy(RXWindow *w)
 {
-    if (w->dev) {
-        vkDeviceWaitIdle(w->dev);
+    if (w->vk.dev) {
+        vkDeviceWaitIdle(w->vk.dev);
 
         rx_vk_collect(w, true);
         for (size_t i = 0; i < w->uploads.nb; i++)
@@ -585,40 +266,25 @@ void rx_vk_destroy(RXWindow *w)
         for (int i = 0; i < RX_FRAMES_IN_FLIGHT; i++) {
             RXFrame *f = &w->frames[i];
             if (f->times)
-                vkDestroyQueryPool(w->dev, f->times, NULL);
+                vkDestroyQueryPool(w->vk.dev, f->times, NULL);
             if (f->acquired)
-                vkDestroySemaphore(w->dev, f->acquired, NULL);
+                vkDestroySemaphore(w->vk.dev, f->acquired, NULL);
             if (f->fence)
-                vkDestroyFence(w->dev, f->fence, NULL);
+                vkDestroyFence(w->vk.dev, f->fence, NULL);
             if (f->pool)
-                vkDestroyCommandPool(w->dev, f->pool, NULL);
+                vkDestroyCommandPool(w->vk.dev, f->pool, NULL);
             *f = (RXFrame) { 0 };
         }
 
-        if (w->vma)
-            vmaDestroyAllocator(w->vma);
-        w->vma = NULL;
-        vkDestroyDevice(w->dev, NULL);
-        w->dev = VK_NULL_HANDLE;
     }
 
     /* SDL made the surface, so SDL unmakes it: it knows which loader entry
-     * point it used. Before the instance, while the window still exists. */
-    if (w->surface && w->inst)
-        SDL_Vulkan_DestroySurface(w->inst, w->surface, NULL);
+     * point it used. After the swapchain (window.c), before the instance,
+     * while the window still exists. */
+    if (w->surface && w->vk.inst)
+        SDL_Vulkan_DestroySurface(w->vk.inst, w->surface, NULL);
     w->surface = VK_NULL_HANDLE;
-
-    if (w->messenger) {
-        PFN_vkDestroyDebugUtilsMessengerEXT destroy = (PFN_vkDestroyDebugUtilsMessengerEXT)
-            vkGetInstanceProcAddr(w->inst, "vkDestroyDebugUtilsMessengerEXT");
-        if (destroy)
-            destroy(w->inst, w->messenger, NULL);
-        w->messenger = VK_NULL_HANDLE;
-    }
-
-    if (w->inst)
-        vkDestroyInstance(w->inst, NULL);
-    w->inst = VK_NULL_HANDLE;
+    rx_vkdev_destroy(&w->vk);
 
     rx_array_free(&w->garbage);
     rx_array_free(&w->uploads);
@@ -662,7 +328,7 @@ int rx_vk_buffer_create(RXWindow *w, RXVkBuffer *b, VkDeviceSize size,
     }
 
     VmaAllocationInfo ai = { 0 };
-    VkResult res = vmaCreateBuffer(w->vma, &info, &ci, &b->buf, &b->alloc, &ai);
+    VkResult res = vmaCreateBuffer(w->vk.vma, &info, &ci, &b->buf, &b->alloc, &ai);
     if (res != VK_SUCCESS) {
         rx_err("gpu: unable to allocate a %llu byte buffer: %s", (unsigned long long)size,
                rx_vk_strerror(res));
@@ -678,7 +344,7 @@ int rx_vk_buffer_create(RXWindow *w, RXVkBuffer *b, VkDeviceSize size,
             .sType  = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO,
             .buffer = b->buf,
         };
-        b->addr = vkGetBufferDeviceAddress(w->dev, &ainfo);
+        b->addr = vkGetBufferDeviceAddress(w->vk.dev, &ainfo);
     }
 
     return 0;
@@ -688,7 +354,7 @@ void rx_vk_buffer_free(RXWindow *w, RXVkBuffer *b)
 {
     if (!b || !b->buf)
         return;
-    vmaDestroyBuffer(w->vma, b->buf, b->alloc);
+    vmaDestroyBuffer(w->vk.vma, b->buf, b->alloc);
     *b = (RXVkBuffer) { 0 };
 }
 
@@ -696,7 +362,7 @@ int rx_vk_buffer_invalidate(RXWindow *w, RXVkBuffer *b)
 {
     if (!b->map)
         return 0;
-    return rx_vk_ret2err(vmaInvalidateAllocation(w->vma, b->alloc, 0, VK_WHOLE_SIZE));
+    return rx_vk_ret2err(vmaInvalidateAllocation(w->vk.vma, b->alloc, 0, VK_WHOLE_SIZE));
 }
 
 /* ------------------------------------------------------ deferred destruction */
@@ -706,13 +372,13 @@ static void free_deferred(RXWindow *w, const RXDeferred *d)
     if (d->tex_id)
         rx_imgui_remove_texture(w, d->tex_id);
     if (d->view)
-        vkDestroyImageView(w->dev, d->view, NULL);
+        vkDestroyImageView(w->vk.dev, d->view, NULL);
     if (d->img)
-        vmaDestroyImage(w->vma, d->img, d->alloc);
+        vmaDestroyImage(w->vk.vma, d->img, d->alloc);
     else if (d->buf)
-        vmaDestroyBuffer(w->vma, d->buf, d->alloc);
+        vmaDestroyBuffer(w->vk.vma, d->buf, d->alloc);
     else if (d->alloc)
-        vmaFreeMemory(w->vma, d->alloc);
+        vmaFreeMemory(w->vk.vma, d->alloc);
 }
 
 int rx_vk_defer_reserve(RXWindow *w, size_t n)
@@ -740,7 +406,7 @@ static void defer_at(RXWindow *w, const RXDeferred *d, uint64_t serial)
         /* Deferred without room taken for it, and no memory to grow:
          * everything submitted is done once the device is idle, and its
          * garbage makes room. */
-        vkDeviceWaitIdle(w->dev);
+        vkDeviceWaitIdle(w->vk.dev);
         w->completed = w->serial;
         rx_vk_collect(w, false);
         item = rx_array_push(&w->garbage, d);
@@ -771,7 +437,7 @@ void rx_vk_poll_completed(RXWindow *w)
 {
     for (int i = 0; i < RX_FRAMES_IN_FLIGHT; i++) {
         RXFrame *f = &w->frames[i];
-        if (f->serial > w->completed && vkGetFenceStatus(w->dev, f->fence) == VK_SUCCESS)
+        if (f->serial > w->completed && vkGetFenceStatus(w->vk.dev, f->fence) == VK_SUCCESS)
             w->completed = f->serial;
     }
 }

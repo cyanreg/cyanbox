@@ -50,10 +50,10 @@ endforeach
 rx_ml_lib = static_library('rx_ml',
     files('gpu.c', 'gguf.c', 'tokenizer.c', 'moss.c', 'tag.c'), ml_shader_headers,
     include_directories: rx_inc,
-    dependencies: [ rx_common_dep, vulkan_dep, vma_dep, m_dep ],
+    dependencies: [ rx_vkdev_dep, m_dep ],
 )
 rx_ml_dep = declare_dependency(link_with: rx_ml_lib,
-                               dependencies: [ rx_common_dep, vulkan_dep, vma_dep ])
+                               dependencies: [ rx_vkdev_dep ])
 
 # The kernels against plain C on small random inputs. Needs a Vulkan device
 # that can run the model; skipped (77) without one.

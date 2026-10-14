@@ -27,8 +27,8 @@
 uint64_t rx_texture_create(RXWindow *w, const uint8_t *rgba, int width, int height)
 {
     if (!w || !rgba || width <= 0 || height <= 0 ||
-        (uint32_t)width > w->props.limits.maxImageDimension2D ||
-        (uint32_t)height > w->props.limits.maxImageDimension2D)
+        (uint32_t)width > w->vk.props.limits.maxImageDimension2D ||
+        (uint32_t)height > w->vk.props.limits.maxImageDimension2D)
         return 0;
     if (w->textures.nb >= RX_MAX_TEXTURES) {
         rx_err("gpu: too many textures (%d)", RX_MAX_TEXTURES);
@@ -61,7 +61,7 @@ uint64_t rx_texture_create(RXWindow *w, const uint8_t *rgba, int width, int heig
     VmaAllocationCreateInfo ainfo = {
         .usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
     };
-    VkResult res = vmaCreateImage(w->vma, &iinfo, &ainfo, &tex.img, &tex.alloc, NULL);
+    VkResult res = vmaCreateImage(w->vk.vma, &iinfo, &ainfo, &tex.img, &tex.alloc, NULL);
     if (res != VK_SUCCESS) {
         rx_err("gpu: unable to create a %dx%d texture: %s", width, height,
                rx_vk_strerror(res));
@@ -80,7 +80,7 @@ uint64_t rx_texture_create(RXWindow *w, const uint8_t *rgba, int width, int heig
             .layerCount = 1,
         },
     };
-    res = vkCreateImageView(w->dev, &vinfo, NULL, &tex.view);
+    res = vkCreateImageView(w->vk.dev, &vinfo, NULL, &tex.view);
     if (res != VK_SUCCESS)
         goto fail;
 
@@ -88,7 +88,7 @@ uint64_t rx_texture_create(RXWindow *w, const uint8_t *rgba, int width, int heig
                             RX_MEM_UPLOAD) < 0)
         goto fail;
     memcpy(up.staging.map, rgba, size);
-    vmaFlushAllocation(w->vma, up.staging.alloc, 0, VK_WHOLE_SIZE);
+    vmaFlushAllocation(w->vk.vma, up.staging.alloc, 0, VK_WHOLE_SIZE);
     up.dst_img = tex.img;
     up.width   = (uint32_t)width;
     up.height  = (uint32_t)height;
@@ -114,8 +114,8 @@ fail:
         rx_imgui_remove_texture(w, tex.id);
     rx_vk_buffer_free(w, &up.staging);
     if (tex.view)
-        vkDestroyImageView(w->dev, tex.view, NULL);
-    vmaDestroyImage(w->vma, tex.img, tex.alloc);
+        vkDestroyImageView(w->vk.dev, tex.view, NULL);
+    vmaDestroyImage(w->vk.vma, tex.img, tex.alloc);
     return 0;
 }
 

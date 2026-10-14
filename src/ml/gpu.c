@@ -1,9 +1,11 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
 /* The model's GPU: a Vulkan instance with no surface, the best device that
- * can run the kernels, one compute queue, VMA, a timeline semaphore, the
- * pipelines and one command buffer. Cut from rxbox's compute context
- * (src/gpu/compute.c) and kept like it, with what the model needs on top.
+ * can run the kernels, one compute queue, VMA (all set up by
+ * src/gpu/vkdev.c, as the window's and the compute context's are), a
+ * timeline semaphore, the pipelines and one command buffer. Kept like
+ * rxbox's compute context (src/gpu/compute.c), with what the model needs
+ * on top.
  *
  * Choices, and why:
  *  - Its own device (ml_priv.h says why not rxbox's compute context). The
@@ -96,199 +98,6 @@ static const struct {
 #undef K
 };
 
-/* ------------------------------------------------------------------ errors */
-
-static int ret2err(VkResult res)
-{
-    switch (res) {
-    case VK_SUCCESS:
-        return 0;
-    case VK_ERROR_OUT_OF_HOST_MEMORY:
-    case VK_ERROR_OUT_OF_DEVICE_MEMORY:
-        return RX_ERROR(ENOMEM);
-    case VK_ERROR_DEVICE_LOST:
-        return RX_ERROR(EIO);
-    case VK_ERROR_INITIALIZATION_FAILED:
-    case VK_ERROR_INCOMPATIBLE_DRIVER:
-    case VK_ERROR_EXTENSION_NOT_PRESENT:
-    case VK_ERROR_FEATURE_NOT_PRESENT:
-    case VK_ERROR_LAYER_NOT_PRESENT:
-        return RX_ERROR(ENODEV);
-    case VK_TIMEOUT:
-    case VK_NOT_READY:
-        return RX_ERROR(ETIMEDOUT);
-    default:
-        return RX_ERROR(EINVAL);
-    }
-}
-
-static const char *vk_strerror(VkResult res)
-{
-    switch (res) {
-    case VK_SUCCESS:                      return "success";
-    case VK_TIMEOUT:                      return "timeout";
-    case VK_ERROR_OUT_OF_HOST_MEMORY:     return "out of host memory";
-    case VK_ERROR_OUT_OF_DEVICE_MEMORY:   return "out of device memory";
-    case VK_ERROR_INITIALIZATION_FAILED:  return "initialization failed";
-    case VK_ERROR_DEVICE_LOST:            return "device lost";
-    case VK_ERROR_LAYER_NOT_PRESENT:      return "layer not present";
-    case VK_ERROR_EXTENSION_NOT_PRESENT:  return "extension not present";
-    case VK_ERROR_FEATURE_NOT_PRESENT:    return "feature not present";
-    case VK_ERROR_INCOMPATIBLE_DRIVER:    return "incompatible driver";
-    default:                              return "error";
-    }
-}
-
-/* -------------------------------------------------------------- validation */
-
-static VKAPI_ATTR VkBool32 VKAPI_CALL debug_cb(VkDebugUtilsMessageSeverityFlagBitsEXT sev,
-                                               VkDebugUtilsMessageTypeFlagsEXT type,
-                                               const VkDebugUtilsMessengerCallbackDataEXT *data,
-                                               void *opaque)
-{
-    MLGpu *g = opaque;
-
-    if (sev & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
-        atomic_fetch_add(&g->validation_errors, 1);
-        rx_err("ml: %s", data->pMessage);
-    } else if (sev & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
-        rx_warn("ml: %s", data->pMessage);
-    } else {
-        rx_debug("ml: %s", data->pMessage);
-    }
-
-    return VK_FALSE;
-}
-
-static bool have_layer(const char *name)
-{
-    uint32_t nb = 0;
-    if (vkEnumerateInstanceLayerProperties(&nb, NULL) != VK_SUCCESS || !nb)
-        return false;
-
-    VkLayerProperties *props = calloc(nb, sizeof(*props));
-    if (!props)
-        return false;
-
-    bool found = false;
-    if (vkEnumerateInstanceLayerProperties(&nb, props) == VK_SUCCESS) {
-        for (uint32_t i = 0; i < nb && !found; i++)
-            found = !strcmp(props[i].layerName, name);
-    }
-
-    free(props);
-    return found;
-}
-
-static bool have_instance_ext(const char *layer, const char *name)
-{
-    uint32_t nb = 0;
-    if (vkEnumerateInstanceExtensionProperties(layer, &nb, NULL) != VK_SUCCESS || !nb)
-        return false;
-
-    VkExtensionProperties *props = calloc(nb, sizeof(*props));
-    if (!props)
-        return false;
-
-    bool found = false;
-    if (vkEnumerateInstanceExtensionProperties(layer, &nb, props) == VK_SUCCESS) {
-        for (uint32_t i = 0; i < nb && !found; i++)
-            found = !strcmp(props[i].extensionName, name);
-    }
-
-    free(props);
-    return found;
-}
-
-/* ---------------------------------------------------------------- instance */
-
-static int create_instance(MLGpu *g, bool validation)
-{
-    uint32_t version = 0;
-    if (vkEnumerateInstanceVersion(&version) != VK_SUCCESS || version < VK_API_VERSION_1_3) {
-        rx_debug("ml: the Vulkan loader is older than 1.3");
-        return RX_ERROR(ENODEV);
-    }
-
-    const char *exts[2];
-    uint32_t nb_exts = 0;
-    const char *layers[1];
-    uint32_t nb_layers = 0;
-    bool debug_utils = false, features = false;
-    if (validation) {
-        if (have_layer("VK_LAYER_KHRONOS_validation")) {
-            layers[nb_layers++] = "VK_LAYER_KHRONOS_validation";
-            features = have_instance_ext("VK_LAYER_KHRONOS_validation",
-                                         VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME);
-            if (features)
-                exts[nb_exts++] = VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME;
-        } else {
-            rx_warn("ml: VK_LAYER_KHRONOS_validation is not installed");
-        }
-        debug_utils = have_instance_ext(NULL, VK_EXT_DEBUG_UTILS_EXTENSION_NAME) ||
-                      (nb_layers && have_instance_ext("VK_LAYER_KHRONOS_validation",
-                                                      VK_EXT_DEBUG_UTILS_EXTENSION_NAME));
-        if (debug_utils)
-            exts[nb_exts++] = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
-    }
-
-    /* Synchronisation validation too, as the compute context has: the
-     * barriers between dispatches, copies and the host's reads are what
-     * the model's recording gets wrong if it gets anything wrong. */
-    const VkValidationFeatureEnableEXT enables[] = {
-        VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT,
-    };
-    VkValidationFeaturesEXT vfeat = {
-        .sType                         = VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT,
-        .enabledValidationFeatureCount = RX_ARRAY_ELEMS(enables),
-        .pEnabledValidationFeatures    = enables,
-    };
-
-    VkApplicationInfo app = {
-        .sType              = VK_STRUCTURE_TYPE_APPLICATION_INFO,
-        .pApplicationName   = "rxbox",
-        .applicationVersion = 1,
-        .pEngineName        = "rxbox",
-        .engineVersion      = 1,
-        .apiVersion         = VK_API_VERSION_1_3,
-    };
-    VkInstanceCreateInfo info = {
-        .sType                   = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
-        .pNext                   = features ? &vfeat : NULL,
-        .pApplicationInfo        = &app,
-        .enabledLayerCount       = nb_layers,
-        .ppEnabledLayerNames     = nb_layers ? layers : NULL,
-        .enabledExtensionCount   = nb_exts,
-        .ppEnabledExtensionNames = nb_exts ? exts : NULL,
-    };
-    VkResult res = vkCreateInstance(&info, NULL, &g->inst);
-    if (res != VK_SUCCESS) {
-        rx_debug("ml: no Vulkan instance: %s", vk_strerror(res));
-        g->inst = VK_NULL_HANDLE;
-        return ret2err(res);
-    }
-
-    if (debug_utils) {
-        PFN_vkCreateDebugUtilsMessengerEXT create = (PFN_vkCreateDebugUtilsMessengerEXT)
-            vkGetInstanceProcAddr(g->inst, "vkCreateDebugUtilsMessengerEXT");
-        VkDebugUtilsMessengerCreateInfoEXT dinfo = {
-            .sType           = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
-            .messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT |
-                               VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT,
-            .messageType     = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
-                               VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT,
-            .pfnUserCallback = debug_cb,
-            .pUserData       = g,
-        };
-        if (create)
-            create(g->inst, &dinfo, NULL, &g->messenger);
-    }
-    if (nb_layers)
-        rx_info("ml: validation enabled%s", features ? " (with synchronisation checks)" : "");
-
-    return 0;
-}
-
 /* ------------------------------------------------------------------ device */
 
 #define NEED_SHARED (48 * 1024)
@@ -299,19 +108,17 @@ static int create_instance(MLGpu *g, bool validation)
 
 /* What a device is set up with beyond the defaults. */
 typedef struct DevChoice {
-    uint32_t qfam;
     uint32_t sub_size;          /* the size the subgroup kernels require, 0: any it picks */
     bool full_sub;              /* computeFullSubgroups */
 } DevChoice;
 
-/* Why a device cannot run the model, or NULL; `c` gets the queue family
- * to use and how the subgroup kernels are run. */
-static const char *device_unusable(VkPhysicalDevice pd, const VkPhysicalDeviceProperties *props,
-                                   DevChoice *c)
+/* Why a device cannot run the model, or NULL (RXVkDevCheck): `qfam` gets
+ * the queue family to use, the DevChoice `opaque` how the subgroup
+ * kernels are run. */
+static const char *device_unusable(void *opaque, VkPhysicalDevice pd,
+                                   const VkPhysicalDeviceProperties *props, uint32_t *qfam)
 {
-    if (props->apiVersion < VK_API_VERSION_1_3)
-        return "Vulkan 1.3 is required";
-
+    DevChoice *c = opaque;
     VkPhysicalDeviceVulkan13Features f13 = {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
     };
@@ -381,94 +188,7 @@ static const char *device_unusable(VkPhysicalDevice pd, const VkPhysicalDevicePr
         return "workgroups too small";
     if (l->maxPushConstantsSize < ML_PUSH_SIZE)
         return "push constants too small";
-
-    uint32_t nb = 0;
-    vkGetPhysicalDeviceQueueFamilyProperties(pd, &nb, NULL);
-    VkQueueFamilyProperties *qf = calloc(RX_MAX(nb, 1), sizeof(*qf));
-    if (!qf)
-        return "out of memory";
-    vkGetPhysicalDeviceQueueFamilyProperties(pd, &nb, qf);
-    int any = -1, only = -1;
-    for (uint32_t i = 0; i < nb; i++) {
-        if (!(qf[i].queueFlags & VK_QUEUE_COMPUTE_BIT) || !qf[i].queueCount)
-            continue;
-        if (any < 0)
-            any = (int)i;
-        if (only < 0 && !(qf[i].queueFlags & VK_QUEUE_GRAPHICS_BIT))
-            only = (int)i;
-    }
-    free(qf);
-    if (any < 0)
-        return "no compute queue";
-
-    c->qfam = (uint32_t)(only >= 0 ? only : any);
-    return NULL;
-}
-
-static int type_score(VkPhysicalDeviceType type)
-{
-    switch (type) {
-    case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:   return 4;
-    case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU: return 3;
-    case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU:    return 2;
-    default:                                     return 0;
-    }
-}
-
-static int pick_device(MLGpu *g, const char *want)
-{
-    uint32_t nb = 0;
-    VkResult res = vkEnumeratePhysicalDevices(g->inst, &nb, NULL);
-    if (res != VK_SUCCESS || !nb) {
-        rx_debug("ml: no Vulkan devices");
-        return RX_ERROR(ENODEV);
-    }
-
-    VkPhysicalDevice *devs = calloc(nb, sizeof(*devs));
-    if (!devs)
-        return RX_ERROR(ENOMEM);
-    vkEnumeratePhysicalDevices(g->inst, &nb, devs);
-
-    int best_score = -1;
-    bool named = false;
-    for (uint32_t i = 0; i < nb; i++) {
-        VkPhysicalDeviceProperties props;
-        DevChoice choice = { 0 };
-
-        vkGetPhysicalDeviceProperties(devs[i], &props);
-        bool match = want && rx_str_contains_fold(props.deviceName, want);
-        const char *why = device_unusable(devs[i], &props, &choice);
-        if (!why && props.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU && !match)
-            why = "a CPU implementation (used only when named)";
-        if (why) {
-            rx_debug("ml: %s: %s", props.deviceName, why);
-            if (match)
-                rx_warn("ml: %s cannot be used: %s", props.deviceName, why);
-            continue;
-        }
-
-        int score = type_score(props.deviceType) + (match ? 100 : 0);
-        rx_debug("ml: %s: usable, score %d", props.deviceName, score);
-        if (score > best_score) {
-            best_score = score;
-            named = match;
-            g->phys = devs[i];
-            g->props = props;
-            g->qfam = choice.qfam;
-            g->sub_size = choice.sub_size;
-            g->full_sub = choice.full_sub;
-        }
-    }
-    free(devs);
-
-    if (best_score < 0) {
-        rx_debug("ml: no Vulkan device can run the model");
-        return RX_ERROR(ENODEV);
-    }
-    if (want && !named)
-        rx_warn("ml: no usable device matches \"%s\"; using %s", want, g->props.deviceName);
-
-    return 0;
+    return rx_vkdev_compute_family(pd, qfam);
 }
 
 static int create_pipelines(MLGpu *g)
@@ -482,9 +202,9 @@ static int create_pipelines(MLGpu *g)
         .pushConstantRangeCount = 1,
         .pPushConstantRanges    = &range,
     };
-    VkResult res = vkCreatePipelineLayout(g->dev, &linfo, NULL, &g->layout);
+    VkResult res = vkCreatePipelineLayout(g->vk.dev, &linfo, NULL, &g->layout);
     if (res != VK_SUCCESS)
-        return ret2err(res);
+        return rx_vk_ret2err(res);
 
     for (int k = 0; k < ML_NB_KERNELS; k++) {
         VkShaderModuleCreateInfo minfo = {
@@ -493,9 +213,9 @@ static int create_pipelines(MLGpu *g)
             .pCode    = (const uint32_t *)kernels[k].code,
         };
         VkShaderModule mod = VK_NULL_HANDLE;
-        res = vkCreateShaderModule(g->dev, &minfo, NULL, &mod);
+        res = vkCreateShaderModule(g->vk.dev, &minfo, NULL, &mod);
         if (res != VK_SUCCESS)
-            return ret2err(res);
+            return rx_vk_ret2err(res);
 
         bool sub = k == ML_K_GEMV_Q4K || k == ML_K_ATTN || k == ML_K_ATTN_DEC;
         VkPipelineShaderStageRequiredSubgroupSizeCreateInfo size = {
@@ -515,11 +235,12 @@ static int create_pipelines(MLGpu *g)
             },
             .layout = g->layout,
         };
-        res = vkCreateComputePipelines(g->dev, VK_NULL_HANDLE, 1, &pinfo, NULL, &g->pipes[k]);
-        vkDestroyShaderModule(g->dev, mod, NULL);
+        res = vkCreateComputePipelines(g->vk.dev, VK_NULL_HANDLE, 1, &pinfo, NULL, &g->pipes[k]);
+        vkDestroyShaderModule(g->vk.dev, mod, NULL);
         if (res != VK_SUCCESS) {
-            rx_warn("ml: unable to create the %s pipeline: %s", kernels[k].name, vk_strerror(res));
-            return ret2err(res);
+            rx_warn("ml: unable to create the %s pipeline: %s", kernels[k].name,
+                    rx_vk_strerror(res));
+            return rx_vk_ret2err(res);
         }
     }
     return 0;
@@ -556,94 +277,37 @@ static int create_device(MLGpu *g)
         },
     };
 
-    const float prio = 1.0f;
-    VkDeviceQueueCreateInfo qinfo = {
-        .sType            = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
-        .queueFamilyIndex = g->qfam,
-        .queueCount       = 1,
-        .pQueuePriorities = &prio,
-    };
-    VkDeviceCreateInfo info = {
-        .sType                = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
-        .pNext                = &f2,
-        .queueCreateInfoCount = 1,
-        .pQueueCreateInfos    = &qinfo,
-    };
-    VkResult res = vkCreateDevice(g->phys, &info, NULL, &g->dev);
-    if (res != VK_SUCCESS) {
-        rx_warn("ml: unable to create a device on %s: %s", g->props.deviceName, vk_strerror(res));
-        g->dev = VK_NULL_HANDLE;
-        return ret2err(res);
-    }
-    vkGetDeviceQueue(g->dev, g->qfam, 0, &g->queue);
-
-    uint32_t nb_qf = 0;
-    vkGetPhysicalDeviceQueueFamilyProperties(g->phys, &nb_qf, NULL);
-    VkQueueFamilyProperties *qf = calloc(RX_MAX(nb_qf, 1), sizeof(*qf));
-    if (!qf)
-        return RX_ERROR(ENOMEM);
-    vkGetPhysicalDeviceQueueFamilyProperties(g->phys, &nb_qf, qf);
-    uint32_t ts_bits = g->qfam < nb_qf ? qf[g->qfam].timestampValidBits : 0;
-    free(qf);
-    g->ts_mask = ts_bits >= 64 ? UINT64_MAX : ts_bits ? (UINT64_C(1) << ts_bits) - 1 : 0;
-
-    VmaVulkanFunctions fn = {
-        .vkGetInstanceProcAddr = vkGetInstanceProcAddr,
-        .vkGetDeviceProcAddr   = vkGetDeviceProcAddr,
-    };
-    VmaAllocatorCreateInfo vinfo = {
-        .flags            = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT,
-        .physicalDevice   = g->phys,
-        .device           = g->dev,
-        .pVulkanFunctions = &fn,
-        .instance         = g->inst,
-        .vulkanApiVersion = VK_API_VERSION_1_3,
-    };
-    res = vmaCreateAllocator(&vinfo, &g->vma);
-    if (res != VK_SUCCESS) {
-        g->vma = NULL;
-        return ret2err(res);
-    }
-
-    VkSemaphoreTypeCreateInfo tinfo = {
-        .sType         = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO,
-        .semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE,
-    };
-    VkSemaphoreCreateInfo sinfo = {
-        .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
-        .pNext = &tinfo,
-    };
-    res = vkCreateSemaphore(g->dev, &sinfo, NULL, &g->timeline);
-    if (res != VK_SUCCESS)
-        return ret2err(res);
+    int ret = rx_vkdev_device(&g->vk, &f2, NULL, 0);
+    if (ret < 0 || (ret = rx_vkdev_timeline(&g->vk, &g->timeline)) < 0)
+        return ret;
 
     VkCommandPoolCreateInfo pinfo = {
         .sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
         .flags            = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
-        .queueFamilyIndex = g->qfam,
+        .queueFamilyIndex = g->vk.qfam,
     };
-    res = vkCreateCommandPool(g->dev, &pinfo, NULL, &g->pool);
+    VkResult res = vkCreateCommandPool(g->vk.dev, &pinfo, NULL, &g->pool);
     if (res != VK_SUCCESS)
-        return ret2err(res);
+        return rx_vk_ret2err(res);
     VkCommandBufferAllocateInfo cinfo = {
         .sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
         .commandPool        = g->pool,
         .level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
         .commandBufferCount = 1,
     };
-    res = vkAllocateCommandBuffers(g->dev, &cinfo, &g->cmd);
+    res = vkAllocateCommandBuffers(g->vk.dev, &cinfo, &g->cmd);
     if (res != VK_SUCCESS)
-        return ret2err(res);
+        return rx_vk_ret2err(res);
 
-    if (g->profile && g->ts_mask) {
+    if (g->profile && g->vk.ts_mask) {
         VkQueryPoolCreateInfo qpinfo = {
             .sType      = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
             .queryType  = VK_QUERY_TYPE_TIMESTAMP,
             .queryCount = RX_ARRAY_ELEMS(g->time_kernel) + 1,
         };
-        res = vkCreateQueryPool(g->dev, &qpinfo, NULL, &g->times);
+        res = vkCreateQueryPool(g->vk.dev, &qpinfo, NULL, &g->times);
         if (res != VK_SUCCESS)
-            return ret2err(res);
+            return rx_vk_ret2err(res);
     } else {
         g->profile = false;
     }
@@ -654,7 +318,6 @@ static int create_device(MLGpu *g)
 int ml_gpu_create(MLGpu *g, const char *device, bool validation)
 {
     *g = (MLGpu) { 0 };
-    atomic_init(&g->validation_errors, 0);
 
     const char *want = device && device[0] ? device : getenv("RXBOX_GPU_DEVICE");
     if (want && !want[0])
@@ -664,20 +327,33 @@ int ml_gpu_create(MLGpu *g, const char *device, bool validation)
     const char *prof = getenv("RXBOX_ML_PROFILE");
     g->profile = prof && !strcmp(prof, "1");
 
+    DevChoice choice = { 0 };
+    RXVkDevOptions vo = {
+        .tag        = "ml",
+        .validation = validation,
+        .device     = want,
+        .check      = device_unusable,
+        .opaque     = &choice,
+    };
     int ret;
-    if ((ret = create_instance(g, validation)) < 0)
+    if ((ret = rx_vkdev_instance(&g->vk, &vo)) < 0)
         goto fail;
-    if ((ret = pick_device(g, want)) < 0)
+    if ((ret = rx_vkdev_pick(&g->vk, &vo)) < 0) {
+        rx_debug("ml: no Vulkan device can run the model");
         goto fail;
+    }
+    g->sub_size = choice.sub_size;
+    g->full_sub = choice.full_sub;
     if ((ret = create_device(g)) < 0)
         goto fail;
 
     char sub[32] = "as the driver picks";
     if (g->sub_size)
         snprintf(sub, sizeof(sub), "of %u", g->sub_size);
-    rx_debug("ml: %s, Vulkan %u.%u, queue family %u%s, subgroups %s", g->props.deviceName,
-             VK_API_VERSION_MAJOR(g->props.apiVersion), VK_API_VERSION_MINOR(g->props.apiVersion),
-             g->qfam, g->ts_mask ? "" : " (no timestamps)", sub);
+    rx_debug("ml: %s, Vulkan %u.%u, queue family %u%s, subgroups %s", g->vk.props.deviceName,
+             VK_API_VERSION_MAJOR(g->vk.props.apiVersion),
+             VK_API_VERSION_MINOR(g->vk.props.apiVersion), g->vk.qfam,
+             g->vk.ts_mask ? "" : " (no timestamps)", sub);
     return 0;
 
 fail:
@@ -687,33 +363,22 @@ fail:
 
 void ml_gpu_destroy(MLGpu *g)
 {
-    if (g->dev) {
-        vkDeviceWaitIdle(g->dev);
+    if (g->vk.dev) {
+        vkDeviceWaitIdle(g->vk.dev);
         for (int k = 0; k < ML_NB_KERNELS; k++) {
             if (g->pipes[k])
-                vkDestroyPipeline(g->dev, g->pipes[k], NULL);
+                vkDestroyPipeline(g->vk.dev, g->pipes[k], NULL);
         }
         if (g->layout)
-            vkDestroyPipelineLayout(g->dev, g->layout, NULL);
+            vkDestroyPipelineLayout(g->vk.dev, g->layout, NULL);
         if (g->times)
-            vkDestroyQueryPool(g->dev, g->times, NULL);
+            vkDestroyQueryPool(g->vk.dev, g->times, NULL);
         if (g->pool)
-            vkDestroyCommandPool(g->dev, g->pool, NULL);
+            vkDestroyCommandPool(g->vk.dev, g->pool, NULL);
         if (g->timeline)
-            vkDestroySemaphore(g->dev, g->timeline, NULL);
-        if (g->vma)
-            vmaDestroyAllocator(g->vma);
-        vkDestroyDevice(g->dev, NULL);
+            vkDestroySemaphore(g->vk.dev, g->timeline, NULL);
     }
-
-    if (g->messenger) {
-        PFN_vkDestroyDebugUtilsMessengerEXT destroy = (PFN_vkDestroyDebugUtilsMessengerEXT)
-            vkGetInstanceProcAddr(g->inst, "vkDestroyDebugUtilsMessengerEXT");
-        if (destroy)
-            destroy(g->inst, g->messenger, NULL);
-    }
-    if (g->inst)
-        vkDestroyInstance(g->inst, NULL);
+    rx_vkdev_destroy(&g->vk);
 
     *g = (MLGpu) { 0 };
 }
@@ -759,12 +424,12 @@ int ml_buf_create(MLGpu *g, MLBuf *b, VkDeviceSize size, enum MLMem mem)
     }
 
     VmaAllocationInfo ai = { 0 };
-    VkResult res = vmaCreateBuffer(g->vma, &info, &ci, &b->buf, &b->alloc, &ai);
+    VkResult res = vmaCreateBuffer(g->vk.vma, &info, &ci, &b->buf, &b->alloc, &ai);
     if (res != VK_SUCCESS) {
         rx_warn("ml: unable to allocate a %llu byte buffer: %s", (unsigned long long)size,
-                vk_strerror(res));
+                rx_vk_strerror(res));
         *b = (MLBuf) { 0 };
-        return ret2err(res);
+        return rx_vk_ret2err(res);
     }
 
     b->size = size;
@@ -774,7 +439,7 @@ int ml_buf_create(MLGpu *g, MLBuf *b, VkDeviceSize size, enum MLMem mem)
         .sType  = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO,
         .buffer = b->buf,
     };
-    b->addr = vkGetBufferDeviceAddress(g->dev, &ainfo);
+    b->addr = vkGetBufferDeviceAddress(g->vk.dev, &ainfo);
     return 0;
 }
 
@@ -782,16 +447,16 @@ void ml_buf_free(MLGpu *g, MLBuf *b)
 {
     if (!b || !b->buf)
         return;
-    vmaDestroyBuffer(g->vma, b->buf, b->alloc);
+    vmaDestroyBuffer(g->vk.vma, b->buf, b->alloc);
     *b = (MLBuf) { 0 };
 }
 
 uint64_t ml_gpu_allocated(MLGpu *g)
 {
     VmaBudget budgets[VK_MAX_MEMORY_HEAPS];
-    vmaGetHeapBudgets(g->vma, budgets);
+    vmaGetHeapBudgets(g->vk.vma, budgets);
     const VkPhysicalDeviceMemoryProperties *mp = NULL;
-    vmaGetMemoryProperties(g->vma, &mp);
+    vmaGetMemoryProperties(g->vk.vma, &mp);
     uint64_t total = 0;
     for (uint32_t i = 0; i < mp->memoryHeapCount; i++)
         total += budgets[i].statistics.allocationBytes;
@@ -802,14 +467,14 @@ int ml_buf_invalidate(MLGpu *g, MLBuf *b)
 {
     if (!b->map)
         return 0;
-    return ret2err(vmaInvalidateAllocation(g->vma, b->alloc, 0, VK_WHOLE_SIZE));
+    return rx_vk_ret2err(vmaInvalidateAllocation(g->vk.vma, b->alloc, 0, VK_WHOLE_SIZE));
 }
 
 int ml_buf_flush(MLGpu *g, MLBuf *b, VkDeviceSize size)
 {
     if (!b->map)
         return 0;
-    return ret2err(vmaFlushAllocation(g->vma, b->alloc, 0, size));
+    return rx_vk_ret2err(vmaFlushAllocation(g->vk.vma, b->alloc, 0, size));
 }
 
 /* --------------------------------------------------------------- recording */
@@ -894,12 +559,12 @@ static void read_times(MLGpu *g)
     if (!g->profile || !g->nb_times)
         return;
     uint64_t ts[RX_ARRAY_ELEMS(g->time_kernel) + 1];
-    if (vkGetQueryPoolResults(g->dev, g->times, 0, (uint32_t)g->nb_times + 1, sizeof(ts), ts,
+    if (vkGetQueryPoolResults(g->vk.dev, g->times, 0, (uint32_t)g->nb_times + 1, sizeof(ts), ts,
                               sizeof(uint64_t), VK_QUERY_RESULT_64_BIT) != VK_SUCCESS)
         return;
-    double period = g->props.limits.timestampPeriod * 1e-6;
+    double period = g->vk.props.limits.timestampPeriod * 1e-6;
     for (int i = 0; i < g->nb_times; i++) {
-        uint64_t d = (ts[i + 1] - ts[i]) & g->ts_mask;
+        uint64_t d = (ts[i + 1] - ts[i]) & g->vk.ts_mask;
         g->kernel_ms[g->time_kernel[i]] += (double)d * period;
         g->kernel_calls[g->time_kernel[i]]++;
     }
@@ -946,10 +611,10 @@ int ml_gpu_run(MLGpu *g)
     VkResult res = vkEndCommandBuffer(g->cmd);
     g->recording = false;
     if (res != VK_SUCCESS) {
-        rx_warn("ml: recording failed: %s", vk_strerror(res));
+        rx_warn("ml: recording failed: %s", rx_vk_strerror(res));
         vkResetCommandBuffer(g->cmd, 0);
         g->nb_times = 0;
-        return ret2err(res);
+        return rx_vk_ret2err(res);
     }
 
     uint64_t v = g->submitted + 1;
@@ -970,12 +635,12 @@ int ml_gpu_run(MLGpu *g)
         .signalSemaphoreInfoCount = 1,
         .pSignalSemaphoreInfos    = &signal,
     };
-    res = vkQueueSubmit2(g->queue, 1, &info, VK_NULL_HANDLE);
+    res = vkQueueSubmit2(g->vk.queue, 1, &info, VK_NULL_HANDLE);
     if (res != VK_SUCCESS) {
-        rx_warn("ml: submission failed: %s", vk_strerror(res));
+        rx_warn("ml: submission failed: %s", rx_vk_strerror(res));
         vkResetCommandBuffer(g->cmd, 0);
         g->nb_times = 0;
-        return ret2err(res);
+        return rx_vk_ret2err(res);
     }
     g->submitted = v;
 
@@ -987,18 +652,18 @@ int ml_gpu_run(MLGpu *g)
         .pSemaphores    = &g->timeline,
         .pValues        = &v,
     };
-    res = vkWaitSemaphores(g->dev, &winfo, UINT64_C(60000000000));
+    res = vkWaitSemaphores(g->vk.dev, &winfo, UINT64_C(60000000000));
     if (res != VK_SUCCESS) {
         /* The command buffer may still be running, or never end: wait
          * until the device is idle (a hung GPU is reset by its driver,
          * and the wait ends with the device lost) before its buffers can
          * be freed, and use the context no more. */
-        rx_err("ml: waiting for the GPU failed: %s; the model stops", vk_strerror(res));
-        vkDeviceWaitIdle(g->dev);
+        rx_err("ml: waiting for the GPU failed: %s; the model stops", rx_vk_strerror(res));
+        vkDeviceWaitIdle(g->vk.dev);
         g->lost = true;
         vkResetCommandBuffer(g->cmd, 0);
         g->nb_times = 0;
-        return ret2err(res);
+        return rx_vk_ret2err(res);
     }
     read_times(g);
     vkResetCommandBuffer(g->cmd, 0);

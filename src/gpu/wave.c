@@ -87,7 +87,7 @@ static int shader_module(RXWindow *w, const uint8_t *code, size_t size, VkShader
         .codeSize = size,
         .pCode    = (const uint32_t *)code,
     };
-    return rx_vk_ret2err(vkCreateShaderModule(w->dev, &info, NULL, out));
+    return rx_vk_ret2err(vkCreateShaderModule(w->vk.dev, &info, NULL, out));
 }
 
 int rx_wave_pipeline_create(RXWindow *w)
@@ -109,7 +109,7 @@ int rx_wave_pipeline_create(RXWindow *w)
         .pushConstantRangeCount = 1,
         .pPushConstantRanges    = &range,
     };
-    ret = rx_vk_ret2err(vkCreatePipelineLayout(w->dev, &linfo, NULL, &w->wave_layout));
+    ret = rx_vk_ret2err(vkCreatePipelineLayout(w->vk.dev, &linfo, NULL, &w->wave_layout));
     if (ret < 0)
         goto fail;
 
@@ -199,25 +199,25 @@ int rx_wave_pipeline_create(RXWindow *w)
         .pDynamicState       = &dynamic,
         .layout              = w->wave_layout,
     };
-    ret = rx_vk_ret2err(vkCreateGraphicsPipelines(w->dev, VK_NULL_HANDLE, 1, &pinfo, NULL,
+    ret = rx_vk_ret2err(vkCreateGraphicsPipelines(w->vk.dev, VK_NULL_HANDLE, 1, &pinfo, NULL,
                                                   &w->wave_pipe));
 
 fail:
     if (ret < 0)
         rx_err("gpu: unable to create the waveform pipeline (%d)", ret);
     if (vert)
-        vkDestroyShaderModule(w->dev, vert, NULL);
+        vkDestroyShaderModule(w->vk.dev, vert, NULL);
     if (frag)
-        vkDestroyShaderModule(w->dev, frag, NULL);
+        vkDestroyShaderModule(w->vk.dev, frag, NULL);
     return ret;
 }
 
 void rx_wave_pipeline_destroy(RXWindow *w)
 {
     if (w->wave_pipe)
-        vkDestroyPipeline(w->dev, w->wave_pipe, NULL);
+        vkDestroyPipeline(w->vk.dev, w->wave_pipe, NULL);
     if (w->wave_layout)
-        vkDestroyPipelineLayout(w->dev, w->wave_layout, NULL);
+        vkDestroyPipelineLayout(w->vk.dev, w->wave_layout, NULL);
     w->wave_pipe = VK_NULL_HANDLE;
     w->wave_layout = VK_NULL_HANDLE;
 }
@@ -263,7 +263,7 @@ RXWaveGpu *rx_wave_upload(RXWindow *w, enum RXWaveKind kind, const uint8_t *colu
         goto fail;
     memcpy(up.staging.map, columns, bytes);
     memset((uint8_t *)up.staging.map + bytes, 0, size - bytes);
-    vmaFlushAllocation(w->vma, up.staging.alloc, 0, VK_WHOLE_SIZE);
+    vmaFlushAllocation(w->vk.vma, up.staging.alloc, 0, VK_WHOLE_SIZE);
     up.dst_buf = g->buf.buf;
 
     ret = rx_vk_upload(w, &up);
