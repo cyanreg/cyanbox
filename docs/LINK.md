@@ -12,11 +12,13 @@ such as the CDJ-3000 and the CDJ-3000X, over Ethernet and nothing else.
 
 ## Status (2026-10-14)
 
-Steps 1 to 5 of the order of work below are written and tested without a
+Steps 1 to 6 of the order of work below are written and tested without a
 player: `src/link` serves the library from the CLI (`rxbox link serve -i
-IF`), and `rxbox link browse -i IF [HOST]` is a fake CDJ-3000 that joins,
-browses, loads a track and reads it as a player does. Not yet: the
-interface's Link switch and panel and play counting (step 6), a run
+IF`) and from the interface (`rxbox --pro-link`: the Link menu's switch
+and the PRO DJ LINK window, src/app/link.c and src/ui/link_view.cpp), the
+interface counts a track of ours that a player plays for 30 s as a play,
+and `rxbox link browse -i IF [HOST]` is a fake CDJ-3000 that joins,
+browses, loads a track and reads it as a player does. Not yet: a run
 against a player on Ethernet (step 7), writes from the deck (step 8).
 
 What has been run against what:
@@ -25,6 +27,8 @@ What has been run against what:
 | --- | --- | --- | --- |
 | rxbox | rxbox's fake player | loopback, ports of their own (`test_loopback`) | join, browse, every track's bytes (transcodes too), the player's status, the fences, a library change |
 | rxbox | rxbox's fake player | two network namespaces, rekordbox's ports (`tests/link/netns_test.sh`) | the same through the CLI, real broadcasts |
+| rxbox's app | rxbox's fake player | loopback (`test_link`) | the switch (refused without `--pro-link`), the player and its load seen, 30 s of play recorded, the library read again after it, off, off while starting |
+| rxbox's interface | rxbox's fake player | two network namespaces, by hand | the window: on the link as 17, the player's load by title, playing, its play counted |
 | rxbox | rbxport's `browse` example | two network namespaces | root, sort, tracks, playlists, metadata, track info, grid, preview, the file over NFS |
 | rbxport's `serve` (its emulator fixture) | rxbox's fake player | two network namespaces | the same; rbxport reads our CDJ status (loaded, playing) |
 
@@ -239,7 +243,21 @@ Link is on:
 - **Off by default**, bound to one chosen interface (`link.interface`):
   a Link switch and panel in the interface (the players seen, what each
   has loaded, playing or not), and `rxbox link serve -i IF` running
-  the server in the foreground from the CLI.
+  the server in the foreground from the CLI. The interface offers it only
+  when started with `--pro-link`; without it there is no Link menu and
+  nothing is ever bound (rx_app_link_start refuses). The switch is off
+  at every start and waits for an interface to be chosen: rxbox never
+  guesses which network to open the library to.
+- **The app's side** (src/app/link.c): the service starts and stops on a
+  thread of its own (a start reads the library and plans over all of it;
+  a stop waits for a request in progress), each tick copies its state
+  for the window, and the library is read again 2 s after its last change
+  (30 s at most while changes keep coming: an analysis queue). Plays are
+  counted there, on the owner thread, from each player's status as the
+  deck counts its own: 30 s of distinct audio of one load, a beat at a
+  time (60 / BPM seconds each, so a loop counts its beats once and a jump
+  adds nothing), or the time it played at its pitch when the player gives
+  no beat numbers; then `rx_library_record_play`, once per load.
 - **Exposure**: as in "Security". A host firewall must let UDP 50000,
   50002, 50111 and 2049 and the TCP database ports in on that interface.
 

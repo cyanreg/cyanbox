@@ -69,6 +69,8 @@
 #include "rxbox/mpris.h"
 #include "rxbox/notation.h"
 
+#include "applink.h"
+
 /* Job results applied per tick: an analysis writes the track and its
  * waveforms, so a long queue is spread over several frames. */
 #define RESULTS_PER_TICK 16
@@ -3372,6 +3374,8 @@ void rx_app_destroy(RXApp *app)
 
     /* The export has a library handle of its own; cancel it and wait. */
     export_stop(app);
+    /* So has Link: it stops serving before anything it reads goes. */
+    rx_app_link_destroy(app);
 
     /* The interface goes before anything it draws from. */
     if (priv->ui_ready) {
@@ -3506,6 +3510,10 @@ bool rx_app_tick(RXApp *app)
     }
 
     if (flush_saves(app))
+        changed = true;
+
+    /* After the saves: the library Link reads again is the one saved. */
+    if (rx_app_link_tick(app))
         changed = true;
 
     if (app->rows_dirty || app->rows_generation != app->lib.generation) {

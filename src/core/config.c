@@ -18,6 +18,9 @@
  *   player.<name>  mixer.<name>  device.<name>     My Settings, names as
  *                                                  `rxbox settings` lists them
  *   audio.sink
+ *   link.interface                 the network interface PRO DJ LINK serves
+ *                                  on (rxbox/link.h; the interface's Link
+ *                                  panel, with --pro-link)
  *   ml.model                       the model's GGUF file for tagging tracks
  *                                  (rxbox/ml.h; unset: $RXBOX_ML_MODEL, else
  *                                  models/ beside the executable)
@@ -84,6 +87,7 @@ void rx_config_free(RXConfig *c)
         return;
     free(c->device_name);
     free(c->audio_sink);
+    free(c->link_interface);
     free(c->ml_model);
     for (int i = 0; i < RX_TRACK_COLORS; i++)
         free(c->vibes[i]);
@@ -302,6 +306,7 @@ static const struct {
     { "export.device_name",      K_TEXT },
     { "export.background_color", K_BACKGROUND },
     { "audio.sink",              K_TEXT },
+    { "link.interface",          K_TEXT },
     { "ml.model",                K_TEXT },
     { "color.pink",              K_VIBE }, { "color.red",    K_VIBE },
     { "color.orange",            K_VIBE }, { "color.yellow", K_VIBE },
@@ -392,7 +397,9 @@ int rx_config_set(RXConfig *c, const char *key, const char *value)
         return 0;
     case K_TEXT:
         return set_string(!strcmp(key, "export.device_name") ? &c->device_name :
-                          !strcmp(key, "audio.sink")         ? &c->audio_sink : &c->ml_model, value);
+                          !strcmp(key, "audio.sink")         ? &c->audio_sink :
+                          !strcmp(key, "link.interface")     ? &c->link_interface : &c->ml_model,
+                          value);
     case K_VIBE:
         for (int i = 0; i < RX_TRACK_COLORS; i++) {
             if (!strcmp(key, vibe_keys[i]))
@@ -585,6 +592,7 @@ int rx_library_config_save(RXLibrary *lib)
         { "export.background_color",
           background_names[RX_CLAMP(c->background_color, 0, RX_TRACK_COLORS)] },
         { "audio.sink",              c->audio_sink },
+        { "link.interface",          c->link_interface },
         { "ml.model",                c->ml_model },
         { "ui.traffic_light",        c->traffic_light },
         { "ui.detail_bars",          rx_core_fmt_double(c->detail_bars, bars, sizeof(bars)) },

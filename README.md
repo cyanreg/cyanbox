@@ -243,6 +243,7 @@ they come. Besides the players' My Settings
 | `export.compat_transcode` | `true` | transcode AAC and hi-res files to 16-bit/44.1 kHz FLAC (`--no-compat` for one export) |
 | `export.device_name` | the stick's label | the name the players show for the stick |
 | `audio.sink` | the default output | the PipeWire node to play to |
+| `link.interface` | none | the network interface PRO DJ LINK serves on (the interface's Link window, with `--pro-link`) |
 | `ml.model` | `models/moss-audio-4b-instruct-q4_k.gguf` | the tagging model's file (also `$RXBOX_ML_MODEL`) |
 | `color.pink` ... `color.purple` | the legend (Tags) | what each track colour stands for, in the words the tagging model picks by; `""` puts the default back |
 | `ui.traffic_light` | `related3` | the browser's key highlight (View → Traffic Light) |
@@ -259,6 +260,7 @@ rxbox --library ~/dj/library        # another library
 rxbox --audio-sink alsa_output.usb-headphones   # play to this PipeWire node
 rxbox --audio none                  # no audio device at all
 rxbox --no-mpris                    # stay off the D-Bus session bus
+rxbox --pro-link                    # offer PRO DJ LINK (the Link menu)
 ```
 
 `--audio-sink NAME` (or the `audio.sink` setting) connects the player to that
@@ -288,6 +290,18 @@ leaves it out, `enabled` requires sd-bus) decides. `--no-mpris` keeps the
 interface off the bus; the subcommands never go on it. Without a session
 bus, or with another rxbox holding the name, the interface says so once
 and runs without it.
+
+PRO DJ LINK, as rekordbox's Link Export (docs/LINK.md): players on the
+same network browse the library and load its tracks with their grids,
+cues and waveforms, with no stick. Only with `--pro-link`: without it the
+interface has no Link menu and never opens a Link socket. With it, Link
+→ Serve to players switches it on (off at every start) on the network
+interface chosen in the PRO DJ LINK window, which lists the players and
+what each plays; a track of ours that a player plays for 30 s is counted
+as a play, as on the deck. While it is on, anything on that network can
+read the library's audio, artwork and analysis (never other files, and
+nothing can be written), so use a network with only the players on it.
+`rxbox link serve -i IF` serves from the command line.
 
 ## Exporting
 

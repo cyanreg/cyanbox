@@ -12,6 +12,10 @@
 #include "rxbox/player.h"
 #include "rxbox/jobs.h"
 #include "rxbox/gpu.h"
+#include "rxbox/link.h"
+
+/* The devices on the link the app keeps a copy of (link_state). */
+#define RX_APP_LINK_DEVICES 16
 
 /* Per-deck interface state that outlives a frame. */
 typedef struct RXDeckView {
@@ -113,6 +117,29 @@ typedef struct RXApp {
     uint64_t   stick_request;       /* in flight, 0 none */
     RXJobResult *stick_result;
 
+    /* PRO DJ LINK (src/app/link.c, docs/LINK.md): the library served to the
+     * players on one network interface while the switch is on, and plays
+     * counted from what they say they play. Only with --pro-link: src/cli.c
+     * sets `enabled` before rx_app_run; without it the interface offers none
+     * of it and rx_app_link_start refuses, so nothing is ever bound. The
+     * rest is the service's state, copied here every tick while it runs. */
+    struct {
+        bool     enabled;
+        bool     on;                /* serving (the switch is on and the start worked) */
+        bool     busy;              /* starting or stopping, on a thread */
+        int      err;               /* why the last start failed, 0 none */
+        char     interface[16];     /* what it serves on, or last tried to */
+        enum RXLinkState state;
+        int      number;            /* our device number once up */
+        RXLinkPlayer devices[RX_APP_LINK_DEVICES];
+        int      nb_devices;
+        /* Per device: the seconds of its load (a track of ours) played so
+         * far, distinct audio as the deck counts it, and whether that load
+         * was counted as a play. */
+        double   played[RX_APP_LINK_DEVICES];
+        bool     counted[RX_APP_LINK_DEVICES];
+    } link_state;
+
     /* The waveform palette of the deck and the table's previews: 0 3band,
      * 1 blue, 2 rgb. The players' device.waveform_color, which rx_app_tick
      * reads again every tick; set that, not this. */
@@ -123,6 +150,7 @@ typedef struct RXApp {
     void      *ui;                  /* src/ui private state */
     struct RXAppPriv *priv;         /* src/app/app.c private state */
     struct RXMpris *mpris;          /* src/app/mpris.c (rxbox/mpris.h); NULL off the bus */
+    struct RXAppLink *link;         /* src/app/link.c; NULL before Link is first started */
 } RXApp;
 
 /* Lifecycle (src/app.c). player_opt NULL: the null audio backend. Creating
@@ -232,6 +260,19 @@ int  rx_app_apply_tags(RXApp *app, RXTrack *t, const RXMLTags *tags);
  * environment named, or NULL when models/ was looked in. Allocating. */
 #define RX_APP_ML_MODEL "moss-audio-4b-instruct-q4_k.gguf"
 int  rx_app_ml_model(const RXApp *app, char **path);
+/* PRO DJ LINK on (src/app/link.c): the service starts on a thread with
+ * `o` (its interface required; its library, when NULL, the app's), and
+ * link_state.busy says so until the next ticks see it done: then `on`, or
+ * `err` says why not. While it runs, each tick copies its state into
+ * link_state, counts a play of a track of ours that a player has played
+ * 30 s of (rx_library_record_play, as the deck's), and, a little after the
+ * library last changed, has the service read it again. -EPERM without
+ * --pro-link (link_state.enabled false), -EBUSY while starting or
+ * stopping, -EALREADY when on. */
+int  rx_app_link_start(RXApp *app, const RXLinkOptions *o);
+/* Off, on a thread (busy until done); a start in progress is stopped as
+ * soon as it is done. */
+void rx_app_link_stop(RXApp *app);
 /* Re-checks which audio files are missing; returns how many changed. */
 int  rx_app_rescan(RXApp *app);
 /* For the browser: a track's cover thumbnail texture and its preview in the

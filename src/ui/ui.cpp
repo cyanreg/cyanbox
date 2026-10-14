@@ -20,7 +20,8 @@
 // RXBOX_UI_AUTOLOAD=<id> loads that track on the first frame and starts it
 // once it is loaded (RXBOX_UI_AUTOLOAD_AT=<seconds>: from there);
 // RXBOX_UI_SHOW=<list> opens panels and dialogs on the first frame (grid,
-// half, export, sync, inspect, analysis, settings, add, keys, about), and
+// half, export, sync, inspect, analysis, settings, add, keys, about, link;
+// link-on switches PRO DJ LINK on, which still needs --pro-link), and
 // `tags` asks for the autoloaded track's tags from the model;
 // RXBOX_UI_SCREENSHOT=<png> saves frame 100 (RXBOX_UI_SCREENSHOT_FRAME=<n>:
 // frame n) through rx_window_screenshot_next(), which writes it once it is
@@ -1021,6 +1022,17 @@ static void menu_bar(UiState *ui)
         ImGui::EndMenu();
     }
 
+    // PRO DJ LINK, only with --pro-link.
+    if (app->link_state.enabled && ImGui::BeginMenu("Link")) {
+        const auto &ls = app->link_state;
+        bool on = ls.on != ls.busy;
+        if (ImGui::MenuItem("Serve to players", nullptr, on, !ls.busy))
+            ui_link_switch(ui, !on);
+        if (ImGui::MenuItem("Players and settings..."))
+            ui_open_link(ui);
+        ImGui::EndMenu();
+    }
+
     if (ImGui::BeginMenu("Help")) {
         if (ImGui::MenuItem("Keyboard map"))
             ui->dlg_keys = true;
@@ -1087,6 +1099,21 @@ static void status_bar(UiState *ui, ImVec2 a, ImVec2 b)
     }
     x -= PX(16) + ui_text_width(ui, nullptr, fs, audio);
     ui_text(ui, dl, nullptr, fs, ImVec2(x, ty), err ? UI_RED : UI_DIM, audio);
+    // PRO DJ LINK's word (--pro-link only); a click opens its window.
+    if (app->link_state.enabled) {
+        char link[96];
+        ImU32 col;
+        ui_link_summary(ui, link, sizeof(link), &col);
+        float lw = ui_text_width(ui, nullptr, fs, link);
+        x -= PX(16) + lw;
+        ImVec2 cur = ImGui::GetCursorScreenPos();
+        ImGui::SetCursorScreenPos(ImVec2(x, a.y));
+        if (ImGui::InvisibleButton("##link_status", ImVec2(lw, b.y - a.y)))
+            ui_open_link(ui);
+        bool hot = ImGui::IsItemHovered();
+        ImGui::SetCursorScreenPos(cur);
+        ui_text(ui, dl, nullptr, fs, ImVec2(x, ty), hot ? UI_TEXT : col, link);
+    }
     float right_edge = x - PX(16);
 
     // Middle: analysis and export progress, each with a thin bar.
@@ -1557,6 +1584,11 @@ static void autoshow(UiState *ui)
         ui->dlg_keys = true;
     if (shown(ui, "about"))
         ui->dlg_about = true;
+    if (shown(ui, "link"))
+        ui_open_link(ui);
+    // Tests: Link switched on, as its switch does (--pro-link still needed).
+    if (shown(ui, "link-on"))
+        ui_link_switch(ui, true);
 }
 
 static void autoload_tick(UiState *ui)

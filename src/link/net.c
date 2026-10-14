@@ -15,11 +15,14 @@
 #include <netpacket/packet.h>
 #include <poll.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "rxbox/common.h"
+#include "rxbox/link.h"
 
 static uint32_t ipv4_of(const struct sockaddr *sa)
 {
@@ -93,6 +96,58 @@ int rx_link_if_find(RXLinkIf *out, const char *name, const char *address, const 
     }
     out->index = (int)if_nametoindex(name);
     return out->index ? 0 : RX_ERROR(ENODEV);
+}
+
+static bool usable(const struct ifaddrs *i)
+{
+    return i->ifa_addr && i->ifa_addr->sa_family == AF_INET && (i->ifa_flags & IFF_UP) &&
+           !(i->ifa_flags & IFF_LOOPBACK) && strlen(i->ifa_name) < IFNAMSIZ;
+}
+
+static int interface_order(const void *a, const void *b)
+{
+    const RXLinkInterface *x = a, *y = b;
+    if (x->running != y->running)
+        return x->running ? -1 : 1;
+    if (x->wireless != y->wireless)
+        return x->wireless ? 1 : -1;
+    return strcmp(x->name, y->name);
+}
+
+int rx_link_interfaces(RXLinkInterface *out, int max)
+{
+    struct ifaddrs *ifs;
+    if (getifaddrs(&ifs) < 0)
+        return RX_ERROR(errno);
+    int nb = 0;
+    for (struct ifaddrs *i = ifs; i; i = i->ifa_next) {
+        if (!usable(i))
+            continue;
+        /* The first IPv4 address of each, as rx_link_if_find takes. */
+        bool seen = false;
+        for (struct ifaddrs *k = ifs; k != i && !seen; k = k->ifa_next)
+            seen = usable(k) && !strcmp(k->ifa_name, i->ifa_name);
+        if (seen)
+            continue;
+        if (nb < max) {
+            RXLinkInterface *o = &out[nb];
+            *o = (RXLinkInterface) { 0 };
+            snprintf(o->name, sizeof(o->name), "%s", i->ifa_name);
+            o->addr = ipv4_of(i->ifa_addr);
+            uint32_t mask = i->ifa_netmask ? ipv4_of(i->ifa_netmask) : 0xFFFFFFFF;
+            o->prefix = __builtin_popcount(mask);
+            o->running = i->ifa_flags & IFF_RUNNING;
+            char path[64];
+            struct stat st;
+            snprintf(path, sizeof(path), "/sys/class/net/%s/wireless", i->ifa_name);
+            o->wireless = stat(path, &st) == 0;
+        }
+        nb++;
+    }
+    freeifaddrs(ifs);
+    if (out && max > 0)
+        qsort(out, (size_t)RX_MIN(nb, max), sizeof(*out), interface_order);
+    return nb;
 }
 
 static void tie(const RXLinkIf *ifc, int fd)

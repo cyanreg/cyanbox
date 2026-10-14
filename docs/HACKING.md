@@ -116,6 +116,7 @@ src/player        player.c pipewire.c nullout.c deck.c feed.c         -> rx_play
                   controls.c stretch.cpp stretch.h player_internal.h
 src/app           jobs.c app.c                                        -> rx_app_dep (everything above,
                                                                        ml for the tag batch, link)
+                  link.c applink.h (Link's switch, state and plays: --pro-link)
                   headless.c (src/gpu and src/ui stand-ins for rxbox-cli and test_app)
                   mpris.c (MPRIS on the D-Bus session bus, with sd-bus: -Dmpris)
 src/gpu           vkdev.c vkdev.h (the Vulkan set-up all three share) -> rx_vkdev_dep (common; Vulkan, VMA)
@@ -127,7 +128,7 @@ src/ml            gpu.c gguf.c tokenizer.c moss.c tag.c               -> rx_ml_d
                   ml_priv.h kernels.h shaders/*.comp common.glsl      (MOSS-Audio, its own VkDevice;
                                                                        docs/ML.md, tests in suite ml)
 src/ui            ui.cpp deck_view.cpp waveform_view.cpp browser.cpp  (C++)
-                  tree.cpp dialogs.cpp keys.cpp ui_internal.h
+                  tree.cpp dialogs.cpp keys.cpp link_view.cpp ui_internal.h
 src/cli.c         the subcommands; src/main.c
 tests/<module>/   meson tests, registered from src/<module>/meson.build with suite: '<module>'
 tools/            developer tools (analysis evaluation, dumpers; rxbox-ml and ml_check.py

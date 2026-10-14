@@ -89,6 +89,20 @@ enum RXLinkState {
     RX_LINK_UP,                 /* on the link with a number */
 };
 
+/* A network interface Link could serve on: up, with an IPv4 address, not
+ * the loopback. */
+typedef struct RXLinkInterface {
+    char     name[16];
+    uint32_t addr;              /* its first IPv4 address, host order */
+    int      prefix;            /* the netmask's length */
+    bool     running;           /* has a carrier (a cable in, a link up) */
+    bool     wireless;          /* Wi-Fi (players are wired) */
+} RXLinkInterface;
+
+/* The interfaces, the ones with a carrier first, wired before wireless,
+ * then by name: the count, up to `max` filled. */
+int  rx_link_interfaces(RXLinkInterface *out, int max);
+
 /* Starts the service thread: binds every port on the interface, opens the
  * library, builds what it serves. Errors are negative errno values
  * (-EADDRINUSE when rekordbox or another rxbox holds the ports, -ENODEV

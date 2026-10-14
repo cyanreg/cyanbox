@@ -62,6 +62,7 @@ typedef struct Cli {
     int   frames;
     bool  validation;
     bool  no_mpris;             /* --no-mpris: the interface stays off the session bus */
+    bool  pro_link;             /* --pro-link: the interface offers PRO DJ LINK */
     bool  verbose;
     const char *cmd;
     const char *usage;          /* the command's usage line, for usage errors */
@@ -113,8 +114,8 @@ static const char usage_text[] =
     "  config [KEY [VALUE]]     show or change a setting (analysis.bpm_min,\n"
     "                           import.comment, export.key_notation,\n"
     "                           export.background_color, player.quantize,\n"
-    "                           ml.model, color.red ...; \"\" puts a colour's words back\n"
-    "                           to the default)\n"
+    "                           link.interface, ml.model, color.red ...; \"\" puts a\n"
+    "                           colour's words back to the default)\n"
     "  init [DIR]               create a library (default: the library directory)\n"
     "  playlist list            list the playlists\n"
     "  playlist create NAME     create a playlist (\"Folder/Name\" creates the folders)\n"
@@ -161,6 +162,10 @@ static const char usage_text[] =
     "  --audio-sink NAME        the PipeWire node to play to\n"
     "  --validation             enable the Vulkan validation layer\n"
     "  --no-mpris               stay off the D-Bus session bus (no MPRIS media controls)\n"
+    "  --pro-link               offer PRO DJ LINK: the Link menu's switch serves the\n"
+    "                           library to players on a network interface (off at\n"
+    "                           start); without it the interface never opens a Link\n"
+    "                           socket\n"
     "  --frames N               draw N frames, then exit (tests)\n";
 
 /* ------------------------------------------------------------------ helpers */
@@ -2253,8 +2258,8 @@ static int cmd_config(Cli *cli, int argc, char **argv)
     }
 
     static const char *const sections[] = {
-        "analysis.", "import.", "export.", "player.", "mixer.", "device.", "audio.", "ml.", "ui.",
-        "color.",
+        "analysis.", "import.", "export.", "player.", "mixer.", "device.", "audio.", "link.", "ml.",
+        "ui.", "color.",
     };
     /* color.<name>: one of the eight colours, its words in the legend. */
     int vibe = 0;
@@ -2266,7 +2271,7 @@ static int cmd_config(Cli *cli, int argc, char **argv)
             known |= rx_str_starts(key, sections[i]);
         if (!known)
             return usage_error(cli, "config: keys start with analysis., import., export., player., "
-                               "mixer., device., audio., ml., ui. or color.");
+                               "mixer., device., audio., link., ml., ui. or color.");
         if (rx_str_starts(key, "color.") && !vibe)
             return usage_error(cli, "config: the colours are color.pink, color.red, color.orange, "
                                "color.yellow, color.green, color.aqua, color.blue and "
@@ -2355,6 +2360,7 @@ static int cmd_config(Cli *cli, int argc, char **argv)
         print_kv("mixer", c->mixer, c->nb_mixer);
         print_kv("device", c->device, c->nb_device);
         printf("audio.sink = %s\n", c->audio_sink ? c->audio_sink : "(the default)");
+        printf("link.interface = %s\n", c->link_interface ? c->link_interface : "(none)");
         printf("ml.model = %s\n", c->ml_model ? c->ml_model : "(models/" RX_APP_ML_MODEL ")");
         printf("ui.traffic_light = %s\n", c->traffic_light);
         printf("ui.detail_bars = %d\n", c->detail_bars);
@@ -2519,6 +2525,8 @@ static int run_interface(Cli *cli)
     /* The deck on the session bus; without one it runs on as it is. */
     if (!cli->no_mpris)
         rx_mpris_create(app);
+    /* Link only when asked for, and then only while its switch is on. */
+    app->link_state.enabled = cli->pro_link;
     ret = rx_app_run(app);
     rx_app_destroy(app);
     free(app);
@@ -2768,6 +2776,10 @@ static int cli_run(int argc, char **argv)
         }
         if (opt_flag(&cli, a, NULL, "--no-mpris")) {
             cli.no_mpris = true;
+            continue;
+        }
+        if (opt_flag(&cli, a, NULL, "--pro-link")) {
+            cli.pro_link = true;
             continue;
         }
         if ((r = opt_value(&cli, argc, argv, &i, NULL, "--audio", &val))) {

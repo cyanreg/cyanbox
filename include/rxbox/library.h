@@ -90,6 +90,10 @@ typedef struct RXConfig {
     /* audio.* */
     char *audio_sink;           /* PipeWire node name, NULL = default */
 
+    /* link.* */
+    char *link_interface;       /* the network interface Link serves on (rxbox/link.h), NULL
+                                   none chosen yet */
+
     /* ml.* */
     char *ml_model;             /* the model's GGUF file for tagging (rxbox/ml.h), NULL:
                                    $RXBOX_ML_MODEL, else models/ (rx_app_ml_model) */
@@ -110,7 +114,7 @@ typedef struct RXConfig {
 void rx_config_free(RXConfig *c);
 void rx_config_defaults(RXConfig *c);
 /* One of RXConfig's own settings by its key as the setting table holds it
- * (analysis.*, import.comment, export.*, audio.sink, ml.model, color.*,
+ * (analysis.*, import.comment, export.*, audio.sink, link.interface, ml.model, color.*,
  * ui.traffic_light, ui.detail_bars, ui.split_*): 0 when `value` is valid
  * for the key and now in c, an empty one (or NULL) putting the default
  * back; -EINVAL when it is not valid (-E2BIG for a description too long),

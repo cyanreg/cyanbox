@@ -45,14 +45,14 @@
 // Esc closes the dialog that has the focus, as its close button does,
 // unless a text field has the keyboard: Esc is the field's then (the Add
 // dialog's finder empties first, and a second Esc closes).
-static void escape_closes(bool *open)
+void ui_escape_closes(bool *open)
 {
     if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
         !ImGui::GetIO().WantTextInput && ImGui::IsKeyPressed(ImGuiKey_Escape, false))
         *open = false;
 }
 
-static void centre_next(UiState *ui, float w, float h)
+void ui_centre_next(UiState *ui, float w, float h)
 {
     ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing,
                             ImVec2(0.5f, 0.5f));
@@ -142,7 +142,7 @@ static void confirm_remove(UiState *ui)
         ImGui::OpenPopup("Remove from library?");
         ui->want_confirm_remove = false;
     }
-    centre_next(ui, 0, 0);
+    ui_centre_next(ui, 0, 0);
     if (!ImGui::BeginPopupModal("Remove from library?", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
         return;
     ui_settle_centred();
@@ -194,7 +194,7 @@ static void relocate(UiState *ui)
         ImGui::OpenPopup("Relocate");
         ui->want_relocate = false;
     }
-    centre_next(ui, 560, 0);
+    ui_centre_next(ui, 560, 0);
     if (!ImGui::BeginPopupModal("Relocate", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
         return;
     ui_settle_centred();
@@ -309,13 +309,13 @@ static void analysis_settings(UiState *ui)
     if (!ui->dlg_analysis)
         return;
     RXConfig *cfg = &ui->app->lib.cfg;
-    centre_next(ui, 380, 0);
+    ui_centre_next(ui, 380, 0);
     if (!ImGui::Begin("Analysis settings", &ui->dlg_analysis, ImGuiWindowFlags_NoCollapse |
                       ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings)) {
         ImGui::End();
         return;
     }
-    escape_closes(&ui->dlg_analysis);
+    ui_escape_closes(&ui->dlg_analysis);
     ui_settle_centred();
     bool changed = false;
     ImGui::SeparatorText("Analyse");
@@ -617,7 +617,7 @@ static void settings_dialog(UiState *ui)
 {
     if (!ui->dlg_settings)
         return;
-    centre_next(ui, 0, 0);
+    ui_centre_next(ui, 0, 0);
     if (ui->settings_focus) {
         ImGui::SetNextWindowFocus();
         ui->settings_focus = false;
@@ -627,7 +627,7 @@ static void settings_dialog(UiState *ui)
         ImGui::End();
         return;
     }
-    escape_closes(&ui->dlg_settings);
+    ui_escape_closes(&ui->dlg_settings);
     ui_settle_centred();
 
     // Columns as wide as the widest label and value of any section, room
@@ -822,7 +822,7 @@ static void export_dialog(UiState *ui)
         ImGui::End();
         return;
     }
-    escape_closes(&open);
+    ui_escape_closes(&open);
     ui_settle_centred();
     if (!open && !es.running) {
         ui->dlg_export = false;
@@ -1144,7 +1144,7 @@ static void sync_dialog(UiState *ui)
         ImGui::End();
         return;
     }
-    escape_closes(&open);
+    ui_escape_closes(&open);
     ui_settle_centred();
     if (!open) {
         ui->dlg_sync = false;
@@ -1323,13 +1323,13 @@ static void inspect_dialog(UiState *ui)
         }
         rx_job_result_free(r);
     }
-    centre_next(ui, 700, 500);
+    ui_centre_next(ui, 700, 500);
     if (!ImGui::Begin("Inspect USB", &ui->dlg_inspect,
                       ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings)) {
         ImGui::End();
         return;
     }
-    escape_closes(&ui->dlg_inspect);
+    ui_escape_closes(&ui->dlg_inspect);
     ui_settle_centred();
     if (!ui->dlg_inspect) {
         // Closed: the inspection in flight is given up.
@@ -1589,13 +1589,13 @@ static void add_dialog(UiState *ui)
         ui->fb_focused = false;
         return;
     }
-    centre_next(ui, 680, 560);
+    ui_centre_next(ui, 680, 560);
     if (!ImGui::Begin("Add files and folders", &ui->dlg_add,
                       ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings)) {
         ImGui::End();
         return;
     }
-    escape_closes(&ui->dlg_add);
+    ui_escape_closes(&ui->dlg_add);
     ui_settle_centred();
     ui->fb_focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
     if (ImGui::Button("Up")) {
@@ -1744,13 +1744,13 @@ static void keys_dialog(UiState *ui)
 {
     if (!ui->dlg_keys)
         return;
-    centre_next(ui, 520, 560);
+    ui_centre_next(ui, 520, 560);
     if (!ImGui::Begin("Keyboard map", &ui->dlg_keys,
                       ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings)) {
         ImGui::End();
         return;
     }
-    escape_closes(&ui->dlg_keys);
+    ui_escape_closes(&ui->dlg_keys);
     ui_settle_centred();
     ImGui::TextDisabled("rekordbox's Export preset, player 1.");
     ImGuiTableFlags tf = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_ScrollY;
@@ -1774,14 +1774,14 @@ static void about_dialog(UiState *ui)
 {
     if (!ui->dlg_about)
         return;
-    centre_next(ui, 0, 0);
+    ui_centre_next(ui, 0, 0);
     if (!ImGui::Begin("About rxbox", &ui->dlg_about,
                       ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize |
                       ImGuiWindowFlags_NoSavedSettings)) {
         ImGui::End();
         return;
     }
-    escape_closes(&ui->dlg_about);
+    ui_escape_closes(&ui->dlg_about);
     ui_settle_centred();
     ImGui::PushFont(ui->font_bold, ui->font_base * 1.6f);
     ImGui::TextUnformatted("rxbox");
@@ -1812,6 +1812,7 @@ void ui_dialogs(UiState *ui)
     add_dialog(ui);
     keys_dialog(ui);
     about_dialog(ui);
+    ui_link_window(ui);
 }
 
 void ui_dialogs_shutdown(UiState *ui)

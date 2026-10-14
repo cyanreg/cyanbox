@@ -10,6 +10,7 @@ ui_sources = files(
     'dialogs.cpp',
     'finder.cpp',
     'keys.cpp',
+    'link_view.cpp',
 )
 
 # The headless run: starts the interface on a private sway with the null
