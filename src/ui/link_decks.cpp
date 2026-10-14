@@ -168,12 +168,28 @@ static const char *slot_name(int slot)
     }
 }
 
+// The cells' text sizes: twice the deck title row's.
+#define LABEL_SIZE  19.0f       // the readouts' labels
+#define VALUE_SIZE  34.0f       // and values
+#define TITLE_SIZE  32.0f
+#define LINE_SIZE   24.0f       // the artist, the model
+#define STATE_SIZE  21.0f
+#define NUMBER_SIZE 44.0f
+
+// How wide a readout is: its label's width or its value's.
+static float readout_w(UiState *ui, const char *label, const char *value)
+{
+    return ImMax(ui_text_width(ui, ui->font_bold, LABEL_SIZE, label),
+                 ui_text_width(ui, ui->font_bold, VALUE_SIZE, value));
+}
+
 // A label over a value, right-aligned at `right`.
 static void readout(UiState *ui, ImDrawList *dl, float right, float y, const char *label,
                     const char *value, ImU32 col)
 {
-    ui_text_right(ui, dl, ui->font_bold, 9.5f, ImVec2(right, y), UI_DIM, label);
-    ui_text_right(ui, dl, ui->font_bold, 17.0f, ImVec2(right, y + PX(12)), col, value);
+    ui_text_right(ui, dl, ui->font_bold, LABEL_SIZE, ImVec2(right, y), UI_DIM, label);
+    ui_text_right(ui, dl, ui->font_bold, VALUE_SIZE, ImVec2(right, y + PX(LABEL_SIZE + 3)), col,
+                  value);
 }
 
 // The track's overview behind a cell, dimmed under the text, the part
@@ -223,83 +239,94 @@ static void deck_cell(UiState *ui, int index, ImVec2 a, ImVec2 b)
     background(ui, t, pos, a, b);
 
     // The number on a dark backing (on air says so in the state); the
-    // cover; the title over the artist.
+    // cover.
     snprintf(buf, sizeof(buf), "%d", d.number);
-    float nw = PX(30);
+    float nw = PX(48);
     dl->AddRectFilled(a, ImVec2(a.x + nw, b.y), IM_COL32(0, 0, 0, 0xB0), PX(3));
-    ui_text_centre(ui, dl, ui->font_bold, 22.0f, a, ImVec2(a.x + nw, b.y), UI_TEXT, buf);
+    ui_text_centre(ui, dl, ui->font_bold, NUMBER_SIZE, a, ImVec2(a.x + nw, b.y), UI_TEXT, buf);
     float art = h - PX(8);
-    ImVec2 p0(a.x + nw, a.y + PX(4)), p1(p0.x + art, p0.y + art);
+    ImVec2 p0(a.x + nw + PX(4), a.y + PX(4)), p1(p0.x + art, p0.y + art);
     uint64_t tex = t ? rx_app_artwork_texture(app, t) : 0;
     if (tex)
         dl->AddImage(ImTextureRef((ImTextureID)tex), p0, p1);
     else
         ui_record_icon(dl, p0, p1);
+    float tx = p1.x + PX(12);
 
-    // Right-aligned, from the edge: the time left, the tempo, the key
-    // (when there is room for it).
-    float x = b.x - PX(8), ry = a.y + floorf((h - PX(33)) * 0.5f);
+    // Right-aligned, from the edge: the time left, the tempo, the key,
+    // each while the title keeps some room.
+    char remain[16], bpm[16], key[16] = "";
     if (t && pos >= 0)
-        ui_fmt_time(-(t->duration - pos), buf, sizeof(buf), false);
+        ui_fmt_time(-(t->duration - pos), remain, sizeof(remain), false);
     else
-        snprintf(buf, sizeof(buf), "-:--");
-    readout(ui, dl, x, ry, "REMAIN", buf, t && pos >= 0 ? UI_TEXT : UI_FAINT);
-    x -= PX(70);
-    bool pitched = fabs(d.pitch) > 0.005;
+        snprintf(remain, sizeof(remain), "-:--");
     if (loaded && d.bpm > 0)
-        snprintf(buf, sizeof(buf), "%.2f", d.bpm * (1.0 + d.pitch / 100.0));
+        snprintf(bpm, sizeof(bpm), "%.2f", d.bpm * (1.0 + d.pitch / 100.0));
     else
-        snprintf(buf, sizeof(buf), "-");
-    readout(ui, dl, x, ry, "BPM", buf, pitched ? UI_ACCENT : UI_TEXT);
-    x -= PX(74);
-    if (width > PX(440)) {
-        char key[16] = "";
-        const char *kt = t ? ui_key_text(ui, t->key, key, sizeof(key)) : "";
-        readout(ui, dl, x, ry, "KEY", kt[0] ? kt : "-", UI_TEXT);
-        x -= PX(52);
+        snprintf(bpm, sizeof(bpm), "-");
+    const char *kt = t ? ui_key_text(ui, t->key, key, sizeof(key)) : "";
+    const struct { const char *label, *value; ImU32 col; } reads[] = {
+        { "REMAIN", remain, t && pos >= 0 ? UI_TEXT : UI_FAINT },
+        { "BPM", bpm, fabs(d.pitch) > 0.005 ? UI_ACCENT : UI_TEXT },
+        { "KEY", kt[0] ? kt : "-", UI_TEXT },
+    };
+    float x = b.x - PX(10), ry = a.y + floorf((h - PX(LABEL_SIZE + 3 + VALUE_SIZE)) * 0.5f);
+    for (size_t i = 0; i < RX_ARRAY_ELEMS(reads); i++) {
+        float rw = readout_w(ui, reads[i].label, reads[i].value);
+        if (i && x - rw - tx < PX(120))
+            break;
+        readout(ui, dl, x, ry, reads[i].label, reads[i].value, reads[i].col);
+        x -= rw + PX(20);
     }
 
-    // The player's state over its model, before the readouts; on a cell
-    // too narrow for both that and the title, under the title instead of
-    // the artist.
-    float tx = p1.x + PX(10), ty = a.y + floorf(h * 0.5f) - PX(16);
-    float sw = PX(104);
-    bool beside = x - sw - tx >= PX(130);
-    float sx = beside ? x - sw : tx, sy = beside ? ty + PX(2) : ty + PX(21);
-    float max_w = (beside ? sx : x) - tx - PX(10);
+    // The title over the artist; the player's state over its model beside
+    // them before the readouts, or on a cell too narrow for that, in the
+    // artist's place.
     const char *state = !d.has_status ? "" : !loaded ? "NO TRACK" : d.playing ? "PLAYING" : "PAUSED";
     ImU32 scol = d.playing && loaded ? UI_PLAY : UI_DIM;
-    float cx = sx;
-    ui_text(ui, dl, ui->font_bold, 10.5f, ImVec2(cx, sy), scol, state);
-    cx += ui_text_width(ui, ui->font_bold, 10.5f, state) + PX(6);
-    if (d.on_air) {
-        ui_text(ui, dl, ui->font_bold, 10.5f, ImVec2(cx, sy), UI_RED, "ON AIR");
-        cx += ui_text_width(ui, ui->font_bold, 10.5f, "ON AIR") + PX(6);
-    }
-    if (d.master) {
-        ui_text(ui, dl, ui->font_bold, 10.5f, ImVec2(cx, sy), UI_ACCENT, "MASTER");
-        cx += ui_text_width(ui, ui->font_bold, 10.5f, "MASTER") + PX(6);
-    }
     const char *model = d.name[0] ? d.name : "Player";
+    float space = ui_text_width(ui, ui->font_bold, STATE_SIZE, " ");
+    float sw = ui_text_width(ui, ui->font_bold, STATE_SIZE, state) +
+               (d.on_air ? space + ui_text_width(ui, ui->font_bold, STATE_SIZE, "ON AIR") : 0) +
+               (d.master ? space + ui_text_width(ui, ui->font_bold, STATE_SIZE, "MASTER") : 0);
+    sw = ImMax(sw, ui_text_width(ui, nullptr, LINE_SIZE, model));
+    bool beside = x - sw - PX(16) - tx >= PX(160);
+    float ty = a.y + floorf(h * 0.5f) - PX((TITLE_SIZE + 4 + LINE_SIZE) * 0.5f);
+    float ly = ty + PX(TITLE_SIZE + 4);
+    float sx = beside ? x - sw : tx, sy = beside ? ty + PX(2) : ly;
+    float max_w = (beside ? sx - PX(16) : x) - tx;
+    // The state's words, each while it fits before the readouts.
+    float cx = sx, right = beside ? x : x - PX(10);
+    auto word = [&](const char *w, ImU32 col) {
+        float ww = ui_text_width(ui, ui->font_bold, STATE_SIZE, w);
+        if (cx + ww > right)
+            return false;
+        ui_text(ui, dl, ui->font_bold, STATE_SIZE, ImVec2(cx, sy), col, w);
+        cx += ww + space;
+        return true;
+    };
+    bool room = word(state, scol);
+    room = room && (!d.on_air || word("ON AIR", UI_RED));
+    room = room && (!d.master || word("MASTER", UI_ACCENT));
     if (beside)
-        ui_text(ui, dl, nullptr, 12.0f, ImVec2(sx, ty + PX(17)), UI_DIM, model, sw);
-    else
-        ui_text(ui, dl, nullptr, 11.0f, ImVec2(cx, sy), UI_DIM, model, ImMax(x - cx - PX(10), 1.0f));
+        ui_text(ui, dl, nullptr, LINE_SIZE, ImVec2(sx, ly), UI_DIM, model, sw);
+    else if (room && right - cx > PX(30))
+        ui_text(ui, dl, nullptr, STATE_SIZE, ImVec2(cx, sy), UI_DIM, model, right - cx);
 
     if (t) {
-        ui_text(ui, dl, ui->font_bold, 16.0f, ImVec2(tx, ty), UI_TEXT, ui_title(t), max_w);
+        ui_text(ui, dl, ui->font_bold, TITLE_SIZE, ImVec2(tx, ty), UI_TEXT, ui_title(t), max_w);
         if (beside)
-            ui_text(ui, dl, nullptr, 12.0f, ImVec2(tx, ty + PX(19)), UI_DIM, ui_artist(t), max_w);
+            ui_text(ui, dl, nullptr, LINE_SIZE, ImVec2(tx, ly), UI_DIM, ui_artist(t), max_w);
     } else {
         if (loaded && d.track_device == d.number)
             snprintf(buf, sizeof(buf), "Track %u from its %s", d.track_id, slot_name(d.track_slot));
         else if (loaded)
             snprintf(buf, sizeof(buf), "Track %u from device %d's %s", d.track_id, d.track_device,
                      slot_name(d.track_slot));
-        ui_text(ui, dl, ui->font_bold, 16.0f, ImVec2(tx, ty), UI_FAINT,
+        ui_text(ui, dl, ui->font_bold, TITLE_SIZE, ImVec2(tx, ty), UI_FAINT,
                 !d.has_status ? "Waiting for its status" : loaded ? buf : "No track loaded", max_w);
         if (beside)
-            ui_text(ui, dl, nullptr, 12.0f, ImVec2(tx, ty + PX(19)), UI_FAINT,
+            ui_text(ui, dl, nullptr, LINE_SIZE, ImVec2(tx, ly), UI_FAINT,
                     loaded ? "Not one of rxbox's tracks" : "Drop a track here", max_w);
     }
 
@@ -332,7 +359,7 @@ void ui_link_decks_row(UiState *ui, ImVec2 a, ImVec2 b)
     ui->link_decks_drawn = n;
     if (!n) {
         ImDrawList *dl = ImGui::GetWindowDrawList();
-        ui_text(ui, dl, nullptr, 14.0f, ImVec2(a.x + PX(12), floorf((a.y + b.y) * 0.5f - PX(9))),
+        ui_text(ui, dl, nullptr, LINE_SIZE, ImVec2(a.x + PX(12), floorf((a.y + b.y) * 0.5f - PX(14))),
                 UI_FAINT, app->link_state.on ? "No player on the link" : "PRO DJ LINK is off");
         return;
     }

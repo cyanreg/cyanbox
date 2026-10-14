@@ -568,8 +568,10 @@ void ui_escape_closes(bool *open);
 // without --pro-link.
 void ui_link_window(UiState *ui);
 // The Link decks (link_decks.cpp): with --pro-link, the players on the
-// link in the deck's title row (a to b), the track menu's "Load in deck"
-// items (and a separator after them), the test hook's players.
+// link in the deck's title row (a to b; UI_LINK_ROW_H high, the title
+// row's height 1.3 times), the track menu's "Load in deck" items (and a
+// separator after them), the test hook's players.
+#define UI_LINK_ROW_H 84
 void ui_link_decks_row(UiState *ui, ImVec2 a, ImVec2 b);
 void ui_link_load_menu(UiState *ui, RXTrack *t);
 void ui_link_decks_test_tick(UiState *ui);

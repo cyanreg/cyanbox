@@ -1723,7 +1723,8 @@ bool rx_ui_frame(RXApp *app)
     // UI_DETAIL_NATURAL detail when that is more; whatever it has beyond
     // its fixed rows goes to the detail waveform (ui_deck_panel). The
     // browser keeps at least a few rows.
-    float fixed = PX(UI_TITLE_ROW_H + UI_OVERVIEW_H + UI_CONTROL_ROW_H + 5 * 4 + 12) +
+    float title_h = app->link_state.enabled ? UI_LINK_ROW_H : UI_TITLE_ROW_H;
+    float fixed = PX(title_h + UI_OVERVIEW_H + UI_CONTROL_ROW_H + 5 * 4 + 12) +
                   (app->decks[0].grid_edit ? PX(UI_GRID_STRIP_H + 4) : 0);
     float natural = fixed + PX(UI_DETAIL_NATURAL), smallest = fixed + PX(80);
     float max_deck = ImMax(body_h - PX(200), smallest);

@@ -232,17 +232,20 @@ last.
 ### Link decks
 
 With `--pro-link` the title row shows the players on the link instead of
-the deck's track (src/ui/link_decks.cpp); the rest of the panel is the
-deck as without it, for editing a track before it goes to a player. One
+the deck's track (src/ui/link_decks.cpp), 84 px high (1.3 times the title
+row) with its text twice the title row's sizes; the rest of the panel is
+the deck as without it, for editing a track before it goes to a player. One
 cell a player, by number, the width shared equally and each at most half
 of it, so two fill it; one alone takes its side (odd numbers left, even
 right); with none, the row says so. A cell has the track's overview for
 its background (dimmed, the part played shaded and the playhead on it
 when the player says where it is), and over it the player's number, the
 cover, the title over the artist, the player's state (PLAYING or PAUSED,
-ON AIR, MASTER) over its model, and right-aligned KEY (left out on a
-narrow cell), BPM at the player's pitch (orange off zero) and REMAIN. On
-a narrow cell the state and model take the artist's place. Outlined
+ON AIR, MASTER) over its model, and right-aligned REMAIN, BPM at the
+player's pitch (orange off zero) and KEY, spaced by their widths; a cell
+too narrow for all of them keeps the title 120 px by leaving out KEY, then
+BPM, and puts the state and model in the artist's place, as far as they
+fit. Outlined
 orange while the player plays. A track not of ours is named by its id and
 where it is from.
 

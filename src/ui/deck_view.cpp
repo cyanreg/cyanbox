@@ -1536,7 +1536,8 @@ void ui_deck_panel(UiState *ui, int deck, ImVec2 size)
     float pad = PX(6), gap = PX(4);
     float x0 = a.x + pad, x1 = b.x - pad;
     float y = a.y + pad;
-    float title_h = PX(UI_TITLE_ROW_H), over_h = PX(UI_OVERVIEW_H), ctrl_h = PX(UI_CONTROL_ROW_H);
+    float title_h = PX(app->link_state.enabled ? UI_LINK_ROW_H : UI_TITLE_ROW_H);
+    float over_h = PX(UI_OVERVIEW_H), ctrl_h = PX(UI_CONTROL_ROW_H);
     float strip_h = dv->grid_edit ? PX(UI_GRID_STRIP_H) : 0;
     float detail_h = (b.y - pad) - y - title_h - over_h - ctrl_h - gap * 3;
     if (strip_h > 0)

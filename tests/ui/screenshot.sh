@@ -307,7 +307,8 @@ variant settings-follow "" "track $ID .*overview centred previews centred key $c
 
 # The Link decks (RXBOX_UI_LINK_DECKS: players made up, no network): two
 # share the deck's title row. With the players' Eject/Load Lock on, a right
-# click on the first row (at 1600x900) opens the track menu, whose "Load
+# click on the first row (at 1600x900, under the taller title row) opens
+# the track menu, whose "Load
 # in deck" items offer deck 1, which plays, greyed out, and deck 2 not.
 (
     export RXBOX_UI_LINK_DECKS="1:CDJ-900:$ID:pa:-1,2:CDJ-2000NXS2:$ID2:m:40"
@@ -315,7 +316,7 @@ variant settings-follow "" "track $ID .*overview centred previews centred key $c
     if [ -n "${RXBOX_UI_SWAYSOCK:-}" ]; then
         SWAYSOCK=$RXBOX_UI_SWAYSOCK swaymsg -q output '*' resolution 1600x900
         rx config player.eject_lock true > /dev/null
-        variant link-load-locked "60:rclick:600:551" 'load menu locked "1"'
+        variant link-load-locked "60:rclick:600:571" 'load menu locked "1"'
         rx config player.eject_lock false > /dev/null
     fi
 ) || exit 1
