@@ -408,8 +408,8 @@ it at once.
   the stick for the players to LOAD under their own settings (the device
   ones apply as the player reads the stick). Three tabs grouped as
   `rxbox settings` groups them: Player (MYSETTING.DAT and MYSETTING2.DAT),
-  Mixer (DJMMYSETTING.DAT) and Device (DEVSETTING.DAT and the background
-  colour the databases carry). Every field `rx_settings_list` gives, so one
+  Mixer (DJMMYSETTING.DAT) and Device (DEVSETTING.DAT; the background
+  colour the databases carry is the Export dialog's). Every field `rx_settings_list` gives, so one
   added to settings.c appears by itself, in two columns of a label and a
   combo, the first half of a tab down the left; every tab is as tall as the
   Player tab's 15 rows, so the dialog keeps its size. Names and values are
@@ -447,12 +447,16 @@ it at once.
   indicator, jog mode, vinyl speed adjust, the jog display and jog LCD
   brightness, slip flashing, disc slot illumination, eject/load lock,
   sync, hot cue auto load, needle lock, phase meter, the waveform area
-  (waveform or phase meter), waveform divisions, pad brightness, every
-  mixer setting, and the background colour.
+  (waveform or phase meter), waveform divisions, pad brightness and every
+  mixer setting.
 - **Export**: destination path (with a list of mounted removable volumes
   read from /proc/mounts under /run/media and /media), whole library or
-  selected playlists, prune, compatibility transcode, then a progress view
-  with the stage, item, bar and a log; cancel; the result summary.
+  selected playlists, prune, compatibility transcode, the players'
+  background colour for the stick's library (a "default" swatch and the
+  eight track colours, `export.background_color`, saved when picked:
+  export.pdb's property row and exportLibrary.db's property table carry
+  it), then a progress view with the stage, item, bar and a log; cancel;
+  the result summary.
 - **Sync from USB**: pick the mount, read the stick, then a table of the
   differences the player left (hot cues set/cleared, memory cues added/
   removed, plays from the history, My Settings changed, named as Player

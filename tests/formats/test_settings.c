@@ -93,8 +93,8 @@ static void errors(void)
 static void from_config(void)
 {
     RXKv player[2] = { { "quantize", "true" }, { "jog_display_mode", "artwork" } };
-    RXKv device[2] = { { "background_color", "blue" }, { "waveform_color", "3band" } };
-    RXConfig cfg = { .player = player, .nb_player = 2, .device = device, .nb_device = 2 };
+    RXKv device[1] = { { "waveform_color", "3band" } };
+    RXConfig cfg = { .player = player, .nb_player = 2, .device = device, .nb_device = 1 };
     RXSettingsFile out[4];
     int nf;
     CHECK_EQ(rx_settings_from_config(&cfg, out, &nf), 0);
@@ -108,12 +108,6 @@ static void from_config(void)
     }
     for (int i = 0; i < nf; i++)
         free(out[i].data);
-
-    /* The background colour alone writes no DEVSETTING.DAT: it lives in
-     * the databases. */
-    cfg = (RXConfig) { .device = device, .nb_device = 1 };
-    CHECK_EQ(rx_settings_from_config(&cfg, out, &nf), 0);
-    CHECK_EQ(nf, 0);
 }
 
 static void list_cb(void *opaque, const char *file, const char *name, const char *const *values,
@@ -147,12 +141,10 @@ static void listed_values(void)
     CHECK_STR(rx_settings_value("MYSETTING.DAT", "tempo_range", "WIDE"), "wide");
     CHECK_STR(rx_settings_value("MYSETTING2.DAT", "vinyl_speed_adjust", "Touch & Release"),
               "touch_release");
-    CHECK_STR(rx_settings_value("export.pdb, exportLibrary.db", "background_color", "Blue"), "blue");
     CHECK(!rx_settings_value("MYSETTING.DAT", "tempo_range", "12"));
     CHECK(!rx_settings_value("MYSETTING.DAT", "tempo_range", "true"));
     CHECK(!rx_settings_value("MYSETTING.DAT", "bogus", "1"));
     CHECK(!rx_settings_value("MYSETTING2.DAT", "quantize", "on"));
-    CHECK(!rx_settings_value("export.pdb, exportLibrary.db", "background_color", "teal"));
 }
 
 /* What the interface follows: the library's value in its listed form, else
@@ -160,8 +152,8 @@ static void listed_values(void)
 static void settings_get(void)
 {
     RXKv player[3] = { { "quantize", "off" }, { "beat_jump_beats", "1/2" }, { "time_mode", "12" } };
-    RXKv device[2] = { { "overview_waveform", "Full" }, { "background_color", "Pink" } };
-    RXConfig cfg = { .player = player, .nb_player = 3, .device = device, .nb_device = 2 };
+    RXKv device[1] = { { "overview_waveform", "Full" } };
+    RXConfig cfg = { .player = player, .nb_player = 3, .device = device, .nb_device = 1 };
     CHECK_STR(rx_settings_get(&cfg, "player.quantize"), "false");
     CHECK_STR(rx_settings_get(&cfg, "player.beat_jump_beats"), "1/2");
     CHECK_STR(rx_settings_get(&cfg, "player.time_mode"), "remain");
@@ -171,7 +163,9 @@ static void settings_get(void)
     CHECK_STR(rx_settings_get(&cfg, "device.overview_waveform"), "full");
     CHECK_STR(rx_settings_get(&cfg, "device.waveform_color"), "3band");
     CHECK_STR(rx_settings_get(&cfg, "device.key_display"), "classic");
-    CHECK_STR(rx_settings_get(&cfg, "device.background_color"), "pink");
+    /* The databases' background colour is an export setting, not one of
+     * these (export.background_color). */
+    CHECK(!rx_settings_get(&cfg, "device.background_color"));
     CHECK_STR(rx_settings_get(&cfg, "mixer.channel_fader_curve"), "linear");
     CHECK_STR(rx_settings_get(NULL, "player.quantize"), "true");
     CHECK(!rx_settings_get(&cfg, "player.bogus"));
@@ -188,7 +182,7 @@ int main(void)
     settings_get();
     int count = 0;
     rx_settings_list(list_cb, &count);
-    /* 22 + 7 + 13 + 4 dj settings, plus the background colour. */
-    CHECK_EQ(count, 22 + 7 + 13 + 4 + 1);
+    /* 22 + 7 + 13 + 4 dj settings. */
+    CHECK_EQ(count, 22 + 7 + 13 + 4);
     return test_result("settings");
 }

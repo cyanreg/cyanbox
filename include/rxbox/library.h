@@ -79,6 +79,8 @@ typedef struct RXConfig {
     bool   export_pdb, export_onelibrary;   /* both default true */
     bool   compat_transcode;    /* AAC and hi-res to 16/44.1 FLAC on the stick */
     char  *device_name;         /* NULL = stick's label */
+    int    background_color;    /* the players' background for the stick's library:
+                                   0 default, 1..8 pink..purple (rxbox/colors.h) */
 
     /* player.* mixer.* device.*: My Settings values the user set */
     RXKv *player; int nb_player;

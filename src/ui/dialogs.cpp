@@ -762,6 +762,46 @@ static void export_start(UiState *ui)
     ui->export_seen_running = true;
 }
 
+// The players' background colour for the stick's library, which the
+// databases carry (export.background_color): default or one of the eight
+// track colours. Saved when picked, as the library's other settings are:
+// the export reads the library's settings when it starts.
+static void background_picker(UiState *ui)
+{
+    RXApp *app = ui->app;
+    RXConfig *cfg = &app->lib.cfg;
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("Background colour on the players");
+    ImGui::SameLine();
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(PX(4), PX(4)));
+    int picked = -1;
+    if (ui_swatch(ui, "##bgdefault", 0, cfg->background_color == 0, 18))
+        picked = 0;
+    ui_tooltip("default (the player's own)");
+    for (int i = 1; i <= RX_TRACK_COLORS; i++) {
+        char id[16];
+        snprintf(id, sizeof(id), "##bg%d", i);
+        ImGui::SameLine();
+        if (ui_swatch(ui, id, rx_track_color_rgb(i), cfg->background_color == i, 18))
+            picked = i;
+        ui_tooltip(rx_track_color_name(i));
+    }
+    ImGui::PopStyleVar();
+    ImGui::SameLine();
+    ImGui::TextDisabled("%s", cfg->background_color ? rx_track_color_name(cfg->background_color)
+                                                    : "default");
+    if (picked >= 0 && picked != cfg->background_color) {
+        int old = cfg->background_color;
+        cfg->background_color = picked;
+        int ret = rx_library_config_save(&app->lib);
+        if (ret < 0) {
+            cfg->background_color = old;
+            rx_app_set_status(app, "The background colour could not be saved: %s",
+                              strerror(-ret));
+        }
+    }
+}
+
 static void export_dialog(UiState *ui)
 {
     RXApp *app = ui->app;
@@ -805,6 +845,7 @@ static void export_dialog(UiState *ui)
         }
         ImGui::SeparatorText("Options");
         ImGui::Checkbox("Compatibility transcode (AAC and hi-res to 16-bit/44.1 kHz FLAC)", &es.compat);
+        background_picker(ui);
         ImGui::TextDisabled("Files already on the stick are skipped. Tracks no longer exported\n"
                             "are deleted from the stick only after you confirm.");
         ImGui::Spacing();

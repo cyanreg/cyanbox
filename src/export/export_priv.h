@@ -75,9 +75,6 @@ bool rx_plan_usb_name_matches(const RXTrack *t, const char *stick_path);
  * as exFAT's default up-case table does (plan.c); two paths with one key
  * are one file on the stick. */
 char *rx_plan_fold_case(const char *s);
-/* The background colour setting ([device] background_color): 0 default,
- * 1..8 pink..purple. */
-int  rx_plan_background_color(const RXConfig *cfg);
 
 /* ----------------------------------------------------------- stick cues */
 

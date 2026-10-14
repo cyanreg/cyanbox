@@ -131,7 +131,8 @@ All of the items the earlier session listed as worth importing are in scope:
 7. More `inspect` checks: ANLZ embedded path matches the audio, folder matches
    the path hash, fixed track-row values, both libraries agree on hot-cue
    auto-load, declared cue counts match parsed ones.
-8. Optional background colour in `[device]`.
+8. Optional background colour for the stick's library (`export.background_color`,
+   the Export dialog's swatches).
 9. Damaged MP3 frames play and analyse as silence rather than being dropped.
 10. The three-band waveform levels are rbxport's analysis
     (`crates/rbl-analysis/src/waveform.rs`), not dj's fit: PWV7 is each band's

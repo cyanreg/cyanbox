@@ -19,10 +19,10 @@
  * rekordbox writes blue, for the same reason: the interface draws the
  * palette this setting holds, and the user wants 3-band on both.
  *
- * The [device] background colour is not in any of these files: rekordbox
+ * The players' background colour is not in any of these files: rekordbox
  * keeps it in export.pdb's property row and exportLibrary.db's property
- * table (rbxport, observed with rekordbox 7.2.14). The plan reads it from
- * the config; here it is only listed and skipped. */
+ * table (rbxport, observed with rekordbox 7.2.14), so it is an export
+ * setting (export.background_color, src/core/config.c), not one of these. */
 
 #include "rxbox/formats.h"
 
@@ -166,12 +166,6 @@ static const File files[] = {
       mixer_fields, RX_ARRAY_ELEMS(mixer_fields) },
     { "DEVSETTING.DAT", "PIONEER DJ", "7.2.8", 32, false, devsetting_default,
       device_fields, RX_ARRAY_ELEMS(device_fields) },
-};
-
-/* The [device] key the plan handles (export.pdb / exportLibrary.db). */
-static const char *const background_key = "background_color";
-static const char *const background_values[] = {
-    "default", "pink", "red", "orange", "yellow", "green", "aqua", "blue", "purple",
 };
 
 static const File *find_file(const char *name)
@@ -401,8 +395,8 @@ int rx_settings_from_config(const RXConfig *cfg, RXSettingsFile files_out[4], in
 {
     int ret = 0;
     *nb = 0;
-    RXKv *p1 = NULL, *p2 = NULL, *dev = NULL;
-    int n1 = 0, n2 = 0, nd = 0;
+    RXKv *p1 = NULL, *p2 = NULL;
+    int n1 = 0, n2 = 0;
 
     /* [player] covers MYSETTING.DAT and MYSETTING2.DAT (dj's
      * files_from_config); a key in neither is an error. */
@@ -430,27 +424,16 @@ int rx_settings_from_config(const RXConfig *cfg, RXSettingsFile files_out[4], in
     }
     if (cfg->nb_mixer && (ret = add_file(files_out, nb, "DJMMYSETTING.DAT", cfg->mixer, cfg->nb_mixer)) < 0)
         goto fail;
-    if (cfg->nb_device) {
-        dev = calloc((size_t)cfg->nb_device, sizeof(*dev));
-        if (!dev) {
-            ret = RX_ERROR(ENOMEM);
-            goto fail;
-        }
-        for (int i = 0; i < cfg->nb_device; i++)
-            if (strcmp(cfg->device[i].key, background_key))
-                dev[nd++] = cfg->device[i];
-        if (nd && (ret = add_file(files_out, nb, "DEVSETTING.DAT", dev, nd)) < 0)
-            goto fail;
-    }
+    if (cfg->nb_device && (ret = add_file(files_out, nb, "DEVSETTING.DAT", cfg->device,
+                                          cfg->nb_device)) < 0)
+        goto fail;
     free(p1);
     free(p2);
-    free(dev);
     return 0;
 
 fail:
     free(p1);
     free(p2);
-    free(dev);
     for (int i = 0; i < *nb; i++)
         free(files_out[i].data);
     *nb = 0;
@@ -462,19 +445,8 @@ const char *rx_settings_value(const char *file, const char *name, const char *va
     if (!file || !name || !value)
         return NULL;
     const File *f = find_file(file);
-    if (!f) {
-        /* The background colour, listed under the databases' names. */
-        if (strcmp(name, background_key))
-            return NULL;
-        char v[64], o[64];
-        normalise(value, v, sizeof(v));
-        for (size_t i = 0; i < RX_ARRAY_ELEMS(background_values); i++) {
-            normalise(background_values[i], o, sizeof(o));
-            if (!strcmp(o, v))
-                return background_values[i];
-        }
+    if (!f)
         return NULL;
-    }
     const Field *fl = find_field(f, name);
     uint8_t byte;
     if (!fl || lookup(fl, value, &byte) < 0)
@@ -502,8 +474,6 @@ bool rx_settings_valid(const char *key, const char *value)
     } else {
         return false;
     }
-    if (!strcmp(name, background_key) && in[0] && !strcmp(in[0]->name, "DEVSETTING.DAT"))
-        return rx_settings_value("", name, value) != NULL;
     for (int i = 0; i < 2 && in[i]; i++) {
         if (find_field(in[i], name))
             return rx_settings_value(in[i]->name, name, value) != NULL;
@@ -596,12 +566,6 @@ const char *rx_settings_get(const RXConfig *cfg, const char *key)
         if (!strcmp(kv[i].key, name))
             stored = kv[i].value ? kv[i].value : "";
     }
-    /* A value the export would refuse counts as none: what the players get
-     * is then still the default (and the export says so). */
-    if (!strcmp(name, background_key) && !strcmp(in[0]->name, "DEVSETTING.DAT")) {
-        const char *v = stored ? rx_settings_value("", name, stored) : NULL;
-        return v ? v : background_values[0];
-    }
     for (int i = 0; i < 2 && in[i]; i++) {
         const Field *fl = find_field(in[i], name);
         if (!fl)
@@ -635,8 +599,5 @@ void rx_settings_list(rx_settings_list_cb cb, void *opaque)
             byte_name(fl, f->defaults[fl->offset], deflt, sizeof(deflt));
             cb(opaque, f->name, fl->name, values, n, deflt);
         }
-        if (!strcmp(f->name, "DEVSETTING.DAT"))
-            cb(opaque, "export.pdb, exportLibrary.db", background_key, background_values,
-               (int)RX_ARRAY_ELEMS(background_values), "default");
     }
 }

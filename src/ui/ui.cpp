@@ -514,8 +514,7 @@ const char *const ui_setting_titles[UI_NB_SETTING_SECTIONS] = { "Player", "Mixer
 const char *const ui_setting_prefixes[UI_NB_SETTING_SECTIONS] = { "player", "mixer", "device" };
 
 // The section `rxbox settings` prints a file's fields under (cli.c,
-// settings_section): the background colour, which the databases carry, is
-// a device setting like DEVSETTING.DAT's.
+// settings_section).
 static int setting_section(const char *file)
 {
     if (!rx_strcasecmp(file, "MYSETTING.DAT") || !rx_strcasecmp(file, "MYSETTING2.DAT"))

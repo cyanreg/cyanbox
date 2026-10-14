@@ -168,6 +168,12 @@ cat "$dir/dry.out"
 grep -q "is not a mount point" "$dir/dry.out" || fail "no warning about a stick that is not mounted"
 grep -q "Click 128 \[colour 193.5° (aqua)\]$" "$dir/dry.out" || fail "the dry run does not say the colour"
 
+# The players' background colour for the stick's library: an export
+# setting, one of the eight colours or default, listed by config.
+run config export.background_color Purple > /dev/null || fail "config export.background_color"
+run config export.background_color teal > /dev/null 2>&1 && fail "a background colour not of the eight"
+run config | grep -q "^export.background_color = purple$" || fail "config does not list the background colour"
+
 run export "$dir/stick" > "$dir/export.out" || { cat "$dir/export.out"; fail "export"; }
 cat "$dir/export.out"
 "$rxbox" inspect "$dir/stick" > "$dir/inspect.out" || { cat "$dir/inspect.out"; fail "inspect"; }

@@ -545,20 +545,6 @@ static void report(rx_progress_cb cb, void *opaque, const char *fmt, ...)
     free(msg);
 }
 
-int rx_plan_background_color(const RXConfig *cfg)
-{
-    for (int i = 0; cfg && i < cfg->nb_device; i++) {
-        if (strcmp(cfg->device[i].key, "background_color"))
-            continue;
-        const char *v = cfg->device[i].value ? cfg->device[i].value : "";
-        int id = rx_track_color_id(v);
-        if (id || !*v || !strcasecmp(v, "default"))
-            return id;
-        rx_warn("device.background_color: unknown colour '%s'", v);
-    }
-    return 0;
-}
-
 /* dj's _tag(): "Situation/Peak Time" is the tag "Peak Time" in the My Tag
  * column "Situation"; a bare tag goes in the fourth column. */
 static int tag_column(const char *tag, char **name)
@@ -1172,7 +1158,7 @@ int rx_plan_build_cb(const RXLibrary *lib, RXTrack *const *tracks, int nb_tracks
     snprintf(out->key_notation, sizeof(out->key_notation), "%s",
              cfg->key_notation[0] ? cfg->key_notation : "classic");
     out->hot_cue_auto_load = true;
-    out->background_color = rx_plan_background_color(cfg);
+    out->background_color = RX_CLAMP(cfg->background_color, 0, RX_TRACK_COLORS);
     /* dj's library constant: zlib.crc32 of the library root. */
     out->library_id = lib->root ? rx_crc32(0, lib->root, strlen(lib->root)) : 0;
     out->cfg = cfg;

@@ -11,6 +11,10 @@
  *                                  user's and starts empty)
  *   export.key_notation  export.pdb  export.onelibrary  export.compat_transcode
  *   export.device_name
+ *   export.background_color        the players' background for the stick's
+ *                                  library: default or one of the eight
+ *                                  track colours (export.pdb's property row,
+ *                                  exportLibrary.db's property table)
  *   player.<name>  mixer.<name>  device.<name>     My Settings, names as
  *                                                  `rxbox settings` lists them
  *   audio.sink
@@ -271,8 +275,14 @@ static int set_string(char **field, const char *value)
 /* RXConfig's own keys (not the My Settings), what each takes, and how it
  * is read. */
 typedef enum Kind {
-    K_BOOL, K_BPM, K_WHAT, K_NOTATION, K_TEXT, K_VIBE, K_TRAFFIC, K_BARS, K_SPLIT,
+    K_BOOL, K_BPM, K_WHAT, K_NOTATION, K_TEXT, K_VIBE, K_TRAFFIC, K_BARS, K_SPLIT, K_BACKGROUND,
 } Kind;
+
+/* export.background_color's values, by id: rxbox/colors.h's order (the
+ * formats module's table, which core does not link). */
+static const char *const background_names[RX_TRACK_COLORS + 1] = {
+    "default", "pink", "red", "orange", "yellow", "green", "aqua", "blue", "purple",
+};
 
 static const struct {
     const char *key;
@@ -290,6 +300,7 @@ static const struct {
     { "export.onelibrary",       K_BOOL },
     { "export.compat_transcode", K_BOOL },
     { "export.device_name",      K_TEXT },
+    { "export.background_color", K_BACKGROUND },
     { "audio.sink",              K_TEXT },
     { "ml.model",                K_TEXT },
     { "color.pink",              K_VIBE }, { "color.red",    K_VIBE },
@@ -336,6 +347,8 @@ const char *rx_config_takes(const char *key)
     case K_TRAFFIC:  return "off, same, related1, related2 or related3";
     case K_BARS:     return "a whole number of bars from 1 to 1024";
     case K_SPLIT:    return "a position, 0 or more (0: the default)";
+    case K_BACKGROUND:
+        return "default, pink, red, orange, yellow, green, aqua, blue or purple";
     default:         return NULL;
     }
 }
@@ -403,6 +416,14 @@ int rx_config_set(RXConfig *c, const char *key, const char *value)
             d = 0.0;
         *(!strcmp(key, "ui.split_player") ? &c->split_player : &c->split_tree) = (float)d;
         return 0;
+    case K_BACKGROUND:
+        for (int i = 0; i <= RX_TRACK_COLORS; i++) {
+            if (reset || !rx_strcasecmp(value, background_names[i])) {
+                c->background_color = reset ? 0 : i;
+                return 0;
+            }
+        }
+        return RX_ERROR(EINVAL);
     }
     return RX_ERROR(ENOENT);
 }
@@ -561,6 +582,8 @@ int rx_library_config_save(RXLibrary *lib)
         { "export.onelibrary",       c->export_onelibrary ? "true" : "false" },
         { "export.compat_transcode", c->compat_transcode ? "true" : "false" },
         { "export.device_name",      c->device_name },
+        { "export.background_color",
+          background_names[RX_CLAMP(c->background_color, 0, RX_TRACK_COLORS)] },
         { "audio.sink",              c->audio_sink },
         { "ml.model",                c->ml_model },
         { "ui.traffic_light",        c->traffic_light },

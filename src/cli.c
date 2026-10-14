@@ -109,7 +109,8 @@ static const char usage_text[] =
     "                           tracks an older analyser analysed\n"
     "  settings                 list the My Settings names and values\n"
     "  config [KEY [VALUE]]     show or change a setting (analysis.bpm_min,\n"
-    "                           import.comment, export.key_notation, player.quantize,\n"
+    "                           import.comment, export.key_notation,\n"
+    "                           export.background_color, player.quantize,\n"
     "                           ml.model, color.red ...; \"\" puts a colour's words back\n"
     "                           to the default)\n"
     "  init [DIR]               create a library (default: the library directory)\n"
@@ -2333,6 +2334,8 @@ static int cmd_config(Cli *cli, int argc, char **argv)
         printf("export.compat_transcode = %s\n", c->compat_transcode ? "true" : "false");
         printf("export.device_name = %s\n",
                c->device_name ? c->device_name : "(the stick's label)");
+        printf("export.background_color = %s\n",
+               c->background_color ? rx_track_color_name(c->background_color) : "default");
         print_kv("player", c->player, c->nb_player);
         print_kv("mixer", c->mixer, c->nb_mixer);
         print_kv("device", c->device, c->nb_device);
@@ -2354,10 +2357,6 @@ static const char *settings_section(const char *file)
     if (!rx_strcasecmp(file, "DJMMYSETTING.DAT"))
         return "mixer";
     if (!rx_strcasecmp(file, "DEVSETTING.DAT"))
-        return "device";
-    /* background_color is a device.* key too, though the databases carry
-     * it rather than DEVSETTING.DAT (src/formats/settings.c, rx_settings_list). */
-    if (!strcmp(file, "export.pdb, exportLibrary.db"))
         return "device";
     return file;
 }

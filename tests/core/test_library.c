@@ -288,6 +288,7 @@ static void test_edit_and_reopen(void)
 
     lib.cfg.key_notation[0] = '\0';
     snprintf(lib.cfg.key_notation, sizeof(lib.cfg.key_notation), "camelot");
+    lib.cfg.background_color = 8;
     lib.cfg.bpm_min = 70;
     lib.cfg.bpm_max = 180.5;
     lib.cfg.snap_bpm = false;
@@ -391,6 +392,7 @@ static void test_edit_and_reopen(void)
 
     const RXConfig *cfg = &lib.cfg;
     CHECK_STR(cfg->key_notation, "camelot");
+    CHECK(cfg->background_color == 8);
     CHECK(cfg->bpm_min == 70 && cfg->bpm_max == 180.5 && !cfg->snap_bpm && cfg->auto_cues);
     CHECK(cfg->compat_transcode && cfg->export_pdb && cfg->detail_bars == 16 && cfg->split_tree == 0.25f);
     CHECK_STR(cfg->device_name, "MY STICK");
@@ -1194,6 +1196,13 @@ static void test_config_set(void)
     CHECK(rx_config_set(&c, "analysis.snap_bpm", "") == 0 && c.snap_bpm);
     CHECK(rx_config_set(&c, "export.pdb", "no") == 0 && !c.export_pdb);
     CHECK(rx_config_set(&c, "export.pdb", NULL) == 0 && c.export_pdb);
+    /* The background colour: default or one of the eight, any case. */
+    CHECK(rx_config_set(&c, "export.background_color", "Blue") == 0 && c.background_color == 7);
+    CHECK(rx_config_set(&c, "export.background_color", "teal") == RX_ERROR(EINVAL) &&
+          c.background_color == 7);
+    CHECK(rx_config_set(&c, "export.background_color", "default") == 0 && !c.background_color);
+    CHECK(rx_config_set(&c, "export.background_color", "pink") == 0 && c.background_color == 1);
+    CHECK(rx_config_set(&c, "export.background_color", "") == 0 && !c.background_color);
     CHECK(rx_config_set(&c, "analysis.bpm_min", "fast") == RX_ERROR(EINVAL) && c.bpm_min == 0.0);
     CHECK(rx_config_set(&c, "analysis.bpm_min", "-1") == RX_ERROR(EINVAL));
     CHECK(rx_config_set(&c, "analysis.bpm_min", "85.5") == 0 && c.bpm_min == 85.5);
