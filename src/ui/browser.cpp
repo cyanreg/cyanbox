@@ -13,7 +13,7 @@
 // Selection is rekordbox's: click selects one, Ctrl toggles, Shift selects
 // the range from the last click; the focused row (the keyboard's, Enter
 // loads it) has a 1 px outline, the player's track a 1.5 px orange one,
-// wherever the focus is. A double-click loads the track into the
+// wherever the focus is, and dark amber for the selection's blue. A double-click loads the track into the
 // player (a playing one is paused and replaced). Rows drag as a list of
 // track ids onto the player or a playlist.
 
@@ -626,14 +626,23 @@ static void table(UiState *ui, ImVec2 size)
             ImGui::PushID((void *)(uintptr_t)t->id);
             ImGui::TableSetColumnIndex(COL_IDX);
             bool sel = ui_is_selected(ui, t->id);
+            bool in_player = loaded && t->id == loaded->id;
             ImVec2 rp = ImGui::GetCursorScreenPos();
             ImGuiSelectableFlags sf = ImGuiSelectableFlags_SpanAllColumns |
                                       ImGuiSelectableFlags_AllowOverlap |
                                       ImGuiSelectableFlags_AllowDoubleClick;
+            // The player's track selected: a dark amber under its orange
+            // outline, not the selection's blue, which clashes with it.
+            if (in_player) {
+                ImGui::PushStyleColor(ImGuiCol_Header, IM_COL32(0x4A, 0x33, 0x16, 0xFF));
+                ImGui::PushStyleColor(ImGuiCol_HeaderActive, IM_COL32(0x5E, 0x40, 0x1A, 0xFF));
+            }
             if (ImGui::Selectable("##row", sel, sf, ImVec2(0, row_h))) {
                 clicked_row = r;
                 double_clicked = ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
             }
+            if (in_player)
+                ImGui::PopStyleColor(2);
             ImRect row_rect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
             if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
                 if (!sel)
@@ -669,7 +678,6 @@ static void table(UiState *ui, ImVec2 size)
             // rectangles, crisp where a thick line would blur, the half
             // pixel an inner one at half strength), the focus 1 px inside
             // it.
-            bool in_player = loaded && t->id == loaded->id;
             if (in_player || t->id == app->focus_track) {
                 ImDrawList *dl = ImGui::GetWindowDrawList();
                 dl->PushClipRect(clip.Min, clip.Max, false);
