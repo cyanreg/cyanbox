@@ -32,6 +32,11 @@
  * else its own Kaiser-windowed filter. The output buffer starts at the
  * container's length estimate and grows by half when that was short.
  *
+ * rx_decode_stream hands the same frames over as they come, a piece at a
+ * time, instead of keeping them: the sink's last step is the consumer's
+ * call rather than the buffer, and nothing before it changes, so what an
+ * export encodes is what the analysis decoded, sample for sample.
+ *
  * A float sample that is not finite (NaN or an infinity, from a damaged or
  * badly written float WAV or AIFF) becomes 0 in that conversion, counted,
  * with one warning per file. One such sample wiped a track's key and its
@@ -78,6 +83,11 @@ typedef struct Sink {
 
     float *buf;
     int64_t nb, cap;        /* frames */
+
+    /* rx_decode_stream: frames handed over (buf only holds the
+     * resampler's output for it) */
+    const RXDecodeTo *to;
+    int64_t emitted;
 } Sink;
 
 /* --------------------------------------------------------------- resampler */
@@ -132,7 +142,7 @@ static int reserve(Sink *s, int64_t frames)
 }
 
 static int sink_init(Sink *s, const char *path, int in_ch, int in_rate, int channels, int rate,
-                     double est_seconds)
+                     double est_seconds, const RXDecodeTo *to)
 {
     *s = (Sink) { 0 };
     if (in_ch <= 0 || in_rate <= 0 || channels < 0 || channels > 2 || rate < 0)
@@ -143,7 +153,17 @@ static int sink_init(Sink *s, const char *path, int in_ch, int in_rate, int chan
         .in_rate  = in_rate,
         .out_ch   = channels ? channels : in_ch,
         .out_rate = rate ? rate : in_rate,
+        .to       = to,
     };
+    /* A consumer hears the decoder's own channels and rate first, and
+     * may ask for another rate. */
+    if (to && to->start) {
+        int want = to->start(to->opaque, s->out_ch, in_rate);
+        if (want < 0)
+            return want;
+        if (want > 0)
+            s->out_rate = want;
+    }
     s->mixer.out_ch = s->out_ch;
     s->zeros = calloc((size_t)SILENCE_CHUNK * s->out_ch, sizeof(float));
     if (!s->zeros)
@@ -154,9 +174,23 @@ static int sink_init(Sink *s, const char *path, int in_ch, int in_rate, int chan
             return ret;
     }
 
-    /* The container's estimate plus a little, at most an hour up front */
+    /* The container's estimate plus a little, at most an hour up front;
+     * a stream keeps nothing */
+    if (to)
+        return 0;
     double est = RX_CLAMP(est_seconds, 0.0, 3600.0) * 1.01 * s->out_rate;
     return reserve(s, (int64_t)est + 65536);
+}
+
+/* The resampler's output so far, to the consumer, from buf. */
+static int sink_emit(Sink *s)
+{
+    int ret = 0;
+    if (s->nb > 0)
+        ret = s->to->frames(s->to->opaque, s->buf, s->nb);
+    s->emitted += s->nb;
+    s->nb = 0;
+    return ret;
 }
 
 static void sink_free(Sink *s)
@@ -180,6 +214,10 @@ static int sink_push(Sink *s, const float *x, int64_t n)
     if (n <= 0)
         return 0;
 
+    if (!s->swr && s->to) {
+        s->emitted += n;
+        return s->to->frames(s->to->opaque, x, n);
+    }
     if (!s->swr) {
         int ret = reserve(s, n);
         if (ret < 0)
@@ -190,7 +228,7 @@ static int sink_push(Sink *s, const float *x, int64_t n)
     }
 
     while (n > 0) {
-        int chunk = (int)RX_MIN(n, (int64_t)(1 << 20));
+        int chunk = (int)RX_MIN(n, (int64_t)(s->to ? 1 << 16 : 1 << 20));
         int max = swr_get_out_samples(s->swr, chunk);
         if (max < 0)
             return rx_audio_error(max);
@@ -205,6 +243,8 @@ static int sink_push(Sink *s, const float *x, int64_t n)
         s->nb += got;
         x += (int64_t)chunk * s->out_ch;
         n -= chunk;
+        if (s->to && (ret = sink_emit(s)) < 0)
+            return ret;
     }
     return 0;
 }
@@ -259,7 +299,16 @@ static int sink_finish(Sink *s, RXAudio *out)
             if (!got)
                 break;
             s->nb += got;
+            if (s->to && (ret = sink_emit(s)) < 0)
+                return ret;
         }
+    }
+    if (s->to) {
+        if (!s->emitted) {
+            rx_debug("%s: no audio decoded", s->path);
+            return RX_ERROR(ENODATA);
+        }
+        return 0;
     }
     if (!s->nb) {
         rx_debug("%s: no audio decoded", s->path);
@@ -572,7 +621,7 @@ static int mp3_frame(void *opaque, const uint8_t *data, size_t size, int samples
 
 /* 1 when this is not an MP3 file the scanner reads (the caller then uses
  * libavformat), 0 when decoded, < 0 on error. */
-static int decode_mp3(const char *path, int channels, int rate, RXAudio *out)
+static int decode_mp3(const char *path, int channels, int rate, RXAudio *out, const RXDecodeTo *to)
 {
     RXMap map;
     if (rx_audio_map(path, &map) < 0)
@@ -605,7 +654,7 @@ static int decode_mp3(const char *path, int channels, int rate, RXAudio *out)
 
     int64_t frames = info.nb_frames + info.header_counts;
     ret = sink_init(&sink, path, info.channels, info.sample_rate, channels, rate,
-                    (double)frames * info.frame_samples / info.sample_rate);
+                    (double)frames * info.frame_samples / info.sample_rate, to);
     if (ret < 0)
         goto end;
     c->sink = &sink;
@@ -648,7 +697,7 @@ static int64_t packet_samples(const AVCodecContext *dec, const AVStream *st, con
     return s->last_frames;
 }
 
-static int decode_av(const char *path, int channels, int rate, RXAudio *out)
+static int decode_av(const char *path, int channels, int rate, RXAudio *out, const RXDecodeTo *to)
 {
     AVFormatContext *fmt;
     int ret = rx_audio_open(path, &fmt, true);
@@ -684,7 +733,7 @@ static int decode_av(const char *path, int channels, int rate, RXAudio *out)
         est = (double)st->duration * av_q2d(st->time_base);
     else if (fmt->duration != AV_NOPTS_VALUE && fmt->duration > 0)
         est = (double)fmt->duration / AV_TIME_BASE;
-    ret = sink_init(&sink, path, dec->ch_layout.nb_channels, dec->sample_rate, channels, rate, est);
+    ret = sink_init(&sink, path, dec->ch_layout.nb_channels, dec->sample_rate, channels, rate, est, to);
     if (ret < 0)
         goto end;
 
@@ -723,10 +772,11 @@ end:
     return ret;
 }
 
-int rx_decode(const char *path, int channels, int rate, RXAudio *out)
+static int decode(const char *path, int channels, int rate, RXAudio *out, const RXDecodeTo *to)
 {
     rx_audio_init_logging();
-    *out = (RXAudio) { 0 };
+    if (out)
+        *out = (RXAudio) { 0 };
     if (channels < 0 || channels > 2 || rate < 0)
         return RX_ERROR(EINVAL);
 
@@ -740,11 +790,23 @@ int rx_decode(const char *path, int channels, int rate, RXAudio *out)
     avformat_close_input(&fmt);
 
     if (mp3) {
-        ret = decode_mp3(path, channels, rate, out);
+        ret = decode_mp3(path, channels, rate, out, to);
         if (ret <= 0)
             return ret;
     }
-    return decode_av(path, channels, rate, out);
+    return decode_av(path, channels, rate, out, to);
+}
+
+int rx_decode(const char *path, int channels, int rate, RXAudio *out)
+{
+    return decode(path, channels, rate, out, NULL);
+}
+
+int rx_decode_stream(const char *path, int channels, const RXDecodeTo *to)
+{
+    if (!to || !to->frames)
+        return RX_ERROR(EINVAL);
+    return decode(path, channels, 0, NULL, to);
 }
 
 /* ---------------------------------------------------------- derived buffers */
@@ -786,7 +848,7 @@ int rx_audio_resample(const RXAudio *in, int rate, RXAudio *out)
 
     Sink s = { 0 };
     int ret = sink_init(&s, "(buffer)", in->channels, in->rate, 0, rate,
-                        (double)in->nb_frames / in->rate);
+                        (double)in->nb_frames / in->rate, NULL);
     if (ret >= 0)
         ret = sink_push(&s, in->samples, in->nb_frames);
     if (ret >= 0)

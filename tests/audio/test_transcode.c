@@ -4,7 +4,13 @@
  * 16-bit 44.1 kHz FLAC of the same length with the same tags and cover; a
  * 16-bit WAV goes through sample for sample (no dither); an MP3 keeps its
  * players' timeline (the silent header frame and encoder delay become
- * samples of the FLAC). */
+ * samples of the FLAC).
+ *
+ * Link's: rx_transcode_wav makes a plain WAV, the 44-byte header and the
+ * samples, no tags or cover, a 16-bit source sample for sample;
+ * rx_transcode_mp3 a 320 kbps MP3 with no ID3 tag and no Xing frame whose
+ * clicks, decoded as a player decodes it (delay and all), are where the
+ * source has them. */
 
 #include "rxbox/audio.h"
 
@@ -121,6 +127,60 @@ int main(void)
         rx_probe_free(&pt);
         free(mp3);
         free(outm);
+    }
+
+    /* Link's WAV: from the 24-bit FLAC with tags and a cover, a plain
+     * 16-bit WAV; from the 16-bit WAV, the same samples */
+    char *lw = test_path(outdir, "link.wav");
+    CHECK(rx_transcode_wav(hi, lw, 48000) >= 0, "transcode to wav");
+    RXProbe pw;
+    CHECK(rx_probe(lw, &pw) >= 0 && !strcmp(pw.codec, "pcm_s16le") && pw.sample_rate == 48000 &&
+          pw.channels == 2 && !pw.has_artwork && !rx_probe_tag(&pw, "title", NULL),
+          "link wav: %s %d Hz %d ch, cover %d", pw.codec, pw.sample_rate, pw.channels,
+          pw.has_artwork);
+    uint8_t *wb = NULL;
+    size_t wn = 0;
+    CHECK(rx_file_read(lw, &wb, &wn) >= 0 && wn > 44 && !memcmp(wb, "RIFF", 4) &&
+          !memcmp(wb + 8, "WAVEfmt ", 8) && wb[16] == 16 && !memcmp(wb + 36, "data", 4) &&
+          wb[40] + (wb[41] << 8) + (wb[42] << 16) + ((size_t)wb[43] << 24) == wn - 44,
+          "link wav is not the plain 44-byte header and the samples");
+    free(wb);
+    rx_probe_free(&pw);
+    CHECK(rx_transcode_wav(wav, lw, 48000) >= 0 && rx_decode(lw, 0, 0, &at) >= 0 &&
+          aw.nb_frames == at.nb_frames &&
+          !memcmp(aw.samples, at.samples, (size_t)aw.nb_frames * 2 * sizeof(float)),
+          "16-bit link wav not exact");
+    rx_audio_free(&at);
+    free(lw);
+
+    /* Link's MP3: no tag, no Xing frame, and the clicks in place */
+    if (have_encoder("libmp3lame")) {
+        char *lm = test_path(outdir, "link.mp3");
+        CHECK(rx_transcode_mp3(wav, lm, 48000) >= 0, "transcode to mp3");
+        RXProbe pl;
+        CHECK(rx_probe(lm, &pl) >= 0 && !strcmp(pl.codec, "mp3") && pl.sample_rate == SIG_RATE &&
+              pl.mp3.valid && !pl.mp3.vbr && pl.mp3.bitrate_kbps == 320,
+              "link mp3: %s %d Hz, %d kbps", pl.codec, pl.sample_rate, pl.mp3.bitrate_kbps);
+        uint8_t *mb = NULL;
+        size_t mn = 0;
+        CHECK(rx_file_read(lm, &mb, &mn) >= 0 && mn > 1044 && memcmp(mb, "ID3", 3) &&
+              mb[0] == 0xff && (mb[1] & 0xe0) == 0xe0 && !memmem(mb, 1044, "Xing", 4) &&
+              !memmem(mb, 1044, "Info", 4) && memcmp(mb + mn - 128, "TAG", 3),
+              "link mp3 has a tag or a Xing frame");
+        free(mb);
+        RXAudio al;
+        CHECK(rx_decode(lm, 1, 0, &al) >= 0 && al.nb_frames >= n, "decode link mp3");
+        for (int k = 1; k < 8 && al.nb_frames >= n; k++) {
+            int64_t at_ = (int64_t)k * SIG_CLICK, best = at_ - 200;
+            for (int64_t i = at_ - 200; i <= at_ + 200; i++)
+                if (fabsf(al.samples[i]) > fabsf(al.samples[best]))
+                    best = i;
+            CHECK(llabs(best - at_) <= 2, "link mp3 click %d at %" PRId64 ", not %" PRId64, k,
+                  best, at_);
+        }
+        rx_audio_free(&al);
+        rx_probe_free(&pl);
+        free(lm);
     }
 
     /* A source that is not there leaves nothing behind */

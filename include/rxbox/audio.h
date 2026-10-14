@@ -101,6 +101,19 @@ typedef struct RXAudio {
  *   rate:     0 native, else resampled with libswresample (soxr when built in)
  * Damaged frames are decoded as silence rather than dropped. */
 int  rx_decode(const char *path, int channels, int rate, RXAudio *out);
+/* rx_decode's frames handed over as they are decoded instead of kept: the
+ * same samples, in pieces of any length (valid during the call), in
+ * memory that does not grow with the file. `start` (may be NULL) is told
+ * the stream's channels (after `channels`, as rx_decode) and the
+ * decoder's rate before any frame, and returns the rate wanted (0: that
+ * one; another resamples) or a negative errno to stop; `frames` gets them,
+ * returning < 0 to stop. Returns 0, the first such errno, or rx_decode's. */
+typedef struct RXDecodeTo {
+    int  (*start)(void *opaque, int channels, int rate);
+    int  (*frames)(void *opaque, const float *frames, int64_t n);
+    void  *opaque;
+} RXDecodeTo;
+int  rx_decode_stream(const char *path, int channels, const RXDecodeTo *to);
 /* Derived buffers from one already decoded (no file access). */
 int  rx_audio_to_mono(const RXAudio *in, RXAudio *out);
 int  rx_audio_resample(const RXAudio *in, int rate, RXAudio *out);
@@ -182,6 +195,45 @@ int  rx_image_jpeg_square(const uint8_t *rgba, int width, int height, int size, 
 int  rx_image_scale(const uint8_t *rgba, int width, int height, int max_w, int max_h,
                     uint8_t **out, int *out_w, int *out_h);
 
+/* ---------------------------------------------------------------- encoding */
+
+/* A track encoded as it is decoded (src/audio/encode.c): rx_decode_stream's
+ * frames, the analysis's samples, to FLAC, WAV, AIFF or MP3, into the
+ * caller's write and seek, in memory that does not grow with the file. */
+enum RXEncodeFormat {
+    RX_ENCODE_FLAC,
+    RX_ENCODE_WAV,
+    RX_ENCODE_AIFF,
+    RX_ENCODE_MP3,             /* 320 kbit/s CBR (160 below 32 kHz) */
+};
+
+typedef struct RXEncodeOptions {
+    enum RXEncodeFormat format;
+    int      bits;              /* FLAC, WAV, AIFF: 16 or 24 */
+    bool     exact;             /* the source's samples fit `bits` exactly: no dither */
+    int      channels;          /* 0 the source's, else 1 or 2 (rx_decode) */
+    int      max_rate;          /* > 0: resampled to it when the source's is higher */
+    int64_t  frames;            /* > 0: exactly this many (silence to it, nothing past) */
+    bool     tags;              /* FLAC: the source's tags and cover */
+    int      compression;       /* FLAC: 1..12, 0 the encoder's default */
+    /* The bytes: as AVIO's write_packet and seek (SEEK_SET only; NULL:
+     * the muxer cannot go back to its header). */
+    int      (*write)(void *opaque, const uint8_t *buf, int size);
+    int64_t  (*seek)(void *opaque, int64_t offset, int whence);
+    void     *opaque;
+    bool     (*cancelled)(void *opaque);    /* asked between pieces; may be NULL */
+} RXEncodeOptions;
+
+typedef struct RXEncoded {
+    int        rate, channels, bits;
+    int64_t    frames;          /* written */
+    int64_t    size;            /* bytes */
+    RXFlacInfo flac;            /* FLAC: its frame table, for the ANLZ (rx_flac_info_free) */
+    uint8_t    md5[16];         /* FLAC: STREAMINFO's MD5 of the samples */
+} RXEncoded;
+
+int  rx_encode(const char *path, const RXEncodeOptions *o, RXEncoded *out);
+
 /* ------------------------------------------------------------- transcoding */
 
 /* Writes `path` as a 16-bit FLAC to `out_path`, at the native rate or at
@@ -189,5 +241,11 @@ int  rx_image_scale(const uint8_t *rgba, int width, int height, int max_w, int m
  * artwork. The audio is rx_decode's, on the players' timeline. For the
  * stick's compatibility mode. */
 int  rx_transcode_flac(const char *path, const char *out_path, int max_rate);
+/* For Link: the same audio as a 16-bit PCM WAV, or as a 320 kbps CBR MP3
+ * (without a Xing frame, the encoder's delay cut from the start so that it
+ * decodes onto the source's timeline), neither with tags or artwork: what
+ * every PRO DJ LINK player plays. */
+int  rx_transcode_wav(const char *path, const char *out_path, int max_rate);
+int  rx_transcode_mp3(const char *path, const char *out_path, int max_rate);
 
 #endif /* RXBOX_AUDIO_H */
