@@ -614,6 +614,8 @@ same and double are each judged by:
 - **Too slow**: the snares and claps (mid band) fall on the half beats about
   as strongly as on the beats. At 87 for drum & bass they are its snares on
   2 and 4; at 64 for house its claps. Likelihood (1 − subdivision)/0.5.
+  Not where the next level up has a *lone snare* (below): its half beats
+  then hold eighth-note syncopation, not the next level's backbeat.
 - **Too slow, by the kick**: kicks on the half beats, but only when the next
   level up has a kick on every beat alike (UK hardcore at 175 read at 87.5)
   and is itself a plausible tempo (inside the range; at most 200 BPM without
@@ -635,6 +637,30 @@ same and double are each judged by:
   (Orange Pekoe's "Happy Valley" came out 210.24); drum & bass at 170-180
   is inside and unaffected. With `bpm_min`/`bpm_max` set, the range is the
   user's and nothing is folded.
+
+"A kick on every beat alike" is read two ways: as many kicks on the even
+beats as on the odd ones (min/max 0.7 or more, dj's alternation), and on
+each of the four beats of a bar (the weakest at least 0.4 of the
+strongest). The parity alone hides a beat in four: a pop kick on 1, the
+"and" of 3 and the "and" of 4 at 100 is, at 200, 0.68, 1.73, 2.42 and 2.31
+by the bar ("Love me, myself", STYLEY NiGHT ii), 0.77 by parity, and it
+vetoed 100; on Clean Tears' "Skyscraper" eighths in the low band did the
+same and marked 196 a four-on-the-floor (0.77 by parity, 0.27 by the bar).
+
+The **lone snare**: per position of a bar (four beats, four half beats),
+the snare is the mid band above its mean where the low band is not above
+its own (mid/mean − low/mean; a kick's body reaches into the mid band, and
+on drum & bass the strongest mid-band beat can be the kick on 1). A level
+whose strongest snare beat (0.5 or more) has nothing like it two beats on
+(1 − that/it ≥ 0.8) is the half-time reading of the level below, whose
+backbeat it is: "Love me, myself" at 200 has +1.85 on one beat and −0.17
+two beats on, against +1.13 and +0.90 at 100 (snares on 2 and 4). The
+lower level is then not "too slow" by its snares (subdivision 0.78 at
+100, likelihood 0.44: hats, the kick's "and"s and other eighths fill its
+half beats). Drum & bass at 172-180 pairs its snares (lone 0.08-0.59 on the eight
+acceptance tracks, or a snare under 0.5, no evidence), so its 87 reading
+stays too slow. The kick veto is not touched: the kick band speaks for
+itself.
 
 When another level wins, the grid is fitted again there. A track too short
 for a grid at that level (16 beats) keeps the grid it had, flagged
@@ -974,6 +1000,8 @@ the final version was not finished (see "Known weaknesses").
 | Tempo range | 50-220 BPM | dj's |
 | Prior | 125 BPM, 0.4 octave, rhythm floored at 0.25 | 83 of 83 octave-labelled tracks |
 | Comfortable range | 60-200 BPM without a requested range; ×1/4 outside | pop at 105 read as 210; drum & bass inside |
+| Kick on every beat | parity ≥ 0.7 and the bar's weakest beat ≥ 0.4 of its strongest | pop at 98-100 read at double: 0.27-0.30; acceptance levels 0.45 up, but one that is no four-on-the-floor |
+| Lone snare | strongest snare beat ≥ 0.5, the one two beats on under 0.2 of it (lone ≥ 0.8) | 200 of "Love me, myself" 1.00, 196 of "Skyscraper" 0.85; drum & bass at its tempo 0.08-0.59 |
 | Tracker tightness | 100 | follows a few % drift, walks through fills |
 | Envelope window | 8192 samples, ±58 ms read | filter ringing never reaches the read part |
 | Envelope bands | <150, 150-2500, 2500-16000 Hz | dj's |
@@ -1063,6 +1091,8 @@ beat, bar or snap lies before it, and the automatic cue.
 | sequenced house 130, a two-bar syncopated fill at Felicidade's gaps (467, 533, 620, 467, 533, 460 ms, the last two on the beats) | one straight section, 130.000, not dynamic; the beats through the fill and a bar either side within 1.2 ms of the pulse, none missing or extra |
 | a kick and clap loop at 87, 9 and 10 s long | 174.000, `octave-uncertain` (margin 0.33): 87 won the octave, but has too few beats for a grid; no grid before |
 | the same loop, 12 s long | 87.000, −1.3 ms |
+| pop 100: kick on 1 and the "and"s of 3 and 4, a high-passed snare on 2 and 4, hats and a legato bass in eighths | 100.000 (margin 2.30; 200 by 5.2 before the lone snare and the bar's kick), −1.0 ms |
+| UK hardcore 175: a kick on every beat, claps on 2 and 4 | 175.000 (not 87.5; margin 9.0), −1.4 ms |
 | (not a track) a walk through attacks that leave a 130 BPM pulse for a dozen beats, 160 ms off | tempo steps of 3.8 % at most (5.5 % without the continuity), the beats away from it on the pulse |
 | (not a track) a kick and a click on every beat at 128, sixteen beats folded on their hits and 60 ms after them (the confidence's windows) | on the hits a rise of 7.20, its whole contrast, at −1.3 ms; 60 ms late a contrast of 12.83 from the tails and a rise of 0.002 at +4.6 ms: not on the grid (it counted as on it) |
 
@@ -1233,6 +1263,8 @@ bands in 16ths (`pattern.py`), and by musical reasoning about the genre.
 | Taiyou no Kakera (Electric Sheep Remix) | 118.99 | 118.99 | Same. Showed that the tempogram must not override a 4:3 family (it gave 158.65). |
 | AD:HOUSE 7 / Voyage with the Seagull | 125, one section | 125 | Same. An earlier version cut a half-beat "phase change" at 219.7 s on an off-beat bass, with confidence 0.00 from empty windows; both fixed. |
 | AD:TECHNO 4 / nakanoshima | 125, one section | 125 | Same. The last 74 beats have only an off-beat element left; a 32-bar minimum for half-beat phase cuts keeps the body's grid. |
+| STYLEY NiGHT ii / Love me, myself, and its instrumental | 100 (margin 2.4, 2.7) | not run | 100 by ear. Was 200 (1.66; the instrumental 1.50, `octave-uncertain`): a snare on 2 and 4, a kick on 1, the "and" of 3 and late in 4, eighths on the hats; the kick veto took the parity's 0.77 at 200 for a four-on-the-floor. Section 8. |
+| Clean Tears / Skyscraper (Heat Haze) | 98 (margin 1.9) | not run | About 98 by ear. Was 196 (6.3): four-on-the-floor at 196 by parity (0.77; by the bar 0.27: eighths in the low band of its louder sections), and 98 too slow by its snares, which are alone at 196. Its pattern varies by section and was not settled by eye. |
 | Bootleg (eKiog UKHardcore) | 175 | 175 | Tag says 170; both say 175. Before the four-on-the-floor kick veto rxbox said 87.5. |
 | TRY UNITE! (Uplifting Trance Mix) | 139 | 139 | Tag says 140; both independently 139.000: the tag is rounded. |
 | Orange Pekoe / Taiyou no Flight (live) | 142.7, two sections | 140.3 | Neither is trustworthy: rubato live jazz; both have low confidence (0.27, 0.14). |
@@ -1326,6 +1358,25 @@ went back to their straight grids. Whether AZKi's recordings are played
 or sequenced was not checked by ear; their attacks on the line read 3.5
 and 3.7-5.1 ms beat to beat, live by the rule.
 
+**The bar's kick and the lone snare** (section 8; `RX_BEATS_VERSION` 6),
+the 57 acceptance tracks still on disk analysed from `rxbox-eval`'s cache
+before and after, every column of the CSV compared: 56 grids are the
+same to the last digit, sections, flags, confidence and starts. One
+changed, a fix:
+
+| Track | Before | Now |
+| --- | --- | --- |
+| AD:Drum'n Bass 5 / Run Away | 175, `octave-uncertain` (margin 1.42) | 175 (margin 5.7): at 350 its snare is alone (one beat in four), so 175 is not too slow by its snares (subdivision 0.88) |
+
+No octave changed; the margins moved on 19 others, none below 2.7: the
+drum & bass rose (Keeps Me High 1.65 to 5.2, Determination 4.7 to 7.1,
+Hullbreaker 4.7 to 5.3), as did エントロピー (2.0 to 7.9), Change
+Everything (9.2 to 21) and Ai no Izumi (12 to 49); house fell where its
+half tempo is no longer too slow by the claps and the prior holds it
+(Hot Vacation 91 to 23, Float 313 to 78, 琥珀 68 to 27, Linked Ring
+8.3 to 5.9). The three tracks heard as 98-100 are right (above), and the
+synthetic pop case at 100 was 200 before.
+
 ### What was tried and dropped
 
 - Octave by "balance × subdivision" on kick+snare onsets with a phase from
@@ -1337,6 +1388,13 @@ and 3.7-5.1 ms beat to beat, live by the rule.
   drum & bass halved. Kept only for four-on-the-floor one level up.
 - The earliest rise among all bands as the attack: a rolling bass in the low
   band starts before the kick.
+- The snare as the strongest mid-band beat, for the lone snare: a kick's
+  body is in the mid band too. Drum & bass's 175 ("Desolate") had its kick
+  on 1 alone and the half tempo would have lost "too slow"; house at 128
+  looked lone as often. Hence mid over its mean less low over its own.
+- The slower level's phase, for "Skyscraper": both of its 98 level's
+  phases read too slow by the snares (subdivision 1.15 and 0.87), so the
+  phase was not the cause.
 
 ## Known weaknesses
 
@@ -1345,6 +1403,22 @@ and 3.7-5.1 ms beat to beat, live by the rule.
   3:2 readings like Kneading that neither analyser settles). The
   `octave-uncertain` flag marks most of them; ×2 and ÷2 in the interface fix
   them in a click.
+- **Pop at 95-105** with eighths in the mid band (hats, guitars, a kick on
+  the "and"s) was read at double tempo; three tracks heard as 98-100 are
+  right now (section 8), but by thresholds with little room: the bar's
+  kick is 0.27-0.30 on them at double tempo against 0.4, and
+  "Skyscraper"'s margin is 1.9 with a pattern that changes by section.
+  More such tracks, checked by ear, would say how general it is.
+- **Half-time genres**: a lone snare at the faster level is read as the
+  half-time of the slower, which is what a listener hears in pop. Dubstep
+  and trap at 140 (snare on 3) keep 140 by the prior (8 to 1 over 70);
+  half-time drum & bass at 170 would have little but the kick to keep it
+  there (none on the lists checked).
+- **The snare measure** (mid band over its mean less the low band over its
+  own) is no backbeat detector for house: with a kick on every beat, the
+  claps on 2 and 4 often read unlike and "lone" at the right tempo. It
+  costs nothing there (the half tempo's prior is 18 to 1 against), but it
+  is why the rule only ever lifts "too slow" and never scores a level.
 - **Live recordings** now get dynamic grids where the line does not hold
   (section 6), and the confidence rises with them on the acceptance list
   (three of the Yokokura recordings from 0.09-0.34 to 0.47-0.86). What a
@@ -1423,6 +1497,8 @@ build-beats/tools/rxbox-eval -v -j 8 -l build-beats/eval/sample.txt \
     --csv build-beats/eval/rx.csv --compare build-beats/eval/dj.csv
 
 # one track in detail: stage timings, sections, octave, the onset signals
+# (-v prints each octave level's evidence, by parity and by the bar, and
+# the levels' first beats, for pattern.py on BASE.0.onsets.csv)
 build-beats/tools/rxbox-eval -vv --dump-onsets build-beats/dump/x FILE
 
 # iterating on the decisions: the first run fills the cache, later ones read it

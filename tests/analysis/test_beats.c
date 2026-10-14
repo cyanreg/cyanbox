@@ -33,6 +33,11 @@
  * shorter two have too few beats for a grid at 87. They keep the grid
  * at 174, flagged octave-uncertain, rather than none.
  *
+ * Two more on the octave, not flagged: pop at 100 ("Love me, myself":
+ * a kick on 1 and the "and"s of 3 and 4, a snare on 2 and 4, eighths on
+ * the hats and the bass), which was read at 200, and UK hardcore at 175
+ * (a kick on every beat), whose 87.5 the kick veto keeps out.
+ *
  * The GPU front end (rxbox/compute.h) must give the same results. When a
  * device is there, every case runs on both paths: each must pass on its
  * own, and the two grids must be the same (sections, their tempo and
@@ -136,6 +141,26 @@ static void add_snare(Track *t, double at, double gain, Lcg *l)
     }
 }
 
+/* A snare as pop mixes it, high-passed: a 240 Hz body and noise without
+ * its low end (a first difference, as the hats), so that the kick band
+ * has the kicks and not the snares ("Love me, myself": 0.7 in the kick
+ * band on 2 and 4 against 3.4-4.1 on its kicks). */
+static void add_snare_bright(Track *t, double at, double gain, Lcg *l)
+{
+    int64_t s0 = (int64_t)llround(at * RATE);
+    double prev = 0.0;
+    for (int i = 0; i < (int)(0.15 * RATE); i++) {
+        double tt = (double)i / RATE;
+        double w = lcg_gauss(l);
+        double v = 0.4 * sin(2.0 * M_PI * 240.0 * tt) * exp(-tt * 30.0) +
+                   1.5 * (w - prev) * exp(-tt * 25.0);
+        prev = w;
+        int64_t j = s0 + i;
+        if (j >= 0 && j < t->n)
+            t->x[j] += (float)(gain * 0.4 * v);
+    }
+}
+
 static double midi_hz(int m)
 {
     return 440.0 * pow(2.0, (m - 69) / 12.0);
@@ -184,6 +209,8 @@ enum {
     STYLE_TWOSTEP,      /* UK garage: kick on 1, the "and" of 2 and the "and" of 3, snare on 2
                          * and 4, hats on the "and"s: the kicks lean to the off-beat */
     STYLE_CLAP,         /* a kick on every beat and a clap on 2 and 4, nothing else */
+    STYLE_POP,          /* pop at 100 ("Love me, myself"): kick on 1, the "and" of 3 and of
+                         * 4, snare on 2 and 4, hats and a bass on every eighth */
 };
 
 typedef struct Spec {
@@ -374,6 +401,13 @@ static int synth(const Spec *sp, Track *t, Truth *truth)
             if (sp->style == STYLE_TECHHOUSE) {
                 for (int q = 0; q < 4; q++)
                     add_tone(t, tb + (q + 0.5) * p, 0.4 * p, midi_hz(36 + tonic + ch[0]), 0.25);
+            } else if (sp->style == STYLE_POP) {
+                /* A bass guitar's eighths, root and octave, legato: the
+                 * kick band (its energy) has the kicks, and the snares'
+                 * leak, as on "Love me, myself". */
+                for (int e = 0; e < 8; e++)
+                    add_tone(t, tb + e * 0.5 * p, 0.5 * p,
+                             midi_hz((e & 1 ? 36 : 24) + tonic + ch[0]), 0.05);
             } else {
                 add_tone(t, tb, bar_len, midi_hz(36 + tonic + ch[0]), 0.10);
             }
@@ -453,6 +487,16 @@ static int synth(const Spec *sp, Track *t, Truth *truth)
                 add_kick(t, tq, 1.0);
                 if (q == 1 || q == 3)
                     add_snare(t, tq, 0.8, &l);
+                break;
+            case STYLE_POP:
+                if (q == 0)
+                    add_kick(t, tq, 1.0);
+                if (q == 2 || q == 3)
+                    add_kick(t, th, 0.8);
+                if (q == 1 || q == 3)
+                    add_snare_bright(t, tq, 1.0, &l);
+                add_hat(t, tq, 0.5, &l);
+                add_hat(t, th, 0.5, &l);
                 break;
             case STYLE_HIPHOP:
                 if (q == 0 || q == 2)
@@ -588,6 +632,11 @@ static const Spec cases[] = {
       .double_ok = true },
     { .name = "a kick and clap loop at 87, 12 s", .style = STYLE_CLAP, .bpm = 87.0,
       .first_downbeat = 0.3, .bars = 5, .seed = 30, .seconds = 12.0 },
+    /* The octave. */
+    { .name = "pop 100: kick on 1 and the \"and\"s of 3 and 4, snare on 2 and 4, eighths",
+      .style = STYLE_POP, .bpm = 100.0, .first_downbeat = 0.4, .bars = 48, .seed = 31 },
+    { .name = "UK hardcore 175: a kick on every beat, claps on 2 and 4",
+      .style = STYLE_HOUSE, .bpm = 175.0, .first_downbeat = 0.3, .bars = 64, .seed = 32 },
 };
 
 typedef struct Want {
@@ -629,6 +678,8 @@ static const Want wants[] = {
     { 0, CUTS | RX_GRID_FLAG_UNSTEADY },
     { 0, CUTS | RX_GRID_FLAG_UNSTEADY },
     { 0, CUTS | RX_GRID_FLAG_UNSTEADY },
+    { 0, CUTS | RX_GRID_FLAG_UNSTEADY | RX_GRID_FLAG_OCTAVE_UNCERTAIN },
+    { 0, CUTS | RX_GRID_FLAG_UNSTEADY | RX_GRID_FLAG_OCTAVE_UNCERTAIN },
 };
 
 /* ----------------------------------------------------------- the checks */

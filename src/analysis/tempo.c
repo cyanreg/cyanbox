@@ -489,25 +489,48 @@ int rx_tempo_estimate(const RXOnsets *o, double lo, double hi, double prior,
 /* ------------------------------------------------------- octave on a grid */
 
 /* Mid-band (snare, clap) balance and subdivision of the beats
- * t0 + k * P in [from, to). */
+ * t0 + k * P in [from, to), the kick band's the same, and both by the
+ * position in a bar of four beats (beats and half beats: eight places).
+ *
+ * The bar positions are there because parity averages hide a beat in
+ * four: on "Love me, myself" (STYLEY NiGHT ii, 100 BPM) the 200 level's
+ * kick averages 1.55 on its even beats and 2.03 on its odd ones (0.77,
+ * "alike"), but by its four beats it is 0.68, 1.73, 2.42, 2.31: a pop
+ * kick on 1, the "and" of 3 and late in 4 at 100, no four-on-the-floor
+ * at 200.
+ *
+ * The snare of a position is the mid band above its mean where the low
+ * band is not above its own (mid / mean - low / mean): a kick's body
+ * reaches into the mid band, and on drum & bass ("Desolate") the
+ * strongest mid-band beat is the kick on 1, not a snare. */
 static void level_evidence(const RXOnsets *o, double t0, double P, double from, double to,
                            RXOctaveEvidence *ev)
 {
     const double fps = o->fps;
     const int n = o->nb;
     double a[2] = { 0 }, half = 0.0, k[2] = { 0 }, khalf = 0.0;
-    int na[2] = { 0 }, nh = 0;
+    double bm[8] = { 0 }, bk[8] = { 0 };
+    int na[2] = { 0 }, nh = 0, nb[4] = { 0 };
     long j0 = (long)ceil((from - t0) / P), j1 = (long)floor((to - t0 - P / 2) / P);
     for (long j = j0; j <= j1; j++) {
         double t = (t0 + j * P) * fps;
         if (t < 2 || t + P / 2 * fps >= n - 2)
             continue;
-        a[j & 1] += peak_near(o->mid, n, t, 2);
-        k[j & 1] += peak_near(o->low, n, t, 2);
+        double m = peak_near(o->mid, n, t, 2), kb = peak_near(o->low, n, t, 2);
+        double mh = peak_near(o->mid, n, t + P / 2 * fps, 2);
+        double kh = peak_near(o->low, n, t + P / 2 * fps, 2);
+        a[j & 1] += m;
+        k[j & 1] += kb;
         na[j & 1]++;
-        half += peak_near(o->mid, n, t + P / 2 * fps, 2);
-        khalf += peak_near(o->low, n, t + P / 2 * fps, 2);
+        half += mh;
+        khalf += kh;
         nh++;
+        int q = (int)(((j % 4) + 4) % 4);
+        bm[2 * q] += m;
+        bk[2 * q] += kb;
+        bm[2 * q + 1] += mh;
+        bk[2 * q + 1] += kh;
+        nb[q]++;
     }
     memset(ev, 0, sizeof(*ev));
     if (!na[0] || !na[1] || !nh)
@@ -518,6 +541,36 @@ static void level_evidence(const RXOnsets *o, double t0, double P, double from, 
     ev->subdiv = e0 + e1 > 0.0 ? eh / (0.5 * (e0 + e1)) : 1.0;
     ev->kick_alt = fmax(k0, k1) > 0.0 ? fmin(k0, k1) / fmax(k0, k1) : 1.0;
     ev->kick_sub = k0 + k1 > 0.0 ? khalf / nh / (0.5 * (k0 + k1)) : 1.0;
+
+    ev->kick_bar = 1.0;
+    if (!nb[0] || !nb[1] || !nb[2] || !nb[3])
+        return;
+    double mm = 0.0, mk = 0.0;
+    for (int i = 0; i < 8; i++) {
+        bm[i] /= nb[i / 2];
+        bk[i] /= nb[i / 2];
+        mm += bm[i] / 8.0;
+        mk += bk[i] / 8.0;
+    }
+    double kmin = bk[0], kmax = bk[0];
+    for (int q = 1; q < 4; q++) {
+        kmin = fmin(kmin, bk[2 * q]);
+        kmax = fmax(kmax, bk[2 * q]);
+    }
+    ev->kick_bar = kmax > 0.0 ? kmin / kmax : 1.0;
+    if (mm <= 0.0 || mk <= 0.0)
+        return;
+    double sn[4];
+    int best = 0;
+    for (int q = 0; q < 4; q++) {
+        sn[q] = bm[2 * q] / mm - bk[2 * q] / mk;
+        if (sn[q] > sn[best])
+            best = q;
+    }
+    if (sn[best] > 0.0) {
+        ev->snare = sn[best];
+        ev->snare_lone = 1.0 - fmax(sn[(best + 2) % 4], 0.0) / sn[best];
+    }
 }
 
 /* Of the beats t0 + k * P and those moved by `alt`, the set whose beats
@@ -537,12 +590,31 @@ static double level_phase(const RXOnsets *o, const float *a, const float *b, dou
     return sum[1] > sum[0] ? t0 + alt : t0;
 }
 
+/* A kick on every beat of the level alike: as many on its even beats as on
+ * its odd ones (dj's alternation), and on each of the bar's four beats,
+ * the weakest at least 0.4 of the strongest. The parity alone takes a
+ * pop kick at twice its tempo for one: "Love me, myself" at 200 (0.77
+ * by parity, 0.28 by the bar; the instrumental 0.75 and 0.30), Clean
+ * Tears' "Skyscraper" at 196 (0.77, 0.27), whose low band has eighths
+ * in its louder sections, three beats in four. On the acceptance list one
+ * other level the rules read changes: AD:HOUSE 7's "琥珀" at 121 (0.76,
+ * 0.29: by the bar 5.1, 4.1, 2.1, 1.5, a kick on 1 and 2, no
+ * four-on-the-floor), whose octave stands (margin 68, now 27); the rest
+ * have 0.45 or more. */
+static bool kick_on_every_beat(const RXOctaveEvidence *ev)
+{
+    return ev->kick_alt >= 0.7 && ev->kick_bar >= 0.4;
+}
+
 /* The octave on a fitted grid. The witnesses are the snares and claps
  * (the mid band, 150-2500 Hz, aligned to the full band), because they are
  * what places the beat in nearly all of this music: on 2 and 4.
  *  - Too slow: at half the true tempo the snares fall on the half beats,
  *    as strong as the beats (drum & bass at 87; house at 64, whose claps
- *    on 2 and 4 become the "and"s). Subdivision near 1.
+ *    on 2 and 4 become the "and"s). Subdivision near 1. Not where the
+ *    level above has a lone snare, one beat in four: that level is the
+ *    half-time reading of this one (pop at 100 whose eighths fill the
+ *    half beats, read at 200).
  *  - Too fast: at twice the true tempo every other beat is a 16th without
  *    snare or clap. Balance well below 1.
  * The kick band was tried as a third witness and made things worse: an
@@ -582,30 +654,51 @@ void rx_tempo_octave_decide(const RXOnsets *o, double t0, double period, double 
     const double lt0[3] = { th, t1, t2 };
     const double lp[3] = { 2.0 * period, period, period / 2.0 };
     double score[3];
+    out->from = from;
+    out->to = to;
     for (int l = 0; l < 3; l++) {
         out->bpm[l] = 60.0 / lp[l];
+        out->t0[l] = lt0[l];
         level_evidence(o, lt0[l], lp[l], from, to, &out->ev[l]);
     }
     for (int l = 0; l < 3; l++) {
         double slow = RX_CLAMP((1.0 - out->ev[l].subdiv) / 0.5, OCTAVE_FLOOR, 1.0);
         double fast = RX_CLAMP(out->ev[l].balance / 0.8, OCTAVE_FLOOR, 1.0);
         double pr = exp(-0.5 * pow(log2(out->bpm[l] / prior) / OCTAVE_PRIOR_WIDTH, 2.0));
+        /* The snares on the half beats make a level too slow because
+         * they are the next level's backbeat, its 2 and 4. Where the
+         * next level up has a lone snare instead, one beat in four with
+         * nothing like it two beats on, it is the half-time reading of
+         * this level, and what fills this level's half beats is
+         * eighth-note syncopation: pop at 100 with a kick on the "and"s
+         * and eighths in the mid band. "Love me, myself" (STYLEY NiGHT
+         * ii, 100 BPM by ear) has its snare on 2 and 4 at 100 (by the
+         * snare measure of level_evidence +1.13 and +0.90 on beats two
+         * apart, -1.24 and +0.24 on the others) and alone at 200 (+1.85,
+         * -0.17 two beats on); Clean Tears' "Skyscraper" (98 by ear) is
+         * alone at 196 (+0.64, +0.10). Drum & bass is not: on the eight
+         * acceptance tracks at 172-180 its snares on 2 and 4 pair (lone
+         * 0.08-0.59), or are under 0.5, which is no evidence either way. */
+        if (l < 2 && out->ev[l + 1].snare >= 0.5 && out->ev[l + 1].snare_lone >= 0.8)
+            slow = 1.0;
         /* A four-on-the-floor kick (on every beat alike, hardly between)
          * is the beat whatever the mid band does: a stab on the "and"
          * must not halve a house track. Only from 90 BPM: a kick on 1 and
          * 3 of a 125 track looks like that at 62.5. It only ever adds:
          * as a veto the kick band fails, an off-beat bass fills it. */
-        if (out->bpm[l] >= 90.0 && out->ev[l].kick_alt >= 0.7 && out->ev[l].kick_sub <= 0.4)
+        if (out->bpm[l] >= 90.0 && kick_on_every_beat(&out->ev[l]) && out->ev[l].kick_sub <= 0.4)
             pr *= 3.0;
         /* Kicks on the half beats make a level too slow when they belong
          * to a four-on-the-floor one level up (every beat of it has a kick
          * alike: UK hardcore at 175 read at 87.5), not when they are a
          * syncopation (drum & bass's kick on the "and" of 3, whose next
-         * level up alternates). Nor when that level is beyond the range
-         * (above 200 BPM without one): a busy drum & bass kick, on the
-         * beats and the "and"s, is no four-on-the-floor at 344. */
+         * level up alternates; a pop kick on 1, the "and" of 3 and of 4,
+         * one beat in four without a kick at the next level up). Nor
+         * when that level is beyond the range (above 200 BPM without
+         * one): a busy drum & bass kick, on the beats and the "and"s, is
+         * no four-on-the-floor at 344. */
         double up_hi = automatic ? OCTAVE_AUTO_HI : hi;
-        if (l < 2 && out->ev[l + 1].kick_alt >= 0.7 && out->bpm[l + 1] <= up_hi * 1.001)
+        if (l < 2 && kick_on_every_beat(&out->ev[l + 1]) && out->bpm[l + 1] <= up_hi * 1.001)
             slow = fmin(slow, RX_CLAMP((1.0 - out->ev[l].kick_sub) / 0.5, OCTAVE_FLOOR, 1.0));
         /* Without a requested range, a level above 200 or below 60 BPM
          * must win by a factor of four: a pop song at 105 with sixteenths

@@ -152,7 +152,7 @@ enum RXAnalyseWhat {
  * RX_WAVES_VERSION is the algorithm; the packed blob has its own format
  * version (rx_waveforms_pack), a storage matter. The two usually bump
  * together, because new levels are what makes old blobs unreadable. */
-#define RX_BEATS_VERSION 5
+#define RX_BEATS_VERSION 6
 #define RX_KEY_VERSION   1
 #define RX_WAVES_VERSION 1
 

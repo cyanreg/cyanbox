@@ -159,6 +159,11 @@ typedef struct RXOctaveEvidence {
     double subdiv;                  /* snare band: half beats vs beats */
     double kick_alt;                /* kick band: min/max of even vs odd beats (dj's alternation) */
     double kick_sub;                /* kick band: half beats vs beats */
+    double kick_bar;                /* kick band: min/max over the four beats of a bar */
+    double snare;                   /* the strongest beat of a bar by its snare (mid band above
+                                     * its mean, low band not), 0 if none */
+    double snare_lone;              /* 1 - the beat two beats from it by the same, over it:
+                                     * 1 is a lone snare every four beats, 0 a backbeat */
     double score;                   /* the rhythm's likelihood of the level, without the prior */
 } RXOctaveEvidence;
 
@@ -184,14 +189,18 @@ double rx_tempo_phase(const float *o, int n, double fps, double bpm, double *str
 /* The octave, decided on a fitted grid (beats at t0 + k * period in
  * [from, to)): its own level, half of it and twice it are judged by the
  * snares and claps of the mid band (too slow when they sit on the half
- * beats about as strongly as on the beats, too fast when every other beat
- * lacks them), by a four-on-the-floor kick (which marks its level), and by
- * a log-normal prior around `prior` where the rhythm leaves it open.
- * Levels outside [lo, hi] (when given, else 50..220) are not considered. */
+ * beats about as strongly as on the beats, unless the level above has a
+ * lone snare, its half-time reading; too fast when every other beat
+ * lacks them), by a four-on-the-floor kick (on each beat of the bar
+ * alike, which marks its level), and by a log-normal prior around
+ * `prior` where the rhythm leaves it open. Levels outside [lo, hi]
+ * (when given, else 50..220) are not considered. */
 typedef struct RXOctaveDecision {
     double factor;                  /* 0.5, 1 or 2 */
     double margin;                  /* best score / runner-up (>= 1) */
     double bpm[3];                  /* half, same, double */
+    double t0[3];                   /* each level's beats: t0[l] + k * 60 / bpm[l] */
+    double from, to;                /* the stretch the evidence was read on */
     RXOctaveEvidence ev[3];
 } RXOctaveDecision;
 

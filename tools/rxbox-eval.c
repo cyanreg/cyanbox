@@ -1457,6 +1457,12 @@ int main(int argc, char **argv)
             printf("  %.1f (snare %.2f/%.2f kick %.2f/%.2f)", r->oct.bpm[l],
                    r->oct.ev[l].balance, r->oct.ev[l].subdiv, r->oct.ev[l].kick_alt,
                    r->oct.ev[l].kick_sub);
+        printf("\n          by the bar:");
+        for (int l = 0; l < 3; l++)
+            printf("  %.1f (kick %.2f, snare %.2f lone %.2f)", r->oct.bpm[l],
+                   r->oct.ev[l].kick_bar, r->oct.ev[l].snare, r->oct.ev[l].snare_lone);
+        printf("\n          the levels' beats from %.4f %.4f %.4f at %.4f BPM, read on %.1f-%.1f s",
+               r->oct.t0[0], r->oct.t0[1], r->oct.t0[2], r->oct.bpm[1], r->oct.from, r->oct.to);
         printf("\n          phase %.2f%s  kick %.2f  jit %.1f ms  scatter %.1f ms  band %d"
                "  locked: kick %.2f at %+.1f ms, full %.2f at %+.1f ms\n",
                r->phase_margin, r->shifted ? " (moved)" : "", r->kick_share, r->jitter * 1e3,
