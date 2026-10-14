@@ -9,13 +9,24 @@
  * preset), which must block the next export until synced; pulled into the
  * library; and pruned when a track leaves the playlists.
  *
+ * Then the other stick formats (RXStickFormat: FLAC, WAV, AIFF), each to a
+ * stick of its own: every file of the type and extension the format says
+ * (MP3 always copied), the stick inspected (each file the size its row
+ * says), each file's audio the source's decoded samples (exactly where
+ * the format holds them, else within the dither), FLAC's PVB2 entries on
+ * the file's own frames, exported again with nothing written, and a
+ * source changed since encoded again.
+ *
  * Needs the ffmpeg CLI with libmp3lame and libopus; skips (77) without. */
 
+#include <fcntl.h>
 #include <math.h>
 #include <stdio.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
+#include "rxbox/audio.h"
 #include "rxbox/export.h"
 #include "rxbox/colors.h"
 
@@ -36,9 +47,10 @@ typedef struct Stages {
 static bool on_progress(void *opaque, const char *stage, int done, int total, const char *item)
 {
     Stages *s = opaque;
-    if (!strcmp(stage, "copy"))
+    /* Files, not the quarter-second ticks between them (no item). */
+    if (!strcmp(stage, "copy") && item)
         s->copy++;
-    else if (!strcmp(stage, "skip"))
+    else if (!strcmp(stage, "skip") && item)
         s->skip++;
     else if (!strcmp(stage, "prune") && item && item[0] == '/')
         s->prune++;
@@ -306,6 +318,159 @@ static void check_stick(RXLibrary *lib)
     free(p);
 }
 
+/* ------------------------------------------------------------ formats */
+
+static uint32_t be32(const uint8_t *p) { return (uint32_t)p[0] << 24 | p[1] << 16 | p[2] << 8 | p[3]; }
+static uint64_t be64(const uint8_t *p) { return (uint64_t)be32(p) << 32 | be32(p + 4); }
+
+/* The stick file's audio against the source's: the same frames, exactly
+ * or within `steps` of 16 bits. */
+static void same_audio(const char *src, const char *made, double steps)
+{
+    RXAudio a, b;
+    CHECK_EQ(rx_decode(src, 0, 0, &a), 0);
+    CHECK_EQ(rx_decode(made, 0, 0, &b), 0);
+    CHECK(a.nb_frames == b.nb_frames && a.channels == b.channels && a.rate == b.rate);
+    double worst = 0;
+    for (int64_t i = 0; i < RX_MIN(a.nb_frames, b.nb_frames) * a.channels && a.channels == b.channels; i++)
+        worst = RX_MAX(worst, fabs((double)a.samples[i] - b.samples[i]) * 32768.0);
+    if (worst > steps)
+        fprintf(stderr, "export: %s is off %s by %.3f steps\n", made, src, worst);
+    CHECK(worst <= steps);
+    rx_audio_free(&a);
+    rx_audio_free(&b);
+}
+
+/* PVB2 in the track's .EXT: each entry a frame of the FLAC (its sync code
+ * at the first frame's offset plus the entry's), the total its frames. */
+static void check_pvb2(const char *dir, const char *anlz_dat, const char *flac)
+{
+    char *ext = rx_asprintf("%s%.*s.EXT", dir, (int)strlen(anlz_dat) - 4, anlz_dat);
+    uint8_t *e = NULL, *f = NULL;
+    size_t en = 0, fn = 0;
+    CHECK(ext && rx_file_read(ext, &e, &en) >= 0 && rx_file_read(flac, &f, &fn) >= 0);
+    RXFlacInfo fi;
+    CHECK_EQ(rx_flac_scan(flac, &fi), 0);
+    RXAnlzTag *tags = NULL;
+    int nt = 0;
+    bool seen = false;
+    if (e && rx_anlz_parse(e, en, &tags, &nt) >= 0) {
+        for (int i = 0; i < nt; i++) {
+            if (strcmp(tags[i].fourcc, "PVB2") || tags[i].size < 20)
+                continue;
+            seen = true;
+            const uint8_t *b = tags[i].body;
+            CHECK_EQ((int64_t)be64(b + 4), fi.total_samples);
+            uint32_t count = be32(b + 12);
+            CHECK(count == 400 && tags[i].size >= 20 + 20 * (size_t)count);
+            int bad = 0;
+            for (uint32_t k = 0; k < count && tags[i].size >= 20 + 20 * (size_t)count; k++) {
+                uint64_t off = be64(b + 20 + 20 * k + 8);
+                uint64_t at = (uint64_t)fi.first_frame_offset + off;
+                bad += at + 2 > fn || f[at] != 0xFF || (f[at + 1] & 0xFE) != 0xF8;
+            }
+            CHECK_EQ(bad, 0);
+        }
+    }
+    CHECK(seen);
+    free(tags);
+    rx_flac_info_free(&fi);
+    free(e);
+    free(f);
+    free(ext);
+}
+
+static void test_formats(RXLibrary *lib)
+{
+    static const char *const files[5] = { "one.flac", "two.mp3", "three.wav", "four.m4a", "five.opus" };
+    static const struct {
+        int format;
+        const char *name;
+        const char *ext[5];
+        int type[5];
+        double steps[5];                 /* off the source: 0 exact */
+    } want[] = {
+        /* one.flac is 24-bit (ffmpeg's choice): FLAC keeps it. */
+        { RX_STICK_FLAC, "flac", { ".flac", ".mp3", ".flac", ".m4a", ".flac" }, { 5, 1, 5, 4, 5 },
+          { 0, 0, 0, 0, 1.5 } },
+        { RX_STICK_WAV, "wav", { ".wav", ".mp3", ".wav", ".wav", ".wav" }, { 11, 1, 11, 11, 11 },
+          { 1.5, 0, 0, 1.5, 1.5 } },
+        { RX_STICK_AIFF, "aiff", { ".aiff", ".mp3", ".aiff", ".aiff", ".aiff" }, { 12, 1, 12, 12, 12 },
+          { 1.5, 0, 0, 1.5, 1.5 } },
+    };
+    for (size_t w = 0; w < RX_ARRAY_ELEMS(want); w++) {
+        char *dir = rx_asprintf("%s/stick-%s", root, want[w].name);
+        sh("rm -rf '%s'", dir);
+        rx_mkdir_p(dir);
+        RXExportOptions opt;
+        rx_export_options_default(&opt);
+        opt.whole_library = true;
+        opt.format = want[w].format;
+        Stages st = { .quiet = true };
+        CHECK_EQ(rx_export(lib, dir, &opt, on_progress, &st), 0);
+        CHECK_EQ(st.copy, 5);
+        int problems = rx_inspect(dir, on_line, NULL);
+        if (problems)
+            rx_inspect(dir, on_line, (void *)1);
+        CHECK_EQ(problems, 0);
+
+        char *pdbp = rx_stick_file(dir, "/PIONEER/rekordbox/export.pdb");
+        uint8_t *b = NULL;
+        size_t n = 0;
+        CHECK(pdbp && rx_file_read(pdbp, &b, &n) >= 0);
+        RXPdbRawTrack *raw = NULL;
+        int nr = 0;
+        CHECK(b && rx_pdb_raw_tracks(b, n, &raw, &nr) >= 0);
+        CHECK_EQ(nr, 5);
+        for (int i = 0; i < 5; i++) {
+            RXTrack *t = track_named(lib, files[i]);
+            for (int k = 0; t && k < nr; k++) {
+                if (raw[k].id != t->id)
+                    continue;
+                const char *path = raw[k].strings[RX_PDB_STR_FILE_PATH];
+                CHECK_EQ(raw[k].file_type, want[w].type[i]);
+                CHECK(rx_str_ends(path, want[w].ext[i]));
+                char *made = rx_stick_file(dir, path);
+                if (i == 1) {
+                    /* The MP3, copied byte for byte. */
+                    uint8_t *x, *y;
+                    size_t xn, yn;
+                    CHECK(rx_file_read(t->path, &x, &xn) >= 0 && rx_file_read(made, &y, &yn) >= 0 &&
+                          xn == yn && !memcmp(x, y, xn));
+                    free(x);
+                    free(y);
+                } else {
+                    same_audio(t->path, made, want[w].steps[i]);
+                }
+                if (want[w].type[i] == 5 && i != 1)
+                    check_pvb2(dir, raw[k].strings[RX_PDB_STR_ANALYZE_PATH], made);
+                free(made);
+            }
+        }
+        rx_pdb_raw_tracks_free(raw, nr);
+        free(b);
+        free(pdbp);
+
+        /* Again: everything there already. */
+        st = (Stages) { .quiet = true };
+        CHECK_EQ(rx_export(lib, dir, &opt, on_progress, &st), 0);
+        CHECK_EQ(st.copy, 0);
+        CHECK_EQ(st.skip, 5);
+        CHECK_EQ(st.anlz, 0);
+        CHECK_EQ(rx_inspect(dir, on_line, NULL), 0);
+
+        /* A source changed since: encoded again, and only it. */
+        RXTrack *three = track_named(lib, "three.wav");
+        struct timespec later[2] = { { .tv_nsec = UTIME_OMIT }, { .tv_sec = time(NULL) + 60 + (time_t)w } };
+        CHECK(three && utimensat(AT_FDCWD, three->path, later, 0) == 0);
+        st = (Stages) { .quiet = true };
+        CHECK_EQ(rx_export(lib, dir, &opt, on_progress, &st), 0);
+        CHECK_EQ(st.copy, 1);
+        CHECK_EQ(rx_inspect(dir, on_line, NULL), 0);
+        free(dir);
+    }
+}
+
 /* What a player does at a gig: moves hot cue A by a second and makes it
  * blue, adds a memory cue at 10 s (written to the ANLZ files as rekordbox
  * would); appends a history list to exportLibrary.db; saves a preset. */
@@ -533,6 +698,8 @@ int main(void)
     CHECK(four && !rx_file_exists(four));
     free(four);
     CHECK_EQ(rx_inspect(stick, on_line, NULL), 0);
+
+    test_formats(&lib);
 
     rx_library_close(&lib);
     if (!failures)

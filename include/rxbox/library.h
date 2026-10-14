@@ -78,9 +78,14 @@ typedef struct RXConfig {
     char   key_notation[8];     /* classic (default), camelot, open */
     bool   export_pdb, export_onelibrary;   /* both default true */
     bool   compat_transcode;    /* AAC and hi-res to 16/44.1 FLAC on the stick */
+    int    export_format;       /* the stick's audio: 0 copy, 1 flac, 2 wav, 3 aiff
+                                   (rxbox/export.h RXStickFormat) */
     char  *device_name;         /* NULL = stick's label */
     int    background_color;    /* the players' background for the stick's library:
                                    0 default, 1..8 pink..purple (rxbox/colors.h) */
+
+    /* link.* */
+    bool   link_mp3;            /* Link converts to 320 kbps MP3 instead of 16-bit WAV */
 
     /* player.* mixer.* device.*: My Settings values the user set */
     RXKv *player; int nb_player;

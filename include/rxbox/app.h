@@ -89,6 +89,8 @@ typedef struct RXApp {
         char   dest[512];
         bool   running;             /* from the start until the end, confirmation included */
         bool   prune, compat;
+        int    format;              /* the stick's audio (rxbox/export.h RXStickFormat);
+                                       starts as export.format */
         bool   whole_library;       /* every track, not only those in playlists */
         bool   ignore_unsynced;     /* export although the stick has changes not synced back */
         bool   cancel;              /* set by the interface to stop the export */

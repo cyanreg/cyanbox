@@ -10,6 +10,8 @@
  *                                  (default false: the comment field is the
  *                                  user's and starts empty)
  *   export.key_notation  export.pdb  export.onelibrary  export.compat_transcode
+ *   export.format                  the stick's audio: copy (as it is), flac,
+ *                                  wav or aiff (rxbox/export.h RXStickFormat)
  *   export.device_name
  *   export.background_color        the players' background for the stick's
  *                                  library: default or one of the eight
@@ -17,6 +19,9 @@
  *                                  exportLibrary.db's property table)
  *   player.<name>  mixer.<name>  device.<name>     My Settings, names as
  *                                                  `rxbox settings` lists them
+ *   link.mp3                       Link serves what the players cannot all
+ *                                  read as 320 kbps MP3 instead of 16-bit
+ *                                  WAV (default false; docs/LINK.md)
  *   audio.sink
  *   ml.model                       the model's GGUF file for tagging tracks
  *                                  (rxbox/ml.h; unset: $RXBOX_ML_MODEL, else
@@ -276,6 +281,7 @@ static int set_string(char **field, const char *value)
  * is read. */
 typedef enum Kind {
     K_BOOL, K_BPM, K_WHAT, K_NOTATION, K_TEXT, K_VIBE, K_TRAFFIC, K_BARS, K_SPLIT, K_BACKGROUND,
+    K_FORMAT,
 } Kind;
 
 /* export.background_color's values, by id: rxbox/colors.h's order (the
@@ -299,8 +305,10 @@ static const struct {
     { "export.pdb",              K_BOOL },
     { "export.onelibrary",       K_BOOL },
     { "export.compat_transcode", K_BOOL },
+    { "export.format",           K_FORMAT },
     { "export.device_name",      K_TEXT },
     { "export.background_color", K_BACKGROUND },
+    { "link.mp3",                K_BOOL },
     { "audio.sink",              K_TEXT },
     { "ml.model",                K_TEXT },
     { "color.pink",              K_VIBE }, { "color.red",    K_VIBE },
@@ -329,11 +337,15 @@ static bool *bool_field(RXConfig *c, const char *key)
            !strcmp(key, "analysis.allow_sections") ? &c->allow_sections :
            !strcmp(key, "import.comment")          ? &c->import_comment :
            !strcmp(key, "export.pdb")              ? &c->export_pdb :
-           !strcmp(key, "export.onelibrary")       ? &c->export_onelibrary : &c->compat_transcode;
+           !strcmp(key, "export.onelibrary")       ? &c->export_onelibrary :
+           !strcmp(key, "link.mp3")                ? &c->link_mp3 : &c->compat_transcode;
 }
 
 #define STR_(x) #x
 #define STR(x) STR_(x)
+
+/* export.format's values, by RXStickFormat (rxbox/export.h). */
+static const char *const format_names[] = { "copy", "flac", "wav", "aiff" };
 
 const char *rx_config_takes(const char *key)
 {
@@ -349,6 +361,7 @@ const char *rx_config_takes(const char *key)
     case K_SPLIT:    return "a position, 0 or more (0: the default)";
     case K_BACKGROUND:
         return "default, pink, red, orange, yellow, green, aqua, blue or purple";
+    case K_FORMAT:   return "copy, flac, wav or aiff";
     default:         return NULL;
     }
 }
@@ -384,6 +397,16 @@ int rx_config_set(RXConfig *c, const char *key, const char *value)
         if (!reset && !parse_what(value, &what))
             return RX_ERROR(EINVAL);
         c->analyse_what = reset ? def.analyse_what : what;
+        return 0;
+    case K_FORMAT:
+        for (int i = 0; !reset && i < (int)RX_ARRAY_ELEMS(format_names); i++)
+            if (!strcmp(value, format_names[i])) {
+                c->export_format = i;
+                return 0;
+            }
+        if (!reset)
+            return RX_ERROR(EINVAL);
+        c->export_format = def.export_format;
         return 0;
     case K_NOTATION:
         if (!reset && strcmp(value, "classic") && strcmp(value, "camelot") && strcmp(value, "open"))
@@ -581,9 +604,12 @@ int rx_library_config_save(RXLibrary *lib)
         { "export.pdb",              c->export_pdb ? "true" : "false" },
         { "export.onelibrary",       c->export_onelibrary ? "true" : "false" },
         { "export.compat_transcode", c->compat_transcode ? "true" : "false" },
+        { "export.format",
+          format_names[RX_CLAMP(c->export_format, 0, (int)RX_ARRAY_ELEMS(format_names) - 1)] },
         { "export.device_name",      c->device_name },
         { "export.background_color",
           background_names[RX_CLAMP(c->background_color, 0, RX_TRACK_COLORS)] },
+        { "link.mp3",                c->link_mp3 ? "true" : "false" },
         { "audio.sink",              c->audio_sink },
         { "ml.model",                c->ml_model },
         { "ui.traffic_light",        c->traffic_light },

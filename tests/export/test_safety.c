@@ -627,17 +627,19 @@ static void dry_run_and_dates(void)
     CHECK_EQ(seen.rewrite, 3 * 2 + 4 + 2 + 1);
     CHECK_EQ(seen.zero, 0);
 
+    /* The real run encodes the A-law file as it writes it (a "copy"
+     * like the other), and keeps nothing of it in the cache. */
     opt.dry_run = false;
     seen = (Seen) { 0 };
     CHECK_EQ(rx_export(&lib, stick, &opt, on_seen, &seen), 0);
-    CHECK_EQ(seen.transcode, 1);
+    CHECK_EQ(seen.transcode, 0);
     CHECK_EQ(seen.prepare, 2);
     CHECK_EQ(seen.zero, 0);
     char *flac = at("stick-dry/Contents/Artist/Album/two.flac");
     CHECK(rx_file_exists(flac));
     free(flac);
     char *made = at("lib-dry/cache/transcode");
-    CHECK_EQ(entries(made), 1);
+    CHECK_EQ(entries(made), 0);
     free(made);
 
     char today[16];

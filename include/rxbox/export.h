@@ -67,8 +67,29 @@ static inline void rx_export_rate_text(int64_t rate, int64_t seconds_left, char 
  * holds player-written cues, history or presets not yet synced into the
  * library blocks the export (reported as a "check" item) unless
  * ignore_unsynced is set, so a gig's hot cues are never overwritten. */
+/* What the stick's audio is (export.format). COPY: each file as it is,
+ * but for what no player reads (to 16-bit FLAC) and, with the compatibility
+ * transcode, AAC and FLAC above 16 bit/48 kHz (to 16-bit FLAC at 48 kHz at
+ * most). FLAC: the lossless files as FLAC at their own depth (24 bits at
+ * most, 96 kHz at most; 16 and 48 with the compatibility transcode), MP3
+ * and AAC as they are. WAV, AIFF: everything but MP3 as 16-bit WAV or AIFF
+ * at 48 kHz at most, which every player reads, the CDJ-900 and the others
+ * before the CDJ-2000NXS2 included (no FLAC there). Whatever is not copied
+ * is encoded from the decoded samples as it is written (rx_encode), so it
+ * is the audio the analysis was made of. */
+enum RXStickFormat {
+    RX_STICK_COPY = 0,
+    RX_STICK_FLAC,
+    RX_STICK_WAV,
+    RX_STICK_AIFF,
+};
+/* "copy", "flac", "wav", "aiff"; the parse returns -1 for anything else. */
+const char *rx_stick_format_name(int format);
+int  rx_stick_format_parse(const char *name);
+
 typedef struct RXExportOptions {
     bool whole_library;         /* every track, not only those in playlists */
+    int  format;                /* enum RXStickFormat; the caller folds in export.format */
     const RXPlaylist *const *playlists; int nb_playlists;   /* NULL: every playlist; else only these */
     bool prune;                 /* delete files on the stick that are no longer exported */
     bool ignore_unsynced;       /* export even if the stick has changes not synced back */
@@ -105,16 +126,47 @@ int  rx_export(RXLibrary *lib, const char *dest, const RXExportOptions *opt,
 /* Codecs every player decodes (dj's PLAYABLE); anything else goes to the
  * stick as FLAC. */
 bool rx_plan_codec_playable(const char *codec);
-/* Whether a track goes to the stick transcoded (1), and the cache file it
- * goes to (NULL when not). Compatibility mode also converts AAC (nobody
- * knows what players do with its priming) and FLAC above 16 bit/48 kHz.
- * `create` makes the cache directory; a dry run passes false. */
-int  rx_plan_transcode_path(const RXLibrary *lib, const RXTrack *t, bool compat, bool create,
+/* What a track is transcoded for. PLAIN: codecs no player reads, to FLAC.
+ * COMPAT (export.compat_transcode): also AAC (nobody knows what players do
+ * with its priming) and FLAC above 16 bit/48 kHz, to 16-bit FLAC at most
+ * 48 kHz. LINK: everything but MP3 and 16-bit PCM at most 48 kHz, to a
+ * 16-bit WAV at most 48 kHz, which every PRO DJ LINK player reads (the
+ * players before the CDJ-2000NXS2, the CDJ-900 among them, read no FLAC).
+ * LINK_MP3 (link.mp3): everything but MP3, to a 320 kbps MP3 at most
+ * 48 kHz. LINK_ANY: everything to LINK's WAV, for a track Link cannot
+ * serve as a WAV made as it is read (src/link/wav.c). A bool's false and
+ * true are PLAIN and COMPAT.
+ *
+ * STICK_*: an export (RXStickFormat, with or without the compatibility
+ * transcode), whose plan names no cache file: what is not copied is
+ * encoded as it is written (RXPlanTrack.encode).
+ *
+ * With LINK, a plan made by rx_plan_build_cb in RX_PLAN_STORED mode makes
+ * no file at all for what can be decoded as it is read (RXPlanTrack.pcm);
+ * the rest it names as above. */
+enum RXTranscode {
+    RX_TRANSCODE_PLAIN = 0,
+    RX_TRANSCODE_COMPAT,
+    RX_TRANSCODE_LINK,
+    RX_TRANSCODE_LINK_MP3,
+    RX_TRANSCODE_LINK_ANY,
+    RX_TRANSCODE_STICK_COPY,
+    RX_TRANSCODE_STICK_COPY_COMPAT,
+    RX_TRANSCODE_STICK_FLAC,
+    RX_TRANSCODE_STICK_FLAC_COMPAT,
+    RX_TRANSCODE_STICK_WAV,
+    RX_TRANSCODE_STICK_AIFF,
+};
+
+/* Whether a track is served transcoded (1), and the cache file it goes to
+ * (NULL when not), for `compat` an RXTranscode. `create` makes the cache
+ * directory; a dry run passes false. */
+int  rx_plan_transcode_path(const RXLibrary *lib, const RXTrack *t, int compat, bool create,
                             char **cache_path, int *max_rate);
 /* The transcode exists and is newer than the track's file. */
 bool rx_plan_transcode_fresh(const RXTrack *t, const char *cache);
 /* Makes sure the transcode exists and is newer than the track's file. */
-int  rx_plan_transcode(const RXLibrary *lib, const RXTrack *t, bool compat, char **source);
+int  rx_plan_transcode(const RXLibrary *lib, const RXTrack *t, int compat, char **source);
 
 /* How a plan learns about the files. */
 enum RXPlanMode {
@@ -140,7 +192,7 @@ enum RXPlanMode {
  * exported) reported through `cb`; returning false from it cancels. */
 int  rx_plan_build_cb(const RXLibrary *lib, RXTrack *const *tracks, int nb_tracks,
                       const RXPlaylist *const *playlists, int nb_playlists,
-                      const char *device_name, bool compat_transcode, enum RXPlanMode mode,
+                      const char *device_name, int compat_transcode, enum RXPlanMode mode,
                       RXPlan *out, rx_progress_cb cb, void *opaque);
 
 /* Reads back a stick and validates what dj's `inspect` did plus the rbxport

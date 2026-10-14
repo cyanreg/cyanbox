@@ -30,6 +30,17 @@ typedef struct RXPlanCue {
     char     name[RX_CUE_NAME_MAX];
 } RXPlanCue;
 
+/* A track the export writes encoded rather than copied (RXStickFormat):
+ * how, for rx_encode. */
+typedef struct RXPlanEncode {
+    bool         on;
+    int          format;        /* enum RXEncodeFormat */
+    int          bits;          /* 16 or 24 */
+    bool         exact;         /* the source's samples fit `bits` as they are */
+    int          max_rate;      /* 0: the source's */
+    int          channels;      /* 0: the source's */
+} RXPlanEncode;
+
 typedef struct RXPlanTrack {
     uint32_t     id;            /* the library id (fits 32 bits) */
     const RXTrack *track;       /* in the library */
@@ -48,7 +59,16 @@ typedef struct RXPlanTrack {
     RXGrid       grid;
     RXPlanCue   *cues; int nb_cues;
     uint32_t    *tag_ids; int nb_tag_ids;   /* My Tags */
-    RXProbe      probe;         /* of `source` */
+    RXProbe      probe;         /* of `source`, or for `pcm` of the WAV served */
+    /* Link (RX_TRANSCODE_LINK): served as a 16-bit stereo WAV of `source`,
+     * the track's own file, decoded as a player reads it (src/link/wav.c),
+     * total_samples frames long; probe, file_type and file_size are the
+     * WAV's. Never set for an export. */
+    bool         pcm;
+    /* An export's track written encoded (RX_TRANSCODE_STICK_*): `source`
+     * is the track's own file; probe, file_type and file_size are the
+     * encoded file's, the size an estimate until it is written. */
+    RXPlanEncode encode;
 } RXPlanTrack;
 
 typedef struct RXPlanName { uint32_t id; char *name; uint32_t artist_id; } RXPlanName;   /* artist_id for albums only */

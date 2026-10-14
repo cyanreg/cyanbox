@@ -1132,6 +1132,7 @@ int rx_pdb_raw_tracks(const uint8_t *b, size_t size, RXPdbRawTrack **out, int *n
             .subtype      = rx_rd_le16(r),
             .bitmask      = rx_rd_le32(r + 0x04),
             .sample_rate  = rx_rd_le32(r + 0x08),
+            .file_size    = rx_rd_le32(r + 0x10),
             .artwork_id   = rx_rd_le32(r + 0x1C),
             .key_id       = rx_rd_le32(r + 0x20),
             .bitrate      = rx_rd_le32(r + 0x30),

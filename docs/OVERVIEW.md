@@ -145,7 +145,10 @@ All of the items the earlier session listed as worth importing are in scope:
     (docs/anlz.md 4.12, 4.13; `src/analysis/waveform.c`).
 
 Plus: an optional "maximum compatibility" transcode (AAC and hi-res FLAC to
-16/44.1 FLAC) at export, since nobody knows what players do with AAC priming.
+16/44.1 FLAC) at export, since nobody knows what players do with AAC priming;
+and the stick's format (`export.format`: as it is, FLAC, or WAV/AIFF for the
+players before the CDJ-2000NXS2), anything not copied encoded from the decoded
+samples as it is written (rx_encode).
 
 ## 4. Architecture
 

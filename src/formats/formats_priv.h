@@ -98,6 +98,7 @@ typedef struct RXPdbRawTrack {
     uint32_t pos;                /* file offset of the row */
     uint16_t subtype, unk56, magic, file_type, duration, sample_depth;
     uint32_t bitmask, id, tempo, sample_rate, bitrate, artwork_id, artist_id, key_id;
+    uint32_t file_size;
     uint8_t  color_id, rating;
     uint16_t string_offsets[21];
     char    *strings[21];        /* isrc ... file_path, see pdb.c */

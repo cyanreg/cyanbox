@@ -241,7 +241,9 @@ they come. Besides the players' My Settings
 | `export.key_notation` | `classic` | how export.pdb names keys: `classic`, `camelot` or `open` |
 | `export.pdb`, `export.onelibrary` | `true` | which device libraries an export writes |
 | `export.compat_transcode` | `true` | transcode AAC and hi-res files to 16-bit/44.1 kHz FLAC (`--no-compat` for one export) |
+| `export.format` | `copy` | the stick's audio: `copy` (each file as it is), `flac` (lossless files as FLAC), `wav` or `aiff` (everything but MP3 as 16-bit, for players before the CDJ-2000NXS2, which read no FLAC); encoded from the decoded samples as it is written (`--format` for one export) |
 | `export.device_name` | the stick's label | the name the players show for the stick |
+| `link.mp3` | `false` | PRO DJ LINK serves tracks not every player reads (FLAC and the like) as 320 kbps MP3 instead of 16-bit WAV |
 | `audio.sink` | the default output | the PipeWire node to play to |
 | `ml.model` | `models/moss-audio-4b-instruct-q4_k.gguf` | the tagging model's file (also `$RXBOX_ML_MODEL`) |
 | `color.pink` ... `color.purple` | the legend (Tags) | what each track colour stands for, in the words the tagging model picks by; `""` puts the default back |
@@ -342,6 +344,16 @@ line `rxbox export STICK`.
   FLAC on the stick) is on by default: the `export.compat_transcode`
   setting is the default of the dialog's checkbox, and `--compat` /
   `--no-compat` decide for one export.
+- The stick's audio is each file as it is by default (`export.format =
+  copy`), or with `--format flac` the lossless files as FLAC, or with
+  `--format wav` / `--format aiff` everything but MP3 as 16-bit WAV or
+  AIFF for players before the CDJ-2000NXS2 (the CDJ-900 and its
+  generation read no FLAC). A file not copied is encoded from its decoded
+  samples as it is written, the very audio the analysis was made of, no
+  copy kept anywhere: encoding runs ahead of the stick (a FLAC encodes
+  four or five times faster than a USB stick takes it), so it costs no
+  time. A record on the stick (`PIONEER/rxbox/encoded.txt`) lets the next
+  export skip what is there already.
 - Before anything is written the export works out what the stick will
   take (the audio not yet on it, the analysis files, artwork and
   databases, in whole clusters) and refuses when there is not enough
@@ -387,7 +399,7 @@ commands fail.
 
 | Path | Contents |
 | --- | --- |
-| `/Contents/<Artist>/<Album>/<file>` | the audio (or its compatibility transcode) |
+| `/Contents/<Artist>/<Album>/<file>` | the audio (as it is, or encoded: `export.format`, the compatibility transcode) |
 | `/PIONEER/rekordbox/export.pdb` | the DeviceSQL library older players read |
 | `/PIONEER/rekordbox/exportExt.pdb` | My Tags, when any track has one |
 | `/PIONEER/rekordbox/exportLibrary.db` | the OneLibrary database (SQLCipher) newer players read |

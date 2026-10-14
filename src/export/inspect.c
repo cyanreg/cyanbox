@@ -17,6 +17,8 @@
  *  - previews have no zero column (Nexus firmware rejects them; rbxport);
  *  - both libraries agree on hot cue auto load per track;
  *  - every referenced file exists (audio, ANLZ, artwork, OneLibrary images),
+ *    an audio file of the size its row says (a file the export encoded
+ *    is not its source: the row has what was written);
  *    playlist entries point at tracks, the history row counts the tracks
  *    (docs/pdb.md G2). */
 
@@ -77,6 +79,15 @@ static bool stick_exists(const char *stick, const char *path)
     bool ok = p && rx_file_exists(p);
     free(p);
     return ok;
+}
+
+/* The file's size on the stick, -1 when it is not there. */
+static int64_t stick_size_of(const char *stick, const char *path)
+{
+    char *p = rx_stick_path_safe(path) ? rx_stick_file(stick, path) : NULL;
+    int64_t n = p ? rx_file_size(p) : -1;
+    free(p);
+    return n;
 }
 
 static int read_stick(const char *stick, const char *path, uint8_t **data, size_t *size)
@@ -190,8 +201,11 @@ static void check_tracks(Report *r, const char *stick, const RXPdbRawTrack *t, i
                     path, x->subtype, x->bitmask, x->unk56, x->magic);
         if (!type_matches(path, x->file_type))
             problem(r, "%s: file type %d does not match the extension", path, x->file_type);
-        if (!stick_exists(stick, path))
+        int64_t size = stick_size_of(stick, path);
+        if (size < 0)
             problem(r, "missing audio %s", path);
+        else if ((uint32_t)size != x->file_size)
+            problem(r, "%s: %lld bytes, the row says %u", path, (long long)size, x->file_size);
         char dir[64];
         if (rx_anlz_dir(path, dir, sizeof(dir)) < 0 || !rx_str_starts(anlz, dir) || strlen(anlz) < 4) {
             problem(r, "%s: analyze_path %s not under %s", path, anlz, dir);

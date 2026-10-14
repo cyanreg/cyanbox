@@ -164,6 +164,7 @@ typedef struct ExportJob {
     int64_t *playlists;         /* ids of the selected playlists */
     int      nb_playlists;
     bool     whole_library, prune, ignore_unsynced, compat, dry_run;
+    int      format;
     RXMailbox *mb;
     RXCancel  *cancel;
     RXExportStats stats;        /* written by the export thread, read by the ticks */
@@ -2253,6 +2254,7 @@ static void *export_main(void *arg)
         opt.prune = ej->prune;
         opt.ignore_unsynced = ej->ignore_unsynced;
         opt.compat_transcode = ej->compat;
+        opt.format = ej->format;
         opt.dry_run = ej->dry_run;
         opt.stats = &ej->stats;
         ret = rx_export(ej->lib, ej->dest, &opt, export_progress, ej);
@@ -2359,6 +2361,7 @@ static void export_run(RXApp *app, bool dry_run)
     ej->prune = dry_run || es->prune;
     ej->ignore_unsynced = es->ignore_unsynced;
     ej->compat = es->compat;
+    ej->format = es->format;
     ej->dry_run = dry_run;
     ej->mb = priv->export_mb;
     ej->cancel = &priv->export_cancel;
@@ -3323,6 +3326,7 @@ int rx_app_create(RXApp *app, const char *library_root, const RXPlayerOptions *p
     }
     app->wave_palette = palette_of(cfg);
     app->export_state.compat = cfg->compat_transcode;
+    app->export_state.format = cfg->export_format;
     app->sort_column = -1;
     app->rows_dirty = true;
 

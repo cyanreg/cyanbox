@@ -427,19 +427,33 @@ bool rx_plan_codec_playable(const char *codec)
     return false;
 }
 
-int rx_plan_transcode_path(const RXLibrary *lib, const RXTrack *t, bool compat, bool create,
+/* Link's transcodes, by their names: 'w' a WAV, 'm' an MP3, 0 neither. */
+static int link_transcode(const char *path)
+{
+    size_t n = strlen(path);
+    return n <= 9 ? 0 : !strcmp(path + n - 9, ".link.wav") ? 'w' :
+           !strcmp(path + n - 9, ".link.mp3") ? 'm' : 0;
+}
+
+int rx_plan_transcode_path(const RXLibrary *lib, const RXTrack *t, int compat, bool create,
                            char **cache_path, int *max_rate)
 {
     *cache_path = NULL;
     bool need = !rx_plan_codec_playable(t->codec);
     bool hires = !strcmp(t->codec, "flac") && (t->bit_depth > 16 || t->sample_rate > 48000);
-    bool for_compat = compat && (!strcmp(t->codec, "aac") || hires);
-    if (!need && !for_compat)
+    bool for_compat = compat == RX_TRANSCODE_COMPAT && (!strcmp(t->codec, "aac") || hires);
+    bool pcm16 = (!strcmp(t->codec, "pcm_s16le") || !strcmp(t->codec, "pcm_s16be")) &&
+                 t->sample_rate <= 48000;
+    bool for_wav = (compat == RX_TRANSCODE_LINK && strcmp(t->codec, "mp3") && !pcm16) ||
+                   compat == RX_TRANSCODE_LINK_ANY;
+    bool for_mp3 = compat == RX_TRANSCODE_LINK_MP3 && strcmp(t->codec, "mp3");
+    bool for_link = for_wav || for_mp3;
+    if (!need && !for_compat && !for_link)
         return 0;
     /* dj kept up to 96 kHz for formats no player reads; compatibility mode
-     * goes to 16 bit at 44.1/48 kHz. */
-    *max_rate = for_compat ? 48000 : 96000;
-    const char *ext = for_compat ? "compat.flac" : "flac";
+     * and Link go to 16 bit (or MP3) at 44.1/48 kHz. */
+    *max_rate = for_compat || for_link ? 48000 : 96000;
+    const char *ext = for_wav ? "link.wav" : for_mp3 ? "link.mp3" : for_compat ? "compat.flac" : "flac";
     /* rx_library_cache_path's name, without creating its directory. */
     *cache_path = create ? rx_library_cache_path(lib, "transcode", t->id, ext)
                          : rx_asprintf("%s/cache/transcode/%llu.%s", lib->root, (unsigned long long)t->id, ext);
@@ -451,7 +465,7 @@ bool rx_plan_transcode_fresh(const RXTrack *t, const char *cache)
     return rx_file_exists(cache) && rx_file_mtime(cache) >= rx_file_mtime(t->path);
 }
 
-int rx_plan_transcode(const RXLibrary *lib, const RXTrack *t, bool compat, char **source)
+int rx_plan_transcode(const RXLibrary *lib, const RXTrack *t, int compat, char **source)
 {
     char *cache;
     int max_rate = 0;
@@ -464,12 +478,15 @@ int rx_plan_transcode(const RXLibrary *lib, const RXTrack *t, bool compat, char 
         *source = cache;
         return 0;
     }
-    char *tmp = rx_asprintf("%s.tmp.flac", cache);
+    int link = link_transcode(cache);
+    char *tmp = rx_asprintf("%s.tmp.%s", cache, link == 'w' ? "wav" : link == 'm' ? "mp3" : "flac");
     if (!tmp) {
         free(cache);
         return RX_ERROR(ENOMEM);
     }
-    ret = rx_transcode_flac(t->path, tmp, max_rate);
+    ret = link == 'w' ? rx_transcode_wav(t->path, tmp, max_rate)
+        : link == 'm' ? rx_transcode_mp3(t->path, tmp, max_rate)
+        : rx_transcode_flac(t->path, tmp, max_rate);
     if (ret >= 0 && rename(tmp, cache) < 0)
         ret = RX_ERROR(errno);
     if (ret < 0) {
@@ -962,14 +979,156 @@ static bool stored_probe(const RXTrack *t, RXProbe *p, int64_t *file_size)
 
 /* A dry run's source for a track whose transcode is not made yet: the
  * cache file it would be, described from the original as the transcode
- * would be (16-bit FLAC at most at max_rate, rx_transcode_flac); its size
- * a typical FLAC's 60 % of PCM, for the free-space check. Nothing is
+ * would be (16-bit FLAC at most at max_rate, rx_transcode_flac, or Link's
+ * 16-bit WAV or 320 kbps MP3); its size a typical FLAC's 60 % of PCM, for
+ * the free-space check, the WAV's own, or the MP3's 40 kB a second. Nothing is
  * written. `stored`: the original as the library stored it, unless it
  * changed since (stored_probe); a transcode made already is then
  * described the same way, its size its own. */
-static int dry_source(const RXLibrary *lib, const RXTrack *t, bool compat, bool stored,
+/* What Link serves as a WAV made as it is read (src/link/wav.c): a file
+ * the packet store places sample for sample (Matroska keeps milliseconds),
+ * of one or two channels at 48 kHz at most, which every player reads as
+ * 16-bit stereo, within NFS version 2's 4 GiB. */
+static bool link_pcm(const RXTrack *t)
+{
+    const char *ext = strrchr(rx_path_base(t->path), '.');
+    bool mkv = ext && (!strcasecmp(ext, ".mka") || !strcasecmp(ext, ".mkv") ||
+                       !strcasecmp(ext, ".webm"));
+    return !mkv && t->codec[0] && t->sample_rate > 0 && t->sample_rate <= 48000 &&
+           t->channels >= 1 && t->channels <= 2 && t->total_samples > 0 &&
+           t->total_samples < (INT64_C(0xffffffff) - 44) / 4;
+}
+
+/* ---------------------------------------------------------- the stick */
+
+static bool lossless_codec(const char *c)
+{
+    return !strcmp(c, "flac") || !strcmp(c, "alac") || !strcmp(c, "wavpack") || !strcmp(c, "ape") ||
+           !strcmp(c, "tta") || rx_str_starts(c, "pcm_");
+}
+
+/* How an export writes a file described by `p` (rxbox/export.h,
+ * RXStickFormat): copied (on false) or encoded so. */
+static RXPlanEncode stick_encode(const RXProbe *p, int kind)
+{
+    bool compat = kind == RX_TRANSCODE_STICK_COPY_COMPAT || kind == RX_TRANSCODE_STICK_FLAC_COMPAT;
+    bool mp3 = !strcmp(p->codec, "mp3"), aac = !strcmp(p->codec, "aac");
+    bool lossless = lossless_codec(p->codec), fpcm = rx_str_starts(p->codec, "pcm_f");
+    RXPlanEncode e = { 0 };
+    switch (kind) {
+    case RX_TRANSCODE_STICK_COPY:
+    case RX_TRANSCODE_STICK_COPY_COMPAT:
+        if (!rx_plan_codec_playable(p->codec))
+            e = (RXPlanEncode) { true, RX_ENCODE_FLAC, 16, false, compat ? 48000 : 96000 };
+        else if (compat && (aac || (!strcmp(p->codec, "flac") &&
+                                    (p->bit_depth > 16 || p->sample_rate > 48000))))
+            e = (RXPlanEncode) { true, RX_ENCODE_FLAC, 16, false, 48000 };
+        break;
+    case RX_TRANSCODE_STICK_FLAC:
+    case RX_TRANSCODE_STICK_FLAC_COMPAT:
+        if (mp3 || (aac && !compat))
+            break;
+        e = (RXPlanEncode) { true, RX_ENCODE_FLAC,
+                             !compat && lossless && !fpcm && p->bit_depth > 16 ? 24 : 16, false,
+                             compat ? 48000 : 96000 };
+        break;
+    case RX_TRANSCODE_STICK_WAV:
+    case RX_TRANSCODE_STICK_AIFF:
+        if (mp3)
+            break;
+        e = (RXPlanEncode) { true, kind == RX_TRANSCODE_STICK_WAV ? RX_ENCODE_WAV : RX_ENCODE_AIFF,
+                             16, false, 48000 };
+        break;
+    }
+    if (e.on) {
+        /* Players play stereo: more channels are mixed down. */
+        e.channels = p->channels > 2 ? 2 : 0;
+        e.exact = lossless && !fpcm && p->bit_depth > 0 && p->bit_depth <= e.bits &&
+                  p->sample_rate <= e.max_rate && p->channels <= 2;
+    }
+    return e;
+}
+
+/* An export's source: the track's own file, copied or encoded; nothing
+ * made before it is written. An encoded one is described as what it will
+ * be (its size the WAV's or AIFF's own, a FLAC's guessed: the source's
+ * when it is a FLAC of the same samples, else 60 % of the samples). */
+static int stick_source(const RXTrack *t, int kind, bool stored, RXPlanTrack *pt)
+{
+    int64_t size = 0;
+    if (!(stored && stored_probe(t, &pt->probe, &size))) {
+        rx_probe_free(&pt->probe);
+        int ret = rx_probe(t->path, &pt->probe);
+        if (ret < 0)
+            return ret;
+        size = rx_file_size(t->path);
+    }
+    if (!(pt->source = rx_strdup(t->path)))
+        return RX_ERROR(ENOMEM);
+    RXProbe *p = &pt->probe;
+    RXPlanEncode e = stick_encode(p, kind);
+    if (!e.on) {
+        pt->file_size = size;
+        return 0;
+    }
+    pt->encode = e;
+    bool same = !strcmp(p->codec, "flac") && p->bit_depth == e.bits && p->channels <= 2 &&
+                p->sample_rate <= e.max_rate;
+    if (p->sample_rate > e.max_rate) {
+        p->total_samples = (int64_t)((double)p->total_samples * e.max_rate / p->sample_rate);
+        p->sample_rate = e.max_rate;
+    }
+    p->channels = e.channels ? e.channels : p->channels;
+    p->bit_depth = e.bits;
+    rx_flac_info_free(&p->flac);
+    p->mp3 = (RXMp3Info) { 0 };
+    static const char *const codec[] = { [RX_ENCODE_FLAC] = "flac", [RX_ENCODE_WAV] = "pcm_s16le",
+                                         [RX_ENCODE_AIFF] = "pcm_s16be" };
+    static const char *const box[] = { [RX_ENCODE_FLAC] = "flac", [RX_ENCODE_WAV] = "wav",
+                                       [RX_ENCODE_AIFF] = "aiff" };
+    snprintf(p->codec, sizeof(p->codec), "%s", e.bits == 24 && e.format == RX_ENCODE_WAV ? "pcm_s24le"
+             : e.bits == 24 && e.format == RX_ENCODE_AIFF ? "pcm_s24be" : codec[e.format]);
+    snprintf(p->container, sizeof(p->container), "%s", box[e.format]);
+    int64_t pcm = p->total_samples * RX_MAX(p->channels, 1) * (e.bits / 8);
+    pt->file_size = e.format == RX_ENCODE_WAV ? 44 + pcm : e.format == RX_ENCODE_AIFF ? 54 + pcm
+                  : same ? size : (int64_t)(0.6 * (double)pcm);
+    return 0;
+}
+
+static int dry_source(const RXLibrary *lib, const RXTrack *t, int compat, bool stored,
                       RXPlanTrack *pt)
 {
+    if (compat >= RX_TRANSCODE_STICK_COPY)
+        return stick_source(t, compat, stored, pt);
+
+    /* Link's WAV of the track's own file, described as what a player
+     * gets: 16-bit stereo at the file's rate, the frames the library
+     * counted (the WAV keeps to them), the header and the samples. */
+    if (compat == RX_TRANSCODE_LINK && link_pcm(t)) {
+        int64_t size = 0;
+        if (!(stored && stored_probe(t, &pt->probe, &size))) {
+            rx_probe_free(&pt->probe);
+            int ret = rx_probe(t->path, &pt->probe);
+            if (ret < 0)
+                return ret;
+        }
+        RXProbe *p = &pt->probe;
+        if (p->sample_rate <= 0 || p->sample_rate > 48000 || p->total_samples <= 0 ||
+            p->total_samples >= (INT64_C(0xffffffff) - 44) / 4)
+            return RX_ERROR(EINVAL);
+        rx_flac_info_free(&p->flac);
+        p->mp3 = (RXMp3Info) { 0 };
+        snprintf(p->codec, sizeof(p->codec), "pcm_s16le");
+        snprintf(p->container, sizeof(p->container), "wav");
+        p->channels = 2;
+        p->bit_depth = 16;
+        p->bit_rate = p->sample_rate * 32;
+        pt->source = rx_strdup(t->path);
+        pt->pcm = true;
+        pt->file_size = 44 + p->total_samples * 4;
+        return pt->source ? 0 : RX_ERROR(ENOMEM);
+    }
+
     char *cache;
     int max_rate = 0;
     int ret = rx_plan_transcode_path(lib, t, compat, false, &cache, &max_rate);
@@ -993,23 +1152,33 @@ static int dry_source(const RXLibrary *lib, const RXTrack *t, bool compat, bool 
     if (!known && (ret = rx_probe(t->path, &pt->probe)) < 0)
         return ret;
     RXProbe *p = &pt->probe;
+    int link = link_transcode(cache);
+    bool mp3 = link == 'm', wav = link == 'w';
     rx_flac_info_free(&p->flac);
     p->mp3 = (RXMp3Info) { 0 };
-    snprintf(p->codec, sizeof(p->codec), "flac");
-    snprintf(p->container, sizeof(p->container), "flac");
+    snprintf(p->codec, sizeof(p->codec), mp3 ? "mp3" : wav ? "pcm_s16le" : "flac");
+    snprintf(p->container, sizeof(p->container), mp3 ? "mp3" : wav ? "wav" : "flac");
     if (max_rate > 0 && p->sample_rate > max_rate) {
         p->total_samples = (int64_t)((double)p->total_samples * max_rate / p->sample_rate);
         p->sample_rate = max_rate;
     }
-    p->bit_depth = 16;
+    p->bit_depth = mp3 ? 0 : 16;
+    if (mp3) {
+        p->channels = RX_MIN(p->channels, 2);
+        p->bit_rate = p->sample_rate >= 32000 ? 320000 : 160000;
+    }
+    /* A WAV's size is its header's 44 bytes and the samples. */
+    double pcm = (double)p->duration * p->sample_rate * RX_MAX(p->channels, 1) * 2;
     pt->file_size = fresh ? rx_file_size(cache)
-                  : (int64_t)(0.6 * p->duration * p->sample_rate * RX_MAX(p->channels, 1) * 2);
+                  : mp3 ? (int64_t)(p->duration * p->bit_rate / 8)
+                  : wav ? 44 + p->total_samples * RX_MAX(p->channels, 1) * 2
+                  : (int64_t)(0.6 * pcm);
     return 0;
 }
 
 int rx_plan_build_cb(const RXLibrary *lib, RXTrack *const *tracks, int nb_tracks,
                      const RXPlaylist *const *playlists, int nb_playlists,
-                     const char *device_name, bool compat_transcode, enum RXPlanMode mode,
+                     const char *device_name, int compat_transcode, enum RXPlanMode mode,
                      RXPlan *out, rx_progress_cb cb, void *opaque)
 {
     bool dry = mode != RX_PLAN_EXPORT;
@@ -1105,7 +1274,11 @@ int rx_plan_build_cb(const RXLibrary *lib, RXTrack *const *tracks, int nb_tracks
             report(cb, opaque, "%s: VBR MP3; seeking and cue timing on players may be off "
                    "(rekordbox's VBR index is unknown)", disp);
 
-        if (!(pt->usb_path = usb_path(t, pt->source, map_taken, &used))) {
+        /* The extension is what is served's: a WAV's for Link's own. */
+        static const char *const as[] = { [RX_ENCODE_FLAC] = "x.flac", [RX_ENCODE_WAV] = "x.wav",
+                                          [RX_ENCODE_AIFF] = "x.aiff", [RX_ENCODE_MP3] = "x.mp3" };
+        const char *named = pt->pcm ? "pcm.wav" : pt->encode.on ? as[pt->encode.format] : pt->source;
+        if (!(pt->usb_path = usb_path(t, named, map_taken, &used))) {
             ret = RX_ERROR(ENOMEM);
             goto fail;
         }

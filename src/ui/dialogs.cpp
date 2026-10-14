@@ -844,6 +844,22 @@ static void export_dialog(UiState *ui)
             ImGui::EndChild();
         }
         ImGui::SeparatorText("Options");
+        // What the stick's audio is (RXStickFormat): encoded from the
+        // decoded samples as it is written, when not copied.
+        static const char *const formats[] = {
+            "Each file as it is",
+            "FLAC (the lossless files)",
+            "WAV, 16-bit (players before the CDJ-2000NXS2)",
+            "AIFF, 16-bit (players before the CDJ-2000NXS2)",
+        };
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Audio");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(PX(360));
+        ImGui::Combo("##format", &es.format, formats, IM_ARRAYSIZE(formats));
+        ui_tooltip("WAV and AIFF are for the CDJ-900 and the other players that read no FLAC; "
+                   "MP3s go as they are. What is not copied is encoded as it is written, "
+                   "from the very audio the analysis was made of.");
         ImGui::Checkbox("Compatibility transcode (AAC and hi-res to 16-bit/44.1 kHz FLAC)", &es.compat);
         background_picker(ui);
         ImGui::TextDisabled("Files already on the stick are skipped. Tracks no longer exported\n"

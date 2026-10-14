@@ -101,6 +101,9 @@ static const char usage_text[] =
     "      --compat, --no-compat\n"
     "                           transcode AAC and hi-res files to 16-bit/44.1 kHz FLAC\n"
     "                           (on by default: export.compat_transcode)\n"
+    "      --format F           the audio: copy (as it is), flac, wav or aiff (wav and\n"
+    "                           aiff for players before the CDJ-2000NXS2: no FLAC there);\n"
+    "                           default export.format\n"
     "      --ignore-unsynced    export although the stick has player changes not synced\n"
     "      -n, --dry-run        print what would be copied and deleted, write nothing\n"
     "  inspect STICK            re-read and validate a stick\n"
@@ -1719,6 +1722,7 @@ static int cmd_export(Cli *cli, int argc, char **argv)
     RXExportOptions opt;
     rx_export_options_default(&opt);
     bool compat = false, no_compat = false;
+    int format = -1;
     RXArray names;
     rx_array_init(&names, sizeof(char *));
     RXArray playlists;
@@ -1745,6 +1749,11 @@ static int cmd_export(Cli *cli, int argc, char **argv)
             compat = true;
         } else if (opt_flag(cli, argv[i], NULL, "--no-compat")) {
             no_compat = true;
+        } else if ((r = opt_value(cli, argc, argv, &i, NULL, "--format", &val))) {
+            if (r < 0 || (format = rx_stick_format_parse(val)) < 0) {
+                code = usage_error(cli, "export: --format takes copy, flac, wav or aiff");
+                goto end;
+            }
         } else if (opt_flag(cli, argv[i], NULL, "--ignore-unsynced")) {
             opt.ignore_unsynced = true;
         } else if (opt_flag(cli, argv[i], "-n", "--dry-run")) {
@@ -1859,6 +1868,7 @@ static int cmd_export(Cli *cli, int argc, char **argv)
     opt.playlists = playlists.nb ? (const RXPlaylist *const *)playlists.data : NULL;
     opt.nb_playlists = (int)playlists.nb;
     opt.compat_transcode = (compat || lib->cfg.compat_transcode) && !no_compat;
+    opt.format = format >= 0 ? format : lib->cfg.export_format;
 
     ProgressCtx ctx = {
         .tty       = isatty(STDOUT_FILENO),
@@ -2352,10 +2362,12 @@ static int cmd_config(Cli *cli, int argc, char **argv)
         printf("export.pdb = %s\n", c->export_pdb ? "true" : "false");
         printf("export.onelibrary = %s\n", c->export_onelibrary ? "true" : "false");
         printf("export.compat_transcode = %s\n", c->compat_transcode ? "true" : "false");
+        printf("export.format = %s\n", rx_stick_format_name(c->export_format));
         printf("export.device_name = %s\n",
                c->device_name ? c->device_name : "(the stick's label)");
         printf("export.background_color = %s\n",
                c->background_color ? rx_track_color_name(c->background_color) : "default");
+        printf("link.mp3 = %s\n", c->link_mp3 ? "true" : "false");
         print_kv("player", c->player, c->nb_player);
         print_kv("mixer", c->mixer, c->nb_mixer);
         print_kv("device", c->device, c->nb_device);
@@ -2760,7 +2772,7 @@ static const struct {
     { "tag",      cmd_tag,      "tag TRACK..." },
     { "color",    cmd_color,    "color HUE|NAME|none TRACK..." },
     { "colour",   cmd_color,    "colour HUE|NAME|none TRACK..." },
-    { "export",   cmd_export,   "export [--all | -p NAME...] [--prune] [--compat | --no-compat] "
+    { "export",   cmd_export,   "export [--all | -p NAME...] [--prune] [--compat | --no-compat] [--format F] "
                                 "[--ignore-unsynced] [-n] STICK" },
     { "inspect",  cmd_inspect,  "inspect STICK" },
     { "pull",     cmd_pull,     "pull STICK" },
