@@ -290,7 +290,7 @@ The table's saved column layout is kept under a new id since this column
 set, so a layout saved for the old one starts from these defaults. Row height
 40 when artwork is shown, else 22. Selected rows highlighted; the focused row has a
 1 px outline; the track in the player, playing or paused, a 1.5 px orange one
-(the accent), the focus's drawn inside it when the two are one row; selected,
+(the accent), which alone marks the focus when the two are one row; selected,
 that row is filled dark amber rather than the selection's blue. A row whose file is missing is drawn greyed out with a "missing" glyph,
 cannot be loaded or analysed, and offers Relocate… in its context menu;
 an unanalysed row shows `—` for BPM/key and a thin flat preview (at the
