@@ -12,7 +12,8 @@
 //
 // Selection is rekordbox's: click selects one, Ctrl toggles, Shift selects
 // the range from the last click; the focused row (the keyboard's, Enter
-// loads it) has a 1 px outline. A double-click loads the track into the
+// loads it) has a 1 px outline, the player's track a 2 px orange one,
+// wherever the focus is. A double-click loads the track into the
 // player (a playing one is paused and replaced). Rows drag as a list of
 // track ids onto the player or a playlist.
 
@@ -607,6 +608,8 @@ static void table(UiState *ui, ImVec2 size)
     int nb_active = app->jobs ? rx_jobs_active_tracks(app->jobs, active, 32) : 0;
     int frow = ui->scroll_to_focus ? focus_row(app) : -1;
     ImRect clip = ImGui::GetCurrentWindow()->InnerClipRect;
+    const RXTrack *loaded = app->decks[0].track;
+    int outline = ImMax(1, (int)(PX(2) + 0.5f));
 
     ImGuiListClipper clipper;
     clipper.Begin(app->nb_rows, row_h);
@@ -661,11 +664,22 @@ static void table(UiState *ui, ImVec2 size)
             }
             ImGui::SetCursorScreenPos(rp);
             row_cells(ui, t, r, row_h, active, nb_active);
-            if (t->id == app->focus_track) {
+            // Over the visible width, so a table scrolled sideways still
+            // shows them: the player's track 2 px orange (nested 1 px
+            // rectangles, crisp where a thick line would blur), the focus
+            // 1 px inside it.
+            bool in_player = loaded && t->id == loaded->id;
+            if (in_player || t->id == app->focus_track) {
                 ImDrawList *dl = ImGui::GetWindowDrawList();
                 dl->PushClipRect(clip.Min, clip.Max, false);
-                dl->AddRect(ImVec2(clip.Min.x, row_rect.Min.y),
-                            ImVec2(clip.Max.x - 1, row_rect.Max.y - 1), ui_alpha(UI_TEXT, 0.55f));
+                ImVec2 a(clip.Min.x, row_rect.Min.y), b(clip.Max.x - 1, row_rect.Max.y - 1);
+                for (int i = 0; in_player && i < outline; i++) {
+                    dl->AddRect(a, b, UI_ACCENT);
+                    a = ImVec2(a.x + 1, a.y + 1);
+                    b = ImVec2(b.x - 1, b.y - 1);
+                }
+                if (t->id == app->focus_track)
+                    dl->AddRect(a, b, ui_alpha(UI_TEXT, 0.55f));
                 dl->PopClipRect();
             }
             ImGui::PopID();
