@@ -544,6 +544,23 @@ int main(int argc, char **argv)
         n = rx_app_albums(&app, &albums);
         CHECK(n == 2 && !strcmp(albums[0].name, "Alpha") && !strcmp(albums[1].name, "Zeta"),
               "albums alphabetically: %d", n);
+        /* In natural order: a number in a name counts as a number. */
+        free(b->meta.album);
+        b->meta.album = rx_strdup("AD:HOUSE 10");
+        free(a->meta.album);
+        a->meta.album = rx_strdup("AD:HOUSE 3");
+        CHECK(rx_library_save_track(&app.lib, a) == 0 && rx_library_save_track(&app.lib, b) == 0,
+              "saving the numbered albums");
+        n = rx_app_albums(&app, &albums);
+        CHECK(n == 2 && !strcmp(albums[0].name, "AD:HOUSE 3") &&
+              !strcmp(albums[1].name, "AD:HOUSE 10"), "3 before 10: %s first",
+              n ? albums[0].name : "none");
+        free(a->meta.album);
+        a->meta.album = rx_strdup("Zeta");
+        free(b->meta.album);
+        b->meta.album = rx_strdup("Alpha");
+        CHECK(rx_library_save_track(&app.lib, a) == 0 && rx_library_save_track(&app.lib, b) == 0,
+              "saving the albums back");
         rx_app_tick(&app);
         CHECK(app.nb_rows == 1 && app.lib.tracks[app.rows[0]] == a, "the album view follows the tags");
         /* One album whatever the case of its tag. */

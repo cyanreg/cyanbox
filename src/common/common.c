@@ -91,6 +91,55 @@ int rx_strcasecmp(const char *a, const char *b)
     return tolower((unsigned char)*a) - tolower((unsigned char)*b);
 }
 
+static int ascii_lower(int c)
+{
+    return c >= 'A' && c <= 'Z' ? c + 'a' - 'A' : c;
+}
+
+static bool ascii_digit(int c)
+{
+    return c >= '0' && c <= '9';
+}
+
+int rx_strnatcasecmp(const char *sa, const char *sb)
+{
+    const unsigned char *a = (const unsigned char *)sa, *b = (const unsigned char *)sb;
+    int zeros = 0;              /* the first difference in leading zeros */
+    while (*a && *b) {
+        if (ascii_digit(*a) && ascii_digit(*b)) {
+            const unsigned char *za = a, *zb = b;
+            while (*a == '0')
+                a++;
+            while (*b == '0')
+                b++;
+            const unsigned char *da = a, *db = b;
+            while (ascii_digit(*a))
+                a++;
+            while (ascii_digit(*b))
+                b++;
+            /* The longer number, without its zeros, is the larger; of two
+             * as long, the first digit that differs says. */
+            size_t la = (size_t)(a - da), lb = (size_t)(b - db);
+            if (la != lb)
+                return la < lb ? -1 : 1;
+            int c = memcmp(da, db, la);
+            if (c)
+                return c < 0 ? -1 : 1;
+            if (!zeros && (da - za) != (db - zb))
+                zeros = (da - za) < (db - zb) ? -1 : 1;
+            continue;
+        }
+        int ca = ascii_lower(*a), cb = ascii_lower(*b);
+        if (ca != cb)
+            return ca < cb ? -1 : 1;
+        a++;
+        b++;
+    }
+    if (*a || *b)
+        return *a ? 1 : -1;
+    return zeros;
+}
+
 /* Decodes one UTF-8 code point; invalid bytes are returned as themselves
  * so a search never stalls on bad input. */
 static uint32_t utf8_next(const char **p)

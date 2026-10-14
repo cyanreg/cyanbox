@@ -67,6 +67,13 @@ bool rx_str_starts(const char *s, const char *pfx);
 bool rx_str_ends(const char *s, const char *sfx);
 /* Case-insensitive ASCII compare, like strcasecmp. */
 int rx_strcasecmp(const char *a, const char *b);
+/* Natural order, case-insensitive (ASCII): a run of digits compares as the
+ * number it writes, so "AD:HOUSE 3" comes before "AD:HOUSE 10" and
+ * "Track 2" before "Track 10". Between names that differ only in leading
+ * zeros the one with fewer comes first ("1" before "01"); everything else
+ * compares as rx_strcasecmp does. 0 only for names rx_strcasecmp calls
+ * equal. */
+int rx_strnatcasecmp(const char *a, const char *b);
 /* UTF-8 aware, case-insensitive "needle in haystack" for the search box.
  * Folds ASCII case and full-width ASCII; everything else compares as is. */
 bool rx_str_contains_fold(const char *haystack, const char *needle);

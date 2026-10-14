@@ -232,7 +232,8 @@ last.
 
 **Playlist tree** (left, 220 default): `Collection` at the top (every
 track), `Albums` under it (closed by default: every album tag in the
-library, alphabetically, with its track count; click one and the table
+library, in natural order (a number in a name counts as a number:
+`AD:HOUSE 3` before `AD:HOUSE 10`; case is ignored), with its track count; click one and the table
 shows its tracks in disc and track order, like a playlist, but nothing
 can be dropped on an album, nothing renames or deletes one, and the
 export does not know them: they are the tags' view of the collection;
@@ -248,7 +249,8 @@ artist, album, genre, comment, file name with `rx_str_contains_fold`
 (Japanese full-width aware). `Ctrl+F` focuses it; `Esc` clears.
 
 **Track table** (ImGui table, resizable/reorderable/sortable columns,
-virtualised with the clipper): default columns in order: `#`, Preview
+virtualised with the clipper; text columns sort in natural order, a
+number in a name counting as a number, case ignored): default columns in order: `#`, Preview
 (the preview tag of the players' waveform colour, PWAV, PWV4 or PWV6 as
 the overview has it, via `rx_wave_draw`, its columns scaled to the cell,
 and drawn as the overview is: the stacked half, or centred with both

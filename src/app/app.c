@@ -2756,7 +2756,7 @@ static int compare_rows(const void *pa, const void *pb, void *opaque)
     if (va.known) {
         int c;
         if (va.str || vb.str)
-            c = rx_strcasecmp(va.str ? va.str : "", vb.str ? vb.str : "");
+            c = rx_strnatcasecmp(va.str ? va.str : "", vb.str ? vb.str : "");
         else
             c = (va.num > vb.num) - (va.num < vb.num);
         if (ctx->descending)
@@ -2835,7 +2835,7 @@ static int compare_album_rows(const void *pa, const void *pb, void *opaque)
     int nb = b->meta.track_number > 0 ? b->meta.track_number : INT_MAX;
     if (na != nb)
         return na < nb ? -1 : 1;
-    int c = rx_strcasecmp(title_of(a), title_of(b));
+    int c = rx_strnatcasecmp(title_of(a), title_of(b));
     if (c)
         return c;
     return (ra->pos > rb->pos) - (ra->pos < rb->pos);
@@ -2925,13 +2925,14 @@ void rx_app_rebuild_rows(RXApp *app)
 }
 
 /* Albums whose names differ only in case are one album (a tag typed
- * "Greatest Hits" on one track and "greatest hits" on another): sorted
- * without case, the exact spellings in a fixed order within, so a run of
- * one album is contiguous and named by its first spelling. */
+ * "Greatest Hits" on one track and "greatest hits" on another), in
+ * natural order ("AD:HOUSE 3" before "AD:HOUSE 10"), the exact spellings
+ * in a fixed order within, so a run of one album is contiguous and named
+ * by its first spelling. */
 static int compare_album_names(const void *pa, const void *pb)
 {
     const char *a = *(const char *const *)pa, *b = *(const char *const *)pb;
-    int c = rx_strcasecmp(a, b);
+    int c = rx_strnatcasecmp(a, b);
     return c ? c : strcmp(a, b);
 }
 

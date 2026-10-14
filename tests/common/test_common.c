@@ -269,6 +269,24 @@ static void test_contains_fold(void)
     CHECK(contains("\x80" "abc", "ABC") && contains("abc\xc3", "\xc3"), "stray bytes");
 }
 
+/* rx_strnatcasecmp: numbers as numbers, case folded, leading zeros a
+ * tie-break, 0 only where rx_strcasecmp says equal. */
+static void test_natural(void)
+{
+    CHECK(rx_strnatcasecmp("AD:HOUSE 3", "AD:HOUSE 10") < 0, "3 before 10");
+    CHECK(rx_strnatcasecmp("AD:HOUSE 10", "AD:HOUSE 3") > 0, "10 after 3");
+    CHECK(rx_strnatcasecmp("AD:HOUSE 9 [FLAC]", "AD:HOUSE 11 [FLAC]") < 0, "a number mid-name");
+    CHECK(rx_strnatcasecmp("Track 2", "track 10") < 0, "case folded around numbers");
+    CHECK(rx_strnatcasecmp("abc", "ABC") == 0 && rx_strcasecmp("abc", "ABC") == 0, "case only");
+    CHECK(rx_strnatcasecmp("1", "01") < 0 && rx_strnatcasecmp("01", "1") > 0, "fewer zeros first");
+    CHECK(rx_strnatcasecmp("a01b", "a1c") < 0, "a later difference beats the zeros");
+    CHECK(rx_strnatcasecmp("x", "x1") < 0 && rx_strnatcasecmp("x1", "x") > 0, "a prefix first");
+    CHECK(rx_strnatcasecmp("99999999999999999999", "100000000000000000000") < 0,
+          "numbers longer than any integer");
+    CHECK(rx_strnatcasecmp("夏恋 2", "夏恋 12") < 0, "after UTF-8");
+    CHECK(rx_strnatcasecmp("", "") == 0 && rx_strnatcasecmp("", "a") < 0, "empty");
+}
+
 static int fuzzy(const char *text, const char *query)
 {
     int s = 0;
@@ -354,6 +372,7 @@ int main(void)
     test_write_atomic();
     test_contains_fold();
     test_fuzzy();
+    test_natural();
 
     if (nftw(dir, remove_entry, 16, FTW_DEPTH | FTW_PHYS) < 0)
         fprintf(stderr, "could not remove %s\n", dir);
