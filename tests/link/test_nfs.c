@@ -1017,14 +1017,20 @@ static void test_access(Fixture *f)
     CHECK(nfs_read(f->nfs, OUTSIDER, fh, 0, 16, buf, sizeof(buf), NULL) == -EACCES, "outsider");
 
     /* UMNT is answered and changes nothing (an XDJ-AZ's two decks share
-     * an address); forgetting a peer makes it mount again. */
+     * an address); a peer forgotten (a deck back from a lapse of its
+     * keep-alives) that reads with a handle of ours is taken back in, as
+     * it never mounts again; a stranger with one is not. */
     call(&c, RX_RPC_MOUNT, RX_RPC_MOUNT_VERSION, RX_MNT_UMNT);
     rx_nfs_put_name(&c.w, "/");
     n = ask(f->nfs, RX_NFS_MOUNT, PLAYER, &c);
     CHECK(results(n, &c, &r) == 0 && n == 24, "UMNT");
     CHECK(nfs_read(f->nfs, PLAYER, fh, 0, 16, buf, sizeof(buf), NULL) == 16, "after UMNT");
     rx_nfs_forget(f->nfs, PLAYER);
-    CHECK(nfs_read(f->nfs, PLAYER, fh, 0, 16, buf, sizeof(buf), NULL) == -EACCES, "forgotten");
+    CHECK(!rx_nfs_mounted(f->nfs, PLAYER), "forgotten");
+    CHECK(nfs_read(f->nfs, PLAYER, fh, 0, 16, buf, sizeof(buf), NULL) == 16 &&
+          rx_nfs_mounted(f->nfs, PLAYER), "taken back in by its handle");
+    CHECK(nfs_read(f->nfs, STRANGER, fh, 0, 16, buf, sizeof(buf), NULL) == -EACCES &&
+          !rx_nfs_mounted(f->nfs, STRANGER), "a stranger with the handle");
     CHECK(mnt(f->nfs, PLAYER, "/", root) == 0, "mount again");
     CHECK(nfs_read(f->nfs, PLAYER, fh, 0, 16, buf, sizeof(buf), NULL) == 16, "reads again");
 

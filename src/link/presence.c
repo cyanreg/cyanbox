@@ -738,15 +738,32 @@ static void hear_conflict(RXPresence *p, const RXPktConflict *c, int64_t now)
         drop_number(p, c->number);
 }
 
+/* A packet in the debug log, its first 0x60 bytes in hex: what a player
+ * sends that is not understood, or not answered. */
+static void dump(const char *what, uint32_t from, const uint8_t *buf, size_t len)
+{
+    if (rx_log_level() < RX_LOG_DEBUG)
+        return;
+    char hex[0x60 * 3 + 1] = "";
+    for (size_t i = 0; i < len && i < 0x60; i++)
+        snprintf(hex + i * 3, 4, "%02x ", buf[i]);
+    rx_debug("link: %s from %u.%u.%u.%u, %zu bytes: %s", what, from >> 24, from >> 16 & 0xFF,
+             from >> 8 & 0xFF, from & 0xFF, len, hex);
+}
+
 static void announce_in(RXPresence *p, uint32_t from, const uint8_t *buf, size_t len, int64_t now)
 {
     RXPktHeader h;
-    if (rx_pkt_header(&h, RX_LINK_ANNOUNCE, buf, len) < 0)
+    if (rx_pkt_header(&h, RX_LINK_ANNOUNCE, buf, len) < 0) {
+        dump("announce port: not a packet", from, buf, len);
         return;
+    }
     switch (h.kind) {
     case RX_ANN_KEEP_ALIVE: {
         RXPktKeepAlive k;
-        if (rx_pkt_keep_alive_parse(&k, buf, len) == 0 && !own_mac(p, k.mac))
+        if (rx_pkt_keep_alive_parse(&k, buf, len) < 0)
+            dump("keep-alive not understood", from, buf, len);
+        else if (!own_mac(p, k.mac))
             hear_keep_alive(p, from, &k, now);
         return;
     }
@@ -773,6 +790,7 @@ static void announce_in(RXPresence *p, uint32_t from, const uint8_t *buf, size_t
         return;
     }
     default:
+        dump("announce port", from, buf, len);
         return;
     }
 }
@@ -810,8 +828,14 @@ static void hear_status(RXPresence *p, uint32_t from, const uint8_t *buf, size_t
 static void answer_media(RXPresence *p, uint32_t from, const uint8_t *buf, size_t len)
 {
     RXPktMediaQuery q;
-    if (rx_pkt_media_query_parse(&q, buf, len) < 0)
+    if (rx_pkt_media_query_parse(&q, buf, len) < 0) {
+        dump("media query not understood", from, buf, len);
         return;
+    }
+    rx_debug("link: media query from %s (%d) about device %d slot %d%s", q.name, q.number,
+             q.device, q.slot,
+             q.device != p->number || (q.slot != RX_SLOT_REKORDBOX && q.slot != RX_SLOT_USB)
+             ? ": not ours" : "");
     /* About our collection: slot 04, or 03 from older CDJ-3000 firmware
      * (EP122); the answer names back the slot asked about, or the player
      * ignores it (rbxport's captures). Any other is not ours to answer. */
@@ -834,12 +858,18 @@ static void answer_media(RXPresence *p, uint32_t from, const uint8_t *buf, size_
 static void status_in(RXPresence *p, uint32_t from, const uint8_t *buf, size_t len, int64_t now)
 {
     RXPktHeader h;
-    if (rx_pkt_header(&h, RX_LINK_STATUS, buf, len) < 0)
+    if (rx_pkt_header(&h, RX_LINK_STATUS, buf, len) < 0) {
+        dump("status port: not a packet", from, buf, len);
         return;
+    }
     if (h.kind == RX_ST_CDJ || h.kind == RX_ST_MIXER) {
         hear_status(p, from, buf, len);
         return;
     }
+    if (p->c.role == RX_PRESENCE_COMPUTER)
+        dump(p->stage != ST_UP ? "status port, not up yet" :
+             !rx_presence_is_peer(p, from) ? "status port, not a peer" : "status port", from,
+             buf, len);
 
     uint8_t out[RX_PKT_MAX];
     RXWr w = rx_wr(out, sizeof(out));

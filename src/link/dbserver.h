@@ -37,6 +37,12 @@ typedef struct RXCatalog RXCatalog;
  * `file_size` (a transcode made when a player asks for the track). */
 int  rx_catalog_new(RXCatalog **out, RXLibrary *lib, RXPlan *plan);
 void rx_catalog_free(RXCatalog **c);
+/* What a track info request checks of a track served as a WAV made as it
+ * is read (RXPlanTrack.pcm; src/link/wav.c): 0 when it can be, else the
+ * catalog has the WAV made as a file first (RX_TRANSCODE_LINK_ANY) and
+ * serves that. Without one, such a track is served as it is planned. */
+void rx_catalog_set_check(RXCatalog *c, int (*check)(void *opaque, const RXPlanTrack *pt),
+                          void *opaque);
 
 /* --------------------------------------------------------------- session */
 
@@ -47,6 +53,9 @@ typedef struct RXDbSession RXDbSession;
  * device number we are on the link. */
 int  rx_dbsession_new(RXDbSession **out, RXCatalog *const *cat, int our_number);
 void rx_dbsession_free(RXDbSession **s);
+/* Texts with typographic punctuation folded to ASCII, for a player that
+ * shows only Latin-1 (rx_dbmsg_item_ascii). */
+void rx_dbsession_set_ascii(RXDbSession *s, bool ascii);
 /* Bytes that arrived on the connection: whole requests are answered, the
  * replies appended to `out`, a partial one kept for the next call.
  * Returns 0, or a negative errno when the connection is to be closed (a

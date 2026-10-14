@@ -29,6 +29,7 @@
 
 #include "dbserver.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -69,11 +70,17 @@ struct RXDbSession {
      * answered as rekordbox answers one (sixteen-argument items); else
      * as the djl-analysis describes (twelve). */
     bool      extended;
+    bool      ascii;            /* a CDJ-900's: rx_dbmsg_item_ascii */
     uint8_t  *in;
     size_t    in_len, in_cap;
     Menu      menus[NB_MENUS];
     uint64_t  clock;
 };
+
+void rx_dbsession_set_ascii(RXDbSession *s, bool ascii)
+{
+    s->ascii = ascii;
+}
 
 int rx_dbsession_new(RXDbSession **out, RXCatalog *const *cat, int our_number)
 {
@@ -299,7 +306,7 @@ static void render(RXDbSession *s, RXWr *w, const RXDbMsg *q, RXCatalog *c)
         column = slot->m.sort;
     numbers(w, q->txid, RX_DB_MENU_HEADER, 1, offset);
     if (slot && c && count)
-        rx_catalog_render(c, &slot->m, offset, count, column, s->extended, q->txid, w);
+        rx_catalog_render(c, &slot->m, offset, count, column, s->extended, s->ascii, q->txid, w);
     rx_dbmsg_numbers(w, q->txid, RX_DB_MENU_FOOTER, NULL, 0);
 }
 
@@ -326,6 +333,16 @@ static int handle(RXDbSession *s, const RXDbMsg *q, RXWr *w)
         /* The server closes the connection; nothing is sent (beat-link,
          * Client.close). */
         return RX_ERROR(ESHUTDOWN);
+    case RX_DB_CANCEL:
+        /* A player gives up a request, a preview of the row it scrolled
+         * past, by sending 0001 with that request's txid and no arguments;
+         * a CDJ-2000nexus answers nothing to it (dysentery's S05, S06, S15a
+         * and S20 captures: the request's own answer and no other). Each
+         * request here is answered before the next is read, so there is
+         * nothing left to give up. beat-link names it INVALID_DATA. A
+         * CDJ-900 sends it after a preview too (2026-10-14), and was
+         * answered with the unknown request's error until then. */
+        return 0;
     case RX_DB_RENDER:
         render(s, w, q, c);
         return 0;
@@ -467,11 +484,22 @@ int rx_dbsession_input(RXDbSession *s, const uint8_t *buf, size_t len, RXWr *out
         if (r == 0)
             break;
         if (r < 0) {
+            rx_debug("link: player %d: a request that is not one (%s)", s->player, strerror(-r));
             ret = r;
             break;
         }
         pos += (size_t)r;
+        if (rx_log_level() >= RX_LOG_DEBUG) {
+            char args[160] = "";
+            for (int i = 0, at = 0; i < q.nb_args && at < (int)sizeof(args) - 16; i++)
+                at += snprintf(args + at, sizeof(args) - at, q.args[i].type == RX_DB_NUM ? " %x" :
+                               q.args[i].type == RX_DB_STR ? " str" : " blob", q.args[i].num);
+            rx_debug("link: player %d asks %04x:%s", s->player, q.kind, args);
+        }
+        size_t before = out->len;
         ret = handle(s, &q, out);
+        rx_debug("link: answered %04x with %zu bytes%s", q.kind, out->len - before,
+                 ret < 0 ? " and closes" : "");
     }
     if (ret < 0) {
         s->in_len = 0;

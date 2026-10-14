@@ -42,14 +42,18 @@
  * - Each socket answers its own program only.
  * - READ and READDIR, the two answers that can be large, answer only a
  *   peer that has mounted, from a small table of addresses (oldest
- *   forgotten first). UMNT does not take a peer off it: an XDJ-AZ is two
- *   decks on one address (rbxport's link-testing.md), and one deck
- *   unmounting must not cut the other off.
+ *   forgotten first), or one that mounted in this session and reads with
+ *   a handle of it, put back in the table: a deck that comes back from a
+ *   lapse reads on and never mounts again. UMNT does not take a peer off
+ *   it: an XDJ-AZ is two decks on one address (rbxport's
+ *   link-testing.md), and one deck unmounting must not cut the other off.
  * - A datagram that is not a call, or whose header cannot be read, gets
  *   nothing; an answer to anything unknown or malformed is sent only when
  *   it is no longer than the request.
  * - Names a peer sends are only ever compared with the tree's; a file is
- *   opened by the plan's `source` alone. */
+ *   opened by the plan's `source` alone. A track the plan marks `pcm` has
+ *   no file: its bytes come from the config's read (a WAV made as it is
+ *   read, wav.h), its size and times as for any other. */
 
 #include <fcntl.h>
 #include <stdio.h>
@@ -97,6 +101,7 @@
 
 #define NB_MOUNTS           16
 #define NB_FILES            4
+#define NB_EVER             256         /* addresses that mounted, remembered */
 /* A READDIR answer's room: what the call asks, within these. The floor
  * fits one entry of the longest name, so a listing always moves on. */
 #define READDIR_MIN         1024
@@ -128,6 +133,10 @@ struct RXNfs {
     uint64_t       clock;       /* counts calls: when a mount or a file was last used */
     Mount          mounts[NB_MOUNTS];
     OpenFile       files[NB_FILES];
+    /* Every address that mounted in this session, which a handle of ours
+     * takes back in (may_read_node); the first NB_EVER. */
+    uint32_t       ever[NB_EVER];
+    int            nb_ever;
 };
 
 /* One call being answered. */
@@ -138,6 +147,8 @@ typedef struct Req {
     RXRd     args;
     RXWr     w;
     bool     small;             /* an answer to the unknown or malformed */
+    uint32_t prog, proc;        /* for the debug log */
+    char     note[160];
 } Req;
 
 static uint32_t be32(const uint8_t *p)
@@ -305,8 +316,18 @@ void rx_nfs_forget(RXNfs *n, uint32_t peer)
         *m = (Mount) { 0 };
 }
 
+static bool mounted_ever(const RXNfs *n, uint32_t peer)
+{
+    for (int i = 0; i < n->nb_ever; i++)
+        if (n->ever[i] == peer)
+            return true;
+    return false;
+}
+
 static void add_mount(RXNfs *n, uint32_t peer)
 {
+    if (!mounted_ever(n, peer) && n->nb_ever < NB_EVER)
+        n->ever[n->nb_ever++] = peer;
     Mount *m = find_mount(n, peer);
     if (!m) {
         m = &n->mounts[0];
@@ -327,6 +348,28 @@ static bool may_read(RXNfs *n, uint32_t peer)
     if (m)
         m->used = n->clock;
     return m;
+}
+
+/* Whether a peer may READ or READDIR through the handle of `node`: one
+ * that is in the table, or one that mounted in this session, is in the
+ * subnet still and reads with a handle of this session's (node >= 0),
+ * taken back in. A deck that dropped off the table (forgotten, or the
+ * oldest of NB_MOUNTS) comes back reading, never mounting again, and a
+ * refusal there would hang its load for good (an emulated CDJ-2000NXS2
+ * retried a refused READ 43 times a second for minutes, its load never
+ * ending). */
+static bool in_subnet(const RXNfsConfig *c, uint32_t peer);
+
+static bool may_read_node(RXNfs *n, uint32_t peer, int node)
+{
+    if (may_read(n, peer))
+        return true;
+    if (node < 0 || !mounted_ever(n, peer) || !in_subnet(&n->cfg, peer))
+        return false;
+    rx_info("link: %u.%u.%u.%u reads with a handle of ours: taken back in", peer >> 24,
+            peer >> 16 & 0xFF, peer >> 8 & 0xFF, peer & 0xFF);
+    add_mount(n, peer);
+    return true;
 }
 
 /* ------------------------------------------------------------------ files */
@@ -703,6 +746,7 @@ static void nfs_lookup(Req *q)
         reply_nfs(q, RX_NFSERR_NAMETOOLONG);
         return;
     }
+    snprintf(q->note, sizeof(q->note), "\"%.120s\" (%d)", len >= 0 ? name : "", len);
     int node = len <= 0 || !strcmp(name, ".") || !strcmp(name, "..") ? -1 :
                rx_vtree_lookup(q->n->tree, dir, name, (size_t)len);
     if (node < 0) {
@@ -722,15 +766,16 @@ static void nfs_read(Req *q)
     RXNfs *n = q->n;
     const uint8_t *fh = rx_rd_bytes(&q->args, RX_NFS_FHSIZE);
     uint32_t offset = rx_rd_u32(&q->args), count = rx_rd_u32(&q->args);
+    snprintf(q->note, sizeof(q->note), "offset %u count %u", offset, count);
     if (q->args.err) {
         reply_rpc(q, RX_RPC_GARBAGE_ARGS);
         return;
     }
-    if (!may_read(n, q->peer)) {
+    int node = node_of(n, fh);
+    if (!may_read_node(n, q->peer, node)) {
         reply_nfs(q, RX_NFSERR_ACCES);
         return;
     }
-    int node = node_of(n, fh);
     if (node < 0) {
         reply_nfs(q, RX_NFSERR_STALE);
         return;
@@ -751,18 +796,27 @@ static void nfs_read(Req *q)
     }
     uint32_t want = RX_MIN(RX_MIN(count, RX_NFS_MAX_READ), size - offset);
     want = (uint32_t)RX_MIN((size_t)want, (q->w.cap - READ_HEAD) & ~(size_t)3);
-    OpenFile *f = open_track(n, pt);
-    if (!f) {
+    /* A WAV made as it is read, or a file. */
+    OpenFile *f = NULL;
+    struct stat st;
+    const struct stat *sp = NULL;
+    if (pt->pcm) {
+        sp = stat_source(pt, &st);
+    } else if ((f = open_track(n, pt))) {
+        sp = &f->st;
+    }
+    if ((pt->pcm && !n->cfg.read) || (!pt->pcm && !f)) {
         reply_nfs(q, RX_NFSERR_IO);
         return;
     }
     put_accepted(&q->w, q->xid, RX_RPC_SUCCESS);
     rx_wr_u32(&q->w, RX_NFS_OK);
-    put_fattr(&q->w, n, node, &f->st);
+    put_fattr(&q->w, n, node, sp);
     size_t at = q->w.len;
     rx_wr_u32(&q->w, 0);
     uint8_t *d = rx_wr_room(&q->w, pad4(want));
-    ssize_t got = d ? pread_full(f->fd, d, want, (off_t)offset) : -1;
+    ssize_t got = !d ? -1 : pt->pcm ? n->cfg.read(n->cfg.read_opaque, pt, offset, d, want)
+                                    : pread_full(f->fd, d, want, (off_t)offset);
     if (got <= 0) {
         /* The file is shorter than the plan says, or unreadable: the
          * answer so far goes, the status alone instead. */
@@ -786,11 +840,11 @@ static void nfs_readdir(Req *q)
         reply_rpc(q, RX_RPC_GARBAGE_ARGS);
         return;
     }
-    if (!may_read(n, q->peer)) {
+    int dir = node_of(n, fh);
+    if (!may_read_node(n, q->peer, dir)) {
         reply_nfs(q, RX_NFSERR_ACCES);
         return;
     }
-    int dir = node_of(n, fh);
     if (dir < 0) {
         reply_nfs(q, RX_NFSERR_STALE);
         return;
@@ -954,6 +1008,8 @@ static bool answer(Req *q, enum RXNfsService svc, const uint8_t *req, size_t len
         return true;
     }
     q->args = rx_rd(r.p + r.pos, r.len - r.pos);
+    q->prog = prog;
+    q->proc = proc;
 
     if (prog == PROG_NLM || prog == PROG_NSM)
         return false;
@@ -981,7 +1037,16 @@ ssize_t rx_nfs_handle(RXNfs *n, enum RXNfsService svc, uint32_t peer,
         return RX_ERROR(EINVAL);
     n->clock++;
     Req q = { .n = n, .peer = peer, .w = rx_wr(reply, cap) };
-    if (!answer(&q, svc, req, len))
+    bool any = answer(&q, svc, req, len);
+    if (rx_log_level() >= RX_LOG_DEBUG) {
+        /* The accept status and the first word of the result. */
+        const uint8_t *o = q.w.p;
+        rx_debug("link: rpc %u.%u from %u.%u.%u.%u %s: %s accept %d, status %d, %zu bytes",
+                 q.prog, q.proc, peer >> 24, peer >> 16 & 0xFF, peer >> 8 & 0xFF, peer & 0xFF,
+                 q.note, any ? "" : "(no answer)", q.w.len >= 24 ? (int)be32(o + 20) : -1,
+                 q.w.len >= 28 ? (int)be32(o + 24) : -1, q.w.len);
+    }
+    if (!any)
         return 0;
     if (q.w.err)
         return RX_ERROR(ENOBUFS);

@@ -60,7 +60,8 @@ enum Sort {
     SORT_COLOR    = 15,
     SORT_PLAYS    = 16,
     SORT_ADDED    = 17,
-    NB_SORTS      = 18,
+    SORT_FILE     = 18,         /* ours: FILE NAME's order, no player asks for it */
+    NB_SORTS      = 19,
 };
 
 /* The column beside a title when the player names none: the artist, the
@@ -99,6 +100,11 @@ struct RXCatalog {
     uint32_t  *order[NB_SORTS]; /* track indices by each sort, made when first asked */
     Analysis   analysis[NB_ANALYSIS];
     uint64_t   clock;
+    int      (*check)(void *opaque, const RXPlanTrack *pt);
+    void      *check_opaque;
+    /* Every play of a track served, oldest first (load_plays). */
+    struct CatPlay { uint32_t track; int32_t day; int64_t at; int seq; } *plays;
+    int        nb_plays;
 };
 
 /* ------------------------------------------------------------- building */
@@ -155,6 +161,8 @@ static size_t stem_len(const RXTrack *t)
     return (dot && dot != base ? (size_t)(dot - base) : strlen(base)) + 1;
 }
 
+static int load_plays(RXCatalog *c);
+
 int rx_catalog_new(RXCatalog **out, RXLibrary *lib, RXPlan *plan)
 {
     *out = NULL;
@@ -207,8 +215,19 @@ int rx_catalog_new(RXCatalog **out, RXLibrary *lib, RXPlan *plan)
         ct->added = added_of(t);
         ct->played = ymd_of(t->last_played);
     }
+    if (load_plays(c) < 0) {
+        rx_catalog_free(&c);
+        return RX_ERROR(ENOMEM);
+    }
     *out = c;
     return 0;
+}
+
+void rx_catalog_set_check(RXCatalog *c, int (*check)(void *opaque, const RXPlanTrack *pt),
+                          void *opaque)
+{
+    c->check = check;
+    c->check_opaque = opaque;
 }
 
 static void analysis_clear(Analysis *a)
@@ -230,6 +249,7 @@ void rx_catalog_free(RXCatalog **cp)
         analysis_clear(&c->analysis[i]);
     free(c->stems);
     free(c->t);
+    free(c->plays);
     free(c);
     *cp = NULL;
 }
@@ -238,6 +258,57 @@ void rx_catalog_free(RXCatalog **cp)
 
 /* The plan's index of a track by id, -1 when there is none (or no
  * catalog: the service may have none between two libraries). */
+static int cmp_play(const void *a, const void *b)
+{
+    const struct CatPlay *x = a, *y = b;
+    return x->at != y->at ? (x->at < y->at ? -1 : 1) : x->seq - y->seq;
+}
+
+static int track_index(const RXCatalog *c, uint32_t id);
+
+/* The history (HISTORY): every play the library recorded of a track
+ * served, as rekordbox's keeps each session's plays; a track played
+ * before the library kept them (a last play and no row) counts that play
+ * once. A play table that does not read leaves the last plays alone. */
+static int load_plays(RXCatalog *c)
+{
+    RXPlay *p = NULL;
+    int n = 0;
+    if (!c->lib || !c->lib->db || rx_library_plays(c->lib, &p, &n) < 0)
+        n = 0;
+    bool *has = calloc((size_t)RX_MAX(c->nb, 1), sizeof(*has));
+    c->plays = malloc((size_t)RX_MAX(n + c->nb, 1) * sizeof(*c->plays));
+    if (!has || !c->plays) {
+        free(has);
+        free(p);
+        return RX_ERROR(ENOMEM);
+    }
+    for (int i = 0; i < n; i++) {
+        int k = p[i].track_id > 0 && p[i].track_id <= UINT32_MAX ? track_index(c, (uint32_t)p[i].track_id)
+                                                                  : -1;
+        if (k < 0 || p[i].played_at <= 0)
+            continue;
+        has[k] = true;
+        c->plays[c->nb_plays] = (struct CatPlay) {
+            c->plan->tracks[k].id, ymd_of(p[i].played_at), p[i].played_at, c->nb_plays,
+        };
+        c->nb_plays++;
+    }
+    for (int k = 0; k < c->nb; k++) {
+        const RXTrack *t = c->plan->tracks[k].track;
+        if (has[k] || !t || t->last_played <= 0)
+            continue;
+        c->plays[c->nb_plays] = (struct CatPlay) {
+            c->plan->tracks[k].id, ymd_of(t->last_played), t->last_played, c->nb_plays,
+        };
+        c->nb_plays++;
+    }
+    qsort(c->plays, (size_t)c->nb_plays, sizeof(*c->plays), cmp_play);
+    free(has);
+    free(p);
+    return 0;
+}
+
 static int track_index(const RXCatalog *c, uint32_t id)
 {
     if (!c)
@@ -401,6 +472,7 @@ static int cmp_by(const RXCatalog *c, int sort, const CatTrack *x, const CatTrac
                                       ty ? (uint64_t)RX_MAX(ty->play_count, 0) : 0);
     case SORT_ADDED:    return -cmp_u(tx ? (uint64_t)RX_MAX(tx->added, 0) : 0,
                                       ty ? (uint64_t)RX_MAX(ty->added, 0) : 0);
+    case SORT_FILE:     return cmp_text(x->file, y->file);
     }
     return 0;
 }
@@ -966,37 +1038,47 @@ static int playlist_tracks(RXCatalog *c, uint32_t id, int sort, RXCatMenu *m)
     return 0;
 }
 
-/* The history: rxbox keeps each track's last play (rxbox/library.h has no
- * reader of the play table), so a day's history is the tracks last played
- * that day, in the order they were, newest day first. Every row of a
- * history carries the played bit (rbxport's capture). */
+/* The histories: each day a track served was played, newest first. */
+static int history_days(RXCatalog *c, RXCatMenu *m)
+{
+    int ret = menu_alloc(m, (uint32_t)c->nb_plays, false);
+    if (ret < 0)
+        return ret;
+    m->what = RX_CAT_HISTORIES;
+    m->type = 0;
+    m->nb = 0;
+    for (int i = c->nb_plays - 1; i >= 0; i--) {
+        uint32_t day = (uint32_t)c->plays[i].day;
+        bool seen = false;
+        for (uint32_t k = 0; k < m->nb && !seen; k++)
+            seen = m->ids[k] == day;
+        if (!seen)
+            m->ids[m->nb++] = day;
+    }
+    /* Newest day first, whatever the clock did. */
+    for (uint32_t i = 1; i < m->nb; i++)
+        for (uint32_t k = i; k > 0 && m->ids[k - 1] < m->ids[k]; k--) {
+            uint32_t t = m->ids[k];
+            m->ids[k] = m->ids[k - 1];
+            m->ids[k - 1] = t;
+        }
+    return 0;
+}
+
+/* A day's history: each play that day in the order it was, a track
+ * played twice twice. Every row of a history carries the played bit
+ * (rbxport's capture). */
 static int history_tracks(RXCatalog *c, uint32_t day, int sort, RXCatMenu *m)
 {
-    uint32_t *ids = malloc((size_t)RX_MAX(c->nb, 1) * sizeof(*ids));
-    int64_t *when = malloc((size_t)RX_MAX(c->nb, 1) * sizeof(*when));
-    if (!ids || !when) {
-        free(ids);
-        free(when);
+    uint32_t *ids = malloc((size_t)RX_MAX(c->nb_plays, 1) * sizeof(*ids));
+    if (!ids)
         return RX_ERROR(ENOMEM);
-    }
     uint32_t n = 0;
-    for (int i = 0; i < c->nb; i++) {
-        const CatTrack *t = &c->t[i];
-        if (!t->played || (uint32_t)t->played != day)
-            continue;
-        uint32_t at = n++;
-        int64_t w = t->pt->track->last_played;
-        while (at > 0 && when[at - 1] > w) {
-            ids[at] = ids[at - 1];
-            when[at] = when[at - 1];
-            at--;
-        }
-        ids[at] = t->pt->id;
-        when[at] = w;
-    }
+    for (int i = 0; i < c->nb_plays; i++)
+        if ((uint32_t)c->plays[i].day == day)
+            ids[n++] = c->plays[i].track;
     int ret = own_tracks(c, ids, n, sort, RX_DB_TRACK_PLAYED, m);
     free(ids);
-    free(when);
     return ret;
 }
 
@@ -1008,10 +1090,32 @@ static int history_tracks(RXCatalog *c, uint32_t day, int sort, RXCatMenu *m)
 static int prepare_source(RXCatalog *c, RXPlanTrack *pt)
 {
     const RXTrack *t = pt->track;
+    /* A WAV made as it is read: nothing to make, unless the file will not
+     * decode that way, when the WAV is made whole now and served instead
+     * (the track info reply is the first a player hears of the file). */
+    if (pt->pcm) {
+        if (!c->check || c->check(c->check_opaque, pt) >= 0 || !t || !t->path || !c->lib)
+            return 0;
+        char *made = NULL;
+        rx_info("link: transcoding %s for a player", t->path);
+        int ret = rx_plan_transcode(c->lib, t, RX_TRANSCODE_LINK_ANY, &made);
+        if (ret < 0 || !made) {
+            rx_warn("link: transcoding %s failed: %s", t->path, strerror(ret < 0 ? -ret : ENOMEM));
+            free(made);
+            return ret < 0 ? ret : RX_ERROR(ENOMEM);
+        }
+        free(pt->source);
+        pt->source = made;
+        pt->pcm = false;
+        int64_t size = rx_file_size(made);
+        if (size > 0)
+            pt->file_size = size;
+        return 0;
+    }
     if (!t || !t->path || !pt->source || !strcmp(pt->source, t->path) || !c->lib)
         return 0;
     if (!rx_plan_transcode_fresh(t, pt->source)) {
-        for (int compat = 0; compat < 2; compat++) {
+        for (int compat = RX_TRANSCODE_PLAIN; compat <= RX_TRANSCODE_LINK_ANY; compat++) {
             char *cache = NULL;
             int max_rate = 0;
             int ret = rx_plan_transcode_path(c->lib, t, compat, false, &cache, &max_rate);
@@ -1027,6 +1131,11 @@ static int prepare_source(RXCatalog *c, RXPlanTrack *pt)
                 return ret;
             }
             free(made);
+            /* An analysis made before the file was (the preview is asked
+             * for first) lacks the MP3's frame count: made again. */
+            for (int i = 0; i < NB_ANALYSIS; i++)
+                if (c->analysis[i].id == pt->id)
+                    analysis_clear(&c->analysis[i]);
             break;
         }
     }
@@ -1084,7 +1193,9 @@ int rx_catalog_menu(RXCatalog *c, const RXDbMsg *q, RXCatMenu *m)
     case RX_DB_TRACKS:
         return list_tracks(c, &f, sort, false, 0, m);
     case RX_DB_FILE_NAMES: {
-        int ret = list_tracks(c, &f, sort, false, 0, m);
+        /* By the file's name unless a sort is asked for (an emulated
+         * CDJ-2000 got it in the titles' order, 2026-10-15). */
+        int ret = list_tracks(c, &f, sort == SORT_DEFAULT ? SORT_FILE : sort, false, 0, m);
         if (ret >= 0)
             m->what = RX_CAT_FILE_NAMES;
         return ret;
@@ -1202,8 +1313,11 @@ int rx_catalog_menu(RXCatalog *c, const RXDbMsg *q, RXCatMenu *m)
         f = (Filter) { .kind = FILTER_ADDED, .a = a2, .b = a3, .c = a4 };
         return list_tracks(c, &f, sort, false, 0, m);
 
-    case RX_DB_KEYS: {
-        /* All 24, by their ids (rbxport's capture of the KEY menu). */
+    case RX_DB_KEYS:
+    case RX_DB_KEYS_2000: {
+        /* All 24, by their ids (rbxport's capture of the KEY menu). A
+         * CDJ-2000 asks for the menu by the root row's type, not its id:
+         * the same list. */
         int ret = fixed_menu(RX_CAT_KEYS, 24, m);
         for (uint32_t i = 0; ret >= 0 && i < 24; i++)
             m->ids[i] = i + 1;
@@ -1221,6 +1335,10 @@ int rx_catalog_menu(RXCatalog *c, const RXDbMsg *q, RXCatMenu *m)
         f = (Filter) { .kind = FILTER_KEYS };
         f.nb_keys = related_keys(a2, RX_MIN(a3, 2u), f.keys);
         return list_tracks(c, &f, sort, false, 0, m);
+    case RX_DB_KEY_TRACKS_2000:
+        f = (Filter) { .kind = FILTER_KEYS };
+        f.nb_keys = related_keys(a2, 0, f.keys);
+        return list_tracks(c, &f, sort, false, 0, m);
 
     case RX_DB_PLAYLIST:
         if (a3 == 1)
@@ -1228,7 +1346,7 @@ int rx_catalog_menu(RXCatalog *c, const RXDbMsg *q, RXCatMenu *m)
         return playlist_tracks(c, a2, sort, m);
 
     case RX_DB_HISTORIES:
-        return list_values(c, V_HISTORY, &f, true, 0, RX_CAT_HISTORIES, 0, m);
+        return history_days(c, m);
     case RX_DB_HISTORY_TRACKS:
         return history_tracks(c, a2, sort, m);
 
@@ -1424,17 +1542,31 @@ static void metadata_item(const RXCatalog *c, const CatTrack *t, uint32_t row, b
     }
 }
 
-/* Track info (2102), the load (rbxport's capture): a first row shaped as a
+/* Track info (2102), the load (rbxport's capture): a first row that gives
+ * the file's type, the duration, the tempo, the comment, then the path the
+ * player reads over NFS with the file's size, a row of 1, the key.
+ *
+ * The first row's second field is the file type, rekordbox's (1 MP3, 4
+ * M4A, 5 FLAC, 11 WAV, 12 AIFF), and a player decodes the file as that: a
+ * CDJ-2000nexus serving its own USB sends 1, 4, 0xb and 0xc for an MP3,
+ * an M4A, a WAV and an AIFF (dysentery's S13-format-ground-truth capture),
+ * rekordbox sent 1 for its MP3s (rbxport's capture), and a CDJ-900 told 1
+ * for a WAV hunts through it for MPEG frames and never plays it
+ * (2026-10-14, two CDJ-900s). In the older layout the row is the nexus's,
+ * a title row and nothing more; a CDJ-3000's is rekordbox's, shaped as a
  * track row, in which rekordbox sent a copyright text the file had (rxbox
- * has none: blank), the duration, the tempo, the comment, then the path
- * the player reads over NFS with the file's size, an unknown row, the key. */
-static void info_item(const CatTrack *t, uint32_t row, RXDbItem *it)
+ * has none: blank). The 2f row is 1 for every format in both captures. */
+static void info_item(const CatTrack *t, uint32_t row, bool extended, RXDbItem *it)
 {
     const RXPlanTrack *pt = t->pt;
+    uint32_t type = (uint32_t)pt->file_type;
     switch (row) {
     case 0:
-        *it = (RXDbItem) { .a = 1, .id = 1, .type = 0x2304, .e = 0x100, .key = t->key,
-                           .art = pt->key_id, .text3 = pt->key_name, .f = t->tempo };
+        if (extended)
+            *it = (RXDbItem) { .a = 1, .id = type, .type = 0x2304, .e = 0x100, .key = t->key,
+                               .art = pt->key_id, .text3 = pt->key_name, .f = t->tempo };
+        else
+            *it = (RXDbItem) { .id = type, .type = RX_DB_ITEM_TITLE };
         break;
     case 1: *it = line(0, (uint32_t)pt->duration, "", RX_DB_ITEM_DURATION); break;
     case 2: *it = line(0, t->tempo, "", RX_DB_ITEM_TEMPO); break;
@@ -1582,7 +1714,7 @@ static bool item_of(RXCatalog *c, const RXCatMenu *m, uint32_t i, int column, bo
         if (m->what == RX_CAT_METADATA)
             metadata_item(c, &c->t[ti], i, extended, it, tx);
         else if (m->what == RX_CAT_TRACK_INFO)
-            info_item(&c->t[ti], i, it);
+            info_item(&c->t[ti], i, extended, it);
         else
             delivery_item(c, &c->t[ti], i, it);
         return true;
@@ -1592,13 +1724,13 @@ static bool item_of(RXCatalog *c, const RXCatMenu *m, uint32_t i, int column, bo
 }
 
 void rx_catalog_render(RXCatalog *c, const RXCatMenu *m, uint32_t offset, uint32_t count,
-                       int column, bool extended, uint32_t txid, RXWr *w)
+                       int column, bool extended, bool ascii, uint32_t txid, RXWr *w)
 {
     for (uint32_t i = offset; c && i < m->nb && i - offset < count; i++) {
         RXDbItem it;
         Texts tx;
         if (item_of(c, m, i, column, extended, &it, &tx))
-            rx_dbmsg_item(w, txid, &it, extended);
+            rx_dbmsg_item_ascii(w, txid, &it, extended, ascii);
     }
 }
 

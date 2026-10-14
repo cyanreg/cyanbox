@@ -16,7 +16,9 @@
  * beyond the sanitizers: a reply fits its buffer and the largest
  * datagram, carries the call's xid and decodes; a refusal is never
  * larger than the call; a peer that has not mounted never gets a file's
- * bytes; at the end, no file but the plan's is open.
+ * bytes (one that mounted before and was forgotten since may, through a
+ * handle of ours: a deck back from a lapse; one outside the subnet never
+ * can); at the end, no file but the plan's is open.
  *
  * Into the client's decoders: the server's own replies, mutated, and
  * random bytes; names round-trip through UTF-16LE.
@@ -594,11 +596,17 @@ int main(void)
             if (!below(4))
                 svc = (enum RXNfsService)below(3);
         }
-        uint32_t peer = peers[below(4) ? 0 : 1 + below(2)];
+        int who = below(4) ? 0 : 1 + (int)below(2);
+        uint32_t peer = peers[who];
         size_t cap = below(20) ? sizeof(out) : below(300);
-        bool mounted = rx_nfs_mounted(w.nfs, peer);
+        /* Mounted now, or seen mounted before (and forgotten since). */
+        static bool ever[3];
+        bool mounted = rx_nfs_mounted(w.nfs, peer) || ever[who];
+        ever[who] |= rx_nfs_mounted(w.nfs, peer);
         ssize_t n = rx_nfs_handle(w.nfs, svc, peer, req, len, out, cap);
         check_reply(req, len, n, cap, mounted, round);
+        ever[who] |= rx_nfs_mounted(w.nfs, peer);
+        CHECK(!ever[2], "round %llu: the outsider mounted", (unsigned long long)round);
         if (n > 0) {
             answered++;
             RXRd r;

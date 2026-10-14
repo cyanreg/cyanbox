@@ -142,6 +142,12 @@ typedef struct RXNfsConfig {
      * group (rbxport, 1605b376); a mount from outside it is refused. Both
      * 0: no group, nobody refused (loopback tests). */
     uint32_t addr, netmask;
+    /* The bytes of a track the plan marks `pcm` (a WAV made as it is
+     * read, src/link/wav.c), which has no file: how many it put in dst
+     * (fewer only at the end), or a negative errno. NULL: such a track
+     * reads as an I/O error. Its times are its source's. */
+    ssize_t (*read)(void *opaque, const RXPlanTrack *pt, uint64_t offset, uint8_t *dst, size_t n);
+    void    *read_opaque;
 } RXNfsConfig;
 
 int  rx_nfs_new(RXNfs **out, const RXNfsConfig *c);
@@ -155,8 +161,10 @@ void rx_nfs_set_tree(RXNfs *n, const RXVTree *t);
  * be sent (not a call, or not worth answering), or a negative errno. */
 ssize_t rx_nfs_handle(RXNfs *n, enum RXNfsService svc, uint32_t peer,
                       const uint8_t *req, size_t len, uint8_t *reply, size_t cap);
-/* Whether `peer` has mounted (and so may READ); forgetting a peer (a
- * player gone from the link) makes it mount again before it reads. */
+/* Whether `peer` has mounted (and so may READ). A peer forgotten that
+ * mounted in this session is taken back in by its next READ or READDIR
+ * with a handle of the session (a deck back from a lapse never mounts
+ * again); one that never mounted must. */
 bool rx_nfs_mounted(const RXNfs *n, uint32_t peer);
 void rx_nfs_forget(RXNfs *n, uint32_t peer);
 

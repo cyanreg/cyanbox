@@ -11,8 +11,11 @@
  *    all the same, for kernels that refuse the option; the TCP listeners
  *    and the NFS sockets are bound to the interface's address alone;
  *  - only players: the database server and NFS answer only addresses that
- *    sent a keep-alive (rx_presence_is_peer), unless `any_peer` says
- *    otherwise for a diagnostic client;
+ *    sent a keep-alive (rx_presence_is_peer), or did in the last half
+ *    hour (a deck drops off the device list after 10 s without one, and
+ *    one busy loading, or behind a switch that rebooted or a cable that
+ *    was reseated, comes back mid-load, reading on), unless `any_peer`
+ *    says otherwise for a diagnostic client;
  *  - bounded: a fixed number of connections, a cap on what a connection
  *    may have waiting to be sent before it is read no more.
  * Our own broadcasts come back to our presence sockets (Linux delivers a
@@ -50,6 +53,11 @@
 #include "net.h"
 #include "nfs.h"
 #include "presence.h"
+#include "wav.h"
+
+/* What the tracks Link serves as WAVs made as they are read may keep open
+ * (their packets, about the size of their files). */
+#define WAV_MEMORY ((size_t)1 << 30)
 
 /* Players open a connection or two each (the browser's and a load's); a
  * full network of six players and a mixer stays well inside. */
@@ -124,9 +132,14 @@ struct RXLink {
     RXCatalog *cat;
     RXVTree *tree;
     RXNfs *nfs;
+    RXLinkWav *wav;             /* the WAVs made as they are read (wav.h) */
     bool serving;               /* the NFS tree is offered (the link is up) */
     uint32_t peers[MAX_PLAYERS];    /* the addresses on the link at the last look */
     int nb_peers;
+    /* Every address that was on the link, and when last: still answered
+     * for KNOWN_FOR after it drops off (the oldest forgotten first). */
+    struct { uint32_t addr; int64_t seen; } known[MAX_PLAYERS];
+    int nb_known;
     Conn conns[MAX_CONNS];
     int nb_conns;
     uint8_t dgram[65536];
@@ -202,6 +215,9 @@ static void presence_send(void *opaque, enum RXLinkPort port, uint32_t to, const
         rx_link_send(l->fds[S_STATUS], to, l->peer.status, buf, len);
 }
 
+/* How long an address is still answered once it has dropped off. */
+#define KNOWN_FOR (30 * 60 * INT64_C(1000000))
+
 static bool admitted(RXLink *l, uint32_t peer)
 {
     if (l->any_peer)
@@ -209,7 +225,28 @@ static bool admitted(RXLink *l, uint32_t peer)
     pthread_mutex_lock(&l->plock);
     bool ok = rx_presence_is_peer(l->pres, peer);
     pthread_mutex_unlock(&l->plock);
+    int64_t now = rx_time_us();
+    for (int i = 0; !ok && i < l->nb_known; i++)
+        ok = l->known[i].addr == peer && now - l->known[i].seen < KNOWN_FOR;
     return ok;
+}
+
+static void known_seen(RXLink *l, uint32_t addr, int64_t now)
+{
+    int at = -1, old = 0;
+    for (int i = 0; i < l->nb_known && at < 0; i++)
+        if (l->known[i].addr == addr)
+            at = i;
+    if (at < 0 && l->nb_known < MAX_PLAYERS) {
+        at = l->nb_known++;
+    } else if (at < 0) {
+        for (int i = 1; i < l->nb_known; i++)
+            if (l->known[i].seen < l->known[old].seen)
+                old = i;
+        at = old;
+    }
+    l->known[at].addr = addr;
+    l->known[at].seen = now;
 }
 
 /* ------------------------------------------------------------ the library */
@@ -242,6 +279,22 @@ static bool still_wanted(void *opaque, const char *stage, int done, int total, c
 {
     RXLink *l = opaque;
     return !atomic_load(&l->stop);
+}
+
+/* The WAV of a track served so, for the catalog and NFS, both on the
+ * service thread (and the catalog's first on the starting thread, before
+ * the service thread is). */
+static int wav_check(void *opaque, const RXPlanTrack *pt)
+{
+    RXLink *l = opaque;
+    return rx_link_wav_check(l->wav, pt);
+}
+
+static ssize_t wav_read(void *opaque, const RXPlanTrack *pt, uint64_t offset, uint8_t *dst,
+                        size_t n)
+{
+    RXLink *l = opaque;
+    return rx_link_wav_read(l->wav, pt, offset, dst, n);
 }
 
 /* The library opened again, the plan over all of it, the catalog and the
@@ -282,8 +335,13 @@ static int served_build(RXLink *l, Served *s)
         if (!lib->tracks[i]->missing && lib->tracks[i]->id <= UINT32_MAX)
             tracks[nb++] = lib->tracks[i];
     }
+    /* Every track as all the players play it: as a 16-bit WAV decoded as
+     * a player reads it (wav.h), what cannot be so as a WAV made when a
+     * player loads the track; or with link.mp3 anything but an MP3 as an
+     * MP3 made then (RX_TRANSCODE_LINK). */
     ret = rx_plan_build_cb(lib, tracks, nb, (const RXPlaylist *const *)pls, nb_pls, l->name,
-                           lib->cfg.compat_transcode, RX_PLAN_STORED, s->plan, still_wanted, l);
+                           lib->cfg.link_mp3 ? RX_TRANSCODE_LINK_MP3 : RX_TRANSCODE_LINK,
+                           RX_PLAN_STORED, s->plan, still_wanted, l);
     if (ret < 0) {
         free(s->plan);
         s->plan = NULL;
@@ -292,6 +350,7 @@ static int served_build(RXLink *l, Served *s)
     if ((ret = rx_catalog_new(&s->cat, lib, s->plan)) < 0 ||
         (ret = rx_vtree_new(&s->tree, s->plan)) < 0)
         goto fail;
+    rx_catalog_set_check(s->cat, wav_check, l);
     free(tracks);
     free(pls);
     return 0;
@@ -394,6 +453,13 @@ static void conn_accept(RXLink *l, enum ConnKind kind)
             close(fd);
             return;
         }
+        /* A CDJ-900 shows only Latin-1: its typographic punctuation as
+         * ASCII, by the name its keep-alives give. */
+        pthread_mutex_lock(&l->lock);
+        for (int i = 0; i < l->nb_players; i++)
+            if (l->players[i].addr == peer && !strcmp(l->players[i].name, "CDJ-900"))
+                rx_dbsession_set_ascii(c->s, true);
+        pthread_mutex_unlock(&l->lock);
     }
     l->nb_conns++;
     rx_debug("link: %s connection from %s", kind == CONN_QUERY ? "query" : "database", a);
@@ -551,8 +617,10 @@ static void *presence_thread(void *arg)
 
 /* What follows here from the devices on the link: the tree is offered
  * once the link is up (before that rekordbox lists no export and refuses
- * mounts: rbxport's capture), and a player gone from the link must mount
- * again before it reads. */
+ * mounts: rbxport's capture), and the devices are kept as known. A
+ * device gone from the link keeps its mount: a deck back from a lapse of
+ * its keep-alives reads on and never mounts again, and a refusal hangs
+ * its load for good (an emulated CDJ-2000NXS2, 2026-10-15). */
 static void follow(RXLink *l)
 {
     uint32_t now[MAX_PLAYERS];
@@ -567,13 +635,9 @@ static void follow(RXLink *l)
         rx_nfs_set_tree(l->nfs, l->tree);
         l->serving = true;
     }
-    for (int i = 0; i < l->nb_peers; i++) {
-        bool still = false;
-        for (int k = 0; k < nb && !still; k++)
-            still = now[k] == l->peers[i];
-        if (!still)
-            rx_nfs_forget(l->nfs, l->peers[i]);
-    }
+    int64_t t = rx_time_us();
+    for (int i = 0; i < nb; i++)
+        known_seen(l, now[i], t);
     memcpy(l->peers, now, (size_t)nb * sizeof(*now));
     l->nb_peers = nb;
 }
@@ -684,6 +748,8 @@ int rx_link_start(RXLink **out, const RXLinkOptions *o)
         goto fail;
     }
 
+    if ((ret = rx_link_wav_new(&l->wav, WAV_MEMORY)) < 0)
+        goto fail;
     int64_t t0 = rx_time_us();
     Served s;
     if ((ret = served_build(l, &s)) < 0) {
@@ -699,6 +765,8 @@ int rx_link_start(RXLink **out, const RXLinkOptions *o)
         .portmap_port = l->ports.portmap,
         .addr         = l->ifc.addr,
         .netmask      = l->ifc.mask,
+        .read         = wav_read,
+        .read_opaque  = l,
     };
     if ((ret = rx_nfs_new(&l->nfs, &nc)) < 0)
         goto fail;
@@ -760,6 +828,7 @@ void rx_link_stop(RXLink **lp)
     rx_nfs_free(&l->nfs);
     Served s = { .lib = l->lib, .plan = l->plan, .cat = l->cat, .tree = l->tree };
     served_free(&s);
+    rx_link_wav_free(&l->wav);
     for (int i = 0; i < NB_SOCKS; i++) {
         if (l->fds[i] >= 0)
             close(l->fds[i]);

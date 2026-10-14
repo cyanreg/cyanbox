@@ -78,6 +78,7 @@ enum RXDbArgType {
  * 3.20, or read from rekordbox's binary. */
 enum RXDbKind {
     RX_DB_SETUP              = 0x0000,
+    RX_DB_CANCEL             = 0x0001,  /* a request given up, by its txid; no answer */
     RX_DB_TEARDOWN           = 0x0100,
 
     /* Menus: answered with RX_DB_AVAILABLE and a count, drawn by a render. */
@@ -90,6 +91,8 @@ enum RXDbKind {
     RX_DB_RATINGS            = 0x1007,
     RX_DB_DECADES            = 0x1008,
     RX_DB_LABELS             = 0x100a,
+    RX_DB_KEYS_2000          = 0x100b,  /* KEY from a CDJ-2000 (fw 4.33): its own table by
+                                           the row's type, 0x8b (an emulated one, 2026-10-15) */
     RX_DB_COLORS             = 0x100d,
     RX_DB_TIMES              = 0x1010,
     RX_DB_BITRATES           = 0x1011,
@@ -115,6 +118,8 @@ enum RXDbKind {
     RX_DB_YEAR_TRACKS        = 0x1208,
     RX_DB_LABEL_ARTIST_ALBUMS = 0x120a,
     RX_DB_KEY_TRACKS         = 0x1214,
+    RX_DB_KEY_TRACKS_2000    = 0x110b,  /* a CDJ-2000's: the key's tracks, no distances (it
+                                           takes the related keys' rows for a leaf) */
     RX_DB_SEARCH             = 0x1300,
     RX_DB_GENRE_TRACKS       = 0x1301,
     RX_DB_ORIGINALS          = 0x1302,
@@ -214,7 +219,7 @@ enum RXDbItemType {
     RX_DB_ITEM_REMIXER       = 0x29,
     RX_DB_ITEM_PLAY_COUNT    = 0x2a,
     RX_DB_ITEM_DATE_ADDED    = 0x2e,
-    RX_DB_ITEM_INFO_2F       = 0x2f,    /* track info, meaning unknown (rbxport) */
+    RX_DB_ITEM_INFO_2F       = 0x2f,    /* track info, 1 for every file, meaning unknown */
     RX_DB_ITEM_DELIVERY_36   = 0x36,    /* delivery info rows rekordbox sends empty */
     RX_DB_ITEM_DELIVERY_37   = 0x37,
     RX_DB_ITEM_DELIVERY_ID   = 0x4f,
@@ -305,6 +310,10 @@ typedef struct RXDbItem {
 } RXDbItem;
 
 void rx_dbmsg_item(RXWr *w, uint32_t txid, const RXDbItem *it, bool extended);
+/* The same with `ascii`: typographic quotes, dashes and the ellipsis as
+ * ASCII (' " - ...), for a CDJ-900, whose display turns what is not
+ * Latin-1 into '?' (an emulated one, 2026-10-15: "Don’t" as "Don?t"). */
+void rx_dbmsg_item_ascii(RXWr *w, uint32_t txid, const RXDbItem *it, bool extended, bool ascii);
 
 /* An item read back by a client: the same fields with its texts in
  * UTF-8, allocated. */

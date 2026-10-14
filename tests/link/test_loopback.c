@@ -9,9 +9,9 @@
  *  - The player announces itself; the server, which waits for a player,
  *    joins, takes 17 and lists the player.
  *  - The player browses as a CDJ-3000 does (rx_link_client_browse) and
- *    reads every track over NFS: the bytes are the file's, or for the
- *    Opus track the FLAC transcode the track info request made, at the
- *    size the track info gave.
+ *    reads every track over NFS, at the size the track info gave: each a
+ *    16-bit WAV of the file made as it is read (src/link/wav.c), the
+ *    file's samples as rx_decode has them, and nothing made on disk.
  *  - The server sees what the player loaded and that it plays.
  *  - A client that never announced itself (127.0.0.3) gets no database
  *    port and no NFS answer: the fences of docs/LINK.md, "Security".
@@ -21,6 +21,7 @@
  * libopus). The protocol details are the codecs' tests' (test_packets,
  * test_db, test_nfs); this one is about the parts working together. */
 
+#include <math.h>
 #include <stdio.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -123,30 +124,37 @@ static void quiet_line(void *opaque, const char *line)
         fprintf(stderr, "  %s\n", line);
 }
 
-/* The bytes a track's file holds: the original, or the transcode the
- * plan names, in the library's cache by the track's id (a 24-bit FLAC
- * from ffmpeg goes too, with the compatibility transcode on). */
-static bool same_as_source(uint32_t id, const char *usb_path, const uint8_t *data, size_t size)
+/* The bytes of a track's WAV: the 44-byte header of 16-bit stereo, then
+ * the samples of its file (by the name in its path) as rx_decode has them,
+ * mono doubled, within dither and rounding. */
+static bool same_as_decoded(const char *usb_path, const uint8_t *data, size_t size)
 {
-    const char *base = rx_path_base(usb_path);
-    char *cand[3] = {
-        rx_asprintf("%s/cache/transcode/%u.compat.flac", libdir, id),
-        rx_asprintf("%s/cache/transcode/%u.flac", libdir, id),
-        rx_asprintf("%s/%s", music, base),
-    };
-    bool ok = false;
-    size_t wn = 0;
-    for (int i = 0; i < 3 && !ok; i++) {
-        uint8_t *want = NULL;
-        if (cand[i] && rx_file_read(cand[i], &want, &wn) >= 0)
-            ok = wn == size && !memcmp(want, data, size);
-        free(want);
+    const char *base = NULL;
+    for (size_t i = 0; i < RX_ARRAY_ELEMS(tracks) && !base; i++) {
+        char stem[32];
+        snprintf(stem, sizeof(stem), "%.*s", (int)strcspn(tracks[i].file, "."), tracks[i].file);
+        if (strstr(usb_path, stem))
+            base = tracks[i].file;
     }
+    char *path = base ? rx_asprintf("%s/%s", music, base) : NULL;
+    RXAudio d = { 0 };
+    bool ok = path && rx_decode(path, 0, 0, &d) >= 0 && size >= 44 && !memcmp(data, "RIFF", 4) &&
+              !memcmp(data + 8, "WAVEfmt ", 8) && !memcmp(data + 36, "data", 4);
+    int64_t frames = ok ? RX_MIN((int64_t)(size - 44) / 4, d.nb_frames) : 0;
+    int64_t off = 0;
+    for (int64_t f = 0; f < frames; f++) {
+        for (int c = 0; c < 2; c++) {
+            const uint8_t *b = data + 44 + f * 4 + c * 2;
+            float x = d.samples[f * d.channels + (d.channels > 1 ? c : 0)];
+            off += fabs((int16_t)(b[0] | b[1] << 8) - (double)x * 32768.0) > 1.5;
+        }
+    }
+    ok = ok && frames > 0 && !off && llabs((int64_t)(size - 44) / 4 - d.nb_frames) < 2048;
     if (!ok)
-        fprintf(stderr, "%s: %zu bytes over NFS, no source of the track %u holds them\n",
-                usb_path, size, id);
-    for (int i = 0; i < 3; i++)
-        free(cand[i]);
+        fprintf(stderr, "%s: %zu bytes over NFS, not a WAV of %s (%lld samples off)\n", usb_path,
+                size, path ? path : "?", (long long)off);
+    rx_audio_free(&d);
+    free(path);
     return ok;
 }
 
@@ -251,9 +259,9 @@ int main(void)
         if (path)
             CHECK_EQ(rx_link_client_fetch(player, path, &data, &got), 0);
         CHECK_EQ(got, size);
-        if (path && rx_str_ends(path, ".opus"))
-            fprintf(stderr, "test_loopback: the Opus track was named as itself, not its FLAC\n"), failures++;
-        CHECK(path && data && same_as_source(rows[i].id, path, data, got));
+        if (path && !rx_str_ends(path, ".wav"))
+            fprintf(stderr, "test_loopback: served as %s\n", path), failures++;
+        CHECK(path && data && same_as_decoded(path, data, got));
         free(data);
         free(path);
     }
@@ -306,6 +314,11 @@ int main(void)
         }
     }
     CHECK(four);
+
+    /* Nothing was made on disk for it. */
+    char *cache = rx_asprintf("%s/cache/transcode", libdir);
+    CHECK(cache && !rx_file_exists(cache));
+    free(cache);
 
     rx_link_client_stop(&player);
     rx_link_stop(&link);

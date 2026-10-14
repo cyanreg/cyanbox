@@ -225,8 +225,14 @@ int      rx_library_save_track(RXLibrary *lib, RXTrack *t);
 /* Re-probes a track whose file changed (mtime); keeps grid/key/cues.
  * Without cfg.import_comment the comment the library holds stays as it is. */
 int      rx_library_refresh_track(RXLibrary *lib, RXTrack *t);
-/* Records a play now (play_count, last_played, the play table). */
+/* Records a play now (play_count, last_played, the play table), or at
+ * `when` (epoch seconds: a player's history). */
 int      rx_library_record_play(RXLibrary *lib, RXTrack *t);
+int      rx_library_record_play_at(RXLibrary *lib, RXTrack *t, int64_t when);
+/* Every play the library recorded, oldest first (ties as recorded); the
+ * array is the caller's to free. */
+typedef struct RXPlay { int64_t track_id, played_at; } RXPlay;
+int      rx_library_plays(RXLibrary *lib, RXPlay **out, int *nb);
 /* Moves a track to a new path (the file was moved by the user). */
 int      rx_library_relocate(RXLibrary *lib, RXTrack *t, const char *new_abs_path);
 

@@ -215,6 +215,26 @@ static void item_bytes(const RXDbItem *it, uint32_t txid, const char *hex, const
     rx_wr_free(&w);
 }
 
+/* An item's texts with typographic punctuation folded for a CDJ-900, the
+ * rest as they are; without the flag, all as they are. */
+static void test_ascii(void)
+{
+    RXDbItem it = { .id = 1, .text = "Don’t “stop” ‐ now…", .text2 = "凛々咲 ☆ é",
+                    .text3 = "‘a’ – b — c", .type = RX_DB_ITEM_TITLE };
+    for (int ascii = 0; ascii < 2; ascii++) {
+        RXWr w = rx_wr_dyn();
+        rx_dbmsg_item_ascii(&w, 7, &it, true, ascii);
+        RXDbMsg m;
+        RXDbRow row;
+        CHECK(rx_dbmsg_parse(w.p, w.len, 1 << 16, &m) > 0 && rx_dbrow_parse(&m, &row) == 0);
+        CHECK_STR(row.text, ascii ? "Don't \"stop\" - now..." : it.text);
+        CHECK_STR(row.text2, it.text2);
+        CHECK_STR(row.text3, ascii ? "'a' - b - c" : it.text3);
+        rx_dbrow_free(&row);
+        rx_wr_free(&w);
+    }
+}
+
 static void test_codec(void)
 {
     const char *const vectors[] = {
@@ -727,6 +747,21 @@ static void test_capture(void)
     CHECK_EQ(rx_dbsession_input(s, req.p, req.len, &out), 0);
     vn = unhex(legacy_setup_rep, vb, sizeof(vb));
     CHECK(out.len == 5 + vn && !memcmp(out.p + 5, vb, vn));
+    /* A request given up (0001 with its txid, as players send it after a
+     * preview they scrolled past): the request's answer and nothing more. */
+    size_t had = out.len;
+    rx_wr_free(&req);
+    req = rx_wr_dyn();
+    put_msg(&req, 0x3800584, RX_DB_ARTIST_ALBUMS, (const uint32_t[]) { 0x02020401, 0, 3 }, 3);
+    put_msg(&req, 0x3800584, RX_DB_CANCEL, NULL, 0);
+    put_msg(&req, 0x3800585, RX_DB_ROOT, (const uint32_t[]) { 0x02010401, 0, 0x00fdffff }, 3);
+    CHECK_EQ(rx_dbsession_input(s, req.p, req.len, &out), 0);
+    rep = (Out) { .p = out.p, .len = out.len, .pos = had };
+    CHECK(next_msg(&rep, &r) && r.txid == 0x3800584 && r.kind == RX_DB_AVAILABLE &&
+          rx_dbmsg_num(&r, 0) == RX_DB_ARTIST_ALBUMS);
+    CHECK(next_msg(&rep, &r) && r.txid == 0x3800585 && r.kind == RX_DB_AVAILABLE &&
+          rx_dbmsg_num(&r, 0) == RX_DB_ROOT);
+    CHECK_EQ(rep.pos, rep.len);
     rx_wr_free(&out);
     rx_wr_free(&req);
     rx_dbsession_free(&s);
@@ -996,9 +1031,11 @@ static int make_library(RXLibrary *lib)
         rx_waveforms_free(&w);
         rx_audio_free(&a);
     }
-    /* Played today: charlie, then alpha. */
+    /* Played today: charlie, then alpha twice; charlie three days ago. */
     RXTrack *alpha = by_file(lib, "alpha.flac"), *charlie = by_file(lib, "charlie.opus");
+    CHECK_EQ(rx_library_record_play_at(lib, charlie, now - 3 * 86400), 0);
     CHECK_EQ(rx_library_record_play(lib, charlie), 0);
+    CHECK_EQ(rx_library_record_play(lib, alpha), 0);
     CHECK_EQ(rx_library_record_play(lib, alpha), 0);
     charlie->last_played = now - 20;
     alpha->last_played = now - 10;
@@ -1249,6 +1286,12 @@ static void test_library(RXLibrary *lib, RXPlan *plan, RXCatalog **cat)
           (int64_t)size == pc->file_size);
     free(path);
     CHECK_EQ(rx_dbclient_track_info(c, 0x7fffffff, &path, &size), -ENOENT);
+    /* The file's type in the first row's id, a FLAC's 5 for alpha (and a
+     * player decodes the file as that); 1 in the 2f row, whatever it is. */
+    CHECK_EQ(rx_dbclient_menu(c, RX_DB_TRACK_INFO, 8, &alpha, 1, &rows, &n), 0);
+    CHECK(n == 7 && pa->file_type == 5 && rows[0].type == 0x2304 && rows[0].id == 5 &&
+          rows[5].type == RX_DB_ITEM_INFO_2F && rows[5].id == 1);
+    rx_dbrows_free(&rows, n);
 
     /* Artwork: by the track's id in the row, both sizes; none for bravo,
      * in rekordbox's no-art shape; an album's by its row's id. */
@@ -1456,13 +1499,25 @@ static void test_library(RXLibrary *lib, RXPlan *plan, RXCatalog **cat)
     rx_dbrows_free(&rows, n);
     menu_ids(c, RX_DB_KEY_TRACKS, 2, IDS(0, 15, 0), IDS(alpha), "key, distance 0");
     menu_ids(c, RX_DB_KEY_TRACKS, 2, IDS(0, 15, 1), IDS(alpha, charlie), "key, distance 1");
+    /* A CDJ-2000's key menu: two levels, the keys (0x100b), then a key's
+     * tracks (0x110b), no distances. */
+    CHECK_EQ(rx_dbclient_menu(c, RX_DB_KEYS_2000, 1, IDS(0), &rows, &n), 0);
+    CHECK(n == 24 && !strcmp(rows[14].text, "Am"));
+    rx_dbrows_free(&rows, n);
+    menu_ids(c, RX_DB_KEY_TRACKS_2000, 2, IDS(0, 15), IDS(alpha), "a 2000's key");
+    /* Every play: two days, today first; today charlie, then alpha twice
+     * (as rekordbox's history keeps each play); charlie's other day. */
     CHECK_EQ(rx_dbclient_menu(c, RX_DB_HISTORIES, 1, IDS(0), &rows, &n), 0);
-    CHECK(n == 1 && rows[0].type == 0x24 && rx_str_starts(rows[0].text, "HISTORY 20"));
-    uint32_t day = n ? rows[0].id : 0;
+    CHECK(n == 2 && rows[0].type == 0x24 && rx_str_starts(rows[0].text, "HISTORY 20") &&
+          rows[0].id > rows[1].id);
+    uint32_t day = n ? rows[0].id : 0, before = n == 2 ? rows[1].id : 0;
     rx_dbrows_free(&rows, n);
     CHECK_EQ(rx_dbclient_menu(c, RX_DB_HISTORY_TRACKS, 2, IDS(0, day), &rows, &n), 0);
-    CHECK(n == 2 && rows[0].id == charlie && rows[1].id == alpha && rows[0].flags == RX_DB_TRACK_PLAYED &&
-          rows[1].d == 2);
+    CHECK(n == 3 && rows[0].id == charlie && rows[1].id == alpha && rows[2].id == alpha &&
+          rows[0].flags == RX_DB_TRACK_PLAYED && rows[2].d == 3);
+    rx_dbrows_free(&rows, n);
+    CHECK_EQ(rx_dbclient_menu(c, RX_DB_HISTORY_TRACKS, 2, IDS(0, before), &rows, &n), 0);
+    CHECK(n == 1 && rows[0].id == charlie);
     rx_dbrows_free(&rows, n);
 
     /* The categories. */
@@ -1517,8 +1572,11 @@ static void test_library(RXLibrary *lib, RXPlan *plan, RXCatalog **cat)
     menu_ids(c, RX_DB_ADDED_DAYS, 2, IDS(0, y, mo), IDS(RX_DB_ALL, d), "added days");
     menu_ids(c, RX_DB_ADDED_DAYS, 2, IDS(0, y, RX_DB_ALL), IDS(RX_DB_ALL), "added days, all months");
     menu_ids(c, RX_DB_ADDED_TRACKS, 2, IDS(0, y, mo, RX_DB_ALL), IDS(alpha, bravo, charlie, delta), "added tracks");
+    /* FILE NAME: by the file's name, whatever the titles say. */
     CHECK_EQ(rx_dbclient_menu(c, RX_DB_FILE_NAMES, 1, IDS(0), &rows, &n), 0);
     CHECK(n == 4 && !strcmp(rows[0].text, rx_path_base(pa->usb_path)));
+    for (int i = 1; i < n; i++)
+        CHECK(rx_strcasecmp(rows[i - 1].text, rows[i].text) <= 0);
     rx_dbrows_free(&rows, n);
 
     /* Unknown requests, and writes refused. */
@@ -1559,6 +1617,12 @@ static void test_library(RXLibrary *lib, RXPlan *plan, RXCatalog **cat)
     rx_dbrows_free(&rows, n);
     CHECK_EQ(rx_dbclient_menu(c, RX_DB_TRACKS, 1, IDS(12), &rows, &n), 0);
     CHECK(n == 4 && rows[1].id == alpha && rows[1].type == 0x0f04 && !strcmp(rows[1].text2, "Am"));
+    rx_dbrows_free(&rows, n);
+    /* Track info's first row as a CDJ-2000nexus sends it: a title row, the
+     * file type its id and nothing else (dysentery's S13 capture). */
+    CHECK_EQ(rx_dbclient_menu(c, RX_DB_TRACK_INFO, 8, &alpha, 1, &rows, &n), 0);
+    CHECK(n == 7 && rows[0].type == RX_DB_ITEM_TITLE && rows[0].id == 5 && !rows[0].a &&
+          !rows[0].e && !rows[0].key && rows[5].id == 1);
     rx_dbrows_free(&rows, n);
     close_pair(&sv, &c);
 }
@@ -1874,11 +1938,62 @@ static void test_stored(RXLibrary *lib)
     same_plans(lib);
 }
 
+/* Link's plan (RX_TRANSCODE_LINK): every track a 16-bit stereo WAV made
+ * as it is read, named .wav, its file the track's own and nothing made.
+ * When the check at track info refuses one (here charlie), the WAV is made
+ * as a file then and served instead, at its own size; the rest make none. */
+static int refuse_charlie(void *opaque, const RXPlanTrack *pt)
+{
+    return rx_str_ends(pt->source, "charlie.opus") ? RX_ERROR(ENOTSUP) : 0;
+}
+
+static void test_link_plan(RXLibrary *lib)
+{
+    RXPlan p;
+    CHECK_EQ(rx_plan_build_cb(lib, lib->tracks, lib->nb_tracks, NULL, 0, NULL, RX_TRANSCODE_LINK,
+                              RX_PLAN_STORED, &p, NULL, NULL), 0);
+    for (int i = 0; i < p.nb_tracks; i++) {
+        const RXPlanTrack *t = &p.tracks[i];
+        CHECK(t->pcm && rx_str_ends(t->usb_path, ".wav") && t->file_type == 11 &&
+              !strcmp(t->source, t->track->path) && t->total_samples == t->track->total_samples &&
+              t->file_size == 44 + 4 * t->total_samples && t->bit_rate == t->sample_rate * 32 / 1000);
+    }
+    RXCatalog *cat = NULL;
+    CHECK_EQ(rx_catalog_new(&cat, lib, &p), 0);
+    if (cat) {
+        rx_catalog_set_check(cat, refuse_charlie, NULL);
+        Server sv;
+        RXDbClient *c = open_pair(&sv, &cat, true);
+        uint32_t alpha = (uint32_t)by_file(lib, "alpha.flac")->id;
+        uint32_t charlie = (uint32_t)by_file(lib, "charlie.opus")->id;
+        const RXPlanTrack *pa = plan_track(&p, alpha), *pc = plan_track(&p, charlie);
+        char *path = NULL;
+        uint64_t size = 0;
+        CHECK(c && rx_dbclient_track_info(c, alpha, &path, &size) == 0);
+        CHECK(path && !strcmp(path, pa->usb_path) && pa->pcm && (int64_t)size == pa->file_size);
+        free(path);
+        path = NULL;
+        CHECK(c && rx_dbclient_track_info(c, charlie, &path, &size) == 0);
+        CHECK(path && !strcmp(path, pc->usb_path) && !pc->pcm &&
+              rx_str_ends(pc->source, ".link.wav") && rx_file_exists(pc->source) &&
+              (int64_t)size == rx_file_size(pc->source) && pc->file_size == (int64_t)size);
+        free(path);
+        if (c)
+            close_pair(&sv, &c);
+        char *made = rx_asprintf("%s/cache/transcode/%u.link.wav", libdir, alpha);
+        CHECK(made && !rx_file_exists(made));
+        free(made);
+    }
+    rx_catalog_free(&cat);
+    rx_plan_free(&p);
+}
+
 /* ---------------------------------------------------------------- main */
 
 int main(void)
 {
     test_codec();
+    test_ascii();
     test_capture();
     test_large();
 
@@ -1901,6 +2016,7 @@ int main(void)
         return failures ? test_result("test_db") : 77;
     }
     test_stored(&lib);
+    test_link_plan(&lib);
     RXPlan plan;
     CHECK_EQ(rx_plan_build_cb(&lib, lib.tracks, lib.nb_tracks, NULL, 0, NULL, false,
                               RX_PLAN_STORED, &plan, NULL, NULL), 0);

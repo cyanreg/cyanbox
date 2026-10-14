@@ -8,7 +8,8 @@ also say what they have loaded and whether it plays, which rxbox can show
 and count as plays.
 
 The players: those with an Ethernet port that speak standard PRO DJ LINK,
-such as the CDJ-3000 and the CDJ-3000X, over Ethernet and nothing else.
+such as the CDJ-3000 and the CDJ-3000X, and the older ones down to the
+CDJ-900, over Ethernet and nothing else.
 
 ## Status (2026-10-14)
 
@@ -19,13 +20,63 @@ interface for as long as it runs with `--pro-link` (the PRO DJ LINK
 window, src/app/link.c and src/ui/link_view.cpp), the interface counts a
 track of ours that a player plays for 30 s as a play,
 and `rxbox link browse -i IF [HOST]` is a fake CDJ-3000 that joins,
-browses, loads a track and reads it as a player does. Not yet: a run
-against a player on Ethernet (step 7), writes from the deck (step 8).
+browses, loads a track and reads it as a player does. Step 7 has begun:
+two CDJ-900s on Ethernet (2026-10-14) joined, mounted the library,
+browsed it and played its MP3s from it. Not yet: a WAV played on one
+(section 4), a CDJ-3000, writes from the deck (step 8).
+
+What the CDJ-900s showed, and what changed for it (`rxbox-cli -v link
+serve` logs every request, NFS call and unknown packet):
+
+- Announcing to the interface's broadcast address as the kernel reported
+  it sent everything to ourselves when the address had been added
+  without one (glibc then gives the address itself): only the subnet's
+  own broadcast address is taken now (src/link/net.c).
+- They set up the older way (one argument), take twelve-argument rows,
+  send 0xd0-byte statuses with no beat number, and read files in 2 kB
+  NFS READs.
+- The track info reply's first row names the file's type, and a player
+  decodes the file as that (section 4).
+- Scrolling a list, a player previews the row under the cursor and gives
+  the preview up with `0001` and that request's txid; a CDJ-2000nexus
+  answers nothing to it (dysentery's captures), and now rxbox neither.
+
+Then emulated players running Pioneer's own firmware (a CDJ-900 v4.32, a
+CDJ-2000 v4.33, a CDJ-2000NXS2 v1.87; 2026-10-15) showed:
+
+- A deck that drops off the device list (no keep-alive for 10 s: a deck
+  busy loading, a switch that rebooted, a cable reseated) and comes back
+  mid-load reads on and never mounts again; refused, an NXS2 retried the
+  READ 43 times a second for minutes and never finished loading. Now an
+  address that was on the link is answered for half an hour after it
+  dropped off, its mount is kept, and a deck that mounted in this session
+  and reads with a handle of it is taken back in (nfs.c, may_read_node).
+- Text in NFD (a kana and its dakuten apart, as tags written on macOS
+  hold it) reached a CDJ-2000 as two characters. The library keeps all
+  its text in NFC now (src/common/utf8.c; existing text is converted as
+  it opens, src/core/clean.c), so the stick and Link give out NFC.
+- A CDJ-900 shows Latin-1 only, everything else as '?' (CJK too, as it
+  does for rekordbox). For its sessions (by the keep-alive's name)
+  typographic quotes, dashes and the ellipsis go as ASCII
+  (rx_dbmsg_item_ascii): "Don’t" as "Don't", not "Don?t".
+- A CDJ-900 accepts the WAV made as it is read (16-bit stereo, 44.1 or
+  48 kHz, the plain 44-byte header): a LOOKUP per path component, a
+  GETATTR, 2 kB at 0 for the header, then 9408-byte READs (four CD
+  sectors). How fast it reads ahead is not known yet: the emulated one
+  read whole tracks at once, likely because its emulated DSP reports no
+  buffer levels.
+- A CDJ-2000's key menu has two levels of its own: `0x100b`, the keys
+  (not `0x1014`), and `0x110b`, a key's tracks (given the related keys'
+  rows, it took them for a leaf and asked nothing more). It reads a WAV
+  as the CDJ-900 does. FILE NAME lists by the file's name now, not the
+  title.
 
 What has been run against what:
 
 | Server | Client | Network | Result |
 | --- | --- | --- | --- |
+| rxbox | two CDJ-900s | Ethernet, a switch, 169.254.0.0/16 | join, mount, browse, the library's MP3s played; WAVs decoded as MP3 until the file type was named |
+| rxbox | emulated CDJ-900, CDJ-2000, CDJ-2000NXS2 (Pioneer's firmware in QEMU) | a bridge, 169.254.0.0/16 | join, mount, browse every category, metadata, waveforms, cues, a load streamed over NFS; the lapse, NFD, CDJ-900 punctuation and CDJ-2000 KEY findings above |
 | rxbox | rxbox's fake player | loopback, ports of their own (`test_loopback`) | join, browse, every track's bytes (transcodes too), the player's status, the fences, a library change |
 | rxbox | rxbox's fake player | two network namespaces, rekordbox's ports (`tests/link/netns_test.sh`) | the same through the CLI, real broadcasts; the Ethernet interface found by the server, two served at once on the same ports, one of them only once its address came |
 | rxbox's app | rxbox's fake player | loopback (`test_link`) | refused without `--pro-link`, on the link before any player, the player and its load seen, 30 s of play recorded, the library read again after it, off, off right after on |
@@ -57,13 +108,14 @@ tree; `emu_fixture DIR` makes its three-track library and
 `RBXPORT_OPTIONS=DIR/options.json serve rxa` serves it.
 
 **Known limits.** A track info request for a track whose transcode is not
-made yet makes it there and then, on the service thread: the database and
-NFS wait for it (seconds), presence does not (its own thread, so the
-keep-alives go on), and stopping Link (quitting) waits for it too.
-HISTORY lists each track by the day it was last
-played (the library has no reader for the play table yet). A player
-reading a file is not told when the library changes under it; handles
-name tracks by id, so it keeps reading.
+made yet (with `link.mp3`, or for what cannot be decoded as it is read:
+section 4) makes it there and then, on the service thread: the database
+and NFS wait for it (seconds), presence does not (its own thread, so the
+keep-alives go on), and stopping Link (quitting) waits for it too. HISTORY lists every play
+the library recorded, by day (rx_library_plays), and a track played
+before the library kept plays by its last play. A player reading a file
+is not told when the library changes under it; handles name tracks by
+id, so it keeps reading.
 
 ## Sources and how far they are proven
 
@@ -190,13 +242,60 @@ path, never by a name a player sent.
 
 ### 4. Files players cannot decode
 
-A player reads the file as it is. What the export transcodes is served
-the same way: a codec no player reads (`rx_plan_codec_playable` refuses
-it: Opus, Vorbis …) as FLAC, and with the compatibility transcode on, AAC
-and hi-res FLAC as 16-bit FLAC. The file named is the export's transcode
-in the library's cache (`rx_plan_transcode`), made when Link starts for
-the tracks that need one, or at the latest before the track-info reply
-names it.
+A player reads the file as it is, and decodes it as the format the track
+info reply names: the second field of its first row is the file type,
+rekordbox's numbers (1 MP3, 4 M4A, 5 FLAC, 11 WAV, 12 AIFF). A
+CDJ-2000nexus serving its own USB sends 1, 4, 11 and 12 there for an MP3,
+an M4A, a WAV and an AIFF (dysentery's `S13-format-ground-truth`
+capture); a CDJ-900 told 1 for a WAV reads the last 128 bytes for an
+ID3v1 tag, then hunts through the whole file for MPEG frames and never
+plays (2026-10-14, two CDJ-900s; rxbox sent 1 for every file until then,
+copied from a rekordbox capture of MP3s). The `2f` row after the path is
+1 for every format in both captures.
+
+So Link serves every track in one form every Ethernet player reads, from
+the CDJ-900 to the CDJ-3000X, and names its type: a 16-bit stereo WAV,
+made from the track's own file as a player reads it (src/link/wav.c).
+Nothing is made ahead and nothing is written to disk: a read is mapped
+onto the frames it covers, the WAV's 44-byte header and 4 bytes a frame,
+and those frames are decoded then through the packet store the decks
+play from (rxbox/audio.h), which starts any range from enough packets
+before it for the decoder to give what a continuous decode gives
+(exactly for FLAC, PCM, ALAC and MP3; within 1e-7 for Opus and AAC). So
+a player plays the very samples the beat grid and the cues were made on,
+whatever the codec: no encoder delay to guess for MP3 or AAC, no VBR
+index for a player to get wrong. MP3s are served so too.
+
+- 16-bit lossless sources go through bit for bit; 24-bit, float and
+  lossy ones get one step of triangular dither drawn from each sample's
+  place, so the same bytes come back however often and in whatever order
+  a player reads them. Mono is doubled.
+- The WAV is the plan's length, the frames the library counted when it
+  probed the file (silence after the file's end, nothing past it): its
+  size is known at the track info reply and never changes under a
+  player, reloads included.
+- On this machine a 2 kB read takes 10 to 16 µs, a 32 kB one 0.15 to
+  0.25 ms, a jump (a hot cue) 0.25 to 0.4 ms, the first read of a track
+  (opening it) 1 to 4 ms; a 13-minute FLAC reads through 790 times faster
+  than it plays. A few tracks are kept open (1 GiB of packets at most),
+  the least recently read closed first.
+- What the packet store cannot place sample for sample (Matroska, which
+  keeps milliseconds), above 48 kHz or of more than two channels is made
+  as a WAV file when a player loads it (`RX_TRANSCODE_LINK`,
+  `rx_transcode_wav`, in the library's cache as `ID.link.wav`), as is a
+  track the WAV cannot be made of after all (the track info request
+  checks: `RX_TRANSCODE_LINK_ANY`).
+
+With the `link.mp3` setting it is a 320 kbps CBR MP3 instead, everything
+but an MP3 (`RX_TRANSCODE_LINK_MP3`, `rx_transcode_mp3`), made whole when
+a player loads the track: no tags, no cover, no Xing/LAME frame, and the
+encoder's delay cut from the start of the audio fed to it, so the file as
+a player decodes it lines up with the source and the grid and cues stay
+right (`test_transcode` checks the clicks of its signal to 2 samples).
+A CDJ-900 played the library's own MP3s at once; whether it plays the
+WAVs now that their type is named has not been tried on one yet.
+
+The USB export is not changed by any of this: it keeps FLAC.
 
 ## Security
 
@@ -220,9 +319,11 @@ Link is on:
   is one with only the players on it: a direct cable or a switch of their
   own.
 - **From whom**: the database server and NFS answer only addresses that
-  are players on Link (they send keep-alives on 50000). UDP sources can
-  be forged, so this is a fence against casual access, not
-  authentication; TCP's cannot be, so it holds for the database server.
+  are players on Link (they send keep-alives on 50000), or were in the
+  last half hour (a deck back from a lapse of its keep-alives must not
+  find itself refused mid-load). UDP sources can be forged, so this is a
+  fence against casual access, not authentication; TCP's cannot be, so
+  it holds for the database server.
 - **What is parsed**: every datagram and message is read by a bounded
   reader that checks each length against what arrived before it reads,
   allocates nothing from a length a peer sent, and answers what it does
@@ -234,8 +335,8 @@ Link is on:
   (random and mutated datagrams, with AddressSanitizer and
   UndefinedBehaviorSanitizer) as part of the tests.
 - **Amplification**: replies to unknown or malformed requests are no
-  larger than the request; READ answers only handles from a mount made
-  from the same address.
+  larger than the request; READ answers only an address that mounted in
+  this session, in the subnet, with a handle of the session.
 
 ## In rxbox
 

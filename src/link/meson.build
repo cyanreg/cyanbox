@@ -15,7 +15,7 @@ link_nfs_src      = files('vtree.c', 'nfs.c', 'nfsclient.c')
 
 rx_link_lib = static_library('rx_link',
     link_wire_src + link_presence_src + link_db_src + link_nfs_src +
-    files('net.c', 'service.c', 'set.c', 'client.c'),
+    files('net.c', 'service.c', 'set.c', 'client.c', 'wav.c'),
     include_directories: rx_inc,
     dependencies: [ rx_export_dep, rx_analysis_dep, threads_dep ],
 )
@@ -75,6 +75,15 @@ fuzz_link_nfs = executable('fuzz_link_nfs',
 test('fuzz-nfs', fuzz_link_nfs, suite: 'link', timeout: 300,
      env: { 'ASAN_OPTIONS': link_asan, 'UBSAN_OPTIONS': link_ubsan,
             'RX_TEST_DIR': link_test_dir / 'fuzz-nfs' })
+
+# -------------------------------------------------------------------- WAVs
+# Link's WAVs made as they are read, on files the ffmpeg CLI makes.
+wav_test_env = environment()
+wav_test_env.set('RX_TEST_DIR', link_test_dir / 'wav')
+test_link_wav = executable('test_link_wav',
+    files('../../tests/link/test_wav.c', 'wav.c') + link_wire_src,
+    include_directories: rx_inc, dependencies: [ rx_export_dep, rx_analysis_dep ])
+test('wav', test_link_wav, suite: 'link', env: wav_test_env, timeout: 120)
 
 # ---------------------------------------------------------------- loopback
 # The service and the fake player on loopback, with ports of their own.

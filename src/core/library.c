@@ -1462,9 +1462,13 @@ end:
 
 int rx_library_record_play(RXLibrary *lib, RXTrack *t)
 {
+    return rx_library_record_play_at(lib, t, rx_time_now());
+}
+
+int rx_library_record_play_at(RXLibrary *lib, RXTrack *t, int64_t now)
+{
     if (rx_library_index_of(lib, t) < 0)
         return RX_ERROR(ENOENT);
-    int64_t now = rx_time_now();
     int ret = rx_db_begin(lib->db);
     if (ret < 0)
         return ret;
@@ -1487,8 +1491,38 @@ int rx_library_record_play(RXLibrary *lib, RXTrack *t)
     if (ret < 0)
         return ret;
     t->play_count++;
-    t->last_played = now;
+    t->last_played = RX_MAX(t->last_played, now);
     lib->generation++;
+    return 0;
+}
+
+int rx_library_plays(RXLibrary *lib, RXPlay **out, int *nb)
+{
+    *out = NULL;
+    *nb = 0;
+    sqlite3_stmt *st = NULL;
+    if (sqlite3_prepare_v2(lib->db->db, "SELECT track_id, played_at FROM play "
+                           "ORDER BY played_at, rowid", -1, &st, NULL) != SQLITE_OK)
+        return RX_ERROR(EIO);
+    RXArray a;
+    rx_array_init(&a, sizeof(RXPlay));
+    int r, ret = 0;
+    while ((r = sqlite3_step(st)) == SQLITE_ROW) {
+        RXPlay p = { sqlite3_column_int64(st, 0), sqlite3_column_int64(st, 1) };
+        if (!rx_array_push(&a, &p)) {
+            ret = RX_ERROR(ENOMEM);
+            break;
+        }
+    }
+    if (ret >= 0 && r != SQLITE_DONE)
+        ret = RX_ERROR(EIO);
+    sqlite3_finalize(st);
+    if (ret < 0) {
+        rx_array_free(&a);
+        return ret;
+    }
+    *out = a.data;
+    *nb = (int)a.nb;
     return 0;
 }
 

@@ -81,7 +81,7 @@ static int wanted(RXLinkSet *s, Want *w)
         if (!ifs[i].addr)
             continue;
         w[nb] = (Want) { .addr = ifs[i].addr };
-        snprintf(w[nb].name, sizeof(w[nb].name), "%s", ifs[i].name);
+        snprintf(w[nb].name, sizeof(w[nb].name), "%.*s", (int)sizeof(w[nb].name) - 1, ifs[i].name);
         nb++;
     }
     return nb;
@@ -141,7 +141,8 @@ static void rescan(RXLinkSet *s)
         if (due && i < 0) {
             i = s->nb++;
             s->served[i] = (Served) { .addr = want[k].addr };
-            snprintf(s->served[i].name, sizeof(s->served[i].name), "%s", want[k].name);
+            snprintf(s->served[i].name, sizeof(s->served[i].name), "%.*s",
+                     (int)sizeof(s->served[i].name) - 1, want[k].name);
             qsort(s->served, (size_t)s->nb, sizeof(*s->served), served_order);
             i = find(s, want[k].name);
         }

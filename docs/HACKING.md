@@ -96,23 +96,23 @@ The style is the one of the user's libcraw and avtransport, exactly:
 
 ```
 include/rxbox/    module interfaces (owned by the architecture, edit with care)
-src/common        common.c log.c thread.c                             -> rx_common_dep
+src/common        common.c log.c thread.c utf8.c nfc_tables.h         -> rx_common_dep
 src/audio         decode.c probe.c mp3.c flac.c artwork.c             -> rx_audio_dep (common)
-                  transcode.c packets.c internal.h
+                  encode.c transcode.c packets.c internal.h
 src/core          model.c grid.c db.c library.c playlist.c config.c   -> rx_core_dep (common, audio)
                   notation.c wavestore.c core.h
 src/analysis      spectrum.c onset.c tempo.c grid_fit.c downbeat.c    -> rx_analysis_dep (core, compute)
                   walk.c start.c beats.c beats_internal.h key.c
                   waveform.c analysis.c
 src/formats       pdb.c anlz.c onelibrary.c sqlcipher.c sha512.h settings.c colors.c util.c (+ buf.h formats_priv.h nfc_tables.h) -> rx_formats_dep
-                  colors.c util.c buf.h formats_priv.h nfc_tables.h
+                  colors.c util.c buf.h formats_priv.h
 src/export        plan.c export.c inspect.c stick.c export_priv.h     -> rx_export_dep
 src/link          packet.c presence.c (UDP presence) dbmsg.c catalog.c -> rx_link_dep (export, analysis)
                   dbserver.c dbclient.c (the database server) vtree.c
                   nfs.c nfsclient.c (NFS over a virtual tree) net.c
                   service.c (one interface's threads) set.c (every Ethernet
-                  interface) client.c (the fake player)
-                  wire.c link_priv.h (docs/LINK.md)
+                  interface) client.c (the fake player) wav.c (the
+                  WAVs made as they are read) wire.c link_priv.h (docs/LINK.md)
 src/player        player.c pipewire.c nullout.c deck.c feed.c         -> rx_player_dep (core)
                   controls.c stretch.cpp stretch.h player_internal.h
 src/app           jobs.c app.c                                        -> rx_app_dep (everything above,
