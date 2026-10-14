@@ -171,11 +171,10 @@ typedef struct RXLibrary {
 } RXLibrary;
 
 /* Opens (creating when absent) the library at `root` (NULL = default),
- * migrates the schema if needed, loads every track and playlist, checks
- * which audio files are missing (stat; such tracks are kept, flagged
- * `missing` and shown greyed out; they come back when the file does).
- * Settings an older rxbox kept elsewhere move to the My Settings that now
- * hold them, once (src/core/config.c, rx_core_config_migrate). */
+ * converts one of schema 8 (src/core/db.c), loads every track and
+ * playlist, checks which audio files are missing (stat; such tracks are
+ * kept, flagged `missing` and shown greyed out; they come back when the
+ * file does). */
 int  rx_library_open(RXLibrary *lib, const char *root);
 void rx_library_close(RXLibrary *lib);
 /* Re-checks `missing` on every track (also called by open). Returns how

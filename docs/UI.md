@@ -442,10 +442,7 @@ it at once.
   load cues), hot cue colour (pads and badges in the cues' colours or the
   default pad colours) and play mode (continue plays on into the next
   track of any view at the end; a playlist being viewed always plays
-  through). An older library's `ui.wave_palette`, and the key
-  notation its View menu kept in `export.key_notation`, become
-  `device.waveform_color` and `device.key_display` once when it opens.
-  Everything else is written to the stick only, meaning nothing to rxbox:
+  through). Everything else is written to the stick only, meaning nothing to rxbox:
   on air display, LCD brightness, language, the jog ring's brightness and
   indicator, jog mode, vinyl speed adjust, the jog display and jog LCD
   brightness, slip flashing, disc slot illumination, eject/load lock,

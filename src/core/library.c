@@ -748,9 +748,6 @@ int rx_library_open(RXLibrary *lib, const char *root)
         ret = rx_library_rescan_missing(lib);
     if (ret < 0)
         goto fail;
-    /* A library that cannot be written keeps its old keys and opens. */
-    if (rx_core_config_migrate(lib) < 0)
-        rx_warn("could not move the old interface settings to the device settings");
     /* What is not valid, or not known, goes (clean.c); then the pages it
      * and earlier removals freed go back to the file system. */
     rx_core_clean(lib);

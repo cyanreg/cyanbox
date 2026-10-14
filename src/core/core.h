@@ -116,10 +116,8 @@ void rx_db_rollback(RXDb *db);
 
 /* -------------------------------------------------------------- library */
 
-/* Settings <-> RXConfig (config.c), called by open. Migrate runs after the
- * load's read transaction, in one of its own. */
+/* Settings <-> RXConfig (config.c), called by open. */
 int  rx_core_config_load(RXLibrary *lib);
-int  rx_core_config_migrate(RXLibrary *lib);
 /* Removes setting rows whose value their key does not take and keys
  * rxbox does not know (not RXConfig's, not My Settings, not the
  * interface's ui.* or the sync's sync.*), counting them in *removed. */
