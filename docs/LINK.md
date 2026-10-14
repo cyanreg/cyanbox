@@ -64,7 +64,9 @@ CDJ-2000 v4.33, a CDJ-2000NXS2 v1.87; 2026-10-15) showed:
   typographic and CJK punctuation as its nearest Latin-1, other scripts
   through ICU. Names with readings of their own come out by their
   ordinary readings (小鳥遊 is not "Takanashi"); a kanji the dictionary
-  has no reading for stays a '?'.
+  has no reading for gets its on'yomi from Unicode's Unihan ("秋奈" as
+  "Akina", "夜一夜の戰" as "Yoru Ichiya no Sen"). Rows are cut at 63
+  bytes by the player itself (its main processor's limit).
 - A CDJ-900 accepts the WAV made as it is read (16-bit stereo, 44.1 or
   48 kHz, the plain 44-byte header): a LOOKUP per path component, a
   GETATTR, 2 kB at 0 for the header, then 9408-byte READs (four CD
