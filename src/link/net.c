@@ -110,9 +110,16 @@ int rx_link_if_find(RXLinkIf *out, const char *name, const char *address, const 
             inet = true;
             out->addr = ipv4_of(i->ifa_addr);
             out->mask = i->ifa_netmask ? ipv4_of(i->ifa_netmask) : 0xFFFFFFFF;
+            /* The kernel's broadcast address only when it is this subnet's:
+             * an address added without one (`ip addr add A/16 dev X`, no
+             * `brd`) has none, and glibc then puts the address itself
+             * there, which would send every announcement to ourselves
+             * (seen with two CDJ-900s on 169.254.0.0/16). */
             if ((i->ifa_flags & IFF_BROADCAST) && i->ifa_broadaddr) {
-                out->bcast = ipv4_of(i->ifa_broadaddr);
-                has_bcast = true;
+                uint32_t b = ipv4_of(i->ifa_broadaddr);
+                has_bcast = b && b != out->addr && (b & out->mask) == (out->addr & out->mask);
+                if (has_bcast)
+                    out->bcast = b;
             }
         } else if (i->ifa_addr->sa_family == AF_PACKET) {
             const struct sockaddr_ll *ll = (const struct sockaddr_ll *)i->ifa_addr;
