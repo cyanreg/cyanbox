@@ -143,8 +143,12 @@ static const char usage_text[] =
     "                           analysis and file; HOST, else the computer source heard\n"
     "      -n, --number N       the player number to use (default 3)\n"
     "      -t, --track ID       the track to load (default the first)\n"
+    "      --name NAME          the model it says it is (default CDJ-3000)\n"
     "      --quiet              do not announce on the link (needs HOST)\n"
-    "      --hold SEC           stay on the link SEC seconds after loading, playing\n"
+    "      --hold SEC           wait for a source that long; once loaded, stay on the\n"
+    "                           link SEC seconds, playing: the beat number and tempo\n"
+    "                           from the track's grid, and any track the source\n"
+    "                           tells it to load (Load in deck) played the same way\n"
     "\n"
     "  A TRACK is an audio file in the library (any path to it), a folder (every\n"
     "  library track under it) or a library id.\n"
@@ -2678,24 +2682,49 @@ static int link_serve(Cli *cli, const RXLinkOptions *opt)
 
 /* A fake player against a server: what rbxport's browse example does, and
  * the after-load requests. */
+// Holding: plays what is loaded, the first track and every one the
+// source tells it to load, until `hold` seconds have passed.
+static void link_hold(RXLinkClient *c, long hold)
+{
+    int64_t end = rx_time_us() + (int64_t)hold * 1000000;
+    uint32_t played = 0;
+    while (rx_time_us() < end) {
+        int device, slot;
+        uint32_t id;
+        rx_link_client_loaded(c, &device, &slot, &id);
+        if (id && id != played) {
+            int nb = rx_link_client_play(c, id);
+            if (nb >= 0)
+                printf("playing track %u (%d beats)\n", id, nb);
+            else
+                printf("track %u: no beat grid (%s); playing without beat numbers\n", id,
+                       strerror(-nb));
+            fflush(stdout);
+            played = id;
+        }
+        usleep(100000);
+    }
+}
+
 static int link_browse(const RXLinkClientOptions *o, uint32_t track, long hold)
 {
     RXLinkClient *c;
     int ret = rx_link_client_start(&c, o);
     if (ret < 0)
         return fail("cannot start a player on %s: %s", o->interface, strerror(-ret));
-    printf("player %d on %s, waiting for a source\n", o->number, o->interface);
+    printf("player %d (%s) on %s, waiting for a source\n", o->number, o->name, o->interface);
     fflush(stdout);
     uint32_t addr;
     int number;
-    if ((ret = rx_link_client_wait_source(c, 20000, &addr, &number)) < 0) {
+    int wait_ms = hold > 0 ? (int)RX_MIN(hold * 1000, (long)INT32_MAX) : 20000;
+    if ((ret = rx_link_client_wait_source(c, wait_ms, &addr, &number)) < 0) {
         rx_link_client_stop(&c);
         return fail("no computer source answered on %s", o->interface);
     }
     ret = rx_link_client_browse(c, track, print_line, NULL);
     fflush(stdout);
     if (ret >= 0 && hold > 0)
-        sleep((unsigned)hold);
+        link_hold(c, hold);
     rx_link_client_stop(&c);
     if (ret < 0)
         return fail("browsing failed: %s", strerror(-ret));
@@ -2736,6 +2765,10 @@ static int cmd_link(Cli *cli, int argc, char **argv)
         } else if ((r = opt_value(cli, argc, argv, &i, "-t", "--track", &val))) {
             if (r < 0 || !parse_count(val, UINT32_MAX, &track))
                 return usage_error(cli, "link: --track takes a track id");
+        } else if ((r = opt_value(cli, argc, argv, &i, NULL, "--name", &val))) {
+            if (r < 0 || strlen(val) > 20)
+                return usage_error(cli, "link: --name takes a model name, 20 characters at most");
+            copt.name = val;
         } else if (is_option(cli, argv[i])) {
             return usage_error(cli, "link: unknown option %s", argv[i]);
         } else if (!sub) {
@@ -2784,7 +2817,7 @@ static const struct {
     { "init",     cmd_init,     "init [DIR]" },
     { "playlist", cmd_playlist, "playlist list|create|add|remove|delete|import|export ..." },
     { "link",     cmd_link,     "link serve [-i IF] [--any-peer] [--wait] | "
-                                "link browse -i IF [-n N] [-t ID] [--hold SEC] [--quiet] [HOST]" },
+                                "link browse -i IF [-n N] [-t ID] [--name NAME] [--hold SEC] [--quiet] [HOST]" },
 };
 
 static int cli_run(int argc, char **argv)

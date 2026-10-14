@@ -245,6 +245,65 @@ void rx_link_client_set_loaded(RXLinkClient *c, int device, int slot, uint32_t t
     pthread_mutex_unlock(&c->lock);
 }
 
+void rx_link_client_loaded(RXLinkClient *c, int *device, int *slot, uint32_t *track_id)
+{
+    *device = *slot = 0;
+    *track_id = 0;
+    if (!c->pres)
+        return;
+    pthread_mutex_lock(&c->lock);
+    rx_presence_loaded(c->pres, device, slot, track_id);
+    pthread_mutex_unlock(&c->lock);
+}
+
+static uint32_t le32_at(const uint8_t *p, size_t size, size_t off)
+{
+    return off + 4 <= size ? (uint32_t)p[off] | (uint32_t)p[off + 1] << 8 |
+                             (uint32_t)p[off + 2] << 16 | (uint32_t)p[off + 3] << 24 : 0;
+}
+
+int rx_link_client_play(RXLinkClient *c, uint32_t track)
+{
+    if (!c->pres)
+        return RX_ERROR(EINVAL);
+    uint8_t *blob = NULL;
+    size_t size = 0;
+    int ret = 0;
+    /* Twice: a connection to a server that has since restarted fails, and
+     * a new one is made. */
+    for (int attempt = 0; attempt < 2; attempt++) {
+        int err = 0;
+        RXDbClient *db = rx_link_client_db(c, &err);
+        ret = db ? rx_dbclient_blob(db, RX_DB_GRID, track, &blob, &size) : err;
+        if (ret >= 0)
+            break;
+        if (db)
+            rx_dbclient_close(&c->db);
+    }
+    /* The beat grid as served (catalog.c, rx_catalog_grid): 20 bytes, the
+     * count at 4; then 16 bytes a beat, its tempo x100 at 2 and its time
+     * in ms at 4, little-endian. */
+    uint32_t nb = ret >= 0 ? le32_at(blob, size, 4) : 0;
+    nb = (uint32_t)RX_MIN((uint64_t)nb, size >= 20 ? (size - 20) / 16 : 0);
+    uint32_t *ms = nb ? malloc(nb * sizeof(*ms)) : NULL;
+    uint16_t *bpm = nb ? malloc(nb * sizeof(*bpm)) : NULL;
+    if (nb && (!ms || !bpm))
+        ret = RX_ERROR(ENOMEM);
+    for (uint32_t i = 0; ret >= 0 && i < nb; i++) {
+        bpm[i] = (uint16_t)(blob[20 + i * 16 + 2] | blob[20 + i * 16 + 3] << 8);
+        ms[i] = le32_at(blob, size, 20 + i * 16 + 4);
+    }
+    if (ret >= 0) {
+        pthread_mutex_lock(&c->lock);
+        ret = rx_presence_play(c->pres, ms, bpm, (int)nb, rx_time_us());
+        pthread_mutex_unlock(&c->lock);
+    }
+    free(ms);
+    free(bpm);
+    free(blob);
+    return ret < 0 ? ret : (int)nb;
+}
+
 /* NFS from the source's portmap, mounted at "/" as rekordbox exports. */
 static int nfs_open(RXLinkClient *c)
 {

@@ -19,8 +19,11 @@ they come and go, from the CLI (`rxbox link serve`) and from the
 interface for as long as it runs with `--pro-link` (the PRO DJ LINK
 window, src/app/link.c and src/ui/link_view.cpp), the interface counts a
 track of ours that a player plays for 30 s as a play,
-and `rxbox link browse -i IF [HOST]` is a fake CDJ-3000 that joins,
-browses, loads a track and reads it as a player does. Step 7 has begun:
+and `rxbox link browse -i IF [HOST]` is a fake CDJ-3000 (or any model:
+`--name CDJ-2000NXS2`) that joins, browses, loads a track and reads it as
+a player does; with `--hold` it then stays, playing: its status says the
+beat number and tempo from the track's grid, and a track the source tells
+it to load is played the same way. Step 7 has begun:
 two CDJ-900s on Ethernet (2026-10-14) joined, mounted the library,
 browsed it and played its MP3s from it. Not yet: a WAV played on one
 (section 4), a CDJ-3000, writes from the deck (step 8).

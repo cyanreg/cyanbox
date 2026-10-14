@@ -135,6 +135,14 @@ struct RXPresence {
     int  track_device, track_slot;
     uint32_t track_id;
     bool playing;
+    /* What the fake player plays (rx_presence_play): its track's beats,
+     * in ms and tempo x100, played from play_from on, and where it
+     * stopped at the end; none: no beat number in its status. */
+    uint32_t *beat_ms;
+    uint16_t *beat_bpm;
+    int      nb_beats;
+    int64_t  play_from;
+    int64_t  stopped_ms;
 
     struct {
         enum SourceStep step;
@@ -358,7 +366,7 @@ static void send_status(RXPresence *p)
 /* The fake player's status, to each address on the link once: players
  * send theirs straight to each device that announces itself (djl-analysis
  * vcdj.adoc, "Creating a Virtual CDJ"). */
-static void send_cdj_status(RXPresence *p)
+static void send_cdj_status(RXPresence *p, int64_t now)
 {
     bool loaded = p->track_device != 0;
     RXPktStatus s = {
@@ -370,6 +378,26 @@ static void send_cdj_status(RXPresence *p)
         .playing      = loaded && p->playing,
         .beat         = -1,
     };
+    /* Playing its beats: the beat number reached (0 before the first),
+     * the tempo there; it stops two seconds after the last. */
+    if (loaded && p->nb_beats > 0) {
+        int64_t pos = p->playing ? (now - p->play_from) / MS : p->stopped_ms;
+        int64_t end = (int64_t)p->beat_ms[p->nb_beats - 1] + 2000;
+        if (p->playing && pos > end) {
+            p->playing = s.playing = false;
+            p->stopped_ms = pos = end;
+        }
+        int lo = 0, hi = p->nb_beats;
+        while (lo < hi) {
+            int mid = (lo + hi) / 2;
+            if ((int64_t)p->beat_ms[mid] <= pos)
+                lo = mid + 1;
+            else
+                hi = mid;
+        }
+        s.beat = lo;
+        s.bpm_x100 = p->beat_bpm[lo ? lo - 1 : 0];
+    }
     memcpy(s.name, p->c.name, sizeof(s.name));
     uint8_t buf[RX_PKT_MAX];
     RXWr w = rx_wr(buf, sizeof(buf));
@@ -582,7 +610,7 @@ static void tick_player(RXPresence *p, int64_t now)
         p->next_keep_alive = later(p->next_keep_alive, CDJ_KEEP_ALIVE, now);
     }
     if (now >= p->next_status) {
-        send_cdj_status(p);
+        send_cdj_status(p, now);
         p->next_status = later(p->next_status, STATUS_EVERY, now);
     }
     if (p->src.step == SRC_NONE) {
@@ -967,8 +995,10 @@ int rx_presence_new(RXPresence **out, const RXPresenceConfig *c, RXPresenceSend 
 
 void rx_presence_free(RXPresence **p)
 {
-    if (!p)
+    if (!p || !*p)
         return;
+    free((*p)->beat_ms);
+    free((*p)->beat_bpm);
     free(*p);
     *p = NULL;
 }
@@ -1064,6 +1094,39 @@ void rx_presence_set_loaded(RXPresence *p, int track_device, int slot, uint32_t 
     p->track_slot = RX_CLAMP(slot, 0, 0xff);
     p->track_id = track_id;
     p->playing = playing;
+    p->nb_beats = 0;
+}
+
+void rx_presence_loaded(const RXPresence *p, int *device, int *slot, uint32_t *track_id)
+{
+    *device = p->track_device;
+    *slot = p->track_slot;
+    *track_id = p->track_id;
+}
+
+int rx_presence_play(RXPresence *p, const uint32_t *beat_ms, const uint16_t *bpm_x100, int nb,
+                     int64_t now)
+{
+    uint32_t *ms = nb > 0 ? malloc((size_t)nb * sizeof(*ms)) : NULL;
+    uint16_t *bpm = nb > 0 ? malloc((size_t)nb * sizeof(*bpm)) : NULL;
+    if (nb > 0 && (!ms || !bpm)) {
+        free(ms);
+        free(bpm);
+        return RX_ERROR(ENOMEM);
+    }
+    if (nb > 0) {
+        memcpy(ms, beat_ms, (size_t)nb * sizeof(*ms));
+        memcpy(bpm, bpm_x100, (size_t)nb * sizeof(*bpm));
+    }
+    free(p->beat_ms);
+    free(p->beat_bpm);
+    p->beat_ms = ms;
+    p->beat_bpm = bpm;
+    p->nb_beats = RX_MAX(nb, 0);
+    p->play_from = now;
+    p->stopped_ms = 0;
+    p->playing = p->track_device != 0;
+    return 0;
 }
 
 int rx_presence_load(RXPresence *p, int player, uint32_t track_id)

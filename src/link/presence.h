@@ -89,9 +89,18 @@ bool rx_presence_is_peer(const RXPresence *p, uint32_t addr);
 /* The devices heard, players first by number. */
 int  rx_presence_players(const RXPresence *p, RXLinkPlayer *out, int max);
 
-/* RX_PRESENCE_PLAYER: what the fake player's status says from now on. */
+/* RX_PRESENCE_PLAYER: what the fake player's status says from now on
+ * (and no beats: see rx_presence_play); what it says it has loaded, as
+ * set or as a load command left it. */
 void rx_presence_set_loaded(RXPresence *p, int track_device, int slot, uint32_t track_id,
                             bool playing);
+void rx_presence_loaded(const RXPresence *p, int *device, int *slot, uint32_t *track_id);
+/* RX_PRESENCE_PLAYER: the fake player plays its loaded track from `now`,
+ * whose beats these are (the beat grid's times in ms and tempos x100):
+ * its status says the beat number reached and the tempo there, as a
+ * nexus player's does, until two seconds past the last, where it stops. */
+int  rx_presence_play(RXPresence *p, const uint32_t *beat_ms, const uint16_t *bpm_x100, int nb,
+                      int64_t now);
 
 /* RX_PRESENCE_COMPUTER: tells `player` to load our track `track_id` (a
  * load command, 19, as from rekordbox: our collection's slot, type 1).
