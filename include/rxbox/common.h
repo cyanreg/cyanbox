@@ -56,6 +56,21 @@ void rx_log_set_sink(rx_log_sink sink, void *opaque);
 
 /* ------------------------------------------------------------------ strings */
 
+/* UTF-8 (src/common/utf8.c). rx_utf8_next decodes one code point and
+ * advances, an invalid byte giving U+FFFD and advancing by one (Python's
+ * decode(errors="replace")); rx_utf8_put encodes one into buf (4 bytes of
+ * room) and returns its length; rx_utf8_length counts code points. */
+uint32_t rx_utf8_next(const char **p);
+int      rx_utf8_put(char *buf, uint32_t c);
+size_t   rx_utf8_length(const char *s);
+/* Invalid bytes replaced by U+FFFD, then Unicode NFC (Unicode 16): every
+ * text rxbox keeps or gives out. Allocated; NULL when out of memory. */
+char    *rx_utf8_nfc(const char *s);
+/* Whether s is NFC already (what rx_utf8_nfc would give back). */
+bool     rx_utf8_is_nfc(const char *s);
+/* Whether s is UTF-8 throughout. */
+bool     rx_utf8_valid(const char *s);
+
 /* Duplicates (NULL in -> NULL out). Returns NULL on ENOMEM. */
 char *rx_strdup(const char *s);
 char *rx_strndup(const char *s, size_t n);

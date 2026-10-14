@@ -1,6 +1,6 @@
 # common: helpers, logging, threads. Depends on nothing else in rxbox.
 rx_common_lib = static_library('rx_common',
-    files('common.c', 'log.c', 'thread.c'),
+    files('common.c', 'log.c', 'thread.c', 'utf8.c'),
     include_directories: rx_inc,
     dependencies: [ m_dep, threads_dep ],
 )

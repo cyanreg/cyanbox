@@ -16,20 +16,15 @@
 
 /* ------------------------------------------------------------------ text */
 
-/* Decodes one code point and advances; an invalid byte gives U+FFFD and
- * advances by one (what dj's decode(errors="replace") does). */
-uint32_t rx_utf8_next(const char **p);
-/* Appends the UTF-8 encoding of `c` to buf (4 bytes room), returns length. */
-int      rx_utf8_put(char *buf, uint32_t c);
+/* UTF-8 itself and NFC: rxbox/common.h (rx_utf8_next, rx_utf8_put,
+ * rx_utf8_length, rx_utf8_nfc). */
 /* UTF-16 code units of a UTF-8 string (surrogate pairs above the BMP). */
 int      rx_utf8_to_utf16(const char *s, uint16_t **units, size_t *nb);
 /* Allocating conversions from UTF-16 bytes; lone surrogates become U+FFFD. */
 char    *rx_utf16le_to_utf8(const uint8_t *p, size_t bytes);
 char    *rx_utf16be_to_utf8(const uint8_t *p, size_t bytes);
-/* Number of code points. */
-size_t   rx_utf8_length(const char *s);
 /* Invalid bytes replaced by U+FFFD, then Unicode NFC: dj's _clean(). */
-char    *rx_utf8_clean_nfc(const char *s);
+static inline char *rx_utf8_clean_nfc(const char *s) { return rx_utf8_nfc(s); }
 /* zlib's crc32(). */
 uint32_t rx_crc32(uint32_t crc, const void *data, size_t size);
 

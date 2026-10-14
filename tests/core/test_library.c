@@ -653,7 +653,13 @@ static void test_clean(void)
         "INSERT OR REPLACE INTO setting VALUES ('bogus.key', '1');"
         "INSERT OR REPLACE INTO setting VALUES ('ui.columns', 'title');"
         "INSERT OR REPLACE INTO setting VALUES ('sync.history.x', '1:0');"
-        "INSERT OR REPLACE INTO setting VALUES ('export.pdb', 'false');";
+        "INSERT OR REPLACE INTO setting VALUES ('export.pdb', 'false');"
+        /* Text in NFD, as tags written on macOS hold it: b's title
+         * "ヘ+゙ージュ" and artist "Cafe+́", a cue's name, a playlist's. */
+        "UPDATE track SET title = 'ヘ\xe3\x82\x99ージュ', artist = 'Cafe\xcc\x81' WHERE id = 2;"
+        "UPDATE cue SET name = 'シ\xe3\x82\x99ャ' WHERE track_id = 2;"
+        "INSERT INTO playlist (parent_id, name, is_folder, position) "
+        "VALUES (NULL, 'おやすみヘ\xe3\x82\x99ージュ', 0, 0);";
     CHECK(sqlite3_exec(s, sql, NULL, NULL, NULL) == SQLITE_OK);
     for (int i = 0; i < RX_TRACK_COLORS; i++) {
         char *ins = rx_asprintf("INSERT INTO track (id, path, hue) "
@@ -689,7 +695,15 @@ static void test_clean(void)
             CHECK(b->meta.hue == 120.0 && b->meta.rating == 3 && !strcmp(b->key, "Am"));
             CHECK(b->grid.nb_sections == 1 && b->grid.sections[0].bpm == 128.0);
             CHECK(b->nb_cues == 1 && rx_cue_is_loop(&b->cues[0]));
+            /* NFC, as the second open finds it in the database too. */
+            CHECK(b->meta.title && !strcmp(b->meta.title, "ベージュ"));
+            CHECK(b->meta.artist && !strcmp(b->meta.artist, "Café"));
+            CHECK(b->nb_cues == 1 && !strcmp(b->cues[0].name, "ジャ"));
         }
+        bool named = false;
+        for (int i = 0; i < lib.root_folder->nb_playlists; i++)
+            named |= !strcmp(lib.root_folder->playlists[i]->name, "おやすみベージュ");
+        CHECK(named);
         char *v = NULL;
         CHECK(rx_library_setting_get(&lib, "analysis.snap_bpm", &v) == RX_ERROR(ENOENT));
         CHECK(lib.cfg.snap_bpm);
@@ -706,6 +720,21 @@ static void test_clean(void)
         CHECK(rx_library_check(&lib) == 0);
         rx_library_close(&lib);
     }
+
+    /* The database keeps the playlist's name NFC too. */
+    CHECK(sqlite3_open(db, &s) == SQLITE_OK);
+    sqlite3_stmt *st = NULL;
+    CHECK(sqlite3_prepare_v2(s, "SELECT count(*) FROM playlist WHERE name = 'おやすみベージュ'", -1,
+                             &st, NULL) == SQLITE_OK && sqlite3_step(st) == SQLITE_ROW &&
+          sqlite3_column_int(st, 0) == 1);
+    sqlite3_finalize(st);
+    sqlite3_close(s);
+
+    /* What is set from now on is NFC as it is set. */
+    RXMeta m = { 0 };
+    CHECK(rx_meta_set(&m.title, "Cafe\xcc\x81") == 0 && !strcmp(m.title, "Café"));
+    CHECK(rx_meta_add_tag(&m, "e\xcc\x81") == 0 && rx_meta_add_tag(&m, "é") == 0 && m.nb_tags == 1);
+    rx_meta_free(&m);
 
     free(db);
     test_rm_rf(dir);

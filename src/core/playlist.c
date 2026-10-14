@@ -37,7 +37,7 @@ static RXPlaylist *playlist_new(int64_t id, const char *name)
     if (!p)
         return NULL;
     p->id = id;
-    p->name = rx_strdup(name);
+    p->name = rx_utf8_valid(name) ? rx_utf8_nfc(name) : rx_strdup(name);
     if (!p->name) {
         free(p);
         return NULL;
@@ -60,7 +60,7 @@ static RXPlaylistFolder *folder_new(int64_t id, const char *name)
     if (!f)
         return NULL;
     f->id = id;
-    f->name = rx_strdup(name);
+    f->name = rx_utf8_valid(name) ? rx_utf8_nfc(name) : rx_strdup(name);
     if (!f->name) {
         free(f);
         return NULL;
@@ -513,7 +513,7 @@ RXPlaylist *rx_library_playlist_create(RXLibrary *lib, RXPlaylistFolder *in, con
 
     int ret = rx_db_begin(lib->db);
     if (ret >= 0) {
-        int64_t id = insert_row(lib, in->id, name, false, in->nb_playlists);
+        int64_t id = insert_row(lib, in->id, p->name, false, in->nb_playlists);
         p->id = id;
         ret = finish(lib, id < 0 ? (int)id : 0);
     }
@@ -543,7 +543,7 @@ RXPlaylistFolder *rx_library_folder_create(RXLibrary *lib, RXPlaylistFolder *in,
 
     int ret = rx_db_begin(lib->db);
     if (ret >= 0) {
-        int64_t id = insert_row(lib, in->id, name, true, in->nb_folders);
+        int64_t id = insert_row(lib, in->id, f->name, true, in->nb_folders);
         f->id = id;
         ret = finish(lib, id < 0 ? (int)id : 0);
     }
@@ -560,7 +560,7 @@ static int rename_row(RXLibrary *lib, int64_t id, char **field, const char *name
 {
     if (!name_ok(name))
         return RX_ERROR(EINVAL);
-    char *copy = rx_strdup(name);
+    char *copy = rx_utf8_valid(name) ? rx_utf8_nfc(name) : rx_strdup(name);
     if (!copy)
         return RX_ERROR(ENOMEM);
     sqlite3_stmt *st = rx_db_stmt(lib->db, RX_STMT_PLAYLIST_RENAME);

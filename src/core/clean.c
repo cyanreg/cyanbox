@@ -24,6 +24,10 @@
  *  - A cover (artwork) no track has: gone. The triggers remove a cover
  *    with its last track; this takes what they could not have seen (a
  *    library edited by hand).
+ *  - Text that is not NFC (tags written on macOS, or a library older than
+ *    the rule; src/common/utf8.c): made NFC, the same text, in the track's
+ *    texts and tags, its cue names, and the playlists' and folders' names.
+ *    Kept NFD, a kana and its dakuten reach a player as two characters.
  *  - Settings: config.c's rx_core_config_clean (a value its key does not
  *    take, a key rxbox does not know), and for My Settings the formats
  *    module's rx_settings_clean, called by the CLI and the app after the
@@ -35,6 +39,7 @@
 #include "core.h"
 
 #include <math.h>
+#include <stdio.h>
 
 #include "rxbox/colors.h"
 #include "rxbox/notation.h"
@@ -92,7 +97,7 @@ static bool cue_known(const RXTrack *t, const RXCue *c)
 }
 
 typedef struct Counts {
-    int colours, grids, cues, keys, probabilities, tracks;
+    int colours, grids, cues, keys, probabilities, texts, tracks;
 } Counts;
 
 /* Removes what `t` holds that is not valid; true when anything went. */
@@ -170,9 +175,57 @@ static bool clean_track(RXTrack *t, Counts *n)
         changed = true;
     }
 
+    int texts = rx_meta_normalise(&t->meta), file_texts = rx_meta_normalise(&t->file_meta);
+    for (int i = 0; i < t->nb_cues; i++) {
+        char *name = t->cues[i].name[0] && rx_utf8_valid(t->cues[i].name) &&
+                     !rx_utf8_is_nfc(t->cues[i].name)
+                     ? rx_utf8_nfc(t->cues[i].name) : NULL;
+        if (name) {
+            snprintf(t->cues[i].name, sizeof(t->cues[i].name), "%s", name);
+            free(name);
+            texts++;
+        }
+    }
+    if (texts > 0 || file_texts > 0) {
+        rx_debug("library: track %llu: %d text%s made NFC", id, RX_MAX(texts, 0) + RX_MAX(file_texts, 0),
+                 RX_MAX(texts, 0) + RX_MAX(file_texts, 0) == 1 ? "" : "s");
+        n->texts += RX_MAX(texts, 0) + RX_MAX(file_texts, 0);
+        changed = true;
+    }
+
     if (changed)
         n->tracks++;
     return changed;
+}
+
+/* The playlists' and folders' names as the database keeps them, NFC (the
+ * tree in memory is so already: playlist.c). */
+static int clean_playlist_names(RXLibrary *lib)
+{
+    sqlite3_stmt *sel = NULL, *upd = NULL;
+    int n = 0;
+    if (sqlite3_prepare_v2(lib->db->db, "SELECT id, name FROM playlist", -1, &sel, NULL) != SQLITE_OK ||
+        sqlite3_prepare_v2(lib->db->db, "UPDATE playlist SET name = ?2 WHERE id = ?1", -1, &upd,
+                           NULL) != SQLITE_OK) {
+        sqlite3_finalize(sel);
+        return 0;
+    }
+    while (sqlite3_step(sel) == SQLITE_ROW) {
+        const char *name = (const char *)sqlite3_column_text(sel, 1);
+        if (!name || !rx_utf8_valid(name) || rx_utf8_is_nfc(name))
+            continue;
+        char *nfc = rx_utf8_nfc(name);
+        if (!nfc)
+            break;
+        sqlite3_bind_int64(upd, 1, sqlite3_column_int64(sel, 0));
+        sqlite3_bind_text(upd, 2, nfc, -1, SQLITE_TRANSIENT);
+        n += sqlite3_step(upd) == SQLITE_DONE;
+        sqlite3_reset(upd);
+        free(nfc);
+    }
+    sqlite3_finalize(sel);
+    sqlite3_finalize(upd);
+    return n;
 }
 
 int rx_core_clean(RXLibrary *lib)
@@ -205,6 +258,11 @@ int rx_core_clean(RXLibrary *lib)
     int settings = 0;
     if (rx_core_config_clean(lib, &settings) < 0)
         rx_warn("library: the settings that are not valid could not be removed");
+    int names = clean_playlist_names(lib);
+    if (n.texts || names)
+        rx_info("library: %d text%s of %d track%s and %d playlist name%s made NFC", n.texts,
+                n.texts == 1 ? "" : "s", n.tracks, n.tracks == 1 ? "" : "s", names,
+                names == 1 ? "" : "s");
 
     if (n.tracks || covers || settings) {
         rx_info("library: removed what was not valid: %d colour%s none of the eight, %d grid%s, "

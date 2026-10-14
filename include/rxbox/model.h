@@ -221,7 +221,10 @@ typedef struct RXMeta {
 /* Frees the strings and tags and leaves an empty RXMeta with no hue. */
 void rx_meta_free(RXMeta *m);
 int  rx_meta_copy(RXMeta *dst, const RXMeta *src);
-int  rx_meta_set(char **field, const char *value);     /* takes a copy; NULL clears */
+int  rx_meta_set(char **field, const char *value);     /* takes a copy, in NFC; NULL clears */
+/* Every text in NFC (an older library's, or tags from macOS): how many
+ * texts changed, or a negative errno. */
+int  rx_meta_normalise(RXMeta *m);
 int  rx_meta_add_tag(RXMeta *m, const char *tag);
 void rx_meta_clear_tags(RXMeta *m);
 bool rx_meta_has_tag(const RXMeta *m, const char *tag);

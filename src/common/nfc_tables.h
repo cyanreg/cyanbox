@@ -1,14 +1,14 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
-/* Unicode 16.0 tables for NFC (util.c), generated with Python's
+/* Unicode 16.0 tables for NFC (utf8.c), generated with Python's
  * unicodedata (unidata 16.0.0): every canonical decomposition (code point,
  * first, second or 0), the primary composites (first, second, composite,
  * composition exclusions left out), and the runs of non-zero canonical
  * combining class. Hangul syllables are composed algorithmically and are
  * not listed. dj normalises stick paths to NFC (export.py _clean). */
 
-#ifndef RXBOX_FORMATS_NFC_TABLES_H
-#define RXBOX_FORMATS_NFC_TABLES_H
+#ifndef RXBOX_COMMON_NFC_TABLES_H
+#define RXBOX_COMMON_NFC_TABLES_H
 
 #include <stdint.h>
 
@@ -887,4 +887,4 @@ static const NfcTriple nfc_combining[] = {
     { 0x1E94A, 0x1E94A, 7 },
 };
 
-#endif /* RXBOX_FORMATS_NFC_TABLES_H */
+#endif /* RXBOX_COMMON_NFC_TABLES_H */

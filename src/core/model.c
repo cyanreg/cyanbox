@@ -84,17 +84,57 @@ void rx_meta_free(RXMeta *m)
     *m = (RXMeta) { .hue = RX_HUE_NONE };
 }
 
+/* Text is kept in NFC (src/common/utf8.c says why); bytes that are not
+ * UTF-8 (a title from a file's name, which Linux keeps as bytes) as
+ * they are. */
+static char *nfc_copy(const char *s)
+{
+    return rx_utf8_valid(s) ? rx_utf8_nfc(s) : rx_strdup(s);
+}
+
+static bool needs_nfc(const char *s)
+{
+    return s && rx_utf8_valid(s) && !rx_utf8_is_nfc(s);
+}
+
 int rx_meta_set(char **field, const char *value)
 {
     char *copy = NULL;
     if (value && *value) {
-        copy = rx_strdup(value);
+        copy = nfc_copy(value);
         if (!copy)
             return RX_ERROR(ENOMEM);
     }
     free(*field);
     *field = copy;
     return 0;
+}
+
+int rx_meta_normalise(RXMeta *m)
+{
+    int changed = 0;
+    for (size_t i = 0; i < RX_ARRAY_ELEMS(meta_string_offsets); i++) {
+        char **f = meta_string(m, (int)i);
+        if (!needs_nfc(*f))
+            continue;
+        char *n = rx_utf8_nfc(*f);
+        if (!n)
+            return RX_ERROR(ENOMEM);
+        free(*f);
+        *f = n;
+        changed++;
+    }
+    for (int i = 0; i < m->nb_tags; i++) {
+        if (!needs_nfc(m->tags[i]))
+            continue;
+        char *n = rx_utf8_nfc(m->tags[i]);
+        if (!n)
+            return RX_ERROR(ENOMEM);
+        free(m->tags[i]);
+        m->tags[i] = n;
+        changed++;
+    }
+    return changed;
 }
 
 int rx_meta_copy(RXMeta *dst, const RXMeta *src)
@@ -142,9 +182,11 @@ int rx_meta_add_tag(RXMeta *m, const char *tag)
 {
     if (!tag || !*tag)
         return RX_ERROR(EINVAL);
-    if (rx_meta_has_tag(m, tag))
+    char *copy = nfc_copy(tag);
+    if (copy && rx_meta_has_tag(m, copy)) {
+        free(copy);
         return 0;
-    char *copy = rx_strdup(tag);
+    }
     if (!copy)
         return RX_ERROR(ENOMEM);
     char **tags = realloc(m->tags, (size_t)(m->nb_tags + 1) * sizeof(*tags));

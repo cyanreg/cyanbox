@@ -359,6 +359,29 @@ static int remove_entry(const char *path, const struct stat *st, int flag, struc
     return remove(path);
 }
 
+/* NFC (src/common/utf8.c): what a CDJ-2000 got of three titles (a kana
+ * and its dakuten apart), Latin, Hangul, what is NFC already, and bytes
+ * that are not UTF-8. */
+static void test_nfc(void)
+{
+    static const struct { const char *in, *out; } v[] = {
+        { "ヘ\xe3\x82\x99ージュ", "ベージュ" },
+        { "シ\xe3\x82\x99", "ジ" },
+        { "好きき\xe3\x82\x99て", "好きぎて" },
+        { "Cafe\xcc\x81 cre\xcc\x80me", "Café crème" },
+        { "\xe1\x84\x92\xe1\x85\xa1\xe1\x86\xab", "한" },
+        { "ハッピーエンド 凛々咲 ☆ ’", "ハッピーエンド 凛々咲 ☆ ’" },
+        { "a\xff" "b", "a\xef\xbf\xbd" "b" },
+        { "", "" },
+    };
+    for (size_t i = 0; i < RX_ARRAY_ELEMS(v); i++) {
+        char *n = rx_utf8_nfc(v[i].in);
+        CHECK(n && !strcmp(n, v[i].out), "nfc %zu: %s", i, n ? n : "(null)");
+        CHECK(rx_utf8_is_nfc(v[i].in) == !strcmp(v[i].in, v[i].out), "is_nfc %zu", i);
+        free(n);
+    }
+}
+
 int main(void)
 {
     snprintf(dir, sizeof(dir), "/tmp/rxbox-test-common-XXXXXX");
@@ -373,6 +396,7 @@ int main(void)
     test_contains_fold();
     test_fuzzy();
     test_natural();
+    test_nfc();
 
     if (nftw(dir, remove_entry, 16, FTW_DEPTH | FTW_PHYS) < 0)
         fprintf(stderr, "could not remove %s\n", dir);
