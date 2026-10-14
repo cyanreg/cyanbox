@@ -285,13 +285,6 @@ int  rx_app_rescan(RXApp *app);
  * until the next rx_app_tick. */
 uint64_t   rx_app_artwork_texture(RXApp *app, const RXTrack *t);
 RXWaveGpu *rx_app_preview_wave(RXApp *app, const RXTrack *t);
-/* For the Link decks: a track's detail waveform (PWV7, PWV3 or PWV5:
- * wave_palette) on the GPU, RX_WAVE_COLUMNS_PER_SECOND columns a second,
- * made on demand from the library and kept for the last few tracks asked
- * for. NULL while being made or when there is none. Window only; valid
- * until the next rx_app_tick. */
-#define RX_APP_LINK_DETAILS 6
-RXWaveGpu *rx_app_detail_wave(RXApp *app, const RXTrack *t);
 /* Tells the Link device link_state.devices[index] (a player) to load
  * `track_id` of the library: -ENOENT when it is gone, -EAGAIN before we
  * are on its link (rxbox/link.h rx_link_load). */

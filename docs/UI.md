@@ -231,30 +231,30 @@ last.
 
 ### Link decks
 
-With `--pro-link` and players on the link, the panel shows them instead
-(src/ui/link_decks.cpp), on the same background: one strip a player,
-by number, the width shared equally and each at most half of it, so two
-fill it; one alone takes its side (odd numbers left, even right). A strip
-has the player's number (red when on air) and the sleeve, title and
-artist in a title row tinted by its side; under it the player's name, its
-state (PLAYING or PAUSED, ON AIR, MASTER, SYNC) and the readouts KEY
-(dropped when the strip is narrow), BPM at the player's pitch (in orange,
-the pitch after the label, when off zero) and REMAIN; the overview, the
-part played shaded, the playhead on it; and the detail waveform, eight
-bars around the playhead (fewer on a narrow strip, at least 16 px a beat),
-with the grid's beats and the cues. The frame glows orange while the
-player plays. A track not of ours is named by its id and where it is
-from, with no waveform.
+With `--pro-link` the title row shows the players on the link instead of
+the deck's track (src/ui/link_decks.cpp); the rest of the panel is the
+deck as without it, for editing a track before it goes to a player. One
+cell a player, by number, the width shared equally and each at most half
+of it, so two fill it; one alone takes its side (odd numbers left, even
+right); with none, the row says so. A cell has the track's overview for
+its background (dimmed, the part played shaded and the playhead on it
+when the player says where it is), and over it the player's number, the
+cover, the title over the artist, the player's state (PLAYING or PAUSED,
+ON AIR, MASTER) over its model, and right-aligned KEY (left out on a
+narrow cell), BPM at the player's pitch (orange off zero) and REMAIN. On
+a narrow cell the state and model take the artist's place. Outlined
+orange while the player plays. A track not of ours is named by its id and
+where it is from.
 
 Where the player is comes from its status: the beat number on the track's
 grid, the one Link serves it, carried forward between statuses (about five
 a second) at its pitch and kept within the beat the last one named. A
-pre-nexus player (CDJ-900, CDJ-2000) sends no beat number: its strip says
-so and shows no playhead.
+pre-nexus player (CDJ-900, CDJ-2000) sends no beat number: no playhead,
+no time left.
 
-Tracks dropped on a strip, and the track menu's "Load in deck N" items,
-go to that player as a load command, as rekordbox's drag onto a deck; a
-deck that plays is greyed out in the menu (and refuses the drop) while the
+Tracks dropped on a cell, and the track menu's "Load in deck N" items, go
+to that player as a load command, as rekordbox's drag onto a deck; a deck
+that plays is greyed out in the menu (and refuses the drop) while the
 players' Eject/Load Lock (`player.eject_lock`) is on.
 
 ## Browser

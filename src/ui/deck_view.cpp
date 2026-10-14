@@ -1544,7 +1544,11 @@ void ui_deck_panel(UiState *ui, int deck, ImVec2 size)
     if (detail_h < PX(40))
         detail_h = PX(40);
 
-    title_row(ui, deck, ImVec2(x0, y), ImVec2(x1, y + title_h), st);
+    // With --pro-link, the players on the link in the title row's place.
+    if (app->link_state.enabled)
+        ui_link_decks_row(ui, ImVec2(x0, y), ImVec2(x1, y + title_h));
+    else
+        title_row(ui, deck, ImVec2(x0, y), ImVec2(x1, y + title_h), st);
     y += title_h + gap;
     ImVec2 wa(x0, y);
     ui_overview(ui, deck, ImVec2(x0, y), ImVec2(x1, y + over_h));

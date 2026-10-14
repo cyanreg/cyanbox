@@ -31,8 +31,8 @@
 # which must land in the library's setting table (the clicks with
 # RXBOX_UI_SWAYSOCK only). Then the interface following two of those
 # settings: the overview type for the overview and the row previews, and
-# the key display for the deck's KEY. Then the Link decks' panel with
-# made-up players, and the track menu's "Load in deck" items under the
+# the key display for the deck's KEY. Then the Link decks in the deck's
+# title row with made-up players, and the track menu's "Load in deck" items under the
 # players' Eject/Load Lock. Last, File > Remove missing tracks
 # (RXBOX_UI_SHOW=remove-missing): it lists the fourth track and a fifth
 # whose folder is gone too, names that folder, and a click on Remove takes
@@ -306,7 +306,7 @@ rx config device.key_display alphanumeric > /dev/null
 variant settings-follow "" "track $ID .*overview centred previews centred key $camelot\$"
 
 # The Link decks (RXBOX_UI_LINK_DECKS: players made up, no network): two
-# share the deck's panel. With the players' Eject/Load Lock on, a right
+# share the deck's title row. With the players' Eject/Load Lock on, a right
 # click on the first row (at 1600x900) opens the track menu, whose "Load
 # in deck" items offer deck 1, which plays, greyed out, and deck 2 not.
 (

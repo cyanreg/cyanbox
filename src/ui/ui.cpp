@@ -1731,12 +1731,8 @@ bool rx_ui_frame(RXApp *app)
                                     : floorf(ui->deck_split * body_h);
     float deck_h = ImClamp(want, smallest, max_deck);
 
-    // With players on the link, they take the deck's place.
     ImGui::SetCursorScreenPos(ImVec2(origin.x + gap, origin.y + gap));
-    if (ui_link_decks_shown(ui))
-        ui_link_decks_panel(ui, ImVec2(avail.x - gap * 2, deck_h - gap));
-    else
-        ui_deck_panel(ui, 0, ImVec2(avail.x - gap * 2, deck_h - gap));
+    ui_deck_panel(ui, 0, ImVec2(avail.x - gap * 2, deck_h - gap));
 
     bool released = false;
     float dy = splitter(ui, "##split_player", ImVec2(origin.x, origin.y + deck_h),

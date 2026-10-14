@@ -567,11 +567,10 @@ void ui_escape_closes(bool *open);
 // Ethernet interfaces served and the devices on them. None of it is drawn
 // without --pro-link.
 void ui_link_window(UiState *ui);
-// The Link decks (link_decks.cpp): whether players are on the link, the
-// panel that shows them in the deck's place, the track menu's "Load in
-// deck" items (and a separator after them), the test hook's players.
-bool ui_link_decks_shown(UiState *ui);
-void ui_link_decks_panel(UiState *ui, ImVec2 size);
+// The Link decks (link_decks.cpp): with --pro-link, the players on the
+// link in the deck's title row (a to b), the track menu's "Load in deck"
+// items (and a separator after them), the test hook's players.
+void ui_link_decks_row(UiState *ui, ImVec2 a, ImVec2 b);
 void ui_link_load_menu(UiState *ui, RXTrack *t);
 void ui_link_decks_test_tick(UiState *ui);
 void ui_link_decks_shutdown(UiState *ui);

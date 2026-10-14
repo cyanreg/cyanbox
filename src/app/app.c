@@ -203,14 +203,6 @@ struct RXAppPriv {
     RXArray  gpu;               /* GpuEntry, the browser's cache */
     RXArray  covers;            /* CoverTexture: the entries' covers, one per library cover */
     int      gpu_budget;
-    /* The Link decks' detail waveforms (rx_app_detail_wave): one per
-     * track a player has loaded, in the palette they were made in. */
-    struct {
-        uint64_t   track_id;    /* 0 a free slot */
-        int        palette;
-        RXWaveGpu *wave;        /* NULL: the track has none */
-        uint64_t   used;        /* tick */
-    } link_detail[RX_APP_LINK_DETAILS];
     RXArray  albums;            /* RXAlbum, the names copies: the tree's list (rx_app_albums) */
     unsigned albums_generation; /* lib.generation it was made for; 0 none */
     /* Per library index, made with the albums (rx_app_albums): the
@@ -619,62 +611,11 @@ RXWaveGpu *rx_app_preview_wave(RXApp *app, const RXTrack *t)
     return e->preview;
 }
 
-static void link_detail_release(RXApp *app, int i)
-{
-    RXAppPriv *priv = app->priv;
-    if (priv->link_detail[i].wave && app->window)
-        rx_wave_release(app->window, priv->link_detail[i].wave);
-    memset(&priv->link_detail[i], 0, sizeof(priv->link_detail[i]));
-}
-
-RXWaveGpu *rx_app_detail_wave(RXApp *app, const RXTrack *t)
-{
-    RXAppPriv *priv = app->priv;
-    if (!priv || !app->window || !t || !t->has_waveforms)
-        return NULL;
-    int slot = 0;
-    for (int i = 0; i < RX_APP_LINK_DETAILS; i++) {
-        if (priv->link_detail[i].track_id == t->id) {
-            if (priv->link_detail[i].palette == app->wave_palette) {
-                priv->link_detail[i].used = priv->tick;
-                return priv->link_detail[i].wave;
-            }
-            slot = i;
-            break;
-        }
-        if (priv->link_detail[i].used < priv->link_detail[slot].used)
-            slot = i;
-    }
-    if (priv->gpu_budget <= 0)
-        return NULL;
-    priv->gpu_budget--;
-    link_detail_release(app, slot);
-    RXWaveforms w = { 0 };
-    RXWaveGpu *g = NULL;
-    if (rx_library_waveforms_load(&app->lib, t->id, &w) >= 0 && w.nb_detail > 0) {
-        if (app->wave_palette == 1 && w.pwv3)
-            g = rx_wave_upload(app->window, RX_WAVE_BLUE, w.pwv3, w.nb_detail);
-        else if (app->wave_palette == 2 && w.pwv5)
-            g = rx_wave_upload(app->window, RX_WAVE_RGB_DETAIL, w.pwv5, w.nb_detail);
-        else if (app->wave_palette != 1 && app->wave_palette != 2 && w.pwv7)
-            g = rx_wave_upload(app->window, RX_WAVE_3BAND, w.pwv7, w.nb_detail);
-    }
-    rx_waveforms_free(&w);
-    priv->link_detail[slot].track_id = t->id;
-    priv->link_detail[slot].palette = app->wave_palette;
-    priv->link_detail[slot].wave = g;
-    priv->link_detail[slot].used = priv->tick;
-    return g;
-}
-
 /* The waveforms of a track changed: its preview is made again on demand. */
 static void gpu_forget_waves(RXApp *app, uint64_t id)
 {
     if (!app->priv)
         return;
-    for (int i = 0; i < RX_APP_LINK_DETAILS; i++)
-        if (app->priv->link_detail[i].track_id == id)
-            link_detail_release(app, i);
     GpuEntry *e = gpu_find(app->priv, id);
     if (!e)
         return;
@@ -701,8 +642,6 @@ static void gpu_forget_previews(RXApp *app)
 static void gpu_cache_free(RXApp *app)
 {
     RXAppPriv *priv = app->priv;
-    for (int i = 0; i < RX_APP_LINK_DETAILS; i++)
-        link_detail_release(app, i);
     for (size_t i = 0; i < priv->gpu.nb; i++)
         gpu_entry_release(app, rx_array_at(&priv->gpu, i));
     rx_array_free(&priv->gpu);

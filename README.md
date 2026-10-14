@@ -309,13 +309,13 @@ start, for as long as it runs, taking up an interface as soon as it is up
 with an address (a cable plugged in) and joining the link at once, before
 any player is on; the PRO DJ LINK window (Link → Players…) shows each
 interface and the players and what each plays; a track of ours that a
-player plays for 30 s is counted as a play, as on the deck. With players
-on the link, the top panel shows them instead of rxbox's own deck: what
-each has loaded, its state, tempo and time, and its waveforms with the
-playhead (from the nexus generation on; older players do not say where
-they are). A track goes to a player from the track menu (Load in deck N)
-or by dropping it on its deck, unless it plays and the players'
-Eject/Load Lock is on. A player
+player plays for 30 s is counted as a play, as on the deck. The deck's
+title row then shows the players on the link instead of its track: what
+each has loaded, its state, model, key, tempo and time left, over the
+track's overview with the playhead (from the nexus generation on; older
+players do not say where they are). A track goes to a player from the
+track menu (Load in deck N) or by dropping it on its cell, unless it
+plays and the players' Eject/Load Lock is on. A player
 streams a track as it plays it, not the whole file first: an emulated
 CDJ-2000NXS2 read about 630 kB in the first 2 s after a load, then about
 as fast as it plays (docs/LINK.md). While it runs,
