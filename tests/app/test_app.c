@@ -489,8 +489,9 @@ int main(int argc, char **argv)
      * search. */
     rx_app_tick(&app);
     CHECK(app.nb_rows == 2, "%d rows", app.nb_rows);
-    uint32_t num_a = (uint32_t)rx_library_index_of(&app.lib, a) + 1;
-    uint32_t num_b = (uint32_t)rx_library_index_of(&app.lib, b) + 1;
+    /* Neither has an album: the collection is None, by title (the file's
+     * name, the files having no tags). */
+    uint32_t num_a = 1, num_b = 2;
     CHECK(app.row_numbers[0] == 1 && app.row_numbers[1] == 2, "numbered %u, %u",
           app.row_numbers[0], app.row_numbers[1]);
     app.sort_descending = true;
@@ -679,6 +680,48 @@ int main(int argc, char **argv)
             rx_app_show_album(&app, NULL);
             CHECK(!app.current_album && app.nb_rows == 4, "back to the collection: %d rows",
                   app.nb_rows);
+            /* The collection is the albums one after the other: None's
+             * tracks by title, then each album in the list's order (by
+             * artist), each in track order. */
+            free(a->meta.album_artist);
+            a->meta.album_artist = rx_strdup("Beta Artist");
+            free(y->meta.album);
+            y->meta.album = rx_strdup("Omega");
+            free(x->meta.album);
+            x->meta.album = rx_strdup("Omega");
+            free(x->meta.album_artist);
+            x->meta.album_artist = rx_strdup("Alpha Artist");
+            y->meta.track_number = 1;
+            x->meta.track_number = 2;
+            CHECK(rx_library_save_track(&app.lib, a) == 0 &&
+                  rx_library_save_track(&app.lib, x) == 0 &&
+                  rx_library_save_track(&app.lib, y) == 0, "saving the two albums");
+            rx_app_tick(&app);
+            CHECK(app.nb_rows == 4 && app.lib.tracks[app.rows[0]] == y &&
+                  app.lib.tracks[app.rows[1]] == x && app.lib.tracks[app.rows[2]] == b &&
+                  app.lib.tracks[app.rows[3]] == a && app.row_numbers[0] == 1 &&
+                  app.row_numbers[3] == 4, "the collection is not Omega, then Zeta");
+            free(x->meta.album);
+            x->meta.album = NULL;
+            free(x->meta.title);
+            x->meta.title = rx_strdup("Zulu");
+            free(y->meta.album);
+            y->meta.album = NULL;
+            free(y->meta.title);
+            y->meta.title = rx_strdup("Alpha");
+            CHECK(rx_library_save_track(&app.lib, x) == 0 &&
+                  rx_library_save_track(&app.lib, y) == 0, "saving x and y in None");
+            rx_app_tick(&app);
+            CHECK(app.nb_rows == 4 && app.lib.tracks[app.rows[0]] == y &&
+                  app.lib.tracks[app.rows[1]] == x && app.lib.tracks[app.rows[2]] == b &&
+                  app.lib.tracks[app.rows[3]] == a, "the collection is not None, then Zeta");
+            rx_app_show_album(&app, "");
+            CHECK(app.nb_rows == 2 && app.lib.tracks[app.rows[0]] == y &&
+                  app.lib.tracks[app.rows[1]] == x, "None is not by title");
+            rx_app_show_album(&app, NULL);
+            free(a->meta.album_artist);
+            a->meta.album_artist = NULL;
+            CHECK(rx_library_save_track(&app.lib, a) == 0, "saving a's album artist back");
             CHECK(rx_library_remove(&app.lib, x) == 0 && rx_library_remove(&app.lib, y) == 0,
                   "removing x and y");
             rx_app_tick(&app);

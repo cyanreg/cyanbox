@@ -173,11 +173,13 @@ fi
 variant cue-focus "70:down:C,72:up:C,80:down:C,88:up:C,88:focus-out" \
     "track $ID playing 0 position 0\.00 "
 
-# Enter on the next row while the deck plays: the deck pauses for the swap
-# and the other track loads and plays on; nothing asks.
+# Enter on the row above while the deck plays (the collection is the
+# album, by title: "Rolling Amen" above "Warehouse Tool"): the deck
+# pauses for the swap and the other track loads and plays on; nothing
+# asks.
 FRAMES=160
 export RXBOX_UI_SCREENSHOT_FRAME=140
-variant enter-loads "70:down:DownArrow,71:up:DownArrow,75:down:Enter,76:up:Enter" \
+variant enter-loads "70:down:UpArrow,71:up:UpArrow,75:down:Enter,76:up:Enter" \
     "track $ID2 playing 1 .*popup 0"
 unset FRAMES RXBOX_UI_SCREENSHOT_FRAME
 

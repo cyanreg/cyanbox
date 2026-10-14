@@ -192,8 +192,11 @@ struct RXAppPriv {
     int      gpu_budget;
     RXArray  albums;            /* RXAlbum, the names copies: the tree's list (rx_app_albums) */
     unsigned albums_generation; /* lib.generation it was made for; 0 none */
-    uint8_t *in_none;           /* per library index: the track is None's (rx_app_albums) */
-    int      nb_in_none;
+    /* Per library index, made with the albums (rx_app_albums): the
+     * track's place in the collection's own order, None's tracks (the
+     * first nb_none) then each album's in the list's order. */
+    int     *rank;
+    int      nb_rank, nb_none;
     RXArray  wave_checks;       /* WaveCheck: the stored waveforms looked at */
 
     RXMailbox *export_mb;
@@ -2849,11 +2852,19 @@ static bool in_album(const RXTrack *t, const char *album)
     return t->meta.album && !rx_strcasecmp(t->meta.album, album);
 }
 
-/* None's tracks (rx_app_albums marks them): no album tag, or one no
- * other track has. */
+/* None's tracks (rx_app_albums ranks them first): no album tag, or one
+ * no other track has. */
 static bool in_none(const RXAppPriv *priv, int index)
 {
-    return priv && index >= 0 && index < priv->nb_in_none && priv->in_none[index];
+    return priv && index >= 0 && index < priv->nb_rank && priv->rank[index] < priv->nb_none;
+}
+
+static int compare_ranks(const void *pa, const void *pb, void *opaque)
+{
+    const RowKey *ra = pa, *rb = pb;
+    const RXAppPriv *priv = opaque;
+    return (priv->rank[ra->index] > priv->rank[rb->index]) -
+           (priv->rank[ra->index] < priv->rank[rb->index]);
 }
 
 void rx_app_rebuild_rows(RXApp *app)
@@ -2866,13 +2877,15 @@ void rx_app_rebuild_rows(RXApp *app)
 
     const RXPlaylist *pl = app->current_playlist;
     const char *album = pl ? NULL : app->current_album;
-    /* None (the album ""): the tracks no album of the list holds, marked
-     * when the list is made. */
+    /* None (the album ""): the tracks no album of the list holds. The
+     * list ranks every track, the collection's own order. */
     bool none = album && !album[0];
-    if (none) {
+    const RXAppPriv *priv = app->priv;
+    if (!pl) {
         const RXAlbum *albums;
         rx_app_albums(app, &albums);
     }
+    bool ranked = !pl && priv && priv->nb_rank == lib->nb_tracks;
     int cap = pl ? pl->nb : lib->nb_tracks;
     RowKey *keys = calloc(RX_MAX(cap, 1), sizeof(*keys));
     if (!keys) {
@@ -2898,9 +2911,12 @@ void rx_app_rebuild_rows(RXApp *app)
     }
 
     /* The view's own order, which `#` numbers before the search and the
-     * sort: an album's is its own, not the library's; None's, of tracks
-     * from no album or each from its own, the library's. */
-    if (album && !none)
+     * sort: a playlist's; else the collection's (rx_app_albums), None's
+     * tracks by title then the albums in the list's order, each in disc
+     * and track order, of which None and an album are runs. */
+    if (ranked)
+        qsort_r(keys, nb, sizeof(*keys), compare_ranks, (void *)priv);
+    else if (album)
         qsort_r(keys, nb, sizeof(*keys), compare_album_rows, lib);
     for (int i = 0; i < nb; i++)
         keys[i].number = (uint32_t)i + 1;
@@ -2978,15 +2994,55 @@ static int compare_album_tracks(const void *pa, const void *pb)
     return c ? c : (a->index > b->index) - (a->index < b->index);
 }
 
+/* An album of the list being made: its entry, and its tracks, a run of
+ * the sorted AlbumTracks. */
+typedef struct AlbumRun {
+    RXAlbum al;
+    int     start;
+} AlbumRun;
+
 /* The list's order: by artist, in natural order, each artist's albums
  * together by name; the albums of no artist after them, by name. */
 static int compare_albums(const void *pa, const void *pb)
 {
-    const RXAlbum *a = pa, *b = pb;
+    const RXAlbum *a = &((const AlbumRun *)pa)->al, *b = &((const AlbumRun *)pb)->al;
     if (!a->artist != !b->artist)
         return a->artist ? -1 : 1;
     int c = a->artist ? rx_strnatcasecmp(a->artist, b->artist) : 0;
     return c ? c : compare_album_names(a->name, b->name);
+}
+
+/* An album's tracks: disc, then track number (tracks without one last),
+ * then title; the library's order between equals. */
+static int compare_in_album(const void *pa, const void *pb, void *opaque)
+{
+    const RXLibrary *lib = opaque;
+    int ia = ((const AlbumTrack *)pa)->index, ib = ((const AlbumTrack *)pb)->index;
+    const RXTrack *a = lib->tracks[ia], *b = lib->tracks[ib];
+    int da = a->meta.disc_number > 0 ? a->meta.disc_number : INT_MAX;
+    int db = b->meta.disc_number > 0 ? b->meta.disc_number : INT_MAX;
+    if (da != db)
+        return da < db ? -1 : 1;
+    int na = a->meta.track_number > 0 ? a->meta.track_number : INT_MAX;
+    int nb = b->meta.track_number > 0 ? b->meta.track_number : INT_MAX;
+    if (na != nb)
+        return na < nb ? -1 : 1;
+    int c = rx_strnatcasecmp(title_of(a), title_of(b));
+    return c ? c : (ia > ib) - (ia < ib);
+}
+
+/* None's tracks: by title, then artist; the library's order between
+ * equals. */
+static int compare_in_none(const void *pa, const void *pb, void *opaque)
+{
+    const RXLibrary *lib = opaque;
+    int ia = *(const int *)pa, ib = *(const int *)pb;
+    const RXTrack *a = lib->tracks[ia], *b = lib->tracks[ib];
+    int c = rx_strnatcasecmp(title_of(a), title_of(b));
+    if (!c)
+        c = rx_strnatcasecmp(a->meta.artist ? a->meta.artist : "",
+                             b->meta.artist ? b->meta.artist : "");
+    return c ? c : (ia > ib) - (ia < ib);
 }
 
 /* The artist an album sorts under: the album artist of its first track
@@ -3022,6 +3078,94 @@ static void albums_free(RXAppPriv *priv)
     }
     priv->albums.nb = 0;
     priv->albums_generation = 0;
+    priv->nb_rank = 0;
+    priv->nb_none = 0;
+}
+
+/* Makes the list and the ranks; false when out of memory (the list is
+ * then empty, the ranks none). */
+static bool albums_make(RXAppPriv *priv, const RXLibrary *lib)
+{
+    int nt = lib->nb_tracks;
+    int *rank = realloc(priv->rank, sizeof(*rank) * RX_MAX(nt, 1));
+    if (!rank)
+        return false;
+    priv->rank = rank;
+    AlbumTrack *tracks = malloc(sizeof(*tracks) * RX_MAX(nt, 1));
+    AlbumRun *runs = malloc(sizeof(*runs) * RX_MAX(nt / 2, 1));
+    int *none = malloc(sizeof(*none) * RX_MAX(nt, 1));
+    bool ok = tracks && runs && none;
+
+    /* The names with their tracks, sorted; a run of equal ones is one
+     * album, of two tracks or more; the rest are None's. */
+    int n = 0, nb_runs = 0, nb_none = 0;
+    for (int i = 0; ok && i < nt; i++) {
+        const char *a = lib->tracks[i]->meta.album;
+        if (a && a[0])
+            tracks[n++] = (AlbumTrack) { a, i };
+        else
+            none[nb_none++] = i;
+    }
+    if (ok)
+        qsort(tracks, n, sizeof(*tracks), compare_album_tracks);
+    for (int i = 0; ok && i < n;) {
+        int j = i + 1;
+        while (j < n && !rx_strcasecmp(tracks[j].name, tracks[i].name))
+            j++;
+        if (j - i == 1) {
+            none[nb_none++] = tracks[i].index;
+        } else {
+            const char *artist = album_artist(lib, tracks + i, j - i);
+            AlbumRun *r = &runs[nb_runs++];
+            *r = (AlbumRun) {
+                .al = {
+                    .name   = rx_strdup(tracks[i].name),
+                    .nb     = j - i,
+                    .artist = artist ? rx_strdup(artist) : NULL,
+                },
+                .start = i,
+            };
+            ok = r->al.name && (!artist || r->al.artist);
+        }
+        i = j;
+    }
+
+    /* None first, by title; then the albums in the list's order, each in
+     * its own. */
+    if (ok) {
+        qsort(runs, nb_runs, sizeof(*runs), compare_albums);
+        qsort_r(none, nb_none, sizeof(*none), compare_in_none, (void *)lib);
+        int k = 0;
+        for (int i = 0; i < nb_none; i++)
+            rank[none[i]] = k++;
+        for (int r = 0; r < nb_runs; r++) {
+            AlbumTrack *run = tracks + runs[r].start;
+            qsort_r(run, runs[r].al.nb, sizeof(*run), compare_in_album, (void *)lib);
+            for (int i = 0; i < runs[r].al.nb; i++)
+                rank[run[i].index] = k++;
+        }
+        RXAlbum al = { .name = rx_strdup(""), .nb = nb_none };
+        ok = al.name && (!nb_none || rx_array_push(&priv->albums, &al));
+        if (!nb_none || !ok)
+            free((char *)al.name);
+    }
+    for (int r = 0; r < nb_runs; r++) {
+        if (ok && rx_array_push(&priv->albums, &runs[r].al))
+            continue;
+        ok = false;
+        free((char *)runs[r].al.name);
+        free((char *)runs[r].al.artist);
+    }
+    free(tracks);
+    free(runs);
+    free(none);
+    if (!ok) {
+        albums_free(priv);
+        return false;
+    }
+    priv->nb_rank = nt;
+    priv->nb_none = nb_none;
+    return true;
 }
 
 int rx_app_albums(RXApp *app, const RXAlbum **albums)
@@ -3033,64 +3177,9 @@ int rx_app_albums(RXApp *app, const RXAlbum **albums)
         return 0;
     if (priv->albums_generation != lib->generation) {
         albums_free(priv);
-        priv->nb_in_none = 0;
-        uint8_t *in_none = realloc(priv->in_none, RX_MAX(lib->nb_tracks, 1));
-        if (!in_none)
+        if (!albums_make(priv, lib)) {
+            rx_err("out of memory making the albums");
             return 0;
-        priv->in_none = in_none;
-        /* The names with their tracks, sorted; a run of equal ones is one
-         * album. */
-        AlbumTrack *tracks = malloc(sizeof(*tracks) * RX_MAX(lib->nb_tracks, 1));
-        if (!tracks)
-            return 0;
-        int n = 0;
-        for (int i = 0; i < lib->nb_tracks; i++) {
-            const char *a = lib->tracks[i]->meta.album;
-            in_none[i] = !a || !a[0];
-            if (!in_none[i])
-                tracks[n++] = (AlbumTrack) { a, i };
-        }
-        qsort(tracks, n, sizeof(*tracks), compare_album_tracks);
-        /* None first, counted as the albums go by: the tracks without an
-         * album, and those whose album no other track has. */
-        RXAlbum none = { .name = rx_strdup(""), .nb = lib->nb_tracks - n };
-        if (!none.name || !rx_array_push(&priv->albums, &none)) {
-            free((char *)none.name);
-            free(tracks);
-            return 0;
-        }
-        for (int i = 0; i < n;) {
-            int j = i + 1;
-            while (j < n && !rx_strcasecmp(tracks[j].name, tracks[i].name))
-                j++;
-            if (j - i == 1) {
-                ((RXAlbum *)rx_array_at(&priv->albums, 0))->nb++;
-                in_none[tracks[i].index] = 1;
-                i = j;
-                continue;
-            }
-            const char *artist = album_artist(lib, tracks + i, j - i);
-            RXAlbum al = {
-                .name   = rx_strdup(tracks[i].name),
-                .nb     = j - i,
-                .artist = artist ? rx_strdup(artist) : NULL,
-            };
-            if (!al.name || (artist && !al.artist) || !rx_array_push(&priv->albums, &al)) {
-                free((char *)al.name);
-                free((char *)al.artist);
-                break;
-            }
-            i = j;
-        }
-        free(tracks);
-        priv->nb_in_none = lib->nb_tracks;
-        RXAlbum *first = rx_array_at(&priv->albums, 0);
-        qsort(first + 1, priv->albums.nb - 1, sizeof(*first), compare_albums);
-        /* An empty None goes. */
-        if (!first->nb) {
-            free((char *)first->name);
-            memmove(first, first + 1, (priv->albums.nb - 1) * sizeof(*first));
-            priv->albums.nb--;
         }
         priv->albums_generation = lib->generation;
     }
@@ -3279,7 +3368,7 @@ void rx_app_destroy(RXApp *app)
     free(app->current_album);
     app->current_album = NULL;
     albums_free(priv);
-    free(priv->in_none);
+    free(priv->rank);
     rx_array_free(&priv->albums);
     free(app->selection);
     app->selection = NULL;

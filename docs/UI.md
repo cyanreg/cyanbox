@@ -231,7 +231,9 @@ last.
 ## Browser
 
 **Playlist tree** (left, 220 default): `Collection` at the top (every
-track), `Albums` under it (closed by default: every album tag two
+track, in the order of `Albums`: None's tracks, then each album of the
+list in turn, in its own order; so the collection's order does not depend
+on the order the tracks or albums were added in), `Albums` under it (closed by default: every album tag two
 tracks or more share, with its track count, the count beside `Albums`
 being theirs, in one flat list by artist, each artist's albums together:
 the artists, then an artist's albums by name, in natural order (a number
@@ -240,7 +242,7 @@ ignored); an album's artist is the album artist of its first track that
 has one, else the artist all its tracks share, and the albums with
 neither come last; first `None`, when
 it has any, the tracks without an album and those whose album no other
-track has (a single), in the collection's order; click one and the table
+track has (a single), by title; click one and the table
 shows its tracks in disc and track order, like a playlist, but nothing
 can be dropped on an album, nothing renames or deletes one, and the
 export does not know them: they are the tags' view of the collection;

@@ -46,8 +46,9 @@ typedef struct RXApp {
     /* The album shown (rx_app_show_album): the tracks whose album this
      * is, in disc and track order, like a playlist that nothing can be
      * added to and that the export does not know; "" is None, the tracks
-     * of no album in the list (rx_app_albums), in the library's order.
-     * NULL = not an album view. Owned here. */
+     * of no album in the list (rx_app_albums), by title. NULL = not an
+     * album view (the collection: None's tracks, then each album of the
+     * list in turn). Owned here. */
     char      *current_album;
     char       search[128];
     int        sort_column;         /* RXColumn index */
@@ -56,8 +57,8 @@ typedef struct RXApp {
     uint64_t   focus_track;         /* the keyboard focus row */
     uint32_t  *rows; int nb_rows;   /* library indices of the current view, sorted and filtered */
     /* Each row's `#`: the track's place in the view's own order (the
-     * library's, the playlist's, the album's), from 1, whatever the sort
-     * and the search. */
+     * playlist's; else the collection's, the albums one after the other:
+     * rx_app_albums), from 1, whatever the sort and the search. */
     uint32_t  *row_numbers;
     unsigned   rows_generation;     /* lib.generation the rows were built for */
     bool       rows_dirty;
@@ -173,9 +174,11 @@ void rx_app_rebuild_rows(RXApp *app);
  * else none), by artist in the order the table sorts names, each
  * artist's albums together by name, the albums of no artist last; after
  * None (the name "", first, when it has tracks): the tracks without an
- * album and those whose album no other track has. Made when the library
- * has changed since the last call; valid until the next one. Returns the
- * count, None included. */
+ * album and those whose album no other track has. The collection's own
+ * order is this list's tracks one after the other (None's by title, an
+ * album's in disc and track order), whatever order they were added in.
+ * Made when the library has changed since the last call; valid until the
+ * next one. Returns the count, None included. */
 typedef struct RXAlbum {
     const char *name;
     int         nb;

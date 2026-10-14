@@ -468,12 +468,12 @@ void ui_tree(UiState *ui, ImVec2 size)
 
     // Albums: every album of the library, one flat list by artist and then
     // name (rx_app_albums), each shown like a playlist of its tracks in
-    // disc and track order, and None first
-    // (the album "": the tracks without an album or with one no other
-    // track has, in the collection's order). Nothing can be dropped on
-    // one, nothing renames or deletes one, and the export does not know
-    // them: they are the tags' view of the collection. The count beside
-    // Albums is of albums, None aside.
+    // disc and track order, and None first (the album "": the tracks
+    // without an album or with one no other track has, by title); the
+    // collection is the list's tracks one after the other. Nothing can be
+    // dropped on one, nothing renames or deletes one, and the export does
+    // not know them: they are the tags' view of the collection. The count
+    // beside Albums is of albums, None aside.
     const RXAlbum *albums = nullptr;
     int nb_albums = rx_app_albums(app, &albums);
     int nb_named = nb_albums - (nb_albums > 0 && !albums[0].name[0]);
