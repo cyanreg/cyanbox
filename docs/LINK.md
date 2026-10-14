@@ -282,8 +282,10 @@ index for a player to get wrong. MP3s are served so too.
   player, reloads included.
 - On this machine a 2 kB read takes 10 to 16 µs, a 32 kB one 0.15 to
   0.25 ms, a jump (a hot cue) 0.25 to 0.4 ms, the first read of a track
-  (opening it) 1 to 4 ms; a 13-minute FLAC reads through 790 times faster
-  than it plays. A few tracks are kept open (1 GiB of packets at most),
+  (opening it) 1 to 4 ms with the file in the page cache, about 200 ms
+  from the disk (an emulated CDJ-2000NXS2's first READs: 205 to 227 ms,
+  tolerated); a 13-minute FLAC reads through 790 times faster than it
+  plays. A few tracks are kept open (1 GiB of packets at most),
   the least recently read closed first.
 - What the packet store cannot place sample for sample (Matroska, which
   keeps milliseconds), above 48 kHz or of more than two channels is made
