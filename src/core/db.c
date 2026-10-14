@@ -1,9 +1,9 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
-/* The library database: the SQLite connection, the schema and its
- * migrations, the cached statements, transactions and error mapping.
+/* The library database: the SQLite connection, the schema, the cached
+ * statements, transactions and error mapping.
  *
- * Schema version 8 (PRAGMA user_version = 8, application_id = 'RXBX').
+ * Schema version 9 (PRAGMA user_version = 9, application_id = 'RXBX').
  * Tables are STRICT so a wrong type is an error instead of a silent
  * conversion, and every row that belongs to a track or a playlist goes
  * with it (ON DELETE CASCADE, foreign keys on for every connection).
@@ -27,8 +27,7 @@
  *                   grid_locked analysed  analysis results and their state
  *                   beats_version key_version waves_version
  *                             the analyser version (RX_*_VERSION, rxbox/analysis.h)
- *                             each result was made by; 0: before versions were
- *                             kept (schema 1), so older than any
+ *                             each result was made by; 0 older than any
  *                   tags_version ml_club ml_intensity ml_valence ml_vocals
  *                             the model's tagging (rxbox/ml.h), asked for by
  *                             the user: RX_ML_TAGS_VERSION (0 never) and its
@@ -46,7 +45,13 @@
  *                   0..7 = A..H), loop_end (NULL: not a loop), loop_beats (NULL:
  *                   absolute end), active, name, color
  *   track_tag       track_id, position, tag (My Tags, in order, unique per track)
- *   waveform        track_id, data (rx_waveforms_pack)
+ *   waveform_preview
+ *                   track_id, data: the packed waveforms' header and previews
+ *                   (rx_waveforms_pack, its first RX_WAVE_PACKED_PREVIEW
+ *                   bytes), what the browser's rows draw
+ *   waveform_detail track_id, data: the rest, the detail waveforms, which only
+ *                   the players and the export read (a track has both or
+ *                   neither)
  *   artwork         id, size (of jpeg, the key it is found by), jpeg, width,
  *                   height: a cover's thumbnail, once however many tracks
  *                   have it
@@ -60,42 +65,19 @@
  *                   once per playlist
  *   setting         key, value (text; see config.c for the keys)
  *
- * Migrations: `migrations[v]` takes a database from version v to v + 1, in
- * one transaction with the user_version bump. A database newer than this
- * build is refused rather than written with a schema we do not know, also
- * when a newer rxbox migrates it while this one is (the version is read
- * again under the write lock). A step that adds columns adds only those
- * the table lacks, and after migrating every column of every step must be
- * there; a missing one is added (check_columns): two branches defined a
- * schema 6 (below, the second became 7), and a library migrated by the
- * other is at a number whose columns are not this build's.
- *   1 -> 2  the three analyser version columns of track.
+ * A new library is made at this schema in one transaction. Of the older
+ * ones only schema 8 is converted (the last of the step by step
+ * migrations, which an older rxbox ran): its single waveform blob per
+ * track is cut in two, at RX_WAVE_PACKED_PREVIEW. Anything older is
+ * refused with the advice to open it once with an rxbox of schema 8; a
+ * database newer than this build is refused rather than written with a
+ * schema we do not know, also when a newer rxbox converts it while this
+ * one opens it (the version is read again under the write lock).
  *
- *   2 -> 3  the tables as they are; a grid's first section stopped
- *           extending back to the start of the track (src/core/grid.c), so
- *           the first section of every stored grid starts at its first beat
- *           at or after time 0 instead, numbered as that beat was: the
- *           grid keeps every beat it had.
- *
- *   3 -> 4  a track's colour became a hue: track.color (one of rekordbox's
- *           eight names) gives way to track.hue, each name its colour's
- *           own hue, so the stick gets the same colour as before. Cue
- *           colours are the players' palette still. Comments imported
- *           from files before are kept; only new imports leave them out.
- *
- *   4 -> 5  the model's tagging: tags_version and the four ml_* measures.
- *
- *   5 -> 6  grid_section.measured, for the beats of a dynamic grid. Every
- *           stored section is straight (0), so every grid is what it was.
- *   6 -> 7  the model picks the colour from a legend: ml_colors and
- *           ml_legend. A track tagged before keeps its hue and measures.
- *           (Its branch numbered this 5 -> 6: a library at that 6 has
- *           these columns and lacks measured, which check_columns adds.)
- *   7 -> 8  a cover is stored once: artwork, one row per track until
- *           then, becomes one row per distinct thumbnail (the same bytes)
- *           and track_artwork links each track to its own. An album's
- *           tracks have the same thumbnail (the same picture, made the
- *           same way), so an album is one row.
+ * Space: auto_vacuum is INCREMENTAL, set before a new library's first
+ * table, and a converted one is vacuumed once to switch; rx_db_trim gives
+ * the free pages back to the file system when there are many (at open),
+ * so a library shrinks when waveforms, covers or tracks go.
  *
  * Journal: WAL, synchronous = NORMAL (a crash loses at most the last
  * transactions, never consistency), and a busy timeout because the export
@@ -106,9 +88,9 @@
 #include <math.h>
 #include <stdio.h>
 
-/* For the track colours' RGB macros only: nothing of the formats module
- * is linked. */
-#include "rxbox/colors.h"
+/* For the size of the packed previews only: nothing of the analysis
+ * module is linked. */
+#include "rxbox/analysis.h"
 
 #define RX_DB_APPLICATION_ID 0x52584258     /* 'RXBX' */
 
@@ -135,7 +117,22 @@ const char *const rx_track_edit_cols[RX_TRACK_EDIT_COLS] = {
 
 /* --------------------------------------------------------------- schema */
 
-static const char schema_v1[] =
+#define RX_DB_SCHEMA 9
+
+#define SQL_INT_(x) #x
+#define SQL_INT(x) SQL_INT_(x)
+
+#define WAVEFORM_TABLES                                                         \
+    "CREATE TABLE waveform_preview ("                                           \
+    "  track_id INTEGER PRIMARY KEY REFERENCES track(id) ON DELETE CASCADE,"    \
+    "  data     BLOB NOT NULL"                                                  \
+    ") STRICT;"                                                                 \
+    "CREATE TABLE waveform_detail ("                                            \
+    "  track_id INTEGER PRIMARY KEY REFERENCES track(id) ON DELETE CASCADE,"    \
+    "  data     BLOB NOT NULL"                                                  \
+    ") STRICT;"
+
+static const char schema[] =
     "CREATE TABLE track ("
     "  id                   INTEGER PRIMARY KEY AUTOINCREMENT,"
     "  path                 TEXT NOT NULL UNIQUE,"
@@ -177,15 +174,25 @@ static const char schema_v1[] =
     "  track_number         INTEGER,"
     "  disc_number          INTEGER,"
     "  rating               INTEGER NOT NULL DEFAULT 0 CHECK (rating BETWEEN 0 AND 5),"
-    "  color                TEXT NOT NULL DEFAULT '',"
+    "  hue                  REAL CHECK (hue >= 0 AND hue < 360),"
     "  key                  TEXT NOT NULL DEFAULT '',"
     "  key_confidence       REAL NOT NULL DEFAULT 0,"
     "  beats_per_bar        INTEGER NOT NULL DEFAULT 4 CHECK (beats_per_bar BETWEEN 1 AND 64),"
     "  grid_confidence      REAL NOT NULL DEFAULT 0,"
     "  grid_flags           INTEGER NOT NULL DEFAULT 0,"
     "  grid_locked          INTEGER NOT NULL DEFAULT 0,"
-    "  added                INTEGER NOT NULL DEFAULT 0,"
     "  analysed             INTEGER NOT NULL DEFAULT 0,"
+    "  beats_version        INTEGER NOT NULL DEFAULT 0,"
+    "  key_version          INTEGER NOT NULL DEFAULT 0,"
+    "  waves_version        INTEGER NOT NULL DEFAULT 0,"
+    "  tags_version         INTEGER NOT NULL DEFAULT 0,"
+    "  ml_club              REAL,"
+    "  ml_intensity         REAL,"
+    "  ml_valence           REAL,"
+    "  ml_vocals            REAL,"
+    "  ml_colors            BLOB,"
+    "  ml_legend            INTEGER NOT NULL DEFAULT 0,"
+    "  added                INTEGER NOT NULL DEFAULT 0,"
     "  play_count           INTEGER NOT NULL DEFAULT 0,"
     "  last_played          INTEGER NOT NULL DEFAULT 0,"
     "  missing              INTEGER NOT NULL DEFAULT 0"
@@ -197,6 +204,7 @@ static const char schema_v1[] =
     "  start    REAL NOT NULL,"
     "  bpm      REAL NOT NULL CHECK (bpm > 0),"
     "  beat     INTEGER NOT NULL DEFAULT 0,"
+    "  measured INTEGER NOT NULL DEFAULT 0,"
     "  PRIMARY KEY (track_id, idx)"
     ") STRICT, WITHOUT ROWID;"
 
@@ -221,17 +229,29 @@ static const char schema_v1[] =
     "  PRIMARY KEY (track_id, tag)"
     ") STRICT, WITHOUT ROWID;"
 
-    "CREATE TABLE waveform ("
-    "  track_id INTEGER PRIMARY KEY REFERENCES track(id) ON DELETE CASCADE,"
-    "  data     BLOB NOT NULL"
-    ") STRICT;"
+    WAVEFORM_TABLES
 
     "CREATE TABLE artwork ("
-    "  track_id INTEGER PRIMARY KEY REFERENCES track(id) ON DELETE CASCADE,"
-    "  jpeg     BLOB NOT NULL,"
-    "  width    INTEGER NOT NULL,"
-    "  height   INTEGER NOT NULL"
+    "  id     INTEGER PRIMARY KEY,"
+    "  size   INTEGER NOT NULL,"
+    "  jpeg   BLOB NOT NULL,"
+    "  width  INTEGER NOT NULL,"
+    "  height INTEGER NOT NULL"
     ") STRICT;"
+    "CREATE INDEX artwork_size ON artwork(size);"
+    "CREATE TABLE track_artwork ("
+    "  track_id   INTEGER PRIMARY KEY REFERENCES track(id) ON DELETE CASCADE,"
+    "  artwork_id INTEGER NOT NULL REFERENCES artwork(id)"
+    ") STRICT;"
+    "CREATE INDEX track_artwork_artwork ON track_artwork(artwork_id);"
+    "CREATE TRIGGER artwork_unlinked AFTER DELETE ON track_artwork BEGIN"
+    "  DELETE FROM artwork WHERE id = old.artwork_id AND"
+    "    NOT EXISTS (SELECT 1 FROM track_artwork WHERE artwork_id = old.artwork_id);"
+    "END;"
+    "CREATE TRIGGER artwork_relinked AFTER UPDATE OF artwork_id ON track_artwork BEGIN"
+    "  DELETE FROM artwork WHERE id = old.artwork_id AND"
+    "    NOT EXISTS (SELECT 1 FROM track_artwork WHERE artwork_id = old.artwork_id);"
+    "END;"
 
     "CREATE TABLE play ("
     "  track_id  INTEGER NOT NULL REFERENCES track(id) ON DELETE CASCADE,"
@@ -262,146 +282,19 @@ static const char schema_v1[] =
     "  value TEXT NOT NULL"
     ") STRICT, WITHOUT ROWID;";
 
-/* A column a migration adds: only when its table lacks it (migrate), so a
- * library that has it already from another branch's migration goes on. */
-typedef struct Column {
-    const char *table, *name, *decl;
-} Column;
-
-/* The analyser versions. Rows from before them get 0, which counts as
- * older than any analyser that keeps a version: everything analysed by
- * schema 1's rxbox is analysed again for what it has. */
-static const Column columns_v2[] = {
-    { "track", "beats_version", "INTEGER NOT NULL DEFAULT 0" },
-    { "track", "key_version",   "INTEGER NOT NULL DEFAULT 0" },
-    { "track", "waves_version", "INTEGER NOT NULL DEFAULT 0" },
-};
-
-/* The first section's start goes back by k = floor(start / period) whole
- * periods (start - k * period, as grid.c computes a beat), and its beat
- * number (0 or out of range is read as 1) back by k. SQLite's % keeps the
- * dividend's sign, hence the + bpb. */
-static const char schema_v3[] =
-    "UPDATE grid_section AS g SET"
-    "  start = g.start - m.k * (60.0 / g.bpm),"
-    "  beat = (((CASE WHEN g.beat BETWEEN 1 AND m.bpb THEN g.beat ELSE 1 END) - 1 - m.k)"
-    "          % m.bpb + m.bpb) % m.bpb + 1 "
-    "FROM (SELECT s.track_id AS id, CAST(s.start / (60.0 / s.bpm) AS INTEGER) AS k,"
-    "             t.beats_per_bar AS bpb"
-    "      FROM grid_section AS s JOIN track AS t ON t.id = s.track_id"
-    "      WHERE s.idx = 0 AND s.start > 0) AS m "
-    "WHERE g.track_id = m.id AND g.idx = 0 AND m.k > 0;";
-
-/* Each of rekordbox's eight colour names becomes its colour's hue: the HSV
- * hue of the RGB the interface drew it in (rxbox/colors.h), by the
- * standard formula, in the same order of operations as rx_rgb_hue in
- * src/formats/colors.c, which core does not link; tests/core checks the
- * two agree. A name the old column should never have held is no colour.
- * The old column goes (and this runs while it is there). */
-#define SQL_INT_(x) #x
-#define SQL_INT(x) SQL_INT_(x)
-static const Column columns_v4[] = {
-    { "track", "hue", "REAL CHECK (hue >= 0 AND hue < 360)" },
-};
-static const char schema_v4[] =
-    "WITH palette(name, rgb) AS (VALUES"
-    "  ('pink', "   SQL_INT(RX_TRACK_RGB_PINK)   "), ('red', "    SQL_INT(RX_TRACK_RGB_RED)    "),"
-    "  ('orange', " SQL_INT(RX_TRACK_RGB_ORANGE) "), ('yellow', " SQL_INT(RX_TRACK_RGB_YELLOW) "),"
-    "  ('green', "  SQL_INT(RX_TRACK_RGB_GREEN)  "), ('aqua', "   SQL_INT(RX_TRACK_RGB_AQUA)   "),"
-    "  ('blue', "   SQL_INT(RX_TRACK_RGB_BLUE)   "), ('purple', " SQL_INT(RX_TRACK_RGB_PURPLE) ")),"
-    "rgb(name, r, g, b) AS (SELECT name, (rgb >> 16) & 255, (rgb >> 8) & 255, rgb & 255 FROM palette),"
-    "hsv(name, r, g, b, mx, d) AS (SELECT name, r, g, b, max(r, g, b), max(r, g, b) - min(r, g, b)"
-    "                              FROM rgb),"
-    "angle(name, h) AS (SELECT name, CASE"
-    "                     WHEN d = 0 THEN NULL"
-    "                     WHEN mx = r THEN 60.0 * ((g - b) * 1.0 / d)"
-    "                     WHEN mx = g THEN 60.0 * ((b - r) * 1.0 / d + 2.0)"
-    "                     ELSE 60.0 * ((r - g) * 1.0 / d + 4.0) END FROM hsv) "
-    "UPDATE track SET hue = (SELECT CASE WHEN h < 0 THEN h + 360.0 ELSE h END FROM angle"
-    "                        WHERE angle.name = lower(trim(track.color, ' ' || char(9)))) "
-    "WHERE color != '';"
-    "ALTER TABLE track DROP COLUMN color;";
-
-/* The model's tagging (rxbox/ml.h): which version of it tagged the track,
- * 0 for never, and its four measures, NULL until it has. */
-static const Column columns_v5[] = {
-    { "track", "tags_version", "INTEGER NOT NULL DEFAULT 0" },
-    { "track", "ml_club",      "REAL" },
-    { "track", "ml_intensity", "REAL" },
-    { "track", "ml_valence",   "REAL" },
-    { "track", "ml_vocals",    "REAL" },
-};
-
-/* A dynamic grid's beats (rxbox/model.h): a section that is one measured
- * beat. The sections there were are all straight. */
-static const Column columns_v6[] = {
-    { "grid_section", "measured", "INTEGER NOT NULL DEFAULT 0" },
-};
-
-/* The colour the model picks from the legend (rxbox/ml.h): the
- * probability of each of the eight colours, NULL until a tagging gave
- * them, and the hash of the legend asked, 0 for none. */
-static const Column columns_v7[] = {
-    { "track", "ml_colors", "BLOB" },
-    { "track", "ml_legend", "INTEGER NOT NULL DEFAULT 0" },
-};
-
-/* A cover once (artwork), each track linked to its own (track_artwork);
- * a cover no track has any more goes. Runs while artwork is still one row
- * per track. */
-static const char schema_v8[] =
-    "ALTER TABLE artwork RENAME TO artwork_v7;"
-    "CREATE TABLE artwork ("
-    "  id     INTEGER PRIMARY KEY,"
-    "  size   INTEGER NOT NULL,"
-    "  jpeg   BLOB NOT NULL,"
-    "  width  INTEGER NOT NULL,"
-    "  height INTEGER NOT NULL"
-    ") STRICT;"
-    "CREATE INDEX artwork_size ON artwork(size);"
-    "CREATE TABLE track_artwork ("
-    "  track_id   INTEGER PRIMARY KEY REFERENCES track(id) ON DELETE CASCADE,"
-    "  artwork_id INTEGER NOT NULL REFERENCES artwork(id)"
-    ") STRICT;"
-    "CREATE INDEX track_artwork_artwork ON track_artwork(artwork_id);"
-    "CREATE TRIGGER artwork_unlinked AFTER DELETE ON track_artwork BEGIN"
-    "  DELETE FROM artwork WHERE id = old.artwork_id AND"
-    "    NOT EXISTS (SELECT 1 FROM track_artwork WHERE artwork_id = old.artwork_id);"
-    "END;"
-    "CREATE TRIGGER artwork_relinked AFTER UPDATE OF artwork_id ON track_artwork BEGIN"
-    "  DELETE FROM artwork WHERE id = old.artwork_id AND"
-    "    NOT EXISTS (SELECT 1 FROM track_artwork WHERE artwork_id = old.artwork_id);"
-    "END;"
-    "INSERT INTO artwork (size, jpeg, width, height)"
-    "  SELECT length(jpeg), jpeg, width, height FROM artwork_v7"
-    "  GROUP BY jpeg ORDER BY min(track_id);"
-    "INSERT INTO track_artwork (track_id, artwork_id)"
-    "  SELECT o.track_id, a.id FROM artwork_v7 o"
-    "  JOIN artwork a ON a.size = length(o.jpeg) AND a.jpeg = o.jpeg;"
-    "DROP TABLE artwork_v7;";
-
-/* One step: its columns first, then its SQL, which runs only while
- * `table` has the column `while_column` when that is set. */
-typedef struct Migration {
-    const Column *add;
-    int           nb_add;
-    const char   *sql;
-    const char   *table, *while_column;
-} Migration;
-
-#define COLUMNS(c) .add = (c), .nb_add = (int)RX_ARRAY_ELEMS(c)
-
-static const Migration migrations[] = {
-    { .sql = schema_v1 },                                       /* 0 -> 1 */
-    { COLUMNS(columns_v2) },                                    /* 1 -> 2 */
-    { .sql = schema_v3 },                                       /* 2 -> 3 */
-    { COLUMNS(columns_v4), .sql = schema_v4,                    /* 3 -> 4 */
-      .table = "track", .while_column = "color" },
-    { COLUMNS(columns_v5) },                                    /* 4 -> 5 */
-    { COLUMNS(columns_v6) },                                    /* 5 -> 6 */
-    { COLUMNS(columns_v7) },                                    /* 6 -> 7 */
-    { .sql = schema_v8, .table = "artwork", .while_column = "track_id" },  /* 7 -> 8 */
-};
+/* Schema 8 to 9: each packed waveform blob (rx_waveforms_pack) cut in two
+ * where its previews end. A blob too short to have detail is damaged or
+ * of a format before the previews' layout: it goes, and the track's
+ * waveforms are made again. Every other table is as schema 8 had it. */
+static const char from_v8[] =
+    WAVEFORM_TABLES
+    "INSERT INTO waveform_preview (track_id, data)"
+    "  SELECT track_id, substr(data, 1, " SQL_INT(RX_WAVE_PACKED_PREVIEW) ") FROM waveform"
+    "  WHERE length(data) > " SQL_INT(RX_WAVE_PACKED_PREVIEW) ";"
+    "INSERT INTO waveform_detail (track_id, data)"
+    "  SELECT track_id, substr(data, " SQL_INT(RX_WAVE_PACKED_PREVIEW) " + 1) FROM waveform"
+    "  WHERE length(data) > " SQL_INT(RX_WAVE_PACKED_PREVIEW) ";"
+    "DROP TABLE waveform;";
 
 /* ------------------------------------------------------------ statements */
 
@@ -420,9 +313,12 @@ static const char *const fixed_sql[RX_STMT_NB] = {
                                 "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
     [RX_STMT_TAG_CLEAR]       = "DELETE FROM track_tag WHERE track_id = ?1",
     [RX_STMT_TAG_INSERT]      = "INSERT INTO track_tag (track_id, position, tag) VALUES (?1, ?2, ?3)",
-    [RX_STMT_WAVE_PUT]        = "INSERT INTO waveform (track_id, data) VALUES (?1, ?2) "
+    [RX_STMT_PREVIEW_PUT]     = "INSERT INTO waveform_preview (track_id, data) VALUES (?1, ?2) "
                                 "ON CONFLICT (track_id) DO UPDATE SET data = excluded.data",
-    [RX_STMT_WAVE_GET]        = "SELECT data FROM waveform WHERE track_id = ?1",
+    [RX_STMT_PREVIEW_GET]     = "SELECT data FROM waveform_preview WHERE track_id = ?1",
+    [RX_STMT_DETAIL_PUT]      = "INSERT INTO waveform_detail (track_id, data) VALUES (?1, ?2) "
+                                "ON CONFLICT (track_id) DO UPDATE SET data = excluded.data",
+    [RX_STMT_DETAIL_GET]      = "SELECT data FROM waveform_detail WHERE track_id = ?1",
     [RX_STMT_ART_FIND]        = "SELECT id FROM artwork WHERE size = ?1 AND jpeg = ?2",
     [RX_STMT_ART_PUT]         = "INSERT INTO artwork (size, jpeg, width, height) "
                                 "VALUES (?1, ?2, ?3, ?4)",
@@ -715,157 +611,91 @@ static int check_identity(RXDb *db, int64_t *version)
         rx_err("%s is not an rxbox library", db->path);
         return RX_ERROR(EINVAL);
     }
-    int64_t current = (int64_t)RX_ARRAY_ELEMS(migrations);
-    if (*version > current) {
-        rx_err("%s was written by a newer rxbox (schema %lld, this build knows %lld); "
-               "not touching it", db->path, (long long)*version, (long long)current);
+    if (*version > RX_DB_SCHEMA) {
+        rx_err("%s was written by a newer rxbox (schema %lld, this build knows %d); "
+               "not touching it", db->path, (long long)*version, RX_DB_SCHEMA);
+        return RX_ERROR(EPROTO);
+    }
+    if (*version > 0 && *version < 8) {
+        rx_err("%s is of schema %lld, older than this build converts (8); open it once with "
+               "an rxbox of schema 8 (before 2026-10-15), then with this one",
+               db->path, (long long)*version);
         return RX_ERROR(EPROTO);
     }
     return 0;
 }
 
-static int has_column(RXDb *db, const char *table, const char *column, bool *has)
+/* Makes a new library (version 0) or converts one of schema 8, in one
+ * transaction with the version bump. The version is read again under the
+ * write lock: another process may have made the library meanwhile (it
+ * is then at this schema and there is nothing to do), or a newer rxbox
+ * taken it past this build's schema. A converted library is vacuumed
+ * once, outside the transaction, to switch to incremental auto_vacuum
+ * and give back the old blobs' pages. */
+static int upgrade(RXDb *db, int64_t version)
 {
-    static const char sql[] = "SELECT count(*) FROM pragma_table_info(?1) WHERE name = ?2";
-    sqlite3_stmt *st = rx_db_prepare(db, sql);
-    if (!st)
-        return RX_ERROR(EIO);
-    rx_db_bind_text(db, st, 1, table);
-    rx_db_bind_text(db, st, 2, column);
-    int ret = rx_db_row(db, st, sql);
-    *has = ret > 0 && sqlite3_column_int64(st, 0) > 0;
-    sqlite3_finalize(st);
-    return ret < 0 ? ret : 0;
-}
-
-/* Adds the columns the table lacks; *added counts them. */
-static int add_columns(RXDb *db, const Column *c, int nb, int *added)
-{
-    for (int i = 0; i < nb; i++) {
-        bool has;
-        int ret = has_column(db, c[i].table, c[i].name, &has);
-        if (ret < 0)
-            return ret;
-        if (has)
-            continue;
-        char sql[256];
-        snprintf(sql, sizeof(sql), "ALTER TABLE %s ADD COLUMN %s %s", c[i].table, c[i].name, c[i].decl);
-        if ((ret = rx_db_exec(db, sql)) < 0)
-            return ret;
-        if (added)
-            (*added)++;
-    }
-    return 0;
-}
-
-static int run_migration(RXDb *db, const Migration *m)
-{
-    int ret = add_columns(db, m->add, m->nb_add, NULL);
-    if (ret < 0 || !m->sql)
-        return ret;
-    bool run = true;
-    if (m->while_column && (ret = has_column(db, m->table, m->while_column, &run)) < 0)
-        return ret;
-    return run ? rx_db_exec(db, m->sql) : 0;
-}
-
-/* The columns every migration adds, after migrating. Two branches each
- * defined a schema 6 (the measured beats, the colour legend; the second
- * became 7 at the merge): a library migrated by the other one is at a
- * version whose columns are not this build's, and a step it skipped
- * left its columns out. They are added here (each is plain data with a
- * default), and then must all be there. */
-static int check_columns(RXDb *db)
-{
-    int missing = 0;
-    for (size_t m = 0; m < RX_ARRAY_ELEMS(migrations); m++) {
-        for (int i = 0; i < migrations[m].nb_add; i++) {
-            bool has;
-            int ret = has_column(db, migrations[m].add[i].table, migrations[m].add[i].name, &has);
-            if (ret < 0)
-                return ret;
-            missing += !has;
-        }
-    }
-    if (!missing)
+    if (version == RX_DB_SCHEMA)
         return 0;
-
-    int added = 0;
+    int64_t pages = 0, page_size = 0;
+    pragma_int(db, "PRAGMA page_count", &pages);
+    pragma_int(db, "PRAGMA page_size", &page_size);
     int ret = rx_db_begin(db);
-    for (size_t m = 0; ret >= 0 && m < RX_ARRAY_ELEMS(migrations); m++)
-        ret = add_columns(db, migrations[m].add, migrations[m].nb_add, &added);
-    if (ret >= 0)
-        ret = rx_db_commit(db);
-    else
+    if (ret < 0)
+        return ret;
+    int64_t now = version;
+    ret = pragma_int(db, "PRAGMA user_version", &now);
+    if (ret >= 0 && now > RX_DB_SCHEMA) {
         rx_db_rollback(db);
+        rx_err("%s was converted by a newer rxbox meanwhile (schema %lld, this build knows %d); "
+               "not touching it", db->path, (long long)now, RX_DB_SCHEMA);
+        return RX_ERROR(EPROTO);
+    }
+    if (ret >= 0 && now == version) {
+        char bump[96];
+        snprintf(bump, sizeof(bump), "PRAGMA user_version = %d; PRAGMA application_id = %d",
+                 RX_DB_SCHEMA, RX_DB_APPLICATION_ID);
+        ret = rx_db_exec(db, version ? from_v8 : schema);
+        if (ret >= 0)
+            ret = rx_db_exec(db, bump);
+    } else if (ret >= 0 && now != RX_DB_SCHEMA) {
+        ret = RX_ERROR(EPROTO);
+    }
     if (ret < 0) {
-        rx_err("%s: the library lacks columns of its schema and they could not be added", db->path);
+        rx_db_rollback(db);
+        rx_err("%s: %s schema %d failed", db->path, version ? "conversion to" : "making",
+               RX_DB_SCHEMA);
         return ret;
     }
-    if (added)
-        rx_info("%s: added %d column%s its schema lacked", db->path, added, added == 1 ? "" : "s");
-    for (size_t m = 0; m < RX_ARRAY_ELEMS(migrations); m++) {
-        for (int i = 0; i < migrations[m].nb_add; i++) {
-            bool has;
-            ret = has_column(db, migrations[m].add[i].table, migrations[m].add[i].name, &has);
-            if (ret < 0)
-                return ret;
-            if (!has) {
-                rx_err("%s: column %s.%s missing", db->path, migrations[m].add[i].table,
-                       migrations[m].add[i].name);
-                return RX_ERROR(EPROTO);
-            }
-        }
+    ret = rx_db_commit(db);
+    if (ret < 0 || now != version || !version)
+        return ret;
+
+    ret = rx_db_exec(db, "PRAGMA auto_vacuum = INCREMENTAL; VACUUM");
+    if (ret < 0) {
+        rx_warn("%s: converted to schema %d, but not vacuumed; it keeps its size", db->path,
+                RX_DB_SCHEMA);
+        return 0;
     }
+    int64_t after = 0;
+    pragma_int(db, "PRAGMA page_count", &after);
+    rx_info("%s: library converted to schema %d, %.1f MB to %.1f MB", db->path, RX_DB_SCHEMA,
+            pages * page_size / 1e6, after * page_size / 1e6);
     return 0;
 }
 
-static int migrate(RXDb *db, int64_t version)
+int rx_db_trim(RXDb *db)
 {
-    int64_t current = (int64_t)RX_ARRAY_ELEMS(migrations);
-    /* A new library goes through every migration; only an existing one is
-     * said to be upgraded. */
-    bool existing = version > 0;
-    while (version < current) {
-        int ret = rx_db_begin(db);
-        if (ret < 0)
-            return ret;
-        /* Again under the write lock: another process opening the same new
-         * library at the same moment may have created it meanwhile, or a
-         * newer rxbox taken it past this build's schema. */
-        int64_t now = version;
-        ret = pragma_int(db, "PRAGMA user_version", &now);
-        if (ret >= 0 && now > current) {
-            rx_db_rollback(db);
-            rx_err("%s was migrated by a newer rxbox meanwhile (schema %lld, this build knows %lld); "
-                   "not touching it", db->path, (long long)now, (long long)current);
-            return RX_ERROR(EPROTO);
-        }
-        if (ret >= 0 && now == version) {
-            char bump[96];
-            snprintf(bump, sizeof(bump), "PRAGMA user_version = %lld; PRAGMA application_id = %d",
-                     (long long)(version + 1), RX_DB_APPLICATION_ID);
-            ret = run_migration(db, &migrations[version]);
-            if (ret >= 0)
-                ret = rx_db_exec(db, bump);
-        }
-        if (ret < 0) {
-            rx_db_rollback(db);
-            rx_err("%s: migration to schema %lld failed", db->path, (long long)(version + 1));
-            return ret;
-        }
-        ret = rx_db_commit(db);
-        if (ret < 0)
-            return ret;
-        if (now != version) {
-            version = now;
-            continue;
-        }
-        if (existing)
-            rx_info("%s: library upgraded to schema %lld", db->path, (long long)(version + 1));
-        version++;
-    }
-    return check_columns(db);
+    int64_t free_pages = 0, vacuum = 0;
+    int ret = pragma_int(db, "PRAGMA freelist_count", &free_pages);
+    if (ret >= 0)
+        ret = pragma_int(db, "PRAGMA auto_vacuum", &vacuum);
+    if (ret < 0 || vacuum != 2 || free_pages < 256)
+        return ret;
+    /* sqlite3_exec steps it to the end: each step frees one page. */
+    ret = rx_db_exec(db, "PRAGMA incremental_vacuum");
+    if (ret >= 0)
+        rx_debug("%s: %lld free pages given back", db->path, (long long)free_pages);
+    return ret;
 }
 
 /* WAL is a property of the file. Switching needs the database to itself:
@@ -917,12 +747,16 @@ int rx_db_open(RXDb **out, const char *path)
     ret = rx_db_exec(db, "PRAGMA foreign_keys = ON");
     if (ret >= 0)
         ret = check_identity(db, &version);
+    /* Before the first table, and before WAL, which writes the header:
+     * after either it no longer takes. */
+    if (ret >= 0 && !version)
+        ret = rx_db_exec(db, "PRAGMA auto_vacuum = INCREMENTAL");
     if (ret >= 0)
         ret = set_wal(db);
     if (ret >= 0)
         ret = rx_db_exec(db, "PRAGMA synchronous = NORMAL");
     if (ret >= 0)
-        ret = migrate(db, version);
+        ret = upgrade(db, version);
     if (ret < 0)
         goto fail;
 

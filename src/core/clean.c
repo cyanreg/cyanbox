@@ -23,7 +23,7 @@
  *    hash with them.
  *  - A cover (artwork) no track has: gone. The triggers remove a cover
  *    with its last track; this takes what they could not have seen (a
- *    library edited by hand, one from before them).
+ *    library edited by hand).
  *  - Settings: config.c's rx_core_config_clean (a value its key does not
  *    take, a key rxbox does not know), and for My Settings the formats
  *    module's rx_settings_clean, called by the CLI and the app after the
@@ -41,7 +41,7 @@
 
 /* The eight hues from the RGB the colour table holds (rxbox/colors.h),
  * by the formula of rx_rgb_hue (src/formats/colors.c), which this module
- * does not link: the schema 4 migration (db.c) does the same in SQL. */
+ * does not link. */
 static double rgb_hue(uint32_t rgb)
 {
     int r = (int)(rgb >> 16 & 0xFF), g = (int)(rgb >> 8 & 0xFF), b = (int)(rgb & 0xFF);

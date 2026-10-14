@@ -644,7 +644,8 @@ static int load_tags(RXLibrary *lib)
 
 static int load_waveform_flags(RXLibrary *lib)
 {
-    sqlite3_stmt *st = rx_db_prepare(lib->db, "SELECT track_id FROM waveform ORDER BY track_id");
+    sqlite3_stmt *st = rx_db_prepare(lib->db,
+                                     "SELECT track_id FROM waveform_preview ORDER BY track_id");
     if (!st)
         return RX_ERROR(EIO);
     Cursor cur = { .lib = lib };
@@ -750,8 +751,11 @@ int rx_library_open(RXLibrary *lib, const char *root)
     /* A library that cannot be written keeps its old keys and opens. */
     if (rx_core_config_migrate(lib) < 0)
         rx_warn("could not move the old interface settings to the device settings");
-    /* What is not valid, or not known, goes (clean.c). */
+    /* What is not valid, or not known, goes (clean.c); then the pages it
+     * and earlier removals freed go back to the file system. */
     rx_core_clean(lib);
+    if (rx_db_trim(lib->db) < 0)
+        rx_warn("library: its free pages could not be given back");
 
     lib->generation = 1;
     return 0;
@@ -1569,51 +1573,84 @@ int rx_library_rescan_missing(RXLibrary *lib)
 
 /* ------------------------------------------------------- waveforms, art */
 
-int rx_core_waveform_blob_put(RXLibrary *lib, uint64_t id, const uint8_t *data, size_t size)
+static int put_blob(RXLibrary *lib, enum RXStmtId stmt, uint64_t id, const uint8_t *data,
+                    size_t size)
+{
+    sqlite3_stmt *st = rx_db_stmt(lib->db, stmt);
+    rx_db_bind_int(lib->db, st, 1, (int64_t)id);
+    rx_db_bind_blob(lib->db, st, 2, data, size);
+    return rx_db_done(lib->db, st, "saving waveforms");
+}
+
+int rx_core_waveform_blob_put(RXLibrary *lib, uint64_t id, const uint8_t *data, size_t size,
+                              size_t split)
 {
     RXTrack *t = rx_library_find_id(lib, id);
     if (!t)
         return RX_ERROR(ENOENT);
-    sqlite3_stmt *st = rx_db_stmt(lib->db, RX_STMT_WAVE_PUT);
-    rx_db_bind_int(lib->db, st, 1, (int64_t)id);
-    rx_db_bind_blob(lib->db, st, 2, data, size);
-    int ret = rx_db_done(lib->db, st, "saving waveforms");
+    if (!split || split >= size)
+        return RX_ERROR(EINVAL);
+    int ret = rx_db_begin(lib->db);
     if (ret < 0)
+        return ret;
+    ret = put_blob(lib, RX_STMT_PREVIEW_PUT, id, data, split);
+    if (ret >= 0)
+        ret = put_blob(lib, RX_STMT_DETAIL_PUT, id, data + split, size - split);
+    if (ret < 0) {
+        rx_db_rollback(lib->db);
+        return ret;
+    }
+    if ((ret = rx_db_commit(lib->db)) < 0)
         return ret;
     t->has_waveforms = true;
     lib->generation++;
     return 0;
 }
 
-int rx_core_waveform_blob_get(const RXLibrary *lib, uint64_t id, uint8_t **data, size_t *size)
+/* Appends a blob column of the row `stmt` finds to *data. */
+static int get_blob(const RXLibrary *lib, enum RXStmtId stmt, uint64_t id, uint8_t **data,
+                    size_t *size)
 {
-    *data = NULL;
-    *size = 0;
-    sqlite3_stmt *st = rx_db_stmt(lib->db, RX_STMT_WAVE_GET);
+    sqlite3_stmt *st = rx_db_stmt(lib->db, stmt);
     rx_db_bind_int(lib->db, st, 1, (int64_t)id);
     int ret = rx_db_row(lib->db, st, "loading waveforms");
     if (ret <= 0)
         return ret < 0 ? ret : RX_ERROR(ENOENT);
     size_t n = (size_t)sqlite3_column_bytes(st, 0);
-    const void *blob = sqlite3_column_blob(st, 0);
-    uint8_t *copy = malloc(n ? n : 1);
-    if (copy && n)
-        memcpy(copy, blob, n);
+    uint8_t *grown = realloc(*data, *size + n + 1);
+    if (grown) {
+        if (n)
+            memcpy(grown + *size, sqlite3_column_blob(st, 0), n);
+        *data = grown;
+        *size += n;
+    }
     sqlite3_reset(st);
-    if (!copy)
-        return RX_ERROR(ENOMEM);
-    *data = copy;
-    *size = n;
-    return 0;
+    return grown ? 0 : RX_ERROR(ENOMEM);
+}
+
+int rx_core_waveform_blob_get(const RXLibrary *lib, uint64_t id, bool detail, uint8_t **data,
+                              size_t *size)
+{
+    *data = NULL;
+    *size = 0;
+    int ret = get_blob(lib, RX_STMT_PREVIEW_GET, id, data, size);
+    if (ret >= 0 && detail)
+        ret = get_blob(lib, RX_STMT_DETAIL_GET, id, data, size);
+    if (ret < 0) {
+        free(*data);
+        *data = NULL;
+        *size = 0;
+    }
+    return ret;
 }
 
 int rx_core_waveform_blob_head(const RXLibrary *lib, uint64_t id, uint8_t *head, size_t size)
 {
-    /* Incremental blob I/O reads the pages the bytes are on and no more:
-     * the rest of a blob of a few hundred kB stays on disk. track_id is
-     * the waveform table's rowid. A missing row is SQLITE_ERROR. */
+    /* Incremental blob I/O reads the pages the bytes are on and no more.
+     * track_id is the table's rowid. A missing row is SQLITE_ERROR. */
     sqlite3_blob *b = NULL;
-    int rc = sqlite3_blob_open(lib->db->db, "main", "waveform", "data", (sqlite3_int64)id, 0, &b);
+    int rc = sqlite3_blob_open(lib->db->db, "main", "waveform_preview", "data",
+                               (sqlite3_int64)id, 0, &b);
     if (rc == SQLITE_ERROR) {
         sqlite3_blob_close(b);
         return RX_ERROR(ENOENT);

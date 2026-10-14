@@ -3,19 +3,15 @@
 /* The SQLite library (src/core/library.c, db.c, config.c): a library made
  * in a scratch directory from real WAV files, edited, closed and opened
  * again, and checked field by field, then with SQLite's own integrity
- * and foreign key checks; a library of schema 1 migrated, its analysis
- * results then older than the analyser; a library of schema 3 whose
- * colour names become hues, checked against src/formats/colors.c (built
- * into this test, as core does not link the formats module); the file's
- * comment left out on import unless import.comment asks for it; the
- * legend's settings and the model's colour probabilities, and a library
- * of schema 5 that gains them; a library at either branch's schema 6,
- * and one a newer rxbox migrates while this one opens it; covers stored
- * once, going with their last track, and a library of schema 7 whose
- * per-track covers become shared ones.
+ * and foreign key checks; the file's comment left out on import unless
+ * import.comment asks for it; the legend's settings and the model's colour
+ * probabilities; a dynamic grid kept; covers stored once, going with their
+ * last track; waveforms stored as previews and detail apart; a library of
+ * schema 8 converted, an older one refused, and one a newer rxbox converts
+ * while this one opens it; free pages given back.
  * Waveforms are stored through the raw blob layer because the analysis
  * module (which packs them) is not linked here; rxbox/analysis.h is used
- * for its version constants and inline helper only. */
+ * for its constants and inline helpers only. */
 
 #include "rxbox/library.h"
 
@@ -77,32 +73,6 @@ static double hue_column(const RXLibrary *lib, uint64_t id)
     }
     free(sql);
     return v;
-}
-
-/* Takes a library back to schema 5: without schema 6's measured-beat
- * column and schema 7's colour probabilities and legend. */
-static int back_to_schema5(sqlite3 *db)
-{
-    return sqlite3_exec(db, "ALTER TABLE grid_section DROP COLUMN measured;"
-                            "ALTER TABLE track DROP COLUMN ml_colors;"
-                            "ALTER TABLE track DROP COLUMN ml_legend;", NULL, NULL, NULL);
-}
-
-/* Takes a library back to schema 3's track table: without schema 5's
- * tagging columns, and the colour name column instead of the hue, for the
- * migrations from older schemas. */
-static int back_to_schema3(sqlite3 *db)
-{
-    int rc = back_to_schema5(db);
-    if (rc != SQLITE_OK)
-        return rc;
-    return sqlite3_exec(db, "ALTER TABLE track DROP COLUMN tags_version;"
-                            "ALTER TABLE track DROP COLUMN ml_club;"
-                            "ALTER TABLE track DROP COLUMN ml_intensity;"
-                            "ALTER TABLE track DROP COLUMN ml_valence;"
-                            "ALTER TABLE track DROP COLUMN ml_vocals;"
-                            "ALTER TABLE track ADD COLUMN color TEXT NOT NULL DEFAULT '';"
-                            "ALTER TABLE track DROP COLUMN hue", NULL, NULL, NULL);
 }
 
 static void make_music(void)
@@ -208,7 +178,11 @@ static void test_create_and_add(void)
 
     sqlite3_stmt *st;
     sqlite3_prepare_v2(lib.db->db, "PRAGMA user_version", -1, &st, NULL);
-    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 8);
+    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 9);
+    sqlite3_finalize(st);
+    /* Made with incremental auto_vacuum, which only takes before WAL. */
+    sqlite3_prepare_v2(lib.db->db, "PRAGMA auto_vacuum", -1, &st, NULL);
+    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 2);
     sqlite3_finalize(st);
     sqlite3_prepare_v2(lib.db->db, "PRAGMA journal_mode", -1, &st, NULL);
     CHECK(sqlite3_step(st) == SQLITE_ROW && !strcmp((const char *)sqlite3_column_text(st, 0), "wal"));
@@ -339,7 +313,9 @@ static void test_edit_and_reopen(void)
 
     CHECK(rx_library_artwork_save(&lib, 1, jpeg, sizeof(jpeg), 240, 240) == 0);
     CHECK(rx_library_artwork_save(&lib, 99, jpeg, sizeof(jpeg), 240, 240) == RX_ERROR(ENOENT));
-    CHECK(rx_core_waveform_blob_put(&lib, 1, blob, sizeof(blob)) == 0);
+    CHECK(rx_core_waveform_blob_put(&lib, 1, blob, sizeof(blob), 4) == 0);
+    CHECK(rx_core_waveform_blob_put(&lib, 1, blob, sizeof(blob), sizeof(blob)) ==
+          RX_ERROR(EINVAL));
     CHECK(rx_library_has_waveforms(&lib, 1) && !rx_library_has_waveforms(&lib, 2));
 
     unsigned gen = lib.generation;
@@ -444,10 +420,14 @@ static void test_edit_and_reopen(void)
     CHECK(size == sizeof(jpeg) && !memcmp(data, jpeg, size) && w == 240 && h == 240);
     free(data);
     CHECK(rx_library_artwork_load(&lib, 2, &data, &size, &w, &h) == RX_ERROR(ENOENT));
-    CHECK(rx_core_waveform_blob_get(&lib, 1, &data, &size) == 0);
+    CHECK(rx_core_waveform_blob_get(&lib, 1, true, &data, &size) == 0);
     CHECK(size == sizeof(blob) && !memcmp(data, blob, size));
     free(data);
-    CHECK(rx_core_waveform_blob_get(&lib, 2, &data, &size) == RX_ERROR(ENOENT));
+    /* The preview alone: the bytes before the split. */
+    CHECK(rx_core_waveform_blob_get(&lib, 1, false, &data, &size) == 0);
+    CHECK(size == 4 && !memcmp(data, blob, size));
+    free(data);
+    CHECK(rx_core_waveform_blob_get(&lib, 2, true, &data, &size) == RX_ERROR(ENOENT) && !data);
 
     /* A player-only key removed from the config goes from the database. */
     free(lib.cfg.player[1].key);
@@ -567,64 +547,10 @@ static void test_refresh(void)
     rx_library_close(&lib);
 }
 
-/* Schema 3: a grid stored by schema 2, whose first section extended back to
- * the start of the track, has that section start at its first beat at or
- * after 0, numbered as that beat was, so it keeps the beats it had. */
-static void test_grid_migration(void)
+/* A dynamic grid's measured beats are kept through a save and an open. */
+static void test_dynamic_grid(void)
 {
-    RXLibrary lib;
-    CHECK(rx_library_open(&lib, root) == 0);
-    RXTrack *b = rx_library_find_id(&lib, 2), *c = rx_library_find_id(&lib, 3);
-    CHECK(b && c);
-    if (!b || !c) {
-        rx_library_close(&lib);
-        return;
-    }
-    rx_grid_free(&b->grid);
-    rx_grid_add_section(&b->grid, 1.5, 120.0, 1);
-    rx_grid_free(&c->grid);
-    rx_grid_add_section(&c->grid, 61.0, 120.0, 0);
-    rx_grid_add_section(&c->grid, 100.0, 125.0, 0);
-    CHECK(rx_library_save_track(&lib, b) == 0 && rx_library_save_track(&lib, c) == 0);
-    rx_library_close(&lib);
-    char *db = path_in(root, "library.db");
-    sqlite3 *s;
-    CHECK(sqlite3_open(db, &s) == SQLITE_OK);
-    CHECK(back_to_schema3(s) == SQLITE_OK);
-    CHECK(sqlite3_exec(s, "PRAGMA user_version = 2", NULL, NULL, NULL) == SQLITE_OK);
-    sqlite3_close(s);
-    free(db);
-
-    CHECK(rx_library_open(&lib, root) == 0);
-    b = rx_library_find_id(&lib, 2);
-    c = rx_library_find_id(&lib, 3);
-    RXTrack *a = rx_library_find_id(&lib, 1);
-    CHECK(b && b->grid.nb_sections == 1);
-    if (b && b->grid.nb_sections == 1)
-        CHECK(b->grid.sections[0].start == 0.0 && b->grid.sections[0].beat == 2);
-    CHECK(c && c->grid.nb_sections == 2);
-    if (c && c->grid.nb_sections == 2) {
-        CHECK(c->grid.sections[0].start == 0.0 && c->grid.sections[0].beat == 3);
-        CHECK(c->grid.sections[1].start == 100.0 && c->grid.sections[1].beat == 0);
-        int bar, beat;
-        rx_grid_bar_of(&c->grid, 61.0, &bar, &beat);
-        CHECK(beat == 1);
-    }
-    /* A first beat within a period of 0 is where it was. */
-    CHECK(a && a->grid.nb_sections == 2 && a->grid.sections[0].start == 0.3125);
-    sqlite3_stmt *st;
-    sqlite3_prepare_v2(lib.db->db, "PRAGMA user_version", -1, &st, NULL);
-    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 8);
-    sqlite3_finalize(st);
-    rx_library_close(&lib);
-}
-
-/* Schema 6: a library without the measured-beat column opens with every
- * grid as it was, straight, and takes a dynamic grid from then on. */
-static void test_measured_migration(void)
-{
-    char *dir = test_dir("library-v5");
-    char *db = path_in(dir, "library.db");
+    char *dir = test_dir("library-dynamic");
     char *a_path = path_in(music, "a.wav");
     RXLibrary lib;
     int err;
@@ -638,17 +564,7 @@ static void test_measured_migration(void)
     }
     rx_library_close(&lib);
 
-    sqlite3 *s;
-    CHECK(sqlite3_open(db, &s) == SQLITE_OK);
-    CHECK(back_to_schema5(s) == SQLITE_OK);
-    CHECK(sqlite3_exec(s, "PRAGMA user_version = 5", NULL, NULL, NULL) == SQLITE_OK);
-    sqlite3_close(s);
-
     CHECK(rx_library_open(&lib, dir) == 0);
-    sqlite3_stmt *st;
-    sqlite3_prepare_v2(lib.db->db, "PRAGMA user_version", -1, &st, NULL);
-    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 8);
-    sqlite3_finalize(st);
     a = rx_library_find_path(&lib, a_path);
     CHECK(a && a->grid.nb_sections == 2 && !rx_grid_dynamic(&a->grid));
     if (a && a->grid.nb_sections == 2) {
@@ -667,63 +583,6 @@ static void test_measured_migration(void)
     rx_library_close(&lib);
 
     free(a_path);
-    free(db);
-    test_rm_rf(dir);
-    free(dir);
-}
-
-/* Schema 4: rekordbox's eight colour names become their colours' hues, the
- * hue colors.c computes from the same RGB, so each comes back as its own
- * entry on the stick; a name the column should not have held, and no
- * name, become no colour. */
-static void test_colour_migration(void)
-{
-    char *dir = test_dir("library-v3");
-    char *db = path_in(dir, "library.db");
-    RXLibrary lib;
-    CHECK(rx_library_open(&lib, dir) == 0);
-    rx_library_close(&lib);
-
-    sqlite3 *s;
-    CHECK(sqlite3_open(db, &s) == SQLITE_OK);
-    CHECK(back_to_schema3(s) == SQLITE_OK);
-    static const char *const names[] = {
-        "pink", "red", "orange", "yellow", "green", "aqua", "blue", "purple",
-        " Aqua ", "mauve", "",
-    };
-    for (size_t i = 0; i < RX_ARRAY_ELEMS(names); i++) {
-        char *sql = rx_asprintf("INSERT INTO track (path, color) VALUES ('/gone/%zu.wav', '%s')",
-                                i, names[i]);
-        CHECK(sqlite3_exec(s, sql, NULL, NULL, NULL) == SQLITE_OK);
-        free(sql);
-    }
-    CHECK(sqlite3_exec(s, "PRAGMA user_version = 3", NULL, NULL, NULL) == SQLITE_OK);
-    sqlite3_close(s);
-
-    CHECK(rx_library_open(&lib, dir) == 0);
-    CHECK(lib.nb_tracks == (int)RX_ARRAY_ELEMS(names));
-    for (int i = 0; i < lib.nb_tracks && i < RX_TRACK_COLORS; i++) {
-        double hue = lib.tracks[i]->meta.hue;
-        CHECK_NEAR(hue, rx_track_color_hue(i + 1), 1e-9);
-        CHECK(rx_track_color_nearest_hue(hue) == i + 1);
-    }
-    if (lib.nb_tracks == (int)RX_ARRAY_ELEMS(names)) {
-        CHECK_NEAR(lib.tracks[8]->meta.hue, rx_track_color_hue(6), 1e-9);
-        CHECK(lib.tracks[9]->meta.hue == RX_HUE_NONE && lib.tracks[10]->meta.hue == RX_HUE_NONE);
-        /* The scale: 0 red, pink near 300 (magenta), aqua near 180 (cyan). */
-        CHECK_NEAR(lib.tracks[0]->meta.hue, 300.0, 1e-9);
-        CHECK_NEAR(lib.tracks[1]->meta.hue, 0.0, 1e-9);
-        CHECK(lib.tracks[5]->meta.hue > 180.0 && lib.tracks[5]->meta.hue < 200.0);
-    }
-    sqlite3_stmt *st;
-    sqlite3_prepare_v2(lib.db->db, "SELECT count(*) FROM pragma_table_info('track') WHERE name = 'color'",
-                       -1, &st, NULL);
-    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 0);
-    sqlite3_finalize(st);
-    CHECK(rx_library_check(&lib) == 0);
-    rx_library_close(&lib);
-
-    free(db);
     test_rm_rf(dir);
     free(dir);
 }
@@ -833,44 +692,6 @@ static void test_legend(void)
     free(dir);
 }
 
-/* Schema 7: a library tagged by schema 5 gains the colour probabilities
- * (none yet) and the legend (none), and keeps its tagging. */
-static void test_migrate_v5(void)
-{
-    char *dir = test_dir("library-v5");
-    char *db = path_in(dir, "library.db");
-    RXLibrary lib;
-    CHECK(rx_library_open(&lib, dir) == 0);
-    rx_library_close(&lib);
-
-    sqlite3 *s;
-    CHECK(sqlite3_open(db, &s) == SQLITE_OK);
-    CHECK(back_to_schema5(s) == SQLITE_OK);
-    CHECK(sqlite3_exec(s, "INSERT INTO track (path, hue, tags_version, ml_club, ml_intensity, "
-                          "ml_valence, ml_vocals) VALUES ('/gone/a.wav', 300, 1, 0.5, 0.75, 0.25, 1);"
-                          "PRAGMA user_version = 5", NULL, NULL, NULL) == SQLITE_OK);
-    sqlite3_close(s);
-
-    CHECK(rx_library_open(&lib, dir) == 0);
-    CHECK(lib.nb_tracks == 1);
-    if (lib.nb_tracks == 1) {
-        const RXTrack *t = lib.tracks[0];
-        CHECK(t->meta.hue == 300.0 && t->tags_version == 1 && t->ml_intensity == 0.75f);
-        CHECK(t->ml_club == 0.5f && t->ml_valence == 0.25f && t->ml_vocals == 1.0f);
-        CHECK(isnan(t->ml_colors[0]) && isnan(t->ml_colors[7]) && !t->ml_legend);
-    }
-    sqlite3_stmt *st;
-    sqlite3_prepare_v2(lib.db->db, "PRAGMA user_version", -1, &st, NULL);
-    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 8);
-    sqlite3_finalize(st);
-    CHECK(rx_library_check(&lib) == 0);
-    rx_library_close(&lib);
-
-    free(db);
-    test_rm_rf(dir);
-    free(dir);
-}
-
 /* The library's cleaning (src/core/clean.c): what it holds that is not
  * valid, or not known, goes when it opens, and stays gone; what is valid
  * is left alone. Planted by SQL as an older rxbox, or a hand, could leave
@@ -893,6 +714,7 @@ static void test_clean(void)
         "X'0000004000000040000000400000004000000040000000400000004000000040', 77);"
         "INSERT INTO track (id, path, duration, hue, rating, key, key_version) "
         "VALUES (2, '/gone/b.wav', 100, 120, 3, 'Am', 1);"
+        /* c..j: the eight colours, by the hue colors.c gives each. */
         "INSERT INTO grid_section (track_id, idx, start, bpm) VALUES (1, 0, 0.5, 5000);"
         "INSERT INTO grid_section (track_id, idx, start, bpm) VALUES (2, 0, 0.5, 128);"
         "INSERT INTO cue (track_id, time, hot) VALUES (1, 10, -1);"           /* kept */
@@ -907,12 +729,23 @@ static void test_clean(void)
         "INSERT OR REPLACE INTO setting VALUES ('sync.history.x', '1:0');"
         "INSERT OR REPLACE INTO setting VALUES ('export.pdb', 'false');";
     CHECK(sqlite3_exec(s, sql, NULL, NULL, NULL) == SQLITE_OK);
+    for (int i = 0; i < RX_TRACK_COLORS; i++) {
+        char *ins = rx_asprintf("INSERT INTO track (id, path, hue) "
+                                "VALUES (%d, '/gone/%d.wav', %.17g)",
+                                3 + i, i, rx_track_color_hue(i + 1));
+        CHECK(sqlite3_exec(s, ins, NULL, NULL, NULL) == SQLITE_OK);
+        free(ins);
+    }
     sqlite3_close(s);
 
     for (int pass = 0; pass < 2; pass++) {
         /* The second open finds it as the first left it. */
         CHECK(rx_library_open(&lib, dir) == 0);
-        CHECK(lib.nb_tracks == 2);
+        CHECK(lib.nb_tracks == 2 + RX_TRACK_COLORS);
+        for (int i = 0; i < RX_TRACK_COLORS; i++) {
+            RXTrack *t = rx_library_find_id(&lib, 3 + i);
+            CHECK(t && t->meta.hue == rx_track_color_hue(i + 1));
+        }
         RXTrack *a = rx_library_find_id(&lib, 1), *b = rx_library_find_id(&lib, 2);
         CHECK(a && b);
         if (a && b) {
@@ -1079,8 +912,9 @@ static void test_missing_relocate_remove(void)
     CHECK(!rx_library_find_id(&lib, 1) && lib.nb_tracks == 2);
     CHECK(!rx_file_exists(cache));
     CHECK(pl->nb == 1 && pl->track_ids[0] == 3);
-    static const char *const tables[] = { "cue", "grid_section", "track_tag", "waveform",
-                                          "track_artwork", "play", "playlist_entry" };
+    static const char *const tables[] = { "cue", "grid_section", "track_tag", "waveform_preview",
+                                          "waveform_detail", "track_artwork", "play",
+                                          "playlist_entry" };
     for (size_t i = 0; i < RX_ARRAY_ELEMS(tables); i++) {
         if (count_rows(&lib, tables[i], 1) != 0) {
             fprintf(stderr, "%s still has rows of a removed track\n", tables[i]);
@@ -1113,78 +947,6 @@ static void test_missing_relocate_remove(void)
     free(c_old);
     free(c_new);
     free(b_path);
-}
-
-/* A library of schema 1, from before the analyser versions were kept:
- * made here as schema 2 and taken back (the columns dropped, the version
- * set back), which leaves the track table as schema 1 created it. Opening
- * it migrates it, and its tracks' grid, key and waveforms are then older
- * than any analyser (version 0); a track with nothing analysed has
- * nothing stale. Results stored at the current versions are not stale. */
-static void test_migrate_v1(void)
-{
-    char *dir = test_dir("library-v1");
-    char *db = path_in(dir, "library.db");
-    char *a_path = path_in(music, "a.wav"), *b_path = path_in(music, "b.wav");
-
-    RXLibrary lib;
-    int err;
-    CHECK(rx_library_open(&lib, dir) == 0);
-    RXTrack *a = rx_library_add_file(&lib, a_path, &err);
-    CHECK(a && rx_library_add_file(&lib, b_path, &err));
-    if (a) {
-        rx_grid_init(&a->grid, 0.5, 128.0);
-        snprintf(a->key, sizeof(a->key), "Am");
-        a->grid_locked = true;
-        CHECK(rx_library_save_track(&lib, a) == 0);
-        CHECK(rx_core_waveform_blob_put(&lib, a->id, blob, sizeof(blob)) == 0);
-    }
-    rx_library_close(&lib);
-
-    sqlite3 *s;
-    CHECK(sqlite3_open(db, &s) == SQLITE_OK);
-    CHECK(back_to_schema3(s) == SQLITE_OK);
-    CHECK(sqlite3_exec(s, "ALTER TABLE track DROP COLUMN beats_version;"
-                          "ALTER TABLE track DROP COLUMN key_version;"
-                          "ALTER TABLE track DROP COLUMN waves_version;"
-                          "PRAGMA user_version = 1", NULL, NULL, NULL) == SQLITE_OK);
-    sqlite3_close(s);
-
-    CHECK(rx_library_open(&lib, dir) == 0);
-    sqlite3_stmt *st;
-    sqlite3_prepare_v2(lib.db->db, "PRAGMA user_version", -1, &st, NULL);
-    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 8);
-    sqlite3_finalize(st);
-    CHECK(lib.nb_tracks == 2);
-    a = rx_library_find_path(&lib, a_path);
-    RXTrack *b = rx_library_find_path(&lib, b_path);
-    CHECK(a && b);
-    if (a && b) {
-        CHECK(a->grid.nb_sections == 1 && !strcmp(a->key, "Am") && a->has_waveforms);
-        CHECK(a->beats_version == 0 && a->key_version == 0 && a->waves_version == 0);
-        /* Locked or not: the lock is the app's rule, not the version's. */
-        CHECK(rx_analysis_stale(a) == RX_ANALYSE_ALL);
-        CHECK(b->beats_version == 0 && rx_analysis_stale(b) == 0);
-
-        a->beats_version = RX_BEATS_VERSION;
-        a->key_version = RX_KEY_VERSION;
-        CHECK(rx_library_save_track(&lib, a) == 0);
-        CHECK(rx_analysis_stale(a) == RX_ANALYSE_WAVES);
-    }
-    CHECK(rx_library_check(&lib) == 0);
-    rx_library_close(&lib);
-
-    CHECK(rx_library_open(&lib, dir) == 0);
-    a = rx_library_find_path(&lib, a_path);
-    CHECK(a && a->beats_version == RX_BEATS_VERSION && a->key_version == RX_KEY_VERSION &&
-          a->waves_version == 0 && rx_analysis_stale(a) == RX_ANALYSE_WAVES);
-    rx_library_close(&lib);
-
-    free(a_path);
-    free(b_path);
-    free(db);
-    test_rm_rf(dir);
-    free(dir);
 }
 
 /* A database from a newer rxbox is left alone; a foreign one too. */
@@ -1602,72 +1364,6 @@ static void test_find_path(void)
     free(dir);
 }
 
-/* Two branches each made a schema 6, and one became 7 at the merge. A
- * library at either 6 opens at 7 with every column and keeps its data:
- * the measured beats' 6 gains the legend's columns, the legend's 6 (its
- * columns there, measured not) gains measured, its probabilities kept.
- * Before, the legend's 6 failed with "duplicate column name" at every
- * open. */
-static void test_migrate_v6(void)
-{
-    for (int legend = 0; legend < 2; legend++) {
-        char *dir = test_dir(legend ? "library-v6-legend" : "library-v6-measured");
-        char *db = path_in(dir, "library.db");
-        RXLibrary lib;
-        CHECK(rx_library_open(&lib, dir) == 0);
-        rx_library_close(&lib);
-
-        sqlite3 *s;
-        CHECK(sqlite3_open(db, &s) == SQLITE_OK);
-        CHECK(sqlite3_exec(s, legend ? "ALTER TABLE grid_section DROP COLUMN measured;"
-                                       "INSERT INTO track (path, ml_colors, ml_legend) VALUES "
-                                       "('/gone/a.wav', X'0000003E0000003E0000003E0000003F"
-                                       "0000003E0000003E0000003E0000003E', 1234);"
-                                     : "ALTER TABLE track DROP COLUMN ml_colors;"
-                                       "ALTER TABLE track DROP COLUMN ml_legend;"
-                                       "INSERT INTO track (path) VALUES ('/gone/a.wav');",
-                              NULL, NULL, NULL) == SQLITE_OK);
-        CHECK(sqlite3_exec(s, "INSERT INTO grid_section (track_id, idx, start, bpm, beat) "
-                              "VALUES (last_insert_rowid(), 0, 0.5, 120, 1);"
-                              "PRAGMA user_version = 6", NULL, NULL, NULL) == SQLITE_OK);
-        sqlite3_close(s);
-
-        CHECK(rx_library_open(&lib, dir) == 0);
-        sqlite3_stmt *st;
-        sqlite3_prepare_v2(lib.db->db, "SELECT (SELECT user_version FROM pragma_user_version), "
-                           "(SELECT count(*) FROM pragma_table_info('grid_section') "
-                           " WHERE name = 'measured'), "
-                           "(SELECT count(*) FROM pragma_table_info('track') "
-                           " WHERE name IN ('ml_colors', 'ml_legend'))", -1, &st, NULL);
-        CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 8 &&
-              sqlite3_column_int(st, 1) == 1 && sqlite3_column_int(st, 2) == 2);
-        sqlite3_finalize(st);
-        CHECK(lib.nb_tracks == 1);
-        RXTrack *t = lib.nb_tracks == 1 ? lib.tracks[0] : NULL;
-        if (t) {
-            CHECK(t->grid.nb_sections == 1 && t->grid.sections[0].start == 0.5 &&
-                  !rx_grid_dynamic(&t->grid));
-            if (legend)
-                CHECK(t->ml_colors[0] == 0.125f && t->ml_colors[3] == 0.5f && t->ml_legend == 1234);
-            else
-                CHECK(isnan(t->ml_colors[0]) && !t->ml_legend);
-            /* A dynamic grid is kept from now on. */
-            rx_grid_add_beat(&t->grid, 2.0, 121.0, 0);
-            CHECK(rx_library_save_track(&lib, t) == 0);
-        }
-        CHECK(rx_library_check(&lib) == 0);
-        rx_library_close(&lib);
-        CHECK(rx_library_open(&lib, dir) == 0);
-        CHECK(lib.nb_tracks == 1 && lib.tracks[0]->grid.nb_sections == 2 &&
-              lib.tracks[0]->grid.sections[1].measured);
-        rx_library_close(&lib);
-
-        free(db);
-        test_rm_rf(dir);
-        free(dir);
-    }
-}
-
 /* The number of rows of a table. */
 static int table_rows(const RXLibrary *lib, const char *table)
 {
@@ -1754,50 +1450,133 @@ static void test_artwork_shared(void)
     free(dir);
 }
 
-/* Schema 7 kept a cover per track: opening it keeps one row per distinct
- * cover, each track linked to its own. */
-static void test_migrate_v7(void)
+/* Takes a library of this schema back to schema 8, which kept each
+ * track's waveforms as one blob, with auto_vacuum off as schema 8 made it. */
+static int back_to_schema8(sqlite3 *db)
 {
-    char *dir = test_dir("library-v7");
+    return sqlite3_exec(db, "DROP TABLE waveform_preview; DROP TABLE waveform_detail;"
+                            "CREATE TABLE waveform ("
+                            "  track_id INTEGER PRIMARY KEY REFERENCES track(id) ON DELETE CASCADE,"
+                            "  data     BLOB NOT NULL"
+                            ") STRICT;"
+                            "PRAGMA auto_vacuum = NONE; VACUUM; PRAGMA user_version = 8",
+                        NULL, NULL, NULL);
+}
+
+static int pragma(const RXLibrary *lib, const char *sql)
+{
+    sqlite3_stmt *st;
+    int v = -1;
+    if (sqlite3_prepare_v2(lib->db->db, sql, -1, &st, NULL) == SQLITE_OK) {
+        if (sqlite3_step(st) == SQLITE_ROW)
+            v = sqlite3_column_int(st, 0);
+        sqlite3_finalize(st);
+    }
+    return v;
+}
+
+/* Schema 8 kept each track's packed waveforms as one blob: opening it
+ * cuts each in two where the previews end, every track keeping its
+ * waveforms whole; a blob too short to have detail goes (made again by
+ * the analysis). The library is vacuumed once into incremental
+ * auto_vacuum. An older schema is refused, untouched. */
+static void test_convert_v8(void)
+{
+    char *dir = test_dir("library-v8");
+    char *db = path_in(dir, "library.db");
+    RXLibrary lib;
+    CHECK(rx_library_open(&lib, dir) == 0);
+    rx_library_close(&lib);
+
+    size_t n = RX_WAVE_PACKED_PREVIEW + 12;
+    uint8_t *whole = malloc(n);
+    for (size_t i = 0; i < n; i++)
+        whole[i] = (uint8_t)(i * 7 + 3);
+    sqlite3 *s;
+    CHECK(sqlite3_open(db, &s) == SQLITE_OK);
+    CHECK(back_to_schema8(s) == SQLITE_OK);
+    CHECK(sqlite3_exec(s, "INSERT INTO track (id, path) "
+                          "VALUES (1, '/gone/a.wav'), (2, '/gone/b.wav')",
+                       NULL, NULL, NULL) == SQLITE_OK);
+    sqlite3_stmt *st;
+    sqlite3_prepare_v2(s, "INSERT INTO waveform (track_id, data) VALUES (?1, ?2)", -1, &st, NULL);
+    sqlite3_bind_int(st, 1, 1);
+    sqlite3_bind_blob(st, 2, whole, (int)n, SQLITE_STATIC);
+    CHECK(sqlite3_step(st) == SQLITE_DONE);
+    sqlite3_reset(st);
+    sqlite3_bind_int(st, 1, 2);
+    sqlite3_bind_blob(st, 2, whole, RX_WAVE_PACKED_PREVIEW, SQLITE_STATIC);
+    CHECK(sqlite3_step(st) == SQLITE_DONE);
+    sqlite3_finalize(st);
+    sqlite3_close(s);
+
+    CHECK(rx_library_open(&lib, dir) == 0);
+    CHECK(pragma(&lib, "PRAGMA user_version") == 9);
+    CHECK(pragma(&lib, "PRAGMA auto_vacuum") == 2);
+    CHECK(pragma(&lib, "SELECT count(*) FROM sqlite_schema WHERE name = 'waveform'") == 0);
+    RXTrack *a = rx_library_find_id(&lib, 1), *b = rx_library_find_id(&lib, 2);
+    CHECK(a && a->has_waveforms && b && !b->has_waveforms);
+    uint8_t *data = NULL;
+    size_t size = 0;
+    CHECK(rx_core_waveform_blob_get(&lib, 1, true, &data, &size) == 0);
+    CHECK(size == n && !memcmp(data, whole, n));
+    free(data);
+    CHECK(rx_core_waveform_blob_get(&lib, 1, false, &data, &size) == 0);
+    CHECK(size == RX_WAVE_PACKED_PREVIEW && !memcmp(data, whole, size));
+    free(data);
+    CHECK(rx_core_waveform_blob_get(&lib, 2, false, &data, &size) == RX_ERROR(ENOENT));
+    CHECK(rx_library_check(&lib) == 0);
+    rx_library_close(&lib);
+    free(whole);
+
+    /* Schema 7 and older: refused, as they are. */
+    CHECK(sqlite3_open(db, &s) == SQLITE_OK);
+    CHECK(sqlite3_exec(s, "PRAGMA user_version = 7", NULL, NULL, NULL) == SQLITE_OK);
+    sqlite3_close(s);
+    CHECK(rx_library_open(&lib, dir) == RX_ERROR(EPROTO));
+    CHECK(sqlite3_open(db, &s) == SQLITE_OK);
+    sqlite3_prepare_v2(s, "PRAGMA user_version", -1, &st, NULL);
+    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 7);
+    sqlite3_finalize(st);
+    sqlite3_close(s);
+
+    free(db);
+    test_rm_rf(dir);
+    free(dir);
+}
+
+/* Free pages go back to the file system at the next open once there are
+ * many: tracks with waveforms removed shrink the library. */
+static void test_trim(void)
+{
+    char *dir = test_dir("library-trim");
     char *db = path_in(dir, "library.db");
     RXLibrary lib;
     CHECK(rx_library_open(&lib, dir) == 0);
     rx_library_close(&lib);
     sqlite3 *s;
     CHECK(sqlite3_open(db, &s) == SQLITE_OK);
-    CHECK(sqlite3_exec(s,
-                       "DROP TRIGGER artwork_unlinked; DROP TRIGGER artwork_relinked;"
-                       "DROP TABLE track_artwork; DROP TABLE artwork;"
-                       "CREATE TABLE artwork ("
-                       "  track_id INTEGER PRIMARY KEY REFERENCES track(id) ON DELETE CASCADE,"
-                       "  jpeg     BLOB NOT NULL,"
-                       "  width    INTEGER NOT NULL,"
-                       "  height   INTEGER NOT NULL"
-                       ") STRICT;"
-                       "INSERT INTO track (id, path) VALUES (1, '/gone/a.wav'), (2, '/gone/b.wav'),"
-                       "  (3, '/gone/c.wav'), (4, '/gone/d.wav');"
-                       "INSERT INTO artwork VALUES (1, X'FFD8010203FFD9', 240, 240),"
-                       "  (2, X'FFD8010203FFD9', 240, 240), (3, X'FFD8040506FFD9', 240, 240),"
-                       "  (4, X'FFD8010203FFD9', 240, 240);"
-                       "PRAGMA user_version = 7", NULL, NULL, NULL) == SQLITE_OK);
+    CHECK(sqlite3_exec(s, "WITH RECURSIVE n(i) AS "
+                          "  (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 200) "
+                          "INSERT INTO track (id, path) SELECT i, '/gone/' || i || '.wav' FROM n",
+                       NULL, NULL, NULL) == SQLITE_OK);
     sqlite3_close(s);
 
+    size_t n = RX_WAVE_PACKED_PREVIEW + 20000;
+    uint8_t *w = calloc(1, n);
     CHECK(rx_library_open(&lib, dir) == 0);
-    sqlite3_stmt *st;
-    sqlite3_prepare_v2(lib.db->db, "PRAGMA user_version", -1, &st, NULL);
-    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 8);
-    sqlite3_finalize(st);
-    CHECK(table_rows(&lib, "artwork") == 2 && table_rows(&lib, "track_artwork") == 4);
-    static const uint8_t album[] = { 0xFF, 0xD8, 1, 2, 3, 0xFF, 0xD9 };
-    static const uint8_t single[] = { 0xFF, 0xD8, 4, 5, 6, 0xFF, 0xD9 };
-    int64_t a = rx_library_artwork_id(&lib, 1);
-    CHECK(a > 0 && rx_library_artwork_id(&lib, 2) == a && rx_library_artwork_id(&lib, 4) == a &&
-          rx_library_artwork_id(&lib, 3) != a);
-    CHECK(artwork_is(&lib, 4, album, sizeof(album)) && artwork_is(&lib, 3, single, sizeof(single)));
-    /* Then as any: the covers go with their last tracks. */
-    CHECK(rx_library_remove(&lib, rx_library_find_id(&lib, 3)) == 0);
-    CHECK(table_rows(&lib, "artwork") == 1);
-    CHECK(rx_library_check(&lib) == 0);
+    for (uint64_t id = 1; id <= 200; id++)
+        CHECK(rx_core_waveform_blob_put(&lib, id, w, n, RX_WAVE_PACKED_PREVIEW) == 0);
+    int full = pragma(&lib, "PRAGMA page_count");
+    while (lib.nb_tracks > 0)
+        CHECK(rx_library_remove(&lib, lib.tracks[0]) == 0);
+    CHECK(pragma(&lib, "PRAGMA freelist_count") > 256);
+    rx_library_close(&lib);
+    free(w);
+
+    CHECK(rx_library_open(&lib, dir) == 0);
+    CHECK(pragma(&lib, "PRAGMA freelist_count") == 0);
+    CHECK(pragma(&lib, "PRAGMA page_count") < full / 10);
     rx_library_close(&lib);
 
     free(db);
@@ -1805,11 +1584,10 @@ static void test_migrate_v7(void)
     free(dir);
 }
 
-/* A newer rxbox migrating the library while this one opens it (it holds
- * the write lock at schema 99 as this one reads 6 and waits for the
+/* A newer rxbox converting the library while this one opens it (it holds
+ * the write lock at schema 99 as this one reads 8 and waits for the
  * lock): this one sees 99 under the lock and refuses, as it does a
- * library newer from the start. Before, it took 99 for done and opened
- * a schema it does not know. */
+ * library newer from the start. */
 static void test_newer_meanwhile(void)
 {
     char *dir = test_dir("library-newer-meanwhile");
@@ -1820,10 +1598,9 @@ static void test_newer_meanwhile(void)
 
     sqlite3 *s;
     CHECK(sqlite3_open(db, &s) == SQLITE_OK);
-    CHECK(sqlite3_exec(s, "ALTER TABLE track DROP COLUMN ml_colors;"
-                          "ALTER TABLE track DROP COLUMN ml_legend;"
-                          "PRAGMA user_version = 6;"
-                          "BEGIN IMMEDIATE; PRAGMA user_version = 99", NULL, NULL, NULL) == SQLITE_OK);
+    CHECK(back_to_schema8(s) == SQLITE_OK);
+    CHECK(sqlite3_exec(s, "BEGIN IMMEDIATE; PRAGMA user_version = 99", NULL, NULL, NULL) ==
+          SQLITE_OK);
     pthread_barrier_t go;
     pthread_barrier_init(&go, NULL, 2);
     Opener o = { .root = dir, .go = &go };
@@ -1883,23 +1660,19 @@ int main(void)
     test_edit_and_reopen();
     test_settings_migration();
     test_refresh();
-    test_grid_migration();
-    test_measured_migration();
-    test_colour_migration();
+    test_dynamic_grid();
     test_legend();
-    test_migrate_v5();
     test_clean();
     test_comment_import();
     test_missing_relocate_remove();
-    test_migrate_v1();
     test_refusals();
     test_lost_transaction();
     test_byte_paths();
     test_open_snapshot();
     test_concurrent_create();
-    test_migrate_v6();
     test_artwork_shared();
-    test_migrate_v7();
+    test_convert_v8();
+    test_trim();
     test_newer_meanwhile();
     test_busy_add();
     test_find_path();

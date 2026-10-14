@@ -46,12 +46,18 @@ typedef struct RXWaveforms {
 int  rx_waveforms_compute(const float *mono, int64_t nb_samples, int rate, RXWaveforms *out);
 void rx_waveforms_free(RXWaveforms *w);
 /* The packed form stored in the library (and the .rxw file format):
- * "RXWV", version, nb_detail, rate, gains, then the tags. Unpack (and load)
- * return -EPROTO for a blob of another format version (versions 1 to 3
- * held older three-band levels): recompute the waveforms; -EINVAL for
- * damaged data. */
+ * "RXWV", version, nb_detail, rate, gains, then the tags, the previews
+ * first: its first RX_WAVE_PACKED_PREVIEW bytes are the header and the
+ * previews, which the library keeps apart from the detail after them.
+ * Unpack (and load) return -EPROTO for a blob of another format version
+ * (versions 1 to 3 held older three-band levels): recompute the
+ * waveforms; -EINVAL for damaged data. unpack_previews takes those first
+ * bytes alone and leaves the detail out (nb_detail 0). */
+#define RX_WAVE_PACKED_PREVIEW (24 + RX_WAVE_PWAV_COLUMNS + RX_WAVE_PWV2_COLUMNS + \
+                                RX_WAVE_PWV4_COLUMNS * 6 + RX_WAVE_PWV6_COLUMNS * 3)
 int  rx_waveforms_pack(const RXWaveforms *w, uint8_t **data, size_t *size);
 int  rx_waveforms_unpack(const uint8_t *data, size_t size, RXWaveforms *w);
+int  rx_waveforms_unpack_previews(const uint8_t *data, size_t size, RXWaveforms *w);
 int  rx_waveforms_save(const RXWaveforms *w, const char *path);
 int  rx_waveforms_load(const char *path, RXWaveforms *w);
 

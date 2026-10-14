@@ -240,10 +240,10 @@ EOF
     python3 - "$lib/library.db" <<'EOF' || fail "cannot make the waveforms an older format"
 import sqlite3, sys
 db = sqlite3.connect(sys.argv[1])
-for track_id, data in db.execute("SELECT track_id, data FROM waveform").fetchall():
+for track_id, data in db.execute("SELECT track_id, data FROM waveform_preview").fetchall():
     data = bytearray(data)
     data[4:8] = (1).to_bytes(4, "little")
-    db.execute("UPDATE waveform SET data = ? WHERE track_id = ?", (bytes(data), track_id))
+    db.execute("UPDATE waveform_preview SET data = ? WHERE track_id = ?", (bytes(data), track_id))
 db.commit()
 db.close()
 EOF

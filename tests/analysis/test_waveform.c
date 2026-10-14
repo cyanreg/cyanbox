@@ -558,6 +558,21 @@ static int test_pack(void)
     CHECK(same_waves(&r, &w));
     rx_waveforms_free(&r);
 
+    /* The previews alone, as the library keeps them apart: the first
+     * RX_WAVE_PACKED_PREVIEW bytes, the header's rate and gains with them,
+     * no detail; any other length refused. */
+    CHECK(RX_WAVE_PACKED_PREVIEW == 24 + 400 + 100 + 7200 + 3600);
+    CHECK(rx_waveforms_unpack_previews(data, RX_WAVE_PACKED_PREVIEW, &r) == 0);
+    CHECK(!r.nb_detail && !r.pwv3 && !r.pwv5 && !r.pwv7 && r.rate == 44100);
+    CHECK(!memcmp(r.pwav, w.pwav, sizeof(w.pwav)) && !memcmp(r.pwv2, w.pwv2, sizeof(w.pwv2)) &&
+          !memcmp(r.pwv4, w.pwv4, sizeof(w.pwv4)) && !memcmp(r.pwv6, w.pwv6, sizeof(w.pwv6)) &&
+          !memcmp(r.gains, w.gains, sizeof(w.gains)));
+    CHECK(rx_waveforms_unpack_previews(data, size, &r) == RX_ERROR(EINVAL));
+    CHECK(rx_waveforms_unpack_previews(data, RX_WAVE_PACKED_PREVIEW - 1, &r) == RX_ERROR(EINVAL));
+    put32(data + 4, 3);
+    CHECK(rx_waveforms_unpack_previews(data, RX_WAVE_PACKED_PREVIEW, &r) == RX_ERROR(EPROTO));
+    put32(data + 4, 4);
+
     /* Refused, with nothing allocated: truncated, one byte too many, bad
      * magic, another version, a column count that disagrees with the size,
      * no columns, shorter than the header, no data */

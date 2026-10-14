@@ -679,6 +679,10 @@ static size_t rxw_size(int n)
            RX_WAVE_PWV4_COLUMNS * 6 + RX_WAVE_PWV6_COLUMNS * 3 + (size_t)n * 6;
 }
 
+static_assert(RX_WAVE_PACKED_PREVIEW == RXW_HEADER + RX_WAVE_PWAV_COLUMNS + RX_WAVE_PWV2_COLUMNS +
+                                        RX_WAVE_PWV4_COLUMNS * 6 + RX_WAVE_PWV6_COLUMNS * 3,
+              "the previews end where the detail starts");
+
 int rx_waveforms_pack(const RXWaveforms *w, uint8_t **data, size_t *size)
 {
     *data = NULL;
@@ -720,6 +724,36 @@ int rx_waveforms_pack(const RXWaveforms *w, uint8_t **data, size_t *size)
     return 0;
 }
 
+/* The header's rate and gains and the previews, from a blob checked. */
+static void unpack_previews(const uint8_t *data, RXWaveforms *w)
+{
+    w->rate = (int)get_le32(data + 12);
+    for (int j = 0; j < 3; j++)
+        w->gains[j] = (uint16_t)(data[16 + 2 * j] | data[17 + 2 * j] << 8);
+    const uint8_t *p = data + RXW_HEADER;
+    memcpy(w->pwav, p, sizeof(w->pwav));
+    p += sizeof(w->pwav);
+    memcpy(w->pwv2, p, sizeof(w->pwv2));
+    p += sizeof(w->pwv2);
+    memcpy(w->pwv4, p, sizeof(w->pwv4));
+    p += sizeof(w->pwv4);
+    memcpy(w->pwv6, p, sizeof(w->pwv6));
+}
+
+int rx_waveforms_unpack_previews(const uint8_t *data, size_t size, RXWaveforms *w)
+{
+    *w = (RXWaveforms) { 0 };
+    if (!data || size < RXW_HEADER || memcmp(data, RXW_MAGIC, 4))
+        return RX_ERROR(EINVAL);
+    if (get_le32(data + 4) != RXW_VERSION)
+        return RX_ERROR(EPROTO);
+    uint32_t n = get_le32(data + 8), rate = get_le32(data + 12);
+    if (n == 0 || n > RXW_MAX_DETAIL || rate > INT32_MAX || size != RX_WAVE_PACKED_PREVIEW)
+        return RX_ERROR(EINVAL);
+    unpack_previews(data, w);
+    return 0;
+}
+
 int rx_waveforms_unpack(const uint8_t *data, size_t size, RXWaveforms *w)
 {
     *w = (RXWaveforms) { 0 };
@@ -735,19 +769,8 @@ int rx_waveforms_unpack(const uint8_t *data, size_t size, RXWaveforms *w)
     int ret = alloc_detail(w, (int)n);
     if (ret < 0)
         return ret;
-
-    w->rate = (int)rate;
-    for (int j = 0; j < 3; j++)
-        w->gains[j] = (uint16_t)(data[16 + 2 * j] | data[17 + 2 * j] << 8);
-    const uint8_t *p = data + RXW_HEADER;
-    memcpy(w->pwav, p, sizeof(w->pwav));
-    p += sizeof(w->pwav);
-    memcpy(w->pwv2, p, sizeof(w->pwv2));
-    p += sizeof(w->pwv2);
-    memcpy(w->pwv4, p, sizeof(w->pwv4));
-    p += sizeof(w->pwv4);
-    memcpy(w->pwv6, p, sizeof(w->pwv6));
-    p += sizeof(w->pwv6);
+    unpack_previews(data, w);
+    const uint8_t *p = data + RX_WAVE_PACKED_PREVIEW;
     memcpy(w->pwv3, p, n);
     p += n;
     memcpy(w->pwv5, p, (size_t)n * 2);

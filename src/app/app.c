@@ -594,7 +594,7 @@ RXWaveGpu *rx_app_preview_wave(RXApp *app, const RXTrack *t)
     if (e->wave_state == GPU_UNKNOWN && t->has_waveforms && priv->gpu_budget > 0) {
         priv->gpu_budget--;
         RXWaveforms w = { 0 };
-        int ret = rx_library_waveforms_load(&app->lib, t->id, &w);
+        int ret = rx_library_waveforms_load_previews(&app->lib, t->id, &w);
         if (ret >= 0)
             e->preview = upload_preview(app, app->wave_palette, &w);
         rx_waveforms_free(&w);
@@ -2708,7 +2708,6 @@ int rx_app_start_export(RXApp *app)
 
 typedef struct RowKey {
     uint32_t index;             /* in lib->tracks */
-    int      pos;               /* playlist position or library order */
     uint32_t number;            /* `#`: the place in the view's own order, from 1 */
 } RowKey;
 
@@ -2894,28 +2893,6 @@ static bool playlist_exists(const RXLibrary *lib, const RXPlaylist *p)
     return found;
 }
 
-/* The tracks of an album in the album's own order: disc, then track
- * number (tracks without one last), then title; the library's order
- * between equals. */
-static int compare_album_rows(const void *pa, const void *pb, void *opaque)
-{
-    const RowKey *ra = pa, *rb = pb;
-    const RXLibrary *lib = opaque;
-    const RXTrack *a = lib->tracks[ra->index], *b = lib->tracks[rb->index];
-    int da = a->meta.disc_number > 0 ? a->meta.disc_number : INT_MAX;
-    int db = b->meta.disc_number > 0 ? b->meta.disc_number : INT_MAX;
-    if (da != db)
-        return da < db ? -1 : 1;
-    int na = a->meta.track_number > 0 ? a->meta.track_number : INT_MAX;
-    int nb = b->meta.track_number > 0 ? b->meta.track_number : INT_MAX;
-    if (na != nb)
-        return na < nb ? -1 : 1;
-    int c = rx_strnatcasecmp(title_of(a), title_of(b));
-    if (c)
-        return c;
-    return (ra->pos > rb->pos) - (ra->pos < rb->pos);
-}
-
 static bool in_album(const RXTrack *t, const char *album)
 {
     return t->meta.album && !rx_strcasecmp(t->meta.album, album);
@@ -2975,18 +2952,16 @@ void rx_app_rebuild_rows(RXApp *app)
             continue;
         keys[nb++] = (RowKey) {
             .index = pl ? (uint32_t)rx_library_index_of(lib, t) : (uint32_t)i,
-            .pos   = i,
         };
     }
 
     /* The view's own order, which `#` numbers before the search and the
      * sort: a playlist's; else the collection's (rx_app_albums), None's
      * tracks by title then the albums in the list's order, each in disc
-     * and track order, of which None and an album are runs. */
+     * and track order, of which None and an album are runs. (Without the
+     * ranks, out of memory, the library's order.) */
     if (ranked)
         qsort_r(keys, nb, sizeof(*keys), compare_ranks, (void *)priv);
-    else if (album)
-        qsort_r(keys, nb, sizeof(*keys), compare_album_rows, lib);
     for (int i = 0; i < nb; i++)
         keys[i].number = (uint32_t)i + 1;
 

@@ -109,8 +109,8 @@ static void play_for(RXApp *app, double seconds, double step, int pace_us, doubl
     }
 }
 
-/* Makes a track's stored waveforms format version 1 (bytes 4..7 of the
- * blob), as a library analysed before the PWV6/PWV7 recalibration holds
+/* Makes a track's stored waveforms format version 1 (bytes 4..7 of its
+ * preview blob), as a library analysed before the PWV6/PWV7 recalibration holds
  * them. */
 static int stale_waveforms(const char *root, uint64_t id)
 {
@@ -122,7 +122,8 @@ static int stale_waveforms(const char *root, uint64_t id)
     uint8_t *data = NULL;
     int size = 0;
     if (rc == SQLITE_OK)
-        rc = sqlite3_prepare_v2(db, "SELECT data FROM waveform WHERE track_id = ?", -1, &get, NULL);
+        rc = sqlite3_prepare_v2(db, "SELECT data FROM waveform_preview WHERE track_id = ?", -1,
+                                &get, NULL);
     if (rc == SQLITE_OK) {
         sqlite3_bind_int64(get, 1, (sqlite3_int64)id);
         rc = sqlite3_step(get) == SQLITE_ROW ? SQLITE_OK : SQLITE_ERROR;
@@ -136,8 +137,8 @@ static int stale_waveforms(const char *root, uint64_t id)
         memcpy(data, sqlite3_column_blob(get, 0), size);
         data[4] = 1;
         data[5] = data[6] = data[7] = 0;
-        rc = sqlite3_prepare_v2(db, "UPDATE waveform SET data = ? WHERE track_id = ?", -1, &put,
-                                NULL);
+        rc = sqlite3_prepare_v2(db, "UPDATE waveform_preview SET data = ? WHERE track_id = ?", -1,
+                                &put, NULL);
     }
     if (rc == SQLITE_OK) {
         sqlite3_bind_blob(put, 1, data, size, SQLITE_TRANSIENT);
@@ -443,6 +444,21 @@ int main(int argc, char **argv)
     RXTrack *a = track_named(&app, "a.wav");
     RXTrack *b = track_named(&app, "b.wav");
     CHECK(a && b, "tracks a %p b %p", (void *)a, (void *)b);
+
+    /* The analysis stored the waveforms as previews and detail apart: the
+     * previews alone are the whole's, without its detail. */
+    if (a) {
+        RXWaveforms whole = { 0 }, previews = { 0 };
+        CHECK(rx_library_waveforms_load(&app.lib, a->id, &whole) == 0 && whole.nb_detail > 0,
+              "a's waveforms");
+        CHECK(rx_library_waveforms_load_previews(&app.lib, a->id, &previews) == 0 &&
+              !previews.nb_detail && !previews.pwv7 &&
+              !memcmp(previews.pwv6, whole.pwv6, sizeof(whole.pwv6)) &&
+              !memcmp(previews.pwav, whole.pwav, sizeof(whole.pwav)) &&
+              !memcmp(previews.pwv4, whole.pwv4, sizeof(whole.pwv4)), "a's previews");
+        rx_waveforms_free(&whole);
+        rx_waveforms_free(&previews);
+    }
     if (!a || !b)
         goto end;
     for (int i = 0; i < 2; i++) {

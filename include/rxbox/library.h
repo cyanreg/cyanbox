@@ -228,6 +228,9 @@ int      rx_library_relocate(RXLibrary *lib, RXTrack *t, const char *new_abs_pat
 struct RXWaveforms;
 int  rx_library_waveforms_save(RXLibrary *lib, uint64_t id, const struct RXWaveforms *w);
 int  rx_library_waveforms_load(const RXLibrary *lib, uint64_t id, struct RXWaveforms *w);
+/* The previews alone (nb_detail 0, no detail tags): a few kB, where the
+ * whole is a few hundred, for what draws only the previews. */
+int  rx_library_waveforms_load_previews(const RXLibrary *lib, uint64_t id, struct RXWaveforms *w);
 bool rx_library_has_waveforms(const RXLibrary *lib, uint64_t id);
 /* Whether the stored waveforms are of the format version this build reads,
  * from their header alone (cheap enough for the whole library): 0 when

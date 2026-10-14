@@ -88,10 +88,11 @@ rxbox settings             list the My Settings names and values
 The library is one SQLite database, `library.db`, in a directory
 (`$RXBOX_LIBRARY`, `-c DIR`, default `~/.local/share/rxbox`). It holds
 everything: file facts and tags, the user's overrides, grid, key, cues,
-rating, colour, My Tags, play counts and history, the waveform bytes, the
-artwork thumbnails (each cover once, however many tracks have it: an
-album's tracks share one, and a cover goes with its last track),
-playlists and folders, and the settings. A track whose
+rating, colour, My Tags, play counts and history, the waveforms (the
+previews the browser draws kept apart from the detail only the players
+and the export read), the artwork thumbnails (each cover once, however
+many tracks have it: an album's tracks share one, and a cover goes with
+its last track), playlists and folders, and the settings. A track whose
 file is missing stays in the library, greyed out, until the file returns or
 is relocated. Every track has an id that never changes; that id is the track
 id on every stick, so players keep their cached artwork and waveforms across
@@ -231,10 +232,13 @@ Decisions and why:
   device, or with `--no-gpu`, everything runs on the CPU (`av_tx`), the
   same results. Decoding and the waveforms now take longer than the beats.
 - **The library is SQLite.** One file, WAL mode, foreign keys, every edit a
-  transaction, schema versioned for migrations. The whole track list is
-  also held in memory (a few thousand rows), written through, so the
-  interface sorts and filters without touching the database. Waveform bytes
-  and artwork thumbnails are blobs in it, so a library is one file to back up.
+  transaction, one versioned schema (a new library is made at it; of the
+  older ones only the last, schema 8, is converted). The whole track list
+  is also held in memory (about 1 kB a track; 9,000 tracks open in 0.07 s),
+  written through, so the interface sorts, groups and filters without
+  touching the database (a few ms at 9,000 tracks). Waveform bytes and
+  artwork thumbnails are blobs in it, so a library is one file to back up;
+  incremental auto-vacuum gives the space of what goes back to the disk.
 
 ## 5. Beat grid: what "robust, with sense and logic" means here
 

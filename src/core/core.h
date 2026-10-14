@@ -42,8 +42,10 @@ enum RXStmtId {
                                  * ?6 loop_beats ?7 active ?8 name ?9 color */
     RX_STMT_TAG_CLEAR,          /* ?1 track_id */
     RX_STMT_TAG_INSERT,         /* ?1 track_id ?2 position ?3 tag */
-    RX_STMT_WAVE_PUT,           /* ?1 track_id ?2 data */
-    RX_STMT_WAVE_GET,           /* ?1 track_id -> data */
+    RX_STMT_PREVIEW_PUT,        /* ?1 track_id ?2 data */
+    RX_STMT_PREVIEW_GET,        /* ?1 track_id -> data */
+    RX_STMT_DETAIL_PUT,         /* ?1 track_id ?2 data */
+    RX_STMT_DETAIL_GET,         /* ?1 track_id -> data */
     RX_STMT_ART_FIND,           /* ?1 size ?2 jpeg -> id */
     RX_STMT_ART_PUT,            /* ?1 size ?2 jpeg ?3 width ?4 height */
     RX_STMT_ART_LINK,           /* ?1 track_id ?2 artwork_id */
@@ -74,6 +76,9 @@ struct RXDb {
  * version. */
 int  rx_db_open(RXDb **db, const char *path);
 void rx_db_close(RXDb *db);
+/* Gives the free pages back to the file system when there are many
+ * (incremental auto_vacuum); nothing when the library has not that mode. */
+int  rx_db_trim(RXDb *db);
 
 /* Maps an sqlite3 result code to a negative errno and logs it with
  * sqlite3_errmsg() and `what`. */
@@ -131,11 +136,16 @@ void rx_core_playlists_free(RXLibrary *lib);
 int  rx_core_playlists_drop_track(RXLibrary *lib, uint64_t id);
 void rx_core_playlists_forget_track(RXLibrary *lib, uint64_t id);
 
-/* The waveform table as raw bytes (library.c); wavestore.c packs. _head
- * reads only the first `size` bytes, without loading the rest: -ENOENT
- * when the track has none, -EINVAL when the blob is shorter. */
-int  rx_core_waveform_blob_put(RXLibrary *lib, uint64_t id, const uint8_t *data, size_t size);
-int  rx_core_waveform_blob_get(const RXLibrary *lib, uint64_t id, uint8_t **data, size_t *size);
+/* The waveforms as raw bytes (library.c); wavestore.c packs. Put stores
+ * the first `split` bytes as the preview and the rest as the detail, in
+ * one transaction; get gives the preview, followed by the detail when
+ * asked (-ENOENT when either is missing). _head reads only the preview's
+ * first `size` bytes, without loading the rest: -ENOENT when the track has
+ * none, -EINVAL when it is shorter. */
+int  rx_core_waveform_blob_put(RXLibrary *lib, uint64_t id, const uint8_t *data, size_t size,
+                               size_t split);
+int  rx_core_waveform_blob_get(const RXLibrary *lib, uint64_t id, bool detail, uint8_t **data,
+                               size_t *size);
 int  rx_core_waveform_blob_head(const RXLibrary *lib, uint64_t id, uint8_t *head, size_t size);
 
 /* Grid positions for notation.c: the beat index (rx_grid_time_to_beat
