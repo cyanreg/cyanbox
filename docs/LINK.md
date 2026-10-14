@@ -233,6 +233,42 @@ first half and give the first track loaded from rxbox by the fake player.
   a check run by hand, clients written against real players
   (alphatheta-connect's, Deep Symmetry's beat-link) pointed at rxbox.
 - The fuzzer over every codec, under the sanitizers.
+
+### Player firmware in an emulator
+
+rbxport's firmware evidence comes from **AtEmu**, an emulator kept
+outside its public repository with a private harness (`ATEMU_DIR`,
+`rbxport-private`); it is not published. The public one is
+**cdj3k-emu** (<https://github.com/nsaintot/cdj3k-emu>, Apache-2.0 or
+MIT, some parts GPL-2.0): QEMU `aarch64-virt` with a stock kernel, its
+own modules and a shim for what the firmware expects (Rockchip DRM, the
+sub-CPU's buttons and jog, audio), booting the real firmware of a
+CDJ-3000 (3.00 and later, the RK3399 boards), CDJ-3000X or CDJ-1500X;
+its README says "Boots, Plays, Pro DJ Link" for each. What it would mean
+here:
+
+- **The firmware and its key are the user's to supply**: the `.UPD`
+  update file, which AlphaTheta publishes, and its LUKS keyfile, which it
+  does not ("Getting the keyfile is the user's responsibility, by
+  whatever means they are entitled to"). Nothing here can come with it.
+- **On this machine**: x86_64, so the ARM guest runs under QEMU's
+  software emulation (TCG), slower than on an ARM host with KVM; it wants
+  a GL 3.3 desktop (the private headless sway the UI tests use), PipeWire,
+  and for Pro DJ Link a tap or macvtap made with root once. A tap with
+  only the emulator and rxbox on it is also the isolated network the
+  Security section asks for.
+- **No automation in it**: rbxport's harness drives the panel (buttons,
+  jog, touch) and reads the screen; for cdj3k-emu that would be written
+  here, through its input and display paths, with a packet capture of
+  the same session.
+- **Unknown**: its README says "LINK MODE, where rekordbox reaches the
+  emulated deck over the network, does not work", without saying whether
+  that is Link Export or what fails. rbxport's AtEmu loads tracks from a
+  Link Export source on CDJ-3000 firmware 3.20, so the firmware does it;
+  whether cdj3k-emu does is the first thing to try.
+
+Used, it would stand in for steps 3 to 5 on a CDJ-3000: rxbox on SOURCE,
+browsing, a track loaded over NFS and played, the after-load requests.
 - Hardware: a checklist like rbxport's `link-testing.md` catalog, per
   model and firmware, the visible result recorded apart from the packets.
 
