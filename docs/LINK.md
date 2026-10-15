@@ -26,8 +26,10 @@ beat number and tempo from the track's grid, and a track the source tells
 it to load is taken as a player does: from its start, playing on if it
 was playing, paused if not (a load never starts a player). Step 7 has begun:
 two CDJ-900s on Ethernet (2026-10-14) joined, mounted the library,
-browsed it and played its MP3s from it. Not yet: a WAV played on one
-(section 4), a CDJ-3000, writes from the deck (step 8).
+browsed it and played its MP3s from it. An emulated CDJ-3000X then did
+everything a player does with rxbox (below). Not yet: a WAV played on a
+real one (section 4), a real CDJ-3000 or 3000X, writes from the deck
+(step 8).
 
 What the CDJ-900s showed, and what changed for it (`rxbox-cli -v link
 serve` logs every request, NFS call and unknown packet):
@@ -105,12 +107,36 @@ nothing on either; the on-air flags (`03`) only on the NXS2. Nothing else
 of a deck can be worked from the network: not its play button, pitch,
 jog, cues or loops.
 
+A CDJ-3000X (firmware 1.41, cdj3k-emu's guest under QEMU; 2026-10-15)
+found rxbox under its name with the library's track and playlist counts,
+browsed it (Japanese text, each row's preview waveform from the .2EX
+tags by `0x2d04`, artwork, BPM, key), loaded from its browser and by
+the load command (answering `1a`), and played: tempo, CUE, the memory
+cues, CALL to a memory loop and its RELOOP, hot cues set on the deck,
+jog, needle search, SEARCH, and the end of the track. What it sends that
+rxbox leaves unanswered, without which it carries on:
+
+- A 44-byte `80` to the status port (50002) of the source it found, 14
+  times 250 ms apart, each from a port of its own, then nothing more; its
+  firmware names a remote service version request [UNKNOWN: the answer].
+- At connect, `3404` and `3304` (a playlist's track deleted, its order
+  changed, by the firmware's names) and `110f` (the tag list's, it
+  seems: rbxport's `100f`), with r:m:s:t `01080401`: answered with an
+  error (`4003`), as rxbox has no tag list and takes no edits.
+- The media reply's date and sizes are zero, so its source information
+  shows Date, Total and Available blank; rekordbox 7.2.11 sends zeros
+  there too (rbxport's capture).
+
+It sends no `0b` (precise position) on 50001 here, only the `28` beats
+and 292-byte `0a` statuses; the Link decks need nothing more.
+
 What has been run against what:
 
 | Server | Client | Network | Result |
 | --- | --- | --- | --- |
 | rxbox | two CDJ-900s | Ethernet, a switch, 169.254.0.0/16 | join, mount, browse, the library's MP3s played; WAVs decoded as MP3 until the file type was named |
 | rxbox | emulated CDJ-900, CDJ-2000, CDJ-2000NXS2 (Pioneer's firmware in QEMU) | a bridge, 169.254.0.0/16 | join, mount, browse every category, metadata, waveforms, cues, a load streamed over NFS; the lapse, NFD, CDJ-900 punctuation and CDJ-2000 KEY findings above; FLAC, MP3, AAC and 16- and 24-bit WAV sources played on the NXS2, with tempo, jog, memory loops, and hot cues A to D in their colours (the pads jump, the hot loop loops); the load command (`0x19`) on the CDJ-900 and the NXS2; no cue writes attempted from an NXS2 |
+| rxbox | emulated CDJ-3000X (firmware 1.41, cdj3k-emu) | a bridge, 169.254.0.0/16 | found by name with its counts, browse with previews and artwork, a load from the browser and by `0x19`, play, tempo, memory cues and loops, hot cues set on the deck; `80` and three database probes left unanswered (above) |
 | rxbox | rxbox's fake player | loopback, ports of their own (`test_loopback`) | join, browse, every track's bytes (transcodes too), the player's status, the fences, a library change |
 | rxbox | rxbox's fake player | two network namespaces, rekordbox's ports (`tests/link/netns_test.sh`) | the same through the CLI, real broadcasts; the Ethernet interface found by the server, two served at once on the same ports, one of them only once its address came |
 | rxbox's app | rxbox's fake player | loopback (`test_link`) | refused without `--pro-link`, on the link before any player, the player and its load seen, 30 s of play recorded, the library read again after it, off, off right after on |
