@@ -1347,6 +1347,20 @@ static void test_cue_saves(RXDbClient *c, RXCatalog **cat, uint32_t track)
         CHECK(!"no PCO2 after a hot cue was saved");
     }
 
+    /* With no colour code, the deck's own pad colour: kept for hot cue A
+     * (00ff00, a CDJ-3000's), none for F, whose default it is. */
+    RXPlanCue pad = { .time = 7.0, .loop_end = -1, .hot = 0, .rgb = 0x00ff00 };
+    CHECK_EQ(rx_dbclient_save_cue(c, track, false, &pad, false, &r), 0);
+    CHECK(ed.nb == 2 && ed.e[1].cue.hot == 0 && !strcmp(ed.e[1].cue.color, "#00ff00"));
+    pad.hot = 5;
+    CHECK_EQ(rx_dbclient_save_cue(c, track, false, &pad, false, &r), 0);
+    CHECK(ed.nb == 3 && ed.e[2].cue.hot == 5 && !ed.e[2].cue.color[0]);
+    CHECK_EQ(rx_dbclient_save_cue(c, track, true, &pad, false, &r), 0);
+    pad.hot = 0;
+    CHECK_EQ(rx_dbclient_save_cue(c, track, true, &pad, false, &r), 0);
+    CHECK_EQ(ed.nb, 5);
+    ed.nb = 1;
+
     /* Saved again as it is: nothing changes, nothing is handed on. */
     CHECK_EQ(rx_dbclient_save_cue(c, track, false, &e, false, &r), 0);
     CHECK_EQ(saved_list(&r, &cues), 1);

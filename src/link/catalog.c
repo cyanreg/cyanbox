@@ -2232,6 +2232,14 @@ int rx_catalog_cue_edit(RXCatalog *c, uint32_t track, int player, bool remove,
         return RX_ERROR(ENOENT);
     RXLinkCueEdit e = { .track_id = track, .player = player, .remove = remove };
     rx_stick_cue_to_track(cue, rx_track_analysed(t) ? &t->grid : NULL, &e.cue);
+    /* A hot cue saved with no colour code comes with the pad colour the
+     * deck gave it (00ff00 from a CDJ-3000, 1aff00 from a 3000X, whatever
+     * the slot; emulated, 2026-10-15), which rekordbox keeps (rbxport). A
+     * stick's 00ff00 is no colour (rx_stick_cue_to_track); here it is so
+     * only as the slot's own default. */
+    if (cue->hot >= 0 && !cue->code && cue->rgb && !e.cue.color[0] &&
+        cue->rgb != rx_hot_cue_default_rgb(cue->hot))
+        snprintf(e.cue.color, sizeof(e.cue.color), "#%06x", cue->rgb);
     int ret = rx_link_cue_apply(t, &e);
     if (ret <= 0)
         return ret;
