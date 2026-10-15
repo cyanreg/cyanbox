@@ -446,6 +446,7 @@ enum RXOutState {
 
 typedef struct RXPwOut RXPwOut;
 typedef struct RXNullOut RXNullOut;
+typedef struct RXRingOut RXRingOut;
 
 struct RXPlayer {
     /* Command ring: head written by the owner, tail by the real-time
@@ -482,6 +483,7 @@ struct RXPlayer {
 
     RXPwOut   *pw;
     RXNullOut *null;
+    RXRingOut *ring_out;
 };
 
 /* ---------------------------------------------------------------- engine */
@@ -552,5 +554,8 @@ int  rx_player_null_open(RXPlayer *p);
 void rx_player_null_close(RXPlayer *p);
 /* Manual mode only: runs the mix for `frames` frames on the calling thread. */
 void rx_player_null_run(RXPlayer *p, int frames);
+
+int  rx_player_ring_open(RXPlayer *p);
+void rx_player_ring_close(RXPlayer *p);
 
 #endif /* RXBOX_PLAYER_INTERNAL_H */

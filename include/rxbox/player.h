@@ -33,8 +33,10 @@
  * end of its track, sample-exactly, as one piece of audio.
  *
  * Backends: PipeWire (pw_stream, 48 kHz float stereo, target node from
- * options), or the null backend, which runs the same callback on a timer
- * thread and discards the audio: for tests and headless runs. Nothing
+ * options), the null backend, which runs the same callback on a timer
+ * thread and discards the audio: for tests and headless runs, or the ring
+ * backend, which keeps it for another thread to take (with --pro-link, the
+ * mixer's LINK CUE; src/player/ringout.c). Nothing
  * here ever picks an output device by itself other than the PipeWire
  * default; tests always use RX_AUDIO_NULL or a null sink. */
 
@@ -50,6 +52,10 @@
 enum RXAudioBackend {
     RX_AUDIO_PIPEWIRE = 0,
     RX_AUDIO_NULL,
+    /* No device: the mix kept for another thread to take as it needs it
+     * (rx_player_ring_take: PRO DJ LINK's LINK CUE), paced by it while it
+     * takes, by the clock while not. */
+    RX_AUDIO_RING,
 };
 
 typedef struct RXPlayerOptions {
@@ -89,6 +95,12 @@ void rx_player_set_master_volume(RXPlayer *p, float gain);   /* 0..1 */
  * the audio around its playhead decoded, as a device on a machine that
  * keeps up would find it, so the tests see the same output every run. */
 void rx_player_null_advance(RXPlayer *p, int frames);
+/* RX_AUDIO_RING: the next `frames` frames of the mix as 16-bit stereo,
+ * interleaved, at the player's rate, into `out`, zeros for what is not
+ * mixed yet: how many were. The first take after a while (50 ms) drops
+ * what the ring held, and the mix catches up within a period. Any
+ * thread, one at a time. */
+int  rx_player_ring_take(RXPlayer *p, int16_t *out, int frames);
 
 /* ------------------------------------------------------------------- decks */
 

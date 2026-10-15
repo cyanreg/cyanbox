@@ -14,7 +14,7 @@ rx_stretch_lib = static_library('rx_stretch',
 # player: PipeWire output, the deck and its feed thread, CDJ-style controls,
 # null backend.
 rx_player_lib = static_library('rx_player',
-    files('player.c', 'deck.c', 'feed.c', 'controls.c', 'nullout.c', 'pipewire.c'),
+    files('player.c', 'deck.c', 'feed.c', 'controls.c', 'nullout.c', 'ringout.c', 'pipewire.c'),
     include_directories: rx_inc,
     dependencies: [ rx_core_dep, pipewire_dep ],
     link_whole: rx_stretch_lib,
@@ -28,6 +28,12 @@ foreach t : [ 'engine', 'controls', 'pipewire' ]
         include_directories: rx_inc, dependencies: [ rx_player_dep ])
     test(t, exe, suite: 'player', workdir: meson.project_source_root(), timeout: 120)
 endforeach
+
+# The ring backend (LINK CUE's) in real time: about four seconds.
+test('ring',
+    executable('test_player_ring', files('../../tests/player/test_ring.c'),
+        include_directories: rx_inc, dependencies: [ rx_player_dep ]),
+    suite: 'player', workdir: meson.project_source_root(), timeout: 60)
 
 # The next track against the owner's changes of mind, on the null backend's
 # own thread, in real time: about a minute.

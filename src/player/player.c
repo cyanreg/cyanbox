@@ -648,6 +648,8 @@ int rx_player_create(RXPlayer **out, const RXPlayerOptions *opt)
 
     if (opt->backend == RX_AUDIO_NULL)
         ret = rx_player_null_open(p);
+    else if (opt->backend == RX_AUDIO_RING)
+        ret = rx_player_ring_open(p);
     else
         ret = rx_player_pw_open(p);
     if (ret < 0)
@@ -670,6 +672,8 @@ void rx_player_destroy(RXPlayer *p)
      * nothing reads the buffers and every one of them can go. */
     if (p->null)
         rx_player_null_close(p);
+    if (p->ring_out)
+        rx_player_ring_close(p);
     if (p->pw)
         rx_player_pw_close(p);
     for (int i = 0; i < RX_DECKS; i++)
