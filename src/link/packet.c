@@ -62,6 +62,13 @@ int rx_pkt_header(RXPktHeader *h, enum RXLinkPort port, const uint8_t *buf, size
         rx_rd_skip(&r, 1);
         h->proto = rx_rd_u8(&r);
         total = rx_rd_u16(&r);
+        /* A DJM-900NXS (firmware 1.32) writes it little-endian: its htons
+         * swaps the bytes on a big-endian CPU (its emulator, 2026-10-16:
+         * 36 00 for a 54-byte keep-alive). A length that does not fit read
+         * one way but does read the other is taken that way. */
+        size_t swapped = (total >> 8 | total << 8) & 0xffff;
+        if (total > len && swapped >= 0x24 && swapped <= len)
+            total = swapped;
     } else {
         /* The length is what follows it (djl-analysis vcdj.adoc, len_r),
          * except in rekordbox's own status, subtype 01, where it is the

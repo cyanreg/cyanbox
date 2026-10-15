@@ -34,6 +34,19 @@ static const char cdj_keep_alive[] =
 static const char djm_keep_alive[] =
     "5173707431576d4a4f4c0600444a4d2d5635000000000000000000000000000001020036"
     "2102c83dfc1dfea2c0a80142040000000331";
+/* A DJM-900NXS on firmware 1.32 (device 33, 169.254.0.33, type 03), as
+ * the cdj session's emulator of it sends them (2026-10-16): its lengths
+ * at 0x22 are little-endian. The keep-alive, the first announcement and
+ * the first-stage claim. */
+static const char djm900_keep_alive[] =
+    "5173707431576d4a4f4c0600444a4d2d3930306e65787573000000000000000001023600"
+    "210200e0363a0021a9fe0021010000000301";
+static const char djm900_hello[] =
+    "5173707431576d4a4f4c0a00444a4d2d3930306e65787573000000000000000001022500"
+    "03";
+static const char djm900_claim1[] =
+    "5173707431576d4a4f4c0000444a4d2d3930306e65787573000000000000000001022c00"
+    "010300e0363a0021";
 /* rekordbox's join (2026-09-12): the first claim, the probes of 17 in round
  * 1 and of 44 in round 6. */
 static const char rb_claim1[] =
@@ -359,6 +372,27 @@ static void keep_alives(void)
     CHECK_EQ(rx_pkt_device_kind(4), RX_LINK_DEVICE_COMPUTER);
     CHECK_EQ(rx_pkt_device_kind(0x42), 0);
 
+    /* A DJM-900NXS writes its lengths little-endian: read all the same;
+     * built back, ours is big-endian and nothing else differs. */
+    Pkt n = pkt(djm900_keep_alive);
+    CHECK_EQ(rx_pkt_keep_alive_parse(&r, n.b, n.len), 0);
+    CHECK_STR(r.name, "DJM-900nexus");
+    CHECK(r.number == 33 && r.proto == 2 && r.addr == 0xa9fe0021 && r.peers == 1 &&
+          rx_pkt_device_kind(r.type) == RX_LINK_DEVICE_MIXER);
+    WR(w3);
+    rx_pkt_keep_alive(&w3, &r);
+    CHECK(w3.len == n.len && w3_buf[0x22] == 0x00 && w3_buf[0x23] == 0x36 &&
+          !memcmp(w3_buf, n.b, 0x22) && !memcmp(w3_buf + 0x24, n.b + 0x24, n.len - 0x24));
+    RXPktClaim cl;
+    Pkt h = pkt(djm900_hello);
+    CHECK(rx_pkt_claim_parse(&cl, h.b, h.len) == 0 && cl.kind == RX_ANN_HELLO && cl.type == 3);
+    Pkt c1 = pkt(djm900_claim1);
+    CHECK(rx_pkt_claim_parse(&cl, c1.b, c1.len) == 0 && cl.kind == RX_ANN_CLAIM1 &&
+          cl.counter == 1 && cl.type == 3);
+    /* A length that fits neither way round is still refused. */
+    n.b[0x22] = 0x37;
+    CHECK(rx_pkt_keep_alive_parse(&r, n.b, n.len) < 0);
+
     /* A keep-alive with another subtype is not one. */
     c.b[0x0b] = 1;
     CHECK(rx_pkt_keep_alive_parse(&r, c.b, c.len) < 0);
@@ -629,6 +663,8 @@ static void malformed(void)
     static const struct { const char *hex; enum RXLinkPort port; } all[] = {
         { rb_keep_alive, RX_LINK_ANNOUNCE }, { cdj_keep_alive, RX_LINK_ANNOUNCE },
         { djm_keep_alive, RX_LINK_ANNOUNCE }, { rb_claim1, RX_LINK_ANNOUNCE },
+        { djm900_keep_alive, RX_LINK_ANNOUNCE }, { djm900_hello, RX_LINK_ANNOUNCE },
+        { djm900_claim1, RX_LINK_ANNOUNCE },
         { rb_probe_17_1, RX_LINK_ANNOUNCE }, { rb_probe_44_6, RX_LINK_ANNOUNCE },
         { rb_status_idle, RX_LINK_STATUS }, { rb_status_master, RX_LINK_STATUS },
         { cdj_media_query_3, RX_LINK_STATUS }, { cdj_media_query_4, RX_LINK_STATUS },
@@ -914,6 +950,25 @@ static void join_variants(void)
 }
 
 /* --------------------------------------------------------- up and serving */
+
+/* A DJM-900NXS, its lengths little-endian, is on the link: a mixer, whose
+ * LINK CUE timing is answered only so (service.c). */
+static void djm900_on_link(void)
+{
+    Cap c = { .now = T0 };
+    RXPresence *p = computer(&c, true, NULL);
+    run_until(p, &c, T0 + 3900 * MS);
+    CHECK_EQ(rx_presence_state(p, NULL), RX_LINK_UP);
+    feed(p, &c, RX_LINK_ANNOUNCE, 0xa9fe0021, djm900_hello);
+    feed(p, &c, RX_LINK_ANNOUNCE, 0xa9fe0021, djm900_keep_alive);
+    CHECK(rx_presence_is_peer(p, 0xa9fe0021));
+    RXLinkPlayer seen[4];
+    CHECK_EQ(rx_presence_players(p, seen, 4), 1);
+    CHECK(seen[0].number == 33 && seen[0].type == RX_LINK_DEVICE_MIXER &&
+          seen[0].addr == 0xa9fe0021 && !strcmp(seen[0].name, "DJM-900nexus"));
+    rx_presence_free(&p);
+    free(c.out);
+}
 
 static void serving(void)
 {
@@ -1501,6 +1556,7 @@ int main(void)
     join_timeline();
     join_variants();
     serving();
+    djm900_on_link();
     listing();
     back_to_back();
     conflict_on_17();

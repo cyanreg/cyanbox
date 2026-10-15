@@ -721,6 +721,14 @@ mixer of the test's own, the deck moving by what was taken; and by hand,
 the interface with `--pro-link` in tests/link/netns.sh's namespaces and a
 fake mixer on the other host, its status bar saying `LINK CUE: playing on
 DJM-A9`.
+**An emulated DJM-900NXS** (its firmware 1.32 under QEMU, the cdj
+session's, 2026-10-16) writes the length at 0x22 of its port-50000
+packets little-endian (its htons swaps the bytes on its big-endian CPU;
+`36 00` for a 54-byte keep-alive), so rxbox read none of them, never had
+it on the link and left its timing unanswered. A length that does not fit
+read big-endian but does byte-swapped is now taken that way (packet.c);
+what rxbox sends stays big-endian.
+
 **Not yet**: a real mixer. The first check at one: with rxbox up as device
 17, `tcpdump -ni IF udp port 50004` shows a 42-byte timing packet from
 the mixer every 7 ms or so; if none come, something the readings missed
