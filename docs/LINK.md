@@ -226,8 +226,9 @@ id, so it keeps reading.
   static readings, made for rxbox, of the DJM-A9's firmware 1.22 and the
   DJM-900NXS's 1.32 (AlphaTheta's own updates; compressed, not
   encrypted), for which devices LINK CUE takes audio from and how. Each
-  finding is written up there with its addresses. Not yet checked against
-  a mixer.
+  finding is written up there with its addresses. Both firmwares have
+  since run under QEMU with rxbox feeding their LINK CUE ("LINK CUE");
+  not yet checked against a real mixer.
 
 ## The pieces
 
@@ -742,12 +743,25 @@ of silence to begin with). Only the very first start, LINK CUE switched
 on while rxbox was already elected, got no timing for about a second
 (about one lap of the mixer's ring at 96 kHz): the mixer's doing, not
 rxbox's.
+**An emulated DJM-A9** (its firmware 1.22 under QEMU, the cdj session's
+`djma9/emu`, 2026-10-16; its port-50000 lengths are big-endian) worked
+the same with nothing changed in rxbox: timing to 17 every 7 ms (3098 in
+21.7 s), rxbox took over with 2 while nobody was elected, the mixer
+handed over and named 17, and once its LINK CUE was on 2847 packets
+followed over 19.93 s, every counter a timing's, all 0 but the first;
+the mixer's output carried 440 Hz for those 19.93 s. Its timing waits
+about 58 ms after LINK CUE goes on (its 70 ms prefill, as on the
+DJM-900NXS), so rxbox, 50 ms without sending, takes over once more from
+the source elected, which changes nothing. There the LINK CUE button is
+set through a stand-in for the panel's microcontroller and the DSP is a
+stand-in that collects the audio; the network, PRO DJ LINK and LINK CUE
+code are the firmware's own.
 
-**Not yet**: a real mixer (the emulated DJM-900NXS runs its real
-firmware, but not its real hardware). The first check at one: with rxbox up as device
-17, `tcpdump -ni IF udp port 50004` shows a 42-byte timing packet from
-the mixer every 7 ms or so; if none come, something the readings missed
-gates it.
+**Not yet**: a real mixer (the emulated DJM-900NXS and DJM-A9 run their
+real firmware, but not their real hardware). The first check at one:
+with rxbox up as device 17, `tcpdump -ni IF udp port 50004` shows a
+42-byte timing packet from the mixer every 7 ms or so; if none come,
+something the readings missed gates it.
 
 ## Order of work
 
