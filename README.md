@@ -318,8 +318,8 @@ track's overview with the playhead (from the nexus generation on; older
 players do not say where they are). A track goes to a player from the
 track menu (Load in deck N) or by dropping it on its cell, unless it
 plays and the players' Eject/Load Lock is on. A cue saved on a player's
-deck (MEMORY, a hot cue pad) or deleted there is kept in the library, as
-rekordbox keeps it. A player
+deck (MEMORY, a hot cue pad) or deleted there, and a rating given there,
+are kept in the library, as rekordbox keeps them. A player
 streams a track as it plays it, not the whole file first: an emulated
 CDJ-2000NXS2 read about 630 kB in the first 2 s after a load, then about
 as fast as it plays (docs/LINK.md). While it runs,

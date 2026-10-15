@@ -134,8 +134,8 @@ static const char usage_text[] =
     "  link serve [-i IF]       serve the library to players (PRO DJ LINK, as\n"
     "                           rekordbox's Link Export) on every Ethernet interface,\n"
     "                           as they come and go, until interrupted, listing the\n"
-    "                           players heard; the cues they save on the deck go\n"
-    "                           into the library\n"
+    "                           players heard; the cues they save on the deck and\n"
+    "                           the ratings they give go into the library\n"
     "      -i, --interface IF   only on this interface\n"
     "      --any-peer           answer any address, not only players heard (diagnostics)\n"
     "      --wait               join only once a player is heard, as rekordbox does\n"
@@ -2594,28 +2594,40 @@ static bool served_same(const RXLinkServed *a, const RXLinkServed *b)
            a->number == b->number;
 }
 
-/* The cues players saved on the deck or deleted, into the library: the
- * services have served them since (rx_link_set_cue_edits). True when
- * the library changed. */
+/* The cues players saved on the deck or deleted and the ratings they
+ * gave, into the library: the services have served them since
+ * (rx_link_set_edits). True when the library changed. */
 static bool link_take_edits(Cli *cli, RXLinkSet *set)
 {
     bool changed = false;
-    RXLinkCueEdit e[16];
+    RXLinkEdit e[16];
     int n;
     do {
-        n = rx_link_set_cue_edits(set, e, 16);
+        n = rx_link_set_edits(set, e, 16);
         for (int i = 0; i < n; i++) {
             RXTrack *t = rx_library_find_id(&cli->app.lib, e[i].track_id);
             if (!t)
                 continue;
             char name[512], at[32], what[16];
             rx_track_display(t, name, sizeof(name));
+            if (e[i].what == RX_LINK_EDIT_RATING) {
+                int ret = rx_link_edit_apply(t, &e[i]);
+                if (ret > 0 && (ret = rx_library_save_track(&cli->app.lib, t)) >= 0)
+                    changed = true;
+                if (ret < 0)
+                    printf("player %d: cannot keep the rating of %s: %s\n", e[i].player, name,
+                           strerror(-ret));
+                else
+                    printf("player %d rated %s %d star%s\n", e[i].player, name, e[i].rating,
+                           e[i].rating == 1 ? "" : "s");
+                continue;
+            }
             if (e[i].cue.hot >= 0)
                 snprintf(what, sizeof(what), "hot cue %c", rx_cue_letter(&e[i].cue));
             else
                 snprintf(what, sizeof(what), "a memory %s",
                          rx_cue_is_loop(&e[i].cue) ? "loop" : "cue");
-            int ret = rx_link_cue_apply(t, &e[i]);
+            int ret = rx_link_edit_apply(t, &e[i]);
             if (ret > 0 && (ret = rx_library_save_track(&cli->app.lib, t)) >= 0)
                 changed = true;
             if (ret < 0)

@@ -107,5 +107,10 @@ int  rx_catalog_cues(RXCatalog *c, uint32_t track, RXWr *records, RXWr *times,
  * -ENOMEM. */
 int  rx_catalog_cue_edit(RXCatalog *c, uint32_t track, int player, bool remove,
                          const RXStickCue *cue);
+/* The rating `player` gave `track` on the deck, 0 to 5 stars: applied to
+ * the library's track and what the catalog serves, then handed on. 0,
+ * also when it changed nothing; -ENOENT for a track not served, -EINVAL
+ * for a rating past 5. */
+int  rx_catalog_rating_edit(RXCatalog *c, uint32_t track, int player, int stars);
 
 #endif /* RXBOX_LINK_CATALOG_H */

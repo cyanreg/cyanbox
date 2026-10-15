@@ -19,9 +19,9 @@
  *
  * A cue saved on the deck, or deleted, is kept (save_cue): the catalog
  * applies it to what it serves and hands it to the library's owner, and
- * the answer is the track's list as it is then. The other writes from the
- * deck (the grid's offset, ratings, tags, history) are refused, each in
- * the shape the player waits for. Requests nobody knows get the generic error,
+ * the answer is the track's list as it is then; a rating is kept so too.
+ * The other writes from the deck (the grid's offset, the tag list,
+ * history) are refused, each in the shape the player waits for. Requests nobody knows get the generic error,
  * the request's kind in a 4003, as rekordbox answers them (rbxport, from
  * rekordbox's binary). Notices a player sends without waiting (history,
  * on air, analysis uploads) get nothing: an answer would be read as the
@@ -527,13 +527,25 @@ static int handle(RXDbSession *s, const RXDbMsg *q, RXWr *w)
         numbers(w, q->txid, RX_DB_AVAILABLE, q->kind, 0);
         return 0;
 
-    /* Cues saved on the deck are kept; the other writes refused
-     * (docs/LINK.md). */
+    /* Cues saved on the deck are kept, and ratings (below); the other
+     * writes refused (docs/LINK.md). */
     case RX_DB_SAVE_CUE_EXT:
     case RX_DB_SAVE_CUE:
         return save_cue(s, w, q, c);
+    case RX_DB_SAVE_RATING: {
+        /* [r:m:s:t, track, 0 to 5 stars], kept as a saved cue is:
+         * 4000 [kind, 0] when it was, 1 when not (rbxport, from rekordbox
+         * 7.2.19). */
+        uint32_t stars = rx_dbmsg_num(q, 2);
+        int player = (int)(rx_dbmsg_num(q, 0) >> 24);
+        int ret = !c ? RX_ERROR(ENOENT) : stars > 5 ? RX_ERROR(EINVAL) :
+                  rx_catalog_rating_edit(c, a1, player ? player : s->player, (int)stars);
+        if (ret == RX_ERROR(ENOMEM))
+            return ret;
+        numbers(w, q->txid, RX_DB_AVAILABLE, q->kind, ret < 0);
+        return 0;
+    }
     case RX_DB_SAVE_GRID_OFFSET:
-    case RX_DB_SAVE_RATING:
     case RX_DB_SAVE_TAG:
     case RX_DB_CLEAR_TAGS:
         /* 4000 [kind, 1]: 0 says it was saved (rbxport). */

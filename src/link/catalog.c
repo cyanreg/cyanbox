@@ -106,7 +106,7 @@ struct RXCatalog {
     /* Every play of a track served, oldest first (load_plays). */
     struct CatPlay { uint32_t track; int32_t day; int64_t at; int seq; } *plays;
     int        nb_plays;
-    void     (*edit)(void *opaque, const RXLinkCueEdit *e);
+    void     (*edit)(void *opaque, const RXLinkEdit *e);
     void      *edit_opaque;
 };
 
@@ -270,7 +270,7 @@ void rx_catalog_set_check(RXCatalog *c, int (*check)(void *opaque, const RXPlanT
     c->check_opaque = opaque;
 }
 
-void rx_catalog_set_edit(RXCatalog *c, void (*edit)(void *opaque, const RXLinkCueEdit *e),
+void rx_catalog_set_edit(RXCatalog *c, void (*edit)(void *opaque, const RXLinkEdit *e),
                          void *opaque)
 {
     c->edit = edit;
@@ -2197,8 +2197,16 @@ static bool cue_same(const RXCue *a, const RXCue *b)
            a->active == b->active && !strcmp(a->name, b->name) && !strcmp(a->color, b->color);
 }
 
-int rx_link_cue_apply(RXTrack *t, const RXLinkCueEdit *e)
+int rx_link_edit_apply(RXTrack *t, const RXLinkEdit *e)
 {
+    if (e->what == RX_LINK_EDIT_RATING) {
+        if (e->rating < 0 || e->rating > 5)
+            return RX_ERROR(EINVAL);
+        if (t->meta.rating == e->rating)
+            return 0;
+        t->meta.rating = e->rating;
+        return 1;
+    }
     const RXCue *c = &e->cue;
     if (c->hot >= RX_HOT_CUE_SLOTS)
         return RX_ERROR(EINVAL);
@@ -2230,7 +2238,7 @@ int rx_catalog_cue_edit(RXCatalog *c, uint32_t track, int player, bool remove,
     RXTrack *t = ti >= 0 ? rx_library_find_id(c->lib, track) : NULL;
     if (!t)
         return RX_ERROR(ENOENT);
-    RXLinkCueEdit e = { .track_id = track, .player = player, .remove = remove };
+    RXLinkEdit e = { .track_id = track, .player = player, .remove = remove };
     rx_stick_cue_to_track(cue, rx_track_analysed(t) ? &t->grid : NULL, &e.cue);
     /* A hot cue saved with no colour code comes with the pad colour the
      * deck gave it (00ff00 from a CDJ-3000, 1aff00 from a 3000X, whatever
@@ -2240,7 +2248,7 @@ int rx_catalog_cue_edit(RXCatalog *c, uint32_t track, int player, bool remove,
     if (cue->hot >= 0 && !cue->code && cue->rgb && !e.cue.color[0] &&
         cue->rgb != rx_hot_cue_default_rgb(cue->hot))
         snprintf(e.cue.color, sizeof(e.cue.color), "#%06x", cue->rgb);
-    int ret = rx_link_cue_apply(t, &e);
+    int ret = rx_link_edit_apply(t, &e);
     if (ret <= 0)
         return ret;
     if ((ret = rx_plan_track_cues(c->t[ti].pt, t)) < 0)
@@ -2256,6 +2264,27 @@ int rx_catalog_cue_edit(RXCatalog *c, uint32_t track, int player, bool remove,
         snprintf(what, sizeof(what), "a memory %s", rx_cue_is_loop(&e.cue) ? "loop" : "cue");
     rx_info("link: player %d %s %s at %s on track %u", player, remove ? "deleted" : "saved", what,
             rx_fmt_time(e.cue.time, at, sizeof(at)), track);
+    if (c->edit)
+        c->edit(c->edit_opaque, &e);
+    return 0;
+}
+
+int rx_catalog_rating_edit(RXCatalog *c, uint32_t track, int player, int stars)
+{
+    int ti = track_index(c, track);
+    RXTrack *t = ti >= 0 ? rx_library_find_id(c->lib, track) : NULL;
+    if (!t)
+        return RX_ERROR(ENOENT);
+    RXLinkEdit e = {
+        .what = RX_LINK_EDIT_RATING, .track_id = track, .player = player, .rating = stars,
+    };
+    int ret = rx_link_edit_apply(t, &e);
+    if (ret <= 0)
+        return ret;
+    c->t[ti].rating = (uint8_t)stars;
+    free(c->order[SORT_RATING]);
+    c->order[SORT_RATING] = NULL;
+    rx_info("link: player %d rated track %u %d star%s", player, track, stars, stars == 1 ? "" : "s");
     if (c->edit)
         c->edit(c->edit_opaque, &e);
     return 0;

@@ -10,8 +10,8 @@
  *
  * What the players send back is applied here, on the owner thread: the
  * services never write the library. That is the plays, and the cues a
- * player saves on the deck or deletes, which the services have served
- * since and hand over (rx_link_set_cue_edits). */
+ * player saves on the deck or deletes and the ratings it gives, which the
+ * services have served since and hand over (rx_link_set_edits). */
 
 #include "applink.h"
 
@@ -210,19 +210,36 @@ static void record(RXApp *app, const RXLinkPlayer *p)
     app->rows_dirty = true;
 }
 
-/* A cue a player saved on the deck or deleted, into the library. */
-static void apply_edit(RXApp *app, const RXLinkCueEdit *e)
+/* A cue a player saved on the deck or deleted, or a rating it gave,
+ * into the library. */
+static void apply_edit(RXApp *app, const RXLinkEdit *e)
 {
     RXTrack *t = rx_library_find_id(&app->lib, e->track_id);
     if (!t)
         return;
     char name[256], what[16];
     rx_track_display(t, name, sizeof(name));
+    if (e->what == RX_LINK_EDIT_RATING) {
+        int ret = rx_link_edit_apply(t, e);
+        if (ret > 0)
+            ret = rx_library_save_track(&app->lib, t);
+        if (ret < 0) {
+            app->last_error_count++;
+            rx_app_set_status(app, "Cannot keep the rating player %d gave %s: %s", e->player, name,
+                              strerror(-ret));
+            return;
+        }
+        rx_app_set_status(app, "Player %d rated %s %d star%s", e->player, name, e->rating,
+                          e->rating == 1 ? "" : "s");
+        app->rows_dirty = true;
+        app->dirty = true;
+        return;
+    }
     if (e->cue.hot >= 0)
         snprintf(what, sizeof(what), "hot cue %c", rx_cue_letter(&e->cue));
     else
         snprintf(what, sizeof(what), "a memory %s", rx_cue_is_loop(&e->cue) ? "loop" : "cue");
-    int ret = rx_link_cue_apply(t, e);
+    int ret = rx_link_edit_apply(t, e);
     if (ret > 0)
         ret = rx_library_save_track(&app->lib, t);
     if (ret < 0) {
@@ -239,10 +256,10 @@ static void apply_edit(RXApp *app, const RXLinkCueEdit *e)
 
 static void take_edits(RXApp *app)
 {
-    RXLinkCueEdit e[16];
+    RXLinkEdit e[16];
     int n;
     do {
-        n = rx_link_set_cue_edits(app->link->set, e, 16);
+        n = rx_link_set_edits(app->link->set, e, 16);
         for (int i = 0; i < n; i++)
             apply_edit(app, &e[i]);
     } while (n == 16);

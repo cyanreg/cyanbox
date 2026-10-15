@@ -1284,11 +1284,11 @@ static void menu_ids(RXDbClient *c, uint16_t kind, int loc, const uint32_t *args
 
 /* The cues the catalog hands on (rx_catalog_set_edit). */
 typedef struct Edits {
-    RXLinkCueEdit e[8];
+    RXLinkEdit e[8];
     int nb;
 } Edits;
 
-static void edit_seen(void *opaque, const RXLinkCueEdit *e)
+static void edit_seen(void *opaque, const RXLinkEdit *e)
 {
     Edits *d = opaque;
     if (d->nb < 8)
@@ -1417,6 +1417,40 @@ static void test_cue_saves(RXDbClient *c, RXCatalog **cat, uint32_t track)
     CHECK(r.kind == RX_DB_CUES_REPLY && rx_dbmsg_num(&r, 1) == 0 && rx_dbmsg_num(&r, 5) == 0 &&
           rx_dbmsg_num(&r, 6) == 0);
     CHECK_EQ(ed.nb, 6);
+    rx_catalog_set_edit(*cat, NULL, NULL);
+}
+
+/* A rating given on the deck (2107): 4000 [kind, 0] when kept, handed on
+ * once, and the RATING menu follows; a rating past 5 or a track not
+ * served is refused (1). `track` is unrated, and is again at the end. */
+static void test_ratings(RXDbClient *c, RXCatalog **cat, uint32_t track)
+{
+    Edits ed = { 0 };
+    rx_catalog_set_edit(*cat, edit_seen, &ed);
+    RXDbMsg r;
+    CHECK_EQ(rx_dbclient_request(c, RX_DB_SAVE_RATING, 8, IDS(track, 3), &r), 0);
+    CHECK(r.kind == RX_DB_AVAILABLE && rx_dbmsg_num(&r, 0) == RX_DB_SAVE_RATING &&
+          rx_dbmsg_num(&r, 1) == 0);
+    CHECK(ed.nb == 1 && ed.e[0].what == RX_LINK_EDIT_RATING && ed.e[0].track_id == track &&
+          ed.e[0].rating == 3 && ed.e[0].player > 0);
+    RXDbRow *rows;
+    int n = 0;
+    CHECK_EQ(rx_dbclient_menu(c, RX_DB_RATING_TRACKS, 2, IDS(0, 3), &rows, &n), 0);
+    bool listed = false;
+    for (int i = 0; i < n; i++)
+        listed |= rows[i].id == track;
+    rx_dbrows_free(&rows, n);
+    CHECK(listed);
+    /* The same again: kept, nothing handed on. Past 5, or no such track:
+     * refused. */
+    CHECK_EQ(rx_dbclient_request(c, RX_DB_SAVE_RATING, 8, IDS(track, 3), &r), 0);
+    CHECK(rx_dbmsg_num(&r, 1) == 0 && ed.nb == 1);
+    CHECK_EQ(rx_dbclient_request(c, RX_DB_SAVE_RATING, 8, IDS(track, 6), &r), 0);
+    CHECK(rx_dbmsg_num(&r, 1) == 1);
+    CHECK_EQ(rx_dbclient_request(c, RX_DB_SAVE_RATING, 8, IDS(0x7fffff, 2), &r), 0);
+    CHECK(rx_dbmsg_num(&r, 1) == 1 && ed.nb == 1);
+    CHECK_EQ(rx_dbclient_request(c, RX_DB_SAVE_RATING, 8, IDS(track, 0), &r), 0);
+    CHECK(rx_dbmsg_num(&r, 1) == 0 && ed.nb == 2 && ed.e[1].rating == 0);
     rx_catalog_set_edit(*cat, NULL, NULL);
 }
 
@@ -1870,8 +1904,7 @@ static void test_library(RXLibrary *lib, RXPlan *plan, RXCatalog **cat)
     CHECK_EQ(rx_dbclient_request(c, RX_DB_SAVE_CUE, 8, (const uint32_t[]) { alpha, 1, 0 }, 3, &r), 0);
     CHECK(r.kind == RX_DB_CUES_REPLY && r.nb_args == 9 && rx_dbmsg_num(&r, 1) == 0x32);
     test_cue_saves(c, cat, charlie);
-    CHECK_EQ(rx_dbclient_request(c, RX_DB_SAVE_RATING, 8, (const uint32_t[]) { alpha, 5 }, 2, &r), 0);
-    CHECK(r.kind == RX_DB_AVAILABLE && rx_dbmsg_num(&r, 1) == 1);
+    test_ratings(c, cat, charlie);
     close_pair(&sv, &c);
 
     /* A client set up the older way: twelve-argument rows, the plain

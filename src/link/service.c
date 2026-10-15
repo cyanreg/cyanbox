@@ -151,8 +151,8 @@ struct RXLink {
     int number;
     RXLinkPlayer players[MAX_PLAYERS];
     int nb_players;
-    /* Cues players saved, for the owner to apply (rx_link_cue_edits). */
-    RXLinkCueEdit edits[RX_LINK_EDITS_KEPT];
+    /* Cues players saved, for the owner to apply (rx_link_edits). */
+    RXLinkEdit edits[RX_LINK_EDITS_KEPT];
     int nb_edits;
 };
 
@@ -301,8 +301,8 @@ static ssize_t wav_read(void *opaque, const RXPlanTrack *pt, uint64_t offset, ui
 }
 
 /* A cue a player saved, applied to what is served already (catalog.c):
- * kept for the owner, who writes the library (rx_link_cue_edits). */
-static void cue_edited(void *opaque, const RXLinkCueEdit *e)
+ * kept for the owner, who writes the library (rx_link_edits). */
+static void edited(void *opaque, const RXLinkEdit *e)
 {
     RXLink *l = opaque;
     pthread_mutex_lock(&l->lock);
@@ -370,7 +370,7 @@ static int served_build(RXLink *l, Served *s)
         (ret = rx_vtree_new(&s->tree, s->plan)) < 0)
         goto fail;
     rx_catalog_set_check(s->cat, wav_check, l);
-    rx_catalog_set_edit(s->cat, cue_edited, l);
+    rx_catalog_set_edit(s->cat, edited, l);
     free(tracks);
     free(pls);
     return 0;
@@ -901,7 +901,7 @@ void rx_link_library_changed(RXLink *l)
     wake(l->wake);
 }
 
-int rx_link_cue_edits(RXLink *l, RXLinkCueEdit *out, int max)
+int rx_link_edits(RXLink *l, RXLinkEdit *out, int max)
 {
     pthread_mutex_lock(&l->lock);
     int n = RX_MIN(l->nb_edits, RX_MAX(max, 0));

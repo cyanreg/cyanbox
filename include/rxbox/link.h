@@ -136,32 +136,40 @@ int  rx_link_load(RXLink *l, int player, uint32_t track_id);
 /* The ports bound (with any 0 asked for filled in). */
 void rx_link_bound_ports(RXLink *l, RXLinkPorts *out);
 
-/* A cue a player saved on the deck, or deleted, on a track of ours
- * (docs/LINK.md, "Cues saved on the deck"). The service has applied it to
- * what it serves, so its answer to the player shows it, and hands it on:
- * the library's owner applies it (rx_link_cue_apply) and saves the track.
- * The services never write the library. */
-typedef struct RXLinkCueEdit {
+/* What a player changed on the deck on a track of ours (docs/LINK.md,
+ * "Edits on the deck"): a cue saved or deleted, or the rating. The service
+ * has applied it to what it serves, so its answer to the player shows it,
+ * and hands it on: the library's owner applies it (rx_link_edit_apply)
+ * and saves the track. The services never write the library. */
+enum RXLinkEditWhat {
+    RX_LINK_EDIT_CUE = 0,
+    RX_LINK_EDIT_RATING,
+};
+
+typedef struct RXLinkEdit {
+    int      what;              /* enum RXLinkEditWhat */
     uint32_t track_id;
     int      player;            /* the device number of the player that sent it */
-    bool     remove;            /* deleted, else saved */
-    /* A hot cue names its slot, a memory cue its time. On the track's grid
-     * when it sits on a beat, as a cue read back from a stick
-     * (rx_stick_cue_to_track). */
+    /* A cue: deleted, else saved. A hot cue names its slot, a memory cue
+     * its time. On the track's grid when it sits on a beat, as a cue read
+     * back from a stick (rx_stick_cue_to_track). */
+    bool     remove;
     RXCue    cue;
-} RXLinkCueEdit;
+    int      rating;            /* the rating: 0 to 5 stars */
+} RXLinkEdit;
 
 /* A service keeps this many edits not taken yet; the oldest go first. */
 #define RX_LINK_EDITS_KEPT 256
 /* The edits players made since the last call, oldest first: the count,
  * up to `max` taken (the rest wait for the next call). */
-int  rx_link_cue_edits(RXLink *l, RXLinkCueEdit *out, int max);
+int  rx_link_edits(RXLink *l, RXLinkEdit *out, int max);
 /* Applies an edit to `t` as rekordbox applies one to its library: a hot
  * cue saved takes its slot, replacing what was there; a memory cue saved
  * replaces the one at its time (within 20 ms) or is added; a deletion
- * takes off the hot cue in the slot, or the memory cue at the time. 1
- * when `t` changed, 0 when there was nothing to do, or a negative errno. */
-int  rx_link_cue_apply(RXTrack *t, const RXLinkCueEdit *e);
+ * takes off the hot cue in the slot, or the memory cue at the time; a
+ * rating replaces the track's. 1 when `t` changed, 0 when there was
+ * nothing to do, or a negative errno. */
+int  rx_link_edit_apply(RXTrack *t, const RXLinkEdit *e);
 
 /* ------------------------------------------------------------- the set */
 
@@ -201,8 +209,8 @@ void rx_link_set_library_changed(RXLinkSet *s);
 /* rx_link_load on the interface `where` (rx_link_set_players' index):
  * -ENOENT when it is not served any more. */
 int  rx_link_set_load(RXLinkSet *s, int where, int player, uint32_t track_id);
-/* rx_link_cue_edits of every service, one after the other. */
-int  rx_link_set_cue_edits(RXLinkSet *s, RXLinkCueEdit *out, int max);
+/* rx_link_edits of every service, one after the other. */
+int  rx_link_set_edits(RXLinkSet *s, RXLinkEdit *out, int max);
 
 /* ------------------------------------------------------------ fake player */
 

@@ -29,9 +29,10 @@ two CDJ-900s on Ethernet (2026-10-14) joined, mounted the library,
 browsed it and played its MP3s from it. An emulated CDJ-3000X then did
 everything a player does with rxbox (below), as then did a CDJ-3000 on
 firmware 3.22, and the cues a player saves
-on the deck are kept in the library ("Cues saved on the deck"). Not yet:
-a WAV played on a real one (section 4), a real CDJ-3000 or 3000X, the
-other writes from the deck (the grid's offset, ratings: step 8).
+on the deck and the ratings it gives are kept in the library ("Edits on
+the deck"). Not yet: a WAV played on a real one (section 4), a real
+CDJ-3000 or 3000X, the other writes from the deck (the grid's offset,
+the tag list: step 8).
 
 What the CDJ-900s showed, and what changed for it (`rxbox-cli -v link
 serve` logs every request, NFS call and unknown packet):
@@ -124,7 +125,7 @@ comes as `2705` (the extended cue's entry, rxbox's `4e02` layout
 without a comment: a hot cue with its slot and colour, a memory cue with
 slot 0). Refused (`32`, as rxbox did at first), the deck kept a hot cue
 so saved for itself and dropped a memory cue, and said nothing either
-way; rxbox keeps them now ("Cues saved on the deck").
+way; rxbox keeps them now ("Edits on the deck").
 
 What it sends that rxbox leaves unanswered, without which it carries on:
 
@@ -161,7 +162,7 @@ What has been run against what:
 | Server | Client | Network | Result |
 | --- | --- | --- | --- |
 | rxbox | two CDJ-900s | Ethernet, a switch, 169.254.0.0/16 | join, mount, browse, the library's MP3s played; WAVs decoded as MP3 until the file type was named |
-| rxbox | emulated CDJ-900, CDJ-2000, CDJ-2000NXS2 (Pioneer's firmware in QEMU) | a bridge, 169.254.0.0/16 | join, mount, browse every category, metadata, waveforms, cues, a load streamed over NFS; the lapse, NFD, CDJ-900 punctuation and CDJ-2000 KEY findings above; FLAC, MP3, AAC and 16- and 24-bit WAV sources played on the NXS2, with tempo, jog, memory loops, and hot cues A to D in their colours (the pads jump, the hot loop loops); the load command (`0x19`) on the CDJ-900 and the NXS2; cues saved and deleted on all three kept in the library ("Cues saved on the deck") |
+| rxbox | emulated CDJ-900, CDJ-2000, CDJ-2000NXS2 (Pioneer's firmware in QEMU) | a bridge, 169.254.0.0/16 | join, mount, browse every category, metadata, waveforms, cues, a load streamed over NFS; the lapse, NFD, CDJ-900 punctuation and CDJ-2000 KEY findings above; FLAC, MP3, AAC and 16- and 24-bit WAV sources played on the NXS2, with tempo, jog, memory loops, and hot cues A to D in their colours (the pads jump, the hot loop loops); the load command (`0x19`) on the CDJ-900 and the NXS2; cues saved and deleted on all three kept in the library ("Edits on the deck") |
 | rxbox | emulated CDJ-3000 (firmware 3.22, cdj3k-emu) | a bridge, 169.254.0.0/16 | as the 3000X: browse with previews and artwork, a load from the browser and by `0x19`, play, tempo, CUE, a memory loop; cues saved and deleted on the deck kept; no `80`, no probes but `3007` |
 | rxbox | emulated CDJ-3000X (firmware 1.41, cdj3k-emu) | a bridge, 169.254.0.0/16 | found by name with its counts, browse with previews and artwork, a load from the browser and by `0x19`, play, tempo, memory cues and loops, hot cues A to D in their colours with names and a hot loop; cues saved and deleted on the deck kept in the library (below); `80` and three database probes left unanswered (above) |
 | rxbox | rxbox's fake player | loopback, ports of their own (`test_loopback`) | join, browse, every track's bytes (transcodes too), the player's status, the fences, a library change |
@@ -270,8 +271,9 @@ binary blobs). Menus come as a header, items and a footer, paged.
 | Beat grid, cues | `2204`; cues `2104` (legacy) and `2b04` (extended) | |
 | VBR index | `2504` | |
 | After a load | `3006` user info (answered with `4d02`, 160 bytes), `2602` delivery info | the CDJ-3000 waits for these before it goes back to browsing |
-| Cues saved on the deck | `2705` extended, `2105` older (A to C) | kept in the library ("Cues saved on the deck") |
-| Other writes from the deck | `2605` grid offset, `2107` rating … | refused |
+| Cues saved on the deck | `2705` extended, `2105` older (A to C) | kept in the library ("Edits on the deck") |
+| A rating given on the deck | `2107` | kept in the library ("Edits on the deck") |
+| Other writes from the deck | `2605` grid offset, `3002` and `3202` the tag list … | refused |
 
 The library is in memory already, so every menu is a query over
 `RXLibrary` and the album and collection orders rxbox has. The analysis
@@ -490,11 +492,27 @@ Link is on:
   time (60 / BPM seconds each, so a loop counts its beats once and a jump
   adds nothing), or the time it played at its pitch when the player gives
   no beat numbers; then `rx_library_record_play`, once per load. Saved
-  cues are taken from the services there too ("Cues saved on the deck").
+  cues and ratings are taken from the services there too ("Edits on the
+  deck").
 - **Exposure**: as in "Security". A host firewall must let UDP 50000,
   50002, 50111 and 2049 and the TCP database ports in on that interface.
 
-## Cues saved on the deck
+## Edits on the deck
+
+A player sends the source what is changed on its deck: a cue saved or
+deleted, a rating, the grid's offset, and tracks added to or taken off
+its TAG LIST (`3002`, `3202` to clear it: the list of tracks a DJ
+collects while browsing, not rekordbox's My Tags, which no player
+edits). rxbox keeps the cues and the ratings in the library; the grid's
+offset and the tag list are refused (step 8).
+
+**A rating** comes as `2107` [r:m:s:t, track, 0 to 5 stars] and is kept
+as a cue is (below: the service applies it to what it serves,
+`rx_catalog_rating_edit`, and hands it on as an `RXLinkEdit`), answered
+`4000` [`2107`, 0], or 1 for a rating past 5 or a track not served, as
+rekordbox answers (rbxport, from rekordbox 7.2.19).
+
+### Cues saved on the deck
 
 A player that saves a cue (MEMORY, or a hot cue pad with nothing on it)
 or deletes one sends it to the source at once, one cue a request: `2705`
@@ -523,10 +541,10 @@ one, else `#rrggbb`.
 - The service applies it to what it serves (its own library and the
   plan: `rx_catalog_cue_edit`) and answers with the track's list as it is
   then, in the request's form (`4e02` or `4702`): the player shows the
-  cue from that answer. It also hands it on (`rx_link_cue_edits`): the
+  cue from that answer. It also hands it on (`rx_link_edits`): the
   services never write the library.
 - The library's owner applies it there and saves the track
-  (`rx_link_cue_apply`): the interface on its tick, with a status line
+  (`rx_link_edit_apply`): the interface on its tick, with a status line
   ("Player 2 saved hot cue C on ..."), `rxbox link serve` in its loop,
   with a line of its own; both have the services read the library again
   once it has settled (2 s), so every interface serves it.
@@ -562,7 +580,8 @@ the older way, each in the answer, handed on once and in the ANLZ files
 served after; test_loopback has the service hand one on; the app's
 test_link has one in the app's library and on disk; netns_test has
 `rxbox link serve` keep the hot cue `rxbox link browse --save-cue A@1.5`
-saved.
+saved. test_db gives a rating as a player does, and test_link has the
+app keep one.
 
 ## Order of work
 

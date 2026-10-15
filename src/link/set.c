@@ -321,13 +321,13 @@ int rx_link_set_load(RXLinkSet *s, int where, int player, uint32_t track_id)
     return ret;
 }
 
-int rx_link_set_cue_edits(RXLinkSet *s, RXLinkCueEdit *out, int max)
+int rx_link_set_edits(RXLinkSet *s, RXLinkEdit *out, int max)
 {
     pthread_mutex_lock(&s->lock);
     int n = 0;
     for (int i = 0; i < s->nb && n < max; i++) {
         if (s->served[i].link)
-            n += rx_link_cue_edits(s->served[i].link, out + n, max - n);
+            n += rx_link_edits(s->served[i].link, out + n, max - n);
     }
     pthread_mutex_unlock(&s->lock);
     return n;

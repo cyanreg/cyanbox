@@ -320,11 +320,11 @@ int main(void)
         RXDbMsg r;
         CHECK_EQ(rx_dbclient_save_cue(db, other, false, &cue, false, &r), 0);
         CHECK(r.kind == RX_DB_CUES_EXT_REPLY && rx_dbmsg_num(&r, 1) == 0);
-        RXLinkCueEdit e[4];
-        CHECK_EQ(rx_link_cue_edits(link, e, 4), 1);
+        RXLinkEdit e[4];
+        CHECK_EQ(rx_link_edits(link, e, 4), 1);
         CHECK(e[0].track_id == other && e[0].player == 2 && !e[0].remove && e[0].cue.hot < 0 &&
               fabs(e[0].cue.time - 0.75) < 0.001);
-        CHECK_EQ(rx_link_cue_edits(link, e, 4), 0);
+        CHECK_EQ(rx_link_edits(link, e, 4), 0);
     }
 
     /* A host that never joined the link: no database, no files. */

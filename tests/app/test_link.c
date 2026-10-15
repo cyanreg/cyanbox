@@ -10,7 +10,8 @@
  * and on the link at once, before any player; the player seen joining,
  * loading a track of ours and playing it, the play recorded in the
  * library after 30 s, the library read again, a hot cue the player saves
- * on the deck kept in the library (and on disk), a stop, and a stop right
+ * on the deck kept in the library (and on disk) and a rating it gives, a
+ * stop, and a stop right
  * after a start, while the set is still starting the service.
  *
  * Usage: test_link FILE.wav SCRATCH_DIR */
@@ -183,6 +184,12 @@ static bool has_hot_c(RXApp *app)
     return hot_c_at(rx_library_find_id(&app->lib, loaded_id));
 }
 
+static bool rated_4(RXApp *app)
+{
+    RXTrack *t = rx_library_find_id(&app->lib, loaded_id);
+    return t && t->meta.rating == 4;
+}
+
 /* A free port on the loopback for the server, which the player is told
  * before the server binds it. */
 static uint16_t free_udp(const char *addr)
@@ -311,6 +318,12 @@ static void test_app(const char *wav, const char *dir)
         CHECK_EQ(rx_library_open(&again, root), 0);
         CHECK(hot_c_at(rx_library_find_id(&again, loaded_id)));
         rx_library_close(&again);
+        /* A rating given on the deck: kept too. */
+        CHECK_EQ(rx_dbclient_request(db, RX_DB_SAVE_RATING, 8, (const uint32_t[]) { loaded_id, 4 },
+                                     2, &r), 0);
+        CHECK(r.kind == RX_DB_AVAILABLE && rx_dbmsg_num(&r, 1) == 0);
+        CHECK(tick_until(&app, rated_4, 5));
+        CHECK(strstr(app.status, "Player 2 rated") != NULL);
     }
 
     /* Off. */

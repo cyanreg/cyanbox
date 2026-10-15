@@ -46,7 +46,7 @@ void rx_catalog_set_check(RXCatalog *c, int (*check)(void *opaque, const RXPlanT
                           void *opaque);
 /* Where the catalog hands the cues players save on the deck (the
  * service's queue for the library's owner, rxbox/link.h). */
-void rx_catalog_set_edit(RXCatalog *c, void (*edit)(void *opaque, const RXLinkCueEdit *e),
+void rx_catalog_set_edit(RXCatalog *c, void (*edit)(void *opaque, const RXLinkEdit *e),
                          void *opaque);
 
 /* --------------------------------------------------------------- session */
