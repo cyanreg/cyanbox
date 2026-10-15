@@ -727,9 +727,16 @@ packets little-endian (its htons swaps the bytes on its big-endian CPU;
 `36 00` for a 54-byte keep-alive), so rxbox read none of them, never had
 it on the link and left its timing unanswered. A length that does not fit
 read big-endian but does byte-swapped is now taken that way (packet.c);
-what rxbox sends stays big-endian.
+what rxbox sends stays big-endian. With that, LINK CUE worked there
+end to end: rxbox (`--pro-link`, a 440 Hz track playing) took over with
+2 while nobody was elected, the mixer handed over and named 17, and once
+its LINK CUE was on every timing was answered with 0 and its counter;
+the mixer's output carried 440 Hz for the 15 s played, 6 dB down, as its
+own LINK CUE path has it. Stopped, rxbox sent nothing more and the mixer
+played out what it held and stood down, still naming 17.
 
-**Not yet**: a real mixer. The first check at one: with rxbox up as device
+**Not yet**: a real mixer (the emulated DJM-900NXS runs its real
+firmware, but not its real hardware). The first check at one: with rxbox up as device
 17, `tcpdump -ni IF udp port 50004` shows a 42-byte timing packet from
 the mixer every 7 ms or so; if none come, something the readings missed
 gates it.
