@@ -5,8 +5,9 @@
 # network of netns.sh: rekordbox's real ports, real broadcasts, sockets
 # tied to an interface; the server finding the Ethernet interface by
 # itself; serving two at once on the same ports, one that gets its
-# address only after the server started among them; and the fence (a
-# browse that never announces itself gets nothing).
+# address only after the server started among them; a hot cue the player
+# saves kept in the library; and the fence (a browse that never announces
+# itself gets nothing).
 #
 #   tests/link/netns_test.sh RXBOX-CLI AUDIO.wav DIR
 #
@@ -19,7 +20,7 @@ rm -rf "$dir" && mkdir -p "$dir" || exit 1
 "$cli" -c "$dir/lib" add "$audio" > "$dir/add.log" 2>&1 || { cat "$dir/add.log"; exit 1; }
 
 out=$("$here/netns.sh" -w 1 "$cli -c $dir/lib link serve" -- \
-      "timeout 60 $cli link browse -i \$RXB --hold 1" 2>&1)
+      "timeout 60 $cli link browse -i \$RXB --hold 1 --save-cue A@1.5" 2>&1)
 status=$?
 [ $status -eq 77 ] && exit 77
 echo "$out"
@@ -38,6 +39,13 @@ check "beat grid \(2204\): [0-9]+ bytes, [0-9]+ beats"
 check "file over NFS: [0-9]+ bytes in [0-9]+ ms \([0-9.]+ MB/s\)$"
 check "^link up as device 17 on rxa"
 check "playing track 1 from 17"
+# The hot cue the player saved: in the answer, said by the server, and in
+# the library after it.
+check "^saved hot cue A at 0:01\.500 on track 1: the source lists [0-9]+ cues?$"
+check "^player 3 saved hot cue A at 0:01\.500 on "
+shown=$("$cli" -c "$dir/lib" show "$audio" 2>&1)
+grep -qE "cue hot A +0:01\.500" <<< "$shown" || {
+    echo "netns_test: the saved hot cue is not in the library:"; echo "$shown"; fail=1; }
 
 # Two interfaces on host A: rxc served at once, rxa only once it has its
 # address back, three seconds after the server started; the player on B

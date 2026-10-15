@@ -9,7 +9,8 @@
  * without --pro-link (link_state.enabled), started by the set's thread
  * and on the link at once, before any player; the player seen joining,
  * loading a track of ours and playing it, the play recorded in the
- * library after 30 s, the library read again, a stop, and a stop right
+ * library after 30 s, the library read again, a hot cue the player saves
+ * on the deck kept in the library (and on disk), a stop, and a stop right
  * after a start, while the set is still starting the service.
  *
  * Usage: test_link FILE.wav SCRATCH_DIR */
@@ -18,10 +19,16 @@
 
 #include <errno.h>
 #include <ftw.h>
+#include <math.h>
 #include <stdio.h>
+#include <string.h>
 #include <unistd.h>
 
+#include "rxbox/colors.h"
+
 #include "src/app/applink.h"
+#include "src/link/client.h"
+#include "src/link/dbserver.h"
 #include "src/link/net.h"
 #include "tests/formats/test.h"
 
@@ -164,6 +171,18 @@ static bool played(RXApp *app)
     return t && t->play_count == 1;
 }
 
+/* Hot cue C at 1.5 s on the loaded track, blue. */
+static bool hot_c_at(const RXTrack *t)
+{
+    int i = t ? rx_track_hot_cue(t, 2) : -1;
+    return i >= 0 && fabs(t->cues[i].time - 1.5) < 0.001 && !strcmp(t->cues[i].color, "blue");
+}
+
+static bool has_hot_c(RXApp *app)
+{
+    return hot_c_at(rx_library_find_id(&app->lib, loaded_id));
+}
+
 /* A free port on the loopback for the server, which the player is told
  * before the server binds it. */
 static uint16_t free_udp(const char *addr)
@@ -271,6 +290,28 @@ static void test_app(const char *wav, const char *dir)
         usleep(20000);
     }
     CHECK(sees_player(&app) && app.link_state.on);
+
+    /* A hot cue the player saves on the deck, as a CDJ-3000X does: the
+     * answer has it, the app keeps it in the library, and it is on disk
+     * (a library opened again has it). */
+    RXDbClient *db = player ? rx_link_client_db(player, &err) : NULL;
+    CHECK(db);
+    if (db) {
+        int code;
+        uint32_t rgb;
+        CHECK_EQ(rx_hot_cue_color("blue", &code, &rgb), 0);
+        RXPlanCue cue = { .time = 1.5, .loop_end = -1, .hot = 2, .color_code = code, .rgb = rgb };
+        RXDbMsg r;
+        CHECK_EQ(rx_dbclient_save_cue(db, loaded_id, false, &cue, false, &r), 0);
+        CHECK(r.kind == RX_DB_CUES_EXT_REPLY && rx_dbmsg_num(&r, 1) == 0 &&
+              rx_dbmsg_num(&r, 4) == 1);
+        CHECK(tick_until(&app, has_hot_c, 5));
+        CHECK(strstr(app.status, "Player 2 saved hot cue C on") != NULL);
+        RXLibrary again;
+        CHECK_EQ(rx_library_open(&again, root), 0);
+        CHECK(hot_c_at(rx_library_find_id(&again, loaded_id)));
+        rx_library_close(&again);
+    }
 
     /* Off. */
     rx_app_link_stop(&app);

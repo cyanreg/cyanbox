@@ -151,6 +151,9 @@ struct RXLink {
     int number;
     RXLinkPlayer players[MAX_PLAYERS];
     int nb_players;
+    /* Cues players saved, for the owner to apply (rx_link_cue_edits). */
+    RXLinkCueEdit edits[RX_LINK_EDITS_KEPT];
+    int nb_edits;
 };
 
 void rx_link_options_default(RXLinkOptions *o)
@@ -297,6 +300,22 @@ static ssize_t wav_read(void *opaque, const RXPlanTrack *pt, uint64_t offset, ui
     return rx_link_wav_read(l->wav, pt, offset, dst, n);
 }
 
+/* A cue a player saved, applied to what is served already (catalog.c):
+ * kept for the owner, who writes the library (rx_link_cue_edits). */
+static void cue_edited(void *opaque, const RXLinkCueEdit *e)
+{
+    RXLink *l = opaque;
+    pthread_mutex_lock(&l->lock);
+    if (l->nb_edits == RX_LINK_EDITS_KEPT) {
+        rx_warn("link: a cue player %d saved was not taken in time and is dropped",
+                l->edits[0].player);
+        memmove(l->edits, l->edits + 1, (RX_LINK_EDITS_KEPT - 1) * sizeof(*l->edits));
+        l->nb_edits--;
+    }
+    l->edits[l->nb_edits++] = *e;
+    pthread_mutex_unlock(&l->lock);
+}
+
 /* The library opened again, the plan over all of it, the catalog and the
  * tree over the plan. Tracks whose file is gone are left out (a player
  * could not read them). The plan reads no audio (RX_PLAN_STORED: the
@@ -351,6 +370,7 @@ static int served_build(RXLink *l, Served *s)
         (ret = rx_vtree_new(&s->tree, s->plan)) < 0)
         goto fail;
     rx_catalog_set_check(s->cat, wav_check, l);
+    rx_catalog_set_edit(s->cat, cue_edited, l);
     free(tracks);
     free(pls);
     return 0;
@@ -879,6 +899,17 @@ void rx_link_library_changed(RXLink *l)
 {
     atomic_store(&l->reload, true);
     wake(l->wake);
+}
+
+int rx_link_cue_edits(RXLink *l, RXLinkCueEdit *out, int max)
+{
+    pthread_mutex_lock(&l->lock);
+    int n = RX_MIN(l->nb_edits, RX_MAX(max, 0));
+    memcpy(out, l->edits, (size_t)n * sizeof(*out));
+    memmove(l->edits, l->edits + n, (size_t)(l->nb_edits - n) * sizeof(*l->edits));
+    l->nb_edits -= n;
+    pthread_mutex_unlock(&l->lock);
+    return n;
 }
 
 void rx_link_bound_ports(RXLink *l, RXLinkPorts *out)

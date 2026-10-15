@@ -1154,6 +1154,130 @@ static void menu_ids(RXDbClient *c, uint16_t kind, int loc, const uint32_t *args
 
 #define IDS(...) (const uint32_t[]) { __VA_ARGS__ }, (int)(sizeof((const uint32_t[]) { __VA_ARGS__ }) / sizeof(uint32_t))
 
+/* The cues the catalog hands on (rx_catalog_set_edit). */
+typedef struct Edits {
+    RXLinkCueEdit e[8];
+    int nb;
+} Edits;
+
+static void edit_seen(void *opaque, const RXLinkCueEdit *e)
+{
+    Edits *d = opaque;
+    if (d->nb < 8)
+        d->e[d->nb++] = *e;
+}
+
+/* A save's answer: the extended list's cues (4e02: kind, status, length,
+ * blob, count), or -1 when it was refused. */
+static int saved_list(const RXDbMsg *r, RXPlanCue **cues)
+{
+    *cues = NULL;
+    if (r->kind != RX_DB_CUES_EXT_REPLY || rx_dbmsg_num(r, 0) != RX_DB_SAVE_CUE_EXT ||
+        rx_dbmsg_num(r, 1) == RX_DB_STATUS_NONE)
+        return -1;
+    int nc = 0;
+    if (r->nb_args < 4 || !r->args[3].len)
+        return 0;
+    return rx_db_cues_ext_parse(r->args[3].p, r->args[3].len, cues, &nc) < 0 ? -1 : nc;
+}
+
+/* Cues saved on the deck (2705 as a CDJ-3000X sends them, and the older
+ * 2105) and deleted: each answered with the list as it is then, handed on
+ * once, and in the ANLZ files served after; one rekordbox does not take
+ * changes nothing; a record too short is refused. On `track`, which has
+ * none, and has none again at the end. */
+static void test_cue_saves(RXDbClient *c, RXCatalog **cat, uint32_t track)
+{
+    Edits ed = { 0 };
+    rx_catalog_set_edit(*cat, edit_seen, &ed);
+    RXDbMsg r;
+    RXPlanCue *cues;
+    uint8_t *blob;
+    size_t pco2_before = 0, bn;
+    if (rx_dbclient_tag(c, track, "PCO2", "EXT", &blob, &bn) == 0) {
+        pco2_before = bn;
+        free(blob);
+    }
+
+    /* Hot cue E, green, as the 3000X saved it (an empty pad, playing). */
+    int code;
+    uint32_t rgb;
+    CHECK_EQ(rx_hot_cue_color("green", &code, &rgb), 0);
+    RXPlanCue e = { .time = 5.237, .loop_end = -1, .hot = 4, .color_code = code, .rgb = rgb };
+    CHECK_EQ(rx_dbclient_save_cue(c, track, false, &e, false, &r), 0);
+    CHECK_EQ(rx_dbmsg_num(&r, 4), 1u);
+    CHECK(saved_list(&r, &cues) == 1 && cues[0].hot == 4 && fabs(cues[0].time - 5.237) < 0.0005 &&
+          cues[0].color_code == code);
+    free(cues);
+    CHECK(ed.nb == 1 && ed.e[0].track_id == track && ed.e[0].player > 0 && !ed.e[0].remove &&
+          ed.e[0].cue.hot == 4 && fabs(ed.e[0].cue.time - 5.237) < 0.0005 &&
+          ed.e[0].cue.loop_end < 0 && !strcmp(ed.e[0].cue.color, "green"));
+    if (rx_dbclient_tag(c, track, "PCO2", "EXT", &blob, &bn) == 0) {
+        CHECK(bn > pco2_before);
+        free(blob);
+    } else {
+        CHECK(!"no PCO2 after a hot cue was saved");
+    }
+
+    /* Saved again as it is: nothing changes, nothing is handed on. */
+    CHECK_EQ(rx_dbclient_save_cue(c, track, false, &e, false, &r), 0);
+    CHECK_EQ(saved_list(&r, &cues), 1);
+    free(cues);
+    CHECK_EQ(ed.nb, 1);
+
+    /* A memory cue with a name and a colour, then the older form's active
+     * memory loop: both kept, the list with all three. */
+    RXPlanCue m = { .time = 46.666, .loop_end = -1, .hot = -1, .color_code = 3 };
+    snprintf(m.name, sizeof(m.name), "%s", "ドロップ");
+    CHECK_EQ(rx_dbclient_save_cue(c, track, false, &m, false, &r), 0);
+    CHECK(saved_list(&r, &cues) == 2 && cues[1].hot < 0 && fabs(cues[1].time - 46.666) < 0.0005 &&
+          !strcmp(cues[1].name, "ドロップ") && cues[1].color_code == 3);
+    free(cues);
+    CHECK(ed.nb == 2 && ed.e[1].cue.hot < 0 && !strcmp(ed.e[1].cue.name, "ドロップ") &&
+          !strcmp(ed.e[1].cue.color, rx_track_color_name(3)));
+    RXPlanCue l = { .time = 10.0, .loop_end = 12.0, .hot = -1, .active = true };
+    CHECK_EQ(rx_dbclient_save_cue(c, track, false, &l, true, &r), 0);
+    CHECK(r.kind == RX_DB_CUES_REPLY && r.nb_args == 9 && rx_dbmsg_num(&r, 0) == RX_DB_SAVE_CUE &&
+          rx_dbmsg_num(&r, 1) == 0 && rx_dbmsg_num(&r, 6) == 2);
+    CHECK(ed.nb == 3 && ed.e[2].cue.hot < 0 && ed.e[2].cue.active &&
+          fabs(ed.e[2].cue.time - 10.0) < 0.0005 && fabs(ed.e[2].cue.loop_end - 12.0) < 0.0005);
+    CHECK_EQ(rx_dbclient_blob(c, RX_DB_CUES_EXT, track, &blob, &bn), 0);
+    int nc = 0;
+    cues = NULL;
+    CHECK(rx_db_cues_ext_parse(blob, bn, &cues, &nc) == 0 && nc == 3);
+    free(cues);
+    free(blob);
+
+    /* One rekordbox does not take (a slot past H): the list as it is. A
+     * save without its record: refused. */
+    RXPlanCue bad = e;
+    bad.hot = 8;
+    CHECK_EQ(rx_dbclient_save_cue(c, track, false, &bad, false, &r), 0);
+    CHECK_EQ(saved_list(&r, &cues), 3);
+    free(cues);
+    CHECK_EQ(ed.nb, 3);
+    CHECK_EQ(rx_dbclient_request(c, RX_DB_SAVE_CUE_EXT, 8, (const uint32_t[]) { track, 1, 4 }, 3, &r), 0);
+    CHECK(r.kind == RX_DB_CUES_EXT_REPLY && rx_dbmsg_num(&r, 1) == RX_DB_STATUS_NONE);
+
+    /* Deleted: hot cue E by its slot (whatever time it names), the memory
+     * cue by its time, the loop by the older form; the list empty again. */
+    RXPlanCue del = e;
+    del.time = 99.0;
+    CHECK_EQ(rx_dbclient_save_cue(c, track, true, &del, false, &r), 0);
+    CHECK_EQ(saved_list(&r, &cues), 2);
+    free(cues);
+    CHECK(ed.nb == 4 && ed.e[3].remove && ed.e[3].cue.hot == 4);
+    m.time += 0.010;
+    CHECK_EQ(rx_dbclient_save_cue(c, track, true, &m, false, &r), 0);
+    CHECK_EQ(saved_list(&r, &cues), 1);
+    free(cues);
+    CHECK_EQ(rx_dbclient_save_cue(c, track, true, &l, true, &r), 0);
+    CHECK(r.kind == RX_DB_CUES_REPLY && rx_dbmsg_num(&r, 1) == 0 && rx_dbmsg_num(&r, 5) == 0 &&
+          rx_dbmsg_num(&r, 6) == 0);
+    CHECK_EQ(ed.nb, 6);
+    rx_catalog_set_edit(*cat, NULL, NULL);
+}
+
 static void test_library(RXLibrary *lib, RXPlan *plan, RXCatalog **cat)
 {
     uint32_t alpha = (uint32_t)by_file(lib, "alpha.flac")->id;
@@ -1598,6 +1722,7 @@ static void test_library(RXLibrary *lib, RXPlan *plan, RXCatalog **cat)
     CHECK(r.kind == RX_DB_CUES_EXT_REPLY && rx_dbmsg_num(&r, 0) == RX_DB_SAVE_CUE_EXT && rx_dbmsg_num(&r, 1) == 0x32);
     CHECK_EQ(rx_dbclient_request(c, RX_DB_SAVE_CUE, 8, (const uint32_t[]) { alpha, 1, 0 }, 3, &r), 0);
     CHECK(r.kind == RX_DB_CUES_REPLY && r.nb_args == 9 && rx_dbmsg_num(&r, 1) == 0x32);
+    test_cue_saves(c, cat, charlie);
     CHECK_EQ(rx_dbclient_request(c, RX_DB_SAVE_RATING, 8, (const uint32_t[]) { alpha, 5 }, 2, &r), 0);
     CHECK(r.kind == RX_DB_AVAILABLE && rx_dbmsg_num(&r, 1) == 1);
     close_pair(&sv, &c);

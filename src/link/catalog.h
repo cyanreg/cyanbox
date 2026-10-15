@@ -15,6 +15,9 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "rxbox/export.h"
+#include "rxbox/link.h"
+
 #include "dbmsg.h"
 #include "dbserver.h"
 
@@ -96,5 +99,13 @@ int  rx_catalog_cues_ext(RXCatalog *c, uint32_t track, RXWr *blob, uint32_t *cou
  * hot and memory cues. */
 int  rx_catalog_cues(RXCatalog *c, uint32_t track, RXWr *records, RXWr *times,
                      uint32_t *hot, uint32_t *memory);
+
+/* A cue `player` saved on the deck (or, `remove`, deleted) on `track`, as
+ * it sent it: made a library cue on the track's grid, applied to the
+ * library's track and to the plan's cues the catalog serves, then handed
+ * on. 0, also when it changed nothing; -ENOENT for a track not served,
+ * -ENOMEM. */
+int  rx_catalog_cue_edit(RXCatalog *c, uint32_t track, int player, bool remove,
+                         const RXStickCue *cue);
 
 #endif /* RXBOX_LINK_CATALOG_H */

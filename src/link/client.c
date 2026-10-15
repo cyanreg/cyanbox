@@ -21,6 +21,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include "rxbox/colors.h"
 #include "rxbox/common.h"
 
 #include "client.h"
@@ -260,6 +261,28 @@ static uint32_t le32_at(const uint8_t *p, size_t size, size_t off)
 {
     return off + 4 <= size ? (uint32_t)p[off] | (uint32_t)p[off + 1] << 8 |
                              (uint32_t)p[off + 2] << 16 | (uint32_t)p[off + 3] << 24 : 0;
+}
+
+int rx_link_client_save_cue(RXLinkClient *c, uint32_t track, int hot, double time, int *nb_cues)
+{
+    *nb_cues = 0;
+    if (hot < -1 || hot >= RX_HOT_CUE_SLOTS || !(time >= 0))
+        return RX_ERROR(EINVAL);
+    int ret = 0;
+    RXDbClient *db = rx_link_client_db(c, &ret);
+    if (!db)
+        return ret;
+    /* A hot cue in the slot's own pad colour, as a player saves one. */
+    RXPlanCue cue = { .time = time, .loop_end = -1, .hot = hot };
+    if (hot >= 0)
+        cue.rgb = rx_hot_cue_default_rgb(hot);
+    RXDbMsg r;
+    if ((ret = rx_dbclient_save_cue(db, track, false, &cue, false, &r)) < 0)
+        return ret;
+    if (r.kind != RX_DB_CUES_EXT_REPLY || rx_dbmsg_num(&r, 1) == RX_DB_STATUS_NONE)
+        return RX_ERROR(EPROTO);
+    *nb_cues = (int)RX_MIN(rx_dbmsg_num(&r, 4), (uint32_t)INT32_MAX);
+    return 0;
 }
 
 int rx_link_client_play(RXLinkClient *c, uint32_t track)

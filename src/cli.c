@@ -134,7 +134,8 @@ static const char usage_text[] =
     "  link serve [-i IF]       serve the library to players (PRO DJ LINK, as\n"
     "                           rekordbox's Link Export) on every Ethernet interface,\n"
     "                           as they come and go, until interrupted, listing the\n"
-    "                           players heard\n"
+    "                           players heard; the cues they save on the deck go\n"
+    "                           into the library\n"
     "      -i, --interface IF   only on this interface\n"
     "      --any-peer           answer any address, not only players heard (diagnostics)\n"
     "      --wait               join only once a player is heard, as rekordbox does\n"
@@ -151,6 +152,8 @@ static const char usage_text[] =
     "                           end; a track the source tells it to load (Load in\n"
     "                           deck) is taken as a player does: from its start,\n"
     "                           playing on if it was playing, paused if not\n"
+    "      --save-cue X@SEC     once loaded, save a cue on the track as a player does on\n"
+    "                           the deck: hot cue X (A..H) or a memory cue (M) at SEC\n"
     "\n"
     "  A TRACK is an audio file in the library (any path to it), a folder (every\n"
     "  library track under it) or a library id.\n"
@@ -2591,9 +2594,45 @@ static bool served_same(const RXLinkServed *a, const RXLinkServed *b)
            a->number == b->number;
 }
 
+/* The cues players saved on the deck or deleted, into the library: the
+ * services have served them since (rx_link_set_cue_edits). True when
+ * the library changed. */
+static bool link_take_edits(Cli *cli, RXLinkSet *set)
+{
+    bool changed = false;
+    RXLinkCueEdit e[16];
+    int n;
+    do {
+        n = rx_link_set_cue_edits(set, e, 16);
+        for (int i = 0; i < n; i++) {
+            RXTrack *t = rx_library_find_id(&cli->app.lib, e[i].track_id);
+            if (!t)
+                continue;
+            char name[512], at[32], what[16];
+            rx_track_display(t, name, sizeof(name));
+            if (e[i].cue.hot >= 0)
+                snprintf(what, sizeof(what), "hot cue %c", rx_cue_letter(&e[i].cue));
+            else
+                snprintf(what, sizeof(what), "a memory %s",
+                         rx_cue_is_loop(&e[i].cue) ? "loop" : "cue");
+            int ret = rx_link_cue_apply(t, &e[i]);
+            if (ret > 0 && (ret = rx_library_save_track(&cli->app.lib, t)) >= 0)
+                changed = true;
+            if (ret < 0)
+                printf("player %d: cannot keep %s on %s: %s\n", e[i].player, what, name,
+                       strerror(-ret));
+            else
+                printf("player %d %s %s at %s on %s\n", e[i].player,
+                       e[i].remove ? "deleted" : "saved", what,
+                       rx_fmt_time(e[i].cue.time, at, sizeof(at)), name);
+        }
+    } while (n == 16);
+    return changed;
+}
+
 /* Served on every Ethernet interface, or on the one -i names, until
  * interrupted: each interface's state and the devices said as they
- * change. */
+ * change, and the cues players save kept in the library. */
 static int link_serve(Cli *cli, const RXLinkOptions *opt)
 {
     char *root = library_root(cli);
@@ -2608,7 +2647,8 @@ static int link_serve(Cli *cli, const RXLinkOptions *opt)
     pthread_sigmask(SIG_BLOCK, &sigs, NULL);
 
     /* The ids players report are the library's: a connection of our own
-     * to name them (read only, as the services'). */
+     * to name them, and to keep the cues they save (the services never
+     * write the library). */
     int code = open_library(cli, false);
     if (code) {
         free(root);
@@ -2626,10 +2666,19 @@ static int link_serve(Cli *cli, const RXLinkOptions *opt)
     int nb_was = 0;
     RXLinkPlayer seen[64], now[64];
     int nb_seen = 0, where[64];
+    /* The services read the library again once saved cues have settled
+     * for this long, as the interface does (src/app/link.c). */
+    int64_t edited_us = 0;
     while (1) {
         struct timespec ts = { .tv_sec = 0, .tv_nsec = 250000000 };
         if (sigtimedwait(&sigs, NULL, &ts) >= 0)
             break;
+        if (link_take_edits(cli, set))
+            edited_us = rx_time_us();
+        if (edited_us && rx_time_us() - edited_us >= 2000000) {
+            rx_link_set_library_changed(set);
+            edited_us = 0;
+        }
         RXLinkServed ifs[8];
         int nb_ifs = RX_MIN(rx_link_set_interfaces(set, ifs, 8), 8);
         for (int i = 0; i < nb_ifs; i++) {
@@ -2676,6 +2725,7 @@ static int link_serve(Cli *cli, const RXLinkOptions *opt)
         }
         fflush(stdout);
     }
+    link_take_edits(cli, set);
     rx_link_set_stop(&set);
     printf("stopped\n");
     return EXIT_OK;
@@ -2709,7 +2759,25 @@ static void link_hold(RXLinkClient *c, long hold)
     }
 }
 
-static int link_browse(const RXLinkClientOptions *o, uint32_t track, long hold)
+/* A cue to save once loaded (--save-cue): `hot` 0..7, -1 a memory cue,
+ * -2 none. */
+typedef struct SaveCue {
+    int    hot;
+    double time;
+} SaveCue;
+
+static bool parse_save_cue(const char *s, SaveCue *c)
+{
+    char x = (char)(*s & ~0x20);
+    if (!((x >= 'A' && x <= 'H') || x == 'M') || s[1] != '@')
+        return false;
+    char *end;
+    c->time = strtod(s + 2, &end);
+    c->hot = x == 'M' ? -1 : x - 'A';
+    return end != s + 2 && !*end && c->time >= 0 && c->time < 86400;
+}
+
+static int link_browse(const RXLinkClientOptions *o, uint32_t track, long hold, SaveCue save)
 {
     RXLinkClient *c;
     int ret = rx_link_client_start(&c, o);
@@ -2725,6 +2793,23 @@ static int link_browse(const RXLinkClientOptions *o, uint32_t track, long hold)
         return fail("no computer source answered on %s", o->interface);
     }
     ret = rx_link_client_browse(c, track, print_line, NULL);
+    if (ret >= 0 && save.hot > -2) {
+        int device, slot, nb = 0;
+        uint32_t id;
+        rx_link_client_loaded(c, &device, &slot, &id);
+        char at[32], what[16];
+        rx_fmt_time(save.time, at, sizeof(at));
+        if (save.hot >= 0)
+            snprintf(what, sizeof(what), "hot cue %c", 'A' + save.hot);
+        else
+            snprintf(what, sizeof(what), "a memory cue");
+        ret = rx_link_client_save_cue(c, id, save.hot, save.time, &nb);
+        if (ret >= 0)
+            printf("saved %s at %s on track %u: the source lists %d cue%s\n", what, at, id, nb,
+                   nb == 1 ? "" : "s");
+        else
+            printf("saving %s at %s on track %u failed: %s\n", what, at, id, strerror(-ret));
+    }
     fflush(stdout);
     if (ret >= 0 && hold > 0)
         link_hold(c, hold);
@@ -2741,6 +2826,7 @@ static int cmd_link(Cli *cli, int argc, char **argv)
     RXLinkClientOptions copt;
     rx_link_client_options_default(&copt);
     long number = 3, track = 0, hold = 0;
+    SaveCue save = { .hot = -2 };
     const char *sub = NULL, *host = NULL;
     for (int i = 1; i < argc; i++) {
         const char *val;
@@ -2768,6 +2854,10 @@ static int cmd_link(Cli *cli, int argc, char **argv)
         } else if ((r = opt_value(cli, argc, argv, &i, "-t", "--track", &val))) {
             if (r < 0 || !parse_count(val, UINT32_MAX, &track))
                 return usage_error(cli, "link: --track takes a track id");
+        } else if ((r = opt_value(cli, argc, argv, &i, NULL, "--save-cue", &val))) {
+            if (r < 0 || !parse_save_cue(val, &save))
+                return usage_error(cli, "link: --save-cue takes a hot cue A..H or M, @ and "
+                                        "seconds (A@1.5)");
         } else if ((r = opt_value(cli, argc, argv, &i, NULL, "--name", &val))) {
             if (r < 0 || strlen(val) > 20)
                 return usage_error(cli, "link: --name takes a model name, 20 characters at most");
@@ -2793,7 +2883,7 @@ static int cmd_link(Cli *cli, int argc, char **argv)
     copt.interface = opt.interface;
     copt.server = host;
     copt.number = (int)number;
-    return link_browse(&copt, (uint32_t)track, hold);
+    return link_browse(&copt, (uint32_t)track, hold, save);
 }
 
 static const struct {
@@ -2820,7 +2910,8 @@ static const struct {
     { "init",     cmd_init,     "init [DIR]" },
     { "playlist", cmd_playlist, "playlist list|create|add|remove|delete|import|export ..." },
     { "link",     cmd_link,     "link serve [-i IF] [--any-peer] [--wait] | "
-                                "link browse -i IF [-n N] [-t ID] [--name NAME] [--hold SEC] [--quiet] [HOST]" },
+                                "link browse -i IF [-n N] [-t ID] [--name NAME] [--hold SEC] "
+                                "[--save-cue X@SEC] [--quiet] [HOST]" },
 };
 
 static int cli_run(int argc, char **argv)

@@ -27,9 +27,10 @@ it to load is taken as a player does: from its start, playing on if it
 was playing, paused if not (a load never starts a player). Step 7 has begun:
 two CDJ-900s on Ethernet (2026-10-14) joined, mounted the library,
 browsed it and played its MP3s from it. An emulated CDJ-3000X then did
-everything a player does with rxbox (below). Not yet: a WAV played on a
-real one (section 4), a real CDJ-3000 or 3000X, writes from the deck
-(step 8).
+everything a player does with rxbox (below), and the cues a player saves
+on the deck are kept in the library ("Cues saved on the deck"). Not yet:
+a WAV played on a real one (section 4), a real CDJ-3000 or 3000X, the
+other writes from the deck (the grid's offset, ratings: step 8).
 
 What the CDJ-900s showed, and what changed for it (`rxbox-cli -v link
 serve` logs every request, NFS call and unknown packet):
@@ -120,8 +121,9 @@ under the waveform as it is triggered, D's hot loop looping its 16
 beats; CALL steps through the memory cues only. A cue saved on the deck
 comes as `2705` (the extended cue's entry, rxbox's `4e02` layout
 without a comment: a hot cue with its slot and colour, a memory cue with
-slot 0), which rxbox refuses (`32`): the deck keeps a hot cue so saved
-for itself and drops a memory cue, and says nothing either way.
+slot 0). Refused (`32`, as rxbox did at first), the deck kept a hot cue
+so saved for itself and dropped a memory cue, and said nothing either
+way; rxbox keeps them now ("Cues saved on the deck").
 
 What it sends that rxbox leaves unanswered, without which it carries on:
 
@@ -130,9 +132,10 @@ What it sends that rxbox leaves unanswered, without which it carries on:
   remote service version request, which a 3000X answers itself (0x298
   bytes, to the asker's 50002) with its model, firmware and the streaming
   services it has (Beatport, CloudDirectPlay) and their versions. Unanswered,
-  it records that the source has neither, which is so for rxbox, and
-  browsing does not wait for it; an answer of no services would only
-  save the retries.
+  it records nothing of the source, which then never counts against the
+  devices' compatibility, and browsing does not wait for it; an answer of
+  no services stops the retries but makes it log an error (an invalid
+  service version), so rxbox leaves it unanswered.
 - At connect, `3404` and `3304` (a playlist's track deleted, its order
   changed, by the firmware's names) and `110f` (the tag list's, it
   seems: rbxport's `100f`), with r:m:s:t `01080401`: answered with an
@@ -150,7 +153,7 @@ What has been run against what:
 | --- | --- | --- | --- |
 | rxbox | two CDJ-900s | Ethernet, a switch, 169.254.0.0/16 | join, mount, browse, the library's MP3s played; WAVs decoded as MP3 until the file type was named |
 | rxbox | emulated CDJ-900, CDJ-2000, CDJ-2000NXS2 (Pioneer's firmware in QEMU) | a bridge, 169.254.0.0/16 | join, mount, browse every category, metadata, waveforms, cues, a load streamed over NFS; the lapse, NFD, CDJ-900 punctuation and CDJ-2000 KEY findings above; FLAC, MP3, AAC and 16- and 24-bit WAV sources played on the NXS2, with tempo, jog, memory loops, and hot cues A to D in their colours (the pads jump, the hot loop loops); the load command (`0x19`) on the CDJ-900 and the NXS2; no cue writes attempted from an NXS2 |
-| rxbox | emulated CDJ-3000X (firmware 1.41, cdj3k-emu) | a bridge, 169.254.0.0/16 | found by name with its counts, browse with previews and artwork, a load from the browser and by `0x19`, play, tempo, memory cues and loops, hot cues A to D in their colours with names and a hot loop; cues saved on the deck refused (kept by it for a hot cue); `80` and three database probes left unanswered (above) |
+| rxbox | emulated CDJ-3000X (firmware 1.41, cdj3k-emu) | a bridge, 169.254.0.0/16 | found by name with its counts, browse with previews and artwork, a load from the browser and by `0x19`, play, tempo, memory cues and loops, hot cues A to D in their colours with names and a hot loop; cues saved on the deck sent as `2705` (refused then: kept since); `80` and three database probes left unanswered (above) |
 | rxbox | rxbox's fake player | loopback, ports of their own (`test_loopback`) | join, browse, every track's bytes (transcodes too), the player's status, the fences, a library change |
 | rxbox | rxbox's fake player | two network namespaces, rekordbox's ports (`tests/link/netns_test.sh`) | the same through the CLI, real broadcasts; the Ethernet interface found by the server, two served at once on the same ports, one of them only once its address came |
 | rxbox's app | rxbox's fake player | loopback (`test_link`) | refused without `--pro-link`, on the link before any player, the player and its load seen, 30 s of play recorded, the library read again after it, off, off right after on |
@@ -257,7 +260,8 @@ binary blobs). Menus come as a header, items and a footer, paged.
 | Beat grid, cues | `2204`; cues `2104` (legacy) and `2b04` (extended) | |
 | VBR index | `2504` | |
 | After a load | `3006` user info (answered with `4d02`, 160 bytes), `2602` delivery info | the CDJ-3000 waits for these before it goes back to browsing |
-| Writes from the deck | `2105` cues, `2705` extended cues, `2605` grid offset … | refused at first; later, saved to the library |
+| Cues saved on the deck | `2705` extended, `2105` older (A to C) | kept in the library ("Cues saved on the deck") |
+| Other writes from the deck | `2605` grid offset, `2107` rating … | refused |
 
 The library is in memory already, so every menu is a query over
 `RXLibrary` and the album and collection orders rxbox has. The analysis
@@ -434,9 +438,9 @@ Link is on:
   1,400 tracks, every time the library changed, and stopping waited for
   it; this one takes 0.4 s, and a stop interrupts it. A handle names a
   track by id, so a player reading a file keeps reading it across a
-  rebuild. The app owns the library: what players send back
-  (loads, plays; later cues) goes to the app as job results, the way the
-  export's do.
+  rebuild. The app owns the library: what players send back (plays,
+  saved cues) the app applies on its own thread; the services never write
+  the library.
 - **Every Ethernet interface** (`src/link/set.c`, `RXLinkSet`): a service
   per interface, each bound to its own; they bind the same ports, which
   Linux allows on different devices. A thread of the set's own looks at
@@ -458,9 +462,57 @@ Link is on:
   deck counts its own: 30 s of distinct audio of one load, a beat at a
   time (60 / BPM seconds each, so a loop counts its beats once and a jump
   adds nothing), or the time it played at its pitch when the player gives
-  no beat numbers; then `rx_library_record_play`, once per load.
+  no beat numbers; then `rx_library_record_play`, once per load. Saved
+  cues are taken from the services there too ("Cues saved on the deck").
 - **Exposure**: as in "Security". A host firewall must let UDP 50000,
   50002, 50111 and 2049 and the TCP database ports in on that interface.
+
+## Cues saved on the deck
+
+A player that saves a cue (MEMORY, or a hot cue pad with nothing on it)
+or deletes one sends it to the source at once, one cue a request: `2705`
+from the nexus generation on (a CDJ-3000X did, 2026-10-15), its third
+argument 1 to save and 0 to delete, the cue as an entry of the extended
+list; or `2105`, the older 36-byte record with its milliseconds after it,
+hot cues A to C only (a CDJ-3000 falls back to it when `2705` gets the
+generic error: rbxport, from its firmware 3.20). MEMORY saves the cue
+point, not the playhead, and sends nothing when the cue point is on a
+memory cue already. The entry is read as rekordbox 7.2.19 reads it
+(rbxport, from its SavUsbCueExt and SavUsbCue): the slot, cue or loop,
+in and out in ms (or 1/150 s), an active memory loop, and when present a
+memory cue's colour, the comment and a hot cue's colour code and RGB.
+
+rxbox keeps it as rekordbox does (rbxport, from its
+`ReceiveSetCueEvent`): a hot cue takes its slot, whatever was there
+before; a memory cue is added, or replaces one within 20 ms of it; a
+deletion takes off the hot cue in the slot, or the memory cue at the
+time. A cue on a beat of the track's grid (a player quantises to the
+ms) follows the grid, as one read back from a stick does
+(`rx_stick_cue_to_track`); a colour becomes a palette name where it is
+one, else `#rrggbb`.
+
+- The service applies it to what it serves (its own library and the
+  plan: `rx_catalog_cue_edit`) and answers with the track's list as it is
+  then, in the request's form (`4e02` or `4702`): the player shows the
+  cue from that answer. It also hands it on (`rx_link_cue_edits`): the
+  services never write the library.
+- The library's owner applies it there and saves the track
+  (`rx_link_cue_apply`): the interface on its tick, with a status line
+  ("Player 2 saved hot cue C on ..."), `rxbox link serve` in its loop,
+  with a line of its own; both have the services read the library again
+  once it has settled (2 s), so every interface serves it.
+- A record too short to be one, or an older one past C, is refused
+  (`32`); an extended one rekordbox does not take (a slot past H, a time
+  base other than 1000, 150 or 75) changes nothing and gets the list as
+  it is. Never the generic error: a CDJ-3000 that gets it for a saved cue
+  sends the cue again and again (rbxport).
+
+Tests: test_db saves and deletes cues on a track as a CDJ-3000X does and
+the older way, each in the answer, handed on once and in the ANLZ files
+served after; test_loopback has the service hand one on; the app's
+test_link has one in the app's library and on disk; netns_test has
+`rxbox link serve` keep the hot cue `rxbox link browse --save-cue A@1.5`
+saved.
 
 ## Order of work
 
@@ -483,7 +535,8 @@ Symmetry's analysis), and the tests below stand in for the hardware.
    status.
 7. **With the hardware**: a CDJ-3000 or CDJ-3000X on Ethernet (what does
    `tcpdump` see), then the checklist below.
-8. **Later**: writes from the deck (cues, grid), several interfaces.
+8. **Later**: writes from the deck (cues done; the grid's offset,
+   ratings), several interfaces.
 
 Roughly 12 000 to 15 000 lines of C with the tests; steps 1 to 4 are the
 first half and give the first track loaded from rxbox by the fake player.

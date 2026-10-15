@@ -17,11 +17,11 @@
  * and the blob is left out, as rekordbox's "no artwork" reply (rbxport's
  * capture), never silence: a player waits for each answer.
  *
- * Writes from the deck (cues, the grid's offset, ratings, tags, history)
- * are refused, each in the shape the player waits for: a CDJ-3000 that
- * gets the generic error for a saved cue sends it again forever (rbxport,
- * from CDJ-3000 firmware 3.20), so cue saves get their own list replies
- * with the failure status. Requests nobody knows get the generic error,
+ * A cue saved on the deck, or deleted, is kept (save_cue): the catalog
+ * applies it to what it serves and hands it to the library's owner, and
+ * the answer is the track's list as it is then. The other writes from the
+ * deck (the grid's offset, ratings, tags, history) are refused, each in
+ * the shape the player waits for. Requests nobody knows get the generic error,
  * the request's kind in a 4003, as rekordbox answers them (rbxport, from
  * rekordbox's binary). Notices a player sends without waiting (history,
  * on air, analysis uploads) get nothing: an answer would be read as the
@@ -232,11 +232,12 @@ static void cues_message(RXWr *w, const RXDbMsg *q, bool ok, const RXWr *records
     rx_dbmsg_write(w, &m);
 }
 
-static int cues_reply(RXWr *w, const RXDbMsg *q, RXCatalog *c)
+/* The track's older cue list, or with `refuse` its failure. */
+static int cues_reply(RXWr *w, const RXDbMsg *q, RXCatalog *c, bool refuse)
 {
     RXWr records = rx_wr_dyn(), times = rx_wr_dyn();
     uint32_t hot = 0, memory = 0;
-    int ret = q->kind == RX_DB_CUES ?
+    int ret = !refuse && c ?
               rx_catalog_cues(c, rx_dbmsg_num(q, 1), &records, &times, &hot, &memory) :
               RX_ERROR(EROFS);
     if (records.err || times.err || ret == RX_ERROR(ENOMEM)) {
@@ -248,6 +249,143 @@ static int cues_reply(RXWr *w, const RXDbMsg *q, RXCatalog *c)
     rx_wr_free(&records);
     rx_wr_free(&times);
     return 0;
+}
+
+/* ------------------------------------------------------- cues saved */
+
+/* 1/150 s as ms, rounded up, as rekordbox converts a player's frames
+ * (rbxport, from rekordbox 7.2.19's SavUsbCue). */
+static uint32_t frames_ms(uint64_t frames)
+{
+    return (uint32_t)RX_MIN((frames * 1000 + 149) / 150, 0xfffffffeu);
+}
+
+/* An entry of the extended cue list (2705; the 4e02 list's layout) read
+ * as rekordbox 7.2.19 reads one (rbxport, from its SavUsbCueExt),
+ * little-endian: the hot cue's slot at 4 (1..8, 0 a memory cue), 1 a cue
+ * or 2 a loop at 6, the time base at 0xa (1000 for ms, or 150 or 75
+ * frames a second), in and out at 0xc and 0x10, an active memory loop's
+ * bit 4 at 0x18; then, when the length at 0x34 says that much follows: a
+ * memory cue's colour id at 0x3a, the comment's length in bytes (its NUL
+ * included) at 0x48 and the comment in UTF-16 after it, and after that a
+ * length and a hot cue's colour code and RGB. -EINVAL for one rekordbox
+ * does not take: it changes nothing and answers with the list. */
+static int cue_ext_parse(const uint8_t *p, uint32_t len, RXStickCue *c)
+{
+    RXRd r = rx_rd(p, len);
+    unsigned slot = rx_rd_at_u16le(&r, 4), shape = rx_rd_at_u8(&r, 6);
+    unsigned base = rx_rd_at_u16le(&r, 0xa);
+    if (slot > RX_HOT_CUE_SLOTS || (shape != 1 && shape != 2) ||
+        (base != 1000 && base != 150 && base != 75))
+        return RX_ERROR(EINVAL);
+    bool loop = shape == 2;
+    uint32_t in = rx_rd_at_u32le(&r, 0xc), out = rx_rd_at_u32le(&r, 0x10);
+    if (base != 1000) {
+        uint64_t k = base == 75 ? 2 : 1;
+        in = frames_ms(in * k);
+        out = frames_ms(out * k + 1);
+    }
+    *c = (RXStickCue) {
+        .hot    = slot ? (int)slot - 1 : -1,
+        .in     = in,
+        .out    = loop ? out : 0xffffffffu,
+        .active = !slot && loop && (rx_rd_at_u16le(&r, 0x18) & 4),
+    };
+    uint32_t more = rx_rd_at_u32le(&r, 0x34);
+    if (!more || len < 0x38 + (uint64_t)more)
+        return 0;
+    if (!slot && rx_rd_at_u8(&r, 0x3a) <= 8)
+        c->code = rx_rd_at_u8(&r, 0x3a);
+    uint32_t name_len = rx_rd_at_u16le(&r, 0x48);
+    if (name_len && 0x4a + name_len <= len) {
+        char *name = rx_link_utf16_to_utf8(p + 0x4a, name_len, false);
+        if (!name)
+            return RX_ERROR(ENOMEM);
+        snprintf(c->name, sizeof(c->name), "%s", name);
+        free(name);
+    }
+    uint32_t tail = 0x4a + name_len;
+    if (slot && tail + 8 <= len) {
+        uint32_t n = RX_MIN(rx_rd_at_u32le(&r, tail), 4u);
+        uint8_t v[4] = { 0 };
+        for (uint32_t i = 0; i < n; i++)
+            v[i] = rx_rd_at_u8(&r, tail + 4 + i);
+        c->code = v[0] < 64 ? v[0] : 0;
+        c->rgb = (uint32_t)v[1] << 16 | (uint32_t)v[2] << 8 | v[3];
+    }
+    return 0;
+}
+
+/* A record of the older cue list (2105, 36 bytes) and the milliseconds
+ * sent after it, read as rekordbox 7.2.19 reads them (rbxport, from its
+ * SavUsbCue): flags at 0 (the hot cue's letter 1..3 << 16, bit 0 a loop,
+ * 0x200 an active one), in and out in 1/150 s at 0xc and 0x10, or the
+ * milliseconds' in and out when their in is not 0. -EINVAL for a hot
+ * cue past C, which rekordbox refuses. */
+static int cue_old_parse(const uint8_t *p, uint32_t len, const uint8_t *ms, uint32_t ms_len,
+                         RXStickCue *c)
+{
+    RXRd r = rx_rd(p, len), m = rx_rd(ms, ms_len);
+    uint32_t flags = rx_rd_at_u32le(&r, 0);
+    if (flags >= 0x40000)
+        return RX_ERROR(EINVAL);
+    bool loop = flags & 1;
+    unsigned slot = flags >> 16;
+    uint32_t in = rx_rd_at_u32le(&m, 0), out = rx_rd_at_u32le(&m, 4);
+    if (!in) {
+        in = frames_ms(rx_rd_at_u32le(&r, 0xc));
+        out = frames_ms((uint64_t)rx_rd_at_u32le(&r, 0x10) + 1);
+    }
+    *c = (RXStickCue) {
+        .hot    = slot ? (int)slot - 1 : -1,
+        .in     = in,
+        .out    = loop ? out : 0xffffffffu,
+        .active = !slot && loop && (flags & 0x200),
+    };
+    return 0;
+}
+
+/* A cue saved on the deck, or deleted (its third argument 0): [r:m:s:t,
+ * track, save, the record's length, the record] and for the older form
+ * [8, the milliseconds] after it. Applied to what is served and handed
+ * to the library's owner (rx_catalog_cue_edit), then answered with the
+ * track's list as it is now, in the request's form (4e02 for 2705, 4702
+ * for 2105), as rekordbox answers (rbxport, from rekordbox 7.2.19). A
+ * record too short to be one is refused (0x32), and so is an older one
+ * past C; an extended one rekordbox does not take changes nothing and
+ * gets the list. Never the generic error: a CDJ-3000 that gets it for a
+ * saved cue sends the cue again forever (rbxport, from CDJ-3000 firmware
+ * 3.20). */
+static int save_cue(RXDbSession *s, RXWr *w, const RXDbMsg *q, RXCatalog *c)
+{
+    bool ext = q->kind == RX_DB_SAVE_CUE_EXT;
+    uint32_t len = 0, ms_len = 0;
+    const uint8_t *rec = rx_dbmsg_blob(q, 4, &len);
+    const uint8_t *ms = ext ? NULL : rx_dbmsg_blob(q, 6, &ms_len);
+    len = RX_MIN(len, rx_dbmsg_num(q, 3));
+    RXStickCue cue;
+    int ret = RX_ERROR(EPROTO);
+    if (c && rec && len >= (ext ? 0x38u : 0x24u))
+        ret = ext ? cue_ext_parse(rec, len, &cue) : cue_old_parse(rec, len, ms, ms_len, &cue);
+    if (ret == RX_ERROR(ENOMEM))
+        return ret;
+    bool refuse = ret < 0 && (ret != RX_ERROR(EINVAL) || !ext);
+    if (ret >= 0) {
+        /* The player by the request's r:m:s:t, else as it set up. */
+        int player = (int)(rx_dbmsg_num(q, 0) >> 24);
+        ret = rx_catalog_cue_edit(c, rx_dbmsg_num(q, 1), player ? player : s->player,
+                                  !rx_dbmsg_num(q, 2), &cue);
+        if (ret == RX_ERROR(ENOMEM))
+            return ret;
+        refuse = ret < 0;
+    }
+    if (!ext)
+        return cues_reply(w, q, c, refuse);
+    if (refuse) {
+        blob_reply(w, q, RX_DB_CUES_EXT_REPLY, NULL, 0, true, 0);
+        return 0;
+    }
+    return cues_ext_reply(w, q, c);
 }
 
 /* --------------------------------------------------------------- menus */
@@ -375,7 +513,7 @@ static int handle(RXDbSession *s, const RXDbMsg *q, RXWr *w)
     case RX_DB_CUES_EXT:
         return cues_ext_reply(w, q, c);
     case RX_DB_CUES:
-        return cues_reply(w, q, c);
+        return cues_reply(w, q, c, false);
     case RX_DB_USER_INFO: {
         /* [3006, 0, 160, the blob]: a CDJ-3000 waits for this after every
          * load from a rekordbox source before it asks for anything else
@@ -389,14 +527,11 @@ static int handle(RXDbSession *s, const RXDbMsg *q, RXWr *w)
         numbers(w, q->txid, RX_DB_AVAILABLE, q->kind, 0);
         return 0;
 
-    /* Writes, refused (docs/LINK.md). */
+    /* Cues saved on the deck are kept; the other writes refused
+     * (docs/LINK.md). */
     case RX_DB_SAVE_CUE_EXT:
-        /* Never 4003 here (above): the cue list's own reply, refused. */
-        blob_reply(w, q, RX_DB_CUES_EXT_REPLY, NULL, 0, true, 0);
-        return 0;
     case RX_DB_SAVE_CUE:
-        /* The older cue list's failure. */
-        return cues_reply(w, q, c);
+        return save_cue(s, w, q, c);
     case RX_DB_SAVE_GRID_OFFSET:
     case RX_DB_SAVE_RATING:
     case RX_DB_SAVE_TAG:

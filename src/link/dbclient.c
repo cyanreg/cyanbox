@@ -15,6 +15,7 @@
 #include "dbserver.h"
 
 #include <arpa/inet.h>
+#include <math.h>
 #include <netinet/in.h>
 #include <poll.h>
 #include <stdio.h>
@@ -301,6 +302,81 @@ int rx_dbclient_request(RXDbClient *c, uint16_t kind, int location, const uint32
     for (int i = 0; i < nb; i++)
         a[i + 1] = (RXDbArg) { .type = RX_DB_NUM, .num = args[i] };
     return request(c, kind, a, nb + 1, reply);
+}
+
+static uint32_t cue_ms(double t)
+{
+    double v = floor(t * 1000.0 + 0.5);
+    return v <= 0 ? 0 : v >= 4294967294.0 ? 0xfffffffeu : (uint32_t)v;
+}
+
+int rx_dbclient_save_cue(RXDbClient *c, uint32_t track, bool remove, const RXPlanCue *cue,
+                         bool older, RXDbMsg *reply)
+{
+    bool hot = cue->hot >= 0, loop = cue->loop_end > cue->time;
+    uint32_t in = cue_ms(cue->time), out = loop ? cue_ms(cue->loop_end) : 0xffffffffu;
+    RXWr rec = rx_wr_dyn(), ms = rx_wr_dyn();
+    if (older) {
+        /* The 36-byte record of the older list and its milliseconds. */
+        uint32_t flags = (uint32_t)(hot ? cue->hot + 1 : 0) << 16 | loop |
+                         (cue->active ? 0x200u : 0);
+        const uint32_t words[9] = {
+            flags, 0, 0, (uint32_t)((uint64_t)in * 3 / 20),
+            loop ? (uint32_t)((uint64_t)out * 3 / 20) : 0xffffffffu, 0, 0, 0, 0,
+        };
+        for (int k = 0; k < 9; k++)
+            rx_wr_u32le(&rec, words[k]);
+        rx_wr_u32le(&ms, in);
+        rx_wr_u32le(&ms, out);
+    } else {
+        /* An entry of the extended list as a CDJ-3000X sent one (84 bytes
+         * without a comment, cdj3k-emu 2026-10-15): the list's own layout,
+         * no neighbours, the comment if there is one, then a length and a
+         * hot cue's colour code and RGB, and two bytes to spare. */
+        size_t units = cue->name[0] ? rx_link_utf16_units(cue->name) + 1 : 0;
+        size_t len = 0x4a + 2 * units + 10;
+        rx_wr_u32le(&rec, (uint32_t)len);
+        rx_wr_u16le(&rec, hot ? (uint16_t)(cue->hot + 1) : 0);
+        rx_wr_u8(&rec, loop ? 2 : 1);
+        rx_wr_zeros(&rec, 3);
+        rx_wr_u16le(&rec, 1000);
+        rx_wr_u32le(&rec, in);
+        rx_wr_u32le(&rec, out);
+        rx_wr_zeros(&rec, 0x18 - 0x14);
+        rx_wr_u16le(&rec, cue->active ? 4 : 0);
+        rx_wr_zeros(&rec, 0x20 - 0x1a);
+        rx_wr_u32(&rec, 0xffffffff);
+        rx_wr_zeros(&rec, 0x34 - 0x24);
+        rx_wr_u32le(&rec, (uint32_t)(len - 0x38));
+        rx_wr_zeros(&rec, 0x3a - 0x38);
+        rx_wr_u8(&rec, hot ? 0 : (uint8_t)RX_CLAMP(cue->color_code, 0, 8));
+        rx_wr_zeros(&rec, 0x48 - 0x3b);
+        rx_wr_u16le(&rec, (uint16_t)(2 * units));
+        if (units)
+            rx_wr_utf16(&rec, cue->name, false, true);
+        rx_wr_u32le(&rec, 4);
+        rx_wr_u8(&rec, hot ? (uint8_t)cue->color_code : 0);
+        rx_wr_u8(&rec, hot ? (uint8_t)(cue->rgb >> 16) : 0);
+        rx_wr_u8(&rec, hot ? (uint8_t)(cue->rgb >> 8) : 0);
+        rx_wr_u8(&rec, hot ? (uint8_t)cue->rgb : 0);
+        rx_wr_zeros(&rec, 2);
+    }
+    int ret = RX_ERROR(ENOMEM);
+    if (!rec.err && !ms.err) {
+        RXDbArg a[7] = {
+            { .type = RX_DB_NUM, .num = rmst(c, 8) },
+            { .type = RX_DB_NUM, .num = track },
+            { .type = RX_DB_NUM, .num = !remove },
+            { .type = RX_DB_NUM, .num = (uint32_t)rec.len },
+            { .type = RX_DB_BLOB, .p = rec.p, .len = (uint32_t)rec.len },
+            { .type = RX_DB_NUM, .num = (uint32_t)ms.len },
+            { .type = RX_DB_BLOB, .p = ms.p, .len = (uint32_t)ms.len },
+        };
+        ret = request(c, older ? RX_DB_SAVE_CUE : RX_DB_SAVE_CUE_EXT, a, older ? 7 : 5, reply);
+    }
+    rx_wr_free(&rec);
+    rx_wr_free(&ms);
+    return ret;
 }
 
 /* Renders a menu the server said has `count` rows into rows. */

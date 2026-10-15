@@ -12,7 +12,8 @@
  *    reads every track over NFS, at the size the track info gave: each a
  *    16-bit WAV of the file made as it is read (src/link/wav.c), the
  *    file's samples as rx_decode has them, and nothing made on disk.
- *  - The server sees what the player loaded and that it plays.
+ *  - The server sees what the player loaded and that it plays; a cue
+ *    the player saves is handed on for the library's owner.
  *  - A client that never announced itself (127.0.0.3) gets no database
  *    port and no NFS answer: the fences of docs/LINK.md, "Security".
  *  - A library change is served again: a new track is browsable.
@@ -31,6 +32,7 @@
 #include "rxbox/link.h"
 
 #include "src/link/client.h"
+#include "src/link/dbserver.h"
 #include "src/link/net.h"
 #include "tests/formats/test.h"
 
@@ -309,6 +311,21 @@ int main(void)
                       !seen[i].playing && seen[i].bpm > 0;
     }
     CHECK(placed);
+
+    /* A memory cue the player saves on the deck: the answer has it, and
+     * the service hands it on once, for the library's owner (it never
+     * writes the library itself). */
+    if (db) {
+        RXPlanCue cue = { .time = 0.75, .loop_end = -1, .hot = -1 };
+        RXDbMsg r;
+        CHECK_EQ(rx_dbclient_save_cue(db, other, false, &cue, false, &r), 0);
+        CHECK(r.kind == RX_DB_CUES_EXT_REPLY && rx_dbmsg_num(&r, 1) == 0);
+        RXLinkCueEdit e[4];
+        CHECK_EQ(rx_link_cue_edits(link, e, 4), 1);
+        CHECK(e[0].track_id == other && e[0].player == 2 && !e[0].remove && e[0].cue.hot < 0 &&
+              fabs(e[0].cue.time - 0.75) < 0.001);
+        CHECK_EQ(rx_link_cue_edits(link, e, 4), 0);
+    }
 
     /* A host that never joined the link: no database, no files. */
     RXLinkClientOptions qo = co;

@@ -20,6 +20,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "rxbox/model.h"
+
 typedef struct RXLink RXLink;
 
 /* The ports, ours and the ones players listen on. Real players use
@@ -134,6 +136,33 @@ int  rx_link_load(RXLink *l, int player, uint32_t track_id);
 /* The ports bound (with any 0 asked for filled in). */
 void rx_link_bound_ports(RXLink *l, RXLinkPorts *out);
 
+/* A cue a player saved on the deck, or deleted, on a track of ours
+ * (docs/LINK.md, "Cues saved on the deck"). The service has applied it to
+ * what it serves, so its answer to the player shows it, and hands it on:
+ * the library's owner applies it (rx_link_cue_apply) and saves the track.
+ * The services never write the library. */
+typedef struct RXLinkCueEdit {
+    uint32_t track_id;
+    int      player;            /* the device number of the player that sent it */
+    bool     remove;            /* deleted, else saved */
+    /* A hot cue names its slot, a memory cue its time. On the track's grid
+     * when it sits on a beat, as a cue read back from a stick
+     * (rx_stick_cue_to_track). */
+    RXCue    cue;
+} RXLinkCueEdit;
+
+/* A service keeps this many edits not taken yet; the oldest go first. */
+#define RX_LINK_EDITS_KEPT 256
+/* The edits players made since the last call, oldest first: the count,
+ * up to `max` taken (the rest wait for the next call). */
+int  rx_link_cue_edits(RXLink *l, RXLinkCueEdit *out, int max);
+/* Applies an edit to `t` as rekordbox applies one to its library: a hot
+ * cue saved takes its slot, replacing what was there; a memory cue saved
+ * replaces the one at its time (within 20 ms) or is added; a deletion
+ * takes off the hot cue in the slot, or the memory cue at the time. 1
+ * when `t` changed, 0 when there was nothing to do, or a negative errno. */
+int  rx_link_cue_apply(RXTrack *t, const RXLinkCueEdit *e);
+
 /* ------------------------------------------------------------- the set */
 
 /* Link on every Ethernet interface (rx_link_interfaces), or on the one
@@ -172,6 +201,8 @@ void rx_link_set_library_changed(RXLinkSet *s);
 /* rx_link_load on the interface `where` (rx_link_set_players' index):
  * -ENOENT when it is not served any more. */
 int  rx_link_set_load(RXLinkSet *s, int where, int player, uint32_t track_id);
+/* rx_link_cue_edits of every service, one after the other. */
+int  rx_link_set_cue_edits(RXLinkSet *s, RXLinkCueEdit *out, int max);
 
 /* ------------------------------------------------------------ fake player */
 
@@ -219,6 +250,12 @@ void rx_link_client_loaded(RXLinkClient *c, int *device, int *slot, uint32_t *tr
  * were (a load does not start a player). The number of beats, or a
  * negative errno (the source has no grid for it, or is gone). */
 int  rx_link_client_play(RXLinkClient *c, uint32_t track);
+
+/* Saves a cue on `track` as a player does on the deck (as a CDJ-3000X
+ * sends one): hot cue `hot` (0..7 for A..H, in its slot's pad colour) or
+ * with -1 a memory cue, at `time` seconds. 0 and how many cues the
+ * source's answer lists; -EPROTO when it refused the cue. */
+int  rx_link_client_save_cue(RXLinkClient *c, uint32_t track, int hot, double time, int *nb_cues);
 
 /* What a player does with a source, reported a line at a time: the root
  * and sort menus, all tracks, the playlists; then for `track` (0: the first one) its metadata, track

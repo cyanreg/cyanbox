@@ -133,6 +133,17 @@ static inline uint32_t rx_rd_at_u32(const RXRd *r, size_t off)
                                (uint32_t)r->p[off + 2] << 8 | r->p[off + 3] : 0;
 }
 
+static inline uint16_t rx_rd_at_u16le(const RXRd *r, size_t off)
+{
+    return off + 2 <= r->len ? (uint16_t)(r->p[off + 1] << 8 | r->p[off]) : 0;
+}
+
+static inline uint32_t rx_rd_at_u32le(const RXRd *r, size_t off)
+{
+    return off + 4 <= r->len ? (uint32_t)r->p[off + 3] << 24 | (uint32_t)r->p[off + 2] << 16 |
+                               (uint32_t)r->p[off + 1] << 8 | r->p[off] : 0;
+}
+
 /* ----------------------------------------------------------------- writer */
 
 typedef struct RXWr {

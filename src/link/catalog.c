@@ -105,6 +105,8 @@ struct RXCatalog {
     /* Every play of a track served, oldest first (load_plays). */
     struct CatPlay { uint32_t track; int32_t day; int64_t at; int seq; } *plays;
     int        nb_plays;
+    void     (*edit)(void *opaque, const RXLinkCueEdit *e);
+    void      *edit_opaque;
 };
 
 /* ------------------------------------------------------------- building */
@@ -228,6 +230,13 @@ void rx_catalog_set_check(RXCatalog *c, int (*check)(void *opaque, const RXPlanT
 {
     c->check = check;
     c->check_opaque = opaque;
+}
+
+void rx_catalog_set_edit(RXCatalog *c, void (*edit)(void *opaque, const RXLinkCueEdit *e),
+                         void *opaque)
+{
+    c->edit = edit;
+    c->edit_opaque = opaque;
 }
 
 static void analysis_clear(Analysis *a)
@@ -2117,5 +2126,72 @@ int rx_catalog_cues(RXCatalog *c, uint32_t track, RXWr *records, RXWr *times,
         }
     }
     free(v);
+    return 0;
+}
+
+/* ------------------------------------------------------- cues saved */
+
+/* The same place, loop, state, name and colour, to the ms. */
+static bool cue_same(const RXCue *a, const RXCue *b)
+{
+    return a->hot == b->hot && fabs(a->time - b->time) < 0.0015 &&
+           (a->loop_end >= 0) == (b->loop_end >= 0) &&
+           (a->loop_end < 0 || fabs(a->loop_end - b->loop_end) < 0.0015) &&
+           a->active == b->active && !strcmp(a->name, b->name) && !strcmp(a->color, b->color);
+}
+
+int rx_link_cue_apply(RXTrack *t, const RXLinkCueEdit *e)
+{
+    const RXCue *c = &e->cue;
+    if (c->hot >= RX_HOT_CUE_SLOTS)
+        return RX_ERROR(EINVAL);
+    /* A memory cue within 20 ms is the one meant, as a stick's read back
+     * finds it (rx_stick_apply). */
+    int at = c->hot >= 0 ? rx_track_hot_cue(t, c->hot) : rx_track_memory_cue_at(t, c->time, 0.020);
+    if (e->remove) {
+        if (at < 0)
+            return 0;
+        int ret = rx_track_remove_cue(t, at);
+        return ret < 0 ? ret : 1;
+    }
+    if (at >= 0 && cue_same(&t->cues[at], c))
+        return 0;
+    /* A hot cue takes its slot over by itself (rx_track_add_cue). */
+    if (at >= 0 && c->hot < 0) {
+        int ret = rx_track_remove_cue(t, at);
+        if (ret < 0)
+            return ret;
+    }
+    int ret = rx_track_add_cue(t, c);
+    return ret < 0 ? ret : 1;
+}
+
+int rx_catalog_cue_edit(RXCatalog *c, uint32_t track, int player, bool remove,
+                        const RXStickCue *cue)
+{
+    int ti = track_index(c, track);
+    RXTrack *t = ti >= 0 ? rx_library_find_id(c->lib, track) : NULL;
+    if (!t)
+        return RX_ERROR(ENOENT);
+    RXLinkCueEdit e = { .track_id = track, .player = player, .remove = remove };
+    rx_stick_cue_to_track(cue, rx_track_analysed(t) ? &t->grid : NULL, &e.cue);
+    int ret = rx_link_cue_apply(t, &e);
+    if (ret <= 0)
+        return ret;
+    if ((ret = rx_plan_track_cues(c->t[ti].pt, t)) < 0)
+        return ret;
+    /* The ANLZ files made for it (their cue tags) are made again. */
+    for (int i = 0; i < NB_ANALYSIS; i++)
+        if (c->analysis[i].id == track)
+            analysis_clear(&c->analysis[i]);
+    char what[16], at[32];
+    if (e.cue.hot >= 0)
+        snprintf(what, sizeof(what), "hot cue %c", rx_cue_letter(&e.cue));
+    else
+        snprintf(what, sizeof(what), "a memory %s", rx_cue_is_loop(&e.cue) ? "loop" : "cue");
+    rx_info("link: player %d %s %s at %s on track %u", player, remove ? "deleted" : "saved", what,
+            rx_fmt_time(e.cue.time, at, sizeof(at)), track);
+    if (c->edit)
+        c->edit(c->edit_opaque, &e);
     return 0;
 }

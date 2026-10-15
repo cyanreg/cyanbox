@@ -9,7 +9,9 @@
  * tells the services when the library has changed, once it has settled.
  *
  * What the players send back is applied here, on the owner thread: the
- * services never write the library. */
+ * services never write the library. That is the plays, and the cues a
+ * player saves on the deck or deletes, which the services have served
+ * since and hand over (rx_link_set_cue_edits). */
 
 #include "applink.h"
 
@@ -156,11 +158,14 @@ int rx_app_link_load(RXApp *app, int index, uint64_t track_id)
     return rx_link_set_load(l->set, app->link_state.device_if[index], p->number, (uint32_t)track_id);
 }
 
+static void take_edits(RXApp *app);
+
 void rx_app_link_stop(RXApp *app)
 {
     RXAppLink *l = app->link;
     if (!l || !l->set)
         return;
+    take_edits(app);
     rx_link_set_stop(&l->set);
     for (int i = 0; i < RX_APP_LINK_DEVICES; i++)
         l->counters[i].number = 0;
@@ -203,6 +208,44 @@ static void record(RXApp *app, const RXLinkPlayer *p)
     }
     rx_app_set_status(app, "Played on player %d: %s", p->number, name);
     app->rows_dirty = true;
+}
+
+/* A cue a player saved on the deck or deleted, into the library. */
+static void apply_edit(RXApp *app, const RXLinkCueEdit *e)
+{
+    RXTrack *t = rx_library_find_id(&app->lib, e->track_id);
+    if (!t)
+        return;
+    char name[256], what[16];
+    rx_track_display(t, name, sizeof(name));
+    if (e->cue.hot >= 0)
+        snprintf(what, sizeof(what), "hot cue %c", rx_cue_letter(&e->cue));
+    else
+        snprintf(what, sizeof(what), "a memory %s", rx_cue_is_loop(&e->cue) ? "loop" : "cue");
+    int ret = rx_link_cue_apply(t, e);
+    if (ret > 0)
+        ret = rx_library_save_track(&app->lib, t);
+    if (ret < 0) {
+        app->last_error_count++;
+        rx_app_set_status(app, "Cannot keep %s player %d %s on %s: %s", what, e->player,
+                          e->remove ? "deleted" : "saved", name, strerror(-ret));
+        return;
+    }
+    rx_app_set_status(app, "Player %d %s %s on %s", e->player, e->remove ? "deleted" : "saved",
+                      what, name);
+    app->rows_dirty = true;
+    app->dirty = true;
+}
+
+static void take_edits(RXApp *app)
+{
+    RXLinkCueEdit e[16];
+    int n;
+    do {
+        n = rx_link_set_cue_edits(app->link->set, e, 16);
+        for (int i = 0; i < n; i++)
+            apply_edit(app, &e[i]);
+    } while (n == 16);
 }
 
 /* What the window shows of a device. */
@@ -302,6 +345,7 @@ bool rx_app_link_tick(RXApp *app)
         return false;
     int64_t now = rx_time_us();
     bool changed = follow(app, now);
+    take_edits(app);
     follow_library(app, now);
     return changed;
 }

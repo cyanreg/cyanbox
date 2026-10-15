@@ -22,6 +22,7 @@
 
 #include "rxbox/formats.h"
 #include "rxbox/library.h"
+#include "rxbox/link.h"
 
 #include "dbmsg.h"
 #include "link_priv.h"
@@ -43,6 +44,10 @@ void rx_catalog_free(RXCatalog **c);
  * serves that. Without one, such a track is served as it is planned. */
 void rx_catalog_set_check(RXCatalog *c, int (*check)(void *opaque, const RXPlanTrack *pt),
                           void *opaque);
+/* Where the catalog hands the cues players save on the deck (the
+ * service's queue for the library's owner, rxbox/link.h). */
+void rx_catalog_set_edit(RXCatalog *c, void (*edit)(void *opaque, const RXLinkCueEdit *e),
+                         void *opaque);
 
 /* --------------------------------------------------------------- session */
 
@@ -109,6 +114,12 @@ int  rx_dbclient_server_number(const RXDbClient *c);
  * call. 0 or a negative errno (-ETIMEDOUT, -EPROTO, -ECONNRESET). */
 int  rx_dbclient_request(RXDbClient *c, uint16_t kind, int location, const uint32_t *args, int nb,
                          RXDbMsg *reply);
+/* A cue saved on the deck, or with `remove` deleted, as a player sends
+ * it: the extended form a CDJ-3000X sends (2705, an entry of the 4e02
+ * list), or with `older` the older one (2105, the 36-byte record and its
+ * milliseconds). The reply in `reply`, as rx_dbclient_request's. */
+int  rx_dbclient_save_cue(RXDbClient *c, uint32_t track, bool remove, const RXPlanCue *cue,
+                          bool older, RXDbMsg *reply);
 /* A menu request and its rows, rendered whole page by page: -ENOENT when
  * the server answers it with an error. Free with rx_dbrows_free. */
 int  rx_dbclient_menu(RXDbClient *c, uint16_t kind, int location, const uint32_t *args, int nb,
