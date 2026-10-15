@@ -211,6 +211,18 @@ static void album_icon(ImDrawList *dl, ImVec2 p, float s, ImU32 col)
     dl->AddCircleFilled(c, s * 0.08f, col, 8);
 }
 
+// A luggage tag, its hole punched.
+static void tag_icon(ImDrawList *dl, ImVec2 p, float s, ImU32 col)
+{
+    ImVec2 w[5] = {
+        ImVec2(p.x + s * 0.05f, p.y + s * 0.5f),  ImVec2(p.x + s * 0.3f, p.y + s * 0.22f),
+        ImVec2(p.x + s * 0.95f, p.y + s * 0.22f), ImVec2(p.x + s * 0.95f, p.y + s * 0.78f),
+        ImVec2(p.x + s * 0.3f, p.y + s * 0.78f),
+    };
+    dl->AddConvexPolyFilled(w, 5, col);
+    dl->AddCircleFilled(ImVec2(p.x + s * 0.33f, p.y + s * 0.5f), s * 0.08f, UI_PANEL, 8);
+}
+
 // A head and shoulders.
 static void artist_icon(ImDrawList *dl, ImVec2 p, float s, ImU32 col)
 {
@@ -234,6 +246,8 @@ static void draw_icon(ImDrawList *dl, int icon, ImVec2 p, float s, ImU32 col)
         album_icon(dl, p, s, col);
     else if (icon == 4)
         artist_icon(dl, p, s, col);
+    else if (icon == 5)
+        tag_icon(dl, p, s, col);
     else
         playlist_icon(dl, p, s, col);
 }
@@ -696,7 +710,7 @@ static void tree_nodes(UiState *ui)
     RXPlaylistFolder *root = app->lib.root_folder;
     // Collection: every track.
     bool sel = app->current_playlist == nullptr && app->current_album == nullptr &&
-               app->current_album_artist == nullptr;
+               app->current_album_artist == nullptr && !app->current_tag_list;
     ImGuiTreeNodeFlags fl = ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen |
                             ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_FramePadding;
     if (sel)
@@ -831,6 +845,32 @@ static void tree_nodes(UiState *ui)
         if (nb_artists == 0)
             ImGui::TextDisabled("  No album tags yet.");
         ImGui::TreePop();
+    }
+
+    // The TAG LIST, shared with the players (--pro-link only): the tracks
+    // collected with TAG TRACK on a deck or Add to Tag List here, for this
+    // session; the context menu clears it.
+    if (RXLinkTagList *tags = rx_app_tag_list(app)) {
+        uint32_t none;
+        int nb_tags = rx_link_tag_list_get(tags, &none, 0);
+        ImGuiTreeNodeFlags tf = ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen |
+                                ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_FramePadding;
+        if (app->current_tag_list)
+            tf |= ImGuiTreeNodeFlags_Selected;
+        ImGui::TreeNodeEx("##tag_list", tf);
+        a = ImGui::GetItemRectMin();
+        b = ImGui::GetItemRectMax();
+        if (ImGui::IsItemClicked() && !app->current_tag_list) {
+            app->nb_selection = 0;
+            rx_app_show_tag_list(app);
+        }
+        if (ImGui::BeginPopupContextItem("##tag_list_menu")) {
+            if (ImGui::MenuItem("Clear Tag List", nullptr, false, nb_tags > 0))
+                rx_link_tag_list_clear(tags);
+            ImGui::EndPopup();
+        }
+        node_label(ui, ImVec2(a.x + ImGui::GetTreeNodeToLabelSpacing() - PX(14), a.y), b, 5,
+                   "Tag List", nb_tags, app->current_tag_list);
     }
 
     ImGui::Dummy(ImVec2(0, PX(2)));

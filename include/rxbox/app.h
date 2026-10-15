@@ -62,6 +62,10 @@ typedef struct RXApp {
      * None's tracks and those of the albums of no artist. NULL = not an
      * album artist view; never set with current_album. Owned here. */
     char      *current_album_artist;
+    /* The TAG LIST shown (rx_app_show_tag_list): its tracks in the order
+     * they were added, the players' and ours (--pro-link only); never set
+     * with a playlist, an album or an album artist. */
+    bool       current_tag_list;
     char       search[128];
     int        sort_column;         /* RXColumn index */
     bool       sort_descending;
@@ -233,12 +237,14 @@ typedef struct RXAlbumArtist {
     int         nb;
 } RXAlbumArtist;
 int  rx_app_album_artists(RXApp *app, const RXAlbumArtist **artists);
-/* Shows the album `name` (copied; "": None; NULL: the album and album
- * artist views are left, the playlist or collection view stays): the
- * playlist and album artist views are cleared and the rows rebuilt. */
+/* Shows the album `name` (copied; "": None; NULL: the album, album artist
+ * and TAG LIST views are left, the playlist or collection view stays): the
+ * playlist, album artist and TAG LIST views are cleared and the rows
+ * rebuilt. */
 void rx_app_show_album(RXApp *app, const char *name);
 /* Shows the album artist `name` (copied; "": None; NULL: the view is
- * left): the playlist and album views are cleared and the rows rebuilt. */
+ * left): the playlist, album and TAG LIST views are cleared and the rows
+ * rebuilt. */
 void rx_app_show_album_artist(RXApp *app, const char *name);
 int  rx_app_start_export(RXApp *app);                /* from export_state */
 /* RX_JOB_STICK_READ against the library as saved (pending saves are
@@ -306,6 +312,14 @@ int  rx_app_rescan(RXApp *app);
  * until the next rx_app_tick. */
 uint64_t   rx_app_artwork_texture(RXApp *app, const RXTrack *t);
 RXWaveGpu *rx_app_preview_wave(RXApp *app, const RXTrack *t);
+/* The TAG LIST shared with the players (rxbox/link.h RXLinkTagList): the
+ * tracks collected with TAG TRACK on a deck or Add to Tag List here, for
+ * this session only. NULL without --pro-link; made when first asked for,
+ * and the services share it from their start. */
+RXLinkTagList *rx_app_tag_list(RXApp *app);
+/* Shows the TAG LIST: the playlist, album and album artist views are
+ * cleared and the rows rebuilt; nothing without --pro-link. */
+void rx_app_show_tag_list(RXApp *app);
 /* Tells the Link device link_state.devices[index] (a player) to load
  * `track_id` of the library: -ENOENT when it is gone, -EAGAIN before we
  * are on its link (rxbox/link.h rx_link_load). */

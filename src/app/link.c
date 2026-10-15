@@ -39,6 +39,8 @@ typedef struct Counter {
 
 typedef struct RXAppLink {
     RXLinkSet *set;
+    RXLinkTagList *tags;        /* the TAG LIST, for as long as the app runs */
+    unsigned tags_generation;   /* the one the rows were made for */
     unsigned generation;        /* lib.generation the services read last */
     unsigned seen_generation;   /* the last one seen, since changed_us */
     int64_t changed_us, first_change_us;
@@ -131,6 +133,8 @@ int rx_app_link_start(RXApp *app, const RXLinkOptions *o)
         rx_link_options_default(&opt);
     if (!opt.library)
         opt.library = app->lib.root;
+    if (!opt.tag_list && !(opt.tag_list = rx_app_tag_list(app)))
+        return RX_ERROR(ENOMEM);
     int ret = rx_link_set_start(&l->set, &opt);
     if (ret < 0) {
         app->last_error_count++;
@@ -139,6 +143,8 @@ int rx_app_link_start(RXApp *app, const RXLinkOptions *o)
     }
     *l = (RXAppLink) {
         .set = l->set,
+        .tags = l->tags,
+        .tags_generation = l->tags_generation,
         .generation = app->lib.generation,
         .seen_generation = app->lib.generation,
     };
@@ -368,9 +374,35 @@ static void follow_library(RXApp *app, int64_t now)
     l->first_change_us = 0;
 }
 
+RXLinkTagList *rx_app_tag_list(RXApp *app)
+{
+    if (!app->link_state.enabled)
+        return NULL;
+    if (!app->link && !(app->link = calloc(1, sizeof(*app->link))))
+        return NULL;
+    if (!app->link->tags && rx_link_tag_list_new(&app->link->tags) < 0)
+        return NULL;
+    return app->link->tags;
+}
+
+/* A change to the TAG LIST, from a player or here: its view made again. */
+static bool follow_tags(RXApp *app)
+{
+    RXAppLink *l = app->link;
+    unsigned gen = l->tags ? rx_link_tag_list_generation(l->tags) : 0;
+    if (gen == l->tags_generation)
+        return false;
+    l->tags_generation = gen;
+    if (app->current_tag_list)
+        app->rows_dirty = true;
+    return true;
+}
+
 bool rx_app_link_tick(RXApp *app)
 {
     RXAppLink *l = app->link;
+    if (l && follow_tags(app))
+        app->dirty = true;
     if (!l || !l->set)
         return false;
     int64_t now = rx_time_us();
@@ -383,6 +415,8 @@ bool rx_app_link_tick(RXApp *app)
 void rx_app_link_destroy(RXApp *app)
 {
     rx_app_link_stop(app);
+    if (app->link)
+        rx_link_tag_list_free(&app->link->tags);
     free(app->link);
     app->link = NULL;
 }

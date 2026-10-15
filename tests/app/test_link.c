@@ -11,7 +11,7 @@
  * loading a track of ours and playing it, the play recorded in the
  * library after 30 s, the library read again, a hot cue the player saves
  * on the deck kept in the library (and on disk) and a rating it gives, a
- * stop, and a stop right
+ * track it tags on the app's TAG LIST, a stop, and a stop right
  * after a start, while the set is still starting the service.
  *
  * Usage: test_link FILE.wav SCRATCH_DIR */
@@ -324,6 +324,13 @@ static void test_app(const char *wav, const char *dir)
         CHECK(r.kind == RX_DB_AVAILABLE && rx_dbmsg_num(&r, 1) == 0);
         CHECK(tick_until(&app, rated_4, 5));
         CHECK(strstr(app.status, "Player 2 rated") != NULL);
+        /* TAG TRACK on the deck: on the app's TAG LIST, which the services
+         * share. */
+        CHECK_EQ(rx_dbclient_request(db, RX_DB_TAG_LIST_ADD, 8,
+                                     (const uint32_t[]) { loaded_id, 1 }, 2, &r), 0);
+        CHECK(r.kind == RX_DB_AVAILABLE && rx_dbmsg_num(&r, 1) == 0);
+        RXLinkTagList *tags = rx_app_tag_list(&app);
+        CHECK(tags && rx_link_tag_list_has(tags, loaded_id));
     }
 
     /* Off. */

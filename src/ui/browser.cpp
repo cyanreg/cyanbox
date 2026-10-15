@@ -340,6 +340,26 @@ static void track_menu(UiState *ui)
     }
     if (ImGui::MenuItem("Remove from playlist", "Delete", false, app->current_playlist != nullptr))
         ui_remove_from_playlist(ui);
+    // The TAG LIST shared with the players (--pro-link only).
+    if (RXLinkTagList *tags = rx_app_tag_list(app)) {
+        if (ImGui::MenuItem("Add to Tag List")) {
+            int added = 0, full = 0;
+            for (uint64_t id : menu_tracks(ui, t)) {
+                int ret = rx_link_tag_list_add(tags, (uint32_t)id);
+                added += ret > 0;
+                full += ret < 0;
+            }
+            if (full)
+                rx_app_set_status(app, "The Tag List is full (%d tracks)", RX_LINK_TAG_LIST_MAX);
+            else
+                rx_app_set_status(app, "Added %d track%s to the Tag List", added,
+                                  added == 1 ? "" : "s");
+        }
+        if (app->current_tag_list && ImGui::MenuItem("Remove from Tag List")) {
+            for (uint64_t id : menu_tracks(ui, t))
+                rx_link_tag_list_remove(tags, (uint32_t)id);
+        }
+    }
     if (ImGui::MenuItem("Remove from library...")) {
         ui->remove_ids.assign(app->selection, app->selection + app->nb_selection);
         ui->want_confirm_remove = true;
@@ -761,6 +781,7 @@ void ui_browser(UiState *ui, ImVec2 size)
     float hh = PX(30);
     ImGui::SetCursorScreenPos(ImVec2(a.x + PX(8), a.y));
     const char *view = app->current_playlist ? app->current_playlist->name
+                     : app->current_tag_list ? "Tag List"
                      : app->current_album_artist ? (app->current_album_artist[0]
                                                     ? app->current_album_artist : "None")
                      : !app->current_album   ? "Collection"

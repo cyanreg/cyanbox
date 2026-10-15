@@ -29,10 +29,11 @@ two CDJ-900s on Ethernet (2026-10-14) joined, mounted the library,
 browsed it and played its MP3s from it. An emulated CDJ-3000X then did
 everything a player does with rxbox (below), as then did a CDJ-3000 on
 firmware 3.22, and the cues a player saves
-on the deck and the ratings it gives are kept in the library ("Edits on
-the deck"). Not yet: a WAV played on a real one (section 4), a real
-CDJ-3000 or 3000X, the other writes from the deck (the grid's offset,
-the tag list: step 8).
+on the deck and the ratings it gives are kept in the library, and its
+TAG LIST is shared with the interface ("Edits on the deck"). Not yet: a
+WAV played on a real one (section 4), a real CDJ-3000 or 3000X, the
+grid's offset changed on a deck (step 8), the TAG LIST tried on a
+deck.
 
 What the CDJ-900s showed, and what changed for it (`rxbox-cli -v link
 serve` logs every request, NFS call and unknown packet):
@@ -139,9 +140,9 @@ What it sends that rxbox leaves unanswered, without which it carries on:
   no services stops the retries but makes it log an error (an invalid
   service version), so rxbox leaves it unanswered.
 - At connect, `3404` and `3304` (a playlist's track deleted, its order
-  changed, by the firmware's names) and `110f` (the tag list's, it
-  seems: rbxport's `100f`), with r:m:s:t `01080401`: answered with an
-  error (`4003`), as rxbox has no tag list and takes no edits.
+  changed, by the firmware's names) and `110f` [0, 0] (unnamed in its
+  firmware's list), with r:m:s:t `01080401`: answered with an error
+  (`4003`), as rxbox takes no playlist edits from a deck.
 - The media reply's date and sizes are zero, so its source information
   shows Date, Total and Available blank; rekordbox 7.2.11 sends zeros
   there too (rbxport's capture).
@@ -273,7 +274,8 @@ binary blobs). Menus come as a header, items and a footer, paged.
 | After a load | `3006` user info (answered with `4d02`, 160 bytes), `2602` delivery info | the CDJ-3000 waits for these before it goes back to browsing |
 | Cues saved on the deck | `2705` extended, `2105` older (A to C) | kept in the library ("Edits on the deck") |
 | A rating given on the deck | `2107` | kept in the library ("Edits on the deck") |
-| Other writes from the deck | `2605` grid offset, `3002` and `3202` the tag list … | refused |
+| The TAG LIST | `100f` its tracks, `3002` a track added (1) or taken off (0), `3202` cleared | shared with the interface ("Edits on the deck") |
+| Other writes from the deck | `2605` grid offset … | refused |
 
 The library is in memory already, so every menu is a query over
 `RXLibrary` and the album and collection orders rxbox has. The analysis
@@ -517,8 +519,23 @@ A player sends the source what is changed on its deck: a cue saved or
 deleted, a rating, the grid's offset, and tracks added to or taken off
 its TAG LIST (`3002`, `3202` to clear it: the list of tracks a DJ
 collects while browsing, not rekordbox's My Tags, which no player
-edits). rxbox keeps the cues and the ratings in the library; the grid's
-offset and the tag list are refused (step 8).
+edits). rxbox keeps the cues and the ratings in the library and shares
+the TAG LIST with the interface; the grid's offset is refused (step 8).
+
+**The TAG LIST** is the source's: every deck browsing rxbox lists it
+(`100f`, CMD_PREPARE_ROOT by its firmware's names, answered as a
+playlist's tracks are) and changes it: `3002` (CMD_ADD_PREPARE)
+[r:m:s:t, track, 1 to add it at the end, 0 to take it off], `3202`
+(CMD_DEL_TAGLIST_ALL) to clear it, each answered `4000` [kind, 0], or 1
+for a track not served (rbxport, from rekordbox 7.2.19). Its tracks
+carry bit 0 in every track row and in the metadata's title row, which a
+deck marks. In rxbox it is an `RXLinkTagList`, in memory only, one for
+all the services and the interface (`rx_app_tag_list`), so it lasts as
+long as rxbox runs; with `--pro-link` the interface shows it in the tree
+(Tag List) and adds to it from the track menu. The firmware names more
+(`3102` a playlist added, `3302` reordered, `3602` replaced, `3402`
+whether a playlist is it), which no deck has been seen sending; they get
+the generic error.
 
 **A rating** comes as `2107` [r:m:s:t, track, 0 to 5 stars] and is kept
 as a cue is (below: the service applies it to what it serves,
@@ -594,7 +611,9 @@ served after; test_loopback has the service hand one on; the app's
 test_link has one in the app's library and on disk; netns_test has
 `rxbox link serve` keep the hot cue `rxbox link browse --save-cue A@1.5`
 saved. test_db gives a rating as a player does, and test_link has the
-app keep one.
+app keep one. test_db adds to, takes off and clears the TAG LIST as a
+player does, its rows marked; test_app shows it in the interface's view,
+and test_link has a deck's TAG TRACK reach it.
 
 ## Order of work
 

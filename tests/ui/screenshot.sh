@@ -32,8 +32,8 @@
 # RXBOX_UI_SWAYSOCK only). Then the interface following two of those
 # settings: the overview type for the overview and the row previews, and
 # the key display for the deck's KEY. Then the Link decks in the deck's
-# title row with made-up players, and the track menu's "Load in deck" items under the
-# players' Eject/Load Lock. Last, File > Remove missing tracks
+# title row with made-up players, the track menu's "Load in deck" items under the
+# players' Eject/Load Lock, and a track added to the TAG LIST and shown. Last, File > Remove missing tracks
 # (RXBOX_UI_SHOW=remove-missing): it lists the fourth track and a fifth
 # whose folder is gone too, names that folder, and a click on Remove takes
 # both out of the library, the rest kept. Then Album Artists: opened and an
@@ -319,6 +319,11 @@ variant settings-follow "" "track $ID .*overview centred previews centred key $c
         rx config player.eject_lock true > /dev/null
         variant link-load-locked "60:rclick:600:571" 'load menu locked "1"'
         rx config player.eject_lock false > /dev/null
+        # The TAG LIST (--pro-link only): Add to Tag List in the track
+        # menu of the second row (the first, missing, has Relocate too),
+        # then a click on the tree's Tag List shows it, that one track in it.
+        variant tag-list "60:rclick:600:611,70:click:650:794,80:click:60:640" \
+            'view "Tag List" rows 1'
     fi
 ) || exit 1
 

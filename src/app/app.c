@@ -946,7 +946,8 @@ static RXTrack *next_candidate(RXApp *app, const RXTrack *t)
     if (app->rows_dirty || app->rows_generation != app->lib.generation || !app->rows)
         rx_app_rebuild_rows(app);
     bool wrap = my_setting_is(&app->lib.cfg, "player.play_mode", "continue");
-    if (!wrap && !app->current_playlist && !app->current_album && !app->current_album_artist)
+    if (!wrap && !app->current_playlist && !app->current_album && !app->current_album_artist &&
+        !app->current_tag_list)
         return NULL;
     int n = app->nb_rows;
     int idx = rx_library_index_of(&app->lib, t);
@@ -2957,21 +2958,28 @@ void rx_app_rebuild_rows(RXApp *app)
         app->current_playlist = NULL;
 
     const RXPlaylist *pl = app->current_playlist;
-    const char *album = pl ? NULL : app->current_album;
+    /* The TAG LIST: its ids in its order, as a playlist's. */
+    RXLinkTagList *tags = pl || !app->current_tag_list ? NULL : rx_app_tag_list(app);
+    uint32_t *tag_ids = tags ? malloc(RX_LINK_TAG_LIST_MAX * sizeof(*tag_ids)) : NULL;
+    int nb_tags = tag_ids ? RX_MIN(rx_link_tag_list_get(tags, tag_ids, RX_LINK_TAG_LIST_MAX),
+                                   RX_LINK_TAG_LIST_MAX) : 0;
+    bool own = pl || tag_ids;
+    const char *album = own ? NULL : app->current_album;
     /* None (the album ""): the tracks no album of the list holds. The
      * list ranks every track, the collection's own order. */
     bool none = album && !album[0];
-    const char *artist = pl || album ? NULL : app->current_album_artist;
+    const char *artist = own || album ? NULL : app->current_album_artist;
     const RXAppPriv *priv = app->priv;
     if (!pl) {
         const RXAlbum *albums;
         rx_app_albums(app, &albums);
     }
     int artist_at = artist ? artist_index(priv, artist) : -1;
-    bool ranked = !pl && priv && priv->nb_rank == lib->nb_tracks;
-    int cap = pl ? pl->nb : lib->nb_tracks;
+    bool ranked = !own && priv && priv->nb_rank == lib->nb_tracks;
+    int cap = pl ? pl->nb : tag_ids ? nb_tags : lib->nb_tracks;
     RowKey *keys = calloc(RX_MAX(cap, 1), sizeof(*keys));
     if (!keys) {
+        free(tag_ids);
         rx_err("out of memory building the track table");
         return;
     }
@@ -2982,7 +2990,9 @@ void rx_app_rebuild_rows(RXApp *app)
 
     int nb = 0;
     for (int i = 0; i < cap; i++) {
-        const RXTrack *t = pl ? rx_library_find_id(lib, pl->track_ids[i]) : lib->tracks[i];
+        const RXTrack *t = pl      ? rx_library_find_id(lib, pl->track_ids[i])
+                         : tag_ids ? rx_library_find_id(lib, tag_ids[i])
+                                   : lib->tracks[i];
         if (!t)
             continue;
         if (none ? !in_none(app->priv, i) : album && !in_album(t, album))
@@ -2990,9 +3000,10 @@ void rx_app_rebuild_rows(RXApp *app)
         if (artist && !in_artist(priv, artist_at, i))
             continue;
         keys[nb++] = (RowKey) {
-            .index = pl ? (uint32_t)rx_library_index_of(lib, t) : (uint32_t)i,
+            .index = own ? (uint32_t)rx_library_index_of(lib, t) : (uint32_t)i,
         };
     }
+    free(tag_ids);
 
     /* The view's own order, which `#` numbers before the search and the
      * sort: a playlist's; else the collection's (rx_app_albums), None's
@@ -3339,6 +3350,7 @@ void rx_app_show_album(RXApp *app, const char *name)
     app->current_album = copy;
     free(app->current_album_artist);
     app->current_album_artist = NULL;
+    app->current_tag_list = false;
     if (copy)
         app->current_playlist = NULL;
     rx_app_rebuild_rows(app);
@@ -3355,7 +3367,21 @@ void rx_app_show_album_artist(RXApp *app, const char *name)
         free(app->current_album);
         app->current_album = NULL;
         app->current_playlist = NULL;
+        app->current_tag_list = false;
     }
+    rx_app_rebuild_rows(app);
+}
+
+void rx_app_show_tag_list(RXApp *app)
+{
+    if (!rx_app_tag_list(app))
+        return;
+    free(app->current_album);
+    app->current_album = NULL;
+    free(app->current_album_artist);
+    app->current_album_artist = NULL;
+    app->current_playlist = NULL;
+    app->current_tag_list = true;
     rx_app_rebuild_rows(app);
 }
 

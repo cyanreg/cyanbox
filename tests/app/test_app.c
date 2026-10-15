@@ -821,6 +821,35 @@ int main(int argc, char **argv)
         }
     }
 
+    /* The TAG LIST: none without --pro-link; with it, the tracks added
+     * show in its view in the order they were added, and the view follows
+     * the list. */
+    CHECK(!rx_app_tag_list(&app), "a tag list without --pro-link");
+    rx_app_show_tag_list(&app);
+    CHECK(!app.current_tag_list, "the tag list shown without --pro-link");
+    app.link_state.enabled = true;
+    RXLinkTagList *tags = rx_app_tag_list(&app);
+    CHECK(tags && rx_app_tag_list(&app) == tags, "no tag list, or another each time");
+    if (tags) {
+        CHECK(rx_link_tag_list_add(tags, (uint32_t)b->id) == 1 &&
+              rx_link_tag_list_add(tags, (uint32_t)a->id) == 1 &&
+              rx_link_tag_list_add(tags, (uint32_t)b->id) == 0, "adding to the tag list");
+        rx_app_show_tag_list(&app);
+        CHECK(app.current_tag_list && !app.current_playlist && !app.current_album &&
+              app.nb_rows == 2 && app.lib.tracks[app.rows[0]] == b &&
+              app.lib.tracks[app.rows[1]] == a, "the tag list's rows: %d", app.nb_rows);
+        rx_link_tag_list_remove(tags, (uint32_t)b->id);
+        rx_app_tick(&app);
+        rx_app_tick(&app);
+        CHECK(app.nb_rows == 1 && app.lib.tracks[app.rows[0]] == a,
+              "the tag list view after a removal: %d rows", app.nb_rows);
+        rx_app_show_album(&app, NULL);
+        CHECK(!app.current_tag_list && app.nb_rows == app.lib.nb_tracks,
+              "back to the collection from the tag list: %d rows", app.nb_rows);
+        rx_link_tag_list_clear(tags);
+    }
+    app.link_state.enabled = false;
+
     /* The deck: decoded on the io queue, waveforms from the library. */
     ret = rx_app_load_deck(&app, 0, b);
     CHECK(ret == 0, "load: %s", strerror(-ret));
