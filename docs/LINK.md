@@ -161,7 +161,7 @@ What has been run against what:
 | Server | Client | Network | Result |
 | --- | --- | --- | --- |
 | rxbox | two CDJ-900s | Ethernet, a switch, 169.254.0.0/16 | join, mount, browse, the library's MP3s played; WAVs decoded as MP3 until the file type was named |
-| rxbox | emulated CDJ-900, CDJ-2000, CDJ-2000NXS2 (Pioneer's firmware in QEMU) | a bridge, 169.254.0.0/16 | join, mount, browse every category, metadata, waveforms, cues, a load streamed over NFS; the lapse, NFD, CDJ-900 punctuation and CDJ-2000 KEY findings above; FLAC, MP3, AAC and 16- and 24-bit WAV sources played on the NXS2, with tempo, jog, memory loops, and hot cues A to D in their colours (the pads jump, the hot loop loops); the load command (`0x19`) on the CDJ-900 and the NXS2; no cue writes attempted from an NXS2 |
+| rxbox | emulated CDJ-900, CDJ-2000, CDJ-2000NXS2 (Pioneer's firmware in QEMU) | a bridge, 169.254.0.0/16 | join, mount, browse every category, metadata, waveforms, cues, a load streamed over NFS; the lapse, NFD, CDJ-900 punctuation and CDJ-2000 KEY findings above; FLAC, MP3, AAC and 16- and 24-bit WAV sources played on the NXS2, with tempo, jog, memory loops, and hot cues A to D in their colours (the pads jump, the hot loop loops); the load command (`0x19`) on the CDJ-900 and the NXS2; cues saved and deleted on all three kept in the library ("Cues saved on the deck") |
 | rxbox | emulated CDJ-3000 (firmware 3.22, cdj3k-emu) | a bridge, 169.254.0.0/16 | as the 3000X: browse with previews and artwork, a load from the browser and by `0x19`, play, tempo, CUE, a memory loop; cues saved and deleted on the deck kept; no `80`, no probes but `3007` |
 | rxbox | emulated CDJ-3000X (firmware 1.41, cdj3k-emu) | a bridge, 169.254.0.0/16 | found by name with its counts, browse with previews and artwork, a load from the browser and by `0x19`, play, tempo, memory cues and loops, hot cues A to D in their colours with names and a hot loop; cues saved and deleted on the deck kept in the library (below); `80` and three database probes left unanswered (above) |
 | rxbox | rxbox's fake player | loopback, ports of their own (`test_loopback`) | join, browse, every track's bytes (transcodes too), the player's status, the fences, a library change |
@@ -290,7 +290,10 @@ an album with neither. An album artist's menu is ALL, then its albums as
 the ALBUM menu lists them; ALL is their tracks album by album, each in
 its own order. Wherever else a player shows an original artist (the
 track's metadata, a column beside the title, the sort, the search) it is
-the album artist too. Original artist tags are not served at all.
+the album artist too. Original artist tags are not served at all. An
+emulated CDJ-2000NXS2 showed the row third, its name as sent (the names
+it translates it shows in 【】, so this one stands out), the list
+headed ALBUM ARTIST, and an album artist's ALL album by album.
 
 ### 3. NFS (UDP: portmap 50111, NFS 2049)
 
@@ -495,11 +498,13 @@ Link is on:
 
 A player that saves a cue (MEMORY, or a hot cue pad with nothing on it)
 or deletes one sends it to the source at once, one cue a request: `2705`
-from the nexus generation on (a CDJ-3000X did, 2026-10-15), its third
-argument 1 to save and 0 to delete, the cue as an entry of the extended
-list; or `2105`, the older 36-byte record with its milliseconds after it,
-hot cues A to C only (a CDJ-3000 falls back to it when `2705` gets the
-generic error: rbxport, from its firmware 3.20). MEMORY saves the cue
+from the nexus 2 generation on (emulated, 2026-10-15: a CDJ-2000NXS2, a
+CDJ-3000, a CDJ-3000X), its third argument 1 to save and 0 to delete,
+the cue as an entry of the extended list; or `2105`, the older 36-byte
+record with its milliseconds after it, hot cues A to C only (a CDJ-2000
+and a CDJ-900 send it; a CDJ-3000 falls back to it when `2705` gets the
+generic error: rbxport, from its firmware 3.20). An NXS2's entry says 0
+for a cue's out, not ff.., which a cue (not a loop) ignores. MEMORY saves the cue
 point, not the playhead, and sends nothing when the cue point is on a
 memory cue already. The entry is read as rekordbox 7.2.19 reads it
 (rbxport, from its SavUsbCueExt and SavUsbCue): the slot, cue or loop,
@@ -531,8 +536,13 @@ one, else `#rrggbb`.
   it is. Never the generic error: a CDJ-3000 that gets it for a saved cue
   sends the cue again and again (rbxport).
 
-On the emulated CDJ-3000X (1.41) and CDJ-3000 (3.22), 2026-10-15, with
-rxbox serving a copy of a library: MEMORY at a new cue point leaves its
+On the emulated CDJ-900 (4.32), CDJ-2000 (4.33) and CDJ-2000NXS2 (1.87)
+the same day, MEMORY and DELETE did the same, and a CDJ-2000's REC MODE
+with a pad saved over that hot cue (no name, no colour: the older record
+has neither); a new hot cue on an NXS2's empty pad was not recorded even
+on the deck, which is likely the emulation (it reaches pads A to D only).
+On the emulated CDJ-3000X (1.41) and CDJ-3000 (3.22), with rxbox serving
+a copy of a library: MEMORY at a new cue point leaves its
 marker, a hot cue saved on an empty pad comes back with its colour after
 another track and a reload, and deletions take. Each is one `2705` (the
 entry 0x4c bytes for a memory cue, 0x54 for a hot cue) and nothing
