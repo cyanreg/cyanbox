@@ -54,6 +54,9 @@ typedef struct RXLinkOptions {
     bool start_up;
     RXLinkPorts ports;          /* ours */
     RXLinkPorts peer_ports;     /* the players' (announce and status only) */
+    /* Tests: each reading of the library after the first takes this much
+     * longer, so a test sees players answered while one runs. */
+    int test_build_ms;
 } RXLinkOptions;
 
 void rx_link_options_default(RXLinkOptions *o);

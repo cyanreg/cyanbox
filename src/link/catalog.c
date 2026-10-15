@@ -2231,6 +2231,35 @@ int rx_link_edit_apply(RXTrack *t, const RXLinkEdit *e)
     return ret < 0 ? ret : 1;
 }
 
+/* An edit applied to the library's track and to what the catalog serves
+ * of it: 1 when it changed something, 0 when not, or a negative errno. */
+static int apply(RXCatalog *c, int ti, RXTrack *t, const RXLinkEdit *e)
+{
+    int ret = rx_link_edit_apply(t, e);
+    if (ret <= 0)
+        return ret;
+    if (e->what == RX_LINK_EDIT_RATING) {
+        c->t[ti].rating = (uint8_t)e->rating;
+        free(c->order[SORT_RATING]);
+        c->order[SORT_RATING] = NULL;
+        return 1;
+    }
+    if ((ret = rx_plan_track_cues(c->t[ti].pt, t)) < 0)
+        return ret;
+    /* The ANLZ files made for it (their cue tags) are made again. */
+    for (int i = 0; i < NB_ANALYSIS; i++)
+        if (c->analysis[i].id == e->track_id)
+            analysis_clear(&c->analysis[i]);
+    return 1;
+}
+
+int rx_catalog_apply_edit(RXCatalog *c, const RXLinkEdit *e)
+{
+    int ti = track_index(c, e->track_id);
+    RXTrack *t = ti >= 0 ? rx_library_find_id(c->lib, e->track_id) : NULL;
+    return t ? apply(c, ti, t, e) : RX_ERROR(ENOENT);
+}
+
 int rx_catalog_cue_edit(RXCatalog *c, uint32_t track, int player, bool remove,
                         const RXStickCue *cue)
 {
@@ -2248,15 +2277,9 @@ int rx_catalog_cue_edit(RXCatalog *c, uint32_t track, int player, bool remove,
     if (cue->hot >= 0 && !cue->code && cue->rgb && !e.cue.color[0] &&
         cue->rgb != rx_hot_cue_default_rgb(cue->hot))
         snprintf(e.cue.color, sizeof(e.cue.color), "#%06x", cue->rgb);
-    int ret = rx_link_edit_apply(t, &e);
+    int ret = apply(c, ti, t, &e);
     if (ret <= 0)
         return ret;
-    if ((ret = rx_plan_track_cues(c->t[ti].pt, t)) < 0)
-        return ret;
-    /* The ANLZ files made for it (their cue tags) are made again. */
-    for (int i = 0; i < NB_ANALYSIS; i++)
-        if (c->analysis[i].id == track)
-            analysis_clear(&c->analysis[i]);
     char what[16], at[32];
     if (e.cue.hot >= 0)
         snprintf(what, sizeof(what), "hot cue %c", rx_cue_letter(&e.cue));
@@ -2278,12 +2301,9 @@ int rx_catalog_rating_edit(RXCatalog *c, uint32_t track, int player, int stars)
     RXLinkEdit e = {
         .what = RX_LINK_EDIT_RATING, .track_id = track, .player = player, .rating = stars,
     };
-    int ret = rx_link_edit_apply(t, &e);
+    int ret = apply(c, ti, t, &e);
     if (ret <= 0)
         return ret;
-    c->t[ti].rating = (uint8_t)stars;
-    free(c->order[SORT_RATING]);
-    c->order[SORT_RATING] = NULL;
     rx_info("link: player %d rated track %u %d star%s", player, track, stars, stars == 1 ? "" : "s");
     if (c->edit)
         c->edit(c->edit_opaque, &e);

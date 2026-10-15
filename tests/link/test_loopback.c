@@ -16,7 +16,9 @@
  *    the player saves is handed on for the library's owner.
  *  - A client that never announced itself (127.0.0.3) gets no database
  *    port and no NFS answer: the fences of docs/LINK.md, "Security".
- *  - A library change is served again: a new track is browsable.
+ *  - A library change is served again: a new track is browsable. It is
+ *    read on a thread of its own while the player is answered, and a cue
+ *    saved meanwhile is served after it.
  *
  * Tracks are made by the ffmpeg CLI (skips, 77, without it, or without
  * libopus). The protocol details are the codecs' tests' (test_packets,
@@ -198,6 +200,9 @@ int main(void)
     so.broadcast = "127.0.0.2";
     so.ports = (RXLinkPorts) { 0 };
     so.peer_ports = (RXLinkPorts) { .announce = pa, .status = ps };
+    /* Every reading of the library after the first 1.5 s slower: what
+     * players ask meanwhile is answered all the same. */
+    so.test_build_ms = 1500;
     RXLink *link = NULL;
     CHECK_EQ(rx_link_start(&link, &so), 0);
     if (!link)
@@ -351,6 +356,25 @@ int main(void)
     add_track(&lib, "delta.flac", 122);
     rx_library_close(&lib);
     rx_link_library_changed(link);
+    /* It is read on a thread of its own: the player is answered at once
+     * meanwhile, from the library as it was, and a cue it saves then is
+     * served after the swap too, though the owner never saved it. */
+    usleep(200000);
+    if (db) {
+        int64_t t0 = rx_time_us();
+        CHECK_EQ(rx_dbclient_menu(db, RX_DB_TRACKS, 1, (const uint32_t[]) { 0 }, 1, &rows,
+                                  &nb_rows), 0);
+        int64_t took = rx_time_us() - t0;
+        if (took > 300000)
+            fprintf(stderr, "test_loopback: answered in %lld ms while reading the library\n",
+                    (long long)(took / 1000)), failures++;
+        CHECK_EQ(nb_rows, 3);
+        rx_dbrows_free(&rows, nb_rows);
+        RXPlanCue cue = { .time = 0.5, .loop_end = -1, .hot = 1 };
+        RXDbMsg r;
+        CHECK_EQ(rx_dbclient_save_cue(db, loaded, false, &cue, false, &r), 0);
+        CHECK(r.kind == RX_DB_CUES_EXT_REPLY && rx_dbmsg_num(&r, 1) == 0);
+    }
     bool four = false;
     for (int k = 0; k < 100 && !four && db; k++) {
         usleep(50000);
@@ -361,6 +385,20 @@ int main(void)
         }
     }
     CHECK(four);
+    if (db) {
+        uint8_t *blob = NULL;
+        size_t bn = 0;
+        RXPlanCue *cues = NULL;
+        int nc = 0;
+        CHECK_EQ(rx_dbclient_blob(db, RX_DB_CUES_EXT, loaded, &blob, &bn), 0);
+        CHECK_EQ(rx_db_cues_ext_parse(blob, bn, &cues, &nc), 0);
+        bool kept = false;
+        for (int i = 0; i < nc; i++)
+            kept |= cues[i].hot == 1 && fabs(cues[i].time - 0.5) < 0.001;
+        CHECK(kept);
+        free(cues);
+        free(blob);
+    }
 
     /* Nothing was made on disk for it. */
     char *cache = rx_asprintf("%s/cache/transcode", libdir);

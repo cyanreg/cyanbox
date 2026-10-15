@@ -48,6 +48,11 @@ void rx_catalog_set_check(RXCatalog *c, int (*check)(void *opaque, const RXPlanT
  * service's queue for the library's owner, rxbox/link.h). */
 void rx_catalog_set_edit(RXCatalog *c, void (*edit)(void *opaque, const RXLinkEdit *e),
                          void *opaque);
+/* An edit a player made, applied again to a catalog over a library read
+ * again (one read before the owner saved it): to the library's track and
+ * what is served of it, handed on to no one. 1 when it changed something,
+ * 0 when it was there already, -ENOENT for a track not served, -ENOMEM. */
+int  rx_catalog_apply_edit(RXCatalog *c, const RXLinkEdit *e);
 
 /* --------------------------------------------------------------- session */
 

@@ -26,9 +26,10 @@
  * thread's own, read only: a dry export plan over every track whose file
  * is there and every playlist (the paths players are given, the files
  * behind them), the database catalog over it, and the NFS tree over it.
- * A library change builds all three again and swaps them in between two
- * requests; sessions see the catalog through a pointer to the current one
- * and NFS handles name tracks by id, so nothing a player holds goes stale. */
+ * A library change builds all three again on a thread of its own, the
+ * old ones served meanwhile, and swaps them in between two requests;
+ * sessions see the catalog through a pointer to the current one and NFS
+ * handles name tracks by id, so nothing a player holds goes stale. */
 
 #include "rxbox/link.h"
 
@@ -101,10 +102,23 @@ typedef struct Conn {
     bool closing;               /* close once `out` is sent */
 } Conn;
 
+typedef struct Served {
+    RXLibrary *lib;
+    RXPlan *plan;
+    RXCatalog *cat;
+    RXVTree *tree;
+} Served;
+
+/* Edits players made lately, kept this long to be applied again to the
+ * library read again (reload_done): one read may not have them yet. */
+#define RECENT_EDITS 64
+#define RECENT_US    10000000
+
 struct RXLink {
     /* Set by rx_link_start, read only after. */
     char *root, *name;
     bool any_peer, start_up;
+    int test_build_ms;
     RXLinkIf ifc;
     RXLinkPorts ports;          /* as bound */
     RXLinkPorts peer;
@@ -134,6 +148,16 @@ struct RXLink {
     RXNfs *nfs;
     RXLinkWav *wav;             /* the WAVs made as they are read (wav.h) */
     bool serving;               /* the NFS tree is offered (the link is up) */
+    /* A library change read on a thread of its own (builder) while this
+     * one goes on answering, then swapped in (reload_done). */
+    pthread_t bthread;
+    bool building;              /* bthread runs, or is done and not joined */
+    atomic_bool built;          /* its result is in `fresh` */
+    Served fresh;
+    int fresh_ret;
+    int64_t build_start;
+    struct { RXLinkEdit e; int64_t at; } recent[RECENT_EDITS];
+    int nb_recent;
     uint32_t peers[MAX_PLAYERS];    /* the addresses on the link at the last look */
     int nb_peers;
     /* Every address that was on the link, and when last: still answered
@@ -254,13 +278,6 @@ static void known_seen(RXLink *l, uint32_t addr, int64_t now)
 
 /* ------------------------------------------------------------ the library */
 
-typedef struct Served {
-    RXLibrary *lib;
-    RXPlan *plan;
-    RXCatalog *cat;
-    RXVTree *tree;
-} Served;
-
 static void served_free(Served *s)
 {
     rx_catalog_free(&s->cat);
@@ -305,6 +322,12 @@ static ssize_t wav_read(void *opaque, const RXPlanTrack *pt, uint64_t offset, ui
 static void edited(void *opaque, const RXLinkEdit *e)
 {
     RXLink *l = opaque;
+    if (l->nb_recent == RECENT_EDITS) {
+        memmove(l->recent, l->recent + 1, (RECENT_EDITS - 1) * sizeof(*l->recent));
+        l->nb_recent--;
+    }
+    l->recent[l->nb_recent].e = *e;
+    l->recent[l->nb_recent++].at = rx_time_us();
     pthread_mutex_lock(&l->lock);
     if (l->nb_edits == RX_LINK_EDITS_KEPT) {
         rx_warn("link: a cue player %d saved was not taken in time and is dropped",
@@ -413,18 +436,55 @@ static void served_take(RXLink *l, Served *s)
     l->tree = s->tree;
 }
 
-/* A library change: everything built again, then swapped in. On failure
- * the old stays served. */
-static void reload(RXLink *l)
+/* A library change: everything built again on a thread of its own, the
+ * builder, while the service thread goes on answering players (a library
+ * of 1,400 tracks takes 0.5 to 1.3 s: every database answer and NFS read
+ * waited that long when it was built here), then swapped in between two
+ * requests (reload_done). On failure the old stays served. */
+static void wake(int fd);
+
+static void *builder(void *arg)
 {
-    int64_t t0 = rx_time_us();
-    Served s;
-    int ret = served_build(l, &s);
-    if (ret == RX_ERROR(ECANCELED))
+    RXLink *l = arg;
+    if (l->test_build_ms > 0)
+        usleep((useconds_t)l->test_build_ms * 1000);
+    l->fresh_ret = served_build(l, &l->fresh);
+    atomic_store(&l->built, true);
+    wake(l->wake);
+    return NULL;
+}
+
+static void reload_start(RXLink *l)
+{
+    l->fresh = (Served) { 0 };
+    l->build_start = rx_time_us();
+    if (pthread_create(&l->bthread, NULL, builder, l) != 0) {
+        rx_warn("link: the library changed but cannot be read again: no thread");
         return;
-    if (ret < 0) {
-        rx_warn("link: the library changed but cannot be read again: %s", strerror(-ret));
+    }
+    l->building = true;
+}
+
+static void reload_done(RXLink *l)
+{
+    pthread_join(l->bthread, NULL);
+    l->building = false;
+    Served s = l->fresh;
+    l->fresh = (Served) { 0 };
+    if (l->fresh_ret == RX_ERROR(ECANCELED))
         return;
+    if (l->fresh_ret < 0) {
+        rx_warn("link: the library changed but cannot be read again: %s",
+                strerror(-l->fresh_ret));
+        return;
+    }
+    /* What players changed lately: the owner may not have saved it before
+     * the library was read (rx_catalog_apply_edit changes nothing twice). */
+    for (int i = 0; i < l->nb_recent; i++) {
+        if (l->recent[i].at >= l->build_start - RECENT_US &&
+            rx_catalog_apply_edit(s.cat, &l->recent[i].e) == RX_ERROR(ENOMEM))
+            rx_warn("link: out of memory applying an edit of player %d again",
+                    l->recent[i].e.player);
     }
     Served old = { .lib = l->lib, .plan = l->plan, .cat = l->cat, .tree = l->tree };
     served_take(l, &s);
@@ -432,8 +492,8 @@ static void reload(RXLink *l)
         rx_nfs_set_tree(l->nfs, l->tree);
     presence_library(l);
     served_free(&old);
-    rx_info("link: serving %d tracks again (%.0f ms)", l->plan->nb_tracks,
-            (double)(rx_time_us() - t0) / 1000.0);
+    rx_info("link: serving %d tracks again (read in %.0f ms)", l->plan->nb_tracks,
+            (double)(rx_time_us() - l->build_start) / 1000.0);
 }
 
 /* ----------------------------------------------------------- connections */
@@ -695,8 +755,11 @@ static void *service(void *arg)
             uint64_t v;
             if (read(l->wake, &v, sizeof(v)) < 0 && errno != EAGAIN)
                 rx_debug("link: wake: %s", strerror(errno));
-            if (atomic_exchange(&l->reload, false))
-                reload(l);
+            if (atomic_exchange(&l->built, false))
+                reload_done(l);
+            /* A change while one is read: read again after it. */
+            if (!l->building && atomic_exchange(&l->reload, false))
+                reload_start(l);
         }
         if (pfd[S_QUERY - S_FIRST].revents & POLLIN)
             conn_accept(l, CONN_QUERY);
@@ -750,6 +813,7 @@ int rx_link_start(RXLink **out, const RXLinkOptions *o)
     l->name = rx_strndup(o->name && *o->name ? o->name : "rekordbox", 20);
     l->any_peer = o->any_peer;
     l->start_up = o->start_up;
+    l->test_build_ms = o->test_build_ms;
     l->peer = o->peer_ports;
     int ret = RX_ERROR(ENOMEM);
     if ((o->library && !l->root) || !l->name)
@@ -843,6 +907,11 @@ void rx_link_stop(RXLink **lp)
     if (l->running) {
         wake(l->wake);
         pthread_join(l->thread, NULL);
+    }
+    /* A reading of the library in progress stops at once (still_wanted). */
+    if (l->building) {
+        pthread_join(l->bthread, NULL);
+        served_free(&l->fresh);
     }
     rx_presence_free(&l->pres);
     rx_nfs_free(&l->nfs);

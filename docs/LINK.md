@@ -455,7 +455,13 @@ Link is on:
   thread polling the sockets.
 - **The library on the service thread**: its own connection and its own
   `RXLibrary`, as the export job opens one, loaded again when the app says
-  the library changed; and the export plan over the whole library
+  the library changed, on a thread of its own while the old one is served
+  (read on the service thread, it held up every database answer and NFS
+  read, a playing deck's too, for 0.5 to 1.3 s on 1,400 tracks at every
+  change: a counted play, a saved cue, an analysis), then swapped in
+  between two requests, with the edits players made in the last 10 s
+  applied to it again (the owner may not have saved them before it was
+  read); and the export plan over the whole library
   (`rx_plan_build_cb`), which the database server's paths and the virtual
   tree both come from, made again with it. That plan reads no audio
   (`RX_PLAN_STORED`): each file is described from what the library stored
@@ -572,8 +578,8 @@ colour the deck shows (00ff00 from the 3000 whatever the slot, 1aff00
 from the 3000X), kept as `#rrggbb` unless it is the slot's own default,
 as rekordbox keeps it (a stick's 00ff00 is taken for no colour instead:
 `rx_stick_cue_to_track`). Each save makes the services read the library
-again once it settles (0.5 to 1.3 s on 1,400 tracks), which the decks
-did not notice.
+again once it settles, on a thread of their own (0.5 to 1.3 s on 1,400
+tracks), the decks answered meanwhile.
 
 Tests: test_db saves and deletes cues on a track as a CDJ-3000X does and
 the older way, each in the answer, handed on once and in the ANLZ files
