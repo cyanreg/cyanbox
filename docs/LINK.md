@@ -32,8 +32,7 @@ firmware 3.22, and the cues a player saves
 on the deck and the ratings it gives are kept in the library, and its
 TAG LIST is shared with the interface ("Edits on the deck"). Not yet: a
 WAV played on a real one (section 4), a real CDJ-3000 or 3000X, the
-grid's offset changed on a deck (step 8), the TAG LIST tried on a
-deck.
+grid's offset changed on a deck (step 8).
 
 What the CDJ-900s showed, and what changed for it (`rxbox-cli -v link
 serve` logs every request, NFS call and unknown packet):
@@ -297,7 +296,10 @@ track's metadata, a column beside the title, the sort, the search) it is
 the album artist too. Original artist tags are not served at all. An
 emulated CDJ-2000NXS2 showed the row third, its name as sent (the names
 it translates it shows in 【】, so this one stands out), the list
-headed ALBUM ARTIST, and an album artist's ALL album by album.
+headed ALBUM ARTIST, and an album artist's ALL album by album. A
+CDJ-3000X (1.41) ignores the name and shows the row as ORIGINAL ARTIST,
+with that category's icon: it names its menus by their item type, which
+no source can change.
 
 ### 3. NFS (UDP: portmap 50111, NFS 2049)
 
@@ -534,8 +536,22 @@ all the services and the interface (`rx_app_tag_list`), so it lasts as
 long as rxbox runs; with `--pro-link` the interface shows it in the tree
 (Tag List) and adds to it from the track menu. The firmware names more
 (`3102` a playlist added, `3302` reordered, `3602` replaced, `3402`
-whether a playlist is it), which no deck has been seen sending; they get
-the generic error.
+whether a playlist is it); of those only `3402` has been seen, and it
+gets the generic error.
+
+On the emulated CDJ-3000X (1.41) and CDJ-3000 (3.22), 2026-10-15, all of
+it worked: TAG TRACK on a row sends `3002` [r:m:s:t, track, 1, 0] (the
+3000X) or [r:m:s:t, track, 1] (the 3000), and the row shows its red
+tick; the TAG LIST asks `100f` [r:m:s:t at menu location 6, 0] and lists
+rxbox's tracks in the order they were tagged (the 3000 first asks which
+source: its TAG LIST is one a source); TAG TRACK on a row of it sends
+`3002` with 0; the 3000X's MENU there offers REMOVE ALL TRACKS, which
+sends `3202` [r:m:s:t, 0]; and what one deck tagged showed on the other.
+Opening that MENU sends `3402` first, answered with the generic error,
+so the dialog offers nothing else (an answer would likely add saving
+the list as a playlist, `3102`). The 3000X's `110f` [0, 0] at connect,
+unnamed in its firmware, still gets the generic error, and nothing
+needs it.
 
 **A rating** comes as `2107` [r:m:s:t, track, 0 to 5 stars] and is kept
 as a cue is (below: the service applies it to what it serves,
