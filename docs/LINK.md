@@ -256,7 +256,7 @@ binary blobs). Menus come as a header, items and a footer, paged.
 | What | Request | Notes |
 | --- | --- | --- |
 | Session | `0000` setup, `0100` teardown | |
-| Root and categories | `1000`, `1001` genre … `1014` key | the categories rekordbox offers |
+| Root and categories | `1000`, `1001` genre … `1014` key | the categories rekordbox offers, ORIGINAL ARTIST's as ALBUM ARTIST (below) |
 | All tracks | `1004` | |
 | Playlists | `1105` (folder and list modes) | playlist order, first position 1 |
 | History | `1012`, `1112` | |
@@ -277,6 +277,20 @@ The library is in memory already, so every menu is a query over
 `RXLibrary` and the album and collection orders rxbox has. The analysis
 replies are the ANLZ tags the export writes (`src/formats`), made in
 memory.
+
+**ALBUM ARTIST.** A player's menus are its firmware's: the root row's
+item type decides what it asks for when the row is picked and how many
+levels the menu has, so a category of rxbox's own can only take over one
+the players know. ORIGINAL ARTIST's does (`8a`; `1302`, `1402`, `1502`):
+its row is named ALBUM ARTIST (sent as it is, not for the player to
+translate) and comes right below ALBUM, and its menus list album
+artists: a track's is its album's album artist, else the artist all the
+album's tracks share, and Unknown, last, has the tracks of no album or of
+an album with neither. An album artist's menu is ALL, then its albums as
+the ALBUM menu lists them; ALL is their tracks album by album, each in
+its own order. Wherever else a player shows an original artist (the
+track's metadata, a column beside the title, the sort, the search) it is
+the album artist too. Original artist tags are not served at all.
 
 ### 3. NFS (UDP: portmap 50111, NFS 2049)
 

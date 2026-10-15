@@ -80,6 +80,7 @@ typedef struct CatTrack {
     uint8_t      rating;
     int32_t      added;         /* yyyymmdd, 0 unknown */
     int32_t      played;        /* the day of the last play, yyyymmdd, 0 never */
+    uint32_t     album_artist;  /* ORIGINAL ARTIST's (album_artists): an artist id, 0 none */
 } CatTrack;
 
 /* One track's ANLZ files as the export would write them, and their tags. */
@@ -165,6 +166,43 @@ static size_t stem_len(const RXTrack *t)
 
 static int load_plays(RXCatalog *c);
 
+/* The decks' ORIGINAL ARTIST lists album artists (docs/LINK.md, "The
+ * pieces"): a track's is its album's album artist, else the artist all
+ * the album's tracks share; 0 for a track of no album, or of an album
+ * with neither. */
+static int album_artists(RXCatalog *c)
+{
+    const RXPlan *p = c->plan;
+    uint32_t n = (uint32_t)RX_MAX(p->nb_albums, 0);
+    /* Each album's own (by id), then the artist its tracks share:
+     * UINT32_MAX when they share none. */
+    uint32_t *own = calloc((size_t)n + 1, sizeof(*own));
+    uint32_t *shared = calloc((size_t)n + 1, sizeof(*shared));
+    if (!own || !shared) {
+        free(own);
+        free(shared);
+        return RX_ERROR(ENOMEM);
+    }
+    for (uint32_t i = 0; i < n; i++)
+        if (p->albums[i].id >= 1 && p->albums[i].id <= n)
+            own[p->albums[i].id] = p->albums[i].artist_id;
+    for (int i = 0; i < c->nb; i++) {
+        uint32_t al = c->t[i].pt->album_id, ar = c->t[i].pt->artist_id;
+        if (!al || al > n)
+            continue;
+        uint32_t *v = &shared[al];
+        *v = !*v ? (ar ? ar : UINT32_MAX) : *v == ar ? *v : UINT32_MAX;
+    }
+    for (int i = 0; i < c->nb; i++) {
+        uint32_t al = c->t[i].pt->album_id;
+        if (al && al <= n)
+            c->t[i].album_artist = own[al] ? own[al] : shared[al] != UINT32_MAX ? shared[al] : 0;
+    }
+    free(own);
+    free(shared);
+    return 0;
+}
+
 int rx_catalog_new(RXCatalog **out, RXLibrary *lib, RXPlan *plan)
 {
     *out = NULL;
@@ -217,7 +255,7 @@ int rx_catalog_new(RXCatalog **out, RXLibrary *lib, RXPlan *plan)
         ct->added = added_of(t);
         ct->played = ymd_of(t->last_played);
     }
-    if (load_plays(c) < 0) {
+    if (load_plays(c) < 0 || album_artists(c) < 0) {
         rx_catalog_free(&c);
         return RX_ERROR(ENOMEM);
     }
@@ -392,8 +430,9 @@ static const RXPlanArtwork *artwork_of(const RXPlan *p, uint32_t id)
     return NULL;
 }
 
-/* The track's id in a table a menu narrows by. */
-enum Field { F_ARTIST, F_ALBUM, F_GENRE, F_LABEL, F_ORIGINAL, F_REMIXER };
+/* The track's id in a table a menu narrows by. ORIGINAL ARTIST's field
+ * is the album artist (album_artists). */
+enum Field { F_ARTIST, F_ALBUM, F_GENRE, F_LABEL, F_ALBUM_ARTIST, F_REMIXER };
 
 static uint32_t field_id(const CatTrack *t, int field)
 {
@@ -402,7 +441,7 @@ static uint32_t field_id(const CatTrack *t, int field)
     case F_ALBUM:    return album_wire(t->pt->album_id);
     case F_GENRE:    return t->pt->genre_id;
     case F_LABEL:    return t->pt->label_id;
-    case F_ORIGINAL: return t->pt->original_artist_id;
+    case F_ALBUM_ARTIST: return t->album_artist;
     case F_REMIXER:  return t->pt->remixer_id;
     }
     return 0;
@@ -472,7 +511,8 @@ static int cmp_by(const RXCatalog *c, int sort, const CatTrack *x, const CatTrac
     case SORT_TIME:     return cmp_u((uint64_t)x->pt->duration, (uint64_t)y->pt->duration);
     case SORT_REMIXER:  return cmp_text(field_name(c, x, F_REMIXER), field_name(c, y, F_REMIXER));
     case SORT_LABEL:    return cmp_text(field_name(c, x, F_LABEL), field_name(c, y, F_LABEL));
-    case SORT_ORIGINAL: return cmp_text(field_name(c, x, F_ORIGINAL), field_name(c, y, F_ORIGINAL));
+    case SORT_ORIGINAL: return cmp_text(field_name(c, x, F_ALBUM_ARTIST),
+                                        field_name(c, y, F_ALBUM_ARTIST));
     case SORT_KEY:      return cmp_u_set(x->key, y->key);
     case SORT_BITRATE:  return cmp_u_set((uint64_t)RX_MAX(x->pt->bit_rate, 0),
                                          (uint64_t)RX_MAX(y->pt->bit_rate, 0));
@@ -537,7 +577,7 @@ enum FilterKind {
     FILTER_ARTIST,              /* a artist, b album */
     FILTER_ALBUM,               /* a album */
     FILTER_LABEL,               /* a label, b artist, c album */
-    FILTER_ORIGINAL,            /* a original artist, b album */
+    FILTER_ORIGINAL,            /* a album artist (0 none), b album */
     FILTER_REMIXER,             /* a remixer, b album */
     FILTER_BPM,                 /* a BPM x100, b percent */
     FILTER_RATING,
@@ -570,7 +610,7 @@ static bool search_match(const RXCatalog *c, const CatTrack *t, const char *text
     const char *fields[] = {
         t->title, field_name(c, t, F_ARTIST), field_name(c, t, F_ALBUM),
         field_name(c, t, F_GENRE), field_name(c, t, F_LABEL), field_name(c, t, F_REMIXER),
-        field_name(c, t, F_ORIGINAL), m->comment,
+        field_name(c, t, F_ALBUM_ARTIST), m->comment,
     };
     for (size_t i = 0; i < RX_ARRAY_ELEMS(fields); i++)
         if (fields[i] && rx_str_contains_fold(fields[i], text))
@@ -595,7 +635,7 @@ static bool match(const RXCatalog *c, const CatTrack *t, const Filter *f)
         return t->pt->label_id == f->a && any_or(f->b, t->pt->artist_id) &&
                any_or(f->c, field_id(t, F_ALBUM));
     case FILTER_ORIGINAL:
-        return f->a && t->pt->original_artist_id == f->a && any_or(f->b, field_id(t, F_ALBUM));
+        return t->album_artist == f->a && any_or(f->b, field_id(t, F_ALBUM));
     case FILTER_REMIXER:
         return f->a && t->pt->remixer_id == f->a && any_or(f->b, field_id(t, F_ALBUM));
     case FILTER_BPM: {
@@ -658,14 +698,20 @@ typedef struct AlbumCtx {
 } AlbumCtx;
 
 /* An album's own order: disc and track number, unnumbered ones after, by
- * title (rbxport puts the track number in the row's position). */
+ * title (rbxport puts the track number in the row's position). Tracks of
+ * several albums (an album artist's ALL) go album by album, as the ALBUM
+ * menu lists the albums. */
 static int cmp_album_rows(const void *a, const void *b, void *opaque)
 {
     const AlbumCtx *s = opaque;
     const CatTrack *x = &s->c->t[s->idx[*(const uint32_t *)a]];
     const CatTrack *y = &s->c->t[s->idx[*(const uint32_t *)b]];
     const RXMeta *mx = meta_of(x), *my = meta_of(y);
-    int r = cmp_u_set((uint64_t)RX_MAX(mx->disc_number, 0), (uint64_t)RX_MAX(my->disc_number, 0));
+    int r = cmp_text(field_name(s->c, x, F_ALBUM), field_name(s->c, y, F_ALBUM));
+    if (!r)
+        r = cmp_u(field_id(x, F_ALBUM), field_id(y, F_ALBUM));
+    if (!r)
+        r = cmp_u_set((uint64_t)RX_MAX(mx->disc_number, 0), (uint64_t)RX_MAX(my->disc_number, 0));
     if (!r)
         r = cmp_u_set((uint64_t)RX_MAX(mx->track_number, 0), (uint64_t)RX_MAX(my->track_number, 0));
     return r ? r : cmp_u(*(const uint32_t *)a, *(const uint32_t *)b);
@@ -800,7 +846,8 @@ static uint32_t table_size(const RXCatalog *c, int table)
 /* The names in `field` of the tracks a filter lets through, by name; an
  * ALL row first when there is more than one row and `all` (rbxport's
  * capture: an artist's albums, ALL then six albums); an "Unknown" album
- * for tracks without one, last, as rekordbox sent it. */
+ * for tracks without one, last, as rekordbox sent it, and so an
+ * "Unknown" album artist. */
 static int list_names(RXCatalog *c, int field, const Filter *f, bool all, RXCatMenu *m)
 {
     int table = field_table(field);
@@ -815,7 +862,7 @@ static int list_names(RXCatalog *c, int field, const Filter *f, bool all, RXCatM
             continue;
         uint32_t id = field_id(&c->t[i], field) & ~(field == F_ALBUM ? ALBUM_BIT : 0);
         if (!id) {
-            unknown |= field == F_ALBUM && f->kind != FILTER_ALL;
+            unknown |= (field == F_ALBUM && f->kind != FILTER_ALL) || field == F_ALBUM_ARTIST;
             continue;
         }
         if (id <= size && !seen[id] && table_name(c, table, id)) {
@@ -919,15 +966,22 @@ static int list_values(RXCatalog *c, int what, const Filter *f, bool descending,
  * binary; a CDJ-3000 sent 0x05cfffff). rekordbox's default categories in
  * its order (ARTIST ... DATE ADDED; its MATCHING needs rekordbox's related
  * tracks, and FOLDER is never sent), then the others it offers when
- * enabled; the order of those is assumed. */
+ * enabled; the order of those is assumed.
+ *
+ * ORIGINAL ARTIST's menus list album artists (album_artists), under ALBUM
+ * ARTIST, below ALBUM: a player's menus are its firmware's, so a category
+ * of our own takes over one it has (docs/LINK.md). Its name is sent as it
+ * is, not for the player to translate (`own`). */
 static const struct {
     uint32_t    id;
     int         bit;
     const char *name;
     uint32_t    type;
+    bool        own;
 } root_rows[] = {
     { 2,  1,  "ARTIST",          0x81 },
     { 3,  2,  "ALBUM",           0x82 },
+    { 11, 9,  "ALBUM ARTIST",    0x8a, true },
     { 4,  3,  "TRACK",           0x83 },
     { 1,  0,  "GENRE",           0x80 },
     { 12, 10, "KEY",             0x8b },
@@ -941,7 +995,6 @@ static const struct {
     { 15, 12, "COLOR",           0x8e },
     { 19, 13, "TIME",            0x92 },
     { 20, 14, "BITRATE",         0x93 },
-    { 11, 9,  "ORIGINAL ARTIST", 0x8a },
     { 9,  7,  "REMIXER",         0x88 },
     { 21, 15, "FILE NAME",       0x94 },
     { 27, 24, "DATE ADDED",      0x8c },
@@ -1252,7 +1305,7 @@ int rx_catalog_menu(RXCatalog *c, const RXDbMsg *q, RXCatMenu *m)
     case RX_DB_ORIGINALS:
     case RX_DB_REMIXERS:
         f.kind = FILTER_ALL;
-        return list_names(c, q->kind == RX_DB_ORIGINALS ? F_ORIGINAL : F_REMIXER, &f, false, m);
+        return list_names(c, q->kind == RX_DB_ORIGINALS ? F_ALBUM_ARTIST : F_REMIXER, &f, false, m);
     case RX_DB_ORIGINAL_ALBUMS:
     case RX_DB_REMIXER_ALBUMS:
         f = (Filter) { .kind = q->kind == RX_DB_ORIGINAL_ALBUMS ? FILTER_ORIGINAL : FILTER_REMIXER,
@@ -1260,9 +1313,12 @@ int rx_catalog_menu(RXCatalog *c, const RXDbMsg *q, RXCatMenu *m)
         return list_names(c, F_ALBUM, &f, true, m);
     case RX_DB_ORIGINAL_TRACKS:
     case RX_DB_REMIXER_TRACKS:
+        /* An album artist's ALL: its albums one after the other, each in
+         * its own order (cmp_album_rows). */
         f = (Filter) { .kind = q->kind == RX_DB_ORIGINAL_TRACKS ? FILTER_ORIGINAL : FILTER_REMIXER,
                        .a = a2, .b = a3 };
-        return list_tracks(c, &f, sort, a3 != RX_DB_ALL, RX_DB_TRACK_LISTED, m);
+        return list_tracks(c, &f, sort, a3 != RX_DB_ALL || q->kind == RX_DB_ORIGINAL_TRACKS,
+                           RX_DB_TRACK_LISTED, m);
 
     /* The numeric menus' rows are values the player prints (rbxport). */
     case RX_DB_BPMS:
@@ -1402,9 +1458,10 @@ typedef struct Texts {
     char t1[512], t2[512];
 } Texts;
 
-static void heading(RXDbItem *it, uint32_t id, const char *label, uint32_t type, Texts *tx)
+static void heading(RXDbItem *it, uint32_t id, const char *label, uint32_t type, bool own,
+                    Texts *tx)
 {
-    snprintf(tx->t1, sizeof(tx->t1), FFFA "%s" FFFB, label);
+    snprintf(tx->t1, sizeof(tx->t1), own ? "%s" : FFFA "%s" FFFB, label);
     *it = (RXDbItem) { .id = id, .text = tx->t1, .type = type };
 }
 
@@ -1447,8 +1504,8 @@ static void track_item(const RXCatalog *c, const CatTrack *t, int column, bool e
                         text2 = field_name(c, t, F_LABEL); break;
     case SORT_REMIXER:  sub = RX_DB_ITEM_REMIXER; a = pt->remixer_id;
                         text2 = field_name(c, t, F_REMIXER); break;
-    case SORT_ORIGINAL: sub = RX_DB_ITEM_ORIGINAL; a = pt->original_artist_id;
-                        text2 = field_name(c, t, F_ORIGINAL); break;
+    case SORT_ORIGINAL: sub = RX_DB_ITEM_ORIGINAL; a = t->album_artist;
+                        text2 = field_name(c, t, F_ALBUM_ARTIST); break;
     case SORT_COMMENT:  sub = RX_DB_ITEM_COMMENT; text2 = nonnull(m->comment); break;
     case SORT_RATING:   sub = RX_DB_ITEM_RATING; a = t->rating; break;
     case SORT_TIME:     sub = RX_DB_ITEM_DURATION; a = (uint32_t)pt->duration; break;
@@ -1543,7 +1600,7 @@ static void metadata_item(const RXCatalog *c, const CatTrack *t, uint32_t row, b
     case M_YEAR:     *it = line(0, (uint32_t)RX_MAX(m->year, 0), "", RX_DB_ITEM_YEAR); break;
     case M_LABEL:    *it = line(0, pt->label_id, field_name(c, t, F_LABEL), RX_DB_ITEM_LABEL); break;
     case M_ORIGINAL:
-        *it = line(0, pt->original_artist_id, field_name(c, t, F_ORIGINAL), RX_DB_ITEM_ORIGINAL);
+        *it = line(0, t->album_artist, field_name(c, t, F_ALBUM_ARTIST), RX_DB_ITEM_ORIGINAL);
         break;
     case M_REMIXER:
         *it = line(0, pt->remixer_id, field_name(c, t, F_REMIXER), RX_DB_ITEM_REMIXER);
@@ -1631,21 +1688,21 @@ static bool item_of(RXCatalog *c, const RXCatMenu *m, uint32_t i, int column, bo
     uint32_t id = m->ids ? m->ids[i] : 0, num = m->nums ? m->nums[i] : 0;
     char buf[64];
     if (id == RX_DB_ALL && (m->what == RX_CAT_NAMES || m->what == RX_CAT_NUMBERS)) {
-        heading(it, RX_DB_ALL, "ALL", RX_DB_ITEM_ALL, tx);
+        heading(it, RX_DB_ALL, "ALL", RX_DB_ITEM_ALL, false, tx);
         return true;
     }
     switch (m->what) {
     case RX_CAT_ROOT:
         for (size_t k = 0; k < RX_ARRAY_ELEMS(root_rows); k++)
             if (root_rows[k].id == id) {
-                heading(it, id, root_rows[k].name, root_rows[k].type, tx);
+                heading(it, id, root_rows[k].name, root_rows[k].type, root_rows[k].own, tx);
                 return true;
             }
         return false;
     case RX_CAT_SORTS:
         for (size_t k = 0; k < RX_ARRAY_ELEMS(sort_rows); k++)
             if (sort_rows[k].id == id) {
-                heading(it, id, sort_rows[k].name, sort_rows[k].type, tx);
+                heading(it, id, sort_rows[k].name, sort_rows[k].type, false, tx);
                 return true;
             }
         return false;
@@ -1668,7 +1725,7 @@ static bool item_of(RXCatalog *c, const RXCatMenu *m, uint32_t i, int column, bo
         };
         bool album = m->table == RX_CAT_ALBUM;
         const char *name = id ? table_name(c, m->table, album ? id & ~ALBUM_BIT : id) :
-                           album ? "Unknown" : NULL;
+                           album || m->table == RX_CAT_ARTIST ? "Unknown" : NULL;
         if (!name)
             return false;
         *it = (RXDbItem) { .id = id, .text = name, .type = types[m->table], .c = album ? id : 0 };

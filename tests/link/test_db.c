@@ -463,6 +463,134 @@ static int capture_catalog(Mem *m)
     return 0;
 }
 
+#define IDS(...) (const uint32_t[]) { __VA_ARGS__ }, (int)(sizeof((const uint32_t[]) { __VA_ARGS__ }) / sizeof(uint32_t))
+
+/* The ids of the menu a request makes, compared with `want`. */
+static void cat_ids(RXCatalog *cat, uint16_t kind, const uint32_t *args, int nb,
+                    const uint32_t *want, int nb_want, const char *what)
+{
+    RXDbMsg q = { .kind = kind, .nb_args = nb + 2 };
+    q.args[0] = (RXDbArg) { .type = RX_DB_NUM, .num = rx_db_rmst(1, 1, 3, 1) };
+    q.args[1] = (RXDbArg) { .type = RX_DB_NUM, .num = 0 };
+    for (int i = 0; i < nb; i++)
+        q.args[i + 2] = (RXDbArg) { .type = RX_DB_NUM, .num = args[i] };
+    RXCatMenu m;
+    int ret = rx_catalog_menu(cat, &q, &m);
+    bool ok = ret == 0 && m.nb == (uint32_t)nb_want;
+    for (int i = 0; ok && i < nb_want; i++)
+        ok = m.ids[i] == want[i];
+    if (!ok) {
+        fprintf(stderr, "%s (%04x): %d, %u rows:", what, kind, ret, ret == 0 ? m.nb : 0);
+        for (uint32_t i = 0; ret == 0 && i < m.nb; i++)
+            fprintf(stderr, " %x", m.ids[i]);
+        fprintf(stderr, "\n");
+        failures++;
+    }
+    if (ret == 0)
+        rx_catalog_menu_free(&m);
+}
+
+#define AB 0x40000000u          /* an album id's ALBUM_BIT (catalog.c) */
+
+/* ORIGINAL ARTIST lists album artists (catalog.c, album_artists): an
+ * album's album artist, else the artist all its tracks share, else
+ * Unknown (last), as for tracks of no album; an artist's albums by name,
+ * ALL first; ALL their tracks album by album, each in its own order. The
+ * root row says ALBUM ARTIST as it is, not for the player to translate,
+ * right below ALBUM. */
+static void test_album_artists(void)
+{
+    static const char *const artists[] = { "Diverse System", "Other", "Third" };
+    static const struct { const char *name; uint32_t artist; } albums[] = {
+        { "AD:HOUSE 3", 1 }, { "AD:Garage", 1 }, { "Solo LP", 0 }, { "Mixed", 0 },
+    };
+    static const struct { uint32_t id, album, artist; int number; const char *title; } v[] = {
+        { 101, 1, 2, 2, "House B" }, { 102, 2, 3, 3, "Garage C" }, { 103, 1, 2, 1, "House A" },
+        { 104, 3, 2, 1, "Solo A" },  { 105, 3, 2, 2, "Solo B" },   { 106, 4, 2, 1, "Mixed A" },
+        { 107, 4, 3, 2, "Mixed B" }, { 108, 0, 3, 0, "Loose" },
+    };
+    int nt = (int)RX_ARRAY_ELEMS(v);
+    Mem m = { .nb = nt };
+    m.tracks = calloc((size_t)nt, sizeof(*m.tracks));
+    m.plan.tracks = calloc((size_t)nt, sizeof(*m.plan.tracks));
+    m.plan.artists = calloc(3, sizeof(*m.plan.artists));
+    m.plan.albums = calloc(4, sizeof(*m.plan.albums));
+    CHECK(m.tracks && m.plan.tracks && m.plan.artists && m.plan.albums);
+    if (!m.tracks || !m.plan.tracks || !m.plan.artists || !m.plan.albums) {
+        mem_free(&m);
+        return;
+    }
+    for (int i = 0; i < 3; i++)
+        m.plan.artists[i] = (RXPlanName) { .id = (uint32_t)i + 1, .name = rx_strdup(artists[i]) };
+    m.plan.nb_artists = 3;
+    for (int i = 0; i < 4; i++)
+        m.plan.albums[i] = (RXPlanName) { .id = (uint32_t)i + 1, .name = rx_strdup(albums[i].name),
+                                          .artist_id = albums[i].artist };
+    m.plan.nb_albums = 4;
+    for (int i = 0; i < nt; i++) {
+        char file[32];
+        snprintf(file, sizeof(file), "%u.flac", v[i].id);
+        RXTrack *t = m.tracks[i] = rx_track_new(file);
+        if (!t)
+            continue;
+        rx_meta_set(&t->meta.title, v[i].title);
+        t->meta.track_number = v[i].number;
+        m.plan.tracks[i] = (RXPlanTrack) {
+            .id = v[i].id, .track = t, .album_id = v[i].album, .artist_id = v[i].artist,
+        };
+    }
+    m.plan.nb_tracks = nt;
+    RXCatalog *cat = NULL;
+    CHECK_EQ(rx_catalog_new(&cat, NULL, &m.plan), 0);
+    if (!cat) {
+        mem_free(&m);
+        return;
+    }
+    cat_ids(cat, RX_DB_ORIGINALS, NULL, 0, IDS(1, 2, 0), "album artists");
+    cat_ids(cat, RX_DB_ORIGINAL_ALBUMS, IDS(1), IDS(RX_DB_ALL, 2 | AB, 1 | AB), "Diverse's albums");
+    cat_ids(cat, RX_DB_ORIGINAL_TRACKS, IDS(1, RX_DB_ALL), IDS(102, 103, 101), "Diverse's ALL");
+    cat_ids(cat, RX_DB_ORIGINAL_TRACKS, IDS(1, 1 | AB), IDS(103, 101), "AD:HOUSE 3");
+    cat_ids(cat, RX_DB_ORIGINAL_ALBUMS, IDS(2), IDS(3 | AB), "Other's albums");
+    cat_ids(cat, RX_DB_ORIGINAL_ALBUMS, IDS(0), IDS(RX_DB_ALL, 4 | AB, 0), "Unknown's albums");
+    cat_ids(cat, RX_DB_ORIGINAL_TRACKS, IDS(0, RX_DB_ALL), IDS(106, 107, 108), "Unknown's ALL");
+
+    /* The root menu's rows, drawn. */
+    RXDbMsg q = { .kind = RX_DB_ROOT, .nb_args = 3 };
+    q.args[0] = (RXDbArg) { .type = RX_DB_NUM, .num = rx_db_rmst(1, 1, 3, 1) };
+    q.args[1] = (RXDbArg) { .type = RX_DB_NUM, .num = 0 };
+    q.args[2] = (RXDbArg) { .type = RX_DB_NUM, .num = 0xffffffff };
+    RXCatMenu root;
+    CHECK_EQ(rx_catalog_menu(cat, &q, &root), 0);
+    RXWr w = rx_wr_dyn();
+    rx_catalog_render(cat, &root, 0, root.nb, RX_CAT_COLUMN_DEFAULT, true, false, 1, &w);
+    int album_at = -1, aa_at = -1, k = 0;
+    char *aa_text = NULL;
+    RXDbMsg msg;
+    for (size_t at = 0; !w.err && at < w.len; k++) {
+        int len = rx_dbmsg_parse(w.p + at, w.len - at, w.len, &msg);
+        if (len <= 0)
+            break;
+        at += (size_t)len;
+        RXDbRow row;
+        if (rx_dbrow_parse(&msg, &row) < 0)
+            continue;
+        if (row.type == 0x82)
+            album_at = k;
+        if (row.type == 0x8a) {
+            aa_at = k;
+            aa_text = row.text ? rx_strdup(row.text) : NULL;
+        }
+        rx_dbrow_free(&row);
+    }
+    CHECK(album_at >= 0 && aa_at == album_at + 1);
+    CHECK(aa_text && !strcmp(aa_text, "ALBUM ARTIST"));
+    free(aa_text);
+    rx_wr_free(&w);
+    rx_catalog_menu_free(&root);
+    rx_catalog_free(&cat);
+    mem_free(&m);
+}
+
 /* rekordbox's extended cue list for 0x475f (rbxport's corpus, transaction
  * 0x1b8): hot cues A to D, then four memory cues. */
 static const char captured_cues[] =
@@ -1152,7 +1280,7 @@ static void menu_ids(RXDbClient *c, uint16_t kind, int loc, const uint32_t *args
     rx_dbrows_free(&rows, n);
 }
 
-#define IDS(...) (const uint32_t[]) { __VA_ARGS__ }, (int)(sizeof((const uint32_t[]) { __VA_ARGS__ }) / sizeof(uint32_t))
+
 
 /* The cues the catalog hands on (rx_catalog_set_edit). */
 typedef struct Edits {
@@ -1693,9 +1821,14 @@ static void test_library(RXLibrary *lib, RXPlan *plan, RXCatalog **cat)
     CHECK(n >= 2 && rows[0].id > rows[n - 1].id && rows[0].type == 0x10);
     rx_dbrows_free(&rows, n);
     menu_ids(c, RX_DB_BITRATE_TRACKS, 2, IDS(0, (uint32_t)pb->bit_rate), IDS(bravo), "bitrate's tracks");
-    menu_ids(c, RX_DB_ORIGINALS, 1, IDS(0), IDS(pb->original_artist_id), "original artists");
-    menu_ids(c, RX_DB_ORIGINAL_ALBUMS, 2, IDS(0, pb->original_artist_id), IDS(album), "original's albums");
-    menu_ids(c, RX_DB_ORIGINAL_TRACKS, 2, IDS(0, pb->original_artist_id, RX_DB_ALL), IDS(bravo), "original's tracks");
+    /* ORIGINAL ARTIST lists album artists: Synthetic's is the artist its
+     * tracks share; charlie and delta have no album, so Unknown, last. */
+    menu_ids(c, RX_DB_ORIGINALS, 1, IDS(0), IDS(synth, 0), "album artists");
+    menu_ids(c, RX_DB_ORIGINAL_ALBUMS, 2, IDS(0, synth), IDS(album), "album artist's albums");
+    menu_ids(c, RX_DB_ORIGINAL_TRACKS, 2, IDS(0, synth, RX_DB_ALL), IDS(alpha, bravo),
+             "album artist's tracks");
+    menu_ids(c, RX_DB_ORIGINAL_ALBUMS, 2, IDS(0, 0), IDS(0), "Unknown's albums");
+    menu_ids(c, RX_DB_ORIGINAL_TRACKS, 2, IDS(0, 0, RX_DB_ALL), IDS(charlie, delta), "Unknown's tracks");
     menu_ids(c, RX_DB_REMIXERS, 1, IDS(0), IDS(pb->remixer_id), "remixers");
     menu_ids(c, RX_DB_REMIXER_TRACKS, 2, IDS(0, pb->remixer_id, album), IDS(bravo), "remixer's tracks");
     time_t now = time(NULL);
@@ -2131,6 +2264,7 @@ int main(void)
     test_codec();
     test_latin1();
     test_capture();
+    test_album_artists();
     test_large();
 
     const char *base = getenv("RX_TEST_DIR");

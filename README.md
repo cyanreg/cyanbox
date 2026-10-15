@@ -302,7 +302,9 @@ and runs without it.
 PRO DJ LINK, as rekordbox's Link Export (docs/LINK.md): players with an
 Ethernet port that speak standard PRO DJ LINK (the CDJ-3000, the CDJ-3000X
 and the like), on the same Ethernet, browse the library and load its
-tracks with their grids, cues and waveforms, with no stick. Only with
+tracks with their grids, cues and waveforms, with no stick. Their
+ORIGINAL ARTIST category shows as ALBUM ARTIST and lists album artists,
+each with its albums' tracks one album after the other. Only with
 `--pro-link`: without it the interface has no Link menu and never opens a
 Link socket. With it, rxbox serves on every Ethernet interface from the
 start, for as long as it runs, taking up an interface as soon as it is up
