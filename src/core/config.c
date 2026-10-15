@@ -639,7 +639,7 @@ int rx_library_config_save(RXLibrary *lib)
 
     ret = rx_db_commit(lib->db);
     if (ret >= 0)
-        lib->generation++;
+        rx_core_changed(lib, 0);
     return ret;
 }
 
@@ -665,6 +665,6 @@ int rx_library_setting_set(RXLibrary *lib, const char *key, const char *value)
         return RX_ERROR(EINVAL);
     int ret = put(lib, key, value);
     if (ret >= 0)
-        lib->generation++;
+        rx_core_changed(lib, 0);
     return ret;
 }

@@ -473,6 +473,60 @@ static void test_refresh(void)
     rx_library_close(&lib);
 }
 
+/* The record of changes: a saved track and a played one by id, once
+ * each; a playlist made, everything; taking it starts it again. And a
+ * track read back through a second connection as the first saved it,
+ * the second's own copy untouched. */
+static void test_changes(void)
+{
+    RXLibrary lib, other;
+    CHECK(rx_library_open(&lib, root) == 0);
+    CHECK(rx_library_open(&other, root) == 0);
+    uint64_t *ids = NULL;
+    int nb = 0;
+    CHECK(rx_library_take_changes(&lib, &ids, &nb) == 0 && !ids && nb == 0);
+
+    RXTrack *a = rx_library_find_id(&lib, 1), *b = rx_library_find_id(&lib, 2);
+    CHECK(a && b);
+    if (!a || !b)
+        goto done;
+    int rating = a->meta.rating, cues = a->nb_cues;
+    a->meta.rating = 2;
+    RXCue c;
+    rx_cue_init(&c, 3.25);
+    CHECK(rx_track_add_cue(a, &c) >= 0);
+    CHECK(rx_library_save_track(&lib, a) == 0);
+    CHECK(rx_library_save_track(&lib, a) == 0);
+    CHECK(rx_library_record_play(&lib, b) == 0);
+    CHECK(rx_library_take_changes(&lib, &ids, &nb) == 0 && nb == 2 && ids[0] == a->id &&
+          ids[1] == b->id);
+    free(ids);
+    CHECK(rx_library_take_changes(&lib, &ids, &nb) == 0 && nb == 0);
+
+    int err = 0;
+    RXTrack *read = rx_library_read_track(&other, a->id, &err);
+    CHECK(read && read->meta.rating == 2 && read->nb_cues == cues + 1 &&
+          read->grid.nb_sections == a->grid.nb_sections && !strcmp(read->path, a->path) &&
+          read->has_waveforms == a->has_waveforms);
+    CHECK(rx_library_find_id(&other, a->id)->meta.rating == rating);
+    rx_track_free(read);
+    CHECK(!rx_library_read_track(&other, 999999, &err) && err == RX_ERROR(ENOENT));
+
+    RXPlaylist *pl = rx_library_playlist_create(&lib, lib.root_folder, "Changes");
+    CHECK(pl);
+    CHECK(rx_library_take_changes(&lib, &ids, &nb) == 1 && !ids && nb == 0);
+    CHECK(rx_library_take_changes(&lib, &ids, &nb) == 0 && nb == 0);
+    if (pl)
+        CHECK(rx_library_playlist_delete(&lib, pl) == 0);
+    a->meta.rating = rating;
+    int at = rx_track_memory_cue_at(a, 3.25, 0.001);
+    CHECK(at >= 0 && rx_track_remove_cue(a, at) == 0);
+    CHECK(rx_library_save_track(&lib, a) == 0);
+done:
+    rx_library_close(&other);
+    rx_library_close(&lib);
+}
+
 /* A dynamic grid's measured beats are kept through a save and an open. */
 static void test_dynamic_grid(void)
 {
@@ -1631,6 +1685,7 @@ int main(void)
     test_album_order();
     test_edit_and_reopen();
     test_refresh();
+    test_changes();
     test_dynamic_grid();
     test_legend();
     test_clean();

@@ -451,7 +451,8 @@ static int check_track(const RXTrack *t)
 #define COL_FILE 6
 #define COL_EDIT (COL_FILE + RX_TRACK_FILE_COLS)
 
-static char *track_select_sql(void)
+/* Every track's row (`tail` " ORDER BY id"), or one's (" WHERE id = ?1"). */
+static char *track_select_sql(const char *tail)
 {
     char sql[4096];
     size_t n = (size_t)snprintf(sql, sizeof(sql),
@@ -461,7 +462,7 @@ static char *track_select_sql(void)
     for (int i = 0; i < RX_TRACK_EDIT_COLS && n < sizeof(sql); i++)
         n += (size_t)snprintf(sql + n, sizeof(sql) - n, ", %s", rx_track_edit_cols[i]);
     if (n < sizeof(sql))
-        n += (size_t)snprintf(sql + n, sizeof(sql) - n, " FROM track ORDER BY id");
+        n += (size_t)snprintf(sql + n, sizeof(sql) - n, " FROM track%s", tail);
     return n < sizeof(sql) ? rx_strdup(sql) : NULL;
 }
 
@@ -558,6 +559,22 @@ static RXTrack *cursor_find(Cursor *c, uint64_t id)
     return NULL;
 }
 
+/* A grid section's columns from `c` on: start, bpm, beat, measured. */
+static int add_section(RXTrack *t, sqlite3_stmt *st, int c)
+{
+    RXTempoSection *s = realloc(t->grid.sections, (size_t)(t->grid.nb_sections + 1) * sizeof(*s));
+    if (!s)
+        return RX_ERROR(ENOMEM);
+    s[t->grid.nb_sections++] = (RXTempoSection) {
+        .start    = sqlite3_column_double(st, c),
+        .bpm      = sqlite3_column_double(st, c + 1),
+        .beat     = sqlite3_column_int(st, c + 2),
+        .measured = sqlite3_column_int(st, c + 3) != 0,
+    };
+    t->grid.sections = s;
+    return 1;
+}
+
 static int load_sections(RXLibrary *lib)
 {
     sqlite3_stmt *st = rx_db_prepare(lib->db, "SELECT track_id, start, bpm, beat, measured "
@@ -568,20 +585,8 @@ static int load_sections(RXLibrary *lib)
     int ret;
     while ((ret = rx_db_row(lib->db, st, "loading grids")) > 0) {
         RXTrack *t = cursor_find(&cur, (uint64_t)sqlite3_column_int64(st, 0));
-        if (!t)
-            continue;
-        RXTempoSection *s = realloc(t->grid.sections, (size_t)(t->grid.nb_sections + 1) * sizeof(*s));
-        if (!s) {
-            ret = RX_ERROR(ENOMEM);
+        if (t && (ret = add_section(t, st, 1)) < 0)
             break;
-        }
-        s[t->grid.nb_sections++] = (RXTempoSection) {
-            .start    = sqlite3_column_double(st, 1),
-            .bpm      = sqlite3_column_double(st, 2),
-            .beat     = sqlite3_column_int(st, 3),
-            .measured = sqlite3_column_int(st, 4) != 0,
-        };
-        t->grid.sections = s;
     }
     sqlite3_finalize(st);
     return ret;
@@ -590,6 +595,27 @@ static int load_sections(RXLibrary *lib)
 static double column_or_nan(sqlite3_stmt *st, int col)
 {
     return sqlite3_column_type(st, col) == SQLITE_NULL ? NAN : sqlite3_column_double(st, col);
+}
+
+/* A cue's columns from `k` on: time, grid_beat, hot, loop_end, loop_beats,
+ * active, name, color. */
+static int add_cue(RXTrack *t, sqlite3_stmt *st, int k)
+{
+    RXCue *cues = realloc(t->cues, (size_t)(t->nb_cues + 1) * sizeof(*cues));
+    if (!cues)
+        return RX_ERROR(ENOMEM);
+    t->cues = cues;
+    RXCue *c = &cues[t->nb_cues++];
+    rx_cue_init(c, sqlite3_column_double(st, k));
+    c->grid_beat = column_or_nan(st, k + 1);
+    c->hot = sqlite3_column_int(st, k + 2);
+    c->loop_end = sqlite3_column_type(st, k + 3) == SQLITE_NULL ? -1.0
+                                                                : sqlite3_column_double(st, k + 3);
+    c->loop_beats = column_or_nan(st, k + 4);
+    c->active = sqlite3_column_int(st, k + 5);
+    column_copy(st, k + 6, c->name, sizeof(c->name));
+    column_copy(st, k + 7, c->color, sizeof(c->color));
+    return 1;
 }
 
 static int load_cues(RXLibrary *lib)
@@ -603,23 +629,8 @@ static int load_cues(RXLibrary *lib)
     int ret;
     while ((ret = rx_db_row(lib->db, st, "loading cues")) > 0) {
         RXTrack *t = cursor_find(&cur, (uint64_t)sqlite3_column_int64(st, 0));
-        if (!t)
-            continue;
-        RXCue *cues = realloc(t->cues, (size_t)(t->nb_cues + 1) * sizeof(*cues));
-        if (!cues) {
-            ret = RX_ERROR(ENOMEM);
+        if (t && (ret = add_cue(t, st, 1)) < 0)
             break;
-        }
-        t->cues = cues;
-        RXCue *c = &cues[t->nb_cues++];
-        rx_cue_init(c, sqlite3_column_double(st, 1));
-        c->grid_beat = column_or_nan(st, 2);
-        c->hot = sqlite3_column_int(st, 3);
-        c->loop_end = sqlite3_column_type(st, 4) == SQLITE_NULL ? -1.0 : sqlite3_column_double(st, 4);
-        c->loop_beats = column_or_nan(st, 5);
-        c->active = sqlite3_column_int(st, 6);
-        column_copy(st, 7, c->name, sizeof(c->name));
-        column_copy(st, 8, c->color, sizeof(c->color));
     }
     sqlite3_finalize(st);
     return ret;
@@ -661,7 +672,7 @@ static int load_waveform_flags(RXLibrary *lib)
 
 static int load_tracks(RXLibrary *lib)
 {
-    char *sql = track_select_sql();
+    char *sql = track_select_sql(" ORDER BY id");
     if (!sql)
         return RX_ERROR(ENOMEM);
     sqlite3_stmt *st = rx_db_prepare(lib->db, sql);
@@ -692,6 +703,105 @@ static int load_tracks(RXLibrary *lib)
     /* A grid that is not valid is removed once the library has opened
      * (clean.c). */
     return ret;
+}
+
+/* One track's rows as the database holds them now. */
+RXTrack *rx_library_read_track(RXLibrary *lib, uint64_t id, int *err)
+{
+    *err = 0;
+    char *sql = track_select_sql(" WHERE id = ?1");
+    sqlite3_stmt *st = sql ? rx_db_prepare(lib->db, sql) : NULL;
+    free(sql);
+    if (!st) {
+        *err = RX_ERROR(EIO);
+        return NULL;
+    }
+    rx_db_bind_int(lib->db, st, 1, (int64_t)id);
+    RXTrack *t = NULL;
+    int ret = rx_db_row(lib->db, st, "reading a track");
+    if (ret > 0)
+        ret = track_from_row(st, &t);
+    else if (ret == 0)
+        ret = RX_ERROR(ENOENT);
+    sqlite3_finalize(st);
+    static const char *const child[] = {
+        "SELECT start, bpm, beat, measured FROM grid_section WHERE track_id = ?1 ORDER BY idx",
+        "SELECT time, grid_beat, hot, loop_end, loop_beats, active, name, color FROM cue "
+        "WHERE track_id = ?1 ORDER BY time, id",
+        "SELECT tag FROM track_tag WHERE track_id = ?1 ORDER BY position",
+        "SELECT 1 FROM waveform_preview WHERE track_id = ?1",
+    };
+    for (size_t k = 0; ret >= 0 && k < RX_ARRAY_ELEMS(child); k++) {
+        if (!(st = rx_db_prepare(lib->db, child[k]))) {
+            ret = RX_ERROR(EIO);
+            break;
+        }
+        rx_db_bind_int(lib->db, st, 1, (int64_t)id);
+        while (ret >= 0 && (ret = rx_db_row(lib->db, st, "reading a track")) > 0) {
+            switch (k) {
+            case 0: ret = add_section(t, st, 0); break;
+            case 1: ret = add_cue(t, st, 0); break;
+            case 2: ret = rx_meta_add_tag(&t->meta, (const char *)sqlite3_column_text(st, 0));
+                    break;
+            case 3: t->has_waveforms = true; break;
+            }
+        }
+        sqlite3_finalize(st);
+    }
+    if (ret < 0) {
+        rx_track_free(t);
+        *err = ret;
+        return NULL;
+    }
+    return t;
+}
+
+/* -------------------------------------------------------------- changes */
+
+static void changed_everything(RXLibrary *lib)
+{
+    lib->changed_all = true;
+    free(lib->changed);
+    lib->changed = NULL;
+    lib->nb_changed = 0;
+}
+
+void rx_core_changed(RXLibrary *lib, uint64_t id)
+{
+    lib->generation++;
+    if (lib->changed_all)
+        return;
+    if (!id || lib->nb_changed == RX_LIBRARY_CHANGES_KEPT) {
+        changed_everything(lib);
+        return;
+    }
+    for (int i = 0; i < lib->nb_changed; i++)
+        if (lib->changed[i] == id)
+            return;
+    if (!(lib->nb_changed % 64)) {
+        uint64_t *v = realloc(lib->changed, (size_t)(lib->nb_changed + 64) * sizeof(*v));
+        if (!v) {
+            changed_everything(lib);
+            return;
+        }
+        lib->changed = v;
+    }
+    lib->changed[lib->nb_changed++] = id;
+}
+
+int rx_library_take_changes(RXLibrary *lib, uint64_t **ids, int *nb)
+{
+    *ids = NULL;
+    *nb = 0;
+    if (lib->changed_all) {
+        lib->changed_all = false;
+        return 1;
+    }
+    *ids = lib->changed;
+    *nb = lib->nb_changed;
+    lib->changed = NULL;
+    lib->nb_changed = 0;
+    return 0;
 }
 
 /* ------------------------------------------------------------ open/close */
@@ -754,7 +864,12 @@ int rx_library_open(RXLibrary *lib, const char *root)
     if (rx_db_trim(lib->db) < 0)
         rx_warn("library: its free pages could not be given back");
 
+    /* What opening cleaned is no change to anyone. */
     lib->generation = 1;
+    free(lib->changed);
+    lib->changed = NULL;
+    lib->nb_changed = 0;
+    lib->changed_all = false;
     return 0;
 
 fail:
@@ -771,6 +886,7 @@ void rx_library_close(RXLibrary *lib)
         rx_track_free(lib->tracks[i]);
     free(lib->tracks);
     index_free(lib);
+    free(lib->changed);
     rx_config_free(&lib->cfg);
     rx_db_close(lib->db);
     free(lib->root);
@@ -940,7 +1056,7 @@ static int set_missing(RXLibrary *lib, RXTrack *t, bool missing)
     int ret = rx_db_done(lib->db, st, t->path);
     if (ret >= 0 && t->missing != missing) {
         t->missing = missing;
-        lib->generation++;
+        rx_core_changed(lib, 0);
     }
     return ret;
 }
@@ -1005,7 +1121,7 @@ static int insert_batch(RXLibrary *lib, Probed *items, int nb, rx_add_cb cb, voi
         p->t = NULL;
     }
     if (added)
-        lib->generation++;
+        rx_core_changed(lib, 0);
     return ret < 0 ? ret : added;
 }
 
@@ -1352,7 +1468,7 @@ int rx_library_remove(RXLibrary *lib, RXTrack *t)
             (size_t)(lib->nb_tracks - idx - 1) * sizeof(*lib->tracks));
     lib->nb_tracks--;
     rx_track_free(t);
-    lib->generation++;
+    rx_core_changed(lib, 0);
     return 0;
 }
 
@@ -1384,7 +1500,7 @@ int rx_library_save_track(RXLibrary *lib, RXTrack *t)
         rx_err("track %llu (%s) was NOT saved", (unsigned long long)t->id, t->path);
         return ret;
     }
-    lib->generation++;
+    rx_core_changed(lib, t->id);
     return 0;
 }
 
@@ -1453,7 +1569,7 @@ int rx_library_refresh_track(RXLibrary *lib, RXTrack *t)
     t->mtime = n->mtime;
     t->has_artwork = n->has_artwork;
     t->missing = false;
-    lib->generation++;
+    rx_core_changed(lib, 0);
 
 end:
     rx_track_free(p.t);
@@ -1492,7 +1608,7 @@ int rx_library_record_play_at(RXLibrary *lib, RXTrack *t, int64_t now)
         return ret;
     t->play_count++;
     t->last_played = RX_MAX(t->last_played, now);
-    lib->generation++;
+    rx_core_changed(lib, t->id);
     return 0;
 }
 
@@ -1558,7 +1674,7 @@ int rx_library_relocate(RXLibrary *lib, RXTrack *t, const char *new_abs_path)
     t->path = path;
     index_put(lib, t);
     t->missing = missing;
-    lib->generation++;
+    rx_core_changed(lib, 0);
     return 0;
 }
 
@@ -1596,7 +1712,7 @@ int rx_library_rescan_missing(RXLibrary *lib)
     if (ret >= 0) {
         for (int i = 0; i < lib->nb_tracks; i++)
             lib->tracks[i]->missing = missing[i];
-        lib->generation++;
+        rx_core_changed(lib, 0);
     }
     free(missing);
     return ret < 0 ? ret : changed;
@@ -1634,7 +1750,7 @@ int rx_core_waveform_blob_put(RXLibrary *lib, uint64_t id, const uint8_t *data, 
     if ((ret = rx_db_commit(lib->db)) < 0)
         return ret;
     t->has_waveforms = true;
-    lib->generation++;
+    rx_core_changed(lib, id);
     return 0;
 }
 
@@ -1753,7 +1869,7 @@ int rx_library_artwork_save(RXLibrary *lib, uint64_t id, const uint8_t *jpeg, si
     }
     ret = rx_db_commit(lib->db);
     if (ret >= 0)
-        lib->generation++;
+        rx_core_changed(lib, 0);
     return ret;
 }
 

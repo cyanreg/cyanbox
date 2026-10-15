@@ -174,8 +174,18 @@ typedef struct RXLibrary {
     int       nb_tracks;
     RXPlaylistFolder *root_folder;   /* playlist tree, owned */
     unsigned  generation;       /* bumped on every change; the interface watches it */
+    /* What changed since rx_library_take_changes: the tracks whose own
+     * state did (an edit saved, a play, waveforms), or everything else
+     * (`changed_all`: tracks added, removed, moved or read again from
+     * their files, playlists, settings, artwork). PRO DJ LINK reads only
+     * those tracks again (src/app/link.c). */
+    uint64_t *changed; int nb_changed;
+    bool      changed_all;
     RXPathIndex *by_path;       /* rx_library_find_path's; kept by the library's own edits */
 } RXLibrary;
+
+/* The tracks the record of changes holds before it says everything. */
+#define RX_LIBRARY_CHANGES_KEPT 512
 
 /* Opens (creating when absent) the library at `root` (NULL = default),
  * converts one of schema 8 (src/core/db.c), loads every track and
@@ -235,6 +245,15 @@ typedef struct RXPlay { int64_t track_id, played_at; } RXPlay;
 int      rx_library_plays(RXLibrary *lib, RXPlay **out, int *nb);
 /* Moves a track to a new path (the file was moved by the user). */
 int      rx_library_relocate(RXLibrary *lib, RXTrack *t, const char *new_abs_path);
+/* The tracks changed since the last call (`*ids`, the caller's to free;
+ * NULL and 0 for none): 0; or 1 when everything is to be taken as
+ * changed. The record starts again either way. */
+int      rx_library_take_changes(RXLibrary *lib, uint64_t **ids, int *nb);
+/* A track as the database holds it now, which another connection may
+ * have written since this one loaded it (the interface's, for Link's):
+ * its row, grid, cues and My Tags, not added to the library; the caller
+ * frees it. NULL with *err -ENOENT when there is no such track. */
+RXTrack *rx_library_read_track(RXLibrary *lib, uint64_t id, int *err);
 
 /* Waveforms and artwork, by track id. Load returns -ENOENT when absent. */
 struct RXWaveforms;

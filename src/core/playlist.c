@@ -522,7 +522,7 @@ RXPlaylist *rx_library_playlist_create(RXLibrary *lib, RXPlaylistFolder *in, con
         return NULL;
     }
     in->playlists[in->nb_playlists++] = p;
-    lib->generation++;
+    rx_core_changed(lib, 0);
     return p;
 }
 
@@ -552,7 +552,7 @@ RXPlaylistFolder *rx_library_folder_create(RXLibrary *lib, RXPlaylistFolder *in,
         return NULL;
     }
     in->folders[in->nb_folders++] = f;
-    lib->generation++;
+    rx_core_changed(lib, 0);
     return f;
 }
 
@@ -573,7 +573,7 @@ static int rename_row(RXLibrary *lib, int64_t id, char **field, const char *name
     }
     free(*field);
     *field = copy;
-    lib->generation++;
+    rx_core_changed(lib, 0);
     return 0;
 }
 
@@ -617,7 +617,7 @@ int rx_library_playlist_delete(RXLibrary *lib, RXPlaylist *p)
 
     remove_ptr(&in->playlists, &in->nb_playlists, index);
     playlist_free(p);
-    lib->generation++;
+    rx_core_changed(lib, 0);
     return 0;
 }
 
@@ -641,7 +641,7 @@ int rx_library_folder_delete(RXLibrary *lib, RXPlaylistFolder *f)
 
     remove_ptr(&in->folders, &in->nb_folders, index);
     folder_free(f);
-    lib->generation++;
+    rx_core_changed(lib, 0);
     return 0;
 }
 
@@ -690,7 +690,7 @@ int rx_library_playlist_reparent(RXLibrary *lib, RXPlaylist *p, RXPlaylistFolder
     free(to->playlists);
     to->playlists = list;
     to->nb_playlists = nb_after;
-    lib->generation++;
+    rx_core_changed(lib, 0);
     return 0;
 }
 
@@ -740,7 +740,7 @@ int rx_library_folder_reparent(RXLibrary *lib, RXPlaylistFolder *f, RXPlaylistFo
     free(to->folders);
     to->folders = list;
     to->nb_folders = nb_after;
-    lib->generation++;
+    rx_core_changed(lib, 0);
     return 0;
 }
 
@@ -759,7 +759,7 @@ static int set_entries(RXLibrary *lib, RXPlaylist *p, uint64_t *ids, int nb)
     free(p->track_ids);
     p->track_ids = ids;
     p->nb = nb;
-    lib->generation++;
+    rx_core_changed(lib, 0);
     return 0;
 }
 

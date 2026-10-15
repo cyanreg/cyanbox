@@ -117,6 +117,10 @@ void rx_db_rollback(RXDb *db);
 /* -------------------------------------------------------------- library */
 
 /* Settings <-> RXConfig (config.c), called by open. */
+/* A change: the generation bumped and the record of changes told which
+ * track's own state changed, or with id 0 that anything else did
+ * (rx_library_take_changes). */
+void rx_core_changed(RXLibrary *lib, uint64_t id);
 int  rx_core_config_load(RXLibrary *lib);
 /* Removes setting rows whose value their key does not take and keys
  * rxbox does not know (not RXConfig's, not My Settings, not the
