@@ -27,7 +27,8 @@ it to load is taken as a player does: from its start, playing on if it
 was playing, paused if not (a load never starts a player). Step 7 has begun:
 two CDJ-900s on Ethernet (2026-10-14) joined, mounted the library,
 browsed it and played its MP3s from it. An emulated CDJ-3000X then did
-everything a player does with rxbox (below), and the cues a player saves
+everything a player does with rxbox (below), as then did a CDJ-3000 on
+firmware 3.22, and the cues a player saves
 on the deck are kept in the library ("Cues saved on the deck"). Not yet:
 a WAV played on a real one (section 4), a real CDJ-3000 or 3000X, the
 other writes from the deck (the grid's offset, ratings: step 8).
@@ -147,12 +148,21 @@ What it sends that rxbox leaves unanswered, without which it carries on:
 It sends no `0b` (precise position) on 50001 here, only the `28` beats
 and 292-byte `0a` statuses; the Link decks need nothing more.
 
+A CDJ-3000 (firmware 3.22, the same emulator; 2026-10-15) did the same
+with rxbox: mounted, browsed (previews, artwork, Unicode text), loaded
+from its browser and by the load command, played with tempo, CUE and
+CALL to a memory loop. It asks for the same things (`2002`, `2003`,
+`2004`, `2102`, `2204`, `2504`, `2904`, `2b04`, `2c04`, `2d04`, `3000`
+and the menus) and sends 292-byte statuses too, but no `80` and, at
+connect, only `3007`: none of the 3000X's three probes.
+
 What has been run against what:
 
 | Server | Client | Network | Result |
 | --- | --- | --- | --- |
 | rxbox | two CDJ-900s | Ethernet, a switch, 169.254.0.0/16 | join, mount, browse, the library's MP3s played; WAVs decoded as MP3 until the file type was named |
 | rxbox | emulated CDJ-900, CDJ-2000, CDJ-2000NXS2 (Pioneer's firmware in QEMU) | a bridge, 169.254.0.0/16 | join, mount, browse every category, metadata, waveforms, cues, a load streamed over NFS; the lapse, NFD, CDJ-900 punctuation and CDJ-2000 KEY findings above; FLAC, MP3, AAC and 16- and 24-bit WAV sources played on the NXS2, with tempo, jog, memory loops, and hot cues A to D in their colours (the pads jump, the hot loop loops); the load command (`0x19`) on the CDJ-900 and the NXS2; no cue writes attempted from an NXS2 |
+| rxbox | emulated CDJ-3000 (firmware 3.22, cdj3k-emu) | a bridge, 169.254.0.0/16 | as the 3000X: browse with previews and artwork, a load from the browser and by `0x19`, play, tempo, CUE, a memory loop; no `80`, no probes but `3007` |
 | rxbox | emulated CDJ-3000X (firmware 1.41, cdj3k-emu) | a bridge, 169.254.0.0/16 | found by name with its counts, browse with previews and artwork, a load from the browser and by `0x19`, play, tempo, memory cues and loops, hot cues A to D in their colours with names and a hot loop; cues saved on the deck sent as `2705` (refused then: kept since); `80` and three database probes left unanswered (above) |
 | rxbox | rxbox's fake player | loopback, ports of their own (`test_loopback`) | join, browse, every track's bytes (transcodes too), the player's status, the fences, a library change |
 | rxbox | rxbox's fake player | two network namespaces, rekordbox's ports (`tests/link/netns_test.sh`) | the same through the CLI, real broadcasts; the Ethernet interface found by the server, two served at once on the same ports, one of them only once its address came |
