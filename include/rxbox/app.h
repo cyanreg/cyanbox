@@ -56,6 +56,12 @@ typedef struct RXApp {
      * album view (the collection: None's tracks, then each album of the
      * list in turn). Owned here. */
     char      *current_album;
+    /* The album artist shown (rx_app_show_album_artist): the tracks of
+     * its albums in the list (rx_app_albums), one album after the other
+     * in the list's order, each in disc and track order; "" is None,
+     * None's tracks and those of the albums of no artist. NULL = not an
+     * album artist view; never set with current_album. Owned here. */
+    char      *current_album_artist;
     char       search[128];
     int        sort_column;         /* RXColumn index */
     bool       sort_descending;
@@ -215,10 +221,25 @@ typedef struct RXAlbum {
     const char *artist;         /* NULL none */
 } RXAlbum;
 int  rx_app_albums(RXApp *app, const RXAlbum **albums);
-/* Shows the album `name` (copied; "": None; NULL: the album view is
- * left, the playlist or collection view stays): the playlist view is
- * cleared and the rows rebuilt. */
+/* The album artists for the tree: the artists of the albums list
+ * (RXAlbum.artist; names that differ only in case are one, named as the
+ * first of its albums has it), in the list's order,
+ * each with the count of its albums' tracks; after None (the name "",
+ * first, when it has tracks): None's tracks and those of the albums of
+ * no artist. Made with the albums, valid as long. Returns the count, None
+ * included. */
+typedef struct RXAlbumArtist {
+    const char *name;
+    int         nb;
+} RXAlbumArtist;
+int  rx_app_album_artists(RXApp *app, const RXAlbumArtist **artists);
+/* Shows the album `name` (copied; "": None; NULL: the album and album
+ * artist views are left, the playlist or collection view stays): the
+ * playlist and album artist views are cleared and the rows rebuilt. */
 void rx_app_show_album(RXApp *app, const char *name);
+/* Shows the album artist `name` (copied; "": None; NULL: the view is
+ * left): the playlist and album views are cleared and the rows rebuilt. */
+void rx_app_show_album_artist(RXApp *app, const char *name);
 int  rx_app_start_export(RXApp *app);                /* from export_state */
 /* RX_JOB_STICK_READ against the library as saved (pending saves are
  * written first), or RX_JOB_INSPECT, of the stick at `mount`; see

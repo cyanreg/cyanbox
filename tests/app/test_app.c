@@ -734,6 +734,82 @@ int main(int argc, char **argv)
             rx_app_show_album(&app, "");
             CHECK(app.nb_rows == 2 && app.lib.tracks[app.rows[0]] == y &&
                   app.lib.tracks[app.rows[1]] == x, "None is not by title");
+
+            /* Album Artists: None first, None's tracks; then the artists
+             * of the albums, each a view of its albums' tracks. */
+            const RXAlbumArtist *artists = NULL;
+            n = rx_app_album_artists(&app, &artists);
+            CHECK(n == 2 && !strcmp(artists[0].name, "") && artists[0].nb == 2 &&
+                  !strcmp(artists[1].name, "Beta Artist") && artists[1].nb == 2,
+                  "album artists: %d, %s first", n, n ? artists[0].name : "none");
+            rx_app_show_album_artist(&app, "beta artist");
+            CHECK(app.current_album_artist && !app.current_album && app.nb_rows == 2 &&
+                  app.lib.tracks[app.rows[0]] == b && app.lib.tracks[app.rows[1]] == a,
+                  "the album artist's rows %d, in track order", app.nb_rows);
+            /* Its albums one after the other as Albums lists them: Omega
+             * (y's album artist, the same but for case) before Zeta. */
+            free(x->meta.album);
+            x->meta.album = rx_strdup("Omega");
+            free(y->meta.album);
+            y->meta.album = rx_strdup("Omega");
+            free(x->meta.album_artist);
+            x->meta.album_artist = NULL;
+            free(y->meta.album_artist);
+            y->meta.album_artist = rx_strdup("BETA ARTIST");
+            CHECK(rx_library_save_track(&app.lib, x) == 0 &&
+                  rx_library_save_track(&app.lib, y) == 0, "saving Omega's artist");
+            rx_app_tick(&app);
+            n = rx_app_album_artists(&app, &artists);
+            CHECK(n == 1 && !strcmp(artists[0].name, "BETA ARTIST") && artists[0].nb == 4,
+                  "one album artist whatever the case: %d, %s", n, n ? artists[0].name : "none");
+            CHECK(app.nb_rows == 4 && app.lib.tracks[app.rows[0]] == y &&
+                  app.lib.tracks[app.rows[1]] == x && app.lib.tracks[app.rows[2]] == b &&
+                  app.lib.tracks[app.rows[3]] == a && app.row_numbers[0] == 1 &&
+                  app.row_numbers[3] == 4, "the album artist is not Omega, then Zeta");
+            /* The albums of no artist are None's, after None's own tracks:
+             * x leaves Omega (y alone in it: None's), and Zeta's tracks
+             * share no artist and have no album artist. */
+            artist_a = a->meta.artist;
+            artist_b = b->meta.artist;
+            a->meta.artist = rx_strdup("One");
+            b->meta.artist = rx_strdup("Two");
+            free(a->meta.album_artist);
+            a->meta.album_artist = NULL;
+            free(x->meta.album);
+            x->meta.album = NULL;
+            CHECK(rx_library_save_track(&app.lib, a) == 0 &&
+                  rx_library_save_track(&app.lib, b) == 0 &&
+                  rx_library_save_track(&app.lib, x) == 0, "saving Zeta with no artist");
+            rx_app_show_album_artist(&app, "");
+            n = rx_app_album_artists(&app, &artists);
+            CHECK(n == 1 && !artists[0].name[0] && artists[0].nb == 4, "None alone: %d", n);
+            CHECK(app.nb_rows == 4 && app.lib.tracks[app.rows[0]] == y &&
+                  app.lib.tracks[app.rows[1]] == x && app.lib.tracks[app.rows[2]] == b &&
+                  app.lib.tracks[app.rows[3]] == a, "None is not None's tracks, then Zeta");
+            /* One view at a time. */
+            rx_app_show_album(&app, "Zeta");
+            CHECK(app.current_album && !app.current_album_artist && app.nb_rows == 2,
+                  "the album view kept the album artist");
+            rx_app_show_album_artist(&app, "");
+            CHECK(!app.current_album && app.current_album_artist && app.nb_rows == 4,
+                  "the album artist view kept the album");
+            rx_app_show_album_artist(&app, "Nobody");
+            CHECK(app.nb_rows == 0, "an album artist of no album: %d rows", app.nb_rows);
+            rx_app_show_album(&app, NULL);
+            CHECK(!app.current_album && !app.current_album_artist && app.nb_rows == 4,
+                  "back to the collection from an album artist: %d rows", app.nb_rows);
+            free(a->meta.artist);
+            free(b->meta.artist);
+            a->meta.artist = artist_a;
+            b->meta.artist = artist_b;
+            free(y->meta.album);
+            y->meta.album = NULL;
+            free(y->meta.album_artist);
+            y->meta.album_artist = NULL;
+            CHECK(rx_library_save_track(&app.lib, a) == 0 &&
+                  rx_library_save_track(&app.lib, b) == 0 &&
+                  rx_library_save_track(&app.lib, y) == 0, "saving the artists back");
+
             rx_app_show_album(&app, NULL);
             free(a->meta.album_artist);
             a->meta.album_artist = NULL;
