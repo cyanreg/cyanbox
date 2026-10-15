@@ -761,6 +761,8 @@ void ui_browser(UiState *ui, ImVec2 size)
     float hh = PX(30);
     ImGui::SetCursorScreenPos(ImVec2(a.x + PX(8), a.y));
     const char *view = app->current_playlist ? app->current_playlist->name
+                     : app->current_album_artist ? (app->current_album_artist[0]
+                                                    ? app->current_album_artist : "None")
                      : !app->current_album   ? "Collection"
                      : app->current_album[0] ? app->current_album
                                              : "None";

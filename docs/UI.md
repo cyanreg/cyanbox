@@ -281,6 +281,13 @@ shows its tracks in disc and track order, like a playlist, but nothing
 can be dropped on an album, nothing renames or deletes one, and the
 export does not know them: they are the tags' view of the collection;
 playing one through continues from track to track as a playlist does),
+`Album Artists` under that (closed by default: the artists of the Albums
+list in its order, names that differ only in case being one, each with
+the count of its albums' tracks, the count beside `Album Artists` being
+of artists; first `None`, when it has any: None's tracks, then those of
+the albums of no artist; click one and the table shows the tracks of its
+albums one after the other as Albums lists them, each in disc and track
+order, viewed and played through as an album is),
 then the folders and playlists from the library. Click selects the view.
 Right-click: new playlist, new folder (the folder it goes in opens),
 rename, delete (with confirm); m3u8 import and export are on the command

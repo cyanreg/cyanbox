@@ -1325,10 +1325,12 @@ static void log_test_state(UiState *ui)
     // The view the table shows, and the tree's finder: what is typed, its
     // matches and the one Enter opens.
     const char *view = app->current_playlist ? app->current_playlist->name
+                     : app->current_album_artist ? (app->current_album_artist[0]
+                                                    ? app->current_album_artist : "None")
                      : !app->current_album   ? "Collection"
                      : app->current_album[0] ? app->current_album
                                              : "None";
-    rx_info("ui test: view \"%s\"", view);
+    rx_info("ui test: view \"%s\" rows %d", view, app->nb_rows);
     if (ui->link_decks_drawn)
         rx_info("ui test: link decks %d", ui->link_decks_drawn);
     if (ui->link_menu_frame && ui->frame_no - ui->link_menu_frame <= 2)

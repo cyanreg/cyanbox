@@ -36,7 +36,8 @@
 # players' Eject/Load Lock. Last, File > Remove missing tracks
 # (RXBOX_UI_SHOW=remove-missing): it lists the fourth track and a fifth
 # whose folder is gone too, names that folder, and a click on Remove takes
-# both out of the library, the rest kept.
+# both out of the library, the rest kept. Then Album Artists: opened and an
+# artist shown with two clicks (with RXBOX_UI_SWAYSOCK only).
 #
 # usage: screenshot.sh RXBOX OUTDIR
 
@@ -346,3 +347,21 @@ for gone in "$AUDIO/04-techno.flac" "$OUT/gone/05-gone.flac"; do
     fi
 done
 echo "remove-missing: the two missing tracks removed, three kept"
+
+# Album Artists: two of the album's three tracks get an album artist (an
+# edit, as the library keeps one), which is then the album's; at 1600x900
+# a click on the node's arrow opens it, one on its first row shows the
+# artist's tracks, the whole album.
+if [ -n "${RXBOX_UI_SWAYSOCK:-}" ] && command -v python3 > /dev/null; then
+    python3 - "$LIB/library.db" "$ID" "$ID2" <<'EOF' || exit 1
+import sqlite3, sys
+db = sqlite3.connect(sys.argv[1])
+n = db.execute("UPDATE track SET album_artist = 'Test Tones' WHERE id IN (?, ?)",
+               (int(sys.argv[2]), int(sys.argv[3]))).rowcount
+db.commit()
+if n != 2:
+    sys.exit(f"FAIL: album-artists: {n} tracks given an album artist, want 2")
+EOF
+    SWAYSOCK=$RXBOX_UI_SWAYSOCK swaymsg -q output '*' resolution 1600x900
+    variant album-artists "70:click:19:593,80:click:100:621" 'view "Test Tones" rows 3'
+fi

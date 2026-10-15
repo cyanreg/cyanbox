@@ -4,7 +4,9 @@
 // Albums (every album tag two tracks or more share, by artist and then
 // name, each a view of its tracks in disc and track order, after None, the
 // tracks of no album or of one no other track has: nothing is added to,
-// renamed or exported there), then the library's folders and playlists. A click shows a playlist; the
+// renamed or exported there), the Album Artists (the artists of Albums,
+// each a view of its albums' tracks, the albums as Albums lists them,
+// after None), then the library's folders and playlists. A click shows a playlist; the
 // context menu creates, renames (in place, as rekordbox does) and deletes
 // (after a confirmation). Tracks dragged from the table onto a playlist
 // are appended to it; playlists and folders dragged within the tree move
@@ -209,6 +211,14 @@ static void album_icon(ImDrawList *dl, ImVec2 p, float s, ImU32 col)
     dl->AddCircleFilled(c, s * 0.08f, col, 8);
 }
 
+// A head and shoulders.
+static void artist_icon(ImDrawList *dl, ImVec2 p, float s, ImU32 col)
+{
+    dl->AddCircleFilled(ImVec2(p.x + s * 0.5f, p.y + s * 0.36f), s * 0.2f, col, 12);
+    dl->AddRectFilled(ImVec2(p.x + s * 0.14f, p.y + s * 0.64f), ImVec2(p.x + s * 0.86f, p.y + s * 0.95f),
+                      col, s * 0.3f, ImDrawFlags_RoundTop);
+}
+
 /* -------------------------------------------------------------------- nodes */
 
 // The tree's names, counts and icons (logical pixels).
@@ -222,6 +232,8 @@ static void draw_icon(ImDrawList *dl, int icon, ImVec2 p, float s, ImU32 col)
         folder_icon(dl, p, s, col);
     else if (icon == 3)
         album_icon(dl, p, s, col);
+    else if (icon == 4)
+        artist_icon(dl, p, s, col);
     else
         playlist_icon(dl, p, s, col);
 }
@@ -683,7 +695,8 @@ static void tree_nodes(UiState *ui)
     RXApp *app = ui->app;
     RXPlaylistFolder *root = app->lib.root_folder;
     // Collection: every track.
-    bool sel = app->current_playlist == nullptr && app->current_album == nullptr;
+    bool sel = app->current_playlist == nullptr && app->current_album == nullptr &&
+               app->current_album_artist == nullptr;
     ImGuiTreeNodeFlags fl = ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen |
                             ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_FramePadding;
     if (sel)
@@ -771,6 +784,51 @@ static void tree_nodes(UiState *ui)
             }
         }
         if (nb_albums == 0)
+            ImGui::TextDisabled("  No album tags yet.");
+        ImGui::TreePop();
+    }
+
+    // Album Artists: the artists of Albums in its order, None first (the
+    // name "": None's tracks and the albums of no artist), each shown like
+    // a playlist of its albums' tracks, the albums one after the other as
+    // Albums lists them. The count beside it is of artists, None aside.
+    const RXAlbumArtist *artists = nullptr;
+    int nb_artists = rx_app_album_artists(app, &artists);
+    int nb_named_artists = nb_artists - (nb_artists > 0 && !artists[0].name[0]);
+    bool artists_open = ImGui::TreeNodeEx("##album_artists", afl);
+    a = ImGui::GetItemRectMin();
+    b = ImGui::GetItemRectMax();
+    node_label(ui, ImVec2(a.x + ImGui::GetTreeNodeToLabelSpacing(), a.y), b, 4, "Album Artists",
+               nb_named_artists, false);
+    if (artists_open) {
+        ImGuiListClipper clip;
+        clip.Begin(nb_artists);
+        while (clip.Step()) {
+            for (int i = clip.DisplayStart; i < clip.DisplayEnd && i < nb_artists; i++) {
+                ImGui::PushID(i);
+                bool asel = app->current_album_artist &&
+                            !strcmp(app->current_album_artist, artists[i].name);
+                ImGuiTreeNodeFlags lf = ImGuiTreeNodeFlags_Leaf |
+                                        ImGuiTreeNodeFlags_NoTreePushOnOpen |
+                                        ImGuiTreeNodeFlags_SpanAvailWidth |
+                                        ImGuiTreeNodeFlags_FramePadding;
+                if (asel)
+                    lf |= ImGuiTreeNodeFlags_Selected;
+                ImGui::TreeNodeEx("##album_artist", lf);
+                ImVec2 la = ImGui::GetItemRectMin(), lb = ImGui::GetItemRectMax();
+                if (ImGui::IsItemClicked() && !asel) {
+                    app->nb_selection = 0;
+                    rx_app_show_album_artist(app, artists[i].name);
+                    nb_artists = rx_app_album_artists(app, &artists);
+                }
+                float llx = la.x + ImGui::GetTreeNodeToLabelSpacing() - PX(14);
+                if (i < nb_artists)
+                    node_label(ui, ImVec2(llx, la.y), lb, 4,
+                               artists[i].name[0] ? artists[i].name : "None", artists[i].nb, asel);
+                ImGui::PopID();
+            }
+        }
+        if (nb_artists == 0)
             ImGui::TextDisabled("  No album tags yet.");
         ImGui::TreePop();
     }
