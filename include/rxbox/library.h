@@ -243,6 +243,21 @@ int      rx_library_record_play_at(RXLibrary *lib, RXTrack *t, int64_t when);
  * array is the caller's to free. */
 typedef struct RXPlay { int64_t track_id, played_at; } RXPlay;
 int      rx_library_plays(RXLibrary *lib, RXPlay **out, int *nb);
+/* The History: a row for each track a deck on PRO DJ LINK played straight
+ * on for 1.5 minutes (src/app/link.c), when it started, and for each one
+ * added to it by hand, kept in the library. */
+typedef struct RXHistoryEntry {
+    int64_t  id;
+    uint64_t track_id;
+    int64_t  played_at;         /* epoch seconds */
+    int      player;            /* the deck's number, 0 added by hand */
+} RXHistoryEntry;
+int      rx_library_history_add(RXLibrary *lib, const RXTrack *t, int64_t played_at, int player);
+/* Every row, oldest first (by played_at, then as added); the caller frees
+ * the array. */
+int      rx_library_history(RXLibrary *lib, RXHistoryEntry **out, int *nb);
+/* Every row of a track: how many there were. */
+int      rx_library_history_remove(RXLibrary *lib, uint64_t track_id);
 /* Moves a track to a new path (the file was moved by the user). */
 int      rx_library_relocate(RXLibrary *lib, RXTrack *t, const char *new_abs_path);
 /* The tracks changed since the last call (`*ids`, the caller's to free;

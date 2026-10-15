@@ -1642,6 +1642,66 @@ int rx_library_plays(RXLibrary *lib, RXPlay **out, int *nb)
     return 0;
 }
 
+int rx_library_history_add(RXLibrary *lib, const RXTrack *t, int64_t played_at, int player)
+{
+    if (rx_library_index_of(lib, t) < 0)
+        return RX_ERROR(ENOENT);
+    sqlite3_stmt *st = rx_db_stmt(lib->db, RX_STMT_HISTORY_INSERT);
+    rx_db_bind_int(lib->db, st, 1, (int64_t)t->id);
+    rx_db_bind_int(lib->db, st, 2, played_at);
+    rx_db_bind_int(lib->db, st, 3, player);
+    int ret = rx_db_done(lib->db, st, t->path);
+    if (ret >= 0)
+        rx_core_changed(lib, t->id);
+    return ret;
+}
+
+int rx_library_history(RXLibrary *lib, RXHistoryEntry **out, int *nb)
+{
+    *out = NULL;
+    *nb = 0;
+    sqlite3_stmt *st = rx_db_prepare(lib->db, "SELECT id, track_id, played_at, player "
+                                              "FROM deck_history ORDER BY played_at, id");
+    if (!st)
+        return RX_ERROR(EIO);
+    RXArray a;
+    rx_array_init(&a, sizeof(RXHistoryEntry));
+    int ret;
+    while ((ret = rx_db_row(lib->db, st, "reading the history")) > 0) {
+        RXHistoryEntry e = {
+            .id        = sqlite3_column_int64(st, 0),
+            .track_id  = (uint64_t)sqlite3_column_int64(st, 1),
+            .played_at = sqlite3_column_int64(st, 2),
+            .player    = sqlite3_column_int(st, 3),
+        };
+        if (!rx_array_push(&a, &e)) {
+            ret = RX_ERROR(ENOMEM);
+            break;
+        }
+    }
+    sqlite3_finalize(st);
+    if (ret < 0) {
+        rx_array_free(&a);
+        return ret;
+    }
+    *out = a.data;
+    *nb = (int)a.nb;
+    return 0;
+}
+
+int rx_library_history_remove(RXLibrary *lib, uint64_t track_id)
+{
+    sqlite3_stmt *st = rx_db_stmt(lib->db, RX_STMT_HISTORY_DELETE);
+    rx_db_bind_int(lib->db, st, 1, (int64_t)track_id);
+    int ret = rx_db_done(lib->db, st, "the history");
+    if (ret < 0)
+        return ret;
+    int n = sqlite3_changes(lib->db->db);
+    if (n)
+        rx_core_changed(lib, track_id);
+    return n;
+}
+
 int rx_library_relocate(RXLibrary *lib, RXTrack *t, const char *new_abs_path)
 {
     if (rx_library_index_of(lib, t) < 0 || !new_abs_path || new_abs_path[0] != '/')

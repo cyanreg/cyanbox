@@ -35,6 +35,8 @@ enum RXStmtId {
     RX_STMT_TRACK_PATH,         /* ?1 id ?2 path ?3 missing */
     RX_STMT_TRACK_PLAYED,       /* ?1 id ?2 play_count ?3 last_played */
     RX_STMT_PLAY_INSERT,        /* ?1 track_id ?2 played_at */
+    RX_STMT_HISTORY_INSERT,     /* ?1 track_id ?2 played_at ?3 player */
+    RX_STMT_HISTORY_DELETE,     /* ?1 track_id */
     RX_STMT_SECTION_CLEAR,      /* ?1 track_id */
     RX_STMT_SECTION_INSERT,     /* ?1 track_id ?2 idx ?3 start ?4 bpm ?5 beat */
     RX_STMT_CUE_CLEAR,          /* ?1 track_id */

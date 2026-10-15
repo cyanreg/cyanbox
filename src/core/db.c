@@ -3,7 +3,7 @@
 /* The library database: the SQLite connection, the schema, the cached
  * statements, transactions and error mapping.
  *
- * Schema version 9 (PRAGMA user_version = 9, application_id = 'RXBX').
+ * Schema version 10 (PRAGMA user_version = 10, application_id = 'RXBX').
  * Tables are STRICT so a wrong type is an error instead of a silent
  * conversion, and every row that belongs to a track or a playlist goes
  * with it (ON DELETE CASCADE, foreign keys on for every connection).
@@ -59,6 +59,11 @@
  *                   with its last track (the triggers artwork_unlinked and
  *                   artwork_relinked): the rows that name it are its count
  *   play            track_id, played_at (one row per play)
+ *   deck_history    id (AUTOINCREMENT), track_id, played_at (epoch seconds:
+ *                   when it started playing, or was added), player (the
+ *                   deck's number on PRO DJ LINK, 0 added by hand): the
+ *                   History, a row per track a deck played straight on for
+ *                   1.5 minutes (src/app/link.c) and per one added to it
  *   playlist        id (AUTOINCREMENT), parent_id (NULL: root), name, is_folder,
  *                   position (dense among all children of the parent)
  *   playlist_entry  playlist_id, position (dense), track_id; a track at most
@@ -66,9 +71,10 @@
  *   setting         key, value (text; see config.c for the keys)
  *
  * A new library is made at this schema in one transaction. Of the older
- * ones only schema 8 is converted (the last of the step by step
- * migrations, which an older rxbox ran): its single waveform blob per
- * track is cut in two, at RX_WAVE_PACKED_PREVIEW. Anything older is
+ * ones schema 9 is converted (deck_history made), and schema 8 (the last
+ * of the step by step migrations, which an older rxbox ran): its single
+ * waveform blob per track is cut in two, at RX_WAVE_PACKED_PREVIEW, then
+ * as 9. Anything older is
  * refused with the advice to open it once with an rxbox of schema 8; a
  * database newer than this build is refused rather than written with a
  * schema we do not know, also when a newer rxbox converts it while this
@@ -117,7 +123,7 @@ const char *const rx_track_edit_cols[RX_TRACK_EDIT_COLS] = {
 
 /* --------------------------------------------------------------- schema */
 
-#define RX_DB_SCHEMA 9
+#define RX_DB_SCHEMA 10
 
 #define SQL_INT_(x) #x
 #define SQL_INT(x) SQL_INT_(x)
@@ -131,6 +137,15 @@ const char *const rx_track_edit_cols[RX_TRACK_EDIT_COLS] = {
     "  track_id INTEGER PRIMARY KEY REFERENCES track(id) ON DELETE CASCADE,"    \
     "  data     BLOB NOT NULL"                                                  \
     ") STRICT;"
+
+#define HISTORY_TABLE                                                           \
+    "CREATE TABLE deck_history ("                                               \
+    "  id        INTEGER PRIMARY KEY AUTOINCREMENT,"                           \
+    "  track_id  INTEGER NOT NULL REFERENCES track(id) ON DELETE CASCADE,"    \
+    "  played_at INTEGER NOT NULL,"                                             \
+    "  player    INTEGER NOT NULL"                                              \
+    ") STRICT;"                                                                 \
+    "CREATE INDEX deck_history_track ON deck_history(track_id);"
 
 static const char schema[] =
     "CREATE TABLE track ("
@@ -258,6 +273,7 @@ static const char schema[] =
     "  played_at INTEGER NOT NULL"
     ") STRICT;"
     "CREATE INDEX play_track ON play(track_id);"
+    HISTORY_TABLE
 
     "CREATE TABLE playlist ("
     "  id        INTEGER PRIMARY KEY AUTOINCREMENT,"
@@ -294,7 +310,11 @@ static const char from_v8[] =
     "INSERT INTO waveform_detail (track_id, data)"
     "  SELECT track_id, substr(data, " SQL_INT(RX_WAVE_PACKED_PREVIEW) " + 1) FROM waveform"
     "  WHERE length(data) > " SQL_INT(RX_WAVE_PACKED_PREVIEW) ";"
-    "DROP TABLE waveform;";
+    "DROP TABLE waveform;"
+    HISTORY_TABLE;
+
+/* Schema 9 to 10: the History, empty. */
+static const char from_v9[] = HISTORY_TABLE;
 
 /* ------------------------------------------------------------ statements */
 
@@ -304,6 +324,9 @@ static const char *const fixed_sql[RX_STMT_NB] = {
     [RX_STMT_TRACK_PATH]      = "UPDATE track SET path = ?2, missing = ?3 WHERE id = ?1",
     [RX_STMT_TRACK_PLAYED]    = "UPDATE track SET play_count = ?2, last_played = ?3 WHERE id = ?1",
     [RX_STMT_PLAY_INSERT]     = "INSERT INTO play (track_id, played_at) VALUES (?1, ?2)",
+    [RX_STMT_HISTORY_INSERT]  = "INSERT INTO deck_history (track_id, played_at, player) "
+                                "VALUES (?1, ?2, ?3)",
+    [RX_STMT_HISTORY_DELETE]  = "DELETE FROM deck_history WHERE track_id = ?1",
     [RX_STMT_SECTION_CLEAR]   = "DELETE FROM grid_section WHERE track_id = ?1",
     [RX_STMT_SECTION_INSERT]  = "INSERT INTO grid_section (track_id, idx, start, bpm, beat, "
                                 "measured) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -625,8 +648,8 @@ static int check_identity(RXDb *db, int64_t *version)
     return 0;
 }
 
-/* Makes a new library (version 0) or converts one of schema 8, in one
- * transaction with the version bump. The version is read again under the
+/* Makes a new library (version 0) or converts one of schema 8 or 9, in
+ * one transaction with the version bump. The version is read again under the
  * write lock: another process may have made the library meanwhile (it
  * is then at this schema and there is nothing to do), or a newer rxbox
  * taken it past this build's schema. A converted library is vacuumed
@@ -654,7 +677,7 @@ static int upgrade(RXDb *db, int64_t version)
         char bump[96];
         snprintf(bump, sizeof(bump), "PRAGMA user_version = %d; PRAGMA application_id = %d",
                  RX_DB_SCHEMA, RX_DB_APPLICATION_ID);
-        ret = rx_db_exec(db, version ? from_v8 : schema);
+        ret = rx_db_exec(db, !version ? schema : version == 8 ? from_v8 : from_v9);
         if (ret >= 0)
             ret = rx_db_exec(db, bump);
     } else if (ret >= 0 && now != RX_DB_SCHEMA) {
@@ -667,7 +690,8 @@ static int upgrade(RXDb *db, int64_t version)
         return ret;
     }
     ret = rx_db_commit(db);
-    if (ret < 0 || now != version || !version)
+    /* Only schema 8's conversion leaves pages to give back. */
+    if (ret < 0 || now != version || version != 8)
         return ret;
 
     ret = rx_db_exec(db, "PRAGMA auto_vacuum = INCREMENTAL; VACUUM");

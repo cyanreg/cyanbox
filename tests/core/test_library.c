@@ -178,7 +178,7 @@ static void test_create_and_add(void)
 
     sqlite3_stmt *st;
     sqlite3_prepare_v2(lib.db->db, "PRAGMA user_version", -1, &st, NULL);
-    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 9);
+    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 10);
     sqlite3_finalize(st);
     /* Made with incremental auto_vacuum, which only takes before WAL. */
     sqlite3_prepare_v2(lib.db->db, "PRAGMA auto_vacuum", -1, &st, NULL);
@@ -525,6 +525,55 @@ static void test_changes(void)
 done:
     rx_library_close(&other);
     rx_library_close(&lib);
+}
+
+/* The History: rows oldest first whatever order they were added in, a
+ * track's rows all taken off at once, kept through an open, and gone with
+ * the track. */
+static void test_history(void)
+{
+    char *dir = test_dir("library-history");
+    char *m = path_in(dir, "music");
+    CHECK(rx_mkdir_p(m) == 0);
+    char *pa = path_in(m, "a.wav"), *pb = path_in(m, "b.wav");
+    test_write_wav(pa, 1.0, 44100, 2, "A", "X", "2024");
+    test_write_wav(pb, 1.0, 44100, 2, "B", "X", "2024");
+    RXLibrary lib;
+    CHECK(rx_library_open(&lib, dir) == 0);
+    int err = 0;
+    RXTrack *a = rx_library_add_file(&lib, pa, &err), *b = rx_library_add_file(&lib, pb, &err);
+    CHECK(a && b);
+    RXHistoryEntry *h = NULL;
+    int nb = 0;
+    if (a && b) {
+        CHECK(rx_library_history(&lib, &h, &nb) == 0 && nb == 0);
+        free(h);
+        CHECK(rx_library_history_add(&lib, a, 2000, 1) == 0);
+        CHECK(rx_library_history_add(&lib, b, 1000, 2) == 0);
+        CHECK(rx_library_history_add(&lib, a, 3000, 0) == 0);
+        CHECK(rx_library_history(&lib, &h, &nb) == 0 && nb == 3);
+        CHECK(nb == 3 && h[0].track_id == b->id && h[0].played_at == 1000 && h[0].player == 2 &&
+              h[1].track_id == a->id && h[1].player == 1 && h[2].track_id == a->id &&
+              h[2].played_at == 3000 && h[2].player == 0);
+        free(h);
+        uint64_t aid = a->id, bid = b->id;
+        rx_library_close(&lib);
+        CHECK(rx_library_open(&lib, dir) == 0);
+        CHECK(rx_library_history(&lib, &h, &nb) == 0 && nb == 3);
+        free(h);
+        CHECK(rx_library_history_remove(&lib, aid) == 2);
+        CHECK(rx_library_history_remove(&lib, aid) == 0);
+        CHECK(rx_library_history(&lib, &h, &nb) == 0 && nb == 1 && h[0].track_id == bid);
+        free(h);
+        CHECK(rx_library_remove(&lib, rx_library_find_id(&lib, bid)) == 0);
+        CHECK(rx_library_history(&lib, &h, &nb) == 0 && nb == 0);
+        free(h);
+    }
+    rx_library_close(&lib);
+    free(pa);
+    free(pb);
+    free(m);
+    free(dir);
 }
 
 /* A dynamic grid's measured beats are kept through a save and an open. */
@@ -1480,7 +1529,8 @@ static void test_artwork_shared(void)
  * track's waveforms as one blob, with auto_vacuum off as schema 8 made it. */
 static int back_to_schema8(sqlite3 *db)
 {
-    return sqlite3_exec(db, "DROP TABLE waveform_preview; DROP TABLE waveform_detail;"
+    return sqlite3_exec(db, "DROP TABLE deck_history;"
+                            "DROP TABLE waveform_preview; DROP TABLE waveform_detail;"
                             "CREATE TABLE waveform ("
                             "  track_id INTEGER PRIMARY KEY REFERENCES track(id) ON DELETE CASCADE,"
                             "  data     BLOB NOT NULL"
@@ -1537,8 +1587,9 @@ static void test_convert_v8(void)
     sqlite3_close(s);
 
     CHECK(rx_library_open(&lib, dir) == 0);
-    CHECK(pragma(&lib, "PRAGMA user_version") == 9);
+    CHECK(pragma(&lib, "PRAGMA user_version") == 10);
     CHECK(pragma(&lib, "PRAGMA auto_vacuum") == 2);
+    CHECK(pragma(&lib, "SELECT count(*) FROM deck_history") == 0);
     CHECK(pragma(&lib, "SELECT count(*) FROM sqlite_schema WHERE name = 'waveform'") == 0);
     RXTrack *a = rx_library_find_id(&lib, 1), *b = rx_library_find_id(&lib, 2);
     CHECK(a && a->has_waveforms && b && !b->has_waveforms);
@@ -1554,6 +1605,18 @@ static void test_convert_v8(void)
     CHECK(rx_library_check(&lib) == 0);
     rx_library_close(&lib);
     free(whole);
+
+    /* Schema 9: the History made, empty, the rest as it was. */
+    CHECK(sqlite3_open(db, &s) == SQLITE_OK);
+    CHECK(sqlite3_exec(s, "DROP TABLE deck_history; PRAGMA user_version = 9", NULL, NULL,
+                       NULL) == SQLITE_OK);
+    sqlite3_close(s);
+    CHECK(rx_library_open(&lib, dir) == 0);
+    CHECK(pragma(&lib, "PRAGMA user_version") == 10);
+    CHECK(pragma(&lib, "SELECT count(*) FROM deck_history") == 0);
+    CHECK(rx_library_find_id(&lib, 1) && rx_library_find_id(&lib, 1)->has_waveforms);
+    CHECK(rx_library_check(&lib) == 0);
+    rx_library_close(&lib);
 
     /* Schema 7 and older: refused, as they are. */
     CHECK(sqlite3_open(db, &s) == SQLITE_OK);
@@ -1686,6 +1749,7 @@ int main(void)
     test_edit_and_reopen();
     test_refresh();
     test_changes();
+    test_history();
     test_dynamic_grid();
     test_legend();
     test_clean();
