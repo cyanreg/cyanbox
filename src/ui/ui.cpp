@@ -1326,6 +1326,7 @@ static void log_test_state(UiState *ui)
     // matches and the one Enter opens.
     const char *view = app->current_playlist ? app->current_playlist->name
                      : app->current_tag_list ? "Tag List"
+                     : app->current_history ? "History"
                      : app->current_album_artist ? (app->current_album_artist[0]
                                                     ? app->current_album_artist : "None")
                      : !app->current_album   ? "Collection"

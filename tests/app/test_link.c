@@ -190,6 +190,74 @@ static bool rated_4(RXApp *app)
     return t && t->meta.rating == 4;
 }
 
+/* ------------------------------------------------------------- history */
+
+/* As run(), for the History's timer: the time the load went on it, -1
+ * none. The clock starts at epoch 1000 s. */
+static double straight(RXLinkRun *r, uint32_t id, double from, double to, bool playing,
+                       int (*beat_of)(double t), double bpm, int ours)
+{
+    double at = -1;
+    for (double t = from; t < to; t += 0.05) {
+        double sent = (int)(t / 0.2) * 0.2;
+        RXLinkPlayer s = status(id, playing, beat_of ? beat_of(sent) : -1, bpm, 0);
+        if (rx_link_run_feed(r, &s, ours, (int64_t)(t * 1e6) + 1000000, 1000 + (int64_t)t)) {
+            CHECK(at < 0);
+            at = t;
+        }
+    }
+    return at;
+}
+
+/* A 4-beat loop at 120 BPM from 30 s on. */
+static int beat_loop_30(double t)   { return t < 30 ? 1 + (int)(t * 2.0) : 61 + (int)(t * 2.0) % 4; }
+
+static void test_runs(void)
+{
+    RXLinkRun r;
+
+    /* 90 s straight on: on the History, once, from when it started. */
+    rx_link_run_reset(&r);
+    double at = straight(&r, 5, 0, 100, true, beat_120, 120, 17);
+    CHECK(at >= 89.9 && at <= 90.3);
+    CHECK(r.recorded && r.start_at == 1000);
+    CHECK_EQ(straight(&r, 5, 100, 200, true, beat_120, 120, 17) < 0, 1);
+
+    /* Not added up: 60 s, a pause, 60 s more. Then 90 s straight on from
+     * the next start. */
+    rx_link_run_reset(&r);
+    CHECK_EQ(straight(&r, 5, 0, 60, true, beat_120, 120, 17) < 0, 1);
+    CHECK_EQ(straight(&r, 5, 60, 65, false, beat_120, 120, 17) < 0, 1);
+    CHECK_EQ(straight(&r, 5, 65, 125, true, beat_120, 120, 17) < 0, 1);
+    at = straight(&r, 5, 125, 200, true, beat_120, 120, 17);
+    CHECK(at >= 154.9 && at <= 155.3 && r.start_at == 1065);
+
+    /* A loop goes back each time round: no stretch, however long. A jump
+     * ahead starts one too. */
+    rx_link_run_reset(&r);
+    CHECK_EQ(straight(&r, 5, 0, 200, true, beat_loop_30, 120, 17) < 0, 1);
+    rx_link_run_reset(&r);
+    at = straight(&r, 5, 0, 120, true, beat_seek, 120, 17);
+    CHECK(at >= 94.9 && at <= 95.3 && r.start_at == 1005);
+
+    /* No beat numbers (a CDJ-900): straight on while it plays. */
+    rx_link_run_reset(&r);
+    at = straight(&r, 5, 0, 100, true, NULL, 0, 17);
+    CHECK(at >= 89.9 && at <= 90.3);
+    rx_link_run_reset(&r);
+    CHECK_EQ(straight(&r, 5, 0, 80, true, NULL, 0, 17) < 0, 1);
+    CHECK_EQ(straight(&r, 5, 80, 81, false, NULL, 0, 17) < 0, 1);
+    CHECK_EQ(straight(&r, 5, 81, 160, true, NULL, 0, 17) < 0, 1);
+
+    /* Another load starts again; a track of another source never counts. */
+    rx_link_run_reset(&r);
+    CHECK_EQ(straight(&r, 5, 0, 80, true, beat_120, 120, 17) < 0, 1);
+    at = straight(&r, 6, 80, 200, true, beat_120, 120, 17);
+    CHECK(at >= 169.9 && at <= 170.3);
+    rx_link_run_reset(&r);
+    CHECK_EQ(straight(&r, 5, 0, 200, true, beat_120, 120, 3) < 0, 1);
+}
+
 /* A free port on the loopback for the server, which the player is told
  * before the server binds it. */
 static uint16_t free_udp(const char *addr)
@@ -361,6 +429,7 @@ int main(int argc, char **argv)
         return 2;
     }
     test_plays();
+    test_runs();
     test_app(argv[1], argv[2]);
     return test_result("test_link");
 }

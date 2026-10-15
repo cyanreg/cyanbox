@@ -210,6 +210,11 @@ struct RXAppPriv {
     RXArray  gpu;               /* GpuEntry, the browser's cache */
     RXArray  covers;            /* CoverTexture: the entries' covers, one per library cover */
     int      gpu_budget;
+    /* The History's tracks, each once, oldest latest play first
+     * (history_tracks); for lib.generation history_generation, 0 none. */
+    uint64_t *history;
+    int       nb_history;
+    unsigned  history_generation;
     RXArray  albums;            /* RXAlbum, the names copies: the tree's list (rx_app_albums) */
     RXArray  album_artists;     /* RXAlbumArtist, the names copies (rx_app_album_artists) */
     RXArray  artist_spans;      /* ArtistSpan, one per album artist */
@@ -947,7 +952,7 @@ static RXTrack *next_candidate(RXApp *app, const RXTrack *t)
         rx_app_rebuild_rows(app);
     bool wrap = my_setting_is(&app->lib.cfg, "player.play_mode", "continue");
     if (!wrap && !app->current_playlist && !app->current_album && !app->current_album_artist &&
-        !app->current_tag_list)
+        !app->current_tag_list && !app->current_history)
         return NULL;
     int n = app->nb_rows;
     int idx = rx_library_index_of(&app->lib, t);
@@ -2913,6 +2918,69 @@ static bool in_album(const RXTrack *t, const char *album)
     return t->meta.album && !rx_strcasecmp(t->meta.album, album);
 }
 
+/* The History's tracks (rx_app_show_history), each once at its latest
+ * play, oldest first, made again when the library has changed. Its count,
+ * or a negative errno. */
+static int history_tracks(RXApp *app)
+{
+    RXAppPriv *priv = app->priv;
+    RXLibrary *lib = &app->lib;
+    if (!priv)
+        return RX_ERROR(EINVAL);
+    if (priv->history_generation == lib->generation)
+        return priv->nb_history;
+    RXHistoryEntry *h = NULL;
+    int nb = 0;
+    int ret = rx_library_history(lib, &h, &nb);
+    bool *seen = ret >= 0 ? calloc((size_t)RX_MAX(lib->nb_tracks, 1), sizeof(*seen)) : NULL;
+    uint64_t *ids = seen ? malloc((size_t)RX_MAX(nb, 1) * sizeof(*ids)) : NULL;
+    if (!ids) {
+        free(h);
+        free(seen);
+        return ret < 0 ? ret : RX_ERROR(ENOMEM);
+    }
+    /* Newest first, each track at its first sight; then turned round. */
+    int n = 0;
+    for (int i = nb - 1; i >= 0; i--) {
+        const RXTrack *t = rx_library_find_id(lib, h[i].track_id);
+        int idx = t ? rx_library_index_of(lib, t) : -1;
+        if (idx < 0 || seen[idx])
+            continue;
+        seen[idx] = true;
+        ids[n++] = h[i].track_id;
+    }
+    for (int i = 0; i < n / 2; i++) {
+        uint64_t t = ids[i];
+        ids[i] = ids[n - 1 - i];
+        ids[n - 1 - i] = t;
+    }
+    free(h);
+    free(seen);
+    free(priv->history);
+    priv->history = ids;
+    priv->nb_history = n;
+    priv->history_generation = lib->generation;
+    return n;
+}
+
+int rx_app_history_count(RXApp *app)
+{
+    if (!app->link_state.enabled)
+        return 0;
+    int n = history_tracks(app);
+    return RX_MAX(n, 0);
+}
+
+/* Leaving the History: the backwards order it opened with goes. */
+static void leave_history(RXApp *app)
+{
+    if (!app->current_history)
+        return;
+    app->current_history = false;
+    if (app->sort_column < 0 && app->sort_descending)
+        app->sort_descending = false;
+}
+
 /* None's tracks (rx_app_albums ranks them first): no album tag, or one
  * no other track has. */
 static bool in_none(const RXAppPriv *priv, int index)
@@ -2958,11 +3026,26 @@ void rx_app_rebuild_rows(RXApp *app)
         app->current_playlist = NULL;
 
     const RXPlaylist *pl = app->current_playlist;
-    /* The TAG LIST: its ids in its order, as a playlist's. */
+    /* The TAG LIST and the History: their ids in their order, as a
+     * playlist's. */
     RXLinkTagList *tags = pl || !app->current_tag_list ? NULL : rx_app_tag_list(app);
-    uint32_t *tag_ids = tags ? malloc(RX_LINK_TAG_LIST_MAX * sizeof(*tag_ids)) : NULL;
-    int nb_tags = tag_ids ? RX_MIN(rx_link_tag_list_get(tags, tag_ids, RX_LINK_TAG_LIST_MAX),
-                                   RX_LINK_TAG_LIST_MAX) : 0;
+    uint64_t *tag_ids = NULL;
+    int nb_tags = 0;
+    if (tags) {
+        uint32_t *v = malloc(RX_LINK_TAG_LIST_MAX * sizeof(*v));
+        tag_ids = malloc(RX_LINK_TAG_LIST_MAX * sizeof(*tag_ids));
+        nb_tags = v && tag_ids ? RX_MIN(rx_link_tag_list_get(tags, v, RX_LINK_TAG_LIST_MAX),
+                                        RX_LINK_TAG_LIST_MAX) : 0;
+        for (int i = 0; i < nb_tags; i++)
+            tag_ids[i] = v[i];
+        free(v);
+    } else if (!pl && app->current_history && history_tracks(app) >= 0) {
+        const RXAppPriv *hp = app->priv;
+        if ((tag_ids = malloc((size_t)RX_MAX(hp->nb_history, 1) * sizeof(*tag_ids)))) {
+            nb_tags = hp->nb_history;
+            memcpy(tag_ids, hp->history, (size_t)nb_tags * sizeof(*tag_ids));
+        }
+    }
     bool own = pl || tag_ids;
     const char *album = own ? NULL : app->current_album;
     /* None (the album ""): the tracks no album of the list holds. The
@@ -3351,6 +3434,7 @@ void rx_app_show_album(RXApp *app, const char *name)
     free(app->current_album_artist);
     app->current_album_artist = NULL;
     app->current_tag_list = false;
+    leave_history(app);
     if (copy)
         app->current_playlist = NULL;
     rx_app_rebuild_rows(app);
@@ -3368,6 +3452,7 @@ void rx_app_show_album_artist(RXApp *app, const char *name)
         app->current_album = NULL;
         app->current_playlist = NULL;
         app->current_tag_list = false;
+        leave_history(app);
     }
     rx_app_rebuild_rows(app);
 }
@@ -3381,7 +3466,26 @@ void rx_app_show_tag_list(RXApp *app)
     free(app->current_album_artist);
     app->current_album_artist = NULL;
     app->current_playlist = NULL;
+    leave_history(app);
     app->current_tag_list = true;
+    rx_app_rebuild_rows(app);
+}
+
+void rx_app_show_history(RXApp *app)
+{
+    if (!app->link_state.enabled)
+        return;
+    free(app->current_album);
+    app->current_album = NULL;
+    free(app->current_album_artist);
+    app->current_album_artist = NULL;
+    app->current_playlist = NULL;
+    app->current_tag_list = false;
+    if (!app->current_history) {
+        app->current_history = true;
+        app->sort_column = -1;
+        app->sort_descending = true;
+    }
     rx_app_rebuild_rows(app);
 }
 
@@ -3563,6 +3667,7 @@ void rx_app_destroy(RXApp *app)
     app->current_album_artist = NULL;
     albums_free(priv);
     free(priv->rank);
+    free(priv->history);
     rx_array_free(&priv->albums);
     rx_array_free(&priv->album_artists);
     rx_array_free(&priv->artist_spans);

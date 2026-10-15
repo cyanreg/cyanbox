@@ -33,7 +33,8 @@
 # settings: the overview type for the overview and the row previews, and
 # the key display for the deck's KEY. Then the Link decks in the deck's
 # title row with made-up players, the track menu's "Load in deck" items under the
-# players' Eject/Load Lock, and a track added to the TAG LIST and shown. Last, File > Remove missing tracks
+# players' Eject/Load Lock, a track added to the TAG LIST and shown, and
+# one added to the History and shown. Last, File > Remove missing tracks
 # (RXBOX_UI_SHOW=remove-missing): it lists the fourth track and a fifth
 # whose folder is gone too, names that folder, and a click on Remove takes
 # both out of the library, the rest kept. Then Album Artists: opened and an
@@ -324,6 +325,10 @@ variant settings-follow "" "track $ID .*overview centred previews centred key $c
         # then a click on the tree's Tag List shows it, that one track in it.
         variant tag-list "60:rclick:600:611,70:click:650:794,80:click:60:640" \
             'view "Tag List" rows 1'
+        # The History (--pro-link only), kept in the library: Add to History
+        # in the same menu, then a click on the tree's History shows it.
+        variant history "60:rclick:600:611,70:click:650:813,80:click:60:667" \
+            'view "History" rows 1'
     fi
 ) || exit 1
 

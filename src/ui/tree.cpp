@@ -211,6 +211,15 @@ static void album_icon(ImDrawList *dl, ImVec2 p, float s, ImU32 col)
     dl->AddCircleFilled(c, s * 0.08f, col, 8);
 }
 
+// A clock face at ten past ten.
+static void clock_icon(ImDrawList *dl, ImVec2 p, float s, ImU32 col)
+{
+    ImVec2 c(p.x + s * 0.5f, p.y + s * 0.55f);
+    dl->AddCircle(c, s * 0.42f, col, 20, 1.5f);
+    dl->AddLine(c, ImVec2(c.x, c.y - s * 0.28f), col, 1.5f);
+    dl->AddLine(c, ImVec2(c.x + s * 0.2f, c.y + s * 0.08f), col, 1.5f);
+}
+
 // A luggage tag, its hole punched.
 static void tag_icon(ImDrawList *dl, ImVec2 p, float s, ImU32 col)
 {
@@ -248,6 +257,8 @@ static void draw_icon(ImDrawList *dl, int icon, ImVec2 p, float s, ImU32 col)
         artist_icon(dl, p, s, col);
     else if (icon == 5)
         tag_icon(dl, p, s, col);
+    else if (icon == 6)
+        clock_icon(dl, p, s, col);
     else
         playlist_icon(dl, p, s, col);
 }
@@ -710,7 +721,8 @@ static void tree_nodes(UiState *ui)
     RXPlaylistFolder *root = app->lib.root_folder;
     // Collection: every track.
     bool sel = app->current_playlist == nullptr && app->current_album == nullptr &&
-               app->current_album_artist == nullptr && !app->current_tag_list;
+               app->current_album_artist == nullptr && !app->current_tag_list &&
+               !app->current_history;
     ImGuiTreeNodeFlags fl = ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen |
                             ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_FramePadding;
     if (sel)
@@ -871,6 +883,25 @@ static void tree_nodes(UiState *ui)
         }
         node_label(ui, ImVec2(a.x + ImGui::GetTreeNodeToLabelSpacing() - PX(14), a.y), b, 5,
                    "Tag List", nb_tags, app->current_tag_list);
+    }
+
+    // The History (--pro-link only): what the decks played straight on for
+    // 1.5 minutes and what was added to it by hand, kept in the library; a
+    // click shows it, the latest first.
+    if (app->link_state.enabled) {
+        ImGuiTreeNodeFlags hf = ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen |
+                                ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_FramePadding;
+        if (app->current_history)
+            hf |= ImGuiTreeNodeFlags_Selected;
+        ImGui::TreeNodeEx("##history", hf);
+        a = ImGui::GetItemRectMin();
+        b = ImGui::GetItemRectMax();
+        if (ImGui::IsItemClicked() && !app->current_history) {
+            app->nb_selection = 0;
+            rx_app_show_history(app);
+        }
+        node_label(ui, ImVec2(a.x + ImGui::GetTreeNodeToLabelSpacing() - PX(14), a.y), b, 6,
+                   "History", rx_app_history_count(app), app->current_history);
     }
 
     ImGui::Dummy(ImVec2(0, PX(2)));

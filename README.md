@@ -322,7 +322,9 @@ deck (MEMORY, a hot cue pad) or deleted there, and a rating given there,
 are kept in the library, as rekordbox keeps them. The players' TAG LIST
 (TAG TRACK on a deck) is shared with the interface, which shows it in the
 tree (Tag List) and adds to it from the track menu; it lasts as long as
-rxbox runs. A player
+rxbox runs. A track a player plays straight on for 1.5 minutes goes on
+the History, which the library keeps and the tree shows (History), the
+latest first; the track menu adds to it by hand. A player
 streams a track as it plays it, not the whole file first: an emulated
 CDJ-2000NXS2 read about 630 kB in the first 2 s after a load, then about
 as fast as it plays (docs/LINK.md). While it runs,

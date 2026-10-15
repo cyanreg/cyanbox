@@ -850,6 +850,33 @@ int main(int argc, char **argv)
     }
     app.link_state.enabled = false;
 
+    /* The History: none without --pro-link; with it each track once, at its
+     * latest play, the latest first and numbered down (the table's own
+     * order backwards until another is picked); a track's rows taken off
+     * at once; leaving it puts the order back. */
+    CHECK(rx_app_history_count(&app) == 0, "a history count without --pro-link");
+    rx_app_show_history(&app);
+    CHECK(!app.current_history, "the history shown without --pro-link");
+    app.link_state.enabled = true;
+    CHECK(rx_library_history_add(&app.lib, a, 1000, 1) == 0 &&
+          rx_library_history_add(&app.lib, b, 2000, 2) == 0 &&
+          rx_library_history_add(&app.lib, a, 3000, 0) == 0, "adding to the history");
+    CHECK(rx_app_history_count(&app) == 2, "history count %d", rx_app_history_count(&app));
+    rx_app_show_history(&app);
+    CHECK(app.current_history && !app.current_tag_list && !app.current_playlist &&
+          app.sort_column < 0 && app.sort_descending, "the history's view and order");
+    CHECK(app.nb_rows == 2 && app.lib.tracks[app.rows[0]] == a && app.row_numbers[0] == 2 &&
+          app.lib.tracks[app.rows[1]] == b && app.row_numbers[1] == 1,
+          "the history's rows: %d, latest first", app.nb_rows);
+    CHECK(rx_library_history_remove(&app.lib, a->id) == 2, "a's history rows");
+    rx_app_tick(&app);
+    CHECK(app.nb_rows == 1 && app.lib.tracks[app.rows[0]] == b && rx_app_history_count(&app) == 1,
+          "the history after a removal: %d rows", app.nb_rows);
+    rx_app_show_album(&app, NULL);
+    CHECK(!app.current_history && !app.sort_descending, "leaving the history");
+    CHECK(rx_library_history_remove(&app.lib, b->id) == 1, "b's history row");
+    app.link_state.enabled = false;
+
     /* The deck: decoded on the io queue, waveforms from the library. */
     ret = rx_app_load_deck(&app, 0, b);
     CHECK(ret == 0, "load: %s", strerror(-ret));

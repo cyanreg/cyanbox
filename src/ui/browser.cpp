@@ -22,6 +22,8 @@
 
 #include "ui_internal.h"
 
+#include "imgui_internal.h"
+
 #include <math.h>
 #include <stdio.h>
 #include <time.h>
@@ -360,6 +362,21 @@ static void track_menu(UiState *ui)
                 rx_link_tag_list_remove(tags, (uint32_t)id);
         }
     }
+    // The History (--pro-link only): added by hand as played now.
+    if (app->link_state.enabled) {
+        if (ImGui::MenuItem("Add to History")) {
+            int added = 0;
+            for (uint64_t id : menu_tracks(ui, t)) {
+                RXTrack *s = rx_library_find_id(&app->lib, id);
+                added += s && rx_library_history_add(&app->lib, s, (int64_t)time(nullptr), 0) >= 0;
+            }
+            rx_app_set_status(app, "Added %d track%s to the History", added, added == 1 ? "" : "s");
+        }
+        if (app->current_history && ImGui::MenuItem("Remove from History")) {
+            for (uint64_t id : menu_tracks(ui, t))
+                rx_library_history_remove(&app->lib, id);
+        }
+    }
     if (ImGui::MenuItem("Remove from library...")) {
         ui->remove_ids.assign(app->selection, app->selection + app->nb_selection);
         ui->want_confirm_remove = true;
@@ -613,6 +630,24 @@ static void table(UiState *ui, ImVec2 size)
     ImGui::TableSetupScrollFreeze(1, 1);
     ImGui::TableHeadersRow();
 
+    // A view may set the order itself (the History opens with its own
+    // order backwards): the header follows, so a click turns it round
+    // from there.
+    if (ImGuiTableSortSpecs *ss = ImGui::TableGetSortSpecs()) {
+        int want = -1;
+        for (int c = 0; c < COL_N && want < 0; c++) {
+            if (COLS[c].sort == app->sort_column)
+                want = c;
+        }
+        ImGuiSortDirection dir = app->sort_descending ? ImGuiSortDirection_Descending
+                                                      : ImGuiSortDirection_Ascending;
+        bool same = ss->SpecsCount > 0 ? (int)ss->Specs[0].ColumnUserID == want &&
+                                             ss->Specs[0].SortDirection == dir
+                                       : app->sort_column < 0 && !app->sort_descending;
+        if (!ss->SpecsDirty && !same && want >= 0)
+            ImGui::TableSetColumnSortDirection(want, dir, false);
+    }
+
     if (ImGuiTableSortSpecs *ss = ImGui::TableGetSortSpecs()) {
         if (ss->SpecsDirty) {
             if (ss->SpecsCount > 0) {
@@ -782,6 +817,7 @@ void ui_browser(UiState *ui, ImVec2 size)
     ImGui::SetCursorScreenPos(ImVec2(a.x + PX(8), a.y));
     const char *view = app->current_playlist ? app->current_playlist->name
                      : app->current_tag_list ? "Tag List"
+                     : app->current_history ? "History"
                      : app->current_album_artist ? (app->current_album_artist[0]
                                                     ? app->current_album_artist : "None")
                      : !app->current_album   ? "Collection"

@@ -66,6 +66,10 @@ typedef struct RXApp {
      * they were added, the players' and ours (--pro-link only); never set
      * with a playlist, an album or an album artist. */
     bool       current_tag_list;
+    /* The History shown (rx_app_show_history, --pro-link only): each
+     * track on it once, at its latest play, numbered from the oldest and
+     * shown newest first; never set with another view. */
+    bool       current_history;
     char       search[128];
     int        sort_column;         /* RXColumn index */
     bool       sort_descending;
@@ -320,6 +324,14 @@ RXLinkTagList *rx_app_tag_list(RXApp *app);
 /* Shows the TAG LIST: the playlist, album and album artist views are
  * cleared and the rows rebuilt; nothing without --pro-link. */
 void rx_app_show_tag_list(RXApp *app);
+/* The History (rx_library_history), with --pro-link only: what the decks
+ * played straight on for 1.5 minutes and what was added to it by hand.
+ * The view shows each track once, at its latest play, in the table's own
+ * order backwards (the latest first, the numbers going down) until
+ * another order is picked; leaving it puts that order back. Nothing
+ * without --pro-link. The count is of its tracks, 0 without --pro-link. */
+void rx_app_show_history(RXApp *app);
+int  rx_app_history_count(RXApp *app);
 /* Tells the Link device link_state.devices[index] (a player) to load
  * `track_id` of the library: -ENOENT when it is gone, -EAGAIN before we
  * are on its link (rxbox/link.h rx_link_load). */

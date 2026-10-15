@@ -292,7 +292,13 @@ order, viewed and played through as an album is), with `--pro-link`
 link, docs/LINK.md: the tracks collected with TAG TRACK on a deck or Add
 to Tag List here, in the order they were added, with their count; for
 as long as rxbox runs, never saved; a click shows it, played through as
-a playlist; its context menu has Clear Tag List),
+a playlist; its context menu has Clear Tag List), and `History` (with
+`--pro-link`: what the players on the link played straight on for 1.5
+minutes, docs/LINK.md, and what was added to it by hand, kept in the
+library; each track once, at its latest play, with the count of its
+tracks; a click shows it in its own order backwards, the latest first and
+`#` counting down, until a header picks another order, which leaving it
+puts back),
 then the folders and playlists from the library. Click selects the view.
 Right-click: new playlist, new folder (the folder it goes in opens),
 rename, delete (with confirm); m3u8 import and export are on the command
@@ -372,7 +378,9 @@ Load in deck N for each (Link decks, above), then Analyse (BPM/grid, key, both; 
 Analyse tags (the model's genre, colour and comment, docs/ML.md: for the
 selection, or the clicked track when it is not selected),
 Add to playlist (every playlist, folders as submenus), Remove from playlist,
-with `--pro-link` Add to Tag List (and Remove from Tag List in its view),
+with `--pro-link` Add to Tag List (and Remove from Tag List in its view)
+and Add to History (as played now; Remove from History in its view, every
+row of the track),
 Remove from library, Set colour, Set rating (and Relocate… for a missing file).
 Keyboard: up/down move the focus, Enter loads the focused track, Delete
 removes it from the playlist (unless a click on the player's cue list

@@ -19,6 +19,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "rxbox/common.h"
 
@@ -35,6 +36,7 @@ typedef struct Counter {
     int  number;                /* 0 a free slot */
     bool used;                  /* seen in this tick's devices */
     RXLinkPlays plays;
+    RXLinkRun run;
 } Counter;
 
 typedef struct RXAppLink {
@@ -108,6 +110,58 @@ bool rx_link_plays_feed(RXLinkPlays *p, const RXLinkPlayer *pl, int ours, int64_
     p->recorded = true;
     return true;
 }
+/* -------------------------------------------------------------- history */
+
+void rx_link_run_reset(RXLinkRun *r)
+{
+    *r = (RXLinkRun) { .last_beat = -1 };
+}
+
+bool rx_link_run_feed(RXLinkRun *r, const RXLinkPlayer *pl, int ours, int64_t now_us,
+                      int64_t now_at)
+{
+    bool loaded = ours > 0 && pl->type == RX_LINK_DEVICE_PLAYER && pl->has_status &&
+                  pl->track_device == ours && pl->track_type == 1 && pl->track_id;
+    if (!loaded) {
+        if (r->track_id)
+            rx_link_run_reset(r);
+        return false;
+    }
+    if (pl->track_id != r->track_id) {
+        rx_link_run_reset(r);
+        r->track_id = pl->track_id;
+    }
+    int64_t last_us = r->last_us;
+    int last_beat = r->last_beat;
+    r->last_us = now_us;
+    r->last_beat = pl->beat;
+    if (r->recorded)
+        return false;
+    if (!pl->playing) {
+        r->start_us = 0;
+        return false;
+    }
+    /* Straight on since the last look: its beats moved forward no more
+     * than its tempo plays in the time between (and a beat or two of
+     * slack, as rx_link_plays_feed allows). */
+    bool straight = r->start_us != 0;
+    if (straight && pl->beat >= 1 && last_beat >= 1 && pl->bpm > 0) {
+        double since = (double)(now_us - last_us) * 1e-6;
+        double speed = RX_MAX(1.0 + pl->pitch / 100.0, 1.0);
+        int step = pl->beat - last_beat;
+        straight = step >= 0 && step <= since * pl->bpm / 60.0 * speed * 1.25 + 2.0;
+    }
+    if (!straight) {
+        r->start_us = now_us;
+        r->start_at = now_at;
+        return false;
+    }
+    if ((double)(now_us - r->start_us) * 1e-6 < RX_LINK_HISTORY_SECONDS)
+        return false;
+    r->recorded = true;
+    return true;
+}
+
 /* -------------------------------------------------------- start and stop */
 
 static void state_clear(RXApp *app)
@@ -200,6 +254,7 @@ static Counter *counter_of(RXAppLink *l, const char *interface, int number)
     free_slot->number = number;
     snprintf(free_slot->interface, sizeof(free_slot->interface), "%s", interface);
     rx_link_plays_reset(&free_slot->plays);
+    rx_link_run_reset(&free_slot->run);
     return free_slot;
 }
 
@@ -276,6 +331,25 @@ static void take_edits(RXApp *app)
     } while (n == 16);
 }
 
+/* A load a player has played straight on for 1.5 minutes, on the History
+ * from when it started. */
+static void to_history(RXApp *app, const RXLinkPlayer *p, int64_t at)
+{
+    RXTrack *t = rx_library_find_id(&app->lib, p->track_id);
+    if (!t)
+        return;
+    char name[256];
+    rx_track_display(t, name, sizeof(name));
+    int ret = rx_library_history_add(&app->lib, t, at, p->number);
+    if (ret < 0) {
+        app->last_error_count++;
+        rx_app_set_status(app, "Cannot put %s on the History: %s", name, strerror(-ret));
+        return;
+    }
+    rx_app_set_status(app, "On the History from player %d: %s", p->number, name);
+    app->rows_dirty = true;
+}
+
 /* What the window shows of a device. */
 static bool shown_same(const RXLinkPlayer *a, const RXLinkPlayer *b)
 {
@@ -319,6 +393,8 @@ static bool follow(RXApp *app, int64_t now)
         c->used = true;
         if (rx_link_plays_feed(&c->plays, &dev[i], ours, now))
             record(app, &dev[i]);
+        if (rx_link_run_feed(&c->run, &dev[i], ours, now, (int64_t)time(NULL)))
+            to_history(app, &dev[i], c->run.start_at);
         played[i] = c->plays.track_id ? c->plays.seconds : 0.0;
         counted[i] = c->plays.track_id && c->plays.recorded;
     }

@@ -512,9 +512,16 @@ Link is on:
   deck counts its own: 30 s of distinct audio of one load, a beat at a
   time (60 / BPM seconds each, so a loop counts its beats once and a jump
   adds nothing), or the time it played at its pitch when the player gives
-  no beat numbers; then `rx_library_record_play`, once per load. Saved
-  cues and ratings are taken from the services there too ("Edits on the
-  deck").
+  no beat numbers; then `rx_library_record_play`, once per load. A load
+  goes on the History too (`rx_library_history_add`, the library's
+  `deck_history` table, which the interface shows with `--pro-link`) once
+  it has played 1.5 minutes straight on, by the clock: not added up, one
+  stretch, which a pause, a jump back (a hot cue, a loop going round, a
+  seek) or a jump further ahead than its tempo plays starts again (a
+  pre-nexus player, without beat numbers, only a pause); the row says
+  when the stretch began and which player played it (`rx_link_run_feed`).
+  Saved cues and ratings are taken from the services there too ("Edits
+  on the deck").
 - **Exposure**: as in "Security". A host firewall must let UDP 50000,
   50002, 50111 and 2049 and the TCP database ports in on that interface.
 
