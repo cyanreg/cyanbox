@@ -177,7 +177,9 @@ static const char usage_text[] =
     "  --no-mpris               stay off the D-Bus session bus (no MPRIS media controls)\n"
     "  --pro-link               serve the library to players (PRO DJ LINK) on every\n"
     "                           Ethernet interface while the interface runs; without\n"
-    "                           it no Link socket is ever opened\n"
+    "                           it no Link socket is ever opened. The deck is then\n"
+    "                           heard only in a DJM's headphone cue (LINK CUE): no\n"
+    "                           audio device is opened, --audio does not apply\n"
     "  --frames N               draw N frames, then exit (tests)\n";
 
 /* ------------------------------------------------------------------ helpers */
@@ -2519,6 +2521,12 @@ static int run_interface(Cli *cli)
     po.backend = cli->audio;
     po.sink = cli->sink;
     po.app_name = "rxbox";
+    /* With --pro-link the deck is heard only in a mixer's LINK CUE, which
+     * takes its audio from the ring (src/app/link.c). */
+    if (cli->pro_link) {
+        po.backend = RX_AUDIO_RING;
+        po.sink = NULL;
+    }
 
     RXWindowOptions wo;
     rx_window_options_default(&wo);

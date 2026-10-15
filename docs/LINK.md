@@ -703,11 +703,24 @@ rxbox does not fight a DJ cueing on a deck. While its decks do not play
 nothing is sent. One mixer at a time: the first heard, until it is silent
 for a second.
 
+**With `--pro-link`** the interface's deck is heard only there: the
+player runs its ring backend (src/player/ringout.c), whose audio the
+services take 336 frames at a time as the mixer asks, and no audio
+device is opened. Each tick tells LINK CUE whether the deck plays (or
+scrubs) and when it starts (src/app/link.c); the status bar says where
+the cue stands (docs/UI.md). `rxbox link serve` has no deck and binds no
+LINK CUE port.
+
 **Proven**: test_cue, the decisions against a driven clock and a service
 on the loopback answering a mixer of the test's own (a second of timings
 answered packet for packet, one takeover, the frames in the order taken,
 nothing to a device off the link); the packets in test_packets, built from
-touch_audio.adoc's figures (nobody captured them for us); the fuzzer.
+touch_audio.adoc's figures (nobody captured them for us); the fuzzer;
+the app's test_link, the deck played with the ring backend and heard by a
+mixer of the test's own, the deck moving by what was taken; and by hand,
+the interface with `--pro-link` in tests/link/netns.sh's namespaces and a
+fake mixer on the other host, its status bar saying `LINK CUE: playing on
+DJM-A9`.
 **Not yet**: a real mixer. The first check at one: with rxbox up as device
 17, `tcpdump -ni IF udp port 50004` shows a 42-byte timing packet from
 the mixer every 7 ms or so; if none come, something the readings missed

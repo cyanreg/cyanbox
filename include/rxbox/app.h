@@ -154,6 +154,11 @@ typedef struct RXApp {
          * was counted as a play. */
         double   played[RX_APP_LINK_DEVICES];
         bool     counted[RX_APP_LINK_DEVICES];
+        /* LINK CUE: with the player's ring backend (--pro-link) the deck is
+         * heard only in a mixer's headphone cue (rxbox/link.h RXLinkCue);
+         * where that stands, copied every tick. */
+        bool     cue_enabled;
+        RXLinkCueState cue;
     } link_state;
 
     /* The waveform palette of the deck and the table's previews: 0 3band,

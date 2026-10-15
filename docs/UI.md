@@ -437,7 +437,11 @@ the error in red), the library track count with the size of its files
 (`58 tracks · 1.7 GB`: what a stick with every track holds), the
 GPU name. With `--pro-link`, Link's word before the audio state (`Link:
 2 players`, `Link: on 1 network`, `Link: no Ethernet`, or in red `Link:
-cannot serve`), which opens the PRO DJ LINK window when clicked.
+cannot serve`), which opens the PRO DJ LINK window when clicked; the audio
+state is then LINK CUE's, the deck being heard only in a mixer's
+headphone cue (`LINK CUE: no mixer`, `LINK CUE: off on DJM-A9`, `LINK
+CUE: DJM-A9` elected, `LINK CUE: DJM-A9 has player 2`, or in green `LINK
+CUE: playing on DJM-A9`).
 
 ## Dialogs and menus
 

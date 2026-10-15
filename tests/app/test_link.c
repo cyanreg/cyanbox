@@ -12,7 +12,11 @@
  * library after 30 s, the library read again, a hot cue the player saves
  * on the deck kept in the library (and on disk) and a rating it gives, a
  * track it tags on the app's TAG LIST, a stop, and a stop right
- * after a start, while the set is still starting the service.
+ * after a start, while the set is still starting the service. Last LINK
+ * CUE with the player's ring backend (as --pro-link has it): a mixer of
+ * the test's own hears nothing while the deck is paused; the deck played,
+ * its timing is answered packet for packet with the deck's audio, the
+ * deck moving by what was taken, and nothing once it is paused again.
  *
  * Usage: test_link FILE.wav SCRATCH_DIR */
 
@@ -22,6 +26,7 @@
 #include <ftw.h>
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -31,6 +36,7 @@
 #include "src/link/client.h"
 #include "src/link/dbserver.h"
 #include "src/link/net.h"
+#include "src/link/packet.h"
 #include "tests/formats/test.h"
 
 /* ---------------------------------------------------------------- plays */
@@ -422,6 +428,186 @@ static void test_app(const char *wav, const char *dir)
     free(a_wav);
 }
 
+/* ------------------------------------------------------------- LINK CUE */
+
+static bool deck_loaded(RXApp *app)
+{
+    RXDeckState s;
+    rx_deck_state(app->player, 0, &s);
+    return app->decks[0].track && s.loaded;
+}
+
+static bool sees_mixer(RXApp *app)
+{
+    for (int i = 0; i < app->link_state.nb_devices; i++) {
+        const RXLinkPlayer *d = &app->link_state.devices[i];
+        if (d->number == 33 && d->type == RX_LINK_DEVICE_MIXER)
+            return true;
+    }
+    return false;
+}
+
+/* The mixer, a DJM-A9 (device 33) on 127.0.0.2, as far as LINK CUE goes:
+ * a timing every 7 ms for `ms` to the app's service at `port`, the app
+ * ticking every 21 ms, and what comes back: how many timings were
+ * answered, the loudest sample and how many took over. It hands over at
+ * the first that does, as a mixer does. */
+typedef struct Mixer {
+    RXLinkIf ifc;
+    int fd;
+    uint16_t port;              /* the service's */
+    uint32_t counter;
+    int elected;
+    int sent, answered, takes, peak, bad;
+} Mixer;
+
+static void mixer_run(RXApp *app, Mixer *m, int ms)
+{
+    m->sent = m->answered = m->takes = m->peak = 0;
+    static uint8_t buf[2048];
+    static RXPktCueAudio a;
+    int64_t next = rx_time_us(), end = next + ms * INT64_C(1000), tick = next;
+    while (rx_time_us() < end) {
+        RXPktCueTiming t = { .name = "DJM-A9", .mixer = 33, .counter = m->counter++, .on = true,
+                             .source = m->elected };
+        RXWr w = rx_wr(buf, sizeof(buf));
+        rx_pkt_cue_timing(&w, &t);
+        rx_link_send(m->fd, 0x7F000001, m->port, w.p, w.len);
+        m->sent++;
+        next += 7000;
+        while (rx_time_us() < next) {
+            if (rx_time_us() >= tick) {
+                rx_app_tick(app);
+                tick += 21000;
+            }
+            uint32_t from;
+            uint16_t port;
+            ssize_t n = rx_link_recv(&m->ifc, m->fd, buf, sizeof(buf), &from, &port);
+            if (n <= 0) {
+                usleep(500);
+                continue;
+            }
+            if (rx_pkt_cue_audio_parse(&a, buf, (size_t)n) < 0 || a.number != 17 ||
+                a.counter + 1 != m->counter) {
+                m->bad++;
+                continue;
+            }
+            m->answered++;
+            for (int i = 0; i < RX_CUE_FRAMES * 2; i++)
+                m->peak = RX_MAX(m->peak, abs(a.pcm[i]));
+            if (a.mode == RX_CUE_TAKE) {
+                m->takes++;
+                RXWr hw = rx_wr(buf, sizeof(buf));
+                rx_pkt_cue_handover(&hw, "DJM-A9", 33);
+                rx_link_send(m->fd, 0x7F000001, m->port, hw.p, hw.len);
+                m->elected = 17;
+            }
+        }
+    }
+}
+
+static void test_cue(const char *wav, const char *dir)
+{
+    nftw(dir, remove_one, 16, FTW_DEPTH | FTW_PHYS);
+    char *music = rx_path_join(dir, "music");
+    char *root = rx_path_join(dir, "lib");
+    char *a_wav = music ? rx_path_join(music, "a.wav") : NULL;
+    uint8_t *data = NULL;
+    size_t size = 0;
+    CHECK(music && root && a_wav && rx_mkdir_p(music) >= 0 &&
+          rx_file_read(wav, &data, &size) >= 0 && rx_file_write_atomic(a_wav, data, size) >= 0);
+    free(data);
+
+    RXPlayerOptions po;
+    rx_player_options_default(&po);
+    po.backend = RX_AUDIO_RING;
+    RXApp app;
+    CHECK_EQ(rx_app_create(&app, root, &po, NULL), 0);
+    int err = 0;
+    RXTrack *t = rx_library_add_file(&app.lib, a_wav, &err);
+    CHECK(t && rx_app_load_deck(&app, 0, t) == 0);
+    CHECK(tick_until(&app, deck_loaded, 30));
+
+    Mixer m = { .counter = 5000 };
+    uint16_t ma = 0, ms = 0;
+    CHECK_EQ(rx_link_if_find(&m.ifc, "lo", "127.0.0.2", NULL), 0);
+    int fa = rx_link_udp(&m.ifc, m.ifc.addr, 0, &ma);
+    int fs = rx_link_udp(&m.ifc, m.ifc.addr, 0, &ms);
+    uint16_t mc = 0;
+    m.fd = rx_link_udp(&m.ifc, m.ifc.addr, 0, &mc);
+    RXLinkPorts sp = {
+        .announce = free_udp("127.0.0.1"), .status = free_udp("127.0.0.1"),
+        .query = free_tcp(), .portmap = free_udp("127.0.0.1"), .cue = free_udp("127.0.0.1"),
+    };
+    m.port = sp.cue;
+    CHECK(fa >= 0 && fs >= 0 && m.fd >= 0 && sp.announce && sp.status && sp.query &&
+          sp.portmap && sp.cue);
+    RXLinkOptions so;
+    rx_link_options_default(&so);
+    so.interface = "lo";
+    so.broadcast = "127.0.0.2";
+    so.ports = sp;
+    so.peer_ports = (RXLinkPorts) { .announce = ma, .status = ms, .cue = mc };
+    app.link_state.enabled = true;
+    CHECK_EQ(rx_app_link_start(&app, &so), 0);
+    CHECK(app.link_state.cue_enabled);
+    CHECK(tick_until(&app, up, 15));
+
+    /* The mixer on the link (its keep-alive, as a DJM-V5's). */
+    RXPktKeepAlive k = { .name = "DJM-A9", .proto = 2, .number = 33, .first = 2,
+                         .mac = { 0xc8, 0x3d, 0xfc, 0x1d, 0xfe, 0xa2 }, .addr = m.ifc.addr,
+                         .peers = 1, .type = 3, .tail = 0x31 };
+    uint8_t kb[64];
+    RXWr kw = rx_wr(kb, sizeof(kb));
+    rx_pkt_keep_alive(&kw, &k);
+    if (fa >= 0)
+        rx_link_send(fa, 0x7F000001, sp.announce, kw.p, kw.len);
+    CHECK(tick_until(&app, sees_mixer, 5));
+
+    /* Paused: nothing, the mixer seen. */
+    mixer_run(&app, &m, 150);
+    CHECK(m.sent > 15 && !m.answered && !m.bad);
+    rx_app_tick(&app);
+    const RXLinkCueState *cs = &app.link_state.cue;
+    CHECK(cs->mixer && !strcmp(cs->name, "DJM-A9") && cs->number == 33 && cs->on && !cs->ours &&
+          !cs->sending);
+
+    /* Played: a second of the deck's audio, the deck moving by what was
+     * taken (the ring holds 21 ms more). */
+    RXDeckState st;
+    rx_deck_state(app.player, 0, &st);
+    double from = st.position;
+    rx_deck_play(app.player, 0);
+    rx_app_tick(&app);
+    mixer_run(&app, &m, 1000);
+    rx_deck_state(app.player, 0, &st);
+    double moved = st.position - from, taken = m.answered * (double)RX_CUE_FRAMES / 48000;
+    fprintf(stderr, "test_link: LINK CUE: %d timings, %d answered, peak %d, moved %.3f s for "
+            "%.3f s taken\n", m.sent, m.answered, m.peak, moved, taken);
+    CHECK(m.answered >= m.sent - 3 && m.takes == 1 && !m.bad);
+    CHECK(m.peak > 10000);
+    CHECK(fabs(moved - taken) < 0.06);
+    rx_app_tick(&app);
+    CHECK(cs->mixer && cs->on && cs->source == 17 && cs->ours && cs->sending);
+
+    /* Paused again: nothing. */
+    rx_deck_pause(app.player, 0);
+    rx_app_tick(&app);
+    mixer_run(&app, &m, 150);
+    CHECK(m.sent > 15 && !m.answered && !m.bad);
+
+    rx_app_destroy(&app);
+    CHECK(!app.link);
+    int fds[] = { fa, fs, m.fd };
+    for (size_t i = 0; i < RX_ARRAY_ELEMS(fds); i++) {
+        if (fds[i] >= 0)
+            close(fds[i]);
+    }
+    free(music);
+    free(root);
+    free(a_wav);
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 3) {
@@ -431,5 +617,9 @@ int main(int argc, char **argv)
     test_plays();
     test_runs();
     test_app(argv[1], argv[2]);
+    char *cue_dir = rx_path_join(argv[2], "cue");
+    if (cue_dir)
+        test_cue(argv[1], cue_dir);
+    free(cue_dir);
     return test_result("test_link");
 }

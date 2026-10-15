@@ -268,7 +268,8 @@ rxbox --library ~/dj/library        # another library
 rxbox --audio-sink alsa_output.usb-headphones   # play to this PipeWire node
 rxbox --audio none                  # no audio device at all
 rxbox --no-mpris                    # stay off the D-Bus session bus
-rxbox --pro-link                    # offer PRO DJ LINK (the Link menu)
+rxbox --pro-link                    # offer PRO DJ LINK (the Link menu); the deck
+                                    # heard only in a DJM's LINK CUE
 ```
 
 `--audio-sink NAME` (or the `audio.sink` setting) connects the player to that
@@ -327,7 +328,13 @@ the History, which the library keeps and the tree shows (History), the
 latest first; the track menu adds to it by hand. A player
 streams a track as it plays it, not the whole file first: an emulated
 CDJ-2000NXS2 read about 630 kB in the first 2 s after a load, then about
-as fast as it plays (docs/LINK.md). While it runs,
+as fast as it plays (docs/LINK.md). With `--pro-link` the interface's own
+deck is heard only in a DJM's headphone cue, LINK CUE, as rekordbox's Link
+Monitor feeds it: no audio device is opened, and when the deck starts
+playing rxbox asks the mixer for the cue, which it keeps until a player
+takes it over (the status bar says where it stands). Not yet tried on a
+real mixer: the DJM-A9's and DJM-900NXS's firmware take this audio from
+a computer (docs/LINK.md, "LINK CUE"). While it runs,
 anything on those networks can read the library's audio, artwork and
 analysis (never other files, and nothing can be written), so use a network
 with only the players on it. `rxbox link serve` serves from the command

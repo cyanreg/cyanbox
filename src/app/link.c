@@ -11,7 +11,11 @@
  * What the players send back is applied here, on the owner thread: the
  * services never write the library. That is the plays, and the cues a
  * player saves on the deck or deletes and the ratings it gives, which the
- * services have served since and hand over (rx_link_set_edits). */
+ * services have served since and hand over (rx_link_set_edits).
+ *
+ * With the player's ring backend (--pro-link) the deck is heard only in a
+ * mixer's LINK CUE: the services take its audio from the ring as the mixer
+ * asks (rx_player_ring_take), and each tick tells them whether it plays. */
 
 #include "applink.h"
 
@@ -42,6 +46,8 @@ typedef struct Counter {
 typedef struct RXAppLink {
     RXLinkSet *set;
     RXLinkTagList *tags;        /* the TAG LIST, for as long as the app runs */
+    RXLinkCue *cue;             /* LINK CUE, with the ring backend; as long as the app runs */
+    bool cue_playing;           /* the deck played at the last tick */
     unsigned tags_generation;   /* the one the rows were made for */
     unsigned generation;        /* lib.generation the services read last */
     unsigned seen_generation;   /* the last one seen, since changed_us */
@@ -169,6 +175,13 @@ static void state_clear(RXApp *app)
     app->link_state.on = false;
     app->link_state.nb_interfaces = 0;
     app->link_state.nb_devices = 0;
+    app->link_state.cue_enabled = false;
+    app->link_state.cue = (RXLinkCueState) { 0 };
+}
+
+static int ring_take(void *opaque, int16_t *out, int frames)
+{
+    return rx_player_ring_take(opaque, out, frames);
 }
 
 int rx_app_link_start(RXApp *app, const RXLinkOptions *o)
@@ -189,6 +202,12 @@ int rx_app_link_start(RXApp *app, const RXLinkOptions *o)
         opt.library = app->lib.root;
     if (!opt.tag_list && !(opt.tag_list = rx_app_tag_list(app)))
         return RX_ERROR(ENOMEM);
+    /* The deck heard only in a mixer's LINK CUE. */
+    if (!opt.cue && app->player && rx_player_backend(app->player) == RX_AUDIO_RING) {
+        if (!l->cue && rx_link_cue_new(&l->cue, ring_take, app->player) < 0)
+            return RX_ERROR(ENOMEM);
+        opt.cue = l->cue;
+    }
     int ret = rx_link_set_start(&l->set, &opt);
     if (ret < 0) {
         app->last_error_count++;
@@ -198,6 +217,7 @@ int rx_app_link_start(RXApp *app, const RXLinkOptions *o)
     *l = (RXAppLink) {
         .set = l->set,
         .tags = l->tags,
+        .cue = l->cue,
         .tags_generation = l->tags_generation,
         .generation = app->lib.generation,
         .seen_generation = app->lib.generation,
@@ -209,6 +229,7 @@ int rx_app_link_start(RXApp *app, const RXLinkOptions *o)
     free(ids);
     state_clear(app);
     app->link_state.on = true;
+    app->link_state.cue_enabled = l->cue && opt.cue == l->cue;
     app->dirty = true;
     return 0;
 }
@@ -474,6 +495,33 @@ static bool follow_tags(RXApp *app)
     return true;
 }
 
+static bool cue_same(const RXLinkCueState *a, const RXLinkCueState *b)
+{
+    return a->mixer == b->mixer && a->number == b->number && a->on == b->on &&
+           a->source == b->source && a->ours == b->ours && a->sending == b->sending &&
+           !strcmp(a->name, b->name);
+}
+
+/* LINK CUE: the deck told the services (playing, scrubbing, and a start,
+ * which asks the mixer for the cue), and where it stands copied. True when
+ * that changed. */
+static bool follow_cue(RXApp *app)
+{
+    RXAppLink *l = app->link;
+    if (!app->link_state.cue_enabled)
+        return false;
+    RXDeckState s;
+    rx_deck_state(app->player, 0, &s);
+    bool playing = s.loaded && (s.playing || s.scrubbing);
+    rx_link_cue_decks(l->cue, playing, playing && !l->cue_playing);
+    l->cue_playing = playing;
+    RXLinkCueState st;
+    rx_link_cue_state(l->cue, &st);
+    bool changed = !cue_same(&st, &app->link_state.cue);
+    app->link_state.cue = st;
+    return changed;
+}
+
 bool rx_app_link_tick(RXApp *app)
 {
     RXAppLink *l = app->link;
@@ -483,6 +531,7 @@ bool rx_app_link_tick(RXApp *app)
         return false;
     int64_t now = rx_time_us();
     bool changed = follow(app, now);
+    changed |= follow_cue(app);
     take_edits(app);
     follow_library(app, now);
     return changed;
@@ -491,8 +540,10 @@ bool rx_app_link_tick(RXApp *app)
 void rx_app_link_destroy(RXApp *app)
 {
     rx_app_link_stop(app);
-    if (app->link)
+    if (app->link) {
         rx_link_tag_list_free(&app->link->tags);
+        rx_link_cue_free(&app->link->cue);
+    }
     free(app->link);
     app->link = NULL;
 }

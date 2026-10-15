@@ -1098,17 +1098,35 @@ static void status_bar(UiState *ui, ImVec2 a, ImVec2 b)
     ui_text(ui, dl, nullptr, fs, ImVec2(x, ty), UI_DIM, tracks);
     char audio[160];
     const char *err = nullptr;
+    ImU32 acol = UI_DIM;
     if (!app->player || rx_player_backend(app->player) == RX_AUDIO_NULL) {
         snprintf(audio, sizeof(audio), "Audio: none");
     } else if ((err = rx_player_error(app->player))) {
         snprintf(audio, sizeof(audio), "%s", err);
+        acol = UI_RED;
+    } else if (rx_player_backend(app->player) == RX_AUDIO_RING) {
+        // --pro-link: the deck heard only in a mixer's headphone cue.
+        const RXLinkCueState &c = app->link_state.cue;
+        if (!app->link_state.cue_enabled || !c.mixer)
+            snprintf(audio, sizeof(audio), "LINK CUE: no mixer");
+        else if (!c.on)
+            snprintf(audio, sizeof(audio), "LINK CUE: off on %s", c.name);
+        else if (c.ours && c.sending)
+            snprintf(audio, sizeof(audio), "LINK CUE: playing on %s", c.name);
+        else if (c.ours || !c.source)
+            snprintf(audio, sizeof(audio), "LINK CUE: %s", c.name);
+        else
+            snprintf(audio, sizeof(audio), "LINK CUE: %s has %s %d", c.name,
+                     c.source <= 6 ? "player" : "device", c.source);
+        if (c.ours && c.sending)
+            acol = UI_PLAY;
     } else {
         const char *sink = rx_player_sink(app->player);
         snprintf(audio, sizeof(audio), "PipeWire %g kHz \xC2\xB7 %s",
                  rx_player_rate(app->player) / 1000.0, sink ? sink : "default");
     }
     x -= PX(16) + ui_text_width(ui, nullptr, fs, audio);
-    ui_text(ui, dl, nullptr, fs, ImVec2(x, ty), err ? UI_RED : UI_DIM, audio);
+    ui_text(ui, dl, nullptr, fs, ImVec2(x, ty), acol, audio);
     // PRO DJ LINK's word (--pro-link only); a click opens its window.
     if (app->link_state.enabled) {
         char link[96];
