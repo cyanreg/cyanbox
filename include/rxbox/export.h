@@ -194,6 +194,23 @@ int  rx_plan_build_cb(const RXLibrary *lib, RXTrack *const *tracks, int nb_track
                       const RXPlaylist *const *playlists, int nb_playlists,
                       const char *device_name, int compat_transcode, enum RXPlanMode mode,
                       RXPlan *out, rx_progress_cb cb, void *opaque);
+/* A plan track's cues made again from `t`'s, as the plan makes them:
+ * Link's plan follows a cue a player saved on the deck. */
+int  rx_plan_track_cues(RXPlanTrack *pt, const RXTrack *t);
+
+/* A cue as the stick stores it, and as a player gives one back, on a
+ * stick it wrote to or over Link (a cue saved on the deck). */
+typedef struct RXStickCue {
+    int      hot;                /* -1 memory, 0..7 */
+    uint32_t in, out;            /* ms; out 0xFFFFFFFF when not a loop */
+    int      code;               /* hot: palette code; memory: colour id */
+    uint32_t rgb;                /* hot cues: the pad RGB */
+    bool     active;
+    char     name[RX_CUE_NAME_MAX];
+} RXStickCue;
+
+/* Back to a library cue on `grid` (musical when it sits on a beat). */
+void rx_stick_cue_to_track(const RXStickCue *s, const RXGrid *grid, RXCue *c);
 
 /* Reads back a stick and validates what dj's `inspect` did plus the rbxport
  * checks: ANLZ embedded path matches the audio, folder matches the path

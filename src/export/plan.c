@@ -696,6 +696,21 @@ static void plan_cue(const RXCue *c, RXPlanCue *p, bool *bad_color)
     }
 }
 
+int rx_plan_track_cues(RXPlanTrack *pt, const RXTrack *t)
+{
+    RXPlanCue *cues = NULL;
+    if (t->nb_cues > 0 && !(cues = calloc((size_t)t->nb_cues, sizeof(*cues))))
+        return RX_ERROR(ENOMEM);
+    for (int k = 0; k < t->nb_cues; k++) {
+        bool bad;
+        plan_cue(&t->cues[k], &cues[k], &bad);
+    }
+    free(pt->cues);
+    pt->cues = cues;
+    pt->nb_cues = RX_MAX(t->nb_cues, 0);
+    return 0;
+}
+
 void rx_stick_cue_from_track(const RXCue *c, RXStickCue *s)
 {
     RXPlanCue p;

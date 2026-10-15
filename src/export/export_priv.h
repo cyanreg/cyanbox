@@ -54,21 +54,10 @@ char *rx_plan_fold_case(const char *s);
 
 /* ----------------------------------------------------------- stick cues */
 
-/* A cue as the stick stores it. */
-typedef struct RXStickCue {
-    int      hot;                /* -1 memory, 0..7 */
-    uint32_t in, out;            /* ms; out 0xFFFFFFFF when not a loop */
-    int      code;               /* hot: palette code; memory: colour id */
-    uint32_t rgb;                /* hot cues: the pad RGB */
-    bool     active;
-    char     name[RX_CUE_NAME_MAX];
-} RXStickCue;
-
+/* RXStickCue and rx_stick_cue_to_track: rxbox/export.h. */
 void rx_stick_cue_from_plan(const RXPlanCue *c, RXStickCue *s);
 /* A library cue as the export would write it. */
 void rx_stick_cue_from_track(const RXCue *c, RXStickCue *s);
-/* Back to a library cue on `grid` (musical when it sits on a beat). */
-void rx_stick_cue_to_track(const RXStickCue *s, const RXGrid *grid, RXCue *c);
 /* Same position, loop, name and colour (1 ms tolerance for rounding). */
 bool rx_stick_cue_equal(const RXStickCue *a, const RXStickCue *b);
 
