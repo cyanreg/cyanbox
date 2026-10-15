@@ -30,6 +30,7 @@
 enum RXLinkPort {
     RX_LINK_ANNOUNCE,           /* 50000 */
     RX_LINK_STATUS,             /* 50002 */
+    RX_LINK_CUE,                /* 50004: LINK CUE (packet.h), never presence's */
 };
 
 #define RX_PRESENCE_BROADCAST 0xFFFFFFFFu   /* `to`: the broadcast address */

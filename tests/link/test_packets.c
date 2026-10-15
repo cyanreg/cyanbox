@@ -1421,6 +1421,74 @@ static void conflict_on_17(void)
     net_free(&net);
 }
 
+/* LINK CUE on 50004: nobody captured these for us, so they are built
+ * from djl-analysis touch_audio.adoc's figures (a DJM-900NXS2's timing,
+ * here at its counter 0a73, LINK CUE on, player 3 elected) and checked by
+ * offset. */
+static const char djm_cue_timing[] =
+    "5173707431576d4a4f4c20444a4d2d3930306e7873320000000000000000000100210006"
+    "00000a730103";
+
+static void cue_packets(void)
+{
+    Pkt k = pkt(djm_cue_timing);
+    RXPktCueTiming t;
+    CHECK_EQ(rx_pkt_cue_timing_parse(&t, k.b, k.len), 0);
+    CHECK_STR(t.name, "DJM-900nxs2");
+    CHECK(t.mixer == 33 && t.counter == 0xa73 && t.on && t.source == 3);
+    WR(w);
+    rx_pkt_cue_timing(&w, &t);
+    CHECK_W("LINK CUE timing", w, djm_cue_timing);
+    for (size_t cut = 0; cut < k.len; cut++)
+        CHECK(rx_pkt_cue_timing_parse(&t, k.b, cut) < 0);
+    /* Not a timing: a handover, or the same bytes as another kind. */
+    int mixer = 0;
+    CHECK(rx_pkt_cue_handover_parse(&mixer, k.b, k.len) < 0);
+
+    WR(h);
+    rx_pkt_cue_handover(&h, "DJM-A9", 33);
+    CHECK(h.len == 0x24 && h_buf[0x0a] == RX_CUE_HANDOVER && h_buf[0x1f] == 1 &&
+          h_buf[0x20] == 0 && h_buf[0x21] == 33 && !h_buf[0x22] && !h_buf[0x23]);
+    CHECK(rx_pkt_cue_handover_parse(&mixer, h.p, h.len) == 0 && mixer == 33);
+    CHECK(rx_pkt_cue_timing_parse(&t, h.p, h.len) < 0);
+
+    /* Our audio: always 0x56c bytes; the mode at 0x24, the counter echoed
+     * at 0x28, the samples little-endian from 0x2c. */
+    static RXPktCueAudio a, back;
+    a = (RXPktCueAudio) { .name = "rekordbox", .number = 17, .mode = RX_CUE_TAKE,
+                          .counter = 0xa74, .audio = true };
+    for (int i = 0; i < RX_CUE_FRAMES * 2; i++)
+        a.pcm[i] = (int16_t)(i * 97 - 30000);
+    static uint8_t buf[RX_CUE_AUDIO_SIZE + 16];
+    RXWr aw = rx_wr(buf, sizeof(buf));
+    rx_pkt_cue_audio(&aw, &a);
+    static const uint8_t head[] = { 0x01, 0x06, 17, 0x05, 0x6c, RX_CUE_TAKE, 0, 0, 0,
+                                    0x00, 0x00, 0x0a, 0x74 };
+    CHECK(aw.len == RX_CUE_AUDIO_SIZE && buf[0x0a] == RX_CUE_AUDIO &&
+          !memcmp(buf + 0x0b, "rekordbox", 10) && !memcmp(buf + 0x1f, head, sizeof(head)));
+    CHECK(buf[0x2c] == (uint8_t)(-30000 & 0xff) && buf[0x2d] == (uint8_t)((-30000 >> 8) & 0xff));
+    CHECK(buf[0x56a] == (uint8_t)((671 * 97 - 30000) & 0xff));
+    CHECK_EQ(rx_pkt_cue_audio_parse(&back, buf, aw.len), 0);
+    CHECK(back.number == 17 && back.mode == RX_CUE_TAKE && back.counter == 0xa74 && back.audio &&
+          !strcmp(back.name, "rekordbox") && !memcmp(back.pcm, a.pcm, sizeof(a.pcm)));
+    CHECK(rx_pkt_cue_audio_parse(&back, buf, aw.len - 1) < 0);
+    /* Without audio: the length says the header alone, the rest zeros. */
+    a.audio = false;
+    a.mode = RX_CUE_GO_ON;
+    aw = rx_wr(buf, sizeof(buf));
+    rx_pkt_cue_audio(&aw, &a);
+    bool zeros = true;
+    for (size_t i = 0x2c; i < RX_CUE_AUDIO_SIZE; i++)
+        zeros &= !buf[i];
+    CHECK(aw.len == RX_CUE_AUDIO_SIZE && buf[0x22] == 0x00 && buf[0x23] == 0x2c && zeros);
+    CHECK(rx_pkt_cue_audio_parse(&back, buf, aw.len) == 0 && !back.audio && !back.mode);
+    /* Too small a buffer: nothing written that could go out. */
+    uint8_t small[0x100];
+    RXWr sw = rx_wr(small, sizeof(small));
+    rx_pkt_cue_audio(&sw, &a);
+    CHECK(sw.err);
+}
+
 int main(void)
 {
     rx_log_set_level(RX_LOG_WARN);
@@ -1436,5 +1504,6 @@ int main(void)
     listing();
     back_to_back();
     conflict_on_17();
+    cue_packets();
     return test_result("link packets");
 }

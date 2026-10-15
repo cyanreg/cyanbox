@@ -2,8 +2,9 @@
 
 /* The DJ Link packets presence reads and writes, on UDP 50000 (announce,
  * device number claims, keep-alives) and 50002 (status, media queries and
- * the questions players ask a computer source): pure functions from bytes
- * to a struct and back, for presence.c, its tests and its fuzzer.
+ * the questions players ask a computer source), and LINK CUE's on 50004
+ * (cue.c): pure functions from bytes to a struct and back, for presence.c,
+ * cue.c, their tests and the fuzzer.
  *
  * Two header layouts (djl-analysis, examples/startup_shared.edn and
  * status_shared.edn). On 50000: the ten-byte magic, the kind at 0x0a, a
@@ -246,5 +247,62 @@ void rx_pkt_load_track(RXWr *w, const RXPktLoad *l);
 /* The answer (1a, 0x28 bytes): the player's number, then 01 (an NXS2's,
  * [ASSUME] that it says the load was taken). */
 void rx_pkt_load_ack(RXWr *w, const char *name, int number);
+
+/* ------------------------------------------------------------- port 50004 */
+
+/* LINK CUE (docs/LINK.md, "LINK CUE"): a mixer's headphone cue fed with a
+ * source's audio. A DJM sends each source it takes audio from a timing
+ * packet every 7 ms; the source it has elected answers each with the next
+ * 7 ms. Layouts from djl-analysis touch_audio.adoc (a CDJ-3000 and a
+ * DJM-900NXS2 captured) and what the DJM-A9's firmware 1.22 reads of them
+ * (docs/LINK.md, "Sources"); the header is the status port's. */
+enum RXCueKind {
+    RX_CUE_AUDIO    = 0x1e,         /* a source's 7 ms of audio, to the mixer */
+    RX_CUE_HANDOVER = 0x1f,         /* the mixer to a source: elected */
+    RX_CUE_TIMING   = 0x20,         /* the mixer's clock, every 7 ms */
+};
+
+/* What an audio packet asks of the mixer (byte 0x24, the DJM-A9's
+ * reading): go on; engage (from the source elected and LINK CUE on: stop);
+ * take over (from the source elected: go on). */
+enum {
+    RX_CUE_GO_ON  = 0,
+    RX_CUE_ENGAGE = 1,
+    RX_CUE_TAKE   = 2,
+};
+
+#define RX_CUE_FRAMES     336       /* an audio packet's: 7 ms of 48 kHz stereo */
+#define RX_CUE_AUDIO_SIZE 0x56c     /* every audio packet's size, with audio or not */
+
+/* A timing packet (20, 0x2a bytes). */
+typedef struct RXPktCueTiming {
+    char     name[21];
+    int      mixer;                 /* its device number, 0x21 */
+    uint32_t counter;               /* 0x24, one more every packet */
+    bool     on;                    /* 0x28: the mixer's LINK CUE is on */
+    int      source;                /* 0x29: the source elected last, 0 none yet */
+} RXPktCueTiming;
+
+int  rx_pkt_cue_timing_parse(RXPktCueTiming *t, const uint8_t *buf, size_t len);
+void rx_pkt_cue_timing(RXWr *w, const RXPktCueTiming *t);
+/* A handover (1f, 0x24 bytes: the header alone): the mixer's number. */
+int  rx_pkt_cue_handover_parse(int *mixer, const uint8_t *buf, size_t len);
+void rx_pkt_cue_handover(RXWr *w, const char *name, int mixer);
+
+/* An audio packet (1e, always RX_CUE_AUDIO_SIZE bytes): the source's
+ * number, what it asks, the counter of the timing it answers, and 336
+ * frames of 16-bit stereo (little-endian, interleaved), or none: the
+ * length field then says 0x2c, the header alone, and the rest is zeros. */
+typedef struct RXPktCueAudio {
+    char     name[21];
+    int      number;
+    int      mode;                  /* RX_CUE_GO_ON, _ENGAGE or _TAKE */
+    uint32_t counter;
+    bool     audio;
+    int16_t  pcm[RX_CUE_FRAMES * 2];
+} RXPktCueAudio;
+
+int  rx_pkt_cue_audio_parse(RXPktCueAudio *a, const uint8_t *buf, size_t len);
+void rx_pkt_cue_audio(RXWr *w, const RXPktCueAudio *a);
 
 #endif /* RXBOX_LINK_PACKET_H */

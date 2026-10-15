@@ -25,6 +25,7 @@
 
 typedef struct RXLink RXLink;
 typedef struct RXLinkTagList RXLinkTagList;
+typedef struct RXLinkCue RXLinkCue;
 
 /* The ports, ours and the ones players listen on. Real players use
  * rekordbox's (rx_link_options_default); the tests run a server and a
@@ -35,6 +36,7 @@ typedef struct RXLinkPorts {
     uint16_t announce, status;      /* UDP 50000, 50002 */
     uint16_t query, database;       /* TCP 12523, ephemeral */
     uint16_t portmap, mount, nfs;   /* UDP 50111, ephemeral, 2049 */
+    uint16_t cue;                   /* UDP 50004, LINK CUE (with RXLinkOptions.cue) */
 } RXLinkPorts;
 
 typedef struct RXLinkOptions {
@@ -55,13 +57,16 @@ typedef struct RXLinkOptions {
      * keep-alive, as rekordbox does (the tests of that wait). */
     bool start_up;
     RXLinkPorts ports;          /* ours */
-    RXLinkPorts peer_ports;     /* the players' (announce and status only) */
+    RXLinkPorts peer_ports;     /* the players' (announce and status) and mixers' (cue) */
     /* Tests: each reading of the library after the first takes this much
      * longer, so a test sees players answered while one runs. */
     int test_build_ms;
     /* The TAG LIST the players see and change (below), the owner's to
      * keep; NULL: a service or a set makes its own. */
     RXLinkTagList *tag_list;
+    /* LINK CUE (below): the owner's audio for mixers, the owner's to keep;
+     * NULL: none, and its port is not bound. */
+    RXLinkCue *cue;
 } RXLinkOptions;
 
 void rx_link_options_default(RXLinkOptions *o);
@@ -205,6 +210,45 @@ bool rx_link_tag_list_has(RXLinkTagList *tl, uint32_t id);
 int  rx_link_tag_list_get(RXLinkTagList *tl, uint32_t *ids, int max);
 /* Bumped by every change, for an owner's view to follow. */
 unsigned rx_link_tag_list_generation(RXLinkTagList *tl);
+
+/* ------------------------------------------------------------ LINK CUE */
+
+/* LINK CUE (docs/LINK.md, "LINK CUE"): a mixer's headphone cue fed with
+ * the owner's audio, as rekordbox's Link Monitor feeds it. A DJM takes
+ * audio from the computers on the link (device 17 and 18) as from its
+ * players: it sends each a timing packet every 7 ms, and the source it
+ * elected answers each, while the mixer's LINK CUE is on, with the next
+ * 7 ms of audio, 336 frames of 16-bit stereo at 48 kHz, which `take` gives
+ * (rx_player_ring_take): the mixer's clock paces the decks.
+ *
+ * A source asks to be elected; rxbox asks when its decks start playing (a
+ * deck started, or a mixer appearing while one plays) and then streams
+ * for as long as they play and the mixer keeps it. A player taking the
+ * cue over (a CDJ-3000's touch cue) has it until rxbox's decks start
+ * again. Nothing is sent while they do not play. One mixer at a time:
+ * the first heard, until it is silent for a second.
+ *
+ * Shared by the services of a set; every call takes its lock, and `take`
+ * is called with it held, on a service's thread. */
+typedef int (*rx_link_cue_take_fn)(void *opaque, int16_t *out, int frames);
+
+int  rx_link_cue_new(RXLinkCue **out, rx_link_cue_take_fn take, void *opaque);
+void rx_link_cue_free(RXLinkCue **c);
+/* The owner's decks: whether one plays, and whether one started since the
+ * last call (it then asks the mixer for the cue). */
+void rx_link_cue_decks(RXLinkCue *c, bool playing, bool started);
+
+typedef struct RXLinkCueState {
+    bool     mixer;             /* a mixer's timing heard in the last second */
+    char     name[21];          /* the mixer's, its number below */
+    int      number;
+    bool     on;                /* its LINK CUE is on */
+    int      source;            /* the source it elected last, 0 none yet */
+    bool     ours;              /* that is us */
+    bool     sending;           /* our audio went to it in the last 100 ms */
+} RXLinkCueState;
+
+void rx_link_cue_state(RXLinkCue *c, RXLinkCueState *out);
 
 /* ------------------------------------------------------------- the set */
 

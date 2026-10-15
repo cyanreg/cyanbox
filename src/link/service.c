@@ -49,6 +49,7 @@
 #include "rxbox/formats.h"
 #include "rxbox/library.h"
 
+#include "cue.h"
 #include "dbserver.h"
 #include "link_priv.h"
 #include "net.h"
@@ -139,6 +140,12 @@ struct RXLink {
     pthread_mutex_t plock;
     RXPresence *pres;
     uint8_t pdgram[2048];
+    /* LINK CUE, on the presence thread too: a mixer's timing comes every
+     * 7 ms and is answered at once (cue.h). -1 without it. */
+    RXLinkCue *cue;
+    int cue_fd;
+    uint8_t cdgram[2048];
+    uint8_t cout[RX_CUE_AUDIO_SIZE];
 
     /* The service thread's. */
     RXLibrary *lib;
@@ -197,6 +204,7 @@ void rx_link_options_default(RXLinkOptions *o)
             .query    = RX_LINK_PORT_QUERY,
             .portmap  = RX_LINK_PORT_PORTMAP,
             .nfs      = RX_LINK_PORT_NFS,
+            .cue      = RX_LINK_PORT_CUE,
         },
     };
     o->peer_ports = o->ports;
@@ -659,6 +667,41 @@ static void drain_presence(RXLink *l, enum Sock s)
     }
 }
 
+/* A mixer's LINK CUE timing, from a device on the link, answered with
+ * our audio once we have a number there; its handover only logged (the
+ * next timing names us). Nothing else is ever sent to 50004: a DJM-A9
+ * takes what does not start with the magic for an encrypted packet, and
+ * one that does not decrypt for its sender gone. */
+static void drain_cue(RXLink *l)
+{
+    for (int k = 0; k < DRAIN_MAX; k++) {
+        uint32_t from;
+        uint16_t port;
+        ssize_t n = rx_link_recv(&l->ifc, l->cue_fd, l->cdgram, sizeof(l->cdgram), &from, &port);
+        if (n < 0)
+            break;
+        if (!n || from == l->ifc.addr)
+            continue;
+        int number = 0;
+        pthread_mutex_lock(&l->plock);
+        bool ok = (l->any_peer || rx_presence_is_peer(l->pres, from)) &&
+                  rx_presence_state(l->pres, &number) == RX_LINK_UP;
+        pthread_mutex_unlock(&l->plock);
+        if (!ok)
+            continue;
+        RXPktCueTiming t;
+        int mixer;
+        if (rx_pkt_cue_timing_parse(&t, l->cdgram, (size_t)n) >= 0) {
+            size_t len = rx_link_cue_answer(l->cue, l, from, number, l->name, &t, rx_time_us(),
+                                            l->cout, sizeof(l->cout));
+            if (len)
+                rx_link_send(l->cue_fd, from, l->peer.cue, l->cout, len);
+        } else if (rx_pkt_cue_handover_parse(&mixer, l->cdgram, (size_t)n) >= 0) {
+            rx_debug("link: %s: mixer %d hands us LINK CUE", l->ifc.name, mixer);
+        }
+    }
+}
+
 static void drain_nfs(RXLink *l, enum Sock s)
 {
     static const enum RXNfsService svc[NB_SOCKS] = {
@@ -723,16 +766,19 @@ static void *presence_thread(void *arg)
         pthread_mutex_unlock(&l->plock);
         publish(l);
 
-        struct pollfd p[3] = {
+        struct pollfd p[4] = {
             { .fd = l->fds[S_ANNOUNCE], .events = POLLIN },
             { .fd = l->fds[S_STATUS], .events = POLLIN },
             { .fd = l->pwake, .events = POLLIN },
+            { .fd = l->cue_fd, .events = POLLIN },  /* ignored when -1 */
         };
         int timeout = next > now ? (int)RX_MIN((next - now + 999) / 1000, 1000) : 0;
-        if (poll(p, 3, timeout) < 0 && errno != EINTR) {
+        if (poll(p, 4, timeout) < 0 && errno != EINTR) {
             rx_err("link: poll: %s", strerror(errno));
             break;
         }
+        if (p[3].revents & POLLIN)
+            drain_cue(l);
         if (p[0].revents & POLLIN)
             drain_presence(l, S_ANNOUNCE);
         if (p[1].revents & POLLIN)
@@ -853,7 +899,7 @@ int rx_link_start(RXLink **out, const RXLinkOptions *o)
         return RX_ERROR(ENOMEM);
     for (int i = 0; i < NB_SOCKS; i++)
         l->fds[i] = -1;
-    l->status_out = l->wake = l->pwake = -1;
+    l->status_out = l->wake = l->pwake = l->cue_fd = -1;
     pthread_mutex_init(&l->lock, NULL);
     pthread_mutex_init(&l->plock, NULL);
     l->root = o->library ? rx_strdup(o->library) : NULL;
@@ -875,6 +921,14 @@ int rx_link_start(RXLink **out, const RXLinkOptions *o)
     if ((l->status_out = rx_link_udp(&l->ifc, INADDR_ANY, 0, &eph)) < 0) {
         ret = l->status_out;
         goto fail;
+    }
+    /* LINK CUE's port, when the owner has audio for it; without it Link
+     * serves on all the same. */
+    if (o->cue) {
+        l->cue = o->cue;
+        if ((l->cue_fd = rx_link_udp(&l->ifc, l->ifc.addr, o->ports.cue, &l->ports.cue)) < 0)
+            rx_err("link: cannot bind the LINK CUE port %u on %s: %s", o->ports.cue, l->ifc.name,
+                   strerror(-l->cue_fd));
     }
     if ((l->wake = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC)) < 0 ||
         (l->pwake = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC)) < 0) {
@@ -937,6 +991,8 @@ int rx_link_start(RXLink **out, const RXLinkOptions *o)
             "database %u, portmap %u, mount %u, NFS %u", l->plan->nb_tracks, l->ifc.name, a, b,
             l->name, (double)(rx_time_us() - t0) / 1000.0, l->ports.database, l->ports.portmap,
             l->ports.mount, l->ports.nfs);
+    if (l->cue_fd >= 0)
+        rx_info("link: LINK CUE on %s, port %u", l->ifc.name, l->ports.cue);
     *out = l;
     return 0;
 fail:
@@ -963,6 +1019,8 @@ void rx_link_stop(RXLink **lp)
         pthread_join(l->bthread, NULL);
         served_free(&l->fresh);
     }
+    if (l->cue)
+        rx_link_cue_forget(l->cue, l);
     rx_presence_free(&l->pres);
     rx_nfs_free(&l->nfs);
     if (l->own_tags)
@@ -976,6 +1034,8 @@ void rx_link_stop(RXLink **lp)
     }
     if (l->status_out >= 0)
         close(l->status_out);
+    if (l->cue_fd >= 0)
+        close(l->cue_fd);
     if (l->wake >= 0)
         close(l->wake);
     if (l->pwake >= 0)

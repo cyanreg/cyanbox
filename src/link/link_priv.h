@@ -30,13 +30,14 @@
 /* ------------------------------------------------------------------ ports */
 
 /* rekordbox's own (docs/LINK.md): presence on 50000, beats on 50001,
- * status on 50002; the database server's port query on TCP 12523; portmap
- * on UDP 50111, not 111; NFS on 2049. The database server and mountd take
- * ephemeral ports, which the port query and portmap give out. All above
- * 1024: nothing needs root. */
+ * status on 50002, LINK CUE on 50004; the database server's port query on
+ * TCP 12523; portmap on UDP 50111, not 111; NFS on 2049. The database
+ * server and mountd take ephemeral ports, which the port query and portmap
+ * give out. All above 1024: nothing needs root. */
 #define RX_LINK_PORT_ANNOUNCE   50000
 #define RX_LINK_PORT_BEAT       50001
 #define RX_LINK_PORT_STATUS     50002
+#define RX_LINK_PORT_CUE        50004
 #define RX_LINK_PORT_QUERY      12523
 #define RX_LINK_PORT_PORTMAP    50111
 #define RX_LINK_PORT_NFS        2049

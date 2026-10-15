@@ -66,17 +66,21 @@ int rx_pkt_header(RXPktHeader *h, enum RXLinkPort port, const uint8_t *buf, size
         /* The length is what follows it (djl-analysis vcdj.adoc, len_r),
          * except in rekordbox's own status, subtype 01, where it is the
          * whole packet's again (vcdj.adoc, "Mixer Status Packets"; rbxport's
-         * capture of rekordbox 7.2.11 says 0x38 for 0x38 bytes). */
+         * capture of rekordbox 7.2.11 says 0x38 for 0x38 bytes). LINK CUE's
+         * packets on 50004 have the same header. */
         name = rx_rd_bytes(&r, 20);
         rx_rd_skip(&r, 1);
         h->subtype = rx_rd_u8(&r);
         h->number = rx_rd_u8(&r);
         size_t declared = rx_rd_u16(&r);
-        total = h->kind == RX_ST_MIXER && h->subtype == 1 ? declared : 0x24 + declared;
+        bool status = port == RX_LINK_STATUS;
+        total = status && h->kind == RX_ST_MIXER && h->subtype == 1 ? declared : 0x24 + declared;
         /* Players do not always say their status's length right (beat-link
          * CdjStatus: an XDJ-1000 reports one payload size and sends
-         * another), so a status is read within what arrived. */
-        if (h->kind == RX_ST_CDJ)
+         * another), so a status is read within what arrived; an audio
+         * packet's length says how much of it is valid, the packet itself
+         * is always RX_CUE_AUDIO_SIZE (touch_audio.adoc). */
+        if ((status && h->kind == RX_ST_CDJ) || (!status && h->kind == RX_CUE_AUDIO))
             total = len;
     }
     if (r.err || total < 0x24 || total > len)
@@ -750,4 +754,76 @@ void rx_pkt_settings(RXWr *w, const char *name, int number, const uint8_t devset
     rx_wr_u16(w, rx_rd_u16le(&d));
     rx_wr_u32(w, rx_rd_u32le(&d));
     st_finish(w, start);
+}
+
+/* ------------------------------------------------------------- port 50004 */
+
+int rx_pkt_cue_timing_parse(RXPktCueTiming *t, const uint8_t *buf, size_t len)
+{
+    RXRd r;
+    RXPktHeader h;
+    if (!body(&r, &h, RX_LINK_CUE, RX_CUE_TIMING, buf, len))
+        return RX_ERROR(EINVAL);
+    *t = (RXPktCueTiming) { .mixer = h.number };
+    memcpy(t->name, h.name, sizeof(t->name));
+    t->counter = rx_rd_u32(&r);
+    t->on = rx_rd_u8(&r) != 0;
+    t->source = rx_rd_u8(&r);
+    return r.err ? RX_ERROR(EINVAL) : 0;
+}
+
+void rx_pkt_cue_timing(RXWr *w, const RXPktCueTiming *t)
+{
+    size_t start = st_header(w, RX_CUE_TIMING, 0x00, t->name, t->mixer);
+    rx_wr_u32(w, t->counter);
+    rx_wr_u8(w, t->on);
+    rx_wr_u8(w, (uint8_t)t->source);
+    st_finish(w, start);
+}
+
+int rx_pkt_cue_handover_parse(int *mixer, const uint8_t *buf, size_t len)
+{
+    RXPktHeader h;
+    if (rx_pkt_header(&h, RX_LINK_CUE, buf, len) < 0 || h.kind != RX_CUE_HANDOVER)
+        return RX_ERROR(EINVAL);
+    *mixer = h.number;
+    return 0;
+}
+
+void rx_pkt_cue_handover(RXWr *w, const char *name, int mixer)
+{
+    st_header(w, RX_CUE_HANDOVER, 0x00, name, mixer);
+}
+
+int rx_pkt_cue_audio_parse(RXPktCueAudio *a, const uint8_t *buf, size_t len)
+{
+    RXPktHeader h;
+    if (rx_pkt_header(&h, RX_LINK_CUE, buf, len) < 0 || h.kind != RX_CUE_AUDIO ||
+        h.len < RX_CUE_AUDIO_SIZE)
+        return RX_ERROR(EINVAL);
+    RXRd r = rx_rd(buf, RX_CUE_AUDIO_SIZE);
+    *a = (RXPktCueAudio) {
+        .number  = h.number,
+        .mode    = rx_rd_at_u8(&r, 0x24),
+        .counter = rx_rd_at_u32(&r, 0x28),
+        .audio   = rx_rd_at_u16(&r, 0x22) == RX_CUE_AUDIO_SIZE,
+    };
+    memcpy(a->name, h.name, sizeof(a->name));
+    for (int i = 0; i < RX_CUE_FRAMES * 2; i++)
+        a->pcm[i] = (int16_t)rx_rd_at_u16le(&r, 0x2c + (size_t)i * 2);
+    return 0;
+}
+
+void rx_pkt_cue_audio(RXWr *w, const RXPktCueAudio *a)
+{
+    /* Byte 0x20 is 06 in a CDJ-3000's (touch_audio.adoc); the DJM-A9 does
+     * not read it. Without audio the length says the header alone and the
+     * samples are zeros, the packet as long all the same. */
+    size_t start = st_header(w, RX_CUE_AUDIO, 0x06, a->name, a->number);
+    rx_wr_u8(w, (uint8_t)a->mode);
+    rx_wr_zeros(w, 3);
+    rx_wr_u32(w, a->counter);
+    for (int i = 0; i < RX_CUE_FRAMES * 2; i++)
+        rx_wr_u16le(w, a->audio ? (uint16_t)a->pcm[i] : 0);
+    rx_wr_at_u16(w, start + 0x22, a->audio ? RX_CUE_AUDIO_SIZE : 0x2c);
 }

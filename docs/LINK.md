@@ -222,6 +222,12 @@ id, so it keeps reading.
 - **Deep Symmetry's djl-analysis** (dysentery, beat-link, crate-digger):
   the community analysis of the packets and the database protocol, from
   captures of real hardware.
+- **Mixer firmware** (`~/projects/cdj/djma9`, `~/projects/cdj/djm900nxs`):
+  static readings, made for rxbox, of the DJM-A9's firmware 1.22 and the
+  DJM-900NXS's 1.32 (AlphaTheta's own updates; compressed, not
+  encrypted), for which devices LINK CUE takes audio from and how. Each
+  finding is written up there with its addresses. Not yet checked against
+  a mixer.
 
 ## The pieces
 
@@ -441,6 +447,9 @@ Link is on:
   find itself refused mid-load). UDP sources can be forged, so this is a
   fence against casual access, not authentication; TCP's cannot be, so
   it holds for the database server.
+- **What is sent**: besides the answers, LINK CUE's audio ("LINK CUE"),
+  only while the owner's decks play and only to a device on the link
+  whose timing asks for it, at its address (the same fence as above).
 - **What is parsed**: every datagram and message is read by a bounded
   reader that checks each length against what arrived before it reads,
   allocates nothing from a length a peer sent, and answers what it does
@@ -640,6 +649,69 @@ saved. test_db gives a rating as a player does, and test_link has the
 app keep one. test_db adds to, takes off and clears the TAG LIST as a
 player does, its rows marked; test_app shows it in the interface's view,
 and test_link has a deck's TAG TRACK reach it.
+
+## LINK CUE
+
+A DJM's LINK CUE puts a source's audio in the mixer's headphone cue:
+rekordbox's Link Monitor, and what a CDJ-3000's touch cue and touch
+preview use. rxbox feeds it from its own decks, as a computer (device 17
+or 18) the way rekordbox does; it never poses as a player.
+
+**The protocol** (UDP 50004, the status port's header;
+djl-analysis touch_audio.adoc, from captures of a CDJ-3000 and a
+DJM-900NXS2, and the mixer firmware readings, "Sources"):
+
+- The mixer sends each source it takes audio from a timing packet `20`
+  (0x2a bytes) about every 7 ms (the DJM-A9: every 6 while it plays,
+  none while it holds 104 ms or more): a counter one more each time at
+  0x24, whether its LINK CUE is on at 0x28, and the source it elected
+  last at 0x29 (0 none yet).
+- A source answers a timing with an audio packet `1e`, always 0x56c
+  bytes: its number at 0x21, what it asks at 0x24, the timing's counter
+  at 0x28 and 336 frames (7 ms) of 16-bit stereo at 48 kHz from 0x2c.
+- What it asks: 0 go on, 1 engage, 2 take over. Asked to engage or take
+  over by a source it has not elected, the mixer elects it and sends it a
+  handover `1f` (the header alone), and plays what it sends, counter after
+  counter, a small gap padded with silence. Asked to engage by the source
+  elected, with LINK CUE on, it stops. When the audio stops coming it
+  plays out what it holds and lets the source go, naming it still as the
+  last.
+- Who may be a source: the DJM-900NXS sends timing to devices 17 and 18
+  and takes audio from them only (LINK CUE began as rekordbox's). The
+  DJM-A9 keeps 17 and 18 enabled from the start and adds players 1 to 4,
+  each while its CDJ status sets bit 0x10 of byte 0xcd (the CDJ-3000's
+  touch cue), and devices 73 to 78 by a status of their own. A computer
+  sends no status for it: its keep-alives, which put it in the mixer's
+  device table, are all it takes.
+- Nothing else goes to a mixer's 50004: the DJM-A9 takes a datagram that
+  does not start with the magic for an encrypted one, and one that does
+  not decrypt has every device at its sender's address dropped.
+
+**In rxbox** (src/link/cue.c, `RXLinkCue`): the owner gives a function
+that takes the next frames and says whether its decks play and when one
+starts. Each service binds 50004 on its interface and answers on its
+presence thread, so a database request that takes seconds never delays
+the audio; only a device on the link is answered. rxbox never asks to
+engage, which from the source elected would stop it: it takes over when
+a deck starts, when it first hears a mixer while one plays, and while
+nobody is elected; then it goes on, each timing that names it with LINK
+CUE on answered with the next 7 ms, so the mixer's clock paces the decks.
+After a pause of 50 ms in what it sent (LINK CUE was off), the first
+packet takes over again: a mixer that ran dry let its source go. A player
+that takes the cue over keeps it until a deck in rxbox starts again:
+rxbox does not fight a DJ cueing on a deck. While its decks do not play
+nothing is sent. One mixer at a time: the first heard, until it is silent
+for a second.
+
+**Proven**: test_cue, the decisions against a driven clock and a service
+on the loopback answering a mixer of the test's own (a second of timings
+answered packet for packet, one takeover, the frames in the order taken,
+nothing to a device off the link); the packets in test_packets, built from
+touch_audio.adoc's figures (nobody captured them for us); the fuzzer.
+**Not yet**: a real mixer. The first check at one: with rxbox up as device
+17, `tcpdump -ni IF udp port 50004` shows a 42-byte timing packet from
+the mixer every 7 ms or so; if none come, something the readings missed
+gates it.
 
 ## Order of work
 

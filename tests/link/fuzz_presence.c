@@ -24,7 +24,7 @@
 
 #define DEFAULT_SEED  UINT64_C(0x5174707431576d4a)
 #define DEFAULT_ITERS 3000000
-#define MAX_DGRAM     700
+#define MAX_DGRAM     1500       /* a LINK CUE audio packet's 0x56c fits */
 #define NB_NODES      4
 #define QUEUE         256
 
@@ -145,7 +145,7 @@ static size_t build(Rng *r, uint8_t *buf, size_t cap, enum RXLinkPort *port)
     name(r, nm);
     int n = some_number(r);
     *port = RX_LINK_ANNOUNCE;
-    switch (below(r, 16)) {
+    switch (below(r, 19)) {
     case 0: {
         RXPktKeepAlive k = {
             .proto = (int)below(r, 5), .number = n, .first = (int)below(r, 3),
@@ -236,6 +236,29 @@ static size_t build(Rng *r, uint8_t *buf, size_t cap, enum RXLinkPort *port)
         rx_pkt_settings_query(&w, nm, n);
         *port = RX_LINK_STATUS;
         break;
+    case 16: {
+        RXPktCueTiming t = { .mixer = n, .counter = (uint32_t)rnd(r), .on = below(r, 2),
+                             .source = some_number(r) };
+        memcpy(t.name, nm, sizeof(t.name));
+        rx_pkt_cue_timing(&w, &t);
+        *port = RX_LINK_CUE;
+        break;
+    }
+    case 17:
+        rx_pkt_cue_handover(&w, nm, n);
+        *port = RX_LINK_CUE;
+        break;
+    case 18: {
+        static RXPktCueAudio a;
+        a = (RXPktCueAudio) { .number = n, .mode = (int)below(r, 4), .counter = (uint32_t)rnd(r),
+                              .audio = below(r, 2) };
+        memcpy(a.name, nm, sizeof(a.name));
+        for (int i = 0; i < RX_CUE_FRAMES * 2; i++)
+            a.pcm[i] = (int16_t)rnd(r);
+        rx_pkt_cue_audio(&w, &a);
+        *port = RX_LINK_CUE;
+        break;
+    }
     default: {
         uint8_t ds[32];
         for (int i = 0; i < 32; i++)
@@ -336,7 +359,7 @@ static void check_name(const char *n)
 
 static void parse_all(const uint8_t *buf, size_t len)
 {
-    for (int port = RX_LINK_ANNOUNCE; port <= RX_LINK_STATUS; port++) {
+    for (int port = RX_LINK_ANNOUNCE; port <= RX_LINK_CUE; port++) {
         RXPktHeader h;
         if (rx_pkt_header(&h, (enum RXLinkPort)port, buf, len) == 0) {
             if (h.len < 0x24 || h.len > len)
@@ -384,6 +407,31 @@ static void parse_all(const uint8_t *buf, size_t len)
     rx_pkt_media_query_parse(&q, buf, len);
     RXPktMedia m;
     rx_pkt_media_parse(&m, buf, len);
+
+    RXPktCueTiming t;
+    if (rx_pkt_cue_timing_parse(&t, buf, len) == 0) {
+        check_name(t.name);
+        uint8_t again[RX_PKT_MAX];
+        RXWr w = rx_wr(again, sizeof(again));
+        rx_pkt_cue_timing(&w, &t);
+        RXPktCueTiming t2;
+        if (w.err || rx_pkt_cue_timing_parse(&t2, w.p, w.len) < 0 || t2.mixer != t.mixer ||
+            t2.counter != t.counter || t2.on != t.on || t2.source != t.source)
+            fail("a LINK CUE timing does not survive a round trip");
+    }
+    int mixer;
+    rx_pkt_cue_handover_parse(&mixer, buf, len);
+    static RXPktCueAudio a, a2;
+    if (rx_pkt_cue_audio_parse(&a, buf, len) == 0) {
+        check_name(a.name);
+        static uint8_t again[RX_CUE_AUDIO_SIZE];
+        RXWr w = rx_wr(again, sizeof(again));
+        rx_pkt_cue_audio(&w, &a);
+        if (w.err || w.len != RX_CUE_AUDIO_SIZE || rx_pkt_cue_audio_parse(&a2, w.p, w.len) < 0 ||
+            a2.counter != a.counter || a2.mode != a.mode || a2.audio != a.audio ||
+            (a.audio && memcmp(a2.pcm, a.pcm, sizeof(a.pcm))))
+            fail("a LINK CUE audio packet does not survive a round trip");
+    }
 }
 
 /* ------------------------------------------------------------ the nodes */

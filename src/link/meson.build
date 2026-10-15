@@ -15,7 +15,7 @@ link_nfs_src      = files('vtree.c', 'nfs.c', 'nfsclient.c')
 
 rx_link_lib = static_library('rx_link',
     link_wire_src + link_presence_src + link_db_src + link_nfs_src +
-    files('net.c', 'service.c', 'set.c', 'client.c', 'wav.c'),
+    files('net.c', 'service.c', 'set.c', 'client.c', 'wav.c', 'cue.c'),
     include_directories: rx_inc,
     dependencies: [ rx_export_dep, rx_analysis_dep, threads_dep ],
 )
@@ -93,3 +93,13 @@ test_link_loopback = executable('test_link_loopback',
     files('../../tests/link/test_loopback.c'),
     include_directories: rx_inc, dependencies: [ rx_link_dep, rx_analysis_dep ])
 test('loopback', test_link_loopback, suite: 'link', env: loop_test_env, timeout: 300)
+
+# ---------------------------------------------------------------- LINK CUE
+# Its decisions against a driven clock, then the service on loopback
+# answering a mixer of the test's own.
+cue_test_env = environment()
+cue_test_env.set('RX_TEST_DIR', link_test_dir / 'cue')
+test_link_cue = executable('test_link_cue',
+    files('../../tests/link/test_cue.c'),
+    include_directories: rx_inc, dependencies: [ rx_link_dep ])
+test('cue', test_link_cue, suite: 'link', env: cue_test_env, timeout: 60)
