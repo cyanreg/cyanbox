@@ -30,9 +30,11 @@ browsed it and played its MP3s from it. An emulated CDJ-3000X then did
 everything a player does with rxbox (below), as then did a CDJ-3000 on
 firmware 3.22, and the cues a player saves
 on the deck and the ratings it gives are kept in the library, and its
-TAG LIST is shared with the interface ("Edits on the deck"). Not yet: a
-WAV played on a real one (section 4), a real CDJ-3000 or 3000X, the
-grid's offset changed on a deck (step 8).
+TAG LIST is shared with the interface ("Edits on the deck"). Then a
+real CDJ-3000 with a DJM-A9 mixer played a 1.5 hour set from rxbox
+(October 2026) without a fault. Not yet: a WAV played on a real
+CDJ-900 (section 4), a real 3000X, the grid's offset changed on a deck
+(step 8).
 
 What the CDJ-900s showed, and what changed for it (`rxbox-cli -v link
 serve` logs every request, NFS call and unknown packet):
@@ -162,6 +164,7 @@ What has been run against what:
 | Server | Client | Network | Result |
 | --- | --- | --- | --- |
 | rxbox | two CDJ-900s | Ethernet, a switch, 169.254.0.0/16 | join, mount, browse, the library's MP3s played; WAVs decoded as MP3 until the file type was named |
+| rxbox's interface | a CDJ-3000 and a DJM-A9 | Ethernet | a 1.5 hour set played from the library (October 2026), without a fault |
 | rxbox | emulated CDJ-900, CDJ-2000, CDJ-2000NXS2 (Pioneer's firmware in QEMU) | a bridge, 169.254.0.0/16 | join, mount, browse every category, metadata, waveforms, cues, a load streamed over NFS; the lapse, NFD, CDJ-900 punctuation and CDJ-2000 KEY findings above; FLAC, MP3, AAC and 16- and 24-bit WAV sources played on the NXS2, with tempo, jog, memory loops, and hot cues A to D in their colours (the pads jump, the hot loop loops); the load command (`0x19`) on the CDJ-900 and the NXS2; cues saved and deleted on all three kept in the library ("Edits on the deck") |
 | rxbox | emulated CDJ-3000 (firmware 3.22, cdj3k-emu) | a bridge, 169.254.0.0/16 | as the 3000X: browse with previews and artwork, a load from the browser and by `0x19`, play, tempo, CUE, a memory loop; cues saved and deleted on the deck kept; no `80`, no probes but `3007` |
 | rxbox | emulated CDJ-3000X (firmware 1.41, cdj3k-emu) | a bridge, 169.254.0.0/16 | found by name with its counts, browse with previews and artwork, a load from the browser and by `0x19`, play, tempo, memory cues and loops, hot cues A to D in their colours with names and a hot loop; cues saved and deleted on the deck kept in the library (below); `80` and three database probes left unanswered (above) |
