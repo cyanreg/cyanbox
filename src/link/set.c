@@ -333,6 +333,16 @@ int rx_link_set_edits(RXLinkSet *s, RXLinkEdit *out, int max)
     return n;
 }
 
+void rx_link_set_tracks_changed(RXLinkSet *s, const uint64_t *ids, int nb)
+{
+    pthread_mutex_lock(&s->lock);
+    for (int i = 0; i < s->nb; i++) {
+        if (s->served[i].link)
+            rx_link_tracks_changed(s->served[i].link, ids, nb);
+    }
+    pthread_mutex_unlock(&s->lock);
+}
+
 void rx_link_set_library_changed(RXLinkSet *s)
 {
     atomic_store(&s->reload, true);

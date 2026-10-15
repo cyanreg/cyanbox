@@ -18,7 +18,9 @@
  *    port and no NFS answer: the fences of docs/LINK.md, "Security".
  *  - A library change is served again: a new track is browsable. It is
  *    read on a thread of its own while the player is answered, and a cue
- *    saved meanwhile is served after it.
+ *    saved meanwhile is served after it. A track whose own state changed
+ *    (a rating, a cue) is read again alone and served at once; one whose
+ *    title changed has the whole library read again.
  *
  * Tracks are made by the ffmpeg CLI (skips, 77, without it, or without
  * libopus). The protocol details are the codecs' tests' (test_packets,
@@ -399,6 +401,74 @@ int main(void)
         free(cues);
         free(blob);
     }
+
+    /* Tracks changed through another connection to the library, as the
+     * interface changes them: a rating and a memory cue are read again and
+     * served at once, well before a whole reading (1.5 s slower here)
+     * could be; a new title changes what is planned, so it is the whole
+     * library read again, served only once that is done. */
+    RXLibrary own = { 0 };
+    CHECK_EQ(rx_library_open(&own, libdir), 0);
+    RXTrack *t = rx_library_find_id(&own, other);
+    CHECK(t);
+    if (t && db) {
+        t->meta.rating = 4;
+        RXCue mc;
+        rx_cue_init(&mc, 2.0);
+        CHECK(rx_track_add_cue(t, &mc) >= 0);
+        CHECK_EQ(rx_library_save_track(&own, t), 0);
+        uint64_t *ids = NULL;
+        int nids = 0;
+        CHECK(rx_library_take_changes(&own, &ids, &nids) == 0 && nids == 1 && ids[0] == other);
+        free(ids);
+        uint64_t id = other;
+        int64_t t0 = rx_time_us();
+        rx_link_tracks_changed(link, &id, 1);
+        bool rated = false, cued = false;
+        while (!(rated && cued) && rx_time_us() - t0 < 400000) {
+            usleep(20000);
+            if (rx_dbclient_menu(db, RX_DB_RATING_TRACKS, 2, (const uint32_t[]) { 0, 4 }, 2,
+                                 &rows, &nb_rows) >= 0) {
+                for (int i = 0; i < nb_rows; i++)
+                    rated |= rows[i].id == other;
+                rx_dbrows_free(&rows, nb_rows);
+            }
+            uint8_t *blob = NULL;
+            size_t bn = 0;
+            RXPlanCue *cues = NULL;
+            int nc = 0;
+            if (rx_dbclient_blob(db, RX_DB_CUES_EXT, other, &blob, &bn) == 0 &&
+                rx_db_cues_ext_parse(blob, bn, &cues, &nc) == 0) {
+                for (int i = 0; i < nc; i++)
+                    cued |= cues[i].hot < 0 && fabs(cues[i].time - 2.0) < 0.001;
+            }
+            free(cues);
+            free(blob);
+        }
+        CHECK(rated && cued);
+
+        rx_meta_set(&t->meta.title, "Renamed");
+        CHECK_EQ(rx_library_save_track(&own, t), 0);
+        CHECK(rx_library_take_changes(&own, &ids, &nids) == 0 && nids == 1);
+        free(ids);
+        rx_link_tracks_changed(link, &id, 1);
+        usleep(300000);
+        RXDbRow *meta = NULL;
+        int nm = 0;
+        CHECK_EQ(rx_dbclient_metadata(db, other, &meta, &nm), 0);
+        CHECK(nm > 0 && meta[0].text && strcmp(meta[0].text, "Renamed"));
+        rx_dbrows_free(&meta, nm);
+        bool renamed = false;
+        for (int k = 0; k < 100 && !renamed; k++) {
+            usleep(50000);
+            if (rx_dbclient_metadata(db, other, &meta, &nm) == 0) {
+                renamed = nm > 0 && meta[0].text && !strcmp(meta[0].text, "Renamed");
+                rx_dbrows_free(&meta, nm);
+            }
+        }
+        CHECK(renamed);
+    }
+    rx_library_close(&own);
 
     /* Nothing was made on disk for it. */
     char *cache = rx_asprintf("%s/cache/transcode", libdir);

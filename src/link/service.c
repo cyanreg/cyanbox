@@ -178,6 +178,10 @@ struct RXLink {
     /* Cues players saved, for the owner to apply (rx_link_edits). */
     RXLinkEdit edits[RX_LINK_EDITS_KEPT];
     int nb_edits;
+    /* Tracks the owner changed, to be read again (rx_link_tracks_changed);
+     * more than fit is the whole library. */
+    uint64_t changed[RX_LIBRARY_CHANGES_KEPT];
+    int nb_changed;
 };
 
 void rx_link_options_default(RXLinkOptions *o)
@@ -496,6 +500,45 @@ static void reload_done(RXLink *l)
             (double)(rx_time_us() - l->build_start) / 1000.0);
 }
 
+/* Tracks the owner changed: each read again from the library and put in
+ * place (rx_catalog_update_track), in a few ms, unless the plan itself
+ * would change (a new name, a key, a file), which the whole library read
+ * again on the builder does; so does a change while one is read, which
+ * may have been read before it. */
+static void tracks_changed(RXLink *l)
+{
+    uint64_t ids[RX_LIBRARY_CHANGES_KEPT];
+    pthread_mutex_lock(&l->lock);
+    int nb = l->nb_changed;
+    memcpy(ids, l->changed, (size_t)nb * sizeof(*ids));
+    l->nb_changed = 0;
+    pthread_mutex_unlock(&l->lock);
+    if (!nb)
+        return;
+    if (l->building || !l->cat) {
+        atomic_store(&l->reload, true);
+        return;
+    }
+    int64_t t0 = rx_time_us();
+    int done = 0;
+    for (int i = 0; i < nb; i++) {
+        int err = 0;
+        RXTrack *fresh = rx_library_read_track(l->lib, ids[i], &err);
+        int ret = fresh ? rx_catalog_update_track(l->cat, fresh) : err;
+        rx_track_free(fresh);
+        if (ret != 0) {
+            if (ret < 0 && ret != RX_ERROR(ENOENT))
+                rx_warn("link: track %llu cannot be read again: %s", (unsigned long long)ids[i],
+                        strerror(-ret));
+            atomic_store(&l->reload, true);
+            return;
+        }
+        done++;
+    }
+    rx_info("link: %d track%s read again (%.1f ms)", done, done == 1 ? "" : "s",
+            (double)(rx_time_us() - t0) / 1000.0);
+}
+
 /* ----------------------------------------------------------- connections */
 
 static void conn_close(RXLink *l, int i)
@@ -757,6 +800,7 @@ static void *service(void *arg)
                 rx_debug("link: wake: %s", strerror(errno));
             if (atomic_exchange(&l->built, false))
                 reload_done(l);
+            tracks_changed(l);
             /* A change while one is read: read again after it. */
             if (!l->building && atomic_exchange(&l->reload, false))
                 reload_start(l);
@@ -967,6 +1011,26 @@ int rx_link_load(RXLink *l, int player, uint32_t track_id)
 void rx_link_library_changed(RXLink *l)
 {
     atomic_store(&l->reload, true);
+    wake(l->wake);
+}
+
+void rx_link_tracks_changed(RXLink *l, const uint64_t *ids, int nb)
+{
+    pthread_mutex_lock(&l->lock);
+    for (int i = 0; i < nb; i++) {
+        int k = 0;
+        while (k < l->nb_changed && l->changed[k] != ids[i])
+            k++;
+        if (k < l->nb_changed)
+            continue;
+        if (l->nb_changed == RX_LIBRARY_CHANGES_KEPT) {
+            l->nb_changed = 0;
+            atomic_store(&l->reload, true);
+            break;
+        }
+        l->changed[l->nb_changed++] = ids[i];
+    }
+    pthread_mutex_unlock(&l->lock);
     wake(l->wake);
 }
 

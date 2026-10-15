@@ -461,7 +461,15 @@ Link is on:
   change: a counted play, a saved cue, an analysis), then swapped in
   between two requests, with the edits players made in the last 10 s
   applied to it again (the owner may not have saved them before it was
-  read); and the export plan over the whole library
+  read). Most changes are one track's own: a play, a cue, a rating, an
+  analysis, an edit in the interface. The library keeps a record of
+  which tracks changed (`rx_library_take_changes`), the owner hands them
+  over (`rx_link_set_tracks_changed`), and the service reads only those
+  again (`rx_library_read_track`) and puts each in place in what it
+  serves, in under a millisecond a track (`rx_catalog_update_track`);
+  only a change to what the plan is made of (the file, a name, the key,
+  My Tags, the cover, tracks added or removed, playlists, settings)
+  reads the whole library again. And the export plan over the whole library
   (`rx_plan_build_cb`), which the database server's paths and the virtual
   tree both come from, made again with it. That plan reads no audio
   (`RX_PLAN_STORED`): each file is described from what the library stored
@@ -577,9 +585,8 @@ sits on it. A hot cue saved with no colour code comes with the pad
 colour the deck shows (00ff00 from the 3000 whatever the slot, 1aff00
 from the 3000X), kept as `#rrggbb` unless it is the slot's own default,
 as rekordbox keeps it (a stick's 00ff00 is taken for no colour instead:
-`rx_stick_cue_to_track`). Each save makes the services read the library
-again once it settles, on a thread of their own (0.5 to 1.3 s on 1,400
-tracks), the decks answered meanwhile.
+`rx_stick_cue_to_track`). Each save has the services read that track
+again once it settles, which takes under a millisecond.
 
 Tests: test_db saves and deletes cues on a track as a CDJ-3000X does and
 the older way, each in the answer, handed on once and in the ANLZ files

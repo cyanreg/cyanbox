@@ -2678,8 +2678,8 @@ static int link_serve(Cli *cli, const RXLinkOptions *opt)
     int nb_was = 0;
     RXLinkPlayer seen[64], now[64];
     int nb_seen = 0, where[64];
-    /* The services read the library again once saved cues have settled
-     * for this long, as the interface does (src/app/link.c). */
+    /* The services read the tracks saved again once the edits have
+     * settled for this long, as the interface does (src/app/link.c). */
     int64_t edited_us = 0;
     while (1) {
         struct timespec ts = { .tv_sec = 0, .tv_nsec = 250000000 };
@@ -2688,7 +2688,13 @@ static int link_serve(Cli *cli, const RXLinkOptions *opt)
         if (link_take_edits(cli, set))
             edited_us = rx_time_us();
         if (edited_us && rx_time_us() - edited_us >= 2000000) {
-            rx_link_set_library_changed(set);
+            uint64_t *ids = NULL;
+            int nb = 0;
+            if (rx_library_take_changes(&cli->app.lib, &ids, &nb) != 0)
+                rx_link_set_library_changed(set);
+            else if (nb)
+                rx_link_set_tracks_changed(set, ids, nb);
+            free(ids);
             edited_us = 0;
         }
         RXLinkServed ifs[8];

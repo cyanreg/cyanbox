@@ -142,6 +142,11 @@ int rx_app_link_start(RXApp *app, const RXLinkOptions *o)
         .generation = app->lib.generation,
         .seen_generation = app->lib.generation,
     };
+    /* What changed before is in the library the services read first. */
+    uint64_t *ids = NULL;
+    int nb = 0;
+    rx_library_take_changes(&app->lib, &ids, &nb);
+    free(ids);
     state_clear(app);
     app->link_state.on = true;
     app->dirty = true;
@@ -335,7 +340,9 @@ static bool follow(RXApp *app, int64_t now)
 }
 
 /* The library read again once its changes have settled: every change
- * bumps lib.generation (an analysis applied, a cue set, a play). */
+ * bumps lib.generation (an analysis applied, a cue set, a play). Only the
+ * tracks changed are, when the library's record says which
+ * (rx_library_take_changes); the whole of it when anything else did. */
 static void follow_library(RXApp *app, int64_t now)
 {
     RXAppLink *l = app->link;
@@ -350,7 +357,13 @@ static void follow_library(RXApp *app, int64_t now)
     }
     if (now - l->changed_us < RELOAD_QUIET_US && now - l->first_change_us < RELOAD_LONGEST_US)
         return;
-    rx_link_set_library_changed(l->set);
+    uint64_t *ids = NULL;
+    int nb = 0;
+    if (rx_library_take_changes(&app->lib, &ids, &nb) != 0)
+        rx_link_set_library_changed(l->set);
+    else if (nb)
+        rx_link_set_tracks_changed(l->set, ids, nb);
+    free(ids);
     l->generation = gen;
     l->first_change_us = 0;
 }

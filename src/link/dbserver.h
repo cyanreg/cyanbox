@@ -53,6 +53,14 @@ void rx_catalog_set_edit(RXCatalog *c, void (*edit)(void *opaque, const RXLinkEd
  * what is served of it, handed on to no one. 1 when it changed something,
  * 0 when it was there already, -ENOENT for a track not served, -ENOMEM. */
 int  rx_catalog_apply_edit(RXCatalog *c, const RXLinkEdit *e);
+/* A track as the library holds it now (rx_library_read_track), put in
+ * the place of the catalog's library's copy when only what the catalog
+ * reads as it goes or patches here differs (cues, the grid, the rating,
+ * the colour, plays, the comment, numbers, the analysis): 0, `fresh` then
+ * holding the old copy, the caller's to free. 1 when the plan itself would
+ * change (the file, names, the key, My Tags, the cover, a track not there
+ * before): the whole library is to be read again. -ENOMEM. */
+int  rx_catalog_update_track(RXCatalog *c, RXTrack *fresh);
 
 /* --------------------------------------------------------------- session */
 

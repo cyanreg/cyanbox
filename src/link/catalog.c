@@ -166,6 +166,13 @@ static size_t stem_len(const RXTrack *t)
 
 static int load_plays(RXCatalog *c);
 
+/* The tempo the stick's track row carries (src/formats/pdb.c), x100. */
+static uint32_t tempo_of(const RXPlanTrack *pt)
+{
+    double bpm = rx_grid_bpm_median(&pt->grid, pt->duration);
+    return bpm > 0 && bpm < 1000 ? (uint32_t)nearbyint(bpm * 100.0) : 0;
+}
+
 /* The decks' ORIGINAL ARTIST lists album artists (docs/LINK.md, "The
  * pieces"): a track's is its album's album artist, else the artist all
  * the album's tracks share; 0 for a track of no album, or of an album
@@ -233,10 +240,7 @@ int rx_catalog_new(RXCatalog **out, RXLibrary *lib, RXPlan *plan)
             .file  = pt->usb_path ? rx_path_base(pt->usb_path) : "",
             .color = (uint8_t)(pt->color_id <= 8 ? pt->color_id : 0),
         };
-        /* The tempo the stick's track row carries (src/formats/pdb.c). */
-        double bpm = rx_grid_bpm_median(&pt->grid, pt->duration);
-        if (bpm > 0 && bpm < 1000)
-            ct->tempo = (uint32_t)nearbyint(bpm * 100.0);
+        ct->tempo = tempo_of(pt);
         if (!t)
             continue;
         /* The title as both databases write it: the tag, else the file's
@@ -2307,5 +2311,82 @@ int rx_catalog_rating_edit(RXCatalog *c, uint32_t track, int player, int stars)
     rx_info("link: player %d rated track %u %d star%s", player, track, stars, stars == 1 ? "" : "s");
     if (c->edit)
         c->edit(c->edit_opaque, &e);
+    return 0;
+}
+
+/* ------------------------------------------------------ one track again */
+
+static bool same_text(const char *a, const char *b)
+{
+    return !strcmp(a ? a : "", b ? b : "");
+}
+
+/* Whether `b` is `a` in everything the plan is made of (its file, the
+ * names it interns, the paths it makes, its key, its My Tags, its
+ * cover): what may differ is what the catalog reads of the track as it
+ * goes, or patches (rx_catalog_update_track). */
+static bool same_shape(const RXTrack *a, const RXTrack *b)
+{
+    const RXMeta *x = &a->meta, *y = &b->meta;
+    if (!same_text(a->path, b->path) || a->missing != b->missing || a->added != b->added ||
+        a->mtime != b->mtime || a->file_size != b->file_size || strcmp(a->codec, b->codec) ||
+        a->duration != b->duration || a->total_samples != b->total_samples ||
+        a->sample_rate != b->sample_rate || a->channels != b->channels ||
+        a->bit_rate != b->bit_rate || a->bit_depth != b->bit_depth ||
+        a->has_artwork != b->has_artwork || strcmp(a->key, b->key))
+        return false;
+    if (!same_text(x->title, y->title) || !same_text(x->artist, y->artist) ||
+        !same_text(x->album, y->album) || !same_text(x->album_artist, y->album_artist) ||
+        !same_text(x->genre, y->genre) || !same_text(x->label, y->label) ||
+        !same_text(x->remixer, y->remixer) || !same_text(x->composer, y->composer) ||
+        !same_text(x->original_artist, y->original_artist) || x->nb_tags != y->nb_tags)
+        return false;
+    for (int i = 0; i < x->nb_tags; i++)
+        if (!same_text(x->tags[i], y->tags[i]))
+            return false;
+    return true;
+}
+
+int rx_catalog_update_track(RXCatalog *c, RXTrack *fresh)
+{
+    RXTrack *t = rx_library_find_id(c->lib, fresh->id);
+    if (!t || !same_shape(t, fresh))
+        return 1;
+    bool played = t->play_count != fresh->play_count || t->last_played != fresh->last_played;
+    /* In place: the plan and the catalog point at the track. */
+    RXTrack old = *t;
+    *t = *fresh;
+    *fresh = old;
+    int ti = fresh->id <= UINT32_MAX ? track_index(c, (uint32_t)fresh->id) : -1;
+    if (ti < 0)
+        return 0;
+    RXPlanTrack *pt = c->t[ti].pt;
+    CatTrack *ct = &c->t[ti];
+    int ret;
+    if ((ret = rx_grid_copy(&pt->grid, &t->grid)) < 0 || (ret = rx_plan_track_cues(pt, t)) < 0)
+        return ret;
+    pt->color_id = (uint32_t)rx_track_color_nearest_hue(t->meta.hue);
+    /* The title is the stem made of the path, which is the same, or the
+     * tag, whose string was the old copy's. */
+    if (!stem_len(t) && t->meta.title)
+        ct->title = t->meta.title;
+    ct->tempo = tempo_of(pt);
+    ct->color = (uint8_t)(pt->color_id <= 8 ? pt->color_id : 0);
+    ct->rating = (uint8_t)RX_CLAMP(t->meta.rating, 0, 5);
+    ct->played = ymd_of(t->last_played);
+    for (int i = 0; i < NB_SORTS; i++) {
+        free(c->order[i]);
+        c->order[i] = NULL;
+    }
+    for (int i = 0; i < NB_ANALYSIS; i++)
+        if (c->analysis[i].id == pt->id)
+            analysis_clear(&c->analysis[i]);
+    if (played) {
+        free(c->plays);
+        c->plays = NULL;
+        c->nb_plays = 0;
+        if ((ret = load_plays(c)) < 0)
+            return ret;
+    }
     return 0;
 }

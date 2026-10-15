@@ -20,6 +20,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "rxbox/library.h"
 #include "rxbox/model.h"
 
 typedef struct RXLink RXLink;
@@ -129,8 +130,13 @@ enum RXLinkState rx_link_state(RXLink *l, int *number);
 /* The devices heard, players first by number: the count, up to `max`
  * filled. */
 int  rx_link_players(RXLink *l, RXLinkPlayer *out, int max);
-/* The library changed: what is served is built again from it. */
+/* The library changed: what is served is built again from it (on a
+ * thread of its own, the old served meanwhile). */
 void rx_link_library_changed(RXLink *l);
+/* Only these tracks' own state changed (rx_library_take_changes): each is
+ * read again and put in place, unless what changed shapes what is served
+ * (a name, the key, the file), which builds it all again. */
+void rx_link_tracks_changed(RXLink *l, const uint64_t *ids, int nb);
 /* Tells `player` to load our track `track_id` (a load command, as
  * rekordbox sends for a track dragged onto a deck; docs/LINK.md). 0 once
  * sent: the player's status says when it has loaded it. -EAGAIN before we
@@ -207,8 +213,9 @@ int  rx_link_set_interfaces(RXLinkSet *s, RXLinkServed *out, int max);
  * order, in the order of rx_link_set_interfaces; `where` (may be NULL)
  * gets each one's index in that list. The count, up to `max` filled. */
 int  rx_link_set_players(RXLinkSet *s, RXLinkPlayer *out, int *where, int max);
-/* rx_link_library_changed for every service. */
+/* rx_link_library_changed and rx_link_tracks_changed for every service. */
 void rx_link_set_library_changed(RXLinkSet *s);
+void rx_link_set_tracks_changed(RXLinkSet *s, const uint64_t *ids, int nb);
 /* rx_link_load on the interface `where` (rx_link_set_players' index):
  * -ENOENT when it is not served any more. */
 int  rx_link_set_load(RXLinkSet *s, int where, int player, uint32_t track_id);
