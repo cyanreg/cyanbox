@@ -1454,6 +1454,58 @@ static void test_ratings(RXDbClient *c, RXCatalog **cat, uint32_t track)
     rx_catalog_set_edit(*cat, NULL, NULL);
 }
 
+/* The TAG LIST: 100f lists it in the order tracks were added (none at
+ * first), 3002 adds (1) or takes off (0) a track served and answers
+ * 4000 [kind, 0], or 1 for a track not served; 3202 clears it. Its tracks
+ * carry bit 0 in their rows and the metadata's title row. */
+static bool tagged_in_tracks(RXDbClient *c, uint32_t track)
+{
+    RXDbRow *rows;
+    int n = 0;
+    bool tagged = false;
+    if (rx_dbclient_menu(c, RX_DB_TRACKS, 1, IDS(0), &rows, &n) == 0) {
+        for (int i = 0; i < n; i++)
+            tagged |= rows[i].id == track && (rows[i].flags & 1);
+        rx_dbrows_free(&rows, n);
+    }
+    return tagged;
+}
+
+static void test_tag_list(RXDbClient *c, RXCatalog **cat, uint32_t a, uint32_t b)
+{
+    RXLinkTagList *tl = NULL;
+    CHECK_EQ(rx_link_tag_list_new(&tl), 0);
+    if (!tl)
+        return;
+    rx_catalog_set_tag_list(*cat, tl);
+    RXDbMsg r;
+    menu_ids(c, RX_DB_TAG_LIST, 1, IDS(0), NULL, 0, "empty tag list");
+    CHECK_EQ(rx_dbclient_request(c, RX_DB_TAG_LIST_ADD, 8, IDS(b, 1), &r), 0);
+    CHECK(r.kind == RX_DB_AVAILABLE && rx_dbmsg_num(&r, 0) == RX_DB_TAG_LIST_ADD &&
+          rx_dbmsg_num(&r, 1) == 0);
+    CHECK_EQ(rx_dbclient_request(c, RX_DB_TAG_LIST_ADD, 8, IDS(a, 1), &r), 0);
+    CHECK_EQ(rx_dbmsg_num(&r, 1), 0u);
+    menu_ids(c, RX_DB_TAG_LIST, 1, IDS(0), IDS(b, a), "tag list");
+    CHECK(tagged_in_tracks(c, a) && tagged_in_tracks(c, b));
+    RXDbRow *rows;
+    int n = 0;
+    CHECK_EQ(rx_dbclient_metadata(c, a, &rows, &n), 0);
+    CHECK(n > 0 && (rows[0].flags & 1));
+    rx_dbrows_free(&rows, n);
+    CHECK_EQ(rx_dbclient_request(c, RX_DB_TAG_LIST_ADD, 8, IDS(0x7fffff, 1), &r), 0);
+    CHECK_EQ(rx_dbmsg_num(&r, 1), 1u);
+    CHECK_EQ(rx_dbclient_request(c, RX_DB_TAG_LIST_ADD, 8, IDS(b, 0), &r), 0);
+    CHECK_EQ(rx_dbmsg_num(&r, 1), 0u);
+    menu_ids(c, RX_DB_TAG_LIST, 1, IDS(0), IDS(a), "tag list less one");
+    CHECK(!tagged_in_tracks(c, b));
+    CHECK_EQ(rx_dbclient_request(c, RX_DB_TAG_LIST_CLEAR, 8, NULL, 0, &r), 0);
+    CHECK(r.kind == RX_DB_AVAILABLE && rx_dbmsg_num(&r, 1) == 0);
+    menu_ids(c, RX_DB_TAG_LIST, 1, IDS(0), NULL, 0, "cleared tag list");
+    CHECK(!tagged_in_tracks(c, a));
+    rx_catalog_set_tag_list(*cat, NULL);
+    rx_link_tag_list_free(&tl);
+}
+
 static void test_library(RXLibrary *lib, RXPlan *plan, RXCatalog **cat)
 {
     uint32_t alpha = (uint32_t)by_file(lib, "alpha.flac")->id;
@@ -1905,6 +1957,7 @@ static void test_library(RXLibrary *lib, RXPlan *plan, RXCatalog **cat)
     CHECK(r.kind == RX_DB_CUES_REPLY && r.nb_args == 9 && rx_dbmsg_num(&r, 1) == 0x32);
     test_cue_saves(c, cat, charlie);
     test_ratings(c, cat, charlie);
+    test_tag_list(c, cat, charlie, delta);
     close_pair(&sv, &c);
 
     /* A client set up the older way: twelve-argument rows, the plain

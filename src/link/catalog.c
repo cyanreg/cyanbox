@@ -108,6 +108,7 @@ struct RXCatalog {
     int        nb_plays;
     void     (*edit)(void *opaque, const RXLinkEdit *e);
     void      *edit_opaque;
+    RXLinkTagList *tags;
 };
 
 /* ------------------------------------------------------------- building */
@@ -272,6 +273,11 @@ void rx_catalog_set_check(RXCatalog *c, int (*check)(void *opaque, const RXPlanT
 {
     c->check = check;
     c->check_opaque = opaque;
+}
+
+void rx_catalog_set_tag_list(RXCatalog *c, RXLinkTagList *tl)
+{
+    c->tags = tl;
 }
 
 void rx_catalog_set_edit(RXCatalog *c, void (*edit)(void *opaque, const RXLinkEdit *e),
@@ -1131,6 +1137,20 @@ static int history_days(RXCatalog *c, RXCatMenu *m)
     return 0;
 }
 
+/* The TAG LIST's tracks, in the order they were added (CMD_PREPARE_ROOT;
+ * rbxport lists them as it lists a playlist's). */
+static int tag_list_tracks(RXCatalog *c, int sort, RXCatMenu *m)
+{
+    uint32_t *ids = malloc(RX_LINK_TAG_LIST_MAX * sizeof(*ids));
+    if (!ids)
+        return RX_ERROR(ENOMEM);
+    int n = c->tags ? rx_link_tag_list_get(c->tags, ids, RX_LINK_TAG_LIST_MAX) : 0;
+    int ret = own_tracks(c, ids, (uint32_t)RX_CLAMP(n, 0, RX_LINK_TAG_LIST_MAX), sort,
+                         RX_DB_TRACK_LISTED, m);
+    free(ids);
+    return ret;
+}
+
 /* A day's history: each play that day in the order it was, a track
  * played twice twice. Every row of a history carries the played bit
  * (rbxport's capture). */
@@ -1258,6 +1278,8 @@ int rx_catalog_menu(RXCatalog *c, const RXDbMsg *q, RXCatMenu *m)
 
     case RX_DB_TRACKS:
         return list_tracks(c, &f, sort, false, 0, m);
+    case RX_DB_TAG_LIST:
+        return tag_list_tracks(c, sort, m);
     case RX_DB_FILE_NAMES: {
         /* By the file's name unless a sort is asked for (an emulated
          * CDJ-2000 got it in the titles' order, 2026-10-15). */
@@ -1528,7 +1550,8 @@ static void track_item(const RXCatalog *c, const CatTrack *t, int column, bool e
         .text  = t->title,
         .text2 = text2,
         .type  = sub << 8 | RX_DB_ITEM_TITLE,
-        .flags = flags,
+        /* Bit 0: on the TAG LIST, which a player marks (rbxport). */
+        .flags = flags | (c->tags && rx_link_tag_list_has(c->tags, pt->id)),
         /* The djl-analysis' older layout has the artwork id here, which
          * its clients ask 2003 for; rekordbox's has the track's id, which
          * a CDJ-3000 asks for (rbxport's capture). */
@@ -2389,4 +2412,14 @@ int rx_catalog_update_track(RXCatalog *c, RXTrack *fresh)
             return ret;
     }
     return 0;
+}
+
+RXLinkTagList *rx_catalog_tag_list(RXCatalog *c)
+{
+    return c->tags;
+}
+
+bool rx_catalog_serves(RXCatalog *c, uint32_t track)
+{
+    return track_index(c, track) >= 0;
 }

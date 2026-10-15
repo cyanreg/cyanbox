@@ -24,6 +24,7 @@
 #include "rxbox/model.h"
 
 typedef struct RXLink RXLink;
+typedef struct RXLinkTagList RXLinkTagList;
 
 /* The ports, ours and the ones players listen on. Real players use
  * rekordbox's (rx_link_options_default); the tests run a server and a
@@ -58,6 +59,9 @@ typedef struct RXLinkOptions {
     /* Tests: each reading of the library after the first takes this much
      * longer, so a test sees players answered while one runs. */
     int test_build_ms;
+    /* The TAG LIST the players see and change (below), the owner's to
+     * keep; NULL: a service or a set makes its own. */
+    RXLinkTagList *tag_list;
 } RXLinkOptions;
 
 void rx_link_options_default(RXLinkOptions *o);
@@ -179,6 +183,28 @@ int  rx_link_edits(RXLink *l, RXLinkEdit *out, int max);
  * rating replaces the track's. 1 when `t` changed, 0 when there was
  * nothing to do, or a negative errno. */
 int  rx_link_edit_apply(RXTrack *t, const RXLinkEdit *e);
+
+/* ------------------------------------------------------------ tag list */
+
+/* The TAG LIST (docs/LINK.md, "Edits on the deck"): the tracks a DJ
+ * collects while browsing, with TAG TRACK on a deck or in the interface,
+ * in the order they were added, which every deck browsing rxbox shows and
+ * changes. Temporary: in memory only, shared by the services and their
+ * owner; every call takes its lock. */
+#define RX_LINK_TAG_LIST_MAX 1000
+
+int  rx_link_tag_list_new(RXLinkTagList **out);
+void rx_link_tag_list_free(RXLinkTagList **tl);
+/* At the end: 1, or 0 when it is there already; -ENOSPC when full. */
+int  rx_link_tag_list_add(RXLinkTagList *tl, uint32_t id);
+/* 1, or 0 when it was not there. */
+int  rx_link_tag_list_remove(RXLinkTagList *tl, uint32_t id);
+void rx_link_tag_list_clear(RXLinkTagList *tl);
+bool rx_link_tag_list_has(RXLinkTagList *tl, uint32_t id);
+/* The ids in order: how many there are, up to `max` copied. */
+int  rx_link_tag_list_get(RXLinkTagList *tl, uint32_t *ids, int max);
+/* Bumped by every change, for an owner's view to follow. */
+unsigned rx_link_tag_list_generation(RXLinkTagList *tl);
 
 /* ------------------------------------------------------------- the set */
 

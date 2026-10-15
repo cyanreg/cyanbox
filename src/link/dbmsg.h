@@ -98,6 +98,7 @@ enum RXDbKind {
     RX_DB_BITRATES           = 0x1011,
     RX_DB_HISTORIES          = 0x1012,
     RX_DB_FILE_NAMES         = 0x1013,
+    RX_DB_TAG_LIST           = 0x100f,  /* CMD_PREPARE_ROOT: the TAG LIST's tracks (rbxport) */
     RX_DB_KEYS               = 0x1014,
     RX_DB_GENRE_ARTISTS      = 0x1101,
     RX_DB_ARTIST_ALBUMS      = 0x1102,
@@ -164,10 +165,10 @@ enum RXDbKind {
     RX_DB_SAVE_ATOM          = 0x2805,
     RX_DB_UPDATE_ATOM        = 0x2905,
     RX_DB_HISTORY_ADD        = 0x3001,
-    RX_DB_SAVE_TAG           = 0x3002,
+    RX_DB_TAG_LIST_ADD       = 0x3002,  /* CMD_ADD_PREPARE (firmware): 1 add, 0 remove */
     RX_DB_HISTORY_DELETE     = 0x3101,
     RX_DB_ON_AIR             = 0x3201,
-    RX_DB_CLEAR_TAGS         = 0x3202,
+    RX_DB_TAG_LIST_CLEAR     = 0x3202,  /* CMD_DEL_TAGLIST_ALL */
     RX_DB_HISTORY_REMOVE     = 0x3401,
 
     /* Replies. */

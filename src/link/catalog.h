@@ -112,5 +112,9 @@ int  rx_catalog_cue_edit(RXCatalog *c, uint32_t track, int player, bool remove,
  * also when it changed nothing; -ENOENT for a track not served, -EINVAL
  * for a rating past 5. */
 int  rx_catalog_rating_edit(RXCatalog *c, uint32_t track, int player, int stars);
+/* The TAG LIST it serves (rx_catalog_set_tag_list), NULL none; whether
+ * `track` is one it serves. */
+RXLinkTagList *rx_catalog_tag_list(RXCatalog *c);
+bool rx_catalog_serves(RXCatalog *c, uint32_t track);
 
 #endif /* RXBOX_LINK_CATALOG_H */

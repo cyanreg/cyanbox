@@ -55,6 +55,8 @@ struct RXLinkSet {
     pthread_mutex_t lock;       /* served[] and nb */
     Served served[MAX_SERVED];
     int nb;
+    /* The TAG LIST every service shares: the owner's, or the set's own. */
+    RXLinkTagList *own_tags;
 };
 
 typedef struct Want {
@@ -221,6 +223,7 @@ static void set_free(RXLinkSet *s)
     free(s->interface);
     free(s->name);
     free(s->broadcast);
+    rx_link_tag_list_free(&s->own_tags);
     free(s);
 }
 
@@ -242,8 +245,10 @@ int rx_link_set_start(RXLinkSet **out, const RXLinkOptions *o)
     s->opt.interface = NULL;
     s->wake = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
     int ret = 0;
+    if (!o->tag_list && rx_link_tag_list_new(&s->own_tags) >= 0)
+        s->opt.tag_list = s->own_tags;
     if ((o->library && !s->library) || (o->interface && !s->interface) ||
-        (o->name && !s->name) || (o->broadcast && !s->broadcast))
+        (o->name && !s->name) || (o->broadcast && !s->broadcast) || !s->opt.tag_list)
         ret = RX_ERROR(ENOMEM);
     else if (s->wake < 0)
         ret = RX_ERROR(errno);

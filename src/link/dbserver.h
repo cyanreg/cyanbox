@@ -44,6 +44,8 @@ void rx_catalog_free(RXCatalog **c);
  * serves that. Without one, such a track is served as it is planned. */
 void rx_catalog_set_check(RXCatalog *c, int (*check)(void *opaque, const RXPlanTrack *pt),
                           void *opaque);
+/* The TAG LIST the catalog serves and marks tracks of (NULL: none). */
+void rx_catalog_set_tag_list(RXCatalog *c, RXLinkTagList *tl);
 /* Where the catalog hands the cues players save on the deck (the
  * service's queue for the library's owner, rxbox/link.h). */
 void rx_catalog_set_edit(RXCatalog *c, void (*edit)(void *opaque, const RXLinkEdit *e),

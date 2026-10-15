@@ -10,7 +10,7 @@
 
 link_wire_src     = files('wire.c')
 link_presence_src = files('packet.c', 'presence.c')
-link_db_src       = files('dbmsg.c', 'catalog.c', 'dbserver.c', 'dbclient.c')
+link_db_src       = files('dbmsg.c', 'catalog.c', 'dbserver.c', 'dbclient.c', 'taglist.c')
 link_nfs_src      = files('vtree.c', 'nfs.c', 'nfsclient.c')
 
 rx_link_lib = static_library('rx_link',

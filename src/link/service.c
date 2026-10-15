@@ -158,6 +158,8 @@ struct RXLink {
     int64_t build_start;
     struct { RXLinkEdit e; int64_t at; } recent[RECENT_EDITS];
     int nb_recent;
+    RXLinkTagList *tags;        /* the owner's, or ours (own_tags) */
+    bool own_tags;
     uint32_t peers[MAX_PLAYERS];    /* the addresses on the link at the last look */
     int nb_peers;
     /* Every address that was on the link, and when last: still answered
@@ -398,6 +400,7 @@ static int served_build(RXLink *l, Served *s)
         goto fail;
     rx_catalog_set_check(s->cat, wav_check, l);
     rx_catalog_set_edit(s->cat, edited, l);
+    rx_catalog_set_tag_list(s->cat, l->tags);
     free(tracks);
     free(pls);
     return 0;
@@ -858,9 +861,12 @@ int rx_link_start(RXLink **out, const RXLinkOptions *o)
     l->any_peer = o->any_peer;
     l->start_up = o->start_up;
     l->test_build_ms = o->test_build_ms;
+    l->tags = o->tag_list;
     l->peer = o->peer_ports;
     int ret = RX_ERROR(ENOMEM);
-    if ((o->library && !l->root) || !l->name)
+    if (!l->tags && rx_link_tag_list_new(&l->tags) >= 0)
+        l->own_tags = true;
+    if ((o->library && !l->root) || !l->name || !l->tags)
         goto fail;
     if ((ret = rx_link_if_find(&l->ifc, o->interface, NULL, o->broadcast)) < 0 ||
         (ret = open_sockets(l, &o->ports)) < 0)
@@ -959,6 +965,8 @@ void rx_link_stop(RXLink **lp)
     }
     rx_presence_free(&l->pres);
     rx_nfs_free(&l->nfs);
+    if (l->own_tags)
+        rx_link_tag_list_free(&l->tags);
     Served s = { .lib = l->lib, .plan = l->plan, .cat = l->cat, .tree = l->tree };
     served_free(&s);
     rx_link_wav_free(&l->wav);
