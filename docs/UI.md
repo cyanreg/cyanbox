@@ -112,7 +112,8 @@ The full width of the window. Rows, top to bottom:
      Fine/1Beat/2Beats/4Beats/8Beats/16Beats/8Bars/16Bars/32Bars;
      right-click picks from a menu). The arrows jump on the press and,
      held, again every 120 ms after 300 ms. Media keys and other MPRIS
-     clients (README.md, The interface) drive the same transport: play
+     clients (README.md, The interface; not with `--pro-link`, which
+     keeps the interface off the bus) drive the same transport: play
      and pause as PLAY/PAUSE, stop as CUE while playing (back to the cue
      point, paused), seek, and next and previous load the row after or
      before the loaded track in the current view, playing on if the deck

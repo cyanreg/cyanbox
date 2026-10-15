@@ -269,7 +269,7 @@ rxbox --audio-sink alsa_output.usb-headphones   # play to this PipeWire node
 rxbox --audio none                  # no audio device at all
 rxbox --no-mpris                    # stay off the D-Bus session bus
 rxbox --pro-link                    # offer PRO DJ LINK (the Link menu); the deck
-                                    # heard only in a DJM's LINK CUE
+                                    # heard only in a DJM's LINK CUE, no MPRIS
 ```
 
 `--audio-sink NAME` (or the `audio.sink` setting) connects the player to that
@@ -296,7 +296,8 @@ table), a library track opened by its `file://` URL (never one outside
 the library), and quit. It is built when sd-bus is found (`libsystemd`,
 else `libelogind` or `basu`); the meson option `mpris` (`-Dmpris=disabled`
 leaves it out, `enabled` requires sd-bus) decides. `--no-mpris` keeps the
-interface off the bus; the subcommands never go on it. Without a session
+interface off the bus, and so does `--pro-link`, whose deck is heard only
+in a mixer's headphone cue; the subcommands never go on it. Without a session
 bus, or with another rxbox holding the name, the interface says so once
 and runs without it.
 
