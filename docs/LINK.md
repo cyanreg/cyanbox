@@ -733,7 +733,15 @@ end to end: rxbox (`--pro-link`, a 440 Hz track playing) took over with
 its LINK CUE was on every timing was answered with 0 and its counter;
 the mixer's output carried 440 Hz for the 15 s played, 6 dB down, as its
 own LINK CUE path has it. Stopped, rxbox sent nothing more and the mixer
-played out what it held and stood down, still naming 17.
+played out what it held and stood down, still naming 17. Paused for 0.5,
+3 and 8 s and played again, the mixer's output fell silent for as long
+and played on each time: it lets a source go about 0.1 s after the audio
+stops, still naming it and sending it timing, so every start is a new
+takeover and handover (its timing then waits about 57 ms, its 70 ms
+of silence to begin with). Only the very first start, LINK CUE switched
+on while rxbox was already elected, got no timing for about a second
+(about one lap of the mixer's ring at 96 kHz): the mixer's doing, not
+rxbox's.
 
 **Not yet**: a real mixer (the emulated DJM-900NXS runs its real
 firmware, but not its real hardware). The first check at one: with rxbox up as device
