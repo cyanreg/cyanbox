@@ -143,7 +143,8 @@ struct CBML {
 
     /* The context: what the cache holds. */
     int nb_prefix;              /* tokens of the prompt up to the audio's end */
-    int pass_rows;              /* PASS_ROWS, or fewer (ml_set_pass_rows) */
+    int pass_rows;              /* PASS_ROWS, or fewer (ml_set_listen) */
+    bool listen_logits;         /* the prompt's last logits too (ml_set_listen) */
     int nb_audio;               /* audio rows in `audio`, `ds_out` */
 
     double listen_ms, ask_ms;
@@ -1009,7 +1010,9 @@ typedef struct Rows {
 
 /* The rows, every segment's, through the decoder and into the cache; then
  * the logits of rows lrows[0 .. nl) into ml->logits, rows [out0, out0 +
- * nl). Recorded, not run. */
+ * nl). With no logits wanted, the last layer goes only as far as the
+ * cache: what comes after its keys and values is read by nothing but the
+ * head. Recorded, not run. */
 static void pass(CBML *ml, const Rows *r, const Segment *segs, int nb_segs, const int *lrows,
                  int nl, int out0)
 {
@@ -1047,6 +1050,8 @@ static void pass(CBML *ml, const Rows *r, const Segment *segs, int nb_segs, cons
         };
         ml_gpu_dispatch(g, ML_K_QK_ROPE, &rp, sizeof(rp), m, 1, 1);
         ml_gpu_barrier(g);
+        if (!nl && i == L_LAYERS - 1)
+            return;
         attention(ml, i, segs, nb_segs);
         gemm(ml, ml->o.b.addr, L_HEADS * L_HEAD, l->o, 0, x, L_DIM, m, FLAG_ADD);
         ml_gpu_barrier(g);
@@ -1086,8 +1091,9 @@ static void pass(CBML *ml, const Rows *r, const Segment *segs, int nb_segs, cons
  * the cache; aidx[i] >= 0 puts that audio row at token i instead of its
  * embedding (and adds the deepstack's rows after the first layers). The
  * logits of the last nb_logits tokens (at most 8, and n when n is no more
- * than LLM_CHUNK) end in ml->logits, [nb_logits][VOCAB]. The tokens are
- * read in chunks of LLM_CHUNK, a segment each, up to PASS_ROWS a pass. */
+ * than LLM_CHUNK; 0: none) end in ml->logits, [nb_logits][VOCAB]. The
+ * tokens are read in chunks of LLM_CHUNK, a segment each, up to PASS_ROWS
+ * a pass. */
 static int decode(CBML *ml, const int32_t *ids, const int32_t *aidx, int n, int pos0,
                   int nb_logits, CBCancel *cancel)
 {
@@ -1131,7 +1137,7 @@ static int decode(CBML *ml, const int32_t *ids, const int32_t *aidx, int n, int 
             .audio = audio,
         };
         int lrows[8], nl = 0;
-        if (p0 + rows == n) {
+        if (p0 + rows == n && nb_logits > 0) {
             nl = CB_CLAMP(nb_logits, 1, CB_MIN(8, last));
             for (int j = 0; j < nl; j++)
                 lrows[j] = rows - nl + j;
@@ -1257,9 +1263,10 @@ const MLStats *ml_stats(const CBML *ml)
     return &ml->stats;
 }
 
-void ml_set_pass_rows(CBML *ml, int rows)
+void ml_set_listen(CBML *ml, int pass_rows, bool logits)
 {
-    ml->pass_rows = CB_CLAMP(rows, LLM_CHUNK, PASS_ROWS);
+    ml->pass_rows = CB_CLAMP(pass_rows, LLM_CHUNK, PASS_ROWS);
+    ml->listen_logits = logits;
 }
 
 int ml_listen(CBML *ml, const float *pcm, int64_t n, int room, CBCancel *cancel)
@@ -1302,7 +1309,7 @@ int ml_listen(CBML *ml, const float *pcm, int64_t n, int room, CBCancel *cancel)
         ret = CB_ERROR(E2BIG);
         goto end;
     }
-    if ((ret = decode(ml, t.ids, t.aidx, t.nb, 0, 1, cancel)) < 0)
+    if ((ret = decode(ml, t.ids, t.aidx, t.nb, 0, ml->listen_logits, cancel)) < 0)
         goto end;
     ml->nb_prefix = t.nb;
     ml->nb_audio = nb_audio;

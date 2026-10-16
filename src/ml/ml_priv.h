@@ -212,9 +212,12 @@ int ml_listen(CBML *ml, const float *pcm, int64_t n, int room, CBCancel *cancel)
  * ask it. */
 int ml_question_tokens(CBML *ml, const char *question, const char *prefix);
 int ml_max_context(const CBML *ml);
-/* The most tokens a pass reads the audio in (2048, in chunks of 512 that
- * each come out as alone; fewer for the tests: 512 at least). */
-void ml_set_pass_rows(CBML *ml, int rows);
+/* How the audio is read, for the tests, which check that neither changes
+ * what the questions after it get: up to pass_rows tokens a pass (2048,
+ * in chunks of 512 that each come out as alone; 512 at least), and with
+ * the logits of its last token, the last layer whole (not by default:
+ * nothing reads them). */
+void ml_set_listen(CBML *ml, int pass_rows, bool logits);
 
 /* The model's vocabulary: the logits of a token. */
 #define ML_VOCAB 151936

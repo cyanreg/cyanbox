@@ -22,7 +22,7 @@ colour and the comment, and the genre unless the user typed one
 | | per track (4–5 min) |
 | --- | --- |
 | Loading the model, once | 3.5 s; 4.1 GB of weights onto the GPU, none kept in RAM |
-| Listening (the whole track) | 2.3–4.1 s on a 6900 XT, ~75x real time: the encoder 0.5–0.8 s, the prompt up to the audio's end (2,700 to 4,600 tokens) 1.8–3.3 s |
+| Listening (the whole track) | 2.3–4.1 s on a 6900 XT, ~75x real time: the encoder 0.5–0.8 s, the prompt up to the audio's end (2,700 to 4,600 tokens) 1.8–3.2 s |
 | Every question of `cb_ml_tag` at once (seven yes/no, the colour in eight orders, three in words) | ~0.85 s for their 836 tokens, then 0.1–0.25 s for the answers' 10 to 30 |
 | A track in all, from its audio to the last answer | 3.9 s (the median of 16 tracks of 3 to 6 minutes; 6.7 s when the questions went one at a time and its audio was decoded first, 0.3 s) |
 | Memory | 174 MB of RAM at most (64 MB of it a read buffer while loading); 5.6 GB of VRAM in buffers after the questions (4.1 GB weights, 1.2 GB cache, the decoder's scratch for 2048 tokens a pass), 6.1 GB at the peak for a 4-minute track and 6.7 GB for one of 9.5 minutes or more (the encoder's scratch, freed before the decoder reads its rows; the decoder's is freed before it is made) |
@@ -278,7 +278,8 @@ reads back a token or a row of logits, and does nothing else.
   with its time markers (the seconds every 2 s); the cache holds it up to
   the end of the audio, and every question starts again from there. It is
   read 2048 tokens a pass, in chunks of 512 that each keep the attention
-  they would have alone: the GEMM is faster on more rows.
+  they would have alone: the GEMM is faster on more rows. Nothing reads
+  its logits, so its last layer goes only as far as the cache.
 - **Questions together.** Questions asked together (`ml_ask_many`; a tag
   asks eighteen) go through the decoder in one pass of their 836 tokens
   rather than eighteen of 15 to 80, which keep most of the GPU idle (the
@@ -321,9 +322,10 @@ one alone ran over 250 tracks without fault.
   row the same whatever rows come with it, attention the same with keys
   moved to other slots, RoPE the same from a table of positions.
 - `test_ml_ask` (needs the model: `CYANBOX_ML_MODEL=FILE meson test`;
-  skipped without) reads the audio in passes of one chunk and of several,
-  asks questions together and one at a time, in one batch and in two, and
-  compares the logits bit for bit and the answers.
+  skipped without) reads the audio as it is and as it was at first (in
+  passes of one chunk, the last layer whole), asks questions together and
+  one at a time, in one batch and in two, and compares the logits bit for
+  bit and the answers.
   `jobs_tag` (`test_jobs --tag`, with the model too) tags a batch whose
   tracks each decode while the one before is tagged, and checks each got
   its own audio: the same tags as `cb_ml_tag` of it decoded alone. Both

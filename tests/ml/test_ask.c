@@ -6,8 +6,10 @@
  * over LLM_CHUNK tokens (read in two chunks), answers of one token and of
  * many, and an answer cut short once settled; and all of them twice over,
  * more than the cache has room for beside the audio at once. Before that,
- * the audio read in passes of one chunk and of several, the questions
- * alone after each: the same, bit for bit. The audio is made here: 90 s of
+ * the audio read as it was at first (in passes of one chunk, the last
+ * layer whole for the prompt's logits) and as it is (passes of several,
+ * the last layer only as far as the cache), the questions alone after
+ * each: the same, bit for bit. The audio is made here: 90 s of
  * a beat, a bass line and a chord, three chunks.
  *
  * Needs the model, $CYANBOX_ML_MODEL (the 4 GB GGUF file), and a GPU that
@@ -143,17 +145,18 @@ int main(void)
         strcat(long_q, "Listen closely. ");
     strcat(long_q, "Is this music? Answer yes or no.");
 
-    /* The audio in passes of a chunk, then of several; one question at a
-     * time after each, as cb_ml_choose and cb_ml_ask ask. */
+    /* The audio read as it is, then as it was at first (into the same
+     * slots: a slot it would leave unwritten would show first); one
+     * question at a time after each, as cb_ml_choose and cb_ml_ask ask. */
     MLQuery alone[NQ], chunked[NQ], together[2 * NQ];
     for (int k = 0; k < 2; k++) {
-        MLQuery *q = k ? alone : chunked;
-        ml_set_pass_rows(ml, k ? 4096 : 512);
+        MLQuery *q = k ? chunked : alone;
+        ml_set_listen(ml, k ? 512 : 4096, k);
         if ((ret = cb_ml_listen(ml, pcm, n, NULL)) < 0) {
             printf("FAIL listening: %s\n", strerror(-ret));
             return 1;
         }
-        make_queries(q, k ? alone_l : chunked_l, long_q);
+        make_queries(q, k ? chunked_l : alone_l, long_q);
         for (int i = 0; i < NQ; i++) {
             if ((ret = ml_ask_many(ml, &q[i], 1, NULL)) < 0) {
                 printf("FAIL question %d alone: %s\n", i, strerror(-ret));
@@ -166,7 +169,7 @@ int main(void)
         printf("FAIL the audio is not of the length the test needs\n");
         failures++;
     }
-    compare("the audio in passes of several chunks", alone, chunked);
+    compare("the audio read as it was at first", alone, chunked);
     printf("question 4 is %d tokens; the genre: \"%s\"; the music: \"%s\"\n",
            ml_question_tokens(ml, long_q, NULL), alone[3].answer, alone[5].answer);
     if (ml_question_tokens(ml, long_q, NULL) <= 512 || ml_question_tokens(ml, "Hi", NULL) > 8) {
