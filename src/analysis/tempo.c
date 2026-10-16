@@ -151,6 +151,19 @@ static double comb(const float *ac, int n, double fps, double bpm)
     return interp(ac, n, lag) + 0.5 * interp(ac, n, 2 * lag) + 0.25 * interp(ac, n, 4 * lag);
 }
 
+int cb_tempo_combs(const CBOnsets *o, const double *bpm, int nb, double *out)
+{
+    const int nlag = (int)(4 * 60.0 * o->fps / CB_TEMPO_MIN) + 4;
+    float *ac = malloc((size_t)nlag * sizeof(*ac));
+    if (!ac)
+        return CB_ERROR(ENOMEM);
+    int ret = autocorr(o->full, o->nb, ac, nlag);
+    for (int i = 0; i < nb && ret >= 0; i++)
+        out[i] = comb(ac, nlag, o->fps, bpm[i]);
+    free(ac);
+    return ret;
+}
+
 /* --------------------------------------------------- harmonic strength */
 
 double cb_tempo_phase(const float *o, int n, double fps, double bpm, double *strength)

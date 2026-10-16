@@ -182,6 +182,11 @@ typedef struct CBTempoEstimate {
 int cb_tempo_estimate(const CBOnsets *o, double lo, double hi, double prior,
                       CBTempoEstimate *out);
 
+/* How strongly the full band repeats at each of the nb tempos: its
+ * whole-track autocorrelation at the beat, two-beat and bar lags (the
+ * comb cb_tempo_estimate finds its peaks with). */
+int cb_tempo_combs(const CBOnsets *o, const double *bpm, int nb, double *out);
+
 /* Phase (seconds, in [0, 60/bpm)) of the onset signal's fundamental at
  * `bpm`, and its strength. */
 double cb_tempo_phase(const float *o, int n, double fps, double bpm, double *strength);

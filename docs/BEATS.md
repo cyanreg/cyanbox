@@ -607,6 +607,18 @@ kicks at both tempos, and on 18 synthetic cases, two of them with a kick
 share under a half at the runner-up (0.44, 0.21) whose decision stands
 either way: no grid changed.
 
+The runner-up also wins, whatever its grid's support, where the full
+band repeats at least twice as strongly at its beat, two-beat and bar
+lags (the comb `cb_tempo_estimate` finds its peaks with, whole track):
+a grid fitted to the off-beat hats rather than the kicks can collect
+fewer kicks than the impostor's, and a ragged one can fail the
+cleanliness test, but neither repeats. "plan goes on" and "In My House"
+(128 by ear), read at 96, the 3:4 family whose fourth harmonic is the
+eighth-note triplets at 128: combs 1.07 at 128 against 0.12 and 0.46 at
+96 (`CB_BEATS_VERSION` 8). Where the check runs on the lists checked and
+the runner-up is not the beat, its comb is the weaker (0.22-0.76 of the
+first) or within a third (1.29, 1.36).
+
 **The octave** is decided on the fitted grid, whose beats sit on the hits
 (rhythm evidence needs that; a whole-track estimate does not have it). Half,
 same and double are each judged by:
@@ -1410,16 +1422,26 @@ compilation, kept as a guard for fast tracks), from `cyanbox-eval`'s
 cache before and after: every tempo, flag and confidence the same. Two
 synthetic cases at 100, one per rule, came out 200 before.
 
+Version 8 adds the family by the comb (above): "plan goes on" and "In
+My House" are 128 now, from 192; again no tempo, flag or confidence
+changed on the two lists, and a synthetic case at 128 (kicks on the
+sixteenths 1.3, 2.4, 3.3 and 4.4, triplets on 2 and 4), read at 96
+before, is 128.
+
 Not fixed: "LIFE GOES ON" (98, read 196) has its snare on 2 and 4 with
 next to nothing on 1 and 3 in the mid band (balance 0.16 at 98), which
 the "too fast" test takes for 16ths, and its kick follows the snare's
 parity, so neither band tells the backbeat from a double tempo. "Egret
 and Willow" (98 by the grid; heard as about 110, which holds no grid)
 is 196 by a margin of 1.2, its lone snare at 196 just under the
-threshold (0.48). "plan goes on" and "In My House" (128) are fitted at
-96 first, a 3:4 family whose grid sits on the hits while the 128 grid
-sits about 100 ms off the kicks, then doubled. "Yay Yeah" (102) is read
-at 82 and 164. Two the user named do not hold the tempo given:
+threshold (0.48). "Yay Yeah (Long Ver.)" changes tempo: 102 for its
+first 80 seconds, then 82 to the end (16-second windows: nothing at 102
+after 80 s); it is read 204 and 164, both twice, because the octave is
+decided on the longest section, where the rhythm leans to 82 (0.85
+against 0.68) but the prior to 164. "In My House" is flagged
+`phase-uncertain`, and "plan goes on"'s kicks sit a sixteenth before its
+beats: where the beat lies in those two syncopated patterns has not been
+checked by ear. Two the user named do not hold the tempo given:
 "Peaky Pumpin" (180 by ear) is 199-200 in every 16-second window of the
 track and 180 in none, and "Reminiscence of Sea" (170) likewise 197.
 

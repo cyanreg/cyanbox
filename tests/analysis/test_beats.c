@@ -42,6 +42,11 @@
  * ("Defragmenter"), one with sixteenths (hats, ghost notes) and a snare on
  * 2 and 4 ("Super-Slow-Internet-san").
  *
+ * And the family: 128 with kicks on the sixteenths 1.3, 2.4, 3.3 and 4.4
+ * and triplets on 2 and 4 ("plan goes on"), whose harmonics make 96 the
+ * working family, and whose 96 grid collects more kicks: the 128 one
+ * repeats, and wins.
+ *
  * The GPU front end (cyanbox/compute.h) must give the same results. When a
  * device is there, every case runs on both paths: each must pass on its
  * own, and the two grids must be the same (sections, their tempo and
@@ -217,6 +222,9 @@ enum {
                          * 4, snare on 2 and 4, hats and a bass on every eighth */
     STYLE_EIGHTS,       /* a kick and hats on every eighth and nothing between them, no
                          * snare ("Defragmenter") */
+    STYLE_SYNCO,        /* 128 as Ym1024's "plan goes on": kicks on the sixteenths 1.3,
+                         * 2.4, 3.3 and 4.4, a snare on 3.3, hats on the eighths but
+                         * for triplets on 2 and 4 */
     STYLE_EIGHTS_SNARE, /* a kick on every eighth, hats and ghost notes on the sixteenths,
                          * a snare on 2 and 4 ("Super-Slow-Internet-san") */
 };
@@ -512,6 +520,20 @@ static int synth(const Spec *sp, Track *t, Truth *truth)
                 add_hat(t, tq, 0.5, &l);
                 add_hat(t, th, 0.5, &l);
                 break;
+            case STYLE_SYNCO: {
+                static const double kicks[4] = { 0.5, 0.75, 0.5, 0.75 };
+                add_kick(t, tq + kicks[q] * p, 1.0);
+                if (q == 2)
+                    add_snare_bright(t, tq + 0.5 * p, 1.0, &l);
+                if (q == 1 || q == 3) {
+                    for (int k = 0; k < 3; k++)
+                        add_hat(t, tq + k * p / 3.0, 0.7, &l);
+                } else {
+                    add_hat(t, tq, 0.7, &l);
+                    add_hat(t, th, 0.7, &l);
+                }
+                break;
+            }
             case STYLE_EIGHTS_SNARE:
                 add_kick(t, tq, 1.0);
                 add_kick(t, th, 0.9);
@@ -668,6 +690,8 @@ static const Spec cases[] = {
     { .name = "eighths 100: a kick on every eighth, sixteenths, snare on 2 and 4",
       .style = STYLE_EIGHTS_SNARE, .bpm = 100.0, .first_downbeat = 0.4, .bars = 48,
       .seed = 34 },
+    { .name = "syncopated 128: kicks on the sixteenths 1.3, 2.4, 3.3, 4.4",
+      .style = STYLE_SYNCO, .bpm = 128.0, .first_downbeat = 0.4, .bars = 64, .seed = 35 },
 };
 
 typedef struct Want {
@@ -713,6 +737,7 @@ static const Want wants[] = {
     { 0, CUTS | CB_GRID_FLAG_UNSTEADY | CB_GRID_FLAG_OCTAVE_UNCERTAIN },
     { 0, CUTS | CB_GRID_FLAG_UNSTEADY | CB_GRID_FLAG_OCTAVE_UNCERTAIN },
     { 0, CUTS | CB_GRID_FLAG_UNSTEADY | CB_GRID_FLAG_OCTAVE_UNCERTAIN },
+    { 0, CUTS | CB_GRID_FLAG_UNSTEADY },
 };
 
 /* ----------------------------------------------------------- the checks */

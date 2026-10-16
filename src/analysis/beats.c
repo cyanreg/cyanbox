@@ -2473,6 +2473,19 @@ static int analyse(const float *mono, int64_t nb_samples, int rate, CBSpectrum *
             ret = r2;
             goto fail;
         }
+        /* Or it repeats twice as strongly at its beat, two-beat and bar
+         * lags: then its grid is the beat whatever its support, which a
+         * grid on the off-beat hats, not the kicks, can lose (KO3's "In
+         * My House" and Ym1024's "plan goes on", 128 by ear, read at 96:
+         * 1.07 against 0.46 and 0.12; where the runner-up is the
+         * impostor it is the weaker, or within a fifth). */
+        double cmb[2] = { 0 };
+        const double fam[2] = { bpm0, alt };
+        if (r2 == 0 && (ret = cb_tempo_combs(&c.ons, fam, 2, cmb)) < 0) {
+            fit_free(&first);
+            goto fail;
+        }
+        bool periodic = r2 == 0 && cmb[1] >= 2.0 * cmb[0];
         bool kicks = first.arbiter == c.ons.low || (r2 == 0 && c.arbiter == c.ons.low);
         const float *band = kicks ? c.ons.low : c.ons.full;
         double s1 = kicks ? s1_low : s1_full;
@@ -2480,6 +2493,7 @@ static int analyse(const float *mono, int64_t nb_samples, int rate, CBSpectrum *
         cb_debug("beats: family %.3f support %.3f vs %.3f support %.3f (the %s band; kick "
                  "shares %.2f, %.2f)\n", bpm0, s1, alt, s2, kicks ? "kick" : "full",
                  first.kick_share, r2 == 0 ? c.kick_share : 0.0);
+        cb_debug("beats: family combs %.3f, %.3f\n", cmb[0], cmb[1]);
         /* And it must be as clean a grid: no more sections, no more
          * scatter (a syncopated two-step at 3/4 of its tempo can collect
          * hits, but only with a ragged grid). */
@@ -2492,7 +2506,7 @@ static int analyse(const float *mono, int64_t nb_samples, int rate, CBSpectrum *
                 j2 = fmax(j2, c.secs[i].jitter);
             clean = j2 <= 1.2 * j1 + 0.0005;
         }
-        if (clean && s2 > 1.1 * s1) {
+        if ((clean && s2 > 1.1 * s1) || periodic) {
             fit_free(&first);
             bpm0 = alt;
         } else {
