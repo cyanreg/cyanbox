@@ -21,11 +21,11 @@ colour and the comment, and the genre unless the user typed one
 
 | | per track (4–5 min) |
 | --- | --- |
-| Loading the model, once | 3.5 s; 4.1 GB of weights onto the GPU, none kept in RAM |
+| Loading the model, once | 2.5 s; 4.1 GB of weights onto the GPU, none kept in RAM |
 | Listening (the whole track) | 2.3–4.1 s on a 6900 XT, ~75x real time: the encoder 0.5–0.8 s, the prompt up to the audio's end (2,700 to 4,600 tokens) 1.8–3.2 s |
 | Every question of `cb_ml_tag` at once (seven yes/no, the colour in eight orders, three in words) | ~0.85 s for their 836 tokens, then 0.1–0.25 s for the answers' 10 to 30 |
 | A track in all, from its audio to the last answer | 3.9 s (the median of 16 tracks of 3 to 6 minutes; 6.7 s when the questions went one at a time and its audio was decoded first, 0.3 s) |
-| Memory | 174 MB of RAM at most (64 MB of it a read buffer while loading); 5.6 GB of VRAM in buffers after the questions (4.1 GB weights, 1.2 GB cache, the decoder's scratch for 2048 tokens a pass), 6.1 GB at the peak for a 4-minute track and 6.7 GB for one of 9.5 minutes or more (the encoder's scratch, freed before the decoder reads its rows; the decoder's is freed before it is made) |
+| Memory | RAM: two 64 MB read buffers while loading, the audio of this track and the next (19 MB each for 5 minutes), the logits of 15 questions (9 MB); a whole `cyanbox tag` peaks at 280 MB. VRAM: 5.6 GB in buffers after the questions (4.1 GB weights, 1.2 GB cache, the decoder's scratch for 2048 tokens a pass), 6.1 GB at the peak for a 4-minute track and 6.7 GB for one of 9.5 minutes or more (the encoder's scratch, freed before the decoder reads its rows; the decoder's is freed before it is made) |
 
 What it gives, measured on the author's library (some 150 tracks: house,
 garage, techno, trance, J-core, electro, bossa nova, jazz, AOR, J-pop,
@@ -261,7 +261,8 @@ reads back a token or a row of logits, and does nothing else.
 - **Weights.** The GGUF's tensors are streamed into device buffers that keep
   the file's layout (a segment of up to 1 GB is a copy of a run of the
   file), 64 MB at a time, read with O_DIRECT so they stay out of the page
-  cache. The conv weights are reordered once on the GPU for the GEMM's
+  cache, on a thread of their own while the piece before goes onto the
+  GPU (2.5 s; 3.9 s one after the other). The conv weights are reordered once on the GPU for the GEMM's
   gather.
 - **Features.** Whisper's log-mel (128 bins, 25 ms frames every 10 ms) from a
   DFT table computed in double precision: `mel.comp`, `mel_norm.comp`.
