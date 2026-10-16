@@ -751,7 +751,10 @@ takeover and handover (its timing then waits about 57 ms, its 70 ms
 of silence to begin with). Only the very first start, LINK CUE switched
 on while rxbox was already elected, got no timing for about a second
 (about one lap of the mixer's ring at 96 kHz): the mixer's doing, not
-rxbox's.
+rxbox's, and not seen again on the run with b473e39 (below), whose
+longest wait for timing was 61 ms. There, at each of the four starts,
+one 2 and then 0 through the mixer's 56 to 61 ms without asking; the
+output silent only for the pauses, the tone without a jump for 32.9 s.
 **An emulated DJM-A9** (its firmware 1.22 under QEMU, the cdj session's
 `djma9/emu`, 2026-10-16; its port-50000 lengths are big-endian) worked
 the same: timing to 17 every 7 ms (3098 in 21.7 s), rxbox took over
@@ -764,10 +767,16 @@ holding enough, asked nothing for 58 ms after its third timing. rxbox
 its ring, not taken from for 50 ms, dropped what it kept and gave 336
 frames of silence: 6.8 ms of nothing in the mixer's output, 14 ms into
 the tone. Since then a mixer asking nothing is no pause (above), for
-LINK CUE and for the ring. There the LINK CUE button is
-set through a stand-in for the panel's microcontroller and the DSP is a
-stand-in that collects the audio; the network, PRO DJ LINK and LINK CUE
-code are the firmware's own.
+LINK CUE and for the ring. With that (b473e39): one 2 as LINK CUE went
+on, then 0 through 54 ms without timing, 2846 packets over 19.92 s,
+every counter a timing's; the audio sent, put together from the capture,
+without a gap or a jump in its phase, and the mixer's output 19.93 s of
+440 Hz with no silence over 0.5 ms (three jumps in its phase were the
+stand-in DSP's, below, taking one buffer twice when the emulation ran
+late). There the LINK CUE button is set through a stand-in for the
+panel's microcontroller and the DSP is a stand-in that collects the
+audio; the network, PRO DJ LINK and LINK CUE code are the firmware's
+own.
 
 **Not yet**: a real mixer (the emulated DJM-900NXS and DJM-A9 run their
 real firmware, but not their real hardware). The first check at one:
