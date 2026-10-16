@@ -8,6 +8,11 @@
 // double precision ([position][64] (cos, sin)): the GPU's own sin and cos
 // lose digits on angles in the thousands of radians.
 //
+// Token t is at position pos0 + t and goes to that slot of the cache, or,
+// with a table `pos`, at position pos[t].x and slot pos[t].y: questions
+// asked of the same audio together are each at the positions after it,
+// and each has slots of its own (moss.c, Segment).
+//
 // A workgroup a token, an invocation a dimension.
 
 #version 460
@@ -23,6 +28,7 @@ layout(push_constant, std430) uniform Push {
     uint64_t qw, kw;        // [128]
     uint64_t rope;          // [max_ctx][64] vec2
     uint64_t kc, vc;        // F16 [8][max_ctx][128]
+    uint64_t pos;           // [nb] ivec2 (position, slot), or 0: pos0 + t for both
     uint pos0;
     uint max_ctx;
     uint nb_q, nb_kv;       // heads
@@ -58,7 +64,11 @@ void main()
 {
     uint d = gl_LocalInvocationIndex;
     uint t = gl_WorkGroupID.x;
-    uint pos = pc.pos0 + t;
+    uint pos = pc.pos0 + t, slot = pos;
+    if (pc.pos != 0ul) {
+        pos = uint(I32(pc.pos).v[2u * t]);
+        slot = uint(I32(pc.pos).v[2u * t + 1u]);
+    }
     vec2 cs = vec2(F32(pc.rope).v[2u * (pos * 64u + d % 64u)],
                    F32(pc.rope).v[2u * (pos * 64u + d % 64u) + 1u]);
 
@@ -80,7 +90,7 @@ void main()
         uint idx = (t * pc.nb_kv + h) * D + d;
         float x = k.v[idx];
         x *= rms_scale(x) * kw;
-        uint c = (h * pc.max_ctx + pos) * D + d;
+        uint c = (h * pc.max_ctx + slot) * D + d;
         kc.v[c] = float16_t(rotate(x, d, cs));
         vc.v[c] = float16_t(v.v[idx]);
     }

@@ -11,10 +11,14 @@
  *    target of direct I/O (the read fails with EFAULT). O_DIRECT keeps the
  *    file out of the page cache: a buffered read would leave 4 GB of it
  *    there, on a machine that may not have it to spare. Where the file
- *    system refuses O_DIRECT, the reads go straight into the staging
- *    buffer and the pages are dropped after each piece
- *    (POSIX_FADV_DONTNEED). The GPU's copy of a piece takes a tenth of its
- *    read, so the two are not overlapped.
+ *    system refuses O_DIRECT, the pages are dropped after each piece
+ *    (POSIX_FADV_DONTNEED).
+ *  - The pieces are read on a thread of their own, into two bounce
+ *    buffers in turn, so that the file is read while the last piece goes
+ *    onto the GPU: on the 6900 XT the disk reads 4.1 GB in 1.5 s, and
+ *    the copies into the staging buffer and onto the GPU take 2.4 s
+ *    (the GPU reads the host's memory at 2.3 GB/s there, through an
+ *    IOMMU), which was 3.9 s one after the other.
  *  - On the GPU the tensors keep the file's layout: buffers of at most
  *    1 GB (well under every device's maxBufferSize), each a copy of a run
  *    of consecutive tensors. A tensor's address is its segment's plus its
@@ -30,6 +34,7 @@
 #include "ml_priv.h"
 
 #include <fcntl.h>
+#include <pthread.h>
 #include <stdckdint.h>
 #include <stdio.h>
 #include <unistd.h>
@@ -391,6 +396,49 @@ static int read_piece(int fd, bool direct, uint64_t off, uint64_t size, uint8_t 
     return 0;
 }
 
+/* The pieces of the file, read on a thread of their own into two bounce
+ * buffers in turn: piece k + 1 is read while piece k goes onto the GPU. */
+typedef struct Pieces {
+    pthread_mutex_t lock;
+    pthread_cond_t cond;
+    int fd;
+    bool direct;
+    const uint64_t (*pieces)[2];    /* offset in the file, size */
+    int nb;
+    uint8_t *buf[2];
+    uint64_t skip[2];
+    int ret[2];
+    int read;                       /* pieces read */
+    int used;                       /* pieces taken from their buffer */
+    bool stop;
+} Pieces;
+
+static void *pieces_run(void *arg)
+{
+    Pieces *r = arg;
+    for (int k = 0; k < r->nb; k++) {
+        pthread_mutex_lock(&r->lock);
+        while (!r->stop && k - r->used >= 2)
+            pthread_cond_wait(&r->cond, &r->lock);
+        bool stop = r->stop;
+        pthread_mutex_unlock(&r->lock);
+        if (stop)
+            break;
+        uint64_t skip = 0;
+        int ret = read_piece(r->fd, r->direct, r->pieces[k][0], r->pieces[k][1], r->buf[k % 2],
+                             &skip);
+        pthread_mutex_lock(&r->lock);
+        r->skip[k % 2] = skip;
+        r->ret[k % 2] = ret;
+        r->read = k + 1;
+        pthread_cond_broadcast(&r->cond);
+        pthread_mutex_unlock(&r->lock);
+        if (ret < 0)
+            break;
+    }
+    return NULL;
+}
+
 int ml_gguf_upload(MLGguf *f, MLGpu *g)
 {
     MLTensor **order = calloc(CB_MAX(f->nb_tensors, 1), sizeof(*order));
@@ -406,7 +454,11 @@ int ml_gguf_upload(MLGguf *f, MLGpu *g)
     uint64_t *seg_end = calloc(CB_MAX(f->nb_tensors, 1), sizeof(*seg_end));
     int *seg_of = calloc(CB_MAX(f->nb_tensors, 1), sizeof(*seg_of));
     MLBuf staging = { 0 };
-    uint8_t *bounce = NULL;
+    Pieces pr = { .fd = -1 };
+    uint64_t (*pieces)[2] = NULL;
+    int *piece_seg = NULL, nb_pieces = 0;
+    pthread_t thread;
+    bool running = false;
     int ret = 0;
     if (!f->segs || !seg_start || !seg_end || !seg_of) {
         ret = CB_ERROR(ENOMEM);
@@ -430,55 +482,104 @@ int ml_gguf_upload(MLGguf *f, MLGpu *g)
     for (int i = 0; i < f->nb_tensors; i++)
         order[i]->addr = f->segs[seg_of[i]].addr + (order[i]->offset - seg_start[seg_of[i]]);
 
-    if ((ret = ml_buf_create(g, &staging, PIECE + 2 * DIRECT_ALIGN, ML_MEM_UPLOAD)) < 0)
-        goto end;
-
-    char fdpath[64];
-    snprintf(fdpath, sizeof(fdpath), "/proc/self/fd/%d", f->fd);
-    int fd = open(fdpath, O_RDONLY | O_DIRECT | O_CLOEXEC);
-    bool direct = fd >= 0 &&
-                  !posix_memalign((void **)&bounce, DIRECT_ALIGN, PIECE + 2 * DIRECT_ALIGN);
-    if (!direct) {
-        if (fd >= 0)
-            close(fd);
-        fd = f->fd;
-        cb_debug("ml: no O_DIRECT, reading the weights buffered");
-    }
-
     /* Each segment, a piece at a time. */
-    int64_t t0 = cb_time_us();
-    uint64_t total = 0;
-    for (int s = 0; s < f->nb_segs && ret >= 0; s++) {
-        for (uint64_t off = seg_start[s]; off < seg_end[s]; off += PIECE) {
-            uint64_t size = CB_MIN(PIECE, seg_end[s] - off);
-            uint64_t skip = 0;
-            ret = read_piece(fd, direct, f->data_offset + off, size,
-                             direct ? bounce : staging.map, &skip);
-            if (ret < 0)
-                break;
-            if (direct) {
-                memcpy(staging.map, bounce + skip, size);
-                skip = 0;
-            }
-            if ((ret = ml_buf_flush(g, &staging, skip + size)) < 0)
-                break;
-            ml_gpu_copy(g, &staging, skip, &f->segs[s], off - seg_start[s], size);
-            if ((ret = ml_gpu_run(g)) < 0)
-                break;
-            total += size;
+    for (int s = 0; s < f->nb_segs; s++)
+        nb_pieces += (int)((seg_end[s] - seg_start[s] + PIECE - 1) / PIECE);
+    pieces = calloc(CB_MAX(nb_pieces, 1), sizeof(*pieces));
+    piece_seg = calloc(CB_MAX(nb_pieces, 1), sizeof(*piece_seg));
+    if (!pieces || !piece_seg) {
+        ret = CB_ERROR(ENOMEM);
+        goto end;
+    }
+    for (int s = 0, k = 0; s < f->nb_segs; s++) {
+        for (uint64_t off = seg_start[s]; off < seg_end[s]; off += PIECE, k++) {
+            pieces[k][0] = f->data_offset + off;
+            pieces[k][1] = CB_MIN(PIECE, seg_end[s] - off);
+            piece_seg[k] = s;
         }
     }
-    if (fd != f->fd)
-        close(fd);
+
+    if ((ret = ml_buf_create(g, &staging, PIECE, ML_MEM_UPLOAD)) < 0)
+        goto end;
+    char fdpath[64];
+    snprintf(fdpath, sizeof(fdpath), "/proc/self/fd/%d", f->fd);
+    pr.fd = open(fdpath, O_RDONLY | O_DIRECT | O_CLOEXEC);
+    pr.direct = pr.fd >= 0;
+    if (!pr.direct) {
+        pr.fd = f->fd;
+        cb_debug("ml: no O_DIRECT, reading the weights buffered");
+    }
+    for (int i = 0; i < 2; i++) {
+        if (posix_memalign((void **)&pr.buf[i], DIRECT_ALIGN, PIECE + 2 * DIRECT_ALIGN)) {
+            ret = CB_ERROR(ENOMEM);
+            goto end;
+        }
+    }
+    pr.pieces = (const uint64_t (*)[2])pieces;
+    pr.nb = nb_pieces;
+    pthread_mutex_init(&pr.lock, NULL);
+    pthread_cond_init(&pr.cond, NULL);
+    if (pthread_create(&thread, NULL, pieces_run, &pr)) {
+        ret = CB_ERROR(EAGAIN);
+        goto end;
+    }
+    running = true;
+
+    int64_t t0 = cb_time_us();
+    double wait = 0.0;
+    uint64_t total = 0;
+    for (int k = 0; k < nb_pieces; k++) {
+        int64_t t1 = cb_time_us();
+        pthread_mutex_lock(&pr.lock);
+        while (pr.read <= k)
+            pthread_cond_wait(&pr.cond, &pr.lock);
+        ret = pr.ret[k % 2];
+        uint64_t skip = pr.skip[k % 2];
+        pthread_mutex_unlock(&pr.lock);
+        wait += (cb_time_us() - t1) * 1e-6;
+        if (ret < 0)
+            break;
+
+        int s = piece_seg[k];
+        uint64_t size = pieces[k][1];
+        memcpy(staging.map, pr.buf[k % 2] + skip, size);
+        pthread_mutex_lock(&pr.lock);
+        pr.used = k + 1;
+        pthread_cond_broadcast(&pr.cond);
+        pthread_mutex_unlock(&pr.lock);
+        if ((ret = ml_buf_flush(g, &staging, size)) < 0)
+            break;
+        ml_gpu_copy(g, &staging, 0, &f->segs[s], pieces[k][0] - f->data_offset - seg_start[s],
+                    size);
+        if ((ret = ml_gpu_run(g)) < 0)
+            break;
+        total += size;
+    }
     if (ret >= 0) {
         double sec = (cb_time_us() - t0) * 1e-6;
-        cb_debug("ml: %.2f GB of weights onto the GPU in %.1f s%s", total * 1e-9, sec,
-                 direct ? "" : " (buffered)");
+        cb_debug("ml: %.2f GB of weights onto the GPU in %.1f s%s, %.1f s of it waiting for "
+                 "the file", total * 1e-9, sec, pr.direct ? "" : " (buffered)", wait);
     }
 
 end:
+    if (running) {
+        pthread_mutex_lock(&pr.lock);
+        pr.stop = true;
+        pthread_cond_broadcast(&pr.cond);
+        pthread_mutex_unlock(&pr.lock);
+        pthread_join(thread, NULL);
+    }
+    if (pr.pieces) {
+        pthread_mutex_destroy(&pr.lock);
+        pthread_cond_destroy(&pr.cond);
+    }
+    if (pr.fd >= 0 && pr.fd != f->fd)
+        close(pr.fd);
+    free(pr.buf[0]);
+    free(pr.buf[1]);
     ml_buf_free(g, &staging);
-    free(bounce);
+    free(pieces);
+    free(piece_seg);
     free(seg_of);
     free(seg_end);
     free(seg_start);

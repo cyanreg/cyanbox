@@ -17,16 +17,35 @@
 // With nsplit > 1 the keys are cut into nsplit runs, one a workgroup (z),
 // and each writes its part (output, maximum, sum) for COMBINE: a few
 // queries over a long context would otherwise be a few workgroups.
+//
+// Key k is at slot k of the cache before position brk, and at k + shift
+// from there on: questions asked of the same audio together each keep
+// their own tokens past the audio's (moss.c, Segment). Every key is
+// visited as it would be at its own slot, so the result is the same.
 
 #version 460
 #extension GL_GOOGLE_include_directive : require
 #include "common.glsl"
 
-layout(local_size_x = 256) in;
+// Rows (queries) a workgroup, and rows an invocation: the workgroup is
+// BR / RT * 8 invocations. A row's sums are the same whatever the two are
+// (eight lanes a row, keys tx + 8 j, dimensions tx + 8 k), so a segment of
+// a few queries may run in blocks of 32 rather than 64 (BR 32, 128
+// invocations; 1.3 to 1.65 times as fast for a question of 17 to 75
+// tokens) and come out the same, bit for bit (moss.c, attention).
+#ifndef BR
+#define BR   64
+#endif
+#ifndef RT
+#define RT   2
+#endif
+#define NT   (BR / RT * 8)
+#define RS   (BR / RT)          // between an invocation's rows
+
+layout(local_size_x = NT) in;
 
 #define D    128
 #define D4   (D / 4)
-#define BR   64
 #define BC   32
 #define PART (D + 2)
 
@@ -41,6 +60,7 @@ layout(push_constant, std430) uniform Push {
     uint nsplit;
     uint split_len;             // keys a split (a multiple of BC)
     float scale;
+    uint brk, shift;            // keys from brk on are shift slots further
 } pc;
 
 #ifndef COMBINE
@@ -55,20 +75,22 @@ shared float Ps[BR][BC];
 void main()
 {
     uint tid = gl_LocalInvocationIndex;
-    uint tx = tid % 8u, ty = tid / 8u;          // rows ty, ty + 32; keys tx + 8 j
+    uint tx = tid % 8u, ty = tid / 8u;          // rows ty + RS i; keys tx + 8 j
     uint qb = gl_WorkGroupID.x, h = gl_WorkGroupID.y, split = gl_WorkGroupID.z;
     uint kvh = h / (pc.nb_q / pc.nb_kv);
     uint width = pc.nb_q * D;
 
     F32x4 q4 = F32x4(pc.q);
-    for (uint e = tid; e < BR * D4; e += 256u) {
+    for (uint e = tid; e < BR * D4; e += NT) {
         uint r = e / D4, d4 = e % D4;
         uint qi = qb * BR + r;
         vec4 v = qi < pc.nq ? q4.v[(qi * width + h * D) / 4u + d4] * pc.scale : vec4(0.0);
         Qs[r][SW(r, d4)] = f16vec4(v);
     }
 
-    uint qpos[2] = { pc.pos0 + qb * BR + ty, pc.pos0 + qb * BR + ty + 32u };
+    uint qpos[RT];
+    for (uint i = 0u; i < RT; i++)
+        qpos[i] = pc.pos0 + qb * BR + ty + RS * i;
     uint last = pc.pos0 + min(qb * BR + BR, pc.nq) - 1u;   // the block's last query
     uint kbeg = split * pc.split_len;
     uint kend = min(last + 1u, kbeg + pc.split_len);
@@ -77,39 +99,43 @@ void main()
     F16x4 vc = F16x4(pc.vc);
     uint cache = kvh * pc.max_ctx * D4;
 
-    float mx[2] = { -1e30, -1e30 }, l[2] = { 0.0, 0.0 };
-    vec4 acc[2][4];
-    for (uint i = 0u; i < 2u; i++) {
+    float mx[RT], l[RT];
+    vec4 acc[RT][4];
+    for (uint i = 0u; i < RT; i++) {
+        mx[i] = -1e30;
+        l[i] = 0.0;
         for (uint k = 0u; k < 4u; k++)
             acc[i][k] = vec4(0.0);
     }
 
     for (uint k0 = kbeg; k0 < kend; k0 += BC) {
         barrier();
-        for (uint e = tid; e < BC * D4; e += 256u) {
+        for (uint e = tid; e < BC * D4; e += NT) {
             uint c = e / D4, d4 = e % D4;
-            bool in_ = k0 + c < kend;
-            Ks[c][SW(c, d4)] = in_ ? kc.v[cache + (k0 + c) * D4 + d4] : f16vec4(0.0);
-            Vs[c][SW(c, d4)] = in_ ? vc.v[cache + (k0 + c) * D4 + d4] : f16vec4(0.0);
+            uint key = k0 + c;
+            bool in_ = key < kend;
+            uint slot = key < pc.brk ? key : key + pc.shift;
+            Ks[c][SW(c, d4)] = in_ ? kc.v[cache + slot * D4 + d4] : f16vec4(0.0);
+            Vs[c][SW(c, d4)] = in_ ? vc.v[cache + slot * D4 + d4] : f16vec4(0.0);
         }
         barrier();
 
-        float s[2][4];
-        for (uint i = 0u; i < 2u; i++) {
+        float s[RT][4];
+        for (uint i = 0u; i < RT; i++) {
             for (uint j = 0u; j < 4u; j++)
                 s[i][j] = 0.0;
         }
         for (uint d4 = 0u; d4 < D4; d4++) {
-            vec4 qv[2], kv[4];
-            for (uint i = 0u; i < 2u; i++) {
-                uint r = ty + 32u * i;
+            vec4 qv[RT], kv[4];
+            for (uint i = 0u; i < RT; i++) {
+                uint r = ty + RS * i;
                 qv[i] = vec4(Qs[r][SW(r, d4)]);
             }
             for (uint j = 0u; j < 4u; j++) {
                 uint c = tx + 8u * j;
                 kv[j] = vec4(Ks[c][SW(c, d4)]);
             }
-            for (uint i = 0u; i < 2u; i++) {
+            for (uint i = 0u; i < RT; i++) {
                 for (uint j = 0u; j < 4u; j++) {
                     s[i][j] = fma(qv[i].x, kv[j].x, s[i][j]);
                     s[i][j] = fma(qv[i].y, kv[j].y, s[i][j]);
@@ -119,7 +145,7 @@ void main()
             }
         }
 
-        for (uint i = 0u; i < 2u; i++) {
+        for (uint i = 0u; i < RT; i++) {
             float smax = -1e30;
             for (uint j = 0u; j < 4u; j++) {
                 uint key = k0 + tx + 8u * j;
@@ -133,7 +159,7 @@ void main()
             float mn = max(mx[i], smax);
             float corr = exp(mx[i] - mn);
             float psum = 0.0;
-            uint r = ty + 32u * i;
+            uint r = ty + RS * i;
             for (uint j = 0u; j < 4u; j++) {
                 float p = s[i][j] > -1e29 ? exp(s[i][j] - mn) : 0.0;
                 uint c = tx + 8u * j;
@@ -154,8 +180,8 @@ void main()
             vec4 vv[4];
             for (uint k = 0u; k < 4u; k++)
                 vv[k] = vec4(Vs[c][SW(c, tx + 8u * k)]);
-            for (uint i = 0u; i < 2u; i++) {
-                uint r = ty + 32u * i;
+            for (uint i = 0u; i < RT; i++) {
+                uint r = ty + RS * i;
                 float p = Ps[r][c ^ (r & 31u)];
                 for (uint k = 0u; k < 4u; k++)
                     acc[i][k] += p * vv[k];
@@ -163,8 +189,8 @@ void main()
         }
     }
 
-    for (uint i = 0u; i < 2u; i++) {
-        uint qi = qb * BR + ty + 32u * i;
+    for (uint i = 0u; i < RT; i++) {
+        uint qi = qb * BR + ty + RS * i;
         if (qi >= pc.nq)
             continue;
         if (pc.nsplit == 1u) {

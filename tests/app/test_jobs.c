@@ -7,11 +7,16 @@
  * requests, destroying a queue with work still in it, and the memory
  * guard: with a budget smaller than any analysis, two analyses on two
  * workers run one after the other (and both run), one waiting for memory
- * can be cancelled, and with the default budget the same two run at once.
+ * can be cancelled, and with the default budget the same two run at once;
+ * a tag batch whose model does not open. With --tag, the tag batch with the
+ * model (src/app/jobs.c decodes each track while the one before it is
+ * tagged): see test_tag.
  *
- * Usage: test_jobs FILE.wav */
+ * Usage: test_jobs FILE.wav
+ *        test_jobs --tag A.wav B.wav (with $CYANBOX_ML_MODEL) */
 
 #include "cyanbox/jobs.h"
+#include "cyanbox/library.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -349,10 +354,121 @@ static void test_budget(const char *wav)
     cb_jobs_destroy(j);
 }
 
+/* The tag batch with a model that does not open: the first track decodes
+ * on a thread of its own while the model loads, and the batch still ends
+ * with the one result that says so, nothing left running. */
+static void test_tag_no_model(const char *wav)
+{
+    CBJobs *j = NULL;
+    int ret = cb_jobs_create(&j, 1);
+    CHECK(ret == 0, "cb_jobs_create: %s", strerror(-ret));
+    if (ret < 0)
+        return;
+    for (uint64_t id = 1; id <= 3; id++)
+        CHECK((int64_t)cb_jobs_tag(j, "/nonexistent/model.gguf", NULL, id, wav) > 0, "queued");
+    CBJobResult *r = wait_result(j, 60);
+    CHECK(r && r->kind == CB_JOB_TAG && !r->track_id && r->err < 0, "the model's failure");
+    cb_job_result_free(r);
+    int64_t t0 = cb_time_us();
+    while (cb_jobs_tag_progress(j, NULL, NULL, NULL) && cb_time_us() - t0 < 10000000)
+        usleep(1000);
+    CHECK(!cb_jobs_tag_progress(j, NULL, NULL, NULL), "the batch has not ended");
+    r = wait_result(j, 1);
+    CHECK(!r, "a result after the failure");
+    cb_job_result_free(r);
+    cb_jobs_destroy(j);
+}
+
+static bool same_tags(const CBMLTags *a, const CBMLTags *b)
+{
+    return a && b && a->color == b->color && !memcmp(a->colors, b->colors, sizeof(a->colors)) &&
+           a->intensity == b->intensity && a->club == b->club && a->valence == b->valence &&
+           a->vocals == b->vocals &&
+           !strcmp(a->comment ? a->comment : "", b->comment ? b->comment : "") &&
+           !strcmp(a->genre ? a->genre : "", b->genre ? b->genre : "");
+}
+
+/* The tag batch with the model ($CYANBOX_ML_MODEL): a, a missing file, b
+ * and a again, each decoded while the one before it is tagged. Each gets
+ * its own audio: a's tags twice the same, and the same as cb_ml_tag's of
+ * a decoded here (with the batch's model closed first: one model on a
+ * GPU at a time). */
+static int test_tag(const char *model, const char *a, const char *b)
+{
+    CBJobs *j = NULL;
+    int ret = cb_jobs_create(&j, 1);
+    CHECK(ret == 0, "cb_jobs_create: %s", strerror(-ret));
+    if (ret < 0)
+        return 1;
+    cb_jobs_set_gpu(j, true, NULL);
+    const char *paths[4] = { a, "/nonexistent/track.wav", b, a };
+    CBMLTags *tags[4] = { 0 };
+    for (int i = 0; i < 4; i++)
+        CHECK((int64_t)cb_jobs_tag(j, model, NULL, (uint64_t)i + 1, paths[i]) > 0, "queued");
+    for (int n = 0; n < 4; n++) {
+        CBJobResult *r = wait_result(j, 300);
+        CHECK(r && r->kind == CB_JOB_TAG, "a tag result");
+        if (!r)
+            break;
+        if (!r->track_id) {
+            fprintf(stderr, "the model does not open (%s): skipped\n", strerror(-r->err));
+            cb_job_result_free(r);
+            cb_jobs_destroy(j);
+            return 77;
+        }
+        int i = (int)r->track_id - 1;
+        CHECK(i >= 0 && i < 4 && (i == 1 ? r->err < 0 : r->err == 0 && r->tags),
+              "track %d: %s", i + 1, strerror(-r->err));
+        if (i >= 0 && i < 4 && r->tags) {
+            tags[i] = r->tags;
+            r->tags = NULL;
+        }
+        cb_job_result_free(r);
+    }
+    cb_jobs_destroy(j);
+
+    CHECK(same_tags(tags[0], tags[3]), "a's tags differ from one time to the next");
+    CHECK(tags[2] && !same_tags(tags[0], tags[2]), "b's tags are a's");
+
+    CBML *ml = NULL;
+    CBAudio audio = { 0 };
+    CBMLTags direct = { 0 };
+    ret = cb_ml_open(&ml, model, NULL);
+    CHECK(ret == 0, "cb_ml_open: %s", strerror(-ret));
+    if (ret == 0 && (ret = cb_decode(a, 1, CB_ML_RATE, &audio)) == 0) {
+        const char *legend[CB_TRACK_COLORS];
+        for (int i = 0; i < CB_TRACK_COLORS; i++)
+            legend[i] = cb_config_vibe_default(i + 1);
+        ret = cb_ml_tag(ml, audio.samples, audio.nb_frames, legend, &direct, NULL);
+        CHECK(ret >= 0, "cb_ml_tag: %s", strerror(-ret));
+        CHECK(same_tags(tags[0], &direct), "the batch's tags of a are not cb_ml_tag's");
+    }
+    cb_ml_tags_free(&direct);
+    cb_audio_free(&audio);
+    cb_ml_close(&ml);
+    for (int i = 0; i < 4; i++) {
+        if (tags[i])
+            cb_ml_tags_free(tags[i]);
+        free(tags[i]);
+    }
+    return failures ? 1 : 0;
+}
+
 int main(int argc, char **argv)
 {
+    if (argc == 4 && !strcmp(argv[1], "--tag")) {
+        const char *model = getenv("CYANBOX_ML_MODEL");
+        if (!model || access(model, R_OK)) {
+            printf("no model ($CYANBOX_ML_MODEL): skipped\n");
+            return 77;
+        }
+        int ret = test_tag(model, argv[2], argv[3]);
+        printf("jobs, tagging: %s\n", ret == 77 ? "skipped" : ret ? "FAILED" : "OK");
+        return ret;
+    }
     if (argc < 2) {
-        fprintf(stderr, "usage: test_jobs FILE.wav\n");
+        fprintf(stderr, "usage: test_jobs FILE.wav\n"
+                        "       test_jobs --tag A.wav B.wav (with $CYANBOX_ML_MODEL)\n");
         return 2;
     }
     const char *wav = argv[1];
@@ -361,6 +477,7 @@ int main(int argc, char **argv)
     test_decode_and_artwork(wav);
     test_cancel(wav);
     test_budget(wav);
+    test_tag_no_model(wav);
 
     if (failures) {
         fprintf(stderr, "%d failure%s\n", failures, failures == 1 ? "" : "s");

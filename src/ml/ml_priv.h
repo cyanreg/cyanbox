@@ -33,8 +33,10 @@ enum MLKernel {
     ML_K_CONV_PERMUTE,
     ML_K_STEM_PERMUTE,
     ML_K_GEMM_F16,              /* shaders/gemm.comp, F16 weights */
+    ML_K_GEMM_F16_BK32,         /*   the same in tiles of 32 columns of K (gpu.c) */
     ML_K_GEMM_F16_CONV,         /*   the same, an im2col gather of a 3x3 convolution */
     ML_K_GEMM_Q4K,              /*   Q4_K weights */
+    ML_K_GEMM_Q4K_BK32,         /*   the same in tiles of 32 columns of K */
     ML_K_GEMM_Q4K_SMALL,        /*   the same in tiles of 32 rows, for a few tokens */
     ML_K_GEMV_Q4K,              /* shaders/gemv.comp: a few rows of Q4_K weights */
     ML_K_LAYERNORM,             /* shaders/norm.comp */
@@ -43,6 +45,7 @@ enum MLKernel {
     ML_K_ENC_ATTN,              /* shaders/enc_attn.comp */
     ML_K_QK_ROPE,               /* shaders/rope.comp */
     ML_K_ATTN,                  /* shaders/attn.comp: causal, KV cache */
+    ML_K_ATTN_32,               /*   the same in blocks of 32 queries */
     ML_K_ATTN_FCOMB,
     ML_K_ATTN_DEC,              /* shaders/attn_dec.comp: one or two tokens */
     ML_K_ATTN_COMB,
@@ -70,6 +73,7 @@ typedef struct MLGpu {
     CBVkDev vk;
     uint32_t sub_size;          /* the subgroup size gemv and attention require, 0: any */
     bool full_sub;              /* and full subgroups (gpu.c says why) */
+    bool gemm_wave32;           /* the products in subgroups of 32 (gpu.c says why) */
 
     VkSemaphore timeline;
     uint64_t submitted;
@@ -211,5 +215,68 @@ int ml_listen(CBML *ml, const float *pcm, int64_t n, int room, CBCancel *cancel)
  * ask it. */
 int ml_question_tokens(CBML *ml, const char *question, const char *prefix);
 int ml_max_context(const CBML *ml);
+/* How the audio is read, for the tests, which check that neither changes
+ * what the questions after it get: up to pass_rows tokens a pass (2048,
+ * in chunks of 512 that each come out as alone; 512 at least), and with
+ * the logits of its last token, the last layer whole (not by default:
+ * nothing reads them). */
+void ml_set_listen(CBML *ml, int pass_rows, bool logits);
+
+/* The model's vocabulary: the logits of a token. */
+#define ML_VOCAB 151936
+
+/* A question about the audio listened to, for ml_ask_many. */
+typedef struct MLQuery {
+    const char *question;
+    const char *prefix;         /* the answer's start, may be NULL */
+    float *logits;              /* ML_VOCAB floats: the logits of the answer's first
+                                   token (cb_ml_choose's); NULL: not wanted */
+    bool answer_wanted;         /* the answer, greedily, up to max_tokens (cb_ml_ask's) */
+    int max_tokens;
+    /* Whether the answer so far is all that will be made of it: what
+     * follows could not change that, so it is not generated. NULL: to the
+     * model's end or max_tokens. */
+    bool (*settled)(const char *answer);
+    char *answer;               /* out, malloc'd */
+} MLQuery;
+
+/* The questions, asked of the audio together: each comes out as it would
+ * asked alone (cb_ml_choose's logits, cb_ml_ask's answer), but they go
+ * through the decoder in passes of hundreds of tokens rather than one at
+ * a time, and the answers a token each a step. */
+int ml_ask_many(CBML *ml, MLQuery *q, int nb, CBCancel *cancel);
+/* The tokens of `choices`, which must be one each (-EINVAL). */
+int ml_choice_ids(CBML *ml, const char *const *choices, int nb, int32_t *ids);
+/* cb_ml_choose's probabilities from the logits (-EIO when they are not
+ * numbers, or the choices hold none of it). */
+int ml_choice_probs(const float *logits, const int32_t *ids, int nb, float *probs, float *mass);
+
+/* ------------------------------------------------------------- answers.c */
+
+/* The tags' words from the model's answers, malloc'd: "progressive house"
+ * -> "Progressive House" (NULL: none); "Yes, a female vocalist sings in
+ * Japanese." -> "Female vocals, Japanese", "No, ..." -> "Instrumental";
+ * "Bright, energetic, and uplifting." -> "Bright, energetic, uplifting". */
+char *ml_genre_of(const char *answer);
+char *ml_vocals_of(const char *answer);
+char *ml_mood_of(const char *answer);
+/* Whether the answer so far already makes all that the function above
+ * will make of it, whatever follows (MLQuery.settled). */
+bool ml_genre_settled(const char *answer);
+bool ml_vocals_settled(const char *answer);
+bool ml_mood_settled(const char *answer);
+
+/* Where the time of the last listen and the questions since went, in ms
+ * of wall time (each stage waits for the GPU), for the debug log. */
+typedef struct MLStats {
+    double encode_ms;           /* the samples to the adapter's rows */
+    double prefill_ms;          /* the prompt up to the audio's end into the cache */
+    int    prefill_tokens;
+    double read_ms;             /* the questions through the decoder */
+    int    read_tokens;
+    double answer_ms;           /* the answers, a token at a time */
+    int    answer_tokens;       /* tokens generated */
+} MLStats;
+const MLStats *ml_stats(const CBML *ml);
 
 #endif /* CYANBOX_ML_PRIV_H */

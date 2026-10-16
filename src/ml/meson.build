@@ -16,9 +16,11 @@ foreach sh : [
     [ 'conv1',         'conv1.comp',        [] ],
     [ 'conv_permute',  'conv_permute.comp', [] ],
     [ 'stem_permute',  'stem_permute.comp', [] ],
-    [ 'gemm_f16',      'gemm.comp',         [] ],
+    [ 'gemm_f16',      'gemm.comp',         [ '-DBK=64' ] ],
+    [ 'gemm_f16_bk32', 'gemm.comp',         [] ],
     [ 'gemm_f16_conv', 'gemm.comp',         [ '-DA_CONV' ] ],
-    [ 'gemm_q4k',      'gemm.comp',         [ '-DW_Q4K' ] ],
+    [ 'gemm_q4k',      'gemm.comp',         [ '-DW_Q4K', '-DBK=64' ] ],
+    [ 'gemm_q4k_bk32', 'gemm.comp',         [ '-DW_Q4K' ] ],
     [ 'gemm_q4k_small', 'gemm.comp',        [ '-DW_Q4K', '-DSMALL_M' ] ],
     [ 'gemv_q4k',      'gemv.comp',         [] ],
     [ 'layernorm',     'norm.comp',         [] ],
@@ -27,6 +29,7 @@ foreach sh : [
     [ 'enc_attn',      'enc_attn.comp',     [] ],
     [ 'qk_rope',       'qk_rope.comp',      [] ],
     [ 'attn',          'attn.comp',         [] ],
+    [ 'attn_32',       'attn.comp',         [ '-DBR=32' ] ],
     [ 'attn_fcomb',    'attn.comp',         [ '-DCOMBINE' ] ],
     [ 'attn_dec',      'attn_dec.comp',     [] ],
     [ 'attn_comb',     'attn_dec.comp',     [ '-DCOMBINE' ] ],
@@ -48,7 +51,7 @@ foreach sh : [
 endforeach
 
 cb_ml_lib = static_library('cb_ml',
-    files('gpu.c', 'gguf.c', 'tokenizer.c', 'moss.c', 'tag.c'), ml_shader_headers,
+    files('gpu.c', 'gguf.c', 'tokenizer.c', 'moss.c', 'tag.c', 'answers.c'), ml_shader_headers,
     include_directories: cb_inc,
     dependencies: [ cb_vkdev_dep, m_dep ],
 )
@@ -64,6 +67,31 @@ test('ml_kernels',
     ),
     suite: 'ml',
     timeout: 300,
+)
+
+# Questions asked together against the same asked one at a time, bit for
+# bit. Needs the model ($CYANBOX_ML_MODEL) and a GPU that runs it; skipped
+# (77) without them. On its own: two models on one GPU have made the
+# driver reset it.
+test('ml_ask',
+    executable('test_ml_ask', '../../tests/ml/test_ask.c',
+        include_directories: [ cb_inc, include_directories('.') ],
+        dependencies: [ cb_ml_dep ],
+    ),
+    suite: 'ml',
+    timeout: 300,
+    is_parallel: false,
+)
+
+# What the tags make of the model's answers in words, and that an answer
+# cut short once settled makes the same. No GPU.
+test('ml_answers',
+    executable('test_ml_answers', '../../tests/ml/test_answers.c',
+        include_directories: [ cb_inc, include_directories('.') ],
+        dependencies: [ cb_ml_dep ],
+    ),
+    suite: 'ml',
+    timeout: 60,
 )
 
 # The model file's header against crafted files that must be refused (a

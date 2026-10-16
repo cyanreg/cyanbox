@@ -12,18 +12,20 @@ encoder in F16, its decoder (Qwen3-4B) in Q4_K. The code is `src/ml/`
 In cyanbox it runs only when asked: the track menu's Analyse tags, Analysis →
 Analyse tags of selection, or `cyanbox tag TRACK...`. The tracks join one
 batch that loads the model once and unloads it after the last
-(`src/app/jobs.c`); a result writes the colour and the comment, and the
-genre unless the user typed one (README.md, Tagging).
+(`src/app/jobs.c`), and decodes the next track on a CPU while the GPU
+tags this one (the first while the model loads); a result writes the
+colour and the comment, and the genre unless the user typed one
+(README.md, Tagging).
 
 ## In short
 
 | | per track (4–5 min) |
 | --- | --- |
-| Loading the model, once | 3.5 s; 4.1 GB of weights onto the GPU, none kept in RAM |
-| Listening (the whole track) | ~4 s on a 6900 XT, ~70x real time |
-| The other questions of `cb_ml_tag` (seven yes/no, three in words) | ~1.1 s |
-| The colour question, in eight orders | ~1.7 s (1.3–2.1; 2.5 s with three renders sharing the GPU) |
-| Memory | 174 MB of RAM at most (64 MB of it a read buffer while loading); 5.4 GB of VRAM in buffers from one listen to the next (4.1 GB weights, 1.2 GB cache, the decoder's scratch), 6.2 GB at the peak for a 4-minute track and 6.7 GB for one of 9.5 minutes or more (the encoder's scratch, freed after listening) |
+| Loading the model, once | 2.5 s; 4.1 GB of weights onto the GPU, none kept in RAM |
+| Listening (the whole track) | 2.2–3.8 s on a 6900 XT, ~80x real time: the encoder 0.45–0.75 s, the prompt up to the audio's end (2,700 to 4,600 tokens) 1.7–3.1 s |
+| Every question of `cb_ml_tag` at once (seven yes/no, the colour in eight orders, three in words) | ~0.73 s for their 836 tokens, then 0.1–0.25 s for the answers' 10 to 30 |
+| A track in all, from its audio to the last answer | 3.7 s, the median of 16 tracks of 3 to 6 minutes (a batch of the 16, the model's loading included, 63 s); 6.3 s (107 s) when the questions went one at a time and the model took 4 s to load, the tags the same to the bit |
+| Memory | RAM: two 64 MB read buffers while loading, the audio of this track and the next (19 MB each for 5 minutes), the logits of 15 questions (9 MB); a whole `cyanbox tag` peaks at 280 MB. VRAM: 5.6 GB in buffers after the questions (4.1 GB weights, 1.2 GB cache, the decoder's scratch for 2048 tokens a pass), 6.1 GB at the peak for a 4-minute track and 6.7 GB for one of 9.5 minutes or more (the encoder's scratch, freed before the decoder reads its rows; the decoder's is freed before it is made) |
 
 What it gives, measured on the author's library (some 150 tracks: house,
 garage, techno, trance, J-core, electro, bossa nova, jazz, AOR, J-pop,
@@ -83,11 +85,19 @@ at the end) and asks:
 The comment is the vocals and the mood: "Female vocals, English.
 Melancholic, introspective, atmospheric."
 
+An answer in words stops being generated once nothing the model could
+add would change what is made of it (`src/ml/answers.c`): the genre and
+the mood once something other than spaces and full stops follows the
+first cut, the vocals once they begin with "No" and something not a
+letter ("No, there are no vocals in this track." is "Instrumental" from
+its second token on). `test_ml_answers` checks every prefix of random
+answers that is called settled against the whole.
+
 ### The colour
 
 The colour is one of rekordbox's eight, the one whose words in the legend
 fit the track best (README.md, Tagging; the settings `color.pink` ...
-`color.purple`). After the yes/no questions the model is asked, against
+`color.purple`). With the yes/no questions the model is asked, against
 the same audio in its cache, with the default legend:
 
 ```
@@ -226,7 +236,9 @@ table of the first tagging (intense and bright), is orange (0.61, then red
 share). These figures are the first legend's. With three Blender renders sharing the 6900 XT, a track took 9.9 s
 on average (4.4 to 14.3) from decoding to the last answer, the colour's
 eight asks 2.5 s of it. Alone on the GPU, the eight asks take 1.7 s (1.3
-to 2.1, the longer tracks' cache the slower) and listening 3.3 s.
+to 2.1, the longer tracks' cache the slower) and listening 3.3 s. Since
+the questions go through the decoder together (How it runs), all
+eighteen take 0.9 s.
 
 Before tagging version 2 the colour was a hue computed from the measures:
 the direction of the track on the plane of mood and intensity (Russell's
@@ -249,8 +261,9 @@ reads back a token or a row of logits, and does nothing else.
 - **Weights.** The GGUF's tensors are streamed into device buffers that keep
   the file's layout (a segment of up to 1 GB is a copy of a run of the
   file), 64 MB at a time, read with O_DIRECT so they stay out of the page
-  cache. The conv weights are reordered once on the GPU for the GEMM's
-  gather.
+  cache, on a thread of their own while the piece before goes onto the GPU
+  (2.5 s; 3.9 s one after the other). The conv weights are reordered once on
+  the GPU for the GEMM's gather.
 - **Features.** Whisper's log-mel (128 bins, 25 ms frames every 10 ms) from a
   DFT table computed in double precision: `mel.comp`, `mel_norm.comp`.
 - **Encoder.** Chunks of 4 s; three 3x3 stride-2 convolutions (the first
@@ -260,26 +273,48 @@ reads back a token or a row of logits, and does nothing else.
 - **Decoder.** Qwen3-4B with a 8192-token f16 cache: RMS norms, the q/k
   norms and RoPE from a double-precision table (`qk_rope.comp`), flash
   attention for prefills (`attn.comp`, split over the keys when there are
-  few queries), flash decoding for single tokens (`attn_dec.comp`).
+  few queries, in blocks of 32 queries rather than 64 where 64 would
+  leave half the last block empty), flash decoding for single tokens
+  (`attn_dec.comp`).
   The audio's rows replace their tokens' embeddings, and the deepstack's
   rows are added after layers 0 to 2. The prompt is MOSS-Audio's default
   with its time markers (the seconds every 2 s); the cache holds it up to
-  the end of the audio, and every question starts again from there.
+  the end of the audio, and every question starts again from there. It is
+  read 2048 tokens a pass, in chunks of 512 that each keep the attention
+  they would have alone: the GEMM is faster on more rows. Nothing reads
+  its logits, so its last layer goes only as far as the cache.
+- **Questions together.** Questions asked together (`ml_ask_many`; a tag
+  asks eighteen) go through the decoder in one pass of their 836 tokens
+  rather than eighteen of 15 to 80, which keep most of the GPU idle (the
+  colour's eight took 1.7 s that way): each at the positions after the
+  audio but in slots of the cache of its own, its attention cut into the
+  same splits as alone. Every other kernel works a row at a time, so each
+  question comes out bit for bit as it would alone. The answers then go a
+  token each a step, every answer in one pass and one wait.
 - **Products.** `gemm.comp`: 128x128 tiles, 8x8 per invocation, f32 FMAs,
   shared memory swizzled against bank conflicts (Q4_K dequantised on the
-  way in; a 32-row variant for questions). `gemv.comp` for one to eight
-  rows, at the memory's speed.
+  way in; a 32-row variant for a few dozen tokens). `gemv.comp` for one
+  to eight rows, at the memory's speed. Each output is the same sum in the
+  same order whatever rows come with it, in either GEMM (the GEMV's order
+  is another), which the questions together rely on. The GEMMs run in
+  subgroups of 32 where the device lets a pipeline ask (RADV picks 64 for
+  compute, 10 to 15 % slower here; `CYANBOX_ML_WAVE32=0` leaves it so):
+  none of their sums goes through a subgroup, so no result changes. And
+  they go through K 64 columns at a time where the device has the 64 kB
+  of shared memory that takes (AMD's; 32 elsewhere), some 5 % faster.
 
 | kernel (6900 XT) | |
 | --- | --- |
-| GEMM, F16 weights, 2048 tokens | 12.3 TFLOPS (53 % of the f32 peak) |
-| GEMM, Q4_K, 512 tokens | 10.2–12.9 TFLOPS |
+| GEMM, F16 weights, 2048 tokens | 10.5–13.0 TFLOPS (55 % of the f32 peak at most, at the 2.35 GHz it holds under its power cap) |
+| GEMM, Q4_K, 512 tokens | 9.0–13.0 TFLOPS |
+| GEMM, Q4_K, 2048 tokens | 12.1–14.0 TFLOPS |
 | GEMV, Q4_K, one token | 400–445 GB/s (80–87 % of the memory's) |
-| Attention, 512 queries after 3584 keys | 3.3 ms a layer, 9.8 TFLOPS |
+| Attention, 512 queries after 3584 keys | 3.5 ms a layer, 9.2 TFLOPS |
+| Attention, 17 queries after 3500 keys | 0.24 ms a layer (0.40 ms in a block of 64) |
 | Attention, one query after 4000 keys | 64 µs a layer |
 
 A 5-minute track is ~4,000 tokens through the decoder: ~2.5 s of GEMM,
-~0.6 s of attention, ~0.7 s of encoder.
+~0.6 s of attention, ~0.7 s of encoder; and the questions' 836 tokens 0.9 s.
 
 **One model per GPU.** Two processes running the model on the 6900 XT at
 once made the driver reset the GPU (both contexts lost) within minutes;
@@ -289,6 +324,18 @@ one alone ran over 250 tracks without fault.
 
 - `test_ml_kernels` (meson suite `ml`) runs every kernel on random inputs of
   awkward sizes against plain C in double precision; `-b` benchmarks them.
+  It checks bit for bit what the questions together rely on: a product's
+  row the same whatever rows come with it, attention the same with keys
+  moved to other slots, RoPE the same from a table of positions.
+- `test_ml_ask` (needs the model: `CYANBOX_ML_MODEL=FILE meson test`;
+  skipped without) reads the audio as it is and as it was at first (in
+  passes of one chunk, the last layer whole), asks questions together and
+  one at a time, in one batch and in two, and compares the logits bit for
+  bit and the answers.
+  `jobs_tag` (`test_jobs --tag`, with the model too) tags a batch whose
+  tracks each decode while the one before is tagged, and checks each got
+  its own audio: the same tags as `cb_ml_tag` of it decoded alone. Both
+  run on their own (`is_parallel: false`): one model on a GPU at a time.
 - `tools/ml_check.py` recomputes the encoder stage by stage in PyTorch from
   the reference code (transformers' Whisper feature extractor and encoder
   layer, MOSS-Audio's conv stem and gated MLPs), each stage from the GPU's

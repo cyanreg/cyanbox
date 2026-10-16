@@ -22,7 +22,9 @@
  *   CYANBOX_GPU_DEVICE=NAME  prefer the device whose name contains NAME
  *                          (case-insensitive), unless the options name one
  *   CYANBOX_GPU_VALIDATION=1 the Khronos validation layer
- *   CYANBOX_ML_PROFILE=1     time every kernel, printed at close */
+ *   CYANBOX_ML_PROFILE=1     time every kernel, printed at close
+ *   CYANBOX_ML_WAVE32=0      the matrix products in the driver's subgroup size, not 32
+ *                          (the same results; slower on RDNA) */
 
 #include "cyanbox/colors.h"
 #include "cyanbox/common.h"

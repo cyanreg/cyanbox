@@ -6,11 +6,16 @@
 // decoder's single-token steps (gemv.comp).
 //
 // A workgroup computes a 128 x 128 tile of Y, its 256 invocations 8 x 8
-// each (SMALL_M: 32 x 128, 2 x 8 each, for the questions' few tokens),
-// from tiles of 32 columns of K that go through shared memory as f32 (the
+// each (SMALL_M: 32 x 128, 2 x 8 each, for a few dozen tokens), from
+// tiles of BK columns of K (32, or 64 where the device has the 64 kB of
+// shared memory that takes) that go through shared memory as f32 (the
 // weights dequantised on the way in). The products are f32 FMAs:
 // no cooperative matrices. The next tiles are loaded from memory into
 // registers while the current ones are multiplied.
+//
+// Each output is one chain of FMAs over K in order, whatever the tiles,
+// the rows with it or the subgroup size: the questions asked together
+// (moss.c) rely on a row coming out the same in any pass.
 //
 // Variants (compile-time):
 //   W_Q4K   W is Q4_K, row after row of blocks (ggml's block_q4_K)
@@ -19,8 +24,8 @@
 //           W [cout][3][3][cin] (conv_permute.comp); a row of Y is an
 //           output position (b, fo, to), so Y is channel-last again
 //
-// Dispatch: (ceil(N / 128), ceil(M / BM)). K is a multiple of 32 (of 256
-// for Q4_K), N of 4, ldx of 4; with A_CONV, cin is a multiple of 32.
+// Dispatch: (ceil(N / 128), ceil(M / BM)). K is a multiple of BK (of 256
+// for Q4_K), N of 4, ldx of 4; with A_CONV, cin is a multiple of BK.
 
 #version 460
 #extension GL_GOOGLE_include_directive : require
@@ -34,10 +39,14 @@ layout(local_size_x = 256) in;
 #define BM 128
 #endif
 #define BN 128
+#ifndef BK
+#define BK 32                   // columns of K a tile
+#endif
 #define TM (BM / 16)            // rows an invocation computes
-#define NA (BM / 32)            // vec4 of A an invocation loads
-#define BK 32
 #define KQ (BK / 4)
+#define RS (256 / KQ)           // rows the workgroup loads at once
+#define NA (BM * KQ / 256)      // vec4 of A an invocation loads
+#define NB (BN * KQ / 256)      // and of B
 
 #define FLAG_GELU 1u
 #define FLAG_ADD  2u
@@ -62,14 +71,14 @@ shared vec4 Bs[BN][KQ];
 #define SWZ(r, q) ((q) ^ ((r) & 7u))
 
 vec4 ra[NA];
-vec4 rb[4];
+vec4 rb[NB];
 
 void load_a(uint k0)
 {
     uint tid = gl_LocalInvocationIndex;
-    uint q = tid % 8u;
+    uint q = tid % KQ;
     for (uint i = 0u; i < NA; i++) {
-        uint r = tid / 8u + 32u * i;
+        uint r = tid / KQ + RS * i;
         uint m = gl_WorkGroupID.y * BM + r;
         ra[i] = vec4(0.0);
         if (m >= pc.M)
@@ -95,32 +104,38 @@ void load_b(uint k0)
 {
     uint tid = gl_LocalInvocationIndex;
 #ifdef W_Q4K
-    // A thread takes 16 weights of one row: half of a 32-weight sub-block.
+    // A thread takes BK / 2 weights of one row: half of a 32-weight
+    // sub-block (BK 32), or a whole one (BK 64).
     uint r = tid / 2u, h = tid % 2u;
     uint n = gl_WorkGroupID.x * BN + r;
-    for (uint i = 0u; i < 4u; i++)
+    for (uint i = 0u; i < NB; i++)
         rb[i] = vec4(0.0);
     if (n >= pc.N)
         return;
     uint nb = pc.K / 256u;
     uint kb = k0 / 256u;
+#if BK == 64
+    uint s = (k0 % 256u) / 32u + h;
+    uint first = 2u * (s / 2u);
+#else
     uint s = (k0 % 256u) / 32u;
+    uint first = 2u * (s / 2u) + h;
+#endif
     uint blk = (n * nb + kb) * 9u;
     U32x4 wq = U32x4(pc.w);
     uvec4 hd = wq.v[blk];
-    uvec4 qs = wq.v[blk + 1u + 2u * (s / 2u) + h];
     vec2 dm = q4k_scale_min(hd, s);
     uint shift = 4u * (s & 1u);
-    for (uint i = 0u; i < 4u; i++) {
-        uint word = qs[i];
+    for (uint i = 0u; i < NB; i++) {
+        uint word = wq.v[blk + 1u + first + i / 4u][i % 4u];
         rb[i] = vec4(float((word >> shift) & 15u), float((word >> (8u + shift)) & 15u),
                      float((word >> (16u + shift)) & 15u), float((word >> (24u + shift)) & 15u))
                 * dm.x - dm.y;
     }
 #else
-    uint q = tid % 8u;
-    for (uint i = 0u; i < 4u; i++) {
-        uint r = tid / 8u + 32u * i;
+    uint q = tid % KQ;
+    for (uint i = 0u; i < NB; i++) {
+        uint r = tid / KQ + RS * i;
         uint n = gl_WorkGroupID.x * BN + r;
         rb[i] = n < pc.N ? vec4(F16x4(pc.w).v[(n * pc.K + k0) / 4u + q]) : vec4(0.0);
     }
@@ -131,17 +146,17 @@ void store_tiles()
 {
     uint tid = gl_LocalInvocationIndex;
     for (uint i = 0u; i < NA; i++) {
-        uint r = tid / 8u + 32u * i;
-        As[r][SWZ(r, tid % 8u)] = ra[i];
+        uint r = tid / KQ + RS * i;
+        As[r][SWZ(r, tid % KQ)] = ra[i];
     }
 #ifdef W_Q4K
     uint r = tid / 2u;
-    for (uint i = 0u; i < 4u; i++)
-        Bs[r][SWZ(r, 4u * (tid % 2u) + i)] = rb[i];
+    for (uint i = 0u; i < NB; i++)
+        Bs[r][SWZ(r, NB * (tid % 2u) + i)] = rb[i];
 #else
-    for (uint i = 0u; i < 4u; i++) {
-        uint r = tid / 8u + 32u * i;
-        Bs[r][SWZ(r, tid % 8u)] = rb[i];
+    for (uint i = 0u; i < NB; i++) {
+        uint r = tid / KQ + RS * i;
+        Bs[r][SWZ(r, tid % KQ)] = rb[i];
     }
 #endif
 }
