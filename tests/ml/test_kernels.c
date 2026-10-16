@@ -247,6 +247,66 @@ static void test_gemm(bool q4k, int M, int N, int K, uint32_t flags, bool bench)
     free(x); free(w); free(bias); free(y0); free(got); free(want); free(wh); free(wq);
 }
 
+/* Bitwise equality of two runs' outputs: questions asked together must
+ * come out as asked alone (moss.c, Segment). */
+static void check_same(const char *name, const void *a, const void *b, size_t size)
+{
+    bool ok = !memcmp(a, b, size);
+    printf("%-28s %s  %s\n", name, ok ? "ok  " : "FAIL", ok ? "bit for bit" : "differs");
+    failures += !ok;
+}
+
+/* A row of the Q4_K product is the same whatever rows come with it: the
+ * GEMM's tiles of 128 and of 32 rows sum each output in the same order,
+ * and so does the GEMV for any of its one to eight rows (not the GEMM's
+ * order: a pass mixes no rows of the two). */
+static void test_gemm_rows(void)
+{
+    const int M = 150, N = 260, K = 512;
+    float *x = malloc((size_t)M * K * 4), *w = malloc((size_t)N * K * 4);
+    uint8_t *wq = malloc((size_t)N * K / 256 * 144);
+    float *all = malloc((size_t)M * N * 4), *part = malloc((size_t)M * N * 4);
+    for (size_t i = 0; i < (size_t)M * K; i++)
+        x[i] = (float)frand();
+    make_q4k(wq, w, N, K);
+    MLBuf bx = upload(x, (size_t)M * K * 4), bw = upload(wq, (size_t)N * K / 256 * 144);
+    MLBuf by = zeros((size_t)M * N * 4), bp = zeros((size_t)M * N * 4);
+
+    /* kernel, first row, rows */
+    static const struct { enum MLKernel k; int m0, m; } runs[] = {
+        { ML_K_GEMM_Q4K, 0, M }, { ML_K_GEMM_Q4K_SMALL, 100, 37 }, { ML_K_GEMM_Q4K, 3, 70 },
+        { ML_K_GEMV_Q4K, 5, 8 }, { ML_K_GEMV_Q4K, 7, 1 }, { ML_K_GEMV_Q4K, 9, 3 },
+    };
+    for (size_t r = 0; r < CB_ARRAY_ELEMS(runs); r++) {
+        GemmPush p = {
+            .x = bx.addr + (VkDeviceAddress)runs[r].m0 * K * 4, .w = bw.addr,
+            .y = (r ? bp.addr : by.addr) + (VkDeviceAddress)runs[r].m0 * N * 4,
+            .M = (uint32_t)runs[r].m, .N = N, .K = K, .ldx = K, .ldy = N,
+        };
+        enum MLKernel k = runs[r].k;
+        uint32_t gx = k == ML_K_GEMV_Q4K ? (N + 3) / 4 : (N + 127) / 128;
+        uint32_t gy = k == ML_K_GEMV_Q4K ? 1 : k == ML_K_GEMM_Q4K_SMALL ? (p.M + 31) / 32 :
+                      (p.M + 127) / 128;
+        ml_gpu_dispatch(&gpu, k, &p, sizeof(p), gx, gy, 1);
+        ml_gpu_barrier(&gpu);
+        download(r ? &bp : &by, r ? part : all, (size_t)M * N * 4);
+        if (r == 3) {
+            /* The GEMV's reference: its own rows, alone. */
+            memcpy(all + (size_t)5 * N, part + (size_t)5 * N, (size_t)8 * N * 4);
+            continue;
+        }
+        char name[64];
+        snprintf(name, sizeof(name), "%s rows %d-%d", k == ML_K_GEMV_Q4K ? "gemv_q4k" :
+                 k == ML_K_GEMM_Q4K_SMALL ? "gemm_q4k_small" : "gemm_q4k", runs[r].m0,
+                 runs[r].m0 + runs[r].m - 1);
+        if (r)
+            check_same(name, part + (size_t)runs[r].m0 * N, all + (size_t)runs[r].m0 * N,
+                       (size_t)runs[r].m * N * 4);
+    }
+    ml_buf_free(&gpu, &bx); ml_buf_free(&gpu, &bw); ml_buf_free(&gpu, &by); ml_buf_free(&gpu, &bp);
+    free(x); free(w); free(wq); free(all); free(part);
+}
+
 /* A 3x3, stride 2, padding 1 convolution through the GEMM's gather. */
 static void test_conv(void)
 {
@@ -302,9 +362,55 @@ static void test_conv(void)
 
 /* -------------------------------------------------------------- attention */
 
+/* The attention kernel's dispatches for the test: q, o, the cache and
+ * parts in buffers; the keys from brk on shift slots further. */
+static void run_attn(const MLBuf *bq, const MLBuf *bo, const MLBuf *bk, const MLBuf *bv, int nq,
+                     int pos0, bool dec, bool split, uint32_t brk, uint32_t shift)
+{
+    const int H = 32, KV = 8, D = 128, CTX = 4096;
+    int nk = pos0 + nq;
+    double scale = 1.0 / sqrt(D);
+    MLBuf bp;
+    if (dec) {
+        uint32_t nsplit = (nk + ATTN_SPLIT - 1) / ATTN_SPLIT;
+        bp = zeros((size_t)KV * nsplit * ATTN_DEC_ROWS * ATTN_PART * 4);
+        AttnDecPush p = {
+            .q = bq->addr, .o = bo->addr, .kc = bk->addr, .vc = bv->addr, .part = bp.addr,
+            .nq = (uint32_t)nq, .pos0 = (uint32_t)pos0, .max_ctx = CTX,
+            .nb_q = H, .nb_kv = KV, .nsplit = nsplit,
+            .scale = (float)scale, .brk = brk, .shift = shift,
+        };
+        ml_gpu_dispatch(&gpu, ML_K_ATTN_DEC, &p, sizeof(p), nsplit, KV, 1);
+        ml_gpu_barrier(&gpu);
+        ml_gpu_dispatch(&gpu, ML_K_ATTN_COMB, &p, sizeof(p), nq * (H / KV), KV, 1);
+    } else {
+        /* Split the keys whenever there are 128 or more. */
+        uint32_t fsplit = CB_MAX(1, nk / 128), len = CB_ALIGN((nk + fsplit - 1) / fsplit, 32);
+        fsplit = (nk + len - 1) / len;
+        bp = zeros((size_t)fsplit * nq * H * ATTN_PART * 4);
+        AttnPush p = {
+            .q = bq->addr, .o = bo->addr, .kc = bk->addr, .vc = bv->addr, .part = bp.addr,
+            .nq = (uint32_t)nq, .pos0 = (uint32_t)pos0, .max_ctx = CTX,
+            .nb_q = H, .nb_kv = KV, .nsplit = split ? fsplit : 1, .split_len = split ? len : 4096,
+            .scale = (float)scale, .brk = brk, .shift = shift,
+        };
+        ml_gpu_dispatch(&gpu, ML_K_ATTN, &p, sizeof(p), (nq + 63) / 64, H, p.nsplit);
+        if (p.nsplit > 1) {
+            ml_gpu_barrier(&gpu);
+            ml_gpu_dispatch(&gpu, ML_K_ATTN_FCOMB, &p, sizeof(p), nq, H, 1);
+        }
+    }
+    ml_gpu_barrier(&gpu);
+    ml_gpu_run(&gpu);
+    ml_buf_free(&gpu, &bp);
+}
+
 /* Causal attention of nq queries at [pos0, pos0 + nq) over a cache that
- * holds positions [0, pos0 + nq), GQA 32/8, 128 dimensions. */
-static void test_attn(int nq, int pos0, bool dec, bool split)
+ * holds positions [0, pos0 + nq), GQA 32/8, 128 dimensions; and the same
+ * with the keys from brk on moved `shift` slots further, junk in the slots
+ * between, which must give the same, bit for bit (a question asked with
+ * others keeps its keys past theirs, moss.c). */
+static void test_attn(int nq, int pos0, bool dec, bool split, int brk, int shift)
 {
     const int H = 32, KV = 8, D = 128, CTX = 4096;
     int nk = pos0 + nq;
@@ -352,42 +458,38 @@ static void test_attn(int nq, int pos0, bool dec, bool split)
     }
 
     MLBuf bq = upload(q, nqv * 4), bk = upload(kc, nc * 2), bv = upload(vc, nc * 2);
-    MLBuf bo = zeros(nqv * 4), bp;
-    if (dec) {
-        uint32_t nsplit = (nk + ATTN_SPLIT - 1) / ATTN_SPLIT;
-        bp = zeros((size_t)KV * nsplit * ATTN_DEC_ROWS * ATTN_PART * 4);
-        AttnDecPush p = {
-            .q = bq.addr, .o = bo.addr, .kc = bk.addr, .vc = bv.addr, .part = bp.addr,
-            .nq = (uint32_t)nq, .pos0 = (uint32_t)pos0, .max_ctx = CTX,
-            .nb_q = H, .nb_kv = KV, .nsplit = nsplit,
-            .scale = (float)scale,
-        };
-        ml_gpu_dispatch(&gpu, ML_K_ATTN_DEC, &p, sizeof(p), nsplit, KV, 1);
-        ml_gpu_barrier(&gpu);
-        ml_gpu_dispatch(&gpu, ML_K_ATTN_COMB, &p, sizeof(p), nq * (H / KV), KV, 1);
-    } else {
-        /* Split the keys whenever there are 128 or more. */
-        uint32_t fsplit = CB_MAX(1, nk / 128), len = CB_ALIGN((nk + fsplit - 1) / fsplit, 32);
-        fsplit = (nk + len - 1) / len;
-        bp = zeros((size_t)fsplit * nq * H * ATTN_PART * 4);
-        AttnPush p = {
-            .q = bq.addr, .o = bo.addr, .kc = bk.addr, .vc = bv.addr, .part = bp.addr,
-            .nq = (uint32_t)nq, .pos0 = (uint32_t)pos0, .max_ctx = CTX,
-            .nb_q = H, .nb_kv = KV, .nsplit = split ? fsplit : 1, .split_len = split ? len : 4096,
-            .scale = (float)scale,
-        };
-        ml_gpu_dispatch(&gpu, ML_K_ATTN, &p, sizeof(p), (nq + 63) / 64, H, p.nsplit);
-        if (p.nsplit > 1) {
-            ml_gpu_barrier(&gpu);
-            ml_gpu_dispatch(&gpu, ML_K_ATTN_FCOMB, &p, sizeof(p), nq, H, 1);
-        }
-    }
+    MLBuf bo = zeros(nqv * 4);
+    run_attn(&bq, &bo, &bk, &bv, nq, pos0, dec, split, 0, 0);
     download(&bo, got, nqv * 4);
-    ml_buf_free(&gpu, &bp);
     char name[64];
     snprintf(name, sizeof(name), "%s nq %d pos0 %d", dec ? "attn_dec" : split ? "attn split" : "attn",
              nq, pos0);
     check(name, got, want, nqv, 2e-3);
+
+    if (shift) {
+        /* The keys from brk on, shift slots further; junk where they were. */
+        uint16_t *kc2 = malloc(nc * 2), *vc2 = malloc(nc * 2);
+        for (size_t i = 0; i < nc; i++) {
+            kc2[i] = to_half((float)(frand() * 50.0));
+            vc2[i] = to_half((float)(frand() * 50.0));
+        }
+        for (int h = 0; h < KV; h++) {
+            for (int p = 0; p < nk; p++) {
+                size_t from = ((size_t)h * CTX + p) * D;
+                size_t to = ((size_t)h * CTX + p + (p >= brk ? shift : 0)) * D;
+                memcpy(kc2 + to, kc + from, D * 2);
+                memcpy(vc2 + to, vc + from, D * 2);
+            }
+        }
+        MLBuf bk2 = upload(kc2, nc * 2), bv2 = upload(vc2, nc * 2), bo2 = zeros(nqv * 4);
+        float *got2 = malloc(nqv * 4);
+        run_attn(&bq, &bo2, &bk2, &bv2, nq, pos0, dec, split, (uint32_t)brk, (uint32_t)shift);
+        download(&bo2, got2, nqv * 4);
+        snprintf(name, sizeof(name), "%s keys from %d +%d", dec ? "attn_dec" : "attn", brk, shift);
+        check_same(name, got2, got, nqv * 4);
+        ml_buf_free(&gpu, &bk2); ml_buf_free(&gpu, &bv2); ml_buf_free(&gpu, &bo2);
+        free(kc2); free(vc2); free(got2);
+    }
 
     ml_buf_free(&gpu, &bq); ml_buf_free(&gpu, &bk); ml_buf_free(&gpu, &bv);
     ml_buf_free(&gpu, &bo);
@@ -562,6 +664,40 @@ static void test_rope(void)
         gkf[i] = from_half(gk[i]);
     check("qk_rope q", gq, wq, nq, 1e-5);
     check("qk_rope k (f16)", gkf, wk, nc, 1e-3);
+
+    /* The same tokens at the same positions from a table, their keys and
+     * values to other slots: the same, bit for bit, where they go. */
+    int32_t *pos = malloc(2 * NT * sizeof(*pos));
+    for (int t = 0; t < NT; t++) {
+        pos[2 * t] = POS0 + t;
+        pos[2 * t + 1] = 3 + 2 * t;
+    }
+    MLBuf bq2 = upload(q, nq * 4), bkc2 = zeros(nc * 2), bvc2 = zeros(nc * 2);
+    MLBuf bpos = upload(pos, 2 * NT * sizeof(*pos));
+    p.q = bq2.addr;
+    p.kc = bkc2.addr;
+    p.vc = bvc2.addr;
+    p.pos = bpos.addr;
+    p.pos0 = 0;
+    ml_gpu_dispatch(&gpu, ML_K_QK_ROPE, &p, sizeof(p), NT, 1, 1);
+    float *gq2 = malloc(nq * 4);
+    uint16_t *gk2 = malloc(nc * 2), *gv = malloc(nc * 2), *gv2 = malloc(nc * 2);
+    download(&bq2, gq2, nq * 4);
+    download(&bkc2, gk2, nc * 2);
+    download(&bvc, gv, nc * 2);
+    download(&bvc2, gv2, nc * 2);
+    check_same("qk_rope q, positions table", gq2, gq, nq * 4);
+    bool same = true;
+    for (int h = 0; h < KV; h++) {
+        for (int t = 0; t < NT; t++) {
+            size_t a = ((size_t)h * CTX + POS0 + t) * D, b = ((size_t)h * CTX + 3 + 2 * t) * D;
+            same &= !memcmp(gk + a, gk2 + b, D * 2) && !memcmp(gv + a, gv2 + b, D * 2);
+        }
+    }
+    check_same("qk_rope k, v to the slots", &same, &(bool) { true }, sizeof(same));
+    ml_buf_free(&gpu, &bq2); ml_buf_free(&gpu, &bkc2); ml_buf_free(&gpu, &bvc2);
+    ml_buf_free(&gpu, &bpos);
+    free(gq2); free(gk2); free(gv); free(gv2); free(pos);
     ml_buf_free(&gpu, &bq); ml_buf_free(&gpu, &bk); ml_buf_free(&gpu, &bv);
     ml_buf_free(&gpu, &bqw); ml_buf_free(&gpu, &bkw); ml_buf_free(&gpu, &br);
     ml_buf_free(&gpu, &bkc); ml_buf_free(&gpu, &bvc);
@@ -691,6 +827,13 @@ int main(int argc, char **argv)
         test_gemm(true, 512, 4096, 2560, 0, true);
         test_gemm(true, 512, 9728, 2560, 0, true);
         test_gemm(true, 512, 2560, 9728, FLAG_ADD, true);
+        test_gemm(true, 1024, 4096, 2560, 0, true);
+        test_gemm(true, 1024, 1024, 2560, 0, true);
+        test_gemm(true, 1024, 9728, 2560, 0, true);
+        test_gemm(true, 1024, 2560, 9728, FLAG_ADD, true);
+        test_gemm(true, 2048, 4096, 2560, 0, true);
+        test_gemm(true, 2048, 9728, 2560, 0, true);
+        test_gemm(true, 2048, 2560, 9728, FLAG_ADD, true);
         test_gemm(true, 1, 9728, 2560, 0, true);
         test_gemm(true, 1, 2560, 9728, 0, true);
         test_gemm(true, 1, 151936, 2560, 0, true);
@@ -711,16 +854,17 @@ int main(int argc, char **argv)
         test_gemm(true, 37, 260, 512, FLAG_ADD, false);
         test_conv();
         test_enc_attn();
-        test_attn(70, 30, false, false);
-        test_attn(1, 300, false, false);
-        test_attn(3, 129, false, false);
-        test_attn(130, 1000, false, false);
-        test_attn(70, 30, false, true);
-        test_attn(20, 1000, false, true);
-        test_attn(1, 0, true, false);
-        test_attn(1, 300, true, false);
-        test_attn(2, 1000, true, false);
-        test_attn(2, 127, true, false);
+        test_gemm_rows();
+        test_attn(70, 30, false, false, 20, 50);
+        test_attn(1, 300, false, false, 0, 0);
+        test_attn(3, 129, false, false, 0, 0);
+        test_attn(130, 1000, false, false, 1000, 333);
+        test_attn(70, 30, false, true, 30, 100);
+        test_attn(20, 1000, false, true, 1000, 77);
+        test_attn(1, 0, true, false, 0, 0);
+        test_attn(1, 300, true, false, 250, 129);
+        test_attn(2, 1000, true, false, 900, 1000);
+        test_attn(2, 127, true, false, 0, 0);
         test_rope();
         test_mel();
         test_norm(false);

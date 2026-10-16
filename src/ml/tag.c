@@ -259,22 +259,39 @@ static void rotate(const char *const legend[CB_TRACK_COLORS], int r,
         opts[k] = legend[(r + k) % CB_TRACK_COLORS];
 }
 
-int cb_ml_color(CBML *ml, const char *const legend[CB_TRACK_COLORS], int orders,
-                float probs[CB_TRACK_COLORS], float *mass)
+/* The colour's question in `orders` rotations, as queries for ml_ask_many:
+ * rotation r's prompt in prompts[r] (malloc'd, freed by the caller), its
+ * logits into logits + r * ML_VOCAB. Rotation r lists description (r + k)
+ * mod N under the k-th letter: over all N rotations each description has
+ * every letter and every place once. */
+static int color_queries(const char *const legend[CB_TRACK_COLORS], int orders, MLQuery *q,
+                         char **prompts, float *logits)
+{
+    for (int r = 0; r < orders; r++) {
+        const char *opts[CB_TRACK_COLORS];
+        rotate(legend, r, opts);
+        if (!(prompts[r] = pick_prompt(q_color, opts, CB_TRACK_COLORS)))
+            return CB_ERROR(ENOMEM);
+        q[r] = (MLQuery) { .question = prompts[r], .logits = logits + (size_t)r * ML_VOCAB };
+    }
+    return 0;
+}
+
+/* The colour from the logits of the colour's questions (color_queries),
+ * as cb_ml_color returns it. */
+static int color_of(CBML *ml, const float *logits, int orders, float probs[CB_TRACK_COLORS],
+                    float *mass)
 {
     enum { N = CB_TRACK_COLORS };
-    orders = CB_CLAMP(orders, 1, N);
+    int32_t ids[N];
+    int ret = ml_choice_ids(ml, letters, N, ids);
+    if (ret < 0)
+        return ret;
     double lp[N] = { 0 };
     float mass_sum = 0.0f;
     for (int r = 0; r < orders; r++) {
-        /* Rotation r lists description (r + k) mod N under the k-th
-         * letter: over all N rotations each description has every letter
-         * and every place once. */
-        const char *opts[N];
         float p[N], m;
-        rotate(legend, r, opts);
-        int ret = cb_ml_pick(ml, q_color, opts, N, p, &m);
-        if (ret < 0)
+        if ((ret = ml_choice_probs(logits + (size_t)r * ML_VOCAB, ids, N, p, &m)) < 0)
             return ret;
         for (int k = 0; k < N; k++)
             lp[(r + k) % N] += log(fmax(p[k], 1e-30));
@@ -302,6 +319,24 @@ int cb_ml_color(CBML *ml, const char *const legend[CB_TRACK_COLORS], int orders,
     if (mass)
         *mass = mass_sum / orders;
     return best + 1;
+}
+
+int cb_ml_color(CBML *ml, const char *const legend[CB_TRACK_COLORS], int orders,
+                float probs[CB_TRACK_COLORS], float *mass)
+{
+    orders = CB_CLAMP(orders, 1, CB_TRACK_COLORS);
+    MLQuery q[CB_TRACK_COLORS];
+    char *prompts[CB_TRACK_COLORS] = { 0 };
+    float *logits = malloc((size_t)orders * ML_VOCAB * sizeof(*logits));
+    int ret = logits ? color_queries(legend, orders, q, prompts, logits) : CB_ERROR(ENOMEM);
+    if (ret >= 0)
+        ret = ml_ask_many(ml, q, orders, NULL);
+    if (ret >= 0)
+        ret = color_of(ml, logits, orders, probs, mass);
+    for (int r = 0; r < orders; r++)
+        free(prompts[r]);
+    free(logits);
+    return ret;
 }
 
 uint32_t cb_ml_legend_hash(const char *const legend[CB_TRACK_COLORS])
@@ -391,43 +426,77 @@ int cb_ml_tag(CBML *ml, const float *pcm, int64_t nb_samples,
                room, ml_max_context(ml) / 4);
         return CB_ERROR(E2BIG);
     }
+    int64_t t0 = cb_time_us();
     int ret = ml_listen(ml, pcm, nb_samples, room, cancel);
     if (ret < 0)
         return ret;
 
+    /* Every question at once (ml_ask_many): the seven yes/no, the colour's
+     * in every order, and the three in words. */
+    enum {
+        Q_YES = 0,
+        Q_COLOR = Q_YES + NB_YES,
+        Q_GENRE = Q_COLOR + CB_ML_COLOR_ORDERS,
+        Q_VOCALS,
+        Q_MOOD,
+        NB_Q,
+    };
+    MLQuery q[NB_Q] = { 0 };
+    char *prompts[CB_ML_COLOR_ORDERS] = { 0 };
+    float *logits = malloc((size_t)Q_GENRE * ML_VOCAB * sizeof(*logits));
+    if (!logits) {
+        ret = CB_ERROR(ENOMEM);
+        goto end;
+    }
+    for (int i = 0; i < NB_YES; i++)
+        q[Q_YES + i] = (MLQuery) {
+            .question = yes_q[i].q, .logits = logits + (size_t)(Q_YES + i) * ML_VOCAB,
+        };
+    if ((ret = color_queries(legend, CB_ML_COLOR_ORDERS, q + Q_COLOR, prompts,
+                             logits + (size_t)Q_COLOR * ML_VOCAB)) < 0)
+        goto end;
+    q[Q_GENRE] = (MLQuery) {
+        .question = q_genre, .answer_wanted = true, .max_tokens = GENRE_TOKENS,
+    };
+    q[Q_VOCALS] = (MLQuery) {
+        .question = q_vocals, .answer_wanted = true, .max_tokens = VOCALS_TOKENS,
+    };
+    q[Q_MOOD] = (MLQuery) {
+        .question = q_mood, .answer_wanted = true, .max_tokens = MOOD_TOKENS,
+    };
+    if ((ret = ml_ask_many(ml, q, NB_Q, cancel)) < 0)
+        goto end;
+
     static const char *const yn[2] = { "Yes", "No" };
+    int32_t yn_ids[2];
+    if ((ret = ml_choice_ids(ml, yn, 2, yn_ids)) < 0)
+        goto end;
     double z[NB_YES];
     for (int i = 0; i < NB_YES; i++) {
         float p[2];
-        if ((ret = cb_ml_choose(ml, yes_q[i].q, NULL, yn, 2, p, NULL)) < 0)
-            return ret;
+        if ((ret = ml_choice_probs(q[Q_YES + i].logits, yn_ids, 2, p, NULL)) < 0)
+            goto end;
         z[i] = (logit(p[0]) - yes_q[i].mean) / yes_q[i].sd;
-        if (cb_cancelled(cancel))
-            return CB_ERROR(ECANCELED);
     }
     double in = (z[Y_INTENSE] - z[Y_CALM] - z[Y_CHILL]) / 3.0;
     double club = z[Y_CLUB];
     double val = (z[Y_HAPPY] - z[Y_DARK] - z[Y_MELANCHOLIC]) / 3.0;
 
     float mass;
-    if ((ret = cb_ml_color(ml, legend, CB_ML_COLOR_ORDERS, tags->colors, &mass)) < 0)
-        return ret;
+    if ((ret = color_of(ml, logits + (size_t)Q_COLOR * ML_VOCAB, CB_ML_COLOR_ORDERS, tags->colors,
+                        &mass)) < 0)
+        goto end;
     if (!(mass >= MIN_LETTER_MASS)) {
         cb_err("ml: the letters held only %.0f %% of the model's answer to the colour "
                "question; the legend's words may not read as a list to it", mass * 100.0);
-        return CB_ERROR(EIO);
+        ret = CB_ERROR(EIO);
+        goto end;
     }
     tags->color = ret;
     tags->legend = cb_ml_legend_hash(legend);
-    if (cb_cancelled(cancel))
-        return CB_ERROR(ECANCELED);
 
-    char *genre = NULL, *vocals = NULL, *mood = NULL;
-    if ((ret = cb_ml_ask(ml, q_genre, GENRE_TOKENS, &genre)) < 0 ||
-        (ret = cb_ml_ask(ml, q_vocals, VOCALS_TOKENS, &vocals)) < 0 ||
-        (ret = cb_ml_ask(ml, q_mood, MOOD_TOKENS, &mood)) < 0)
-        goto end;
-
+    const char *genre = q[Q_GENRE].answer, *vocals = q[Q_VOCALS].answer;
+    const char *mood = q[Q_MOOD].answer;
     tags->genre = genre_of(genre);
     char *v = vocals_of(vocals), *m = mood_of(mood);
     tags->vocals = v && strcmp(v, "Instrumental") ? 1.0f : 0.0f;
@@ -442,11 +511,22 @@ int cb_ml_tag(CBML *ml, const float *pcm, int64_t nb_samples,
     tags->club = unit(club);
     tags->valence = unit(val);
     cb_debug("ml: intensity %+.2f club %+.2f mood %+.2f, colour %d", in, club, val, tags->color);
+    const MLStats *st = ml_stats(ml);
+    cb_debug("ml: tagged in %.0f ms: encoder %.0f, %d tokens of audio read %.0f, %d of questions "
+             "%.0f, %d of answers %.0f", (cb_time_us() - t0) * 1e-3, st->encode_ms,
+             st->prefill_tokens, st->prefill_ms, st->read_tokens, st->read_ms, st->answer_tokens,
+             st->answer_ms);
+    cb_debug("ml: colours %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f; intensity %.6f club %.6f "
+             "mood %.6f; genre \"%s\" vocals \"%s\" mood \"%s\"", tags->colors[0], tags->colors[1],
+             tags->colors[2], tags->colors[3], tags->colors[4], tags->colors[5], tags->colors[6],
+             tags->colors[7], tags->intensity, tags->club, tags->valence, genre, vocals, mood);
 
 end:
-    free(genre);
-    free(vocals);
-    free(mood);
+    for (int i = 0; i < NB_Q; i++)
+        free(q[i].answer);
+    for (int r = 0; r < CB_ML_COLOR_ORDERS; r++)
+        free(prompts[r]);
+    free(logits);
     if (ret < 0)
         cb_ml_tags_free(tags);
     return ret;

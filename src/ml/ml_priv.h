@@ -212,4 +212,46 @@ int ml_listen(CBML *ml, const float *pcm, int64_t n, int room, CBCancel *cancel)
 int ml_question_tokens(CBML *ml, const char *question, const char *prefix);
 int ml_max_context(const CBML *ml);
 
+/* The model's vocabulary: the logits of a token. */
+#define ML_VOCAB 151936
+
+/* A question about the audio listened to, for ml_ask_many. */
+typedef struct MLQuery {
+    const char *question;
+    const char *prefix;         /* the answer's start, may be NULL */
+    float *logits;              /* ML_VOCAB floats: the logits of the answer's first
+                                   token (cb_ml_choose's); NULL: not wanted */
+    bool answer_wanted;         /* the answer, greedily, up to max_tokens (cb_ml_ask's) */
+    int max_tokens;
+    /* Whether the answer so far is all that will be made of it: what
+     * follows could not change that, so it is not generated. NULL: to the
+     * model's end or max_tokens. */
+    bool (*settled)(const char *answer);
+    char *answer;               /* out, malloc'd */
+} MLQuery;
+
+/* The questions, asked of the audio together: each comes out as it would
+ * asked alone (cb_ml_choose's logits, cb_ml_ask's answer), but they go
+ * through the decoder in passes of hundreds of tokens rather than one at
+ * a time, and the answers a token each a step. */
+int ml_ask_many(CBML *ml, MLQuery *q, int nb, CBCancel *cancel);
+/* The tokens of `choices`, which must be one each (-EINVAL). */
+int ml_choice_ids(CBML *ml, const char *const *choices, int nb, int32_t *ids);
+/* cb_ml_choose's probabilities from the logits (-EIO when they are not
+ * numbers, or the choices hold none of it). */
+int ml_choice_probs(const float *logits, const int32_t *ids, int nb, float *probs, float *mass);
+
+/* Where the time of the last listen and the questions since went, in ms
+ * of wall time (each stage waits for the GPU), for the debug log. */
+typedef struct MLStats {
+    double encode_ms;           /* the samples to the adapter's rows */
+    double prefill_ms;          /* the prompt up to the audio's end into the cache */
+    int    prefill_tokens;
+    double read_ms;             /* the questions through the decoder */
+    int    read_tokens;
+    double answer_ms;           /* the answers, a token at a time */
+    int    answer_tokens;       /* tokens generated */
+} MLStats;
+const MLStats *ml_stats(const CBML *ml);
+
 #endif /* CYANBOX_ML_PRIV_H */

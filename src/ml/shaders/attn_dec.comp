@@ -11,6 +11,9 @@
 // Rows are (query, head) pairs: r = q * 4 + head in the group; at most 8.
 //
 // COMBINE: one workgroup a row, the splits merged and normalised.
+//
+// Key k is at slot k of the cache before position brk, and at k + shift
+// from there on (attn.comp says why).
 
 #version 460
 #extension GL_GOOGLE_include_directive : require
@@ -35,6 +38,7 @@ layout(push_constant, std430) uniform Push {
     uint nb_q, nb_kv;
     uint nsplit;
     float scale;
+    uint brk, shift;            // keys from brk on are shift slots further
 } pc;
 
 #ifndef COMBINE
@@ -66,9 +70,10 @@ void main()
     uint lane = tid % 8u;
     for (uint kk = tid / 8u; kk < SPLIT; kk += 32u) {
         uint key = k0 + kk;
+        uint slot = key < pc.brk ? key : key + pc.shift;
         vec4 kv[4];
         for (uint i = 0u; i < 4u; i++)
-            kv[i] = key < nkeys ? vec4(kc.v[cache + key * D4 + lane * 4u + i]) : vec4(0.0);
+            kv[i] = key < nkeys ? vec4(kc.v[cache + slot * D4 + lane * 4u + i]) : vec4(0.0);
         for (uint r = 0u; r < R; r++) {
             float s = 0.0;
             for (uint i = 0u; i < 4u; i++)
@@ -113,7 +118,9 @@ void main()
     for (uint r = 0u; r < MAXR; r++)
         acc[r] = vec4(0.0);
     for (uint kk = kg; kk < SPLIT && k0 + kk < nkeys; kk += 8u) {
-        vec4 v = vec4(vc.v[cache + (k0 + kk) * D4 + d4]);
+        uint key = k0 + kk;
+        uint slot = key < pc.brk ? key : key + pc.shift;
+        vec4 v = vec4(vc.v[cache + slot * D4 + d4]);
         for (uint r = 0u; r < R; r++)
             acc[r] += S[r][kk] * v;
     }

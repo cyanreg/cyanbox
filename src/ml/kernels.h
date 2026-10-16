@@ -78,20 +78,24 @@ typedef struct EmbedPush {
     uint32_t n;
 } EmbedPush;
 
+/* pos: per token, its position and its slot in the cache (int32 pairs), or
+ * 0 for pos0 + t, both. */
 typedef struct RopePush {
-    uint64_t q, k, v, qw, kw, rope, kc, vc;
+    uint64_t q, k, v, qw, kw, rope, kc, vc, pos;
     uint32_t pos0, max_ctx, nb_q, nb_kv;
     float eps;
 } RopePush;
 
 /* attn.comp: at most ATTN_MAX_PARTS (query, split) pairs when the keys
- * are split. */
+ * are split. Both attention kernels find key k at slot k of the cache
+ * before brk, at k + shift from there on (0, 0: every key at its own). */
 #define ATTN_MAX_PARTS 1024
 
 typedef struct AttnPush {
     uint64_t q, o, kc, vc, part;
     uint32_t nq, pos0, max_ctx, nb_q, nb_kv, nsplit, split_len;
     float scale;
+    uint32_t brk, shift;
 } AttnPush;
 
 /* attn_dec.comp: splits of ATTN_SPLIT keys, at most ATTN_DEC_ROWS rows of
@@ -104,6 +108,7 @@ typedef struct AttnDecPush {
     uint64_t q, o, kc, vc, part;
     uint32_t nq, pos0, max_ctx, nb_q, nb_kv, nsplit;
     float scale;
+    uint32_t brk, shift;
 } AttnDecPush;
 
 typedef struct ArgmaxPush {
@@ -114,5 +119,6 @@ typedef struct ArgmaxPush {
 #define ML_PUSH_CHECK(t) static_assert(sizeof(t) <= 128, #t " is too big for push constants")
 ML_PUSH_CHECK(GemmPush);
 ML_PUSH_CHECK(RopePush);
+ML_PUSH_CHECK(AttnPush);
 
 #endif /* CYANBOX_ML_KERNELS_H */

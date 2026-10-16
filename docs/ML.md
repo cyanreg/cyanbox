@@ -20,10 +20,10 @@ genre unless the user typed one (README.md, Tagging).
 | | per track (4–5 min) |
 | --- | --- |
 | Loading the model, once | 3.5 s; 4.1 GB of weights onto the GPU, none kept in RAM |
-| Listening (the whole track) | ~4 s on a 6900 XT, ~70x real time |
-| The other questions of `cb_ml_tag` (seven yes/no, three in words) | ~1.1 s |
-| The colour question, in eight orders | ~1.7 s (1.3–2.1; 2.5 s with three renders sharing the GPU) |
-| Memory | 174 MB of RAM at most (64 MB of it a read buffer while loading); 5.4 GB of VRAM in buffers from one listen to the next (4.1 GB weights, 1.2 GB cache, the decoder's scratch), 6.2 GB at the peak for a 4-minute track and 6.7 GB for one of 9.5 minutes or more (the encoder's scratch, freed after listening) |
+| Listening (the whole track) | 3–4.5 s on a 6900 XT, ~70x real time: the encoder 0.5–0.9 s, the prompt up to the audio's end (3,000 to 4,600 tokens) 2.2–3.8 s |
+| Every question of `cb_ml_tag` at once (seven yes/no, the colour in eight orders, three in words) | ~0.9 s for their 836 tokens, then 0.1–0.25 s for the answers' 10 to 30 |
+| A track in all, from decoding to the last answer | 4.75 s (the median of 16 tracks of 3 to 6 minutes; 6.7 s when the questions went one at a time) |
+| Memory | 174 MB of RAM at most (64 MB of it a read buffer while loading); 5.6 GB of VRAM in buffers after the questions (4.1 GB weights, 1.2 GB cache, the decoder's scratch for the questions' 836 tokens), 6.2 GB at the peak for a 4-minute track and 6.7 GB for one of 9.5 minutes or more (the encoder's scratch, freed after listening; the questions' is freed before it is made) |
 
 What it gives, measured on the author's library (some 150 tracks: house,
 garage, techno, trance, J-core, electro, bossa nova, jazz, AOR, J-pop,
@@ -87,7 +87,7 @@ Melancholic, introspective, atmospheric."
 
 The colour is one of rekordbox's eight, the one whose words in the legend
 fit the track best (README.md, Tagging; the settings `color.pink` ...
-`color.purple`). After the yes/no questions the model is asked, against
+`color.purple`). With the yes/no questions the model is asked, against
 the same audio in its cache, with the default legend:
 
 ```
@@ -226,7 +226,9 @@ table of the first tagging (intense and bright), is orange (0.61, then red
 share). These figures are the first legend's. With three Blender renders sharing the 6900 XT, a track took 9.9 s
 on average (4.4 to 14.3) from decoding to the last answer, the colour's
 eight asks 2.5 s of it. Alone on the GPU, the eight asks take 1.7 s (1.3
-to 2.1, the longer tracks' cache the slower) and listening 3.3 s.
+to 2.1, the longer tracks' cache the slower) and listening 3.3 s. Since
+the questions go through the decoder together (How it runs), all
+eighteen take 0.9 s.
 
 Before tagging version 2 the colour was a hue computed from the measures:
 the direction of the track on the plane of mood and intensity (Russell's
@@ -265,10 +267,20 @@ reads back a token or a row of logits, and does nothing else.
   rows are added after layers 0 to 2. The prompt is MOSS-Audio's default
   with its time markers (the seconds every 2 s); the cache holds it up to
   the end of the audio, and every question starts again from there.
+- **Questions together.** Questions asked together (`ml_ask_many`; a tag
+  asks eighteen) go through the decoder in one pass of their 836 tokens
+  rather than eighteen of 15 to 80, which keep most of the GPU idle (the
+  colour's eight took 1.7 s that way): each at the positions after the
+  audio but in slots of the cache of its own, its attention cut into the
+  same splits as alone. Every other kernel works a row at a time, so each
+  question comes out bit for bit as it would alone. The answers then go a
+  token each a step, every answer in one pass and one wait.
 - **Products.** `gemm.comp`: 128x128 tiles, 8x8 per invocation, f32 FMAs,
   shared memory swizzled against bank conflicts (Q4_K dequantised on the
-  way in; a 32-row variant for questions). `gemv.comp` for one to eight
-  rows, at the memory's speed.
+  way in; a 32-row variant for a few dozen tokens). `gemv.comp` for one
+  to eight rows, at the memory's speed. Each output is the same sum in the
+  same order whatever rows come with it, in either GEMM (the GEMV's order
+  is another), which the questions together rely on.
 
 | kernel (6900 XT) | |
 | --- | --- |
@@ -279,7 +291,7 @@ reads back a token or a row of logits, and does nothing else.
 | Attention, one query after 4000 keys | 64 µs a layer |
 
 A 5-minute track is ~4,000 tokens through the decoder: ~2.5 s of GEMM,
-~0.6 s of attention, ~0.7 s of encoder.
+~0.6 s of attention, ~0.7 s of encoder; and the questions' 836 tokens 0.9 s.
 
 **One model per GPU.** Two processes running the model on the 6900 XT at
 once made the driver reset the GPU (both contexts lost) within minutes;
@@ -289,6 +301,12 @@ one alone ran over 250 tracks without fault.
 
 - `test_ml_kernels` (meson suite `ml`) runs every kernel on random inputs of
   awkward sizes against plain C in double precision; `-b` benchmarks them.
+  It checks bit for bit what the questions together rely on: a product's
+  row the same whatever rows come with it, attention the same with keys
+  moved to other slots, RoPE the same from a table of positions.
+- `test_ml_ask` (needs the model: `CYANBOX_ML_MODEL=FILE meson test`;
+  skipped without) asks questions together and one at a time, in one
+  batch and in two, and compares the logits bit for bit and the answers.
 - `tools/ml_check.py` recomputes the encoder stage by stage in PyTorch from
   the reference code (transformers' Whisper feature extractor and encoder
   layer, MOSS-Audio's conv stem and gated MLPs), each stage from the GPU's

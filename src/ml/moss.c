@@ -26,6 +26,12 @@
  *    MOSS-Audio's own scripts turn them on), and the question after the
  *    audio. Everything up to the audio's end is read into the cache once
  *    (cb_ml_listen); each question starts again from there.
+ *  - Questions asked together (ml_ask_many; cb_ml_tag asks eighteen) go
+ *    through the decoder together, each at the positions after the audio
+ *    but in slots of the cache of its own, and their answers a token each
+ *    a step. Each comes out as it would alone, bit for bit (Segment says
+ *    how), several times faster: a question of a few dozen tokens alone
+ *    keeps most of the GPU idle.
  *  - The prefill goes through the decoder 512 tokens at a time, so its
  *    scratch buffers do not grow with the audio; the decoder's single
  *    tokens use the GEMV kernel, which reads each weight once.
@@ -66,7 +72,7 @@
 #define L_HEAD     128
 #define L_FFN      9728
 #define L_LAYERS   36
-#define VOCAB      151936
+#define VOCAB      ML_VOCAB
 #define DEEPSTACK  3
 
 /* Chunks through the convolutions at once; tokens through the decoder at
@@ -125,14 +131,15 @@ struct CBML {
     Scratch pcm, mel, maxbits, c1, c2, c3, stem;
     Scratch ex, eh, eq, ek, ev, eo, ef, ds_x[DEEPSTACK];
     Scratch ag, au, audio, ds_out[DEEPSTACK];
-    Scratch x, h, q, k, v, o, fg, fu, logits, ids, aidx, part;
-    MLBuf up, down;             /* small host buffers: ids in, a token or logits out */
+    Scratch x, h, q, k, v, o, fg, fu, logits, ids, aidx, pos, next, part;
+    MLBuf up, down;             /* host buffers: ids and positions in, tokens or logits out */
 
     /* The context: what the cache holds. */
     int nb_prefix;              /* tokens of the prompt up to the audio's end */
     int nb_audio;               /* audio rows in `audio`, `ds_out` */
 
     double listen_ms, ask_ms;
+    MLStats stats;
 };
 
 /* ----------------------------------------------------------------- tensors */
@@ -302,6 +309,18 @@ static void free_audio_scratch(CBML *ml)
         &ml->ex, &ml->eh, &ml->eq, &ml->ek, &ml->ev, &ml->eo, &ml->ef,
         &ml->ds_x[0], &ml->ds_x[1], &ml->ds_x[2], &ml->ag, &ml->au,
         &ml->audio, &ml->ds_out[0], &ml->ds_out[1], &ml->ds_out[2],
+    };
+    for (size_t i = 0; i < CB_ARRAY_ELEMS(all); i++)
+        ml_buf_free(&ml->g, &all[i]->b);
+}
+
+/* The decoder's larger scratch, which the questions asked together grow
+ * past what reading the audio needs: freed before the encoder's is made,
+ * so that the two are not on the GPU at once. */
+static void free_decoder_scratch(CBML *ml)
+{
+    Scratch *all[] = {
+        &ml->x, &ml->h, &ml->q, &ml->k, &ml->v, &ml->o, &ml->fg, &ml->fu, &ml->logits, &ml->part,
     };
     for (size_t i = 0; i < CB_ARRAY_ELEMS(all); i++)
         ml_buf_free(&ml->g, &all[i]->b);
@@ -523,7 +542,7 @@ int cb_ml_open(CBML **out, const char *path, const CBMLOptions *opt)
     if ((ret = ml_buf_create(&ml->g, &ml->kc, cache, ML_MEM_DEVICE)) < 0 ||
         (ret = ml_buf_create(&ml->g, &ml->vc, cache, ML_MEM_DEVICE)) < 0)
         goto fail;
-    if ((ret = ml_buf_create(&ml->g, &ml->up, (size_t)ml->max_ctx * 8, ML_MEM_UPLOAD)) < 0 ||
+    if ((ret = ml_buf_create(&ml->g, &ml->up, (size_t)ml->max_ctx * 16, ML_MEM_UPLOAD)) < 0 ||
         (ret = ml_buf_create(&ml->g, &ml->down, (size_t)VOCAB * 8 * 4, ML_MEM_READBACK)) < 0)
         goto fail;
 
@@ -551,7 +570,7 @@ void cb_ml_close(CBML **pml)
             &ml->ds_x[0], &ml->ds_x[1], &ml->ds_x[2],
             &ml->ag, &ml->au, &ml->audio, &ml->ds_out[0], &ml->ds_out[1], &ml->ds_out[2],
             &ml->x, &ml->h, &ml->q, &ml->k, &ml->v, &ml->o, &ml->fg, &ml->fu,
-            &ml->logits, &ml->ids, &ml->aidx, &ml->part,
+            &ml->logits, &ml->ids, &ml->aidx, &ml->pos, &ml->next, &ml->part,
         };
         for (size_t i = 0; i < CB_ARRAY_ELEMS(all); i++)
             ml_buf_free(&ml->g, &all[i]->b);
@@ -818,53 +837,227 @@ static int encode(CBML *ml, const float *pcm, int64_t n, CBCancel *cancel)
 
 /* ---------------------------------------------------------------- decoder */
 
-/* Layer i's attention for m queries at [pos0, pos0 + m) (in ml->q, after
- * qk_rope) over the cache, into ml->o: flash attention for a prefill,
- * flash decoding (split over the keys) for one or two tokens. */
-static void attention(CBML *ml, int i, uint32_t m, int pos0)
+/* A run of one prompt's tokens through the decoder: m rows from `row` of a
+ * pass, the tokens at positions [pos0, pos0 + m), whose keys and values go
+ * to the cache's slots [slot0, slot0 + m). The prompt's keys before brk are
+ * at their own slots (the head and the audio, which every question after
+ * them shares); from brk on they are slot0 - pos0 slots further (the
+ * question's own, which another question asked at the same time would
+ * otherwise overwrite).
+ *
+ * A segment is what one decode() of the prompt alone would put through the
+ * decoder at once: a chunk of at most LLM_CHUNK tokens. Its attention cuts
+ * the keys as that would (attn_plan, from m and pos0 alone), and every
+ * other kernel works row by row, so its rows come out the same, bit for
+ * bit, whatever else is in the pass, provided the pass's products are of
+ * the same kind: a pass of eight rows or fewer goes through the GEMV,
+ * whose sums run in another order than the GEMM's, so a segment of eight
+ * tokens or fewer only shares a pass with others like it. */
+typedef struct Segment {
+    int row, m, pos0, slot0, brk;
+} Segment;
+
+/* How attention cuts the keys of m queries at [pos0, pos0 + m), and the
+ * bytes of partial results it needs: flash decoding (split over the keys)
+ * for one or two tokens; flash attention for more, the keys split until
+ * there are some 256 workgroups, each with 256 keys or more, or for a
+ * handful of queries, whose 64-row tiles are mostly empty, 1024
+ * workgroups of 128 keys. */
+typedef struct AttnPlan {
+    bool dec;
+    uint32_t nsplit, split_len;
+    size_t part;
+} AttnPlan;
+
+static AttnPlan attn_plan(uint32_t m, uint32_t pos0)
 {
-    size_t layer_cache = (size_t)L_KV * ml->max_ctx * L_HEAD * 2;
-    VkDeviceAddress kc = ml->kc.addr + i * layer_cache, vc = ml->vc.addr + i * layer_cache;
-    float scale = (float)(1.0 / sqrt((double)L_HEAD));
-
+    AttnPlan a = { 0 };
     if (m * (L_HEADS / L_KV) <= ATTN_DEC_ROWS) {
-        uint32_t nsplit = (pos0 + m + ATTN_SPLIT - 1) / ATTN_SPLIT;
-        AttnDecPush p = {
-            .q = ml->q.b.addr, .o = ml->o.b.addr, .kc = kc, .vc = vc, .part = ml->part.b.addr,
-            .nq = m, .pos0 = (uint32_t)pos0, .max_ctx = (uint32_t)ml->max_ctx,
-            .nb_q = L_HEADS, .nb_kv = L_KV, .nsplit = nsplit,
-            .scale = scale,
-        };
-        ml_gpu_dispatch(&ml->g, ML_K_ATTN_DEC, &p, sizeof(p), nsplit, L_KV, 1);
-        ml_gpu_barrier(&ml->g);
-        ml_gpu_dispatch(&ml->g, ML_K_ATTN_COMB, &p, sizeof(p), m * (L_HEADS / L_KV), L_KV, 1);
-        ml_gpu_barrier(&ml->g);
-        return;
+        a.dec = true;
+        a.nsplit = (pos0 + m + ATTN_SPLIT - 1) / ATTN_SPLIT;
+        a.part = (size_t)L_KV * a.nsplit * ATTN_DEC_ROWS * ATTN_PART * 4;
+        return a;
     }
-
-    /* Few queries over many keys: the keys are split until there are some
-     * 256 workgroups, each with 256 keys or more; for a handful of queries,
-     * whose 64-row tiles are mostly empty, 1024 workgroups of 128 keys. */
     uint32_t qblocks = (m + 63) / 64, nkeys = pos0 + m;
     uint32_t want = m <= 16 ? 1024 : 256, least = m <= 16 ? 128 : 256;
     uint32_t nsplit = CB_MAX(1, want / (qblocks * L_HEADS));
     nsplit = CB_MIN(nsplit, CB_MAX(1, nkeys / least));
     nsplit = CB_MIN(nsplit, ATTN_MAX_PARTS / m);
     nsplit = CB_MAX(nsplit, 1);
-    uint32_t split_len = CB_ALIGN((nkeys + nsplit - 1) / nsplit, 32);
-    nsplit = (nkeys + split_len - 1) / split_len;
-    AttnPush p = {
-        .q = ml->q.b.addr, .o = ml->o.b.addr, .kc = kc, .vc = vc, .part = ml->part.b.addr,
-        .nq = m, .pos0 = (uint32_t)pos0, .max_ctx = (uint32_t)ml->max_ctx,
-        .nb_q = L_HEADS, .nb_kv = L_KV, .nsplit = nsplit, .split_len = split_len,
-        .scale = scale,
-    };
-    ml_gpu_dispatch(&ml->g, ML_K_ATTN, &p, sizeof(p), qblocks, L_HEADS, nsplit);
-    ml_gpu_barrier(&ml->g);
-    if (nsplit > 1) {
-        ml_gpu_dispatch(&ml->g, ML_K_ATTN_FCOMB, &p, sizeof(p), m, L_HEADS, 1);
-        ml_gpu_barrier(&ml->g);
+    a.split_len = CB_ALIGN((nkeys + nsplit - 1) / nsplit, 32);
+    a.nsplit = (nkeys + a.split_len - 1) / a.split_len;
+    a.part = a.nsplit > 1 ? (size_t)a.nsplit * m * L_HEADS * ATTN_PART * 4 : 0;
+    return a;
+}
+
+/* The partial results the segments' attention needs, one after another. */
+static size_t attn_part(const Segment *segs, int nb)
+{
+    size_t part = 0;
+    for (int s = 0; s < nb; s++)
+        part += attn_plan((uint32_t)segs[s].m, (uint32_t)segs[s].pos0).part;
+    return part;
+}
+
+/* Layer i's attention for the segments' queries (in ml->q, after qk_rope)
+ * over the cache, into ml->o: every segment's parts, then their merges. */
+static void attention(CBML *ml, int i, const Segment *segs, int nb)
+{
+    size_t layer_cache = (size_t)L_KV * ml->max_ctx * L_HEAD * 2;
+    VkDeviceAddress kc = ml->kc.addr + i * layer_cache, vc = ml->vc.addr + i * layer_cache;
+    float scale = (float)(1.0 / sqrt((double)L_HEAD));
+    VkDeviceSize row_bytes = (VkDeviceSize)L_HEADS * L_HEAD * 4;
+
+    for (int phase = 0; phase < 2; phase++) {
+        VkDeviceAddress part = ml->part.b.addr;
+        bool any = false;
+        for (int s = 0; s < nb; s++) {
+            const Segment *sg = &segs[s];
+            uint32_t m = (uint32_t)sg->m, pos0 = (uint32_t)sg->pos0;
+            AttnPlan a = attn_plan(m, pos0);
+            VkDeviceAddress q = ml->q.b.addr + sg->row * row_bytes;
+            VkDeviceAddress o = ml->o.b.addr + sg->row * row_bytes;
+            uint32_t brk = (uint32_t)sg->brk, shift = (uint32_t)(sg->slot0 - sg->pos0);
+            if (a.dec) {
+                AttnDecPush p = {
+                    .q = q, .o = o, .kc = kc, .vc = vc, .part = part,
+                    .nq = m, .pos0 = pos0, .max_ctx = (uint32_t)ml->max_ctx,
+                    .nb_q = L_HEADS, .nb_kv = L_KV, .nsplit = a.nsplit,
+                    .scale = scale, .brk = brk, .shift = shift,
+                };
+                if (!phase)
+                    ml_gpu_dispatch(&ml->g, ML_K_ATTN_DEC, &p, sizeof(p), a.nsplit, L_KV, 1);
+                else
+                    ml_gpu_dispatch(&ml->g, ML_K_ATTN_COMB, &p, sizeof(p), m * (L_HEADS / L_KV),
+                                    L_KV, 1);
+                any = true;
+            } else if (!phase || a.nsplit > 1) {
+                AttnPush p = {
+                    .q = q, .o = o, .kc = kc, .vc = vc, .part = part,
+                    .nq = m, .pos0 = pos0, .max_ctx = (uint32_t)ml->max_ctx,
+                    .nb_q = L_HEADS, .nb_kv = L_KV, .nsplit = a.nsplit, .split_len = a.split_len,
+                    .scale = scale, .brk = brk, .shift = shift,
+                };
+                if (!phase)
+                    ml_gpu_dispatch(&ml->g, ML_K_ATTN, &p, sizeof(p), (m + 63) / 64, L_HEADS,
+                                    a.nsplit);
+                else
+                    ml_gpu_dispatch(&ml->g, ML_K_ATTN_FCOMB, &p, sizeof(p), m, L_HEADS, 1);
+                any = true;
+            }
+            part += a.part;
+        }
+        if (any)
+            ml_gpu_barrier(&ml->g);
     }
+}
+
+/* The decoder's scratch for passes of `rows` rows, `part` bytes of
+ * attention's partial results and `logits` rows of logits (and as many
+ * next tokens). */
+static int reserve_decoder(CBML *ml, int rows, size_t part, int logits)
+{
+    int ret;
+    if ((ret = reserve(ml, &ml->x, (size_t)rows * L_DIM * 4)) < 0 ||
+        (ret = reserve(ml, &ml->h, (size_t)rows * L_DIM * 4)) < 0 ||
+        (ret = reserve(ml, &ml->q, (size_t)rows * L_HEADS * L_HEAD * 4)) < 0 ||
+        (ret = reserve(ml, &ml->k, (size_t)rows * L_KV * L_HEAD * 4)) < 0 ||
+        (ret = reserve(ml, &ml->v, (size_t)rows * L_KV * L_HEAD * 4)) < 0 ||
+        (ret = reserve(ml, &ml->o, (size_t)rows * L_HEADS * L_HEAD * 4)) < 0 ||
+        (ret = reserve(ml, &ml->fg, (size_t)rows * L_FFN * 4)) < 0 ||
+        (ret = reserve(ml, &ml->fu, (size_t)rows * L_FFN * 4)) < 0 ||
+        (ret = reserve(ml, &ml->logits, (size_t)VOCAB * CB_MAX(logits, 8) * 4)) < 0 ||
+        (ret = reserve(ml, &ml->ids, (size_t)ml->max_ctx * 4)) < 0 ||
+        (ret = reserve(ml, &ml->aidx, (size_t)ml->max_ctx * 4)) < 0 ||
+        (ret = reserve(ml, &ml->pos, (size_t)ml->max_ctx * 8)) < 0 ||
+        (ret = reserve(ml, &ml->next, (size_t)CB_MAX(logits, 8) * 4)) < 0 ||
+        (ret = reserve(ml, &ml->part, CB_MAX(part, 4))) < 0)
+        return ret;
+    return 0;
+}
+
+/* A pass's rows on the GPU: their tokens, the audio row each stands for
+ * (or -1), and their (position, slot) pairs, or 0 for the one segment's
+ * own positions. */
+typedef struct Rows {
+    VkDeviceAddress ids, aidx, pos;
+    int n;
+    bool audio;                 /* some row is audio: the deepstack's rows go in */
+} Rows;
+
+/* The rows, every segment's, through the decoder and into the cache; then
+ * the logits of rows lrows[0 .. nl) into ml->logits, rows [out0, out0 +
+ * nl). Recorded, not run. */
+static void pass(CBML *ml, const Rows *r, const Segment *segs, int nb_segs, const int *lrows,
+                 int nl, int out0)
+{
+    MLGpu *g = &ml->g;
+    uint32_t m = (uint32_t)r->n;
+    size_t layer_cache = (size_t)L_KV * ml->max_ctx * L_HEAD * 2;
+    VkDeviceAddress x = ml->x.b.addr, h = ml->h.b.addr;
+    EmbedPush ep = {
+        .table = ml->embed->addr,
+        .ids = r->ids,
+        .audio_idx = r->aidx,
+        .audio = ml->audio.b.addr,
+        .dst = x,
+        .n = L_DIM,
+    };
+    ml_gpu_dispatch(g, ML_K_EMBED, &ep, sizeof(ep), m, 1, 1);
+    ml_gpu_barrier(g);
+
+    for (int i = 0; i < L_LAYERS; i++) {
+        const LLMLayer *l = &ml->llm[i];
+        norm(ml, true, x, l->attn_norm, NULL, h, m, L_DIM, 1e-6f);
+        ml_gpu_barrier(g);
+        gemm(ml, h, L_DIM, l->q, 0, ml->q.b.addr, L_HEADS * L_HEAD, m, 0);
+        gemm(ml, h, L_DIM, l->k, 0, ml->k.b.addr, L_KV * L_HEAD, m, 0);
+        gemm(ml, h, L_DIM, l->v, 0, ml->v.b.addr, L_KV * L_HEAD, m, 0);
+        ml_gpu_barrier(g);
+        RopePush rp = {
+            .q = ml->q.b.addr, .k = ml->k.b.addr, .v = ml->v.b.addr,
+            .qw = l->q_norm->addr, .kw = l->k_norm->addr, .rope = ml->rope,
+            .kc = ml->kc.addr + i * layer_cache, .vc = ml->vc.addr + i * layer_cache,
+            .pos = r->pos,
+            .pos0 = (uint32_t)segs[0].pos0, .max_ctx = (uint32_t)ml->max_ctx,
+            .nb_q = L_HEADS, .nb_kv = L_KV,
+            .eps = 1e-6f,
+        };
+        ml_gpu_dispatch(g, ML_K_QK_ROPE, &rp, sizeof(rp), m, 1, 1);
+        ml_gpu_barrier(g);
+        attention(ml, i, segs, nb_segs);
+        gemm(ml, ml->o.b.addr, L_HEADS * L_HEAD, l->o, 0, x, L_DIM, m, FLAG_ADD);
+        ml_gpu_barrier(g);
+        norm(ml, true, x, l->ffn_norm, NULL, h, m, L_DIM, 1e-6f);
+        ml_gpu_barrier(g);
+        gemm(ml, h, L_DIM, l->gate, 0, ml->fg.b.addr, L_FFN, m, 0);
+        gemm(ml, h, L_DIM, l->up, 0, ml->fu.b.addr, L_FFN, m, 0);
+        ml_gpu_barrier(g);
+        act(ml, ACT_SWIGLU, ml->fg.b.addr, ml->fu.b.addr, 0, (uint64_t)m * L_FFN, 0, 0);
+        ml_gpu_barrier(g);
+        gemm(ml, ml->fg.b.addr, L_FFN, l->down, 0, x, L_DIM, m, FLAG_ADD);
+        ml_gpu_barrier(g);
+        /* MOSS-Audio's deepstack hooks: after layer i < 3, the audio
+         * tokens' rows get the i-th merger's rows. */
+        if (r->audio && i < DEEPSTACK) {
+            act(ml, ACT_ADD_ROWS, x, ml->ds_out[i].b.addr, r->aidx, (uint64_t)m * L_DIM, L_DIM, 0);
+            ml_gpu_barrier(g);
+        }
+    }
+
+    /* The final norm of the rows whose logits are wanted, gathered, then
+     * the head: eight rows at a time, the most the GEMV takes. */
+    if (!nl)
+        return;
+    for (int j = 0; j < nl; j++)
+        norm(ml, true, x + (VkDeviceAddress)lrows[j] * L_DIM * 4, ml->final_norm, NULL,
+             h + (VkDeviceAddress)j * L_DIM * 4, 1, L_DIM, 1e-6f);
+    ml_gpu_barrier(g);
+    for (int j = 0; j < nl; j += 8)
+        gemm(ml, h + (VkDeviceAddress)j * L_DIM * 4, L_DIM, ml->lm_head, 0,
+             ml->logits.b.addr + (VkDeviceAddress)(out0 + j) * VOCAB * 4, VOCAB,
+             (uint32_t)CB_MIN(8, nl - j), 0);
+    ml_gpu_barrier(g);
 }
 
 /* Tokens ids[0 .. n) at positions [pos0, pos0 + n) through the decoder, into
@@ -881,20 +1074,9 @@ static int decode(CBML *ml, const int32_t *ids, const int32_t *aidx, int n, int 
         return CB_ERROR(E2BIG);
 
     int step = CB_MIN(n, LLM_CHUNK);
-    if ((ret = reserve(ml, &ml->x, (size_t)step * L_DIM * 4)) < 0 ||
-        (ret = reserve(ml, &ml->h, (size_t)step * L_DIM * 4)) < 0 ||
-        (ret = reserve(ml, &ml->q, (size_t)step * L_HEADS * L_HEAD * 4)) < 0 ||
-        (ret = reserve(ml, &ml->k, (size_t)step * L_KV * L_HEAD * 4)) < 0 ||
-        (ret = reserve(ml, &ml->v, (size_t)step * L_KV * L_HEAD * 4)) < 0 ||
-        (ret = reserve(ml, &ml->o, (size_t)step * L_HEADS * L_HEAD * 4)) < 0 ||
-        (ret = reserve(ml, &ml->fg, (size_t)step * L_FFN * 4)) < 0 ||
-        (ret = reserve(ml, &ml->fu, (size_t)step * L_FFN * 4)) < 0 ||
-        (ret = reserve(ml, &ml->logits, (size_t)VOCAB * 8 * 4)) < 0 ||
-        (ret = reserve(ml, &ml->ids, (size_t)ml->max_ctx * 4)) < 0 ||
-        (ret = reserve(ml, &ml->aidx, (size_t)ml->max_ctx * 4)) < 0 ||
-        (ret = reserve(ml, &ml->part,
-                       CB_MAX((size_t)L_KV * (ml->max_ctx / ATTN_SPLIT + 1) * ATTN_DEC_ROWS,
-                              (size_t)ATTN_MAX_PARTS * L_HEADS) * ATTN_PART * 4)) < 0)
+    size_t part = CB_MAX((size_t)L_KV * (ml->max_ctx / ATTN_SPLIT + 1) * ATTN_DEC_ROWS,
+                         (size_t)ATTN_MAX_PARTS * L_HEADS) * ATTN_PART * 4;
+    if ((ret = reserve_decoder(ml, step, part, 8)) < 0)
         return ret;
 
     int32_t *up = ml->up.map;
@@ -909,92 +1091,27 @@ static int decode(CBML *ml, const int32_t *ids, const int32_t *aidx, int n, int 
     ml_gpu_copy(g, &ml->up, (size_t)ml->max_ctx * 4, &ml->aidx.b, 0, n * 4);
     ml_gpu_barrier(g);
 
-    size_t layer_cache = (size_t)L_KV * ml->max_ctx * L_HEAD * 2;
     for (int c0 = 0; c0 < n; c0 += step) {
-        uint32_t m = (uint32_t)CB_MIN(step, n - c0);
-        VkDeviceAddress x = ml->x.b.addr, h = ml->h.b.addr;
-        EmbedPush ep = {
-            .table = ml->embed->addr,
+        int m = CB_MIN(step, n - c0);
+        Rows r = {
             .ids = ml->ids.b.addr + (VkDeviceAddress)c0 * 4,
-            .audio_idx = ml->aidx.b.addr + (VkDeviceAddress)c0 * 4,
-            .audio = ml->audio.b.addr,
-            .dst = x,
-            .n = L_DIM,
+            .aidx = ml->aidx.b.addr + (VkDeviceAddress)c0 * 4,
+            .n = m,
+            .audio = audio,
         };
-        ml_gpu_dispatch(g, ML_K_EMBED, &ep, sizeof(ep), m, 1, 1);
-        ml_gpu_barrier(g);
-
-        for (int i = 0; i < L_LAYERS; i++) {
-            const LLMLayer *l = &ml->llm[i];
-            norm(ml, true, x, l->attn_norm, NULL, h, m, L_DIM, 1e-6f);
-            ml_gpu_barrier(g);
-            gemm(ml, h, L_DIM, l->q, 0, ml->q.b.addr, L_HEADS * L_HEAD, m, 0);
-            gemm(ml, h, L_DIM, l->k, 0, ml->k.b.addr, L_KV * L_HEAD, m, 0);
-            gemm(ml, h, L_DIM, l->v, 0, ml->v.b.addr, L_KV * L_HEAD, m, 0);
-            ml_gpu_barrier(g);
-            RopePush rp = {
-                .q = ml->q.b.addr, .k = ml->k.b.addr, .v = ml->v.b.addr,
-                .qw = l->q_norm->addr, .kw = l->k_norm->addr, .rope = ml->rope,
-                .kc = ml->kc.addr + i * layer_cache, .vc = ml->vc.addr + i * layer_cache,
-                .pos0 = (uint32_t)(pos0 + c0), .max_ctx = (uint32_t)ml->max_ctx,
-                .nb_q = L_HEADS, .nb_kv = L_KV,
-                .eps = 1e-6f,
-            };
-            ml_gpu_dispatch(g, ML_K_QK_ROPE, &rp, sizeof(rp), m, 1, 1);
-            ml_gpu_barrier(g);
-            attention(ml, i, m, pos0 + c0);
-            gemm(ml, ml->o.b.addr, L_HEADS * L_HEAD, l->o, 0, x, L_DIM, m, FLAG_ADD);
-            ml_gpu_barrier(g);
-            norm(ml, true, x, l->ffn_norm, NULL, h, m, L_DIM, 1e-6f);
-            ml_gpu_barrier(g);
-            gemm(ml, h, L_DIM, l->gate, 0, ml->fg.b.addr, L_FFN, m, 0);
-            gemm(ml, h, L_DIM, l->up, 0, ml->fu.b.addr, L_FFN, m, 0);
-            ml_gpu_barrier(g);
-            act(ml, ACT_SWIGLU, ml->fg.b.addr, ml->fu.b.addr, 0, (uint64_t)m * L_FFN, 0, 0);
-            ml_gpu_barrier(g);
-            gemm(ml, ml->fg.b.addr, L_FFN, l->down, 0, x, L_DIM, m, FLAG_ADD);
-            ml_gpu_barrier(g);
-            /* MOSS-Audio's deepstack hooks: after layer i < 3, the audio
-             * tokens' rows get the i-th merger's rows. */
-            if (audio && i < DEEPSTACK) {
-                act(ml, ACT_ADD_ROWS, x, ml->ds_out[i].b.addr,
-                    ml->aidx.b.addr + (VkDeviceAddress)c0 * 4, (uint64_t)m * L_DIM, L_DIM, 0);
-                ml_gpu_barrier(g);
-            }
+        Segment s = { .row = 0, .m = m, .pos0 = pos0 + c0, .slot0 = pos0 + c0 };
+        int lrows[8], nl = 0;
+        if (c0 + m == n) {
+            nl = CB_CLAMP(nb_logits, 1, CB_MIN(8, m));
+            for (int j = 0; j < nl; j++)
+                lrows[j] = m - nl + j;
         }
-
-        if (c0 + (int)m == n) {
-            uint32_t nl = (uint32_t)CB_CLAMP(nb_logits, 1, CB_MIN(8, (int)m));
-            VkDeviceAddress last = x + (VkDeviceAddress)(m - nl) * L_DIM * 4;
-            norm(ml, true, last, ml->final_norm, NULL, h, nl, L_DIM, 1e-6f);
-            ml_gpu_barrier(g);
-            gemm(ml, h, L_DIM, ml->lm_head, 0, ml->logits.b.addr, VOCAB, nl, 0);
-            ml_gpu_barrier(g);
-        }
+        pass(ml, &r, &s, 1, lrows, nl, 0);
         if ((ret = ml_gpu_run(g)) < 0)
             return ret;
         if (cb_cancelled(cancel))
             return CB_ERROR(ECANCELED);
     }
-    return 0;
-}
-
-/* The most likely next token after decode(). */
-static int next_token(CBML *ml, int32_t *tok)
-{
-    ArgmaxPush p = {
-        .logits = ml->logits.b.addr,
-        .dst = ml->ids.b.addr + (VkDeviceAddress)(ml->max_ctx - 1) * 4,
-        .n = VOCAB,
-    };
-    ml_gpu_dispatch(&ml->g, ML_K_ARGMAX, &p, sizeof(p), 1, 1, 1);
-    ml_gpu_barrier(&ml->g);
-    ml_gpu_copy(&ml->g, &ml->ids.b, (VkDeviceSize)(ml->max_ctx - 1) * 4, &ml->down, 0, 4);
-    int ret = ml_gpu_run(&ml->g);
-    if (ret < 0)
-        return ret;
-    ml_buf_invalidate(&ml->g, &ml->down);
-    *tok = *(int32_t *)ml->down.map;
     return 0;
 }
 
@@ -1105,6 +1222,11 @@ int ml_max_context(const CBML *ml)
     return ml->max_ctx;
 }
 
+const MLStats *ml_stats(const CBML *ml)
+{
+    return &ml->stats;
+}
+
 int ml_listen(CBML *ml, const float *pcm, int64_t n, int room, CBCancel *cancel)
 {
     int64_t t0 = cb_time_us();
@@ -1127,10 +1249,14 @@ int ml_listen(CBML *ml, const float *pcm, int64_t n, int room, CBCancel *cancel)
         return CB_ERROR(E2BIG);
 
     Tokens t = { 0 };
+    ml->stats = (MLStats) { 0 };
+    free_decoder_scratch(ml);
     int ret = encode(ml, pcm, n, cancel);
     if (ret < 0)
         goto end;
     int nb_audio = ret;
+    int64_t t1 = cb_time_us();
+    ml->stats.encode_ms = (t1 - t0) * 1e-3;
     if ((ret = tok_head(ml, &t)) < 0 || (ret = tok_push(&t, TOK_AUDIO_BOS, -1)) < 0 ||
         (ret = tok_audio(&t, nb_audio)) < 0 || (ret = tok_push(&t, TOK_AUDIO_EOS, -1)) < 0)
         goto end;
@@ -1142,6 +1268,8 @@ int ml_listen(CBML *ml, const float *pcm, int64_t n, int room, CBCancel *cancel)
         goto end;
     ml->nb_prefix = t.nb;
     ml->nb_audio = nb_audio;
+    ml->stats.prefill_ms = (cb_time_us() - t1) * 1e-3;
+    ml->stats.prefill_tokens = t.nb;
 
 end:
     tok_free(&t);
@@ -1198,67 +1326,406 @@ int ml_question_tokens(CBML *ml, const char *question, const char *prefix)
     return ret;
 }
 
-int cb_ml_ask(CBML *ml, const char *question, int max_tokens, char **answer)
+/* ------------------------------------------------------------- questions */
+
+/* Questions asked together (ml_ask_many) go through the decoder together:
+ * the tag's eighteen questions of 15 to 80 tokens each are, one at a time,
+ * too few rows for the GEMM to keep the GPU busy (a fifth of its speed on
+ * a prefill), and together a pass of some 800. Each question keeps slots
+ * of its own in the cache past the audio, for its tokens and its answer's;
+ * its rows come out as they would asked alone (Segment says why). */
+
+/* Rows of a pass of questions at most: the scratch of the decoder grows
+ * to it. */
+#define BATCH_ROWS 1024
+
+static bool is_end(int32_t tok)
 {
-    *answer = NULL;
+    return tok == TOK_IM_END || tok == TOK_ENDOFTEXT;
+}
+
+static int reserve_down(CBML *ml, size_t size)
+{
+    if (ml->down.size >= size)
+        return 0;
+    ml_buf_free(&ml->g, &ml->down);
+    return ml_buf_create(&ml->g, &ml->down, size, ML_MEM_READBACK);
+}
+
+/* The rows of a batch, laid out pass after pass: for each, its segment, the
+ * question it is of, and whether it is that question's last. */
+typedef struct Plan {
+    Segment *segs;
+    int *query;
+    int nb_segs, nb_rows;
+    int (*passes)[2];           /* first segment, segments */
+    int nb_passes;
+} Plan;
+
+static void plan_free(Plan *p)
+{
+    free(p->segs);
+    free(p->query);
+    free(p->passes);
+    *p = (Plan) { 0 };
+}
+
+/* The questions' segments, cut as decode() would cut each (chunks of
+ * LLM_CHUNK tokens), in rounds: every question's first chunk, then every
+ * second chunk, which attends to the first through the cache. In a round,
+ * the segments of more than eight tokens go into passes of up to
+ * BATCH_ROWS rows, the others into passes of up to eight. */
+static int plan_batch(Plan *p, const Tokens *t, const int *slot, int nb, int prefix)
+{
+    *p = (Plan) { 0 };
+    int rounds = 0, cap = 0;
+    for (int i = 0; i < nb; i++) {
+        int c = (t[i].nb + LLM_CHUNK - 1) / LLM_CHUNK;
+        rounds = CB_MAX(rounds, c);
+        cap += c;
+    }
+    p->segs = calloc(CB_MAX(cap, 1), sizeof(*p->segs));
+    p->query = calloc(CB_MAX(cap, 1), sizeof(*p->query));
+    p->passes = calloc(CB_MAX(cap, 1), sizeof(*p->passes));
+    if (!p->segs || !p->query || !p->passes) {
+        plan_free(p);
+        return CB_ERROR(ENOMEM);
+    }
+
+    for (int r = 0; r < rounds; r++) {
+        for (int few = 0; few < 2; few++) {
+            int limit = few ? 8 : BATCH_ROWS, rows = 0;
+            bool open = false;
+            for (int i = 0; i < nb; i++) {
+                int c0 = r * LLM_CHUNK;
+                if (c0 >= t[i].nb)
+                    continue;
+                int m = CB_MIN(LLM_CHUNK, t[i].nb - c0);
+                if ((m <= 8) != few)
+                    continue;
+                if (!open || rows + m > limit) {
+                    p->passes[p->nb_passes][0] = p->nb_segs;
+                    p->passes[p->nb_passes][1] = 0;
+                    p->nb_passes++;
+                    rows = 0;
+                    open = true;
+                }
+                p->segs[p->nb_segs] = (Segment) {
+                    .row = rows, .m = m, .pos0 = prefix + c0, .slot0 = slot[i] + c0,
+                    .brk = prefix,
+                };
+                p->query[p->nb_segs] = i;
+                p->nb_segs++;
+                p->passes[p->nb_passes - 1][1]++;
+                rows += m;
+                p->nb_rows += m;
+            }
+        }
+    }
+    return 0;
+}
+
+/* An answer being generated. */
+typedef struct Gen {
+    MLQuery *q;
+    int32_t tok;                /* the next token, from the last logits */
+    int i, pos, slot;
+    char *out;
+    size_t len, cap;
+} Gen;
+
+/* nb questions whose slots in the cache, from slot[i], do not overlap:
+ * read, then answered a token at a time, every answer of the batch at
+ * once. */
+static int ask_batch(CBML *ml, MLQuery *qs, const Tokens *t, const int *slot, int nb,
+                     CBCancel *cancel)
+{
+    MLGpu *g = &ml->g;
+    int prefix = ml->nb_prefix, ret;
     int64_t t0 = cb_time_us();
-    Tokens t = { 0 };
-    char *out = NULL;
-    size_t len = 0, cap = 0;
-    int ret = tok_question(ml, &t, question, NULL, ml->nb_prefix);
-    if (ret < 0)
-        goto end;
+    Plan p;
+    Gen *gen = NULL;
+    int *lidx = NULL;
+    if ((ret = plan_batch(&p, t, slot, nb, prefix)) < 0)
+        return ret;
 
-    int pos = ml->nb_prefix;
-    if ((ret = decode(ml, t.ids, NULL, t.nb, pos, 1, NULL)) < 0)
+    int max_rows = 0, nb_gen = 0, nb_scored = 0;
+    size_t part = 0;
+    for (int k = 0; k < p.nb_passes; k++) {
+        const Segment *s = p.segs + p.passes[k][0];
+        int n = 0;
+        for (int j = 0; j < p.passes[k][1]; j++)
+            n += s[j].m;
+        max_rows = CB_MAX(max_rows, n);
+        part = CB_MAX(part, attn_part(s, p.passes[k][1]));
+    }
+    for (int i = 0; i < nb; i++) {
+        nb_gen += qs[i].answer_wanted;
+        nb_scored += !!qs[i].logits;
+    }
+    /* The answers' steps: a token each, eight at most in a pass. */
+    Segment worst = { .m = 1, .pos0 = ml->max_ctx - 1 };
+    part = CB_MAX(part, 8 * attn_part(&worst, 1));
+    if ((ret = reserve_decoder(ml, CB_MAX(max_rows, 8), part, nb)) < 0 ||
+        (ret = reserve_down(ml, (size_t)CB_MAX(nb_scored, 1) * VOCAB * 4)) < 0)
         goto end;
-    pos += t.nb;
-
-    cap = 256;
-    if (!(out = calloc(1, cap))) {
+    if (!(lidx = calloc(nb, sizeof(*lidx))) || !(gen = calloc(CB_MAX(nb_gen, 1), sizeof(*gen)))) {
         ret = CB_ERROR(ENOMEM);
         goto end;
     }
-    for (int i = 0; i < max_tokens; i++) {
-        int32_t tok;
-        if ((ret = next_token(ml, &tok)) < 0)
-            goto end;
-        if (tok == TOK_IM_END || tok == TOK_ENDOFTEXT)
-            break;
-        if ((ret = ml_tok_decode(ml->tok, tok, &out, &len, &cap)) < 0)
-            goto end;
-        if (i + 1 == max_tokens || pos + 1 >= ml->max_ctx)
-            break;
-        if ((ret = decode(ml, &tok, NULL, 1, pos, 1, NULL)) < 0)
-            goto end;
-        pos++;
+
+    /* Every row's token and (position, slot), pass after pass. */
+    int32_t *up = ml->up.map;
+    for (int s = 0, row = 0; s < p.nb_segs; s++) {
+        const Segment *sg = &p.segs[s];
+        const Tokens *qt = &t[p.query[s]];
+        int c0 = sg->pos0 - prefix;
+        for (int j = 0; j < sg->m; j++, row++) {
+            up[row] = qt->ids[c0 + j];
+            up[ml->max_ctx + row] = -1;
+            up[2 * ml->max_ctx + 2 * row] = sg->pos0 + j;
+            up[2 * ml->max_ctx + 2 * row + 1] = sg->slot0 + j;
+        }
     }
-    *answer = out;
-    out = NULL;
+    ml_buf_flush(g, &ml->up, (size_t)ml->max_ctx * 16);
+    ml_gpu_copy(g, &ml->up, 0, &ml->ids.b, 0, (size_t)p.nb_rows * 4);
+    ml_gpu_copy(g, &ml->up, (size_t)ml->max_ctx * 4, &ml->aidx.b, 0, (size_t)p.nb_rows * 4);
+    ml_gpu_copy(g, &ml->up, (size_t)ml->max_ctx * 8, &ml->pos.b, 0, (size_t)p.nb_rows * 8);
+    ml_gpu_barrier(g);
+
+    /* The questions, the logits of each at its last token in the order
+     * they come. */
+    int nl = 0, row0 = 0;
+    for (int k = 0; k < p.nb_passes; k++) {
+        const Segment *s = p.segs + p.passes[k][0];
+        const int *sq = p.query + p.passes[k][0];
+        int ns = p.passes[k][1], n = 0, lrows[BATCH_ROWS], nl0 = nl, cnt = 0;
+        for (int j = 0; j < ns; j++) {
+            n += s[j].m;
+            if (s[j].pos0 - prefix + s[j].m == t[sq[j]].nb) {
+                lrows[cnt++] = s[j].row + s[j].m - 1;
+                lidx[sq[j]] = nl++;
+            }
+        }
+        Rows r = {
+            .ids = ml->ids.b.addr + (VkDeviceAddress)row0 * 4,
+            .aidx = ml->aidx.b.addr + (VkDeviceAddress)row0 * 4,
+            .pos = ml->pos.b.addr + (VkDeviceAddress)row0 * 8,
+            .n = n,
+        };
+        pass(ml, &r, s, ns, lrows, cnt, nl0);
+        if ((ret = ml_gpu_run(g)) < 0)
+            goto end;
+        if (cb_cancelled(cancel)) {
+            ret = CB_ERROR(ECANCELED);
+            goto end;
+        }
+        row0 += n;
+    }
+    ml->stats.read_tokens += p.nb_rows;
+
+    /* The scored questions' logits, and the answers' first tokens. */
+    int ng = 0;
+    for (int i = 0; i < nb; i++) {
+        if (qs[i].logits)
+            ml_gpu_copy(g, &ml->logits.b, (VkDeviceSize)lidx[i] * VOCAB * 4, &ml->down,
+                        (VkDeviceSize)lidx[i] * VOCAB * 4, (VkDeviceSize)VOCAB * 4);
+    }
+    if ((ret = ml_gpu_run(g)) < 0 || (ret = ml_buf_invalidate(g, &ml->down)) < 0)
+        goto end;
+    for (int i = 0; i < nb; i++) {
+        if (qs[i].logits)
+            memcpy(qs[i].logits, (const float *)ml->down.map + (size_t)lidx[i] * VOCAB,
+                   (size_t)VOCAB * 4);
+        if (!qs[i].answer_wanted)
+            continue;
+        Gen *ge = &gen[ng++];
+        ge->q = &qs[i];
+        ge->pos = prefix + t[i].nb;
+        ge->slot = slot[i] + t[i].nb;
+        ge->cap = 256;
+        if (!(ge->out = calloc(1, ge->cap))) {
+            ret = CB_ERROR(ENOMEM);
+            goto end;
+        }
+    }
+    int64_t t1 = cb_time_us();
+    ml->stats.read_ms += (t1 - t0) * 1e-3;
+    if (!nb_gen)
+        goto end;
+
+    /* The answers, greedily, as cb_ml_ask's loop would make each alone, a
+     * step at a time for all of them: an answer's token through the
+     * decoder is a segment of one row, eight to a pass (a pass's GEMV
+     * takes no more). act: the answers whose next token is in ml->next,
+     * in its order. */
+    int *act = calloc(nb_gen, sizeof(*act)), nact = 0;
+    if (!act) {
+        ret = CB_ERROR(ENOMEM);
+        goto end;
+    }
+    for (int k = 0; k < nb_gen; k++) {
+        if (gen[k].q->max_tokens <= 0)
+            continue;
+        ArgmaxPush ap = {
+            .logits = ml->logits.b.addr + (VkDeviceAddress)lidx[gen[k].q - qs] * VOCAB * 4,
+            .dst = ml->next.b.addr + (VkDeviceAddress)nact * 4,
+            .n = VOCAB,
+        };
+        ml_gpu_dispatch(g, ML_K_ARGMAX, &ap, sizeof(ap), 1, 1, 1);
+        act[nact++] = k;
+    }
+    while (nact) {
+        ml_gpu_barrier(g);
+        ml_gpu_copy(g, &ml->next.b, 0, &ml->down, 0, (VkDeviceSize)nact * 4);
+        if ((ret = ml_gpu_run(g)) < 0 || (ret = ml_buf_invalidate(g, &ml->down)) < 0)
+            break;
+        const int32_t *toks = ml->down.map;
+        for (int j = 0; j < nact; j++)
+            gen[act[j]].tok = toks[j];
+        if (cb_cancelled(cancel)) {
+            ret = CB_ERROR(ECANCELED);
+            break;
+        }
+
+        /* Each answer's token, and whether it goes on. */
+        int nn = 0;
+        for (int j = 0; j < nact && ret >= 0; j++) {
+            Gen *ge = &gen[act[j]];
+            if (is_end(ge->tok))
+                continue;
+            if ((ret = ml_tok_decode(ml->tok, ge->tok, &ge->out, &ge->len, &ge->cap)) < 0)
+                break;
+            ml->stats.answer_tokens++;
+            if (ge->i + 1 == ge->q->max_tokens || ge->pos + 1 >= ml->max_ctx)
+                continue;
+            if (ge->q->settled && ge->q->settled(ge->out))
+                continue;
+            act[nn++] = act[j];
+        }
+        if (ret < 0 || !nn)
+            break;
+
+        for (int j = 0; j < nn; j++) {
+            const Gen *ge = &gen[act[j]];
+            up[j] = ge->tok;
+            up[ml->max_ctx + j] = -1;
+            up[2 * ml->max_ctx + 2 * j] = ge->pos;
+            up[2 * ml->max_ctx + 2 * j + 1] = ge->slot;
+        }
+        ml_buf_flush(g, &ml->up, (size_t)ml->max_ctx * 16);
+        ml_gpu_copy(g, &ml->up, 0, &ml->ids.b, 0, (size_t)nn * 4);
+        ml_gpu_copy(g, &ml->up, (size_t)ml->max_ctx * 4, &ml->aidx.b, 0, (size_t)nn * 4);
+        ml_gpu_copy(g, &ml->up, (size_t)ml->max_ctx * 8, &ml->pos.b, 0, (size_t)nn * 8);
+        ml_gpu_barrier(g);
+        for (int p0 = 0; p0 < nn; p0 += 8) {
+            int np = CB_MIN(8, nn - p0);
+            Segment segs[8];
+            int lrows[8];
+            for (int j = 0; j < np; j++) {
+                const Gen *ge = &gen[act[p0 + j]];
+                segs[j] = (Segment) {
+                    .row = j, .m = 1, .pos0 = ge->pos, .slot0 = ge->slot, .brk = prefix,
+                };
+                lrows[j] = j;
+            }
+            Rows r = {
+                .ids = ml->ids.b.addr + (VkDeviceAddress)p0 * 4,
+                .aidx = ml->aidx.b.addr + (VkDeviceAddress)p0 * 4,
+                .pos = ml->pos.b.addr + (VkDeviceAddress)p0 * 8,
+                .n = np,
+            };
+            pass(ml, &r, segs, np, lrows, np, p0);
+        }
+        for (int j = 0; j < nn; j++) {
+            ArgmaxPush ap = {
+                .logits = ml->logits.b.addr + (VkDeviceAddress)j * VOCAB * 4,
+                .dst = ml->next.b.addr + (VkDeviceAddress)j * 4,
+                .n = VOCAB,
+            };
+            ml_gpu_dispatch(g, ML_K_ARGMAX, &ap, sizeof(ap), 1, 1, 1);
+            Gen *ge = &gen[act[j]];
+            ge->i++;
+            ge->pos++;
+            ge->slot++;
+        }
+        nact = nn;
+    }
+    free(act);
+    if (ret < 0)
+        goto end;
+    for (int k = 0; k < nb_gen; k++) {
+        gen[k].q->answer = gen[k].out;
+        gen[k].out = NULL;
+    }
+    ml->stats.answer_ms += (cb_time_us() - t1) * 1e-3;
 
 end:
-    free(out);
-    tok_free(&t);
-    if (ret < 0)
+    for (int k = 0; gen && k < nb_gen; k++)
+        free(gen[k].out);
+    free(gen);
+    free(lidx);
+    plan_free(&p);
+    return ret < 0 ? ret : 0;
+}
+
+int ml_ask_many(CBML *ml, MLQuery *qs, int nb, CBCancel *cancel)
+{
+    int64_t t0 = cb_time_us();
+    Tokens *t = calloc(CB_MAX(nb, 1), sizeof(*t));
+    int *slot = calloc(CB_MAX(nb, 1), sizeof(*slot));
+    int ret = t && slot ? 0 : CB_ERROR(ENOMEM);
+    for (int i = 0; i < nb; i++)
+        qs[i].answer = NULL;
+    for (int i = 0; i < nb && ret >= 0; i++) {
+        ret = tok_question(ml, &t[i], qs[i].question, qs[i].prefix, ml->nb_prefix);
+        if (ret >= 0 && ml->nb_prefix + t[i].nb > ml->max_ctx)
+            ret = CB_ERROR(E2BIG);
+    }
+
+    /* As many questions a batch as have room in the cache past the audio,
+     * each for its tokens and the answer's (the last of an answer's tokens
+     * is never read back in). One that has no room beside the others goes
+     * first in a batch of its own, at the slots it would have alone. */
+    int avail = ml->max_ctx - ml->nb_prefix;
+    for (int i = 0; i < nb && ret >= 0;) {
+        int used = 0, j = i;
+        while (j < nb) {
+            int answer = qs[j].answer_wanted ? CB_MAX(qs[j].max_tokens - 1, 0) : 0;
+            int need = CB_MIN(t[j].nb + answer, avail);
+            if (j > i && used + need > avail)
+                break;
+            slot[j] = ml->nb_prefix + used;
+            used += need;
+            j++;
+        }
+        cb_debug("ml: questions %d to %d of %d together, in %d of the %d slots past the audio",
+                 i + 1, j, nb, used, avail);
+        ret = ask_batch(ml, qs + i, t + i, slot + i, j - i, cancel);
+        i = j;
+    }
+
+    for (int i = 0; t && i < nb; i++)
+        tok_free(&t[i]);
+    free(t);
+    free(slot);
+    if (ret < 0) {
         ml_gpu_discard(&ml->g);
+        for (int i = 0; i < nb; i++) {
+            free(qs[i].answer);
+            qs[i].answer = NULL;
+        }
+    }
     ml->ask_ms += (cb_time_us() - t0) * 1e-3;
     return ret;
 }
 
-int cb_ml_choose(CBML *ml, const char *question, const char *prefix,
-                 const char *const *choices, int nb, float *probs, float *mass)
+int ml_choice_ids(CBML *ml, const char *const *choices, int nb, int32_t *ids)
 {
-    int64_t t0 = cb_time_us();
-    int32_t *ids = calloc(CB_MAX(nb, 1), sizeof(*ids));
-    if (!ids)
-        return CB_ERROR(ENOMEM);
-
-    Tokens t = { 0 };
-    int ret = 0;
     for (int i = 0; i < nb; i++) {
         int32_t *c = NULL;
         int cn = 0, ccap = 0;
-        ret = ml_tok_encode(ml->tok, choices[i], &c, &cn, &ccap);
+        int ret = ml_tok_encode(ml->tok, choices[i], &c, &cn, &ccap);
         if (ret >= 0 && cn != 1) {
             cb_err("ml: choice \"%s\" is %d tokens, not one", choices[i], cn);
             ret = CB_ERROR(EINVAL);
@@ -1267,20 +1734,13 @@ int cb_ml_choose(CBML *ml, const char *question, const char *prefix,
             ids[i] = c[0];
         free(c);
         if (ret < 0)
-            goto end;
+            return ret;
     }
+    return 0;
+}
 
-    if ((ret = tok_question(ml, &t, question, prefix, ml->nb_prefix)) < 0)
-        goto end;
-    if ((ret = decode(ml, t.ids, NULL, t.nb, ml->nb_prefix, 1, NULL)) < 0)
-        goto end;
-
-    ml_gpu_copy(&ml->g, &ml->logits.b, 0, &ml->down, 0, (size_t)VOCAB * 4);
-    if ((ret = ml_gpu_run(&ml->g)) < 0)
-        goto end;
-    ml_buf_invalidate(&ml->g, &ml->down);
-    const float *logits = ml->down.map;
-
+int ml_choice_probs(const float *logits, const int32_t *ids, int nb, float *probs, float *mass)
+{
     /* Softmax over the whole vocabulary, in double. A logit that is not a
      * number (a fault on the GPU) would make it uniform, or every choice
      * 0: an error, not an answer. */
@@ -1288,8 +1748,7 @@ int cb_ml_choose(CBML *ml, const char *question, const char *prefix,
     for (int i = 0; i < VOCAB; i++) {
         if (!isfinite(logits[i])) {
             cb_err("ml: the model's logits are not finite");
-            ret = CB_ERROR(EIO);
-            goto end;
+            return CB_ERROR(EIO);
         }
         mx = fmax(mx, logits[i]);
     }
@@ -1303,20 +1762,39 @@ int cb_ml_choose(CBML *ml, const char *question, const char *prefix,
     }
     if (!(sum > 0.0) || !isfinite(sum)) {
         cb_err("ml: the choices have no probability at all");
-        ret = CB_ERROR(EIO);
-        goto end;
+        return CB_ERROR(EIO);
     }
     for (int i = 0; i < nb; i++)
         probs[i] = (float)(probs[i] / sum);
     if (mass)
         *mass = (float)sum;
+    return 0;
+}
 
-end:
+int cb_ml_ask(CBML *ml, const char *question, int max_tokens, char **answer)
+{
+    MLQuery q = { .question = question, .answer_wanted = true, .max_tokens = max_tokens };
+    int ret = ml_ask_many(ml, &q, 1, NULL);
+    *answer = q.answer;
+    return ret;
+}
+
+int cb_ml_choose(CBML *ml, const char *question, const char *prefix,
+                 const char *const *choices, int nb, float *probs, float *mass)
+{
+    int32_t *ids = calloc(CB_MAX(nb, 1), sizeof(*ids));
+    float *logits = malloc((size_t)VOCAB * sizeof(*logits));
+    int ret = ids && logits ? 0 : CB_ERROR(ENOMEM);
+    if (ret >= 0)
+        ret = ml_choice_ids(ml, choices, nb, ids);
+    if (ret >= 0) {
+        MLQuery q = { .question = question, .prefix = prefix, .logits = logits };
+        ret = ml_ask_many(ml, &q, 1, NULL);
+    }
+    if (ret >= 0)
+        ret = ml_choice_probs(logits, ids, nb, probs, mass);
     free(ids);
-    tok_free(&t);
-    if (ret < 0)
-        ml_gpu_discard(&ml->g);
-    ml->ask_ms += (cb_time_us() - t0) * 1e-3;
+    free(logits);
     return ret;
 }
 

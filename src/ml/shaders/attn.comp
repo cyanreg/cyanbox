@@ -17,6 +17,11 @@
 // With nsplit > 1 the keys are cut into nsplit runs, one a workgroup (z),
 // and each writes its part (output, maximum, sum) for COMBINE: a few
 // queries over a long context would otherwise be a few workgroups.
+//
+// Key k is at slot k of the cache before position brk, and at k + shift
+// from there on: questions asked of the same audio together each keep
+// their own tokens past the audio's (moss.c, Segment). Every key is
+// visited as it would be at its own slot, so the result is the same.
 
 #version 460
 #extension GL_GOOGLE_include_directive : require
@@ -41,6 +46,7 @@ layout(push_constant, std430) uniform Push {
     uint nsplit;
     uint split_len;             // keys a split (a multiple of BC)
     float scale;
+    uint brk, shift;            // keys from brk on are shift slots further
 } pc;
 
 #ifndef COMBINE
@@ -88,9 +94,11 @@ void main()
         barrier();
         for (uint e = tid; e < BC * D4; e += 256u) {
             uint c = e / D4, d4 = e % D4;
-            bool in_ = k0 + c < kend;
-            Ks[c][SW(c, d4)] = in_ ? kc.v[cache + (k0 + c) * D4 + d4] : f16vec4(0.0);
-            Vs[c][SW(c, d4)] = in_ ? vc.v[cache + (k0 + c) * D4 + d4] : f16vec4(0.0);
+            uint key = k0 + c;
+            bool in_ = key < kend;
+            uint slot = key < pc.brk ? key : key + pc.shift;
+            Ks[c][SW(c, d4)] = in_ ? kc.v[cache + slot * D4 + d4] : f16vec4(0.0);
+            Vs[c][SW(c, d4)] = in_ ? vc.v[cache + slot * D4 + d4] : f16vec4(0.0);
         }
         barrier();
 

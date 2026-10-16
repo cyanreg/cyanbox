@@ -66,6 +66,18 @@ test('ml_kernels',
     timeout: 300,
 )
 
+# Questions asked together against the same asked one at a time, bit for
+# bit. Needs the model ($CYANBOX_ML_MODEL) and a GPU that runs it; skipped
+# (77) without them.
+test('ml_ask',
+    executable('test_ml_ask', '../../tests/ml/test_ask.c',
+        include_directories: [ cb_inc, include_directories('.') ],
+        dependencies: [ cb_ml_dep ],
+    ),
+    suite: 'ml',
+    timeout: 300,
+)
+
 # The model file's header against crafted files that must be refused (a
 # zero alignment, sizes that overflow, offsets that wrap, tensors of the
 # wrong shape). No GPU: the refusals all come before the device.
