@@ -235,6 +235,22 @@ static void sync_record(void)
     uint8_t *text;
     size_t n;
     CHECK_EQ(cb_file_read(path, &text, &n), 0);
+    /* A record of another format, a newer one or rxbox's, is no record. */
+    static const char *const heads[] = { "cyanbox-sync 2\n", "rxbox-sync 1\n" };
+    size_t skip = strlen("cyanbox-sync 1\n");
+    for (int k = 0; k < 2 && n > skip; k++) {
+        size_t hl = strlen(heads[k]);
+        uint8_t *c = malloc(hl + n - skip);
+        memcpy(c, heads[k], hl);
+        memcpy(c + hl, text + skip, n - skip);
+        CHECK_EQ(cb_file_write_atomic(path, c, hl + n - skip), 0);
+        CBSyncRecord f;
+        int ret = cb_sync_record_read(dir, &f);
+        CHECK_EQ(ret, CB_ERROR(EINVAL));
+        if (ret >= 0)
+            cb_sync_record_free(&f);
+        free(c);
+    }
     uint32_t x = 12345;
     for (size_t i = 0; i < 3 * n; i++) {
         uint8_t *c = malloc(n);

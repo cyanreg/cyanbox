@@ -52,6 +52,9 @@
 #include "src/formats/buf.h"
 #include "src/formats/formats_priv.h"
 
+/* The sync record's first line (export_priv.h). */
+#define SYNC_HEAD "cyanbox-sync 1\n"
+
 static const char *const settings_files[4] = {
     "MYSETTING.DAT", "MYSETTING2.DAT", "DJMMYSETTING.DAT", "DEVSETTING.DAT",
 };
@@ -541,7 +544,7 @@ int cb_sync_record_write(int root, const CBSyncRecord *r)
     FILE *f = open_memstream(&buf, &size);
     if (!f)
         return CB_ERROR(ENOMEM);
-    fprintf(f, "cyanbox-sync 1\nuuid %s\n", r->uuid);
+    fprintf(f, "%suuid %s\n", SYNC_HEAD, r->uuid);
     if (r->library[0])
         fprintf(f, "library %s\n", r->library);
     fprintf(f, "date %s\n", r->date);
@@ -595,7 +598,7 @@ int cb_sync_record_read(const char *mount, CBSyncRecord *r)
     int ret = read_stick_file(mount, CB_SYNC_PATH, &data, &size);
     if (ret < 0)
         return ret;
-    if (strncmp((char *)data, "cyanbox-sync 1\n", 13)) {
+    if (strncmp((char *)data, SYNC_HEAD, sizeof(SYNC_HEAD) - 1)) {
         free(data);
         return CB_ERROR(EINVAL);
     }
