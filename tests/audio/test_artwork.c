@@ -7,7 +7,7 @@
  * JPEG's quantisation tables are checked against libjpeg's at quality 90.
  * Then the covers found next to a file, by name and rank. */
 
-#include "rxbox/audio.h"
+#include "cyanbox/audio.h"
 
 #include <math.h>
 
@@ -40,7 +40,7 @@ static void compare(const uint8_t *a, const uint8_t *b, int n, double *mean, int
         for (int c = 0; c < 3; c++) {
             int d = abs(a[i * 4 + c] - b[i * 4 + c]);
             sum += d;
-            *max = RX_MAX(*max, d);
+            *max = CB_MAX(*max, d);
         }
     }
     *mean = sum / (3.0 * n);
@@ -70,7 +70,7 @@ static void expect_cover(const char *root, const char *name, const Place *files,
                          const uint8_t *rgb)
 {
     char *dir = test_path(root, name);
-    rx_mkdir_p(dir);
+    cb_mkdir_p(dir);
     char *track = test_path(dir, "01 track.flac");
     copy_file(bare_flac, track);
     for (const Place *p = files; p->name; p++) {
@@ -80,30 +80,30 @@ static void expect_cover(const char *root, const char *name, const Place *files,
     }
 
     char *found = NULL;
-    int ret = rx_artwork_find_file(track, &found);
+    int ret = cb_artwork_find_file(track, &found);
     /* What the probe says is what the deck and the stick will show */
-    RXProbe p;
-    CHECK(rx_probe(track, &p) >= 0 && p.has_artwork == (want != NULL), "%s: probe has_artwork %d",
+    CBProbe p;
+    CHECK(cb_probe(track, &p) >= 0 && p.has_artwork == (want != NULL), "%s: probe has_artwork %d",
           name, p.has_artwork);
-    rx_probe_free(&p);
+    cb_probe_free(&p);
     uint8_t *rgba = NULL, *raw = NULL;
     size_t rawn;
     char codec[16];
     int w, h;
     if (!want) {
         CHECK(ret == -ENOENT && !found, "%s: found %s", name, found ? found : "-");
-        CHECK(rx_artwork_rgba(track, &rgba, &w, &h) == -ENOENT, "%s: rgba found", name);
-        CHECK(rx_artwork_raw(track, &raw, &rawn, codec) == -ENOENT, "%s: raw found", name);
+        CHECK(cb_artwork_rgba(track, &rgba, &w, &h) == -ENOENT, "%s: rgba found", name);
+        CHECK(cb_artwork_raw(track, &raw, &rawn, codec) == -ENOENT, "%s: raw found", name);
     } else {
-        CHECK(ret >= 0 && found && !strcmp(rx_path_base(found), want), "%s: found %s, want %s", name,
+        CHECK(ret >= 0 && found && !strcmp(cb_path_base(found), want), "%s: found %s, want %s", name,
               found ? found : "nothing", want);
-        CHECK(rx_artwork_rgba(track, &rgba, &w, &h) >= 0 && w == W && h == H, "%s: rgba", name);
+        CHECK(cb_artwork_rgba(track, &rgba, &w, &h) >= 0 && w == W && h == H, "%s: rgba", name);
         if (rgb)
             CHECK(same_rgb(rgba, w, h, rgb), "%s: wrong picture", name);
         uint8_t *bytes;
         size_t n;
         char *path = test_path(dir, want);
-        CHECK(rx_artwork_raw(track, &raw, &rawn, codec) >= 0 && rx_file_read(path, &bytes, &n) >= 0 &&
+        CHECK(cb_artwork_raw(track, &raw, &rawn, codec) >= 0 && cb_file_read(path, &bytes, &n) >= 0 &&
               n == rawn && !memcmp(raw, bytes, n), "%s: raw bytes are not %s's", name, want);
         free(bytes);
         free(path);
@@ -139,7 +139,7 @@ static void ijg_table(int chroma, int quality, int out[64])
     };
     int s = quality < 50 ? 5000 / quality : 200 - 2 * quality;
     for (int i = 0; i < 64; i++)
-        out[i] = RX_CLAMP(((chroma ? chr : luma)[i] * s + 50) / 100, 1, 255);
+        out[i] = CB_CLAMP(((chroma ? chr : luma)[i] * s + 50) / 100, 1, 255);
 }
 
 /* The DQT and SOF0 segments of a baseline 4:2:0 JPEG */
@@ -213,27 +213,27 @@ int main(void)
     uint8_t *pngb, *rawb;
     size_t pngn, rawn;
     char codec[16];
-    CHECK(rx_file_read(png, &pngb, &pngn) >= 0, "read png");
-    CHECK(rx_artwork_raw(art, &rawb, &rawn, codec) >= 0, "artwork raw");
+    CHECK(cb_file_read(png, &pngb, &pngn) >= 0, "read png");
+    CHECK(cb_artwork_raw(art, &rawb, &rawn, codec) >= 0, "artwork raw");
     CHECK(!strcmp(codec, "png") && rawn == pngn && !memcmp(rawb, pngb, pngn),
           "embedded bytes differ (%s, %zu vs %zu)", codec, rawn, pngn);
     /* Nothing embedded: the folder's cover.jpg (before cover.png) */
     free(rawb);
-    CHECK(rx_artwork_raw(bare, &rawb, &rawn, codec) >= 0 && !strcmp(codec, "mjpeg"),
+    CHECK(cb_artwork_raw(bare, &rawb, &rawn, codec) >= 0 && !strcmp(codec, "mjpeg"),
           "bare file: folder cover %s", codec);
     free(rawb);
 
-    RXProbe p;
-    CHECK(rx_probe(art, &p) >= 0 && p.has_artwork, "probe: no artwork");
-    rx_probe_free(&p);
+    CBProbe p;
+    CHECK(cb_probe(art, &p) >= 0 && p.has_artwork, "probe: no artwork");
+    cb_probe_free(&p);
     /* Nothing embedded, but the folder's cover is its cover all the same */
-    CHECK(rx_probe(bare, &p) >= 0 && p.has_artwork, "probe: the folder's cover not seen");
-    rx_probe_free(&p);
+    CHECK(cb_probe(bare, &p) >= 0 && p.has_artwork, "probe: the folder's cover not seen");
+    cb_probe_free(&p);
 
     /* Decoded exactly (PNG is lossless) */
     uint8_t *rgba;
     int w, h;
-    CHECK(rx_artwork_rgba(art, &rgba, &w, &h) >= 0 && w == W && h == H, "rgba %dx%d", w, h);
+    CHECK(cb_artwork_rgba(art, &rgba, &w, &h) >= 0 && w == W && h == H, "rgba %dx%d", w, h);
     bool exact = w == W && h == H;
     for (int i = 0; exact && i < W * H; i++)
         exact = !memcmp(rgba + i * 4, rgb + i * 3, 3) && rgba[i * 4 + 3] == 255;
@@ -242,7 +242,7 @@ int main(void)
     /* Thumbnail: aspect kept, never enlarged */
     uint8_t *thumb;
     int tw, th;
-    CHECK(rx_image_scale(rgba, W, H, 100, 100, &thumb, &tw, &th) >= 0 && tw == 100 && th == 75,
+    CHECK(cb_image_scale(rgba, W, H, 100, 100, &thumb, &tw, &th) >= 0 && tw == 100 && th == 75,
           "thumbnail %dx%d", tw, th);
     if (tw == 100 && th == 75) {
         uint8_t want[3];
@@ -253,7 +253,7 @@ int main(void)
         CHECK(thumb[(37 * 100 + 2) * 4] > 250 && thumb[(37 * 100 + 2) * 4 + 1] < 5, "thumbnail bar");
     }
     free(thumb);
-    CHECK(rx_image_scale(rgba, W, H, 1000, 1000, &thumb, &tw, &th) >= 0 && tw == W && th == H &&
+    CHECK(cb_image_scale(rgba, W, H, 1000, 1000, &thumb, &tw, &th) >= 0 && tw == W && th == H &&
           !memcmp(thumb, rgba, W * H * 4), "no-op scale changed the image");
     free(thumb);
 
@@ -264,19 +264,19 @@ int main(void)
         int size = sizes[s];
         uint8_t *jpeg;
         size_t jn;
-        CHECK(rx_image_jpeg_square(rgba, W, H, size, 90, &jpeg, &jn) >= 0, "jpeg %d", size);
+        CHECK(cb_image_jpeg_square(rgba, W, H, size, 90, &jpeg, &jn) >= 0, "jpeg %d", size);
         check_jpeg(jpeg, jn, size, 90);
 
         uint8_t *back;
         int bw, bh;
-        CHECK(rx_image_decode(jpeg, jn, &back, &bw, &bh) >= 0 && bw == size && bh == size,
+        CHECK(cb_image_decode(jpeg, jn, &back, &bw, &bh) >= 0 && bw == size && bh == size,
               "jpeg decode %dx%d", bw, bh);
         /* Reference: the centre square, area-scaled */
         uint8_t *square = malloc(H * H * 4), *ref;
         for (int y = 0; y < H; y++)
             memcpy(square + y * H * 4, rgba + (y * W + (W - H) / 2) * 4, H * 4);
         int rw, rh;
-        CHECK(rx_image_scale(square, H, H, size, size, &ref, &rw, &rh) >= 0, "reference");
+        CHECK(cb_image_scale(square, H, H, size, size, &ref, &rw, &rh) >= 0, "reference");
         double mean;
         int max;
         compare(back, ref, size * size, &mean, &max);
@@ -300,20 +300,20 @@ int main(void)
         char *mp3 = test_path(dir, "art.mp3");
         CHECK(!ffmpeg("-i", wav, "-i", jpg, "-map", "0:a", "-map", "1:v", "-c:a", "libmp3lame",
                       "-c:v", "copy", "-disposition:v", "attached_pic", mp3, NULL), "mp3 art");
-        CHECK(rx_artwork_raw(mp3, &rawb, &rawn, codec) >= 0 && !strcmp(codec, "mjpeg"),
+        CHECK(cb_artwork_raw(mp3, &rawb, &rawn, codec) >= 0 && !strcmp(codec, "mjpeg"),
               "mp3 cover codec %s", codec);
         free(rawb);
-        CHECK(rx_artwork_rgba(mp3, &rgba, &w, &h) >= 0 && w == W && h == H, "mp3 cover %dx%d", w, h);
+        CHECK(cb_artwork_rgba(mp3, &rgba, &w, &h) >= 0 && w == W && h == H, "mp3 cover %dx%d", w, h);
         free(rgba);
         free(mp3);
     }
 
-    /* Next to the file (rxbox/audio.h's rule), each case in its own folder
+    /* Next to the file (cyanbox/audio.h's rule), each case in its own folder
      * under one that holds no image, so the parent lookup finds nothing */
     char *root = test_path(dir, "lookup");
     const char *rm[] = { "rm", "-rf", root, NULL };
     run(rm);
-    rx_mkdir_p(root);
+    cb_mkdir_p(root);
     char *webp = NULL;
     if (have_encoder("libwebp")) {
         webp = test_path(dir, "cover.webp");
@@ -358,21 +358,21 @@ int main(void)
     /* A disc subfolder takes its album's cover */
     char *album = test_path(root, "album");
     char *disc = test_path(album, "CD1");
-    rx_mkdir_p(disc);
+    cb_mkdir_p(disc);
     char *afront = test_path(album, "front.png");
     char *dtrack = test_path(disc, "01 track.flac");
     copy_file(png, afront);
     copy_file(bare, dtrack);
     char *found = NULL;
-    CHECK(rx_artwork_find_file(dtrack, &found) >= 0 && found && rx_str_ends(found, "album/front.png"),
+    CHECK(cb_artwork_find_file(dtrack, &found) >= 0 && found && cb_str_ends(found, "album/front.png"),
           "disc subfolder: %s", found ? found : "nothing");
     free(found);
-    CHECK(rx_artwork_rgba(dtrack, &rgba, &w, &h) >= 0 && w == W, "disc subfolder rgba");
+    CHECK(cb_artwork_rgba(dtrack, &rgba, &w, &h) >= 0 && w == W, "disc subfolder rgba");
     free(rgba);
     /* ... unless the disc folder has its own */
     char *dcover = test_path(disc, "cover.jpg");
     copy_file(jpg, dcover);
-    CHECK(rx_artwork_find_file(dtrack, &found) >= 0 && found && rx_str_ends(found, "CD1/cover.jpg"),
+    CHECK(cb_artwork_find_file(dtrack, &found) >= 0 && found && cb_str_ends(found, "CD1/cover.jpg"),
           "disc's own cover: %s", found ? found : "nothing");
     free(found);
 
@@ -380,20 +380,20 @@ int main(void)
      * not, so the artist's picture is not its cover */
     char *disc2 = test_path(album, "[Disc 2] bonus");
     char *d2track = test_path(disc2, "01 bonus.flac");
-    rx_mkdir_p(disc2);
+    cb_mkdir_p(disc2);
     copy_file(bare, d2track);
-    CHECK(rx_artwork_find_file(d2track, &found) >= 0 && found && rx_str_ends(found, "album/front.png"),
+    CHECK(cb_artwork_find_file(d2track, &found) >= 0 && found && cb_str_ends(found, "album/front.png"),
           "[Disc 2]: %s", found ? found : "nothing");
     free(found);
     char *artist = test_path(root, "artist");
     char *aalbum = test_path(artist, "Some Album");
     char *atrack = test_path(aalbum, "01 track.flac");
     char *apic = test_path(artist, "cover.jpg");
-    rx_mkdir_p(aalbum);
+    cb_mkdir_p(aalbum);
     copy_file(bare, atrack);
     copy_file(jpg, apic);
     found = NULL;
-    CHECK(rx_artwork_find_file(atrack, &found) == -ENOENT, "artist picture used: %s",
+    CHECK(cb_artwork_find_file(atrack, &found) == -ENOENT, "artist picture used: %s",
           found ? found : "-");
     free(found);
     free(disc2);
@@ -405,15 +405,15 @@ int main(void)
 
     /* Embedded wins over the folder */
     char *emb_dir = test_path(root, "embedded");
-    rx_mkdir_p(emb_dir);
+    cb_mkdir_p(emb_dir);
     char *emb = test_path(emb_dir, "02 art.flac");
     char *emb_front = test_path(emb_dir, "front.jpg");
     copy_file(art, emb);
     copy_file(jpg, emb_front);
-    CHECK(rx_artwork_raw(emb, &rawb, &rawn, codec) >= 0 && !strcmp(codec, "png") && rawn == pngn,
+    CHECK(cb_artwork_raw(emb, &rawb, &rawn, codec) >= 0 && !strcmp(codec, "png") && rawn == pngn,
           "embedded raw not chosen (%s)", codec);
     free(rawb);
-    CHECK(rx_artwork_rgba(emb, &rgba, &w, &h) >= 0 && same_rgb(rgba, w, h, rgb),
+    CHECK(cb_artwork_rgba(emb, &rgba, &w, &h) >= 0 && same_rgb(rgba, w, h, rgb),
           "folder cover chosen over the embedded one");
     free(rgba);
 
@@ -429,10 +429,10 @@ int main(void)
     free(root);
 
     /* Not images */
-    CHECK(rx_image_decode((const uint8_t *)"hello world, not an image", 25, &rgba, &w, &h) < 0,
+    CHECK(cb_image_decode((const uint8_t *)"hello world, not an image", 25, &rgba, &w, &h) < 0,
           "text decoded as an image");
     static const uint8_t bad_png[16] = { 0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 0, 0, 0, 13 };
-    CHECK(rx_image_decode(bad_png, sizeof(bad_png), &rgba, &w, &h) < 0, "broken png decoded");
+    CHECK(cb_image_decode(bad_png, sizeof(bad_png), &rgba, &w, &h) < 0, "broken png decoded");
 
     free(pngb);
     free(pcm);

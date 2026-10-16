@@ -1,16 +1,16 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
-#ifndef RXBOX_UI_INTERNAL_H
-#define RXBOX_UI_INTERNAL_H
+#ifndef CYANBOX_UI_INTERNAL_H
+#define CYANBOX_UI_INTERNAL_H
 
 // The interface's private state and the helpers its screens share. One
-// UiState hangs off RXApp.ui; every screen function takes it. Nothing here
+// UiState hangs off CBApp.ui; every screen function takes it. Nothing here
 // is global: the ImGui context is the only process-wide state and it is
 // the window module's.
 //
 // Sizes are written in logical pixels at 1x and multiplied by `ui->s`
-// (PX()), which rx_ui_frame derives each frame from the ImGui display size
-// against rx_window_size(), so the layout holds whether the window module
+// (PX()), which cb_ui_frame derives each frame from the ImGui display size
+// against cb_window_size(), so the layout holds whether the window module
 // runs ImGui in logical or in device pixels.
 
 #include <stdint.h>
@@ -22,18 +22,18 @@
 #include "imgui_internal.h"
 
 extern "C" {
-#include "rxbox/common.h"
-#include "rxbox/model.h"
-#include "rxbox/library.h"
-#include "rxbox/analysis.h"
-#include "rxbox/player.h"
-#include "rxbox/jobs.h"
-#include "rxbox/gpu.h"
-#include "rxbox/app.h"
-#include "rxbox/colors.h"
-#include "rxbox/notation.h"
-#include "rxbox/export.h"
-#include "rxbox/formats.h"
+#include "cyanbox/common.h"
+#include "cyanbox/model.h"
+#include "cyanbox/library.h"
+#include "cyanbox/analysis.h"
+#include "cyanbox/player.h"
+#include "cyanbox/jobs.h"
+#include "cyanbox/gpu.h"
+#include "cyanbox/app.h"
+#include "cyanbox/colors.h"
+#include "cyanbox/notation.h"
+#include "cyanbox/export.h"
+#include "cyanbox/formats.h"
 }
 
 #define PX(v) (ui->s * (float)(v))
@@ -131,8 +131,8 @@ static const double UI_TEMPO_RANGES[] = { 6, 10, 16, 100 };
 struct UiLinkDeck {
     uint32_t track_id = 0;         // the estimate's track, 0 none
     double   pos = -1;             // seconds, < 0 unknown
-    int64_t  pos_us = 0;           // rx_time_us when pos was
-    RXBeat  *beats = nullptr;      // the track's grid beats, as Link serves them
+    int64_t  pos_us = 0;           // cb_time_us when pos was
+    CBBeat  *beats = nullptr;      // the track's grid beats, as Link serves them
     int      nb_beats = 0;
     uint64_t beats_track = 0;      // the track they are of
 };
@@ -140,7 +140,7 @@ struct UiLinkDeck {
 struct UiDeck {
     // Beats of the loaded grid, rebuilt when the grid changes.
     uint64_t beats_sig;
-    RXBeat  *beats;
+    CBBeat  *beats;
     int      nb_beats;
 
     // The live state of the deck's buttons. Each starts as the players'
@@ -164,7 +164,7 @@ struct UiDeck {
     int      ctx_cue;          // cue index under the pointer, -1
 
     // Hot cue pad popup and name editing.
-    char     name_buf[RX_CUE_NAME_MAX];
+    char     name_buf[CB_CUE_NAME_MAX];
     // The cue whose name is edited, kept by what it is as the selection
     // is (a cue set above it mid-edit moves its row): deck_view.cpp,
     // cue_edit_index.
@@ -213,7 +213,7 @@ struct UiFinderEntry {
 };
 struct UiFinder;
 
-// A My Settings field as rx_settings_list gives it, in the section `rxbox
+// A My Settings field as cb_settings_list gives it, in the section `cyanbox
 // settings` prints it under: both MYSETTING files are the player's,
 // DJMMYSETTING.DAT the mixer's, DEVSETTING.DAT and the background colour
 // (which the databases carry) the device's. The library keeps its value as
@@ -223,11 +223,11 @@ struct UiSetting {
     std::string file;          // MYSETTING.DAT ...
     std::string name;          // quantize
     int         section;       // UI_SETTINGS_*
-    std::vector<std::string> values;   // as `rxbox settings` lists them
+    std::vector<std::string> values;   // as `cyanbox settings` lists them
     int         deflt;         // the default, an index into values
 };
 
-// An input event the test hook gives ImGui at a frame (RXBOX_UI_EVENTS).
+// An input event the test hook gives ImGui at a frame (CYANBOX_UI_EVENTS).
 struct UiTestEvent {
     int      frame;
     int      type;             // 0 key down, 1 key up, 2 focus out, 3 focus in, 4 click, 5 text,
@@ -244,26 +244,26 @@ struct UiTreeHit {
     enum Kind { COLLECTION, ALBUM, PLAYLIST } kind;
     std::string text;
     std::string album;
-    RXPlaylist *playlist;
-    RXPlaylistFolder *parent;
+    CBPlaylist *playlist;
+    CBPlaylistFolder *parent;
     int count;
     int score;
 };
 
 struct UiState {
-    RXApp *app;
+    CBApp *app;
     float  s;                  // layout scale (see top of file)
     ImFont *font_bold;         // NULL: the regular font
     float  font_base;          // style.FontSizeBase at init
 
-    // Layout: the splits are RXConfig's (split_player, split_tree); the rest
+    // Layout: the splits are CBConfig's (split_player, split_tree); the rest
 // is ImGui's ini text kept in the library's "ui.layout" setting (ui.cpp).
     float  deck_split;         // fraction of the height for the player, < 0: the default
     float  tree_width;         // logical pixels
     bool   detail_half;        // rekordbox 2 PLAYER half-height detail instead of CDJ centred
-    int    traffic_light;      // RXKeyReach of the table's key highlight
+    int    traffic_light;      // CBKeyReach of the table's key highlight
 
-    // The players' My Settings the drawing follows, set from RXConfig at
+    // The players' My Settings the drawing follows, set from CBConfig at
     // the start of every frame (ui.cpp, follow_settings).
     bool   key_camelot;        // device.key_display alphanumeric: keys as Camelot codes
     bool   overview_full;      // device.overview_waveform full: the overview and the row
@@ -273,17 +273,17 @@ struct UiState {
     bool   hot_cue_colour;     // player.hot_cue_color: hot cues in their own colours, else
                                // in the slots' default pad colours
     // What the last frame drew, for the test hooks' log: the overview's and
-    // the row previews' RXWaveMode (-1 none drawn) and the deck's KEY.
+    // the row previews' CBWaveMode (-1 none drawn) and the deck's KEY.
     int    overview_mode_drawn, preview_mode_drawn;
     char   key_drawn[16];
     // The settings of the deck's startup state as last applied to it
     // (ui.cpp, follow_settings: player.quantize, beat_jump_beats,
     // tempo_range, master_tempo, time_mode); NULL before the first time.
-    // The strings are rx_settings_get's, which are static.
+    // The strings are cb_settings_get's, which are static.
     const char *startup_applied[UI_NB_STARTUP];
     bool   layout_dirty;
 
-    UiDeck decks[RX_DECKS];
+    UiDeck decks[CB_DECKS];
 
     // Browser.
     int       anchor_row;
@@ -305,8 +305,8 @@ struct UiState {
     bool      want_delete_popup;
     // Edits that change the tree's arrays wait until it has been drawn.
     bool      create_pending, create_folder;
-    RXPlaylistFolder *create_in;
-    RXPlaylistFolder *reveal;  // opened, with every folder above it, at the next tree draw
+    CBPlaylistFolder *create_in;
+    CBPlaylistFolder *reveal;  // opened, with every folder above it, at the next tree draw
     // The finder above the tree: what is typed, its matches best first (made
     // again when it or the library changes), the one Enter opens; after a
     // pick, the row the tree scrolls to (an album's opens Albums).
@@ -319,16 +319,16 @@ struct UiState {
     bool      tree_hit_scroll;
     bool      tree_reveal_album;
     std::string tree_reveal_album_name;
-    RXPlaylist *tree_reveal_playlist;
+    CBPlaylist *tree_reveal_playlist;
     unsigned  bytes_generation;    // lib.generation the status bar's size is for, 0 none
     int64_t   bytes_total;
     bool      move_pending, move_folder;
     void     *move_ptr;
-    RXPlaylistFolder *move_to;
+    CBPlaylistFolder *move_to;
     int       move_pos;
 
     // The Link decks' panel (link_decks.cpp): per player number; how many
-    // the last frame drew (the test hooks' log); RXBOX_UI_LINK_DECKS's
+    // the last frame drew (the test hooks' log); CYANBOX_UI_LINK_DECKS's
     // made-up players, when it given, from when and at which first beats.
     UiLinkDeck link_decks[UI_LINK_DECKS];
     int       link_decks_drawn;
@@ -336,7 +336,7 @@ struct UiState {
     std::string link_menu_locked;     // the decks they offered greyed out (numbers, spaced)
     std::string link_decks_fake;
     int64_t   link_decks_fake_us;
-    int       link_decks_fake_beat[RX_APP_LINK_DEVICES];
+    int       link_decks_fake_beat[CB_APP_LINK_DEVICES];
 
     // Remove from library confirmation; for File > Remove missing tracks,
     // the tracks listed and the folders gone with them (a drive not
@@ -358,7 +358,7 @@ struct UiState {
     bool      settings_focus;  // bring Player settings to the front (Ctrl+, while open)
     std::vector<UiSetting> settings;   // every My Settings field (ui_settings)
     int       bpm_preset;
-    char      vibe_buf[RX_TRACK_COLORS][128];   // the legend's fields in Analysis settings
+    char      vibe_buf[CB_TRACK_COLORS][128];   // the legend's fields in Analysis settings
     std::string fb_path;
     char      fb_edit[1024];
     std::vector<UiFileEntry> fb_entries;
@@ -374,7 +374,7 @@ struct UiState {
     std::vector<std::string> volumes;
     bool      export_seen_running;
     int       export_scope;    // 0 all playlists, 1 selected playlists, 2 entire library
-    std::vector<RXPlaylist *> export_playlists;
+    std::vector<CBPlaylist *> export_playlists;
     char      stick_path[512];
     std::string inspect_report;
     int       inspect_result;
@@ -383,14 +383,14 @@ struct UiState {
     // Sync from USB: read + diff (on a worker), review, apply.
     int       sync_stage;      // 0 pick, 1 review, 2 applied
     uint64_t  sync_request;    // the read running on a worker, 0 none
-    RXStickState sync_state;
+    CBStickState sync_state;
     bool      sync_state_valid;
-    RXSyncItem *sync_items;
+    CBSyncItem *sync_items;
     int       nb_sync_items;
     int       sync_applied;
     std::string sync_progress;
     std::string sync_error;
-    int       sync_filter;     // -1 all, else an RXSyncKind
+    int       sync_filter;     // -1 all, else an CBSyncKind
 
     // Frame pacing and the headless test hooks.
     int       frames_wanted;
@@ -407,18 +407,18 @@ struct UiState {
     double    saved_zoom;
 };
 
-static inline UiState *ui_of(RXApp *app) { return (UiState *)app->ui; }
+static inline UiState *ui_of(CBApp *app) { return (UiState *)app->ui; }
 
 /* ------------------------------------------------------------------ ui.cpp */
 
 // Texts and formatting.
 const char *ui_fmt_time(double seconds, char *buf, size_t size, bool tenths);
 const char *ui_key_text(const UiState *ui, const char *classic, char *buf, size_t size);
-const char *ui_title(const RXTrack *t);
-const char *ui_artist(const RXTrack *t);
-uint32_t    ui_hot_cue_rgb(const UiState *ui, const RXCue *c);
-uint32_t    ui_memory_cue_rgb(const RXCue *c);
-uint32_t    ui_track_rgb(const RXTrack *t);
+const char *ui_title(const CBTrack *t);
+const char *ui_artist(const CBTrack *t);
+uint32_t    ui_hot_cue_rgb(const UiState *ui, const CBCue *c);
+uint32_t    ui_memory_cue_rgb(const CBCue *c);
+uint32_t    ui_track_rgb(const CBTrack *t);
 ImU32       ui_text_on(uint32_t rgb);
 
 // Draw-list text: size in logical pixels; clipped to max_w with "..." when > 0.
@@ -464,15 +464,15 @@ bool ui_swatch(UiState *ui, const char *id, uint32_t rgb, bool selected, float s
 // The colour menus: hot cue colours (rekordbox's sixteen) and the eight
 // track colours, which memory cues take (a track's own colour is a hue:
 // ui_colour_picker). Return true when one was picked into `out` ("" = none).
-bool ui_hot_cue_colour_menu(UiState *ui, const char *current, char out[RX_COLOR_MAX]);
-bool ui_track_colour_menu(UiState *ui, const char *current, char out[RX_COLOR_MAX]);
-// A track's colour (rxbox/model.h: a hue, one of the eight's when picked
+bool ui_hot_cue_colour_menu(UiState *ui, const char *current, char out[CB_COLOR_MAX]);
+bool ui_track_colour_menu(UiState *ui, const char *current, char out[CB_COLOR_MAX]);
+// A track's colour (cyanbox/model.h: a hue, one of the eight's when picked
 // here or by the model), in `width` logical pixels (0: what is left of the
 // line): a "none" swatch and the eight track colours, each with its name
 // and the legend's words as a tooltip. The one the hue is is outlined;
 // none is when the hue is between them, as an older library may hold, and
 // the track is drawn in that hue still. True when one is clicked (its own too, for a selection):
-// *hue is then its hue, or RX_HUE_NONE; the caller saves.
+// *hue is then its hue, or CB_HUE_NONE; the caller saves.
 bool ui_colour_picker(UiState *ui, const char *id, double *hue, float width);
 // "red · intense, peak time" (the legend's words), "200°, between the
 // eight (aqua on the stick)" or "none".
@@ -491,12 +491,12 @@ const char *ui_setting_value(const char *name, const char *value, char *buf, siz
 // as an export would write it: the library's, else the default.
 const char *ui_my_setting(UiState *ui, const char *key);
 // Sets a My Setting from outside the Player settings dialog (the View
-// menu), the way the dialog sets one: in RXConfig and the library at once,
-// said in the status bar. `value` as rx_settings_list lists it.
+// menu), the way the dialog sets one: in CBConfig and the library at once,
+// said in the status bar. `value` as cb_settings_list lists it.
 void        ui_setting_pick(UiState *ui, const char *key, const char *value);
 
 // Loads a track into the player, pausing it first when it plays.
-void ui_load(UiState *ui, RXTrack *t);
+void ui_load(UiState *ui, CBTrack *t);
 void ui_want_frames(UiState *ui, int n);
 void ui_save_config(UiState *ui);
 
@@ -504,7 +504,7 @@ void ui_save_config(UiState *ui);
 
 void ui_deck_panel(UiState *ui, int deck, ImVec2 size);
 void ui_deck_shutdown(UiState *ui);
-double ui_deck_position(UiState *ui, int deck, RXDeckState *st);
+double ui_deck_position(UiState *ui, int deck, CBDeckState *st);
 void ui_grid_edited(UiState *ui, int deck);
 void ui_jump(UiState *ui, int deck, int dir);
 void ui_shift_grid(UiState *ui, int deck, double seconds);
@@ -519,8 +519,8 @@ void ui_cue_list_move(UiState *ui, int deck, int dir);
 
 void ui_overview(UiState *ui, int deck, ImVec2 a, ImVec2 b);
 void ui_detail(UiState *ui, int deck, ImVec2 a, ImVec2 b);
-void ui_row_preview(UiState *ui, const RXTrack *t, ImVec2 a, ImVec2 b, bool analysing);
-const RXBeat *ui_deck_beats(UiState *ui, int deck, int *nb);
+void ui_row_preview(UiState *ui, const CBTrack *t, ImVec2 a, ImVec2 b, bool analysing);
+const CBBeat *ui_deck_beats(UiState *ui, int deck, int *nb);
 double ui_zoom_step(double bars, int dir);
 
 /* ------------------------------------------------------------ browser.cpp */
@@ -531,10 +531,10 @@ void ui_select_only(UiState *ui, uint64_t id);
 bool ui_is_selected(const UiState *ui, uint64_t id);
 void ui_remove_from_playlist(UiState *ui);
 void ui_move_focus(UiState *ui, int delta);
-RXTrack *ui_focus_track(UiState *ui);
+CBTrack *ui_focus_track(UiState *ui);
 
 // Drag and drop: a payload of track ids.
-#define UI_DND_TRACKS "RX_TRACKS"
+#define UI_DND_TRACKS "CB_TRACKS"
 bool ui_accept_tracks(UiState *ui, std::vector<uint64_t> &ids);
 
 /* --------------------------------------------------------------- tree.cpp */
@@ -542,7 +542,7 @@ bool ui_accept_tracks(UiState *ui, std::vector<uint64_t> &ids);
 void ui_tree(UiState *ui, ImVec2 size);
 // Appends the tracks to the playlist (a track once per playlist), with the
 // count in the status bar.
-void ui_add_to_playlist(UiState *ui, RXPlaylist *p, const std::vector<uint64_t> &ids);
+void ui_add_to_playlist(UiState *ui, CBPlaylist *p, const std::vector<uint64_t> &ids);
 
 /* ------------------------------------------------------------ dialogs.cpp */
 
@@ -552,7 +552,7 @@ void ui_open_export(UiState *ui);
 void ui_open_inspect(UiState *ui);
 void ui_open_sync(UiState *ui);
 void ui_open_settings(UiState *ui);
-void ui_open_relocate(UiState *ui, RXTrack *t);
+void ui_open_relocate(UiState *ui, CBTrack *t);
 // File > Remove missing tracks: rescans, then asks (confirm_remove).
 void ui_open_remove_missing(UiState *ui);
 void ui_dialogs_shutdown(UiState *ui);
@@ -563,7 +563,7 @@ void ui_escape_closes(bool *open);
 
 /* ----------------------------------------------------------- link_view.cpp */
 
-// PRO DJ LINK (rxbox --pro-link; app->link_state): the window with the
+// PRO DJ LINK (cyanbox --pro-link; app->link_state): the window with the
 // Ethernet interfaces served and the devices on them. None of it is drawn
 // without --pro-link.
 void ui_link_window(UiState *ui);
@@ -573,7 +573,7 @@ void ui_link_window(UiState *ui);
 // separator after them), the test hook's players.
 #define UI_LINK_ROW_H 84
 void ui_link_decks_row(UiState *ui, ImVec2 a, ImVec2 b);
-void ui_link_load_menu(UiState *ui, RXTrack *t);
+void ui_link_load_menu(UiState *ui, CBTrack *t);
 void ui_link_decks_test_tick(UiState *ui);
 void ui_link_decks_shutdown(UiState *ui);
 void ui_open_link(UiState *ui);
@@ -608,4 +608,4 @@ struct UiKeyRow { const char *key; const char *action; };
 extern const UiKeyRow ui_key_rows[];
 extern const int ui_nb_key_rows;
 
-#endif /* RXBOX_UI_INTERNAL_H */
+#endif /* CYANBOX_UI_INTERNAL_H */

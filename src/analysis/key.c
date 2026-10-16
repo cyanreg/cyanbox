@@ -93,7 +93,7 @@
  *
  * Silence (no tonal energy at all) gives "" and confidence 0, as before. */
 
-#include "rxbox/analysis.h"
+#include "cyanbox/analysis.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -103,7 +103,7 @@
 #include <libavutil/mem.h>
 #include <libavutil/tx.h>
 
-#include "rxbox/common.h"
+#include "cyanbox/common.h"
 
 #define KEY_RATE 11025.0
 #define N_FFT 8192
@@ -208,7 +208,7 @@ static int decimator_init(Decimator *dc, const float *x, int64_t n, int d)
     };
     float *h = calloc(padded, sizeof(*h));
     if (!h)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     double sum = 0.0, i0b = bessel_i0(6.0);
     for (int i = 0; i < taps; i++) {
         double m = i - half, r = m / half;
@@ -252,7 +252,7 @@ static float decimate_at(const Decimator *dc, int64_t k)
  * samples, filled as the frames need them. Each pass decimates again from
  * the start (stft_rewind) instead of reading a copy of the whole decimated
  * track: a quarter of the input at 44.1 kHz, 159 MB an hour, which made
- * the key the largest stage of rx_analyse (docs/BEATS.md, "Memory"). The
+ * the key the largest stage of cb_analyse (docs/BEATS.md, "Memory"). The
  * frames read the same samples either way, to the bit. */
 typedef struct Stft {
     const float *x;                 /* the signal, when it is not decimated */
@@ -285,7 +285,7 @@ static int stft_init(Stft *s, const float *x, int64_t n, const Decimator *dc)
         .n  = dc ? dc->ny : n,
     };
     float scale = 1.0f;
-    /* AVERROR(e) is -e on POSIX systems, the same convention as rxbox's */
+    /* AVERROR(e) is -e on POSIX systems, the same convention as cyanbox's */
     int ret = av_tx_init(&s->tx, &s->fn, AV_TX_FLOAT_RDFT, 0, N_FFT, &scale, 0);
     if (ret < 0)
         return ret;
@@ -296,7 +296,7 @@ static int stft_init(Stft *s, const float *x, int64_t n, const Decimator *dc)
     if (dc)
         s->ring = av_malloc(sizeof(*s->ring) * N_FFT);
     if (!s->win || !s->frame || !s->spec || !s->mag || (dc && !s->ring))
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     for (int i = 0; i < N_FFT; i++)
         s->win[i] = (float)(0.5 - 0.5 * cos(2 * M_PI * i / N_FFT));
     return 0;
@@ -316,7 +316,7 @@ static void stft_frame(Stft *s, int64_t f, int nb)
 {
     int64_t start = f * HOP - N_FFT / 2;
     if (s->dc) {
-        int64_t end = RX_MIN(start + N_FFT, s->n);
+        int64_t end = CB_MIN(start + N_FFT, s->n);
         for (; s->filled < end; s->filled++)
             s->ring[s->filled % N_FFT] = decimate_at(s->dc, s->filled);
         for (int i = 0; i < N_FFT; i++) {
@@ -343,8 +343,8 @@ static void stft_frame(Stft *s, int64_t f, int nb)
 static double estimate_tuning(Stft *s, int64_t nb_frames, double fs)
 {
     double df = fs / N_FFT, re = 0.0, im = 0.0;
-    int lo = RX_MAX((int)ceil(PEAK_LO / df), 1);
-    int hi = RX_MIN((int)(fmin(PEAK_HI, 0.45 * fs) / df), N_FFT / 2 - 1);
+    int lo = CB_MAX((int)ceil(PEAK_LO / df), 1);
+    int hi = CB_MIN((int)(fmin(PEAK_HI, 0.45 * fs) / df), N_FFT / 2 - 1);
     if (hi <= lo)
         return 0.0;
     for (int64_t f = 0; f < nb_frames; f += TUNE_STEP) {
@@ -360,7 +360,7 @@ static double estimate_tuning(Stft *s, int64_t nb_frames, double fs)
             if (!(m > floor_mag && m > s->mag[b - 1] && m >= s->mag[b + 1]))
                 continue;
             float a = logf(s->mag[b - 1] + 1e-9f), c = logf(s->mag[b + 1] + 1e-9f), l = logf(m);
-            float off = RX_CLAMP(0.5f * (a - c) / (a - 2 * l + c - 1e-12f), -0.5f, 0.5f);
+            float off = CB_CLAMP(0.5f * (a - c) / (a - 2 * l + c - 1e-12f), -0.5f, 0.5f);
             float peak = l - 0.25f * (a - c) * off;
             float dev = 12 * log2f((b + off) * (float)df / 440.0f);
             float w = expf(2 * peak);
@@ -399,14 +399,14 @@ static int kernel_init(Kernel *k, double fs, double tuning)
         if (last >= N_FFT / 2)
             last = first - 1;
         k->start[m] = first;
-        k->len[m] = RX_MAX(last - first + 1, 0);
+        k->len[m] = CB_MAX(last - first + 1, 0);
         total += k->len[m];
         if (k->len[m])
-            k->nb_bins = RX_MAX(k->nb_bins, last + 1);
+            k->nb_bins = CB_MAX(k->nb_bins, last + 1);
     }
-    k->w = malloc(sizeof(*k->w) * RX_MAX(total, 1));
+    k->w = malloc(sizeof(*k->w) * CB_MAX(total, 1));
     if (!k->w)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     float *w = k->w;
     for (int m = 0; m < NB_BANDS; m++) {
         double b0 = centre[m] - width[m] / 2, sum = 0.0;
@@ -446,7 +446,7 @@ static int key_frames(const float *mono, int64_t n, int rate, KeyFrames *kf)
     Kernel k = { 0 };
 
     /* Rates up to ~16.5 kHz are analysed as they are */
-    int d = RX_MAX((int)lrint(rate / KEY_RATE), 1);
+    int d = CB_MAX((int)lrint(rate / KEY_RATE), 1);
     if (d > 1 && (ret = decimator_init(&dc, mono, n, d)) < 0)
         goto fail;
     ret = stft_init(&s, mono, n, d > 1 ? &dc : NULL);
@@ -462,7 +462,7 @@ static int key_frames(const float *mono, int64_t n, int rate, KeyFrames *kf)
 
     kf->bands = malloc(sizeof(*kf->bands) * kf->nb_frames * NB_BANDS);
     if (!kf->bands) {
-        ret = RX_ERROR(ENOMEM);
+        ret = CB_ERROR(ENOMEM);
         goto fail;
     }
     float top = 0;
@@ -490,7 +490,7 @@ static int key_frames(const float *mono, int64_t n, int rate, KeyFrames *kf)
         for (int m = 0; m < NB_BANDS; m++) {
             float acc = 0;
             for (int j = m - WHITE; j <= m + WHITE; j++)
-                acc += row[RX_CLAMP(j, 0, NB_BANDS - 1)];
+                acc += row[CB_CLAMP(j, 0, NB_BANDS - 1)];
             env[m] = acc / (2 * WHITE + 1);
         }
         for (int m = 0; m < NB_BANDS; m++)
@@ -577,11 +577,11 @@ static int best_key(const double x[NB_FEAT], const double score[24])
 
 /* ------------------------------------------------------------------- key */
 
-int rx_analyse_key(const float *mono, int64_t nb_samples, int rate, RXKeyResult *out)
+int cb_analyse_key(const float *mono, int64_t nb_samples, int rate, CBKeyResult *out)
 {
-    *out = (RXKeyResult) { 0 };
+    *out = (CBKeyResult) { 0 };
     if (rate <= 0 || nb_samples < 0 || (nb_samples && !mono))
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
     if (!nb_samples)
         return 0;
 
@@ -606,14 +606,14 @@ int rx_analyse_key(const float *mono, int64_t nb_samples, int rate, RXKeyResult 
     double sum = 0.0;
     for (int k = 0; k < 24; k++)
         sum += exp(TEMPERATURE * (score[k] - score[best]));
-    double p = RX_CLAMP(1.0 / sum, 1e-6, 1 - 1e-6);
+    double p = CB_CLAMP(1.0 / sum, 1e-6, 1 - 1e-6);
 
     /* The agreement of the 20-second segments; a last one shorter than
      * half a segment, and silent ones, are left out */
-    int64_t seg = RX_MAX(llrint(SEG_SECONDS * kf.fs / HOP), 1);
+    int64_t seg = CB_MAX(llrint(SEG_SECONDS * kf.fs / HOP), 1);
     int nb_seg = 0, nb_agree = 0;
     for (int64_t f0 = 0; f0 < kf.nb_frames; f0 += seg) {
-        int64_t f1 = RX_MIN(f0 + seg, kf.nb_frames);
+        int64_t f1 = CB_MIN(f0 + seg, kf.nb_frames);
         if (f0 && f1 - f0 < seg / 2)
             break;
         double xs[NB_FEAT], ss[24], e = 0.0;

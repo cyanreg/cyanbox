@@ -11,7 +11,7 @@
 
 static void nfc(const char *in, const char *want)
 {
-    char *got = rx_utf8_clean_nfc(in);
+    char *got = cb_utf8_clean_nfc(in);
     CHECK_STR(got, want);
     free(got);
 }
@@ -30,17 +30,17 @@ int main(void)
     nfc("plain ascii", "plain ascii");
     nfc("bad \xFF byte", "bad \xEF\xBF\xBD byte");            /* invalid byte -> U+FFFD */
 
-    CHECK_EQ(rx_crc32(0, "123456789", 9), 0xCBF43926);
-    CHECK_EQ(rx_utf8_length("R\xC3\xB8""dh\xC3\xA5""d"), 6);
+    CHECK_EQ(cb_crc32(0, "123456789", 9), 0xCBF43926);
+    CHECK_EQ(cb_utf8_length("R\xC3\xB8""dh\xC3\xA5""d"), 6);
 
     uint16_t *u;
     size_t n;
-    CHECK_EQ(rx_utf8_to_utf16("\xF0\x9F\x85\xB4", &u, &n), 0);   /* U+1F174 */
+    CHECK_EQ(cb_utf8_to_utf16("\xF0\x9F\x85\xB4", &u, &n), 0);   /* U+1F174 */
     CHECK_EQ(n, 2);
     CHECK_EQ(u[0], 0xD83C);
     CHECK_EQ(u[1], 0xDD74);
     uint8_t le[4] = { (uint8_t)u[0], (uint8_t)(u[0] >> 8), (uint8_t)u[1], (uint8_t)(u[1] >> 8) };
-    char *back = rx_utf16le_to_utf8(le, 4);
+    char *back = cb_utf16le_to_utf8(le, 4);
     CHECK_STR(back, "\xF0\x9F\x85\xB4");
     free(back);
     free(u);

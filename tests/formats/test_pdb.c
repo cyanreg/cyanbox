@@ -12,7 +12,7 @@
 #include <stdio.h>
 #include <time.h>
 
-#include "rxbox/formats.h"
+#include "cyanbox/formats.h"
 
 #include "src/formats/buf.h"
 #include "src/formats/formats_priv.h"
@@ -33,13 +33,13 @@ static void strings(void)
     x127[127] = '\0';
     const char *all[] = { "", "a", x126, x127, "Rødhåd", "日本語", "🅴" };
     const bool lng[] = { false, false, false, true, true, true, true };
-    for (size_t i = 0; i < RX_ARRAY_ELEMS(all); i++) {
+    for (size_t i = 0; i < CB_ARRAY_ELEMS(all); i++) {
         uint8_t *enc;
         size_t n;
         char *dec = NULL;
-        CHECK_EQ(rx_pdb_string_encode(all[i], &enc, &n), 0);
+        CHECK_EQ(cb_pdb_string_encode(all[i], &enc, &n), 0);
         CHECK_EQ(!(enc[0] & 1), lng[i]);
-        CHECK_EQ(rx_pdb_string_decode(enc, n, &dec), 0);
+        CHECK_EQ(cb_pdb_string_decode(enc, n, &dec), 0);
         CHECK_STR(dec, all[i]);
         free(dec);
         free(enc);
@@ -48,13 +48,13 @@ static void strings(void)
      * len + 4, UTF-16 0x90 without a terminator. */
     uint8_t *enc;
     size_t n;
-    rx_pdb_string_encode("", &enc, &n);
+    cb_pdb_string_encode("", &enc, &n);
     CHECK(n == 1 && enc[0] == 0x03);
     free(enc);
-    rx_pdb_string_encode(x127, &enc, &n);
+    cb_pdb_string_encode(x127, &enc, &n);
     CHECK(n == 131 && enc[0] == 0x40 && enc[1] == 131 && enc[2] == 0 && enc[3] == 0);
     free(enc);
-    rx_pdb_string_encode("🅴", &enc, &n);
+    cb_pdb_string_encode("🅴", &enc, &n);
     static const uint8_t emoji[] = { 0x90, 0x08, 0x00, 0x00, 0x3C, 0xD8, 0x74, 0xDD };
     CHECK(n == sizeof(emoji) && !memcmp(enc, emoji, n));
     free(enc);
@@ -63,13 +63,13 @@ static void strings(void)
 /* The file offsets of a table's rows. */
 static int table_rows(const uint8_t *b, size_t size, int type, uint32_t **pos)
 {
-    RXPdbHeader h;
-    RXPdbRow *rows;
+    CBPdbHeader h;
+    CBPdbRow *rows;
     int n = 0;
     *pos = NULL;
-    if (rx_pdb_read_header(b, size, &h) < 0 || rx_pdb_table_rows(b, size, &h.tables[type], &rows, &n) < 0)
+    if (cb_pdb_read_header(b, size, &h) < 0 || cb_pdb_table_rows(b, size, &h.tables[type], &rows, &n) < 0)
         return 0;
-    *pos = malloc((size_t)RX_MAX(n, 1) * sizeof(**pos));
+    *pos = malloc((size_t)CB_MAX(n, 1) * sizeof(**pos));
     for (int i = 0; *pos && i < n; i++)
         (*pos)[i] = rows[i].pos;
     free(rows);
@@ -83,28 +83,28 @@ static void fixed_tables(void)
 {
     uint8_t *ref;
     size_t ref_size;
-    if (rx_file_read("tests/data/rekordbox-7.2.18-export.pdb", &ref, &ref_size) < 0) {
+    if (cb_file_read("tests/data/rekordbox-7.2.18-export.pdb", &ref, &ref_size) < 0) {
         fprintf(stderr, "cannot read the rekordbox fixture\n");
         failures++;
         return;
     }
-    CHECK_EQ(rx_pdb_check(ref, ref_size, print_problem, "rekordbox"), 0);
+    CHECK_EQ(cb_pdb_check(ref, ref_size, print_problem, "rekordbox"), 0);
 
-    RXPlan plan = { .hot_cue_auto_load = true };
+    CBPlan plan = { .hot_cue_auto_load = true };
     snprintf(plan.date, sizeof(plan.date), "2026-10-13");
     uint8_t *ours;
     size_t size;
-    CHECK_EQ(rx_pdb_build(&plan, &ours, &size), 0);
-    CHECK_EQ(rx_pdb_check(ours, size, print_problem, "ours"), 0);
-    const int types[] = { RX_PDB_COLORS, RX_PDB_COLUMNS, RX_PDB_MENU, RX_PDB_SORT };
-    for (size_t i = 0; i < RX_ARRAY_ELEMS(types); i++) {
+    CHECK_EQ(cb_pdb_build(&plan, &ours, &size), 0);
+    CHECK_EQ(cb_pdb_check(ours, size, print_problem, "ours"), 0);
+    const int types[] = { CB_PDB_COLORS, CB_PDB_COLUMNS, CB_PDB_MENU, CB_PDB_SORT };
+    for (size_t i = 0; i < CB_ARRAY_ELEMS(types); i++) {
         uint32_t *po, *pr;
         int no = table_rows(ours, size, types[i], &po);
         int nr = table_rows(ref, ref_size, types[i], &pr);
         CHECK(no > 0 && no == nr);
         if (no > 0 && no == nr) {
-            size_t a = po[0] / RX_PDB_PAGE * RX_PDB_PAGE, b = pr[0] / RX_PDB_PAGE * RX_PDB_PAGE;
-            if (memcmp(ours + a + 0x18, ref + b + 0x18, RX_PDB_PAGE - 0x18)) {
+            size_t a = po[0] / CB_PDB_PAGE * CB_PDB_PAGE, b = pr[0] / CB_PDB_PAGE * CB_PDB_PAGE;
+            if (memcmp(ours + a + 0x18, ref + b + 0x18, CB_PDB_PAGE - 0x18)) {
                 fprintf(stderr, "table %d differs from rekordbox 7.2.18\n", types[i]);
                 failures++;
             }
@@ -121,9 +121,9 @@ static void fixed_tables(void)
 static void roundtrip(void)
 {
     enum { NT = 400, NA = 299 };
-    RXTrack *tr = calloc(NT, sizeof(*tr));
-    RXPlanTrack *pt = calloc(NT, sizeof(*pt));
-    RXPlanName *artists = calloc(NA, sizeof(*artists));
+    CBTrack *tr = calloc(NT, sizeof(*tr));
+    CBPlanTrack *pt = calloc(NT, sizeof(*pt));
+    CBPlanName *artists = calloc(NA, sizeof(*artists));
     char (*titles)[200] = calloc(NT, 200);
     char (*comments)[200] = calloc(NT, 200);
     char (*paths)[64] = calloc(NT, 64);
@@ -142,7 +142,7 @@ static void roundtrip(void)
         snprintf(paths[i - 1], 64, "/Contents/A/B/%d.flac", i);
         tr[i - 1].meta.title = t;
         tr[i - 1].meta.comment = comments[i - 1];
-        pt[i - 1] = (RXPlanTrack) {
+        pt[i - 1] = (CBPlanTrack) {
             .id          = (uint32_t)i,
             .track       = &tr[i - 1],
             .usb_path    = paths[i - 1],
@@ -157,8 +157,8 @@ static void roundtrip(void)
         };
     }
     for (int i = 1; i <= NA; i++)
-        artists[i - 1] = (RXPlanName) { .id = (uint32_t)i, .name = i % 2 ? "Rødhåd" : "Artist" };
-    RXPlan plan = {
+        artists[i - 1] = (CBPlanName) { .id = (uint32_t)i, .name = i % 2 ? "Rødhåd" : "Artist" };
+    CBPlan plan = {
         .tracks            = pt,
         .nb_tracks         = NT,
         .artists           = artists,
@@ -169,11 +169,11 @@ static void roundtrip(void)
 
     uint8_t *b;
     size_t size;
-    CHECK_EQ(rx_pdb_build(&plan, &b, &size), 0);
-    CHECK_EQ(rx_pdb_check(b, size, print_problem, "ours"), 0);
+    CHECK_EQ(cb_pdb_build(&plan, &b, &size), 0);
+    CHECK_EQ(cb_pdb_check(b, size, print_problem, "ours"), 0);
 
-    RXPdb pdb;
-    CHECK_EQ(rx_pdb_read(b, size, &pdb), 0);
+    CBPdb pdb;
+    CHECK_EQ(cb_pdb_read(b, size, &pdb), 0);
     CHECK_EQ(pdb.nb_tracks, NT);
     for (int i = 0; i < pdb.nb_tracks && i < NT; i++) {
         CHECK_STR(pdb.tracks[i].title, titles[i]);
@@ -181,48 +181,48 @@ static void roundtrip(void)
         CHECK_STR(pdb.tracks[i].artist, (i + 1) % NA % 2 == 0 ? "Rødhåd" : "Artist");
         CHECK_EQ(pdb.tracks[i].id, i + 1);
     }
-    rx_pdb_free(&pdb);
+    cb_pdb_free(&pdb);
 
-    RXPdbRawTrack *raw;
+    CBPdbRawTrack *raw;
     int nraw;
-    CHECK_EQ(rx_pdb_raw_tracks(b, size, &raw, &nraw), 0);
+    CHECK_EQ(cb_pdb_raw_tracks(b, size, &raw, &nraw), 0);
     CHECK_EQ(nraw, NT);
     for (int i = 0; i < nraw; i++) {
         CHECK_EQ(raw[i].subtype, 0x24);
         CHECK_EQ(raw[i].unk56, 0x29);
         CHECK_EQ(raw[i].magic, 3);
         CHECK_EQ(raw[i].bitmask, 0x000C0700);
-        CHECK_STR(raw[i].strings[RX_PDB_STR_COMMENT], comments[i]);
-        CHECK_STR(raw[i].strings[RX_PDB_STR_AUTOLOAD_HOTCUES], "ON");
-        CHECK_STR(raw[i].strings[RX_PDB_STR_ANALYZE_DATE], "2026-10-06");
-        CHECK_STR(raw[i].strings[RX_PDB_STR_FILENAME], rx_path_base(paths[i]));
+        CHECK_STR(raw[i].strings[CB_PDB_STR_COMMENT], comments[i]);
+        CHECK_STR(raw[i].strings[CB_PDB_STR_AUTOLOAD_HOTCUES], "ON");
+        CHECK_STR(raw[i].strings[CB_PDB_STR_ANALYZE_DATE], "2026-10-06");
+        CHECK_STR(raw[i].strings[CB_PDB_STR_FILENAME], cb_path_base(paths[i]));
     }
-    rx_pdb_raw_tracks_free(raw, nraw);
+    cb_pdb_raw_tracks_free(raw, nraw);
 
     for (int i = 0; i < NT; i++) {
         size_t len, alloc;
-        CHECK_EQ(rx_pdb_track_row_size(&pt[i], &plan, &len, &alloc), 0);
+        CHECK_EQ(cb_pdb_track_row_size(&pt[i], &plan, &len, &alloc), 0);
         CHECK(len <= alloc && alloc >= 224);
-        CHECK_EQ(rx_pdb_track_row_overflow(&pt[i], &plan), 0);
+        CHECK_EQ(cb_pdb_track_row_overflow(&pt[i], &plan), 0);
     }
 
     /* The history row (docs/pdb.md 2.11): 400 tracks, the date, 19 1E,
      * "1000", the empty label; 40 bytes allocated. */
     uint32_t num;
     char *date = NULL;
-    CHECK_EQ(rx_pdb_history(b, size, &num, &date), 0);
+    CHECK_EQ(cb_pdb_history(b, size, &num, &date), 0);
     CHECK_EQ(num, NT);
     CHECK_STR(date, "2026-10-06");
     free(date);
     uint32_t *pos;
-    int n = table_rows(b, size, RX_PDB_HISTORY, &pos);
+    int n = table_rows(b, size, CB_PDB_HISTORY, &pos);
     static const uint8_t hist[40] = {
         0x80, 0x02, 0x00, 0x00, 0x90, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         0x17, '2', '0', '2', '6', '-', '1', '0', '-', '0', '6', 0x19, 0x1E,
         0x0B, '1', '0', '0', '0', 0x03,
     };
     CHECK(n == 1 && !memcmp(b + pos[0], hist, sizeof(hist)));
-    CHECK(n == 1 && rx_rd_le16(b + pos[0] / RX_PDB_PAGE * RX_PDB_PAGE + 0x1E) == 40);
+    CHECK(n == 1 && cb_rd_le16(b + pos[0] / CB_PDB_PAGE * CB_PDB_PAGE + 0x1E) == 40);
     free(pos);
     free(b);
 
@@ -232,9 +232,9 @@ static void roundtrip(void)
     memset(big, 'y', 4999);
     big[4999] = '\0';
     tr[0].meta.comment = big;
-    CHECK(rx_pdb_track_row_overflow(&pt[0], &plan) > 0);
+    CHECK(cb_pdb_track_row_overflow(&pt[0], &plan) > 0);
     plan.nb_tracks = 1;
-    CHECK(rx_pdb_build(&plan, &b, &size) < 0);
+    CHECK(cb_pdb_build(&plan, &b, &size) < 0);
     free(big);
 
     free(tr);
@@ -249,15 +249,15 @@ static void roundtrip(void)
  * long name at 0x0C after two pad bytes, 32 bytes allocated. */
 static void artist_row(void)
 {
-    RXPlanName a[12];
+    CBPlanName a[12];
     for (int i = 0; i < 12; i++)
-        a[i] = (RXPlanName) { .id = (uint32_t)i + 1, .name = i == 10 ? "Rødhåd" : "A" };
-    RXPlan plan = { .artists = a, .nb_artists = 12 };
+        a[i] = (CBPlanName) { .id = (uint32_t)i + 1, .name = i == 10 ? "Rødhåd" : "A" };
+    CBPlan plan = { .artists = a, .nb_artists = 12 };
     uint8_t *b;
     size_t size;
-    CHECK_EQ(rx_pdb_build(&plan, &b, &size), 0);
+    CHECK_EQ(cb_pdb_build(&plan, &b, &size), 0);
     uint32_t *pos;
-    int n = table_rows(b, size, RX_PDB_ARTISTS, &pos);
+    int n = table_rows(b, size, CB_PDB_ARTISTS, &pos);
     static const uint8_t want[32] = {
         0x60, 0x00, 0x40, 0x01, 0x0b, 0x00, 0x00, 0x00, 0x03, 0x0c, 0x00, 0x00,
         0x90, 0x10, 0x00, 0x00, 0x52, 0x00, 0xf8, 0x00, 0x64, 0x00, 0x68, 0x00,
@@ -265,7 +265,7 @@ static void artist_row(void)
     };
     CHECK(n == 12 && !memcmp(b + pos[10], want, sizeof(want)));
     CHECK(n == 12 && pos[11] - pos[10] == 32);
-    CHECK_EQ(rx_pdb_check(b, size, print_problem, "ours"), 0);
+    CHECK_EQ(cb_pdb_check(b, size, print_problem, "ours"), 0);
     free(pos);
     free(b);
 }
@@ -310,8 +310,8 @@ static int hexval(char c)
 
 static void ext_tags(void)
 {
-    enum { N = RX_ARRAY_ELEMS(ext_rows) };
-    RXPlanTag tags[N];
+    enum { N = CB_ARRAY_ELEMS(ext_rows) };
+    CBPlanTag tags[N];
     char names[N][64];
     uint8_t rows[N][64];
     size_t lens[N];
@@ -323,29 +323,29 @@ static void ext_tags(void)
         size_t nl = (size_t)(r[0x1F] >> 1) - 1;
         memcpy(names[i], r + 0x20, nl);
         names[i][nl] = '\0';
-        tags[i] = (RXPlanTag) {
-            .id          = rx_rd_le32(r + 0x14),
+        tags[i] = (CBPlanTag) {
+            .id          = cb_rd_le32(r + 0x14),
             .name        = names[i],
-            .category    = (int)rx_rd_le32(r + 0x0C),
-            .position    = (int)rx_rd_le32(r + 0x10),
-            .is_category = rx_rd_le32(r + 0x18) == 0x01000000,
+            .category    = (int)cb_rd_le32(r + 0x0C),
+            .position    = (int)cb_rd_le32(r + 0x10),
+            .is_category = cb_rd_le32(r + 0x18) == 0x01000000,
         };
     }
-    RXPlan plan = { .tags = tags, .nb_tags = N };
+    CBPlan plan = { .tags = tags, .nb_tags = N };
     uint8_t *b;
     size_t size;
-    CHECK_EQ(rx_pdb_ext_build(&plan, &b, &size), 0);
-    CHECK_EQ(rx_pdb_check(b, size, print_problem, "ours"), 0);
-    RXPdbHeader h;
-    CHECK_EQ(rx_pdb_read_header(b, size, &h), 0);
+    CHECK_EQ(cb_pdb_ext_build(&plan, &b, &size), 0);
+    CHECK_EQ(cb_pdb_check(b, size, print_problem, "ours"), 0);
+    CBPdbHeader h;
+    CHECK_EQ(cb_pdb_read_header(b, size, &h), 0);
     CHECK_EQ(h.num_tables, 9);
     CHECK_EQ(h.unknown, 5);
     uint32_t *pos;
-    int n = table_rows(b, size, RX_PDB_EXT_TAGS, &pos);
+    int n = table_rows(b, size, CB_PDB_EXT_TAGS, &pos);
     CHECK_EQ(n, N);
     for (int i = 0; i < n && i < N; i++) {
-        size_t page = pos[i] / RX_PDB_PAGE * RX_PDB_PAGE;
-        CHECK_EQ(pos[i] - page - RX_PDB_HEAP, ext_rows[i].at);
+        size_t page = pos[i] / CB_PDB_PAGE * CB_PDB_PAGE;
+        CHECK_EQ(pos[i] - page - CB_PDB_HEAP, ext_rows[i].at);
         if (memcmp(b + pos[i], rows[i], lens[i])) {
             fprintf(stderr, "tag row %d differs from rekordbox's\n", i);
             failures++;
@@ -354,11 +354,11 @@ static void ext_tags(void)
     static const uint8_t head[16] = {
         0x1c, 0x80, 0x03, 0x24, 0x08, 0x0a, 0x90, 0x05, 0x1c, 0x00, 0, 0, 0, 0, 0, 0,
     };
-    CHECK(n > 0 && !memcmp(b + pos[0] / RX_PDB_PAGE * RX_PDB_PAGE + 0x18, head, sizeof(head)));
+    CHECK(n > 0 && !memcmp(b + pos[0] / CB_PDB_PAGE * CB_PDB_PAGE + 0x18, head, sizeof(head)));
     free(pos);
     /* Table 7's row: library constant + 1 at 0x18 (docs/pdb.md 3). */
-    n = table_rows(b, size, RX_PDB_EXT_T7, &pos);
-    CHECK(n == 1 && b[pos[0] + 1] == 0x07 && rx_rd_le32(b + pos[0] + 0x18) == 1);
+    n = table_rows(b, size, CB_PDB_EXT_T7, &pos);
+    CHECK(n == 1 && b[pos[0] + 1] == 0x07 && cb_rd_le32(b + pos[0] + 0x18) == 1);
     free(pos);
     free(b);
 }
@@ -370,30 +370,30 @@ static void ext_tags(void)
  * title cut to the plan's buffer stays valid UTF-8. */
 static void limits(void)
 {
-    RXTrack tr = { 0 };
+    CBTrack tr = { 0 };
     tr.meta.title = "\xF0\x9F\x8E\xB5 title";
     tr.meta.comment = "";
-    RXPlanTrack pt = {
+    CBPlanTrack pt = {
         .id = 1, .track = &tr, .usb_path = "/Contents/\xF0\x9F\x8E\xB5/B/x.flac",
         .anlz_dir = "/PIONEER/USBANLZ/P000/00000000", .file_type = 5, .artist_id = 1, .album_id = 1,
     };
-    RXPlanName artist = { 1, "\xF0\x9F\x8E\xB5 artist" }, album = { 1, "\xC3\xA4lbum \xF0\x9F\x8E\xB5", 1 };
-    RXPlanPlaylist pl = { .id = 1, .name = "\xF0\x9F\x8E\xB5 list" };
-    RXPlan plan = {
+    CBPlanName artist = { 1, "\xF0\x9F\x8E\xB5 artist" }, album = { 1, "\xC3\xA4lbum \xF0\x9F\x8E\xB5", 1 };
+    CBPlanPlaylist pl = { .id = 1, .name = "\xF0\x9F\x8E\xB5 list" };
+    CBPlan plan = {
         .tracks = &pt, .nb_tracks = 1, .artists = &artist, .nb_artists = 1, .albums = &album, .nb_albums = 1,
         .playlists = &pl, .nb_playlists = 1,
     };
     snprintf(plan.date, sizeof(plan.date), "2026-10-13");
     uint8_t *b;
     size_t size;
-    CHECK_EQ(rx_pdb_build(&plan, &b, &size), 0);
-    CHECK_EQ(rx_pdb_check(b, size, print_problem, "astral"), 0);
-    RXPdb pdb;
-    CHECK_EQ(rx_pdb_read(b, size, &pdb), 0);
+    CHECK_EQ(cb_pdb_build(&plan, &b, &size), 0);
+    CHECK_EQ(cb_pdb_check(b, size, print_problem, "astral"), 0);
+    CBPdb pdb;
+    CHECK_EQ(cb_pdb_read(b, size, &pdb), 0);
     CHECK(pdb.nb_tracks == 1 && !strcmp(pdb.tracks[0].title, tr.meta.title) &&
           !strcmp(pdb.tracks[0].path, pt.usb_path) && !strcmp(pdb.tracks[0].artist, artist.name));
     CHECK(pdb.nb_playlists == 1 && !strcmp(pdb.playlists[0].name, pl.name));
-    rx_pdb_free(&pdb);
+    cb_pdb_free(&pdb);
     free(b);
 
     size_t big_n = 70000;
@@ -401,20 +401,20 @@ static void limits(void)
     memset(big, 'z', big_n);
     big[big_n] = '\0';
     tr.meta.comment = big;
-    CHECK_EQ(rx_pdb_track_row_overflow(&pt, &plan), 0x10000);
-    CHECK(rx_pdb_build(&plan, &b, &size) < 0);
+    CHECK_EQ(cb_pdb_track_row_overflow(&pt, &plan), 0x10000);
+    CHECK(cb_pdb_build(&plan, &b, &size) < 0);
     tr.meta.comment = "";
     big[5000] = '\0';
     char *keep = artist.name;
     artist.name = big;
-    CHECK_EQ(rx_pdb_track_row_overflow(&pt, &plan), 0);
-    CHECK(rx_pdb_build(&plan, &b, &size) < 0);
+    CHECK_EQ(cb_pdb_track_row_overflow(&pt, &plan), 0);
+    CHECK(cb_pdb_build(&plan, &b, &size) < 0);
     artist.name = keep;
     pl.name = big;
-    CHECK(rx_pdb_build(&plan, &b, &size) < 0);
+    CHECK(cb_pdb_build(&plan, &b, &size) < 0);
     pl.name = "list";
     album.name = big;
-    CHECK(rx_pdb_build(&plan, &b, &size) < 0);
+    CHECK(cb_pdb_build(&plan, &b, &size) < 0);
     free(big);
 
     /* 1100 x U+00E9: 2200 bytes, cut by the 1024-byte title buffer. */
@@ -424,12 +424,12 @@ static void limits(void)
     e[2200] = '\0';
     tr.meta.title = e;
     char t[1024];
-    rx_plan_title(&pt, t, sizeof(t));
+    cb_plan_title(&pt, t, sizeof(t));
     CHECK(strlen(t) == 1022);
     const char *p = t;
     bool valid = true;
     while (*p)
-        valid &= rx_utf8_next(&p) == 0xE9;
+        valid &= cb_utf8_next(&p) == 0xE9;
     CHECK(valid);
     free(e);
 }
@@ -452,30 +452,30 @@ static void count_problem(void *opaque, const char *problem)
 static size_t read_all(const uint8_t *b, size_t n, int *problems)
 {
     size_t total = 0;
-    RXPdb pdb;
-    if (rx_pdb_read(b, n, &pdb) >= 0) {
+    CBPdb pdb;
+    if (cb_pdb_read(b, n, &pdb) >= 0) {
         total += (size_t)pdb.nb_tracks + (size_t)pdb.nb_playlists;
         for (int i = 0; i < pdb.nb_playlists; i++)
             total += (size_t)pdb.playlists[i].nb + strlen(pdb.playlists[i].name);
-        rx_pdb_free(&pdb);
+        cb_pdb_free(&pdb);
     }
-    RXPdbRawTrack *raw;
+    CBPdbRawTrack *raw;
     int nr;
-    if (rx_pdb_raw_tracks(b, n, &raw, &nr) >= 0) {
+    if (cb_pdb_raw_tracks(b, n, &raw, &nr) >= 0) {
         for (int i = 0; i < nr; i++)
             for (int s = 0; s < 21; s++)
                 total += strlen(raw[i].strings[s]) + 1;
-        rx_pdb_raw_tracks_free(raw, nr);
+        cb_pdb_raw_tracks_free(raw, nr);
     }
-    RXPdbHistoryList *hl;
+    CBPdbHistoryList *hl;
     int nh;
-    if (rx_pdb_history_lists(b, n, &hl, &nh) >= 0) {
+    if (cb_pdb_history_lists(b, n, &hl, &nh) >= 0) {
         for (int i = 0; i < nh; i++)
             total += 1 + (size_t)hl[i].nb;
-        rx_pdb_history_lists_free(hl, nh);
+        cb_pdb_history_lists_free(hl, nh);
     }
     *problems = 0;
-    int count = rx_pdb_check(b, n, count_problem, problems);
+    int count = cb_pdb_check(b, n, count_problem, problems);
     CHECK(count >= *problems);
     return total;
 }
@@ -490,24 +490,24 @@ static void hostile(void)
     static const struct {
         int slots, stride;
     } kinds[] = { { HOSTILE_SLOTS, 0 }, { 1000, 1 } };
-    for (size_t k = 0; k < RX_ARRAY_ELEMS(kinds); k++) {
+    for (size_t k = 0; k < CB_ARRAY_ELEMS(kinds); k++) {
         size_t n;
         uint8_t *b = hostile_pdb_rows(6, kinds[k].slots, kinds[k].stride, &n);
         if (!b)
             continue;
         double t0 = seconds();
-        RXPdb pdb;
-        CHECK_EQ(rx_pdb_read(b, n, &pdb), 0);
+        CBPdb pdb;
+        CHECK_EQ(cb_pdb_read(b, n, &pdb), 0);
         /* At most one row a page has room: every tree row is playlist
          * 0x03030303, listed once, with at most an entry a page. */
         CHECK(pdb.nb_tracks <= 6 && pdb.nb_playlists <= 1);
         CHECK(pdb.nb_playlists == 0 || pdb.playlists[0].nb <= 6);
-        rx_pdb_free(&pdb);
-        RXPdbHistoryList *hl;
+        cb_pdb_free(&pdb);
+        CBPdbHistoryList *hl;
         int nh;
-        CHECK_EQ(rx_pdb_history_lists(b, n, &hl, &nh), 0);
+        CHECK_EQ(cb_pdb_history_lists(b, n, &hl, &nh), 0);
         CHECK(nh <= 1 && (nh == 0 || hl[0].nb <= 6));
-        rx_pdb_history_lists_free(hl, nh);
+        cb_pdb_history_lists_free(hl, nh);
         int problems;
         size_t total = read_all(b, n, &problems);
         CHECK(total <= n);
@@ -520,16 +520,16 @@ static void hostile(void)
     uint8_t *b = hostile_pdb_strings(4, &n);
     if (b) {
         double t0 = seconds();
-        RXPdbRawTrack *raw;
+        CBPdbRawTrack *raw;
         int nr;
-        CHECK_EQ(rx_pdb_raw_tracks(b, n, &raw, &nr), 0);
+        CHECK_EQ(cb_pdb_raw_tracks(b, n, &raw, &nr), 0);
         CHECK_EQ(nr, 4 * 16);
         /* Only the last row of a page has the string in its room. */
         int with = 0;
         for (int i = 0; i < nr; i++)
             with += strlen(raw[i].strings[17]) > 0;
         CHECK_EQ(with, 4);
-        rx_pdb_raw_tracks_free(raw, nr);
+        cb_pdb_raw_tracks_free(raw, nr);
         int problems;
         CHECK(read_all(b, n, &problems) <= 64 * n);
         CHECK(seconds() - t0 < 10.0);
@@ -540,7 +540,7 @@ static void hostile(void)
     if (b) {
         double t0 = seconds();
         int problems = 0;
-        int count = rx_pdb_check(b, n, count_problem, &problems);
+        int count = cb_pdb_check(b, n, count_problem, &problems);
         /* Each of the 64 chains stops where it loops; the first 200
          * problems and a line saying how many more. */
         CHECK(count > 64 && count < 1000);

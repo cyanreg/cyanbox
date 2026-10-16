@@ -1,37 +1,37 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
-/* The TAG LIST (rxbox/link.h, RXLinkTagList): the tracks a DJ collects
+/* The TAG LIST (cyanbox/link.h, CBLinkTagList): the tracks a DJ collects
  * while browsing, on a deck or in the interface, in the order they were
  * added. Shared by every service of a set (their sessions, each on its
  * service's thread) and the owner, so under a lock; in memory only. */
 
-#include "rxbox/link.h"
+#include "cyanbox/link.h"
 
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include "rxbox/common.h"
+#include "cyanbox/common.h"
 
-struct RXLinkTagList {
+struct CBLinkTagList {
     pthread_mutex_t lock;
-    uint32_t ids[RX_LINK_TAG_LIST_MAX];
+    uint32_t ids[CB_LINK_TAG_LIST_MAX];
     int nb;
     atomic_uint generation;
 };
 
-int rx_link_tag_list_new(RXLinkTagList **out)
+int cb_link_tag_list_new(CBLinkTagList **out)
 {
-    RXLinkTagList *tl = calloc(1, sizeof(*tl));
+    CBLinkTagList *tl = calloc(1, sizeof(*tl));
     if (!tl)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     pthread_mutex_init(&tl->lock, NULL);
     *out = tl;
     return 0;
 }
 
-void rx_link_tag_list_free(RXLinkTagList **tl)
+void cb_link_tag_list_free(CBLinkTagList **tl)
 {
     if (!*tl)
         return;
@@ -40,7 +40,7 @@ void rx_link_tag_list_free(RXLinkTagList **tl)
     *tl = NULL;
 }
 
-static int find(const RXLinkTagList *tl, uint32_t id)
+static int find(const CBLinkTagList *tl, uint32_t id)
 {
     for (int i = 0; i < tl->nb; i++)
         if (tl->ids[i] == id)
@@ -48,10 +48,10 @@ static int find(const RXLinkTagList *tl, uint32_t id)
     return -1;
 }
 
-int rx_link_tag_list_add(RXLinkTagList *tl, uint32_t id)
+int cb_link_tag_list_add(CBLinkTagList *tl, uint32_t id)
 {
     pthread_mutex_lock(&tl->lock);
-    int ret = find(tl, id) >= 0 ? 0 : tl->nb == RX_LINK_TAG_LIST_MAX ? RX_ERROR(ENOSPC) : 1;
+    int ret = find(tl, id) >= 0 ? 0 : tl->nb == CB_LINK_TAG_LIST_MAX ? CB_ERROR(ENOSPC) : 1;
     if (ret > 0) {
         tl->ids[tl->nb++] = id;
         atomic_fetch_add(&tl->generation, 1);
@@ -60,7 +60,7 @@ int rx_link_tag_list_add(RXLinkTagList *tl, uint32_t id)
     return ret;
 }
 
-int rx_link_tag_list_remove(RXLinkTagList *tl, uint32_t id)
+int cb_link_tag_list_remove(CBLinkTagList *tl, uint32_t id)
 {
     pthread_mutex_lock(&tl->lock);
     int at = find(tl, id);
@@ -73,7 +73,7 @@ int rx_link_tag_list_remove(RXLinkTagList *tl, uint32_t id)
     return at >= 0;
 }
 
-void rx_link_tag_list_clear(RXLinkTagList *tl)
+void cb_link_tag_list_clear(CBLinkTagList *tl)
 {
     pthread_mutex_lock(&tl->lock);
     if (tl->nb) {
@@ -83,7 +83,7 @@ void rx_link_tag_list_clear(RXLinkTagList *tl)
     pthread_mutex_unlock(&tl->lock);
 }
 
-bool rx_link_tag_list_has(RXLinkTagList *tl, uint32_t id)
+bool cb_link_tag_list_has(CBLinkTagList *tl, uint32_t id)
 {
     pthread_mutex_lock(&tl->lock);
     bool has = find(tl, id) >= 0;
@@ -91,16 +91,16 @@ bool rx_link_tag_list_has(RXLinkTagList *tl, uint32_t id)
     return has;
 }
 
-int rx_link_tag_list_get(RXLinkTagList *tl, uint32_t *ids, int max)
+int cb_link_tag_list_get(CBLinkTagList *tl, uint32_t *ids, int max)
 {
     pthread_mutex_lock(&tl->lock);
     int n = tl->nb;
-    memcpy(ids, tl->ids, (size_t)RX_CLAMP(n, 0, max) * sizeof(*ids));
+    memcpy(ids, tl->ids, (size_t)CB_CLAMP(n, 0, max) * sizeof(*ids));
     pthread_mutex_unlock(&tl->lock);
     return n;
 }
 
-unsigned rx_link_tag_list_generation(RXLinkTagList *tl)
+unsigned cb_link_tag_list_generation(CBLinkTagList *tl)
 {
     return atomic_load(&tl->generation);
 }

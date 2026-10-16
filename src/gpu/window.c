@@ -1,7 +1,7 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
 /* The window: SDL3 on Wayland, the Wayland frame callback that paces it,
- * the event loop, and the public entry points of rxbox/gpu.h that are not
+ * the event loop, and the public entry points of cyanbox/gpu.h that are not
  * about textures or waveforms.
  *
  * Frame pacing. A frame is drawn only when two things hold: the
@@ -28,13 +28,13 @@
  * A window nobody can see (another workspace, the scratchpad, a
  * minimised or fully covered window) gets no frame callbacks. The loop
  * then never draws, still processes every event, and after 150 ms without
- * an answer sleeps at least 100 ms between looks (rx_window_poll): it
+ * an answer sleeps at least 100 ms between looks (cb_window_poll): it
  * costs nothing, and it never blocks in the driver, which a FIFO present
  * on such a window would. When the window is shown again the compositor
  * answers the outstanding request, the socket wakes the sleep, and drawing
  * resumes. */
 
-#include "rxbox/gpu.h"
+#include "cyanbox/gpu.h"
 
 #include <errno.h>
 #include <poll.h>
@@ -51,12 +51,12 @@
 /* Frames drawn after input even without a redraw request: ImGui trickles
  * a press and a release that arrive together over two frames, and a
  * widget that changes the layout shows it one frame later still. */
-#define RX_SETTLE_FRAMES 3
+#define CB_SETTLE_FRAMES 3
 
-void rx_window_options_default(RXWindowOptions *o)
+void cb_window_options_default(CBWindowOptions *o)
 {
-    *o = (RXWindowOptions) {
-        .title     = "rxbox",
+    *o = (CBWindowOptions) {
+        .title     = "cyanbox",
         .width     = 1600,
         .height    = 900,
         .font_size = 15.0f,
@@ -65,12 +65,12 @@ void rx_window_options_default(RXWindowOptions *o)
 
 /* -------------------------------------------------------- frame callbacks */
 
-static void forget_cb(RXWindow *w, struct wl_callback *cb)
+static void forget_cb(CBWindow *w, struct wl_callback *cb)
 {
     for (size_t i = 0; i < w->frame_cbs.nb; i++) {
-        struct wl_callback **p = rx_array_at(&w->frame_cbs, i);
+        struct wl_callback **p = cb_array_at(&w->frame_cbs, i);
         if (*p == cb) {
-            rx_array_remove(&w->frame_cbs, i);
+            cb_array_remove(&w->frame_cbs, i);
             break;
         }
     }
@@ -78,13 +78,13 @@ static void forget_cb(RXWindow *w, struct wl_callback *cb)
 
 static void frame_done(void *opaque, struct wl_callback *cb, uint32_t time)
 {
-    RXWindow *w = opaque;
+    CBWindow *w = opaque;
 
     /* Only the callback asked for with the last present says the
      * compositor wants the next frame; an older one (from a present that
      * failed and whose request rode on a later commit) only goes away. */
     if (cb == w->frame_cb) {
-        int64_t now = rx_time_us();
+        int64_t now = cb_time_us();
 
         /* The interval between two answers means something only while
          * frames follow each other without a pause: the request that this
@@ -111,10 +111,10 @@ static const struct wl_callback_listener frame_listener = {
     .done = frame_done,
 };
 
-void rx_window_want_frame_cb(RXWindow *w)
+void cb_window_want_frame_cb(CBWindow *w)
 {
     struct wl_callback *cb = wl_surface_frame(w->wl_wrap);
-    if (!cb || !rx_array_push(&w->frame_cbs, &cb)) {
+    if (!cb || !cb_array_push(&w->frame_cbs, &cb)) {
         /* Better unpaced than never drawn again. */
         if (cb)
             wl_callback_destroy(cb);
@@ -126,10 +126,10 @@ void rx_window_want_frame_cb(RXWindow *w)
     wl_callback_add_listener(cb, &frame_listener, w);
     w->frame_cb = cb;
     w->frame_done = false;
-    w->req_wall = rx_time_us();
+    w->req_wall = cb_time_us();
 }
 
-void rx_window_frame_skipped(RXWindow *w)
+void cb_window_frame_skipped(CBWindow *w)
 {
     w->frame_cb = NULL;
     w->frame_done = true;
@@ -137,7 +137,7 @@ void rx_window_frame_skipped(RXWindow *w)
 
 /* ------------------------------------------------------------------ events */
 
-static void update_size(RXWindow *w)
+static void update_size(CBWindow *w)
 {
     SDL_GetWindowSize(w->win, &w->width, &w->height);
     SDL_GetWindowSizeInPixels(w->win, &w->px_width, &w->px_height);
@@ -152,10 +152,10 @@ static void update_size(RXWindow *w)
     w->content_scale = display > 0.0f ? display / w->scale : 1.0f;
 }
 
-static void handle_event(RXWindow *w, const SDL_Event *ev)
+static void handle_event(CBWindow *w, const SDL_Event *ev)
 {
     if (w->imgui)
-        rx_imgui_process_event(w, ev);
+        cb_imgui_process_event(w, ev);
 
     switch (ev->type) {
     case SDL_EVENT_QUIT:
@@ -173,7 +173,7 @@ static void handle_event(RXWindow *w, const SDL_Event *ev)
         float old = w->content_scale;
         update_size(w);
         if (w->imgui && w->content_scale != old)
-            rx_imgui_set_scale(w);
+            cb_imgui_set_scale(w);
         w->swap_dirty = true;
         w->need_redraw = true;
         w->stalled = false;
@@ -183,7 +183,7 @@ static void handle_event(RXWindow *w, const SDL_Event *ev)
     case SDL_EVENT_WINDOW_SHOWN:
     case SDL_EVENT_WINDOW_RESTORED:
         if (w->hidden)
-            rx_debug("gpu: window shown");
+            cb_debug("gpu: window shown");
         w->hidden = false;
         w->need_redraw = true;
         w->stalled = false;
@@ -192,26 +192,26 @@ static void handle_event(RXWindow *w, const SDL_Event *ev)
     case SDL_EVENT_WINDOW_HIDDEN:
     case SDL_EVENT_WINDOW_MINIMIZED:
         if (!w->hidden)
-            rx_debug("gpu: window hidden");
+            cb_debug("gpu: window hidden");
         w->hidden = true;
         break;
     default:
-        w->settle = RX_SETTLE_FRAMES;
+        w->settle = CB_SETTLE_FRAMES;
         break;
     }
 }
 
-static void dispatch_queue(RXWindow *w)
+static void dispatch_queue(CBWindow *w)
 {
     if (wl_display_dispatch_queue_pending(w->wl_dpy, w->wl_queue) < 0) {
         int err = wl_display_get_error(w->wl_dpy);
-        rx_err("gpu: the Wayland connection failed: %s", strerror(err ? err : EPIPE));
+        cb_err("gpu: the Wayland connection failed: %s", strerror(err ? err : EPIPE));
         w->should_close = true;
     }
 }
 
 /* SDL's events (SDL_PollEvent reads the socket), then ours. */
-static void pump(RXWindow *w)
+static void pump(CBWindow *w)
 {
     SDL_Event ev;
     while (SDL_PollEvent(&ev))
@@ -219,7 +219,7 @@ static void pump(RXWindow *w)
     dispatch_queue(w);
 }
 
-static void wait_event(RXWindow *w, int timeout_ms)
+static void wait_event(CBWindow *w, int timeout_ms)
 {
     SDL_Event ev;
     if (SDL_WaitEventTimeout(&ev, timeout_ms))
@@ -228,7 +228,7 @@ static void wait_event(RXWindow *w, int timeout_ms)
 
 /* Sleeps until something arrives on the Wayland socket or the timeout
  * passes (see the top of the file for why not SDL's wait). */
-static void wait_frame(RXWindow *w, int timeout_ms)
+static void wait_frame(CBWindow *w, int timeout_ms)
 {
     while (wl_display_prepare_read_queue(w->wl_dpy, w->wl_queue) != 0) {
         dispatch_queue(w);
@@ -255,17 +255,17 @@ static void wait_frame(RXWindow *w, int timeout_ms)
     dispatch_queue(w);
 }
 
-static bool wanted(const RXWindow *w, bool want_redraw)
+static bool wanted(const CBWindow *w, bool want_redraw)
 {
     return want_redraw || w->need_redraw || w->settle > 0;
 }
 
-static bool ready(const RXWindow *w)
+static bool ready(const CBWindow *w)
 {
     return w->frame_done && !w->stalled;
 }
 
-bool rx_window_poll(RXWindow *w, bool want_redraw, int timeout_ms)
+bool cb_window_poll(CBWindow *w, bool want_redraw, int timeout_ms)
 {
     if (w->opts.max_frames > 0 && w->frames_drawn >= w->opts.max_frames)
         w->should_close = true;
@@ -283,8 +283,8 @@ bool rx_window_poll(RXWindow *w, bool want_redraw, int timeout_ms)
          * stops waking every few milliseconds for a callback that is not
          * coming (the caller's short timeout is for its own bookkeeping). */
         int t = timeout_ms;
-        if (rx_time_us() - w->req_wall > 150000)
-            t = RX_MAX(t, 100);
+        if (cb_time_us() - w->req_wall > 150000)
+            t = CB_MAX(t, 100);
         wait_frame(w, t);
     } else {
         wait_event(w, timeout_ms);
@@ -298,49 +298,49 @@ bool rx_window_poll(RXWindow *w, bool want_redraw, int timeout_ms)
     return !w->should_close && wanted(w, want_redraw) && ready(w);
 }
 
-bool rx_window_hidden(const RXWindow *w)
+bool cb_window_hidden(const CBWindow *w)
 {
     return w && w->hidden;
 }
 
-bool rx_window_should_close(const RXWindow *w)
+bool cb_window_should_close(const CBWindow *w)
 {
     if (w->opts.max_frames > 0 && w->frames_drawn >= w->opts.max_frames)
         return true;
     return w->should_close;
 }
 
-void rx_window_request_close(RXWindow *w)
+void cb_window_request_close(CBWindow *w)
 {
     w->should_close = true;
 }
 
 /* ------------------------------------------------------------------ frames */
 
-void rx_window_begin_frame(RXWindow *w)
+void cb_window_begin_frame(CBWindow *w)
 {
     if (w->in_frame)
         return;
-    rx_imgui_new_frame(w);
+    cb_imgui_new_frame(w);
     w->in_frame = true;
 }
 
-void rx_window_end_frame(RXWindow *w)
+void cb_window_end_frame(CBWindow *w)
 {
     if (!w->in_frame)
         return;
     w->in_frame = false;
 
-    void *dd = rx_imgui_render(w);
+    void *dd = cb_imgui_render(w);
 
     /* The last frame of a test run is always captured for the screenshot. */
     bool capture = w->capture_next ||
                    (w->opts.max_frames > 0 && w->frames_drawn + 1 >= w->opts.max_frames);
 
-    int ret = rx_swapchain_frame(w, dd, capture);
+    int ret = cb_swapchain_frame(w, dd, capture);
     if (ret < 0) {
-        rx_err("gpu: drawing a frame failed (%d)", ret);
-        if (ret == RX_ERROR(EIO) || ret == RX_ERROR(ENODEV))
+        cb_err("gpu: drawing a frame failed (%d)", ret);
+        if (ret == CB_ERROR(EIO) || ret == CB_ERROR(ENODEV))
             w->should_close = true;
         w->stalled = true;
     } else if (ret > 0) {
@@ -351,12 +351,12 @@ void rx_window_end_frame(RXWindow *w)
         w->capture_next = false;
         if (w->settle > 0)
             w->settle--;
-        /* rx_window_screenshot_next: this frame was captured and is now
+        /* cb_window_screenshot_next: this frame was captured and is now
          * presented. The readback waits for its submission, once. */
         if (w->shot_path) {
-            int err = rx_swapchain_save_png(w, w->shot_path);
+            int err = cb_swapchain_save_png(w, w->shot_path);
             if (err < 0)
-                rx_err("gpu: screenshot to %s failed (%d)", w->shot_path, err);
+                cb_err("gpu: screenshot to %s failed (%d)", w->shot_path, err);
             free(w->shot_path);
             w->shot_path = NULL;
         }
@@ -367,7 +367,7 @@ void rx_window_end_frame(RXWindow *w)
 
 /* ----------------------------------------------------------------- getters */
 
-void rx_window_size(const RXWindow *w, int *width, int *height)
+void cb_window_size(const CBWindow *w, int *width, int *height)
 {
     if (width)
         *width = w->width;
@@ -375,68 +375,68 @@ void rx_window_size(const RXWindow *w, int *width, int *height)
         *height = w->height;
 }
 
-float rx_window_scale(const RXWindow *w)
+float cb_window_scale(const CBWindow *w)
 {
     return w->scale;
 }
 
-int rx_window_frames_drawn(const RXWindow *w)
+int cb_window_frames_drawn(const CBWindow *w)
 {
     return w->frames_drawn;
 }
 
-double rx_window_frame_interval_ms(const RXWindow *w)
+double cb_window_frame_interval_ms(const CBWindow *w)
 {
     return w->interval_ms;
 }
 
-double rx_window_gpu_ms(const RXWindow *w)
+double cb_window_gpu_ms(const CBWindow *w)
 {
     return w->gpu_ms;
 }
 
-int rx_window_validation_errors(const RXWindow *w)
+int cb_window_validation_errors(const CBWindow *w)
 {
-    return rx_vkdev_validation_errors(&w->vk);
+    return cb_vkdev_validation_errors(&w->vk);
 }
 
-bool rx_window_frame_pending(const RXWindow *w)
+bool cb_window_frame_pending(const CBWindow *w)
 {
     return !w->frame_done;
 }
 
-void rx_window_capture_next(RXWindow *w)
+void cb_window_capture_next(CBWindow *w)
 {
     w->capture_next = true;
 }
 
-int rx_window_readback(RXWindow *w, uint8_t **rgba, int *width, int *height)
+int cb_window_readback(CBWindow *w, uint8_t **rgba, int *width, int *height)
 {
     if (!w->cap_serial || w->cap_serial != w->last_present_serial)
-        return RX_ERROR(EAGAIN);
-    return rx_swapchain_readback(w, rgba, width, height);
+        return CB_ERROR(EAGAIN);
+    return cb_swapchain_readback(w, rgba, width, height);
 }
 
 /* ----------------------------------------------------------- create/destroy */
 
-static int open_wayland(RXWindow *w)
+static int open_wayland(CBWindow *w)
 {
     SDL_PropertiesID props = SDL_GetWindowProperties(w->win);
     w->wl_dpy  = SDL_GetPointerProperty(props, SDL_PROP_WINDOW_WAYLAND_DISPLAY_POINTER, NULL);
     w->wl_surf = SDL_GetPointerProperty(props, SDL_PROP_WINDOW_WAYLAND_SURFACE_POINTER, NULL);
     if (!w->wl_dpy || !w->wl_surf) {
-        rx_err("gpu: not a Wayland window; the interface runs on Wayland only");
-        return RX_ERROR(ENODEV);
+        cb_err("gpu: not a Wayland window; the interface runs on Wayland only");
+        return CB_ERROR(ENODEV);
     }
 
 #if WAYLAND_VERSION_MAJOR > 1 || WAYLAND_VERSION_MINOR >= 23
-    w->wl_queue = wl_display_create_queue_with_name(w->wl_dpy, "rxbox frame callbacks");
+    w->wl_queue = wl_display_create_queue_with_name(w->wl_dpy, "cyanbox frame callbacks");
 #else
     w->wl_queue = wl_display_create_queue(w->wl_dpy);
 #endif
     w->wl_wrap = wl_proxy_create_wrapper(w->wl_surf);
     if (!w->wl_queue || !w->wl_wrap)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     wl_proxy_set_queue((struct wl_proxy *)w->wl_wrap, w->wl_queue);
 
     return 0;
@@ -444,28 +444,28 @@ static int open_wayland(RXWindow *w)
 
 static char *dup_opt(const char *s)
 {
-    return s ? rx_strdup(s) : NULL;
+    return s ? cb_strdup(s) : NULL;
 }
 
-int rx_window_create(RXWindow **out, const RXWindowOptions *o)
+int cb_window_create(CBWindow **out, const CBWindowOptions *o)
 {
-    RXWindowOptions def;
+    CBWindowOptions def;
     if (!o) {
-        rx_window_options_default(&def);
+        cb_window_options_default(&def);
         o = &def;
     }
 
-    RXWindow *w = calloc(1, sizeof(*w));
+    CBWindow *w = calloc(1, sizeof(*w));
     if (!w)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
 
     int ret = 0;
     w->opts = *o;
-    w->title  = dup_opt(o->title ? o->title : "rxbox");
+    w->title  = dup_opt(o->title ? o->title : "cyanbox");
     w->font   = dup_opt(o->font);
     w->device = dup_opt(o->device);
     if (!w->title || (o->font && !w->font) || (o->device && !w->device)) {
-        ret = RX_ERROR(ENOMEM);
+        ret = CB_ERROR(ENOMEM);
         goto fail;
     }
     w->opts.title  = w->title;
@@ -478,7 +478,7 @@ int rx_window_create(RXWindow **out, const RXWindowOptions *o)
     if (w->opts.font_size <= 0.0f)
         w->opts.font_size = 15.0f;
 
-    rx_array_init(&w->frame_cbs, sizeof(struct wl_callback *));
+    cb_array_init(&w->frame_cbs, sizeof(struct wl_callback *));
     w->frame_done = true;
     w->need_redraw = true;
     w->interval_ms = 1000.0 / 60.0;
@@ -486,10 +486,10 @@ int rx_window_create(RXWindow **out, const RXWindowOptions *o)
     /* Wayland only: the pacing is built on its frame callback. The app id
      * is what compositors match window rules on (tests/sway.conf). */
     SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "wayland");
-    SDL_SetAppMetadata("rxbox", RXBOX_VERSION, "rxbox");
+    SDL_SetAppMetadata("cyanbox", CYANBOX_VERSION, "cyanbox");
     if (!SDL_InitSubSystem(SDL_INIT_VIDEO)) {
-        rx_err("gpu: SDL could not open a Wayland display: %s", SDL_GetError());
-        ret = RX_ERROR(ENODEV);
+        cb_err("gpu: SDL could not open a Wayland display: %s", SDL_GetError());
+        ret = CB_ERROR(ENODEV);
         goto fail;
     }
     w->sdl_init = true;
@@ -502,8 +502,8 @@ int rx_window_create(RXWindow **out, const RXWindowOptions *o)
                               SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE |
                               SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_BORDERLESS);
     if (!w->win) {
-        rx_err("gpu: SDL_CreateWindow: %s", SDL_GetError());
-        ret = RX_ERROR(ENODEV);
+        cb_err("gpu: SDL_CreateWindow: %s", SDL_GetError());
+        ret = CB_ERROR(ENODEV);
         goto fail;
     }
 
@@ -513,58 +513,58 @@ int rx_window_create(RXWindow **out, const RXWindowOptions *o)
 
     update_size(w);
 
-    ret = rx_vk_create(w);
+    ret = cb_vk_create(w);
     if (ret < 0)
         goto fail;
 
-    ret = rx_swapchain_create(w);
+    ret = cb_swapchain_create(w);
     if (ret < 0)
         goto fail;
 
-    ret = rx_imgui_init(w);
+    ret = cb_imgui_init(w);
     if (ret < 0)
         goto fail;
 
-    ret = rx_wave_pipeline_create(w);
+    ret = cb_wave_pipeline_create(w);
     if (ret < 0)
         goto fail;
 
-    rx_info("gpu: window %dx%d (%dx%d pixels, scale %.2f)", w->width, w->height,
+    cb_info("gpu: window %dx%d (%dx%d pixels, scale %.2f)", w->width, w->height,
             w->px_width, w->px_height, w->scale);
 
     *out = w;
     return 0;
 
 fail:
-    rx_window_destroy(w);
+    cb_window_destroy(w);
     return ret;
 }
 
-void rx_window_destroy(RXWindow *w)
+void cb_window_destroy(CBWindow *w)
 {
     if (!w)
         return;
 
     /* GPU first: nothing may still be reading what goes next. Textures
      * unregister from ImGui, so they go before its backend does; the
-     * swapchain before the surface (in rx_vk_destroy), and all of it
+     * swapchain before the surface (in cb_vk_destroy), and all of it
      * before SDL takes the wl_surface away. */
     if (w->vk.dev) {
         vkDeviceWaitIdle(w->vk.dev);
-        rx_textures_destroy_all(w);
-        rx_vk_collect(w, true);
+        cb_textures_destroy_all(w);
+        cb_vk_collect(w, true);
     }
-    rx_imgui_shutdown(w);
+    cb_imgui_shutdown(w);
     if (w->vk.dev) {
-        rx_wave_pipeline_destroy(w);
-        rx_swapchain_destroy(w);
+        cb_wave_pipeline_destroy(w);
+        cb_swapchain_destroy(w);
     }
-    rx_vk_destroy(w);
+    cb_vk_destroy(w);
 
     /* Our proxies on SDL's display, before SDL closes it. */
     for (size_t i = 0; i < w->frame_cbs.nb; i++)
-        wl_callback_destroy(*(struct wl_callback **)rx_array_at(&w->frame_cbs, i));
-    rx_array_free(&w->frame_cbs);
+        wl_callback_destroy(*(struct wl_callback **)cb_array_at(&w->frame_cbs, i));
+    cb_array_free(&w->frame_cbs);
     if (w->wl_wrap)
         wl_proxy_wrapper_destroy(w->wl_wrap);
     if (w->wl_queue)

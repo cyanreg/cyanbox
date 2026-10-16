@@ -31,7 +31,7 @@
  * export.pdb leaves exportLibrary.db to name the tracks, and setting values
  * the library could not store are not proposed. */
 
-#include "rxbox/export.h"
+#include "cyanbox/export.h"
 
 #include <ctype.h>
 #include <dirent.h>
@@ -47,7 +47,7 @@
 #include <linux/openat2.h>
 #endif
 
-#include "rxbox/colors.h"
+#include "cyanbox/colors.h"
 #include "src/export/export_priv.h"
 #include "src/formats/buf.h"
 #include "src/formats/formats_priv.h"
@@ -67,15 +67,15 @@ static const char *settings_section(const char *file)
 
 /* ---------------------------------------------------------------- files */
 
-char *rx_stick_file(const char *mount, const char *stick_path)
+char *cb_stick_file(const char *mount, const char *stick_path)
 {
     size_t n = strlen(mount);
     while (n > 1 && mount[n - 1] == '/')
         n--;
-    return rx_asprintf("%.*s%s%s", (int)n, mount, stick_path[0] == '/' ? "" : "/", stick_path);
+    return cb_asprintf("%.*s%s%s", (int)n, mount, stick_path[0] == '/' ? "" : "/", stick_path);
 }
 
-bool rx_stick_path_safe(const char *p)
+bool cb_stick_path_safe(const char *p)
 {
     if (!p || p[0] != '/')
         return false;
@@ -115,29 +115,29 @@ static int open_beneath(int dir, const char *rel, int flags, mode_t mode)
             break;
     }
     if (errno != ENOSYS && errno != EPERM)
-        return RX_ERROR(errno);
+        return CB_ERROR(errno);
 #endif
     struct stat root;
     if (fstat(dir, &root) < 0)
-        return RX_ERROR(errno);
+        return CB_ERROR(errno);
     int at = dir, ret = 0;
     const char *p = rel;
     const char *slash;
     while ((slash = strchr(p, '/'))) {
         /* The link itself, if it is one, and refused below. */
-        char *name = rx_strndup(p, (size_t)(slash - p));
+        char *name = cb_strndup(p, (size_t)(slash - p));
         int next = name ? openat(at, name, O_PATH | O_NOFOLLOW | O_CLOEXEC) : -1;
-        ret = !name ? RX_ERROR(ENOMEM) : next < 0 ? RX_ERROR(errno) : 0;
+        ret = !name ? CB_ERROR(ENOMEM) : next < 0 ? CB_ERROR(errno) : 0;
         free(name);
         struct stat st;
         if (ret >= 0 && fstat(next, &st) < 0)
-            ret = RX_ERROR(errno);
+            ret = CB_ERROR(errno);
         else if (ret >= 0 && S_ISLNK(st.st_mode))
-            ret = RX_ERROR(ELOOP);
+            ret = CB_ERROR(ELOOP);
         else if (ret >= 0 && !S_ISDIR(st.st_mode))
-            ret = RX_ERROR(ENOTDIR);
+            ret = CB_ERROR(ENOTDIR);
         else if (ret >= 0 && st.st_dev != root.st_dev)
-            ret = RX_ERROR(EXDEV);
+            ret = CB_ERROR(EXDEV);
         if (at != dir)
             close(at);
         at = next;
@@ -149,15 +149,15 @@ static int open_beneath(int dir, const char *rel, int flags, mode_t mode)
         p = slash + 1;
     }
     int fd = openat(at, p, flags | O_NOFOLLOW | O_CLOEXEC, mode);
-    ret = fd < 0 ? RX_ERROR(errno) : 0;
+    ret = fd < 0 ? CB_ERROR(errno) : 0;
     struct stat st;
     /* A link opened as a directory is refused as openat2 refuses it. */
-    if (ret == RX_ERROR(ENOTDIR) && !fstatat(at, p, &st, AT_SYMLINK_NOFOLLOW) && S_ISLNK(st.st_mode))
-        ret = RX_ERROR(ELOOP);
+    if (ret == CB_ERROR(ENOTDIR) && !fstatat(at, p, &st, AT_SYMLINK_NOFOLLOW) && S_ISLNK(st.st_mode))
+        ret = CB_ERROR(ELOOP);
     else if (ret >= 0 && fstat(fd, &st) < 0)
-        ret = RX_ERROR(errno);
+        ret = CB_ERROR(errno);
     else if (ret >= 0 && st.st_dev != root.st_dev)
-        ret = RX_ERROR(EXDEV);
+        ret = CB_ERROR(EXDEV);
     if (at != dir)
         close(at);
     if (ret < 0 && fd >= 0)
@@ -165,16 +165,16 @@ static int open_beneath(int dir, const char *rel, int flags, mode_t mode)
     return ret < 0 ? ret : fd;
 }
 
-int rx_stick_root(const char *mount)
+int cb_stick_root(const char *mount)
 {
     int fd = open(mount, O_PATH | O_DIRECTORY | O_CLOEXEC);
-    return fd < 0 ? RX_ERROR(errno) : fd;
+    return fd < 0 ? CB_ERROR(errno) : fd;
 }
 
-int rx_stick_mkdirs(int root, const char *stick_dir)
+int cb_stick_mkdirs(int root, const char *stick_dir)
 {
-    if (!rx_stick_path_safe(stick_dir))
-        return RX_ERROR(EINVAL);
+    if (!cb_stick_path_safe(stick_dir))
+        return CB_ERROR(EINVAL);
     /* Down from the root, each directory made where missing and then
      * opened by the same rules, so a link put in its place is refused. */
     int at = root, ret = 0;
@@ -182,13 +182,13 @@ int rx_stick_mkdirs(int root, const char *stick_dir)
     while (*p && ret >= 0) {
         const char *slash = strchr(p, '/');
         size_t n = slash ? (size_t)(slash - p) : strlen(p);
-        char *name = rx_strndup(p, n);
+        char *name = cb_strndup(p, n);
         if (!name) {
-            ret = RX_ERROR(ENOMEM);
+            ret = CB_ERROR(ENOMEM);
             break;
         }
         if (mkdirat(at, name, 0755) < 0 && errno != EEXIST)
-            ret = RX_ERROR(errno);
+            ret = CB_ERROR(errno);
         int next = ret >= 0 ? open_beneath(at, name, O_PATH | O_DIRECTORY, 0) : -1;
         if (ret >= 0 && next < 0)
             ret = next;
@@ -203,52 +203,52 @@ int rx_stick_mkdirs(int root, const char *stick_dir)
     return ret;
 }
 
-int rx_stick_open(int root, const char *stick_path, int flags, mode_t mode)
+int cb_stick_open(int root, const char *stick_path, int flags, mode_t mode)
 {
-    if (!rx_stick_path_safe(stick_path))
-        return RX_ERROR(EINVAL);
+    if (!cb_stick_path_safe(stick_path))
+        return CB_ERROR(EINVAL);
     int fd = open_beneath(root, stick_path + 1, flags, mode);
-    if (fd != RX_ERROR(ENOENT) || !(flags & O_CREAT))
+    if (fd != CB_ERROR(ENOENT) || !(flags & O_CREAT))
         return fd;
     /* A directory on the way is missing. */
-    char *dir = rx_strndup(stick_path, (size_t)(strrchr(stick_path, '/') - stick_path));
-    int ret = !dir ? RX_ERROR(ENOMEM) : dir[0] ? rx_stick_mkdirs(root, dir) : fd;
+    char *dir = cb_strndup(stick_path, (size_t)(strrchr(stick_path, '/') - stick_path));
+    int ret = !dir ? CB_ERROR(ENOMEM) : dir[0] ? cb_stick_mkdirs(root, dir) : fd;
     free(dir);
     return ret < 0 ? ret : open_beneath(root, stick_path + 1, flags, mode);
 }
 
-int rx_stick_stat(int root, const char *stick_path, struct stat *st)
+int cb_stick_stat(int root, const char *stick_path, struct stat *st)
 {
-    int fd = rx_stick_open(root, stick_path, O_PATH | O_NOFOLLOW, 0);
+    int fd = cb_stick_open(root, stick_path, O_PATH | O_NOFOLLOW, 0);
     if (fd < 0)
         return fd;
-    int ret = fstat(fd, st) < 0 ? RX_ERROR(errno) : 0;
+    int ret = fstat(fd, st) < 0 ? CB_ERROR(errno) : 0;
     close(fd);
     return ret;
 }
 
-int rx_stick_unlink(int root, const char *stick_path, int flags)
+int cb_stick_unlink(int root, const char *stick_path, int flags)
 {
-    if (!rx_stick_path_safe(stick_path))
-        return RX_ERROR(EINVAL);
+    if (!cb_stick_path_safe(stick_path))
+        return CB_ERROR(EINVAL);
     const char *base = strrchr(stick_path, '/') + 1;
     int dir = root;
     if (base - 1 != stick_path) {
-        char *parent = rx_strndup(stick_path, (size_t)(base - 1 - stick_path));
-        dir = parent ? rx_stick_open(root, parent, O_PATH | O_DIRECTORY, 0) : RX_ERROR(ENOMEM);
+        char *parent = cb_strndup(stick_path, (size_t)(base - 1 - stick_path));
+        dir = parent ? cb_stick_open(root, parent, O_PATH | O_DIRECTORY, 0) : CB_ERROR(ENOMEM);
         free(parent);
         if (dir < 0)
             return dir;
     }
-    int ret = unlinkat(dir, base, flags) < 0 ? RX_ERROR(errno) : 0;
+    int ret = unlinkat(dir, base, flags) < 0 ? CB_ERROR(errno) : 0;
     if (dir != root)
         close(dir);
     return ret;
 }
 
-int rx_stick_write(int root, const char *stick_path, const void *data, size_t size)
+int cb_stick_write(int root, const char *stick_path, const void *data, size_t size)
 {
-    int fd = rx_stick_open(root, stick_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    int fd = cb_stick_open(root, stick_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0)
         return fd;
     int ret = 0;
@@ -259,48 +259,48 @@ int rx_stick_write(int root, const char *stick_path, const void *data, size_t si
         if (n < 0 && errno == EINTR)
             continue;
         if (n < 0) {
-            ret = RX_ERROR(errno);
+            ret = CB_ERROR(errno);
             break;
         }
         p += n;
         left -= (size_t)n;
     }
     if (close(fd) < 0 && !ret)
-        ret = RX_ERROR(errno);
+        ret = CB_ERROR(errno);
     return ret;
 }
 
-int rx_stick_sync(const char *mount)
+int cb_stick_sync(const char *mount)
 {
     int fd = open(mount, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
     if (fd < 0)
-        return RX_ERROR(errno);
-    int ret = syncfs(fd) < 0 ? RX_ERROR(errno) : 0;
+        return CB_ERROR(errno);
+    int ret = syncfs(fd) < 0 ? CB_ERROR(errno) : 0;
     close(fd);
     return ret;
 }
 
 /* Only regular files: a link or a FIFO on a stick formatted with a Unix
  * file system could point the reader at /dev/zero. */
-int rx_stick_read_file(int root, const char *stick_path, uint8_t **data, size_t *size)
+int cb_stick_read_file(int root, const char *stick_path, uint8_t **data, size_t *size)
 {
     *data = NULL;
     *size = 0;
-    int fd = rx_stick_open(root, stick_path, O_RDONLY, 0);
+    int fd = cb_stick_open(root, stick_path, O_RDONLY, 0);
     if (fd < 0)
         return fd;
     struct stat st;
-    int ret = fstat(fd, &st) < 0 ? RX_ERROR(errno) : S_ISREG(st.st_mode) ? 0 : RX_ERROR(EINVAL);
-    uint8_t *buf = ret >= 0 ? malloc((size_t)RX_MAX(st.st_size, 1)) : NULL;
+    int ret = fstat(fd, &st) < 0 ? CB_ERROR(errno) : S_ISREG(st.st_mode) ? 0 : CB_ERROR(EINVAL);
+    uint8_t *buf = ret >= 0 ? malloc((size_t)CB_MAX(st.st_size, 1)) : NULL;
     if (ret >= 0 && !buf)
-        ret = RX_ERROR(ENOMEM);
+        ret = CB_ERROR(ENOMEM);
     size_t n = 0;
     while (ret >= 0 && n < (size_t)st.st_size) {
         ssize_t r = read(fd, buf + n, (size_t)st.st_size - n);
         if (r < 0 && errno == EINTR)
             continue;
         if (r < 0)
-            ret = RX_ERROR(errno);
+            ret = CB_ERROR(errno);
         else if (!r)
             break;
         else
@@ -321,10 +321,10 @@ static int read_stick_file(const char *mount, const char *stick_path, uint8_t **
 {
     *data = NULL;
     *size = 0;
-    int root = rx_stick_root(mount);
+    int root = cb_stick_root(mount);
     if (root < 0)
         return root;
-    int ret = rx_stick_read_file(root, stick_path, data, size);
+    int ret = cb_stick_read_file(root, stick_path, data, size);
     close(root);
     return ret;
 }
@@ -334,12 +334,12 @@ static int read_stick_file(const char *mount, const char *stick_path, uint8_t **
 /* A hot cue without a colour: code 0 with no RGB, the slot's default pad
  * colour (rekordbox 7, rbxport), or green 00FF00 (dj, and the most common
  * code-0 RGB on rekordbox 7 sticks; docs/anlz.md 4.6). */
-static bool default_pad(const RXStickCue *c)
+static bool default_pad(const CBStickCue *c)
 {
-    return c->hot >= 0 && !c->code && (!c->rgb || c->rgb == 0x00FF00 || c->rgb == rx_hot_cue_default_rgb(c->hot));
+    return c->hot >= 0 && !c->code && (!c->rgb || c->rgb == 0x00FF00 || c->rgb == cb_hot_cue_default_rgb(c->hot));
 }
 
-bool rx_stick_cue_equal(const RXStickCue *a, const RXStickCue *b)
+bool cb_stick_cue_equal(const CBStickCue *a, const CBStickCue *b)
 {
     if (a->hot != b->hot || (a->out == 0xFFFFFFFFu) != (b->out == 0xFFFFFFFFu))
         return false;
@@ -358,9 +358,9 @@ bool rx_stick_cue_equal(const RXStickCue *a, const RXStickCue *b)
     return !strcmp(a->name, b->name);
 }
 
-void rx_stick_cue_to_track(const RXStickCue *s, const RXGrid *grid, RXCue *c)
+void cb_stick_cue_to_track(const CBStickCue *s, const CBGrid *grid, CBCue *c)
 {
-    *c = (RXCue) {
+    *c = (CBCue) {
         .time       = s->in / 1000.0,
         .grid_beat  = NAN,
         .hot        = s->hot,
@@ -375,33 +375,33 @@ void rx_stick_cue_to_track(const RXStickCue *s, const RXGrid *grid, RXCue *c)
         if (s->code) {
             int code;
             uint32_t rgb;
-            const char *name = rx_cue_palette_name(s->code);
-            if (name && !rx_hot_cue_color(name, &code, &rgb) && code == s->code)
+            const char *name = cb_cue_palette_name(s->code);
+            if (name && !cb_hot_cue_color(name, &code, &rgb) && code == s->code)
                 snprintf(c->color, sizeof(c->color), "%s", name);
             else
-                snprintf(c->color, sizeof(c->color), "#%06x", rx_cue_palette_rgb(s->code));
+                snprintf(c->color, sizeof(c->color), "#%06x", cb_cue_palette_rgb(s->code));
         } else if (!default_pad(s)) {
             snprintf(c->color, sizeof(c->color), "#%06x", s->rgb);
         }
-    } else if (s->code >= 1 && s->code <= RX_TRACK_COLORS) {
-        snprintf(c->color, sizeof(c->color), "%s", rx_track_color_name(s->code));
+    } else if (s->code >= 1 && s->code <= CB_TRACK_COLORS) {
+        snprintf(c->color, sizeof(c->color), "%s", cb_track_color_name(s->code));
     }
 
     /* A cue on a beat (the player's quantize puts it there, to the ms)
      * follows the grid; so does a loop a whole number of 1/32 beats long. */
-    if (!grid || !rx_grid_valid(grid))
+    if (!grid || !cb_grid_valid(grid))
         return;
-    double b = rx_grid_time_to_beat(grid, c->time);
+    double b = cb_grid_time_to_beat(grid, c->time);
     double nb = round(b);
-    double tb = rx_grid_beat_to_time(grid, nb);
+    double tb = cb_grid_beat_to_time(grid, nb);
     if (fabs(tb - c->time) > 0.0015)
         return;
     c->grid_beat = nb;
     c->time = tb;
     if (c->loop_end >= 0) {
-        double lb = rx_grid_time_to_beat(grid, c->loop_end) - nb;
+        double lb = cb_grid_time_to_beat(grid, c->loop_end) - nb;
         double q = round(lb * 32) / 32;
-        double te = rx_grid_beat_to_time(grid, nb + q);
+        double te = cb_grid_beat_to_time(grid, nb + q);
         if (q > 0 && fabs(te - c->loop_end) <= 0.0015) {
             c->loop_beats = q;
             c->loop_end = te;
@@ -436,64 +436,64 @@ static void unescape(char *s)
     *o = '\0';
 }
 
-void rx_sync_record_free(RXSyncRecord *r)
+void cb_sync_record_free(CBSyncRecord *r)
 {
     for (int i = 0; i < r->nb_tracks; i++)
         free(r->tracks[i].cues);
     free(r->tracks);
     for (int i = 0; i < r->nb_settings; i++)
         free(r->settings[i].data);
-    *r = (RXSyncRecord) { 0 };
+    *r = (CBSyncRecord) { 0 };
 }
 
 static int cmp_sync_track(const void *a, const void *b)
 {
-    uint64_t x = ((const RXSyncTrack *)a)->id, y = ((const RXSyncTrack *)b)->id;
+    uint64_t x = ((const CBSyncTrack *)a)->id, y = ((const CBSyncTrack *)b)->id;
     return x < y ? -1 : x > y;
 }
 
-const RXSyncTrack *rx_sync_record_track(const RXSyncRecord *r, uint64_t id)
+const CBSyncTrack *cb_sync_record_track(const CBSyncRecord *r, uint64_t id)
 {
     if (!r->nb_tracks)
         return NULL;
-    RXSyncTrack key = { .id = id };
+    CBSyncTrack key = { .id = id };
     return bsearch(&key, r->tracks, (size_t)r->nb_tracks, sizeof(key), cmp_sync_track);
 }
 
-int rx_sync_record_from_plan(const RXPlan *plan, RXSyncRecord *r)
+int cb_sync_record_from_plan(const CBPlan *plan, CBSyncRecord *r)
 {
-    *r = (RXSyncRecord) { 0 };
+    *r = (CBSyncRecord) { 0 };
     uint8_t u[8];
     if (getrandom(u, sizeof(u), 0) != (ssize_t)sizeof(u))
-        return RX_ERROR(EIO);
+        return CB_ERROR(EIO);
     for (int i = 0; i < 8; i++)
         snprintf(r->uuid + 2 * i, 3, "%02x", u[i]);
     snprintf(r->date, sizeof(r->date), "%s", plan->date);
-    r->tracks = calloc((size_t)RX_MAX(plan->nb_tracks, 1), sizeof(*r->tracks));
+    r->tracks = calloc((size_t)CB_MAX(plan->nb_tracks, 1), sizeof(*r->tracks));
     if (!r->tracks)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     for (int i = 0; i < plan->nb_tracks; i++) {
-        const RXPlanTrack *t = &plan->tracks[i];
-        RXSyncTrack *st = &r->tracks[r->nb_tracks++];
+        const CBPlanTrack *t = &plan->tracks[i];
+        CBSyncTrack *st = &r->tracks[r->nb_tracks++];
         st->id = t->id;
         if (!t->nb_cues)
             continue;
         if (!(st->cues = calloc((size_t)t->nb_cues, sizeof(*st->cues)))) {
-            rx_sync_record_free(r);
-            return RX_ERROR(ENOMEM);
+            cb_sync_record_free(r);
+            return CB_ERROR(ENOMEM);
         }
         for (int k = 0; k < t->nb_cues; k++)
-            rx_stick_cue_from_plan(&t->cues[k], &st->cues[k]);
+            cb_stick_cue_from_plan(&t->cues[k], &st->cues[k]);
         st->nb_cues = t->nb_cues;
     }
     qsort(r->tracks, (size_t)r->nb_tracks, sizeof(*r->tracks), cmp_sync_track);
     return 0;
 }
 
-int rx_sync_library_key(RXLibrary *lib, char key[33])
+int cb_sync_library_key(CBLibrary *lib, char key[33])
 {
     char *v = NULL;
-    if (rx_library_setting_get(lib, "sync.library", &v) >= 0 && v && strlen(v) == 32) {
+    if (cb_library_setting_get(lib, "sync.library", &v) >= 0 && v && strlen(v) == 32) {
         memcpy(key, v, 33);
         free(v);
         return 0;
@@ -501,30 +501,30 @@ int rx_sync_library_key(RXLibrary *lib, char key[33])
     free(v);
     uint8_t u[16];
     if (getrandom(u, sizeof(u), 0) != (ssize_t)sizeof(u))
-        return RX_ERROR(EIO);
+        return CB_ERROR(EIO);
     for (int i = 0; i < 16; i++)
         snprintf(key + 2 * i, 3, "%02x", u[i]);
-    return rx_library_setting_set(lib, "sync.library", key);
+    return cb_library_setting_set(lib, "sync.library", key);
 }
 
 /* Whether `lib` wrote the record: its key is in it. */
-static bool record_is_ours(const RXLibrary *lib, const RXSyncRecord *r)
+static bool record_is_ours(const CBLibrary *lib, const CBSyncRecord *r)
 {
     char *v = NULL;
-    bool ours = r->library[0] && rx_library_setting_get(lib, "sync.library", &v) >= 0 && v &&
+    bool ours = r->library[0] && cb_library_setting_get(lib, "sync.library", &v) >= 0 && v &&
                 !strcmp(v, r->library);
     free(v);
     return ours;
 }
 
-int rx_sync_record_add_settings(RXSyncRecord *r, int root)
+int cb_sync_record_add_settings(CBSyncRecord *r, int root)
 {
     for (int i = 0; i < 4; i++) {
         char path[64];
         snprintf(path, sizeof(path), "/PIONEER/%s", settings_files[i]);
         uint8_t *d;
         size_t n;
-        if (rx_stick_read_file(root, path, &d, &n) < 0)
+        if (cb_stick_read_file(root, path, &d, &n) < 0)
             continue;
         snprintf(r->settings[r->nb_settings].name, sizeof(r->settings[0].name), "%s", settings_files[i]);
         r->settings[r->nb_settings].data = d;
@@ -534,22 +534,22 @@ int rx_sync_record_add_settings(RXSyncRecord *r, int root)
     return 0;
 }
 
-int rx_sync_record_write(int root, const RXSyncRecord *r)
+int cb_sync_record_write(int root, const CBSyncRecord *r)
 {
     char *buf = NULL;
     size_t size = 0;
     FILE *f = open_memstream(&buf, &size);
     if (!f)
-        return RX_ERROR(ENOMEM);
-    fprintf(f, "rxbox-sync 1\nuuid %s\n", r->uuid);
+        return CB_ERROR(ENOMEM);
+    fprintf(f, "cyanbox-sync 1\nuuid %s\n", r->uuid);
     if (r->library[0])
         fprintf(f, "library %s\n", r->library);
     fprintf(f, "date %s\n", r->date);
     for (int i = 0; i < r->nb_tracks; i++) {
-        const RXSyncTrack *t = &r->tracks[i];
+        const CBSyncTrack *t = &r->tracks[i];
         fprintf(f, "track %llu\n", (unsigned long long)t->id);
         for (int k = 0; k < t->nb_cues; k++) {
-            const RXStickCue *c = &t->cues[k];
+            const CBStickCue *c = &t->cues[k];
             long long out = c->out == 0xFFFFFFFFu ? -1 : (long long)c->out;
             if (c->hot >= 0)
                 fprintf(f, "hot %d %u %lld %d %06x ", c->hot, c->in, out, c->code, c->rgb);
@@ -567,9 +567,9 @@ int rx_sync_record_write(int root, const RXSyncRecord *r)
     }
     if (fclose(f)) {
         free(buf);
-        return RX_ERROR(EIO);
+        return CB_ERROR(EIO);
     }
-    int ret = rx_stick_write(root, RX_SYNC_PATH, buf, size);
+    int ret = cb_stick_write(root, CB_SYNC_PATH, buf, size);
     free(buf);
     return ret;
 }
@@ -587,25 +587,25 @@ static char *field_rest(char *line, int skip)
     return p;
 }
 
-int rx_sync_record_read(const char *mount, RXSyncRecord *r)
+int cb_sync_record_read(const char *mount, CBSyncRecord *r)
 {
-    *r = (RXSyncRecord) { 0 };
+    *r = (CBSyncRecord) { 0 };
     uint8_t *data;
     size_t size;
-    int ret = read_stick_file(mount, RX_SYNC_PATH, &data, &size);
+    int ret = read_stick_file(mount, CB_SYNC_PATH, &data, &size);
     if (ret < 0)
         return ret;
-    if (strncmp((char *)data, "rxbox-sync 1\n", 13)) {
+    if (strncmp((char *)data, "cyanbox-sync 1\n", 13)) {
         free(data);
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
     }
-    RXArray tracks, cues;
-    rx_array_init(&tracks, sizeof(RXSyncTrack));
-    rx_array_init(&cues, sizeof(RXStickCue));
-    RXSyncTrack *cur = NULL;
+    CBArray tracks, cues;
+    cb_array_init(&tracks, sizeof(CBSyncTrack));
+    cb_array_init(&cues, sizeof(CBStickCue));
+    CBSyncTrack *cur = NULL;
     char *save = NULL;
     for (char *line = strtok_r((char *)data, "\n", &save); line; line = strtok_r(NULL, "\n", &save)) {
-        RXStickCue c = { 0 };
+        CBStickCue c = { 0 };
         long long out;
         unsigned long long id;
         char name[24];
@@ -618,17 +618,17 @@ int rx_sync_record_read(const char *mount, RXSyncRecord *r)
             if (cur && cues.nb) {
                 cur->cues = cues.data;
                 cur->nb_cues = (int)cues.nb;
-                rx_array_init(&cues, sizeof(RXStickCue));
+                cb_array_init(&cues, sizeof(CBStickCue));
             }
-            RXSyncTrack t = { .id = id };
-            if (!(cur = rx_array_push(&tracks, &t))) {
-                ret = RX_ERROR(ENOMEM);
+            CBSyncTrack t = { .id = id };
+            if (!(cur = cb_array_push(&tracks, &t))) {
+                ret = CB_ERROR(ENOMEM);
                 break;
             }
             continue;
         }
         if (sscanf(line, "hot %d %u %lld %d %x", &slot, &in, &out, &code, &rgb) == 5) {
-            c = (RXStickCue) {
+            c = (CBStickCue) {
                 .hot  = slot,
                 .in   = in,
                 .out  = out < 0 ? 0xFFFFFFFFu : (uint32_t)out,
@@ -638,7 +638,7 @@ int rx_sync_record_read(const char *mount, RXSyncRecord *r)
             char *n = field_rest(line, 6);
             snprintf(c.name, sizeof(c.name), "%s", n ? n : "");
         } else if (sscanf(line, "mem %u %lld %d %d", &in, &out, &code, &active) == 4) {
-            c = (RXStickCue) {
+            c = (CBStickCue) {
                 .hot    = -1,
                 .in     = in,
                 .out    = out < 0 ? 0xFFFFFFFFu : (uint32_t)out,
@@ -650,9 +650,9 @@ int rx_sync_record_read(const char *mount, RXSyncRecord *r)
         } else if (sscanf(line, "setting %23s", name) == 1 && r->nb_settings < 4) {
             char *hex = field_rest(line, 2);
             size_t n = hex ? strlen(hex) / 2 : 0;
-            uint8_t *d = malloc(RX_MAX(n, 1));
+            uint8_t *d = malloc(CB_MAX(n, 1));
             if (!d) {
-                ret = RX_ERROR(ENOMEM);
+                ret = CB_ERROR(ENOMEM);
                 break;
             }
             for (size_t k = 0; k < n; k++) {
@@ -671,22 +671,22 @@ int rx_sync_record_read(const char *mount, RXSyncRecord *r)
         if (!cur)
             continue;
         unescape(c.name);
-        if (!rx_array_push(&cues, &c)) {
-            ret = RX_ERROR(ENOMEM);
+        if (!cb_array_push(&cues, &c)) {
+            ret = CB_ERROR(ENOMEM);
             break;
         }
     }
     if (cur && cues.nb && ret >= 0) {
         cur->cues = cues.data;
         cur->nb_cues = (int)cues.nb;
-        rx_array_init(&cues, sizeof(RXStickCue));
+        cb_array_init(&cues, sizeof(CBStickCue));
     }
-    rx_array_free(&cues);
+    cb_array_free(&cues);
     free(data);
     r->tracks = tracks.data;
     r->nb_tracks = (int)tracks.nb;
     if (ret < 0) {
-        rx_sync_record_free(r);
+        cb_sync_record_free(r);
         return ret;
     }
     if (r->nb_tracks)
@@ -705,14 +705,14 @@ typedef struct HistList {
 } HistList;
 
 typedef struct StickTrack {
-    RXStickCue *cues;
+    CBStickCue *cues;
     int         nb;
 } StickTrack;
 
-struct RXStickPriv {
-    RXSyncRecord record;
+struct CBStickPriv {
+    CBSyncRecord record;
     bool         has_record;
-    StickTrack  *cues;           /* parallel to RXStickState.tracks */
+    StickTrack  *cues;           /* parallel to CBStickState.tracks */
     HistList    *hist;
     int          nb_hist;
     struct { char name[24]; uint8_t *data; size_t size; } files[4];
@@ -720,7 +720,7 @@ struct RXStickPriv {
     char         stick_key[40];  /* the record's uuid, or the stick's label */
 };
 
-void rx_stick_state_free(RXStickState *s)
+void cb_stick_state_free(CBStickState *s)
 {
     for (int i = 0; i < s->nb_track_states; i++) {
         free(s->tracks[i].cues);
@@ -730,11 +730,11 @@ void rx_stick_state_free(RXStickState *s)
     for (int i = 0; i < s->nb_plays; i++)
         free(s->plays[i].label);
     free(s->plays);
-    rx_kv_free(s->settings, s->nb_settings);
+    cb_kv_free(s->settings, s->nb_settings);
     free(s->mount);
-    struct RXStickPriv *p = s->priv;
+    struct CBStickPriv *p = s->priv;
     if (p) {
-        rx_sync_record_free(&p->record);
+        cb_sync_record_free(&p->record);
         for (int i = 0; i < s->nb_track_states; i++)
             free(p->cues[i].cues);
         free(p->cues);
@@ -747,7 +747,7 @@ void rx_stick_state_free(RXStickState *s)
             free(p->files[i].data);
         free(p);
     }
-    *s = (RXStickState) { 0 };
+    *s = (CBStickState) { 0 };
 }
 
 /* pread(2) of exactly `n` bytes at `off`; a file shorter than that is
@@ -760,16 +760,16 @@ static int pread_all(int fd, void *buf, size_t n, off_t off)
         if (r < 0 && errno == EINTR)
             continue;
         if (r < 0)
-            return RX_ERROR(errno);
+            return CB_ERROR(errno);
         if (!r)
-            return RX_ERROR(EINVAL);
+            return CB_ERROR(EINVAL);
         done += (size_t)r;
     }
     return 0;
 }
 
 /* An analysis file's header and cue tags (PCOB, PCO2), as an analysis file
- * of their own for rx_anlz_read_cues: a sync, and every export's check,
+ * of their own for cb_anlz_read_cues: a sync, and every export's check,
  * reads the cues of a stick of five thousand tracks, not the gigabyte of
  * waveforms around them. Of the other tags only the headers are read, up
  * to the waveforms after the cues (rekordbox's order, docs/anlz.md 1.2:
@@ -780,11 +780,11 @@ static int read_cue_tags(int root, const char *stick_path, uint8_t **out, size_t
 {
     *out = NULL;
     *size = 0;
-    int fd = rx_stick_open(root, stick_path, O_RDONLY, 0);
+    int fd = cb_stick_open(root, stick_path, O_RDONLY, 0);
     if (fd < 0)
         return fd;
     struct stat st;
-    int ret = fstat(fd, &st) < 0 ? RX_ERROR(errno) : S_ISREG(st.st_mode) ? 0 : RX_ERROR(EINVAL);
+    int ret = fstat(fd, &st) < 0 ? CB_ERROR(errno) : S_ISREG(st.st_mode) ? 0 : CB_ERROR(EINVAL);
     /* The pages asked for, no read-ahead into the waveforms. */
     if (ret >= 0)
         posix_fadvise(fd, 0, 0, POSIX_FADV_RANDOM);
@@ -792,19 +792,19 @@ static int read_cue_tags(int root, const char *stick_path, uint8_t **out, size_t
     uint8_t h[12];
     if (ret >= 0)
         ret = pread_all(fd, h, sizeof(h), 0);
-    uint64_t len = ret >= 0 ? rx_rd_be32(h + 4) : 0;
+    uint64_t len = ret >= 0 ? cb_rd_be32(h + 4) : 0;
     if (ret >= 0 && (memcmp(h, "PMAI", 4) || len < 12 || len > end))
-        ret = RX_ERROR(EINVAL);
-    RXBuf b = { 0 };
-    if (ret >= 0 && (ret = rx_buf_reserve(&b, len)) >= 0 && (ret = pread_all(fd, b.data, len, 0)) >= 0)
+        ret = CB_ERROR(EINVAL);
+    CBBuf b = { 0 };
+    if (ret >= 0 && (ret = cb_buf_reserve(&b, len)) >= 0 && (ret = pread_all(fd, b.data, len, 0)) >= 0)
         b.len = len;
     bool cues = false;
     for (uint64_t off = len; ret >= 0 && off + 12 <= end; off += len) {
         if ((ret = pread_all(fd, h, sizeof(h), (off_t)off)) < 0)
             break;
-        len = rx_rd_be32(h + 8);
+        len = cb_rd_be32(h + 8);
         if (len < 12 || off + len > end) {
-            ret = RX_ERROR(EINVAL);
+            ret = CB_ERROR(EINVAL);
             break;
         }
         bool cue = !memcmp(h, "PCOB", 4) || !memcmp(h, "PCO2", 4);
@@ -813,29 +813,29 @@ static int read_cue_tags(int root, const char *stick_path, uint8_t **out, size_t
         if (!cue)
             continue;
         cues = true;
-        if ((ret = rx_buf_reserve(&b, len)) < 0 ||
+        if ((ret = cb_buf_reserve(&b, len)) < 0 ||
             (ret = pread_all(fd, b.data + b.len, len, (off_t)off)) < 0)
             break;
         b.len += len;
     }
     close(fd);
     if (ret < 0) {
-        rx_buf_free(&b);
+        cb_buf_free(&b);
         return ret;
     }
-    return rx_buf_finish(&b, out, size);
+    return cb_buf_finish(&b, out, size);
 }
 
 /* The cues of one track as the stick holds them. */
-static int stick_cues(int root, const char *dat_path, RXStickCue **out, int *nb)
+static int stick_cues(int root, const char *dat_path, CBStickCue **out, int *nb)
 {
     *out = NULL;
     *nb = 0;
     if (!dat_path || strlen(dat_path) < 4)
-        return RX_ERROR(EINVAL);
-    char *ext_path = rx_strdup(dat_path);
+        return CB_ERROR(EINVAL);
+    char *ext_path = cb_strdup(dat_path);
     if (!ext_path)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     memcpy(ext_path + strlen(ext_path) - 4, ".EXT", 4);
     uint8_t *dat = NULL, *ext = NULL;
     size_t dat_size = 0, ext_size = 0;
@@ -846,37 +846,37 @@ static int stick_cues(int root, const char *dat_path, RXStickCue **out, int *nb)
     if (ret < 0)
         return ret;
 
-    RXPlanCue *dc = NULL, *ec = NULL;
+    CBPlanCue *dc = NULL, *ec = NULL;
     int nd = 0, ne = 0;
-    if ((ret = rx_anlz_read_cues(dat, dat_size, &dc, &nd)) < 0)
+    if ((ret = cb_anlz_read_cues(dat, dat_size, &dc, &nd)) < 0)
         goto out;
-    if (ext && rx_anlz_read_cues(ext, ext_size, &ec, &ne) < 0)
+    if (ext && cb_anlz_read_cues(ext, ext_size, &ec, &ne) < 0)
         ne = 0;
     /* PCO2 present when the .EXT gave names or colours or any memory cue;
      * a .EXT read through its PCOB has only hot cues D-H. */
-    RXAnlzTag *tags = NULL;
+    CBAnlzTag *tags = NULL;
     int nt = 0;
     bool has_pco2 = false;
-    if (ext && rx_anlz_parse(ext, ext_size, &tags, &nt) >= 0)
+    if (ext && cb_anlz_parse(ext, ext_size, &tags, &nt) >= 0)
         for (int i = 0; i < nt; i++)
             has_pco2 |= !memcmp(tags[i].fourcc, "PCO2", 4);
     free(tags);
 
-    RXStickCue *c = calloc((size_t)RX_MAX(nd + ne, 1), sizeof(*c));
+    CBStickCue *c = calloc((size_t)CB_MAX(nd + ne, 1), sizeof(*c));
     if (!c) {
-        ret = RX_ERROR(ENOMEM);
+        ret = CB_ERROR(ENOMEM);
         goto out;
     }
     int n = 0;
     if (has_pco2) {
         for (int i = 0; i < ne; i++)
-            rx_stick_cue_from_plan(&ec[i], &c[n++]);
+            cb_stick_cue_from_plan(&ec[i], &c[n++]);
     } else {
         for (int i = 0; i < nd; i++)
-            rx_stick_cue_from_plan(&dc[i], &c[n++]);
+            cb_stick_cue_from_plan(&dc[i], &c[n++]);
         for (int i = 0; i < ne; i++)
             if (ec[i].hot >= 0)
-                rx_stick_cue_from_plan(&ec[i], &c[n++]);
+                cb_stick_cue_from_plan(&ec[i], &c[n++]);
     }
     /* Only the .DAT's PCOB memory list marks the active loop. */
     for (int i = 0; i < n; i++) {
@@ -884,7 +884,7 @@ static int stick_cues(int root, const char *dat_path, RXStickCue **out, int *nb)
             continue;
         c[i].active = false;
         for (int k = 0; k < nd; k++)
-            if (dc[k].hot < 0 && dc[k].active && llabs((long long)rx_anlz_ms(dc[k].time) - c[i].in) <= 1)
+            if (dc[k].hot < 0 && dc[k].active && llabs((long long)cb_anlz_ms(dc[k].time) - c[i].in) <= 1)
                 c[i].active = true;
     }
     *out = c;
@@ -904,7 +904,7 @@ typedef struct StickRow {
     char    *path, *anlz;
 } StickRow;
 
-static int onelibrary_rows(sqlite3 *db, RXArray *rows, RXArray *hist)
+static int onelibrary_rows(sqlite3 *db, CBArray *rows, CBArray *hist)
 {
     sqlite3_stmt *st;
     const char *sql = "SELECT content_id, path, analysisDataFilePath FROM content ORDER BY content_id";
@@ -914,10 +914,10 @@ static int onelibrary_rows(sqlite3 *db, RXArray *rows, RXArray *hist)
             const char *a = (const char *)sqlite3_column_text(st, 2);
             StickRow r = {
                 .id   = (uint64_t)sqlite3_column_int64(st, 0),
-                .path = rx_strdup(p ? p : ""),
-                .anlz = rx_strdup(a ? a : ""),
+                .path = cb_strdup(p ? p : ""),
+                .anlz = cb_strdup(a ? a : ""),
             };
-            if (!rows || !r.path || !r.anlz || !rx_array_push(rows, &r)) {
+            if (!rows || !r.path || !r.anlz || !cb_array_push(rows, &r)) {
                 free(r.path);
                 free(r.anlz);
             }
@@ -929,14 +929,14 @@ static int onelibrary_rows(sqlite3 *db, RXArray *rows, RXArray *hist)
      * read in one query, in list order, and each list takes its run: one
      * query a list scanned history_content whole each time (it has no
      * index), quadratic in a long-used stick's history. */
-    RXArray pairs;              /* uint32_t[2]: history_id, content_id */
-    rx_array_init(&pairs, sizeof(uint32_t[2]));
+    CBArray pairs;              /* uint32_t[2]: history_id, content_id */
+    cb_array_init(&pairs, sizeof(uint32_t[2]));
     if (sqlite3_prepare_v2(db, "SELECT history_id, content_id FROM history_content "
                            "ORDER BY history_id, sequenceNo", -1, &st, NULL) == SQLITE_OK) {
         while (sqlite3_step(st) == SQLITE_ROW) {
             uint32_t pair[2] = { (uint32_t)sqlite3_column_int64(st, 0),
                                  (uint32_t)sqlite3_column_int64(st, 1) };
-            if (!rx_array_push(&pairs, pair))
+            if (!cb_array_push(&pairs, pair))
                 break;
         }
         sqlite3_finalize(st);
@@ -946,7 +946,7 @@ static int onelibrary_rows(sqlite3 *db, RXArray *rows, RXArray *hist)
 
     if (sqlite3_prepare_v2(db, "SELECT history_id, name FROM history ORDER BY sequenceNo, history_id",
                            -1, &st, NULL) != SQLITE_OK) {
-        rx_array_free(&pairs);
+        cb_array_free(&pairs);
         return 0;
     }
     while (sqlite3_step(st) == SQLITE_ROW) {
@@ -954,7 +954,7 @@ static int onelibrary_rows(sqlite3 *db, RXArray *rows, RXArray *hist)
         HistList h = {
             .source = 'o',
             .id     = (uint32_t)sqlite3_column_int64(st, 0),
-            .name   = rx_strdup(name ? name : ""),
+            .name   = cb_strdup(name ? name : ""),
         };
         /* The first entry of this list: pairs are sorted by list id. */
         size_t lo = 0, hi = np;
@@ -973,13 +973,13 @@ static int onelibrary_rows(sqlite3 *db, RXArray *rows, RXArray *hist)
                 h.track_ids[k - lo] = pr[k][1];
             h.nb = (int)(end - lo);
         }
-        if (!h.name || !h.nb || !rx_array_push(hist, &h)) {
+        if (!h.name || !h.nb || !cb_array_push(hist, &h)) {
             free(h.name);
             free(h.track_ids);
         }
     }
     sqlite3_finalize(st);
-    rx_array_free(&pairs);
+    cb_array_free(&pairs);
     return 0;
 }
 
@@ -994,52 +994,52 @@ static int cmp_u64(const void *a, const void *b)
     return x < y ? -1 : x > y;
 }
 
-int rx_stick_read(const RXLibrary *lib, const char *mount, RXStickState *out)
+int cb_stick_read(const CBLibrary *lib, const char *mount, CBStickState *out)
 {
-    *out = (RXStickState) { 0 };
-    struct RXStickPriv *p = calloc(1, sizeof(*p));
-    out->mount = rx_strdup(mount);
+    *out = (CBStickState) { 0 };
+    struct CBStickPriv *p = calloc(1, sizeof(*p));
+    out->mount = cb_strdup(mount);
     if (!p || !out->mount) {
         free(p);
         free(out->mount);
         out->mount = NULL;
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     }
     out->priv = p;
     int ret = 0;
-    RXArray rows, hist, states, plays, settings;
-    rx_array_init(&rows, sizeof(StickRow));
-    rx_array_init(&hist, sizeof(HistList));
-    rx_array_init(&states, sizeof(out->tracks[0]));
-    rx_array_init(&plays, sizeof(out->plays[0]));
-    rx_array_init(&settings, sizeof(RXKv));
+    CBArray rows, hist, states, plays, settings;
+    cb_array_init(&rows, sizeof(StickRow));
+    cb_array_init(&hist, sizeof(HistList));
+    cb_array_init(&states, sizeof(out->tracks[0]));
+    cb_array_init(&plays, sizeof(out->plays[0]));
+    cb_array_init(&settings, sizeof(CBKv));
     StickTrack *cues = NULL;
     int nb_cues = 0;
     char **pdb_paths = NULL;
     uint64_t *ids = NULL;
-    int root = rx_stick_root(mount);
+    int root = cb_stick_root(mount);
     if (root < 0) {
         ret = root;
         goto fail;
     }
 
-    p->has_record = rx_sync_record_read(mount, &p->record) >= 0;
+    p->has_record = cb_sync_record_read(mount, &p->record) >= 0;
     if (p->has_record && !record_is_ours(lib, &p->record)) {
-        rx_sync_record_free(&p->record);
+        cb_sync_record_free(&p->record);
         p->has_record = false;
     }
     if (p->has_record)
         snprintf(p->stick_key, sizeof(p->stick_key), "%s", p->record.uuid);
-    else if (rx_stick_label(mount, p->stick_key, sizeof(p->stick_key)) < 0)
+    else if (cb_stick_label(mount, p->stick_key, sizeof(p->stick_key)) < 0)
         snprintf(p->stick_key, sizeof(p->stick_key), "stick");
 
     uint8_t *data;
     size_t size;
     size_t pdb_rows = 0;
-    if (rx_stick_read_file(root, "/PIONEER/rekordbox/export.pdb", &data, &size) >= 0) {
-        RXPdb pdb;
+    if (cb_stick_read_file(root, "/PIONEER/rekordbox/export.pdb", &data, &size) >= 0) {
+        CBPdb pdb;
         out->has_pdb = true;
-        if (rx_pdb_read(data, size, &pdb) >= 0) {
+        if (cb_pdb_read(data, size, &pdb) >= 0) {
             for (int i = 0; i < pdb.nb_tracks; i++) {
                 StickRow r = {
                     .id   = pdb.tracks[i].id,
@@ -1047,17 +1047,17 @@ int rx_stick_read(const RXLibrary *lib, const char *mount, RXStickState *out)
                     .anlz = pdb.tracks[i].anlz_path,
                 };
                 pdb.tracks[i].path = pdb.tracks[i].anlz_path = NULL;
-                if (!rx_array_push(&rows, &r)) {
+                if (!cb_array_push(&rows, &r)) {
                     free(r.path);
                     free(r.anlz);
                 }
             }
-            rx_pdb_free(&pdb);
+            cb_pdb_free(&pdb);
         }
         pdb_rows = rows.nb;
-        RXPdbHistoryList *hl;
+        CBPdbHistoryList *hl;
         int nh;
-        if (rx_pdb_history_lists(data, size, &hl, &nh) >= 0) {
+        if (cb_pdb_history_lists(data, size, &hl, &nh) >= 0) {
             for (int i = 0; i < nh; i++) {
                 HistList h = {
                     .source    = 'p',
@@ -1068,50 +1068,50 @@ int rx_stick_read(const RXLibrary *lib, const char *mount, RXStickState *out)
                 };
                 hl[i].name = NULL;
                 hl[i].track_ids = NULL;
-                if (!h.nb || !rx_array_push(&hist, &h)) {
+                if (!h.nb || !cb_array_push(&hist, &h)) {
                     free(h.name);
                     free(h.track_ids);
                 }
             }
-            rx_pdb_history_lists_free(hl, nh);
+            cb_pdb_history_lists_free(hl, nh);
         }
         free(data);
     }
-    if (rx_stick_read_file(root, "/PIONEER/rekordbox/exportLibrary.db", &data, &size) >= 0) {
+    if (cb_stick_read_file(root, "/PIONEER/rekordbox/exportLibrary.db", &data, &size) >= 0) {
         out->has_onelibrary = true;
         uint8_t *wal = NULL, *plain;
         size_t wal_size = 0, plain_size;
-        rx_stick_read_file(root, "/PIONEER/rekordbox/exportLibrary.db-wal", &wal, &wal_size);
-        if (rx_sqlcipher_decrypt(data, size, rx_onelibrary_passphrase, wal, wal_size, &plain,
+        cb_stick_read_file(root, "/PIONEER/rekordbox/exportLibrary.db-wal", &wal, &wal_size);
+        if (cb_sqlcipher_decrypt(data, size, cb_onelibrary_passphrase, wal, wal_size, &plain,
                                  &plain_size) >= 0) {
             sqlite3 *db;
-            if (rx_onelibrary_open_plain(plain, plain_size, &db) >= 0) {
+            if (cb_onelibrary_open_plain(plain, plain_size, &db) >= 0) {
                 /* Track identity from export.pdb; the OneLibrary adds the
                  * tracks export.pdb does not have (it may be damaged, or
                  * be a player's half-written one) and its history. Its
                  * rows are looked up among export.pdb's by path, sorted. */
-                RXArray more;
-                rx_array_init(&more, sizeof(StickRow));
+                CBArray more;
+                cb_array_init(&more, sizeof(StickRow));
                 onelibrary_rows(db, &more, &hist);
-                pdb_paths = malloc(RX_MAX(pdb_rows, 1) * sizeof(*pdb_paths));
+                pdb_paths = malloc(CB_MAX(pdb_rows, 1) * sizeof(*pdb_paths));
                 if (!pdb_paths)
-                    ret = RX_ERROR(ENOMEM);
+                    ret = CB_ERROR(ENOMEM);
                 for (size_t k = 0; pdb_paths && k < pdb_rows; k++)
-                    pdb_paths[k] = ((StickRow *)rx_array_at(&rows, k))->path;
+                    pdb_paths[k] = ((StickRow *)cb_array_at(&rows, k))->path;
                 if (pdb_paths && pdb_rows)
                     qsort(pdb_paths, pdb_rows, sizeof(*pdb_paths), cmp_path);
                 for (size_t i = 0; i < more.nb; i++) {
-                    StickRow *m = rx_array_at(&more, i);
+                    StickRow *m = cb_array_at(&more, i);
                     bool dup = !pdb_paths || (pdb_rows && bsearch(&m->path, pdb_paths, pdb_rows,
                                                                   sizeof(*pdb_paths), cmp_path));
-                    if (dup || !rx_array_push(&rows, m)) {
+                    if (dup || !cb_array_push(&rows, m)) {
                         free(m->path);
                         free(m->anlz);
                     }
                 }
                 free(pdb_paths);
                 pdb_paths = NULL;
-                rx_array_free(&more);
+                cb_array_free(&more);
                 sqlite3_close(db);
             }
             free(plain);
@@ -1123,18 +1123,18 @@ int rx_stick_read(const RXLibrary *lib, const char *mount, RXStickState *out)
         goto fail;
     out->nb_tracks = (int)rows.nb;
 
-    cues = calloc(RX_MAX(rows.nb, 1), sizeof(*cues));
+    cues = calloc(CB_MAX(rows.nb, 1), sizeof(*cues));
     if (!cues) {
-        ret = RX_ERROR(ENOMEM);
+        ret = CB_ERROR(ENOMEM);
         goto fail;
     }
     for (size_t i = 0; i < rows.nb; i++) {
-        StickRow *r = rx_array_at(&rows, i);
-        RXTrack *t = rx_library_find_id(lib, r->id);
+        StickRow *r = cb_array_at(&rows, i);
+        CBTrack *t = cb_library_find_id(lib, r->id);
         /* Our own stick: the record names the ids. Otherwise the file name
          * must be the one the plan gives the track. */
-        bool ours = t && (p->has_record ? rx_sync_record_track(&p->record, r->id) != NULL
-                                        : rx_plan_usb_name_matches(t, r->path));
+        bool ours = t && (p->has_record ? cb_sync_record_track(&p->record, r->id) != NULL
+                                        : cb_plan_usb_name_matches(t, r->path));
         if (!ours) {
             out->nb_tracks_unknown++;
             continue;
@@ -1143,46 +1143,46 @@ int rx_stick_read(const RXLibrary *lib, const char *mount, RXStickState *out)
          * compute the directory from the audio path anyway (docs/pdb.md
          * 1.3). */
         char dat[128];
-        const char *anlz = r->anlz && rx_stick_path_safe(r->anlz) ? r->anlz : NULL;
-        if (!anlz && rx_anlz_dir(r->path, dat, sizeof(dat) - 16) >= 0) {
+        const char *anlz = r->anlz && cb_stick_path_safe(r->anlz) ? r->anlz : NULL;
+        if (!anlz && cb_anlz_dir(r->path, dat, sizeof(dat) - 16) >= 0) {
             strcat(dat, "/ANLZ0000.DAT");
             anlz = dat;
         }
-        RXStickCue *sc = NULL;
+        CBStickCue *sc = NULL;
         int nsc = 0;
         if (stick_cues(root, anlz, &sc, &nsc) < 0)
             continue;
-        RXCue *rc = calloc((size_t)RX_MAX(nsc, 1), sizeof(*rc));
+        CBCue *rc = calloc((size_t)CB_MAX(nsc, 1), sizeof(*rc));
         typeof(out->tracks[0]) st = {
             .track_id   = r->id,
             .cues       = rc,
             .nb_cues    = nsc,
-            .stick_path = rx_strdup(r->path),
+            .stick_path = cb_strdup(r->path),
         };
-        if (!rc || !st.stick_path || !rx_array_push(&states, &st)) {
+        if (!rc || !st.stick_path || !cb_array_push(&states, &st)) {
             free(rc);
             free(st.stick_path);
             free(sc);
-            ret = RX_ERROR(ENOMEM);
+            ret = CB_ERROR(ENOMEM);
             goto fail;
         }
         for (int k = 0; k < nsc; k++)
-            rx_stick_cue_to_track(&sc[k], &t->grid, &rc[k]);
+            cb_stick_cue_to_track(&sc[k], &t->grid, &rc[k]);
         cues[nb_cues++] = (StickTrack) { .cues = sc, .nb = nsc };
     }
 
     /* The plays of the tracks read, looked up by id, sorted. */
-    ids = malloc(RX_MAX(states.nb, 1) * sizeof(*ids));
+    ids = malloc(CB_MAX(states.nb, 1) * sizeof(*ids));
     if (!ids) {
-        ret = RX_ERROR(ENOMEM);
+        ret = CB_ERROR(ENOMEM);
         goto fail;
     }
     for (size_t i = 0; i < states.nb; i++)
-        ids[i] = ((typeof(out->tracks[0]) *)rx_array_at(&states, i))->track_id;
+        ids[i] = ((typeof(out->tracks[0]) *)cb_array_at(&states, i))->track_id;
     if (states.nb)
         qsort(ids, states.nb, sizeof(*ids), cmp_u64);
     for (size_t i = 0; i < hist.nb; i++) {
-        HistList *h = rx_array_at(&hist, i);
+        HistList *h = cb_array_at(&hist, i);
         for (int k = 0; k < h->nb; k++) {
             uint64_t id = h->track_ids[k];
             if (!states.nb || !bsearch(&id, ids, states.nb, sizeof(*ids), cmp_u64))
@@ -1190,11 +1190,11 @@ int rx_stick_read(const RXLibrary *lib, const char *mount, RXStickState *out)
             typeof(out->plays[0]) pl = {
                 .track_id  = h->track_ids[k],
                 .played_at = 0,
-                .label     = rx_strdup(h->name),
+                .label     = cb_strdup(h->name),
             };
-            if (!pl.label || !rx_array_push(&plays, &pl)) {
+            if (!pl.label || !cb_array_push(&plays, &pl)) {
                 free(pl.label);
-                ret = RX_ERROR(ENOMEM);
+                ret = CB_ERROR(ENOMEM);
                 goto fail;
             }
         }
@@ -1203,11 +1203,11 @@ int rx_stick_read(const RXLibrary *lib, const char *mount, RXStickState *out)
     for (int i = 0; i < 4; i++) {
         char path[64];
         snprintf(path, sizeof(path), "/PIONEER/%s", settings_files[i]);
-        if (rx_stick_read_file(root, path, &data, &size) < 0)
+        if (cb_stick_read_file(root, path, &data, &size) < 0)
             continue;
-        RXKv *kv;
+        CBKv *kv;
         int nk;
-        if (rx_settings_decode(settings_files[i], data, size, &kv, &nk) < 0) {
+        if (cb_settings_decode(settings_files[i], data, size, &kv, &nk) < 0) {
             free(data);
             continue;
         }
@@ -1216,22 +1216,22 @@ int rx_stick_read(const RXLibrary *lib, const char *mount, RXStickState *out)
         p->files[p->nb_files].size = size;
         p->nb_files++;
         for (int k = 0; k < nk; k++) {
-            RXKv e = { .key = rx_asprintf("%s.%s", settings_section(settings_files[i]), kv[k].key),
+            CBKv e = { .key = cb_asprintf("%s.%s", settings_section(settings_files[i]), kv[k].key),
                        .value = kv[k].value };
             kv[k].value = NULL;
-            if (!e.key || !rx_array_push(&settings, &e)) {
+            if (!e.key || !cb_array_push(&settings, &e)) {
                 free(e.key);
                 free(e.value);
             }
         }
-        rx_kv_free(kv, nk);
+        cb_kv_free(kv, nk);
     }
 
     /* Neither database nor a settings file: not a stick (a mistyped mount
      * point, or a stick not mounted yet), which must not pass for one
      * with nothing to sync. */
     if (!out->has_pdb && !out->has_onelibrary && !p->nb_files) {
-        ret = RX_ERROR(ENOENT);
+        ret = CB_ERROR(ENOENT);
         goto fail;
     }
 
@@ -1256,32 +1256,32 @@ int rx_stick_read(const RXLibrary *lib, const char *mount, RXStickState *out)
 
 fail:
     for (size_t i = 0; i < rows.nb; i++) {
-        StickRow *r = rx_array_at(&rows, i);
+        StickRow *r = cb_array_at(&rows, i);
         free(r->path);
         free(r->anlz);
     }
-    rx_array_free(&rows);
+    cb_array_free(&rows);
     for (size_t i = 0; i < hist.nb; i++) {
-        HistList *h = rx_array_at(&hist, i);
+        HistList *h = cb_array_at(&hist, i);
         free(h->name);
         free(h->track_ids);
     }
-    rx_array_free(&hist);
+    cb_array_free(&hist);
     for (size_t i = 0; i < states.nb; i++) {
-        typeof(out->tracks[0]) *st = rx_array_at(&states, i);
+        typeof(out->tracks[0]) *st = cb_array_at(&states, i);
         free(st->cues);
         free(st->stick_path);
     }
-    rx_array_free(&states);
+    cb_array_free(&states);
     for (size_t i = 0; i < plays.nb; i++)
-        free(((typeof(out->plays[0]) *)rx_array_at(&plays, i))->label);
-    rx_array_free(&plays);
+        free(((typeof(out->plays[0]) *)cb_array_at(&plays, i))->label);
+    cb_array_free(&plays);
     for (size_t i = 0; i < settings.nb; i++) {
-        RXKv *e = rx_array_at(&settings, i);
+        CBKv *e = cb_array_at(&settings, i);
         free(e->key);
         free(e->value);
     }
-    rx_array_free(&settings);
+    cb_array_free(&settings);
     if (cues) {
         for (int i = 0; i < nb_cues; i++)
             free(cues[i].cues);
@@ -1291,35 +1291,35 @@ fail:
     if (root >= 0)
         close(root);
     if (ret < 0)
-        rx_stick_state_free(out);
+        cb_stick_state_free(out);
     return ret;
 }
 
 /* ------------------------------------------------------------- the diff */
 
-static int push_item(RXArray *items, const RXSyncItem *it)
+static int push_item(CBArray *items, const CBSyncItem *it)
 {
-    return rx_array_push(items, it) ? 0 : RX_ERROR(ENOMEM);
+    return cb_array_push(items, it) ? 0 : CB_ERROR(ENOMEM);
 }
 
 /* A stick cue against the library's: equal as stored, or the same once
  * read back into the library's form (a custom pad colour the library can
  * only name by its RGB). */
-static bool same_as_library(const RXStickCue *s, const RXCue *lib, const RXGrid *grid)
+static bool same_as_library(const CBStickCue *s, const CBCue *lib, const CBGrid *grid)
 {
-    RXStickCue l;
-    rx_stick_cue_from_track(lib, &l);
-    if (rx_stick_cue_equal(s, &l))
+    CBStickCue l;
+    cb_stick_cue_from_track(lib, &l);
+    if (cb_stick_cue_equal(s, &l))
         return true;
-    RXCue back;
-    rx_stick_cue_to_track(s, grid, &back);
-    RXStickCue colourless = *s;
+    CBCue back;
+    cb_stick_cue_to_track(s, grid, &back);
+    CBStickCue colourless = *s;
     colourless.code = l.code;
     colourless.rgb = l.rgb;
-    return rx_stick_cue_equal(&colourless, &l) && !strcasecmp(back.color, lib->color);
+    return cb_stick_cue_equal(&colourless, &l) && !strcasecmp(back.color, lib->color);
 }
 
-static const RXStickCue *find_hot(const RXStickCue *c, int n, int slot)
+static const CBStickCue *find_hot(const CBStickCue *c, int n, int slot)
 {
     for (int i = 0; i < n; i++)
         if (c[i].hot == slot)
@@ -1328,7 +1328,7 @@ static const RXStickCue *find_hot(const RXStickCue *c, int n, int slot)
 }
 
 /* Memory cues match within 20 ms (export.h). */
-static const RXStickCue *find_memory(const RXStickCue *c, int n, uint32_t in)
+static const CBStickCue *find_memory(const CBStickCue *c, int n, uint32_t in)
 {
     for (int i = 0; i < n; i++)
         if (c[i].hot < 0 && llabs((long long)c[i].in - (long long)in) <= 20)
@@ -1336,31 +1336,31 @@ static const RXStickCue *find_memory(const RXStickCue *c, int n, uint32_t in)
     return NULL;
 }
 
-static int cue_items(const RXLibrary *lib, const RXStickState *s, int k, RXArray *items)
+static int cue_items(const CBLibrary *lib, const CBStickState *s, int k, CBArray *items)
 {
-    const struct RXStickPriv *p = s->priv;
+    const struct CBStickPriv *p = s->priv;
     uint64_t id = s->tracks[k].track_id;
-    const RXTrack *t = rx_library_find_id(lib, id);
+    const CBTrack *t = cb_library_find_id(lib, id);
     if (!t)
         return 0;
-    const RXStickCue *sc = p->cues[k].cues;
+    const CBStickCue *sc = p->cues[k].cues;
     int ns = p->cues[k].nb;
-    const RXSyncTrack *base = p->has_record ? rx_sync_record_track(&p->record, id) : NULL;
+    const CBSyncTrack *base = p->has_record ? cb_sync_record_track(&p->record, id) : NULL;
     int ret = 0;
 
-    RXStickCue *lc = calloc((size_t)RX_MAX(t->nb_cues, 1), sizeof(*lc));
+    CBStickCue *lc = calloc((size_t)CB_MAX(t->nb_cues, 1), sizeof(*lc));
     if (!lc)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     for (int i = 0; i < t->nb_cues; i++)
-        rx_stick_cue_from_track(&t->cues[i], &lc[i]);
+        cb_stick_cue_from_track(&t->cues[i], &lc[i]);
 
-    for (int slot = 0; slot < RX_HOT_CUE_SLOTS && ret >= 0; slot++) {
-        const RXStickCue *sv = find_hot(sc, ns, slot);
-        const RXStickCue *bv = base ? find_hot(base->cues, base->nb_cues, slot) : NULL;
-        int li = rx_track_hot_cue(t, slot);
-        if (base && (sv ? bv && rx_stick_cue_equal(sv, bv) : !bv))
+    for (int slot = 0; slot < CB_HOT_CUE_SLOTS && ret >= 0; slot++) {
+        const CBStickCue *sv = find_hot(sc, ns, slot);
+        const CBStickCue *bv = base ? find_hot(base->cues, base->nb_cues, slot) : NULL;
+        int li = cb_track_hot_cue(t, slot);
+        if (base && (sv ? bv && cb_stick_cue_equal(sv, bv) : !bv))
             continue;
-        RXSyncItem it = {
+        CBSyncItem it = {
             .track_id = id,
             .slot     = slot,
             .accepted = true,
@@ -1368,11 +1368,11 @@ static int cue_items(const RXLibrary *lib, const RXStickState *s, int k, RXArray
         if (sv) {
             if (li >= 0 && same_as_library(sv, &t->cues[li], &t->grid))
                 continue;
-            it.kind = RX_SYNC_HOT_CUE_SET;
-            rx_stick_cue_to_track(sv, &t->grid, &it.cue);
+            it.kind = CB_SYNC_HOT_CUE_SET;
+            cb_stick_cue_to_track(sv, &t->grid, &it.cue);
             ret = push_item(items, &it);
         } else if (base && li >= 0) {
-            it.kind = RX_SYNC_HOT_CUE_CLEARED;
+            it.kind = CB_SYNC_HOT_CUE_CLEARED;
             it.cue = t->cues[li];
             ret = push_item(items, &it);
         }
@@ -1384,26 +1384,26 @@ static int cue_items(const RXLibrary *lib, const RXStickState *s, int k, RXArray
             continue;
         if (find_memory(lc, t->nb_cues, sc[i].in))
             continue;
-        RXSyncItem it = {
-            .kind     = RX_SYNC_MEMORY_ADDED,
+        CBSyncItem it = {
+            .kind     = CB_SYNC_MEMORY_ADDED,
             .track_id = id,
             .slot     = -1,
             .accepted = true,
         };
-        rx_stick_cue_to_track(&sc[i], &t->grid, &it.cue);
+        cb_stick_cue_to_track(&sc[i], &t->grid, &it.cue);
         ret = push_item(items, &it);
     }
     /* Removals only against the record: a memory cue the export wrote, the
      * stick no longer has and the library still has. */
     for (int i = 0; base && i < base->nb_cues && ret >= 0; i++) {
-        const RXStickCue *b = &base->cues[i];
+        const CBStickCue *b = &base->cues[i];
         if (b->hot >= 0 || find_memory(sc, ns, b->in))
             continue;
         for (int l = 0; l < t->nb_cues; l++) {
             if (lc[l].hot >= 0 || llabs((long long)lc[l].in - (long long)b->in) > 20)
                 continue;
-            RXSyncItem it = {
-                .kind     = RX_SYNC_MEMORY_REMOVED,
+            CBSyncItem it = {
+                .kind     = CB_SYNC_MEMORY_REMOVED,
                 .track_id = id,
                 .slot     = -1,
                 .cue      = t->cues[l],
@@ -1422,15 +1422,15 @@ static uint32_t history_crc(const HistList *h, int count)
     uint32_t crc = 0;
     for (int i = 0; i < count && i < h->nb; i++) {
         uint8_t le[4];
-        rx_wr_le32(le, h->track_ids[i]);
-        crc = rx_crc32(crc, le, 4);
+        cb_wr_le32(le, h->track_ids[i]);
+        crc = cb_crc32(crc, le, 4);
     }
     return crc;
 }
 
-static int play_items(const RXLibrary *lib, const RXStickState *s, RXArray *items)
+static int play_items(const CBLibrary *lib, const CBStickState *s, CBArray *items)
 {
-    const struct RXStickPriv *p = s->priv;
+    const struct CBStickPriv *p = s->priv;
     for (int i = 0; i < p->nb_hist; i++) {
         const HistList *h = &p->hist[i];
         char key[48];
@@ -1438,7 +1438,7 @@ static int play_items(const RXLibrary *lib, const RXStickState *s, RXArray *item
         /* Entries a previous pull applied (same list, same leading tracks). */
         int done = 0;
         char *v = NULL;
-        if (rx_library_setting_get(lib, key, &v) >= 0 && v) {
+        if (cb_library_setting_get(lib, key, &v) >= 0 && v) {
             int count;
             unsigned crc;
             if (sscanf(v, "%d:%x", &count, &crc) == 2 && count <= h->nb && history_crc(h, count) == crc)
@@ -1446,14 +1446,14 @@ static int play_items(const RXLibrary *lib, const RXStickState *s, RXArray *item
         }
         free(v);
         for (int k = done; k < h->nb; k++) {
-            const RXTrack *t = rx_library_find_id(lib, h->track_ids[k]);
+            const CBTrack *t = cb_library_find_id(lib, h->track_ids[k]);
             bool known = false;
             for (int n = 0; t && n < s->nb_track_states && !known; n++)
                 known = s->tracks[n].track_id == h->track_ids[k];
             if (!known)
                 continue;
-            RXSyncItem it = {
-                .kind       = RX_SYNC_PLAY,
+            CBSyncItem it = {
+                .kind       = CB_SYNC_PLAY,
                 .track_id   = t->id,
                 .slot       = -1,
                 .play_index = k,
@@ -1462,7 +1462,7 @@ static int play_items(const RXLibrary *lib, const RXStickState *s, RXArray *item
             snprintf(it.setting_key, sizeof(it.setting_key), "%s", key);
             snprintf(it.setting_value, sizeof(it.setting_value), "%d:%08x", k + 1, history_crc(h, k + 1));
             if (push_item(items, &it) < 0)
-                return RX_ERROR(ENOMEM);
+                return CB_ERROR(ENOMEM);
         }
     }
     return 0;
@@ -1470,10 +1470,10 @@ static int play_items(const RXLibrary *lib, const RXStickState *s, RXArray *item
 
 /* The canonical (decoded) form of a library value for a setting, or the
  * file's default when the library has none. */
-static int library_setting(const RXLibrary *lib, const char *file, const char *key, char *buf, size_t size)
+static int library_setting(const CBLibrary *lib, const char *file, const char *key, char *buf, size_t size)
 {
     const char *section = settings_section(file);
-    const RXKv *kv = lib->cfg.device;
+    const CBKv *kv = lib->cfg.device;
     int nb = lib->cfg.nb_device;
     if (!strcmp(section, "player")) {
         kv = lib->cfg.player;
@@ -1482,35 +1482,35 @@ static int library_setting(const RXLibrary *lib, const char *file, const char *k
         kv = lib->cfg.mixer;
         nb = lib->cfg.nb_mixer;
     }
-    RXKv one = { 0 };
+    CBKv one = { 0 };
     for (int i = 0; i < nb; i++)
         if (!strcmp(kv[i].key, key))
             one = kv[i];
     uint8_t *data;
     size_t n;
-    if (rx_settings_encode(file, one.key ? &one : NULL, one.key ? 1 : 0, &data, &n) < 0 &&
-        rx_settings_encode(file, NULL, 0, &data, &n) < 0)
-        return RX_ERROR(EINVAL);
-    RXKv *dec;
+    if (cb_settings_encode(file, one.key ? &one : NULL, one.key ? 1 : 0, &data, &n) < 0 &&
+        cb_settings_encode(file, NULL, 0, &data, &n) < 0)
+        return CB_ERROR(EINVAL);
+    CBKv *dec;
     int nd;
-    int ret = rx_settings_decode(file, data, n, &dec, &nd);
+    int ret = cb_settings_decode(file, data, n, &dec, &nd);
     free(data);
     if (ret < 0)
         return ret;
-    ret = RX_ERROR(ENOENT);
+    ret = CB_ERROR(ENOENT);
     for (int i = 0; i < nd; i++) {
         if (!strcmp(dec[i].key, key)) {
             snprintf(buf, size, "%s", dec[i].value);
             ret = 0;
         }
     }
-    rx_kv_free(dec, nd);
+    cb_kv_free(dec, nd);
     return ret;
 }
 
-static int setting_items(const RXLibrary *lib, const RXStickState *s, RXArray *items)
+static int setting_items(const CBLibrary *lib, const CBStickState *s, CBArray *items)
 {
-    const struct RXStickPriv *p = s->priv;
+    const struct CBStickPriv *p = s->priv;
     for (int i = 0; i < p->nb_files; i++) {
         const char *file = p->files[i].name;
         const uint8_t *base = NULL;
@@ -1524,12 +1524,12 @@ static int setting_items(const RXLibrary *lib, const RXStickState *s, RXArray *i
         /* Untouched since the export. */
         if (base && base_size == p->files[i].size && !memcmp(base, p->files[i].data, base_size))
             continue;
-        RXKv *now = NULL, *was = NULL;
+        CBKv *now = NULL, *was = NULL;
         int nn = 0, nw = 0;
-        if (rx_settings_decode(file, p->files[i].data, p->files[i].size, &now, &nn) < 0)
+        if (cb_settings_decode(file, p->files[i].data, p->files[i].size, &now, &nn) < 0)
             continue;
         if (base)
-            rx_settings_decode(file, base, base_size, &was, &nw);
+            cb_settings_decode(file, base, base_size, &was, &nw);
         for (int k = 0; k < nn; k++) {
             if (was && k < nw && !strcmp(was[k].value, now[k].value))
                 continue;
@@ -1541,8 +1541,8 @@ static int setting_items(const RXLibrary *lib, const RXStickState *s, RXArray *i
             char lv[32];
             if (library_setting(lib, file, now[k].key, lv, sizeof(lv)) < 0 || !strcmp(lv, now[k].value))
                 continue;
-            RXSyncItem it = {
-                .kind     = RX_SYNC_SETTING,
+            CBSyncItem it = {
+                .kind     = CB_SYNC_SETTING,
                 .slot     = -1,
                 .accepted = true,
             };
@@ -1550,25 +1550,25 @@ static int setting_items(const RXLibrary *lib, const RXStickState *s, RXArray *i
             snprintf(it.setting_value, sizeof(it.setting_value), "%s", now[k].value);
             snprintf(it.setting_old, sizeof(it.setting_old), "%s", lv);
             if (push_item(items, &it) < 0) {
-                rx_kv_free(now, nn);
-                rx_kv_free(was, nw);
-                return RX_ERROR(ENOMEM);
+                cb_kv_free(now, nn);
+                cb_kv_free(was, nw);
+                return CB_ERROR(ENOMEM);
             }
         }
-        rx_kv_free(now, nn);
-        rx_kv_free(was, nw);
+        cb_kv_free(now, nn);
+        cb_kv_free(was, nw);
     }
     return 0;
 }
 
-int rx_stick_diff(const RXLibrary *lib, const RXStickState *s, RXSyncItem **items, int *nb)
+int cb_stick_diff(const CBLibrary *lib, const CBStickState *s, CBSyncItem **items, int *nb)
 {
     *items = NULL;
     *nb = 0;
     if (!s->priv)
-        return RX_ERROR(EINVAL);
-    RXArray a;
-    rx_array_init(&a, sizeof(RXSyncItem));
+        return CB_ERROR(EINVAL);
+    CBArray a;
+    cb_array_init(&a, sizeof(CBSyncItem));
     int ret = 0;
     for (int k = 0; k < s->nb_track_states && ret >= 0; k++)
         ret = cue_items(lib, s, k, &a);
@@ -1577,7 +1577,7 @@ int rx_stick_diff(const RXLibrary *lib, const RXStickState *s, RXSyncItem **item
     if (ret >= 0)
         ret = setting_items(lib, s, &a);
     if (ret < 0) {
-        rx_array_free(&a);
+        cb_array_free(&a);
         return ret;
     }
     *items = a.data;
@@ -1587,54 +1587,54 @@ int rx_stick_diff(const RXLibrary *lib, const RXStickState *s, RXSyncItem **item
 
 /* ------------------------------------------------------------ the apply */
 
-static int set_kv(RXKv **kv, int *nb, const char *key, const char *value)
+static int set_kv(CBKv **kv, int *nb, const char *key, const char *value)
 {
     for (int i = 0; i < *nb; i++) {
         if (!strcmp((*kv)[i].key, key)) {
-            char *v = rx_strdup(value);
+            char *v = cb_strdup(value);
             if (!v)
-                return RX_ERROR(ENOMEM);
+                return CB_ERROR(ENOMEM);
             free((*kv)[i].value);
             (*kv)[i].value = v;
             return 0;
         }
     }
-    RXKv *n = realloc(*kv, (size_t)(*nb + 1) * sizeof(*n));
+    CBKv *n = realloc(*kv, (size_t)(*nb + 1) * sizeof(*n));
     if (!n)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     *kv = n;
-    n[*nb] = (RXKv) { .key = rx_strdup(key), .value = rx_strdup(value) };
+    n[*nb] = (CBKv) { .key = cb_strdup(key), .value = cb_strdup(value) };
     if (!n[*nb].key || !n[*nb].value) {
         free(n[*nb].key);
         free(n[*nb].value);
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     }
     (*nb)++;
     return 0;
 }
 
-int rx_stick_apply(RXLibrary *lib, const RXSyncItem *items, int nb, rx_progress_cb cb, void *opaque)
+int cb_stick_apply(CBLibrary *lib, const CBSyncItem *items, int nb, cb_progress_cb cb, void *opaque)
 {
     int applied = 0, ret = 0;
     bool settings = false;
-    RXTrack **dirty = calloc((size_t)RX_MAX(nb, 1), sizeof(*dirty));
+    CBTrack **dirty = calloc((size_t)CB_MAX(nb, 1), sizeof(*dirty));
     int nd = 0;
     if (!dirty)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     for (int i = 0; i < nb && ret >= 0; i++) {
-        const RXSyncItem *it = &items[i];
+        const CBSyncItem *it = &items[i];
         if (!it->accepted)
             continue;
         if (cb && !cb(opaque, "apply", i, nb, it->setting_key[0] ? it->setting_key : NULL)) {
-            ret = RX_ERROR(ECANCELED);
+            ret = CB_ERROR(ECANCELED);
             break;
         }
-        if (it->kind == RX_SYNC_SETTING) {
+        if (it->kind == CB_SYNC_SETTING) {
             const char *dot = strchr(it->setting_key, '.');
             if (!dot)
                 continue;
             size_t sl = (size_t)(dot - it->setting_key);
-            RXConfig *c = &lib->cfg;
+            CBConfig *c = &lib->cfg;
             if (sl == 6 && !strncmp(it->setting_key, "player", 6))
                 ret = set_kv(&c->player, &c->nb_player, dot + 1, it->setting_value);
             else if (sl == 5 && !strncmp(it->setting_key, "mixer", 5))
@@ -1647,27 +1647,27 @@ int rx_stick_apply(RXLibrary *lib, const RXSyncItem *items, int nb, rx_progress_
             applied++;
             continue;
         }
-        RXTrack *t = rx_library_find_id(lib, it->track_id);
+        CBTrack *t = cb_library_find_id(lib, it->track_id);
         if (!t)
             continue;
         int idx;
         switch (it->kind) {
-        case RX_SYNC_HOT_CUE_SET:
-        case RX_SYNC_MEMORY_ADDED:
-            ret = rx_track_add_cue(t, &it->cue);
+        case CB_SYNC_HOT_CUE_SET:
+        case CB_SYNC_MEMORY_ADDED:
+            ret = cb_track_add_cue(t, &it->cue);
             break;
-        case RX_SYNC_HOT_CUE_CLEARED:
-            if ((idx = rx_track_hot_cue(t, it->slot)) >= 0)
-                ret = rx_track_remove_cue(t, idx);
+        case CB_SYNC_HOT_CUE_CLEARED:
+            if ((idx = cb_track_hot_cue(t, it->slot)) >= 0)
+                ret = cb_track_remove_cue(t, idx);
             break;
-        case RX_SYNC_MEMORY_REMOVED:
-            if ((idx = rx_track_memory_cue_at(t, it->cue.time, 0.020)) >= 0)
-                ret = rx_track_remove_cue(t, idx);
+        case CB_SYNC_MEMORY_REMOVED:
+            if ((idx = cb_track_memory_cue_at(t, it->cue.time, 0.020)) >= 0)
+                ret = cb_track_remove_cue(t, idx);
             break;
-        case RX_SYNC_PLAY:
-            ret = rx_library_record_play(lib, t);
+        case CB_SYNC_PLAY:
+            ret = cb_library_record_play(lib, t);
             if (ret >= 0 && it->setting_key[0])
-                ret = rx_library_setting_set(lib, it->setting_key, it->setting_value);
+                ret = cb_library_setting_set(lib, it->setting_key, it->setting_value);
             applied += ret >= 0;
             continue;
         default:
@@ -1683,32 +1683,32 @@ int rx_stick_apply(RXLibrary *lib, const RXSyncItem *items, int nb, rx_progress_
             dirty[nd++] = t;
     }
     for (int k = 0; k < nd; k++) {
-        int r = rx_library_save_track(lib, dirty[k]);
+        int r = cb_library_save_track(lib, dirty[k]);
         if (r < 0 && ret >= 0)
             ret = r;
     }
     free(dirty);
     if (settings) {
-        int r = rx_library_config_save(lib);
+        int r = cb_library_config_save(lib);
         if (r < 0 && ret >= 0)
             ret = r;
     }
     return ret < 0 ? ret : applied;
 }
 
-int rx_pull(RXLibrary *lib, const char *stick, rx_progress_cb cb, void *opaque)
+int cb_pull(CBLibrary *lib, const char *stick, cb_progress_cb cb, void *opaque)
 {
-    RXStickState s;
-    int ret = rx_stick_read(lib, stick, &s);
+    CBStickState s;
+    int ret = cb_stick_read(lib, stick, &s);
     if (ret < 0)
         return ret;
-    RXSyncItem *items;
+    CBSyncItem *items;
     int nb;
-    if ((ret = rx_stick_diff(lib, &s, &items, &nb)) >= 0) {
-        ret = rx_stick_apply(lib, items, nb, cb, opaque);
+    if ((ret = cb_stick_diff(lib, &s, &items, &nb)) >= 0) {
+        ret = cb_stick_apply(lib, items, nb, cb, opaque);
         free(items);
     }
-    rx_stick_state_free(&s);
+    cb_stick_state_free(&s);
     return ret;
 }
 
@@ -1762,17 +1762,17 @@ static bool mount_entry(const char *path, char *dev, size_t dev_size, char *fsty
     return found;
 }
 
-bool rx_stick_is_mounted(const char *mount)
+bool cb_stick_is_mounted(const char *mount)
 {
     return mount_entry(mount, NULL, 0, NULL, 0);
 }
 
-int rx_stick_fs_type(const char *mount, char *buf, size_t size)
+int cb_stick_fs_type(const char *mount, char *buf, size_t size)
 {
-    return mount_entry(mount, NULL, 0, buf, size) ? 0 : RX_ERROR(ENOENT);
+    return mount_entry(mount, NULL, 0, buf, size) ? 0 : CB_ERROR(ENOENT);
 }
 
-int rx_stick_label(const char *mount, char *buf, size_t size)
+int cb_stick_label(const char *mount, char *buf, size_t size)
 {
     char dev[1024];
     if (mount_entry(mount, dev, sizeof(dev), NULL, 0)) {
@@ -1782,7 +1782,7 @@ int rx_stick_label(const char *mount, char *buf, size_t size)
         while (d && (e = readdir(d))) {
             if (e->d_name[0] == '.')
                 continue;
-            char *link = rx_asprintf("/dev/disk/by-label/%s", e->d_name);
+            char *link = cb_asprintf("/dev/disk/by-label/%s", e->d_name);
             char *target = link ? realpath(link, NULL) : NULL;
             if (target && !strcmp(target, real_dev)) {
                 /* udev escapes unsafe characters as \xHH. */
@@ -1813,7 +1813,7 @@ int rx_stick_label(const char *mount, char *buf, size_t size)
     }
     /* udisks mounts sticks at /run/media/<user>/<label>. */
     char *real = realpath(mount, NULL);
-    snprintf(buf, size, "%s", rx_path_base(real ? real : mount));
+    snprintf(buf, size, "%s", cb_path_base(real ? real : mount));
     free(real);
     return 0;
 }

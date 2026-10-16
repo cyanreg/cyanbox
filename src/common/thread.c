@@ -1,10 +1,10 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
-/* The fixed thread pool and the mailbox of rxbox/thread.h, on pthreads.
+/* The fixed thread pool and the mailbox of cyanbox/thread.h, on pthreads.
  *
  * The pool is a FIFO of jobs behind one mutex and two condition variables:
  * `work` wakes a worker when a job arrives (or the pool shuts down) and
- * `idle` wakes rx_pool_wait() when the last job has finished. `pending`
+ * `idle` wakes cb_pool_wait() when the last job has finished. `pending`
  * counts queued plus running jobs; it is changed under the mutex but kept
  * atomic so the const accessor can read it without locking. Jobs are
  * allocated per submission: nothing here is on a real-time path.
@@ -12,7 +12,7 @@
  * The mailbox is a growable ring of pointers. Its timed wait runs on
  * CLOCK_MONOTONIC so a wall-clock change never stretches a timeout. */
 
-#include "rxbox/thread.h"
+#include "cyanbox/thread.h"
 
 #include <pthread.h>
 #include <time.h>
@@ -20,17 +20,17 @@
 
 /* ------------------------------------------------------------------ pool */
 
-typedef struct RXJob {
+typedef struct CBJob {
     void (*fn)(void *arg);
     void *arg;
-    struct RXJob *next;
-} RXJob;
+    struct CBJob *next;
+} CBJob;
 
-struct RXThreadPool {
+struct CBThreadPool {
     pthread_mutex_t lock;
     pthread_cond_t work;
     pthread_cond_t idle;
-    RXJob *head, *tail;
+    CBJob *head, *tail;
     _Atomic int pending;
     bool quit;
     int nb_threads;
@@ -39,7 +39,7 @@ struct RXThreadPool {
 
 static void *pool_worker(void *opaque)
 {
-    RXThreadPool *pool = opaque;
+    CBThreadPool *pool = opaque;
 
     pthread_mutex_lock(&pool->lock);
     while (1) {
@@ -49,7 +49,7 @@ static void *pool_worker(void *opaque)
         if (!pool->head)
             break;
 
-        RXJob *job = pool->head;
+        CBJob *job = pool->head;
         pool->head = job->next;
         if (!pool->head)
             pool->tail = NULL;
@@ -66,21 +66,21 @@ static void *pool_worker(void *opaque)
     return NULL;
 }
 
-int rx_pool_create(RXThreadPool **out, int nb_threads)
+int cb_pool_create(CBThreadPool **out, int nb_threads)
 {
     *out = NULL;
     if (nb_threads <= 0) {
         long n = sysconf(_SC_NPROCESSORS_ONLN);
-        nb_threads = n > 0 ? (int)RX_MIN(n, 1024) : 1;
+        nb_threads = n > 0 ? (int)CB_MIN(n, 1024) : 1;
     }
 
-    RXThreadPool *pool = calloc(1, sizeof(*pool));
+    CBThreadPool *pool = calloc(1, sizeof(*pool));
     if (!pool)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     pool->threads = calloc((size_t)nb_threads, sizeof(*pool->threads));
     if (!pool->threads) {
         free(pool);
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     }
     pthread_mutex_init(&pool->lock, NULL);
     pthread_cond_init(&pool->work, NULL);
@@ -90,14 +90,14 @@ int rx_pool_create(RXThreadPool **out, int nb_threads)
     for (int i = 0; i < nb_threads; i++) {
         ret = pthread_create(&pool->threads[i], NULL, pool_worker, pool);
         if (ret) {
-            ret = RX_ERROR(ret);
+            ret = CB_ERROR(ret);
             break;
         }
         pool->nb_threads++;
     }
 
     if (ret < 0) {
-        rx_pool_destroy(pool);
+        cb_pool_destroy(pool);
         return ret;
     }
 
@@ -105,7 +105,7 @@ int rx_pool_create(RXThreadPool **out, int nb_threads)
     return 0;
 }
 
-void rx_pool_destroy(RXThreadPool *pool)
+void cb_pool_destroy(CBThreadPool *pool)
 {
     if (!pool)
         return;
@@ -120,7 +120,7 @@ void rx_pool_destroy(RXThreadPool *pool)
 
     /* Only reachable when no worker could be started. */
     while (pool->head) {
-        RXJob *job = pool->head;
+        CBJob *job = pool->head;
         pool->head = job->next;
         free(job);
     }
@@ -132,15 +132,15 @@ void rx_pool_destroy(RXThreadPool *pool)
     free(pool);
 }
 
-int rx_pool_submit(RXThreadPool *pool, void (*fn)(void *arg), void *arg)
+int cb_pool_submit(CBThreadPool *pool, void (*fn)(void *arg), void *arg)
 {
     if (!pool || !fn)
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
 
-    RXJob *job = malloc(sizeof(*job));
+    CBJob *job = malloc(sizeof(*job));
     if (!job)
-        return RX_ERROR(ENOMEM);
-    *job = (RXJob) {
+        return CB_ERROR(ENOMEM);
+    *job = (CBJob) {
         .fn  = fn,
         .arg = arg,
     };
@@ -157,7 +157,7 @@ int rx_pool_submit(RXThreadPool *pool, void (*fn)(void *arg), void *arg)
     return 0;
 }
 
-void rx_pool_wait(RXThreadPool *pool)
+void cb_pool_wait(CBThreadPool *pool)
 {
     if (!pool)
         return;
@@ -167,31 +167,31 @@ void rx_pool_wait(RXThreadPool *pool)
     pthread_mutex_unlock(&pool->lock);
 }
 
-int rx_pool_threads(const RXThreadPool *pool)
+int cb_pool_threads(const CBThreadPool *pool)
 {
     return pool ? pool->nb_threads : 0;
 }
 
-int rx_pool_pending(const RXThreadPool *pool)
+int cb_pool_pending(const CBThreadPool *pool)
 {
     return pool ? __atomic_load_n(&pool->pending, __ATOMIC_ACQUIRE) : 0;
 }
 
 /* --------------------------------------------------------------- mailbox */
 
-struct RXMailbox {
+struct CBMailbox {
     pthread_mutex_t lock;
     pthread_cond_t cond;
     void **items;
     size_t head, nb, cap;
 };
 
-int rx_mailbox_create(RXMailbox **out)
+int cb_mailbox_create(CBMailbox **out)
 {
     *out = NULL;
-    RXMailbox *mb = calloc(1, sizeof(*mb));
+    CBMailbox *mb = calloc(1, sizeof(*mb));
     if (!mb)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
 
     pthread_condattr_t attr;
     pthread_condattr_init(&attr);
@@ -204,7 +204,7 @@ int rx_mailbox_create(RXMailbox **out)
     return 0;
 }
 
-void rx_mailbox_destroy(RXMailbox *mb)
+void cb_mailbox_destroy(CBMailbox *mb)
 {
     if (!mb)
         return;
@@ -215,12 +215,12 @@ void rx_mailbox_destroy(RXMailbox *mb)
 }
 
 /* Called with the lock held. Unwraps the ring into a larger buffer. */
-static int mailbox_grow(RXMailbox *mb)
+static int mailbox_grow(CBMailbox *mb)
 {
     size_t cap = mb->cap ? mb->cap * 2 : 16;
     void **items = malloc(cap * sizeof(*items));
     if (!items)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     for (size_t i = 0; i < mb->nb; i++)
         items[i] = mb->items[(mb->head + i) % mb->cap];
     free(mb->items);
@@ -230,11 +230,11 @@ static int mailbox_grow(RXMailbox *mb)
     return 0;
 }
 
-int rx_mailbox_post(RXMailbox *mb, void *item)
+int cb_mailbox_post(CBMailbox *mb, void *item)
 {
     /* NULL is what take/wait return for "nothing", so it cannot be an item. */
     if (!mb || !item)
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
 
     int ret = 0;
     pthread_mutex_lock(&mb->lock);
@@ -250,7 +250,7 @@ int rx_mailbox_post(RXMailbox *mb, void *item)
 }
 
 /* Called with the lock held. */
-static void *mailbox_pop(RXMailbox *mb)
+static void *mailbox_pop(CBMailbox *mb)
 {
     if (!mb->nb)
         return NULL;
@@ -260,7 +260,7 @@ static void *mailbox_pop(RXMailbox *mb)
     return item;
 }
 
-void *rx_mailbox_take(RXMailbox *mb)
+void *cb_mailbox_take(CBMailbox *mb)
 {
     if (!mb)
         return NULL;
@@ -270,7 +270,7 @@ void *rx_mailbox_take(RXMailbox *mb)
     return item;
 }
 
-void *rx_mailbox_wait(RXMailbox *mb, int timeout_ms)
+void *cb_mailbox_wait(CBMailbox *mb, int timeout_ms)
 {
     if (!mb)
         return NULL;

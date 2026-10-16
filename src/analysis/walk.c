@@ -71,7 +71,7 @@ static int cmp_double(const void *a, const void *b)
     return (x > y) - (x < y);
 }
 
-static bool supported(const RXBeatObs *b)
+static bool supported(const CBBeatObs *b)
 {
     return b->weight > 0.0 && !isnan(b->attack);
 }
@@ -103,7 +103,7 @@ static bool solve3(const double M[3][3], const double T[3], double sol[3])
  * evaluated at beat k: its value and its slope there. False with too few
  * attacks (three for a line, five for a quadratic) or too few distinct
  * counts. */
-static bool local_fit(const RXBeatObs *beats, int first, int last, int k, int reach,
+static bool local_fit(const CBBeatObs *beats, int first, int last, int k, int reach,
                       const double *w, bool quadratic, double *val, double *slope)
 {
     double S[5] = { 0 }, T[3] = { 0 };
@@ -121,8 +121,8 @@ static bool local_fit(const RXBeatObs *beats, int first, int last, int k, int re
             xp *= x;
         }
         n++;
-        lo_x = RX_MIN(lo_x, dx);
-        hi_x = RX_MAX(hi_x, dx);
+        lo_x = CB_MIN(lo_x, dx);
+        hi_x = CB_MAX(hi_x, dx);
     }
     if (n < (quadratic ? 5 : 3) || hi_x - lo_x < (quadratic ? 2 : 1) || S[0] <= 0.0)
         return false;
@@ -149,7 +149,7 @@ static bool local_fit(const RXBeatObs *beats, int first, int last, int k, int re
  * from it, with the scale the larger of their robust spread and
  * `sigma`. sm[i] (NAN where the line cannot be had) and, optionally,
  * the slope sl[i]. */
-static int smooth(const RXBeatObs *beats, int first, int last, int reach, bool quadratic,
+static int smooth(const CBBeatObs *beats, int first, int last, int reach, bool quadratic,
                   double sigma, double *sm, double *sl)
 {
     int n = last - first + 1;
@@ -158,7 +158,7 @@ static int smooth(const RXBeatObs *beats, int first, int last, int reach, bool q
     if (!w || !r) {
         free(w);
         free(r);
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     }
     for (int i = 0; i < n; i++)
         w[i] = beats[first + i].weight;
@@ -201,7 +201,7 @@ static int smooth(const RXBeatObs *beats, int first, int last, int reach, bool q
     return 0;
 }
 
-int rx_line_strain(const RXBeatObs *beats, const RXFitSection *s, double *dev,
+int cb_line_strain(const CBBeatObs *beats, const CBFitSection *s, double *dev,
                    double *drift, double *bend, double *bend_noise)
 {
     int n = s->last - s->first + 1;
@@ -213,7 +213,7 @@ int rx_line_strain(const RXBeatObs *beats, const RXFitSection *s, double *dev,
     if (!sm || !r) {
         free(sm);
         free(r);
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     }
     /* The scale of the scatter: beat to beat where it could be measured
      * (the spread around the line, the jitter, holds the drift itself). */
@@ -231,7 +231,7 @@ int rx_line_strain(const RXBeatObs *beats, const RXFitSection *s, double *dev,
     for (int i = s->first; i <= s->last; i++) {
         dev[i - s->first] = NAN;
         if (supported(&beats[i]) && !isnan(sm[i - s->first]))
-            r[m++] = sm[i - s->first] - rx_beat_predict(beats, i, s);
+            r[m++] = sm[i - s->first] - cb_beat_predict(beats, i, s);
     }
     if (m >= STRAIN_MEDIAN) {
         double win[STRAIN_MEDIAN];
@@ -239,7 +239,7 @@ int rx_line_strain(const RXBeatObs *beats, const RXFitSection *s, double *dev,
         for (int i = s->first; i <= s->last; i++) {
             if (!supported(&beats[i]) || isnan(sm[i - s->first]))
                 continue;
-            int a = RX_CLAMP(j - STRAIN_MEDIAN / 2, 0, m - STRAIN_MEDIAN);
+            int a = CB_CLAMP(j - STRAIN_MEDIAN / 2, 0, m - STRAIN_MEDIAN);
             memcpy(win, r + a, sizeof(win));
             qsort(win, STRAIN_MEDIAN, sizeof(*win), cmp_double);
             dev[i - s->first] = win[STRAIN_MEDIAN / 2];
@@ -259,7 +259,7 @@ int rx_line_strain(const RXBeatObs *beats, const RXFitSection *s, double *dev,
         if (!w) {
             free(sm);
             free(r);
-            return RX_ERROR(ENOMEM);
+            return CB_ERROR(ENOMEM);
         }
         /* Tukey's weights start from the line's own residuals: an
          * unweighted first fit through a stretch half a beat off the line
@@ -271,7 +271,7 @@ int rx_line_strain(const RXBeatObs *beats, const RXFitSection *s, double *dev,
                 w[i - s->first] = 0.0;
                 continue;
             }
-            double u = (beats[i].attack - rx_beat_predict(beats, i, s)) / scale;
+            double u = (beats[i].attack - cb_beat_predict(beats, i, s)) / scale;
             w[i - s->first] = fabs(u) < 1.0 ? beats[i].weight * (1 - u * u) * (1 - u * u) : 0.0;
         }
         double a = 0.0, b = 0.0;
@@ -283,7 +283,7 @@ int rx_line_strain(const RXBeatObs *beats, const RXFitSection *s, double *dev,
                 if (ww <= 0.0)
                     continue;
                 double x = beats[i].index - k0;
-                double y = beats[i].attack - rx_beat_predict(beats, i, s);
+                double y = beats[i].attack - cb_beat_predict(beats, i, s);
                 double xp = 1.0;
                 for (int p = 0; p < 5; p++) {
                     S[p] += ww * xp;
@@ -305,7 +305,7 @@ int rx_line_strain(const RXBeatObs *beats, const RXFitSection *s, double *dev,
                     continue;
                 }
                 double x = beats[i].index - k0;
-                double y = beats[i].attack - rx_beat_predict(beats, i, s);
+                double y = beats[i].attack - cb_beat_predict(beats, i, s);
                 double u = (y - (a + b * x + c * x * x)) / scale;
                 w[i - s->first] = fabs(u) < 1.0 ? beats[i].weight * (1 - u * u) * (1 - u * u) : 0.0;
             }
@@ -352,9 +352,9 @@ static double anchor_offset(const double *t, const int *a, int na, int j)
  * through by interpolation. Stops at three beats with times. */
 static int tempo_continuity(double *t, int n, double med)
 {
-    int *a = malloc((size_t)RX_MAX(n, 1) * sizeof(*a));
+    int *a = malloc((size_t)CB_MAX(n, 1) * sizeof(*a));
     if (!a)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     const double step = log(1.0 + WALK_TEMPO_STEP), band = log(1.0 + WALK_TEMPO_BAND);
     while (1) {
         int na = 0;
@@ -393,27 +393,27 @@ static int tempo_continuity(double *t, int n, double med)
     return 0;
 }
 
-int rx_walk_beats(RXBeatObs *beats, int first, int last, double scatter)
+int cb_walk_beats(CBBeatObs *beats, int first, int last, double scatter)
 {
     int n = last - first + 1;
     if (n < 2)
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
     for (int i = first + 1; i <= last; i++) {
         if (beats[i].index != beats[i - 1].index + 1)
-            return RX_ERROR(EINVAL);
+            return CB_ERROR(EINVAL);
     }
     int m = 0;
     for (int i = first; i <= last; i++)
         m += supported(&beats[i]);
     if (m < 4)
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
 
     double *sm = malloc((size_t)n * sizeof(*sm));
     double *sl = malloc((size_t)n * sizeof(*sl));
     if (!sm || !sl) {
         free(sm);
         free(sl);
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     }
     int ret = smooth(beats, first, last, WALK_REACH, true, scatter, sm, sl);
     if (ret < 0) {
@@ -437,7 +437,7 @@ int rx_walk_beats(RXBeatObs *beats, int first, int last, double scatter)
     if (!iv) {
         free(sm);
         free(sl);
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     }
     int ni = 0;
     for (int i = 1; i < n; i++) {
@@ -471,7 +471,7 @@ int rx_walk_beats(RXBeatObs *beats, int first, int last, double scatter)
             free(iv);
             free(sm);
             free(sl);
-            return RX_ERROR(ENOMEM);
+            return CB_ERROR(ENOMEM);
         }
     }
     free(iv);
@@ -489,7 +489,7 @@ int rx_walk_beats(RXBeatObs *beats, int first, int last, double scatter)
     if (lo < 0 || hi == lo) {
         free(sm);
         free(sl);
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
     }
     for (int i = lo + 1; i < hi; i++) {
         if (!isnan(sm[i]))
@@ -506,8 +506,8 @@ int rx_walk_beats(RXBeatObs *beats, int first, int last, double scatter)
     double v_lo = sm[lo + 1] - sm[lo], v_hi = sm[hi] - sm[hi - 1];
     double p_lo = !isnan(sl[lo]) && sl[lo] > 0.0 ? sl[lo] : v_lo;
     double p_hi = !isnan(sl[hi]) && sl[hi] > 0.0 ? sl[hi] : v_hi;
-    p_lo = RX_CLAMP(p_lo, v_lo / (1.0 + WALK_TEMPO_STEP), v_lo * (1.0 + WALK_TEMPO_STEP));
-    p_hi = RX_CLAMP(p_hi, v_hi / (1.0 + WALK_TEMPO_STEP), v_hi * (1.0 + WALK_TEMPO_STEP));
+    p_lo = CB_CLAMP(p_lo, v_lo / (1.0 + WALK_TEMPO_STEP), v_lo * (1.0 + WALK_TEMPO_STEP));
+    p_hi = CB_CLAMP(p_hi, v_hi / (1.0 + WALK_TEMPO_STEP), v_hi * (1.0 + WALK_TEMPO_STEP));
     for (int i = lo - 1; i >= 0; i--)
         sm[i] = sm[lo] - (lo - i) * p_lo;
     for (int i = hi + 1; i < n; i++)

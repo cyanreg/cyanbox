@@ -1,7 +1,7 @@
 # Vendored third-party code. Each is built once here and handed on as a
 # dependency; nothing else includes these directories directly.
 
-# tomlc17 (MIT): the TOML reader for rxbox.toml and the sidecars.
+# tomlc17 (MIT): the TOML reader for cyanbox.toml and the sidecars.
 tomlc17_lib = static_library('tomlc17', 'tomlc17/tomlc17.c',
     c_args: [ '-w' ],
 )

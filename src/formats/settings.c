@@ -12,8 +12,8 @@
  * apply [player] and [mixer] only when the DJ loads My Settings;
  * DEVSETTING applies directly.
  *
- * The tempo range defaults to +-6 % where rekordbox writes +-10 %: rxbox's
- * deck starts at the range this setting holds (rx_settings_get), as a CDJ
+ * The tempo range defaults to +-6 % where rekordbox writes +-10 %: cyanbox's
+ * deck starts at the range this setting holds (cb_settings_get), as a CDJ
  * switched on starts at +-6 %, so the default is the range wanted on both
  * (docs/settings.md 3). The waveform colour defaults to 3-band where
  * rekordbox writes blue, for the same reason: the interface draws the
@@ -24,7 +24,7 @@
  * table (rbxport, observed with rekordbox 7.2.14), so it is an export
  * setting (export.background_color, src/core/config.c), not one of these. */
 
-#include "rxbox/formats.h"
+#include "cyanbox/formats.h"
 
 #include <stdio.h>
 #include <strings.h>
@@ -159,18 +159,18 @@ static const uint8_t devsetting_default[32] = {
 
 static const File files[] = {
     { "MYSETTING.DAT", "PIONEER", "0.001", 40, false, mysetting_default,
-      player_fields, RX_ARRAY_ELEMS(player_fields) },
+      player_fields, CB_ARRAY_ELEMS(player_fields) },
     { "MYSETTING2.DAT", "PIONEER", "0.001", 40, false, mysetting2_default,
-      player2_fields, RX_ARRAY_ELEMS(player2_fields) },
+      player2_fields, CB_ARRAY_ELEMS(player2_fields) },
     { "DJMMYSETTING.DAT", "PioneerDJ", "1.000", 52, true, djmmysetting_default,
-      mixer_fields, RX_ARRAY_ELEMS(mixer_fields) },
+      mixer_fields, CB_ARRAY_ELEMS(mixer_fields) },
     { "DEVSETTING.DAT", "PIONEER DJ", "7.2.8", 32, false, devsetting_default,
-      device_fields, RX_ARRAY_ELEMS(device_fields) },
+      device_fields, CB_ARRAY_ELEMS(device_fields) },
 };
 
 static const File *find_file(const char *name)
 {
-    for (size_t i = 0; i < RX_ARRAY_ELEMS(files); i++)
+    for (size_t i = 0; i < CB_ARRAY_ELEMS(files); i++)
         if (!strcasecmp(files[i].name, name))
             return &files[i];
     return NULL;
@@ -240,7 +240,7 @@ static int lookup(const Field *f, const char *value, uint8_t *byte)
         else if (!strcmp(v, "false") || !strcmp(v, "0"))
             snprintf(v, sizeof(v), "off");
     } else if (!strcmp(v, "true") || !strcmp(v, "false")) {
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
     }
     for (int i = 0; f->opts[i].name; i++) {
         char o[64];
@@ -250,7 +250,7 @@ static int lookup(const Field *f, const char *value, uint8_t *byte)
             return 0;
         }
     }
-    return RX_ERROR(EINVAL);
+    return CB_ERROR(EINVAL);
 }
 
 static void options_text(const Field *f, char *buf, size_t size)
@@ -267,27 +267,27 @@ static void options_text(const Field *f, char *buf, size_t size)
         o += (size_t)snprintf(buf + o, size - o, "%s%s", i ? ", " : "", f->opts[i].name);
 }
 
-int rx_settings_encode(const char *file_name, const RXKv *kv, int nb, uint8_t **out, size_t *size)
+int cb_settings_encode(const char *file_name, const CBKv *kv, int nb, uint8_t **out, size_t *size)
 {
     const File *f = find_file(file_name);
     if (!f)
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
 
     uint8_t payload[64];
     memcpy(payload, f->defaults, (size_t)f->len);
     for (int i = 0; i < nb; i++) {
         const Field *fl = find_field(f, kv[i].key);
         if (!fl) {
-            rx_err("%s: unknown setting '%s'; see `rxbox settings`", f->name, kv[i].key);
-            return RX_ERROR(EINVAL);
+            cb_err("%s: unknown setting '%s'; see `cyanbox settings`", f->name, kv[i].key);
+            return CB_ERROR(EINVAL);
         }
         uint8_t byte;
         if (lookup(fl, kv[i].value ? kv[i].value : "", &byte) < 0) {
             char opts[512];
             options_text(fl, opts, sizeof(opts));
-            rx_err("%s: %s = '%s' is not one of %s", f->name, fl->name,
+            cb_err("%s: %s = '%s' is not one of %s", f->name, fl->name,
                    kv[i].value ? kv[i].value : "", opts);
-            return RX_ERROR(EINVAL);
+            return CB_ERROR(EINVAL);
         }
         payload[fl->offset] = byte;
     }
@@ -295,7 +295,7 @@ int rx_settings_encode(const char *file_name, const RXKv *kv, int nb, uint8_t **
     size_t total = 0x68 + (size_t)f->len + 4;
     uint8_t *b = calloc(1, total);
     if (!b)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     /* Header: len_strings 0x60, three NUL-padded 32-byte strings, len_data
      * (docs/settings.md 2). */
     b[0] = 0x60;
@@ -338,7 +338,7 @@ static void byte_name(const Field *f, uint8_t byte, char *buf, size_t size)
         snprintf(buf, size, "0x%02x", byte);
 }
 
-void rx_kv_free(RXKv *kv, int nb)
+void cb_kv_free(CBKv *kv, int nb)
 {
     if (!kv)
         return;
@@ -349,24 +349,24 @@ void rx_kv_free(RXKv *kv, int nb)
     free(kv);
 }
 
-int rx_settings_decode(const char *file_name, const uint8_t *data, size_t size, RXKv **kv, int *nb)
+int cb_settings_decode(const char *file_name, const uint8_t *data, size_t size, CBKv **kv, int *nb)
 {
     *kv = NULL;
     *nb = 0;
     const File *f = find_file(file_name);
     if (!f || size < 0x68 + (size_t)f->len)
-        return RX_ERROR(EINVAL);
-    RXKv *out = calloc((size_t)f->nb_fields, sizeof(*out));
+        return CB_ERROR(EINVAL);
+    CBKv *out = calloc((size_t)f->nb_fields, sizeof(*out));
     if (!out)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     for (int i = 0; i < f->nb_fields; i++) {
         char v[32];
         byte_name(&f->fields[i], data[0x68 + f->fields[i].offset], v, sizeof(v));
-        out[i].key = rx_strdup(f->fields[i].name);
-        out[i].value = rx_strdup(v);
+        out[i].key = cb_strdup(f->fields[i].name);
+        out[i].value = cb_strdup(v);
         if (!out[i].key || !out[i].value) {
-            rx_kv_free(out, f->nb_fields);
-            return RX_ERROR(ENOMEM);
+            cb_kv_free(out, f->nb_fields);
+            return CB_ERROR(ENOMEM);
         }
     }
     *kv = out;
@@ -374,15 +374,15 @@ int rx_settings_decode(const char *file_name, const uint8_t *data, size_t size, 
     return 0;
 }
 
-static int add_file(RXSettingsFile files_out[4], int *nb, const char *name, const RXKv *kv, int nb_kv)
+static int add_file(CBSettingsFile files_out[4], int *nb, const char *name, const CBKv *kv, int nb_kv)
 {
     const File *f = find_file(name);
     uint8_t *data;
     size_t size;
-    int ret = rx_settings_encode(name, kv, nb_kv, &data, &size);
+    int ret = cb_settings_encode(name, kv, nb_kv, &data, &size);
     if (ret < 0)
         return ret;
-    files_out[*nb] = (RXSettingsFile) {
+    files_out[*nb] = (CBSettingsFile) {
         .name = f->name,
         .data = data,
         .size = size,
@@ -391,11 +391,11 @@ static int add_file(RXSettingsFile files_out[4], int *nb, const char *name, cons
     return 0;
 }
 
-int rx_settings_from_config(const RXConfig *cfg, RXSettingsFile files_out[4], int *nb)
+int cb_settings_from_config(const CBConfig *cfg, CBSettingsFile files_out[4], int *nb)
 {
     int ret = 0;
     *nb = 0;
-    RXKv *p1 = NULL, *p2 = NULL;
+    CBKv *p1 = NULL, *p2 = NULL;
     int n1 = 0, n2 = 0;
 
     /* [player] covers MYSETTING.DAT and MYSETTING2.DAT (dj's
@@ -404,7 +404,7 @@ int rx_settings_from_config(const RXConfig *cfg, RXSettingsFile files_out[4], in
         p1 = calloc((size_t)cfg->nb_player, sizeof(*p1));
         p2 = calloc((size_t)cfg->nb_player, sizeof(*p2));
         if (!p1 || !p2) {
-            ret = RX_ERROR(ENOMEM);
+            ret = CB_ERROR(ENOMEM);
             goto fail;
         }
         for (int i = 0; i < cfg->nb_player; i++) {
@@ -413,8 +413,9 @@ int rx_settings_from_config(const RXConfig *cfg, RXSettingsFile files_out[4], in
             } else if (find_field(&files[1], cfg->player[i].key)) {
                 p2[n2++] = cfg->player[i];
             } else {
-                rx_err("[player]: unknown setting '%s'; see `rxbox settings`", cfg->player[i].key);
-                ret = RX_ERROR(EINVAL);
+                cb_err("[player]: unknown setting '%s'; see `cyanbox settings`",
+                       cfg->player[i].key);
+                ret = CB_ERROR(EINVAL);
                 goto fail;
             }
         }
@@ -440,7 +441,7 @@ fail:
     return ret;
 }
 
-const char *rx_settings_value(const char *file, const char *name, const char *value)
+const char *cb_settings_value(const char *file, const char *name, const char *value)
 {
     if (!file || !name || !value)
         return NULL;
@@ -455,20 +456,20 @@ const char *rx_settings_value(const char *file, const char *name, const char *va
     return byte_listed(fl, byte);
 }
 
-bool rx_settings_valid(const char *key, const char *value)
+bool cb_settings_valid(const char *key, const char *value)
 {
     if (!key || !value)
         return false;
     const File *in[2] = { NULL, NULL };
     const char *name;
-    if (rx_str_starts(key, "player.")) {
+    if (cb_str_starts(key, "player.")) {
         name = key + 7;
         in[0] = find_file("MYSETTING.DAT");
         in[1] = find_file("MYSETTING2.DAT");
-    } else if (rx_str_starts(key, "mixer.")) {
+    } else if (cb_str_starts(key, "mixer.")) {
         name = key + 6;
         in[0] = find_file("DJMMYSETTING.DAT");
-    } else if (rx_str_starts(key, "device.")) {
+    } else if (cb_str_starts(key, "device.")) {
         name = key + 7;
         in[0] = find_file("DEVSETTING.DAT");
     } else {
@@ -476,30 +477,30 @@ bool rx_settings_valid(const char *key, const char *value)
     }
     for (int i = 0; i < 2 && in[i]; i++) {
         if (find_field(in[i], name))
-            return rx_settings_value(in[i]->name, name, value) != NULL;
+            return cb_settings_value(in[i]->name, name, value) != NULL;
     }
     return false;
 }
 
 /* The My Settings of one group that are valid, the others said and
  * dropped; true when any went. */
-static bool clean_group(const char *prefix, RXKv **kv, int *nb, int *removed)
+static bool clean_group(const char *prefix, CBKv **kv, int *nb, int *removed)
 {
     int kept = 0;
     bool any = false;
     for (int i = 0; i < *nb; i++) {
-        RXKv *e = &(*kv)[i];
+        CBKv *e = &(*kv)[i];
         char key[96];
         snprintf(key, sizeof(key), "%s.%s", prefix, e->key ? e->key : "");
-        if (e->key && rx_settings_valid(key, e->value ? e->value : "")) {
+        if (e->key && cb_settings_valid(key, e->value ? e->value : "")) {
             (*kv)[kept++] = *e;
             continue;
         }
-        if (e->key && rx_settings_get(NULL, key))
-            rx_info("settings: %s = \"%s\" is no value it takes; removed, the default stands", key,
+        if (e->key && cb_settings_get(NULL, key))
+            cb_info("settings: %s = \"%s\" is no value it takes; removed, the default stands", key,
                     e->value ? e->value : "");
         else
-            rx_info("settings: %s is no My Setting; removed", key);
+            cb_info("settings: %s is no My Setting; removed", key);
         free(e->key);
         free(e->value);
         (*removed)++;
@@ -509,33 +510,33 @@ static bool clean_group(const char *prefix, RXKv **kv, int *nb, int *removed)
     return any;
 }
 
-int rx_settings_clean(RXLibrary *lib)
+int cb_settings_clean(CBLibrary *lib)
 {
-    RXConfig *c = &lib->cfg;
+    CBConfig *c = &lib->cfg;
     int removed = 0;
     bool any = clean_group("player", &c->player, &c->nb_player, &removed);
     any |= clean_group("mixer", &c->mixer, &c->nb_mixer, &removed);
     any |= clean_group("device", &c->device, &c->nb_device, &removed);
     if (!any)
         return 0;
-    int ret = rx_library_config_save(lib);
+    int ret = cb_library_config_save(lib);
     if (ret < 0) {
-        rx_warn("settings: the My Settings that are not valid could not be removed: %s",
+        cb_warn("settings: the My Settings that are not valid could not be removed: %s",
                 strerror(-ret));
         return ret;
     }
     return removed;
 }
 
-const char *rx_settings_get(const RXConfig *cfg, const char *key)
+const char *cb_settings_get(const CBConfig *cfg, const char *key)
 {
     if (!key)
         return NULL;
-    const RXKv *kv = NULL;
+    const CBKv *kv = NULL;
     int nb = 0;
     const File *in[2] = { NULL, NULL };
     const char *name;
-    if (rx_str_starts(key, "player.")) {
+    if (cb_str_starts(key, "player.")) {
         name = key + 7;
         if (cfg) {
             kv = cfg->player;
@@ -543,14 +544,14 @@ const char *rx_settings_get(const RXConfig *cfg, const char *key)
         }
         in[0] = find_file("MYSETTING.DAT");
         in[1] = find_file("MYSETTING2.DAT");
-    } else if (rx_str_starts(key, "mixer.")) {
+    } else if (cb_str_starts(key, "mixer.")) {
         name = key + 6;
         if (cfg) {
             kv = cfg->mixer;
             nb = cfg->nb_mixer;
         }
         in[0] = find_file("DJMMYSETTING.DAT");
-    } else if (rx_str_starts(key, "device.")) {
+    } else if (cb_str_starts(key, "device.")) {
         name = key + 7;
         if (cfg) {
             kv = cfg->device;
@@ -570,15 +571,15 @@ const char *rx_settings_get(const RXConfig *cfg, const char *key)
         const Field *fl = find_field(in[i], name);
         if (!fl)
             continue;
-        const char *v = stored ? rx_settings_value(in[i]->name, name, stored) : NULL;
+        const char *v = stored ? cb_settings_value(in[i]->name, name, stored) : NULL;
         return v ? v : byte_listed(fl, in[i]->defaults[fl->offset]);
     }
     return NULL;
 }
 
-void rx_settings_list(rx_settings_list_cb cb, void *opaque)
+void cb_settings_list(cb_settings_list_cb cb, void *opaque)
 {
-    for (size_t i = 0; i < RX_ARRAY_ELEMS(files); i++) {
+    for (size_t i = 0; i < CB_ARRAY_ELEMS(files); i++) {
         const File *f = &files[i];
         for (int k = 0; k < f->nb_fields; k++) {
             const Field *fl = &f->fields[k];

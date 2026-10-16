@@ -1,6 +1,6 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
-/* The application state the interface reads and writes (rxbox/app.h):
+/* The application state the interface reads and writes (cyanbox/app.h):
  * creating and tearing down the library, the jobs, the player and the
  * window; applying job results; loading the deck; the track table's rows
  * and its per-track GPU resources; play history; the export running in
@@ -9,7 +9,7 @@
  * Threads and ownership:
  *  - Everything here runs on the owner (main) thread, which alone touches
  *    the library, the deck and the window. Background work goes through
- *    RXJobs (rxbox/jobs.h), whose results come back in rx_app_tick(), which
+ *    CBJobs (cyanbox/jobs.h), whose results come back in cb_app_tick(), which
  *    applies and frees them.
  *  - Two job queues: app->jobs (every CPU but one) analyses; a private
  *    two-thread queue decodes for the deck, makes artwork and reads sticks,
@@ -18,21 +18,21 @@
  *    Request ids are per queue; each kind of request only ever goes to one
  *    of them.
  *  - A decode result's packet store (or, for a file the store refuses, its
- *    RXAudio decoded whole) is handed to the player: rx_deck_load_packets
+ *    CBAudio decoded whole) is handed to the player: cb_deck_load_packets
  *    takes it over on success (and releases what it replaces only once the
  *    real-time thread and the deck's decoding thread have let go of it); on
  *    failure it stays ours to free. The job only opens the store, a few
  *    milliseconds, so LOADING shows for about as long as a frame takes.
  *    The track to follow the deck's (the next row of the playlist being
  *    viewed, continue_play) is decoded the same way ahead of the end and
- *    queued on the deck (rx_deck_queue_next), which plays on into it with
+ *    queued on the deck (cb_deck_queue_next), which plays on into it with
  *    no gap; the view follows once the player says it has moved on.
  *  - The deck view's waveforms are its own copy, read from the library;
  *    their GPU uploads, the deck's artwork texture and the browser cache's
  *    textures and previews belong to this file and are released through
  *    the window before it goes.
  *  - The export runs on a thread of its own with a library handle of its
- *    own (a second connection to the same database): rx_export() wants a
+ *    own (a second connection to the same database): cb_export() wants a
  *    mutable library, and sharing the interface's would race with every
  *    edit made while it runs. What the tracks lack is analysed first here,
  *    through the normal jobs (the export waits for its own tracks'
@@ -50,12 +50,12 @@
  *  - Saves asked for by the deck controls are queued and written once per
  *    tick, so a burst of edits costs one transaction.
  *  - Tagging with the model is the user's to ask for (the track menu, the
- *    Analysis menu, `rxbox tag`), never done unasked: it holds the GPU for
+ *    Analysis menu, `cyanbox tag`), never done unasked: it holds the GPU for
  *    seconds a track and up to 7 GB of its memory. Its results come back
  *    through app->jobs like an analysis's; the batch's progress is the
- *    jobs' own (rx_jobs_tag_progress). */
+ *    jobs' own (cb_jobs_tag_progress). */
 
-#include "rxbox/app.h"
+#include "cyanbox/app.h"
 
 #include <limits.h>
 #include <math.h>
@@ -63,11 +63,11 @@
 #include <stdio.h>
 #include <unistd.h>
 
-#include "rxbox/analysis.h"
-#include "rxbox/export.h"
-#include "rxbox/formats.h"
-#include "rxbox/mpris.h"
-#include "rxbox/notation.h"
+#include "cyanbox/analysis.h"
+#include "cyanbox/export.h"
+#include "cyanbox/formats.h"
+#include "cyanbox/mpris.h"
+#include "cyanbox/notation.h"
 
 #include "applink.h"
 
@@ -106,7 +106,7 @@
  * a message as new (src/ui/ui.cpp, status_bar). */
 #define STATUS_HOLD_US   8000000
 
-typedef struct RXAppPriv RXAppPriv;
+typedef struct CBAppPriv CBAppPriv;
 
 typedef struct Inflight {
     uint64_t request;
@@ -125,7 +125,7 @@ typedef struct GpuEntry {
     uint64_t   track_id;
     uint64_t   texture;         /* the cover's, shared (artwork_id), or its own */
     int64_t    artwork_id;      /* the library's cover the texture is of; 0 its own */
-    RXWaveGpu *preview;
+    CBWaveGpu *preview;
     uint64_t   art_request;     /* io job in flight */
     uint8_t    art_state;
     uint8_t    wave_state;
@@ -154,10 +154,10 @@ typedef struct ExportMsg {
 
 /* Owned by the main thread; the export thread reads the inputs, writes
  * `result` (and `opened`), then sets `finished` last. The library is the
- * export's snapshot (RXAppPriv.export_lib), the thread's alone while it
+ * export's snapshot (CBAppPriv.export_lib), the thread's alone while it
  * runs; with `root` set the thread opens it first. */
 typedef struct ExportJob {
-    RXLibrary *lib;
+    CBLibrary *lib;
     char    *root;              /* the library to open as the snapshot; NULL: open already */
     bool     opened;            /* the thread opened the snapshot (export_join takes it over) */
     char    *dest;
@@ -165,9 +165,9 @@ typedef struct ExportJob {
     int      nb_playlists;
     bool     whole_library, prune, ignore_unsynced, compat, dry_run;
     int      format;
-    RXMailbox *mb;
-    RXCancel  *cancel;
-    RXExportStats stats;        /* written by the export thread, read by the ticks */
+    CBMailbox *mb;
+    CBCancel  *cancel;
+    CBExportStats stats;        /* written by the export thread, read by the ticks */
     int      result;
     int      finished;          /* atomic */
 } ExportJob;
@@ -179,59 +179,59 @@ typedef struct ArtistSpan {
     bool none;
 } ArtistSpan;
 
-struct RXAppPriv {
+struct CBAppPriv {
     bool     lib_open;
     bool     ui_ready;
     int      max_frames;
     uint64_t tick;
 
-    RXJobs  *io_jobs;           /* decodes and artwork */
-    RXArray  inflight;          /* Inflight: analyses queued and not yet applied */
+    CBJobs  *io_jobs;           /* decodes and artwork */
+    CBArray  inflight;          /* Inflight: analyses queued and not yet applied */
     int      analyses_failed;   /* since the queue was last empty */
     int64_t  status_held;       /* status_time of a failure's status, kept a while (0 none) */
-    RXArray  saves;             /* uint64_t: tracks whose state is due to be written */
+    CBArray  saves;             /* uint64_t: tracks whose state is due to be written */
 
-    int      uploaded_palette[RX_DECKS];    /* palette of the deck's GPU waveforms, -1 none */
-    uint64_t deck_track_id[RX_DECKS];
-    uint8_t  play_seen[RX_DECKS][PLAY_BINS / 8];   /* bins of the track played since the load */
-    int      play_bins[RX_DECKS];           /* bits set in play_seen */
-    double   play_last_pos[RX_DECKS];       /* position at the last tick, < 0 none */
-    int64_t  play_last_us[RX_DECKS];
-    bool     play_recorded[RX_DECKS];
-    bool     was_playing[RX_DECKS];         /* at the last tick (continue_play) */
-    uint64_t ended_for[RX_DECKS];           /* stopped at its end waiting for this next (the
+    int      uploaded_palette[CB_DECKS];    /* palette of the deck's GPU waveforms, -1 none */
+    uint64_t deck_track_id[CB_DECKS];
+    uint8_t  play_seen[CB_DECKS][PLAY_BINS / 8];   /* bins of the track played since the load */
+    int      play_bins[CB_DECKS];           /* bits set in play_seen */
+    double   play_last_pos[CB_DECKS];       /* position at the last tick, < 0 none */
+    int64_t  play_last_us[CB_DECKS];
+    bool     play_recorded[CB_DECKS];
+    bool     was_playing[CB_DECKS];         /* at the last tick (continue_play) */
+    uint64_t ended_for[CB_DECKS];           /* stopped at its end waiting for this next (the
                                                candidate then); 0 none */
-    uint64_t next_request[RX_DECKS];        /* the decode of the track queued to follow, in
+    uint64_t next_request[CB_DECKS];        /* the decode of the track queued to follow, in
                                                flight on io_jobs; 0 none */
-    uint64_t next_failed_id[RX_DECKS];      /* a track whose decode or queueing failed: not
+    uint64_t next_failed_id[CB_DECKS];      /* a track whose decode or queueing failed: not
                                                asked for again while it stays the candidate */
-    unsigned deck_advanced[RX_DECKS];       /* RXDeckState.advanced as last seen */
+    unsigned deck_advanced[CB_DECKS];       /* CBDeckState.advanced as last seen */
 
-    RXArray  gpu;               /* GpuEntry, the browser's cache */
-    RXArray  covers;            /* CoverTexture: the entries' covers, one per library cover */
+    CBArray  gpu;               /* GpuEntry, the browser's cache */
+    CBArray  covers;            /* CoverTexture: the entries' covers, one per library cover */
     int      gpu_budget;
     /* The History's tracks, each once, oldest latest play first
      * (history_tracks); for lib.generation history_generation, 0 none. */
     uint64_t *history;
     int       nb_history;
     unsigned  history_generation;
-    RXArray  albums;            /* RXAlbum, the names copies: the tree's list (rx_app_albums) */
-    RXArray  album_artists;     /* RXAlbumArtist, the names copies (rx_app_album_artists) */
-    RXArray  artist_spans;      /* ArtistSpan, one per album artist */
+    CBArray  albums;            /* CBAlbum, the names copies: the tree's list (cb_app_albums) */
+    CBArray  album_artists;     /* CBAlbumArtist, the names copies (cb_app_album_artists) */
+    CBArray  artist_spans;      /* ArtistSpan, one per album artist */
     unsigned albums_generation; /* lib.generation it was made for; 0 none */
-    /* Per library index, made with the albums (rx_app_albums): the
+    /* Per library index, made with the albums (cb_app_albums): the
      * track's place in the collection's own order, None's tracks (the
      * first nb_none) then each album's in the list's order. */
     int     *rank;
     int      nb_rank, nb_none;
-    RXArray  wave_checks;       /* WaveCheck: the stored waveforms looked at */
+    CBArray  wave_checks;       /* WaveCheck: the stored waveforms looked at */
 
-    RXMailbox *export_mb;
-    RXCancel   export_cancel;
+    CBMailbox *export_mb;
+    CBCancel   export_cancel;
     int        export_phase;    /* enum ExportPhase */
     int64_t   *export_playlists;    /* ids of the selected playlists, taken at start */
     int        nb_export_playlists;
-    RXLibrary  export_lib;      /* the snapshot the dry run and the real run export */
+    CBLibrary  export_lib;      /* the snapshot the dry run and the real run export */
     bool       export_lib_open;
     unsigned   export_generation;   /* lib.generation when the snapshot was taken */
     ExportJob *export_job;      /* the run on the thread, NULL between runs */
@@ -248,17 +248,17 @@ struct RXAppPriv {
 /* ------------------------------------------------------------------ helpers */
 
 /* The players' My Settings that act on the app: what an export would write
- * (rx_settings_get), read when they are needed, so a change in the Player
+ * (cb_settings_get), read when they are needed, so a change in the Player
  * settings dialog or a sync takes effect at once. */
-static bool my_setting_is(const RXConfig *cfg, const char *key, const char *value)
+static bool my_setting_is(const CBConfig *cfg, const char *key, const char *value)
 {
-    const char *v = rx_settings_get(cfg, key);
+    const char *v = cb_settings_get(cfg, key);
     return v && !strcmp(v, value);
 }
 
 /* The waveform palette is the players' WAVEFORM COLOR (device.waveform_color):
  * what the stick will show is what the deck and the table show. */
-static int palette_of(const RXConfig *cfg)
+static int palette_of(const CBConfig *cfg)
 {
     if (my_setting_is(cfg, "device.waveform_color", "blue"))
         return 1;
@@ -268,9 +268,9 @@ static int palette_of(const RXConfig *cfg)
 }
 
 /* QUANTIZE BEAT VALUE: the part of a beat QUANTIZE snaps to. */
-static double quantize_beats_of(const RXConfig *cfg)
+static double quantize_beats_of(const CBConfig *cfg)
 {
-    const char *v = rx_settings_get(cfg, "player.quantize_beat_value");
+    const char *v = cb_settings_get(cfg, "player.quantize_beat_value");
     if (v && !strcmp(v, "1/2"))
         return 0.5;
     if (v && !strcmp(v, "1/4"))
@@ -281,18 +281,18 @@ static double quantize_beats_of(const RXConfig *cfg)
 }
 
 /* AUTO CUE and AUTO CUE LEVEL: where a load leaves the deck. */
-static RXAutoCue auto_cue_of(const RXConfig *cfg)
+static CBAutoCue auto_cue_of(const CBConfig *cfg)
 {
     if (my_setting_is(cfg, "player.auto_cue", "false"))
-        return RX_AUTO_CUE_OFF;
+        return CB_AUTO_CUE_OFF;
     if (my_setting_is(cfg, "player.auto_cue_level", "memory"))
-        return RX_AUTO_CUE_MEMORY;
-    return RX_AUTO_CUE_LEVEL;
+        return CB_AUTO_CUE_MEMORY;
+    return CB_AUTO_CUE_LEVEL;
 }
 
-static void analysis_options(const RXConfig *cfg, RXAnalysisOptions *opt)
+static void analysis_options(const CBConfig *cfg, CBAnalysisOptions *opt)
 {
-    rx_analysis_options_default(opt);
+    cb_analysis_options_default(opt);
     if (cfg->bpm_min > 0 && cfg->bpm_max > cfg->bpm_min) {
         opt->bpm_min = cfg->bpm_min;
         opt->bpm_max = cfg->bpm_max;
@@ -301,47 +301,47 @@ static void analysis_options(const RXConfig *cfg, RXAnalysisOptions *opt)
     opt->allow_sections = cfg->allow_sections;
 }
 
-static const char *track_name(const RXTrack *t, char *buf, size_t size)
+static const char *track_name(const CBTrack *t, char *buf, size_t size)
 {
-    return rx_track_display(t, buf, size);
+    return cb_track_display(t, buf, size);
 }
 
-void rx_app_set_status(RXApp *app, const char *fmt, ...)
+void cb_app_set_status(CBApp *app, const char *fmt, ...)
 {
     va_list args;
     va_start(args, fmt);
     vsnprintf(app->status, sizeof(app->status), fmt, args);
     va_end(args);
-    app->status_time = rx_time_us();
+    app->status_time = cb_time_us();
     app->dirty = true;
-    rx_debug("status: %s", app->status);
+    cb_debug("status: %s", app->status);
 }
 
 /* Decodes the library's thumbnail of a track (owner thread). */
-static int artwork_from_library(RXApp *app, uint64_t id, uint8_t **rgba, int *w, int *h)
+static int artwork_from_library(CBApp *app, uint64_t id, uint8_t **rgba, int *w, int *h)
 {
     uint8_t *jpeg = NULL;
     size_t size = 0;
     int tw = 0, th = 0;
-    int ret = rx_library_artwork_load(&app->lib, id, &jpeg, &size, &tw, &th);
+    int ret = cb_library_artwork_load(&app->lib, id, &jpeg, &size, &tw, &th);
     if (ret < 0)
         return ret;
-    ret = rx_image_decode(jpeg, size, rgba, w, h);
+    ret = cb_image_decode(jpeg, size, rgba, w, h);
     free(jpeg);
     return ret;
 }
 
 /* ---------------------------------------------------------------- waveforms */
 
-static int queue_analysis(RXApp *app, RXTrack *t, unsigned what, bool force, bool override_lock);
+static int queue_analysis(CBApp *app, CBTrack *t, unsigned what, bool force, bool override_lock);
 
-static void waves_seen(const RXApp *app, uint64_t id, bool stale)
+static void waves_seen(const CBApp *app, uint64_t id, bool stale)
 {
-    RXAppPriv *priv = app->priv;
+    CBAppPriv *priv = app->priv;
     if (!priv)
         return;
     for (size_t i = 0; i < priv->wave_checks.nb; i++) {
-        WaveCheck *c = rx_array_at(&priv->wave_checks, i);
+        WaveCheck *c = cb_array_at(&priv->wave_checks, i);
         if (c->track_id == id) {
             c->stale = stale;
             return;
@@ -349,84 +349,84 @@ static void waves_seen(const RXApp *app, uint64_t id, bool stale)
     }
     /* Out of memory: the track is only looked at again. */
     WaveCheck c = { .track_id = id, .stale = stale };
-    rx_array_push(&priv->wave_checks, &c);
+    cb_array_push(&priv->wave_checks, &c);
 }
 
 /* Waveforms stored in a format version the library no longer reads
- * (rx_waveforms_unpack's -EPROTO: made before the PWV6/PWV7
+ * (cb_waveforms_unpack's -EPROTO: made before the PWV6/PWV7
  * recalibration) are as good as none, and the track is analysed for them
  * again. A track's are looked at once: the deck and the table's preview
  * record what their loads find, the rest is a look at the stored header
  * here, cheap enough for the whole library at start. */
-static bool waves_stale(const RXApp *app, const RXTrack *t)
+static bool waves_stale(const CBApp *app, const CBTrack *t)
 {
     if (!t->has_waveforms)
         return false;
-    RXAppPriv *priv = app->priv;
+    CBAppPriv *priv = app->priv;
     for (size_t i = 0; priv && i < priv->wave_checks.nb; i++) {
-        const WaveCheck *c = rx_array_at(&priv->wave_checks, i);
+        const WaveCheck *c = cb_array_at(&priv->wave_checks, i);
         if (c->track_id == t->id)
             return c->stale;
     }
-    int ret = rx_library_waveforms_check(&app->lib, t->id);
-    if (ret == RX_ERROR(EPROTO))
-        rx_debug("track %llu: stored waveforms are an older format; recomputing",
+    int ret = cb_library_waveforms_check(&app->lib, t->id);
+    if (ret == CB_ERROR(EPROTO))
+        cb_debug("track %llu: stored waveforms are an older format; recomputing",
                  (unsigned long long)t->id);
-    bool stale = ret == RX_ERROR(EPROTO);
+    bool stale = ret == CB_ERROR(EPROTO);
     waves_seen(app, t->id, stale);
     return stale;
 }
 
 /* -------------------------------------------------------------------- saves */
 
-void rx_app_save_track(RXApp *app, RXTrack *t)
+void cb_app_save_track(CBApp *app, CBTrack *t)
 {
     if (!t)
         return;
-    int ret = rx_library_save_track(&app->lib, t);
+    int ret = cb_library_save_track(&app->lib, t);
     if (ret < 0) {
         char name[256];
         app->last_error_count++;
-        rx_app_set_status(app, "Cannot save %s: %s", track_name(t, name, sizeof(name)),
+        cb_app_set_status(app, "Cannot save %s: %s", track_name(t, name, sizeof(name)),
                           strerror(-ret));
     }
     app->rows_dirty = true;
 }
 
-static void queue_save(RXApp *app, RXTrack *t)
+static void queue_save(CBApp *app, CBTrack *t)
 {
-    RXAppPriv *priv = app->priv;
+    CBAppPriv *priv = app->priv;
     if (!priv) {
-        rx_app_save_track(app, t);
+        cb_app_save_track(app, t);
         return;
     }
     for (size_t i = 0; i < priv->saves.nb; i++) {
-        if (*(uint64_t *)rx_array_at(&priv->saves, i) == t->id)
+        if (*(uint64_t *)cb_array_at(&priv->saves, i) == t->id)
             return;
     }
-    if (!rx_array_push(&priv->saves, &t->id))
-        rx_app_save_track(app, t);
+    if (!cb_array_push(&priv->saves, &t->id))
+        cb_app_save_track(app, t);
 }
 
-static bool flush_saves(RXApp *app)
+static bool flush_saves(CBApp *app)
 {
-    RXAppPriv *priv = app->priv;
+    CBAppPriv *priv = app->priv;
     if (!priv || !priv->saves.nb)
         return false;
     for (size_t i = 0; i < priv->saves.nb; i++) {
-        RXTrack *t = rx_library_find_id(&app->lib, *(uint64_t *)rx_array_at(&priv->saves, i));
+        CBTrack *t = cb_library_find_id(&app->lib, *(uint64_t *)cb_array_at(&priv->saves, i));
         if (t)
-            rx_app_save_track(app, t);
+            cb_app_save_track(app, t);
     }
-    rx_array_clear(&priv->saves);
+    cb_array_clear(&priv->saves);
     return true;
 }
 
 /* The deck controls edited a track's cues or grid (owner thread). */
 static void deck_changed(void *opaque, int deck)
 {
-    RXApp *app = opaque;
-    RXTrack *t = app->decks[deck].ctl.track;
+    CBApp *app = opaque;
+    CBTrack *t = app->decks[deck].ctl.track;
     if (t)
         queue_save(app, t);
     app->dirty = true;
@@ -437,12 +437,12 @@ static void deck_changed(void *opaque, int deck)
 /* The texture of a library cover for one more entry: the one made,
  * else one made of `rgba` when given, else of the library's thumbnail. 0
  * when none could be made. */
-static uint64_t cover_ref(RXApp *app, int64_t artwork_id, uint64_t track_id,
+static uint64_t cover_ref(CBApp *app, int64_t artwork_id, uint64_t track_id,
                           const uint8_t *rgba, int w, int h)
 {
-    RXAppPriv *priv = app->priv;
+    CBAppPriv *priv = app->priv;
     for (size_t i = 0; i < priv->covers.nb; i++) {
-        CoverTexture *c = rx_array_at(&priv->covers, i);
+        CoverTexture *c = cb_array_at(&priv->covers, i);
         if (c->artwork_id == artwork_id) {
             c->refs++;
             return c->texture;
@@ -450,57 +450,57 @@ static uint64_t cover_ref(RXApp *app, int64_t artwork_id, uint64_t track_id,
     }
     uint64_t texture = 0;
     if (rgba) {
-        texture = rx_texture_create(app->window, rgba, w, h);
+        texture = cb_texture_create(app->window, rgba, w, h);
     } else {
         uint8_t *own = NULL;
         if (artwork_from_library(app, track_id, &own, &w, &h) >= 0)
-            texture = rx_texture_create(app->window, own, w, h);
+            texture = cb_texture_create(app->window, own, w, h);
         free(own);
     }
     CoverTexture c = { artwork_id, texture, 1 };
-    if (texture && !rx_array_push(&priv->covers, &c)) {
-        rx_texture_destroy(app->window, texture);
+    if (texture && !cb_array_push(&priv->covers, &c)) {
+        cb_texture_destroy(app->window, texture);
         texture = 0;
     }
     return texture;
 }
 
-static void cover_unref(RXApp *app, int64_t artwork_id)
+static void cover_unref(CBApp *app, int64_t artwork_id)
 {
-    RXAppPriv *priv = app->priv;
+    CBAppPriv *priv = app->priv;
     for (size_t i = 0; i < priv->covers.nb; i++) {
-        CoverTexture *c = rx_array_at(&priv->covers, i);
+        CoverTexture *c = cb_array_at(&priv->covers, i);
         if (c->artwork_id != artwork_id)
             continue;
         if (--c->refs <= 0) {
             if (app->window)
-                rx_texture_destroy(app->window, c->texture);
-            rx_array_remove(&priv->covers, i);
+                cb_texture_destroy(app->window, c->texture);
+            cb_array_remove(&priv->covers, i);
         }
         return;
     }
 }
 
-static void gpu_entry_release(RXApp *app, GpuEntry *e)
+static void gpu_entry_release(CBApp *app, GpuEntry *e)
 {
     if (e->artwork_id)
         cover_unref(app, e->artwork_id);
     else if (e->texture && app->window)
-        rx_texture_destroy(app->window, e->texture);
+        cb_texture_destroy(app->window, e->texture);
     if (e->preview && app->window)
-        rx_wave_release(app->window, e->preview);
+        cb_wave_release(app->window, e->preview);
     if (e->art_request && app->priv->io_jobs)
-        rx_jobs_cancel(app->priv->io_jobs, e->art_request);
+        cb_jobs_cancel(app->priv->io_jobs, e->art_request);
     e->texture = 0;
     e->artwork_id = 0;
     e->preview = NULL;
     e->art_request = 0;
 }
 
-static GpuEntry *gpu_find(RXAppPriv *priv, uint64_t id)
+static GpuEntry *gpu_find(CBAppPriv *priv, uint64_t id)
 {
     for (size_t i = 0; i < priv->gpu.nb; i++) {
-        GpuEntry *e = rx_array_at(&priv->gpu, i);
+        GpuEntry *e = cb_array_at(&priv->gpu, i);
         if (e->track_id == id)
             return e;
     }
@@ -509,9 +509,9 @@ static GpuEntry *gpu_find(RXAppPriv *priv, uint64_t id)
 
 /* The entry for a track, made when absent; beyond GPU_CACHE_MAX the one
  * asked for least recently (and not this tick) is recycled. */
-static GpuEntry *gpu_entry(RXApp *app, uint64_t id)
+static GpuEntry *gpu_entry(CBApp *app, uint64_t id)
 {
-    RXAppPriv *priv = app->priv;
+    CBAppPriv *priv = app->priv;
     GpuEntry *e = gpu_find(priv, id);
     if (e)
         return e;
@@ -519,7 +519,7 @@ static GpuEntry *gpu_entry(RXApp *app, uint64_t id)
     if (priv->gpu.nb >= GPU_CACHE_MAX) {
         GpuEntry *old = NULL;
         for (size_t i = 0; i < priv->gpu.nb; i++) {
-            GpuEntry *c = rx_array_at(&priv->gpu, i);
+            GpuEntry *c = cb_array_at(&priv->gpu, i);
             if (c->used != priv->tick && (!old || c->used < old->used))
                 old = c;
         }
@@ -528,7 +528,7 @@ static GpuEntry *gpu_entry(RXApp *app, uint64_t id)
         gpu_entry_release(app, old);
         e = old;
     } else {
-        e = rx_array_push(&priv->gpu, NULL);
+        e = cb_array_push(&priv->gpu, NULL);
         if (!e)
             return NULL;
     }
@@ -539,9 +539,9 @@ static GpuEntry *gpu_entry(RXApp *app, uint64_t id)
     return e;
 }
 
-uint64_t rx_app_artwork_texture(RXApp *app, const RXTrack *t)
+uint64_t cb_app_artwork_texture(CBApp *app, const CBTrack *t)
 {
-    RXAppPriv *priv = app->priv;
+    CBAppPriv *priv = app->priv;
     if (!priv || !app->window || !t)
         return 0;
     GpuEntry *e = gpu_entry(app, t->id);
@@ -556,14 +556,14 @@ uint64_t rx_app_artwork_texture(RXApp *app, const RXTrack *t)
      * "none" until the entry is recycled. */
     if (e->art_state == GPU_UNKNOWN && priv->gpu_budget > 0) {
         priv->gpu_budget--;
-        int64_t art = rx_library_artwork_id(&app->lib, t->id);
+        int64_t art = cb_library_artwork_id(&app->lib, t->id);
         if (art > 0)
             e->texture = cover_ref(app, art, t->id, NULL, 0, 0);
         if (e->texture) {
             e->artwork_id = art;
             e->art_state = GPU_DONE;
         } else if (t->has_artwork && !t->missing) {
-            uint64_t req = rx_jobs_artwork(priv->io_jobs, t->id, t->path, ART_SIZE);
+            uint64_t req = cb_jobs_artwork(priv->io_jobs, t->id, t->path, ART_SIZE);
             e->art_request = (int64_t)req > 0 ? req : 0;
             e->art_state = e->art_request ? GPU_LOADING : GPU_DONE;
         } else {
@@ -573,9 +573,9 @@ uint64_t rx_app_artwork_texture(RXApp *app, const RXTrack *t)
     return e->texture;
 }
 
-bool rx_app_artwork_pending(RXApp *app, const RXTrack *t)
+bool cb_app_artwork_pending(CBApp *app, const CBTrack *t)
 {
-    RXAppPriv *priv = app->priv;
+    CBAppPriv *priv = app->priv;
     if (!priv || !app->window || !t)
         return false;
     const GpuEntry *e = gpu_find(priv, t->id);
@@ -584,21 +584,21 @@ bool rx_app_artwork_pending(RXApp *app, const RXTrack *t)
 
 /* A preview tag on the GPU in a palette: PWV6 (3-band), PWAV (blue) or
  * PWV4 (RGB), the overview the players draw in that WAVEFORM COLOR. */
-static RXWaveGpu *upload_preview(RXApp *app, int palette, const RXWaveforms *w)
+static CBWaveGpu *upload_preview(CBApp *app, int palette, const CBWaveforms *w)
 {
     switch (palette) {
     case 1:
-        return rx_wave_upload(app->window, RX_WAVE_BLUE, w->pwav, RX_WAVE_PWAV_COLUMNS);
+        return cb_wave_upload(app->window, CB_WAVE_BLUE, w->pwav, CB_WAVE_PWAV_COLUMNS);
     case 2:
-        return rx_wave_upload(app->window, RX_WAVE_RGB_PREVIEW, w->pwv4, RX_WAVE_PWV4_COLUMNS);
+        return cb_wave_upload(app->window, CB_WAVE_RGB_PREVIEW, w->pwv4, CB_WAVE_PWV4_COLUMNS);
     default:
-        return rx_wave_upload(app->window, RX_WAVE_3BAND, w->pwv6, RX_WAVE_PWV6_COLUMNS);
+        return cb_wave_upload(app->window, CB_WAVE_3BAND, w->pwv6, CB_WAVE_PWV6_COLUMNS);
     }
 }
 
-RXWaveGpu *rx_app_preview_wave(RXApp *app, const RXTrack *t)
+CBWaveGpu *cb_app_preview_wave(CBApp *app, const CBTrack *t)
 {
-    RXAppPriv *priv = app->priv;
+    CBAppPriv *priv = app->priv;
     if (!priv || !app->window || !t)
         return NULL;
     GpuEntry *e = gpu_entry(app, t->id);
@@ -610,23 +610,23 @@ RXWaveGpu *rx_app_preview_wave(RXApp *app, const RXTrack *t)
      * state when they land, a change of palette every entry's. */
     if (e->wave_state == GPU_UNKNOWN && t->has_waveforms && priv->gpu_budget > 0) {
         priv->gpu_budget--;
-        RXWaveforms w = { 0 };
-        int ret = rx_library_waveforms_load_previews(&app->lib, t->id, &w);
+        CBWaveforms w = { 0 };
+        int ret = cb_library_waveforms_load_previews(&app->lib, t->id, &w);
         if (ret >= 0)
             e->preview = upload_preview(app, app->wave_palette, &w);
-        rx_waveforms_free(&w);
+        cb_waveforms_free(&w);
         e->wave_state = GPU_DONE;
         /* Stale ones are made again; the preview follows (gpu_forget_waves). */
-        waves_seen(app, t->id, ret == RX_ERROR(EPROTO));
-        RXTrack *lt = ret == RX_ERROR(EPROTO) ? rx_library_find_id(&app->lib, t->id) : NULL;
+        waves_seen(app, t->id, ret == CB_ERROR(EPROTO));
+        CBTrack *lt = ret == CB_ERROR(EPROTO) ? cb_library_find_id(&app->lib, t->id) : NULL;
         if (lt)
-            queue_analysis(app, lt, RX_ANALYSE_WAVES, false, false);
+            queue_analysis(app, lt, CB_ANALYSE_WAVES, false, false);
     }
     return e->preview;
 }
 
 /* The waveforms of a track changed: its preview is made again on demand. */
-static void gpu_forget_waves(RXApp *app, uint64_t id)
+static void gpu_forget_waves(CBApp *app, uint64_t id)
 {
     if (!app->priv)
         return;
@@ -634,65 +634,65 @@ static void gpu_forget_waves(RXApp *app, uint64_t id)
     if (!e)
         return;
     if (e->preview && app->window)
-        rx_wave_release(app->window, e->preview);
+        cb_wave_release(app->window, e->preview);
     e->preview = NULL;
     e->wave_state = GPU_UNKNOWN;
 }
 
 /* The palette changed: every preview is made again, in the new one, as
  * the table asks for it. */
-static void gpu_forget_previews(RXApp *app)
+static void gpu_forget_previews(CBApp *app)
 {
-    RXAppPriv *priv = app->priv;
+    CBAppPriv *priv = app->priv;
     for (size_t i = 0; i < priv->gpu.nb; i++) {
-        GpuEntry *e = rx_array_at(&priv->gpu, i);
+        GpuEntry *e = cb_array_at(&priv->gpu, i);
         if (e->preview && app->window)
-            rx_wave_release(app->window, e->preview);
+            cb_wave_release(app->window, e->preview);
         e->preview = NULL;
         e->wave_state = GPU_UNKNOWN;
     }
 }
 
-static void gpu_cache_free(RXApp *app)
+static void gpu_cache_free(CBApp *app)
 {
-    RXAppPriv *priv = app->priv;
+    CBAppPriv *priv = app->priv;
     for (size_t i = 0; i < priv->gpu.nb; i++)
-        gpu_entry_release(app, rx_array_at(&priv->gpu, i));
-    rx_array_free(&priv->gpu);
-    rx_array_free(&priv->covers);
+        gpu_entry_release(app, cb_array_at(&priv->gpu, i));
+    cb_array_free(&priv->gpu);
+    cb_array_free(&priv->covers);
 }
 
 /* --------------------------------------------------------------------- deck */
 
-static void release_waves_gpu(RXApp *app, RXDeckView *dv)
+static void release_waves_gpu(CBApp *app, CBDeckView *dv)
 {
     if (app->window) {
         if (dv->wave_preview)
-            rx_wave_release(app->window, dv->wave_preview);
+            cb_wave_release(app->window, dv->wave_preview);
         if (dv->wave_detail)
-            rx_wave_release(app->window, dv->wave_detail);
+            cb_wave_release(app->window, dv->wave_detail);
     }
     dv->wave_preview = NULL;
     dv->wave_detail = NULL;
 }
 
-static void release_artwork(RXApp *app, RXDeckView *dv)
+static void release_artwork(CBApp *app, CBDeckView *dv)
 {
     if (app->window && dv->artwork)
-        rx_texture_destroy(app->window, dv->artwork);
+        cb_texture_destroy(app->window, dv->artwork);
     dv->artwork = 0;
 }
 
 /* Uploads the deck's waveforms in the current palette (or releases them
  * when there are none). */
-static void deck_upload_waves(RXApp *app, int deck)
+static void deck_upload_waves(CBApp *app, int deck)
 {
-    RXDeckView *dv = &app->decks[deck];
+    CBDeckView *dv = &app->decks[deck];
     release_waves_gpu(app, dv);
     if (app->priv)
         app->priv->uploaded_palette[deck] = app->wave_palette;
 
-    const RXWaveforms *w = &dv->waves;
+    const CBWaveforms *w = &dv->waves;
     if (!app->window || w->nb_detail <= 0)
         return;
 
@@ -700,26 +700,26 @@ static void deck_upload_waves(RXApp *app, int deck)
     switch (app->wave_palette) {
     case 1:
         if (w->pwv3)
-            dv->wave_detail = rx_wave_upload(app->window, RX_WAVE_BLUE, w->pwv3, w->nb_detail);
+            dv->wave_detail = cb_wave_upload(app->window, CB_WAVE_BLUE, w->pwv3, w->nb_detail);
         break;
     case 2:
         if (w->pwv5)
-            dv->wave_detail = rx_wave_upload(app->window, RX_WAVE_RGB_DETAIL, w->pwv5,
+            dv->wave_detail = cb_wave_upload(app->window, CB_WAVE_RGB_DETAIL, w->pwv5,
                                              w->nb_detail);
         break;
     default:
         if (w->pwv7)
-            dv->wave_detail = rx_wave_upload(app->window, RX_WAVE_3BAND, w->pwv7, w->nb_detail);
+            dv->wave_detail = cb_wave_upload(app->window, CB_WAVE_3BAND, w->pwv7, w->nb_detail);
         break;
     }
 }
 
 /* Reads the deck track's waveforms from the library into the deck view;
  * the GPU copy follows on the next tick. */
-static void deck_load_waves(RXApp *app, int deck)
+static void deck_load_waves(CBApp *app, int deck)
 {
-    RXDeckView *dv = &app->decks[deck];
-    rx_waveforms_free(&dv->waves);
+    CBDeckView *dv = &app->decks[deck];
+    cb_waveforms_free(&dv->waves);
     memset(&dv->waves, 0, sizeof(dv->waves));
     if (app->priv)
         app->priv->uploaded_palette[deck] = -1;
@@ -728,39 +728,39 @@ static void deck_load_waves(RXApp *app, int deck)
 
     /* Stale ones count as none: the analysis queued with the load (or
      * after this one) makes them again. */
-    int ret = rx_library_waveforms_load(&app->lib, dv->track->id, &dv->waves);
-    waves_seen(app, dv->track->id, ret == RX_ERROR(EPROTO));
+    int ret = cb_library_waveforms_load(&app->lib, dv->track->id, &dv->waves);
+    waves_seen(app, dv->track->id, ret == CB_ERROR(EPROTO));
     if (ret < 0) {
-        if (ret != RX_ERROR(EPROTO))
-            rx_warn("cannot read the waveforms of track %llu: %s",
+        if (ret != CB_ERROR(EPROTO))
+            cb_warn("cannot read the waveforms of track %llu: %s",
                     (unsigned long long)dv->track->id, strerror(-ret));
-        rx_waveforms_free(&dv->waves);
+        cb_waveforms_free(&dv->waves);
         memset(&dv->waves, 0, sizeof(dv->waves));
     }
 }
 
-static void deck_set_artwork(RXApp *app, RXDeckView *dv, const uint8_t *rgba, int w, int h)
+static void deck_set_artwork(CBApp *app, CBDeckView *dv, const uint8_t *rgba, int w, int h)
 {
     release_artwork(app, dv);
     if (app->window && rgba)
-        dv->artwork = rx_texture_create(app->window, rgba, w, h);
+        dv->artwork = cb_texture_create(app->window, rgba, w, h);
 }
 
 /* Drops what the deck view holds for its track: the artwork request, the
  * waveforms and their uploads, the artwork, the play count. The player is
  * left alone. */
-static void deck_view_reset(RXApp *app, int deck)
+static void deck_view_reset(CBApp *app, int deck)
 {
-    RXDeckView *dv = &app->decks[deck];
-    RXAppPriv *priv = app->priv;
+    CBDeckView *dv = &app->decks[deck];
+    CBAppPriv *priv = app->priv;
 
     if (priv && priv->io_jobs && dv->artwork_request)
-        rx_jobs_cancel(priv->io_jobs, dv->artwork_request);
+        cb_jobs_cancel(priv->io_jobs, dv->artwork_request);
     dv->artwork_request = 0;
 
     release_waves_gpu(app, dv);
     release_artwork(app, dv);
-    rx_waveforms_free(&dv->waves);
+    cb_waveforms_free(&dv->waves);
     memset(&dv->waves, 0, sizeof(dv->waves));
     dv->track = NULL;
     dv->nb_taps = 0;
@@ -782,18 +782,18 @@ static void deck_view_reset(RXApp *app, int deck)
  * as it may (has_next), and until then the track stays the one to follow,
  * so that the view follows the deck into it (continue_play) and nothing
  * else is queued meanwhile. */
-static void cancel_next(RXApp *app, int deck)
+static void cancel_next(CBApp *app, int deck)
 {
-    RXAppPriv *priv = app->priv;
-    RXDeckView *dv = &app->decks[deck];
+    CBAppPriv *priv = app->priv;
+    CBDeckView *dv = &app->decks[deck];
     if (priv) {
         if (priv->io_jobs && priv->next_request[deck])
-            rx_jobs_cancel(priv->io_jobs, priv->next_request[deck]);
+            cb_jobs_cancel(priv->io_jobs, priv->next_request[deck]);
         priv->next_request[deck] = 0;
     }
     if (app->player) {
-        rx_deck_clear_next(app->player, deck);
-        if (rx_deck_has_next(app->player, deck))
+        cb_deck_clear_next(app->player, deck);
+        if (cb_deck_has_next(app->player, deck))
             return;
     }
     dv->next_track_id = 0;
@@ -801,13 +801,13 @@ static void cancel_next(RXApp *app, int deck)
 
 /* Empties the deck: cancels its loads, unloads the player, drops the
  * waveforms and the artwork. */
-static void deck_clear(RXApp *app, int deck)
+static void deck_clear(CBApp *app, int deck)
 {
-    RXDeckView *dv = &app->decks[deck];
-    RXAppPriv *priv = app->priv;
+    CBDeckView *dv = &app->decks[deck];
+    CBAppPriv *priv = app->priv;
 
     if (priv && priv->io_jobs && dv->loading_request)
-        rx_jobs_cancel(priv->io_jobs, dv->loading_request);
+        cb_jobs_cancel(priv->io_jobs, dv->loading_request);
     dv->loading_request = 0;
     dv->loading_track_id = 0;
     cancel_next(app, deck);
@@ -815,16 +815,16 @@ static void deck_clear(RXApp *app, int deck)
         priv->ended_for[deck] = 0;
 
     if (app->player) {
-        rx_ctl_unload(&dv->ctl);
-        rx_deck_unload(app->player, deck);
+        cb_ctl_unload(&dv->ctl);
+        cb_deck_unload(app->player, deck);
     }
     deck_view_reset(app, deck);
 }
 
 /* The deck's cover: the library's thumbnail, or a job for the file's. */
-static void deck_fetch_artwork(RXApp *app, int deck, const RXTrack *t)
+static void deck_fetch_artwork(CBApp *app, int deck, const CBTrack *t)
 {
-    RXDeckView *dv = &app->decks[deck];
+    CBDeckView *dv = &app->decks[deck];
     if (!app->window)
         return;
     uint8_t *rgba = NULL;
@@ -833,57 +833,57 @@ static void deck_fetch_artwork(RXApp *app, int deck, const RXTrack *t)
         deck_set_artwork(app, dv, rgba, w, h);
         free(rgba);
     } else {
-        uint64_t req = rx_jobs_artwork(app->priv->io_jobs, t->id, t->path, ART_SIZE);
+        uint64_t req = cb_jobs_artwork(app->priv->io_jobs, t->id, t->path, ART_SIZE);
         dv->artwork_request = (int64_t)req > 0 ? req : 0;
     }
 }
 
-int rx_app_load_deck(RXApp *app, int deck, RXTrack *t)
+int cb_app_load_deck(CBApp *app, int deck, CBTrack *t)
 {
-    if (deck < 0 || deck >= RX_DECKS || !t)
-        return RX_ERROR(EINVAL);
+    if (deck < 0 || deck >= CB_DECKS || !t)
+        return CB_ERROR(EINVAL);
     if (!app->player || !app->priv || !app->priv->io_jobs)
-        return RX_ERROR(ENODEV);
+        return CB_ERROR(ENODEV);
 
     char name[256];
     track_name(t, name, sizeof(name));
     if (t->missing) {
-        rx_app_set_status(app, "Cannot load %s: the file is missing", name);
-        return RX_ERROR(ENOENT);
+        cb_app_set_status(app, "Cannot load %s: the file is missing", name);
+        return CB_ERROR(ENOENT);
     }
 
     /* Replacing a playing track is the interface's decision (it pauses
      * the deck, then calls again). */
-    RXDeckState st;
-    rx_deck_state(app->player, deck, &st);
+    CBDeckState st;
+    cb_deck_state(app->player, deck, &st);
     if (st.playing)
-        return RX_ERROR(EBUSY);
+        return CB_ERROR(EBUSY);
 
-    RXDeckView *dv = &app->decks[deck];
-    RXJobs *io = app->priv->io_jobs;
+    CBDeckView *dv = &app->decks[deck];
+    CBJobs *io = app->priv->io_jobs;
     if (dv->loading_request)
-        rx_jobs_cancel(io, dv->loading_request);
+        cb_jobs_cancel(io, dv->loading_request);
     dv->loading_request = 0;
     dv->loading_track_id = 0;
     /* A new start: what was to follow the old track goes. */
     cancel_next(app, deck);
     app->priv->ended_for[deck] = 0;
 
-    uint64_t req = rx_jobs_decode(io, t->id, t->path, deck);
+    uint64_t req = cb_jobs_decode(io, t->id, t->path, deck);
     if ((int64_t)req < 0) {
-        rx_app_set_status(app, "Cannot load %s: %s", name, strerror((int)-(int64_t)req));
+        cb_app_set_status(app, "Cannot load %s: %s", name, strerror((int)-(int64_t)req));
         return (int)(int64_t)req;
     }
 
     dv->loading_request = req;
     dv->loading_track_id = t->id;
-    rx_app_set_status(app, "Loading %s", name);
+    cb_app_set_status(app, "Loading %s", name);
     return 0;
 }
 
-void rx_app_unload_deck(RXApp *app, int deck)
+void cb_app_unload_deck(CBApp *app, int deck)
 {
-    if (deck < 0 || deck >= RX_DECKS)
+    if (deck < 0 || deck >= CB_DECKS)
         return;
     deck_clear(app, deck);
     app->dirty = true;
@@ -894,16 +894,16 @@ void rx_app_unload_deck(RXApp *app, int deck)
  * audio that really played forward: a seek, a jump, a loop wrapping or a
  * scrub adds nothing, and what a loop or a repeated hot cue plays again
  * counts once (PLAY_BIN). */
-static void track_plays(RXApp *app, int deck)
+static void track_plays(CBApp *app, int deck)
 {
-    RXAppPriv *priv = app->priv;
-    RXDeckView *dv = &app->decks[deck];
+    CBAppPriv *priv = app->priv;
+    CBDeckView *dv = &app->decks[deck];
     if (!app->player || !dv->track || priv->play_recorded[deck])
         return;
 
-    RXDeckState st;
-    rx_deck_state(app->player, deck, &st);
-    int64_t now = rx_time_us();
+    CBDeckState st;
+    cb_deck_state(app->player, deck, &st);
+    int64_t now = cb_time_us();
     double last = priv->play_last_pos[deck];
     double since = (now - priv->play_last_us[deck]) * 1e-6;
     priv->play_last_pos[deck] = st.loaded ? st.position : -1.0;
@@ -912,12 +912,12 @@ static void track_plays(RXApp *app, int deck)
         return;
 
     double step = st.position - last;
-    double allowed = RX_MAX(PLAY_MAX_STEP, since * RX_MAX(st.tempo, 1.0) * 1.25 + 0.05);
+    double allowed = CB_MAX(PLAY_MAX_STEP, since * CB_MAX(st.tempo, 1.0) * 1.25 + 0.05);
     if (!(step > 0.0) || step > allowed)
         return;
 
-    int b0 = (int)RX_MIN(floor(last / PLAY_BIN), PLAY_BINS - 1.0);
-    int b1 = (int)RX_MIN(floor(st.position / PLAY_BIN), PLAY_BINS - 1.0);
+    int b0 = (int)CB_MIN(floor(last / PLAY_BIN), PLAY_BINS - 1.0);
+    int b1 = (int)CB_MIN(floor(st.position / PLAY_BIN), PLAY_BINS - 1.0);
     for (int b = b0; b <= b1; b++) {
         uint8_t bit = (uint8_t)(1u << (b & 7));
         if (priv->play_seen[deck][b >> 3] & bit)
@@ -929,11 +929,11 @@ static void track_plays(RXApp *app, int deck)
         return;
 
     priv->play_recorded[deck] = true;
-    int ret = rx_library_record_play(&app->lib, dv->track);
+    int ret = cb_library_record_play(&app->lib, dv->track);
     if (ret < 0) {
         char name[256];
         app->last_error_count++;
-        rx_app_set_status(app, "Cannot record the play of %s: %s",
+        cb_app_set_status(app, "Cannot record the play of %s: %s",
                           track_name(dv->track, name, sizeof(name)), strerror(-ret));
     }
     app->rows_dirty = true;
@@ -946,16 +946,16 @@ static void track_plays(RXApp *app, int deck)
  * view: the next row of the current view in the table's order (the first
  * when `t` is not in the view), wrapping at the end. Past missing files.
  * NULL when there is none. */
-static RXTrack *next_candidate(RXApp *app, const RXTrack *t)
+static CBTrack *next_candidate(CBApp *app, const CBTrack *t)
 {
     if (app->rows_dirty || app->rows_generation != app->lib.generation || !app->rows)
-        rx_app_rebuild_rows(app);
+        cb_app_rebuild_rows(app);
     bool wrap = my_setting_is(&app->lib.cfg, "player.play_mode", "continue");
     if (!wrap && !app->current_playlist && !app->current_album && !app->current_album_artist &&
         !app->current_tag_list && !app->current_history)
         return NULL;
     int n = app->nb_rows;
-    int idx = rx_library_index_of(&app->lib, t);
+    int idx = cb_library_index_of(&app->lib, t);
     int at = -1;
     for (int i = 0; i < n && at < 0; i++) {
         if ((int)app->rows[i] == idx)
@@ -970,7 +970,7 @@ static RXTrack *next_candidate(RXApp *app, const RXTrack *t)
                 return NULL;
             i %= n;
         }
-        RXTrack *next = app->lib.tracks[app->rows[i]];
+        CBTrack *next = app->lib.tracks[app->rows[i]];
         if (!next->missing)
             return next;
     }
@@ -978,15 +978,15 @@ static RXTrack *next_candidate(RXApp *app, const RXTrack *t)
 }
 
 /* The deck has moved on to the track queued after its own
- * (RXDeckState.advanced): the view follows; the playhead plays on. */
-static void take_over(RXApp *app, int deck, RXTrack *t)
+ * (CBDeckState.advanced): the view follows; the playhead plays on. */
+static void take_over(CBApp *app, int deck, CBTrack *t)
 {
-    RXDeckView *dv = &app->decks[deck];
+    CBDeckView *dv = &app->decks[deck];
     deck_view_reset(app, deck);
     if (!t) {
         /* Gone from the library since it was queued: the deck plays what
          * cannot be shown. */
-        rx_app_set_status(app, "The next track left the library meanwhile");
+        cb_app_set_status(app, "The next track left the library meanwhile");
         deck_clear(app, deck);
         return;
     }
@@ -995,21 +995,21 @@ static void take_over(RXApp *app, int deck, RXTrack *t)
     dv->track = t;
     app->priv->deck_track_id[deck] = t->id;
     dv->ctl.auto_cue = auto_cue_of(&app->lib.cfg);
-    rx_ctl_continue(&dv->ctl, t);
+    cb_ctl_continue(&dv->ctl, t);
     deck_load_waves(app, deck);
-    queue_analysis(app, t, RX_ANALYSE_ALL, false, false);
+    queue_analysis(app, t, CB_ANALYSE_ALL, false, false);
     deck_fetch_artwork(app, deck, t);
-    rx_app_set_status(app, "Playing %s", name);
+    cb_app_set_status(app, "Playing %s", name);
 }
 
 /* The track to follow: decoded on the io queue as a load is, handed to
  * the player when it comes (handle_next). */
-static void queue_next_track(RXApp *app, int deck, const RXTrack *t)
+static void queue_next_track(CBApp *app, int deck, const CBTrack *t)
 {
-    RXAppPriv *priv = app->priv;
-    uint64_t req = rx_jobs_decode(priv->io_jobs, t->id, t->path, deck);
+    CBAppPriv *priv = app->priv;
+    uint64_t req = cb_jobs_decode(priv->io_jobs, t->id, t->path, deck);
     if ((int64_t)req < 0) {
-        rx_warn("cannot queue the next track: %s", strerror((int)-(int64_t)req));
+        cb_warn("cannot queue the next track: %s", strerror((int)-(int64_t)req));
         return;
     }
     priv->next_request[deck] = req;
@@ -1017,7 +1017,7 @@ static void queue_next_track(RXApp *app, int deck, const RXTrack *t)
 }
 
 /* What follows the deck's track (next_candidate) is kept queued on the
- * deck (rx_deck_queue_next) from NEXT_LEAD_SECONDS before the end, so the
+ * deck (cb_deck_queue_next) from NEXT_LEAD_SECONDS before the end, so the
  * deck plays on into it with no gap, and the view follows the deck's move
  * (take_over). The candidate goes with the view: a view that changes
  * changes what is queued. A deck that reaches its end before the next is
@@ -1026,22 +1026,22 @@ static void queue_next_track(RXApp *app, int deck, const RXTrack *t)
  * on the end, where the player leaves it (PLAY MODE SINGLE). The end is a
  * deck that was playing at the last tick and now stands on its last
  * frames, stopped. */
-static bool continue_play(RXApp *app, int deck)
+static bool continue_play(CBApp *app, int deck)
 {
-    RXAppPriv *priv = app->priv;
-    RXDeckView *dv = &app->decks[deck];
+    CBAppPriv *priv = app->priv;
+    CBDeckView *dv = &app->decks[deck];
     bool changed = false;
 
-    RXDeckState st;
-    rx_deck_state(app->player, deck, &st);
+    CBDeckState st;
+    cb_deck_state(app->player, deck, &st);
     if (st.advanced != priv->deck_advanced[deck]) {
         priv->deck_advanced[deck] = st.advanced;
         if (dv->next_track_id) {
-            RXTrack *t = rx_library_find_id(&app->lib, dv->next_track_id);
+            CBTrack *t = cb_library_find_id(&app->lib, dv->next_track_id);
             dv->next_track_id = 0;
             priv->ended_for[deck] = 0;
             take_over(app, deck, t);
-            rx_deck_state(app->player, deck, &st);
+            cb_deck_state(app->player, deck, &st);
             changed = true;
         }
     }
@@ -1057,7 +1057,7 @@ static bool continue_play(RXApp *app, int deck)
     bool loaded = st.loaded && dv->track && !dv->loading_request;
     bool at_end = loaded && st.duration > 0 && st.position >= st.duration - END_SLACK;
 
-    RXTrack *want = loaded ? next_candidate(app, dv->track) : NULL;
+    CBTrack *want = loaded ? next_candidate(app, dv->track) : NULL;
     /* One that failed is not asked for again until the candidate changes. */
     if (want && want->id == priv->next_failed_id[deck])
         want = NULL;
@@ -1087,7 +1087,7 @@ static bool continue_play(RXApp *app, int deck)
     }
     if (priv->ended_for[deck] && st.has_next && dv->next_track_id == priv->ended_for[deck]) {
         /* PLAY on a deck stopped at its end takes the next. */
-        rx_deck_play(app->player, deck);
+        cb_deck_play(app->player, deck);
         priv->ended_for[deck] = 0;
         changed = true;
     }
@@ -1096,16 +1096,16 @@ static bool continue_play(RXApp *app, int deck)
 
 /* ----------------------------------------------------------------- analysis */
 
-unsigned rx_app_analysis_stale(const RXApp *app, const RXTrack *t)
+unsigned cb_app_analysis_stale(const CBApp *app, const CBTrack *t)
 {
     /* The version first: it costs nothing, the format is a read. */
-    unsigned stale = rx_analysis_stale(t);
-    if (!(stale & RX_ANALYSE_WAVES) && waves_stale(app, t))
-        stale |= RX_ANALYSE_WAVES;
+    unsigned stale = cb_analysis_stale(t);
+    if (!(stale & CB_ANALYSE_WAVES) && waves_stale(app, t))
+        stale |= CB_ANALYSE_WAVES;
     return stale;
 }
 
-unsigned rx_app_analysis_needed(const RXApp *app, const RXTrack *t, unsigned what, bool force)
+unsigned cb_app_analysis_needed(const CBApp *app, const CBTrack *t, unsigned what, bool force)
 {
     if (!t || t->missing)
         return 0;
@@ -1113,63 +1113,63 @@ unsigned rx_app_analysis_needed(const RXApp *app, const RXTrack *t, unsigned wha
     /* A stale result is as good as none: the upgrade that bumped its
      * version is there to replace it. A locked grid is kept all the
      * same. */
-    unsigned stale = rx_app_analysis_stale(app, t);
-    unsigned need = what & RX_ANALYSE_ALL;
+    unsigned stale = cb_app_analysis_stale(app, t);
+    unsigned need = what & CB_ANALYSE_ALL;
     if (!force) {
         /* A stage the current analyser ran is done, whether it found a
          * grid or a key or not (apply_analysis sets the version either
          * way): run again, it would find nothing again, on every add,
          * analyse and export. */
-        if ((rx_track_analysed(t) || t->beats_version >= RX_BEATS_VERSION) &&
-            !(stale & RX_ANALYSE_BEATS))
-            need &= ~RX_ANALYSE_BEATS;
-        if ((t->key[0] || t->key_version >= RX_KEY_VERSION) && !(stale & RX_ANALYSE_KEY))
-            need &= ~RX_ANALYSE_KEY;
+        if ((cb_track_analysed(t) || t->beats_version >= CB_BEATS_VERSION) &&
+            !(stale & CB_ANALYSE_BEATS))
+            need &= ~CB_ANALYSE_BEATS;
+        if ((t->key[0] || t->key_version >= CB_KEY_VERSION) && !(stale & CB_ANALYSE_KEY))
+            need &= ~CB_ANALYSE_KEY;
     }
     if (t->grid_locked && !force)
-        need &= ~RX_ANALYSE_BEATS;
+        need &= ~CB_ANALYSE_BEATS;
 
     /* The deck, the table preview and the stick all need the waveforms,
      * so missing or stale ones are made whatever was asked. */
-    if (!t->has_waveforms || (stale & RX_ANALYSE_WAVES))
-        need |= RX_ANALYSE_WAVES;
+    if (!t->has_waveforms || (stale & CB_ANALYSE_WAVES))
+        need |= CB_ANALYSE_WAVES;
     else if (!force)
-        need &= ~RX_ANALYSE_WAVES;
+        need &= ~CB_ANALYSE_WAVES;
 
     return need;
 }
 
 /* Queues what a track lacks. Returns 1 when queued, 0 when there was
  * nothing to do (or the same work is already queued), or an error. */
-static int queue_analysis(RXApp *app, RXTrack *t, unsigned what, bool force, bool override_lock)
+static int queue_analysis(CBApp *app, CBTrack *t, unsigned what, bool force, bool override_lock)
 {
     if (!app->jobs || !t)
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
     if (t->missing)
-        return RX_ERROR(ENOENT);
+        return CB_ERROR(ENOENT);
 
-    unsigned need = rx_app_analysis_needed(app, t, what, force);
+    unsigned need = cb_app_analysis_needed(app, t, what, force);
     if (t->grid_locked && !override_lock)
-        need &= ~RX_ANALYSE_BEATS;
+        need &= ~CB_ANALYSE_BEATS;
     if (!need)
         return 0;
 
-    RXAppPriv *priv = app->priv;
+    CBAppPriv *priv = app->priv;
     if (priv) {
         for (size_t i = 0; i < priv->inflight.nb; i++) {
-            const Inflight *f = rx_array_at(&priv->inflight, i);
+            const Inflight *f = cb_array_at(&priv->inflight, i);
             if (f->track_id == t->id && !(need & ~f->what))
                 return 0;
         }
     }
 
-    RXAnalysisOptions opt;
+    CBAnalysisOptions opt;
     analysis_options(&app->lib.cfg, &opt);
     /* With other work queued the pool is the parallelism; a single
      * analysis on its own may use threads inside. */
-    opt.deterministic_threads = rx_jobs_pending(app->jobs) > 0;
+    opt.deterministic_threads = cb_jobs_pending(app->jobs) > 0;
 
-    uint64_t req = rx_jobs_analyse(app->jobs, t->id, t->path, &opt, need);
+    uint64_t req = cb_jobs_analyse(app->jobs, t->id, t->path, &opt, need);
     if ((int64_t)req < 0)
         return (int)(int64_t)req;
 
@@ -1180,73 +1180,73 @@ static int queue_analysis(RXApp *app, RXTrack *t, unsigned what, bool force, boo
             .what          = need,
             .override_lock = override_lock && t->grid_locked,
         };
-        if (!rx_array_push(&priv->inflight, &f))
-            rx_warn("out of memory tracking analysis requests");
+        if (!cb_array_push(&priv->inflight, &f))
+            cb_warn("out of memory tracking analysis requests");
     }
     app->analysing_total++;
     app->dirty = true;
     return 1;
 }
 
-int rx_app_analyse_track(RXApp *app, RXTrack *t, unsigned what, bool force)
+int cb_app_analyse_track(CBApp *app, CBTrack *t, unsigned what, bool force)
 {
     if (!t)
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
     if (t->missing) {
         char name[256];
-        rx_app_set_status(app, "Cannot analyse %s: the file is missing",
+        cb_app_set_status(app, "Cannot analyse %s: the file is missing",
                           track_name(t, name, sizeof(name)));
-        return RX_ERROR(ENOENT);
+        return CB_ERROR(ENOENT);
     }
     /* One track, asked for explicitly: forcing it replaces even a locked
      * grid (the deck's RE-ANALYSE). */
     return queue_analysis(app, t, what, force, force);
 }
 
-int rx_app_analyse_tracks(RXApp *app, const uint64_t *ids, int n, unsigned what, bool force)
+int cb_app_analyse_tracks(CBApp *app, const uint64_t *ids, int n, unsigned what, bool force)
 {
     /* A locked grid is replaced only when its track is named: one track
      * selected. A selection of many (Ctrl+A among them) keeps every locked
      * grid, as Analyse all does. */
     int queued = 0;
     for (int i = 0; i < n; i++) {
-        RXTrack *t = rx_library_find_id(&app->lib, ids[i]);
+        CBTrack *t = cb_library_find_id(&app->lib, ids[i]);
         if (t && !t->missing && queue_analysis(app, t, what, force, force && n == 1) > 0)
             queued++;
     }
     return queued;
 }
 
-int rx_app_analyse_all(RXApp *app, bool force)
+int cb_app_analyse_all(CBApp *app, bool force)
 {
     /* Library-wide, locked grids are kept even when forced: a bulk
      * re-analysis must not undo grids fixed by hand. */
     int queued = 0;
     for (int i = 0; i < app->lib.nb_tracks; i++) {
-        RXTrack *t = app->lib.tracks[i];
-        if (!t->missing && queue_analysis(app, t, RX_ANALYSE_ALL, force, false) > 0)
+        CBTrack *t = app->lib.tracks[i];
+        if (!t->missing && queue_analysis(app, t, CB_ANALYSE_ALL, force, false) > 0)
             queued++;
     }
     if (queued)
-        rx_app_set_status(app, "Analysing %d track%s", queued, queued == 1 ? "" : "s");
+        cb_app_set_status(app, "Analysing %d track%s", queued, queued == 1 ? "" : "s");
     else
-        rx_app_set_status(app, "Every track is analysed");
+        cb_app_set_status(app, "Every track is analysed");
     return queued;
 }
 
 /* What an older analyser made, after an upgrade that bumped a stage's
- * version or the waveform format (rx_app_analysis_stale): those stages of
+ * version or the waveform format (cb_app_analysis_stale): those stages of
  * every track are queued, and only those (and waveforms the track lacks,
  * which always count). Locked grids stay, as in any analysis that was not
  * asked for by name. Returns how many tracks were queued. */
-static int queue_stale(RXApp *app)
+static int queue_stale(CBApp *app)
 {
     int queued = 0;
     for (int i = 0; i < app->lib.nb_tracks; i++) {
-        RXTrack *t = app->lib.tracks[i];
+        CBTrack *t = app->lib.tracks[i];
         if (t->missing)
             continue;
-        unsigned stale = rx_app_analysis_stale(app, t);
+        unsigned stale = cb_app_analysis_stale(app, t);
         if (stale && queue_analysis(app, t, stale, false, false) > 0)
             queued++;
     }
@@ -1255,22 +1255,22 @@ static int queue_stale(RXApp *app)
 
 /* override_lock: a forced analysis of one track replaces its locked grid
  * (the lock stays). */
-static int apply_analysis(RXApp *app, RXTrack *t, RXAnalysis *a, bool override_lock)
+static int apply_analysis(CBApp *app, CBTrack *t, CBAnalysis *a, bool override_lock)
 {
     if (!t || !a)
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
 
-    RXLibrary *lib = &app->lib;
+    CBLibrary *lib = &app->lib;
     int err = 0;
 
     bool grid_changed = false;
-    if ((a->done & RX_ANALYSE_BEATS) && (!t->grid_locked || override_lock) &&
-        rx_grid_valid(&a->beats.grid)) {
-        RXGrid g = { 0 };
-        int ret = rx_grid_copy(&g, &a->beats.grid);
+    if ((a->done & CB_ANALYSE_BEATS) && (!t->grid_locked || override_lock) &&
+        cb_grid_valid(&a->beats.grid)) {
+        CBGrid g = { 0 };
+        int ret = cb_grid_copy(&g, &a->beats.grid);
         if (ret < 0)
             return ret;
-        rx_grid_free(&t->grid);
+        cb_grid_free(&t->grid);
         t->grid = g;
         t->grid_confidence = a->beats.confidence;
         t->grid_flags = a->beats.flags;
@@ -1283,15 +1283,15 @@ static int apply_analysis(RXApp *app, RXTrack *t, RXAnalysis *a, bool override_l
      * current version all the same: the analysis is deterministic, so
      * running it again would find nothing again, on every start. A locked
      * grid the analysis did not replace keeps its version. */
-    if ((a->done & RX_ANALYSE_BEATS) && (!t->grid_locked || override_lock))
-        t->beats_version = RX_BEATS_VERSION;
+    if ((a->done & CB_ANALYSE_BEATS) && (!t->grid_locked || override_lock))
+        t->beats_version = CB_BEATS_VERSION;
 
-    if ((a->done & RX_ANALYSE_KEY) && a->key.key[0]) {
+    if ((a->done & CB_ANALYSE_KEY) && a->key.key[0]) {
         snprintf(t->key, sizeof(t->key), "%s", a->key.key);
         t->key_confidence = a->key.confidence;
     }
-    if (a->done & RX_ANALYSE_KEY)
-        t->key_version = RX_KEY_VERSION;
+    if (a->done & CB_ANALYSE_KEY)
+        t->key_version = CB_KEY_VERSION;
 
     /* The decode is the players' timeline: trust it over the probe. */
     if (a->duration > 0) {
@@ -1302,48 +1302,48 @@ static int apply_analysis(RXApp *app, RXTrack *t, RXAnalysis *a, bool override_l
 
     /* Cues set in bars follow a new grid. */
     if (grid_changed)
-        rx_track_resolve_cues(t);
+        cb_track_resolve_cues(t);
 
     /* dj's _auto_cues: a memory cue on the first downbeat once the music
      * starts, for a track with no cues. On a locked grid it is placed on
      * that grid. */
-    if ((a->done & RX_ANALYSE_BEATS) && lib->cfg.auto_cues && !t->nb_cues &&
-        rx_grid_valid(&t->grid)) {
-        RXBeatResult b = a->beats;
+    if ((a->done & CB_ANALYSE_BEATS) && lib->cfg.auto_cues && !t->nb_cues &&
+        cb_grid_valid(&t->grid)) {
+        CBBeatResult b = a->beats;
         b.grid = t->grid;
-        int ret = rx_analysis_auto_cues(t, &b);
+        int ret = cb_analysis_auto_cues(t, &b);
         if (ret < 0)
-            rx_warn("cannot add the automatic cue: %s", strerror(-ret));
+            cb_warn("cannot add the automatic cue: %s", strerror(-ret));
     }
 
-    if (a->done & RX_ANALYSE_WAVES) {
-        int ret = rx_library_waveforms_save(lib, t->id, &a->waves);
+    if (a->done & CB_ANALYSE_WAVES) {
+        int ret = cb_library_waveforms_save(lib, t->id, &a->waves);
         if (ret < 0) {
-            rx_warn("cannot store the waveforms of track %llu: %s", (unsigned long long)t->id,
+            cb_warn("cannot store the waveforms of track %llu: %s", (unsigned long long)t->id,
                     strerror(-ret));
             err = ret;
         } else {
             t->has_waveforms = true;
-            t->waves_version = RX_WAVES_VERSION;
+            t->waves_version = CB_WAVES_VERSION;
             waves_seen(app, t->id, false);
         }
         gpu_forget_waves(app, t->id);
     }
 
     if (a->done)
-        t->analysed = rx_time_now();
+        t->analysed = cb_time_now();
 
-    int ret = rx_library_save_track(lib, t);
+    int ret = cb_library_save_track(lib, t);
     if (ret < 0 && !err)
         err = ret;
 
-    for (int d = 0; d < RX_DECKS; d++) {
-        RXDeckView *dv = &app->decks[d];
+    for (int d = 0; d < CB_DECKS; d++) {
+        CBDeckView *dv = &app->decks[d];
         if (dv->track != t)
             continue;
         if (grid_changed && app->player)
-            rx_ctl_grid_changed(&dv->ctl);
-        if (a->done & RX_ANALYSE_WAVES)
+            cb_ctl_grid_changed(&dv->ctl);
+        if (a->done & CB_ANALYSE_WAVES)
             deck_load_waves(app, d);
     }
 
@@ -1352,23 +1352,23 @@ static int apply_analysis(RXApp *app, RXTrack *t, RXAnalysis *a, bool override_l
     return err;
 }
 
-int rx_app_apply_analysis(RXApp *app, RXTrack *t, RXAnalysis *a)
+int cb_app_apply_analysis(CBApp *app, CBTrack *t, CBAnalysis *a)
 {
     return apply_analysis(app, t, a, false);
 }
 
-int rx_app_rescan(RXApp *app)
+int cb_app_rescan(CBApp *app)
 {
-    int ret = rx_library_rescan_missing(&app->lib);
+    int ret = cb_library_rescan_missing(&app->lib);
     if (ret < 0) {
         app->last_error_count++;
-        rx_app_set_status(app, "Cannot rescan the library: %s", strerror(-ret));
+        cb_app_set_status(app, "Cannot rescan the library: %s", strerror(-ret));
         return ret;
     }
     int missing = 0;
     for (int i = 0; i < app->lib.nb_tracks; i++)
         missing += app->lib.tracks[i]->missing;
-    rx_app_set_status(app, "%d track%s changed state; %d missing", ret, ret == 1 ? "" : "s",
+    cb_app_set_status(app, "%d track%s changed state; %d missing", ret, ret == 1 ? "" : "s",
                       missing);
     app->rows_dirty = true;
     return ret;
@@ -1376,33 +1376,33 @@ int rx_app_rescan(RXApp *app)
 
 /* ------------------------------------------------------------------ tagging */
 
-/* `dir`/models/RX_APP_ML_MODEL when it is there. */
+/* `dir`/models/CB_APP_ML_MODEL when it is there. */
 static char *model_in(const char *dir)
 {
-    char *models = rx_path_join(dir, "models");
-    char *p = models ? rx_path_join(models, RX_APP_ML_MODEL) : NULL;
+    char *models = cb_path_join(dir, "models");
+    char *p = models ? cb_path_join(models, CB_APP_ML_MODEL) : NULL;
     free(models);
-    if (p && rx_file_exists(p))
+    if (p && cb_file_exists(p))
         return p;
     free(p);
     return NULL;
 }
 
-int rx_app_ml_model(const RXApp *app, char **path)
+int cb_app_ml_model(const CBApp *app, char **path)
 {
     *path = NULL;
     const char *named = app->lib.cfg.ml_model;
     if (!named || !named[0])
-        named = getenv("RXBOX_ML_MODEL");
+        named = getenv("CYANBOX_ML_MODEL");
     if (named && named[0]) {
-        char *p = rx_path_expand(named);
+        char *p = cb_path_expand(named);
         if (!p)
-            return RX_ERROR(ENOMEM);
+            return CB_ERROR(ENOMEM);
         *path = p;
-        return rx_file_exists(p) ? 0 : RX_ERROR(ENOENT);
+        return cb_file_exists(p) ? 0 : CB_ERROR(ENOENT);
     }
 
-    /* Beside the program, so an installed rxbox and one run from its
+    /* Beside the program, so an installed cyanbox and one run from its
      * build directory (whose parent is the source tree) both find the
      * tree's models/; then the current directory. */
     char exe[PATH_MAX];
@@ -1419,41 +1419,41 @@ int rx_app_ml_model(const RXApp *app, char **path)
     }
     if (!*path)
         *path = model_in(".");
-    return *path ? 0 : RX_ERROR(ENOENT);
+    return *path ? 0 : CB_ERROR(ENOENT);
 }
 
-int rx_app_tag_tracks(RXApp *app, const uint64_t *ids, int n)
+int cb_app_tag_tracks(CBApp *app, const uint64_t *ids, int n)
 {
     if (!app->jobs)
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
 
     char *model = NULL;
-    int ret = rx_app_ml_model(app, &model);
+    int ret = cb_app_ml_model(app, &model);
     if (ret < 0) {
         app->last_error_count++;
         if (model)
-            rx_app_set_status(app, "Cannot tag: there is no model at %s", model);
+            cb_app_set_status(app, "Cannot tag: there is no model at %s", model);
         else
-            rx_app_set_status(app, "Cannot tag: no model in models/ (%s), and neither the "
-                              "setting ml.model nor RXBOX_ML_MODEL names one", RX_APP_ML_MODEL);
+            cb_app_set_status(app, "Cannot tag: no model in models/ (%s), and neither the "
+                              "setting ml.model nor CYANBOX_ML_MODEL names one", CB_APP_ML_MODEL);
         free(model);
         return ret;
     }
 
     /* The legend as it is now goes with each track (the batch copies it). */
-    const char *legend[RX_TRACK_COLORS];
-    rx_config_legend(&app->lib.cfg, legend);
+    const char *legend[CB_TRACK_COLORS];
+    cb_config_legend(&app->lib.cfg, legend);
     int queued = 0, missing = 0;
-    const RXTrack *first = NULL;
+    const CBTrack *first = NULL;
     for (int i = 0; i < n; i++) {
-        RXTrack *t = rx_library_find_id(&app->lib, ids[i]);
+        CBTrack *t = cb_library_find_id(&app->lib, ids[i]);
         if (!t)
             continue;
         if (t->missing) {
             missing++;
             continue;
         }
-        uint64_t req = rx_jobs_tag(app->jobs, model, legend, t->id, t->path);
+        uint64_t req = cb_jobs_tag(app->jobs, model, legend, t->id, t->path);
         if ((int64_t)req < 0) {
             ret = (int)(int64_t)req;
             break;
@@ -1467,37 +1467,37 @@ int rx_app_tag_tracks(RXApp *app, const uint64_t *ids, int n)
     char name[256];
     if (ret < 0) {
         app->last_error_count++;
-        rx_app_set_status(app, "Cannot tag: %s", strerror(-ret));
+        cb_app_set_status(app, "Cannot tag: %s", strerror(-ret));
         return ret;
     }
     if (!queued && missing)
-        rx_app_set_status(app, "Nothing to tag: the file%s missing", missing == 1 ? " is" : "s are");
+        cb_app_set_status(app, "Nothing to tag: the file%s missing", missing == 1 ? " is" : "s are");
     else if (!queued)
-        rx_app_set_status(app, "Nothing to tag");
+        cb_app_set_status(app, "Nothing to tag");
     else if (queued == 1)
-        rx_app_set_status(app, "Tagging %s", track_name(first, name, sizeof(name)));
+        cb_app_set_status(app, "Tagging %s", track_name(first, name, sizeof(name)));
     else
-        rx_app_set_status(app, "Tagging %d tracks", queued);
+        cb_app_set_status(app, "Tagging %d tracks", queued);
     return queued;
 }
 
-void rx_app_cancel_tags(RXApp *app)
+void cb_app_cancel_tags(CBApp *app)
 {
-    if (!app->jobs || !rx_jobs_tag_progress(app->jobs, NULL, NULL, NULL))
+    if (!app->jobs || !cb_jobs_tag_progress(app->jobs, NULL, NULL, NULL))
         return;
-    rx_jobs_cancel(app->jobs, app->tag_request);
-    rx_app_set_status(app, "Tagging stopped");
+    cb_jobs_cancel(app->jobs, app->tag_request);
+    cb_app_set_status(app, "Tagging stopped");
 }
 
-bool rx_app_tag_progress(RXApp *app, int *done, int *total, uint64_t *current)
+bool cb_app_tag_progress(CBApp *app, int *done, int *total, uint64_t *current)
 {
-    return rx_jobs_tag_progress(app->jobs, done, total, current);
+    return cb_jobs_tag_progress(app->jobs, done, total, current);
 }
 
-int rx_app_apply_tags(RXApp *app, RXTrack *t, const RXMLTags *tags)
+int cb_app_apply_tags(CBApp *app, CBTrack *t, const CBMLTags *tags)
 {
     if (!t || !tags)
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
 
     /* The genre the user sees is the file's unless they changed it; an
      * override that is there and not empty is theirs, and stays. */
@@ -1505,16 +1505,16 @@ int rx_app_apply_tags(RXApp *app, RXTrack *t, const RXMLTags *tags)
     bool own = g && g[0] && strcmp(g, fg ? fg : "");
     int ret = 0;
     if (tags->genre && tags->genre[0] && !own)
-        ret = rx_meta_set(&t->meta.genre, tags->genre);
+        ret = cb_meta_set(&t->meta.genre, tags->genre);
     if (ret >= 0)
-        ret = rx_meta_set(&t->meta.comment, tags->comment ? tags->comment : "");
+        ret = cb_meta_set(&t->meta.comment, tags->comment ? tags->comment : "");
     if (ret < 0)
         return ret;
     /* The colour the model picked is stored as that colour's hue, as one
      * picked by hand is: the stick gets the same colour. */
-    if (tags->color >= 1 && tags->color <= RX_TRACK_COLORS)
-        t->meta.hue = rx_track_color_hue(tags->color);
-    static_assert(RX_ARRAY_ELEMS(t->ml_colors) == RX_ARRAY_ELEMS(tags->colors),
+    if (tags->color >= 1 && tags->color <= CB_TRACK_COLORS)
+        t->meta.hue = cb_track_color_hue(tags->color);
+    static_assert(CB_ARRAY_ELEMS(t->ml_colors) == CB_ARRAY_ELEMS(tags->colors),
                   "a probability per track colour");
     memcpy(t->ml_colors, tags->colors, sizeof(t->ml_colors));
     t->ml_legend = tags->legend;
@@ -1522,9 +1522,9 @@ int rx_app_apply_tags(RXApp *app, RXTrack *t, const RXMLTags *tags)
     t->ml_intensity = tags->intensity;
     t->ml_valence = tags->valence;
     t->ml_vocals = tags->vocals;
-    t->tags_version = RX_ML_TAGS_VERSION;
+    t->tags_version = CB_ML_TAGS_VERSION;
 
-    ret = rx_library_save_track(&app->lib, t);
+    ret = cb_library_save_track(&app->lib, t);
     app->rows_dirty = true;
     app->dirty = true;
     return ret;
@@ -1532,13 +1532,13 @@ int rx_app_apply_tags(RXApp *app, RXTrack *t, const RXMLTags *tags)
 
 /* -------------------------------------------------------------- job results */
 
-static bool take_inflight(RXAppPriv *priv, uint64_t request, Inflight *out)
+static bool take_inflight(CBAppPriv *priv, uint64_t request, Inflight *out)
 {
     for (size_t i = 0; i < priv->inflight.nb; i++) {
-        Inflight *f = rx_array_at(&priv->inflight, i);
+        Inflight *f = cb_array_at(&priv->inflight, i);
         if (f->request == request) {
             *out = *f;
-            rx_array_remove(&priv->inflight, i);
+            cb_array_remove(&priv->inflight, i);
             return true;
         }
     }
@@ -1546,19 +1546,19 @@ static bool take_inflight(RXAppPriv *priv, uint64_t request, Inflight *out)
 }
 
 /* Why an analysis failed, for the status bar. The decoder's errors come
- * back as errno values (rx_audio_error: damaged data is EINVAL, a file
+ * back as errno values (cb_audio_error: damaged data is EINVAL, a file
  * without audio ENODATA), whose own wording means little there; the log
  * has strerror's. */
 static const char *analysis_error(int err)
 {
     switch (err) {
-    case RX_ERROR(ENOENT):  return "the file is missing";
-    case RX_ERROR(EACCES):
-    case RX_ERROR(EPERM):   return "the file cannot be read (permission denied)";
-    case RX_ERROR(EINVAL):
-    case RX_ERROR(ENODATA): return "the file does not decode (damaged, or no audio)";
-    case RX_ERROR(ENOTSUP): return "the file's format is not supported";
-    case RX_ERROR(ENOMEM):  return "out of memory";
+    case CB_ERROR(ENOENT):  return "the file is missing";
+    case CB_ERROR(EACCES):
+    case CB_ERROR(EPERM):   return "the file cannot be read (permission denied)";
+    case CB_ERROR(EINVAL):
+    case CB_ERROR(ENODATA): return "the file does not decode (damaged, or no audio)";
+    case CB_ERROR(ENOTSUP): return "the file's format is not supported";
+    case CB_ERROR(ENOMEM):  return "out of memory";
     default:                return strerror(-err);
     }
 }
@@ -1567,31 +1567,31 @@ static const char *analysis_error(int err)
  * while: in a batch, the next results (up to RESULTS_PER_TICK in the same
  * tick) would otherwise replace it before it is drawn. Any other message
  * set meanwhile ends that. The row's spinner follows the worker
- * (rx_jobs_active_tracks), which is idle again by now, failed or not. */
-static void handle_analysis(RXApp *app, RXJobResult *r)
+ * (cb_jobs_active_tracks), which is idle again by now, failed or not. */
+static void handle_analysis(CBApp *app, CBJobResult *r)
 {
-    RXAppPriv *priv = app->priv;
+    CBAppPriv *priv = app->priv;
     Inflight f = { 0 };
     take_inflight(priv, r->request, &f);
     app->analysing_done++;
 
-    RXTrack *t = rx_library_find_id(&app->lib, r->track_id);
+    CBTrack *t = cb_library_find_id(&app->lib, r->track_id);
     char name[256];
     bool held = priv->status_held && priv->status_held == app->status_time &&
-                rx_time_us() - app->status_time < STATUS_HOLD_US;
+                cb_time_us() - app->status_time < STATUS_HOLD_US;
     if (!t) {
         /* Removed from the library while it was analysed. */
     } else if (r->err < 0 || !r->analysis) {
-        int err = r->err < 0 ? r->err : RX_ERROR(EINVAL);
+        int err = r->err < 0 ? r->err : CB_ERROR(EINVAL);
         app->last_error_count++;
         priv->analyses_failed++;
-        rx_warn("cannot analyse %s: %s", t->path, strerror(-err));
+        cb_warn("cannot analyse %s: %s", t->path, strerror(-err));
         track_name(t, name, sizeof(name));
         if (priv->analyses_failed > 1)
-            rx_app_set_status(app, "Analysis failed for %s: %s (%d failed so far)", name,
+            cb_app_set_status(app, "Analysis failed for %s: %s (%d failed so far)", name,
                               analysis_error(err), priv->analyses_failed);
         else
-            rx_app_set_status(app, "Analysis failed for %s: %s", name, analysis_error(err));
+            cb_app_set_status(app, "Analysis failed for %s: %s", name, analysis_error(err));
         priv->status_held = app->status_time;
     } else {
         int ret = apply_analysis(app, t, r->analysis, f.override_lock);
@@ -1599,15 +1599,15 @@ static void handle_analysis(RXApp *app, RXJobResult *r)
         track_name(t, name, sizeof(name));
         if (ret < 0) {
             app->last_error_count++;
-            rx_app_set_status(app, "Analysed %s, but saving failed: %s", name, strerror(-ret));
+            cb_app_set_status(app, "Analysed %s, but saving failed: %s", name, strerror(-ret));
             priv->status_held = app->status_time;
         } else if (held) {
             /* The failure before it stays. */
-        } else if (rx_grid_valid(&t->grid)) {
-            rx_app_set_status(app, "Analysed %s: %.2f BPM%s%s", name, rx_grid_bpm(&t->grid),
+        } else if (cb_grid_valid(&t->grid)) {
+            cb_app_set_status(app, "Analysed %s: %.2f BPM%s%s", name, cb_grid_bpm(&t->grid),
                               t->key[0] ? ", " : "", t->key);
         } else {
-            rx_app_set_status(app, "Analysed %s", name);
+            cb_app_set_status(app, "Analysed %s", name);
         }
     }
 
@@ -1623,52 +1623,52 @@ static void handle_analysis(RXApp *app, RXJobResult *r)
 static const char *tag_error(int err)
 {
     switch (err) {
-    case RX_ERROR(ENODEV): return "no GPU here can run the model (Vulkan 1.3 with 16- and 8-bit "
+    case CB_ERROR(ENODEV): return "no GPU here can run the model (Vulkan 1.3 with 16- and 8-bit "
                                   "storage)";
-    case RX_ERROR(EIO):    return "the GPU failed (see the log)";
-    case RX_ERROR(E2BIG):  return "the track is too long for the model";
+    case CB_ERROR(EIO):    return "the GPU failed (see the log)";
+    case CB_ERROR(E2BIG):  return "the track is too long for the model";
     default:               return analysis_error(err);
     }
 }
 
 /* A failure is held in the status bar as an analysis's is. */
-static void handle_tags(RXApp *app, RXJobResult *r)
+static void handle_tags(CBApp *app, CBJobResult *r)
 {
-    RXAppPriv *priv = app->priv;
+    CBAppPriv *priv = app->priv;
     char name[256];
     if (!r->track_id) {
         /* The model did not load; the batch is over. */
         app->last_error_count++;
-        rx_app_set_status(app, "Cannot load the model to tag: %s",
-                          r->err == RX_ERROR(EINVAL) ? "the file is not MOSS-Audio" : tag_error(r->err));
+        cb_app_set_status(app, "Cannot load the model to tag: %s",
+                          r->err == CB_ERROR(EINVAL) ? "the file is not MOSS-Audio" : tag_error(r->err));
         priv->status_held = app->status_time;
         return;
     }
 
-    RXTrack *t = rx_library_find_id(&app->lib, r->track_id);
+    CBTrack *t = cb_library_find_id(&app->lib, r->track_id);
     if (!t)
         return;
     track_name(t, name, sizeof(name));
     bool held = priv->status_held && priv->status_held == app->status_time &&
-                rx_time_us() - app->status_time < STATUS_HOLD_US;
+                cb_time_us() - app->status_time < STATUS_HOLD_US;
     if (r->err < 0 || !r->tags) {
-        int err = r->err < 0 ? r->err : RX_ERROR(EINVAL);
+        int err = r->err < 0 ? r->err : CB_ERROR(EINVAL);
         app->last_error_count++;
-        rx_warn("cannot tag %s: %s", t->path, strerror(-err));
-        rx_app_set_status(app, "Tagging failed for %s: %s", name, tag_error(err));
+        cb_warn("cannot tag %s: %s", t->path, strerror(-err));
+        cb_app_set_status(app, "Tagging failed for %s: %s", name, tag_error(err));
         priv->status_held = app->status_time;
         return;
     }
 
-    const RXMLTags *tags = r->tags;
-    int ret = rx_app_apply_tags(app, t, tags);
+    const CBMLTags *tags = r->tags;
+    int ret = cb_app_apply_tags(app, t, tags);
     /* "red (intense, peak time)", in the words the model was asked with:
      * the legend's now, unless it was edited since. */
-    const char *legend[RX_TRACK_COLORS];
-    rx_config_legend(&app->lib.cfg, legend);
-    const char *cname = rx_track_color_name(tags->color);
-    const char *vibe = tags->legend == rx_ml_legend_hash(legend) ?
-                       rx_config_vibe(&app->lib.cfg, tags->color) : NULL;
+    const char *legend[CB_TRACK_COLORS];
+    cb_config_legend(&app->lib.cfg, legend);
+    const char *cname = cb_track_color_name(tags->color);
+    const char *vibe = tags->legend == cb_ml_legend_hash(legend) ?
+                       cb_config_vibe(&app->lib.cfg, tags->color) : NULL;
     char colour[160];
     if (!cname)
         snprintf(colour, sizeof(colour), "no colour");
@@ -1676,20 +1676,20 @@ static void handle_tags(RXApp *app, RXJobResult *r)
         snprintf(colour, sizeof(colour), "%s (%s)", cname, vibe);
     else
         snprintf(colour, sizeof(colour), "%s", cname);
-    rx_info("tagged %s in %.1f s: %s %.2f, %s, %s", t->path, r->seconds, colour,
+    cb_info("tagged %s in %.1f s: %s %.2f, %s, %s", t->path, r->seconds, colour,
             cname ? tags->colors[tags->color - 1] : 0.0f, tags->genre ? tags->genre : "no genre",
             tags->comment ? tags->comment : "");
     if (ret < 0) {
         app->last_error_count++;
-        rx_app_set_status(app, "Tagged %s, but saving failed: %s", name, strerror(-ret));
+        cb_app_set_status(app, "Tagged %s, but saving failed: %s", name, strerror(-ret));
         priv->status_held = app->status_time;
     } else if (held) {
         /* The failure before it stays. */
     } else if (tags->genre && t->meta.genre && strcmp(t->meta.genre, tags->genre)) {
-        rx_app_set_status(app, "Tagged %s in %.1f s: %s; the genre stays %s (the model "
+        cb_app_set_status(app, "Tagged %s in %.1f s: %s; the genre stays %s (the model "
                           "hears %s)", name, r->seconds, colour, t->meta.genre, tags->genre);
     } else {
-        rx_app_set_status(app, "Tagged %s in %.1f s: %s, %s", name, r->seconds,
+        cb_app_set_status(app, "Tagged %s in %.1f s: %s, %s", name, r->seconds,
                           tags->genre ? tags->genre : "no genre", colour);
     }
 }
@@ -1697,34 +1697,34 @@ static void handle_tags(RXApp *app, RXJobResult *r)
 /* The decode of the track queued to follow the deck's: handed to the
  * player, which plays on into it at the end; a deck already stopped at
  * its end plays on now. */
-static void handle_next(RXApp *app, RXJobResult *r, int deck)
+static void handle_next(CBApp *app, CBJobResult *r, int deck)
 {
-    RXAppPriv *priv = app->priv;
-    RXDeckView *dv = &app->decks[deck];
+    CBAppPriv *priv = app->priv;
+    CBDeckView *dv = &app->decks[deck];
     priv->next_request[deck] = 0;
 
-    RXTrack *t = rx_library_find_id(&app->lib, dv->next_track_id);
+    CBTrack *t = cb_library_find_id(&app->lib, dv->next_track_id);
     if (!t || !app->player || !dv->track || dv->loading_request) {
         dv->next_track_id = 0;
         return;
     }
     char name[256];
     track_name(t, name, sizeof(name));
-    int ret = r->err < 0 ? r->err : (r->packets || r->audio ? 0 : RX_ERROR(EINVAL));
+    int ret = r->err < 0 ? r->err : (r->packets || r->audio ? 0 : CB_ERROR(EINVAL));
     if (ret == 0) {
-        const RXGrid *grid = rx_grid_valid(&t->grid) ? &t->grid : NULL;
+        const CBGrid *grid = cb_grid_valid(&t->grid) ? &t->grid : NULL;
         if (r->packets) {
-            RXPackets *pk = r->packets;
+            CBPackets *pk = r->packets;
             r->packets = NULL;
-            ret = rx_deck_queue_next_packets(app->player, deck, pk, grid);
+            ret = cb_deck_queue_next_packets(app->player, deck, pk, grid);
             if (ret < 0)
-                rx_packets_free(pk);
+                cb_packets_free(pk);
         } else {
-            RXAudio *audio = r->audio;
+            CBAudio *audio = r->audio;
             r->audio = NULL;
-            ret = rx_deck_queue_next(app->player, deck, audio, grid);
+            ret = cb_deck_queue_next(app->player, deck, audio, grid);
             if (ret < 0) {
-                rx_audio_free(audio);
+                cb_audio_free(audio);
                 free(audio);
             }
         }
@@ -1734,21 +1734,21 @@ static void handle_next(RXApp *app, RXJobResult *r, int deck)
         priv->next_failed_id[deck] = dv->next_track_id;
         dv->next_track_id = 0;
         app->last_error_count++;
-        rx_app_set_status(app, "Cannot queue %s to follow: %s", name, strerror(-ret));
+        cb_app_set_status(app, "Cannot queue %s to follow: %s", name, strerror(-ret));
         return;
     }
     if (priv->ended_for[deck] && priv->ended_for[deck] == dv->next_track_id) {
-        rx_deck_play(app->player, deck);
+        cb_deck_play(app->player, deck);
         priv->ended_for[deck] = 0;
     }
 }
 
-static void handle_decode(RXApp *app, RXJobResult *r)
+static void handle_decode(CBApp *app, CBJobResult *r)
 {
     int deck = r->deck;
-    if (deck < 0 || deck >= RX_DECKS)
+    if (deck < 0 || deck >= CB_DECKS)
         return;
-    RXDeckView *dv = &app->decks[deck];
+    CBDeckView *dv = &app->decks[deck];
 
     if (r->request && r->request == app->priv->next_request[deck]) {
         handle_next(app, r, deck);
@@ -1761,9 +1761,9 @@ static void handle_decode(RXApp *app, RXJobResult *r)
     dv->loading_request = 0;
     dv->loading_track_id = 0;
 
-    RXTrack *t = rx_library_find_id(&app->lib, id);
+    CBTrack *t = cb_library_find_id(&app->lib, id);
     if (!t) {
-        rx_app_set_status(app, "Not loaded: the track left the library meanwhile");
+        cb_app_set_status(app, "Not loaded: the track left the library meanwhile");
         return;
     }
     if (!app->player)
@@ -1773,7 +1773,7 @@ static void handle_decode(RXApp *app, RXJobResult *r)
     track_name(t, name, sizeof(name));
     if (r->err < 0 || (!r->packets && !r->audio)) {
         app->last_error_count++;
-        rx_app_set_status(app, "Cannot load %s: %s", name,
+        cb_app_set_status(app, "Cannot load %s: %s", name,
                           strerror(r->err < 0 ? -r->err : EINVAL));
         return;
     }
@@ -1784,62 +1784,62 @@ static void handle_decode(RXApp *app, RXJobResult *r)
      * old track goes only once the new one is in: a player that cannot
      * take it (its command queue full while the output stalls) keeps the
      * track it has. */
-    const RXGrid *grid = rx_grid_valid(&t->grid) ? &t->grid : NULL;
+    const CBGrid *grid = cb_grid_valid(&t->grid) ? &t->grid : NULL;
     int ret;
     if (r->packets) {
-        RXPackets *pk = r->packets;
+        CBPackets *pk = r->packets;
         r->packets = NULL;
-        ret = rx_deck_load_packets(app->player, deck, pk, grid);
+        ret = cb_deck_load_packets(app->player, deck, pk, grid);
         if (ret < 0)
-            rx_packets_free(pk);
+            cb_packets_free(pk);
     } else {
-        RXAudio *audio = r->audio;
+        CBAudio *audio = r->audio;
         r->audio = NULL;
-        ret = rx_deck_load(app->player, deck, audio, grid);
+        ret = cb_deck_load(app->player, deck, audio, grid);
         if (ret < 0) {
-            rx_audio_free(audio);
+            cb_audio_free(audio);
             free(audio);
         }
     }
     if (ret < 0) {
         app->last_error_count++;
-        rx_app_set_status(app, "Cannot load %s: %s", name, strerror(-ret));
+        cb_app_set_status(app, "Cannot load %s: %s", name, strerror(-ret));
         return;
     }
-    rx_ctl_unload(&dv->ctl);
+    cb_ctl_unload(&dv->ctl);
     deck_view_reset(app, deck);
 
     dv->track = t;
     app->priv->deck_track_id[deck] = t->id;
     dv->ctl.auto_cue = auto_cue_of(&app->lib.cfg);
-    rx_ctl_load(&dv->ctl, t);
+    cb_ctl_load(&dv->ctl, t);
     deck_load_waves(app, deck);
 
     /* rekordbox analyses a track on load when it has not been: here only
      * what is missing, the waveforms among them. */
-    queue_analysis(app, t, RX_ANALYSE_ALL, false, false);
+    queue_analysis(app, t, CB_ANALYSE_ALL, false, false);
     deck_fetch_artwork(app, deck, t);
 
-    rx_app_set_status(app, "Loaded %s", name);
+    cb_app_set_status(app, "Loaded %s", name);
 }
 
-static void handle_artwork(RXApp *app, RXJobResult *r)
+static void handle_artwork(CBApp *app, CBJobResult *r)
 {
-    RXAppPriv *priv = app->priv;
-    RXTrack *t = rx_library_find_id(&app->lib, r->track_id);
+    CBAppPriv *priv = app->priv;
+    CBTrack *t = cb_library_find_id(&app->lib, r->track_id);
 
     /* The thumbnail goes into the library whoever asked. */
     if (t && r->err >= 0 && r->jpeg) {
-        int ret = rx_library_artwork_save(&app->lib, t->id, r->jpeg, r->jpeg_size, ART_SIZE,
+        int ret = cb_library_artwork_save(&app->lib, t->id, r->jpeg, r->jpeg_size, ART_SIZE,
                                           ART_SIZE);
         if (ret < 0)
-            rx_warn("cannot store the artwork of track %llu: %s", (unsigned long long)t->id,
+            cb_warn("cannot store the artwork of track %llu: %s", (unsigned long long)t->id,
                     strerror(-ret));
     }
     bool ok = r->err >= 0 && r->rgba;
 
-    for (int d = 0; d < RX_DECKS; d++) {
-        RXDeckView *dv = &app->decks[d];
+    for (int d = 0; d < CB_DECKS; d++) {
+        CBDeckView *dv = &app->decks[d];
         if (!dv->artwork_request || dv->artwork_request != r->request)
             continue;
         dv->artwork_request = 0;
@@ -1849,9 +1849,9 @@ static void handle_artwork(RXApp *app, RXJobResult *r)
 
     /* The browser's entry takes the cover's texture, shared with the
      * tracks that have it, when the library stored it. */
-    int64_t art = t && ok ? rx_library_artwork_id(&app->lib, t->id) : 0;
+    int64_t art = t && ok ? cb_library_artwork_id(&app->lib, t->id) : 0;
     for (size_t i = 0; i < priv->gpu.nb; i++) {
-        GpuEntry *e = rx_array_at(&priv->gpu, i);
+        GpuEntry *e = cb_array_at(&priv->gpu, i);
         if (!e->art_request || e->art_request != r->request)
             continue;
         e->art_request = 0;
@@ -1862,21 +1862,21 @@ static void handle_artwork(RXApp *app, RXJobResult *r)
             e->texture = cover_ref(app, art, t->id, r->rgba, r->width, r->height);
             e->artwork_id = e->texture ? art : 0;
         } else {
-            e->texture = rx_texture_create(app->window, r->rgba, r->width, r->height);
+            e->texture = cb_texture_create(app->window, r->rgba, r->width, r->height);
         }
     }
 }
 
 /* A stick read or inspection is kept whole until the interface takes it.
  * drain_jobs frees the result it hands in, so the payload moves to a copy. */
-static void handle_stick(RXApp *app, RXJobResult *r)
+static void handle_stick(CBApp *app, CBJobResult *r)
 {
     if (r->request != app->stick_request)
         return;
     app->stick_request = 0;
-    RXJobResult *keep = malloc(sizeof(*keep));
+    CBJobResult *keep = malloc(sizeof(*keep));
     if (!keep) {
-        rx_app_set_status(app, "Out of memory reading the stick");
+        cb_app_set_status(app, "Out of memory reading the stick");
         return;
     }
     *keep = *r;
@@ -1884,27 +1884,27 @@ static void handle_stick(RXApp *app, RXJobResult *r)
     r->sync_items = NULL;
     r->nb_sync_items = 0;
     r->report = NULL;
-    rx_job_result_free(app->stick_result);
+    cb_job_result_free(app->stick_result);
     app->stick_result = keep;
 }
 
-static void handle_result(RXApp *app, RXJobResult *r)
+static void handle_result(CBApp *app, CBJobResult *r)
 {
     switch (r->kind) {
-    case RX_JOB_ANALYSE:
+    case CB_JOB_ANALYSE:
         handle_analysis(app, r);
         break;
-    case RX_JOB_DECODE:
+    case CB_JOB_DECODE:
         handle_decode(app, r);
         break;
-    case RX_JOB_ARTWORK:
+    case CB_JOB_ARTWORK:
         handle_artwork(app, r);
         break;
-    case RX_JOB_STICK_READ:
-    case RX_JOB_INSPECT:
+    case CB_JOB_STICK_READ:
+    case CB_JOB_INSPECT:
         handle_stick(app, r);
         break;
-    case RX_JOB_TAG:
+    case CB_JOB_TAG:
         handle_tags(app, r);
         break;
     }
@@ -1912,51 +1912,51 @@ static void handle_result(RXApp *app, RXJobResult *r)
 
 /* On the io queue: a read is mostly waiting on the stick, and must not
  * queue behind a library-wide analysis. */
-static int stick_job(RXApp *app, const char *mount, bool inspect)
+static int stick_job(CBApp *app, const char *mount, bool inspect)
 {
-    RXAppPriv *priv = app->priv;
+    CBAppPriv *priv = app->priv;
     if (!priv || !priv->io_jobs || !mount || !mount[0])
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
     if (app->stick_request)
-        return RX_ERROR(EBUSY);
+        return CB_ERROR(EBUSY);
 
     /* The worker compares with the library as the database holds it. */
     if (!inspect)
         flush_saves(app);
-    uint64_t req = inspect ? rx_jobs_inspect(priv->io_jobs, mount)
-                           : rx_jobs_stick_read(priv->io_jobs, app->lib.root, mount);
+    uint64_t req = inspect ? cb_jobs_inspect(priv->io_jobs, mount)
+                           : cb_jobs_stick_read(priv->io_jobs, app->lib.root, mount);
     if ((int64_t)req < 0)
         return (int)(int64_t)req;
 
-    rx_job_result_free(app->stick_result);
+    cb_job_result_free(app->stick_result);
     app->stick_result = NULL;
     app->stick_request = req;
     return 0;
 }
 
-int rx_app_read_stick(RXApp *app, const char *mount)
+int cb_app_read_stick(CBApp *app, const char *mount)
 {
     return stick_job(app, mount, false);
 }
 
-int rx_app_inspect_stick(RXApp *app, const char *mount)
+int cb_app_inspect_stick(CBApp *app, const char *mount)
 {
     return stick_job(app, mount, true);
 }
 
 /* A running read cannot be stopped; with stick_request moved on,
  * handle_stick drops its result when it comes. */
-void rx_app_cancel_stick(RXApp *app, uint64_t request)
+void cb_app_cancel_stick(CBApp *app, uint64_t request)
 {
     if (!request)
         return;
     if (app->stick_request == request) {
         if (app->priv && app->priv->io_jobs)
-            rx_jobs_cancel(app->priv->io_jobs, request);
+            cb_jobs_cancel(app->priv->io_jobs, request);
         app->stick_request = 0;
     }
     if (app->stick_result && app->stick_result->request == request) {
-        rx_job_result_free(app->stick_result);
+        cb_job_result_free(app->stick_result);
         app->stick_result = NULL;
     }
 }
@@ -1964,37 +1964,37 @@ void rx_app_cancel_stick(RXApp *app, uint64_t request)
 /* ----------------------------------------------------------------- add path */
 
 typedef struct AddCtx {
-    RXArray ids;
+    CBArray ids;
     int     failed;
 } AddCtx;
 
-static void add_cb(void *opaque, const char *path, RXTrack *added, int err)
+static void add_cb(void *opaque, const char *path, CBTrack *added, int err)
 {
     AddCtx *ctx = opaque;
     if (err < 0) {
         ctx->failed++;
-        rx_warn("cannot add %s: %s", path, strerror(-err));
+        cb_warn("cannot add %s: %s", path, strerror(-err));
         return;
     }
-    if (added && !rx_array_push(&ctx->ids, &added->id))
+    if (added && !cb_array_push(&ctx->ids, &added->id))
         ctx->failed++;
 }
 
-int rx_app_add_path(RXApp *app, const char *path)
+int cb_app_add_path(CBApp *app, const char *path)
 {
-    char *abs = rx_path_abs(path);
+    char *abs = cb_path_abs(path);
     if (!abs) {
-        rx_app_set_status(app, "Cannot add %s: no such file or directory", path);
-        return RX_ERROR(ENOENT);
+        cb_app_set_status(app, "Cannot add %s: no such file or directory", path);
+        return CB_ERROR(ENOENT);
     }
 
     AddCtx ctx = { 0 };
-    rx_array_init(&ctx.ids, sizeof(uint64_t));
+    cb_array_init(&ctx.ids, sizeof(uint64_t));
     int before = app->lib.nb_tracks;
-    int ret = rx_library_add_path(&app->lib, abs, add_cb, &ctx);
+    int ret = cb_library_add_path(&app->lib, abs, add_cb, &ctx);
     if (ret < 0) {
         app->last_error_count++;
-        rx_app_set_status(app, "Cannot add %s: %s", abs, strerror(-ret));
+        cb_app_set_status(app, "Cannot add %s: %s", abs, strerror(-ret));
         goto end;
     }
 
@@ -2002,22 +2002,22 @@ int rx_app_add_path(RXApp *app, const char *path)
      * still lack something. */
     int queued = 0;
     for (size_t i = 0; i < ctx.ids.nb; i++) {
-        RXTrack *t = rx_library_find_id(&app->lib, *(uint64_t *)rx_array_at(&ctx.ids, i));
-        if (t && queue_analysis(app, t, RX_ANALYSE_ALL, false, false) > 0)
+        CBTrack *t = cb_library_find_id(&app->lib, *(uint64_t *)cb_array_at(&ctx.ids, i));
+        if (t && queue_analysis(app, t, CB_ANALYSE_ALL, false, false) > 0)
             queued++;
     }
 
     int added = app->lib.nb_tracks - before;
     if (ctx.failed)
-        rx_app_set_status(app, "Added %d track%s from %s (%d failed), analysing %d", added,
-                          added == 1 ? "" : "s", rx_path_base(abs), ctx.failed, queued);
+        cb_app_set_status(app, "Added %d track%s from %s (%d failed), analysing %d", added,
+                          added == 1 ? "" : "s", cb_path_base(abs), ctx.failed, queued);
     else
-        rx_app_set_status(app, "Added %d track%s from %s, analysing %d", added,
-                          added == 1 ? "" : "s", rx_path_base(abs), queued);
+        cb_app_set_status(app, "Added %d track%s from %s, analysing %d", added,
+                          added == 1 ? "" : "s", cb_path_base(abs), queued);
     app->rows_dirty = true;
 
 end:
-    rx_array_free(&ctx.ids);
+    cb_array_free(&ctx.ids);
     free(abs);
     return ret;
 }
@@ -2028,7 +2028,7 @@ end:
  * through the jobs; a dry run on the export thread reports what a real run
  * would copy, skip and prune and whether the stick has player changes not
  * synced back (a dry run that only those stop lists everything all the
- * same, rxbox/export.h); when there is something to ask, the interface
+ * same, cyanbox/export.h); when there is something to ask, the interface
  * confirms (prune or not, export over unsynced changes or not), both
  * questions at once; then the real run. */
 enum ExportPhase {
@@ -2057,16 +2057,16 @@ static void export_msg_free(ExportMsg *m)
     free(m);
 }
 
-static void export_drain(RXAppPriv *priv)
+static void export_drain(CBAppPriv *priv)
 {
     if (!priv->export_mb)
         return;
     ExportMsg *m;
-    while ((m = rx_mailbox_take(priv->export_mb)))
+    while ((m = cb_mailbox_take(priv->export_mb)))
         export_msg_free(m);
 }
 
-static void export_prune_list_free(RXApp *app)
+static void export_prune_list_free(CBApp *app)
 {
     typeof(app->export_state) *es = &app->export_state;
     for (int i = 0; i < es->nb_prune; i++)
@@ -2077,8 +2077,8 @@ static void export_prune_list_free(RXApp *app)
 }
 
 /* Appends a line to the dialog's log, dropping the oldest lines when full. */
-static void export_log(RXApp *app, const char *fmt, ...) RX_PRINTF(2, 3);
-static void export_log(RXApp *app, const char *fmt, ...)
+static void export_log(CBApp *app, const char *fmt, ...) CB_PRINTF(2, 3);
+static void export_log(CBApp *app, const char *fmt, ...)
 {
     char line[512];
     va_list args;
@@ -2105,7 +2105,7 @@ static int export_cmp_id(const void *a, const void *b)
     return x < y ? -1 : x > y;
 }
 
-static void export_wait_free(RXAppPriv *priv)
+static void export_wait_free(CBAppPriv *priv)
 {
     free(priv->export_wait);
     priv->export_wait = NULL;
@@ -2116,24 +2116,24 @@ static void export_wait_free(RXAppPriv *priv)
  * with an analysis in flight, queued by the export or before it, and
  * nothing else (after an analyser upgrade the startup queue holds the
  * whole library). */
-static int export_wait_for(RXApp *app, const RXArray *ids)
+static int export_wait_for(CBApp *app, const CBArray *ids)
 {
-    RXAppPriv *priv = app->priv;
+    CBAppPriv *priv = app->priv;
     export_wait_free(priv);
-    uint64_t *in = malloc(RX_MAX(priv->inflight.nb, 1) * sizeof(*in));
-    uint64_t *w = malloc(RX_MAX(ids->nb, 1) * sizeof(*w));
+    uint64_t *in = malloc(CB_MAX(priv->inflight.nb, 1) * sizeof(*in));
+    uint64_t *w = malloc(CB_MAX(ids->nb, 1) * sizeof(*w));
     if (!in || !w) {
         free(in);
         free(w);
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     }
     for (size_t i = 0; i < priv->inflight.nb; i++)
-        in[i] = ((const Inflight *)rx_array_at(&priv->inflight, i))->track_id;
+        in[i] = ((const Inflight *)cb_array_at(&priv->inflight, i))->track_id;
     if (priv->inflight.nb)
         qsort(in, priv->inflight.nb, sizeof(*in), export_cmp_id);
     int n = 0;
     for (size_t i = 0; i < ids->nb; i++) {
-        const uint64_t *id = rx_array_at(ids, i);
+        const uint64_t *id = cb_array_at(ids, i);
         if (priv->inflight.nb && bsearch(id, in, priv->inflight.nb, sizeof(*in), export_cmp_id))
             w[n++] = *id;
     }
@@ -2151,16 +2151,16 @@ static int export_wait_for(RXApp *app, const RXArray *ids)
 }
 
 /* How many of them are still in flight; the others leave the list. */
-static int export_waiting(RXApp *app)
+static int export_waiting(CBApp *app)
 {
-    RXAppPriv *priv = app->priv;
+    CBAppPriv *priv = app->priv;
     if (!priv->nb_export_wait)
         return 0;
     uint8_t *still = calloc((size_t)priv->nb_export_wait, 1);
     if (!still)
         return priv->nb_export_wait;
     for (size_t i = 0; i < priv->inflight.nb; i++) {
-        const Inflight *f = rx_array_at(&priv->inflight, i);
+        const Inflight *f = cb_array_at(&priv->inflight, i);
         const uint64_t *at = bsearch(&f->track_id, priv->export_wait, (size_t)priv->nb_export_wait,
                                      sizeof(*priv->export_wait), export_cmp_id);
         if (at)
@@ -2176,15 +2176,15 @@ static int export_waiting(RXApp *app)
 }
 
 /* Whether the analyses still waited for will never come back. The jobs
- * post a result before they count it done (rxbox/jobs.h), so with nothing
+ * post a result before they count it done (cyanbox/jobs.h), so with nothing
  * pending every result is in their mailbox, and a tick that then applies
- * none (rx_app_tick drains before this) has seen the last: one whose post
+ * none (cb_app_tick drains before this) has seen the last: one whose post
  * failed for memory is lost, and the export goes on without it rather
  * than wait for ever. */
-static bool export_lost(RXApp *app, int waiting)
+static bool export_lost(CBApp *app, int waiting)
 {
-    RXAppPriv *priv = app->priv;
-    if (rx_jobs_pending(app->jobs) > 0) {
+    CBAppPriv *priv = app->priv;
+    if (cb_jobs_pending(app->jobs) > 0) {
         priv->export_idle = false;
         return false;
     }
@@ -2193,7 +2193,7 @@ static bool export_lost(RXApp *app, int waiting)
         priv->export_idle_done = app->analysing_done;
         return false;
     }
-    rx_warn("export: %d analys%s never came back", waiting, waiting == 1 ? "is" : "es");
+    cb_warn("export: %d analys%s never came back", waiting, waiting == 1 ? "is" : "es");
     export_log(app, "%d analys%s never came back; exporting without waiting", waiting,
                waiting == 1 ? "is" : "es");
     return true;
@@ -2206,27 +2206,27 @@ static bool export_progress(void *opaque, const char *stage, int done, int total
     ExportMsg *m = calloc(1, sizeof(*m));
     if (m) {
         snprintf(m->stage, sizeof(m->stage), "%s", stage ? stage : "");
-        m->item = rx_strdup(item);
+        m->item = cb_strdup(item);
         m->done = done;
         m->total = total;
-        if (rx_mailbox_post(ej->mb, m) < 0)
+        if (cb_mailbox_post(ej->mb, m) < 0)
             export_msg_free(m);
     }
-    return !rx_cancelled(ej->cancel);
+    return !cb_cancelled(ej->cancel);
 }
 
 /* Export thread: the selected playlists in its own library handle. */
-static int resolve_playlists(RXLibrary *lib, const ExportJob *ej, RXPlaylist ***out)
+static int resolve_playlists(CBLibrary *lib, const ExportJob *ej, CBPlaylist ***out)
 {
-    int nb_all = rx_library_playlists_flat(lib, NULL, 0);
-    RXPlaylist **all = calloc(RX_MAX(nb_all, 1), sizeof(*all));
-    RXPlaylist **sel = calloc(ej->nb_playlists, sizeof(*sel));
+    int nb_all = cb_library_playlists_flat(lib, NULL, 0);
+    CBPlaylist **all = calloc(CB_MAX(nb_all, 1), sizeof(*all));
+    CBPlaylist **sel = calloc(ej->nb_playlists, sizeof(*sel));
     if (!all || !sel) {
         free(all);
         free(sel);
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     }
-    nb_all = rx_library_playlists_flat(lib, all, nb_all);
+    nb_all = cb_library_playlists_flat(lib, all, nb_all);
 
     int ret = 0;
     for (int i = 0; i < ej->nb_playlists; i++) {
@@ -2235,8 +2235,8 @@ static int resolve_playlists(RXLibrary *lib, const ExportJob *ej, RXPlaylist ***
                 sel[i] = all[k];
         }
         if (!sel[i]) {
-            rx_err("export: playlist %lld is gone", (long long)ej->playlists[i]);
-            ret = RX_ERROR(ENOENT);
+            cb_err("export: playlist %lld is gone", (long long)ej->playlists[i]);
+            ret = CB_ERROR(ENOENT);
         }
     }
     free(all);
@@ -2251,20 +2251,20 @@ static int resolve_playlists(RXLibrary *lib, const ExportJob *ej, RXPlaylist ***
 static void *export_main(void *arg)
 {
     ExportJob *ej = arg;
-    RXPlaylist **playlists = NULL;
+    CBPlaylist **playlists = NULL;
 
     /* The snapshot, opened here: reading the library and looking at every
      * file takes a while, and the interface goes on meanwhile. */
     int ret = 0;
-    if (ej->root && (ret = rx_library_open(ej->lib, ej->root)) >= 0)
+    if (ej->root && (ret = cb_library_open(ej->lib, ej->root)) >= 0)
         ej->opened = true;
     if (ret >= 0 && ej->nb_playlists)
         ret = resolve_playlists(ej->lib, ej, &playlists);
     if (ret >= 0) {
-        RXExportOptions opt;
-        rx_export_options_default(&opt);
+        CBExportOptions opt;
+        cb_export_options_default(&opt);
         opt.whole_library = ej->whole_library;
-        opt.playlists = (const RXPlaylist *const *)playlists;
+        opt.playlists = (const CBPlaylist *const *)playlists;
         opt.nb_playlists = ej->nb_playlists;
         opt.prune = ej->prune;
         opt.ignore_unsynced = ej->ignore_unsynced;
@@ -2272,7 +2272,7 @@ static void *export_main(void *arg)
         opt.format = ej->format;
         opt.dry_run = ej->dry_run;
         opt.stats = &ej->stats;
-        ret = rx_export(ej->lib, ej->dest, &opt, export_progress, ej);
+        ret = cb_export(ej->lib, ej->dest, &opt, export_progress, ej);
     }
     free(playlists);
 
@@ -2283,7 +2283,7 @@ static void *export_main(void *arg)
 
 /* Joins the export thread and drops its job; a snapshot the thread opened
  * is the app's from here on. */
-static void export_join(RXAppPriv *priv)
+static void export_join(CBAppPriv *priv)
 {
     if (priv->export_started) {
         pthread_join(priv->export_thread, NULL);
@@ -2297,16 +2297,16 @@ static void export_join(RXAppPriv *priv)
 }
 
 /* The export is over: its snapshot goes (after export_join). */
-static void export_snapshot_close(RXAppPriv *priv)
+static void export_snapshot_close(CBAppPriv *priv)
 {
     if (priv->export_lib_open)
-        rx_library_close(&priv->export_lib);
+        cb_library_close(&priv->export_lib);
     priv->export_lib_open = false;
 }
 
-static void export_finish(RXApp *app, int result)
+static void export_finish(CBApp *app, int result)
 {
-    RXAppPriv *priv = app->priv;
+    CBAppPriv *priv = app->priv;
     export_join(priv);
     export_snapshot_close(priv);
     export_wait_free(priv);
@@ -2321,29 +2321,29 @@ static void export_finish(RXApp *app, int result)
     if (result >= 0) {
         snprintf(es->stage, sizeof(es->stage), "done");
         export_log(app, "Finished");
-        rx_app_set_status(app, "Export to %s finished", es->dest);
-    } else if (result == RX_ERROR(ECANCELED)) {
+        cb_app_set_status(app, "Export to %s finished", es->dest);
+    } else if (result == CB_ERROR(ECANCELED)) {
         snprintf(es->stage, sizeof(es->stage), "cancelled");
         export_log(app, "Cancelled");
-        rx_app_set_status(app, "Export to %s cancelled", es->dest);
+        cb_app_set_status(app, "Export to %s cancelled", es->dest);
     } else {
         snprintf(es->stage, sizeof(es->stage), "failed");
         export_log(app, "Failed: %s", strerror(-result));
         app->last_error_count++;
-        rx_app_set_status(app, "Export to %s failed: %s", es->dest, strerror(-result));
+        cb_app_set_status(app, "Export to %s failed: %s", es->dest, strerror(-result));
     }
 }
 
 /* Starts a dry or a real run on the export thread, from the dialog state. */
-static void export_run(RXApp *app, bool dry_run)
+static void export_run(CBApp *app, bool dry_run)
 {
-    RXAppPriv *priv = app->priv;
+    CBAppPriv *priv = app->priv;
     typeof(app->export_state) *es = &app->export_state;
 
     /* The snapshot both runs export: the dry run's thread opens it once
      * pending saves are written (export_tick), the real run exports the
      * same one. An edit committed while it is read is in it whole or not
-     * at all (rx_library_open reads in one transaction). */
+     * at all (cb_library_open reads in one transaction). */
     bool open = !priv->export_lib_open;
     if (open)
         priv->export_generation = app->lib.generation;
@@ -2352,12 +2352,12 @@ static void export_run(RXApp *app, bool dry_run)
 
     ExportJob *ej = calloc(1, sizeof(*ej));
     if (!ej) {
-        export_finish(app, RX_ERROR(ENOMEM));
+        export_finish(app, CB_ERROR(ENOMEM));
         return;
     }
     ej->lib = &priv->export_lib;
-    ej->root = open ? rx_strdup(app->lib.root) : NULL;
-    ej->dest = rx_strdup(es->dest);
+    ej->root = open ? cb_strdup(app->lib.root) : NULL;
+    ej->dest = cb_strdup(es->dest);
     if (priv->nb_export_playlists) {
         ej->playlists = calloc(priv->nb_export_playlists, sizeof(*ej->playlists));
         if (ej->playlists) {
@@ -2368,7 +2368,7 @@ static void export_run(RXApp *app, bool dry_run)
     }
     if (!ej->dest || (open && !ej->root) || (priv->nb_export_playlists && !ej->playlists)) {
         export_job_free(ej);
-        export_finish(app, RX_ERROR(ENOMEM));
+        export_finish(app, CB_ERROR(ENOMEM));
         return;
     }
     ej->whole_library = es->whole_library;
@@ -2397,20 +2397,20 @@ static void export_run(RXApp *app, bool dry_run)
     priv->export_phase = dry_run ? EXPORT_DRY_RUN : EXPORT_RUNNING;
     int ret = pthread_create(&priv->export_thread, NULL, export_main, ej);
     if (ret) {
-        export_finish(app, RX_ERROR(ret));
+        export_finish(app, CB_ERROR(ret));
         return;
     }
     priv->export_started = true;
     export_log(app, "%s to %s", dry_run ? "Checking the export" : "Exporting", es->dest);
-    rx_app_set_status(app, "%s to %s", dry_run ? "Checking the export" : "Exporting", es->dest);
+    cb_app_set_status(app, "%s to %s", dry_run ? "Checking the export" : "Exporting", es->dest);
 }
 
 /* The check that blocks an export over player changes not synced back
- * (rxbox/export.h) is recognised by its wording. */
+ * (cyanbox/export.h) is recognised by its wording. */
 static bool unsynced_check(const char *item)
 {
-    return rx_str_contains_fold(item, "unsynced") || rx_str_contains_fold(item, "not synced") ||
-           rx_str_contains_fold(item, "sync first");
+    return cb_str_contains_fold(item, "unsynced") || cb_str_contains_fold(item, "not synced") ||
+           cb_str_contains_fold(item, "sync first");
 }
 
 /* How many changes that check counts: the first number in its wording
@@ -2424,9 +2424,9 @@ static int unsynced_changes(const char *item)
     return n > 0 && n < INT32_MAX ? (int)n : 1;
 }
 
-static void export_apply_msg(RXApp *app, const ExportMsg *m)
+static void export_apply_msg(CBApp *app, const ExportMsg *m)
 {
-    RXAppPriv *priv = app->priv;
+    CBAppPriv *priv = app->priv;
     typeof(app->export_state) *es = &app->export_state;
     bool dry = priv->export_phase == EXPORT_DRY_RUN;
 
@@ -2457,7 +2457,7 @@ static void export_apply_msg(RXApp *app, const ExportMsg *m)
         else if (!strcmp(m->stage, "analysis files") || !strcmp(m->stage, "artwork") ||
                  !strcmp(m->stage, "database"))
             es->rewritten++;
-    } else if (!dry && !strcmp(m->stage, "prune") && rx_str_starts(m->item, "cannot remove")) {
+    } else if (!dry && !strcmp(m->stage, "prune") && cb_str_starts(m->item, "cannot remove")) {
         es->pruned--;
     }
 
@@ -2474,7 +2474,7 @@ static void export_apply_msg(RXApp *app, const ExportMsg *m)
             char **list = realloc(es->prune_list, (es->nb_prune + 1) * sizeof(*list));
             if (list) {
                 es->prune_list = list;
-                list[es->nb_prune] = rx_strdup(m->item);
+                list[es->nb_prune] = cb_strdup(m->item);
                 if (list[es->nb_prune])
                     es->nb_prune++;
             }
@@ -2488,9 +2488,9 @@ static void export_apply_msg(RXApp *app, const ExportMsg *m)
 }
 
 /* A dry run ended: ask, run for real, or stop. */
-static void export_after_dry_run(RXApp *app, int result)
+static void export_after_dry_run(CBApp *app, int result)
 {
-    RXAppPriv *priv = app->priv;
+    CBAppPriv *priv = app->priv;
     typeof(app->export_state) *es = &app->export_state;
     export_join(priv);
 
@@ -2498,7 +2498,7 @@ static void export_after_dry_run(RXApp *app, int result)
      * everything else, and one question covers both; stopped by anything
      * else, the export cannot run: nothing to ask. */
     bool blocked = es->unsynced > 0 && !es->ignore_unsynced;
-    if (result < 0 && !(blocked && result == RX_ERROR(EBUSY))) {
+    if (result < 0 && !(blocked && result == CB_ERROR(EBUSY))) {
         export_finish(app, result);
         return;
     }
@@ -2513,25 +2513,25 @@ static void export_after_dry_run(RXApp *app, int result)
         if (es->nb_prune)
             export_log(app, "%d file%s on the stick %s no longer exported", es->nb_prune,
                        es->nb_prune == 1 ? "" : "s", es->nb_prune == 1 ? "is" : "are");
-        rx_app_set_status(app, "Export to %s: waiting for confirmation", es->dest);
+        cb_app_set_status(app, "Export to %s: waiting for confirmation", es->dest);
         return;
     }
     export_run(app, false);
 }
 
-static bool export_tick(RXApp *app)
+static bool export_tick(CBApp *app)
 {
-    RXAppPriv *priv = app->priv;
+    CBAppPriv *priv = app->priv;
     typeof(app->export_state) *es = &app->export_state;
     if (priv->export_phase == EXPORT_IDLE)
         return false;
 
     if (es->cancel) {
         if (priv->export_phase == EXPORT_ANALYSING || priv->export_phase == EXPORT_CONFIRM) {
-            export_finish(app, RX_ERROR(ECANCELED));
+            export_finish(app, CB_ERROR(ECANCELED));
             return true;
         }
-        rx_cancel(&priv->export_cancel);
+        cb_cancel(&priv->export_cancel);
     }
 
     switch (priv->export_phase) {
@@ -2557,7 +2557,7 @@ static bool export_tick(RXApp *app)
     bool finished = ej && __atomic_load_n(&ej->finished, __ATOMIC_ACQUIRE);
     bool changed = false;
     ExportMsg *m;
-    while ((m = rx_mailbox_take(priv->export_mb))) {
+    while ((m = cb_mailbox_take(priv->export_mb))) {
         export_apply_msg(app, m);
         export_msg_free(m);
         changed = true;
@@ -2583,9 +2583,9 @@ static bool export_tick(RXApp *app)
         /* A real run that got to the end despite a late cancel did export;
          * a dry run that did exported nothing, and the real one never
          * starts. */
-        if (rx_cancelled(&priv->export_cancel)) {
+        if (cb_cancelled(&priv->export_cancel)) {
             bool exported = result >= 0 && priv->export_phase == EXPORT_RUNNING;
-            export_finish(app, exported ? result : RX_ERROR(ECANCELED));
+            export_finish(app, exported ? result : CB_ERROR(ECANCELED));
         } else if (priv->export_phase == EXPORT_DRY_RUN) {
             export_after_dry_run(app, result);
         } else {
@@ -2596,11 +2596,11 @@ static bool export_tick(RXApp *app)
     return changed;
 }
 
-/* Stops a running export for good (rx_app_destroy). */
-static void export_stop(RXApp *app)
+/* Stops a running export for good (cb_app_destroy). */
+static void export_stop(CBApp *app)
 {
-    RXAppPriv *priv = app->priv;
-    rx_cancel(&priv->export_cancel);
+    CBAppPriv *priv = app->priv;
+    cb_cancel(&priv->export_cancel);
     export_join(priv);
     export_snapshot_close(priv);
     export_wait_free(priv);
@@ -2610,12 +2610,12 @@ static void export_stop(RXApp *app)
     export_prune_list_free(app);
 }
 
-int rx_app_start_export(RXApp *app)
+int cb_app_start_export(CBApp *app)
 {
-    RXAppPriv *priv = app->priv;
+    CBAppPriv *priv = app->priv;
     typeof(app->export_state) *es = &app->export_state;
     if (!priv)
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
 
     /* The answer to the confirmation: the real run, which the dry run
      * found nothing else in the way of. */
@@ -2626,13 +2626,13 @@ int rx_app_start_export(RXApp *app)
         return 0;
     }
     if (priv->export_phase != EXPORT_IDLE) {
-        rx_app_set_status(app, "An export is already running");
-        return RX_ERROR(EBUSY);
+        cb_app_set_status(app, "An export is already running");
+        return CB_ERROR(EBUSY);
     }
-    if (!es->dest[0] || !rx_dir_exists(es->dest)) {
-        rx_app_set_status(app, "%s is not a directory (mount the stick first)",
+    if (!es->dest[0] || !cb_dir_exists(es->dest)) {
+        cb_app_set_status(app, "%s is not a directory (mount the stick first)",
                           es->dest[0] ? es->dest : "The destination");
-        return RX_ERROR(ENOTDIR);
+        return CB_ERROR(ENOTDIR);
     }
 
     es->running = true;
@@ -2656,7 +2656,7 @@ int rx_app_start_export(RXApp *app)
         priv->export_playlists = calloc(es->nb_playlists, sizeof(*priv->export_playlists));
         if (!priv->export_playlists) {
             es->running = false;
-            return RX_ERROR(ENOMEM);
+            return CB_ERROR(ENOMEM);
         }
         for (int i = 0; i < es->nb_playlists; i++) {
             if (es->playlists[i])
@@ -2669,41 +2669,41 @@ int rx_app_start_export(RXApp *app)
      * playlists' tracks, every playlist's by default, or everything. The
      * export waits for those (export_wait_for), not for the rest of the
      * queue. */
-    RXArray ids;
-    rx_array_init(&ids, sizeof(uint64_t));
+    CBArray ids;
+    cb_array_init(&ids, sizeof(uint64_t));
     bool oom = false;
     if (es->whole_library) {
         for (int i = 0; i < app->lib.nb_tracks; i++) {
-            RXTrack *t = app->lib.tracks[i];
+            CBTrack *t = app->lib.tracks[i];
             if (t->missing)
                 continue;
-            queue_analysis(app, t, RX_ANALYSE_ALL, false, false);
-            oom |= !rx_array_push(&ids, &t->id);
+            queue_analysis(app, t, CB_ANALYSE_ALL, false, false);
+            oom |= !cb_array_push(&ids, &t->id);
         }
     } else {
         int nb = es->nb_playlists;
-        RXPlaylist **pls = es->playlists;
-        RXPlaylist **all = NULL;
+        CBPlaylist **pls = es->playlists;
+        CBPlaylist **all = NULL;
         if (!nb || !pls) {
-            nb = rx_library_playlists_flat(&app->lib, NULL, 0);
-            all = calloc(RX_MAX(nb, 1), sizeof(*all));
-            nb = all ? rx_library_playlists_flat(&app->lib, all, nb) : 0;
+            nb = cb_library_playlists_flat(&app->lib, NULL, 0);
+            all = calloc(CB_MAX(nb, 1), sizeof(*all));
+            nb = all ? cb_library_playlists_flat(&app->lib, all, nb) : 0;
             pls = all;
         }
         for (int i = 0; i < nb; i++) {
-            const RXPlaylist *p = pls[i];
+            const CBPlaylist *p = pls[i];
             for (int k = 0; p && k < p->nb; k++) {
-                RXTrack *t = rx_library_find_id(&app->lib, p->track_ids[k]);
+                CBTrack *t = cb_library_find_id(&app->lib, p->track_ids[k]);
                 if (!t || t->missing)
                     continue;
-                queue_analysis(app, t, RX_ANALYSE_ALL, false, false);
-                oom |= !rx_array_push(&ids, &t->id);
+                queue_analysis(app, t, CB_ANALYSE_ALL, false, false);
+                oom |= !cb_array_push(&ids, &t->id);
             }
         }
         free(all);
     }
-    int ret = oom ? RX_ERROR(ENOMEM) : export_wait_for(app, &ids);
-    rx_array_free(&ids);
+    int ret = oom ? CB_ERROR(ENOMEM) : export_wait_for(app, &ids);
+    cb_array_free(&ids);
     if (ret < 0) {
         es->running = false;
         return ret;
@@ -2717,7 +2717,7 @@ int rx_app_start_export(RXApp *app)
     if (priv->nb_export_wait) {
         export_log(app, "Analysing %d track%s first", priv->nb_export_wait,
                    priv->nb_export_wait == 1 ? "" : "s");
-        rx_app_set_status(app, "Analysing before the export to %s", es->dest);
+        cb_app_set_status(app, "Analysing before the export to %s", es->dest);
     }
     /* With nothing to wait for, the next tick starts the dry run. */
     app->dirty = true;
@@ -2732,7 +2732,7 @@ typedef struct RowKey {
 } RowKey;
 
 typedef struct SortCtx {
-    const RXLibrary *lib;
+    const CBLibrary *lib;
     int  column;
     bool descending;
 } SortCtx;
@@ -2743,18 +2743,18 @@ typedef struct SortVal {
     const char *str;
 } SortVal;
 
-static const char *title_of(const RXTrack *t)
+static const char *title_of(const CBTrack *t)
 {
-    return t->meta.title && t->meta.title[0] ? t->meta.title : rx_path_base(t->path);
+    return t->meta.title && t->meta.title[0] ? t->meta.title : cb_path_base(t->path);
 }
 
 /* Camelot order: 1A 1B 2A 2B ... 12B, which keeps compatible keys together. */
-static int key_rank(const RXTrack *t)
+static int key_rank(const CBTrack *t)
 {
     if (!t->key[0])
         return -1;
     char buf[8];
-    const char *c = rx_key_to_camelot(t->key, buf, sizeof(buf));
+    const char *c = cb_key_to_camelot(t->key, buf, sizeof(buf));
     if (!c || !c[0])
         return -1;
     char *end;
@@ -2764,69 +2764,69 @@ static int key_rank(const RXTrack *t)
     return (int)n * 2 + (*end == 'B' || *end == 'b');
 }
 
-static SortVal sort_value(const RXTrack *t, int column)
+static SortVal sort_value(const CBTrack *t, int column)
 {
     SortVal v = { 0 };
     switch (column) {
-    case RX_COL_TITLE:
+    case CB_COL_TITLE:
         v.str = title_of(t);
         break;
-    case RX_COL_ARTIST:
+    case CB_COL_ARTIST:
         v.str = t->meta.artist;
         break;
-    case RX_COL_ALBUM:
+    case CB_COL_ALBUM:
         v.str = t->meta.album;
         break;
-    case RX_COL_GENRE:
+    case CB_COL_GENRE:
         v.str = t->meta.genre;
         break;
-    case RX_COL_PATH:
+    case CB_COL_PATH:
         v.str = t->path;
         break;
-    case RX_COL_BPM:
-        v.num = rx_grid_bpm(&t->grid);
+    case CB_COL_BPM:
+        v.num = cb_grid_bpm(&t->grid);
         v.known = v.num > 0;
         return v;
-    case RX_COL_KEY:
+    case CB_COL_KEY:
         v.num = key_rank(t);
         v.known = v.num >= 0;
         return v;
-    case RX_COL_TIME:
+    case CB_COL_TIME:
         v.num = t->duration;
         v.known = v.num > 0;
         return v;
-    case RX_COL_RATING:
+    case CB_COL_RATING:
         v.num = t->meta.rating;
         v.known = true;
         return v;
-    case RX_COL_COLOR: {
+    case CB_COL_COLOR: {
         /* In the legend's order, pink to purple, no colour last. */
-        int id = rx_track_color_of_hue(t->meta.hue);
+        int id = cb_track_color_of_hue(t->meta.hue);
         v.num = id;
         v.known = id > 0;
         return v;
     }
-    case RX_COL_CUES: {
+    case CB_COL_CUES: {
         int hot = 0;
         for (int i = 0; i < t->nb_cues; i++)
-            hot += rx_cue_is_hot(&t->cues[i]);
+            hot += cb_cue_is_hot(&t->cues[i]);
         v.num = hot * 1000.0 + (t->nb_cues - hot);
         v.known = true;
         return v;
     }
-    case RX_COL_YEAR:
+    case CB_COL_YEAR:
         v.num = t->meta.year;
         v.known = v.num > 0;
         return v;
-    case RX_COL_ADDED:
+    case CB_COL_ADDED:
         v.num = (double)t->added;
         v.known = true;
         return v;
-    case RX_COL_PLAYS:
+    case CB_COL_PLAYS:
         v.num = t->play_count;
         v.known = true;
         return v;
-    case RX_COL_LAST_PLAYED:
+    case CB_COL_LAST_PLAYED:
         v.num = (double)t->last_played;
         v.known = v.num > 0;
         return v;
@@ -2850,7 +2850,7 @@ static int compare_rows(const void *pa, const void *pb, void *opaque)
     if (va.known) {
         int c;
         if (va.str || vb.str)
-            c = rx_strnatcasecmp(va.str ? va.str : "", vb.str ? vb.str : "");
+            c = cb_strnatcasecmp(va.str ? va.str : "", vb.str ? vb.str : "");
         else
             c = (va.num > vb.num) - (va.num < vb.num);
         if (ctx->descending)
@@ -2881,31 +2881,31 @@ static int search_words(const char *search, char *buf, size_t size, char **words
 
 static bool field_matches(const char *field, const char *word)
 {
-    return field && field[0] && rx_str_contains_fold(field, word);
+    return field && field[0] && cb_str_contains_fold(field, word);
 }
 
 /* Every word must be found in one of the fields the table shows. */
-static bool track_matches(const RXTrack *t, char **words, int nb_words)
+static bool track_matches(const CBTrack *t, char **words, int nb_words)
 {
     for (int i = 0; i < nb_words; i++) {
         const char *w = words[i];
         if (!field_matches(t->meta.title, w) && !field_matches(t->meta.artist, w) &&
             !field_matches(t->meta.album, w) && !field_matches(t->meta.genre, w) &&
-            !field_matches(t->meta.comment, w) && !field_matches(rx_path_base(t->path), w))
+            !field_matches(t->meta.comment, w) && !field_matches(cb_path_base(t->path), w))
             return false;
     }
     return true;
 }
 
-static bool playlist_exists(const RXLibrary *lib, const RXPlaylist *p)
+static bool playlist_exists(const CBLibrary *lib, const CBPlaylist *p)
 {
-    int nb = rx_library_playlists_flat(lib, NULL, 0);
+    int nb = cb_library_playlists_flat(lib, NULL, 0);
     if (nb <= 0)
         return false;
-    RXPlaylist **all = calloc(nb, sizeof(*all));
+    CBPlaylist **all = calloc(nb, sizeof(*all));
     if (!all)
         return true;
-    nb = rx_library_playlists_flat(lib, all, nb);
+    nb = cb_library_playlists_flat(lib, all, nb);
     bool found = false;
     for (int i = 0; i < nb && !found; i++)
         found = all[i] == p;
@@ -2913,37 +2913,37 @@ static bool playlist_exists(const RXLibrary *lib, const RXPlaylist *p)
     return found;
 }
 
-static bool in_album(const RXTrack *t, const char *album)
+static bool in_album(const CBTrack *t, const char *album)
 {
-    return t->meta.album && !rx_strcasecmp(t->meta.album, album);
+    return t->meta.album && !cb_strcasecmp(t->meta.album, album);
 }
 
-/* The History's tracks (rx_app_show_history), each once at its latest
+/* The History's tracks (cb_app_show_history), each once at its latest
  * play, oldest first, made again when the library has changed. Its count,
  * or a negative errno. */
-static int history_tracks(RXApp *app)
+static int history_tracks(CBApp *app)
 {
-    RXAppPriv *priv = app->priv;
-    RXLibrary *lib = &app->lib;
+    CBAppPriv *priv = app->priv;
+    CBLibrary *lib = &app->lib;
     if (!priv)
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
     if (priv->history_generation == lib->generation)
         return priv->nb_history;
-    RXHistoryEntry *h = NULL;
+    CBHistoryEntry *h = NULL;
     int nb = 0;
-    int ret = rx_library_history(lib, &h, &nb);
-    bool *seen = ret >= 0 ? calloc((size_t)RX_MAX(lib->nb_tracks, 1), sizeof(*seen)) : NULL;
-    uint64_t *ids = seen ? malloc((size_t)RX_MAX(nb, 1) * sizeof(*ids)) : NULL;
+    int ret = cb_library_history(lib, &h, &nb);
+    bool *seen = ret >= 0 ? calloc((size_t)CB_MAX(lib->nb_tracks, 1), sizeof(*seen)) : NULL;
+    uint64_t *ids = seen ? malloc((size_t)CB_MAX(nb, 1) * sizeof(*ids)) : NULL;
     if (!ids) {
         free(h);
         free(seen);
-        return ret < 0 ? ret : RX_ERROR(ENOMEM);
+        return ret < 0 ? ret : CB_ERROR(ENOMEM);
     }
     /* Newest first, each track at its first sight; then turned round. */
     int n = 0;
     for (int i = nb - 1; i >= 0; i--) {
-        const RXTrack *t = rx_library_find_id(lib, h[i].track_id);
-        int idx = t ? rx_library_index_of(lib, t) : -1;
+        const CBTrack *t = cb_library_find_id(lib, h[i].track_id);
+        int idx = t ? cb_library_index_of(lib, t) : -1;
         if (idx < 0 || seen[idx])
             continue;
         seen[idx] = true;
@@ -2963,16 +2963,16 @@ static int history_tracks(RXApp *app)
     return n;
 }
 
-int rx_app_history_count(RXApp *app)
+int cb_app_history_count(CBApp *app)
 {
     if (!app->link_state.enabled)
         return 0;
     int n = history_tracks(app);
-    return RX_MAX(n, 0);
+    return CB_MAX(n, 0);
 }
 
 /* Leaving the History: the backwards order it opened with goes. */
-static void leave_history(RXApp *app)
+static void leave_history(CBApp *app)
 {
     if (!app->current_history)
         return;
@@ -2981,30 +2981,30 @@ static void leave_history(RXApp *app)
         app->sort_descending = false;
 }
 
-/* None's tracks (rx_app_albums ranks them first): no album tag, or one
+/* None's tracks (cb_app_albums ranks them first): no album tag, or one
  * no other track has. */
-static bool in_none(const RXAppPriv *priv, int index)
+static bool in_none(const CBAppPriv *priv, int index)
 {
     return priv && index >= 0 && index < priv->nb_rank && priv->rank[index] < priv->nb_none;
 }
 
 /* The album artist `name` in the list made with the albums: its index,
  * -1 when it has none. */
-static int artist_index(const RXAppPriv *priv, const char *name)
+static int artist_index(const CBAppPriv *priv, const char *name)
 {
     for (size_t i = 0; priv && i < priv->album_artists.nb; i++) {
-        const RXAlbumArtist *aa = rx_array_at(&priv->album_artists, i);
-        if (!aa->name[0] == !name[0] && !rx_strnatcasecmp(aa->name, name))
+        const CBAlbumArtist *aa = cb_array_at(&priv->album_artists, i);
+        if (!aa->name[0] == !name[0] && !cb_strnatcasecmp(aa->name, name))
             return (int)i;
     }
     return -1;
 }
 
-static bool in_artist(const RXAppPriv *priv, int artist, int index)
+static bool in_artist(const CBAppPriv *priv, int artist, int index)
 {
     if (!priv || artist < 0 || index < 0 || index >= priv->nb_rank)
         return false;
-    const ArtistSpan *s = rx_array_at(&priv->artist_spans, (size_t)artist);
+    const ArtistSpan *s = cb_array_at(&priv->artist_spans, (size_t)artist);
     int r = priv->rank[index];
     return (r >= s->lo && r < s->hi) || (s->none && r < priv->nb_none);
 }
@@ -3012,36 +3012,36 @@ static bool in_artist(const RXAppPriv *priv, int artist, int index)
 static int compare_ranks(const void *pa, const void *pb, void *opaque)
 {
     const RowKey *ra = pa, *rb = pb;
-    const RXAppPriv *priv = opaque;
+    const CBAppPriv *priv = opaque;
     return (priv->rank[ra->index] > priv->rank[rb->index]) -
            (priv->rank[ra->index] < priv->rank[rb->index]);
 }
 
-void rx_app_rebuild_rows(RXApp *app)
+void cb_app_rebuild_rows(CBApp *app)
 {
-    RXLibrary *lib = &app->lib;
+    CBLibrary *lib = &app->lib;
 
     /* The interface may have deleted the playlist it was showing. */
     if (app->current_playlist && !playlist_exists(lib, app->current_playlist))
         app->current_playlist = NULL;
 
-    const RXPlaylist *pl = app->current_playlist;
+    const CBPlaylist *pl = app->current_playlist;
     /* The TAG LIST and the History: their ids in their order, as a
      * playlist's. */
-    RXLinkTagList *tags = pl || !app->current_tag_list ? NULL : rx_app_tag_list(app);
+    CBLinkTagList *tags = pl || !app->current_tag_list ? NULL : cb_app_tag_list(app);
     uint64_t *tag_ids = NULL;
     int nb_tags = 0;
     if (tags) {
-        uint32_t *v = malloc(RX_LINK_TAG_LIST_MAX * sizeof(*v));
-        tag_ids = malloc(RX_LINK_TAG_LIST_MAX * sizeof(*tag_ids));
-        nb_tags = v && tag_ids ? RX_MIN(rx_link_tag_list_get(tags, v, RX_LINK_TAG_LIST_MAX),
-                                        RX_LINK_TAG_LIST_MAX) : 0;
+        uint32_t *v = malloc(CB_LINK_TAG_LIST_MAX * sizeof(*v));
+        tag_ids = malloc(CB_LINK_TAG_LIST_MAX * sizeof(*tag_ids));
+        nb_tags = v && tag_ids ? CB_MIN(cb_link_tag_list_get(tags, v, CB_LINK_TAG_LIST_MAX),
+                                        CB_LINK_TAG_LIST_MAX) : 0;
         for (int i = 0; i < nb_tags; i++)
             tag_ids[i] = v[i];
         free(v);
     } else if (!pl && app->current_history && history_tracks(app) >= 0) {
-        const RXAppPriv *hp = app->priv;
-        if ((tag_ids = malloc((size_t)RX_MAX(hp->nb_history, 1) * sizeof(*tag_ids)))) {
+        const CBAppPriv *hp = app->priv;
+        if ((tag_ids = malloc((size_t)CB_MAX(hp->nb_history, 1) * sizeof(*tag_ids)))) {
             nb_tags = hp->nb_history;
             memcpy(tag_ids, hp->history, (size_t)nb_tags * sizeof(*tag_ids));
         }
@@ -3052,18 +3052,18 @@ void rx_app_rebuild_rows(RXApp *app)
      * list ranks every track, the collection's own order. */
     bool none = album && !album[0];
     const char *artist = own || album ? NULL : app->current_album_artist;
-    const RXAppPriv *priv = app->priv;
+    const CBAppPriv *priv = app->priv;
     if (!pl) {
-        const RXAlbum *albums;
-        rx_app_albums(app, &albums);
+        const CBAlbum *albums;
+        cb_app_albums(app, &albums);
     }
     int artist_at = artist ? artist_index(priv, artist) : -1;
     bool ranked = !own && priv && priv->nb_rank == lib->nb_tracks;
     int cap = pl ? pl->nb : tag_ids ? nb_tags : lib->nb_tracks;
-    RowKey *keys = calloc(RX_MAX(cap, 1), sizeof(*keys));
+    RowKey *keys = calloc(CB_MAX(cap, 1), sizeof(*keys));
     if (!keys) {
         free(tag_ids);
-        rx_err("out of memory building the track table");
+        cb_err("out of memory building the track table");
         return;
     }
 
@@ -3073,8 +3073,8 @@ void rx_app_rebuild_rows(RXApp *app)
 
     int nb = 0;
     for (int i = 0; i < cap; i++) {
-        const RXTrack *t = pl      ? rx_library_find_id(lib, pl->track_ids[i])
-                         : tag_ids ? rx_library_find_id(lib, tag_ids[i])
+        const CBTrack *t = pl      ? cb_library_find_id(lib, pl->track_ids[i])
+                         : tag_ids ? cb_library_find_id(lib, tag_ids[i])
                                    : lib->tracks[i];
         if (!t)
             continue;
@@ -3083,13 +3083,13 @@ void rx_app_rebuild_rows(RXApp *app)
         if (artist && !in_artist(priv, artist_at, i))
             continue;
         keys[nb++] = (RowKey) {
-            .index = own ? (uint32_t)rx_library_index_of(lib, t) : (uint32_t)i,
+            .index = own ? (uint32_t)cb_library_index_of(lib, t) : (uint32_t)i,
         };
     }
     free(tag_ids);
 
     /* The view's own order, which `#` numbers before the search and the
-     * sort: a playlist's; else the collection's (rx_app_albums), None's
+     * sort: a playlist's; else the collection's (cb_app_albums), None's
      * tracks by title then the albums in the list's order, each in disc
      * and track order, of which None and an album are runs, and an album
      * artist's albums one after the other. (Without the
@@ -3113,7 +3113,7 @@ void rx_app_rebuild_rows(RXApp *app)
         .column     = app->sort_column,
         .descending = app->sort_descending,
     };
-    if (ctx.column >= 0 && ctx.column < RX_COL_COUNT) {
+    if (ctx.column >= 0 && ctx.column < CB_COL_COUNT) {
         qsort_r(keys, nb, sizeof(*keys), compare_rows, &ctx);
     } else if (ctx.descending) {
         for (int i = 0; i < nb / 2; i++) {
@@ -3124,13 +3124,13 @@ void rx_app_rebuild_rows(RXApp *app)
     }
 
     /* New arrays, so a failure leaves the old rows and numbers whole. */
-    uint32_t *rows = malloc(RX_MAX(nb, 1) * sizeof(*rows));
-    uint32_t *numbers = malloc(RX_MAX(nb, 1) * sizeof(*numbers));
+    uint32_t *rows = malloc(CB_MAX(nb, 1) * sizeof(*rows));
+    uint32_t *numbers = malloc(CB_MAX(nb, 1) * sizeof(*numbers));
     if (!rows || !numbers) {
         free(rows);
         free(numbers);
         free(keys);
-        rx_err("out of memory building the track table");
+        cb_err("out of memory building the track table");
         return;
     }
     for (int i = 0; i < nb; i++) {
@@ -3161,7 +3161,7 @@ typedef struct AlbumTrack {
 
 static int compare_album_names(const char *a, const char *b)
 {
-    int c = rx_strnatcasecmp(a, b);
+    int c = cb_strnatcasecmp(a, b);
     return c ? c : strcmp(a, b);
 }
 
@@ -3175,7 +3175,7 @@ static int compare_album_tracks(const void *pa, const void *pb)
 /* An album of the list being made: its entry, and its tracks, a run of
  * the sorted AlbumTracks. */
 typedef struct AlbumRun {
-    RXAlbum al;
+    CBAlbum al;
     int     start;
 } AlbumRun;
 
@@ -3183,10 +3183,10 @@ typedef struct AlbumRun {
  * together by name; the albums of no artist after them, by name. */
 static int compare_albums(const void *pa, const void *pb)
 {
-    const RXAlbum *a = &((const AlbumRun *)pa)->al, *b = &((const AlbumRun *)pb)->al;
+    const CBAlbum *a = &((const AlbumRun *)pa)->al, *b = &((const AlbumRun *)pb)->al;
     if (!a->artist != !b->artist)
         return a->artist ? -1 : 1;
-    int c = a->artist ? rx_strnatcasecmp(a->artist, b->artist) : 0;
+    int c = a->artist ? cb_strnatcasecmp(a->artist, b->artist) : 0;
     return c ? c : compare_album_names(a->name, b->name);
 }
 
@@ -3194,9 +3194,9 @@ static int compare_albums(const void *pa, const void *pb)
  * then title; the library's order between equals. */
 static int compare_in_album(const void *pa, const void *pb, void *opaque)
 {
-    const RXLibrary *lib = opaque;
+    const CBLibrary *lib = opaque;
     int ia = ((const AlbumTrack *)pa)->index, ib = ((const AlbumTrack *)pb)->index;
-    const RXTrack *a = lib->tracks[ia], *b = lib->tracks[ib];
+    const CBTrack *a = lib->tracks[ia], *b = lib->tracks[ib];
     int da = a->meta.disc_number > 0 ? a->meta.disc_number : INT_MAX;
     int db = b->meta.disc_number > 0 ? b->meta.disc_number : INT_MAX;
     if (da != db)
@@ -3205,7 +3205,7 @@ static int compare_in_album(const void *pa, const void *pb, void *opaque)
     int nb = b->meta.track_number > 0 ? b->meta.track_number : INT_MAX;
     if (na != nb)
         return na < nb ? -1 : 1;
-    int c = rx_strnatcasecmp(title_of(a), title_of(b));
+    int c = cb_strnatcasecmp(title_of(a), title_of(b));
     return c ? c : (ia > ib) - (ia < ib);
 }
 
@@ -3213,12 +3213,12 @@ static int compare_in_album(const void *pa, const void *pb, void *opaque)
  * equals. */
 static int compare_in_none(const void *pa, const void *pb, void *opaque)
 {
-    const RXLibrary *lib = opaque;
+    const CBLibrary *lib = opaque;
     int ia = *(const int *)pa, ib = *(const int *)pb;
-    const RXTrack *a = lib->tracks[ia], *b = lib->tracks[ib];
-    int c = rx_strnatcasecmp(title_of(a), title_of(b));
+    const CBTrack *a = lib->tracks[ia], *b = lib->tracks[ib];
+    int c = cb_strnatcasecmp(title_of(a), title_of(b));
     if (!c)
-        c = rx_strnatcasecmp(a->meta.artist ? a->meta.artist : "",
+        c = cb_strnatcasecmp(a->meta.artist ? a->meta.artist : "",
                              b->meta.artist ? b->meta.artist : "");
     return c ? c : (ia > ib) - (ia < ib);
 }
@@ -3226,7 +3226,7 @@ static int compare_in_none(const void *pa, const void *pb, void *opaque)
 /* The artist an album sorts under: the album artist of its first track
  * (in the library's order) that has one, else the artist its tracks
  * share; NULL when they share none. */
-static const char *album_artist(const RXLibrary *lib, const AlbumTrack *run, int n)
+static const char *album_artist(const CBLibrary *lib, const AlbumTrack *run, int n)
 {
     int first = -1;
     for (int i = 0; i < n; i++) {
@@ -3241,21 +3241,21 @@ static const char *album_artist(const RXLibrary *lib, const AlbumTrack *run, int
         return NULL;
     for (int i = 1; i < n; i++) {
         const char *a = lib->tracks[run[i].index]->meta.artist;
-        if (!a || rx_strcasecmp(a, artist))
+        if (!a || cb_strcasecmp(a, artist))
             return NULL;
     }
     return artist;
 }
 
-static void albums_free(RXAppPriv *priv)
+static void albums_free(CBAppPriv *priv)
 {
     for (size_t i = 0; i < priv->albums.nb; i++) {
-        RXAlbum *al = rx_array_at(&priv->albums, i);
+        CBAlbum *al = cb_array_at(&priv->albums, i);
         free((char *)al->name);
         free((char *)al->artist);
     }
     for (size_t i = 0; i < priv->album_artists.nb; i++)
-        free((char *)((RXAlbumArtist *)rx_array_at(&priv->album_artists, i))->name);
+        free((char *)((CBAlbumArtist *)cb_array_at(&priv->album_artists, i))->name);
     priv->albums.nb = 0;
     priv->album_artists.nb = 0;
     priv->artist_spans.nb = 0;
@@ -3264,22 +3264,22 @@ static void albums_free(RXAppPriv *priv)
     priv->nb_none = 0;
 }
 
-static bool artist_push(RXAppPriv *priv, const char *name, int nb, ArtistSpan span)
+static bool artist_push(CBAppPriv *priv, const char *name, int nb, ArtistSpan span)
 {
-    RXAlbumArtist aa = { .name = rx_strdup(name), .nb = nb };
-    if (!aa.name || !rx_array_push(&priv->album_artists, &aa)) {
+    CBAlbumArtist aa = { .name = cb_strdup(name), .nb = nb };
+    if (!aa.name || !cb_array_push(&priv->album_artists, &aa)) {
         free((char *)aa.name);
         return false;
     }
-    return rx_array_push(&priv->artist_spans, &span);
+    return cb_array_push(&priv->artist_spans, &span);
 }
 
 /* The album artists of the list just made, whose ranks run in its order
  * after None's: each artist's albums are a run of it (it is by artist),
  * and the albums of no artist, last, go to None with None's tracks. */
-static bool artists_make(RXAppPriv *priv, int nb_tracks, int nb_none)
+static bool artists_make(CBAppPriv *priv, int nb_tracks, int nb_none)
 {
-    const RXAlbum *albums = priv->albums.data;
+    const CBAlbum *albums = priv->albums.data;
     int nb_albums = (int)priv->albums.nb;
     ArtistSpan none = { .lo = nb_tracks, .hi = nb_tracks, .none = true };
     int nb = nb_none;
@@ -3291,16 +3291,16 @@ static bool artists_make(RXAppPriv *priv, int nb_tracks, int nb_none)
         return false;
     int rank = nb_none;
     for (int i = 0; i < nb_albums && rank < none.lo; i++) {
-        const RXAlbum *al = &albums[i];
+        const CBAlbum *al = &albums[i];
         if (!al->name[0])
             continue;
         if (!al->artist)
             break;
         size_t last = priv->album_artists.nb;
-        RXAlbumArtist *aa = last ? rx_array_at(&priv->album_artists, last - 1) : NULL;
-        if (aa && aa->name[0] && !rx_strnatcasecmp(aa->name, al->artist)) {
+        CBAlbumArtist *aa = last ? cb_array_at(&priv->album_artists, last - 1) : NULL;
+        if (aa && aa->name[0] && !cb_strnatcasecmp(aa->name, al->artist)) {
             aa->nb += al->nb;
-            ((ArtistSpan *)rx_array_at(&priv->artist_spans, last - 1))->hi += al->nb;
+            ((ArtistSpan *)cb_array_at(&priv->artist_spans, last - 1))->hi += al->nb;
         } else if (!artist_push(priv, al->artist, al->nb,
                                 (ArtistSpan) { .lo = rank, .hi = rank + al->nb })) {
             return false;
@@ -3312,16 +3312,16 @@ static bool artists_make(RXAppPriv *priv, int nb_tracks, int nb_none)
 
 /* Makes the list, the album artists and the ranks; false when out of
  * memory (the lists are then empty, the ranks none). */
-static bool albums_make(RXAppPriv *priv, const RXLibrary *lib)
+static bool albums_make(CBAppPriv *priv, const CBLibrary *lib)
 {
     int nt = lib->nb_tracks;
-    int *rank = realloc(priv->rank, sizeof(*rank) * RX_MAX(nt, 1));
+    int *rank = realloc(priv->rank, sizeof(*rank) * CB_MAX(nt, 1));
     if (!rank)
         return false;
     priv->rank = rank;
-    AlbumTrack *tracks = malloc(sizeof(*tracks) * RX_MAX(nt, 1));
-    AlbumRun *runs = malloc(sizeof(*runs) * RX_MAX(nt / 2, 1));
-    int *none = malloc(sizeof(*none) * RX_MAX(nt, 1));
+    AlbumTrack *tracks = malloc(sizeof(*tracks) * CB_MAX(nt, 1));
+    AlbumRun *runs = malloc(sizeof(*runs) * CB_MAX(nt / 2, 1));
+    int *none = malloc(sizeof(*none) * CB_MAX(nt, 1));
     bool ok = tracks && runs && none;
 
     /* The names with their tracks, sorted; a run of equal ones is one
@@ -3338,7 +3338,7 @@ static bool albums_make(RXAppPriv *priv, const RXLibrary *lib)
         qsort(tracks, n, sizeof(*tracks), compare_album_tracks);
     for (int i = 0; ok && i < n;) {
         int j = i + 1;
-        while (j < n && !rx_strcasecmp(tracks[j].name, tracks[i].name))
+        while (j < n && !cb_strcasecmp(tracks[j].name, tracks[i].name))
             j++;
         if (j - i == 1) {
             none[nb_none++] = tracks[i].index;
@@ -3347,9 +3347,9 @@ static bool albums_make(RXAppPriv *priv, const RXLibrary *lib)
             AlbumRun *r = &runs[nb_runs++];
             *r = (AlbumRun) {
                 .al = {
-                    .name   = rx_strdup(tracks[i].name),
+                    .name   = cb_strdup(tracks[i].name),
                     .nb     = j - i,
-                    .artist = artist ? rx_strdup(artist) : NULL,
+                    .artist = artist ? cb_strdup(artist) : NULL,
                 },
                 .start = i,
             };
@@ -3372,13 +3372,13 @@ static bool albums_make(RXAppPriv *priv, const RXLibrary *lib)
             for (int i = 0; i < runs[r].al.nb; i++)
                 rank[run[i].index] = k++;
         }
-        RXAlbum al = { .name = rx_strdup(""), .nb = nb_none };
-        ok = al.name && (!nb_none || rx_array_push(&priv->albums, &al));
+        CBAlbum al = { .name = cb_strdup(""), .nb = nb_none };
+        ok = al.name && (!nb_none || cb_array_push(&priv->albums, &al));
         if (!nb_none || !ok)
             free((char *)al.name);
     }
     for (int r = 0; r < nb_runs; r++) {
-        if (ok && rx_array_push(&priv->albums, &runs[r].al))
+        if (ok && cb_array_push(&priv->albums, &runs[r].al))
             continue;
         ok = false;
         free((char *)runs[r].al.name);
@@ -3396,17 +3396,17 @@ static bool albums_make(RXAppPriv *priv, const RXLibrary *lib)
     return true;
 }
 
-int rx_app_albums(RXApp *app, const RXAlbum **albums)
+int cb_app_albums(CBApp *app, const CBAlbum **albums)
 {
-    RXAppPriv *priv = app->priv;
-    RXLibrary *lib = &app->lib;
+    CBAppPriv *priv = app->priv;
+    CBLibrary *lib = &app->lib;
     *albums = NULL;
     if (!priv)
         return 0;
     if (priv->albums_generation != lib->generation) {
         albums_free(priv);
         if (!albums_make(priv, lib)) {
-            rx_err("out of memory making the albums");
+            cb_err("out of memory making the albums");
             return 0;
         }
         priv->albums_generation = lib->generation;
@@ -3415,18 +3415,18 @@ int rx_app_albums(RXApp *app, const RXAlbum **albums)
     return (int)priv->albums.nb;
 }
 
-int rx_app_album_artists(RXApp *app, const RXAlbumArtist **artists)
+int cb_app_album_artists(CBApp *app, const CBAlbumArtist **artists)
 {
-    const RXAlbum *albums;
-    rx_app_albums(app, &albums);
-    RXAppPriv *priv = app->priv;
+    const CBAlbum *albums;
+    cb_app_albums(app, &albums);
+    CBAppPriv *priv = app->priv;
     *artists = priv ? priv->album_artists.data : NULL;
     return priv ? (int)priv->album_artists.nb : 0;
 }
 
-void rx_app_show_album(RXApp *app, const char *name)
+void cb_app_show_album(CBApp *app, const char *name)
 {
-    char *copy = name ? rx_strdup(name) : NULL;
+    char *copy = name ? cb_strdup(name) : NULL;
     if (name && !copy)
         return;
     free(app->current_album);
@@ -3437,12 +3437,12 @@ void rx_app_show_album(RXApp *app, const char *name)
     leave_history(app);
     if (copy)
         app->current_playlist = NULL;
-    rx_app_rebuild_rows(app);
+    cb_app_rebuild_rows(app);
 }
 
-void rx_app_show_album_artist(RXApp *app, const char *name)
+void cb_app_show_album_artist(CBApp *app, const char *name)
 {
-    char *copy = name ? rx_strdup(name) : NULL;
+    char *copy = name ? cb_strdup(name) : NULL;
     if (name && !copy)
         return;
     free(app->current_album_artist);
@@ -3454,12 +3454,12 @@ void rx_app_show_album_artist(RXApp *app, const char *name)
         app->current_tag_list = false;
         leave_history(app);
     }
-    rx_app_rebuild_rows(app);
+    cb_app_rebuild_rows(app);
 }
 
-void rx_app_show_tag_list(RXApp *app)
+void cb_app_show_tag_list(CBApp *app)
 {
-    if (!rx_app_tag_list(app))
+    if (!cb_app_tag_list(app))
         return;
     free(app->current_album);
     app->current_album = NULL;
@@ -3468,10 +3468,10 @@ void rx_app_show_tag_list(RXApp *app)
     app->current_playlist = NULL;
     leave_history(app);
     app->current_tag_list = true;
-    rx_app_rebuild_rows(app);
+    cb_app_rebuild_rows(app);
 }
 
-void rx_app_show_history(RXApp *app)
+void cb_app_show_history(CBApp *app)
 {
     if (!app->link_state.enabled)
         return;
@@ -3486,85 +3486,85 @@ void rx_app_show_history(RXApp *app)
         app->sort_column = -1;
         app->sort_descending = true;
     }
-    rx_app_rebuild_rows(app);
+    cb_app_rebuild_rows(app);
 }
 
 /* ---------------------------------------------------------------- lifecycle */
 
-int rx_app_create(RXApp *app, const char *library_root, const RXPlayerOptions *player_opt,
-                  const RXWindowOptions *window_opt)
+int cb_app_create(CBApp *app, const char *library_root, const CBPlayerOptions *player_opt,
+                  const CBWindowOptions *window_opt)
 {
     memset(app, 0, sizeof(*app));
-    RXAppPriv *priv = calloc(1, sizeof(*priv));
+    CBAppPriv *priv = calloc(1, sizeof(*priv));
     if (!priv)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     app->priv = priv;
-    rx_array_init(&priv->inflight, sizeof(Inflight));
-    rx_array_init(&priv->saves, sizeof(uint64_t));
-    rx_array_init(&priv->gpu, sizeof(GpuEntry));
-    rx_array_init(&priv->covers, sizeof(CoverTexture));
-    rx_array_init(&priv->wave_checks, sizeof(WaveCheck));
-    rx_array_init(&priv->albums, sizeof(RXAlbum));
-    rx_array_init(&priv->album_artists, sizeof(RXAlbumArtist));
-    rx_array_init(&priv->artist_spans, sizeof(ArtistSpan));
-    for (int d = 0; d < RX_DECKS; d++) {
+    cb_array_init(&priv->inflight, sizeof(Inflight));
+    cb_array_init(&priv->saves, sizeof(uint64_t));
+    cb_array_init(&priv->gpu, sizeof(GpuEntry));
+    cb_array_init(&priv->covers, sizeof(CoverTexture));
+    cb_array_init(&priv->wave_checks, sizeof(WaveCheck));
+    cb_array_init(&priv->albums, sizeof(CBAlbum));
+    cb_array_init(&priv->album_artists, sizeof(CBAlbumArtist));
+    cb_array_init(&priv->artist_spans, sizeof(ArtistSpan));
+    for (int d = 0; d < CB_DECKS; d++) {
         priv->uploaded_palette[d] = -1;
         priv->play_last_pos[d] = -1.0;
     }
 
-    int ret = rx_mailbox_create(&priv->export_mb);
+    int ret = cb_mailbox_create(&priv->export_mb);
     if (ret < 0)
         goto fail;
 
     /* Opening also checks which files went missing. */
-    ret = rx_library_open(&app->lib, library_root);
+    ret = cb_library_open(&app->lib, library_root);
     if (ret < 0) {
-        rx_err("cannot open the library%s%s: %s", library_root ? " at " : "",
+        cb_err("cannot open the library%s%s: %s", library_root ? " at " : "",
                library_root ? library_root : "", strerror(-ret));
         goto fail;
     }
     priv->lib_open = true;
     /* My Settings that are not valid go, as the rest of what is not
-     * (rx_library_open's cleaning). */
-    rx_settings_clean(&app->lib);
-    const RXConfig *cfg = &app->lib.cfg;
+     * (cb_library_open's cleaning). */
+    cb_settings_clean(&app->lib);
+    const CBConfig *cfg = &app->lib.cfg;
 
     /* One core stays with the interface and the audio. */
     long cpus = sysconf(_SC_NPROCESSORS_ONLN);
-    ret = rx_jobs_create(&app->jobs, (int)RX_MAX(cpus - 1, 1));
+    ret = cb_jobs_create(&app->jobs, (int)CB_MAX(cpus - 1, 1));
     if (ret < 0)
         goto fail;
     /* The analyses run on the GPU the window was asked for (--device), or
      * on the CPU only (--no-gpu). */
     if (window_opt)
-        rx_jobs_set_gpu(app->jobs, !window_opt->cpu_analysis, window_opt->device);
-    ret = rx_jobs_create(&priv->io_jobs, IO_THREADS);
+        cb_jobs_set_gpu(app->jobs, !window_opt->cpu_analysis, window_opt->device);
+    ret = cb_jobs_create(&priv->io_jobs, IO_THREADS);
     if (ret < 0)
         goto fail;
 
-    RXPlayerOptions po;
+    CBPlayerOptions po;
     if (player_opt) {
         po = *player_opt;
     } else {
-        rx_player_options_default(&po);
-        po.backend = RX_AUDIO_NULL;
+        cb_player_options_default(&po);
+        po.backend = CB_AUDIO_NULL;
     }
-    if (!po.sink && po.backend == RX_AUDIO_PIPEWIRE)
+    if (!po.sink && po.backend == CB_AUDIO_PIPEWIRE)
         po.sink = cfg->audio_sink;
     if (!po.app_name)
-        po.app_name = "rxbox";
-    ret = rx_player_create(&app->player, &po);
-    if (ret < 0 && po.backend != RX_AUDIO_NULL) {
-        rx_warn("no audio output (%s); the player plays silently", strerror(-ret));
-        po.backend = RX_AUDIO_NULL;
-        ret = rx_player_create(&app->player, &po);
+        po.app_name = "cyanbox";
+    ret = cb_player_create(&app->player, &po);
+    if (ret < 0 && po.backend != CB_AUDIO_NULL) {
+        cb_warn("no audio output (%s); the player plays silently", strerror(-ret));
+        po.backend = CB_AUDIO_NULL;
+        ret = cb_player_create(&app->player, &po);
     }
     if (ret < 0)
         goto fail;
 
-    for (int d = 0; d < RX_DECKS; d++) {
-        RXDeckView *dv = &app->decks[d];
-        rx_ctl_init(&dv->ctl, app->player, d, deck_changed, app);
+    for (int d = 0; d < CB_DECKS; d++) {
+        CBDeckView *dv = &app->decks[d];
+        cb_ctl_init(&dv->ctl, app->player, d, deck_changed, app);
         dv->zoom_bars = cfg->detail_bars > 0 ? cfg->detail_bars : 12;
     }
     app->wave_palette = palette_of(cfg);
@@ -3575,16 +3575,16 @@ int rx_app_create(RXApp *app, const char *library_root, const RXPlayerOptions *p
 
     if (window_opt) {
         priv->max_frames = window_opt->max_frames;
-        ret = rx_window_create(&app->window, window_opt);
+        ret = cb_window_create(&app->window, window_opt);
         if (ret < 0)
             goto fail;
-        ret = rx_ui_init(app);
+        ret = cb_ui_init(app);
         if (ret < 0)
             goto fail;
         priv->ui_ready = true;
     }
 
-    rx_app_rebuild_rows(app);
+    cb_app_rebuild_rows(app);
 
     /* After an upgrade, what the older analyser made is analysed again in
      * the background, unasked, with the status bar's usual progress. */
@@ -3598,48 +3598,48 @@ int rx_app_create(RXApp *app, const char *library_root, const RXPlayerOptions *p
     for (int i = 0; i < app->lib.nb_tracks; i++)
         missing += app->lib.tracks[i]->missing;
     if (missing)
-        rx_app_set_status(app, "%d tracks in %s, %d missing%s", app->lib.nb_tracks, app->lib.root,
+        cb_app_set_status(app, "%d tracks in %s, %d missing%s", app->lib.nb_tracks, app->lib.root,
                           missing, again);
     else
-        rx_app_set_status(app, "%d track%s in %s%s", app->lib.nb_tracks,
+        cb_app_set_status(app, "%d track%s in %s%s", app->lib.nb_tracks,
                           app->lib.nb_tracks == 1 ? "" : "s", app->lib.root, again);
     return 0;
 
 fail:
-    rx_app_destroy(app);
+    cb_app_destroy(app);
     return ret;
 }
 
-void rx_app_destroy(RXApp *app)
+void cb_app_destroy(CBApp *app)
 {
-    RXAppPriv *priv = app->priv;
+    CBAppPriv *priv = app->priv;
     if (!priv)
         return;
 
     /* Off the bus before anything a call reaches goes. */
-    rx_mpris_destroy(app);
+    cb_mpris_destroy(app);
 
     /* The export has a library handle of its own; cancel it and wait. */
     export_stop(app);
     /* So has Link: it stops serving before anything it reads goes. */
-    rx_app_link_destroy(app);
+    cb_app_link_destroy(app);
 
     /* The interface goes before anything it draws from. */
     if (priv->ui_ready) {
-        rx_ui_shutdown(app);
+        cb_ui_shutdown(app);
         priv->ui_ready = false;
     }
 
     /* Running jobs finish, queued ones are dropped, results freed. */
-    rx_jobs_destroy(app->jobs);
+    cb_jobs_destroy(app->jobs);
     app->jobs = NULL;
-    rx_jobs_destroy(priv->io_jobs);
+    cb_jobs_destroy(priv->io_jobs);
     priv->io_jobs = NULL;
-    rx_job_result_free(app->stick_result);
+    cb_job_result_free(app->stick_result);
     app->stick_result = NULL;
     app->stick_request = 0;
 
-    for (int d = 0; d < RX_DECKS; d++)
+    for (int d = 0; d < CB_DECKS; d++)
         deck_clear(app, d);
     gpu_cache_free(app);
 
@@ -3648,12 +3648,12 @@ void rx_app_destroy(RXApp *app)
 
     /* The player before the library: the deck controls point at tracks. */
     if (app->player)
-        rx_player_destroy(app->player);
+        cb_player_destroy(app->player);
     app->player = NULL;
 
     /* The window after every texture and waveform made through it. */
     if (app->window)
-        rx_window_destroy(app->window);
+        cb_window_destroy(app->window);
     app->window = NULL;
 
     free(app->rows);
@@ -3668,9 +3668,9 @@ void rx_app_destroy(RXApp *app)
     albums_free(priv);
     free(priv->rank);
     free(priv->history);
-    rx_array_free(&priv->albums);
-    rx_array_free(&priv->album_artists);
-    rx_array_free(&priv->artist_spans);
+    cb_array_free(&priv->albums);
+    cb_array_free(&priv->album_artists);
+    cb_array_free(&priv->artist_spans);
     free(app->selection);
     app->selection = NULL;
     app->nb_selection = 0;
@@ -3678,33 +3678,33 @@ void rx_app_destroy(RXApp *app)
     app->current_folder = NULL;
 
     if (priv->lib_open)
-        rx_library_close(&app->lib);
+        cb_library_close(&app->lib);
 
-    rx_array_free(&priv->inflight);
-    rx_array_free(&priv->saves);
-    rx_array_free(&priv->wave_checks);
+    cb_array_free(&priv->inflight);
+    cb_array_free(&priv->saves);
+    cb_array_free(&priv->wave_checks);
     free(priv->export_playlists);
     if (priv->export_mb)
-        rx_mailbox_destroy(priv->export_mb);
+        cb_mailbox_destroy(priv->export_mb);
     free(priv);
     app->priv = NULL;
 }
 
-static int drain_jobs(RXApp *app, RXJobs *jobs, int max)
+static int drain_jobs(CBApp *app, CBJobs *jobs, int max)
 {
     int n = 0;
-    RXJobResult *r;
-    while (n < max && (r = rx_jobs_poll(jobs))) {
+    CBJobResult *r;
+    while (n < max && (r = cb_jobs_poll(jobs))) {
         handle_result(app, r);
-        rx_job_result_free(r);
+        cb_job_result_free(r);
         n++;
     }
     return n;
 }
 
-bool rx_app_tick(RXApp *app)
+bool cb_app_tick(CBApp *app)
 {
-    RXAppPriv *priv = app->priv;
+    CBAppPriv *priv = app->priv;
     if (!priv)
         return false;
 
@@ -3714,9 +3714,9 @@ bool rx_app_tick(RXApp *app)
 
     /* A track removed from the library while loaded: the deck lets go of
      * it before anything (a job result among them) looks at it. */
-    for (int d = 0; d < RX_DECKS; d++) {
-        RXDeckView *dv = &app->decks[d];
-        if (dv->track && rx_library_find_id(&app->lib, priv->deck_track_id[d]) != dv->track) {
+    for (int d = 0; d < CB_DECKS; d++) {
+        CBDeckView *dv = &app->decks[d];
+        if (dv->track && cb_library_find_id(&app->lib, priv->deck_track_id[d]) != dv->track) {
             dv->track = NULL;
             deck_clear(app, d);
             changed = true;
@@ -3743,15 +3743,15 @@ bool rx_app_tick(RXApp *app)
     }
 
     double quantize_beats = quantize_beats_of(&app->lib.cfg);
-    for (int d = 0; d < RX_DECKS; d++) {
-        RXDeckView *dv = &app->decks[d];
+    for (int d = 0; d < CB_DECKS; d++) {
+        CBDeckView *dv = &app->decks[d];
         dv->ctl.quantize_beats = quantize_beats;
         if (app->player) {
             /* The deck's move to the next track first: the controls then
              * tick on the track the deck plays. */
             if (continue_play(app, d))
                 changed = true;
-            rx_ctl_tick(&dv->ctl);
+            cb_ctl_tick(&dv->ctl);
         }
         track_plays(app, d);
 
@@ -3765,11 +3765,11 @@ bool rx_app_tick(RXApp *app)
         changed = true;
 
     /* After the saves: the library Link reads again is the one saved. */
-    if (rx_app_link_tick(app))
+    if (cb_app_link_tick(app))
         changed = true;
 
     if (app->rows_dirty || app->rows_generation != app->lib.generation) {
-        rx_app_rebuild_rows(app);
+        cb_app_rebuild_rows(app);
         changed = true;
     }
 
@@ -3778,50 +3778,50 @@ bool rx_app_tick(RXApp *app)
     return changed;
 }
 
-static bool deck_moving(const RXApp *app)
+static bool deck_moving(const CBApp *app)
 {
     if (!app->player)
         return false;
-    for (int d = 0; d < RX_DECKS; d++) {
-        RXDeckState st;
-        rx_deck_state(app->player, d, &st);
+    for (int d = 0; d < CB_DECKS; d++) {
+        CBDeckState st;
+        cb_deck_state(app->player, d, &st);
         if (st.playing || st.scrubbing)
             return true;
     }
     return false;
 }
 
-int rx_app_run(RXApp *app)
+int cb_app_run(CBApp *app)
 {
     if (!app->window || !app->priv)
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
 
-    RXAppPriv *priv = app->priv;
+    CBAppPriv *priv = app->priv;
     bool ui_wants = true;
     app->dirty = true;
 
     while (!app->quit) {
-        rx_app_tick(app);
-        rx_mpris_tick(app);
+        cb_app_tick(app);
+        cb_mpris_tick(app);
 
         /* An export waiting for the answer to its question is not busy. */
-        bool busy = rx_jobs_pending(app->jobs) > 0 || rx_jobs_pending(priv->io_jobs) > 0 ||
+        bool busy = cb_jobs_pending(app->jobs) > 0 || cb_jobs_pending(priv->io_jobs) > 0 ||
                     (app->export_state.running && !app->export_state.confirm);
         bool want = app->dirty || ui_wants || deck_moving(app) || busy;
         /* --frames: draw continuously so the count is reached. */
         if (priv->max_frames > 0)
             want = true;
 
-        if (rx_window_poll(app->window, want, want ? 4 : 50)) {
+        if (cb_window_poll(app->window, want, want ? 4 : 50)) {
             app->dirty = false;
-            rx_window_begin_frame(app->window);
-            ui_wants = rx_ui_frame(app);
-            rx_window_end_frame(app->window);
+            cb_window_begin_frame(app->window);
+            ui_wants = cb_ui_frame(app);
+            cb_window_end_frame(app->window);
         }
 
-        if (rx_window_should_close(app->window))
+        if (cb_window_should_close(app->window))
             app->quit = true;
-        if (priv->max_frames > 0 && rx_window_frames_drawn(app->window) >= priv->max_frames)
+        if (priv->max_frames > 0 && cb_window_frames_drawn(app->window) >= priv->max_frames)
             app->quit = true;
     }
 

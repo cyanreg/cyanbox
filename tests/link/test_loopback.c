@@ -1,17 +1,17 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
-/* Link end to end on the loopback: rxbox's server (rx_link_start) and the
- * fake player (rx_link_client_start) on real sockets, each with ports of
+/* Link end to end on the loopback: cyanbox's server (cb_link_start) and the
+ * fake player (cb_link_client_start) on real sockets, each with ports of
  * its own so the two fit on one host and nothing competes with a running
- * rxbox or rekordbox for 50000. The server is 127.0.0.1 and "broadcasts"
+ * cyanbox or rekordbox for 50000. The server is 127.0.0.1 and "broadcasts"
  * to the player's 127.0.0.2, the player the other way round.
  *
  *  - The player announces itself; the server, which waits for a player,
  *    joins, takes 17 and lists the player.
- *  - The player browses as a CDJ-3000 does (rx_link_client_browse) and
+ *  - The player browses as a CDJ-3000 does (cb_link_client_browse) and
  *    reads every track over NFS, at the size the track info gave: each a
  *    16-bit WAV of the file made as it is read (src/link/wav.c), the
- *    file's samples as rx_decode has them, and nothing made on disk.
+ *    file's samples as cb_decode has them, and nothing made on disk.
  *  - The server sees what the player loaded and that it plays; a cue
  *    the player saves is handed on for the library's owner.
  *  - A client that never announced itself (127.0.0.3) gets no database
@@ -31,9 +31,9 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-#include "rxbox/analysis.h"
-#include "rxbox/audio.h"
-#include "rxbox/link.h"
+#include "cyanbox/analysis.h"
+#include "cyanbox/audio.h"
+#include "cyanbox/link.h"
 
 #include "src/link/client.h"
 #include "src/link/dbserver.h"
@@ -42,12 +42,12 @@
 
 static char root[512], music[700], libdir[700];
 
-static int sh(const char *fmt, ...) RX_PRINTF(1, 2);
+static int sh(const char *fmt, ...) CB_PRINTF(1, 2);
 static int sh(const char *fmt, ...)
 {
     va_list ap;
     va_start(ap, fmt);
-    char *cmd = rx_vasprintf(fmt, ap);
+    char *cmd = cb_vasprintf(fmt, ap);
     va_end(ap);
     int r = cmd ? system(cmd) : -1;
     free(cmd);
@@ -69,42 +69,42 @@ static int make_track(const char *file, const char *codec, double bpm)
 }
 
 /* A track as the analysis would leave it: a grid and waveforms. */
-static int add_track(RXLibrary *lib, const char *file, double bpm)
+static int add_track(CBLibrary *lib, const char *file, double bpm)
 {
-    char *path = rx_asprintf("%s/%s", music, file);
+    char *path = cb_asprintf("%s/%s", music, file);
     int err = 0;
-    RXTrack *t = path ? rx_library_add_file(lib, path, &err) : NULL;
+    CBTrack *t = path ? cb_library_add_file(lib, path, &err) : NULL;
     free(path);
     CHECK(t);
     if (!t)
         return -1;
-    CHECK_EQ(rx_grid_init(&t->grid, 0.1, bpm), 0);
-    CHECK_EQ(rx_library_save_track(lib, t), 0);
-    RXAudio a;
-    RXWaveforms w;
-    CHECK_EQ(rx_decode(t->path, 1, 0, &a), 0);
-    CHECK_EQ(rx_waveforms_compute(a.samples, a.nb_frames, a.rate, &w), 0);
-    CHECK_EQ(rx_library_waveforms_save(lib, t->id, &w), 0);
-    rx_waveforms_free(&w);
-    rx_audio_free(&a);
+    CHECK_EQ(cb_grid_init(&t->grid, 0.1, bpm), 0);
+    CHECK_EQ(cb_library_save_track(lib, t), 0);
+    CBAudio a;
+    CBWaveforms w;
+    CHECK_EQ(cb_decode(t->path, 1, 0, &a), 0);
+    CHECK_EQ(cb_waveforms_compute(a.samples, a.nb_frames, a.rate, &w), 0);
+    CHECK_EQ(cb_library_waveforms_save(lib, t->id, &w), 0);
+    cb_waveforms_free(&w);
+    cb_audio_free(&a);
     return 0;
 }
 
 static int make_library(void)
 {
-    for (size_t i = 0; i < RX_ARRAY_ELEMS(tracks); i++) {
+    for (size_t i = 0; i < CB_ARRAY_ELEMS(tracks); i++) {
         if (make_track(tracks[i].file, tracks[i].codec, tracks[i].bpm))
             return 77;
     }
-    RXLibrary lib = { 0 };
-    CHECK_EQ(rx_library_open(&lib, libdir), 0);
-    for (size_t i = 0; i < RX_ARRAY_ELEMS(tracks); i++)
+    CBLibrary lib = { 0 };
+    CHECK_EQ(cb_library_open(&lib, libdir), 0);
+    for (size_t i = 0; i < CB_ARRAY_ELEMS(tracks); i++)
         add_track(&lib, tracks[i].file, tracks[i].bpm);
-    RXPlaylist *p = rx_library_playlist_create(&lib, lib.root_folder, "Loop");
+    CBPlaylist *p = cb_library_playlist_create(&lib, lib.root_folder, "Loop");
     CHECK(p);
     for (int i = 0; p && i < lib.nb_tracks; i++)
-        rx_library_playlist_add(&lib, p, lib.tracks[i], -1);
-    rx_library_close(&lib);
+        cb_library_playlist_add(&lib, p, lib.tracks[i], -1);
+    cb_library_close(&lib);
     return 0;
 }
 
@@ -112,11 +112,11 @@ static int make_library(void)
  * told before the player binds them. */
 static int free_ports(uint16_t *a, uint16_t *b)
 {
-    RXLinkIf lo;
-    int ret = rx_link_if_find(&lo, "lo", "127.0.0.2", NULL);
+    CBLinkIf lo;
+    int ret = cb_link_if_find(&lo, "lo", "127.0.0.2", NULL);
     if (ret < 0)
         return ret;
-    int fa = rx_link_udp(&lo, lo.addr, 0, a), fb = rx_link_udp(&lo, lo.addr, 0, b);
+    int fa = cb_link_udp(&lo, lo.addr, 0, a), fb = cb_link_udp(&lo, lo.addr, 0, b);
     if (fa >= 0)
         close(fa);
     if (fb >= 0)
@@ -126,27 +126,27 @@ static int free_ports(uint16_t *a, uint16_t *b)
 
 static void quiet_line(void *opaque, const char *line)
 {
-    if (getenv("RX_TEST_VERBOSE"))
+    if (getenv("CB_TEST_VERBOSE"))
         fprintf(stderr, "  %s\n", line);
 }
 
 /* The bytes of a track's WAV: the 44-byte header of 16-bit stereo, then
- * the samples of its file (by the name in its path) as rx_decode has them,
+ * the samples of its file (by the name in its path) as cb_decode has them,
  * mono doubled, within dither and rounding. */
 static bool same_as_decoded(const char *usb_path, const uint8_t *data, size_t size)
 {
     const char *base = NULL;
-    for (size_t i = 0; i < RX_ARRAY_ELEMS(tracks) && !base; i++) {
+    for (size_t i = 0; i < CB_ARRAY_ELEMS(tracks) && !base; i++) {
         char stem[32];
         snprintf(stem, sizeof(stem), "%.*s", (int)strcspn(tracks[i].file, "."), tracks[i].file);
         if (strstr(usb_path, stem))
             base = tracks[i].file;
     }
-    char *path = base ? rx_asprintf("%s/%s", music, base) : NULL;
-    RXAudio d = { 0 };
-    bool ok = path && rx_decode(path, 0, 0, &d) >= 0 && size >= 44 && !memcmp(data, "RIFF", 4) &&
+    char *path = base ? cb_asprintf("%s/%s", music, base) : NULL;
+    CBAudio d = { 0 };
+    bool ok = path && cb_decode(path, 0, 0, &d) >= 0 && size >= 44 && !memcmp(data, "RIFF", 4) &&
               !memcmp(data + 8, "WAVEfmt ", 8) && !memcmp(data + 36, "data", 4);
-    int64_t frames = ok ? RX_MIN((int64_t)(size - 44) / 4, d.nb_frames) : 0;
+    int64_t frames = ok ? CB_MIN((int64_t)(size - 44) / 4, d.nb_frames) : 0;
     int64_t off = 0;
     for (int64_t f = 0; f < frames; f++) {
         for (int c = 0; c < 2; c++) {
@@ -159,16 +159,16 @@ static bool same_as_decoded(const char *usb_path, const uint8_t *data, size_t si
     if (!ok)
         fprintf(stderr, "%s: %zu bytes over NFS, not a WAV of %s (%lld samples off)\n", usb_path,
                 size, path ? path : "?", (long long)off);
-    rx_audio_free(&d);
+    cb_audio_free(&d);
     free(path);
     return ok;
 }
 
-static int wait_up(RXLink *link, int timeout_ms)
+static int wait_up(CBLink *link, int timeout_ms)
 {
     for (int i = 0; i < timeout_ms / 20; i++) {
         int number = 0;
-        if (rx_link_state(link, &number) == RX_LINK_UP)
+        if (cb_link_state(link, &number) == CB_LINK_UP)
             return number;
         usleep(20000);
     }
@@ -177,7 +177,7 @@ static int wait_up(RXLink *link, int timeout_ms)
 
 int main(void)
 {
-    const char *dir = getenv("RX_TEST_DIR");
+    const char *dir = getenv("CB_TEST_DIR");
     snprintf(root, sizeof(root), "%s", dir ? dir : "build/test-link-loopback");
     snprintf(music, sizeof(music), "%s/music", root);
     snprintf(libdir, sizeof(libdir), "%s/lib", root);
@@ -192,41 +192,41 @@ int main(void)
     uint16_t pa, ps;
     CHECK_EQ(free_ports(&pa, &ps), 0);
 
-    RXLinkOptions so;
-    rx_link_options_default(&so);
-    /* The wait for a player, which rxbox can do as rekordbox does (the
+    CBLinkOptions so;
+    cb_link_options_default(&so);
+    /* The wait for a player, which cyanbox can do as rekordbox does (the
      * service's default is to join at once: test_link). */
     so.start_up = false;
     so.library = libdir;
     so.interface = "lo";
     so.broadcast = "127.0.0.2";
-    so.ports = (RXLinkPorts) { 0 };
-    so.peer_ports = (RXLinkPorts) { .announce = pa, .status = ps };
+    so.ports = (CBLinkPorts) { 0 };
+    so.peer_ports = (CBLinkPorts) { .announce = pa, .status = ps };
     /* Every reading of the library after the first 1.5 s slower: what
      * players ask meanwhile is answered all the same. */
     so.test_build_ms = 1500;
-    RXLink *link = NULL;
-    CHECK_EQ(rx_link_start(&link, &so), 0);
+    CBLink *link = NULL;
+    CHECK_EQ(cb_link_start(&link, &so), 0);
     if (!link)
         return test_result("test_loopback");
-    RXLinkPorts sp;
-    rx_link_bound_ports(link, &sp);
+    CBLinkPorts sp;
+    cb_link_bound_ports(link, &sp);
     /* Waiting, nothing is announced into an empty network. */
     usleep(300000);
-    CHECK_EQ(rx_link_state(link, NULL), RX_LINK_WAITING);
+    CHECK_EQ(cb_link_state(link, NULL), CB_LINK_WAITING);
 
-    RXLinkClientOptions co;
-    rx_link_client_options_default(&co);
+    CBLinkClientOptions co;
+    cb_link_client_options_default(&co);
     co.interface = "lo";
     co.address = "127.0.0.2";
     co.broadcast = "127.0.0.1";
     co.number = 2;
-    co.ports = (RXLinkPorts) { .announce = pa, .status = ps };
+    co.ports = (CBLinkPorts) { .announce = pa, .status = ps };
     co.server_ports = sp;
-    RXLinkClient *player = NULL;
-    CHECK_EQ(rx_link_client_start(&player, &co), 0);
+    CBLinkClient *player = NULL;
+    CHECK_EQ(cb_link_client_start(&player, &co), 0);
     if (!player) {
-        rx_link_stop(&link);
+        cb_link_stop(&link);
         return test_result("test_loopback");
     }
 
@@ -234,55 +234,55 @@ int main(void)
     CHECK_EQ(wait_up(link, 15000), 17);
     uint32_t addr = 0;
     int number = 0;
-    CHECK_EQ(rx_link_client_wait_source(player, 15000, &addr, &number), 0);
+    CHECK_EQ(cb_link_client_wait_source(player, 15000, &addr, &number), 0);
     CHECK_EQ(addr, 0x7F000001);
     CHECK_EQ(number, 17);
-    RXLinkPlayer seen[8];
-    int nb = rx_link_players(link, seen, 8);
+    CBLinkPlayer seen[8];
+    int nb = cb_link_players(link, seen, 8);
     bool listed = false;
     for (int i = 0; i < nb && i < 8; i++)
         listed |= seen[i].number == 2 && seen[i].addr == 0x7F000002 &&
-                  seen[i].type == RX_LINK_DEVICE_PLAYER;
+                  seen[i].type == CB_LINK_DEVICE_PLAYER;
     CHECK(listed);
 
     /* Browse and load the first track. */
-    CHECK_EQ(rx_link_client_browse(player, 0, quiet_line, NULL), 0);
+    CHECK_EQ(cb_link_client_browse(player, 0, quiet_line, NULL), 0);
 
     /* Every track's file over NFS, as its track info names it. */
     int err = 0;
-    RXDbClient *db = rx_link_client_db(player, &err);
+    CBDbClient *db = cb_link_client_db(player, &err);
     CHECK(db);
-    RXDbRow *rows = NULL;
+    CBDbRow *rows = NULL;
     int nb_rows = 0;
     if (db)
-        CHECK_EQ(rx_dbclient_menu(db, RX_DB_TRACKS, 1, (const uint32_t[]) { 0 }, 1, &rows,
+        CHECK_EQ(cb_dbclient_menu(db, CB_DB_TRACKS, 1, (const uint32_t[]) { 0 }, 1, &rows,
                                   &nb_rows), 0);
-    CHECK_EQ(nb_rows, (int)RX_ARRAY_ELEMS(tracks));
+    CHECK_EQ(nb_rows, (int)CB_ARRAY_ELEMS(tracks));
     for (int i = 0; i < nb_rows; i++) {
         char *path = NULL;
         uint64_t size = 0;
-        CHECK_EQ(rx_dbclient_track_info(db, rows[i].id, &path, &size), 0);
-        CHECK(path && rx_str_starts(path, "/Contents/"));
+        CHECK_EQ(cb_dbclient_track_info(db, rows[i].id, &path, &size), 0);
+        CHECK(path && cb_str_starts(path, "/Contents/"));
         uint8_t *data = NULL;
         size_t got = 0;
         if (path)
-            CHECK_EQ(rx_link_client_fetch(player, path, &data, &got), 0);
+            CHECK_EQ(cb_link_client_fetch(player, path, &data, &got), 0);
         CHECK_EQ(got, size);
-        if (path && !rx_str_ends(path, ".wav"))
+        if (path && !cb_str_ends(path, ".wav"))
             fprintf(stderr, "test_loopback: served as %s\n", path), failures++;
         CHECK(path && data && same_as_decoded(path, data, got));
         free(data);
         free(path);
     }
     uint32_t loaded = nb_rows ? rows[nb_rows - 1].id : 0, other = nb_rows ? rows[0].id : 0;
-    rx_dbrows_free(&rows, nb_rows);
+    cb_dbrows_free(&rows, nb_rows);
 
     /* What the player says it plays reaches the server. */
-    rx_link_client_set_loaded(player, 17, 4, loaded, true);
+    cb_link_client_set_loaded(player, 17, 4, loaded, true);
     bool playing = false;
     for (int k = 0; k < 100 && !playing; k++) {
         usleep(20000);
-        nb = rx_link_players(link, seen, 8);
+        nb = cb_link_players(link, seen, 8);
         for (int i = 0; i < nb && i < 8; i++)
             playing |= seen[i].number == 2 && seen[i].has_status && seen[i].playing &&
                        seen[i].track_device == 17 && seen[i].track_id == loaded;
@@ -294,13 +294,13 @@ int main(void)
      * says so; a player not on the link cannot be told. Paused, it stays
      * paused: a load never starts a player. */
     CHECK(other && other != loaded);
-    rx_link_client_set_loaded(player, 17, 4, loaded, false);
-    CHECK_EQ(rx_link_load(link, 2, other), 0);
-    CHECK_EQ(rx_link_load(link, 5, other), RX_ERROR(ENOENT));
+    cb_link_client_set_loaded(player, 17, 4, loaded, false);
+    CHECK_EQ(cb_link_load(link, 2, other), 0);
+    CHECK_EQ(cb_link_load(link, 5, other), CB_ERROR(ENOENT));
     bool switched = false;
     for (int k = 0; k < 100 && !switched; k++) {
         usleep(20000);
-        nb = rx_link_players(link, seen, 8);
+        nb = cb_link_players(link, seen, 8);
         for (int i = 0; i < nb && i < 8; i++)
             switched |= seen[i].number == 2 && seen[i].track_device == 17 &&
                         seen[i].track_id == other && seen[i].status_us > 0;
@@ -308,11 +308,11 @@ int main(void)
     CHECK(switched);
     /* Its beats from the track's grid: the status names a beat (the
      * start's), still paused. */
-    CHECK(rx_link_client_play(player, other) > 0);
+    CHECK(cb_link_client_play(player, other) > 0);
     bool placed = false;
     for (int k = 0; k < 100 && !placed; k++) {
         usleep(20000);
-        nb = rx_link_players(link, seen, 8);
+        nb = cb_link_players(link, seen, 8);
         for (int i = 0; i < nb && i < 8; i++)
             placed |= seen[i].number == 2 && seen[i].track_id == other && seen[i].beat >= 0 &&
                       !seen[i].playing && seen[i].bpm > 0;
@@ -323,77 +323,77 @@ int main(void)
      * the service hands it on once, for the library's owner (it never
      * writes the library itself). */
     if (db) {
-        RXPlanCue cue = { .time = 0.75, .loop_end = -1, .hot = -1 };
-        RXDbMsg r;
-        CHECK_EQ(rx_dbclient_save_cue(db, other, false, &cue, false, &r), 0);
-        CHECK(r.kind == RX_DB_CUES_EXT_REPLY && rx_dbmsg_num(&r, 1) == 0);
-        RXLinkEdit e[4];
-        CHECK_EQ(rx_link_edits(link, e, 4), 1);
+        CBPlanCue cue = { .time = 0.75, .loop_end = -1, .hot = -1 };
+        CBDbMsg r;
+        CHECK_EQ(cb_dbclient_save_cue(db, other, false, &cue, false, &r), 0);
+        CHECK(r.kind == CB_DB_CUES_EXT_REPLY && cb_dbmsg_num(&r, 1) == 0);
+        CBLinkEdit e[4];
+        CHECK_EQ(cb_link_edits(link, e, 4), 1);
         CHECK(e[0].track_id == other && e[0].player == 2 && !e[0].remove && e[0].cue.hot < 0 &&
               fabs(e[0].cue.time - 0.75) < 0.001);
-        CHECK_EQ(rx_link_edits(link, e, 4), 0);
+        CHECK_EQ(cb_link_edits(link, e, 4), 0);
     }
 
     /* A host that never joined the link: no database, no files. */
-    RXLinkClientOptions qo = co;
+    CBLinkClientOptions qo = co;
     qo.address = "127.0.0.3";
     qo.quiet = true;
     qo.server = "127.0.0.1";
-    RXLinkClient *stranger = NULL;
-    CHECK_EQ(rx_link_client_start(&stranger, &qo), 0);
+    CBLinkClient *stranger = NULL;
+    CHECK_EQ(cb_link_client_start(&stranger, &qo), 0);
     if (stranger) {
-        CHECK(!rx_link_client_db(stranger, &err));
+        CHECK(!cb_link_client_db(stranger, &err));
         CHECK(err < 0);
         uint8_t *data = NULL;
         size_t got = 0;
-        CHECK_EQ(rx_link_client_fetch(stranger, "/Contents", &data, &got), RX_ERROR(ETIMEDOUT));
+        CHECK_EQ(cb_link_client_fetch(stranger, "/Contents", &data, &got), CB_ERROR(ETIMEDOUT));
         free(data);
-        rx_link_client_stop(&stranger);
+        cb_link_client_stop(&stranger);
     }
 
     /* A track added: served again once the server is told. */
-    RXLibrary lib = { 0 };
+    CBLibrary lib = { 0 };
     CHECK_EQ(make_track("delta.flac", "-c:a flac", 122), 0);
-    CHECK_EQ(rx_library_open(&lib, libdir), 0);
+    CHECK_EQ(cb_library_open(&lib, libdir), 0);
     add_track(&lib, "delta.flac", 122);
-    rx_library_close(&lib);
-    rx_link_library_changed(link);
+    cb_library_close(&lib);
+    cb_link_library_changed(link);
     /* It is read on a thread of its own: the player is answered at once
      * meanwhile, from the library as it was, and a cue it saves then is
      * served after the swap too, though the owner never saved it. */
     usleep(200000);
     if (db) {
-        int64_t t0 = rx_time_us();
-        CHECK_EQ(rx_dbclient_menu(db, RX_DB_TRACKS, 1, (const uint32_t[]) { 0 }, 1, &rows,
+        int64_t t0 = cb_time_us();
+        CHECK_EQ(cb_dbclient_menu(db, CB_DB_TRACKS, 1, (const uint32_t[]) { 0 }, 1, &rows,
                                   &nb_rows), 0);
-        int64_t took = rx_time_us() - t0;
+        int64_t took = cb_time_us() - t0;
         if (took > 300000)
             fprintf(stderr, "test_loopback: answered in %lld ms while reading the library\n",
                     (long long)(took / 1000)), failures++;
         CHECK_EQ(nb_rows, 3);
-        rx_dbrows_free(&rows, nb_rows);
-        RXPlanCue cue = { .time = 0.5, .loop_end = -1, .hot = 1 };
-        RXDbMsg r;
-        CHECK_EQ(rx_dbclient_save_cue(db, loaded, false, &cue, false, &r), 0);
-        CHECK(r.kind == RX_DB_CUES_EXT_REPLY && rx_dbmsg_num(&r, 1) == 0);
+        cb_dbrows_free(&rows, nb_rows);
+        CBPlanCue cue = { .time = 0.5, .loop_end = -1, .hot = 1 };
+        CBDbMsg r;
+        CHECK_EQ(cb_dbclient_save_cue(db, loaded, false, &cue, false, &r), 0);
+        CHECK(r.kind == CB_DB_CUES_EXT_REPLY && cb_dbmsg_num(&r, 1) == 0);
     }
     bool four = false;
     for (int k = 0; k < 100 && !four && db; k++) {
         usleep(50000);
-        if (rx_dbclient_menu(db, RX_DB_TRACKS, 1, (const uint32_t[]) { 0 }, 1, &rows,
+        if (cb_dbclient_menu(db, CB_DB_TRACKS, 1, (const uint32_t[]) { 0 }, 1, &rows,
                              &nb_rows) >= 0) {
             four = nb_rows == 4;
-            rx_dbrows_free(&rows, nb_rows);
+            cb_dbrows_free(&rows, nb_rows);
         }
     }
     CHECK(four);
     if (db) {
         uint8_t *blob = NULL;
         size_t bn = 0;
-        RXPlanCue *cues = NULL;
+        CBPlanCue *cues = NULL;
         int nc = 0;
-        CHECK_EQ(rx_dbclient_blob(db, RX_DB_CUES_EXT, loaded, &blob, &bn), 0);
-        CHECK_EQ(rx_db_cues_ext_parse(blob, bn, &cues, &nc), 0);
+        CHECK_EQ(cb_dbclient_blob(db, CB_DB_CUES_EXT, loaded, &blob, &bn), 0);
+        CHECK_EQ(cb_db_cues_ext_parse(blob, bn, &cues, &nc), 0);
         bool kept = false;
         for (int i = 0; i < nc; i++)
             kept |= cues[i].hot == 1 && fabs(cues[i].time - 0.5) < 0.001;
@@ -407,38 +407,38 @@ int main(void)
      * served at once, well before a whole reading (1.5 s slower here)
      * could be; a new title changes what is planned, so it is the whole
      * library read again, served only once that is done. */
-    RXLibrary own = { 0 };
-    CHECK_EQ(rx_library_open(&own, libdir), 0);
-    RXTrack *t = rx_library_find_id(&own, other);
+    CBLibrary own = { 0 };
+    CHECK_EQ(cb_library_open(&own, libdir), 0);
+    CBTrack *t = cb_library_find_id(&own, other);
     CHECK(t);
     if (t && db) {
         t->meta.rating = 4;
-        RXCue mc;
-        rx_cue_init(&mc, 2.0);
-        CHECK(rx_track_add_cue(t, &mc) >= 0);
-        CHECK_EQ(rx_library_save_track(&own, t), 0);
+        CBCue mc;
+        cb_cue_init(&mc, 2.0);
+        CHECK(cb_track_add_cue(t, &mc) >= 0);
+        CHECK_EQ(cb_library_save_track(&own, t), 0);
         uint64_t *ids = NULL;
         int nids = 0;
-        CHECK(rx_library_take_changes(&own, &ids, &nids) == 0 && nids == 1 && ids[0] == other);
+        CHECK(cb_library_take_changes(&own, &ids, &nids) == 0 && nids == 1 && ids[0] == other);
         free(ids);
         uint64_t id = other;
-        int64_t t0 = rx_time_us();
-        rx_link_tracks_changed(link, &id, 1);
+        int64_t t0 = cb_time_us();
+        cb_link_tracks_changed(link, &id, 1);
         bool rated = false, cued = false;
-        while (!(rated && cued) && rx_time_us() - t0 < 400000) {
+        while (!(rated && cued) && cb_time_us() - t0 < 400000) {
             usleep(20000);
-            if (rx_dbclient_menu(db, RX_DB_RATING_TRACKS, 2, (const uint32_t[]) { 0, 4 }, 2,
+            if (cb_dbclient_menu(db, CB_DB_RATING_TRACKS, 2, (const uint32_t[]) { 0, 4 }, 2,
                                  &rows, &nb_rows) >= 0) {
                 for (int i = 0; i < nb_rows; i++)
                     rated |= rows[i].id == other;
-                rx_dbrows_free(&rows, nb_rows);
+                cb_dbrows_free(&rows, nb_rows);
             }
             uint8_t *blob = NULL;
             size_t bn = 0;
-            RXPlanCue *cues = NULL;
+            CBPlanCue *cues = NULL;
             int nc = 0;
-            if (rx_dbclient_blob(db, RX_DB_CUES_EXT, other, &blob, &bn) == 0 &&
-                rx_db_cues_ext_parse(blob, bn, &cues, &nc) == 0) {
+            if (cb_dbclient_blob(db, CB_DB_CUES_EXT, other, &blob, &bn) == 0 &&
+                cb_db_cues_ext_parse(blob, bn, &cues, &nc) == 0) {
                 for (int i = 0; i < nc; i++)
                     cued |= cues[i].hot < 0 && fabs(cues[i].time - 2.0) < 0.001;
             }
@@ -447,36 +447,36 @@ int main(void)
         }
         CHECK(rated && cued);
 
-        rx_meta_set(&t->meta.title, "Renamed");
-        CHECK_EQ(rx_library_save_track(&own, t), 0);
-        CHECK(rx_library_take_changes(&own, &ids, &nids) == 0 && nids == 1);
+        cb_meta_set(&t->meta.title, "Renamed");
+        CHECK_EQ(cb_library_save_track(&own, t), 0);
+        CHECK(cb_library_take_changes(&own, &ids, &nids) == 0 && nids == 1);
         free(ids);
-        rx_link_tracks_changed(link, &id, 1);
+        cb_link_tracks_changed(link, &id, 1);
         usleep(300000);
-        RXDbRow *meta = NULL;
+        CBDbRow *meta = NULL;
         int nm = 0;
-        CHECK_EQ(rx_dbclient_metadata(db, other, &meta, &nm), 0);
+        CHECK_EQ(cb_dbclient_metadata(db, other, &meta, &nm), 0);
         CHECK(nm > 0 && meta[0].text && strcmp(meta[0].text, "Renamed"));
-        rx_dbrows_free(&meta, nm);
+        cb_dbrows_free(&meta, nm);
         bool renamed = false;
         for (int k = 0; k < 100 && !renamed; k++) {
             usleep(50000);
-            if (rx_dbclient_metadata(db, other, &meta, &nm) == 0) {
+            if (cb_dbclient_metadata(db, other, &meta, &nm) == 0) {
                 renamed = nm > 0 && meta[0].text && !strcmp(meta[0].text, "Renamed");
-                rx_dbrows_free(&meta, nm);
+                cb_dbrows_free(&meta, nm);
             }
         }
         CHECK(renamed);
     }
-    rx_library_close(&own);
+    cb_library_close(&own);
 
     /* Nothing was made on disk for it. */
-    char *cache = rx_asprintf("%s/cache/transcode", libdir);
-    CHECK(cache && !rx_file_exists(cache));
+    char *cache = cb_asprintf("%s/cache/transcode", libdir);
+    CHECK(cache && !cb_file_exists(cache));
     free(cache);
 
-    rx_link_client_stop(&player);
-    rx_link_stop(&link);
+    cb_link_client_stop(&player);
+    cb_link_stop(&link);
     sh("rm -rf '%s'", root);
     return test_result("test_loopback");
 }

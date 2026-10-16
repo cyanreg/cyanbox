@@ -1,7 +1,7 @@
 // Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md.
 
-// Band energies of a short-time Fourier transform (rxbox/compute.h,
-// RXComputeSTFT): one workgroup per frame. The frame's 2M samples are
+// Band energies of a short-time Fourier transform (cyanbox/compute.h,
+// CBComputeSTFT): one workgroup per frame. The frame's 2M samples are
 // windowed into shared memory as M complex points, transformed, split into
 // the real spectrum's power |X_k|^2 (k in [0, M]), and each band sums the
 // power under its weights, compressed as log(1 + scale * sqrt(sum)).

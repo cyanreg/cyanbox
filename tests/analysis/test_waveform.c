@@ -1,6 +1,6 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
-/* The waveform encoders against dj's: every tag byte of rx_waveforms_compute
+/* The waveform encoders against dj's: every tag byte of cb_waveforms_compute
  * is compared with the reference bytes gen_fixtures.py wrote for the same
  * float32 samples (tests/data/analysis), plus the column count rule, the
  * firmware minimums, the three-band rules, and the packed form (the
@@ -31,8 +31,8 @@
 #include <stdlib.h>
 #include <unistd.h>
 
-#include "rxbox/analysis.h"
-#include "rxbox/common.h"
+#include "cyanbox/analysis.h"
+#include "cyanbox/common.h"
 
 #define DATA_DIR "tests/data/analysis/"
 
@@ -54,18 +54,18 @@ static int fixture_load(const char *path, Fixture *f)
 {
     size_t size;
     *f = (Fixture) { 0 };
-    int ret = rx_file_read(path, &f->buf, &size);
+    int ret = cb_file_read(path, &f->buf, &size);
     if (ret < 0)
         return ret;
     if (size < 24 || memcmp(f->buf, "DJWV", 4))
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
     f->rate = (int)le32(f->buf + 4);
     f->nb_samples = le32(f->buf + 8);
     f->n = (int)le32(f->buf + 12);
     for (int j = 0; j < 3; j++)
         f->gains[j] = (uint16_t)(f->buf[16 + 2 * j] | f->buf[17 + 2 * j] << 8);
     if (size != 24 + 400 + 100 + 7200 + 3600 + (size_t)f->n * 6)
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
     const uint8_t *p = f->buf + 24;
     f->pwav = p;
     p += 400;
@@ -87,14 +87,14 @@ static int signal_load(const char *path, float **x, int64_t *nb)
 {
     uint8_t *buf;
     size_t size;
-    int ret = rx_file_read(path, &buf, &size);
+    int ret = cb_file_read(path, &buf, &size);
     if (ret < 0)
         return ret;
     *nb = (int64_t)(size / 4);
-    *x = malloc(RX_MAX(size, 4));
+    *x = malloc(CB_MAX(size, 4));
     if (!*x) {
         free(buf);
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     }
     /* The fixtures are little-endian float32, as is every host this builds on. */
     memcpy(*x, buf, size);
@@ -112,7 +112,7 @@ static int count_diff(const char *tag, const uint8_t *a, const uint8_t *b, size_
         for (size_t i = 0, shown = 0; i < size && shown < 5; i++) {
             if (a[i] == b[i])
                 continue;
-            printf("          [%zu] rxbox %u dj %u\n", i, a[i], b[i]);
+            printf("          [%zu] cyanbox %u dj %u\n", i, a[i], b[i]);
             shown++;
         }
     }
@@ -139,12 +139,12 @@ static int compare(const char *f32_path, const char *tags_path)
         return 1;
     }
 
-    RXWaveforms w;
-    int64_t t0 = rx_time_us();
-    ret = rx_waveforms_compute(x, nb, fx.rate, &w);
-    int64_t t1 = rx_time_us();
+    CBWaveforms w;
+    int64_t t0 = cb_time_us();
+    ret = cb_waveforms_compute(x, nb, fx.rate, &w);
+    int64_t t1 = cb_time_us();
     if (ret < 0) {
-        printf("  %s: rx_waveforms_compute failed (%s)\n", f32_path, strerror(-ret));
+        printf("  %s: cb_waveforms_compute failed (%s)\n", f32_path, strerror(-ret));
         free(fx.buf);
         free(x);
         return 1;
@@ -152,25 +152,25 @@ static int compare(const char *f32_path, const char *tags_path)
     printf("  %s: %d Hz, %lld samples, %d columns, %.1f ms\n", f32_path, fx.rate,
            (long long)nb, w.nb_detail, (t1 - t0) / 1000.0);
 
-    /* dj's bytes with rxbox's firmware minimums applied. */
-    uint8_t pwav[RX_WAVE_PWAV_COLUMNS], pwv2[RX_WAVE_PWV2_COLUMNS];
+    /* dj's bytes with cyanbox's firmware minimums applied. */
+    uint8_t pwav[CB_WAVE_PWAV_COLUMNS], pwv2[CB_WAVE_PWV2_COLUMNS];
     int clamped = 0;
-    for (int i = 0; i < RX_WAVE_PWAV_COLUMNS; i++) {
+    for (int i = 0; i < CB_WAVE_PWAV_COLUMNS; i++) {
         pwav[i] = fx.pwav[i];
         if ((pwav[i] & 31) < 2) {
             pwav[i] = (uint8_t)((pwav[i] & ~31) | 2);
             clamped++;
         }
     }
-    for (int i = 0; i < RX_WAVE_PWV2_COLUMNS; i++) {
-        pwv2[i] = RX_MAX(fx.pwv2[i], 1);
+    for (int i = 0; i < CB_WAVE_PWV2_COLUMNS; i++) {
+        pwv2[i] = CB_MAX(fx.pwv2[i], 1);
         clamped += fx.pwv2[i] < 1;
     }
     printf("    firmware minimums changed %d of dj's preview bytes\n", clamped);
 
     int diff = 0;
     if (w.nb_detail != fx.n) {
-        printf("    detail columns: rxbox %d dj %d\n", w.nb_detail, fx.n);
+        printf("    detail columns: cyanbox %d dj %d\n", w.nb_detail, fx.n);
         diff++;
     } else {
         diff += count_diff("PWV3", w.pwv3, fx.pwv3, (size_t)fx.n);
@@ -182,11 +182,11 @@ static int compare(const char *f32_path, const char *tags_path)
     diff += count_diff("PWV4", w.pwv4, fx.pwv4, sizeof(w.pwv4));
     diff += count_diff("PWV6", w.pwv6, fx.pwv6, sizeof(w.pwv6));
     int gdiff = memcmp(w.gains, fx.gains, sizeof(w.gains)) != 0;
-    printf("    PWVC  rxbox %u %u %u dj %u %u %u\n", w.gains[0], w.gains[1], w.gains[2],
+    printf("    PWVC  cyanbox %u %u %u dj %u %u %u\n", w.gains[0], w.gains[1], w.gains[2],
            fx.gains[0], fx.gains[1], fx.gains[2]);
     diff += gdiff;
 
-    rx_waveforms_free(&w);
+    cb_waveforms_free(&w);
     free(fx.buf);
     free(x);
     return diff;
@@ -301,11 +301,11 @@ static int test_crossovers(void)
     float *x = tones(rate, freq, 3, 2.0, 0.5, &nb);
     if (!x)
         return 1;
-    RXWaveforms w;
-    CHECK(rx_waveforms_compute(x, nb, rate, &w) == 0 && w.nb_detail == 900);
+    CBWaveforms w;
+    CHECK(cb_waveforms_compute(x, nb, rate, &w) == 0 && w.nb_detail == 900);
     free(x);
     if (w.nb_detail != 900) {
-        rx_waveforms_free(&w);
+        cb_waveforms_free(&w);
         return fails + 1;
     }
     for (int s = 0; s < 3; s++) {
@@ -333,7 +333,7 @@ static int test_crossovers(void)
         CHECK(w.pwv6[k * 3 + 2] <= 1);
         CHECK(w.pwv6[(800 + k) * 3 + 0] <= 4);
     }
-    rx_waveforms_free(&w);
+    cb_waveforms_free(&w);
     return fails;
 }
 
@@ -345,7 +345,7 @@ static double mean_rms(const float *x, int64_t nb, int rate)
     int64_t n = (int64_t)ceil((double)(nb * 150) / rate), start = 0, frames = 0;
     double level = 0.0;
     for (int64_t k = 0; k < n; k++) {
-        int64_t end = RX_MIN((int64_t)floor((double)((k + 1) * rate) / 150 + 0.5), nb);
+        int64_t end = CB_MIN((int64_t)floor((double)((k + 1) * rate) / 150 + 0.5), nb);
         double s = 0.0;
         for (int64_t i = start; i < end; i++)
             s += (double)x[i] * x[i];
@@ -371,22 +371,22 @@ static int test_overview_level(void)
     float *x = loud_master(rate, 20.0, &nb);
     if (!x)
         return 1;
-    RXWaveforms w, h;
+    CBWaveforms w, h;
     for (int64_t i = 0; i < nb; i++)
         x[i] *= 0.5f;
-    CHECK(rx_waveforms_compute(x, nb, rate, &w) == 0);
+    CHECK(cb_waveforms_compute(x, nb, rate, &w) == 0);
     double target = 92 * mean_rms(x, nb, rate);
     for (int64_t i = 0; i < nb; i++)
         x[i] *= 0.5f;
-    CHECK(rx_waveforms_compute(x, nb, rate, &h) == 0);
+    CHECK(cb_waveforms_compute(x, nb, rate, &h) == 0);
     free(x);
 
     double mean[3] = { 0 };
     int top = 0;
-    for (int k = 0; k < RX_WAVE_PWV6_COLUMNS; k++) {
+    for (int k = 0; k < CB_WAVE_PWV6_COLUMNS; k++) {
         for (int j = 0; j < 3; j++) {
-            mean[j] += w.pwv6[k * 3 + j] / (double)RX_WAVE_PWV6_COLUMNS;
-            top = RX_MAX(top, w.pwv6[k * 3 + j]);
+            mean[j] += w.pwv6[k * 3 + j] / (double)CB_WAVE_PWV6_COLUMNS;
+            top = CB_MAX(top, w.pwv6[k * 3 + j]);
             CHECK(abs(2 * h.pwv6[k * 3 + j] - w.pwv6[k * 3 + j]) <= 1);
         }
     }
@@ -397,8 +397,8 @@ static int test_overview_level(void)
         CHECK(fabs(mean[j] - target) < 0.6);
     for (int64_t i = 0; i < (int64_t)w.nb_detail * 3; i++)
         CHECK(abs(2 * h.pwv7[i] - w.pwv7[i]) <= 2);
-    rx_waveforms_free(&w);
-    rx_waveforms_free(&h);
+    cb_waveforms_free(&w);
+    cb_waveforms_free(&h);
     return fails;
 }
 
@@ -419,8 +419,8 @@ static int test_peak(void)
         double hann = 0.5 - 0.5 * cos(2 * M_PI * i / 60);
         x[22150 + i] = (float)(0.8 * hann * sin(2 * M_PI * 8000 * i / rate));
     }
-    RXWaveforms w;
-    CHECK(rx_waveforms_compute(x, rate, rate, &w) == 0 && w.nb_detail == 150);
+    CBWaveforms w;
+    CHECK(cb_waveforms_compute(x, rate, rate, &w) == 0 && w.nb_detail == 150);
     unsigned e[3];
     tone_pwv7(8000, 0.8, rate, e);
     printf("an 8 kHz burst of 60 samples at 0.8: PWV7 %u %u %u (a steady tone %u %u %u)\n",
@@ -428,19 +428,19 @@ static int test_peak(void)
     CHECK(w.pwv7[75 * 3 + 2] <= e[2] + 2 && w.pwv7[75 * 3 + 2] + 4 >= e[2]);
     for (int j = 0; j < 3; j++)
         CHECK(w.pwv7[74 * 3 + j] == 0 && w.pwv7[76 * 3 + j] <= 1);
-    rx_waveforms_free(&w);
+    cb_waveforms_free(&w);
 
     /* 100 Hz at 1.5: its low band is 1.34, so 127; its mid 0.6 */
     for (int i = 0; i < rate; i++)
         x[i] = (float)(1.5 * sin(2 * M_PI * 100 * i / rate));
-    CHECK(rx_waveforms_compute(x, rate, rate, &w) == 0 && w.nb_detail == 150);
+    CHECK(cb_waveforms_compute(x, rate, rate, &w) == 0 && w.nb_detail == 150);
     tone_pwv7(100, 1.5, rate, e);
     CHECK(e[0] == 127 && e[1] < 127);
     for (int k = 10; k < 150; k++) {
         CHECK(w.pwv7[k * 3] == 127);
         CHECK(w.pwv7[k * 3 + 1] <= e[1] && w.pwv7[k * 3 + 1] + 2 >= e[1]);
     }
-    rx_waveforms_free(&w);
+    cb_waveforms_free(&w);
     free(x);
     return fails;
 }
@@ -449,41 +449,41 @@ static int test_peak(void)
 static int test_rules(void)
 {
     int fails = 0;
-    RXWaveforms w;
+    CBWaveforms w;
 
     /* 150 columns per second, ceil(samples * 150 / rate) of them */
     float *z = calloc(44101, sizeof(*z));
     if (!z)
         return 1;
-    CHECK(rx_waveforms_compute(z, 44100, 44100, &w) == 0 && w.nb_detail == 150);
-    rx_waveforms_free(&w);
-    CHECK(rx_waveforms_compute(z, 44101, 44100, &w) == 0 && w.nb_detail == 151);
-    /* Silence: dj writes zero heights, rxbox the firmware minimums. */
-    for (int i = 0; i < RX_WAVE_PWAV_COLUMNS; i++)
+    CHECK(cb_waveforms_compute(z, 44100, 44100, &w) == 0 && w.nb_detail == 150);
+    cb_waveforms_free(&w);
+    CHECK(cb_waveforms_compute(z, 44101, 44100, &w) == 0 && w.nb_detail == 151);
+    /* Silence: dj writes zero heights, cyanbox the firmware minimums. */
+    for (int i = 0; i < CB_WAVE_PWAV_COLUMNS; i++)
         CHECK((w.pwav[i] & 31) == 2);
-    for (int i = 0; i < RX_WAVE_PWV2_COLUMNS; i++)
+    for (int i = 0; i < CB_WAVE_PWV2_COLUMNS; i++)
         CHECK(w.pwv2[i] == 1);
     /* and no three-band level: every band's mean is under rbxport's 1e-6 */
-    for (int i = 0; i < RX_WAVE_PWV6_COLUMNS * 3; i++)
+    for (int i = 0; i < CB_WAVE_PWV6_COLUMNS * 3; i++)
         CHECK(w.pwv6[i] == 0);
     for (int i = 0; i < w.nb_detail * 3; i++)
         CHECK(w.pwv7[i] == 0);
-    rx_waveforms_free(&w);
+    cb_waveforms_free(&w);
     /* No samples: one empty column, and an overview of nothing */
-    CHECK(rx_waveforms_compute(z, 0, 44100, &w) == 0 && w.nb_detail == 1);
-    for (int i = 0; i < RX_WAVE_PWV6_COLUMNS * 3; i++)
+    CHECK(cb_waveforms_compute(z, 0, 44100, &w) == 0 && w.nb_detail == 1);
+    for (int i = 0; i < CB_WAVE_PWV6_COLUMNS * 3; i++)
         CHECK(w.pwv6[i] == 0);
-    rx_waveforms_free(&w);
+    cb_waveforms_free(&w);
     /* Fewer samples than overview columns: those between samples are empty */
     z[5] = 0.5f;
-    CHECK(rx_waveforms_compute(z, 10, 44100, &w) == 0 && w.nb_detail == 1);
+    CHECK(cb_waveforms_compute(z, 10, 44100, &w) == 0 && w.nb_detail == 1);
     int lit = 0;
-    for (int i = 0; i < RX_WAVE_PWV6_COLUMNS * 3; i++)
+    for (int i = 0; i < CB_WAVE_PWV6_COLUMNS * 3; i++)
         lit += w.pwv6[i] > 0;
     CHECK(lit > 0 && w.pwv7[2] > 0);
-    rx_waveforms_free(&w);
+    cb_waveforms_free(&w);
     z[5] = 0.0f;
-    CHECK(rx_waveforms_compute(z, 100, 0, &w) == RX_ERROR(EINVAL));
+    CHECK(cb_waveforms_compute(z, 100, 0, &w) == CB_ERROR(EINVAL));
     free(z);
 
     /* 60 Hz then 5 kHz at 48 kHz: bass dark, treble white */
@@ -495,7 +495,7 @@ static int test_rules(void)
         x[i] = (float)(0.9 * sin(2 * M_PI * 60 * i / rate));
         x[half + i] = (float)(0.9 * sin(2 * M_PI * 5000 * i / rate));
     }
-    CHECK(rx_waveforms_compute(x, half * 2, rate, &w) == 0 && w.nb_detail == 600);
+    CHECK(cb_waveforms_compute(x, half * 2, rate, &w) == 0 && w.nb_detail == 600);
     if (w.nb_detail == 600) {
         for (int i = 5; i < 295; i++) {
             CHECK(w.pwv3[i] >> 5 == 0);
@@ -506,12 +506,12 @@ static int test_rules(void)
         CHECK(w.pwv7[100 * 3 + 0] > w.pwv7[100 * 3 + 2]);
         CHECK(w.pwv7[400 * 3 + 2] > w.pwv7[400 * 3 + 0]);
     }
-    rx_waveforms_free(&w);
+    cb_waveforms_free(&w);
     free(x);
     return fails;
 }
 
-static bool same_waves(const RXWaveforms *a, const RXWaveforms *b)
+static bool same_waves(const CBWaveforms *a, const CBWaveforms *b)
 {
     if (a->nb_detail != b->nb_detail || a->rate != b->rate)
         return false;
@@ -540,52 +540,52 @@ static int test_pack(void)
         printf("FAIL: cannot read short44k.f32\n");
         return 1;
     }
-    RXWaveforms w, r;
-    CHECK(rx_waveforms_compute(x, nb, 44100, &w) == 0);
+    CBWaveforms w, r;
+    CHECK(cb_waveforms_compute(x, nb, 44100, &w) == 0);
     free(x);
 
     uint8_t *data;
     size_t size;
-    CHECK(rx_waveforms_pack(&w, &data, &size) == 0);
+    CHECK(cb_waveforms_pack(&w, &data, &size) == 0);
     if (!data) {
-        rx_waveforms_free(&w);
+        cb_waveforms_free(&w);
         return fails + 1;
     }
     CHECK(size == 24 + 400 + 100 + 7200 + 3600 + (size_t)w.nb_detail * 6);
     CHECK(!memcmp(data, "RXWV", 4) && le32(data + 4) == 4 && le32(data + 8) == (uint32_t)w.nb_detail &&
           le32(data + 12) == 44100);
-    CHECK(rx_waveforms_unpack(data, size, &r) == 0);
+    CHECK(cb_waveforms_unpack(data, size, &r) == 0);
     CHECK(same_waves(&r, &w));
-    rx_waveforms_free(&r);
+    cb_waveforms_free(&r);
 
     /* The previews alone, as the library keeps them apart: the first
-     * RX_WAVE_PACKED_PREVIEW bytes, the header's rate and gains with them,
+     * CB_WAVE_PACKED_PREVIEW bytes, the header's rate and gains with them,
      * no detail; any other length refused. */
-    CHECK(RX_WAVE_PACKED_PREVIEW == 24 + 400 + 100 + 7200 + 3600);
-    CHECK(rx_waveforms_unpack_previews(data, RX_WAVE_PACKED_PREVIEW, &r) == 0);
+    CHECK(CB_WAVE_PACKED_PREVIEW == 24 + 400 + 100 + 7200 + 3600);
+    CHECK(cb_waveforms_unpack_previews(data, CB_WAVE_PACKED_PREVIEW, &r) == 0);
     CHECK(!r.nb_detail && !r.pwv3 && !r.pwv5 && !r.pwv7 && r.rate == 44100);
     CHECK(!memcmp(r.pwav, w.pwav, sizeof(w.pwav)) && !memcmp(r.pwv2, w.pwv2, sizeof(w.pwv2)) &&
           !memcmp(r.pwv4, w.pwv4, sizeof(w.pwv4)) && !memcmp(r.pwv6, w.pwv6, sizeof(w.pwv6)) &&
           !memcmp(r.gains, w.gains, sizeof(w.gains)));
-    CHECK(rx_waveforms_unpack_previews(data, size, &r) == RX_ERROR(EINVAL));
-    CHECK(rx_waveforms_unpack_previews(data, RX_WAVE_PACKED_PREVIEW - 1, &r) == RX_ERROR(EINVAL));
+    CHECK(cb_waveforms_unpack_previews(data, size, &r) == CB_ERROR(EINVAL));
+    CHECK(cb_waveforms_unpack_previews(data, CB_WAVE_PACKED_PREVIEW - 1, &r) == CB_ERROR(EINVAL));
     put32(data + 4, 3);
-    CHECK(rx_waveforms_unpack_previews(data, RX_WAVE_PACKED_PREVIEW, &r) == RX_ERROR(EPROTO));
+    CHECK(cb_waveforms_unpack_previews(data, CB_WAVE_PACKED_PREVIEW, &r) == CB_ERROR(EPROTO));
     put32(data + 4, 4);
 
     /* Refused, with nothing allocated: truncated, one byte too many, bad
      * magic, another version, a column count that disagrees with the size,
      * no columns, shorter than the header, no data */
-    CHECK(rx_waveforms_unpack(data, size - 1, &r) == RX_ERROR(EINVAL) && !r.pwv3);
+    CHECK(cb_waveforms_unpack(data, size - 1, &r) == CB_ERROR(EINVAL) && !r.pwv3);
     uint8_t *big = malloc(size + 1);
     if (big) {
         memcpy(big, data, size);
         big[size] = 0;
-        CHECK(rx_waveforms_unpack(big, size + 1, &r) == RX_ERROR(EINVAL) && !r.pwv3);
+        CHECK(cb_waveforms_unpack(big, size + 1, &r) == CB_ERROR(EINVAL) && !r.pwv3);
         free(big);
     }
     data[0] = 'X';
-    CHECK(rx_waveforms_unpack(data, size, &r) == RX_ERROR(EINVAL));
+    CHECK(cb_waveforms_unpack(data, size, &r) == CB_ERROR(EINVAL));
     data[0] = 'R';
     /* Another version is stale, not damaged: -EPROTO, so the app recomputes.
      * Versions 1 to 3 hold older three-band levels (dj's, then two fits to
@@ -594,25 +594,25 @@ static int test_pack(void)
         if (v == 4)
             continue;
         put32(data + 4, v);
-        CHECK(rx_waveforms_unpack(data, size, &r) == RX_ERROR(EPROTO) && !r.pwv3);
+        CHECK(cb_waveforms_unpack(data, size, &r) == CB_ERROR(EPROTO) && !r.pwv3);
     }
     put32(data + 4, 4);
     put32(data + 8, (uint32_t)w.nb_detail + 1);
-    CHECK(rx_waveforms_unpack(data, size, &r) == RX_ERROR(EINVAL));
+    CHECK(cb_waveforms_unpack(data, size, &r) == CB_ERROR(EINVAL));
     put32(data + 8, 0);
-    CHECK(rx_waveforms_unpack(data, 24 + 400 + 100 + 7200 + 3600, &r) == RX_ERROR(EINVAL));
+    CHECK(cb_waveforms_unpack(data, 24 + 400 + 100 + 7200 + 3600, &r) == CB_ERROR(EINVAL));
     put32(data + 8, (uint32_t)w.nb_detail);
-    CHECK(rx_waveforms_unpack(data, 23, &r) == RX_ERROR(EINVAL));
-    CHECK(rx_waveforms_unpack(NULL, size, &r) == RX_ERROR(EINVAL));
-    CHECK(rx_waveforms_unpack(data, size, &r) == 0 && same_waves(&r, &w));
-    rx_waveforms_free(&r);
+    CHECK(cb_waveforms_unpack(data, 23, &r) == CB_ERROR(EINVAL));
+    CHECK(cb_waveforms_unpack(NULL, size, &r) == CB_ERROR(EINVAL));
+    CHECK(cb_waveforms_unpack(data, size, &r) == 0 && same_waves(&r, &w));
+    cb_waveforms_free(&r);
     free(data);
 
     /* Nothing to pack */
-    RXWaveforms empty = { 0 };
-    CHECK(rx_waveforms_pack(&empty, &data, &size) == RX_ERROR(EINVAL) && !data && !size);
+    CBWaveforms empty = { 0 };
+    CHECK(cb_waveforms_pack(&empty, &data, &size) == CB_ERROR(EINVAL) && !data && !size);
 
-    rx_waveforms_free(&w);
+    cb_waveforms_free(&w);
     return fails;
 }
 
@@ -626,60 +626,60 @@ static int test_cache(void)
         printf("FAIL: cannot read odd11k.f32\n");
         return 1;
     }
-    RXWaveforms w, r;
-    CHECK(rx_waveforms_compute(x, nb, 11025, &w) == 0);
+    CBWaveforms w, r;
+    CHECK(cb_waveforms_compute(x, nb, 11025, &w) == 0);
     free(x);
 
-    char path[] = "/tmp/rxbox-test-waveform-XXXXXX";
+    char path[] = "/tmp/cyanbox-test-waveform-XXXXXX";
     int fd = mkstemp(path);
     CHECK(fd >= 0);
     if (fd < 0) {
-        rx_waveforms_free(&w);
+        cb_waveforms_free(&w);
         return fails;
     }
     close(fd);
 
-    CHECK(rx_waveforms_save(&w, path) == 0);
+    CHECK(cb_waveforms_save(&w, path) == 0);
     uint8_t *packed, *file;
     size_t packed_size, file_size;
-    CHECK(rx_waveforms_pack(&w, &packed, &packed_size) == 0);
-    CHECK(rx_file_read(path, &file, &file_size) == 0);
+    CHECK(cb_waveforms_pack(&w, &packed, &packed_size) == 0);
+    CHECK(cb_file_read(path, &file, &file_size) == 0);
     CHECK(file_size == packed_size && !memcmp(file, packed, file_size));
     free(packed);
     free(file);
-    CHECK(rx_waveforms_load(path, &r) == 0);
+    CHECK(cb_waveforms_load(path, &r) == 0);
     CHECK(same_waves(&r, &w) && r.rate == 11025);
-    rx_waveforms_free(&r);
+    cb_waveforms_free(&r);
 
     /* Damaged files are refused, not half read. */
     uint8_t *buf;
     size_t size;
-    CHECK(rx_file_read(path, &buf, &size) == 0);
-    CHECK(rx_file_write_atomic(path, buf, size - 1) == 0);
-    CHECK(rx_waveforms_load(path, &r) == RX_ERROR(EINVAL) && !r.pwv3);
+    CHECK(cb_file_read(path, &buf, &size) == 0);
+    CHECK(cb_file_write_atomic(path, buf, size - 1) == 0);
+    CHECK(cb_waveforms_load(path, &r) == CB_ERROR(EINVAL) && !r.pwv3);
     buf[8]++;
-    CHECK(rx_file_write_atomic(path, buf, size) == 0);
-    CHECK(rx_waveforms_load(path, &r) == RX_ERROR(EINVAL));
+    CHECK(cb_file_write_atomic(path, buf, size) == 0);
+    CHECK(cb_waveforms_load(path, &r) == CB_ERROR(EINVAL));
     buf[8]--;
     /* A version 1 file (dj's three-band levels) or version 3 one (the last
      * fit to rekordbox's) is stale: -EPROTO */
     buf[4] = 1;
-    CHECK(rx_file_write_atomic(path, buf, size) == 0);
-    CHECK(rx_waveforms_load(path, &r) == RX_ERROR(EPROTO) && !r.pwv3);
+    CHECK(cb_file_write_atomic(path, buf, size) == 0);
+    CHECK(cb_waveforms_load(path, &r) == CB_ERROR(EPROTO) && !r.pwv3);
     buf[4] = 3;
-    CHECK(rx_file_write_atomic(path, buf, size) == 0);
-    CHECK(rx_waveforms_load(path, &r) == RX_ERROR(EPROTO) && !r.pwv3);
+    CHECK(cb_file_write_atomic(path, buf, size) == 0);
+    CHECK(cb_waveforms_load(path, &r) == CB_ERROR(EPROTO) && !r.pwv3);
     buf[4] = 4;
     buf[0] = 'X';
-    CHECK(rx_file_write_atomic(path, buf, size) == 0);
-    CHECK(rx_waveforms_load(path, &r) == RX_ERROR(EINVAL));
-    CHECK(rx_file_write_atomic(path, buf, 10) == 0);
-    CHECK(rx_waveforms_load(path, &r) == RX_ERROR(EINVAL));
+    CHECK(cb_file_write_atomic(path, buf, size) == 0);
+    CHECK(cb_waveforms_load(path, &r) == CB_ERROR(EINVAL));
+    CHECK(cb_file_write_atomic(path, buf, 10) == 0);
+    CHECK(cb_waveforms_load(path, &r) == CB_ERROR(EINVAL));
     free(buf);
     unlink(path);
-    CHECK(rx_waveforms_load(path, &r) == RX_ERROR(ENOENT));
+    CHECK(cb_waveforms_load(path, &r) == CB_ERROR(ENOENT));
 
-    rx_waveforms_free(&w);
+    cb_waveforms_free(&w);
     return fails;
 }
 
@@ -694,7 +694,7 @@ int main(int argc, char **argv)
     int fails = 0;
     printf("fixtures (byte differences per tag; dj's bytes after the firmware minimums,\n"
            "PWV6/PWV7 rbxport's rules):\n");
-    for (size_t i = 0; i < RX_ARRAY_ELEMS(signals); i++) {
+    for (size_t i = 0; i < CB_ARRAY_ELEMS(signals); i++) {
         char f32[256], tags[256];
         snprintf(f32, sizeof(f32), DATA_DIR "%s.f32", signals[i]);
         snprintf(tags, sizeof(tags), DATA_DIR "%s.tags", signals[i]);

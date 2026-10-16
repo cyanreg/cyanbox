@@ -14,7 +14,7 @@
 #include <libavutil/hmac.h>
 #include <libavutil/mem.h>
 
-#include "rxbox/formats.h"
+#include "cyanbox/formats.h"
 
 #include "src/formats/buf.h"
 #include "src/formats/formats_priv.h"
@@ -41,7 +41,7 @@ static char *query_text(sqlite3 *db, const char *sql)
     if (sqlite3_prepare_v2(db, sql, -1, &st, NULL) != SQLITE_OK)
         return NULL;
     if (sqlite3_step(st) == SQLITE_ROW && sqlite3_column_text(st, 0))
-        v = rx_strdup((const char *)sqlite3_column_text(st, 0));
+        v = cb_strdup((const char *)sqlite3_column_text(st, 0));
     sqlite3_finalize(st);
     return v;
 }
@@ -50,18 +50,18 @@ static void reads_rekordbox(void)
 {
     uint8_t *db_bytes, *wal;
     size_t db_size, wal_size;
-    if (rx_file_read("tests/data/rekordbox-7.2.18-exportLibrary.db", &db_bytes, &db_size) < 0 ||
-        rx_file_read("tests/data/rekordbox-7.2.18-exportLibrary.db-wal", &wal, &wal_size) < 0) {
+    if (cb_file_read("tests/data/rekordbox-7.2.18-exportLibrary.db", &db_bytes, &db_size) < 0 ||
+        cb_file_read("tests/data/rekordbox-7.2.18-exportLibrary.db-wal", &wal, &wal_size) < 0) {
         fprintf(stderr, "cannot read the rekordbox fixtures\n");
         failures++;
         return;
     }
     uint8_t *plain;
     size_t plain_size;
-    CHECK_EQ(rx_sqlcipher_decrypt(db_bytes, db_size, rx_onelibrary_passphrase, wal, wal_size,
+    CHECK_EQ(cb_sqlcipher_decrypt(db_bytes, db_size, cb_onelibrary_passphrase, wal, wal_size,
                                   &plain, &plain_size), 0);
     sqlite3 *db;
-    CHECK_EQ(rx_onelibrary_open_plain(plain, plain_size, &db), 0);
+    CHECK_EQ(cb_onelibrary_open_plain(plain, plain_size, &db), 0);
     char *ok = query_text(db, "PRAGMA integrity_check");
     CHECK_STR(ok, "ok");
     free(ok);
@@ -72,19 +72,19 @@ static void reads_rekordbox(void)
     sqlite3_prepare_v2(db, "select sql from sqlite_master order by rowid", -1, &st, NULL);
     while (sqlite3_step(st) == SQLITE_ROW) {
         const char *sql = (const char *)sqlite3_column_text(st, 0);
-        CHECK(i < rx_onelibrary_schema_count && sql && !strcmp(sql, rx_onelibrary_schema[i]));
+        CHECK(i < cb_onelibrary_schema_count && sql && !strcmp(sql, cb_onelibrary_schema[i]));
         i++;
     }
     sqlite3_finalize(st);
-    CHECK_EQ(i, rx_onelibrary_schema_count);
+    CHECK_EQ(i, cb_onelibrary_schema_count);
 
     i = 0;
     sqlite3_prepare_v2(db, "select * from menuItem order by rowid", -1, &st, NULL);
     while (sqlite3_step(st) == SQLITE_ROW && i < 27) {
         char name[64];
-        snprintf(name, sizeof(name), "\xEF\xBF\xBA%s\xEF\xBF\xBB", rx_onelibrary_menu_items[i].name);
-        CHECK_EQ(sqlite3_column_int(st, 0), rx_onelibrary_menu_items[i].id);
-        CHECK_EQ(sqlite3_column_int(st, 1), rx_onelibrary_menu_items[i].kind);
+        snprintf(name, sizeof(name), "\xEF\xBF\xBA%s\xEF\xBF\xBB", cb_onelibrary_menu_items[i].name);
+        CHECK_EQ(sqlite3_column_int(st, 0), cb_onelibrary_menu_items[i].id);
+        CHECK_EQ(sqlite3_column_int(st, 1), cb_onelibrary_menu_items[i].kind);
         CHECK_STR((const char *)sqlite3_column_text(st, 2), name);
         i++;
     }
@@ -94,7 +94,7 @@ static void reads_rekordbox(void)
     sqlite3_prepare_v2(db, "select * from category order by rowid", -1, &st, NULL);
     while (sqlite3_step(st) == SQLITE_ROW && i < 22) {
         for (int k = 0; k < 4; k++)
-            CHECK_EQ(sqlite3_column_int(st, k), rx_onelibrary_category[i][k]);
+            CHECK_EQ(sqlite3_column_int(st, k), cb_onelibrary_category[i][k]);
         i++;
     }
     sqlite3_finalize(st);
@@ -103,16 +103,16 @@ static void reads_rekordbox(void)
     sqlite3_prepare_v2(db, "select * from sort order by rowid", -1, &st, NULL);
     while (sqlite3_step(st) == SQLITE_ROW && i < 17) {
         for (int k = 0; k < 5; k++)
-            CHECK_EQ(sqlite3_column_int(st, k), rx_onelibrary_sort[i][k]);
+            CHECK_EQ(sqlite3_column_int(st, k), cb_onelibrary_sort[i][k]);
         i++;
     }
     sqlite3_finalize(st);
     CHECK_EQ(i, 17);
     sqlite3_close(db);
 
-    RXOneLibTrack *tracks;
+    CBOneLibTrack *tracks;
     int nb;
-    CHECK_EQ(rx_onelibrary_read(plain, plain_size, &tracks, &nb), 0);
+    CHECK_EQ(cb_onelibrary_read(plain, plain_size, &tracks, &nb), 0);
     CHECK_EQ(nb, 34);
     for (int k = 0; k < nb; k++) {
         CHECK(tracks[k].path && tracks[k].path[0] == '/');
@@ -123,8 +123,8 @@ static void reads_rekordbox(void)
     free(plain);
 
     /* dj's test_sqlcipher_wrong_key, on the first page alone. */
-    CHECK_EQ(rx_sqlcipher_decrypt(db_bytes, 4096, "wrong", NULL, 0, &plain, &plain_size),
-             RX_ERROR(EBADMSG));
+    CHECK_EQ(cb_sqlcipher_decrypt(db_bytes, 4096, "wrong", NULL, 0, &plain, &plain_size),
+             CB_ERROR(EBADMSG));
     free(db_bytes);
     free(wal);
 }
@@ -132,12 +132,12 @@ static void reads_rekordbox(void)
 static void roundtrip(void)
 {
     enum { NT = 300 };
-    RXTrack *tr = calloc(NT, sizeof(*tr));
-    RXPlanTrack *pt = calloc(NT, sizeof(*pt));
+    CBTrack *tr = calloc(NT, sizeof(*tr));
+    CBPlanTrack *pt = calloc(NT, sizeof(*pt));
     char (*titles)[32] = calloc(NT, 32);
     char (*paths)[64] = calloc(NT, 64);
-    RXTempoSection sec = { .start = 0.1, .bpm = 128.0, .beat = 1 };
-    RXPlanCue cues[2] = {
+    CBTempoSection sec = { .start = 0.1, .bpm = 128.0, .beat = 1 };
+    CBPlanCue cues[2] = {
         { .time = 1.0, .hot = 0, .loop_end = -1 },
         { .time = 2.0, .hot = -1, .loop_end = 2.0 + 15.0 / 8.0 },
     };
@@ -146,7 +146,7 @@ static void roundtrip(void)
         snprintf(titles[i - 1], 32, "Träck %d", i);
         snprintf(paths[i - 1], 64, "/Contents/A/B/%d.flac", i);
         tr[i - 1].meta.title = titles[i - 1];
-        pt[i - 1] = (RXPlanTrack) {
+        pt[i - 1] = (CBPlanTrack) {
             .id          = (uint32_t)i,
             .track       = &tr[i - 1],
             .usb_path    = paths[i - 1],
@@ -164,21 +164,21 @@ static void roundtrip(void)
         };
     }
     uint32_t list[3] = { 3, 1, 2 };
-    RXPlanPlaylist pl[2] = {
+    CBPlanPlaylist pl[2] = {
         { .id = 1, .parent_id = 0, .sort_order = 0, .is_folder = true, .name = "Folder" },
         { .id = 2, .parent_id = 1, .sort_order = 0, .name = "List", .track_ids = list, .nb = 3 },
     };
-    RXPlanTag tags[5] = {
+    CBPlanTag tags[5] = {
         { .id = 1, .name = "Genre", .position = 0, .is_category = true },
         { .id = 2, .name = "Components", .position = 1, .is_category = true },
         { .id = 3, .name = "Situation", .position = 2, .is_category = true },
         { .id = 4, .name = "Tags", .position = 3, .is_category = true },
         { .id = 999, .name = "vocal", .category = 4, .position = 0 },
     };
-    RXPlanTagTrack tt[NT];
+    CBPlanTagTrack tt[NT];
     for (int i = 0; i < NT; i++)
-        tt[i] = (RXPlanTagTrack) { .track_id = (uint32_t)i + 1, .tag_id = 999 };
-    RXPlan plan = {
+        tt[i] = (CBPlanTagTrack) { .track_id = (uint32_t)i + 1, .tag_id = 999 };
+    CBPlan plan = {
         .tracks            = pt,
         .nb_tracks         = NT,
         .playlists         = pl,
@@ -196,15 +196,15 @@ static void roundtrip(void)
 
     uint8_t *enc;
     size_t enc_size;
-    CHECK_EQ(rx_onelibrary_build(&plan, &enc, &enc_size), 0);
+    CHECK_EQ(cb_onelibrary_build(&plan, &enc, &enc_size), 0);
     CHECK(enc_size % 4096 == 0 && memcmp(enc, "SQLite format 3", 16));
     uint8_t *plain;
     size_t plain_size;
-    CHECK_EQ(rx_sqlcipher_decrypt(enc, enc_size, rx_onelibrary_passphrase, NULL, 0, &plain, &plain_size), 0);
+    CHECK_EQ(cb_sqlcipher_decrypt(enc, enc_size, cb_onelibrary_passphrase, NULL, 0, &plain, &plain_size), 0);
     CHECK(plain[20] == 80 && plain[18] == 2 && plain[19] == 2);
-    CHECK_EQ(rx_rd_be32(plain + 96), RX_SQLCIPHER_SQLITE_VERSION);
+    CHECK_EQ(cb_rd_be32(plain + 96), CB_SQLCIPHER_SQLITE_VERSION);
     sqlite3 *db;
-    CHECK_EQ(rx_onelibrary_open_plain(plain, plain_size, &db), 0);
+    CHECK_EQ(cb_onelibrary_open_plain(plain, plain_size, &db), 0);
     char *ok = query_text(db, "PRAGMA integrity_check");
     CHECK_STR(ok, "ok");
     free(ok);
@@ -247,9 +247,9 @@ static void roundtrip(void)
     free(title);
     sqlite3_close(db);
 
-    RXOneLibTrack *tracks;
+    CBOneLibTrack *tracks;
     int nb;
-    CHECK_EQ(rx_onelibrary_read(plain, plain_size, &tracks, &nb), 0);
+    CHECK_EQ(cb_onelibrary_read(plain, plain_size, &tracks, &nb), 0);
     CHECK_EQ(nb, NT);
     CHECK(nb == NT && tracks[0].nb_cues == 2 && !strcmp(tracks[0].path, "/Contents/A/B/1.flac"));
     for (int k = 0; k < nb; k++) {
@@ -262,11 +262,11 @@ static void roundtrip(void)
     uint8_t salt[16] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 };
     uint8_t *enc2;
     size_t enc2_size;
-    CHECK_EQ(rx_sqlcipher_encrypt(plain, plain_size, "pass", salt, &enc2, &enc2_size), 0);
+    CHECK_EQ(cb_sqlcipher_encrypt(plain, plain_size, "pass", salt, &enc2, &enc2_size), 0);
     CHECK(!memcmp(enc2, salt, 16));
     uint8_t *back;
     size_t back_size;
-    CHECK_EQ(rx_sqlcipher_decrypt(enc2, enc2_size, "pass", NULL, 0, &back, &back_size), 0);
+    CHECK_EQ(cb_sqlcipher_decrypt(enc2, enc2_size, "pass", NULL, 0, &back, &back_size), 0);
     /* The reserve comes back zeroed; everything before it on every page is
      * the plaintext. */
     for (size_t p = 0; p < plain_size / 4096; p++)
@@ -310,20 +310,20 @@ static void crypto_vectors(void)
                  "47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e" },
     };
     uint8_t out[128];
-    for (size_t i = 0; i < RX_ARRAY_ELEMS(sha); i++) {
-        RXSHA512 s;
-        rx_sha512_init(&s);
-        rx_sha512_update(&s, (const uint8_t *)sha[i].msg, strlen(sha[i].msg));
-        rx_sha512_final(&s, out);
+    for (size_t i = 0; i < CB_ARRAY_ELEMS(sha); i++) {
+        CBSHA512 s;
+        cb_sha512_init(&s);
+        cb_sha512_update(&s, (const uint8_t *)sha[i].msg, strlen(sha[i].msg));
+        cb_sha512_final(&s, out);
         check_hex(out, 64, sha[i].want, "sha512");
     }
     /* The two-block message in uneven pieces, through the partial-block
      * paths of update. */
-    RXSHA512 pieces;
-    rx_sha512_init(&pieces);
+    CBSHA512 pieces;
+    cb_sha512_init(&pieces);
     for (size_t pos = 0, step = 1; pos < strlen(m896); pos += step, step = step * 3 % 37 + 1)
-        rx_sha512_update(&pieces, (const uint8_t *)m896 + pos, RX_MIN(step, strlen(m896) - pos));
-    rx_sha512_final(&pieces, out);
+        cb_sha512_update(&pieces, (const uint8_t *)m896 + pos, CB_MIN(step, strlen(m896) - pos));
+    cb_sha512_final(&pieces, out);
     check_hex(out, 64, sha[1].want, "sha512 in pieces");
 
     uint8_t key1[20], key3[20], key4[25], key6[131], data3[50], data4[50];
@@ -356,13 +356,13 @@ static void crypto_vectors(void)
           "80b24263c7c1a3ebb71493c1dd7be8b49b46d1f41b4aeec1121b013783f8f352"
           "6b56d037e05f2598bd0fd2215d6a1e5295e64f73f63f0aec8b915a985d786598" },
     };
-    for (size_t i = 0; i < RX_ARRAY_ELEMS(mac); i++) {
-        RXHMACSHA512 h;
-        rx_hmac_sha512_init(&h, mac[i].key, mac[i].key_len);
+    for (size_t i = 0; i < CB_ARRAY_ELEMS(mac); i++) {
+        CBHMACSHA512 h;
+        cb_hmac_sha512_init(&h, mac[i].key, mac[i].key_len);
         /* Twice: final leaves the context keyed for the next message. */
         for (int k = 0; k < 2; k++) {
-            rx_hmac_sha512_update(&h, mac[i].data, mac[i].len);
-            rx_hmac_sha512_final(&h, out);
+            cb_hmac_sha512_update(&h, mac[i].data, mac[i].len);
+            cb_hmac_sha512_final(&h, out);
             check_hex(out, 64, mac[i].want, "hmac-sha512");
         }
     }
@@ -384,8 +384,8 @@ static void crypto_vectors(void)
           "04f75bdd41494fa324cab24bcc680fb3b96a30cf5d21fac3c2875913919f3399"
           "b1d9ce7e" },
     };
-    for (size_t i = 0; i < RX_ARRAY_ELEMS(kdf); i++) {
-        rx_pbkdf2_sha512((const uint8_t *)kdf[i].pass, strlen(kdf[i].pass),
+    for (size_t i = 0; i < CB_ARRAY_ELEMS(kdf); i++) {
+        cb_pbkdf2_sha512((const uint8_t *)kdf[i].pass, strlen(kdf[i].pass),
                          (const uint8_t *)kdf[i].salt, strlen(kdf[i].salt), kdf[i].iter,
                          out, kdf[i].len);
         check_hex(out, kdf[i].len, kdf[i].want, "pbkdf2-hmac-sha512");
@@ -399,9 +399,9 @@ static void frame_keys(const uint8_t salt[16], uint8_t key[32], uint8_t mac[32])
     uint8_t mac_salt[16];
     for (int i = 0; i < 16; i++)
         mac_salt[i] = salt[i] ^ 0x3A;
-    rx_pbkdf2_sha512((const uint8_t *)rx_onelibrary_passphrase, strlen(rx_onelibrary_passphrase),
+    cb_pbkdf2_sha512((const uint8_t *)cb_onelibrary_passphrase, strlen(cb_onelibrary_passphrase),
                      salt, 16, 256000, key, 32);
-    rx_pbkdf2_sha512(key, 32, mac_salt, 16, 2, mac, 32);
+    cb_pbkdf2_sha512(key, 32, mac_salt, 16, 2, mac, 32);
 }
 
 /* A WAL frame the way SQLCipher writes one: page `pgno` (zeros), encrypted
@@ -412,8 +412,8 @@ static void wal_frame(uint8_t *f, const uint8_t key[32], const uint8_t mac[32], 
                       uint32_t commit, const uint8_t wal_salt[8])
 {
     memset(f, 0, 24 + 4096);
-    rx_wr_be32(f, pgno);
-    rx_wr_be32(f + 4, commit);
+    cb_wr_be32(f, pgno);
+    cb_wr_be32(f + 4, commit);
     memcpy(f + 8, wal_salt, 8);
     uint8_t *page = f + 24, plain[4096 - 80] = { 0 }, iv[16] = { 7 };
     memcpy(page + 4096 - 80, iv, 16);
@@ -423,7 +423,7 @@ static void wal_frame(uint8_t *f, const uint8_t key[32], const uint8_t mac[32], 
     av_free(aes);
     uint8_t buf[4096 - 80 + 16 + 4];
     memcpy(buf, page, 4096 - 80 + 16);
-    rx_wr_le32(buf + 4096 - 80 + 16, pgno);
+    cb_wr_le32(buf + 4096 - 80 + 16, pgno);
     AVHMAC *h = av_hmac_alloc(AV_HMAC_SHA512);
     av_hmac_calc(h, buf, sizeof(buf), mac, 32, page + 4096 - 80 + 16, 64);
     av_hmac_free(h);
@@ -438,15 +438,15 @@ static void hostile_wal(void)
 {
     uint8_t *db_bytes, *wal;
     size_t db_size, wal_size;
-    if (rx_file_read("tests/data/rekordbox-7.2.18-exportLibrary.db", &db_bytes, &db_size) < 0 ||
-        rx_file_read("tests/data/rekordbox-7.2.18-exportLibrary.db-wal", &wal, &wal_size) < 0) {
+    if (cb_file_read("tests/data/rekordbox-7.2.18-exportLibrary.db", &db_bytes, &db_size) < 0 ||
+        cb_file_read("tests/data/rekordbox-7.2.18-exportLibrary.db-wal", &wal, &wal_size) < 0) {
         fprintf(stderr, "cannot read the rekordbox fixtures\n");
         failures++;
         return;
     }
     uint8_t *plain, *ref;
     size_t plain_size, ref_size;
-    CHECK_EQ(rx_sqlcipher_decrypt(db_bytes, db_size, rx_onelibrary_passphrase, wal, wal_size, &ref, &ref_size), 0);
+    CHECK_EQ(cb_sqlcipher_decrypt(db_bytes, db_size, cb_onelibrary_passphrase, wal, wal_size, &ref, &ref_size), 0);
     uint8_t key[32], mac[32];
     frame_keys(db_bytes, key, mac);
 
@@ -455,7 +455,7 @@ static void hostile_wal(void)
     uint8_t *w = malloc(n);
     memcpy(w, wal, wal_size);
     wal_frame(w + wal_size, key, mac, 1u << 18, 1u << 18, wal + 16);
-    int ret = rx_sqlcipher_decrypt(db_bytes, db_size, rx_onelibrary_passphrase, w, n, &plain, &plain_size);
+    int ret = cb_sqlcipher_decrypt(db_bytes, db_size, cb_onelibrary_passphrase, w, n, &plain, &plain_size);
     CHECK(ret < 0 || plain_size == ref_size);
     if (ret >= 0)
         free(plain);
@@ -464,7 +464,7 @@ static void hostile_wal(void)
      * ignored, the database is the fixture's. */
     uint8_t old_salt[8] = { 1, 2, 3, 4, 5, 6, 7, 8 };
     wal_frame(w + wal_size, key, mac, 2, (uint32_t)(db_size / 4096), old_salt);
-    CHECK_EQ(rx_sqlcipher_decrypt(db_bytes, db_size, rx_onelibrary_passphrase, w, n, &plain, &plain_size), 0);
+    CHECK_EQ(cb_sqlcipher_decrypt(db_bytes, db_size, cb_onelibrary_passphrase, w, n, &plain, &plain_size), 0);
     CHECK(plain_size == ref_size && !memcmp(plain, ref, ref_size));
     free(plain);
 
@@ -473,7 +473,7 @@ static void hostile_wal(void)
     memcpy(w, wal, wal_size);
     wal_frame(w + wal_size, key, mac, 2, (uint32_t)(db_size / 4096), wal + 16);
     w[wal_size + 24 + 100] ^= 1;
-    CHECK_EQ(rx_sqlcipher_decrypt(db_bytes, db_size, rx_onelibrary_passphrase, w, n, &plain, &plain_size), 0);
+    CHECK_EQ(cb_sqlcipher_decrypt(db_bytes, db_size, cb_onelibrary_passphrase, w, n, &plain, &plain_size), 0);
     CHECK(plain_size == ref_size && !memcmp(plain, ref, ref_size));
     free(plain);
 
@@ -487,8 +487,8 @@ static void hostile_wal(void)
  * 0 (docs/onelibrary.md 3.1, "color_id 0 = none"). */
 static void bare_track(void)
 {
-    RXTrack tr = { 0 };
-    RXPlanTrack pt = {
+    CBTrack tr = { 0 };
+    CBPlanTrack pt = {
         .id        = 42,
         .track     = &tr,
         .usb_path  = "/Contents/UnknownArtist/UnknownAlbum/x.wav",
@@ -496,12 +496,12 @@ static void bare_track(void)
         .file_type = 11,
         .duration  = 1.0,
     };
-    RXPlan plan = { .tracks = &pt, .nb_tracks = 1 };
+    CBPlan plan = { .tracks = &pt, .nb_tracks = 1 };
     uint8_t *plain;
     size_t plain_size;
-    CHECK_EQ(rx_onelibrary_build_plain(&plan, &plain, &plain_size), 0);
+    CHECK_EQ(cb_onelibrary_build_plain(&plan, &plain, &plain_size), 0);
     sqlite3 *db;
-    CHECK_EQ(rx_onelibrary_open_plain(plain, plain_size, &db), 0);
+    CHECK_EQ(cb_onelibrary_open_plain(plain, plain_size, &db), 0);
     CHECK_EQ(query_int(db, "select count(*) from content where content_id = 42 and image_id is null and "
                            "key_id is null and album_id is null and artist_id_artist is null and "
                            "genre_id is null and releaseYear is null and color_id = 0"), 1);
@@ -540,7 +540,7 @@ static void hostile_schema(void)
         { "virtual table",    "CREATE VIRTUAL TABLE content USING fts5(path, title);"
                               "CREATE TABLE cue(cue_id integer primary key, content_id integer);" },
     };
-    for (size_t i = 0; i < RX_ARRAY_ELEMS(dbs); i++) {
+    for (size_t i = 0; i < CB_ARRAY_ELEMS(dbs); i++) {
         size_t n;
         uint8_t *b = hostile_onelibrary(dbs[i].sql, &n);
         if (!b) {
@@ -549,10 +549,10 @@ static void hostile_schema(void)
         }
         double t0 = seconds();
         sqlite3 *db;
-        CHECK_EQ(rx_onelibrary_open_plain(b, n, &db), RX_ERROR(EINVAL));
-        RXOneLibTrack *t;
+        CHECK_EQ(cb_onelibrary_open_plain(b, n, &db), CB_ERROR(EINVAL));
+        CBOneLibTrack *t;
         int nt;
-        CHECK(rx_onelibrary_read(b, n, &t, &nt) < 0);
+        CHECK(cb_onelibrary_read(b, n, &t, &nt) < 0);
         if (seconds() - t0 > 10.0) {
             fprintf(stderr, "%s: refused after %.1f s\n", dbs[i].what, seconds() - t0);
             failures++;
@@ -561,20 +561,20 @@ static void hostile_schema(void)
     }
 
     /* Ours, with a page header wrecked: quick_check finds it. */
-    RXTrack tr = { 0 };
-    RXPlanTrack pt = {
+    CBTrack tr = { 0 };
+    CBPlanTrack pt = {
         .id       = 1,
         .track    = &tr,
         .usb_path = "/Contents/a.wav",
         .anlz_dir = "/x",
         .duration = 1.0,
     };
-    RXPlan plan = { .tracks = &pt, .nb_tracks = 1 };
+    CBPlan plan = { .tracks = &pt, .nb_tracks = 1 };
     uint8_t *plain;
     size_t plain_size;
-    CHECK_EQ(rx_onelibrary_build_plain(&plan, &plain, &plain_size), 0);
+    CHECK_EQ(cb_onelibrary_build_plain(&plan, &plain, &plain_size), 0);
     sqlite3 *db;
-    CHECK_EQ(rx_onelibrary_open_plain(plain, plain_size, &db), 0);
+    CHECK_EQ(cb_onelibrary_open_plain(plain, plain_size, &db), 0);
     /* The budget: an endless query is interrupted, in its 64 M steps. */
     double t0 = seconds();
     sqlite3_stmt *st;
@@ -590,7 +590,7 @@ static void hostile_schema(void)
     if (plain_size > 3 * 4096) {
         /* Page 2's b-tree page type. */
         plain[4096] = 0x07;
-        CHECK_EQ(rx_onelibrary_open_plain(plain, plain_size, &db), RX_ERROR(EINVAL));
+        CHECK_EQ(cb_onelibrary_open_plain(plain, plain_size, &db), CB_ERROR(EINVAL));
     }
     free(plain);
 }

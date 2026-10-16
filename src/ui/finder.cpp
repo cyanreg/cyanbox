@@ -2,7 +2,7 @@
 
 // The Add dialog's finder: every folder and audio file under the folder
 // being browsed, listed by a thread of its own and matched fuzzily against
-// what is typed (rx_fuzzy_match), best first.
+// what is typed (cb_fuzzy_match), best first.
 //
 // The walk is breadth first, so the folders near the top (artists,
 // albums) are found within a frame or two and the matches come in while
@@ -17,7 +17,7 @@
 // is ever touched by the walker. Matching runs on the interface thread:
 // every entry when the query changes, only the last matches when it was
 // extended (typing on), the new entries as they arrive, sorted again at
-// most every SORT_US while the walk goes on. rx_fuzzy_match rejects an
+// most every SORT_US while the walk goes on. cb_fuzzy_match rejects an
 // ASCII path from its bytes: 300 000 paths take about 0.1 s on this
 // machine, a typical music folder of tens of thousands a few ms.
 
@@ -135,7 +135,7 @@ static void walk(UiFinder *f)
                     file = S_ISREG(ls.st_mode);
                 }
             }
-            if (!dir && !(file && rx_is_audio_path(e->d_name)))
+            if (!dir && !(file && cb_is_audio_path(e->d_name)))
                 continue;
             std::string rel = d.rel.empty() ? std::string(e->d_name) : d.rel + "/" + e->d_name;
             if (dir) {
@@ -206,7 +206,7 @@ void ui_finder_update(UiFinder **pf, const std::string &root, const char *query)
         if (narrower) {
             for (const std::pair<int, int> &m : f->scored) {
                 int s = 0;
-                if (rx_fuzzy_match(f->entries[(size_t)m.second].rel.c_str(), q.c_str(), &s, nullptr,
+                if (cb_fuzzy_match(f->entries[(size_t)m.second].rel.c_str(), q.c_str(), &s, nullptr,
                                    0, nullptr))
                     kept.push_back({ s, m.second });
             }
@@ -219,7 +219,7 @@ void ui_finder_update(UiFinder **pf, const std::string &root, const char *query)
     }
     for (; f->matched < f->entries.size(); f->matched++) {
         int s = 0;
-        if (rx_fuzzy_match(f->entries[f->matched].rel.c_str(), q.c_str(), &s, nullptr, 0, nullptr)) {
+        if (cb_fuzzy_match(f->entries[f->matched].rel.c_str(), q.c_str(), &s, nullptr, 0, nullptr)) {
             f->scored.push_back({ s, (int)f->matched });
             f->unsorted = true;
         }
@@ -228,7 +228,7 @@ void ui_finder_update(UiFinder **pf, const std::string &root, const char *query)
     // The best UI_FINDER_SHOWN, best first (only those are shown: the rest
     // are left as they are); between equals the shorter path (the folder
     // before what is in it), then by name.
-    int64_t now = rx_time_us();
+    int64_t now = cb_time_us();
     bool walking = !f->done.load(std::memory_order_acquire);
     if (f->unsorted && (fresh || !walking || now - f->sorted_at >= SORT_US)) {
         const std::vector<UiFinderEntry> &en = f->entries;

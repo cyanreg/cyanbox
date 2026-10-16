@@ -7,9 +7,9 @@
  * devices heard with what each player's status says.
  *
  * No sockets: the service thread (service.c) hands every datagram that
- * arrived to rx_presence_input and calls rx_presence_tick when its time
+ * arrived to cb_presence_input and calls cb_presence_tick when its time
  * comes; whatever is to be sent goes out through the send callback. Time
- * is rx_time_us(), passed in, so the tests drive the clock.
+ * is cb_time_us(), passed in, so the tests drive the clock.
  *
  * The same machine plays a player for the fake player (client.c, the
  * tests): it then joins as a CDJ with a fixed number and sends a CDJ's
@@ -17,55 +17,55 @@
  *
  * The packets themselves, parsed and built, are packet.h's. */
 
-#ifndef RXBOX_LINK_PRESENCE_H
-#define RXBOX_LINK_PRESENCE_H
+#ifndef CYANBOX_LINK_PRESENCE_H
+#define CYANBOX_LINK_PRESENCE_H
 
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
-#include "rxbox/link.h"
+#include "cyanbox/link.h"
 
 /* Which of the peers' ports a datagram is for or came in on. */
-enum RXLinkPort {
-    RX_LINK_ANNOUNCE,           /* 50000 */
-    RX_LINK_STATUS,             /* 50002 */
-    RX_LINK_CUE,                /* 50004: LINK CUE (packet.h), never presence's */
+enum CBLinkPort {
+    CB_LINK_ANNOUNCE,           /* 50000 */
+    CB_LINK_STATUS,             /* 50002 */
+    CB_LINK_CUE,                /* 50004: LINK CUE (packet.h), never presence's */
 };
 
-#define RX_PRESENCE_BROADCAST 0xFFFFFFFFu   /* `to`: the broadcast address */
+#define CB_PRESENCE_BROADCAST 0xFFFFFFFFu   /* `to`: the broadcast address */
 
 /* One datagram to send to `to` (an IPv4 address in host order, or
- * RX_PRESENCE_BROADCAST) on the peers' `port`. Claims and keep-alives are
+ * CB_PRESENCE_BROADCAST) on the peers' `port`. Claims and keep-alives are
  * broadcast on the announce port, answers to probes unicast there; the
  * status is broadcast on the status port (rekordbox 7.2.11 sends it from
  * an ephemeral source port, rbxport measured), every answer there is
  * unicast from our own status port, which players answer to. */
-typedef void (*RXPresenceSend)(void *opaque, enum RXLinkPort port, uint32_t to,
+typedef void (*CBPresenceSend)(void *opaque, enum CBLinkPort port, uint32_t to,
                                const uint8_t *buf, size_t len);
 
-enum RXPresenceRole {
-    RX_PRESENCE_COMPUTER,       /* rxbox: joins as rekordbox does */
-    RX_PRESENCE_PLAYER,         /* the fake player: a CDJ with a fixed number */
+enum CBPresenceRole {
+    CB_PRESENCE_COMPUTER,       /* cyanbox: joins as rekordbox does */
+    CB_PRESENCE_PLAYER,         /* the fake player: a CDJ with a fixed number */
 };
 
-typedef struct RXPresenceConfig {
-    enum RXPresenceRole role;
+typedef struct CBPresenceConfig {
+    enum CBPresenceRole role;
     char     name[21];          /* "rekordbox"; the fake player a CDJ's model name */
     uint8_t  mac[6];
     uint32_t addr;              /* our IPv4 address, host order */
-    int      number;            /* RX_PRESENCE_PLAYER: the number to claim, 1..80 */
-    bool     start_up;          /* RX_PRESENCE_COMPUTER: join without waiting for a player */
-    /* RX_PRESENCE_COMPUTER: the computer's name, which the identity reply
+    int      number;            /* CB_PRESENCE_PLAYER: the number to claim, 1..80 */
+    bool     start_up;          /* CB_PRESENCE_COMPUTER: join without waiting for a player */
+    /* CB_PRESENCE_COMPUTER: the computer's name, which the identity reply
      * carries (rekordbox sends the host name); empty: `name`. */
     char     host[64];
-} RXPresenceConfig;
+} CBPresenceConfig;
 
-typedef struct RXPresence RXPresence;
+typedef struct CBPresence CBPresence;
 
-int  rx_presence_new(RXPresence **out, const RXPresenceConfig *c, RXPresenceSend send,
+int  cb_presence_new(CBPresence **out, const CBPresenceConfig *c, CBPresenceSend send,
                      void *opaque);
-void rx_presence_free(RXPresence **p);
+void cb_presence_free(CBPresence **p);
 
 /* A datagram that arrived on our `port` from `from` (host order); answers
  * (an "in use" to a probe, a media response, a greeting) go out through
@@ -73,55 +73,55 @@ void rx_presence_free(RXPresence **p);
  * so are our own come back (our address, or our MAC in the packet).
  *
  * An input can make something due at once (the first keep-alive heard
- * starts the join): call rx_presence_tick after a batch of inputs, not only
+ * starts the join): call cb_presence_tick after a batch of inputs, not only
  * when its last deadline passed. It sends only what is due, so calling it
  * early costs nothing. */
-void rx_presence_input(RXPresence *p, enum RXLinkPort port, uint32_t from,
+void cb_presence_input(CBPresence *p, enum CBLinkPort port, uint32_t from,
                        const uint8_t *buf, size_t len, int64_t now);
 /* Sends what is due at `now` (claims, keep-alives, status) and forgets
  * devices not heard for a while; returns when to call it next (an
- * absolute rx_time_us). */
-int64_t rx_presence_tick(RXPresence *p, int64_t now);
+ * absolute cb_time_us). */
+int64_t cb_presence_tick(CBPresence *p, int64_t now);
 
-enum RXLinkState rx_presence_state(const RXPresence *p, int *number);
+enum CBLinkState cb_presence_state(const CBPresence *p, int *number);
 /* Whether `addr` is a device on the link (it sent a keep-alive): the
  * database server and NFS answer only these (docs/LINK.md, "Security"). */
-bool rx_presence_is_peer(const RXPresence *p, uint32_t addr);
+bool cb_presence_is_peer(const CBPresence *p, uint32_t addr);
 /* The devices heard, players first by number. */
-int  rx_presence_players(const RXPresence *p, RXLinkPlayer *out, int max);
+int  cb_presence_players(const CBPresence *p, CBLinkPlayer *out, int max);
 
-/* RX_PRESENCE_PLAYER: what the fake player's status says from now on
- * (and no beats: see rx_presence_play); what it says it has loaded, as
+/* CB_PRESENCE_PLAYER: what the fake player's status says from now on
+ * (and no beats: see cb_presence_play); what it says it has loaded, as
  * set or as a load command left it. */
-void rx_presence_set_loaded(RXPresence *p, int track_device, int slot, uint32_t track_id,
+void cb_presence_set_loaded(CBPresence *p, int track_device, int slot, uint32_t track_id,
                             bool playing);
-void rx_presence_loaded(const RXPresence *p, int *device, int *slot, uint32_t *track_id);
-/* RX_PRESENCE_PLAYER: the fake player's loaded track from its start at
+void cb_presence_loaded(const CBPresence *p, int *device, int *slot, uint32_t *track_id);
+/* CB_PRESENCE_PLAYER: the fake player's loaded track from its start at
  * `now`, whose beats these are (the beat grid's times in ms and tempos
  * x100), playing or paused as it was: a load does not start a player (an
  * emulated CDJ-900 kept a paused deck paused and a playing one playing).
  * Its status says the beat number reached and the tempo there, as a
  * nexus player's does; playing, it stops two seconds past the last. */
-int  rx_presence_play(RXPresence *p, const uint32_t *beat_ms, const uint16_t *bpm_x100, int nb,
+int  cb_presence_play(CBPresence *p, const uint32_t *beat_ms, const uint16_t *bpm_x100, int nb,
                       int64_t now);
 
-/* RX_PRESENCE_COMPUTER: tells `player` to load our track `track_id` (a
+/* CB_PRESENCE_COMPUTER: tells `player` to load our track `track_id` (a
  * load command, 19, as from rekordbox: our collection's slot, type 1).
  * -EAGAIN before we are up, -ENOENT when there is no such player. */
-int  rx_presence_load(RXPresence *p, int player, uint32_t track_id);
+int  cb_presence_load(CBPresence *p, int player, uint32_t track_id);
 
-/* RX_PRESENCE_COMPUTER: the counts the media response gives a player (the
+/* CB_PRESENCE_COMPUTER: the counts the media response gives a player (the
  * library's tracks and playlists; 0 until set, at most 65535 each). */
-void rx_presence_set_media(RXPresence *p, int nb_tracks, int nb_playlists);
-/* RX_PRESENCE_COMPUTER: the display settings a player's device-settings
+void cb_presence_set_media(CBPresence *p, int nb_tracks, int nb_playlists);
+/* CB_PRESENCE_COMPUTER: the display settings a player's device-settings
  * request is answered with, as the 32-byte DEVSETTING.DAT payload
  * (docs/settings.md section 6). Until set, rekordbox 7.2.11's own answer:
  * half overview, 3-band colour, classic keys, centred position. */
-void rx_presence_set_devsetting(RXPresence *p, const uint8_t payload[32]);
-/* RX_PRESENCE_PLAYER: the computer source the fake player found and what
+void cb_presence_set_devsetting(CBPresence *p, const uint8_t payload[32]);
+/* CB_PRESENCE_PLAYER: the computer source the fake player found and what
  * its media response said; false until one answered. Any pointer may be
  * NULL. */
-bool rx_presence_source(const RXPresence *p, int *number, uint32_t *addr, int *nb_tracks,
+bool cb_presence_source(const CBPresence *p, int *number, uint32_t *addr, int *nb_tracks,
                         int *nb_playlists);
 
-#endif /* RXBOX_LINK_PRESENCE_H */
+#endif /* CYANBOX_LINK_PRESENCE_H */

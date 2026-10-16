@@ -1,12 +1,12 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
-/* rx_mp3_scan on MP3 streams built byte by byte: the frame-map rule
+/* cb_mp3_scan on MP3 streams built byte by byte: the frame-map rule
  * (rbxport's cases: a LAME Info frame that matches its audio counts as a
  * frame of silence, an ffmpeg one that does not is skipped, a change in the
  * first four frames restarts the map, a later change does not), ID3v2
  * skipping, VBR detection, junk between frames, MPEG-2/2.5, free format. */
 
-#include "rxbox/audio.h"
+#include "cyanbox/audio.h"
 
 #include <inttypes.h>
 
@@ -71,16 +71,16 @@ static void tag_frame(Buf *b, int mode, const char *tag)
     frame(b, 0xFB, 14, 0, mode, body, sizeof(body));
 }
 
-static RXMp3Info scan(const char *dir, const char *name, Buf *b)
+static CBMp3Info scan(const char *dir, const char *name, Buf *b)
 {
     char *path = test_path(dir, name);
     FILE *f = fopen(path, "wb");
     if (!f || fwrite(b->d, 1, b->n, f) != b->n)
         exit(1);
     fclose(f);
-    RXMp3Info info;
-    int ret = rx_mp3_scan(path, &info);
-    CHECK(ret >= 0, "%s: rx_mp3_scan %d", name, ret);
+    CBMp3Info info;
+    int ret = cb_mp3_scan(path, &info);
+    CHECK(ret >= 0, "%s: cb_mp3_scan %d", name, ret);
     free(path);
     free(b->d);
     *b = (Buf) { 0 };
@@ -91,7 +91,7 @@ int main(void)
 {
     char *dir = test_dir("mp3");
     Buf b = { 0 };
-    RXMp3Info i;
+    CBMp3Info i;
 
     /* LAME 3.99, joint stereo throughout: the Info frame is a frame of
      * silence on the timeline */
@@ -259,11 +259,11 @@ int main(void)
     fwrite(b.d, 1, b.n, f);
     fclose(f);
     free(b.d);
-    CHECK(rx_mp3_scan(path, &i) < 0 && !i.valid, "free format accepted");
+    CHECK(cb_mp3_scan(path, &i) < 0 && !i.valid, "free format accepted");
     free(path);
 
     /* A path that does not exist */
-    CHECK(rx_mp3_scan("/nonexistent/x.mp3", &i) == -ENOENT, "missing file");
+    CHECK(cb_mp3_scan("/nonexistent/x.mp3", &i) == -ENOENT, "missing file");
 
     free(dir);
     if (failures)

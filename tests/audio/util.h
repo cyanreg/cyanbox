@@ -4,12 +4,12 @@
  * directory, running the ffmpeg CLI without a shell, and the known test
  * signal (a 440 Hz sine with a one-sample click every half second). */
 
-#ifndef RXBOX_TESTS_AUDIO_UTIL_H
-#define RXBOX_TESTS_AUDIO_UTIL_H
+#ifndef CYANBOX_TESTS_AUDIO_UTIL_H
+#define CYANBOX_TESTS_AUDIO_UTIL_H
 
 #include <stdio.h>
 
-#include "rxbox/common.h"
+#include "cyanbox/common.h"
 
 #define CHECK(cond, ...)                                                        \
     do {                                                                        \
@@ -27,9 +27,9 @@
 #define SIG_CLICK   (SIG_RATE / 2)          /* a click every this many samples */
 #define SIG_CLICK_VALUE 31129               /* 0.95 of full scale */
 
-/* $RX_TEST_DIR/name, created; malloc'd. Exits when it cannot be made.
+/* $CB_TEST_DIR/name, created; malloc'd. Exits when it cannot be made.
  * Also quiets libav's own log (the tests feed it damaged files on purpose)
- * unless RX_TEST_VERBOSE is set, which also turns rxbox's log to debug. */
+ * unless CB_TEST_VERBOSE is set, which also turns cyanbox's log to debug. */
 char *test_dir(const char *name);
 /* dir/file, malloc'd */
 char *test_path(const char *dir, const char *file);
@@ -46,4 +46,4 @@ int16_t *make_signal(int rate, int channels, int seconds, int64_t *frames);
 int write_wav(const char *path, int rate, int channels, const int16_t *pcm, int64_t frames);
 int copy_file(const char *from, const char *to);
 
-#endif /* RXBOX_TESTS_AUDIO_UTIL_H */
+#endif /* CYANBOX_TESTS_AUDIO_UTIL_H */

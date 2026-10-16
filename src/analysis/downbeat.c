@@ -33,14 +33,14 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define GROUP RX_BEAT_GROUP             /* mel bands per profile band: 16 bands */
+#define GROUP CB_BEAT_GROUP             /* mel bands per profile band: 16 bands */
 #define BASS_WEIGHT 0.5                 /* the bass vote against one novelty scale's 1 */
 /* The music's start, as much as one scale: in the evaluation sample, 59 of
  * the 66 electronic tracks whose music starts on a beat had beat 1 there by
  * structure alone, the rest mostly on weak votes; with the start worth a
  * scale, all of them do (docs/BEATS.md). */
 #define START_WEIGHT 1.0
-#define NPROF RX_BEAT_NPROF
+#define NPROF CB_BEAT_NPROF
 
 /* The bass-note vote: where the bass's pitch class changes between the two
  * beats before and the two beats after, peaks only, normalised to sum 1.
@@ -54,10 +54,10 @@ static int bass_vote(const float *x, int64_t n, const double *times, int K, int 
     double *nov = calloc(K, sizeof(*nov));
     int ret = 0;
     if (!c || !nov) {
-        ret = RX_ERROR(ENOMEM);
+        ret = CB_ERROR(ENOMEM);
         goto end;
     }
-    if ((ret = rx_bass_chroma(x, n, times, K, c)) < 0)
+    if ((ret = cb_bass_chroma(x, n, times, K, c)) < 0)
         goto end;
     for (int k = 2; k + 2 <= K; k++) {
         double d = 0.0;
@@ -84,9 +84,9 @@ end:
     return ret;
 }
 
-int rx_downbeat_vote(const RXSpectrum *s, const float *x, int64_t n,
+int cb_downbeat_vote(const CBSpectrum *s, const float *x, int64_t n,
                      double t0, double period, double start, double end, double start_vote,
-                     RXDownbeat *out)
+                     CBDownbeat *out)
 {
     memset(out, 0, sizeof(*out));
     out->margin = 1.0;
@@ -99,16 +99,16 @@ int rx_downbeat_vote(const RXSpectrum *s, const float *x, int64_t n,
         return 0;
     /* The beats the bass vote reads: k0..k1 on the line. */
     int k0 = (int)ceil((start - t0) / period), k1 = (int)floor((end - t0) / period);
-    int K = RX_MAX(k1 - k0, 0);
+    int K = CB_MAX(k1 - k0, 0);
 
     double *from = malloc((size_t)J * sizeof(*from));
     double *to = malloc((size_t)J * sizeof(*to));
-    double *beat = malloc((size_t)RX_MAX(K, 1) * sizeof(*beat));
+    double *beat = malloc((size_t)CB_MAX(K, 1) * sizeof(*beat));
     if (!from || !to || !beat) {
         free(from);
         free(to);
         free(beat);
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     }
     for (int j = 0; j < J; j++) {
         from[j] = t0 + (j0 + j) * hp;
@@ -125,7 +125,7 @@ int rx_downbeat_vote(const RXSpectrum *s, const float *x, int64_t n,
         if (fabs(k - kj) < 0.2 && start_vote >= start - period && start_vote < end)
             start_pos = ((kj % 8) + 8) % 8;
     }
-    int ret = rx_downbeat_vote_times(s, x, n, from, to, J, ((j0 % 8) + 8) % 8, beat, K,
+    int ret = cb_downbeat_vote_times(s, x, n, from, to, J, ((j0 % 8) + 8) % 8, beat, K,
                                      ((2 * k0) % 8 + 8) % 8, start_pos, out);
     free(from);
     free(to);
@@ -133,10 +133,10 @@ int rx_downbeat_vote(const RXSpectrum *s, const float *x, int64_t n,
     return ret;
 }
 
-int rx_downbeat_vote_times(const RXSpectrum *s, const float *x, int64_t n,
+int cb_downbeat_vote_times(const CBSpectrum *s, const float *x, int64_t n,
                            const double *from, const double *to, int J, int pos0,
                            const double *beat, int K, int bpos0, int start_pos,
-                           RXDownbeat *out)
+                           CBDownbeat *out)
 {
     memset(out, 0, sizeof(*out));
     out->margin = 1.0;
@@ -151,13 +151,13 @@ int rx_downbeat_vote_times(const RXSpectrum *s, const float *x, int64_t n,
         free(prof);
         free(cum);
         free(nov);
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     }
 
     /* Profiles: mean log-mel per band group over each half beat. */
     for (int j = 0; j < J; j++) {
         double a = from[j], b = to[j];
-        int f0 = RX_MAX((int)ceil(a * fps), 0), f1 = RX_MIN((int)ceil(b * fps), s->nb_frames);
+        int f0 = CB_MAX((int)ceil(a * fps), 0), f1 = CB_MIN((int)ceil(b * fps), s->nb_frames);
         float *p = prof + (size_t)j * NPROF;
         for (int f = f0; f < f1; f++) {
             const float *m = s->prof + (size_t)f * NPROF;
@@ -179,7 +179,7 @@ int rx_downbeat_vote_times(const RXSpectrum *s, const float *x, int64_t n,
 
     static const int scales[] = { 8, 16, 32, 64 };     /* one, two, four, eight bars */
     double score[8] = { 0 };
-    for (size_t si = 0; si < RX_ARRAY_ELEMS(scales); si++) {
+    for (size_t si = 0; si < CB_ARRAY_ELEMS(scales); si++) {
         int sc = scales[si];
         if (J < 2 * sc + 2)
             continue;

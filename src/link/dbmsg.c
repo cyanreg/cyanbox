@@ -15,11 +15,11 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "rxbox/common.h"
+#include "cyanbox/common.h"
 
 #include "dbmsg.h"
 
-const uint8_t rx_db_greeting[RX_DB_GREETING_LEN] = { 0x11, 0x00, 0x00, 0x00, 0x01 };
+const uint8_t cb_db_greeting[CB_DB_GREETING_LEN] = { 0x11, 0x00, 0x00, 0x00, 0x01 };
 
 /* Before the argument tags: 11 magic, 11 txid, 10 kind, 0f count, then
  * the tag list as a blob, 14 and its length (rbxport's measurement of
@@ -28,19 +28,19 @@ const uint8_t rx_db_greeting[RX_DB_GREETING_LEN] = { 0x11, 0x00, 0x00, 0x00, 0x0
 
 /* The header's fixed bytes: the field tags and the magic. */
 static const struct { uint8_t at, v; } fixed[] = {
-    { 0, RX_DB_FIELD_NUM4 }, { 1, 0x87 }, { 2, 0x23 }, { 3, 0x49 }, { 4, 0xae },
-    { 5, RX_DB_FIELD_NUM4 }, { 10, RX_DB_FIELD_NUM2 }, { 13, RX_DB_FIELD_NUM1 },
-    { 15, RX_DB_FIELD_BLOB },
+    { 0, CB_DB_FIELD_NUM4 }, { 1, 0x87 }, { 2, 0x23 }, { 3, 0x49 }, { 4, 0xae },
+    { 5, CB_DB_FIELD_NUM4 }, { 10, CB_DB_FIELD_NUM2 }, { 13, CB_DB_FIELD_NUM1 },
+    { 15, CB_DB_FIELD_BLOB },
 };
 
 /* Whether the field tag `field` carries an argument declared as `type`. */
 static bool field_fits(uint8_t type, uint8_t field)
 {
     switch (type) {
-    case RX_DB_NUM:  return field == RX_DB_FIELD_NUM1 || field == RX_DB_FIELD_NUM2 ||
-                            field == RX_DB_FIELD_NUM4;
-    case RX_DB_BLOB: return field == RX_DB_FIELD_BLOB;
-    case RX_DB_STR:  return field == RX_DB_FIELD_STRING;
+    case CB_DB_NUM:  return field == CB_DB_FIELD_NUM1 || field == CB_DB_FIELD_NUM2 ||
+                            field == CB_DB_FIELD_NUM4;
+    case CB_DB_BLOB: return field == CB_DB_FIELD_BLOB;
+    case CB_DB_STR:  return field == CB_DB_FIELD_STRING;
     }
     return false;
 }
@@ -49,148 +49,148 @@ static bool field_fits(uint8_t type, uint8_t field)
  * too long for the cap. */
 static int short_of(size_t pos, uint64_t need, size_t max)
 {
-    return pos + need > max ? RX_ERROR(E2BIG) : 0;
+    return pos + need > max ? CB_ERROR(E2BIG) : 0;
 }
 
-int rx_dbmsg_parse(const uint8_t *buf, size_t len, size_t max, RXDbMsg *m)
+int cb_dbmsg_parse(const uint8_t *buf, size_t len, size_t max, CBDbMsg *m)
 {
-    for (size_t i = 0; i < RX_ARRAY_ELEMS(fixed); i++)
+    for (size_t i = 0; i < CB_ARRAY_ELEMS(fixed); i++)
         if (fixed[i].at < len && buf[fixed[i].at] != fixed[i].v)
-            return RX_ERROR(EPROTO);
+            return CB_ERROR(EPROTO);
     if (len < HEADER_LEN)
         return short_of(0, HEADER_LEN, max);
 
-    RXRd r = rx_rd(buf, len);
-    m->txid = rx_rd_at_u32(&r, 6);
-    m->kind = rx_rd_at_u16(&r, 11);
-    int count = rx_rd_at_u8(&r, 14);
-    uint32_t nb_tags = rx_rd_at_u32(&r, 16);
+    CBRd r = cb_rd(buf, len);
+    m->txid = cb_rd_at_u32(&r, 6);
+    m->kind = cb_rd_at_u16(&r, 11);
+    int count = cb_rd_at_u8(&r, 14);
+    uint32_t nb_tags = cb_rd_at_u32(&r, 16);
     /* The list is `count` long, or a fixed twelve zero-padded (dbmsg.h). */
-    if (count > RX_DB_MAX_ARGS || nb_tags < (uint32_t)count || nb_tags > RX_DB_MAX_ARGS)
-        return RX_ERROR(EPROTO);
+    if (count > CB_DB_MAX_ARGS || nb_tags < (uint32_t)count || nb_tags > CB_DB_MAX_ARGS)
+        return CB_ERROR(EPROTO);
     r.pos = HEADER_LEN;
-    if (rx_rd_left(&r) < nb_tags)
+    if (cb_rd_left(&r) < nb_tags)
         return short_of(r.pos, nb_tags, max);
-    const uint8_t *tags = rx_rd_bytes(&r, nb_tags);
+    const uint8_t *tags = cb_rd_bytes(&r, nb_tags);
     for (int i = 0; i < count; i++)
-        if (tags[i] != RX_DB_NUM && tags[i] != RX_DB_BLOB && tags[i] != RX_DB_STR)
-            return RX_ERROR(EPROTO);
+        if (tags[i] != CB_DB_NUM && tags[i] != CB_DB_BLOB && tags[i] != CB_DB_STR)
+            return CB_ERROR(EPROTO);
 
     m->nb_args = count;
     for (int i = 0; i < count; i++) {
-        RXDbArg *a = &m->args[i];
-        *a = (RXDbArg) { .type = tags[i] };
+        CBDbArg *a = &m->args[i];
+        *a = (CBDbArg) { .type = tags[i] };
         /* A blob after a number 0 is declared and not sent. */
-        if (tags[i] == RX_DB_BLOB && i > 0 && m->args[i - 1].type == RX_DB_NUM &&
+        if (tags[i] == CB_DB_BLOB && i > 0 && m->args[i - 1].type == CB_DB_NUM &&
             m->args[i - 1].num == 0)
             continue;
-        if (!rx_rd_left(&r))
+        if (!cb_rd_left(&r))
             return short_of(r.pos, 1, max);
-        uint8_t field = rx_rd_u8(&r);
+        uint8_t field = cb_rd_u8(&r);
         if (!field_fits(tags[i], field))
-            return RX_ERROR(EPROTO);
+            return CB_ERROR(EPROTO);
         /* A number's value, or a blob's or a string's 4-byte length. */
-        size_t width = field == RX_DB_FIELD_NUM1 ? 1 : field == RX_DB_FIELD_NUM2 ? 2 : 4;
-        if (rx_rd_left(&r) < width)
+        size_t width = field == CB_DB_FIELD_NUM1 ? 1 : field == CB_DB_FIELD_NUM2 ? 2 : 4;
+        if (cb_rd_left(&r) < width)
             return short_of(r.pos, width, max);
-        if (field == RX_DB_FIELD_NUM1)
-            a->num = rx_rd_u8(&r);
-        else if (field == RX_DB_FIELD_NUM2)
-            a->num = rx_rd_u16(&r);
+        if (field == CB_DB_FIELD_NUM1)
+            a->num = cb_rd_u8(&r);
+        else if (field == CB_DB_FIELD_NUM2)
+            a->num = cb_rd_u16(&r);
         else
-            a->num = rx_rd_u32(&r);
-        if (field != RX_DB_FIELD_BLOB && field != RX_DB_FIELD_STRING)
+            a->num = cb_rd_u32(&r);
+        if (field != CB_DB_FIELD_BLOB && field != CB_DB_FIELD_STRING)
             continue;
         /* A string's length counts UTF-16 units, its NUL included. */
-        uint64_t bytes = field == RX_DB_FIELD_STRING ? 2 * (uint64_t)a->num : a->num;
-        if (rx_rd_left(&r) < bytes)
+        uint64_t bytes = field == CB_DB_FIELD_STRING ? 2 * (uint64_t)a->num : a->num;
+        if (cb_rd_left(&r) < bytes)
             return short_of(r.pos, bytes, max);
         a->len = (uint32_t)bytes;
-        a->p = rx_rd_bytes(&r, (size_t)bytes);
+        a->p = cb_rd_bytes(&r, (size_t)bytes);
         a->num = 0;
     }
     if (r.err || r.pos > max)
-        return r.pos > max ? RX_ERROR(E2BIG) : RX_ERROR(EPROTO);
+        return r.pos > max ? CB_ERROR(E2BIG) : CB_ERROR(EPROTO);
     return (int)r.pos;
 }
 
-void rx_dbmsg_write(RXWr *w, const RXDbMsg *m)
+void cb_dbmsg_write(CBWr *w, const CBDbMsg *m)
 {
-    int count = RX_CLAMP(m->nb_args, 0, RX_DB_MAX_ARGS);
-    rx_wr_u8(w, RX_DB_FIELD_NUM4);
-    rx_wr_u32(w, RX_DB_MAGIC);
-    rx_wr_u8(w, RX_DB_FIELD_NUM4);
-    rx_wr_u32(w, m->txid);
-    rx_wr_u8(w, RX_DB_FIELD_NUM2);
-    rx_wr_u16(w, m->kind);
-    rx_wr_u8(w, RX_DB_FIELD_NUM1);
-    rx_wr_u8(w, (uint8_t)count);
-    rx_wr_u8(w, RX_DB_FIELD_BLOB);
-    rx_wr_u32(w, (uint32_t)count);
+    int count = CB_CLAMP(m->nb_args, 0, CB_DB_MAX_ARGS);
+    cb_wr_u8(w, CB_DB_FIELD_NUM4);
+    cb_wr_u32(w, CB_DB_MAGIC);
+    cb_wr_u8(w, CB_DB_FIELD_NUM4);
+    cb_wr_u32(w, m->txid);
+    cb_wr_u8(w, CB_DB_FIELD_NUM2);
+    cb_wr_u16(w, m->kind);
+    cb_wr_u8(w, CB_DB_FIELD_NUM1);
+    cb_wr_u8(w, (uint8_t)count);
+    cb_wr_u8(w, CB_DB_FIELD_BLOB);
+    cb_wr_u32(w, (uint32_t)count);
     /* An argument of no known type goes as a number: what is written
      * always parses. */
     for (int i = 0; i < count; i++) {
         uint8_t t = m->args[i].type;
-        rx_wr_u8(w, t == RX_DB_STR || t == RX_DB_BLOB ? t : RX_DB_NUM);
+        cb_wr_u8(w, t == CB_DB_STR || t == CB_DB_BLOB ? t : CB_DB_NUM);
     }
     for (int i = 0; i < count; i++) {
-        const RXDbArg *a = &m->args[i];
+        const CBDbArg *a = &m->args[i];
         switch (a->type) {
         default:
-            rx_wr_u8(w, RX_DB_FIELD_NUM4);
-            rx_wr_u32(w, a->num);
+            cb_wr_u8(w, CB_DB_FIELD_NUM4);
+            cb_wr_u32(w, a->num);
             break;
-        case RX_DB_BLOB:
-            if (i > 0 && m->args[i - 1].type != RX_DB_STR && m->args[i - 1].type != RX_DB_BLOB &&
+        case CB_DB_BLOB:
+            if (i > 0 && m->args[i - 1].type != CB_DB_STR && m->args[i - 1].type != CB_DB_BLOB &&
                 m->args[i - 1].num == 0)
                 break;
-            rx_wr_u8(w, RX_DB_FIELD_BLOB);
-            rx_wr_u32(w, a->len);
-            rx_wr_bytes(w, a->p, a->len);
+            cb_wr_u8(w, CB_DB_FIELD_BLOB);
+            cb_wr_u32(w, a->len);
+            cb_wr_bytes(w, a->p, a->len);
             break;
-        case RX_DB_STR:
-            rx_wr_u8(w, RX_DB_FIELD_STRING);
+        case CB_DB_STR:
+            cb_wr_u8(w, CB_DB_FIELD_STRING);
             if (a->str) {
-                rx_wr_u32(w, (uint32_t)rx_link_utf16_units(a->str) + 1);
-                rx_wr_utf16(w, a->str, true, true);
+                cb_wr_u32(w, (uint32_t)cb_link_utf16_units(a->str) + 1);
+                cb_wr_utf16(w, a->str, true, true);
             } else {
                 /* As parsed: the units with their NUL, as they came (an
                  * odd last byte cannot be one), so a message read and
                  * written again is the same. */
                 uint32_t units = a->len / 2;
-                rx_wr_u32(w, units);
+                cb_wr_u32(w, units);
                 if (units)
-                    rx_wr_bytes(w, a->p, (size_t)units * 2);
+                    cb_wr_bytes(w, a->p, (size_t)units * 2);
             }
             break;
         }
     }
 }
 
-void rx_dbmsg_numbers(RXWr *w, uint32_t txid, uint16_t kind, const uint32_t *v, int nb)
+void cb_dbmsg_numbers(CBWr *w, uint32_t txid, uint16_t kind, const uint32_t *v, int nb)
 {
-    RXDbMsg m = { .txid = txid, .kind = kind, .nb_args = RX_CLAMP(nb, 0, RX_DB_MAX_ARGS) };
+    CBDbMsg m = { .txid = txid, .kind = kind, .nb_args = CB_CLAMP(nb, 0, CB_DB_MAX_ARGS) };
     for (int i = 0; i < m.nb_args; i++)
-        m.args[i] = (RXDbArg) { .type = RX_DB_NUM, .num = v[i] };
-    rx_dbmsg_write(w, &m);
+        m.args[i] = (CBDbArg) { .type = CB_DB_NUM, .num = v[i] };
+    cb_dbmsg_write(w, &m);
 }
 
-uint32_t rx_dbmsg_num(const RXDbMsg *m, int i)
+uint32_t cb_dbmsg_num(const CBDbMsg *m, int i)
 {
-    return i >= 0 && i < m->nb_args && m->args[i].type == RX_DB_NUM ? m->args[i].num : 0;
+    return i >= 0 && i < m->nb_args && m->args[i].type == CB_DB_NUM ? m->args[i].num : 0;
 }
 
-char *rx_dbmsg_str(const RXDbMsg *m, int i)
+char *cb_dbmsg_str(const CBDbMsg *m, int i)
 {
-    if (i < 0 || i >= m->nb_args || m->args[i].type != RX_DB_STR)
+    if (i < 0 || i >= m->nb_args || m->args[i].type != CB_DB_STR)
         return NULL;
-    return rx_link_utf16_to_utf8(m->args[i].p, m->args[i].len, true);
+    return cb_link_utf16_to_utf8(m->args[i].p, m->args[i].len, true);
 }
 
-const uint8_t *rx_dbmsg_blob(const RXDbMsg *m, int i, uint32_t *len)
+const uint8_t *cb_dbmsg_blob(const CBDbMsg *m, int i, uint32_t *len)
 {
     *len = 0;
-    if (i < 0 || i >= m->nb_args || m->args[i].type != RX_DB_BLOB || !m->args[i].p)
+    if (i < 0 || i >= m->nb_args || m->args[i].type != CB_DB_BLOB || !m->args[i].p)
         return NULL;
     *len = m->args[i].len;
     return m->args[i].p;
@@ -202,60 +202,60 @@ const uint8_t *rx_dbmsg_blob(const RXDbMsg *m, int i, uint32_t *len)
  * (rbxport's capture: "ARTIST" in U+FFFA..U+FFFB is 0x12). */
 static uint32_t text_bytes(const char *s)
 {
-    return 2 * ((uint32_t)rx_link_utf16_units(s ? s : "") + 1);
+    return 2 * ((uint32_t)cb_link_utf16_units(s ? s : "") + 1);
 }
 
-void rx_dbmsg_item(RXWr *w, uint32_t txid, const RXDbItem *it, bool extended)
+void cb_dbmsg_item(CBWr *w, uint32_t txid, const CBDbItem *it, bool extended)
 {
-    rx_dbmsg_item_latin1(w, txid, it, extended, false);
+    cb_dbmsg_item_latin1(w, txid, it, extended, false);
 }
 
-void rx_dbmsg_item_latin1(RXWr *w, uint32_t txid, const RXDbItem *it, bool extended, bool latin1)
+void cb_dbmsg_item_latin1(CBWr *w, uint32_t txid, const CBDbItem *it, bool extended, bool latin1)
 {
-    char *f1 = latin1 ? rx_utf8_latin1(it->text) : NULL;
-    char *f2 = latin1 ? rx_utf8_latin1(it->text2) : NULL;
-    char *f3 = latin1 ? rx_utf8_latin1(it->text3) : NULL;
+    char *f1 = latin1 ? cb_utf8_latin1(it->text) : NULL;
+    char *f2 = latin1 ? cb_utf8_latin1(it->text2) : NULL;
+    char *f3 = latin1 ? cb_utf8_latin1(it->text3) : NULL;
     const char *t1 = f1 ? f1 : it->text ? it->text : "", *t2 = f2 ? f2 : it->text2 ? it->text2 : "";
     const char *t3 = f3 ? f3 : it->text3 ? it->text3 : "";
-    RXDbMsg m = { .txid = txid, .kind = RX_DB_MENU_ITEM, .nb_args = extended ? 16 : 12 };
-    const RXDbArg args[16] = {
-        { .type = RX_DB_NUM, .num = it->a },
-        { .type = RX_DB_NUM, .num = it->id },
-        { .type = RX_DB_NUM, .num = text_bytes(t1) },
-        { .type = RX_DB_STR, .str = t1 },
-        { .type = RX_DB_NUM, .num = text_bytes(t2) },
-        { .type = RX_DB_STR, .str = t2 },
-        { .type = RX_DB_NUM, .num = it->type },
-        { .type = RX_DB_NUM, .num = it->flags },
-        { .type = RX_DB_NUM, .num = it->c },
-        { .type = RX_DB_NUM, .num = it->d },
-        { .type = RX_DB_NUM, .num = it->e },
-        { .type = RX_DB_NUM, .num = it->key },
-        { .type = RX_DB_NUM, .num = it->art },
-        { .type = RX_DB_NUM, .num = text_bytes(t3) },
-        { .type = RX_DB_STR, .str = t3 },
-        { .type = RX_DB_NUM, .num = it->f },
+    CBDbMsg m = { .txid = txid, .kind = CB_DB_MENU_ITEM, .nb_args = extended ? 16 : 12 };
+    const CBDbArg args[16] = {
+        { .type = CB_DB_NUM, .num = it->a },
+        { .type = CB_DB_NUM, .num = it->id },
+        { .type = CB_DB_NUM, .num = text_bytes(t1) },
+        { .type = CB_DB_STR, .str = t1 },
+        { .type = CB_DB_NUM, .num = text_bytes(t2) },
+        { .type = CB_DB_STR, .str = t2 },
+        { .type = CB_DB_NUM, .num = it->type },
+        { .type = CB_DB_NUM, .num = it->flags },
+        { .type = CB_DB_NUM, .num = it->c },
+        { .type = CB_DB_NUM, .num = it->d },
+        { .type = CB_DB_NUM, .num = it->e },
+        { .type = CB_DB_NUM, .num = it->key },
+        { .type = CB_DB_NUM, .num = it->art },
+        { .type = CB_DB_NUM, .num = text_bytes(t3) },
+        { .type = CB_DB_STR, .str = t3 },
+        { .type = CB_DB_NUM, .num = it->f },
     };
     memcpy(m.args, args, sizeof(args));
-    rx_dbmsg_write(w, &m);
+    cb_dbmsg_write(w, &m);
     free(f1);
     free(f2);
     free(f3);
 }
 
-int rx_dbrow_parse(const RXDbMsg *m, RXDbRow *row)
+int cb_dbrow_parse(const CBDbMsg *m, CBDbRow *row)
 {
-    *row = (RXDbRow) { 0 };
-    if (m->kind != RX_DB_MENU_ITEM || (m->nb_args != 12 && m->nb_args != 16))
-        return RX_ERROR(EPROTO);
+    *row = (CBDbRow) { 0 };
+    if (m->kind != CB_DB_MENU_ITEM || (m->nb_args != 12 && m->nb_args != 16))
+        return CB_ERROR(EPROTO);
     static const uint8_t want[16] = {
-        RX_DB_NUM, RX_DB_NUM, RX_DB_NUM, RX_DB_STR, RX_DB_NUM, RX_DB_STR, RX_DB_NUM, RX_DB_NUM,
-        RX_DB_NUM, RX_DB_NUM, RX_DB_NUM, RX_DB_NUM, RX_DB_NUM, RX_DB_NUM, RX_DB_STR, RX_DB_NUM,
+        CB_DB_NUM, CB_DB_NUM, CB_DB_NUM, CB_DB_STR, CB_DB_NUM, CB_DB_STR, CB_DB_NUM, CB_DB_NUM,
+        CB_DB_NUM, CB_DB_NUM, CB_DB_NUM, CB_DB_NUM, CB_DB_NUM, CB_DB_NUM, CB_DB_STR, CB_DB_NUM,
     };
     for (int i = 0; i < m->nb_args; i++)
         if (m->args[i].type != want[i])
-            return RX_ERROR(EPROTO);
-    *row = (RXDbRow) {
+            return CB_ERROR(EPROTO);
+    *row = (CBDbRow) {
         .a     = m->args[0].num,
         .id    = m->args[1].num,
         .type  = m->args[6].num,
@@ -267,30 +267,30 @@ int rx_dbrow_parse(const RXDbMsg *m, RXDbRow *row)
         .art   = m->nb_args > 12 ? m->args[12].num : 0,
         .f     = m->nb_args > 12 ? m->args[15].num : 0,
     };
-    row->text = rx_dbmsg_str(m, 3);
-    row->text2 = rx_dbmsg_str(m, 5);
-    row->text3 = m->nb_args > 12 ? rx_dbmsg_str(m, 14) : rx_strdup("");
+    row->text = cb_dbmsg_str(m, 3);
+    row->text2 = cb_dbmsg_str(m, 5);
+    row->text3 = m->nb_args > 12 ? cb_dbmsg_str(m, 14) : cb_strdup("");
     if (!row->text || !row->text2 || !row->text3) {
-        rx_dbrow_free(row);
-        return RX_ERROR(ENOMEM);
+        cb_dbrow_free(row);
+        return CB_ERROR(ENOMEM);
     }
     return 0;
 }
 
-void rx_dbrow_free(RXDbRow *row)
+void cb_dbrow_free(CBDbRow *row)
 {
     free(row->text);
     free(row->text2);
     free(row->text3);
-    *row = (RXDbRow) { 0 };
+    *row = (CBDbRow) { 0 };
 }
 
-void rx_dbrows_free(RXDbRow **rows, int nb)
+void cb_dbrows_free(CBDbRow **rows, int nb)
 {
     if (!*rows)
         return;
     for (int i = 0; i < nb; i++)
-        rx_dbrow_free(&(*rows)[i]);
+        cb_dbrow_free(&(*rows)[i]);
     free(*rows);
     *rows = NULL;
 }

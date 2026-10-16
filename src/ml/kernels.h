@@ -4,8 +4,8 @@
  * addresses first, 8-byte aligned, then the 4-byte fields), shared by
  * moss.c and the kernel tests. */
 
-#ifndef RXBOX_ML_KERNELS_H
-#define RXBOX_ML_KERNELS_H
+#ifndef CYANBOX_ML_KERNELS_H
+#define CYANBOX_ML_KERNELS_H
 
 #include <stdint.h>
 
@@ -115,4 +115,4 @@ typedef struct ArgmaxPush {
 ML_PUSH_CHECK(GemmPush);
 ML_PUSH_CHECK(RopePush);
 
-#endif /* RXBOX_ML_KERNELS_H */
+#endif /* CYANBOX_ML_KERNELS_H */

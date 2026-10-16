@@ -33,7 +33,7 @@
 
 #define FLUX_DELAY 2
 
-int rx_onset_normalise(float *o, int n, double fps)
+int cb_onset_normalise(float *o, int n, double fps)
 {
     if (n <= 0)
         return 0;
@@ -43,13 +43,13 @@ int rx_onset_normalise(float *o, int n, double fps)
     int w = (int)fps | 1, h = w / 2;
     double *cum = malloc((size_t)(n + 1) * sizeof(*cum));
     if (!cum)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     cum[0] = 0.0;
     for (int i = 0; i < n; i++)
         cum[i + 1] = cum[i] + o[i];
     double sum = 0.0, sum2 = 0.0;
     for (int i = 0; i < n; i++) {
-        int lo = RX_MAX(i - h, 0), hi = RX_MIN(i + h + 1, n);
+        int lo = CB_MAX(i - h, 0), hi = CB_MIN(i + h + 1, n);
         double m = (cum[hi] - cum[lo]) / (hi - lo);
         double v = fmax(0.0, o[i] - m);
         o[i] = (float)v;
@@ -64,11 +64,11 @@ int rx_onset_normalise(float *o, int n, double fps)
     return 0;
 }
 
-void rx_superflux_frame(const float *ref, const float *cur, int mid0, int mid1, int high0,
+void cb_superflux_frame(const float *ref, const float *cur, int mid0, int mid1, int high0,
                         float *full, float *mid, float *high)
 {
-    const int nm = RX_BEAT_NMELS;
-    float d[RX_BEAT_NMELS];
+    const int nm = CB_BEAT_NMELS;
+    float d[CB_BEAT_NMELS];
     for (int b = 0; b < nm; b++) {
         float r = ref[b];
         if (b > 0)
@@ -95,12 +95,12 @@ void rx_superflux_frame(const float *ref, const float *cur, int mid0, int mid1, 
  * there, and on fewer than 8 frames its shift wrote outside v. */
 static void align_band(const float *ref, float *v, int n)
 {
-    const int L = RX_MIN(8, n - 1);
+    const int L = CB_MIN(8, n - 1);
     double best = 0.0;
     int lag = 0;
     for (int l = -L; l <= L; l++) {
         double acc = 0.0;
-        for (int i = RX_MAX(0, -l); i < n && i + l < n; i++)
+        for (int i = CB_MAX(0, -l); i < n && i + l < n; i++)
             acc += (double)ref[i] * v[i + l];
         if (acc > best) {
             best = acc;
@@ -119,7 +119,7 @@ static void align_band(const float *ref, float *v, int n)
     }
 }
 
-int rx_onsets_compute(RXSpectrum *s, RXOnsets *o)
+int cb_onsets_compute(CBSpectrum *s, CBOnsets *o)
 {
     memset(o, 0, sizeof(*o));
     const int n = s->nb_frames;
@@ -129,27 +129,27 @@ int rx_onsets_compute(RXSpectrum *s, RXOnsets *o)
     o->mid = s->flux_mid;
     o->high = s->flux_high;
     s->flux_full = s->flux_mid = s->flux_high = NULL;
-    o->low = calloc(RX_MAX(n, 1), sizeof(float));
-    o->accent = calloc(RX_MAX(n, 1), sizeof(float));
+    o->low = calloc(CB_MAX(n, 1), sizeof(float));
+    o->accent = calloc(CB_MAX(n, 1), sizeof(float));
     if (!o->full || !o->low || !o->mid || !o->high || !o->accent) {
-        rx_onsets_free(o);
-        return RX_ERROR(ENOMEM);
+        cb_onsets_free(o);
+        return CB_ERROR(ENOMEM);
     }
     for (int t = 1; t + 1 < n; t++)
         o->low[t] = fmaxf(0.0f, s->kick[t + 1] - s->kick[t - 1]);
 
     /* The two-frame delay of the log flux (above). */
     float *sig[] = { o->full, o->low, o->mid, o->high };
-    for (size_t k = 0; k < RX_ARRAY_ELEMS(sig); k++) {
-        memmove(sig[k] + FLUX_DELAY, sig[k], (size_t)RX_MAX(n - FLUX_DELAY, 0) * sizeof(float));
-        for (int t = 0; t < RX_MIN(FLUX_DELAY, n); t++)
+    for (size_t k = 0; k < CB_ARRAY_ELEMS(sig); k++) {
+        memmove(sig[k] + FLUX_DELAY, sig[k], (size_t)CB_MAX(n - FLUX_DELAY, 0) * sizeof(float));
+        for (int t = 0; t < CB_MIN(FLUX_DELAY, n); t++)
             sig[k][t] = 0.0f;
     }
 
-    for (size_t k = 0; k < RX_ARRAY_ELEMS(sig); k++) {
-        int ret = rx_onset_normalise(sig[k], n, o->fps);
+    for (size_t k = 0; k < CB_ARRAY_ELEMS(sig); k++) {
+        int ret = cb_onset_normalise(sig[k], n, o->fps);
         if (ret < 0) {
-            rx_onsets_free(o);
+            cb_onsets_free(o);
             return ret;
         }
     }
@@ -168,7 +168,7 @@ int rx_onsets_compute(RXSpectrum *s, RXOnsets *o)
     return 0;
 }
 
-void rx_onsets_free(RXOnsets *o)
+void cb_onsets_free(CBOnsets *o)
 {
     free(o->full);
     free(o->low);
@@ -212,7 +212,7 @@ static float kth_smallest(const float *x, int n, int k)
     return key_float(key);
 }
 
-double rx_onsets_first(const RXOnsets *o)
+double cb_onsets_first(const CBOnsets *o)
 {
     /* dj's rule: the first frame above a quarter of the 99th percentile,
      * i.e. the first onset that is loud for this track. The percentile is
@@ -221,7 +221,7 @@ double rx_onsets_first(const RXOnsets *o)
     if (o->nb <= 0)
         return 0.0;
     double p99 = kth_smallest(o->full, o->nb,
-                              (int)RX_MIN((int64_t)(0.99 * (o->nb - 1) + 0.5), o->nb - 1));
+                              (int)CB_MIN((int64_t)(0.99 * (o->nb - 1) + 0.5), o->nb - 1));
     double thr = 0.25 * p99;
     for (int i = 0; i < o->nb; i++) {
         if (o->full[i] > thr)

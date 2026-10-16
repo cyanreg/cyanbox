@@ -1,125 +1,125 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
-/* Stand-ins for the window (rxbox/gpu.h) and the interface (the rx_ui_*
- * functions of rxbox/app.h), linked only into rxbox-cli: the command line
+/* Stand-ins for the window (cyanbox/gpu.h) and the interface (the cb_ui_*
+ * functions of cyanbox/app.h), linked only into cyanbox-cli: the command line
  * built without src/gpu and src/ui, which the CLI test runs so that it
  * neither needs a display nor waits for the interface to build. Creating a
  * window fails, so the interface is never entered; everything else is
  * unreachable and harmless. */
 
-#include "rxbox/app.h"
-#include "rxbox/gpu.h"
+#include "cyanbox/app.h"
+#include "cyanbox/gpu.h"
 
-void rx_window_options_default(RXWindowOptions *o)
+void cb_window_options_default(CBWindowOptions *o)
 {
-    *o = (RXWindowOptions) {
-        .title  = "rxbox",
+    *o = (CBWindowOptions) {
+        .title  = "cyanbox",
         .width  = 1600,
         .height = 900,
     };
 }
 
-int rx_window_create(RXWindow **w, const RXWindowOptions *o)
+int cb_window_create(CBWindow **w, const CBWindowOptions *o)
 {
-    rx_err("this build of rxbox has no interface (rxbox-cli); use a subcommand");
+    cb_err("this build of cyanbox has no interface (cyanbox-cli); use a subcommand");
     *w = NULL;
-    return RX_ERROR(ENOSYS);
+    return CB_ERROR(ENOSYS);
 }
 
-void rx_window_destroy(RXWindow *w)
+void cb_window_destroy(CBWindow *w)
 {
 }
 
-bool rx_window_poll(RXWindow *w, bool want_redraw, int timeout_ms)
-{
-    return false;
-}
-
-bool rx_window_hidden(const RXWindow *w)
+bool cb_window_poll(CBWindow *w, bool want_redraw, int timeout_ms)
 {
     return false;
 }
 
-bool rx_window_should_close(const RXWindow *w)
+bool cb_window_hidden(const CBWindow *w)
+{
+    return false;
+}
+
+bool cb_window_should_close(const CBWindow *w)
 {
     return true;
 }
 
-void rx_window_request_close(RXWindow *w)
+void cb_window_request_close(CBWindow *w)
 {
 }
 
-void rx_window_begin_frame(RXWindow *w)
+void cb_window_begin_frame(CBWindow *w)
 {
 }
 
-void rx_window_end_frame(RXWindow *w)
+void cb_window_end_frame(CBWindow *w)
 {
 }
 
-void rx_window_size(const RXWindow *w, int *width, int *height)
+void cb_window_size(const CBWindow *w, int *width, int *height)
 {
     *width = 0;
     *height = 0;
 }
 
-float rx_window_scale(const RXWindow *w)
+float cb_window_scale(const CBWindow *w)
 {
     return 1.0f;
 }
 
-int rx_window_frames_drawn(const RXWindow *w)
+int cb_window_frames_drawn(const CBWindow *w)
 {
     return 0;
 }
 
-double rx_window_frame_interval_ms(const RXWindow *w)
+double cb_window_frame_interval_ms(const CBWindow *w)
 {
     return 0.0;
 }
 
-int rx_window_screenshot(RXWindow *w, const char *png_path)
+int cb_window_screenshot(CBWindow *w, const char *png_path)
 {
-    return RX_ERROR(ENOSYS);
+    return CB_ERROR(ENOSYS);
 }
 
-uint64_t rx_texture_create(RXWindow *w, const uint8_t *rgba, int width, int height)
+uint64_t cb_texture_create(CBWindow *w, const uint8_t *rgba, int width, int height)
 {
     return 0;
 }
 
-void rx_texture_destroy(RXWindow *w, uint64_t tex)
+void cb_texture_destroy(CBWindow *w, uint64_t tex)
 {
 }
 
-RXWaveGpu *rx_wave_upload(RXWindow *w, enum RXWaveKind kind, const uint8_t *columns, int nb_columns)
+CBWaveGpu *cb_wave_upload(CBWindow *w, enum CBWaveKind kind, const uint8_t *columns, int nb_columns)
 {
     return NULL;
 }
 
-void rx_wave_release(RXWindow *w, RXWaveGpu *g)
+void cb_wave_release(CBWindow *w, CBWaveGpu *g)
 {
 }
 
-int rx_wave_columns(const RXWaveGpu *g)
+int cb_wave_columns(const CBWaveGpu *g)
 {
     return 0;
 }
 
-void rx_wave_draw(RXWindow *w, void *im_draw_list, const RXWaveGpu *g, const RXWaveDraw *d)
+void cb_wave_draw(CBWindow *w, void *im_draw_list, const CBWaveGpu *g, const CBWaveDraw *d)
 {
 }
 
-int rx_ui_init(RXApp *app)
+int cb_ui_init(CBApp *app)
 {
-    return RX_ERROR(ENOSYS);
+    return CB_ERROR(ENOSYS);
 }
 
-void rx_ui_shutdown(RXApp *app)
+void cb_ui_shutdown(CBApp *app)
 {
 }
 
-bool rx_ui_frame(RXApp *app)
+bool cb_ui_frame(CBApp *app)
 {
     return false;
 }

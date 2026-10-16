@@ -1,32 +1,32 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
-/* Background jobs (rxbox/jobs.h): decoding and analysing tracks, decoding
+/* Background jobs (cyanbox/jobs.h): decoding and analysing tracks, decoding
  * them for a deck, scaling their cover art, reading and inspecting
- * sticks, and tagging tracks with the model, on an RXThreadPool, with the
- * results handed back to the owner thread through an RXMailbox.
+ * sticks, and tagging tracks with the model, on an CBThreadPool, with the
+ * results handed back to the owner thread through an CBMailbox.
  *
  * Ownership and threads:
  *  - A Job is allocated by the owner when it submits, then belongs to the
  *    pool until a worker has run (or dropped) it; the worker frees it. It
- *    stays on the RXJobs list, under `lock`, from submission until the
+ *    stays on the CBJobs list, under `lock`, from submission until the
  *    worker is done with it, which is what lets the owner cancel a job that
  *    has not started: it only flips the state, and the worker that later
  *    pops it frees it without running it.
- *  - A worker allocates the RXJobResult and its payload and posts it; from
+ *  - A worker allocates the CBJobResult and its payload and posts it; from
  *    then on it belongs to whoever takes it from the mailbox (the owner),
- *    who releases it with rx_job_result_free().
+ *    who releases it with cb_job_result_free().
  *  - Workers never see the owner's library: a job carries copies of the
  *    path and the options, nothing else. The stick read needs a library to
  *    compare with, so it opens one of its own from the root path (a second
  *    connection to the database, as the export does) and closes it again.
  *  - The counters and the per-worker active track ids are read without the
- *    lock (atomics), so the status bar can poll them from a const RXJobs.
+ *    lock (atomics), so the status bar can poll them from a const CBJobs.
  *
  * The analyse job decodes mono: every stage of the analysis works on the
  * mean of the channels (dj's decode_player did the same), and a mono buffer
  * halves the memory of the 11 or so decodes running at once. The decode job
  * for a deck decodes nothing: it opens the track's packet store
- * (rx_packets_open, a few milliseconds), which the deck decodes as it plays,
+ * (cb_packets_open, a few milliseconds), which the deck decodes as it plays,
  * at the file's own rate and channels on the players' timeline; only a
  * file the store refuses (Matroska) is decoded whole, as every track was
  * before, which took one to five seconds. The artwork job also makes
@@ -38,7 +38,7 @@
  * mixes on every CPU but one could exhaust the machine. Before it decodes,
  * an analysis reserves its estimate (analysis_estimate) against a budget
  * shared by the queue's workers, 40 % of the physical memory unless
- * RXBOX_ANALYSIS_BUDGET_MB says otherwise, and waits on `budget_cond` while
+ * CYANBOX_ANALYSIS_BUDGET_MB says otherwise, and waits on `budget_cond` while
  * it does not fit. One analysis may always run, so a file larger than the
  * whole budget is still analysed, alone. A waiting job has not started:
  * it is not counted as running, shows no active track, and can be
@@ -46,36 +46,36 @@
  * finite, so that one runs at the latest when the others are done.
  *
  * The GPU: the analyses' spectral front end runs on one compute context
- * (rxbox/compute.h) that all the workers share. It is made when the first
+ * (cyanbox/compute.h) that all the workers share. It is made when the first
  * analysis starts, not with the pool, so a pool that never analyses (the
  * interface's I/O pool, a CLI command that only reads) never touches
- * Vulkan; it goes in rx_jobs_destroy, once the pool has joined its last
+ * Vulkan; it goes in cb_jobs_destroy, once the pool has joined its last
  * worker. The context serialises its own queue submissions and each
  * analysis has its own command pools, so workers never wait for each
  * other's transforms.
  *
- * Tagging (rxbox/ml.h) is one job for a whole batch of tracks, not one per
+ * Tagging (cyanbox/ml.h) is one job for a whole batch of tracks, not one per
  * track: the model takes 3.5 s and 4 GB of the GPU's memory to load, and
  * up to 7 GB while it listens, so it is loaded once, used for every track
  * asked for, one at a time, and unloaded when there is nothing left; and
  * two models on one GPU have made the driver reset it (docs/ML.md). The
- * queue is the RXJobs' own, under `lock`; rx_jobs_tag appends to it and
+ * queue is the CBJobs' own, under `lock`; cb_jobs_tag appends to it and
  * makes the batch's job only when there is none. The job ends only after
  * it has closed the model and found the queue still empty, under the
  * lock: a track asked for while the model closes is tagged by the same
  * job, which opens it again, so a second batch can never start while the
  * first still holds the GPU. Cancelling empties the queue and sets the
- * flag rx_ml_tag watches; a track cancelled half way posts nothing. The
- * model gets the GPU the analyses were given (rx_jobs_set_gpu's name), not
+ * flag cb_ml_tag watches; a track cancelled half way posts nothing. The
+ * model gets the GPU the analyses were given (cb_jobs_set_gpu's name), not
  * their compute context: it keeps a device of its own (src/ml/ml_priv.h). */
 
-#include "rxbox/jobs.h"
+#include "cyanbox/jobs.h"
 
 #include <pthread.h>
 #include <stdio.h>
 #include <unistd.h>
 
-/* The library's artwork thumbnails (rxbox/library.h). */
+/* The library's artwork thumbnails (cyanbox/library.h). */
 #define ARTWORK_THUMB_SIZE 240
 
 /* The memory guard (above): the share of physical memory analyses may hold
@@ -93,19 +93,19 @@ enum JobState {
 };
 
 typedef struct Job {
-    RXJobs *j;
+    CBJobs *j;
     struct Job *prev, *next;        /* on j->head, under j->lock */
     enum JobState state;            /* under j->lock */
-    enum RXJobKind kind;
+    enum CBJobKind kind;
     uint64_t request;
     uint64_t track_id;
     char *path;                     /* the audio file, the stick's mount, or the model's
-                                       file (RX_JOB_TAG) */
-    char *root;                     /* RX_JOB_STICK_READ: the library */
+                                       file (CB_JOB_TAG) */
+    char *root;                     /* CB_JOB_STICK_READ: the library */
     int deck;
     int max_size;
     unsigned what;
-    RXAnalysisOptions opt;
+    CBAnalysisOptions opt;
 } Job;
 
 /* A track waiting in the tag queue, with the legend it was asked with (a
@@ -113,13 +113,13 @@ typedef struct Job {
 typedef struct TagItem {
     uint64_t track_id;
     char *path;
-    char *legend[RX_TRACK_COLORS];
+    char *legend[CB_TRACK_COLORS];
 } TagItem;
 
 static void tag_item_free(TagItem *it)
 {
     free(it->path);
-    for (int i = 0; i < RX_TRACK_COLORS; i++)
+    for (int i = 0; i < CB_TRACK_COLORS; i++)
         free(it->legend[i]);
     *it = (TagItem) { 0 };
 }
@@ -129,9 +129,9 @@ typedef struct Slot {
     int busy;                       /* under j->lock */
 } Slot;
 
-struct RXJobs {
-    RXThreadPool *pool;
-    RXMailbox *results;
+struct CBJobs {
+    CBThreadPool *pool;
+    CBMailbox *results;
 
     pthread_mutex_t lock;           /* guards the list, the states, the slots' busy flags,
                                        the reservations */
@@ -149,22 +149,22 @@ struct RXJobs {
     Slot *slots;
     int nb_slots;
 
-    /* The analyses' GPU (rx_jobs_set_gpu), made by the first analysis
+    /* The analyses' GPU (cb_jobs_set_gpu), made by the first analysis
      * under its own lock: making it takes a moment, and `lock` is the
      * owner thread's too. */
     pthread_mutex_t gpu_lock;       /* guards the four below */
     bool gpu_enable;
     bool gpu_tried;
     char *gpu_device;
-    RXCompute *gpu;
+    CBCompute *gpu;
 
-    /* The tag queue and its batch (rx_jobs_tag): under `lock`, but the
-     * cancel flag, which the batch's rx_ml_tag reads as it goes. */
-    RXArray tag_queue;              /* TagItem, oldest first */
+    /* The tag queue and its batch (cb_jobs_tag): under `lock`, but the
+     * cancel flag, which the batch's cb_ml_tag reads as it goes. */
+    CBArray tag_queue;              /* TagItem, oldest first */
     Job *tag_job;                   /* the batch's job, queued or running; NULL none */
     int tag_done, tag_total;
     uint64_t tag_current;           /* being tagged; 0 while the model loads */
-    RXCancel tag_cancel;
+    CBCancel tag_cancel;
 };
 
 static void job_free(Job *job)
@@ -177,7 +177,7 @@ static void job_free(Job *job)
 }
 
 /* Under j->lock. */
-static void job_unlink(RXJobs *j, Job *job)
+static void job_unlink(CBJobs *j, Job *job)
 {
     if (job->prev)
         job->prev->next = job->next;
@@ -190,16 +190,16 @@ static void job_unlink(RXJobs *j, Job *job)
 
 /* Under j->lock: drops the tracks waiting in the tag queue (not the one
  * being tagged). */
-static void tag_drop(RXJobs *j)
+static void tag_drop(CBJobs *j)
 {
     for (size_t i = 0; i < j->tag_queue.nb; i++)
-        tag_item_free(rx_array_at(&j->tag_queue, i));
+        tag_item_free(cb_array_at(&j->tag_queue, i));
     j->tag_total -= (int)j->tag_queue.nb;
-    rx_array_clear(&j->tag_queue);
+    cb_array_clear(&j->tag_queue);
 }
 
 /* Under j->lock: no batch any more. */
-static void tag_end(RXJobs *j)
+static void tag_end(CBJobs *j)
 {
     j->tag_job = NULL;
     j->tag_done = j->tag_total = 0;
@@ -213,11 +213,11 @@ static void tag_end(RXJobs *j)
  * its decode fails as quickly. */
 static int64_t analysis_estimate(const char *path)
 {
-    RXProbe p;
+    CBProbe p;
     int64_t samples = 0;
-    if (rx_probe(path, &p) >= 0) {
-        samples = RX_MAX(p.total_samples, (int64_t)0);
-        rx_probe_free(&p);
+    if (cb_probe(path, &p) >= 0) {
+        samples = CB_MAX(p.total_samples, (int64_t)0);
+        cb_probe_free(&p);
     }
     double audio = (double)samples * sizeof(float);
     return ANALYSIS_BASE_BYTES + (int64_t)(audio * (1.0 + ANALYSIS_OVERHEAD));
@@ -225,14 +225,14 @@ static int64_t analysis_estimate(const char *path)
 
 static int64_t analysis_budget(void)
 {
-    const char *env = getenv("RXBOX_ANALYSIS_BUDGET_MB");
+    const char *env = getenv("CYANBOX_ANALYSIS_BUDGET_MB");
     if (env && env[0]) {
         char *end;
         errno = 0;
         long long mb = strtoll(env, &end, 10);
         if (!errno && !*end && mb > 0 && mb <= INT64_MAX >> 20)
             return (int64_t)mb << 20;
-        rx_warn("jobs: RXBOX_ANALYSIS_BUDGET_MB is \"%s\", not a number of MB above 0; "
+        cb_warn("jobs: CYANBOX_ANALYSIS_BUDGET_MB is \"%s\", not a number of MB above 0; "
                 "using the default", env);
     }
     long pages = sysconf(_SC_PHYS_PAGES);
@@ -245,12 +245,12 @@ static int64_t analysis_budget(void)
 
 /* Under j->lock: waits until `bytes` fit the budget, or nothing else holds
  * a reservation, or the job is cancelled. Returns false when cancelled. */
-static bool reserve(RXJobs *j, Job *job, int64_t bytes)
+static bool reserve(CBJobs *j, Job *job, int64_t bytes)
 {
     bool said = false;
     while (job->state != JOB_CANCELLED && j->nb_reserved > 0 && j->reserved + bytes > j->budget) {
         if (!said) {
-            rx_debug("jobs: %s waits for %lld MB of memory (%lld of %lld MB reserved)", job->path,
+            cb_debug("jobs: %s waits for %lld MB of memory (%lld of %lld MB reserved)", job->path,
                      (long long)(bytes >> 20), (long long)(j->reserved >> 20),
                      (long long)(j->budget >> 20));
             said = true;
@@ -267,50 +267,50 @@ static bool reserve(RXJobs *j, Job *job, int64_t bytes)
 /* The pool's compute context, made by the first analysis that asks; NULL
  * when there is none (the analyses then run on the CPU). Workers that ask
  * while it is being made wait for it rather than each make their own. */
-static RXCompute *jobs_gpu(RXJobs *j)
+static CBCompute *jobs_gpu(CBJobs *j)
 {
     pthread_mutex_lock(&j->gpu_lock);
     if (!j->gpu_tried && j->gpu_enable) {
         j->gpu_tried = true;
-        RXComputeOptions o;
-        rx_compute_options_default(&o);
+        CBComputeOptions o;
+        cb_compute_options_default(&o);
         o.device = j->gpu_device;
-        int ret = rx_compute_create(&j->gpu, &o);
-        if (ret < 0 && rx_compute_mode() == RX_COMPUTE_REQUIRED)
-            rx_err("jobs: RXBOX_ANALYSIS_GPU=1, but there is no GPU (%s); analysing on the CPU",
+        int ret = cb_compute_create(&j->gpu, &o);
+        if (ret < 0 && cb_compute_mode() == CB_COMPUTE_REQUIRED)
+            cb_err("jobs: CYANBOX_ANALYSIS_GPU=1, but there is no GPU (%s); analysing on the CPU",
                    strerror(-ret));
-        else if (ret < 0 && rx_compute_mode() != RX_COMPUTE_OFF)
-            rx_info("jobs: no GPU for the analyses (%s); they run on the CPU", strerror(-ret));
+        else if (ret < 0 && cb_compute_mode() != CB_COMPUTE_OFF)
+            cb_info("jobs: no GPU for the analyses (%s); they run on the CPU", strerror(-ret));
     }
-    RXCompute *gpu = j->gpu;
+    CBCompute *gpu = j->gpu;
     pthread_mutex_unlock(&j->gpu_lock);
     return gpu;
 }
 
-static int run_analyse(Job *job, RXJobResult *r)
+static int run_analyse(Job *job, CBJobResult *r)
 {
-    RXAudio audio = { 0 };
-    int ret = rx_decode(job->path, 1, 0, &audio);
+    CBAudio audio = { 0 };
+    int ret = cb_decode(job->path, 1, 0, &audio);
     if (ret < 0)
         return ret;
     if (!job->opt.compute)
         job->opt.compute = jobs_gpu(job->j);
 
-    RXAnalysis *a = calloc(1, sizeof(*a));
+    CBAnalysis *a = calloc(1, sizeof(*a));
     if (!a) {
-        rx_audio_free(&audio);
-        return RX_ERROR(ENOMEM);
+        cb_audio_free(&audio);
+        return CB_ERROR(ENOMEM);
     }
 
-    ret = rx_analyse(&audio, &job->opt, job->what, a);
+    ret = cb_analyse(&audio, &job->opt, job->what, a);
     /* The owner updates the track's length from this: the decode is the
      * players' timeline, which the probe only estimates for some files. */
     if (audio.rate > 0)
         a->duration = (double)audio.nb_frames / audio.rate;
-    rx_audio_free(&audio);
+    cb_audio_free(&audio);
 
     if (ret < 0) {
-        rx_analysis_free(a);
+        cb_analysis_free(a);
         free(a);
         return ret;
     }
@@ -319,22 +319,22 @@ static int run_analyse(Job *job, RXJobResult *r)
     return 0;
 }
 
-static int run_decode(Job *job, RXJobResult *r)
+static int run_decode(Job *job, CBJobResult *r)
 {
-    RXPackets *pk;
-    int ret = rx_packets_open(job->path, &pk);
+    CBPackets *pk;
+    int ret = cb_packets_open(job->path, &pk);
     if (ret >= 0) {
         r->packets = pk;
         return 0;
     }
-    if (ret != RX_ERROR(ENOTSUP))
+    if (ret != CB_ERROR(ENOTSUP))
         return ret;
 
-    RXAudio *audio = calloc(1, sizeof(*audio));
+    CBAudio *audio = calloc(1, sizeof(*audio));
     if (!audio)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
 
-    ret = rx_decode(job->path, 0, 0, audio);
+    ret = cb_decode(job->path, 0, 0, audio);
     if (ret < 0) {
         free(audio);
         return ret;
@@ -344,19 +344,19 @@ static int run_decode(Job *job, RXJobResult *r)
     return 0;
 }
 
-static int run_artwork(Job *job, RXJobResult *r)
+static int run_artwork(Job *job, CBJobResult *r)
 {
     uint8_t *rgba = NULL;
     int w = 0, h = 0;
-    int ret = rx_artwork_rgba(job->path, &rgba, &w, &h);
+    int ret = cb_artwork_rgba(job->path, &rgba, &w, &h);
     if (ret < 0)
         return ret;
 
     /* The library keeps a square thumbnail, the size and quality dj used
      * for the stick's larger artwork; the owner stores it. Not fatal. */
-    ret = rx_image_jpeg_square(rgba, w, h, ARTWORK_THUMB_SIZE, 90, &r->jpeg, &r->jpeg_size);
+    ret = cb_image_jpeg_square(rgba, w, h, ARTWORK_THUMB_SIZE, 90, &r->jpeg, &r->jpeg_size);
     if (ret < 0) {
-        rx_debug("jobs: no thumbnail for %s: %s", job->path, strerror(-ret));
+        cb_debug("jobs: no thumbnail for %s: %s", job->path, strerror(-ret));
         r->jpeg = NULL;
         r->jpeg_size = 0;
     }
@@ -364,7 +364,7 @@ static int run_artwork(Job *job, RXJobResult *r)
     if (job->max_size > 0 && (w > job->max_size || h > job->max_size)) {
         uint8_t *scaled = NULL;
         int sw = 0, sh = 0;
-        ret = rx_image_scale(rgba, w, h, job->max_size, job->max_size, &scaled, &sw, &sh);
+        ret = cb_image_scale(rgba, w, h, job->max_size, job->max_size, &scaled, &sw, &sh);
         free(rgba);
         if (ret < 0)
             return ret;
@@ -379,26 +379,26 @@ static int run_artwork(Job *job, RXJobResult *r)
     return 0;
 }
 
-static int run_stick_read(Job *job, RXJobResult *r)
+static int run_stick_read(Job *job, CBJobResult *r)
 {
-    RXLibrary lib = { 0 };
-    int ret = rx_library_open(&lib, job->root);
+    CBLibrary lib = { 0 };
+    int ret = cb_library_open(&lib, job->root);
     if (ret < 0)
         return ret;
 
-    RXStickState *s = calloc(1, sizeof(*s));
+    CBStickState *s = calloc(1, sizeof(*s));
     if (!s) {
-        rx_library_close(&lib);
-        return RX_ERROR(ENOMEM);
+        cb_library_close(&lib);
+        return CB_ERROR(ENOMEM);
     }
-    ret = rx_stick_read(&lib, job->path, s);
+    ret = cb_stick_read(&lib, job->path, s);
     if (ret < 0) {
         free(s);
     } else {
         r->stick = s;
-        ret = rx_stick_diff(&lib, s, &r->sync_items, &r->nb_sync_items);
+        ret = cb_stick_diff(&lib, s, &r->sync_items, &r->nb_sync_items);
     }
-    rx_library_close(&lib);
+    cb_library_close(&lib);
     return ret;
 }
 
@@ -407,45 +407,45 @@ static void report_line(void *opaque, const char *line)
     fprintf(opaque, "%s\n", line);
 }
 
-static int run_inspect(Job *job, RXJobResult *r)
+static int run_inspect(Job *job, CBJobResult *r)
 {
     size_t size = 0;
     FILE *f = open_memstream(&r->report, &size);
     if (!f)
-        return RX_ERROR(ENOMEM);
-    int ret = rx_inspect(job->path, report_line, f);
+        return CB_ERROR(ENOMEM);
+    int ret = cb_inspect(job->path, report_line, f);
     if (fclose(f))
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     if (ret < 0)
         return ret;
     r->problems = ret;
     return 0;
 }
 
-static void post(RXJobs *j, RXJobResult *r, const char *what)
+static void post(CBJobs *j, CBJobResult *r, const char *what)
 {
-    if (rx_mailbox_post(j->results, r) < 0) {
-        rx_err("jobs: cannot post the result of %s", what);
-        rx_job_result_free(r);
+    if (cb_mailbox_post(j->results, r) < 0) {
+        cb_err("jobs: cannot post the result of %s", what);
+        cb_job_result_free(r);
     }
 }
 
 /* One track of the tag batch: decoded mono at the model's rate, tagged. */
-static int tag_one(RXJobs *j, RXML *ml, const TagItem *it, RXJobResult *r)
+static int tag_one(CBJobs *j, CBML *ml, const TagItem *it, CBJobResult *r)
 {
-    RXAudio audio = { 0 };
-    int ret = rx_decode(it->path, 1, RX_ML_RATE, &audio);
+    CBAudio audio = { 0 };
+    int ret = cb_decode(it->path, 1, CB_ML_RATE, &audio);
     if (ret < 0)
         return ret;
 
-    RXMLTags *tags = calloc(1, sizeof(*tags));
+    CBMLTags *tags = calloc(1, sizeof(*tags));
     if (!tags) {
-        rx_audio_free(&audio);
-        return RX_ERROR(ENOMEM);
+        cb_audio_free(&audio);
+        return CB_ERROR(ENOMEM);
     }
-    ret = rx_ml_tag(ml, audio.samples, audio.nb_frames, (const char *const *)it->legend, tags,
+    ret = cb_ml_tag(ml, audio.samples, audio.nb_frames, (const char *const *)it->legend, tags,
                     &j->tag_cancel);
-    rx_audio_free(&audio);
+    cb_audio_free(&audio);
     if (ret < 0) {
         free(tags);
         return ret;
@@ -458,20 +458,20 @@ static int tag_one(RXJobs *j, RXML *ml, const TagItem *it, RXJobResult *r)
  * the file). */
 static void run_tag(Job *job)
 {
-    RXJobs *j = job->j;
-    RXML *ml = NULL;
+    CBJobs *j = job->j;
+    CBML *ml = NULL;
 
     pthread_mutex_lock(&j->gpu_lock);
-    char *device = j->gpu_device ? rx_strdup(j->gpu_device) : NULL;
+    char *device = j->gpu_device ? cb_strdup(j->gpu_device) : NULL;
     pthread_mutex_unlock(&j->gpu_lock);
 
     while (1) {
         TagItem it = { 0 };
         pthread_mutex_lock(&j->lock);
-        bool have = !rx_cancelled(&j->tag_cancel) && j->tag_queue.nb;
+        bool have = !cb_cancelled(&j->tag_cancel) && j->tag_queue.nb;
         if (have) {
-            it = *(TagItem *)rx_array_at(&j->tag_queue, 0);
-            rx_array_remove(&j->tag_queue, 0);
+            it = *(TagItem *)cb_array_at(&j->tag_queue, 0);
+            cb_array_remove(&j->tag_queue, 0);
         }
         j->tag_current = 0;
         pthread_mutex_unlock(&j->lock);
@@ -479,8 +479,8 @@ static void run_tag(Job *job)
         if (!have) {
             /* Done or cancelled: the model goes before the batch ends. */
             if (ml) {
-                rx_ml_close(&ml);
-                rx_info("jobs: the model is unloaded");
+                cb_ml_close(&ml);
+                cb_info("jobs: the model is unloaded");
             }
             pthread_mutex_lock(&j->lock);
             bool more = j->tag_queue.nb > 0;
@@ -495,22 +495,22 @@ static void run_tag(Job *job)
         }
 
         if (!ml) {
-            RXMLOptions o;
-            rx_ml_options_default(&o);
+            CBMLOptions o;
+            cb_ml_options_default(&o);
             o.device = device;
-            int64_t t0 = rx_time_us();
-            int ret = rx_ml_open(&ml, job->path, &o);
+            int64_t t0 = cb_time_us();
+            int ret = cb_ml_open(&ml, job->path, &o);
             if (ret < 0) {
-                rx_err("jobs: cannot load the model %s: %s", job->path, strerror(-ret));
+                cb_err("jobs: cannot load the model %s: %s", job->path, strerror(-ret));
                 tag_item_free(&it);
                 /* The failure is posted and the queue dropped under the
                  * lock, so a track asked for after it starts a new batch
                  * and is not lost with this one. */
-                RXJobResult *r = calloc(1, sizeof(*r));
+                CBJobResult *r = calloc(1, sizeof(*r));
                 pthread_mutex_lock(&j->lock);
                 if (r) {
-                    *r = (RXJobResult) {
-                        .kind    = RX_JOB_TAG,
+                    *r = (CBJobResult) {
+                        .kind    = CB_JOB_TAG,
                         .request = job->request,
                         .err     = ret,
                     };
@@ -521,28 +521,28 @@ static void run_tag(Job *job)
                 pthread_mutex_unlock(&j->lock);
                 break;
             }
-            rx_info("jobs: the model is loaded on %s in %.1f s", rx_ml_device_name(ml),
-                    (rx_time_us() - t0) / 1e6);
+            cb_info("jobs: the model is loaded on %s in %.1f s", cb_ml_device_name(ml),
+                    (cb_time_us() - t0) / 1e6);
         }
 
         pthread_mutex_lock(&j->lock);
         j->tag_current = it.track_id;
         pthread_mutex_unlock(&j->lock);
 
-        int64_t t0 = rx_time_us();
-        RXJobResult *r = calloc(1, sizeof(*r));
-        int ret = r ? tag_one(j, ml, &it, r) : RX_ERROR(ENOMEM);
-        bool interrupted = ret == RX_ERROR(ECANCELED) && rx_cancelled(&j->tag_cancel);
+        int64_t t0 = cb_time_us();
+        CBJobResult *r = calloc(1, sizeof(*r));
+        int ret = r ? tag_one(j, ml, &it, r) : CB_ERROR(ENOMEM);
+        bool interrupted = ret == CB_ERROR(ECANCELED) && cb_cancelled(&j->tag_cancel);
         if (r && !interrupted) {
-            r->kind = RX_JOB_TAG;
+            r->kind = CB_JOB_TAG;
             r->track_id = it.track_id;
             r->request = job->request;
             r->err = ret < 0 ? ret : 0;
-            r->seconds = (rx_time_us() - t0) / 1e6;
-            rx_debug("jobs: tagged %s in %.1f s", it.path, r->seconds);
+            r->seconds = (cb_time_us() - t0) / 1e6;
+            cb_debug("jobs: tagged %s in %.1f s", it.path, r->seconds);
             post(j, r, it.path);
         } else {
-            rx_job_result_free(r);
+            cb_job_result_free(r);
         }
 
         pthread_mutex_lock(&j->lock);
@@ -558,10 +558,10 @@ static void run_tag(Job *job)
          * again: the batch goes on if the GPU recovered, and ends with one
          * message where it cannot be opened, rather than failing every
          * track left. */
-        if (ret == RX_ERROR(EIO) && ml) {
-            rx_warn("jobs: the model failed on %s; it is loaded again for the next track",
+        if (ret == CB_ERROR(EIO) && ml) {
+            cb_warn("jobs: the model failed on %s; it is loaded again for the next track",
                     it.path);
-            rx_ml_close(&ml);
+            cb_ml_close(&ml);
         }
         tag_item_free(&it);
     }
@@ -570,15 +570,15 @@ static void run_tag(Job *job)
 }
 
 /* Every job but the tag batch: one result. */
-static RXJobResult *run_one(Job *job)
+static CBJobResult *run_one(Job *job)
 {
-    int64_t t0 = rx_time_us();
-    RXJobResult *r = calloc(1, sizeof(*r));
+    int64_t t0 = cb_time_us();
+    CBJobResult *r = calloc(1, sizeof(*r));
     if (!r) {
-        rx_err("jobs: out of memory for the result of %s", job->path);
+        cb_err("jobs: out of memory for the result of %s", job->path);
         return NULL;
     }
-    *r = (RXJobResult) {
+    *r = (CBJobResult) {
         .kind     = job->kind,
         .track_id = job->track_id,
         .deck     = job->deck,
@@ -586,27 +586,27 @@ static RXJobResult *run_one(Job *job)
     };
     int ret;
     switch (job->kind) {
-    case RX_JOB_ANALYSE:
+    case CB_JOB_ANALYSE:
         ret = run_analyse(job, r);
         break;
-    case RX_JOB_DECODE:
+    case CB_JOB_DECODE:
         ret = run_decode(job, r);
         break;
-    case RX_JOB_ARTWORK:
+    case CB_JOB_ARTWORK:
         ret = run_artwork(job, r);
         break;
-    case RX_JOB_STICK_READ:
+    case CB_JOB_STICK_READ:
         ret = run_stick_read(job, r);
         break;
-    case RX_JOB_INSPECT:
+    case CB_JOB_INSPECT:
         ret = run_inspect(job, r);
         break;
     default:
-        ret = RX_ERROR(EINVAL);
+        ret = CB_ERROR(EINVAL);
         break;
     }
     r->err = ret < 0 ? ret : 0;
-    r->seconds = (rx_time_us() - t0) / 1e6;
+    r->seconds = (cb_time_us() - t0) / 1e6;
     return r;
 }
 
@@ -614,7 +614,7 @@ static RXJobResult *run_one(Job *job)
 static void run_job(void *arg)
 {
     Job *job = arg;
-    RXJobs *j = job->j;
+    CBJobs *j = job->j;
 
     /* An analysis probes for its estimate before taking the lock, unless
      * it was cancelled while queued (a destroyed queue drops its backlog
@@ -623,12 +623,12 @@ static void run_job(void *arg)
     pthread_mutex_lock(&j->lock);
     bool cancelled = job->state == JOB_CANCELLED;
     pthread_mutex_unlock(&j->lock);
-    if (job->kind == RX_JOB_ANALYSE && !cancelled)
+    if (job->kind == CB_JOB_ANALYSE && !cancelled)
         bytes = analysis_estimate(job->path);
 
     pthread_mutex_lock(&j->lock);
     if (job->state == JOB_CANCELLED || (bytes && !reserve(j, job, bytes))) {
-        /* rx_jobs_cancel() already took it off the counters, and emptied
+        /* cb_jobs_cancel() already took it off the counters, and emptied
          * the queue of a tag batch. */
         if (j->tag_job == job)
             tag_end(j);
@@ -647,7 +647,7 @@ static void run_job(void *arg)
     }
     if (slot >= 0) {
         j->slots[slot].busy = 1;
-        if (job->kind == RX_JOB_ANALYSE)
+        if (job->kind == CB_JOB_ANALYSE)
             __atomic_store_n(&j->slots[slot].track_id, job->track_id, __ATOMIC_RELAXED);
     }
     __atomic_add_fetch(&j->running, 1, __ATOMIC_RELAXED);
@@ -656,10 +656,10 @@ static void run_job(void *arg)
     /* Post before the counters drop, so an owner that sees pending == 0
      * finds every result already in the mailbox (the tag batch posts each
      * of its own as it goes). */
-    if (job->kind == RX_JOB_TAG) {
+    if (job->kind == CB_JOB_TAG) {
         run_tag(job);
     } else {
-        RXJobResult *r = run_one(job);
+        CBJobResult *r = run_one(job);
         if (r)
             post(j, r, job->path);
     }
@@ -682,52 +682,52 @@ static void run_job(void *arg)
     job_free(job);
 }
 
-int rx_jobs_create(RXJobs **out, int threads)
+int cb_jobs_create(CBJobs **out, int threads)
 {
     if (threads <= 0) {
         long n = sysconf(_SC_NPROCESSORS_ONLN);
         threads = n > 0 ? (int)n : 1;
     }
 
-    RXJobs *j = calloc(1, sizeof(*j));
+    CBJobs *j = calloc(1, sizeof(*j));
     if (!j)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
 
     int ret = pthread_mutex_init(&j->lock, NULL);
     if (ret) {
         free(j);
-        return RX_ERROR(ret);
+        return CB_ERROR(ret);
     }
     ret = pthread_cond_init(&j->budget_cond, NULL);
     if (ret) {
         pthread_mutex_destroy(&j->lock);
         free(j);
-        return RX_ERROR(ret);
+        return CB_ERROR(ret);
     }
     ret = pthread_mutex_init(&j->gpu_lock, NULL);
     if (ret) {
         pthread_cond_destroy(&j->budget_cond);
         pthread_mutex_destroy(&j->lock);
         free(j);
-        return RX_ERROR(ret);
+        return CB_ERROR(ret);
     }
     j->gpu_enable = true;
-    rx_array_init(&j->tag_queue, sizeof(TagItem));
+    cb_array_init(&j->tag_queue, sizeof(TagItem));
     j->budget = analysis_budget();
-    rx_debug("jobs: analyses may hold %lld MB at once", (long long)(j->budget >> 20));
+    cb_debug("jobs: analyses may hold %lld MB at once", (long long)(j->budget >> 20));
 
     j->nb_slots = threads;
     j->slots = calloc(threads, sizeof(*j->slots));
     if (!j->slots) {
-        ret = RX_ERROR(ENOMEM);
+        ret = CB_ERROR(ENOMEM);
         goto fail;
     }
 
-    ret = rx_mailbox_create(&j->results);
+    ret = cb_mailbox_create(&j->results);
     if (ret < 0)
         goto fail;
 
-    ret = rx_pool_create(&j->pool, threads);
+    ret = cb_pool_create(&j->pool, threads);
     if (ret < 0)
         goto fail;
 
@@ -736,7 +736,7 @@ int rx_jobs_create(RXJobs **out, int threads)
 
 fail:
     if (j->results)
-        rx_mailbox_destroy(j->results);
+        cb_mailbox_destroy(j->results);
     free(j->slots);
     pthread_mutex_destroy(&j->gpu_lock);
     pthread_cond_destroy(&j->budget_cond);
@@ -745,25 +745,25 @@ fail:
     return ret;
 }
 
-void rx_jobs_destroy(RXJobs *j)
+void cb_jobs_destroy(CBJobs *j)
 {
     if (!j)
         return;
 
     /* Queued jobs are dropped by the workers that pop them; running ones
      * finish. The pool waits for both before joining. */
-    rx_jobs_cancel_all(j);
-    rx_pool_destroy(j->pool);
+    cb_jobs_cancel_all(j);
+    cb_pool_destroy(j->pool);
 
-    RXJobResult *r;
-    while ((r = rx_mailbox_take(j->results)))
-        rx_job_result_free(r);
-    rx_mailbox_destroy(j->results);
+    CBJobResult *r;
+    while ((r = cb_mailbox_take(j->results)))
+        cb_job_result_free(r);
+    cb_mailbox_destroy(j->results);
 
     /* No worker is left to use the GPU, nor the tag queue. */
-    rx_compute_destroy(&j->gpu);
+    cb_compute_destroy(&j->gpu);
     tag_drop(j);
-    rx_array_free(&j->tag_queue);
+    cb_array_free(&j->tag_queue);
     free(j->gpu_device);
     pthread_mutex_destroy(&j->gpu_lock);
 
@@ -773,19 +773,19 @@ void rx_jobs_destroy(RXJobs *j)
     free(j);
 }
 
-void rx_jobs_set_gpu(RXJobs *j, bool enable, const char *device)
+void cb_jobs_set_gpu(CBJobs *j, bool enable, const char *device)
 {
     pthread_mutex_lock(&j->gpu_lock);
     if (!j->gpu_tried) {
         j->gpu_enable = enable;
         free(j->gpu_device);
-        j->gpu_device = device && device[0] ? rx_strdup(device) : NULL;
+        j->gpu_device = device && device[0] ? cb_strdup(device) : NULL;
     }
     pthread_mutex_unlock(&j->gpu_lock);
 }
 
 /* Under j->lock: the job goes on the list, queued, with its request id. */
-static void job_link(RXJobs *j, Job *job)
+static void job_link(CBJobs *j, Job *job)
 {
     job->j = j;
     job->request = ++j->next_request;
@@ -799,9 +799,9 @@ static void job_link(RXJobs *j, Job *job)
 
 /* Hands a linked job to the pool; if the pool refuses it, it comes off the
  * list and is freed (a tag batch with its queue: nothing would drain it). */
-static int job_start(RXJobs *j, Job *job)
+static int job_start(CBJobs *j, Job *job)
 {
-    int ret = rx_pool_submit(j->pool, run_job, job);
+    int ret = cb_pool_submit(j->pool, run_job, job);
     if (ret < 0) {
         pthread_mutex_lock(&j->lock);
         if (job->state != JOB_CANCELLED)
@@ -817,7 +817,7 @@ static int job_start(RXJobs *j, Job *job)
     return ret;
 }
 
-static uint64_t submit(RXJobs *j, Job *job)
+static uint64_t submit(CBJobs *j, Job *job)
 {
     pthread_mutex_lock(&j->lock);
     job_link(j, job);
@@ -828,7 +828,7 @@ static uint64_t submit(RXJobs *j, Job *job)
     return ret < 0 ? (uint64_t)(int64_t)ret : request;
 }
 
-static Job *job_new(enum RXJobKind kind, uint64_t track_id, const char *path)
+static Job *job_new(enum CBJobKind kind, uint64_t track_id, const char *path)
 {
     if (!path)
         return NULL;
@@ -838,7 +838,7 @@ static Job *job_new(enum RXJobKind kind, uint64_t track_id, const char *path)
     job->kind = kind;
     job->track_id = track_id;
     job->deck = -1;
-    job->path = rx_strdup(path);
+    job->path = cb_strdup(path);
     if (!job->path) {
         free(job);
         return NULL;
@@ -846,99 +846,99 @@ static Job *job_new(enum RXJobKind kind, uint64_t track_id, const char *path)
     return job;
 }
 
-uint64_t rx_jobs_analyse(RXJobs *j, uint64_t track_id, const char *path,
-                         const RXAnalysisOptions *opt, unsigned what)
+uint64_t cb_jobs_analyse(CBJobs *j, uint64_t track_id, const char *path,
+                         const CBAnalysisOptions *opt, unsigned what)
 {
     if (!path || !what)
-        return (uint64_t)(int64_t)RX_ERROR(EINVAL);
-    Job *job = job_new(RX_JOB_ANALYSE, track_id, path);
+        return (uint64_t)(int64_t)CB_ERROR(EINVAL);
+    Job *job = job_new(CB_JOB_ANALYSE, track_id, path);
     if (!job)
-        return (uint64_t)(int64_t)RX_ERROR(ENOMEM);
+        return (uint64_t)(int64_t)CB_ERROR(ENOMEM);
 
     if (opt)
         job->opt = *opt;
     else
-        rx_analysis_options_default(&job->opt);
+        cb_analysis_options_default(&job->opt);
     job->what = what;
     return submit(j, job);
 }
 
-uint64_t rx_jobs_decode(RXJobs *j, uint64_t track_id, const char *path, int deck)
+uint64_t cb_jobs_decode(CBJobs *j, uint64_t track_id, const char *path, int deck)
 {
     if (!path)
-        return (uint64_t)(int64_t)RX_ERROR(EINVAL);
-    Job *job = job_new(RX_JOB_DECODE, track_id, path);
+        return (uint64_t)(int64_t)CB_ERROR(EINVAL);
+    Job *job = job_new(CB_JOB_DECODE, track_id, path);
     if (!job)
-        return (uint64_t)(int64_t)RX_ERROR(ENOMEM);
+        return (uint64_t)(int64_t)CB_ERROR(ENOMEM);
     job->deck = deck;
     return submit(j, job);
 }
 
-uint64_t rx_jobs_artwork(RXJobs *j, uint64_t track_id, const char *path, int max_size)
+uint64_t cb_jobs_artwork(CBJobs *j, uint64_t track_id, const char *path, int max_size)
 {
     if (!path)
-        return (uint64_t)(int64_t)RX_ERROR(EINVAL);
-    Job *job = job_new(RX_JOB_ARTWORK, track_id, path);
+        return (uint64_t)(int64_t)CB_ERROR(EINVAL);
+    Job *job = job_new(CB_JOB_ARTWORK, track_id, path);
     if (!job)
-        return (uint64_t)(int64_t)RX_ERROR(ENOMEM);
+        return (uint64_t)(int64_t)CB_ERROR(ENOMEM);
     job->max_size = max_size;
     return submit(j, job);
 }
 
-uint64_t rx_jobs_stick_read(RXJobs *j, const char *library_root, const char *mount)
+uint64_t cb_jobs_stick_read(CBJobs *j, const char *library_root, const char *mount)
 {
     if (!library_root || !mount)
-        return (uint64_t)(int64_t)RX_ERROR(EINVAL);
-    Job *job = job_new(RX_JOB_STICK_READ, 0, mount);
+        return (uint64_t)(int64_t)CB_ERROR(EINVAL);
+    Job *job = job_new(CB_JOB_STICK_READ, 0, mount);
     if (!job)
-        return (uint64_t)(int64_t)RX_ERROR(ENOMEM);
-    job->root = rx_strdup(library_root);
+        return (uint64_t)(int64_t)CB_ERROR(ENOMEM);
+    job->root = cb_strdup(library_root);
     if (!job->root) {
         job_free(job);
-        return (uint64_t)(int64_t)RX_ERROR(ENOMEM);
+        return (uint64_t)(int64_t)CB_ERROR(ENOMEM);
     }
     return submit(j, job);
 }
 
-uint64_t rx_jobs_inspect(RXJobs *j, const char *mount)
+uint64_t cb_jobs_inspect(CBJobs *j, const char *mount)
 {
     if (!mount)
-        return (uint64_t)(int64_t)RX_ERROR(EINVAL);
-    Job *job = job_new(RX_JOB_INSPECT, 0, mount);
+        return (uint64_t)(int64_t)CB_ERROR(EINVAL);
+    Job *job = job_new(CB_JOB_INSPECT, 0, mount);
     if (!job)
-        return (uint64_t)(int64_t)RX_ERROR(ENOMEM);
+        return (uint64_t)(int64_t)CB_ERROR(ENOMEM);
     return submit(j, job);
 }
 
-uint64_t rx_jobs_tag(RXJobs *j, const char *model, const char *const *legend, uint64_t track_id,
+uint64_t cb_jobs_tag(CBJobs *j, const char *model, const char *const *legend, uint64_t track_id,
                      const char *path)
 {
     if (!model || !model[0] || !path)
-        return (uint64_t)(int64_t)RX_ERROR(EINVAL);
+        return (uint64_t)(int64_t)CB_ERROR(EINVAL);
     TagItem it = {
         .track_id = track_id,
-        .path     = rx_strdup(path),
+        .path     = cb_strdup(path),
     };
     bool copied = true;
-    for (int i = 0; i < RX_TRACK_COLORS; i++) {
-        const char *v = legend && legend[i] ? legend[i] : rx_config_vibe_default(i + 1);
-        copied &= !!(it.legend[i] = rx_strdup(v));
+    for (int i = 0; i < CB_TRACK_COLORS; i++) {
+        const char *v = legend && legend[i] ? legend[i] : cb_config_vibe_default(i + 1);
+        copied &= !!(it.legend[i] = cb_strdup(v));
     }
     /* The job a new batch would need, made before the lock is taken. */
-    Job *job = job_new(RX_JOB_TAG, 0, model);
+    Job *job = job_new(CB_JOB_TAG, 0, model);
     if (!it.path || !copied || !job) {
         tag_item_free(&it);
         job_free(job);
-        return (uint64_t)(int64_t)RX_ERROR(ENOMEM);
+        return (uint64_t)(int64_t)CB_ERROR(ENOMEM);
     }
 
     pthread_mutex_lock(&j->lock);
     /* Asked for again while it waits or is being tagged: once is enough.
      * (The queue is only ever filled while its batch is there.) */
     bool queued = j->tag_job && j->tag_job->state != JOB_CANCELLED && track_id &&
-                  j->tag_current == track_id && !rx_cancelled(&j->tag_cancel);
+                  j->tag_current == track_id && !cb_cancelled(&j->tag_cancel);
     for (size_t i = 0; i < j->tag_queue.nb && !queued; i++)
-        queued = ((TagItem *)rx_array_at(&j->tag_queue, i))->track_id == track_id;
+        queued = ((TagItem *)cb_array_at(&j->tag_queue, i))->track_id == track_id;
     if (queued && j->tag_job) {
         uint64_t request = j->tag_job->request;
         pthread_mutex_unlock(&j->lock);
@@ -946,11 +946,11 @@ uint64_t rx_jobs_tag(RXJobs *j, const char *model, const char *const *legend, ui
         job_free(job);
         return request;
     }
-    if (!rx_array_push(&j->tag_queue, &it)) {
+    if (!cb_array_push(&j->tag_queue, &it)) {
         pthread_mutex_unlock(&j->lock);
         tag_item_free(&it);
         job_free(job);
-        return (uint64_t)(int64_t)RX_ERROR(ENOMEM);
+        return (uint64_t)(int64_t)CB_ERROR(ENOMEM);
     }
     /* A batch cancelled before it started never runs: a new one takes
      * its place. One that runs takes the track, even cancelled (it goes
@@ -975,7 +975,7 @@ uint64_t rx_jobs_tag(RXJobs *j, const char *model, const char *const *legend, ui
     return ret < 0 ? (uint64_t)(int64_t)ret : request;
 }
 
-bool rx_jobs_tag_progress(RXJobs *j, int *done, int *total, uint64_t *current)
+bool cb_jobs_tag_progress(CBJobs *j, int *done, int *total, uint64_t *current)
 {
     if (!j)
         return false;
@@ -992,13 +992,13 @@ bool rx_jobs_tag_progress(RXJobs *j, int *done, int *total, uint64_t *current)
 }
 
 /* Under j->lock: the tag batch stops (cancel, cancel_all). */
-static void tag_stop(RXJobs *j)
+static void tag_stop(CBJobs *j)
 {
     tag_drop(j);
-    rx_cancel(&j->tag_cancel);
+    cb_cancel(&j->tag_cancel);
 }
 
-void rx_jobs_cancel(RXJobs *j, uint64_t request)
+void cb_jobs_cancel(CBJobs *j, uint64_t request)
 {
     if (!j || !request)
         return;
@@ -1020,7 +1020,7 @@ void rx_jobs_cancel(RXJobs *j, uint64_t request)
     pthread_mutex_unlock(&j->lock);
 }
 
-void rx_jobs_cancel_all(RXJobs *j)
+void cb_jobs_cancel_all(CBJobs *j)
 {
     if (!j)
         return;
@@ -1038,55 +1038,55 @@ void rx_jobs_cancel_all(RXJobs *j)
     pthread_mutex_unlock(&j->lock);
 }
 
-RXJobResult *rx_jobs_poll(RXJobs *j)
+CBJobResult *cb_jobs_poll(CBJobs *j)
 {
-    return j ? rx_mailbox_take(j->results) : NULL;
+    return j ? cb_mailbox_take(j->results) : NULL;
 }
 
-RXJobResult *rx_jobs_wait(RXJobs *j, int timeout_ms)
+CBJobResult *cb_jobs_wait(CBJobs *j, int timeout_ms)
 {
-    return j ? rx_mailbox_wait(j->results, timeout_ms) : NULL;
+    return j ? cb_mailbox_wait(j->results, timeout_ms) : NULL;
 }
 
-void rx_job_result_free(RXJobResult *r)
+void cb_job_result_free(CBJobResult *r)
 {
     if (!r)
         return;
     if (r->analysis) {
-        rx_analysis_free(r->analysis);
+        cb_analysis_free(r->analysis);
         free(r->analysis);
     }
     if (r->audio) {
-        rx_audio_free(r->audio);
+        cb_audio_free(r->audio);
         free(r->audio);
     }
-    rx_packets_free(r->packets);
+    cb_packets_free(r->packets);
     free(r->rgba);
     free(r->jpeg);
     if (r->stick) {
-        rx_stick_state_free(r->stick);
+        cb_stick_state_free(r->stick);
         free(r->stick);
     }
     free(r->sync_items);
     free(r->report);
     if (r->tags) {
-        rx_ml_tags_free(r->tags);
+        cb_ml_tags_free(r->tags);
         free(r->tags);
     }
     free(r);
 }
 
-int rx_jobs_pending(const RXJobs *j)
+int cb_jobs_pending(const CBJobs *j)
 {
     return j ? __atomic_load_n(&j->pending, __ATOMIC_RELAXED) : 0;
 }
 
-int rx_jobs_running(const RXJobs *j)
+int cb_jobs_running(const CBJobs *j)
 {
     return j ? __atomic_load_n(&j->running, __ATOMIC_RELAXED) : 0;
 }
 
-int rx_jobs_active_tracks(const RXJobs *j, uint64_t *ids, int max)
+int cb_jobs_active_tracks(const CBJobs *j, uint64_t *ids, int max)
 {
     if (!j)
         return 0;

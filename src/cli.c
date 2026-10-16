@@ -1,23 +1,23 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
-/* The command line (docs/OVERVIEW.md, section 2). `rxbox` alone runs the
+/* The command line (docs/OVERVIEW.md, section 2). `cyanbox` alone runs the
  * interface; the subcommands work on the library and never call into
  * src/gpu, so they run anywhere without a display (ssh, cron, the tests).
  * Results go to stdout, problems to stderr. Exit codes: 0 success, 1 usage,
  * 2 failure (stdout that could not be written included).
  *
- * The analysing subcommands use RXJobs directly with every CPU, and apply
- * each result with rx_app_apply_analysis() on an RXApp that holds only the
+ * The analysing subcommands use CBJobs directly with every CPU, and apply
+ * each result with cb_app_apply_analysis() on an CBApp that holds only the
  * library and the jobs (no player, no window, no private state): the same
  * rules as the interface (only what is missing or an older analyser made,
  * grid locks, waveforms, automatic cues), printed as one line per track.
  * The library (a directory holding library.db) is -c/--library DIR, else
- * $RXBOX_LIBRARY, else ~/.local/share/rxbox (rx_library_default_root).
+ * $CYANBOX_LIBRARY, else ~/.local/share/cyanbox (cb_library_default_root).
  * The analysis' spectral front end runs on a GPU when there is one
- * (rxbox/compute.h, through the jobs pool): --device NAME picks it, as it
+ * (cyanbox/compute.h, through the jobs pool): --device NAME picks it, as it
  * picks the window's, and --no-gpu keeps the analysis on the CPU. Neither
- * needs a display. `tag` runs the model (rxbox/ml.h) through the same
- * batch the interface uses (rx_app_tag_tracks), on --device's GPU too,
+ * needs a display. `tag` runs the model (cyanbox/ml.h) through the same
+ * batch the interface uses (cb_app_tag_tracks), on --device's GPU too,
  * and applies each result as it comes, one line per track.
  *
  * Arguments: options and names mix in any order after the command; `--`
@@ -35,17 +35,17 @@
 #include <unistd.h>
 
 #include "config.h"
-#include "rxbox/analysis.h"
-#include "rxbox/app.h"
-#include "rxbox/colors.h"
-#include "rxbox/export.h"
-#include "rxbox/formats.h"
-#include "rxbox/link.h"
-#include "rxbox/ml.h"
-#include "rxbox/mpris.h"
-#include "rxbox/notation.h"
+#include "cyanbox/analysis.h"
+#include "cyanbox/app.h"
+#include "cyanbox/colors.h"
+#include "cyanbox/export.h"
+#include "cyanbox/formats.h"
+#include "cyanbox/link.h"
+#include "cyanbox/ml.h"
+#include "cyanbox/mpris.h"
+#include "cyanbox/notation.h"
 
-int rx_cli_main(int argc, char **argv);
+int cb_cli_main(int argc, char **argv);
 
 enum {
     EXIT_OK    = 0,
@@ -55,7 +55,7 @@ enum {
 
 typedef struct Cli {
     const char *library;        /* -c/--library, NULL: the default */
-    enum RXAudioBackend audio;
+    enum CBAudioBackend audio;
     const char *sink;
     const char *device;         /* --device: the window's GPU and the analysis' */
     bool  no_gpu;               /* --no-gpu: analyse on the CPU only */
@@ -67,12 +67,12 @@ typedef struct Cli {
     const char *cmd;
     const char *usage;          /* the command's usage line, for usage errors */
     bool  args_only;            /* past the command's `--`: no more options */
-    RXApp app;                  /* lib and jobs only, see above */
+    CBApp app;                  /* lib and jobs only, see above */
     bool  lib_open;
 } Cli;
 
 static const char usage_text[] =
-    "usage: rxbox [OPTIONS] [COMMAND [ARGS]]\n"
+    "usage: cyanbox [OPTIONS] [COMMAND [ARGS]]\n"
     "\n"
     "Prepares CDJ USB sticks without rekordbox. Without a command, runs the interface.\n"
     "\n"
@@ -159,12 +159,12 @@ static const char usage_text[] =
     "  library track under it) or a library id.\n"
     "\n"
     "Options:\n"
-    "  -c, --library DIR        the library (default: $RXBOX_LIBRARY, else\n"
-    "                           ~/.local/share/rxbox)\n"
+    "  -c, --library DIR        the library (default: $CYANBOX_LIBRARY, else\n"
+    "                           ~/.local/share/cyanbox)\n"
     "  -v, --verbose            more messages\n"
     "  --device NAME            the GPU whose name contains NAME, for the analysis and the\n"
-    "                           interface (default: $RXBOX_GPU_DEVICE, else the best one)\n"
-    "  --no-gpu                 analyse on the CPU only (as RXBOX_ANALYSIS_GPU=0)\n"
+    "                           interface (default: $CYANBOX_GPU_DEVICE, else the best one)\n"
+    "  --no-gpu                 analyse on the CPU only (as CYANBOX_ANALYSIS_GPU=0)\n"
     "  --                       after a command: the rest are names, even ones starting\n"
     "                           with -\n"
     "  -h, --help               this text\n"
@@ -185,11 +185,11 @@ static const char usage_text[] =
 
 /* ------------------------------------------------------------------ helpers */
 
-static int fail(const char *fmt, ...) RX_PRINTF(1, 2);
+static int fail(const char *fmt, ...) CB_PRINTF(1, 2);
 static int fail(const char *fmt, ...)
 {
     va_list args;
-    fputs("rxbox: ", stderr);
+    fputs("cyanbox: ", stderr);
     va_start(args, fmt);
     vfprintf(stderr, fmt, args);
     va_end(args);
@@ -198,18 +198,18 @@ static int fail(const char *fmt, ...)
 }
 
 /* cli NULL (or no command yet): no usage line, the pointer to --help only. */
-static int usage_error(const Cli *cli, const char *fmt, ...) RX_PRINTF(2, 3);
+static int usage_error(const Cli *cli, const char *fmt, ...) CB_PRINTF(2, 3);
 static int usage_error(const Cli *cli, const char *fmt, ...)
 {
     va_list args;
-    fputs("rxbox: ", stderr);
+    fputs("cyanbox: ", stderr);
     va_start(args, fmt);
     vfprintf(stderr, fmt, args);
     va_end(args);
     fputc('\n', stderr);
     if (cli && cli->usage)
-        fprintf(stderr, "usage: rxbox %s\n", cli->usage);
-    fputs("Try 'rxbox --help'.\n", stderr);
+        fprintf(stderr, "usage: cyanbox %s\n", cli->usage);
+    fputs("Try 'cyanbox --help'.\n", stderr);
     return EXIT_USAGE;
 }
 
@@ -287,7 +287,7 @@ static int common_option(Cli *cli, int argc, char **argv, int *i)
     }
     if (opt_flag(cli, argv[*i], "-v", "--verbose")) {
         cli->verbose = true;
-        rx_log_set_level(RX_LOG_DEBUG);
+        cb_log_set_level(CB_LOG_DEBUG);
         return 1;
     }
     r = opt_value(cli, argc, argv, i, NULL, "--device", &val);
@@ -309,10 +309,10 @@ static int common_option(Cli *cli, int argc, char **argv, int *i)
 /* An absolute path for one that may not exist yet. */
 static char *abs_path(const char *path)
 {
-    char *real = rx_path_abs(path);
+    char *real = cb_path_abs(path);
     if (real)
         return real;
-    char *p = rx_path_expand(path);
+    char *p = cb_path_expand(path);
     if (!p || p[0] == '/')
         return p;
     char cwd[PATH_MAX];
@@ -320,14 +320,14 @@ static char *abs_path(const char *path)
         free(p);
         return NULL;
     }
-    char *out = rx_path_join(cwd, p);
+    char *out = cb_path_join(cwd, p);
     free(p);
     return out;
 }
 
 static char *library_root(const Cli *cli)
 {
-    return cli->library ? abs_path(cli->library) : rx_library_default_root();
+    return cli->library ? abs_path(cli->library) : cb_library_default_root();
 }
 
 /* Opens the library; `create` lets a missing one be created (add). */
@@ -337,16 +337,16 @@ static int open_library(Cli *cli, bool create)
     if (!root)
         return fail("out of memory");
 
-    char *db = rx_path_join(root, "library.db");
-    bool exists = db && rx_file_exists(db);
+    char *db = cb_path_join(root, "library.db");
+    bool exists = db && cb_file_exists(db);
     free(db);
     if (!exists && !create) {
-        int ret = fail("no library at %s (run `rxbox init` or `rxbox add`)", root);
+        int ret = fail("no library at %s (run `cyanbox init` or `cyanbox add`)", root);
         free(root);
         return ret;
     }
 
-    int ret = rx_library_open(&cli->app.lib, root);
+    int ret = cb_library_open(&cli->app.lib, root);
     if (ret < 0) {
         int code = fail("cannot open the library at %s: %s", root, strerror(-ret));
         free(root);
@@ -355,18 +355,18 @@ static int open_library(Cli *cli, bool create)
     free(root);
     cli->lib_open = true;
     /* My Settings that are not valid go, as the rest of what is not
-     * (rx_library_open's cleaning). */
-    rx_settings_clean(&cli->app.lib);
+     * (cb_library_open's cleaning). */
+    cb_settings_clean(&cli->app.lib);
     return EXIT_OK;
 }
 
 static void cli_close(Cli *cli)
 {
     if (cli->app.jobs)
-        rx_jobs_destroy(cli->app.jobs);
+        cb_jobs_destroy(cli->app.jobs);
     cli->app.jobs = NULL;
     if (cli->lib_open)
-        rx_library_close(&cli->app.lib);
+        cb_library_close(&cli->app.lib);
     cli->lib_open = false;
 }
 
@@ -389,7 +389,7 @@ static const char *fmt_flags(unsigned flags, char *buf, size_t size)
     for (int bit = 0; bit < 31 && len < size; bit++) {
         if (!(flags & (1u << bit)))
             continue;
-        const char *name = rx_grid_flag_name((enum RXGridFlag)(1u << bit));
+        const char *name = cb_grid_flag_name((enum CBGridFlag)(1u << bit));
         if (!name)
             continue;
         len += snprintf(buf + len, size - len, "%s%s", len ? ", " : "", name);
@@ -408,18 +408,18 @@ static const char *fmt_date(int64_t when, char *buf, size_t size)
     return buf;
 }
 
-static const char *title_of(const RXTrack *t)
+static const char *title_of(const CBTrack *t)
 {
-    return t->meta.title && t->meta.title[0] ? t->meta.title : rx_path_base(t->path);
+    return t->meta.title && t->meta.title[0] ? t->meta.title : cb_path_base(t->path);
 }
 
-static bool push_unique(RXArray *tracks, RXTrack *t)
+static bool push_unique(CBArray *tracks, CBTrack *t)
 {
     for (size_t i = 0; i < tracks->nb; i++) {
-        if (*(RXTrack **)rx_array_at(tracks, i) == t)
+        if (*(CBTrack **)cb_array_at(tracks, i) == t)
             return true;
     }
-    return rx_array_push(tracks, &t) != NULL;
+    return cb_array_push(tracks, &t) != NULL;
 }
 
 static bool all_digits(const char *s)
@@ -436,18 +436,18 @@ static bool all_digits(const char *s)
 /* Appends the tracks an argument names: a file in the library (any path to
  * it), a directory (every library track under it) or a library id. Returns
  * the number found, or a negative errno with the problem printed. */
-static int resolve_tracks(RXLibrary *lib, const char *arg, RXArray *out)
+static int resolve_tracks(CBLibrary *lib, const char *arg, CBArray *out)
 {
-    char *abs = rx_path_abs(arg);
-    if (abs && rx_dir_exists(abs)) {
+    char *abs = cb_path_abs(arg);
+    if (abs && cb_dir_exists(abs)) {
         size_t n = strlen(abs);
         int found = 0;
         for (int i = 0; i < lib->nb_tracks; i++) {
-            RXTrack *t = lib->tracks[i];
+            CBTrack *t = lib->tracks[i];
             if (!strncmp(t->path, abs, n) && (t->path[n] == '/' || (n == 1 && abs[0] == '/'))) {
                 if (!push_unique(out, t)) {
                     free(abs);
-                    return RX_ERROR(ENOMEM);
+                    return CB_ERROR(ENOMEM);
                 }
                 found++;
             }
@@ -459,35 +459,35 @@ static int resolve_tracks(RXLibrary *lib, const char *arg, RXArray *out)
         /* A number that happens to name a directory here (a year, say)
          * with no library tracks under it is still an id. */
         if (!all_digits(arg)) {
-            fail("%s: no library tracks under it (rxbox add it first)", arg);
-            return RX_ERROR(ENOENT);
+            fail("%s: no library tracks under it (cyanbox add it first)", arg);
+            return CB_ERROR(ENOENT);
         }
     }
 
     /* A track whose file went missing is still found by its path. */
     if (!abs)
         abs = abs_path(arg);
-    RXTrack *t = abs ? rx_library_find_path(lib, abs) : NULL;
+    CBTrack *t = abs ? cb_library_find_path(lib, abs) : NULL;
     free(abs);
     if (!t && all_digits(arg))
-        t = rx_library_find_id(lib, strtoull(arg, NULL, 10));
+        t = cb_library_find_id(lib, strtoull(arg, NULL, 10));
     if (!t) {
         if (all_digits(arg))
             fail("%s: no track with this id or path in the library", arg);
-        else if (rx_file_exists(arg))
-            fail("%s is not in the library (rxbox add it first)", arg);
+        else if (cb_file_exists(arg))
+            fail("%s is not in the library (cyanbox add it first)", arg);
         else
             fail("%s: no such file", arg);
-        return RX_ERROR(ENOENT);
+        return CB_ERROR(ENOENT);
     }
-    return push_unique(out, t) ? 1 : RX_ERROR(ENOMEM);
+    return push_unique(out, t) ? 1 : CB_ERROR(ENOMEM);
 }
 
 /* ----------------------------------------------------------------- analysis */
 
-static void analysis_options(const RXConfig *cfg, RXAnalysisOptions *opt)
+static void analysis_options(const CBConfig *cfg, CBAnalysisOptions *opt)
 {
-    rx_analysis_options_default(opt);
+    cb_analysis_options_default(opt);
     if (cfg->bpm_min > 0 && cfg->bpm_max > cfg->bpm_min) {
         opt->bpm_min = cfg->bpm_min;
         opt->bpm_max = cfg->bpm_max;
@@ -501,21 +501,21 @@ typedef struct Pending {
     bool     override_lock;
 } Pending;
 
-static void print_analysed(int n, int total, const RXTrack *t, const RXJobResult *r, int err)
+static void print_analysed(int n, int total, const CBTrack *t, const CBJobResult *r, int err)
 {
     char name[256];
-    rx_track_display(t, name, sizeof(name));
+    cb_track_display(t, name, sizeof(name));
     if (err < 0) {
         printf("[%d/%d] FAILED %s: %s\n", n, total, t->path, strerror(-err));
         return;
     }
 
     printf("[%d/%d] %s:", n, total, name);
-    if (rx_grid_valid(&t->grid)) {
+    if (cb_grid_valid(&t->grid)) {
         char bpm[32];
-        bool dynamic = rx_grid_dynamic(&t->grid);
+        bool dynamic = cb_grid_dynamic(&t->grid);
         printf(" %s BPM (confidence %.2f%s)",
-               fmt_bpm(dynamic ? rx_grid_bpm_median(&t->grid, t->duration) : rx_grid_bpm(&t->grid),
+               fmt_bpm(dynamic ? cb_grid_bpm_median(&t->grid, t->duration) : cb_grid_bpm(&t->grid),
                        bpm, sizeof(bpm)),
                t->grid_confidence, t->grid_locked ? ", locked" : "");
         if (dynamic)
@@ -528,7 +528,7 @@ static void print_analysed(int n, int total, const RXTrack *t, const RXJobResult
     if (t->key[0]) {
         char camelot[8];
         printf(", key %s (%s, confidence %.2f)", t->key,
-               rx_key_to_camelot(t->key, camelot, sizeof(camelot)), t->key_confidence);
+               cb_key_to_camelot(t->key, camelot, sizeof(camelot)), t->key_confidence);
     }
     char flags[256];
     if (t->grid_flags)
@@ -540,28 +540,28 @@ static void print_analysed(int n, int total, const RXTrack *t, const RXJobResult
  * one line per track. override_lock: a forced analysis replaces locked
  * grids (only for tracks named on the command line). Returns the number
  * of failures. */
-static int analyse_tracks(Cli *cli, RXTrack **tracks, int nb, unsigned what, bool force,
+static int analyse_tracks(Cli *cli, CBTrack **tracks, int nb, unsigned what, bool force,
                           bool override_lock)
 {
-    RXApp *app = &cli->app;
+    CBApp *app = &cli->app;
 
-    unsigned *need = calloc(RX_MAX(nb, 1), sizeof(*need));
-    Pending *pending = calloc(RX_MAX(nb, 1), sizeof(*pending));
+    unsigned *need = calloc(CB_MAX(nb, 1), sizeof(*need));
+    Pending *pending = calloc(CB_MAX(nb, 1), sizeof(*pending));
     if (!need || !pending) {
         free(need);
         free(pending);
         fail("out of memory");
-        return RX_MAX(nb, 1);
+        return CB_MAX(nb, 1);
     }
 
     /* stale: tracks analysed again for what an older analyser made. */
     int todo = 0, stale = 0;
     for (int i = 0; i < nb; i++) {
-        need[i] = rx_app_analysis_needed(app, tracks[i], what, force);
+        need[i] = cb_app_analysis_needed(app, tracks[i], what, force);
         if (tracks[i]->grid_locked && !override_lock)
-            need[i] &= ~RX_ANALYSE_BEATS;
+            need[i] &= ~CB_ANALYSE_BEATS;
         todo += need[i] != 0;
-        stale += (need[i] & rx_app_analysis_stale(app, tracks[i])) != 0;
+        stale += (need[i] & cb_app_analysis_stale(app, tracks[i])) != 0;
     }
     if (!todo) {
         free(need);
@@ -572,17 +572,17 @@ static int analyse_tracks(Cli *cli, RXTrack **tracks, int nb, unsigned what, boo
 
     int failed = 0;
     if (!app->jobs) {
-        int ret = rx_jobs_create(&app->jobs, 0);
+        int ret = cb_jobs_create(&app->jobs, 0);
         if (ret < 0) {
             free(need);
             free(pending);
             fail("cannot start the analysis threads: %s", strerror(-ret));
             return todo;
         }
-        rx_jobs_set_gpu(app->jobs, !cli->no_gpu, cli->device);
+        cb_jobs_set_gpu(app->jobs, !cli->no_gpu, cli->device);
     }
 
-    RXAnalysisOptions opt;
+    CBAnalysisOptions opt;
     analysis_options(&app->lib.cfg, &opt);
     /* Several tracks: the pool is the parallelism. */
     opt.deterministic_threads = todo > 1;
@@ -597,8 +597,8 @@ static int analyse_tracks(Cli *cli, RXTrack **tracks, int nb, unsigned what, boo
     for (int i = 0; i < nb; i++) {
         if (!need[i])
             continue;
-        RXTrack *t = tracks[i];
-        uint64_t req = rx_jobs_analyse(app->jobs, t->id, t->path, &opt, need[i]);
+        CBTrack *t = tracks[i];
+        uint64_t req = cb_jobs_analyse(app->jobs, t->id, t->path, &opt, need[i]);
         if ((int64_t)req < 0) {
             print_analysed(++done, todo, t, NULL, (int)(int64_t)req);
             failed++;
@@ -612,11 +612,11 @@ static int analyse_tracks(Cli *cli, RXTrack **tracks, int nb, unsigned what, boo
 
     int received = 0;
     while (received < queued) {
-        RXJobResult *r = rx_jobs_wait(app->jobs, 1000);
+        CBJobResult *r = cb_jobs_wait(app->jobs, 1000);
         if (!r) {
             /* Workers post before they count down: nothing pending and
              * nothing posted means nothing more will come. */
-            if (!rx_jobs_pending(app->jobs) && !(r = rx_jobs_poll(app->jobs)))
+            if (!cb_jobs_pending(app->jobs) && !(r = cb_jobs_poll(app->jobs)))
                 break;
             if (!r)
                 continue;
@@ -629,28 +629,28 @@ static int analyse_tracks(Cli *cli, RXTrack **tracks, int nb, unsigned what, boo
                 override = pending[i].override_lock;
         }
 
-        RXTrack *t = rx_library_find_id(&app->lib, r->track_id);
+        CBTrack *t = cb_library_find_id(&app->lib, r->track_id);
         if (t) {
             int err = r->err < 0 ? r->err : 0;
             if (!err && !r->analysis)
-                err = RX_ERROR(EINVAL);
+                err = CB_ERROR(EINVAL);
             if (!err && override) {
                 /* Replacing a locked grid on request: unlocked for the
                  * apply, then the lock is put back and saved again. */
                 t->grid_locked = false;
-                err = rx_app_apply_analysis(app, t, r->analysis);
+                err = cb_app_apply_analysis(app, t, r->analysis);
                 t->grid_locked = true;
-                int ret = rx_library_save_track(&app->lib, t);
+                int ret = cb_library_save_track(&app->lib, t);
                 if (!err && ret < 0)
                     err = ret;
             } else if (!err) {
-                err = rx_app_apply_analysis(app, t, r->analysis);
+                err = cb_app_apply_analysis(app, t, r->analysis);
             }
             print_analysed(++done, todo, t, r, err);
             fflush(stdout);
             failed += err < 0;
         }
-        rx_job_result_free(r);
+        cb_job_result_free(r);
     }
     failed += queued - received;
 
@@ -662,16 +662,16 @@ static int analyse_tracks(Cli *cli, RXTrack **tracks, int nb, unsigned what, boo
 /* ---------------------------------------------------------------- playlists */
 
 typedef struct PlaylistRef {
-    RXPlaylist *p;
+    CBPlaylist *p;
     char path[512];             /* "Folder/Sub/Name" */
 } PlaylistRef;
 
-static void collect_playlists(RXPlaylistFolder *f, const char *prefix, RXArray *out)
+static void collect_playlists(CBPlaylistFolder *f, const char *prefix, CBArray *out)
 {
     for (int i = 0; i < f->nb_playlists; i++) {
         PlaylistRef ref = { .p = f->playlists[i] };
         snprintf(ref.path, sizeof(ref.path), "%s%s", prefix, f->playlists[i]->name);
-        rx_array_push(out, &ref);
+        cb_array_push(out, &ref);
     }
     for (int i = 0; i < f->nb_folders; i++) {
         char sub[512];
@@ -681,28 +681,28 @@ static void collect_playlists(RXPlaylistFolder *f, const char *prefix, RXArray *
 }
 
 /* By its full name ("Folder/Name"), else by a name that must be unique. */
-static RXPlaylist *find_playlist(RXLibrary *lib, const char *name)
+static CBPlaylist *find_playlist(CBLibrary *lib, const char *name)
 {
-    RXArray all;
-    rx_array_init(&all, sizeof(PlaylistRef));
+    CBArray all;
+    cb_array_init(&all, sizeof(PlaylistRef));
     if (lib->root_folder)
         collect_playlists(lib->root_folder, "", &all);
 
-    RXPlaylist *found = NULL;
+    CBPlaylist *found = NULL;
     int matches = 0;
     for (size_t i = 0; i < all.nb && !found; i++) {
-        PlaylistRef *ref = rx_array_at(&all, i);
+        PlaylistRef *ref = cb_array_at(&all, i);
         if (!strcmp(ref->path, name))
             found = ref->p;
     }
     for (size_t i = 0; i < all.nb && !found; i++) {
-        PlaylistRef *ref = rx_array_at(&all, i);
+        PlaylistRef *ref = cb_array_at(&all, i);
         if (!strcmp(ref->p->name, name))
             matches++;
     }
     if (!found && matches == 1) {
         for (size_t i = 0; i < all.nb; i++) {
-            PlaylistRef *ref = rx_array_at(&all, i);
+            PlaylistRef *ref = cb_array_at(&all, i);
             if (!strcmp(ref->p->name, name))
                 found = ref->p;
         }
@@ -711,32 +711,32 @@ static RXPlaylist *find_playlist(RXLibrary *lib, const char *name)
     if (!found && matches > 1) {
         fail("there are %d playlists named %s; give the folder too:", matches, name);
         for (size_t i = 0; i < all.nb; i++) {
-            PlaylistRef *ref = rx_array_at(&all, i);
+            PlaylistRef *ref = cb_array_at(&all, i);
             if (!strcmp(ref->p->name, name))
                 fprintf(stderr, "  %s\n", ref->path);
         }
     } else if (!found) {
-        fail("no playlist named %s (rxbox playlist list)", name);
+        fail("no playlist named %s (cyanbox playlist list)", name);
     }
-    rx_array_free(&all);
+    cb_array_free(&all);
     return found;
 }
 
-static void print_folder(const RXPlaylistFolder *f, int depth)
+static void print_folder(const CBPlaylistFolder *f, int depth)
 {
     for (int i = 0; i < f->nb_folders; i++) {
         printf("%*s%s/\n", depth * 2, "", f->folders[i]->name);
         print_folder(f->folders[i], depth + 1);
     }
     for (int i = 0; i < f->nb_playlists; i++) {
-        const RXPlaylist *p = f->playlists[i];
+        const CBPlaylist *p = f->playlists[i];
         printf("%*s%s (%d track%s)\n", depth * 2, "", p->name, p->nb, p->nb == 1 ? "" : "s");
     }
 }
 
 static int playlist_list(Cli *cli)
 {
-    RXLibrary *lib = &cli->app.lib;
+    CBLibrary *lib = &cli->app.lib;
     printf("Collection (%d track%s)\n", lib->nb_tracks, lib->nb_tracks == 1 ? "" : "s");
     if (lib->root_folder)
         print_folder(lib->root_folder, 0);
@@ -745,8 +745,8 @@ static int playlist_list(Cli *cli)
 
 static int playlist_create(Cli *cli, const char *name)
 {
-    RXLibrary *lib = &cli->app.lib;
-    char *copy = rx_strdup(name);
+    CBLibrary *lib = &cli->app.lib;
+    char *copy = cb_strdup(name);
     if (!copy)
         return fail("out of memory");
 
@@ -758,11 +758,11 @@ static int playlist_create(Cli *cli, const char *name)
         free(copy);
         return usage_error(cli, "%s: the playlist needs a name", name);
     }
-    RXPlaylistFolder *in = lib->root_folder;
+    CBPlaylistFolder *in = lib->root_folder;
     for (const char *c = name; in && c < want;) {
         const char *slash = strchr(c, '/');
         size_t n = (size_t)(slash - c);
-        RXPlaylistFolder *sub = NULL;
+        CBPlaylistFolder *sub = NULL;
         for (int i = 0; n && i < in->nb_folders; i++) {
             if (strlen(in->folders[i]->name) == n && !strncmp(in->folders[i]->name, c, n))
                 sub = in->folders[i];
@@ -778,19 +778,19 @@ static int playlist_create(Cli *cli, const char *name)
     }
 
     /* Every component but the last is a folder, created when missing. */
-    RXPlaylistFolder *folder = lib->root_folder;
+    CBPlaylistFolder *folder = lib->root_folder;
     char *leaf = copy;
     for (char *slash; (slash = strchr(leaf, '/')); leaf = slash + 1) {
         *slash = '\0';
         if (!*leaf)
             continue;
-        RXPlaylistFolder *next = NULL;
+        CBPlaylistFolder *next = NULL;
         for (int i = 0; folder && i < folder->nb_folders; i++) {
             if (!strcmp(folder->folders[i]->name, leaf))
                 next = folder->folders[i];
         }
         if (!next)
-            next = rx_library_folder_create(lib, folder, leaf);
+            next = cb_library_folder_create(lib, folder, leaf);
         if (!next) {
             int ret = fail("cannot create the playlist folder %s", leaf);
             free(copy);
@@ -810,7 +810,7 @@ static int playlist_create(Cli *cli, const char *name)
             goto end;
         }
     }
-    RXPlaylist *p = rx_library_playlist_create(lib, folder, leaf);
+    CBPlaylist *p = cb_library_playlist_create(lib, folder, leaf);
     if (!p) {
         ret = fail("cannot create the playlist %s", name);
         goto end;
@@ -824,13 +824,13 @@ end:
 
 static int playlist_add(Cli *cli, const char *name, char **args, int nb_args)
 {
-    RXLibrary *lib = &cli->app.lib;
-    RXPlaylist *p = find_playlist(lib, name);
+    CBLibrary *lib = &cli->app.lib;
+    CBPlaylist *p = find_playlist(lib, name);
     if (!p)
         return EXIT_FAIL;
 
-    RXArray tracks;
-    rx_array_init(&tracks, sizeof(RXTrack *));
+    CBArray tracks;
+    cb_array_init(&tracks, sizeof(CBTrack *));
     int ret = EXIT_OK;
     for (int i = 0; i < nb_args; i++) {
         if (resolve_tracks(lib, args[i], &tracks) < 0)
@@ -839,7 +839,7 @@ static int playlist_add(Cli *cli, const char *name, char **args, int nb_args)
 
     int added = 0, present = 0;
     for (size_t i = 0; i < tracks.nb; i++) {
-        RXTrack *t = *(RXTrack **)rx_array_at(&tracks, i);
+        CBTrack *t = *(CBTrack **)cb_array_at(&tracks, i);
         bool in = false;
         for (int k = 0; k < p->nb && !in; k++)
             in = p->track_ids[k] == t->id;
@@ -847,7 +847,7 @@ static int playlist_add(Cli *cli, const char *name, char **args, int nb_args)
             present++;
             continue;
         }
-        int err = rx_library_playlist_add(lib, p, t, -1);
+        int err = cb_library_playlist_add(lib, p, t, -1);
         if (err < 0) {
             ret = fail("cannot add %s to %s: %s", t->path, name, strerror(-err));
             continue;
@@ -859,19 +859,19 @@ static int playlist_add(Cli *cli, const char *name, char **args, int nb_args)
         printf(" (%d already in it)", present);
     printf("; %d in total\n", p->nb);
 
-    rx_array_free(&tracks);
+    cb_array_free(&tracks);
     return ret;
 }
 
 static int playlist_remove(Cli *cli, const char *name, char **args, int nb_args)
 {
-    RXLibrary *lib = &cli->app.lib;
-    RXPlaylist *p = find_playlist(lib, name);
+    CBLibrary *lib = &cli->app.lib;
+    CBPlaylist *p = find_playlist(lib, name);
     if (!p)
         return EXIT_FAIL;
 
-    RXArray tracks;
-    rx_array_init(&tracks, sizeof(RXTrack *));
+    CBArray tracks;
+    cb_array_init(&tracks, sizeof(CBTrack *));
     int ret = EXIT_OK;
     for (int i = 0; i < nb_args; i++) {
         if (resolve_tracks(lib, args[i], &tracks) < 0)
@@ -880,7 +880,7 @@ static int playlist_remove(Cli *cli, const char *name, char **args, int nb_args)
 
     int removed = 0, absent = 0;
     for (size_t i = 0; i < tracks.nb; i++) {
-        RXTrack *t = *(RXTrack **)rx_array_at(&tracks, i);
+        CBTrack *t = *(CBTrack **)cb_array_at(&tracks, i);
         int at = -1;
         for (int k = p->nb - 1; k >= 0 && at < 0; k--) {
             if (p->track_ids[k] == t->id)
@@ -890,7 +890,7 @@ static int playlist_remove(Cli *cli, const char *name, char **args, int nb_args)
             absent++;
             continue;
         }
-        int err = rx_library_playlist_remove_at(lib, p, at);
+        int err = cb_library_playlist_remove_at(lib, p, at);
         if (err < 0) {
             ret = fail("cannot remove %s from %s: %s", t->path, name, strerror(-err));
             continue;
@@ -902,18 +902,18 @@ static int playlist_remove(Cli *cli, const char *name, char **args, int nb_args)
         printf(" (%d not in it)", absent);
     printf("; %d left\n", p->nb);
 
-    rx_array_free(&tracks);
+    cb_array_free(&tracks);
     return ret;
 }
 
 static int playlist_delete(Cli *cli, const char *name)
 {
-    RXLibrary *lib = &cli->app.lib;
-    RXPlaylist *p = find_playlist(lib, name);
+    CBLibrary *lib = &cli->app.lib;
+    CBPlaylist *p = find_playlist(lib, name);
     if (!p)
         return EXIT_FAIL;
     int nb = p->nb;
-    int err = rx_library_playlist_delete(lib, p);
+    int err = cb_library_playlist_delete(lib, p);
     if (err < 0)
         return fail("cannot delete the playlist %s: %s", name, strerror(-err));
     printf("deleted playlist %s (its %d track%s stay in the library)\n", name, nb,
@@ -923,12 +923,12 @@ static int playlist_delete(Cli *cli, const char *name)
 
 static int playlist_import(Cli *cli, const char *file)
 {
-    RXLibrary *lib = &cli->app.lib;
-    char *abs = rx_path_abs(file);
+    CBLibrary *lib = &cli->app.lib;
+    char *abs = cb_path_abs(file);
     if (!abs)
         return fail("%s: no such file", file);
-    RXPlaylist *p = NULL;
-    int ret = rx_library_playlist_import_m3u(lib, lib->root_folder, abs, &p);
+    CBPlaylist *p = NULL;
+    int ret = cb_library_playlist_import_m3u(lib, lib->root_folder, abs, &p);
     free(abs);
     if (ret < 0)
         return fail("cannot import %s: %s", file, strerror(-ret));
@@ -941,14 +941,14 @@ static int playlist_import(Cli *cli, const char *file)
 
 static int playlist_export(Cli *cli, const char *name, const char *file)
 {
-    RXLibrary *lib = &cli->app.lib;
-    RXPlaylist *p = find_playlist(lib, name);
+    CBLibrary *lib = &cli->app.lib;
+    CBPlaylist *p = find_playlist(lib, name);
     if (!p)
         return EXIT_FAIL;
     char *abs = abs_path(file);
     if (!abs)
         return fail("out of memory");
-    int ret = rx_library_playlist_export_m3u(lib, p, abs);
+    int ret = cb_library_playlist_export_m3u(lib, p, abs);
     if (ret < 0) {
         int code = fail("cannot write %s: %s", abs, strerror(-ret));
         free(abs);
@@ -978,34 +978,34 @@ static int cmd_init(Cli *cli, int argc, char **argv)
     }
 
     char *root = dir ? abs_path(dir) : library_root(cli);
-    char *db = root ? rx_path_join(root, "library.db") : NULL;
+    char *db = root ? cb_path_join(root, "library.db") : NULL;
     int code = EXIT_OK;
     if (!db) {
         code = fail("out of memory");
         goto end;
     }
 
-    int ret = rx_mkdir_p(root);
+    int ret = cb_mkdir_p(root);
     if (ret < 0) {
         code = fail("cannot create %s: %s", root, strerror(-ret));
         goto end;
     }
-    bool existed = rx_file_exists(db);
+    bool existed = cb_file_exists(db);
 
     /* Opening creates the database. */
-    RXLibrary lib = { 0 };
-    ret = rx_library_open(&lib, root);
+    CBLibrary lib = { 0 };
+    ret = cb_library_open(&lib, root);
     if (ret < 0) {
         code = fail("cannot create the library in %s: %s", root, strerror(-ret));
         goto end;
     }
     int nb = lib.nb_tracks;
-    rx_library_close(&lib);
+    cb_library_close(&lib);
 
     if (existed)
         printf("%s already holds a library (%d track%s)\n", root, nb, nb == 1 ? "" : "s");
     else
-        printf("created the library in %s\nadd music with `rxbox%s%s add <folder>`\n", root,
+        printf("created the library in %s\nadd music with `cyanbox%s%s add <folder>`\n", root,
                dir || cli->library ? " -c " : "", dir ? dir : cli->library ? cli->library : "");
 
 end:
@@ -1015,18 +1015,18 @@ end:
 }
 
 typedef struct AddCtx {
-    RXArray  ids;
+    CBArray  ids;
     int      failed;
     int      added;
     uint64_t first_new_id;
     bool     verbose;
 } AddCtx;
 
-static void add_cb(void *opaque, const char *path, RXTrack *t, int err)
+static void add_cb(void *opaque, const char *path, CBTrack *t, int err)
 {
     AddCtx *ctx = opaque;
     if (err < 0) {
-        fprintf(stderr, "rxbox: cannot add %s: %s\n", path, strerror(-err));
+        fprintf(stderr, "cyanbox: cannot add %s: %s\n", path, strerror(-err));
         ctx->failed++;
         return;
     }
@@ -1037,50 +1037,50 @@ static void add_cb(void *opaque, const char *path, RXTrack *t, int err)
         if (ctx->verbose)
             printf("added %s (id %llu)\n", path, (unsigned long long)t->id);
     }
-    if (!rx_array_push(&ctx->ids, &t->id))
+    if (!cb_array_push(&ctx->ids, &t->id))
         ctx->failed++;
 }
 
 static int cmd_add(Cli *cli, int argc, char **argv)
 {
-    RXArray paths;
-    rx_array_init(&paths, sizeof(char *));
+    CBArray paths;
+    cb_array_init(&paths, sizeof(char *));
     for (int i = 1; i < argc; i++) {
         int r = common_option(cli, argc, argv, &i);
         if (r < 0) {
-            rx_array_free(&paths);
+            cb_array_free(&paths);
             return EXIT_USAGE;
         }
         if (r > 0)
             continue;
         if (is_option(cli, argv[i])) {
-            rx_array_free(&paths);
+            cb_array_free(&paths);
             return usage_error(cli, "add: unknown option %s", argv[i]);
         }
-        rx_array_push(&paths, &argv[i]);
+        cb_array_push(&paths, &argv[i]);
     }
     if (!paths.nb) {
-        rx_array_free(&paths);
+        cb_array_free(&paths);
         return usage_error(cli, "add: which files or folders?");
     }
 
     int code = open_library(cli, true);
     if (code) {
-        rx_array_free(&paths);
+        cb_array_free(&paths);
         return code;
     }
-    RXLibrary *lib = &cli->app.lib;
+    CBLibrary *lib = &cli->app.lib;
 
     /* Ids only grow: anything above the largest one now is new. */
     AddCtx ctx = {
         .first_new_id = lib->nb_tracks ? lib->tracks[lib->nb_tracks - 1]->id + 1 : 1,
         .verbose      = cli->verbose,
     };
-    rx_array_init(&ctx.ids, sizeof(uint64_t));
+    cb_array_init(&ctx.ids, sizeof(uint64_t));
     int before = lib->nb_tracks;
     for (size_t i = 0; i < paths.nb; i++) {
-        const char *arg = *(char **)rx_array_at(&paths, i);
-        char *abs = rx_path_abs(arg);
+        const char *arg = *(char **)cb_array_at(&paths, i);
+        char *abs = cb_path_abs(arg);
         if (!abs) {
             fail("%s: no such file or directory", arg);
             ctx.failed++;
@@ -1088,7 +1088,7 @@ static int cmd_add(Cli *cli, int argc, char **argv)
         }
         /* A failure the callback reported is said and counted once. */
         int failed = ctx.failed;
-        int ret = rx_library_add_path(lib, abs, add_cb, &ctx);
+        int ret = cb_library_add_path(lib, abs, add_cb, &ctx);
         if (ret < 0 && ctx.failed == failed) {
             fail("cannot add %s: %s", abs, strerror(-ret));
             ctx.failed++;
@@ -1100,18 +1100,18 @@ static int cmd_add(Cli *cli, int argc, char **argv)
            (int)ctx.ids.nb - ctx.added);
 
     /* Everything named is analysed as far as it lacks something. */
-    RXArray tracks;
-    rx_array_init(&tracks, sizeof(RXTrack *));
+    CBArray tracks;
+    cb_array_init(&tracks, sizeof(CBTrack *));
     for (size_t i = 0; i < ctx.ids.nb; i++) {
-        RXTrack *t = rx_library_find_id(lib, *(uint64_t *)rx_array_at(&ctx.ids, i));
+        CBTrack *t = cb_library_find_id(lib, *(uint64_t *)cb_array_at(&ctx.ids, i));
         if (t)
             push_unique(&tracks, t);
     }
-    int failed = analyse_tracks(cli, tracks.data, (int)tracks.nb, RX_ANALYSE_ALL, false, false);
+    int failed = analyse_tracks(cli, tracks.data, (int)tracks.nb, CB_ANALYSE_ALL, false, false);
 
-    rx_array_free(&tracks);
-    rx_array_free(&ctx.ids);
-    rx_array_free(&paths);
+    cb_array_free(&tracks);
+    cb_array_free(&ctx.ids);
+    cb_array_free(&paths);
     cli_close(cli);
     return ctx.failed || failed ? EXIT_FAIL : EXIT_OK;
 }
@@ -1124,25 +1124,25 @@ static int parse_what(const char *list, unsigned *what)
     char *save = NULL;
     for (char *w = strtok_r(buf, ", ", &save); w; w = strtok_r(NULL, ", ", &save)) {
         if (!strcmp(w, "beats") || !strcmp(w, "grid") || !strcmp(w, "bpm"))
-            *what |= RX_ANALYSE_BEATS;
+            *what |= CB_ANALYSE_BEATS;
         else if (!strcmp(w, "key"))
-            *what |= RX_ANALYSE_KEY;
+            *what |= CB_ANALYSE_KEY;
         else if (!strcmp(w, "waves") || !strcmp(w, "waveforms"))
-            *what |= RX_ANALYSE_WAVES;
+            *what |= CB_ANALYSE_WAVES;
         else if (!strcmp(w, "all"))
-            *what |= RX_ANALYSE_ALL;
+            *what |= CB_ANALYSE_ALL;
         else
-            return RX_ERROR(EINVAL);
+            return CB_ERROR(EINVAL);
     }
-    return *what ? 0 : RX_ERROR(EINVAL);
+    return *what ? 0 : CB_ERROR(EINVAL);
 }
 
 static int cmd_analyze(Cli *cli, int argc, char **argv)
 {
     bool force = false;
-    unsigned what = RX_ANALYSE_ALL;
-    RXArray args;
-    rx_array_init(&args, sizeof(char *));
+    unsigned what = CB_ANALYSE_ALL;
+    CBArray args;
+    cb_array_init(&args, sizeof(char *));
     int code = EXIT_OK;
 
     for (int i = 1; i < argc; i++) {
@@ -1166,25 +1166,25 @@ static int cmd_analyze(Cli *cli, int argc, char **argv)
             code = usage_error(cli, "%s: unknown option %s", cli->cmd, argv[i]);
             goto end;
         } else {
-            rx_array_push(&args, &argv[i]);
+            cb_array_push(&args, &argv[i]);
         }
     }
 
     code = open_library(cli, false);
     if (code)
         goto end;
-    RXLibrary *lib = &cli->app.lib;
+    CBLibrary *lib = &cli->app.lib;
 
-    RXArray tracks;
-    rx_array_init(&tracks, sizeof(RXTrack *));
+    CBArray tracks;
+    cb_array_init(&tracks, sizeof(CBTrack *));
     for (size_t i = 0; i < args.nb; i++) {
-        if (resolve_tracks(lib, *(char **)rx_array_at(&args, i), &tracks) < 0)
+        if (resolve_tracks(lib, *(char **)cb_array_at(&args, i), &tracks) < 0)
             code = EXIT_FAIL;
     }
     if (!args.nb) {
         for (int i = 0; i < lib->nb_tracks; i++) {
             if (!lib->tracks[i]->missing)
-                rx_array_push(&tracks, &lib->tracks[i]);
+                cb_array_push(&tracks, &lib->tracks[i]);
         }
     }
 
@@ -1194,10 +1194,10 @@ static int cmd_analyze(Cli *cli, int argc, char **argv)
     int failed = analyse_tracks(cli, tracks.data, (int)tracks.nb, what, force, args.nb > 0);
     if (failed)
         code = EXIT_FAIL;
-    rx_array_free(&tracks);
+    cb_array_free(&tracks);
 
 end:
-    rx_array_free(&args);
+    cb_array_free(&args);
     cli_close(cli);
     return code;
 }
@@ -1218,12 +1218,12 @@ static void print_version(const char *stage, int version, int current, bool stal
 
 /* "red (intense, peak time)" for one of the eight colours, in the legend's
  * words; "none" (the library keeps no other: src/core/clean.c). */
-static const char *fmt_colour(const RXConfig *cfg, double hue, char *buf, size_t size)
+static const char *fmt_colour(const CBConfig *cfg, double hue, char *buf, size_t size)
 {
-    int id = rx_track_color_of_hue(hue);
+    int id = cb_track_color_of_hue(hue);
     if (!id)
         return "none";
-    snprintf(buf, size, "%s (%s)", rx_track_color_name(id), rx_config_vibe(cfg, id));
+    snprintf(buf, size, "%s (%s)", cb_track_color_name(id), cb_config_vibe(cfg, id));
     return buf;
 }
 
@@ -1231,7 +1231,7 @@ static const char *fmt_colour(const RXConfig *cfg, double hue, char *buf, size_t
 static int runner_up(const float *p, int best)
 {
     int second = best == 1 ? 2 : 1;
-    for (int i = 1; i <= RX_TRACK_COLORS; i++) {
+    for (int i = 1; i <= CB_TRACK_COLORS; i++) {
         if (i != best && p[i - 1] > p[second - 1])
             second = i;
     }
@@ -1240,28 +1240,28 @@ static int runner_up(const float *p, int best)
 
 /* "red 0.62 (intense, peak time), then orange 0.21": the model's pick, in
  * the legend's words when it was asked with the legend there is now. */
-static const char *fmt_pick(const RXConfig *cfg, const float *p, uint32_t legend, char *buf,
+static const char *fmt_pick(const CBConfig *cfg, const float *p, uint32_t legend, char *buf,
                             size_t size)
 {
     int best = 1;
-    for (int i = 2; i <= RX_TRACK_COLORS; i++) {
+    for (int i = 2; i <= CB_TRACK_COLORS; i++) {
         if (p[i - 1] > p[best - 1])
             best = i;
     }
     int second = runner_up(p, best);
-    const char *now[RX_TRACK_COLORS];
-    rx_config_legend(cfg, now);
-    if (legend == rx_ml_legend_hash(now))
-        snprintf(buf, size, "%s %.2f (%s), then %s %.2f", rx_track_color_name(best), p[best - 1],
-                 now[best - 1], rx_track_color_name(second), p[second - 1]);
+    const char *now[CB_TRACK_COLORS];
+    cb_config_legend(cfg, now);
+    if (legend == cb_ml_legend_hash(now))
+        snprintf(buf, size, "%s %.2f (%s), then %s %.2f", cb_track_color_name(best), p[best - 1],
+                 now[best - 1], cb_track_color_name(second), p[second - 1]);
     else
         snprintf(buf, size, "%s %.2f, then %s %.2f (asked with other words)",
-                 rx_track_color_name(best), p[best - 1], rx_track_color_name(second),
+                 cb_track_color_name(best), p[best - 1], cb_track_color_name(second),
                  p[second - 1]);
     return buf;
 }
 
-static void show_track(const RXApp *app, const RXTrack *t)
+static void show_track(const CBApp *app, const CBTrack *t)
 {
     char a[32], b[32], bpm[32];
 
@@ -1277,7 +1277,7 @@ static void show_track(const RXApp *app, const RXTrack *t)
     printf("  %s - %s", t->meta.artist && t->meta.artist[0] ? t->meta.artist : "?", title_of(t));
     if (t->meta.album && t->meta.album[0])
         printf("  [%s]", t->meta.album);
-    printf("  %s\n", rx_fmt_time(t->duration, a, sizeof(a)));
+    printf("  %s\n", cb_fmt_time(t->duration, a, sizeof(a)));
     char colour[192];
     printf("  colour: %s\n", fmt_colour(&app->lib.cfg, t->meta.hue, colour, sizeof(colour)));
     printf("  %s, %d Hz, %d channel%s", t->codec[0] ? t->codec : "?", t->sample_rate,
@@ -1288,15 +1288,15 @@ static void show_track(const RXApp *app, const RXTrack *t)
         printf(", %d kbps", t->bit_rate / 1000);
     printf("\n");
 
-    const RXGrid *g = &t->grid;
-    if (rx_grid_valid(g)) {
+    const CBGrid *g = &t->grid;
+    if (cb_grid_valid(g)) {
         for (int i = 0; i < g->nb_sections; i++) {
-            const RXTempoSection *s = &g->sections[i];
+            const CBTempoSection *s = &g->sections[i];
             int bar = 0, beat = 0;
-            rx_grid_bar_of(g, s->start + 1e-6, &bar, &beat);
+            cb_grid_bar_of(g, s->start + 1e-6, &bar, &beat);
             if (!s->measured) {
                 printf("  grid: %s BPM from %s (bar %d.%d)\n", fmt_bpm(s->bpm, bpm, sizeof(bpm)),
-                       rx_fmt_time(s->start, a, sizeof(a)), bar, beat);
+                       cb_fmt_time(s->start, a, sizeof(a)), bar, beat);
                 continue;
             }
             /* A dynamic passage: its beats, where they run, their tempos. */
@@ -1308,8 +1308,8 @@ static void show_track(const RXApp *app, const RXTrack *t)
                 hi = fmax(hi, g->sections[j].bpm);
             }
             printf("  grid: dynamic, %d beats from %s (bar %d.%d) to %s, %s", j - i + 1,
-                   rx_fmt_time(s->start, a, sizeof(a)), bar, beat,
-                   rx_fmt_time(g->sections[j].start, b, sizeof(b)), fmt_bpm(lo, bpm, sizeof(bpm)));
+                   cb_fmt_time(s->start, a, sizeof(a)), bar, beat,
+                   cb_fmt_time(g->sections[j].start, b, sizeof(b)), fmt_bpm(lo, bpm, sizeof(bpm)));
             printf("-%s BPM\n", fmt_bpm(hi, bpm, sizeof(bpm)));
             i = j;
         }
@@ -1324,16 +1324,16 @@ static void show_track(const RXApp *app, const RXTrack *t)
 
     if (t->key[0])
         printf("  key: %s (Camelot %s, Open Key %s), confidence %.2f\n", t->key,
-               rx_key_to_camelot(t->key, a, sizeof(a)), rx_key_to_open(t->key, b, sizeof(b)),
+               cb_key_to_camelot(t->key, a, sizeof(a)), cb_key_to_open(t->key, b, sizeof(b)),
                t->key_confidence);
     else
         printf("  key: unknown\n");
 
-    unsigned stale = rx_app_analysis_stale(app, t);
+    unsigned stale = cb_app_analysis_stale(app, t);
     printf("  analyser versions:");
-    print_version("beats", t->beats_version, RX_BEATS_VERSION, stale & RX_ANALYSE_BEATS, ",");
-    print_version("key", t->key_version, RX_KEY_VERSION, stale & RX_ANALYSE_KEY, ",");
-    print_version("waves", t->waves_version, RX_WAVES_VERSION, stale & RX_ANALYSE_WAVES, "\n");
+    print_version("beats", t->beats_version, CB_BEATS_VERSION, stale & CB_ANALYSE_BEATS, ",");
+    print_version("key", t->key_version, CB_KEY_VERSION, stale & CB_ANALYSE_KEY, ",");
+    print_version("waves", t->waves_version, CB_WAVES_VERSION, stale & CB_ANALYSE_WAVES, "\n");
 
     /* The model's words go where the user edits them; its measures are
      * its own. */
@@ -1343,8 +1343,8 @@ static void show_track(const RXApp *app, const RXTrack *t)
         printf("  comment: %s\n", t->meta.comment);
     if (t->tags_version > 0) {
         printf("  tags:");
-        print_version("version", t->tags_version, RX_ML_TAGS_VERSION,
-                      t->tags_version < RX_ML_TAGS_VERSION, ":");
+        print_version("version", t->tags_version, CB_ML_TAGS_VERSION,
+                      t->tags_version < CB_ML_TAGS_VERSION, ":");
         if (!isnan(t->ml_colors[0])) {
             char pick[320];
             printf(" %s;", fmt_pick(&app->lib.cfg, t->ml_colors, t->ml_legend, pick,
@@ -1354,45 +1354,45 @@ static void show_track(const RXApp *app, const RXTrack *t)
                t->ml_valence, t->ml_vocals >= 0.5f ? "vocals" : "instrumental");
         if (!isnan(t->ml_colors[0])) {
             printf("  colours:");
-            for (int i = 0; i < RX_TRACK_COLORS; i++)
-                printf("%s %s %.2f", i ? "," : "", rx_track_color_names[i], t->ml_colors[i]);
+            for (int i = 0; i < CB_TRACK_COLORS; i++)
+                printf("%s %s %.2f", i ? "," : "", cb_track_color_names[i], t->ml_colors[i]);
             printf("\n");
         }
     } else {
-        printf("  tags: none (rxbox tag)\n");
+        printf("  tags: none (cyanbox tag)\n");
     }
 
     if (!t->nb_cues)
         printf("  cues: none\n");
     for (int i = 0; i < t->nb_cues; i++) {
-        const RXCue *c = &t->cues[i];
+        const CBCue *c = &t->cues[i];
         char kind[16], pos[48] = "", loop[64] = "";
-        if (rx_cue_is_hot(c))
-            snprintf(kind, sizeof(kind), "hot %c", rx_cue_letter(c));
+        if (cb_cue_is_hot(c))
+            snprintf(kind, sizeof(kind), "hot %c", cb_cue_letter(c));
         else
             snprintf(kind, sizeof(kind), "memory");
 
-        if (rx_grid_valid(g)) {
-            if (rx_cue_is_musical(c)) {
+        if (cb_grid_valid(g)) {
+            if (cb_cue_is_musical(c)) {
                 char p[48];
                 snprintf(pos, sizeof(pos), "%s",
-                         rx_format_grid_position(g, c->grid_beat, p, sizeof(p)));
+                         cb_format_grid_position(g, c->grid_beat, p, sizeof(p)));
             } else {
                 int bar = 0, beat = 0;
-                rx_grid_bar_of(g, c->time + 1e-6, &bar, &beat);
+                cb_grid_bar_of(g, c->time + 1e-6, &bar, &beat);
                 snprintf(pos, sizeof(pos), "in bar %d.%d", bar, beat);
             }
         }
-        if (rx_cue_is_loop(c)) {
+        if (cb_cue_is_loop(c)) {
             if (!isnan(c->loop_beats))
                 snprintf(loop, sizeof(loop), "  loop %s beats to %s",
                          fmt_bpm(c->loop_beats, bpm, sizeof(bpm)),
-                         rx_fmt_time(c->loop_end, b, sizeof(b)));
+                         cb_fmt_time(c->loop_end, b, sizeof(b)));
             else
                 snprintf(loop, sizeof(loop), "  loop to %s",
-                         rx_fmt_time(c->loop_end, b, sizeof(b)));
+                         cb_fmt_time(c->loop_end, b, sizeof(b)));
         }
-        printf("  cue %-8s %s", kind, rx_fmt_time(c->time, a, sizeof(a)));
+        printf("  cue %-8s %s", kind, cb_fmt_time(c->time, a, sizeof(a)));
         if (pos[0])
             printf("  %s", pos);
         printf("%s%s", loop, c->active ? "  active" : "");
@@ -1406,8 +1406,8 @@ static void show_track(const RXApp *app, const RXTrack *t)
 
 static int cmd_show(Cli *cli, int argc, char **argv)
 {
-    RXArray args;
-    rx_array_init(&args, sizeof(char *));
+    CBArray args;
+    cb_array_init(&args, sizeof(char *));
     int code = EXIT_OK;
     for (int i = 1; i < argc; i++) {
         int r = common_option(cli, argc, argv, &i);
@@ -1421,7 +1421,7 @@ static int cmd_show(Cli *cli, int argc, char **argv)
             code = usage_error(cli, "show: unknown option %s", argv[i]);
             goto end;
         }
-        rx_array_push(&args, &argv[i]);
+        cb_array_push(&args, &argv[i]);
     }
     if (!args.nb) {
         code = usage_error(cli, "show: which tracks?");
@@ -1432,29 +1432,29 @@ static int cmd_show(Cli *cli, int argc, char **argv)
     if (code)
         goto end;
 
-    RXArray tracks;
-    rx_array_init(&tracks, sizeof(RXTrack *));
+    CBArray tracks;
+    cb_array_init(&tracks, sizeof(CBTrack *));
     for (size_t i = 0; i < args.nb; i++) {
-        if (resolve_tracks(&cli->app.lib, *(char **)rx_array_at(&args, i), &tracks) < 0)
+        if (resolve_tracks(&cli->app.lib, *(char **)cb_array_at(&args, i), &tracks) < 0)
             code = EXIT_FAIL;
     }
     for (size_t i = 0; i < tracks.nb; i++)
-        show_track(&cli->app, *(RXTrack **)rx_array_at(&tracks, i));
-    rx_array_free(&tracks);
+        show_track(&cli->app, *(CBTrack **)cb_array_at(&tracks, i));
+    cb_array_free(&tracks);
 
 end:
-    rx_array_free(&args);
+    cb_array_free(&args);
     cli_close(cli);
     return code;
 }
 
-/* A track's colour is a hue (rxbox/model.h); each of the eight names stands
- * for its colour's hue, so `rxbox color aqua` puts aqua on the stick, as
+/* A track's colour is a hue (cyanbox/model.h); each of the eight names stands
+ * for its colour's hue, so `cyanbox color aqua` puts aqua on the stick, as
  * the model's pick and the interface's swatches do. */
 static int cmd_color(Cli *cli, int argc, char **argv)
 {
-    RXArray args;
-    rx_array_init(&args, sizeof(char *));
+    CBArray args;
+    cb_array_init(&args, sizeof(char *));
     int code = EXIT_OK;
     for (int i = 1; i < argc; i++) {
         int r = common_option(cli, argc, argv, &i);
@@ -1468,15 +1468,15 @@ static int cmd_color(Cli *cli, int argc, char **argv)
             code = usage_error(cli, "color: unknown option %s", argv[i]);
             goto end;
         }
-        rx_array_push(&args, &argv[i]);
+        cb_array_push(&args, &argv[i]);
     }
     if (args.nb < 2) {
         code = usage_error(cli, "color: a hue and the tracks");
         goto end;
     }
-    const char *arg = *(char **)rx_array_at(&args, 0);
+    const char *arg = *(char **)cb_array_at(&args, 0);
     double hue;
-    if (rx_parse_hue(arg, &hue) < 0) {
+    if (cb_parse_hue(arg, &hue) < 0) {
         code = usage_error(cli, "color: %s is none of the eight colours (pink red orange yellow "
                            "green aqua blue purple, or their hues in degrees) nor none", arg);
         goto end;
@@ -1485,20 +1485,20 @@ static int cmd_color(Cli *cli, int argc, char **argv)
     code = open_library(cli, false);
     if (code)
         goto end;
-    RXLibrary *lib = &cli->app.lib;
+    CBLibrary *lib = &cli->app.lib;
 
-    RXArray tracks;
-    rx_array_init(&tracks, sizeof(RXTrack *));
+    CBArray tracks;
+    cb_array_init(&tracks, sizeof(CBTrack *));
     for (size_t i = 1; i < args.nb; i++) {
-        if (resolve_tracks(lib, *(char **)rx_array_at(&args, i), &tracks) < 0)
+        if (resolve_tracks(lib, *(char **)cb_array_at(&args, i), &tracks) < 0)
             code = EXIT_FAIL;
     }
     char buf[192];
     for (size_t i = 0; i < tracks.nb; i++) {
-        RXTrack *t = *(RXTrack **)rx_array_at(&tracks, i);
+        CBTrack *t = *(CBTrack **)cb_array_at(&tracks, i);
         double old = t->meta.hue;
         t->meta.hue = hue;
-        int ret = rx_library_save_track(lib, t);
+        int ret = cb_library_save_track(lib, t);
         if (ret < 0) {
             t->meta.hue = old;
             code = fail("cannot set the colour of %s: %s", t->path, strerror(-ret));
@@ -1506,27 +1506,27 @@ static int cmd_color(Cli *cli, int argc, char **argv)
         }
         printf("%s: %s\n", t->path, fmt_colour(&lib->cfg, t->meta.hue, buf, sizeof(buf)));
     }
-    rx_array_free(&tracks);
+    cb_array_free(&tracks);
 
 end:
-    rx_array_free(&args);
+    cb_array_free(&args);
     cli_close(cli);
     return code;
 }
 
-/* rxbox-ml -t's line, after analyze's count: the colour the model picked
+/* cyanbox-ml -t's line, after analyze's count: the colour the model picked
  * and its runner-up, the measures, the genre the model hears (and the
  * user's, when that stays) and the comment. */
-static void print_tagged(const RXConfig *cfg, int n, int total, const RXTrack *t,
-                         const RXJobResult *r, int err)
+static void print_tagged(const CBConfig *cfg, int n, int total, const CBTrack *t,
+                         const CBJobResult *r, int err)
 {
     if (err < 0) {
         printf("[%d/%d] FAILED %s: %s\n", n, total, t->path, strerror(-err));
         return;
     }
-    const RXMLTags *g = r->tags;
+    const CBMLTags *g = r->tags;
     char name[256];
-    rx_track_display(t, name, sizeof(name));
+    cb_track_display(t, name, sizeof(name));
     char pick[320];
     printf("[%d/%d] %s: %s | intensity %.2f club %.2f mood %.2f | %s", n, total, name,
            fmt_pick(cfg, g->colors, g->legend, pick, sizeof(pick)), g->intensity, g->club,
@@ -1540,8 +1540,8 @@ static void print_tagged(const RXConfig *cfg, int n, int total, const RXTrack *t
  * model once and unloads it after the last. */
 static int cmd_tag(Cli *cli, int argc, char **argv)
 {
-    RXArray args;
-    rx_array_init(&args, sizeof(char *));
+    CBArray args;
+    cb_array_init(&args, sizeof(char *));
     int code = EXIT_OK;
     for (int i = 1; i < argc; i++) {
         int r = common_option(cli, argc, argv, &i);
@@ -1555,7 +1555,7 @@ static int cmd_tag(Cli *cli, int argc, char **argv)
             code = usage_error(cli, "tag: unknown option %s", argv[i]);
             goto end;
         }
-        rx_array_push(&args, &argv[i]);
+        cb_array_push(&args, &argv[i]);
     }
     if (!args.nb) {
         code = usage_error(cli, "tag: which tracks?");
@@ -1565,37 +1565,37 @@ static int cmd_tag(Cli *cli, int argc, char **argv)
     code = open_library(cli, false);
     if (code)
         goto end;
-    RXApp *app = &cli->app;
+    CBApp *app = &cli->app;
 
-    RXArray ids;
-    rx_array_init(&ids, sizeof(uint64_t));
-    RXArray tracks;
-    rx_array_init(&tracks, sizeof(RXTrack *));
+    CBArray ids;
+    cb_array_init(&ids, sizeof(uint64_t));
+    CBArray tracks;
+    cb_array_init(&tracks, sizeof(CBTrack *));
     for (size_t i = 0; i < args.nb; i++) {
-        if (resolve_tracks(&app->lib, *(char **)rx_array_at(&args, i), &tracks) < 0)
+        if (resolve_tracks(&app->lib, *(char **)cb_array_at(&args, i), &tracks) < 0)
             code = EXIT_FAIL;
     }
     for (size_t i = 0; i < tracks.nb; i++) {
-        RXTrack *t = *(RXTrack **)rx_array_at(&tracks, i);
+        CBTrack *t = *(CBTrack **)cb_array_at(&tracks, i);
         if (t->missing) {
             fail("%s: the file is missing", t->path);
             code = EXIT_FAIL;
-        } else if (!rx_array_push(&ids, &t->id)) {
+        } else if (!cb_array_push(&ids, &t->id)) {
             code = fail("out of memory");
         }
     }
-    rx_array_free(&tracks);
+    cb_array_free(&tracks);
     if (!ids.nb)
         goto out;
 
     /* One worker is all the batch takes. */
-    int ret = rx_jobs_create(&app->jobs, 1);
+    int ret = cb_jobs_create(&app->jobs, 1);
     if (ret < 0) {
         code = fail("cannot start the tagging thread: %s", strerror(-ret));
         goto out;
     }
-    rx_jobs_set_gpu(app->jobs, true, cli->device);
-    int queued = rx_app_tag_tracks(app, ids.data, (int)ids.nb);
+    cb_jobs_set_gpu(app->jobs, true, cli->device);
+    int queued = cb_app_tag_tracks(app, ids.data, (int)ids.nb);
     if (queued < 0) {
         /* The status bar's message, in the CLI's lower case. */
         code = fail("%c%s", tolower((unsigned char)app->status[0]), app->status + 1);
@@ -1606,39 +1606,39 @@ static int cmd_tag(Cli *cli, int argc, char **argv)
 
     int done = 0, failed = 0;
     while (done < queued) {
-        RXJobResult *r = rx_jobs_wait(app->jobs, 1000);
+        CBJobResult *r = cb_jobs_wait(app->jobs, 1000);
         if (!r) {
             /* The batch posts every result before it ends. */
-            if (!rx_jobs_tag_progress(app->jobs, NULL, NULL, NULL) &&
-                !(r = rx_jobs_poll(app->jobs)))
+            if (!cb_jobs_tag_progress(app->jobs, NULL, NULL, NULL) &&
+                !(r = cb_jobs_poll(app->jobs)))
                 break;
             if (!r)
                 continue;
         }
-        if (r->kind == RX_JOB_TAG && !r->track_id) {
+        if (r->kind == CB_JOB_TAG && !r->track_id) {
             fail("cannot load the model: %s", strerror(-r->err));
-            rx_job_result_free(r);
+            cb_job_result_free(r);
             break;
         }
-        RXTrack *t = r->kind == RX_JOB_TAG ? rx_library_find_id(&app->lib, r->track_id) : NULL;
+        CBTrack *t = r->kind == CB_JOB_TAG ? cb_library_find_id(&app->lib, r->track_id) : NULL;
         if (t) {
-            int err = r->err < 0 ? r->err : r->tags ? 0 : RX_ERROR(EINVAL);
+            int err = r->err < 0 ? r->err : r->tags ? 0 : CB_ERROR(EINVAL);
             if (!err)
-                err = rx_app_apply_tags(app, t, r->tags);
+                err = cb_app_apply_tags(app, t, r->tags);
             print_tagged(&app->lib.cfg, ++done, queued, t, r, err);
             fflush(stdout);
             failed += err < 0;
         }
-        rx_job_result_free(r);
+        cb_job_result_free(r);
     }
     failed += queued - done;
     if (failed)
         code = EXIT_FAIL;
 
 out:
-    rx_array_free(&ids);
+    cb_array_free(&ids);
 end:
-    rx_array_free(&args);
+    cb_array_free(&args);
     cli_close(cli);
     return code;
 }
@@ -1653,15 +1653,15 @@ typedef struct ProgressCtx {
     bool line_open;
     int  prune;                 /* stick files beyond the export */
     int  unsynced;              /* "check" items about unsynced player changes */
-    RXExportStats stats;        /* the copy's rate, shown on the line */
+    CBExportStats stats;        /* the copy's rate, shown on the line */
 } ProgressCtx;
 
 /* The check that blocks an export over player changes not synced back
- * (rxbox/export.h) is recognised by its wording. */
+ * (cyanbox/export.h) is recognised by its wording. */
 static bool unsynced_check(const char *item)
 {
-    return rx_str_contains_fold(item, "unsynced") || rx_str_contains_fold(item, "not synced") ||
-           rx_str_contains_fold(item, "sync first");
+    return cb_str_contains_fold(item, "unsynced") || cb_str_contains_fold(item, "not synced") ||
+           cb_str_contains_fold(item, "sync first");
 }
 
 static void progress_end_line(ProgressCtx *ctx)
@@ -1719,7 +1719,7 @@ static bool progress_cb(void *opaque, const char *stage, int done, int total, co
      * left, the item (a tick without one redraws it with the new rate). */
     if (ctx->tty && !ctx->all_items && total > 0 && strcmp(stage, "check") && strcmp(stage, "prune")) {
         char rate[64];
-        rx_export_rate_text(!strcmp(stage, "copy") ? ctx->stats.rate : 0, ctx->stats.seconds_left, rate,
+        cb_export_rate_text(!strcmp(stage, "copy") ? ctx->stats.rate : 0, ctx->stats.seconds_left, rate,
                             sizeof(rate));
         printf("\r\033[K  [%d/%d]%s%s %.100s", done, total, rate[0] ? " " : "", rate, ctx->item);
         ctx->line_open = true;
@@ -1731,17 +1731,17 @@ static bool progress_cb(void *opaque, const char *stage, int done, int total, co
 static int cmd_export(Cli *cli, int argc, char **argv)
 {
     const char *stick = NULL;
-    RXExportOptions opt;
-    rx_export_options_default(&opt);
+    CBExportOptions opt;
+    cb_export_options_default(&opt);
     bool compat = false, no_compat = false;
     int format = -1;
-    RXArray names;
-    rx_array_init(&names, sizeof(char *));
-    RXArray playlists;
-    rx_array_init(&playlists, sizeof(RXPlaylist *));
-    RXArray tracks;
-    rx_array_init(&tracks, sizeof(RXTrack *));
-    RXPlaylist **all = NULL;
+    CBArray names;
+    cb_array_init(&names, sizeof(char *));
+    CBArray playlists;
+    cb_array_init(&playlists, sizeof(CBPlaylist *));
+    CBArray tracks;
+    cb_array_init(&tracks, sizeof(CBTrack *));
+    CBPlaylist **all = NULL;
     int code = EXIT_OK;
 
     for (int i = 1; i < argc; i++) {
@@ -1762,7 +1762,7 @@ static int cmd_export(Cli *cli, int argc, char **argv)
         } else if (opt_flag(cli, argv[i], NULL, "--no-compat")) {
             no_compat = true;
         } else if ((r = opt_value(cli, argc, argv, &i, NULL, "--format", &val))) {
-            if (r < 0 || (format = rx_stick_format_parse(val)) < 0) {
+            if (r < 0 || (format = cb_stick_format_parse(val)) < 0) {
                 code = usage_error(cli, "export: --format takes copy, flac, wav or aiff");
                 goto end;
             }
@@ -1775,7 +1775,7 @@ static int cmd_export(Cli *cli, int argc, char **argv)
                 code = usage_error(cli, "export: --playlist needs a name");
                 goto end;
             }
-            rx_array_push(&names, &val);
+            cb_array_push(&names, &val);
         } else if (is_option(cli, argv[i])) {
             code = usage_error(cli, "export: unknown option %s", argv[i]);
             goto end;
@@ -1794,7 +1794,7 @@ static int cmd_export(Cli *cli, int argc, char **argv)
         code = usage_error(cli, "export: --all or --playlist, not both");
         goto end;
     }
-    if (!rx_dir_exists(stick)) {
+    if (!cb_dir_exists(stick)) {
         code = fail("%s is not a directory (mount the stick first)", stick);
         goto end;
     }
@@ -1802,39 +1802,39 @@ static int cmd_export(Cli *cli, int argc, char **argv)
     code = open_library(cli, false);
     if (code)
         goto end;
-    RXLibrary *lib = &cli->app.lib;
+    CBLibrary *lib = &cli->app.lib;
 
     for (size_t i = 0; i < names.nb; i++) {
-        RXPlaylist *p = find_playlist(lib, *(char **)rx_array_at(&names, i));
+        CBPlaylist *p = find_playlist(lib, *(char **)cb_array_at(&names, i));
         if (!p) {
             code = EXIT_FAIL;
             goto end;
         }
-        rx_array_push(&playlists, &p);
+        cb_array_push(&playlists, &p);
     }
 
     /* What goes on the stick: every track, the chosen playlists' tracks,
      * or by default every playlist's. It is analysed first where it lacks
-     * anything; rx_export skips (and names) what still has no grid. */
+     * anything; cb_export skips (and names) what still has no grid. */
     int nb_pls = (int)playlists.nb;
-    RXPlaylist **pls = playlists.data;
+    CBPlaylist **pls = playlists.data;
     if (opt.whole_library) {
         for (int i = 0; i < lib->nb_tracks; i++)
-            rx_array_push(&tracks, &lib->tracks[i]);
+            cb_array_push(&tracks, &lib->tracks[i]);
     } else {
         if (!nb_pls) {
-            nb_pls = rx_library_playlists_flat(lib, NULL, 0);
-            all = calloc(RX_MAX(nb_pls, 1), sizeof(*all));
+            nb_pls = cb_library_playlists_flat(lib, NULL, 0);
+            all = calloc(CB_MAX(nb_pls, 1), sizeof(*all));
             if (!all) {
                 code = fail("out of memory");
                 goto end;
             }
-            nb_pls = rx_library_playlists_flat(lib, all, nb_pls);
+            nb_pls = cb_library_playlists_flat(lib, all, nb_pls);
             pls = all;
         }
         for (int i = 0; i < nb_pls; i++) {
             for (int k = 0; k < pls[i]->nb; k++) {
-                RXTrack *t = rx_library_find_id(lib, pls[i]->track_ids[k]);
+                CBTrack *t = cb_library_find_id(lib, pls[i]->track_ids[k]);
                 if (t)
                     push_unique(&tracks, t);
             }
@@ -1842,7 +1842,7 @@ static int cmd_export(Cli *cli, int argc, char **argv)
     }
     int missing = 0;
     for (size_t i = 0; i < tracks.nb; i++)
-        missing += (*(RXTrack **)rx_array_at(&tracks, i))->missing;
+        missing += (*(CBTrack **)cb_array_at(&tracks, i))->missing;
     printf("%d track%s", (int)tracks.nb, tracks.nb == 1 ? "" : "s");
     if (!opt.whole_library)
         printf(" in %d playlist%s", nb_pls, nb_pls == 1 ? "" : "s");
@@ -1854,12 +1854,12 @@ static int cmd_export(Cli *cli, int argc, char **argv)
          * it, and the dry run describes the tracks as they are. */
         int todo = 0, stale = 0;
         for (size_t i = 0; i < tracks.nb; i++) {
-            RXTrack *t = *(RXTrack **)rx_array_at(&tracks, i);
-            unsigned need = rx_app_analysis_needed(&cli->app, t, RX_ANALYSE_ALL, false);
+            CBTrack *t = *(CBTrack **)cb_array_at(&tracks, i);
+            unsigned need = cb_app_analysis_needed(&cli->app, t, CB_ANALYSE_ALL, false);
             if (t->grid_locked)
-                need &= ~RX_ANALYSE_BEATS;
+                need &= ~CB_ANALYSE_BEATS;
             todo += need != 0;
-            stale += (need & rx_app_analysis_stale(&cli->app, t)) != 0;
+            stale += (need & cb_app_analysis_stale(&cli->app, t)) != 0;
         }
         printf("\n");
         if (todo) {
@@ -1872,12 +1872,12 @@ static int cmd_export(Cli *cli, int argc, char **argv)
         }
     } else {
         printf("; analysing what is missing\n");
-        int failed = analyse_tracks(cli, tracks.data, (int)tracks.nb, RX_ANALYSE_ALL, false, false);
+        int failed = analyse_tracks(cli, tracks.data, (int)tracks.nb, CB_ANALYSE_ALL, false, false);
         if (failed)
             printf("%d track%s could not be analysed\n", failed, failed == 1 ? "" : "s");
     }
 
-    opt.playlists = playlists.nb ? (const RXPlaylist *const *)playlists.data : NULL;
+    opt.playlists = playlists.nb ? (const CBPlaylist *const *)playlists.data : NULL;
     opt.nb_playlists = (int)playlists.nb;
     opt.compat_transcode = (compat || lib->cfg.compat_transcode) && !no_compat;
     opt.format = format >= 0 ? format : lib->cfg.export_format;
@@ -1889,13 +1889,14 @@ static int cmd_export(Cli *cli, int argc, char **argv)
         .pruning   = opt.prune,
     };
     opt.stats = &ctx.stats;
-    int ret = rx_export(lib, stick, &opt, progress_cb, &ctx);
+    int ret = cb_export(lib, stick, &opt, progress_cb, &ctx);
     progress_end_line(&ctx);
     if (ret < 0) {
         code = fail("the export to %s failed: %s", stick, strerror(-ret));
         if (ctx.unsynced && !opt.ignore_unsynced)
-            fprintf(stderr, "the stick has changes a player made: `rxbox sync %s` shows them, "
-                    "`rxbox pull %s` takes them; --ignore-unsynced exports anyway\n", stick, stick);
+            fprintf(stderr, "the stick has changes a player made: `cyanbox sync %s` shows them, "
+                    "`cyanbox pull %s` takes them; --ignore-unsynced exports anyway\n",
+                    stick, stick);
         goto end;
     }
     /* A real run says so itself. */
@@ -1910,9 +1911,9 @@ static int cmd_export(Cli *cli, int argc, char **argv)
 
 end:
     free(all);
-    rx_array_free(&tracks);
-    rx_array_free(&playlists);
-    rx_array_free(&names);
+    cb_array_free(&tracks);
+    cb_array_free(&playlists);
+    cb_array_free(&names);
     cli_close(cli);
     return code;
 }
@@ -1935,7 +1936,7 @@ static int stick_arg(Cli *cli, int argc, char **argv, const char **stick)
     }
     if (!*stick)
         return usage_error(cli, "%s: where is the stick mounted?", cli->cmd);
-    if (!rx_dir_exists(*stick))
+    if (!cb_dir_exists(*stick))
         return fail("%s is not a directory (mount the stick first)", *stick);
     return EXIT_OK;
 }
@@ -1952,7 +1953,7 @@ static int cmd_inspect(Cli *cli, int argc, char **argv)
     if (code)
         return code;
 
-    int problems = rx_inspect(stick, print_line, NULL);
+    int problems = cb_inspect(stick, print_line, NULL);
     if (problems < 0)
         return fail("cannot inspect %s: %s", stick, strerror(-problems));
     if (problems) {
@@ -1977,9 +1978,9 @@ static int cmd_pull(Cli *cli, int argc, char **argv)
         .tty     = isatty(STDOUT_FILENO),
         .verbose = cli->verbose,
     };
-    int ret = rx_pull(&cli->app.lib, stick, progress_cb, &ctx);
+    int ret = cb_pull(&cli->app.lib, stick, progress_cb, &ctx);
     progress_end_line(&ctx);
-    if (ret == RX_ERROR(ENOENT)) {
+    if (ret == CB_ERROR(ENOENT)) {
         code = fail("%s holds no export.pdb, exportLibrary.db or My Settings: not a stick, or not "
                     "mounted there", stick);
     } else if (ret < 0) {
@@ -1992,44 +1993,44 @@ static int cmd_pull(Cli *cli, int argc, char **argv)
     return code;
 }
 
-static void print_sync_item(const RXLibrary *lib, const RXSyncItem *it)
+static void print_sync_item(const CBLibrary *lib, const CBSyncItem *it)
 {
     char name[256], a[32], b[32];
-    const RXTrack *t = it->track_id ? rx_library_find_id(lib, it->track_id) : NULL;
+    const CBTrack *t = it->track_id ? cb_library_find_id(lib, it->track_id) : NULL;
     if (t)
-        rx_track_display(t, name, sizeof(name));
+        cb_track_display(t, name, sizeof(name));
     else
         snprintf(name, sizeof(name), "track %llu", (unsigned long long)it->track_id);
 
-    const RXCue *c = &it->cue;
+    const CBCue *c = &it->cue;
     char loop[48] = "";
-    if (rx_cue_is_loop(c))
-        snprintf(loop, sizeof(loop), " loop to %s", rx_fmt_time(c->loop_end, b, sizeof(b)));
+    if (cb_cue_is_loop(c))
+        snprintf(loop, sizeof(loop), " loop to %s", cb_fmt_time(c->loop_end, b, sizeof(b)));
 
     switch (it->kind) {
-    case RX_SYNC_HOT_CUE_SET:
+    case CB_SYNC_HOT_CUE_SET:
         printf("hot cue %c set at %s%s%s%s: %s\n", 'A' + it->slot,
-               rx_fmt_time(c->time, a, sizeof(a)), loop, c->name[0] ? " " : "", c->name, name);
+               cb_fmt_time(c->time, a, sizeof(a)), loop, c->name[0] ? " " : "", c->name, name);
         break;
-    case RX_SYNC_HOT_CUE_CLEARED:
+    case CB_SYNC_HOT_CUE_CLEARED:
         printf("hot cue %c cleared (was at %s): %s\n", 'A' + it->slot,
-               rx_fmt_time(c->time, a, sizeof(a)), name);
+               cb_fmt_time(c->time, a, sizeof(a)), name);
         break;
-    case RX_SYNC_MEMORY_ADDED:
-        printf("memory %s added at %s%s: %s\n", rx_cue_is_loop(c) ? "loop" : "cue",
-               rx_fmt_time(c->time, a, sizeof(a)), loop, name);
+    case CB_SYNC_MEMORY_ADDED:
+        printf("memory %s added at %s%s: %s\n", cb_cue_is_loop(c) ? "loop" : "cue",
+               cb_fmt_time(c->time, a, sizeof(a)), loop, name);
         break;
-    case RX_SYNC_MEMORY_REMOVED:
-        printf("memory %s removed at %s: %s\n", rx_cue_is_loop(c) ? "loop" : "cue",
-               rx_fmt_time(c->time, a, sizeof(a)), name);
+    case CB_SYNC_MEMORY_REMOVED:
+        printf("memory %s removed at %s: %s\n", cb_cue_is_loop(c) ? "loop" : "cue",
+               cb_fmt_time(c->time, a, sizeof(a)), name);
         break;
-    case RX_SYNC_PLAY:
+    case CB_SYNC_PLAY:
         if (it->played_at)
             printf("played %s: %s\n", fmt_date(it->played_at, a, sizeof(a)), name);
         else
             printf("played (history entry %d): %s\n", it->play_index + 1, name);
         break;
-    case RX_SYNC_SETTING:
+    case CB_SYNC_SETTING:
         printf("setting %s: %s -> %s\n", it->setting_key,
                it->setting_old[0] ? it->setting_old : "(unset)", it->setting_value);
         break;
@@ -2057,19 +2058,19 @@ static int cmd_sync(Cli *cli, int argc, char **argv)
     }
     if (!stick)
         return usage_error(cli, "sync: where is the stick mounted?");
-    if (!rx_dir_exists(stick))
+    if (!cb_dir_exists(stick))
         return fail("%s is not a directory (mount the stick first)", stick);
 
     int code = open_library(cli, false);
     if (code)
         return code;
-    RXLibrary *lib = &cli->app.lib;
+    CBLibrary *lib = &cli->app.lib;
 
-    RXStickState state = { 0 };
-    RXSyncItem *items = NULL;
+    CBStickState state = { 0 };
+    CBSyncItem *items = NULL;
     int nb = 0;
-    int ret = rx_stick_read(lib, stick, &state);
-    if (ret == RX_ERROR(ENOENT)) {
+    int ret = cb_stick_read(lib, stick, &state);
+    if (ret == CB_ERROR(ENOENT)) {
         code = fail("%s holds no export.pdb, exportLibrary.db or My Settings: not a stick, or not "
                     "mounted there", stick);
         goto end;
@@ -2077,7 +2078,7 @@ static int cmd_sync(Cli *cli, int argc, char **argv)
         code = fail("cannot read %s: %s", stick, strerror(-ret));
         goto end;
     }
-    ret = rx_stick_diff(lib, &state, &items, &nb);
+    ret = cb_stick_diff(lib, &state, &items, &nb);
     if (ret < 0) {
         code = fail("cannot compare %s with the library: %s", stick, strerror(-ret));
         goto end;
@@ -2092,7 +2093,8 @@ static int cmd_sync(Cli *cli, int argc, char **argv)
     if (!nb) {
         printf("nothing to sync: the library has everything on %s\n", stick);
     } else if (!apply) {
-        printf("%d change%s; `rxbox sync --apply %s` takes them\n", nb, nb == 1 ? "" : "s", stick);
+        printf("%d change%s; `cyanbox sync --apply %s` takes them\n", nb, nb == 1 ? "" : "s",
+               stick);
     } else {
         for (int i = 0; i < nb; i++)
             items[i].accepted = true;
@@ -2100,7 +2102,7 @@ static int cmd_sync(Cli *cli, int argc, char **argv)
             .tty     = isatty(STDOUT_FILENO),
             .verbose = cli->verbose,
         };
-        ret = rx_stick_apply(lib, items, nb, progress_cb, &ctx);
+        ret = cb_stick_apply(lib, items, nb, progress_cb, &ctx);
         progress_end_line(&ctx);
         if (ret < 0)
             code = fail("cannot apply the changes: %s", strerror(-ret));
@@ -2110,7 +2112,7 @@ static int cmd_sync(Cli *cli, int argc, char **argv)
 
 end:
     free(items);
-    rx_stick_state_free(&state);
+    cb_stick_state_free(&state);
     cli_close(cli);
     return code;
 }
@@ -2127,9 +2129,9 @@ static int cmd_rescan(Cli *cli, int argc, char **argv)
     int code = open_library(cli, false);
     if (code)
         return code;
-    RXLibrary *lib = &cli->app.lib;
+    CBLibrary *lib = &cli->app.lib;
 
-    int ret = rx_library_rescan_missing(lib);
+    int ret = cb_library_rescan_missing(lib);
     if (ret < 0) {
         code = fail("cannot rescan: %s", strerror(-ret));
     } else {
@@ -2164,41 +2166,41 @@ static int cmd_check(Cli *cli, int argc, char **argv)
         return code;
 
     /* The problems themselves are logged by the check. */
-    const RXLibrary *lib = &cli->app.lib;
-    int ret = rx_library_check(lib);
+    const CBLibrary *lib = &cli->app.lib;
+    int ret = cb_library_check(lib);
     if (ret < 0)
         code = fail("the library database has problems: %s", strerror(-ret));
     else
         printf("OK: the library database is intact (%d track%s)\n", lib->nb_tracks,
                lib->nb_tracks == 1 ? "" : "s");
 
-    /* What `rxbox analyze` would analyse again because it is stale (an
+    /* What `cyanbox analyze` would analyse again because it is stale (an
      * older analyser, or an older waveform format, made it): locked grids
      * stay, so they are counted apart, and a missing file cannot be
      * analysed. */
     int stale = 0, locked = 0;
     for (int i = 0; i < lib->nb_tracks; i++) {
-        const RXTrack *t = lib->tracks[i];
-        unsigned s = t->missing ? 0 : rx_app_analysis_stale(&cli->app, t);
-        if (t->grid_locked && (s & RX_ANALYSE_BEATS)) {
+        const CBTrack *t = lib->tracks[i];
+        unsigned s = t->missing ? 0 : cb_app_analysis_stale(&cli->app, t);
+        if (t->grid_locked && (s & CB_ANALYSE_BEATS)) {
             locked++;
-            s &= ~RX_ANALYSE_BEATS;
+            s &= ~CB_ANALYSE_BEATS;
         }
         stale += s != 0;
     }
     if (stale)
-        printf("%d track%s results from an older analyser; `rxbox analyze` analyses %s "
+        printf("%d track%s results from an older analyser; `cyanbox analyze` analyses %s "
                "again\n", stale, stale == 1 ? " has" : "s have", stale == 1 ? "it" : "them");
     else
         printf("no track has results from an older analyser\n");
     if (locked)
-        printf("%d locked grid%s from an older analyser %s kept (`rxbox analyze --force TRACK` "
+        printf("%d locked grid%s from an older analyser %s kept (`cyanbox analyze --force TRACK` "
                "replaces one)\n", locked, locked == 1 ? "" : "s", locked == 1 ? "is" : "are");
     cli_close(cli);
     return code;
 }
 
-static void print_kv(const char *section, const RXKv *kv, int nb)
+static void print_kv(const char *section, const CBKv *kv, int nb)
 {
     for (int i = 0; i < nb; i++)
         printf("%s.%s = %s\n", section, kv[i].key, kv[i].value ? kv[i].value : "");
@@ -2206,7 +2208,7 @@ static void print_kv(const char *section, const RXKv *kv, int nb)
 
 static const char *settings_section(const char *file);
 
-/* A My Setting (player.NAME, mixer.NAME, device.NAME) as `rxbox settings`
+/* A My Setting (player.NAME, mixer.NAME, device.NAME) as `cyanbox settings`
  * lists it: the file it is in and its values, for the check and the
  * error. */
 typedef struct SettingFind {
@@ -2228,34 +2230,35 @@ static void find_setting(void *opaque, const char *file, const char *name,
                               !i ? "" : i + 1 < nb_values ? ", " : " or ", values[i]);
 }
 
-/* `rxbox config KEY VALUE` stores only what the key takes: a value the
+/* `cyanbox config KEY VALUE` stores only what the key takes: a value the
  * library would warn of at every command, or the export refuse, is a
- * usage error here. Keys under ui. that are none of RXConfig's are the
+ * usage error here. Keys under ui. that are none of CBConfig's are the
  * interface's own (its layout) and taken as they are. */
 static int check_setting(const Cli *cli, const char *key, const char *value)
 {
-    if (rx_str_starts(key, "player.") || rx_str_starts(key, "mixer.") || rx_str_starts(key, "device.")) {
+    if (cb_str_starts(key, "player.") || cb_str_starts(key, "mixer.") || cb_str_starts(key, "device.")) {
         SettingFind f = { .name = strchr(key, '.') + 1 };
         snprintf(f.section, sizeof(f.section), "%.*s", (int)(f.name - 1 - key), key);
-        rx_settings_list(find_setting, &f);
+        cb_settings_list(find_setting, &f);
         if (!f.file)
-            return usage_error(cli, "config: %s is no My Setting (`rxbox settings` lists them)", key);
-        if (!rx_settings_value(f.file, f.name, value))
+            return usage_error(cli, "config: %s is no My Setting (`cyanbox settings` lists them)", key);
+        if (!cb_settings_value(f.file, f.name, value))
             return usage_error(cli, "config: %s takes %s, not \"%s\"", key, f.values, value);
         return 0;
     }
-    RXConfig c;
-    rx_config_defaults(&c);
-    int ret = rx_config_set(&c, key, value);
-    rx_config_free(&c);
-    if (ret == RX_ERROR(E2BIG))
+    CBConfig c;
+    cb_config_defaults(&c);
+    int ret = cb_config_set(&c, key, value);
+    cb_config_free(&c);
+    if (ret == CB_ERROR(E2BIG))
         return usage_error(cli, "config: %s: a colour's description is at most %d bytes, what the "
-                           "tagger's question has room for", key, RX_CONFIG_VIBE_MAX);
-    if (ret == RX_ERROR(EINVAL))
-        return usage_error(cli, "config: %s takes %s, not \"%s\"", key, rx_config_takes(key), value);
-    if (ret == RX_ERROR(ENOENT) && !rx_str_starts(key, "ui."))
-        return usage_error(cli, "config: there is no setting %s (`rxbox config` lists them)", key);
-    if (ret == RX_ERROR(ENOMEM))
+                           "tagger's question has room for", key, CB_CONFIG_VIBE_MAX);
+    if (ret == CB_ERROR(EINVAL))
+        return usage_error(cli, "config: %s takes %s, not \"%s\"", key, cb_config_takes(key), value);
+    if (ret == CB_ERROR(ENOENT) && !cb_str_starts(key, "ui."))
+        return usage_error(cli, "config: there is no setting %s (`cyanbox config` lists them)",
+                           key);
+    if (ret == CB_ERROR(ENOMEM))
         return fail("out of memory");
     return 0;
 }
@@ -2285,16 +2288,16 @@ static int cmd_config(Cli *cli, int argc, char **argv)
     };
     /* color.<name>: one of the eight colours, its words in the legend. */
     int vibe = 0;
-    for (int id = 1; key && id <= RX_TRACK_COLORS && !vibe; id++)
-        vibe = !strcmp(key, rx_config_vibe_key(id)) ? id : 0;
+    for (int id = 1; key && id <= CB_TRACK_COLORS && !vibe; id++)
+        vibe = !strcmp(key, cb_config_vibe_key(id)) ? id : 0;
     if (key) {
         bool known = false;
-        for (size_t i = 0; i < RX_ARRAY_ELEMS(sections); i++)
-            known |= rx_str_starts(key, sections[i]);
+        for (size_t i = 0; i < CB_ARRAY_ELEMS(sections); i++)
+            known |= cb_str_starts(key, sections[i]);
         if (!known)
             return usage_error(cli, "config: keys start with analysis., import., export., player., "
                                "mixer., device., audio., ml., ui. or color.");
-        if (rx_str_starts(key, "color.") && !vibe)
+        if (cb_str_starts(key, "color.") && !vibe)
             return usage_error(cli, "config: the colours are color.pink, color.red, color.orange, "
                                "color.yellow, color.green, color.aqua, color.blue and "
                                "color.purple");
@@ -2307,25 +2310,25 @@ static int cmd_config(Cli *cli, int argc, char **argv)
     int code = open_library(cli, false);
     if (code)
         return code;
-    RXLibrary *lib = &cli->app.lib;
+    CBLibrary *lib = &cli->app.lib;
 
     if (key && value && vibe) {
         /* As the settings dialog keeps it: trimmed, and no row for the
          * default's own words or none. */
-        int ret = rx_config_set_vibe(&lib->cfg, vibe, value);
+        int ret = cb_config_set_vibe(&lib->cfg, vibe, value);
         if (ret >= 0)
-            ret = rx_library_setting_set(lib, key, lib->cfg.vibes[vibe - 1]);
+            ret = cb_library_setting_set(lib, key, lib->cfg.vibes[vibe - 1]);
         if (ret < 0)
             code = fail("cannot set %s: %s", key, strerror(-ret));
         else
-            printf("%s = %s%s\n", key, rx_config_vibe(&lib->cfg, vibe),
+            printf("%s = %s%s\n", key, cb_config_vibe(&lib->cfg, vibe),
                    lib->cfg.vibes[vibe - 1] ? "" : " (the default)");
     } else if (key && vibe) {
-        printf("%s = %s%s\n", key, rx_config_vibe(&lib->cfg, vibe),
+        printf("%s = %s%s\n", key, cb_config_vibe(&lib->cfg, vibe),
                lib->cfg.vibes[vibe - 1] ? "" : " (the default)");
     } else if (key && value) {
-        int ret = rx_library_setting_set(lib, key, *value ? value : NULL);
-        const char *deflt = rx_settings_get(NULL, key);
+        int ret = cb_library_setting_set(lib, key, *value ? value : NULL);
+        const char *deflt = cb_settings_get(NULL, key);
         if (ret < 0)
             code = fail("cannot set %s: %s", key, strerror(-ret));
         else if (*value)
@@ -2336,8 +2339,8 @@ static int cmd_config(Cli *cli, int argc, char **argv)
             printf("%s is not set (the default)\n", key);
     } else if (key) {
         char *v = NULL;
-        int ret = rx_library_setting_get(lib, key, &v);
-        if (ret == RX_ERROR(ENOENT))
+        int ret = cb_library_setting_get(lib, key, &v);
+        if (ret == CB_ERROR(ENOENT))
             printf("%s is not set\n", key);
         else if (ret < 0)
             code = fail("cannot read %s: %s", key, strerror(-ret));
@@ -2345,7 +2348,7 @@ static int cmd_config(Cli *cli, int argc, char **argv)
             printf("%s = %s\n", key, v ? v : "");
         free(v);
     } else {
-        const RXConfig *c = &lib->cfg;
+        const CBConfig *c = &lib->cfg;
         char bpm[32];
         printf("analysis.bpm_min = %s\n",
                c->bpm_min > 0 ? fmt_bpm(c->bpm_min, bpm, sizeof(bpm)) : "(auto)");
@@ -2358,12 +2361,12 @@ static int cmd_config(Cli *cli, int argc, char **argv)
             unsigned    bit;
             const char *name;
         } what_names[] = {
-            { RX_ANALYSE_BEATS, "beats" },
-            { RX_ANALYSE_KEY,   "key"   },
-            { RX_ANALYSE_WAVES, "waves" },
+            { CB_ANALYSE_BEATS, "beats" },
+            { CB_ANALYSE_KEY,   "key"   },
+            { CB_ANALYSE_WAVES, "waves" },
         };
         char what[32] = "";
-        for (size_t i = 0; i < RX_ARRAY_ELEMS(what_names); i++) {
+        for (size_t i = 0; i < CB_ARRAY_ELEMS(what_names); i++) {
             size_t len = strlen(what);
             if (c->analyse_what & what_names[i].bit)
                 snprintf(what + len, sizeof(what) - len, "%s%s", len ? "," : "", what_names[i].name);
@@ -2374,21 +2377,21 @@ static int cmd_config(Cli *cli, int argc, char **argv)
         printf("export.pdb = %s\n", c->export_pdb ? "true" : "false");
         printf("export.onelibrary = %s\n", c->export_onelibrary ? "true" : "false");
         printf("export.compat_transcode = %s\n", c->compat_transcode ? "true" : "false");
-        printf("export.format = %s\n", rx_stick_format_name(c->export_format));
+        printf("export.format = %s\n", cb_stick_format_name(c->export_format));
         printf("export.device_name = %s\n",
                c->device_name ? c->device_name : "(the stick's label)");
         printf("export.background_color = %s\n",
-               c->background_color ? rx_track_color_name(c->background_color) : "default");
+               c->background_color ? cb_track_color_name(c->background_color) : "default");
         printf("link.mp3 = %s\n", c->link_mp3 ? "true" : "false");
         print_kv("player", c->player, c->nb_player);
         print_kv("mixer", c->mixer, c->nb_mixer);
         print_kv("device", c->device, c->nb_device);
         printf("audio.sink = %s\n", c->audio_sink ? c->audio_sink : "(the default)");
-        printf("ml.model = %s\n", c->ml_model ? c->ml_model : "(models/" RX_APP_ML_MODEL ")");
+        printf("ml.model = %s\n", c->ml_model ? c->ml_model : "(models/" CB_APP_ML_MODEL ")");
         printf("ui.traffic_light = %s\n", c->traffic_light);
         printf("ui.detail_bars = %d\n", c->detail_bars);
-        for (int id = 1; id <= RX_TRACK_COLORS; id++)
-            printf("%s = %s\n", rx_config_vibe_key(id), rx_config_vibe(c, id));
+        for (int id = 1; id <= CB_TRACK_COLORS; id++)
+            printf("%s = %s\n", cb_config_vibe_key(id), cb_config_vibe(c, id));
     }
     cli_close(cli);
     return code;
@@ -2396,11 +2399,11 @@ static int cmd_config(Cli *cli, int argc, char **argv)
 
 static const char *settings_section(const char *file)
 {
-    if (!rx_strcasecmp(file, "MYSETTING.DAT") || !rx_strcasecmp(file, "MYSETTING2.DAT"))
+    if (!cb_strcasecmp(file, "MYSETTING.DAT") || !cb_strcasecmp(file, "MYSETTING2.DAT"))
         return "player";
-    if (!rx_strcasecmp(file, "DJMMYSETTING.DAT"))
+    if (!cb_strcasecmp(file, "DJMMYSETTING.DAT"))
         return "mixer";
-    if (!rx_strcasecmp(file, "DEVSETTING.DAT"))
+    if (!cb_strcasecmp(file, "DEVSETTING.DAT"))
         return "device";
     return file;
 }
@@ -2431,17 +2434,17 @@ static int cmd_settings(Cli *cli, int argc, char **argv)
         if (!r)
             return usage_error(cli, "settings: takes no arguments");
     }
-    printf("# set with `rxbox config player.NAME VALUE` (mixer., device. likewise);\n"
+    printf("# set with `cyanbox config player.NAME VALUE` (mixer., device. likewise);\n"
            "# players apply them when you LOAD My Settings\n");
     const char *section = NULL;
-    rx_settings_list(settings_cb, &section);
+    cb_settings_list(settings_cb, &section);
     return EXIT_OK;
 }
 
 static int cmd_playlist(Cli *cli, int argc, char **argv)
 {
-    RXArray args;
-    rx_array_init(&args, sizeof(char *));
+    CBArray args;
+    cb_array_init(&args, sizeof(char *));
     int code = EXIT_OK;
     for (int i = 1; i < argc; i++) {
         int r = common_option(cli, argc, argv, &i);
@@ -2455,7 +2458,7 @@ static int cmd_playlist(Cli *cli, int argc, char **argv)
             code = usage_error(cli, "playlist: unknown option %s", argv[i]);
             goto end;
         }
-        rx_array_push(&args, &argv[i]);
+        cb_array_push(&args, &argv[i]);
     }
     char **a = args.data;
     int nb = (int)args.nb;
@@ -2477,9 +2480,9 @@ static int cmd_playlist(Cli *cli, int argc, char **argv)
         goto end;
     }
     size_t k = 0;
-    while (k < RX_ARRAY_ELEMS(subs) && strcmp(subs[k].name, a[0]))
+    while (k < CB_ARRAY_ELEMS(subs) && strcmp(subs[k].name, a[0]))
         k++;
-    if (k == RX_ARRAY_ELEMS(subs)) {
+    if (k == CB_ARRAY_ELEMS(subs)) {
         code = usage_error(cli, "playlist: unknown command %s", a[0]);
         goto end;
     }
@@ -2509,7 +2512,7 @@ static int cmd_playlist(Cli *cli, int argc, char **argv)
         code = playlist_export(cli, a[1], a[2]);
 
 end:
-    rx_array_free(&args);
+    cb_array_free(&args);
     cli_close(cli);
     return code;
 }
@@ -2517,35 +2520,35 @@ end:
 /* The interface: the only path that opens a window or an audio device. */
 static int run_interface(Cli *cli)
 {
-    RXPlayerOptions po;
-    rx_player_options_default(&po);
+    CBPlayerOptions po;
+    cb_player_options_default(&po);
     po.backend = cli->audio;
     po.sink = cli->sink;
-    po.app_name = "rxbox";
+    po.app_name = "cyanbox";
     /* With --pro-link the deck is heard only in a mixer's LINK CUE, which
      * takes its audio from the ring (src/app/link.c). */
     if (cli->pro_link) {
-        po.backend = RX_AUDIO_RING;
+        po.backend = CB_AUDIO_RING;
         po.sink = NULL;
     }
 
-    RXWindowOptions wo;
-    rx_window_options_default(&wo);
-    wo.title = "rxbox";
+    CBWindowOptions wo;
+    cb_window_options_default(&wo);
+    wo.title = "cyanbox";
     wo.validation = cli->validation;
     wo.device = cli->device;
     wo.cpu_analysis = cli->no_gpu;
     wo.max_frames = cli->frames;
 
     char *root = cli->library ? abs_path(cli->library) : NULL;
-    RXApp *app = calloc(1, sizeof(*app));
+    CBApp *app = calloc(1, sizeof(*app));
     if (!app || (cli->library && !root)) {
         free(app);
         free(root);
         return fail("out of memory");
     }
 
-    int ret = rx_app_create(app, root, &po, &wo);
+    int ret = cb_app_create(app, root, &po, &wo);
     if (ret < 0) {
         free(app);
         free(root);
@@ -2555,14 +2558,14 @@ static int run_interface(Cli *cli)
      * with --pro-link: the deck is a mixer's cue then, not the desktop's
      * player, and no media key or desktop control reaches it. */
     if (!cli->no_mpris && !cli->pro_link)
-        rx_mpris_create(app);
+        cb_mpris_create(app);
     /* Link only when asked for, and then from the start, on every
      * Ethernet interface. */
     app->link_state.enabled = cli->pro_link;
     if (cli->pro_link)
-        rx_app_link_start(app, NULL);
-    ret = rx_app_run(app);
-    rx_app_destroy(app);
+        cb_app_link_start(app, NULL);
+    ret = cb_app_run(app);
+    cb_app_destroy(app);
     free(app);
     free(root);
     if (ret < 0)
@@ -2572,24 +2575,24 @@ static int run_interface(Cli *cli)
 
 /* ------------------------------------------------------------------ link */
 
-static bool player_same(const RXLinkPlayer *a, const RXLinkPlayer *b)
+static bool player_same(const CBLinkPlayer *a, const CBLinkPlayer *b)
 {
     return a->number == b->number && a->addr == b->addr && a->has_status == b->has_status &&
            a->track_device == b->track_device && a->track_slot == b->track_slot &&
            a->track_id == b->track_id && a->playing == b->playing;
 }
 
-static void print_player(const RXLinkPlayer *p, int ours, const RXLibrary *lib)
+static void print_player(const CBLinkPlayer *p, int ours, const CBLibrary *lib)
 {
     printf("  %2d %-20s %u.%u.%u.%u", p->number, p->name, p->addr >> 24, p->addr >> 16 & 0xFF,
            p->addr >> 8 & 0xFF, p->addr & 0xFF);
     if (p->has_status && p->track_id) {
         printf("  %s track %u from %d", p->playing ? "playing" : "loaded", p->track_id,
                p->track_device);
-        RXTrack *t = ours && p->track_device == ours ? rx_library_find_id(lib, p->track_id) : NULL;
+        CBTrack *t = ours && p->track_device == ours ? cb_library_find_id(lib, p->track_id) : NULL;
         if (t) {
             char name[512];
-            rx_track_display(t, name, sizeof(name));
+            cb_track_display(t, name, sizeof(name));
             printf(" (%s)", name);
         }
     }
@@ -2598,7 +2601,7 @@ static void print_player(const RXLinkPlayer *p, int ours, const RXLibrary *lib)
 
 /* Serves until SIGINT or SIGTERM, printing the devices whenever they
  * change. */
-static bool served_same(const RXLinkServed *a, const RXLinkServed *b)
+static bool served_same(const CBLinkServed *a, const CBLinkServed *b)
 {
     return !strcmp(a->interface, b->interface) && a->addr == b->addr &&
            a->running == b->running && a->err == b->err && a->state == b->state &&
@@ -2607,23 +2610,23 @@ static bool served_same(const RXLinkServed *a, const RXLinkServed *b)
 
 /* The cues players saved on the deck or deleted and the ratings they
  * gave, into the library: the services have served them since
- * (rx_link_set_edits). True when the library changed. */
-static bool link_take_edits(Cli *cli, RXLinkSet *set)
+ * (cb_link_set_edits). True when the library changed. */
+static bool link_take_edits(Cli *cli, CBLinkSet *set)
 {
     bool changed = false;
-    RXLinkEdit e[16];
+    CBLinkEdit e[16];
     int n;
     do {
-        n = rx_link_set_edits(set, e, 16);
+        n = cb_link_set_edits(set, e, 16);
         for (int i = 0; i < n; i++) {
-            RXTrack *t = rx_library_find_id(&cli->app.lib, e[i].track_id);
+            CBTrack *t = cb_library_find_id(&cli->app.lib, e[i].track_id);
             if (!t)
                 continue;
             char name[512], at[32], what[16];
-            rx_track_display(t, name, sizeof(name));
-            if (e[i].what == RX_LINK_EDIT_RATING) {
-                int ret = rx_link_edit_apply(t, &e[i]);
-                if (ret > 0 && (ret = rx_library_save_track(&cli->app.lib, t)) >= 0)
+            cb_track_display(t, name, sizeof(name));
+            if (e[i].what == CB_LINK_EDIT_RATING) {
+                int ret = cb_link_edit_apply(t, &e[i]);
+                if (ret > 0 && (ret = cb_library_save_track(&cli->app.lib, t)) >= 0)
                     changed = true;
                 if (ret < 0)
                     printf("player %d: cannot keep the rating of %s: %s\n", e[i].player, name,
@@ -2634,12 +2637,12 @@ static bool link_take_edits(Cli *cli, RXLinkSet *set)
                 continue;
             }
             if (e[i].cue.hot >= 0)
-                snprintf(what, sizeof(what), "hot cue %c", rx_cue_letter(&e[i].cue));
+                snprintf(what, sizeof(what), "hot cue %c", cb_cue_letter(&e[i].cue));
             else
                 snprintf(what, sizeof(what), "a memory %s",
-                         rx_cue_is_loop(&e[i].cue) ? "loop" : "cue");
-            int ret = rx_link_edit_apply(t, &e[i]);
-            if (ret > 0 && (ret = rx_library_save_track(&cli->app.lib, t)) >= 0)
+                         cb_cue_is_loop(&e[i].cue) ? "loop" : "cue");
+            int ret = cb_link_edit_apply(t, &e[i]);
+            if (ret > 0 && (ret = cb_library_save_track(&cli->app.lib, t)) >= 0)
                 changed = true;
             if (ret < 0)
                 printf("player %d: cannot keep %s on %s: %s\n", e[i].player, what, name,
@@ -2647,7 +2650,7 @@ static bool link_take_edits(Cli *cli, RXLinkSet *set)
             else
                 printf("player %d %s %s at %s on %s\n", e[i].player,
                        e[i].remove ? "deleted" : "saved", what,
-                       rx_fmt_time(e[i].cue.time, at, sizeof(at)), name);
+                       cb_fmt_time(e[i].cue.time, at, sizeof(at)), name);
         }
     } while (n == 16);
     return changed;
@@ -2656,12 +2659,12 @@ static bool link_take_edits(Cli *cli, RXLinkSet *set)
 /* Served on every Ethernet interface, or on the one -i names, until
  * interrupted: each interface's state and the devices said as they
  * change, and the cues players save kept in the library. */
-static int link_serve(Cli *cli, const RXLinkOptions *opt)
+static int link_serve(Cli *cli, const CBLinkOptions *opt)
 {
     char *root = library_root(cli);
     if (!root)
         return fail("out of memory");
-    RXLinkOptions o = *opt;
+    CBLinkOptions o = *opt;
     o.library = root;
     sigset_t sigs;
     sigemptyset(&sigs);
@@ -2677,17 +2680,17 @@ static int link_serve(Cli *cli, const RXLinkOptions *opt)
         free(root);
         return code;
     }
-    RXLinkSet *set;
-    int ret = rx_link_set_start(&set, &o);
+    CBLinkSet *set;
+    int ret = cb_link_set_start(&set, &o);
     free(root);
     if (ret < 0)
         return fail("cannot serve: %s", strerror(-ret));
     printf("serving on %s; Ctrl-C stops\n", o.interface ? o.interface : "every Ethernet interface");
     fflush(stdout);
 
-    RXLinkServed was[8];
+    CBLinkServed was[8];
     int nb_was = 0;
-    RXLinkPlayer seen[64], now[64];
+    CBLinkPlayer seen[64], now[64];
     int nb_seen = 0, where[64];
     /* The services read the tracks saved again once the edits have
      * settled for this long, as the interface does (src/app/link.c). */
@@ -2697,35 +2700,35 @@ static int link_serve(Cli *cli, const RXLinkOptions *opt)
         if (sigtimedwait(&sigs, NULL, &ts) >= 0)
             break;
         if (link_take_edits(cli, set))
-            edited_us = rx_time_us();
-        if (edited_us && rx_time_us() - edited_us >= 2000000) {
+            edited_us = cb_time_us();
+        if (edited_us && cb_time_us() - edited_us >= 2000000) {
             uint64_t *ids = NULL;
             int nb = 0;
-            if (rx_library_take_changes(&cli->app.lib, &ids, &nb) != 0)
-                rx_link_set_library_changed(set);
+            if (cb_library_take_changes(&cli->app.lib, &ids, &nb) != 0)
+                cb_link_set_library_changed(set);
             else if (nb)
-                rx_link_set_tracks_changed(set, ids, nb);
+                cb_link_set_tracks_changed(set, ids, nb);
             free(ids);
             edited_us = 0;
         }
-        RXLinkServed ifs[8];
-        int nb_ifs = RX_MIN(rx_link_set_interfaces(set, ifs, 8), 8);
+        CBLinkServed ifs[8];
+        int nb_ifs = CB_MIN(cb_link_set_interfaces(set, ifs, 8), 8);
         for (int i = 0; i < nb_ifs; i++) {
             int k = 0;
             while (k < nb_was && strcmp(was[k].interface, ifs[i].interface))
                 k++;
             if (k < nb_was && served_same(&was[k], &ifs[i]))
                 continue;
-            const RXLinkServed *v = &ifs[i];
+            const CBLinkServed *v = &ifs[i];
             if (!v->running && v->err)
-                printf("%s: cannot serve: %s\n", v->interface, v->err == RX_ERROR(EPROTONOSUPPORT)
+                printf("%s: cannot serve: %s\n", v->interface, v->err == CB_ERROR(EPROTONOSUPPORT)
                        ? "not Ethernet (Link runs on Ethernet only)" : strerror(-v->err));
             else if (!v->running)
                 printf("%s: starting\n", v->interface);
-            else if (v->state == RX_LINK_UP)
+            else if (v->state == CB_LINK_UP)
                 printf("link up as device %d on %s\n", v->number, v->interface);
             else
-                printf("%s: %s\n", v->interface, v->state == RX_LINK_JOINING ? "joining"
+                printf("%s: %s\n", v->interface, v->state == CB_LINK_JOINING ? "joining"
                                                                             : "waiting for a player");
         }
         for (int k = 0; k < nb_was; k++) {
@@ -2738,15 +2741,15 @@ static int link_serve(Cli *cli, const RXLinkOptions *opt)
         memcpy(was, ifs, (size_t)nb_ifs * sizeof(*ifs));
         nb_was = nb_ifs;
 
-        int nb = RX_MIN(rx_link_set_players(set, now, where, 64), 64);
+        int nb = CB_MIN(cb_link_set_players(set, now, where, 64), 64);
         bool same = nb == nb_seen;
         for (int i = 0; same && i < nb; i++)
             same = player_same(&now[i], &seen[i]);
         if (!same) {
             printf("devices:%s\n", nb ? "" : " none");
             for (int i = 0; i < nb; i++) {
-                const RXLinkServed *v = where[i] < nb_ifs ? &ifs[where[i]] : NULL;
-                print_player(&now[i], v && v->state == RX_LINK_UP ? v->number : 0,
+                const CBLinkServed *v = where[i] < nb_ifs ? &ifs[where[i]] : NULL;
+                print_player(&now[i], v && v->state == CB_LINK_UP ? v->number : 0,
                              &cli->app.lib);
             }
             memcpy(seen, now, (size_t)nb * sizeof(*now));
@@ -2755,7 +2758,7 @@ static int link_serve(Cli *cli, const RXLinkOptions *opt)
         fflush(stdout);
     }
     link_take_edits(cli, set);
-    rx_link_set_stop(&set);
+    cb_link_set_stop(&set);
     printf("stopped\n");
     return EXIT_OK;
 }
@@ -2766,16 +2769,16 @@ static int link_serve(Cli *cli, const RXLinkOptions *opt)
 // Holding: follows what is loaded, the first track and every one the
 // source tells it to load (playing or paused as it was), until `hold`
 // seconds have passed.
-static void link_hold(RXLinkClient *c, long hold)
+static void link_hold(CBLinkClient *c, long hold)
 {
-    int64_t end = rx_time_us() + (int64_t)hold * 1000000;
+    int64_t end = cb_time_us() + (int64_t)hold * 1000000;
     uint32_t played = 0;
-    while (rx_time_us() < end) {
+    while (cb_time_us() < end) {
         int device, slot;
         uint32_t id;
-        rx_link_client_loaded(c, &device, &slot, &id);
+        cb_link_client_loaded(c, &device, &slot, &id);
         if (id && id != played) {
-            int nb = rx_link_client_play(c, id);
+            int nb = cb_link_client_play(c, id);
             if (nb >= 0)
                 printf("track %u loaded (%d beats)\n", id, nb);
             else
@@ -2806,33 +2809,33 @@ static bool parse_save_cue(const char *s, SaveCue *c)
     return end != s + 2 && !*end && c->time >= 0 && c->time < 86400;
 }
 
-static int link_browse(const RXLinkClientOptions *o, uint32_t track, long hold, SaveCue save)
+static int link_browse(const CBLinkClientOptions *o, uint32_t track, long hold, SaveCue save)
 {
-    RXLinkClient *c;
-    int ret = rx_link_client_start(&c, o);
+    CBLinkClient *c;
+    int ret = cb_link_client_start(&c, o);
     if (ret < 0)
         return fail("cannot start a player on %s: %s", o->interface, strerror(-ret));
     printf("player %d (%s) on %s, waiting for a source\n", o->number, o->name, o->interface);
     fflush(stdout);
     uint32_t addr;
     int number;
-    int wait_ms = (int)RX_MIN(RX_MAX(hold * 1000, 20000L), (long)INT32_MAX);
-    if ((ret = rx_link_client_wait_source(c, wait_ms, &addr, &number)) < 0) {
-        rx_link_client_stop(&c);
+    int wait_ms = (int)CB_MIN(CB_MAX(hold * 1000, 20000L), (long)INT32_MAX);
+    if ((ret = cb_link_client_wait_source(c, wait_ms, &addr, &number)) < 0) {
+        cb_link_client_stop(&c);
         return fail("no computer source answered on %s", o->interface);
     }
-    ret = rx_link_client_browse(c, track, print_line, NULL);
+    ret = cb_link_client_browse(c, track, print_line, NULL);
     if (ret >= 0 && save.hot > -2) {
         int device, slot, nb = 0;
         uint32_t id;
-        rx_link_client_loaded(c, &device, &slot, &id);
+        cb_link_client_loaded(c, &device, &slot, &id);
         char at[32], what[16];
-        rx_fmt_time(save.time, at, sizeof(at));
+        cb_fmt_time(save.time, at, sizeof(at));
         if (save.hot >= 0)
             snprintf(what, sizeof(what), "hot cue %c", 'A' + save.hot);
         else
             snprintf(what, sizeof(what), "a memory cue");
-        ret = rx_link_client_save_cue(c, id, save.hot, save.time, &nb);
+        ret = cb_link_client_save_cue(c, id, save.hot, save.time, &nb);
         if (ret >= 0)
             printf("saved %s at %s on track %u: the source lists %d cue%s\n", what, at, id, nb,
                    nb == 1 ? "" : "s");
@@ -2842,7 +2845,7 @@ static int link_browse(const RXLinkClientOptions *o, uint32_t track, long hold, 
     fflush(stdout);
     if (ret >= 0 && hold > 0)
         link_hold(c, hold);
-    rx_link_client_stop(&c);
+    cb_link_client_stop(&c);
     if (ret < 0)
         return fail("browsing failed: %s", strerror(-ret));
     return EXIT_OK;
@@ -2850,10 +2853,10 @@ static int link_browse(const RXLinkClientOptions *o, uint32_t track, long hold, 
 
 static int cmd_link(Cli *cli, int argc, char **argv)
 {
-    RXLinkOptions opt;
-    rx_link_options_default(&opt);
-    RXLinkClientOptions copt;
-    rx_link_client_options_default(&copt);
+    CBLinkOptions opt;
+    cb_link_options_default(&opt);
+    CBLinkClientOptions copt;
+    cb_link_client_options_default(&copt);
     long number = 3, track = 0, hold = 0;
     SaveCue save = { .hot = -2 };
     const char *sub = NULL, *host = NULL;
@@ -2946,7 +2949,7 @@ static const struct {
 static int cli_run(int argc, char **argv)
 {
     Cli cli = {
-        .audio = RX_AUDIO_PIPEWIRE,
+        .audio = CB_AUDIO_PIPEWIRE,
     };
 
     int i = 1;
@@ -2971,7 +2974,7 @@ static int cli_run(int argc, char **argv)
             return EXIT_OK;
         }
         if (opt_flag(&cli, a, "-V", "--version")) {
-            printf("rxbox %s\n", RXBOX_VERSION);
+            printf("cyanbox %s\n", CYANBOX_VERSION);
             return EXIT_OK;
         }
         if (opt_flag(&cli, a, NULL, "--validation")) {
@@ -2988,9 +2991,9 @@ static int cli_run(int argc, char **argv)
         }
         if ((r = opt_value(&cli, argc, argv, &i, NULL, "--audio", &val))) {
             if (r > 0 && !strcmp(val, "none"))
-                cli.audio = RX_AUDIO_NULL;
+                cli.audio = CB_AUDIO_NULL;
             else if (r > 0 && !strcmp(val, "pipewire"))
-                cli.audio = RX_AUDIO_PIPEWIRE;
+                cli.audio = CB_AUDIO_PIPEWIRE;
             else
                 return usage_error(NULL, "--audio is pipewire or none");
             continue;
@@ -3014,7 +3017,7 @@ static int cli_run(int argc, char **argv)
     if (i >= argc)
         return run_interface(&cli);
 
-    /* `rxbox help CMD` and `rxbox CMD -h|--help` (before a `--`): the
+    /* `cyanbox help CMD` and `cyanbox CMD -h|--help` (before a `--`): the
      * command's usage line, on stdout, and success. */
     bool help = !strcmp(argv[i], "help");
     const char *name = help && i + 1 < argc ? argv[i + 1] : argv[i];
@@ -3022,11 +3025,11 @@ static int cli_run(int argc, char **argv)
         help = !strcmp(argv[k], "-h") || !strcmp(argv[k], "--help");
 
     cli.cmd = name;
-    for (size_t k = 0; k < RX_ARRAY_ELEMS(commands); k++) {
+    for (size_t k = 0; k < CB_ARRAY_ELEMS(commands); k++) {
         if (strcmp(commands[k].name, name))
             continue;
         if (help) {
-            printf("usage: rxbox %s\n", commands[k].usage);
+            printf("usage: cyanbox %s\n", commands[k].usage);
             return EXIT_OK;
         }
         cli.usage = commands[k].usage;
@@ -3039,7 +3042,7 @@ static int cli_run(int argc, char **argv)
     return usage_error(NULL, "unknown command %s", name);
 }
 
-int rx_cli_main(int argc, char **argv)
+int cb_cli_main(int argc, char **argv)
 {
     int code = cli_run(argc, argv);
 
@@ -3047,7 +3050,7 @@ int rx_cli_main(int argc, char **argv)
      * that does not kill us) is a failure, not a silent success. */
     int err = fflush(stdout) == EOF ? errno : ferror(stdout) ? EIO : 0;
     if (err) {
-        fprintf(stderr, "rxbox: cannot write the output: %s\n", strerror(err));
+        fprintf(stderr, "cyanbox: cannot write the output: %s\n", strerror(err));
         if (code == EXIT_OK)
             code = EXIT_FAIL;
     }

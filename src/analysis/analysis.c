@@ -1,6 +1,6 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
-/* rx_analyse: the whole analysis of one decoded track, and the automatic
+/* cb_analyse: the whole analysis of one decoded track, and the automatic
  * cues dj added after it.
  *
  * The audio is mixed to mono once (the decoder's mean of the channels, so
@@ -21,10 +21,10 @@
  * Each stage stands on its own: one that fails (no memory for an hour's
  * waveforms, say) leaves the others to run, and the first error is
  * returned with what was done in `done`. The samples are taken to be
- * finite: rx_decode decodes NaN and infinities as silence (src/audio/
+ * finite: cb_decode decodes NaN and infinities as silence (src/audio/
  * decode.c), since one of them takes the key and the waveforms with it. */
 
-#include "rxbox/analysis.h"
+#include "cyanbox/analysis.h"
 
 #include <math.h>
 #include <stdlib.h>
@@ -33,7 +33,7 @@
 #include "beats_internal.h"
 
 /* A stage's result: done, or the call's error if it is the first. */
-static void stage_done(RXAnalysis *out, unsigned stage, int ret, int *first_err)
+static void stage_done(CBAnalysis *out, unsigned stage, int ret, int *first_err)
 {
     if (ret >= 0)
         out->done |= stage;
@@ -41,36 +41,36 @@ static void stage_done(RXAnalysis *out, unsigned stage, int ret, int *first_err)
         *first_err = ret;
 }
 
-int rx_analyse(const RXAudio *audio, const RXAnalysisOptions *opt, unsigned what, RXAnalysis *out)
+int cb_analyse(const CBAudio *audio, const CBAnalysisOptions *opt, unsigned what, CBAnalysis *out)
 {
     memset(out, 0, sizeof(*out));
     if (!audio || !audio->samples || audio->channels <= 0 || audio->rate <= 0 ||
         audio->nb_frames < 0)
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
     out->duration = (double)audio->nb_frames / audio->rate;
 
-    RXAnalysisOptions defopt;
+    CBAnalysisOptions defopt;
     if (!opt) {
-        rx_analysis_options_default(&defopt);
+        cb_analysis_options_default(&defopt);
         opt = &defopt;
     }
 
     int first_err = 0;
-    RXAudio mono = { 0 };
+    CBAudio mono = { 0 };
     const float *x = audio->samples;
     if (audio->channels != 1) {
-        int ret = rx_audio_to_mono(audio, &mono);
+        int ret = cb_audio_to_mono(audio, &mono);
         if (ret < 0)
             return ret;
         x = mono.samples;
     }
     const int64_t n = audio->nb_frames;
 
-    if (what & RX_ANALYSE_WAVES)
-        stage_done(out, RX_ANALYSE_WAVES, rx_waveforms_compute(x, n, audio->rate, &out->waves),
+    if (what & CB_ANALYSE_WAVES)
+        stage_done(out, CB_ANALYSE_WAVES, cb_waveforms_compute(x, n, audio->rate, &out->waves),
                    &first_err);
 
-    if (what & (RX_ANALYSE_BEATS | RX_ANALYSE_KEY)) {
+    if (what & (CB_ANALYSE_BEATS | CB_ANALYSE_KEY)) {
         /* At 44.1 kHz beats and key read the mono signal itself. Otherwise
          * one resampled copy, and our own mono mix goes before they run:
          * an hour of mono float is 635 MB at 44.1 kHz, and the library
@@ -79,37 +79,37 @@ int rx_analyse(const RXAudio *audio, const RXAnalysisOptions *opt, unsigned what
         float *own44 = NULL;
         int64_t n44 = n;
         int ret = 0;
-        if (audio->rate != RX_BEAT_RATE) {
-            ret = rx_resample_mono(x, n, audio->rate, RX_BEAT_RATE, &own44, &n44);
+        if (audio->rate != CB_BEAT_RATE) {
+            ret = cb_resample_mono(x, n, audio->rate, CB_BEAT_RATE, &own44, &n44);
             x44 = own44;
-            rx_audio_free(&mono);
+            cb_audio_free(&mono);
         }
         if (ret < 0) {
             if (!first_err)
                 first_err = ret;
         } else {
-            if (what & RX_ANALYSE_BEATS)
-                stage_done(out, RX_ANALYSE_BEATS,
-                           rx_analyse_beats(x44, n44, RX_BEAT_RATE, opt, &out->beats), &first_err);
-            if (what & RX_ANALYSE_KEY)
-                stage_done(out, RX_ANALYSE_KEY, rx_analyse_key(x44, n44, RX_BEAT_RATE, &out->key),
+            if (what & CB_ANALYSE_BEATS)
+                stage_done(out, CB_ANALYSE_BEATS,
+                           cb_analyse_beats(x44, n44, CB_BEAT_RATE, opt, &out->beats), &first_err);
+            if (what & CB_ANALYSE_KEY)
+                stage_done(out, CB_ANALYSE_KEY, cb_analyse_key(x44, n44, CB_BEAT_RATE, &out->key),
                            &first_err);
         }
         free(own44);
     }
 
-    rx_audio_free(&mono);
+    cb_audio_free(&mono);
     return first_err;
 }
 
-void rx_analysis_free(RXAnalysis *a)
+void cb_analysis_free(CBAnalysis *a)
 {
-    rx_beat_result_free(&a->beats);
-    rx_waveforms_free(&a->waves);
+    cb_beat_result_free(&a->beats);
+    cb_waveforms_free(&a->waves);
     memset(a, 0, sizeof(*a));
 }
 
-int rx_analysis_auto_cues(RXTrack *t, const RXBeatResult *beats)
+int cb_analysis_auto_cues(CBTrack *t, const CBBeatResult *beats)
 {
     /* dj's export._auto_cues: one memory cue, on the first downbeat at or
      * after the start of the music (50 ms of slack, so a downbeat that the
@@ -121,8 +121,8 @@ int rx_analysis_auto_cues(RXTrack *t, const RXBeatResult *beats)
      * theirs to keep. */
     if (!t || !beats || t->nb_cues > 0)
         return 0;
-    const RXGrid *g = rx_grid_valid(&t->grid) ? &t->grid : &beats->grid;
-    if (!rx_grid_valid(g))
+    const CBGrid *g = cb_grid_valid(&t->grid) ? &t->grid : &beats->grid;
+    if (!cb_grid_valid(g))
         return 0;
 
     /* The beats up to the end of the track. With its length not known yet
@@ -133,14 +133,14 @@ int rx_analysis_auto_cues(RXTrack *t, const RXBeatResult *beats)
     const double from = beats->music_start - 0.05;
     double duration = t->duration;
     if (!(duration > 0.0)) {
-        const RXTempoSection *last = &g->sections[g->nb_sections - 1];
+        const CBTempoSection *last = &g->sections[g->nb_sections - 1];
         int bpb = g->beats_per_bar > 0 ? g->beats_per_bar : 4;      /* 0 is 4, as in grid.c */
         duration = fmax(from, last->start) + (bpb + 1) * 60.0 / last->bpm;
     }
 
-    RXBeat *b = NULL;
+    CBBeat *b = NULL;
     int nb = 0;
-    int ret = rx_grid_beats(g, duration, &b, &nb);
+    int ret = cb_grid_beats(g, duration, &b, &nb);
     if (ret < 0)
         return ret;
     double at = NAN;
@@ -154,9 +154,9 @@ int rx_analysis_auto_cues(RXTrack *t, const RXBeatResult *beats)
     if (isnan(at))
         return 0;
 
-    RXCue c;
-    rx_cue_init(&c, at);
-    rx_cue_attach_to_grid(&c, g);
-    ret = rx_track_add_cue(t, &c);
+    CBCue c;
+    cb_cue_init(&c, at);
+    cb_cue_attach_to_grid(&c, g);
+    ret = cb_track_add_cue(t, &c);
     return ret < 0 ? ret : 0;
 }

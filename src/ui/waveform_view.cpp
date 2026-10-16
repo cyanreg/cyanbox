@@ -7,7 +7,7 @@
 // previews as the stacked half or centred (device.overview_waveform), the
 // playhead at the centre or near the left (device.waveform_position), and
 // whether hot cues show their colours (player.hot_cue_color, through
-// ui_hot_cue_rgb). The waveform itself is always rx_wave_draw(): the ANLZ
+// ui_hot_cue_rgb). The waveform itself is always cb_wave_draw(): the ANLZ
 // column bytes go to the GPU once and the shader colours every pixel the
 // way rekordbox does, at any zoom. Everything over it (beat grid, cue
 // markers, loop bands, playhead) is ImDrawList.
@@ -20,7 +20,7 @@
 //
 // The detail window is computed in bars, not seconds: `zoom_bars` bars
 // either side of the playhead converted to seconds through the grid
-// (rx_grid_offset_beats), so a 174 BPM track and a 120 BPM track show the
+// (cb_grid_offset_beats), so a 174 BPM track and a 120 BPM track show the
 // same amount of music. Without a grid 120 BPM is assumed.
 
 #include "ui_internal.h"
@@ -48,7 +48,7 @@ double ui_zoom_step(double bars, int dir)
     return UI_ZOOM_STEPS[ImClamp(at + dir, 0, UI_NB_ZOOM - 1)];
 }
 
-static uint64_t grid_sig(const RXTrack *t)
+static uint64_t grid_sig(const CBTrack *t)
 {
     uint64_t h = 1469598103934665603ull;
     auto mix = [&h](const void *p, size_t n) {
@@ -72,12 +72,12 @@ static uint64_t grid_sig(const RXTrack *t)
 }
 
 // Every beat of the loaded track's grid, rebuilt when the grid changes.
-const RXBeat *ui_deck_beats(UiState *ui, int deck, int *nb)
+const CBBeat *ui_deck_beats(UiState *ui, int deck, int *nb)
 {
     UiDeck *ud = &ui->decks[deck];
-    RXTrack *t = ui->app->decks[deck].track;
+    CBTrack *t = ui->app->decks[deck].track;
     *nb = 0;
-    if (!t || !rx_track_analysed(t) || !(t->duration > 0))
+    if (!t || !cb_track_analysed(t) || !(t->duration > 0))
         return nullptr;
     uint64_t sig = grid_sig(t);
     if (sig != ud->beats_sig || !ud->beats) {
@@ -85,7 +85,7 @@ const RXBeat *ui_deck_beats(UiState *ui, int deck, int *nb)
         ud->beats = nullptr;
         ud->nb_beats = 0;
         ud->beats_sig = sig;
-        if (rx_grid_beats(&t->grid, t->duration, &ud->beats, &ud->nb_beats) < 0) {
+        if (cb_grid_beats(&t->grid, t->duration, &ud->beats, &ud->nb_beats) < 0) {
             ud->beats = nullptr;
             ud->nb_beats = 0;
         }
@@ -94,7 +94,7 @@ const RXBeat *ui_deck_beats(UiState *ui, int deck, int *nb)
     return ud->beats;
 }
 
-static int first_beat_at(const RXBeat *beats, int nb, double t)
+static int first_beat_at(const CBBeat *beats, int nb, double t)
 {
     int lo = 0, hi = nb;
     while (lo < hi) {
@@ -107,22 +107,22 @@ static int first_beat_at(const RXBeat *beats, int nb, double t)
     return lo;
 }
 
-static int beats_per_bar(const RXTrack *t)
+static int beats_per_bar(const CBTrack *t)
 {
     return t && t->grid.beats_per_bar > 0 ? t->grid.beats_per_bar : 4;
 }
 
 // Half the detail window in seconds: zoom/2 bars each side of the playhead.
-static double detail_half_seconds(const RXTrack *t, double pos, double bars)
+static double detail_half_seconds(const CBTrack *t, double pos, double bars)
 {
     double half_beats = bars * beats_per_bar(t) * 0.5;
-    if (t && rx_track_analysed(t)) {
-        double t0 = rx_grid_offset_beats(&t->grid, pos, -half_beats);
-        double t1 = rx_grid_offset_beats(&t->grid, pos, half_beats);
+    if (t && cb_track_analysed(t)) {
+        double t0 = cb_grid_offset_beats(&t->grid, pos, -half_beats);
+        double t1 = cb_grid_offset_beats(&t->grid, pos, half_beats);
         // Symmetric so the playhead stays at the centre across a tempo change.
         if (t1 > t0)
             return (t1 - t0) * 0.5;
-        double bpm = rx_grid_bpm_at(&t->grid, pos);
+        double bpm = cb_grid_bpm_at(&t->grid, pos);
         if (bpm > 0)
             return half_beats * 60.0 / bpm;
     }
@@ -134,13 +134,13 @@ static double detail_half_seconds(const RXTrack *t, double pos, double bars)
 // A hot cue badge: a square in the cue's colour, the letter in it, its left
 // edge on the cue (pulled inside the strip at the far end).
 static void hot_badge(UiState *ui, ImDrawList *dl, float x, float y, float size, float x_max,
-                      const RXCue *c)
+                      const CBCue *c)
 {
     uint32_t rgb = ui_hot_cue_rgb(ui, c);
     float bx = ImMin(x, x_max - size);
     ImVec2 p0(floorf(bx), floorf(y)), p1(p0.x + size, p0.y + size);
     dl->AddRectFilled(p0, p1, ui_rgb(rgb), PX(1.5f));
-    char letter[2] = { rx_cue_letter(c), 0 };
+    char letter[2] = { cb_cue_letter(c), 0 };
     ui_text_centre(ui, dl, ui->font_bold, size / ui->s * 0.78f, p0, p1, ui_text_on(rgb), letter);
 }
 
@@ -168,9 +168,9 @@ static void loop_band(ImDrawList *dl, float x0, float x1, float y0, float y1, fl
 // scrubs, the engine playing grains at the drag position.
 static void scrub(UiState *ui, int deck, int area, double click_time, double drag_time, bool loaded)
 {
-    RXApp *app = ui->app;
+    CBApp *app = ui->app;
     UiDeck *ud = &ui->decks[deck];
-    RXDeckCtl *c = &app->decks[deck].ctl;
+    CBDeckCtl *c = &app->decks[deck].ctl;
     ImGuiIO &io = ImGui::GetIO();
     if (!loaded || !app->player)
         return;
@@ -183,17 +183,17 @@ static void scrub(UiState *ui, int deck, int area, double click_time, double dra
         return;
     if (ImGui::IsItemActive()) {
         if (!ud->scrubbing && fabsf(io.MousePos.x - ud->drag_x0) > PX(3)) {
-            rx_deck_scrub_begin(app->player, deck);
+            cb_deck_scrub_begin(app->player, deck);
             ud->scrubbing = true;
         }
         if (ud->scrubbing)
-            rx_deck_scrub_to(app->player, deck, drag_time);
+            cb_deck_scrub_to(app->player, deck, drag_time);
     }
     if (ImGui::IsItemDeactivated()) {
         if (ud->scrubbing)
-            rx_deck_scrub_end(app->player, deck);
+            cb_deck_scrub_end(app->player, deck);
         else
-            rx_ctl_seek(c, click_time);
+            cb_ctl_seek(c, click_time);
         ud->scrubbing = false;
         ud->drag_area = 0;
     }
@@ -203,11 +203,11 @@ static void scrub(UiState *ui, int deck, int area, double click_time, double dra
 
 void ui_overview(UiState *ui, int deck, ImVec2 a, ImVec2 b)
 {
-    RXApp *app = ui->app;
-    RXDeckView *dv = &app->decks[deck];
-    RXTrack *t = dv->track;
+    CBApp *app = ui->app;
+    CBDeckView *dv = &app->decks[deck];
+    CBTrack *t = dv->track;
     ImDrawList *dl = ImGui::GetWindowDrawList();
-    RXDeckState st;
+    CBDeckState st;
     double pos = ui_deck_position(ui, deck, &st);
     bool loaded = st.loaded && t && !dv->loading_request;
     double dur = st.duration > 0 ? st.duration : t ? t->duration : 0;
@@ -227,14 +227,14 @@ void ui_overview(UiState *ui, int deck, ImVec2 a, ImVec2 b)
     // Loop bands under the waveform's markers: memory loops, then the
     // deck's current loop, brighter while it plays.
     for (int i = 0; i < t->nb_cues; i++) {
-        const RXCue *c = &t->cues[i];
-        if (rx_cue_is_loop(c))
+        const CBCue *c = &t->cues[i];
+        if (cb_cue_is_loop(c))
             loop_band(dl, xof(c->time), xof(c->loop_end), a.y, b.y, 0.22f);
     }
 
     if (dv->wave_preview) {
-        double cols = rx_wave_columns(dv->wave_preview);
-        RXWaveDraw d = {};
+        double cols = cb_wave_columns(dv->wave_preview);
+        CBWaveDraw d = {};
         d.x0 = a.x;
         d.y0 = a.y;
         d.x1 = b.x;
@@ -250,7 +250,7 @@ void ui_overview(UiState *ui, int deck, ImVec2 a, ImVec2 b)
         // filled the strip solid cream). The top inset keeps the waveform
         // clear of the hot cue badges and the memory cue heads drawn along
         // the top edge.
-        d.mode = ui->overview_full ? RX_WAVE_CENTRED : RX_WAVE_HALF_STACKED;
+        d.mode = ui->overview_full ? CB_WAVE_CENTRED : CB_WAVE_HALF_STACKED;
         d.gain = 1.0f;
         d.inset_top = PX(13);
         d.inset_bottom = PX(1);
@@ -258,7 +258,7 @@ void ui_overview(UiState *ui, int deck, ImVec2 a, ImVec2 b)
         // The played part at 55 % brightness, as rekordbox dims it.
         d.dim = 0.45f;
         d.dim_until = pos / dur * cols;
-        rx_wave_draw(app->window, dl, dv->wave_preview, &d);
+        cb_wave_draw(app->window, dl, dv->wave_preview, &d);
         ui->overview_mode_drawn = d.mode;
     } else {
         ui_text_centre(ui, dl, nullptr, 11.0f, a, b, UI_FAINT, t->has_waveforms ? "" : "not analysed");
@@ -274,8 +274,8 @@ void ui_overview(UiState *ui, int deck, ImVec2 a, ImVec2 b)
 
     // Memory cues: a red head and a 1 px line; hot cues: their badge on top.
     for (int i = 0; i < t->nb_cues; i++) {
-        const RXCue *c = &t->cues[i];
-        if (rx_cue_is_hot(c))
+        const CBCue *c = &t->cues[i];
+        if (cb_cue_is_hot(c))
             continue;
         float x = floorf(xof(c->time)) + 0.5f;
         ImU32 col = ui_rgb(ui_memory_cue_rgb(c));
@@ -283,8 +283,8 @@ void ui_overview(UiState *ui, int deck, ImVec2 a, ImVec2 b)
         memory_head(dl, x, a.y, PX(4), PX(6), col);
     }
     for (int i = 0; i < t->nb_cues; i++) {
-        const RXCue *c = &t->cues[i];
-        if (!rx_cue_is_hot(c))
+        const CBCue *c = &t->cues[i];
+        if (!cb_cue_is_hot(c))
             continue;
         float x = floorf(xof(c->time));
         dl->AddLine(ImVec2(x + 0.5f, a.y), ImVec2(x + 0.5f, b.y), ui_rgb(ui_hot_cue_rgb(ui, c), 0.55f));
@@ -316,10 +316,10 @@ void ui_overview(UiState *ui, int deck, ImVec2 a, ImVec2 b)
 
 static void detail_menu(UiState *ui, int deck)
 {
-    RXApp *app = ui->app;
-    RXDeckView *dv = &app->decks[deck];
+    CBApp *app = ui->app;
+    CBDeckView *dv = &app->decks[deck];
     UiDeck *ud = &ui->decks[deck];
-    RXTrack *t = dv->ctl.track;
+    CBTrack *t = dv->ctl.track;
     if (!ImGui::BeginPopup("##cuemenu"))
         return;
     if (!t) {
@@ -330,71 +330,71 @@ static void detail_menu(UiState *ui, int deck)
     ImGui::TextDisabled("At %s", ui_fmt_time(ud->ctx_time, buf, sizeof(buf), true));
     ImGui::Separator();
     if (ImGui::MenuItem("Set memory cue here")) {
-        RXCue c;
-        rx_cue_init(&c, ud->ctx_time);
-        rx_cue_attach_to_grid(&c, rx_track_analysed(t) ? &t->grid : nullptr);
-        if (rx_track_add_cue(t, &c) >= 0)
-            rx_app_save_track(app, t);
+        CBCue c;
+        cb_cue_init(&c, ud->ctx_time);
+        cb_cue_attach_to_grid(&c, cb_track_analysed(t) ? &t->grid : nullptr);
+        if (cb_track_add_cue(t, &c) >= 0)
+            cb_app_save_track(app, t);
     }
     if (ImGui::BeginMenu("Set hot cue here")) {
-        for (int slot = 0; slot < RX_HOT_CUE_SLOTS; slot++) {
+        for (int slot = 0; slot < CB_HOT_CUE_SLOTS; slot++) {
             char label[64], at[32] = "";
-            int idx = rx_track_hot_cue(t, slot);
+            int idx = cb_track_hot_cue(t, slot);
             if (idx >= 0)
                 snprintf(at, sizeof(at), "replaces %s",
                          ui_fmt_time(t->cues[idx].time, buf, sizeof(buf), true));
             snprintf(label, sizeof(label), "%c", 'A' + slot);
             if (ImGui::MenuItem(label, at)) {
-                RXCue c;
-                rx_cue_init(&c, ud->ctx_time);
+                CBCue c;
+                cb_cue_init(&c, ud->ctx_time);
                 c.hot = slot;
-                rx_cue_attach_to_grid(&c, rx_track_analysed(t) ? &t->grid : nullptr);
-                if (rx_track_add_cue(t, &c) >= 0)
-                    rx_app_save_track(app, t);
+                cb_cue_attach_to_grid(&c, cb_track_analysed(t) ? &t->grid : nullptr);
+                if (cb_track_add_cue(t, &c) >= 0)
+                    cb_app_save_track(app, t);
             }
         }
         ImGui::EndMenu();
     }
     int ci = ud->ctx_cue;
     if (ci >= 0 && ci < t->nb_cues) {
-        RXCue *c = &t->cues[ci];
+        CBCue *c = &t->cues[ci];
         ImGui::Separator();
-        if (rx_cue_is_hot(c))
-            ImGui::TextDisabled("Hot cue %c", rx_cue_letter(c));
+        if (cb_cue_is_hot(c))
+            ImGui::TextDisabled("Hot cue %c", cb_cue_letter(c));
         else
-            ImGui::TextDisabled(rx_cue_is_loop(c) ? "Memory loop" : "Memory cue");
+            ImGui::TextDisabled(cb_cue_is_loop(c) ? "Memory loop" : "Memory cue");
         ImGui::SetNextItemWidth(PX(200));
         if (ImGui::InputTextWithHint("##cname", "Name", ud->name_buf, sizeof(ud->name_buf),
                                      ImGuiInputTextFlags_EnterReturnsTrue) ||
             ImGui::IsItemDeactivatedAfterEdit()) {
-            if (rx_cue_is_hot(c)) {
-                rx_ctl_hot_cue_set(&dv->ctl, c->hot, ud->name_buf, c->color);
+            if (cb_cue_is_hot(c)) {
+                cb_ctl_hot_cue_set(&dv->ctl, c->hot, ud->name_buf, c->color);
             } else {
                 snprintf(c->name, sizeof(c->name), "%s", ud->name_buf);
-                rx_app_save_track(app, t);
+                cb_app_save_track(app, t);
             }
         }
-        char col[RX_COLOR_MAX];
-        bool picked = rx_cue_is_hot(c) ? ui_hot_cue_colour_menu(ui, c->color, col)
+        char col[CB_COLOR_MAX];
+        bool picked = cb_cue_is_hot(c) ? ui_hot_cue_colour_menu(ui, c->color, col)
                                        : ui_track_colour_menu(ui, c->color, col);
         if (picked) {
-            if (rx_cue_is_hot(c)) {
-                rx_ctl_hot_cue_set(&dv->ctl, c->hot, c->name, col);
+            if (cb_cue_is_hot(c)) {
+                cb_ctl_hot_cue_set(&dv->ctl, c->hot, c->name, col);
             } else {
                 snprintf(c->color, sizeof(c->color), "%s", col);
-                rx_app_save_track(app, t);
+                cb_app_save_track(app, t);
             }
             ImGui::CloseCurrentPopup();
         }
         if (ImGui::MenuItem("Delete")) {
-            if (rx_cue_is_hot(c)) {
-                rx_ctl_hot_cue_delete(&dv->ctl, c->hot);
-            } else if (rx_track_remove_cue(t, ci) >= 0) {
+            if (cb_cue_is_hot(c)) {
+                cb_ctl_hot_cue_delete(&dv->ctl, c->hot);
+            } else if (cb_track_remove_cue(t, ci) >= 0) {
                 if (dv->ctl.active_memory_loop == ci)
                     dv->ctl.active_memory_loop = -1;
                 else if (dv->ctl.active_memory_loop > ci)
                     dv->ctl.active_memory_loop--;
-                rx_app_save_track(app, t);
+                cb_app_save_track(app, t);
             }
         }
     }
@@ -403,13 +403,13 @@ static void detail_menu(UiState *ui, int deck)
 
 void ui_detail(UiState *ui, int deck, ImVec2 a, ImVec2 b)
 {
-    RXApp *app = ui->app;
-    RXDeckView *dv = &app->decks[deck];
+    CBApp *app = ui->app;
+    CBDeckView *dv = &app->decks[deck];
     UiDeck *ud = &ui->decks[deck];
-    RXTrack *t = dv->track;
+    CBTrack *t = dv->track;
     ImDrawList *dl = ImGui::GetWindowDrawList();
     ImGuiIO &io = ImGui::GetIO();
-    RXDeckState st;
+    CBDeckState st;
     double pos = ui_deck_position(ui, deck, &st);
     bool loaded = st.loaded && t && !dv->loading_request;
     float w = b.x - a.x, h = b.y - a.y;
@@ -445,7 +445,7 @@ void ui_detail(UiState *ui, int deck, ImVec2 a, ImVec2 b)
     if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right) && loaded) {
         // On the QUANTIZE grid, a beat or the part of one the players'
         // QUANTIZE BEAT VALUE says, as the deck's own cues land.
-        double tt = rx_ctl_quantized(&dv->ctl, pos + (io.MousePos.x - cx) * spp);
+        double tt = cb_ctl_quantized(&dv->ctl, pos + (io.MousePos.x - cx) * spp);
         ud->ctx_time = ImClamp(tt, 0.0, t->duration);
         ud->ctx_cue = -1;
         float best = PX(7);
@@ -465,31 +465,31 @@ void ui_detail(UiState *ui, int deck, ImVec2 a, ImVec2 b)
     if (loaded) {
         int bpb = beats_per_bar(t);
         int nb = 0;
-        const RXBeat *beats = ui_deck_beats(ui, deck, &nb);
+        const CBBeat *beats = ui_deck_beats(ui, deck, &nb);
 
         // Loop bands behind the markers.
         for (int i = 0; i < t->nb_cues; i++) {
-            const RXCue *c = &t->cues[i];
-            if (rx_cue_is_loop(c) && c->loop_end > w0 && c->time < w1)
+            const CBCue *c = &t->cues[i];
+            if (cb_cue_is_loop(c) && c->loop_end > w0 && c->time < w1)
                 loop_band(dl, xof(c->time), xof(c->loop_end), top, b.y, 0.18f);
         }
         if (st.loop_in >= 0 && st.loop_out > st.loop_in && st.loop_out > w0 && st.loop_in < w1)
             loop_band(dl, xof(st.loop_in), xof(st.loop_out), top, b.y, st.loop_enabled ? 0.30f : 0.15f);
 
         if (dv->wave_detail) {
-            RXWaveDraw d = {};
+            CBWaveDraw d = {};
             d.x0 = a.x;
             d.y0 = a.y;
             d.x1 = b.x;
             d.y1 = b.y;
-            d.col0 = w0 * RX_WAVE_COLUMNS_PER_SECOND;
-            d.col1 = w1 * RX_WAVE_COLUMNS_PER_SECOND;
-            d.mode = ui->detail_half ? RX_WAVE_HALF_OVERLAID : RX_WAVE_CENTRED;
+            d.col0 = w0 * CB_WAVE_COLUMNS_PER_SECOND;
+            d.col1 = w1 * CB_WAVE_COLUMNS_PER_SECOND;
+            d.mode = ui->detail_half ? CB_WAVE_HALF_OVERLAID : CB_WAVE_CENTRED;
             d.inset_top = top - a.y;
             d.inset_bottom = PX(3);
             d.detail = true;
             d.alpha = 1.0f;
-            rx_wave_draw(app->window, dl, dv->wave_detail, &d);
+            cb_wave_draw(app->window, dl, dv->wave_detail, &d);
         } else {
             ui_text_centre(ui, dl, nullptr, 12.0f, a, b, UI_FAINT, "No waveform: analyse the track");
         }
@@ -499,7 +499,7 @@ void ui_detail(UiState *ui, int deck, ImVec2 a, ImVec2 b)
         // and every beat at 64 bars are left out; bar numbers are thinned
         // to keep them legible.
         if (beats && nb > 0) {
-            double beat_px = 60.0 / ImMax(rx_grid_bpm_at(&t->grid, pos), 1.0) / spp;
+            double beat_px = 60.0 / ImMax(cb_grid_bpm_at(&t->grid, pos), 1.0) / spp;
             bool every_beat = beat_px >= PX(4) && dv->zoom_bars < 64;
             int label_every = 1;
             while (beat_px * bpb * label_every < PX(26))
@@ -514,7 +514,7 @@ void ui_detail(UiState *ui, int deck, ImVec2 a, ImVec2 b)
                 dl->AddLine(ImVec2(x, a.y + PX(10)), ImVec2(x, top), down ? UI_DOWNBEAT : UI_BEAT);
                 if (down) {
                     int bar = 0, bn = 0;
-                    rx_grid_bar_of(&t->grid, beats[i].time + 1e-4, &bar, &bn);
+                    cb_grid_bar_of(&t->grid, beats[i].time + 1e-4, &bar, &bn);
                     // Left of the line: a hot cue badge on the downbeat
                     // starts at the line and goes right.
                     if ((bar - 1) % label_every == 0) {
@@ -538,8 +538,8 @@ void ui_detail(UiState *ui, int deck, ImVec2 a, ImVec2 b)
 
         // Cue markers, taller than on the overview.
         for (int i = 0; i < t->nb_cues; i++) {
-            const RXCue *c = &t->cues[i];
-            if (rx_cue_is_hot(c) || c->time < w0 - 1 || c->time > w1 + 1)
+            const CBCue *c = &t->cues[i];
+            if (cb_cue_is_hot(c) || c->time < w0 - 1 || c->time > w1 + 1)
                 continue;
             float x = floorf(xof(c->time)) + 0.5f;
             ImU32 col = ui_rgb(ui_memory_cue_rgb(c));
@@ -547,8 +547,8 @@ void ui_detail(UiState *ui, int deck, ImVec2 a, ImVec2 b)
             memory_head(dl, x, a.y + PX(2), PX(6), PX(10), col);
         }
         for (int i = 0; i < t->nb_cues; i++) {
-            const RXCue *c = &t->cues[i];
-            if (!rx_cue_is_hot(c) || c->time < w0 - 1 || c->time > w1 + 1)
+            const CBCue *c = &t->cues[i];
+            if (!cb_cue_is_hot(c) || c->time < w0 - 1 || c->time > w1 + 1)
                 continue;
             float x = floorf(xof(c->time));
             ImU32 col = ui_rgb(ui_hot_cue_rgb(ui, c));
@@ -614,28 +614,28 @@ void ui_detail(UiState *ui, int deck, ImVec2 a, ImVec2 b)
 // the stacked half, rekordbox's row preview (the shader holds rbxport's
 // measured 128/256/128 scales), or centred with both halves; hot cue
 // badges and memory cue heads over it. The upload and its cache are
-// app.c's (rx_app_preview_wave).
-void ui_row_preview(UiState *ui, const RXTrack *t, ImVec2 a, ImVec2 b, bool analysing)
+// app.c's (cb_app_preview_wave).
+void ui_row_preview(UiState *ui, const CBTrack *t, ImVec2 a, ImVec2 b, bool analysing)
 {
-    RXApp *app = ui->app;
+    CBApp *app = ui->app;
     ImDrawList *dl = ImGui::GetWindowDrawList();
-    RXWaveGpu *g = t->has_waveforms ? rx_app_preview_wave(app, t) : nullptr;
+    CBWaveGpu *g = t->has_waveforms ? cb_app_preview_wave(app, t) : nullptr;
     if (!g && t->has_waveforms)
         ui->previews_pending = true;
     float w = b.x - a.x;
     if (g) {
-        RXWaveDraw d = {};
+        CBWaveDraw d = {};
         d.x0 = a.x;
         d.y0 = a.y;
         d.x1 = b.x;
         d.y1 = b.y;
         d.col0 = 0;
-        d.col1 = rx_wave_columns(g);
-        d.mode = ui->overview_full ? RX_WAVE_CENTRED : RX_WAVE_HALF_STACKED;
+        d.col1 = cb_wave_columns(g);
+        d.mode = ui->overview_full ? CB_WAVE_CENTRED : CB_WAVE_HALF_STACKED;
         d.gain = 1.0f;
         d.inset_top = PX(1);
         d.alpha = t->missing ? 0.3f : 1.0f;
-        rx_wave_draw(app->window, dl, g, &d);
+        cb_wave_draw(app->window, dl, g, &d);
         ui->preview_mode_drawn = d.mode;
     } else if (!t->has_waveforms) {
         // Unanalysed: a thin flat line, where the waveform's silence would be.
@@ -645,14 +645,14 @@ void ui_row_preview(UiState *ui, const RXTrack *t, ImVec2 a, ImVec2 b, bool anal
     if (t->duration > 0 && !t->missing) {
         float bsz = PX(7);
         for (int i = 0; i < t->nb_cues; i++) {
-            const RXCue *c = &t->cues[i];
+            const CBCue *c = &t->cues[i];
             float x = a.x + (float)(c->time / t->duration) * w;
-            if (!rx_cue_is_hot(c))
+            if (!cb_cue_is_hot(c))
                 memory_head(dl, floorf(x) + 0.5f, a.y, PX(3), PX(4), ui_rgb(ui_memory_cue_rgb(c)));
         }
         for (int i = 0; i < t->nb_cues; i++) {
-            const RXCue *c = &t->cues[i];
-            if (!rx_cue_is_hot(c))
+            const CBCue *c = &t->cues[i];
+            if (!cb_cue_is_hot(c))
                 continue;
             float x = floorf(ImMin(a.x + (float)(c->time / t->duration) * w, b.x - bsz));
             dl->AddRectFilled(ImVec2(x, a.y), ImVec2(x + bsz, a.y + bsz), ui_rgb(ui_hot_cue_rgb(ui, c)));

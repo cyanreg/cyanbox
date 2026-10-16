@@ -7,7 +7,7 @@
  * audio away: the clock runs as it would on a device, for headless runs.
  * With period < 0 (manual mode) there is no thread at all and the
  * callback only runs, -period frames at a time, inside
- * rx_player_null_advance() on the owner thread; that keeps the ring's
+ * cb_player_null_advance() on the owner thread; that keeps the ring's
  * single consumer single and makes tests exact and repeatable. */
 
 #include "player_internal.h"
@@ -16,7 +16,7 @@
 #include <stdatomic.h>
 #include <time.h>
 
-struct RXNullOut {
+struct CBNullOut {
     pthread_t   thread;
     bool        started;
     atomic_bool stop;
@@ -26,18 +26,18 @@ struct RXNullOut {
 
 static void *null_thread(void *arg)
 {
-    RXPlayer *p = arg;
-    RXNullOut *n = p->null;
+    CBPlayer *p = arg;
+    CBNullOut *n = p->null;
     struct timespec next;
     clock_gettime(CLOCK_MONOTONIC, &next);
     int64_t rem = 0;
 
     while (!atomic_load_explicit(&n->stop, memory_order_relaxed)) {
-        rx_player_mix(p, n->buf, n->period);
+        cb_player_mix(p, n->buf, n->period);
 
         /* Next deadline: period / rate seconds later, the remainder
          * carried so the schedule does not drift. */
-        int rate = rx_player_rate(p);
+        int rate = cb_player_rate(p);
         int64_t ns = (int64_t)n->period * 1000000000 + rem;
         rem = ns % rate;
         next.tv_nsec += ns / rate;
@@ -58,32 +58,32 @@ static void *null_thread(void *arg)
     return NULL;
 }
 
-int rx_player_null_open(RXPlayer *p)
+int cb_player_null_open(CBPlayer *p)
 {
-    RXNullOut *n = calloc(1, sizeof(*n));
+    CBNullOut *n = calloc(1, sizeof(*n));
     if (!n)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     p->null = n;
     n->period = p->period;
     atomic_init(&n->stop, false);
     n->buf = malloc(sizeof(*n->buf) * 2 * n->period);
     if (!n->buf)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
 
     if (!p->manual) {
         int err = pthread_create(&n->thread, NULL, null_thread, p);
         if (err)
-            return RX_ERROR(err);
+            return CB_ERROR(err);
         n->started = true;
     }
 
-    atomic_store_explicit(&p->out_state, RX_OUT_RUNNING, memory_order_release);
+    atomic_store_explicit(&p->out_state, CB_OUT_RUNNING, memory_order_release);
     return 0;
 }
 
-void rx_player_null_close(RXPlayer *p)
+void cb_player_null_close(CBPlayer *p)
 {
-    RXNullOut *n = p->null;
+    CBNullOut *n = p->null;
     if (!n)
         return;
     if (n->started) {
@@ -95,14 +95,14 @@ void rx_player_null_close(RXPlayer *p)
     p->null = NULL;
 }
 
-void rx_player_null_run(RXPlayer *p, int frames)
+void cb_player_null_run(CBPlayer *p, int frames)
 {
-    RXNullOut *n = p->null;
+    CBNullOut *n = p->null;
     if (!n)
         return;
     while (frames > 0) {
-        int len = RX_MIN(frames, n->period);
-        rx_player_mix(p, n->buf, len);
+        int len = CB_MIN(frames, n->period);
+        cb_player_mix(p, n->buf, len);
         frames -= len;
     }
 }

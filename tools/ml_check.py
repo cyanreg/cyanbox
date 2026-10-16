@@ -6,7 +6,7 @@ and transformers' WhisperFeatureExtractor and WhisperEncoderLayer), stage by
 stage: each stage is computed here from the GPU's own input to it, so an
 error shows where it is made rather than downstream.
 
-    RXBOX_ML_DUMP=DIR rxbox-ml -m MODEL -l 30 -q "..." FILE
+    CYANBOX_ML_DUMP=DIR cyanbox-ml -m MODEL -l 30 -q "..." FILE
     python3 ml_check.py MODEL DIR
 
 Only the tensors a stage needs are read from the GGUF (memory-mapped, a few

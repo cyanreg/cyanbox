@@ -1,16 +1,16 @@
 # The model: genre, colour and comment
 
-How rxbox tags a track with a genre, a colour (one of rekordbox's eight,
+How cyanbox tags a track with a genre, a colour (one of rekordbox's eight,
 picked from a legend) and a comment, what the model behind it can and
 cannot tell, and how it runs. The model is MOSS-Audio-4B-Instruct
 (OpenMOSS, Apache-2.0) from a GGUF file: its audio
 encoder in F16, its decoder (Qwen3-4B) in Q4_K. The code is `src/ml/`
-(`rxbox/ml.h`), the shaders `src/ml/shaders/`, the kernel tests
+(`cyanbox/ml.h`), the shaders `src/ml/shaders/`, the kernel tests
 `tests/ml/test_kernels.c`, the check against the reference implementation
-`tools/ml_check.py`, and the tool for trying prompts `tools/rxbox-ml.c`.
+`tools/ml_check.py`, and the tool for trying prompts `tools/cyanbox-ml.c`.
 
-In rxbox it runs only when asked: the track menu's Analyse tags, Analysis →
-Analyse tags of selection, or `rxbox tag TRACK...`. The tracks join one
+In cyanbox it runs only when asked: the track menu's Analyse tags, Analysis →
+Analyse tags of selection, or `cyanbox tag TRACK...`. The tracks join one
 batch that loads the model once and unloads it after the last
 (`src/app/jobs.c`); a result writes the colour and the comment, and the
 genre unless the user typed one (README.md, Tagging).
@@ -21,7 +21,7 @@ genre unless the user typed one (README.md, Tagging).
 | --- | --- |
 | Loading the model, once | 3.5 s; 4.1 GB of weights onto the GPU, none kept in RAM |
 | Listening (the whole track) | ~4 s on a 6900 XT, ~70x real time |
-| The other questions of `rx_ml_tag` (seven yes/no, three in words) | ~1.1 s |
+| The other questions of `cb_ml_tag` (seven yes/no, three in words) | ~1.1 s |
 | The colour question, in eight orders | ~1.7 s (1.3–2.1; 2.5 s with three renders sharing the GPU) |
 | Memory | 174 MB of RAM at most (64 MB of it a read buffer while loading); 5.4 GB of VRAM in buffers from one listen to the next (4.1 GB weights, 1.2 GB cache, the decoder's scratch), 6.2 GB at the peak for a 4-minute track and 6.7 GB for one of 9.5 minutes or more (the encoder's scratch, freed after listening) |
 
@@ -49,7 +49,7 @@ ambient, orchestral):
   ("for example: uplifting progressive house, bass house") only makes it
   repeat the first example.
 - **Tempo, key, chords: no.** It answers 111 BPM and C major for nearly
-  everything (rxbox's own analysis has both, measured).
+  everything (cyanbox's own analysis has both, measured).
 - **Numbers on a scale: no.** "On a scale of 0 to 9, how energetic?" is 8 or
   9 for anything with a beat. Its probabilities move, but less than a
   yes/no question's.
@@ -62,7 +62,7 @@ ambient, orchestral):
 
 ## The tags
 
-`rx_ml_tag` listens to the whole track (up to what fits in the context
+`cb_ml_tag` listens to the whole track (up to what fits in the context
 beside the questions, about nine and a half minutes; longer tracks are cut
 at the end) and asks:
 
@@ -103,7 +103,7 @@ H. calm and dark, ambient
 Answer with the letter only.
 ```
 
-The answer is scored, not sampled (`rx_ml_pick`, on `rx_ml_choose`): one
+The answer is scored, not sampled (`cb_ml_pick`, on `cb_ml_choose`): one
 forward pass over the question, then the logits of the eight letters, each
 a single token, at the answer's first token, softmaxed over the eight. The
 letters hold 99.9 % of the whole distribution there (99.7 % at least, on
@@ -111,7 +111,7 @@ every ask below), so the model does answer with a letter; its probability
 for each is how well it hears that description in the track. The colour is
 the most probable, so the division into eight is the model's; the eight
 probabilities are kept with the track, with a hash of the legend's words
-(`rx_ml_legend_hash`), so a track tagged under other words shows as such.
+(`cb_ml_legend_hash`), so a track tagged under other words shows as such.
 Should the letters ever hold less than half of it, the tag fails: the
 model is not answering the question, and eight renormalised scraps would
 make a colour of nothing.
@@ -143,7 +143,7 @@ together pick for 34 % of the asks.
 
 So the question is asked in all eight rotations (rotation r lists the
 description r + k under the k-th letter) and the eight answers are combined
-by their geometric mean, renormalised (`rx_ml_color`). A letter's pull
+by their geometric mean, renormalised (`cb_ml_color`). A letter's pull
 multiplies the probability of whatever stands under it, and each
 description has stood under each letter once, so in the product the pulls
 cancel and what is left is the model's preference among the words. The
@@ -152,7 +152,7 @@ picks less steadily: the colour from the even rotations (0, 2, 4, 6) and
 from the odd ones agree for 49 tracks in 58 with the geometric mean, 29
 with the plain mean, and the geometric mean's top probability is higher
 (0.50 on average against 0.35). Four rotations would pick what eight pick
-for 53 tracks in 58, for half the time; rxbox asks all eight.
+for 53 tracks in 58, for half the time; cyanbox asks all eight.
 
 Other wordings did not help (on 11 of the tracks): digits for labels move
 the pull to 5 and 6 and pick less steadily (9 in 11 even against odd,
@@ -195,7 +195,7 @@ against 0.19), so dividing it out tips most of them to yellow. It moves
 Office" (calm, peaceful) from yellow to green, and its colours follow the
 mood measure a little better, but the intensity measure no better. The
 prior measured with silence instead spreads them less still (yellow 36 and
-38 of 58 for 10 and 240 s). So rxbox keeps the probabilities as the model
+38 of 58 for 10 and 240 s). So cyanbox keeps the probabilities as the model
 gives them. The pull is the words' as much as the model's: a description
 the model favours wins the close calls, and the user can reword it.
 
@@ -293,7 +293,7 @@ one alone ran over 250 tracks without fault.
   the reference code (transformers' Whisper feature extractor and encoder
   layer, MOSS-Audio's conv stem and gated MLPs), each stage from the GPU's
   own input to it, reading only the tensors it needs from the GGUF. Run
-  `RXBOX_ML_DUMP=DIR rxbox-ml ...` first. On a 37 s excerpt every stage
+  `CYANBOX_ML_DUMP=DIR cyanbox-ml ...` first. On a 37 s excerpt every stage
   agrees to 2e-5 or better (relative to its largest value).
 - The decoder answers "What is the capital of France?" with "The capital of
   France is Paris.", and the encoder and decoder together transcribe
@@ -302,15 +302,15 @@ one alone ran over 250 tracks without fault.
 ## Trying prompts
 
 ```sh
-rxbox-ml -m MODEL -t FILE...                       # the tags and the colours
-rxbox-ml -m MODEL -t -L "a|b|c|d|e|f|g|h" FILE     # another legend, pink to purple
-rxbox-ml -m MODEL -b FILE...                       # the colour in each order
-rxbox-ml -m MODEL -b                               # the same of no audio: the words' prior
-rxbox-ml -m MODEL -q "Describe this music." FILE   # an answer in words
-rxbox-ml -m MODEL -y "Is this track dark? Answer yes or no." FILE
-rxbox-ml -m MODEL -c "... Answer with one digit." FILE
-rxbox-ml -m MODEL -r "Genre? Answer with the genre name only.|House|Techno" FILE
+cyanbox-ml -m MODEL -t FILE...                       # the tags and the colours
+cyanbox-ml -m MODEL -t -L "a|b|c|d|e|f|g|h" FILE     # another legend, pink to purple
+cyanbox-ml -m MODEL -b FILE...                       # the colour in each order
+cyanbox-ml -m MODEL -b                               # the same of no audio: the words' prior
+cyanbox-ml -m MODEL -q "Describe this music." FILE   # an answer in words
+cyanbox-ml -m MODEL -y "Is this track dark? Answer yes or no." FILE
+cyanbox-ml -m MODEL -c "... Answer with one digit." FILE
+cyanbox-ml -m MODEL -r "Genre? Answer with the genre name only.|House|Techno" FILE
 ```
 
 `-s` and `-l` choose an excerpt (`-s -1`: from the middle);
-`RXBOX_ML_PROFILE=1` times every kernel.
+`CYANBOX_ML_PROFILE=1` times every kernel.

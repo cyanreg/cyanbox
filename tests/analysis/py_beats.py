@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md.
 """Runs dj's Python beat analyser over a list of files and writes a CSV
-with the columns rxbox-eval writes, so `rxbox-eval --compare` can measure
+with the columns cyanbox-eval writes, so `cyanbox-eval --compare` can measure
 how the two analysers agree.
 
 Usage (any python3; it re-executes itself under dj's venv):

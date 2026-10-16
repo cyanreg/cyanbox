@@ -11,11 +11,11 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "rxbox/common.h"
+#include "cyanbox/common.h"
 
 /* ------------------------------------------------------------------ errors */
 
-int rx_vk_ret2err(VkResult res)
+int cb_vk_ret2err(VkResult res)
 {
     switch (res) {
     case VK_SUCCESS:
@@ -24,25 +24,25 @@ int rx_vk_ret2err(VkResult res)
     case VK_ERROR_OUT_OF_DEVICE_MEMORY:
     case VK_ERROR_OUT_OF_POOL_MEMORY:
     case VK_ERROR_FRAGMENTED_POOL:
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     case VK_ERROR_DEVICE_LOST:
-        return RX_ERROR(EIO);
+        return CB_ERROR(EIO);
     case VK_ERROR_INITIALIZATION_FAILED:
     case VK_ERROR_INCOMPATIBLE_DRIVER:
     case VK_ERROR_SURFACE_LOST_KHR:
     case VK_ERROR_EXTENSION_NOT_PRESENT:
     case VK_ERROR_FEATURE_NOT_PRESENT:
     case VK_ERROR_LAYER_NOT_PRESENT:
-        return RX_ERROR(ENODEV);
+        return CB_ERROR(ENODEV);
     case VK_TIMEOUT:
     case VK_NOT_READY:
-        return RX_ERROR(ETIMEDOUT);
+        return CB_ERROR(ETIMEDOUT);
     default:
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
     }
 }
 
-const char *rx_vk_strerror(VkResult res)
+const char *cb_vk_strerror(VkResult res)
 {
     switch (res) {
     case VK_SUCCESS:                      return "success";
@@ -71,21 +71,21 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debug_cb(VkDebugUtilsMessageSeverityFlagBi
                                                const VkDebugUtilsMessengerCallbackDataEXT *data,
                                                void *opaque)
 {
-    RXVkDev *d = opaque;
+    CBVkDev *d = opaque;
 
     if (sev & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
         __atomic_fetch_add(&d->validation_errors, 1, __ATOMIC_RELAXED);
-        rx_err("%s: %s", d->tag, data->pMessage);
+        cb_err("%s: %s", d->tag, data->pMessage);
     } else if (sev & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
-        rx_warn("%s: %s", d->tag, data->pMessage);
+        cb_warn("%s: %s", d->tag, data->pMessage);
     } else {
-        rx_debug("%s: %s", d->tag, data->pMessage);
+        cb_debug("%s: %s", d->tag, data->pMessage);
     }
 
     return VK_FALSE;
 }
 
-int rx_vkdev_validation_errors(const RXVkDev *d)
+int cb_vkdev_validation_errors(const CBVkDev *d)
 {
     return __atomic_load_n(&d->validation_errors, __ATOMIC_RELAXED);
 }
@@ -132,19 +132,19 @@ static bool have_instance_ext(const char *layer, const char *name)
 
 /* ---------------------------------------------------------------- instance */
 
-int rx_vkdev_instance(RXVkDev *d, const RXVkDevOptions *o)
+int cb_vkdev_instance(CBVkDev *d, const CBVkDevOptions *o)
 {
     d->tag = o->tag;
     uint32_t version = 0;
     if (vkEnumerateInstanceVersion(&version) != VK_SUCCESS || version < VK_API_VERSION_1_3) {
-        rx_debug("%s: the Vulkan loader is older than 1.3", d->tag);
-        return RX_ERROR(ENODEV);
+        cb_debug("%s: the Vulkan loader is older than 1.3", d->tag);
+        return CB_ERROR(ENODEV);
     }
 
     /* The user's extensions, then the validation layer's two. */
     const char **exts = calloc(o->nb_exts + 2, sizeof(*exts));
     if (!exts)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     uint32_t nb_exts = 0;
     for (uint32_t i = 0; i < o->nb_exts; i++)
         exts[nb_exts++] = o->exts[i];
@@ -160,7 +160,7 @@ int rx_vkdev_instance(RXVkDev *d, const RXVkDevOptions *o)
             if (features)
                 exts[nb_exts++] = VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME;
         } else {
-            rx_warn("%s: VK_LAYER_KHRONOS_validation is not installed", d->tag);
+            cb_warn("%s: VK_LAYER_KHRONOS_validation is not installed", d->tag);
         }
         debug_utils = have_instance_ext(NULL, VK_EXT_DEBUG_UTILS_EXTENSION_NAME) ||
                       (nb_layers && have_instance_ext("VK_LAYER_KHRONOS_validation",
@@ -177,15 +177,15 @@ int rx_vkdev_instance(RXVkDev *d, const RXVkDevOptions *o)
     };
     VkValidationFeaturesEXT vfeat = {
         .sType                         = VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT,
-        .enabledValidationFeatureCount = RX_ARRAY_ELEMS(enables),
+        .enabledValidationFeatureCount = CB_ARRAY_ELEMS(enables),
         .pEnabledValidationFeatures    = enables,
     };
 
     VkApplicationInfo app = {
         .sType              = VK_STRUCTURE_TYPE_APPLICATION_INFO,
-        .pApplicationName   = "rxbox",
+        .pApplicationName   = "cyanbox",
         .applicationVersion = 1,
-        .pEngineName        = "rxbox",
+        .pEngineName        = "cyanbox",
         .engineVersion      = 1,
         .apiVersion         = VK_API_VERSION_1_3,
     };
@@ -201,9 +201,9 @@ int rx_vkdev_instance(RXVkDev *d, const RXVkDevOptions *o)
     VkResult res = vkCreateInstance(&info, NULL, &d->inst);
     free(exts);
     if (res != VK_SUCCESS) {
-        rx_debug("%s: no Vulkan instance: %s", d->tag, rx_vk_strerror(res));
+        cb_debug("%s: no Vulkan instance: %s", d->tag, cb_vk_strerror(res));
         d->inst = VK_NULL_HANDLE;
-        return rx_vk_ret2err(res);
+        return cb_vk_ret2err(res);
     }
 
     if (debug_utils) {
@@ -224,7 +224,7 @@ int rx_vkdev_instance(RXVkDev *d, const RXVkDevOptions *o)
             create(d->inst, &dinfo, NULL, &d->messenger);
     }
     if (nb_layers)
-        rx_info("%s: validation enabled%s", d->tag,
+        cb_info("%s: validation enabled%s", d->tag,
                 features ? " (with synchronisation checks)" : "");
 
     return 0;
@@ -232,7 +232,7 @@ int rx_vkdev_instance(RXVkDev *d, const RXVkDevOptions *o)
 
 /* ------------------------------------------------------------------ device */
 
-bool rx_vkdev_has_ext(VkPhysicalDevice pd, const char *name)
+bool cb_vkdev_has_ext(VkPhysicalDevice pd, const char *name)
 {
     uint32_t nb = 0;
     if (vkEnumerateDeviceExtensionProperties(pd, NULL, &nb, NULL) != VK_SUCCESS || !nb)
@@ -249,11 +249,11 @@ bool rx_vkdev_has_ext(VkPhysicalDevice pd, const char *name)
     return found;
 }
 
-const char *rx_vkdev_compute_family(VkPhysicalDevice pd, uint32_t *qfam)
+const char *cb_vkdev_compute_family(VkPhysicalDevice pd, uint32_t *qfam)
 {
     uint32_t nb = 0;
     vkGetPhysicalDeviceQueueFamilyProperties(pd, &nb, NULL);
-    VkQueueFamilyProperties *qf = calloc(RX_MAX(nb, 1), sizeof(*qf));
+    VkQueueFamilyProperties *qf = calloc(CB_MAX(nb, 1), sizeof(*qf));
     if (!qf)
         return "out of memory";
     vkGetPhysicalDeviceQueueFamilyProperties(pd, &nb, qf);
@@ -285,18 +285,18 @@ static int type_score(VkPhysicalDeviceType type)
     }
 }
 
-int rx_vkdev_pick(RXVkDev *d, const RXVkDevOptions *o)
+int cb_vkdev_pick(CBVkDev *d, const CBVkDevOptions *o)
 {
     uint32_t nb = 0;
     VkResult res = vkEnumeratePhysicalDevices(d->inst, &nb, NULL);
     if (res != VK_SUCCESS || !nb) {
-        rx_debug("%s: no Vulkan devices", d->tag);
-        return RX_ERROR(ENODEV);
+        cb_debug("%s: no Vulkan devices", d->tag);
+        return CB_ERROR(ENODEV);
     }
 
     VkPhysicalDevice *devs = calloc(nb, sizeof(*devs));
     if (!devs)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     vkEnumeratePhysicalDevices(d->inst, &nb, devs);
 
     const char *want = o->device && o->device[0] ? o->device : NULL;
@@ -307,20 +307,20 @@ int rx_vkdev_pick(RXVkDev *d, const RXVkDevOptions *o)
         uint32_t qfam = 0;
 
         vkGetPhysicalDeviceProperties(devs[i], &props);
-        bool match = want && rx_str_contains_fold(props.deviceName, want);
+        bool match = want && cb_str_contains_fold(props.deviceName, want);
         const char *why = props.apiVersion < VK_API_VERSION_1_3 ? "Vulkan 1.3 is required"
                         : o->check(o->opaque, devs[i], &props, &qfam);
         if (!why && props.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU && !match && !o->cpu)
             why = "a CPU implementation (used only when named)";
         if (why) {
-            rx_debug("%s: %s: %s", d->tag, props.deviceName, why);
+            cb_debug("%s: %s: %s", d->tag, props.deviceName, why);
             if (match)
-                rx_warn("%s: %s cannot be used: %s", d->tag, props.deviceName, why);
+                cb_warn("%s: %s cannot be used: %s", d->tag, props.deviceName, why);
             continue;
         }
 
         int score = type_score(props.deviceType) + (match ? 100 : 0);
-        rx_debug("%s: %s: usable, score %d", d->tag, props.deviceName, score);
+        cb_debug("%s: %s: usable, score %d", d->tag, props.deviceName, score);
         if (score > best_score) {
             best_score = score;
             named = match;
@@ -332,16 +332,16 @@ int rx_vkdev_pick(RXVkDev *d, const RXVkDevOptions *o)
     free(devs);
 
     if (best_score < 0)
-        return RX_ERROR(ENODEV);
+        return CB_ERROR(ENODEV);
     if (want && !named)
-        rx_warn("%s: no usable device matches \"%s\"; using %s", d->tag, want,
+        cb_warn("%s: no usable device matches \"%s\"; using %s", d->tag, want,
                 d->props.deviceName);
     /* Once more for the one chosen: what the check keeps is its. */
     o->check(o->opaque, d->phys, &d->props, &d->qfam);
     return 0;
 }
 
-int rx_vkdev_device(RXVkDev *d, const void *features, const char *const *exts,
+int cb_vkdev_device(CBVkDev *d, const void *features, const char *const *exts,
                     uint32_t nb_exts)
 {
     const float prio = 1.0f;
@@ -361,19 +361,19 @@ int rx_vkdev_device(RXVkDev *d, const void *features, const char *const *exts,
     };
     VkResult res = vkCreateDevice(d->phys, &info, NULL, &d->dev);
     if (res != VK_SUCCESS) {
-        rx_warn("%s: unable to create a device on %s: %s", d->tag, d->props.deviceName,
-                rx_vk_strerror(res));
+        cb_warn("%s: unable to create a device on %s: %s", d->tag, d->props.deviceName,
+                cb_vk_strerror(res));
         d->dev = VK_NULL_HANDLE;
-        return rx_vk_ret2err(res);
+        return cb_vk_ret2err(res);
     }
     vkGetDeviceQueue(d->dev, d->qfam, 0, &d->queue);
 
     /* Timestamps only measure; a queue without them goes without. */
     uint32_t nb_qf = 0;
     vkGetPhysicalDeviceQueueFamilyProperties(d->phys, &nb_qf, NULL);
-    VkQueueFamilyProperties *qf = calloc(RX_MAX(nb_qf, 1), sizeof(*qf));
+    VkQueueFamilyProperties *qf = calloc(CB_MAX(nb_qf, 1), sizeof(*qf));
     if (!qf)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     vkGetPhysicalDeviceQueueFamilyProperties(d->phys, &nb_qf, qf);
     uint32_t ts_bits = d->qfam < nb_qf ? qf[d->qfam].timestampValidBits : 0;
     free(qf);
@@ -393,14 +393,14 @@ int rx_vkdev_device(RXVkDev *d, const void *features, const char *const *exts,
     };
     res = vmaCreateAllocator(&vinfo, &d->vma);
     if (res != VK_SUCCESS) {
-        rx_warn("%s: unable to create the VMA allocator: %s", d->tag, rx_vk_strerror(res));
+        cb_warn("%s: unable to create the VMA allocator: %s", d->tag, cb_vk_strerror(res));
         d->vma = NULL;
-        return rx_vk_ret2err(res);
+        return cb_vk_ret2err(res);
     }
     return 0;
 }
 
-int rx_vkdev_timeline(RXVkDev *d, VkSemaphore *out)
+int cb_vkdev_timeline(CBVkDev *d, VkSemaphore *out)
 {
     VkSemaphoreTypeCreateInfo tinfo = {
         .sType         = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO,
@@ -411,10 +411,10 @@ int rx_vkdev_timeline(RXVkDev *d, VkSemaphore *out)
         .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
         .pNext = &tinfo,
     };
-    return rx_vk_ret2err(vkCreateSemaphore(d->dev, &sinfo, NULL, out));
+    return cb_vk_ret2err(vkCreateSemaphore(d->dev, &sinfo, NULL, out));
 }
 
-void rx_vkdev_destroy(RXVkDev *d)
+void cb_vkdev_destroy(CBVkDev *d)
 {
     if (d->vma)
         vmaDestroyAllocator(d->vma);
@@ -430,5 +430,5 @@ void rx_vkdev_destroy(RXVkDev *d)
         vkDestroyInstance(d->inst, NULL);
 
     const char *tag = d->tag;
-    *d = (RXVkDev) { .tag = tag };
+    *d = (CBVkDev) { .tag = tag };
 }

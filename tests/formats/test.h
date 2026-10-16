@@ -5,13 +5,13 @@
  * the test returns the failure count (0 passes). Tests run from the source
  * root (meson workdir) so tests/data is a relative path. */
 
-#ifndef RXBOX_TESTS_FORMATS_TEST_H
-#define RXBOX_TESTS_FORMATS_TEST_H
+#ifndef CYANBOX_TESTS_FORMATS_TEST_H
+#define CYANBOX_TESTS_FORMATS_TEST_H
 
 #include <stdio.h>
 #include <string.h>
 
-#include "rxbox/common.h"
+#include "cyanbox/common.h"
 
 static int failures;
 
@@ -49,4 +49,4 @@ static inline int test_result(const char *name)
     return failures ? 1 : 0;
 }
 
-#endif /* RXBOX_TESTS_FORMATS_TEST_H */
+#endif /* CYANBOX_TESTS_FORMATS_TEST_H */

@@ -9,23 +9,23 @@
  * error is a beat and a half of drift by the end).
  *
  * Stages here:
- *  - rx_track_beats: Ellis's dynamic-programming tracker. It finds the
+ *  - cb_track_beats: Ellis's dynamic-programming tracker. It finds the
  *    sequence of onsets best explained by beats about one period apart,
  *    over the whole track at once, so it is not thrown by a fill or a
  *    breakdown the way a causal tracker is, and it follows a slowly moving
  *    tempo (a live drummer) without being told how.
- *  - rx_measure_attacks: the nearest strong rise of a fine band envelope,
+ *  - cb_measure_attacks: the nearest strong rise of a fine band envelope,
  *    timed where the band's energy is halfway up the rise. Nearest rather
  *    than strongest (rbxport): a window reaching for the strongest rise
  *    lets a line chase a clap after the kick.
- *  - rx_fit_line: a Theil-Sen start (half the attacks may be wrong without
+ *  - cb_fit_line: a Theil-Sen start (half the attacks may be wrong without
  *    moving it), then weighted least squares with Tukey's biweight, so a
  *    missed kick or a ghost note pulls the line by nothing at all.
- *  - rx_fold: the average beat (dj's fold) in each band; the start of its
+ *  - cb_fold: the average beat (dj's fold) in each band; the start of its
  *    hit is the phase, and the bands say where the hit starts (the click,
  *    not the slower body of the kick).
- *  - rx_segment: lines only where the evidence wants more than one.
- *  - rx_snap_section: integer BPM when it costs no audible drift. */
+ *  - cb_segment: lines only where the evidence wants more than one.
+ *  - cb_snap_section: integer BPM when it costs no audible drift. */
 
 #include "beats_internal.h"
 
@@ -35,8 +35,8 @@
 
 /* -------------------------------------------------------------- tracker */
 
-int rx_track_beats(const RXOnsets *o, const float *period_s, double tightness,
-                   RXBeatObs **out, int *nb_out)
+int cb_track_beats(const CBOnsets *o, const float *period_s, double tightness,
+                   CBBeatObs **out, int *nb_out)
 {
     *out = NULL;
     *nb_out = 0;
@@ -53,7 +53,7 @@ int rx_track_beats(const RXOnsets *o, const float *period_s, double tightness,
     if (!score || !back) {
         free(score);
         free(back);
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     }
 
     /* score[t] = onset[t] + max over predecessors tau in [t - 2P, t - P/2]
@@ -69,7 +69,7 @@ int rx_track_beats(const RXOnsets *o, const float *period_s, double tightness,
                     free(score);
                     free(back);
                     free(pen);
-                    return RX_ERROR(ENOMEM);
+                    return CB_ERROR(ENOMEM);
                 }
                 pen = np;
                 pen_len = len;
@@ -80,7 +80,7 @@ int rx_track_beats(const RXOnsets *o, const float *period_s, double tightness,
             }
             pen_period = P;
         }
-        int dmin = RX_MAX((int)lrint(P / 2), 1), dmax = (int)(2.0 * P);
+        int dmin = CB_MAX((int)lrint(P / 2), 1), dmax = (int)(2.0 * P);
         double best = -INFINITY;
         int arg = -1;
         for (int d = dmin; d <= dmax && t - d >= 0; d++) {
@@ -100,19 +100,19 @@ int rx_track_beats(const RXOnsets *o, const float *period_s, double tightness,
     /* The last beat: the best score within the last period. */
     double Pend = period_s[n - 1] * fps;
     int last = n - 1;
-    for (int t = n - 1; t >= RX_MAX(0, n - 1 - (int)Pend); t--) {
+    for (int t = n - 1; t >= CB_MAX(0, n - 1 - (int)Pend); t--) {
         if (score[t] > score[last])
             last = t;
     }
     int count = 0;
     for (int t = last; t >= 0; t = back[t])
         count++;
-    RXBeatObs *b = calloc(RX_MAX(count, 1), sizeof(*b));
+    CBBeatObs *b = calloc(CB_MAX(count, 1), sizeof(*b));
     if (!b) {
         free(score);
         free(back);
         free(pen);
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     }
     int i = count;
     for (int t = last; t >= 0; t = back[t])
@@ -126,15 +126,15 @@ int rx_track_beats(const RXOnsets *o, const float *period_s, double tightness,
     for (i = 0; i < count; i++) {
         b[i].attack = NAN;
         b[i].weight = 0.0;
-        int f = RX_CLAMP((int)lrint(b[i].time * fps), 0, n - 1);
+        int f = CB_CLAMP((int)lrint(b[i].time * fps), 0, n - 1);
         double k = 0.0;
-        for (int j = RX_MAX(f - 2, 0); j <= RX_MIN(f + 2, n - 1); j++)
+        for (int j = CB_MAX(f - 2, 0); j <= CB_MIN(f + 2, n - 1); j++)
             k = fmax(k, o->low[j]);
         b[i].kick = k;
         if (i) {
             double P = period_s[f];
             int step = (int)lrint((b[i].time - b[i - 1].time) / P);
-            b[i].index = b[i - 1].index + RX_MAX(step, 1);
+            b[i].index = b[i - 1].index + CB_MAX(step, 1);
         }
     }
     *out = b;
@@ -142,20 +142,20 @@ int rx_track_beats(const RXOnsets *o, const float *period_s, double tightness,
     return 0;
 }
 
-int rx_track_beats_range(const RXOnsets *o, const float *period_s, double tightness,
-                         int f0, int f1, RXBeatObs **out, int *nb_out)
+int cb_track_beats_range(const CBOnsets *o, const float *period_s, double tightness,
+                         int f0, int f1, CBBeatObs **out, int *nb_out)
 {
     *out = NULL;
     *nb_out = 0;
-    f0 = RX_CLAMP(f0, 0, o->nb - 1);
-    f1 = RX_CLAMP(f1, f0, o->nb - 1);
+    f0 = CB_CLAMP(f0, 0, o->nb - 1);
+    f1 = CB_CLAMP(f1, f0, o->nb - 1);
     /* A view of the onsets from f0: the tracker reads the accent and the
      * kick band by frame. */
-    RXOnsets v = *o;
+    CBOnsets v = *o;
     v.nb = f1 - f0 + 1;
     v.accent = o->accent + f0;
     v.low = o->low + f0;
-    int ret = rx_track_beats(&v, period_s + f0, tightness, out, nb_out);
+    int ret = cb_track_beats(&v, period_s + f0, tightness, out, nb_out);
     for (int i = 0; ret >= 0 && i < *nb_out; i++)
         (*out)[i].time += f0 / o->fps;
     return ret;
@@ -163,39 +163,39 @@ int rx_track_beats_range(const RXOnsets *o, const float *period_s, double tightn
 
 /* --------------------------------------------------------- envelopes */
 
-int rx_beat_envs(RXEnvCtx *ctx, const RXBeatObs *beats, int nb, RXBeatEnvs *out)
+int cb_beat_envs(CBEnvCtx *ctx, const CBBeatObs *beats, int nb, CBBeatEnvs *out)
 {
     memset(out, 0, sizeof(*out));
-    out->env = malloc((size_t)RX_MAX(nb, 1) * RX_NB_BANDS * RX_ENV_LEN * sizeof(*out->env));
-    out->centre = malloc((size_t)RX_MAX(nb, 1) * sizeof(*out->centre));
+    out->env = malloc((size_t)CB_MAX(nb, 1) * CB_NB_BANDS * CB_ENV_LEN * sizeof(*out->env));
+    out->centre = malloc((size_t)CB_MAX(nb, 1) * sizeof(*out->centre));
     if (!out->env || !out->centre) {
-        rx_beat_envs_free(out);
-        return RX_ERROR(ENOMEM);
+        cb_beat_envs_free(out);
+        return CB_ERROR(ENOMEM);
     }
     out->nb = nb;
     /* All at once: on the GPU a window is one workgroup of a batch. */
-    double *t = malloc((size_t)RX_MAX(nb, 1) * sizeof(*t));
+    double *t = malloc((size_t)CB_MAX(nb, 1) * sizeof(*t));
     if (!t) {
-        rx_beat_envs_free(out);
-        return RX_ERROR(ENOMEM);
+        cb_beat_envs_free(out);
+        return CB_ERROR(ENOMEM);
     }
     for (int i = 0; i < nb; i++)
         t[i] = beats[i].time;
-    int ret = rx_env_windows(ctx, t, nb, out->env, out->centre);
+    int ret = cb_env_windows(ctx, t, nb, out->env, out->centre);
     free(t);
     if (ret < 0)
-        rx_beat_envs_free(out);
+        cb_beat_envs_free(out);
     return ret;
 }
 
-void rx_beat_envs_free(RXBeatEnvs *e)
+void cb_beat_envs_free(CBBeatEnvs *e)
 {
     free(e->env);
     free(e->centre);
     memset(e, 0, sizeof(*e));
 }
 
-double rx_beat_predict(const RXBeatObs *beats, int i, const RXFitSection *s)
+double cb_beat_predict(const CBBeatObs *beats, int i, const CBFitSection *s)
 {
     if (!s)
         return beats[i].time;
@@ -208,11 +208,11 @@ double rx_beat_predict(const RXBeatObs *beats, int i, const RXFitSection *s)
  * band is just after than just before. */
 static double rise_height(const float *e, int i)
 {
-    const int K = (int)(0.010 * RX_ENV_RATE);
+    const int K = (int)(0.010 * CB_ENV_RATE);
     double lo = INFINITY, hi = -INFINITY;
-    for (int j = RX_MAX(i - K, 0); j <= i; j++)
+    for (int j = CB_MAX(i - K, 0); j <= i; j++)
         lo = fmin(lo, e[j]);
-    for (int j = i; j <= RX_MIN(i + K, RX_ENV_LEN - 1); j++)
+    for (int j = i; j <= CB_MIN(i + K, CB_ENV_LEN - 1); j++)
         hi = fmax(hi, e[j]);
     return fmax(hi - lo, 0.0);
 }
@@ -227,11 +227,11 @@ static double rise_height(const float *e, int i)
 static double half_energy(const double *e, int n, int k, int w)
 {
     int a = k, b = k;
-    for (int j = RX_MAX(k - w, 0); j <= k; j++) {
+    for (int j = CB_MAX(k - w, 0); j <= k; j++) {
         if (e[j] < e[a])
             a = j;
     }
-    for (int j = k; j <= RX_MIN(k + w, n - 1); j++) {
+    for (int j = k; j <= CB_MIN(k + w, n - 1); j++) {
         if (e[j] > e[b])
             b = j;
     }
@@ -244,19 +244,19 @@ static double half_energy(const double *e, int n, int k, int w)
     return k;
 }
 
-void rx_measure_attacks(const RXBeatEnvs *e, RXBeatObs *beats, int first, int last,
-                        int band, const RXFitSection *s, double tol)
+void cb_measure_attacks(const CBBeatEnvs *e, CBBeatObs *beats, int first, int last,
+                        int band, const CBFitSection *s, double tol)
 {
     for (int i = first; i <= last; i++) {
-        RXBeatObs *b = &beats[i];
+        CBBeatObs *b = &beats[i];
         b->attack = NAN;
         b->weight = 0.0;
-        const float *env = e->env + ((size_t)i * RX_NB_BANDS + band) * RX_ENV_LEN;
-        double pred = rx_beat_predict(beats, i, s);
-        double rel = (pred - e->centre[i]) * RX_ENV_RATE + RX_ENV_HALF;
-        int lo = (int)ceil(rel - tol * RX_ENV_RATE), hi = (int)floor(rel + tol * RX_ENV_RATE);
-        lo = RX_MAX(lo, 2);
-        hi = RX_MIN(hi, RX_ENV_LEN - 3);
+        const float *env = e->env + ((size_t)i * CB_NB_BANDS + band) * CB_ENV_LEN;
+        double pred = cb_beat_predict(beats, i, s);
+        double rel = (pred - e->centre[i]) * CB_ENV_RATE + CB_ENV_HALF;
+        int lo = (int)ceil(rel - tol * CB_ENV_RATE), hi = (int)floor(rel + tol * CB_ENV_RATE);
+        lo = CB_MAX(lo, 2);
+        hi = CB_MIN(hi, CB_ENV_LEN - 3);
         if (hi <= lo)
             continue;
 
@@ -281,11 +281,11 @@ void rx_measure_attacks(const RXBeatEnvs *e, RXBeatObs *beats, int first, int la
         }
         if (best < 0)
             continue;
-        double ed[RX_ENV_LEN];
-        for (int j = 0; j < RX_ENV_LEN; j++)
+        double ed[CB_ENV_LEN];
+        for (int j = 0; j < CB_ENV_LEN; j++)
             ed[j] = env[j];
-        double x = half_energy(ed, RX_ENV_LEN, best, (int)(0.010 * RX_ENV_RATE));
-        b->attack = e->centre[i] + (x - RX_ENV_HALF) / RX_ENV_RATE;
+        double x = half_energy(ed, CB_ENV_LEN, best, (int)(0.010 * CB_ENV_RATE));
+        b->attack = e->centre[i] + (x - CB_ENV_HALF) / CB_ENV_RATE;
         b->weight = rise_height(env, best);
     }
 }
@@ -298,13 +298,13 @@ static int cmp_double(const void *a, const void *b)
     return (x > y) - (x < y);
 }
 
-static bool supported(const RXBeatObs *b)
+static bool supported(const CBBeatObs *b)
 {
     return b->weight > 0.0 && !isnan(b->attack);
 }
 
 /* Weighted least squares line t = a + b * (k - k0). */
-static bool wls(const RXBeatObs *beats, int first, int last, int k0, const double *w,
+static bool wls(const CBBeatObs *beats, int first, int last, int k0, const double *w,
                 double *a, double *b)
 {
     double sw = 0, sk = 0, st = 0, skk = 0, skt = 0;
@@ -332,7 +332,7 @@ static bool wls(const RXBeatObs *beats, int first, int last, int k0, const doubl
  * range apart, then the median intercept. Up to half the attacks can be
  * wrong (a stretch tracked on the off-beat) without moving it. 1 when
  * there is a line, 0 when the attacks give none, or an error. */
-static int theil_sen(const RXBeatObs *beats, int first, int last, int k0, double *a, double *b)
+static int theil_sen(const CBBeatObs *beats, int first, int last, int k0, double *a, double *b)
 {
     int m = 0;
     for (int i = first; i <= last; i++)
@@ -344,16 +344,16 @@ static int theil_sen(const RXBeatObs *beats, int first, int last, int k0, double
     if (!sup || !v) {
         free(sup);
         free(v);
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     }
     m = 0;
     for (int i = first; i <= last; i++) {
         if (supported(&beats[i]))
             sup[m++] = i;
     }
-    int h = RX_MAX(m / 2, 1), nv = 0;
+    int h = CB_MAX(m / 2, 1), nv = 0;
     for (int j = 0; j + h < m; j++) {
-        const RXBeatObs *p = &beats[sup[j]], *q = &beats[sup[j + h]];
+        const CBBeatObs *p = &beats[sup[j]], *q = &beats[sup[j + h]];
         int dk = q->index - p->index;
         if (dk > 0)
             v[nv++] = (q->attack - p->attack) / dk;
@@ -372,7 +372,7 @@ static int theil_sen(const RXBeatObs *beats, int first, int last, int k0, double
     return ok;
 }
 
-void rx_recount(RXBeatObs *beats, int first, int last, const RXFitSection *line, bool from_end)
+void cb_recount(CBBeatObs *beats, int first, int last, const CBFitSection *line, bool from_end)
 {
     /* The offset of up to 16 attacks nearest the line's side, in beats of
      * the line, median; then rounded. */
@@ -396,19 +396,19 @@ void rx_recount(RXBeatObs *beats, int first, int last, const RXFitSection *line,
         beats[i].index += shift;
 }
 
-int rx_fit_line(const RXBeatObs *beats, int first, int last, const RXFitSection *init,
-                RXFitSection *s)
+int cb_fit_line(const CBBeatObs *beats, int first, int last, const CBFitSection *init,
+                CBFitSection *s)
 {
     int n = last - first + 1;
     if (n <= 0)
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
 
     double *w = malloc((size_t)n * sizeof(*w));
     double *r = malloc((size_t)n * sizeof(*r));
     if (!w || !r) {
         free(w);
         free(r);
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     }
     s->first = first;
     s->last = last;
@@ -432,7 +432,7 @@ int rx_fit_line(const RXBeatObs *beats, int first, int last, const RXFitSection 
     if (ok <= 0) {
         free(w);
         free(r);
-        return ok < 0 ? ok : RX_ERROR(EINVAL);
+        return ok < 0 ? ok : CB_ERROR(EINVAL);
     }
 
     /* Tukey biweight IRLS: residuals beyond 4.685 robust sigmas get no
@@ -493,7 +493,7 @@ int rx_fit_line(const RXBeatObs *beats, int first, int last, const RXFitSection 
     s->jitter = m ? 1.4826 * r[m / 2] : 0.0;
     free(w);
     free(r);
-    return b > 0.0 ? 0 : RX_ERROR(EINVAL);
+    return b > 0.0 ? 0 : CB_ERROR(EINVAL);
 }
 
 /* ---------------------------------------------------------------- fold */
@@ -502,22 +502,22 @@ int rx_fit_line(const RXBeatObs *beats, int first, int last, const RXFitSection 
 #define FOLD_HALF  200              /* +-50 ms */
 #define FOLD_LEN   (2 * FOLD_HALF + 1)
 
-int rx_fold(const RXBeatEnvs *e, const RXBeatObs *beats, int first, int last,
-            const RXFitSection *line, int band, double search,
+int cb_fold(const CBBeatEnvs *e, const CBBeatObs *beats, int first, int last,
+            const CBFitSection *line, int band, double search,
             double *contrast, double *offset, double *rise)
 {
-    double fold[RX_NB_BANDS][FOLD_LEN], cnt[RX_NB_BANDS][FOLD_LEN];
+    double fold[CB_NB_BANDS][FOLD_LEN], cnt[CB_NB_BANDS][FOLD_LEN];
     memset(fold, 0, sizeof(fold));
     memset(cnt, 0, sizeof(cnt));
 
     /* Every envelope sample of every beat of the section, binned by its
      * offset from the line's prediction: the average beat. */
     for (int i = first; i <= last; i++) {
-        double pred = rx_beat_predict(beats, i, line);
-        for (int b = 0; b < RX_NB_BANDS; b++) {
-            const float *env = e->env + ((size_t)i * RX_NB_BANDS + b) * RX_ENV_LEN;
-            for (int j = 0; j < RX_ENV_LEN; j++) {
-                double t = e->centre[i] + (double)(j - RX_ENV_HALF) / RX_ENV_RATE;
+        double pred = cb_beat_predict(beats, i, line);
+        for (int b = 0; b < CB_NB_BANDS; b++) {
+            const float *env = e->env + ((size_t)i * CB_NB_BANDS + b) * CB_ENV_LEN;
+            for (int j = 0; j < CB_ENV_LEN; j++) {
+                double t = e->centre[i] + (double)(j - CB_ENV_HALF) / CB_ENV_RATE;
                 int k = (int)lrint((t - pred) / FOLD_BIN) + FOLD_HALF;
                 if (k < 0 || k >= FOLD_LEN)
                     continue;
@@ -538,12 +538,12 @@ int rx_fold(const RXBeatEnvs *e, const RXBeatObs *beats, int first, int last,
      * rise some 30 ms long. A decaying tail has no height however far it
      * is read: its lowest level before a ripple and its highest after it
      * are the ripple's own. */
-    double sm[RX_NB_BANDS][FOLD_LEN], con[RX_NB_BANDS], pos[RX_NB_BANDS], hgt[RX_NB_BANDS];
-    bool rises[RX_NB_BANDS];
+    double sm[CB_NB_BANDS][FOLD_LEN], con[CB_NB_BANDS], pos[CB_NB_BANDS], hgt[CB_NB_BANDS];
+    bool rises[CB_NB_BANDS];
     const int S = (int)(search / FOLD_BIN);
-    int lo = RX_MAX(FOLD_HALF - S, 1);
-    int hi = RX_MIN(FOLD_HALF + S, FOLD_LEN - 2);
-    for (int b = 0; b < RX_NB_BANDS; b++) {
+    int lo = CB_MAX(FOLD_HALF - S, 1);
+    int hi = CB_MIN(FOLD_HALF + S, FOLD_LEN - 2);
+    for (int b = 0; b < CB_NB_BANDS; b++) {
         for (int k = 0; k < FOLD_LEN; k++)
             fold[b][k] = cnt[b][k] > 0 ? fold[b][k] / cnt[b][k] : NAN;
         const int K = (int)(0.001 / FOLD_BIN);
@@ -551,7 +551,7 @@ int rx_fold(const RXBeatEnvs *e, const RXBeatObs *beats, int first, int last,
         for (int k = 0; k < FOLD_LEN; k++) {
             double acc = 0.0;
             int c = 0;
-            for (int j = RX_MAX(k - K, 0); j <= RX_MIN(k + K, FOLD_LEN - 1); j++) {
+            for (int j = CB_MAX(k - K, 0); j <= CB_MIN(k + K, FOLD_LEN - 1); j++) {
                 if (!isnan(fold[b][j])) {
                     acc += fold[b][j];
                     c++;
@@ -577,9 +577,9 @@ int rx_fold(const RXBeatEnvs *e, const RXBeatObs *beats, int first, int last,
         double x = half_energy(sm[b], FOLD_LEN, arg, (int)(0.010 / FOLD_BIN));
         pos[b] = (x - FOLD_HALF) * FOLD_BIN;
         double r0 = sm[b][arg], r1 = sm[b][arg];
-        for (int k = RX_MAX(arg - S, 0); k <= arg; k++)
+        for (int k = CB_MAX(arg - S, 0); k <= arg; k++)
             r0 = fmin(r0, sm[b][k]);
-        for (int k = arg; k <= RX_MIN(arg + S, FOLD_LEN - 1); k++)
+        for (int k = arg; k <= CB_MIN(arg + S, FOLD_LEN - 1); k++)
             r1 = fmax(r1, sm[b][k]);
         hgt[b] = rises[b] ? (r1 - r0) / (mean + 1e-9) : 0.0;
     }
@@ -597,12 +597,12 @@ int rx_fold(const RXBeatEnvs *e, const RXBeatObs *beats, int first, int last,
     int best = band;
     if (best < 0) {
         int top = 0;
-        for (int b = 1; b < RX_NB_BANDS; b++) {
+        for (int b = 1; b < CB_NB_BANDS; b++) {
             if (con[b] > con[top])
                 top = b;
         }
         best = -1;
-        for (int b = RX_BAND_MID; b <= RX_BAND_HIGH; b++) {
+        for (int b = CB_BAND_MID; b <= CB_BAND_HIGH; b++) {
             if (!rises[b] || con[b] < 0.15 || con[b] < 0.4 * con[top])
                 continue;
             if (best < 0 || pos[b] < pos[best])
@@ -622,7 +622,7 @@ int rx_fold(const RXBeatEnvs *e, const RXBeatObs *beats, int first, int last,
 
 /* -------------------------------------------------------------- snapping */
 
-bool rx_snap_section(const RXBeatObs *beats, RXFitSection *s, double tol)
+bool cb_snap_section(const CBBeatObs *beats, CBFitSection *s, double tol)
 {
     /* The beats the line was fitted on span [k_lo, k_hi]; re-phased around
      * their weighted centre, a tempo error of d BPM drifts by
@@ -637,15 +637,15 @@ bool rx_snap_section(const RXBeatObs *beats, RXFitSection *s, double tol)
             continue;
         sw += beats[i].weight;
         sk += beats[i].weight * (beats[i].index - s->index0);
-        klo = RX_MIN(klo, beats[i].index - s->index0);
-        khi = RX_MAX(khi, beats[i].index - s->index0);
+        klo = CB_MIN(klo, beats[i].index - s->index0);
+        khi = CB_MAX(khi, beats[i].index - s->index0);
     }
     if (sw <= 0.0)
         return false;
     double kc = sk / sw, bpm = 60.0 / s->period;
     double half_span = fmax(kc - klo, khi - kc) * s->period;
     static const double steps[] = { 1.0, 0.5 };
-    for (size_t i = 0; i < RX_ARRAY_ELEMS(steps); i++) {
+    for (size_t i = 0; i < CB_ARRAY_ELEMS(steps); i++) {
         double cand = round(bpm / steps[i]) * steps[i];
         if (half_span * fabs(cand - bpm) / bpm > tol)
             continue;
@@ -673,15 +673,15 @@ bool rx_snap_section(const RXBeatObs *beats, RXFitSection *s, double tol)
 /* The largest running median (9 attacks) of the residuals from the line:
  * how far the line sits from the music anywhere along it. A median, so a
  * single ghost hit cannot hold a boundary in place. */
-static int max_deviation(const RXBeatObs *beats, const RXFitSection *s, double *dev)
+static int max_deviation(const CBBeatObs *beats, const CBFitSection *s, double *dev)
 {
     int n = s->last - s->first + 1, m = 0;
-    double *r = malloc((size_t)RX_MAX(n, 1) * sizeof(*r));
+    double *r = malloc((size_t)CB_MAX(n, 1) * sizeof(*r));
     if (!r)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     for (int i = s->first; i <= s->last; i++) {
         if (supported(&beats[i]))
-            r[m++] = beats[i].attack - rx_beat_predict(beats, i, s);
+            r[m++] = beats[i].attack - cb_beat_predict(beats, i, s);
     }
     double worst = 0.0, win[9];
     for (int j = 0; j + 9 <= m; j++) {
@@ -695,7 +695,7 @@ static int max_deviation(const RXBeatObs *beats, const RXFitSection *s, double *
 }
 
 /* Mean of the support onset at the beats of line s inside [t0, t1]. */
-static double line_support(const RXOnsets *o, const float *v, const RXFitSection *s,
+static double line_support(const CBOnsets *o, const float *v, const CBFitSection *s,
                            double t0, double t1)
 {
     double acc = 0.0;
@@ -716,9 +716,9 @@ static double line_support(const RXOnsets *o, const float *v, const RXFitSection
 }
 
 typedef struct Seg {
-    RXFitSection *s;
+    CBFitSection *s;
     int           nb;
-    RXBeatObs    *beats;
+    CBBeatObs    *beats;
 } Seg;
 
 /* Recounts sections [i, j] onto section dom's line: each other section's
@@ -727,23 +727,23 @@ typedef struct Seg {
  * from dom). */
 static void seg_recount(Seg *g, int i, int j, int dom)
 {
-    const RXFitSection *line = &g->s[dom];
+    const CBFitSection *line = &g->s[dom];
     for (int k = dom - 1; k >= i; k--)
-        rx_recount(g->beats, g->s[k].first, g->s[k].last, line, true);
+        cb_recount(g->beats, g->s[k].first, g->s[k].last, line, true);
     for (int k = dom + 1; k <= j; k++)
-        rx_recount(g->beats, g->s[k].first, g->s[k].last, line, false);
+        cb_recount(g->beats, g->s[k].first, g->s[k].last, line, false);
 }
 
 /* Replaces sections [i, j] by one fitted on their union, counted on
  * section dom's line. */
 static int seg_merge(Seg *g, int i, int j, int dom)
 {
-    RXFitSection init = g->s[dom], out = { 0 };
+    CBFitSection init = g->s[dom], out = { 0 };
     seg_recount(g, i, j, dom);
-    int ret = rx_fit_line(g->beats, g->s[i].first, g->s[j].last, &init, &out);
+    int ret = cb_fit_line(g->beats, g->s[i].first, g->s[j].last, &init, &out);
     if (ret < 0)
         return ret;
-    rx_debug("segment: merged %d-%d on %d: %.3f BPM, jitter %.1f ms\n", i, j, dom,
+    cb_debug("segment: merged %d-%d on %d: %.3f BPM, jitter %.1f ms\n", i, j, dom,
              60.0 / out.period, out.jitter * 1e3);
     g->s[i] = out;
     memmove(g->s + i + 1, g->s + j + 1, (g->nb - j - 1) * sizeof(*g->s));
@@ -770,7 +770,7 @@ static int merged_deviation(Seg *g, int i, int j, int dom, int hide, double *dev
     if (!save || !hw) {
         free(save);
         free(hw);
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     }
     for (int k = first; k <= last; k++) {
         save[k - first] = g->beats[k].index;
@@ -781,12 +781,12 @@ static int merged_deviation(Seg *g, int i, int j, int dom, int hide, double *dev
             g->beats[k].weight = 0.0;
     }
     seg_recount(g, i, j, dom);
-    RXFitSection init = g->s[dom], out = { 0 };
+    CBFitSection init = g->s[dom], out = { 0 };
     *dev = INFINITY;
-    int ret = rx_fit_line(g->beats, first, last, &init, &out);
+    int ret = cb_fit_line(g->beats, first, last, &init, &out);
     if (ret == 0)
         ret = max_deviation(g->beats, &out, dev);
-    else if (ret == RX_ERROR(EINVAL))
+    else if (ret == CB_ERROR(EINVAL))
         ret = 0;
     for (int k = first; k <= last; k++) {
         g->beats[k].index = save[k - first];
@@ -800,15 +800,15 @@ static int merged_deviation(Seg *g, int i, int j, int dom, int hide, double *dev
 /* Section start and end times (the first and last beat on its line). */
 static double seg_t0(const Seg *g, int i)
 {
-    return rx_beat_predict(g->beats, g->s[i].first, &g->s[i]);
+    return cb_beat_predict(g->beats, g->s[i].first, &g->s[i]);
 }
 
 static double seg_t1(const Seg *g, int i)
 {
-    return rx_beat_predict(g->beats, g->s[i].last, &g->s[i]);
+    return cb_beat_predict(g->beats, g->s[i].last, &g->s[i]);
 }
 
-static double region_bpm(const RXTempoRegion *r, int nb, double t)
+static double region_bpm(const CBTempoRegion *r, int nb, double t)
 {
     for (int i = nb - 1; i >= 0; i--) {
         if (t >= r[i].start)
@@ -817,9 +817,9 @@ static double region_bpm(const RXTempoRegion *r, int nb, double t)
     return nb ? r[0].bpm : 0.0;
 }
 
-int rx_segment(RXBeatObs *beats, int nb, const RXOnsets *o, const float *support,
-               const RXTempoRegion *regions, int nb_regions, bool allow,
-               RXFitSection **secs, int *nb_secs)
+int cb_segment(CBBeatObs *beats, int nb, const CBOnsets *o, const float *support,
+               const CBTempoRegion *regions, int nb_regions, bool allow,
+               CBFitSection **secs, int *nb_secs)
 {
     *secs = NULL;
     *nb_secs = 0;
@@ -827,13 +827,13 @@ int rx_segment(RXBeatObs *beats, int nb, const RXOnsets *o, const float *support
 
     /* Supported beats: attacks at least a quarter of the median strength;
      * weaker ones are noise in a breakdown, not beats. */
-    double *ws = malloc((size_t)RX_MAX(nb, 1) * sizeof(*ws));
-    int *sup = malloc((size_t)RX_MAX(nb, 1) * sizeof(*sup));
-    RXFitSection *s = calloc(RX_MAX(nb, 1), sizeof(*s));
+    double *ws = malloc((size_t)CB_MAX(nb, 1) * sizeof(*ws));
+    int *sup = malloc((size_t)CB_MAX(nb, 1) * sizeof(*sup));
+    CBFitSection *s = calloc(CB_MAX(nb, 1), sizeof(*s));
     double *F = NULL;
     int *arg = NULL;
     if (!ws || !sup || !s) {
-        ret = RX_ERROR(ENOMEM);
+        ret = CB_ERROR(ENOMEM);
         goto end;
     }
     int m = 0;
@@ -842,7 +842,7 @@ int rx_segment(RXBeatObs *beats, int nb, const RXOnsets *o, const float *support
             ws[m++] = beats[i].weight;
     }
     if (m < SEG_MIN_SUPPORTED) {
-        ret = RX_ERROR(EINVAL);
+        ret = CB_ERROR(EINVAL);
         goto end;
     }
     qsort(ws, m, sizeof(*ws), cmp_double);
@@ -857,8 +857,8 @@ int rx_segment(RXBeatObs *beats, int nb, const RXOnsets *o, const float *support
 
     /* One line through everything first: the reference for the change
      * points, and the answer when sections are not allowed. */
-    RXFitSection g = { 0 };
-    if ((ret = rx_fit_line(beats, 0, nb - 1, NULL, &g)) < 0)
+    CBFitSection g = { 0 };
+    if ((ret = cb_fit_line(beats, 0, nb - 1, NULL, &g)) < 0)
         goto end;
     if (!allow || m < 2 * SEG_MIN_SUPPORTED) {
         s[0] = g;
@@ -876,17 +876,17 @@ int rx_segment(RXBeatObs *beats, int nb, const RXOnsets *o, const float *support
     {
         double *res = malloc(m * sizeof(*res));
         if (!res) {
-            ret = RX_ERROR(ENOMEM);
+            ret = CB_ERROR(ENOMEM);
             goto end;
         }
         for (int j = 0; j < m; j++) {
-            const RXBeatObs *b = &beats[sup[j]];
+            const CBBeatObs *b = &beats[sup[j]];
             res[j] = b->attack - (g.t0 + (b->index - g.index0) * g.period);
         }
         double tol = fmax(4.0 * g.jitter, 0.008), win[9];
         int dropped = 0;
         for (int j = 0; j < m; j++) {
-            int a = RX_CLAMP(j - 4, 0, RX_MAX(m - 9, 0)), k = RX_MIN(9, m);
+            int a = CB_CLAMP(j - 4, 0, CB_MAX(m - 9, 0)), k = CB_MIN(9, m);
             memcpy(win, res + a, k * sizeof(*win));
             qsort(win, k, sizeof(*win), cmp_double);
             if (fabs(res[j] - win[k / 2]) > tol) {
@@ -910,7 +910,7 @@ int rx_segment(RXBeatObs *beats, int nb, const RXOnsets *o, const float *support
      * which touch only a few of them. */
     int nd = 0;
     for (int j = 1; j + 1 < m; j++) {
-        const RXBeatObs *a = &beats[sup[j - 1]], *b = &beats[sup[j]], *c = &beats[sup[j + 1]];
+        const CBBeatObs *a = &beats[sup[j - 1]], *b = &beats[sup[j]], *c = &beats[sup[j + 1]];
         if (b->index - a->index == 1 && c->index - b->index == 1)
             ws[nd++] = fabs(c->attack - 2 * b->attack + a->attack);
     }
@@ -930,11 +930,11 @@ int rx_segment(RXBeatObs *beats, int nb, const RXOnsets *o, const float *support
     arg = malloc((size_t)(m + 1) * sizeof(*arg));
     if (!P || !F || !arg) {
         free(P);
-        ret = RX_ERROR(ENOMEM);
+        ret = CB_ERROR(ENOMEM);
         goto end;
     }
     for (int j = 0; j < m; j++) {
-        const RXBeatObs *b = &beats[sup[j]];
+        const CBBeatObs *b = &beats[sup[j]];
         double k = b->index - g.index0;
         double r = b->attack - (g.t0 + k * g.period);
         double w = fmin(b->weight / wmed, 3.0);
@@ -980,9 +980,9 @@ int rx_segment(RXBeatObs *beats, int nb, const RXOnsets *o, const float *support
     for (int c = nc - 1; c >= 0; c--) {
         int first = c == nc - 1 ? 0 : sup[cuts[c]];
         int last = c == 0 ? nb - 1 : sup[cuts[c - 1]] - 1;
-        if ((ret = rx_fit_line(beats, first, last, NULL, &s[sg.nb])) < 0) {
+        if ((ret = cb_fit_line(beats, first, last, NULL, &s[sg.nb])) < 0) {
             /* A segment too odd to fit on its own joins the previous one. */
-            if (sg.nb > 0 && ret == RX_ERROR(EINVAL)) {
+            if (sg.nb > 0 && ret == CB_ERROR(EINVAL)) {
                 s[sg.nb - 1].last = last;
                 ret = 0;
                 continue;
@@ -993,7 +993,7 @@ int rx_segment(RXBeatObs *beats, int nb, const RXOnsets *o, const float *support
     }
 
     for (int i = 0; i < sg.nb; i++)
-        rx_debug("segment: proposed %d: beats %d-%d (index %d), %.3f BPM, %d attacks, "
+        cb_debug("segment: proposed %d: beats %d-%d (index %d), %.3f BPM, %d attacks, "
                  "jitter %.1f ms\n",
                  i, sg.s[i].first, sg.s[i].last, sg.s[i].index0, 60.0 / sg.s[i].period,
                  sg.s[i].supported, sg.s[i].jitter * 1e3);
@@ -1030,7 +1030,7 @@ int rx_segment(RXBeatObs *beats, int nb, const RXOnsets *o, const float *support
         for (int i = 1; i + 1 < sg.nb && !changed; i++) {
             /* Only the weaker part is a breakdown: two scraps of junk
              * either side of a good section must not take it over. */
-            if (sg.s[i].supported >= RX_MIN(sg.s[i - 1].supported, sg.s[i + 1].supported))
+            if (sg.s[i].supported >= CB_MIN(sg.s[i - 1].supported, sg.s[i + 1].supported))
                 continue;
             int dom = seg_dominant(&sg, i - 1, i + 1);
             double d;
@@ -1051,7 +1051,7 @@ int rx_segment(RXBeatObs *beats, int nb, const RXOnsets *o, const float *support
          *    hats-only intro tracked on the off-beat has no kick on either
          *    line and joins the music after it. */
         for (int i = 0; i + 1 < sg.nb && !changed; i++) {
-            RXFitSection *A = &sg.s[i], *B = &sg.s[i + 1];
+            CBFitSection *A = &sg.s[i], *B = &sg.s[i + 1];
             /* Not between two tempos the tempogram found settled (3 % or
              * more apart): test 1 has already said the two lines differ
              * audibly, and on soft drums the kick band may confirm neither;
@@ -1096,7 +1096,7 @@ int rx_segment(RXBeatObs *beats, int nb, const RXOnsets *o, const float *support
          *    outro's last bars never do): joins the neighbour whose line
          *    fits it best. */
         for (int i = 0; i < sg.nb && !changed; i++) {
-            RXFitSection *X = &sg.s[i];
+            CBFitSection *X = &sg.s[i];
             int len = X->last - X->first + 1;
             /* At the tempo of a neighbour, a section is a phase cut, and a
              * phase needs 64 beats to be believed (an outro's last bars,
@@ -1136,9 +1136,9 @@ int rx_segment(RXBeatObs *beats, int nb, const RXOnsets *o, const float *support
      * one. Move it back while the old section's last attacks fit the new
      * line within 3 ms. */
     for (int i = 1; i < sg.nb; i++) {
-        RXFitSection *A = &sg.s[i - 1], *B = &sg.s[i];
+        CBFitSection *A = &sg.s[i - 1], *B = &sg.s[i];
         while (B->first - 1 > A->first + SEG_MIN_BEATS) {
-            const RXBeatObs *b = &beats[B->first - 1];
+            const CBBeatObs *b = &beats[B->first - 1];
             if (!supported(b))
                 break;
             double pb = B->t0 + lrint((b->attack - B->t0) / B->period) * B->period;
@@ -1151,8 +1151,8 @@ int rx_segment(RXBeatObs *beats, int nb, const RXOnsets *o, const float *support
 
     /* Each section refitted on its final beats. */
     for (int i = 0; i < sg.nb; i++) {
-        RXFitSection init = sg.s[i];
-        if ((ret = rx_fit_line(beats, sg.s[i].first, sg.s[i].last, &init, &sg.s[i])) < 0)
+        CBFitSection init = sg.s[i];
+        if ((ret = cb_fit_line(beats, sg.s[i].first, sg.s[i].last, &init, &sg.s[i])) < 0)
             goto end;
     }
     *secs = s;

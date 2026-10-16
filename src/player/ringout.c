@@ -1,8 +1,8 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
-/* The ring backend (RX_AUDIO_RING): the mix kept as 16-bit stereo frames
+/* The ring backend (CB_AUDIO_RING): the mix kept as 16-bit stereo frames
  * in a ring that another thread takes as it needs them
- * (rx_player_ring_take), never a device: with --pro-link the mixer's
+ * (cb_player_ring_take), never a device: with --pro-link the mixer's
  * LINK CUE, which asks for 7 ms of audio every 7 ms.
  *
  * One thread mixes, waking every period on an absolute monotonic
@@ -29,7 +29,7 @@
 #define RING_TARGET  1024
 #define RING_IDLE_US 150000
 
-struct RXRingOut {
+struct CBRingOut {
     pthread_t   thread;
     bool        started;
     atomic_bool stop;
@@ -37,7 +37,7 @@ struct RXRingOut {
     int         period;
     int16_t     ring[RING_FRAMES * 2];
     atomic_uint head, tail;         /* frames written and taken, wrapping */
-    atomic_llong taken_us;          /* rx_time_us of the last take, 0 never */
+    atomic_llong taken_us;          /* cb_time_us of the last take, 0 never */
 };
 
 static int16_t to_s16(float v)
@@ -48,19 +48,19 @@ static int16_t to_s16(float v)
 
 static void *ring_thread(void *arg)
 {
-    RXPlayer *p = arg;
-    RXRingOut *r = p->ring_out;
+    CBPlayer *p = arg;
+    CBRingOut *r = p->ring_out;
     struct timespec next;
     clock_gettime(CLOCK_MONOTONIC, &next);
     int64_t rem = 0;
 
     while (!atomic_load_explicit(&r->stop, memory_order_relaxed)) {
         int64_t taken = atomic_load_explicit(&r->taken_us, memory_order_relaxed);
-        if (taken && rx_time_us() - taken < RING_IDLE_US) {
+        if (taken && cb_time_us() - taken < RING_IDLE_US) {
             unsigned head = atomic_load_explicit(&r->head, memory_order_relaxed);
             while (head - atomic_load_explicit(&r->tail, memory_order_acquire) + (unsigned)r->period
                    <= RING_TARGET) {
-                rx_player_mix(p, r->mix, r->period);
+                cb_player_mix(p, r->mix, r->period);
                 for (int i = 0; i < r->period; i++) {
                     unsigned at = (head + (unsigned)i) % RING_FRAMES;
                     r->ring[at * 2] = to_s16(r->mix[i * 2]);
@@ -70,13 +70,13 @@ static void *ring_thread(void *arg)
                 atomic_store_explicit(&r->head, head, memory_order_release);
             }
         } else {
-            rx_player_mix(p, r->mix, r->period);
+            cb_player_mix(p, r->mix, r->period);
         }
 
         /* Next deadline: period / rate seconds later, the remainder carried
          * so the schedule does not drift; after a long stall (a suspended
          * machine) the schedule starts again rather than catching up. */
-        int rate = rx_player_rate(p);
+        int rate = cb_player_rate(p);
         int64_t ns = (int64_t)r->period * 1000000000 + rem;
         rem = ns % rate;
         next.tv_nsec += ns / rate;
@@ -93,31 +93,31 @@ static void *ring_thread(void *arg)
     return NULL;
 }
 
-int rx_player_ring_open(RXPlayer *p)
+int cb_player_ring_open(CBPlayer *p)
 {
-    RXRingOut *r = calloc(1, sizeof(*r));
+    CBRingOut *r = calloc(1, sizeof(*r));
     if (!r)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     p->ring_out = r;
-    r->period = RX_MIN(p->period, RING_TARGET / 2);
+    r->period = CB_MIN(p->period, RING_TARGET / 2);
     atomic_init(&r->stop, false);
     atomic_init(&r->head, 0);
     atomic_init(&r->tail, 0);
     atomic_init(&r->taken_us, 0);
     r->mix = malloc(sizeof(*r->mix) * 2 * (size_t)r->period);
     if (!r->mix)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     int err = pthread_create(&r->thread, NULL, ring_thread, p);
     if (err)
-        return RX_ERROR(err);
+        return CB_ERROR(err);
     r->started = true;
-    atomic_store_explicit(&p->out_state, RX_OUT_RUNNING, memory_order_release);
+    atomic_store_explicit(&p->out_state, CB_OUT_RUNNING, memory_order_release);
     return 0;
 }
 
-void rx_player_ring_close(RXPlayer *p)
+void cb_player_ring_close(CBPlayer *p)
 {
-    RXRingOut *r = p->ring_out;
+    CBRingOut *r = p->ring_out;
     if (!r)
         return;
     if (r->started) {
@@ -129,15 +129,15 @@ void rx_player_ring_close(RXPlayer *p)
     p->ring_out = NULL;
 }
 
-int rx_player_ring_take(RXPlayer *p, int16_t *out, int frames)
+int cb_player_ring_take(CBPlayer *p, int16_t *out, int frames)
 {
-    RXRingOut *r = p->ring_out;
+    CBRingOut *r = p->ring_out;
     if (!r || frames <= 0) {
         if (frames > 0)
             memset(out, 0, (size_t)frames * 2 * sizeof(*out));
         return 0;
     }
-    int64_t now = rx_time_us();
+    int64_t now = cb_time_us();
     int64_t before = atomic_exchange_explicit(&r->taken_us, now, memory_order_relaxed);
     unsigned tail = atomic_load_explicit(&r->tail, memory_order_relaxed);
     unsigned head = atomic_load_explicit(&r->head, memory_order_acquire);
@@ -145,7 +145,7 @@ int rx_player_ring_take(RXPlayer *p, int16_t *out, int frames)
     if (!before || now - before >= RING_IDLE_US)
         tail = head;
     unsigned have = head - tail;
-    int n = (int)RX_MIN(have, (unsigned)frames);
+    int n = (int)CB_MIN(have, (unsigned)frames);
     for (int i = 0; i < n; i++) {
         unsigned at = (tail + (unsigned)i) % RING_FRAMES;
         out[i * 2] = r->ring[at * 2];

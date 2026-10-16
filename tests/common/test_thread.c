@@ -4,7 +4,7 @@
  * wait and destroy drain the queue, the mailbox loses nothing under
  * several producers, and its timed wait times out. */
 
-#include "rxbox/thread.h"
+#include "cyanbox/thread.h"
 
 #include <pthread.h>
 #include <stdio.h>
@@ -37,50 +37,50 @@ static void slow_job(void *arg)
 
 static void test_pool(void)
 {
-    RXThreadPool *pool;
-    CHECK(rx_pool_create(&pool, 4) == 0);
-    CHECK(rx_pool_threads(pool) == 4);
-    CHECK(rx_pool_pending(pool) == 0);
+    CBThreadPool *pool;
+    CHECK(cb_pool_create(&pool, 4) == 0);
+    CHECK(cb_pool_threads(pool) == 4);
+    CHECK(cb_pool_pending(pool) == 0);
 
     counter = 0;
     for (int i = 0; i < 10000; i++)
-        CHECK(rx_pool_submit(pool, count_job, &slots[i]) == 0);
-    rx_pool_wait(pool);
+        CHECK(cb_pool_submit(pool, count_job, &slots[i]) == 0);
+    cb_pool_wait(pool);
     CHECK(counter == 10000);
-    CHECK(rx_pool_pending(pool) == 0);
+    CHECK(cb_pool_pending(pool) == 0);
     int wrong = 0;
     for (int i = 0; i < 10000; i++)
         wrong += slots[i] != 1;
     CHECK(wrong == 0);
-    CHECK(rx_pool_submit(pool, NULL, NULL) == RX_ERROR(EINVAL));
+    CHECK(cb_pool_submit(pool, NULL, NULL) == CB_ERROR(EINVAL));
 
     /* Pending counts queued and running jobs. */
     counter = 0;
     for (int i = 0; i < 40; i++)
-        rx_pool_submit(pool, slow_job, NULL);
-    CHECK(rx_pool_pending(pool) > 0);
-    rx_pool_wait(pool);
-    CHECK(counter == 40 && rx_pool_pending(pool) == 0);
+        cb_pool_submit(pool, slow_job, NULL);
+    CHECK(cb_pool_pending(pool) > 0);
+    cb_pool_wait(pool);
+    CHECK(counter == 40 && cb_pool_pending(pool) == 0);
 
     /* Destroy runs what is still queued before joining. */
     counter = 0;
     for (int i = 0; i < 40; i++)
-        rx_pool_submit(pool, slow_job, NULL);
-    rx_pool_destroy(pool);
+        cb_pool_submit(pool, slow_job, NULL);
+    cb_pool_destroy(pool);
     CHECK(counter == 40);
 
     /* <= 0 threads: one per CPU. */
-    CHECK(rx_pool_create(&pool, 0) == 0);
-    CHECK(rx_pool_threads(pool) == (int)sysconf(_SC_NPROCESSORS_ONLN));
-    rx_pool_destroy(pool);
-    rx_pool_destroy(NULL);
+    CHECK(cb_pool_create(&pool, 0) == 0);
+    CHECK(cb_pool_threads(pool) == (int)sysconf(_SC_NPROCESSORS_ONLN));
+    cb_pool_destroy(pool);
+    cb_pool_destroy(NULL);
 }
 
 #define PRODUCERS 4
 #define ITEMS 20000
 
 typedef struct Producer {
-    RXMailbox *mb;
+    CBMailbox *mb;
     int index;
 } Producer;
 
@@ -88,14 +88,14 @@ static void *produce(void *arg)
 {
     Producer *p = arg;
     for (intptr_t i = 0; i < ITEMS; i++)
-        rx_mailbox_post(p->mb, (void *)(intptr_t)(1 + p->index * ITEMS + i));
+        cb_mailbox_post(p->mb, (void *)(intptr_t)(1 + p->index * ITEMS + i));
     return NULL;
 }
 
 static void *post_later(void *arg)
 {
     usleep(50000);
-    rx_mailbox_post(arg, (void *)(intptr_t)42);
+    cb_mailbox_post(arg, (void *)(intptr_t)42);
     return NULL;
 }
 
@@ -108,17 +108,17 @@ static int64_t now_ms(void)
 
 static void test_mailbox(void)
 {
-    RXMailbox *mb;
-    CHECK(rx_mailbox_create(&mb) == 0);
-    CHECK(rx_mailbox_take(mb) == NULL);
-    CHECK(rx_mailbox_post(mb, NULL) == RX_ERROR(EINVAL));
+    CBMailbox *mb;
+    CHECK(cb_mailbox_create(&mb) == 0);
+    CHECK(cb_mailbox_take(mb) == NULL);
+    CHECK(cb_mailbox_post(mb, NULL) == CB_ERROR(EINVAL));
 
     /* FIFO from one producer. */
     for (intptr_t i = 1; i <= 100; i++)
-        rx_mailbox_post(mb, (void *)i);
+        cb_mailbox_post(mb, (void *)i);
     bool order = true;
     for (intptr_t i = 1; i <= 100; i++)
-        order &= rx_mailbox_take(mb) == (void *)i;
+        order &= cb_mailbox_take(mb) == (void *)i;
     CHECK(order);
 
     /* Several producers, one consumer: everything arrives exactly once, in
@@ -134,7 +134,7 @@ static void test_mailbox(void)
     int got = 0;
     bool in_order = true;
     while (got < PRODUCERS * ITEMS) {
-        void *item = rx_mailbox_wait(mb, 1000);
+        void *item = cb_mailbox_wait(mb, 1000);
         if (!item)
             break;
         intptr_t v = (intptr_t)item;
@@ -155,21 +155,21 @@ static void test_mailbox(void)
 
     /* Timed wait: times out empty, wakes on a post. */
     int64_t t0 = now_ms();
-    CHECK(rx_mailbox_wait(mb, 60) == NULL);
+    CHECK(cb_mailbox_wait(mb, 60) == NULL);
     int64_t waited = now_ms() - t0;
     CHECK(waited >= 55 && waited < 1000);
-    CHECK(rx_mailbox_wait(mb, 0) == NULL);
+    CHECK(cb_mailbox_wait(mb, 0) == NULL);
 
     pthread_t later;
     pthread_create(&later, NULL, post_later, mb);
-    CHECK(rx_mailbox_wait(mb, -1) == (void *)(intptr_t)42);
+    CHECK(cb_mailbox_wait(mb, -1) == (void *)(intptr_t)42);
     pthread_join(later, NULL);
-    rx_mailbox_destroy(mb);
+    cb_mailbox_destroy(mb);
 
-    RXCancel c = { 0 };
-    CHECK(!rx_cancelled(&c));
-    rx_cancel(&c);
-    CHECK(rx_cancelled(&c) && !rx_cancelled(NULL));
+    CBCancel c = { 0 };
+    CHECK(!cb_cancelled(&c));
+    cb_cancel(&c);
+    CHECK(cb_cancelled(&c) && !cb_cancelled(NULL));
 }
 
 int main(void)

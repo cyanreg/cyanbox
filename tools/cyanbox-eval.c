@@ -1,9 +1,9 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
-/* rxbox-eval: runs the beat-grid analyser over audio files and measures
+/* cyanbox-eval: runs the beat-grid analyser over audio files and measures
  * what can be measured without ground truth (docs/BEATS.md, "Evaluation").
  *
- *   rxbox-eval [options] FILE...
+ *   cyanbox-eval [options] FILE...
  *     -l, --list FILE         read paths from FILE (one per line)
  *     -j, --threads N         files analysed in parallel (default: cores / 2)
  *     --csv OUT               one row per file (the columns py_beats.py writes)
@@ -21,8 +21,8 @@
  *                             beat-by-beat grid)
  *     -v                      the analyser's diagnostics per file
  *
- *     --ffmpeg                decode with the ffmpeg command line instead of rx_decode
- *     --all                   run the whole rx_analyse (native channels, waveforms
+ *     --ffmpeg                decode with the ffmpeg command line instead of cb_decode
+ *     --all                   run the whole cb_analyse (native channels, waveforms
  *                             and key too), as the app does; the CSV adds the
  *                             key, its confidence and tuning, and a hash of the
  *                             packed waveforms
@@ -34,21 +34,21 @@
  *                             and its front end's arrays in DIR, and use them on
  *                             the next run: only the decisions run again
  *     --device NAME           the GPU for the front end (a part of its name)
- *     --no-gpu                the front end on the CPU (as RXBOX_ANALYSIS_GPU=0)
+ *     --no-gpu                the front end on the CPU (as CYANBOX_ANALYSIS_GPU=0)
  *
- * The spectral front end runs on the GPU when there is one (rxbox/compute.h;
- * RXBOX_ANALYSIS_GPU=1 makes its absence an error). Each file's time is
+ * The spectral front end runs on the GPU when there is one (cyanbox/compute.h;
+ * CYANBOX_ANALYSIS_GPU=1 makes its absence an error). Each file's time is
  * split into decoding (or loading from the cache), the front end (the
  * STFT) and the decisions (everything after it, the envelopes around the
  * beats included), in wall-clock time, printed with -v and summed at the
  * end, with the cache's hits.
  *
- * Audio is decoded by rx_decode, mono at the file's own rate, as
- * rx_analyse sees it (the analyser resamples). With --ffmpeg it is piped
+ * Audio is decoded by cb_decode, mono at the file's own rate, as
+ * cb_analyse sees it (the analyser resamples). With --ffmpeg it is piped
  * from the ffmpeg command line at 44.1 kHz ("file:" prefix, so names
  * containing ':' work), exactly as dj decodes for its analysis, so that a
  * comparison with dj can see the same samples. The BPM tag, when a file
- * has one, is read with rx_probe and printed.
+ * has one, is read with cb_probe and printed.
  *
  * Where the music starts (docs/BEATS.md): the CSV and -v give its time and
  * kind (hit, fade, swell, at once), and the grid's first beat, its number,
@@ -58,7 +58,7 @@
  * before its on/off-beat decision, for tuning the witnesses without
  * analysing again. */
 
-#include "rxbox/analysis.h"
+#include "cyanbox/analysis.h"
 
 #include <math.h>
 #include <pthread.h>
@@ -74,7 +74,7 @@
 
 #include <linux/magic.h>
 
-#include "rxbox/compute.h"
+#include "cyanbox/compute.h"
 #include "src/analysis/beats_internal.h"
 
 /* ------------------------------------------------------------- decoding */
@@ -84,12 +84,12 @@ static int run_capture(char *const argv[], uint8_t **out, size_t *size)
 {
     int fd[2];
     if (pipe(fd) < 0)
-        return RX_ERROR(errno);
+        return CB_ERROR(errno);
     pid_t pid = fork();
     if (pid < 0) {
         close(fd[0]);
         close(fd[1]);
-        return RX_ERROR(errno);
+        return CB_ERROR(errno);
     }
     if (pid == 0) {
         dup2(fd[1], 1);
@@ -124,9 +124,9 @@ static int run_capture(char *const argv[], uint8_t **out, size_t *size)
     int st = 0;
     waitpid(pid, &st, 0);
     if (!buf)
-        ret = RX_ERROR(ENOMEM);
+        ret = CB_ERROR(ENOMEM);
     else if (!WIFEXITED(st) || WEXITSTATUS(st))
-        ret = RX_ERROR(EIO);
+        ret = CB_ERROR(EIO);
     if (ret < 0) {
         free(buf);
         return ret;
@@ -139,19 +139,19 @@ static int run_capture(char *const argv[], uint8_t **out, size_t *size)
 static int decode_ffmpeg(const char *path, float **x, int64_t *n)
 {
     /* Raw 44.1 kHz mono f32 (test_beats -w) is read as is. */
-    if (rx_str_ends(path, ".f32")) {
+    if (cb_str_ends(path, ".f32")) {
         uint8_t *buf = NULL;
         size_t size = 0;
-        int ret = rx_file_read(path, &buf, &size);
+        int ret = cb_file_read(path, &buf, &size);
         if (ret < 0)
             return ret;
         *x = (float *)buf;
         *n = size / sizeof(float);
         return 0;
     }
-    char *in = rx_asprintf("file:%s", path);
+    char *in = cb_asprintf("file:%s", path);
     if (!in)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     char *argv[] = { "ffmpeg", "-v", "error", "-nostdin", "-i", in, "-map", "0:a:0",
                      "-ac", "1", "-ar", "44100", "-f", "f32le", "-", NULL };
     uint8_t *buf = NULL;
@@ -167,23 +167,23 @@ static int decode_ffmpeg(const char *path, float **x, int64_t *n)
 
 static double read_tag_bpm(const char *path)
 {
-    RXProbe p;
-    if (rx_probe(path, &p) < 0)
+    CBProbe p;
+    if (cb_probe(path, &p) < 0)
         return 0.0;
-    const char *v = rx_probe_tag(&p, "bpm", "tbpm", "tempo", NULL);
+    const char *v = cb_probe_tag(&p, "bpm", "tbpm", "tempo", NULL);
     double bpm = v ? atof(v) : 0.0;
-    rx_probe_free(&p);
+    cb_probe_free(&p);
     return bpm;
 }
 
 /* ---------------------------------------------------------------- cache */
 
 /* --cache DIR: per input file, the decoded mono 44.1 kHz audio as 16-bit
- * PCM and the spectral front end's arrays (what rx_spectrum_compute makes,
+ * PCM and the spectral front end's arrays (what cb_spectrum_compute makes,
  * as floats, exactly), so that a second run over the same files skips
  * decoding and the transforms and runs only what comes after them. A file
  * is found by a hash of its path, size, modification time (ns), the
- * decoder (rx_decode or --ffmpeg) and RX_FRONTEND_VERSION, and its header
+ * decoder (cb_decode or --ffmpeg) and CB_FRONTEND_VERSION, and its header
  * repeats them all: a changed file, another decoder or a new front end is
  * a miss, and the entry is written again. About 6 MB a minute of audio:
  * 5.3 MB of PCM and 0.7 MB of the front end's arrays (21 and 3 MB for a
@@ -200,7 +200,7 @@ static double read_tag_bpm(const char *path)
 #define CACHE_FORMAT 1
 
 typedef struct CacheHead {
-    char     magic[4];              /* "RXFC" */
+    char     magic[4];              /* "CBFC" */
     uint32_t format, frontend, decoder;
     int64_t  size, mtime_ns;
     int64_t  n;                     /* samples at 44.1 kHz */
@@ -223,23 +223,23 @@ static char *cache_name(const char *dir, const char *path, int64_t size, int64_t
 {
     /* FNV-1a over everything that identifies the entry. */
     uint64_t h = 0xcbf29ce484222325ULL;
-    const uint32_t fe = RX_FRONTEND_VERSION;
+    const uint32_t fe = CB_FRONTEND_VERSION;
     const struct { const void *p; size_t n; } parts[] = {
         { path, strlen(path) }, { &size, sizeof(size) }, { &mtime_ns, sizeof(mtime_ns) },
         { &decoder, sizeof(decoder) }, { &fe, sizeof(fe) },
     };
-    for (size_t k = 0; k < RX_ARRAY_ELEMS(parts); k++) {
+    for (size_t k = 0; k < CB_ARRAY_ELEMS(parts); k++) {
         const uint8_t *b = parts[k].p;
         for (size_t i = 0; i < parts[k].n; i++)
             h = (h ^ b[i]) * 0x100000001b3ULL;
     }
-    return rx_asprintf("%s/%016llx.rxfc", dir, (unsigned long long)h);
+    return cb_asprintf("%s/%016llx.rxfc", dir, (unsigned long long)h);
 }
 
 /* The arrays of a spectrum, in the order they are stored, and their
  * lengths. */
 #define NB_SPEC 5
-static void spec_arrays(RXSpectrum *s, float **arr[NB_SPEC], size_t len[NB_SPEC])
+static void spec_arrays(CBSpectrum *s, float **arr[NB_SPEC], size_t len[NB_SPEC])
 {
     arr[0] = &s->prof;
     arr[1] = &s->kick;
@@ -247,14 +247,14 @@ static void spec_arrays(RXSpectrum *s, float **arr[NB_SPEC], size_t len[NB_SPEC]
     arr[3] = &s->flux_mid;
     arr[4] = &s->flux_high;
     const size_t nf = (size_t)s->nb_frames;
-    len[0] = nf * RX_BEAT_NPROF;
+    len[0] = nf * CB_BEAT_NPROF;
     len[1] = len[2] = len[3] = len[4] = nf;
 }
 
 /* Loads the entry of `path`; false when there is none (or it is not
  * this file's, or damaged). */
 static bool cache_load(const char *dir, const char *path, uint32_t decoder, float **x, int64_t *n,
-                       double *duration, RXSpectrum *spec)
+                       double *duration, CBSpectrum *spec)
 {
     int64_t size, mtime;
     if (!file_id(path, &size, &mtime))
@@ -262,7 +262,7 @@ static bool cache_load(const char *dir, const char *path, uint32_t decoder, floa
     char *name = cache_name(dir, path, size, mtime, decoder);
     uint8_t *blob = NULL;
     size_t blob_size = 0;
-    int ret = name ? rx_file_read(name, &blob, &blob_size) : RX_ERROR(ENOMEM);
+    int ret = name ? cb_file_read(name, &blob, &blob_size) : CB_ERROR(ENOMEM);
     free(name);
     if (ret < 0)
         return false;
@@ -271,34 +271,34 @@ static bool cache_load(const char *dir, const char *path, uint32_t decoder, floa
     bool ok = blob_size >= sizeof(h);
     if (ok) {
         memcpy(&h, blob, sizeof(h));
-        ok = !memcmp(h.magic, "RXFC", 4) && h.format == CACHE_FORMAT &&
-             h.frontend == RX_FRONTEND_VERSION && h.decoder == decoder && h.size == size &&
+        ok = !memcmp(h.magic, "CBFC", 4) && h.format == CACHE_FORMAT &&
+             h.frontend == CB_FRONTEND_VERSION && h.decoder == decoder && h.size == size &&
              h.mtime_ns == mtime && h.n >= 0 && h.nb_frames >= 0 && h.path_len >= 0 &&
              (size_t)h.path_len == strlen(path);
     }
     size_t off = sizeof(h) + (ok ? (size_t)h.path_len : 0);
-    off = RX_ALIGN(off, 8);
+    off = CB_ALIGN(off, 8);
     if (ok)
         ok = !memcmp(blob + sizeof(h), path, h.path_len);
-    RXSpectrum s = { .nb_frames = ok ? h.nb_frames : 0 };
+    CBSpectrum s = { .nb_frames = ok ? h.nb_frames : 0 };
     float **arr[NB_SPEC];
     size_t len[NB_SPEC];
     spec_arrays(&s, arr, len);
-    size_t need = off + RX_ALIGN((size_t)(ok ? h.n : 0) * sizeof(int16_t), 8);
+    size_t need = off + CB_ALIGN((size_t)(ok ? h.n : 0) * sizeof(int16_t), 8);
     for (int k = 0; k < NB_SPEC; k++)
         need += len[k] * sizeof(float);
     need += sizeof(s.mel_hz);
     ok = ok && need == blob_size;
 
-    float *xs = ok ? malloc((size_t)RX_MAX(h.n, 1) * sizeof(*xs)) : NULL;
+    float *xs = ok ? malloc((size_t)CB_MAX(h.n, 1) * sizeof(*xs)) : NULL;
     ok = ok && xs;
     for (int k = 0; ok && k < NB_SPEC; k++) {
-        *arr[k] = malloc(RX_MAX(len[k], 1) * sizeof(float));
+        *arr[k] = malloc(CB_MAX(len[k], 1) * sizeof(float));
         ok = *arr[k] != NULL;
     }
     if (!ok) {
         free(xs);
-        rx_spectrum_free(&s);
+        cb_spectrum_free(&s);
         free(blob);
         return false;
     }
@@ -306,7 +306,7 @@ static bool cache_load(const char *dir, const char *path, uint32_t decoder, floa
     const int16_t *pcm = (const int16_t *)(blob + off);
     for (int64_t i = 0; i < h.n; i++)
         xs[i] = pcm[i] / 32768.0f;
-    off += RX_ALIGN((size_t)h.n * sizeof(int16_t), 8);
+    off += CB_ALIGN((size_t)h.n * sizeof(int16_t), 8);
     for (int k = 0; k < NB_SPEC; k++) {
         memcpy(*arr[k], blob + off, len[k] * sizeof(float));
         off += len[k] * sizeof(float);
@@ -327,20 +327,20 @@ static void quantize16(float *x, int64_t n)
 {
     for (int64_t i = 0; i < n; i++) {
         long q = lrintf(x[i] * 32768.0f);
-        x[i] = (int16_t)RX_CLAMP(q, -32768L, 32767L) / 32768.0f;
+        x[i] = (int16_t)CB_CLAMP(q, -32768L, 32767L) / 32768.0f;
     }
 }
 
 static int cache_store(const char *dir, const char *path, uint32_t decoder, const float *x,
-                       int64_t n, double duration, RXSpectrum *spec)
+                       int64_t n, double duration, CBSpectrum *spec)
 {
     int64_t size, mtime;
     if (!file_id(path, &size, &mtime))
-        return RX_ERROR(ENOENT);
+        return CB_ERROR(ENOENT);
     CacheHead h = {
         .magic     = { 'R', 'X', 'F', 'C' },
         .format    = CACHE_FORMAT,
-        .frontend  = RX_FRONTEND_VERSION,
+        .frontend  = CB_FRONTEND_VERSION,
         .decoder   = decoder,
         .size      = size,
         .mtime_ns  = mtime,
@@ -353,21 +353,21 @@ static int cache_store(const char *dir, const char *path, uint32_t decoder, cons
     float **arr[NB_SPEC];
     size_t len[NB_SPEC];
     spec_arrays(spec, arr, len);
-    size_t off = RX_ALIGN(sizeof(h) + (size_t)h.path_len, 8);
-    size_t total = off + RX_ALIGN((size_t)n * sizeof(int16_t), 8);
+    size_t off = CB_ALIGN(sizeof(h) + (size_t)h.path_len, 8);
+    size_t total = off + CB_ALIGN((size_t)n * sizeof(int16_t), 8);
     for (int k = 0; k < NB_SPEC; k++)
         total += len[k] * sizeof(float);
     total += sizeof(spec->mel_hz);
     uint8_t *blob = calloc(1, total);
     if (!blob)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
 
     memcpy(blob, &h, sizeof(h));
     memcpy(blob + sizeof(h), path, h.path_len);
     int16_t *pcm = (int16_t *)(blob + off);
     for (int64_t i = 0; i < n; i++)
-        pcm[i] = (int16_t)RX_CLAMP(lrintf(x[i] * 32768.0f), -32768L, 32767L);
-    off += RX_ALIGN((size_t)n * sizeof(int16_t), 8);
+        pcm[i] = (int16_t)CB_CLAMP(lrintf(x[i] * 32768.0f), -32768L, 32767L);
+    off += CB_ALIGN((size_t)n * sizeof(int16_t), 8);
     for (int k = 0; k < NB_SPEC; k++) {
         memcpy(blob + off, *arr[k], len[k] * sizeof(float));
         off += len[k] * sizeof(float);
@@ -375,7 +375,7 @@ static int cache_store(const char *dir, const char *path, uint32_t decoder, cons
     memcpy(blob + off, spec->mel_hz, sizeof(spec->mel_hz));
 
     char *name = cache_name(dir, path, size, mtime, decoder);
-    int ret = name ? rx_file_write_atomic(name, blob, total) : RX_ERROR(ENOMEM);
+    int ret = name ? cb_file_write_atomic(name, blob, total) : CB_ERROR(ENOMEM);
     free(name);
     free(blob);
     return ret;
@@ -386,7 +386,7 @@ static void cache_check_dir(const char *dir)
 {
     struct statfs fs;
     if (statfs(dir, &fs) == 0 && fs.f_type == TMPFS_MAGIC)
-        fprintf(stderr, "rxbox-eval: %s is on a tmpfs: the cache takes RAM there (about 24 MB "
+        fprintf(stderr, "cyanbox-eval: %s is on a tmpfs: the cache takes RAM there (about 24 MB "
                         "per four-minute track)\n", dir);
 }
 
@@ -399,9 +399,9 @@ typedef struct Result {
     bool   ok;
     double duration;
     int    nb_secs;
-    RXTempoSection secs[MAX_SECS];  /* the straight sections, and one entry per
+    CBTempoSection secs[MAX_SECS];  /* the straight sections, and one entry per
                                      * dynamic passage (measured, its first beat) */
-    RXGrid grid;                    /* the grid itself (empty when read from a CSV) */
+    CBGrid grid;                    /* the grid itself (empty when read from a CSV) */
     int    nb_dynamic;              /* measured beats of the grid */
     double bpm_lo, bpm_hi;          /* their local tempos' range */
     double downbeat;            /* first downbeat >= 0 */
@@ -412,9 +412,9 @@ typedef struct Result {
     double ms;                  /* CPU time of the front end and the decisions */
     double dec_ms, fe_ms, beats_ms;     /* wall time of decoding, the front end, the decisions */
     bool   cached;              /* decoded audio and front end from --cache */
-    /* --all: the key and the waveforms (FNV-1a of rx_waveforms_pack's blob) */
+    /* --all: the key and the waveforms (FNV-1a of cb_waveforms_pack's blob) */
     bool   has_key, has_waves;
-    char   key[RX_KEY_MAX];
+    char   key[CB_KEY_MAX];
     double key_confidence, key_tuning;
     int    wave_columns;
     uint64_t wave_hash;
@@ -424,7 +424,7 @@ typedef struct Result {
     double octave_margin, phase_margin, kick_share, jitter, strong_on_grid;
     double full_on_grid, kick_delay, full_delay, scatter;
     double second_bpm;
-    RXOctaveDecision oct;
+    CBOctaveDecision oct;
     int    band;
     bool   shifted;
     /* where the music starts, and the grid there */
@@ -440,20 +440,20 @@ typedef struct Result {
 
 static const char *kind_name(int k)
 {
-    return k == RX_START_HIT ? "hit" : k == RX_START_FADE ? "fade" :
-           k == RX_START_SWELL ? "swell" : "once";
+    return k == CB_START_HIT ? "hit" : k == CB_START_FADE ? "fade" :
+           k == CB_START_SWELL ? "swell" : "once";
 }
 
 /* The grid's first beat and its number, its first downbeat, and the
- * automatic cue (rx_analysis_auto_cues' rule: the first downbeat at or
+ * automatic cue (cb_analysis_auto_cues' rule: the first downbeat at or
  * after the start of the music, 50 ms of slack). */
-static void grid_start(Result *r, const RXGrid *g)
+static void grid_start(Result *r, const CBGrid *g)
 {
     r->first_beat = r->first_down = r->cue = NAN;
     r->first_number = 0;
-    RXBeat *b = NULL;
+    CBBeat *b = NULL;
     int nb = 0;
-    if (rx_grid_beats(g, r->duration, &b, &nb) < 0 || !nb)
+    if (cb_grid_beats(g, r->duration, &b, &nb) < 0 || !nb)
         return;
     r->first_beat = b[0].time;
     r->first_number = b[0].number;
@@ -473,7 +473,7 @@ static void grid_start(Result *r, const RXGrid *g)
 static double grid_bpm(const Result *r)
 {
     if (r->grid.nb_sections)
-        return rx_grid_bpm_median(&r->grid, r->duration);
+        return cb_grid_bpm_median(&r->grid, r->duration);
     return r->nb_secs ? r->secs[0].bpm : 0.0;
 }
 
@@ -490,8 +490,8 @@ static int sec_at(const Result *r, double t)
 static double nearest_beat(const Result *r, double t)
 {
     if (r->grid.nb_sections)
-        return rx_grid_nearest_beat(&r->grid, t, NULL);
-    const RXTempoSection *s = &r->secs[sec_at(r, t)];
+        return cb_grid_nearest_beat(&r->grid, t, NULL);
+    const CBTempoSection *s = &r->secs[sec_at(r, t)];
     double p = 60.0 / s->bpm;
     return s->start + round((t - s->start) / p) * p;
 }
@@ -503,10 +503,10 @@ static double nearest_downbeat(const Result *r, double t)
     if (r->grid.nb_sections) {
         /* The downbeat nearest t: a bar either side of t's bar. */
         int bar, beat;
-        rx_grid_bar_of(&r->grid, t, &bar, &beat);
+        cb_grid_bar_of(&r->grid, t, &bar, &beat);
         double best = NAN;
-        for (int b = RX_MAX(bar - 1, 1); b <= bar + 1; b++) {
-            double d = rx_grid_bar_time(&r->grid, b, 1);
+        for (int b = CB_MAX(bar - 1, 1); b <= bar + 1; b++) {
+            double d = cb_grid_bar_time(&r->grid, b, 1);
             if (isnan(best) || fabs(d - t) < fabs(best - t))
                 best = d;
         }
@@ -519,7 +519,7 @@ static double nearest_downbeat(const Result *r, double t)
         int beats = (int)lrint((r->secs[i + 1].start - r->secs[i].start) / p);
         num = r->secs[i + 1].beat ? r->secs[i + 1].beat : ((num - 1 + beats) % 4 + 4) % 4 + 1;
     }
-    const RXTempoSection *s = &r->secs[si];
+    const CBTempoSection *s = &r->secs[si];
     double p = 60.0 / s->bpm;
     double first_down = s->start + ((5 - num) % 4) * p;
     double bar = 4 * p;
@@ -532,7 +532,7 @@ static void flags_to_str(unsigned f, char *buf, size_t size)
     for (int i = 0; i < 16; i++) {
         if (!(f & (1u << i)))
             continue;
-        const char *n = rx_grid_flag_name((enum RXGridFlag)(1u << i));
+        const char *n = cb_grid_flag_name((enum CBGridFlag)(1u << i));
         if (!n || !*n)
             continue;
         if (buf[0])
@@ -548,7 +548,7 @@ typedef struct Job {
     int                nb;
     Result            *res;
     atomic_int         next;
-    RXAnalysisOptions  opt;
+    CBAnalysisOptions  opt;
     const char        *dump;
     const char        *cache;
     bool               ffmpeg;
@@ -565,13 +565,13 @@ static double cpu_ms(void)
     return ts.tv_sec * 1e3 + ts.tv_nsec / 1e6;
 }
 
-/* The closest two beats of the grid as a player gets it (rx_grid_beats),
+/* The closest two beats of the grid as a player gets it (cb_grid_beats),
  * in periods of the faster side: under a half, two beats are one hit. */
-static double closest_beats(const RXGrid *g, double duration)
+static double closest_beats(const CBGrid *g, double duration)
 {
-    RXBeat *b = NULL;
+    CBBeat *b = NULL;
     int nb = 0;
-    if (rx_grid_beats(g, duration, &b, &nb) < 0)
+    if (cb_grid_beats(g, duration, &b, &nb) < 0)
         return NAN;
     double m = INFINITY;
     for (int i = 1; i < nb; i++)
@@ -591,7 +591,7 @@ static int cmp_dbl(const void *a, const void *b)
  * nearest beat (a band's flux has its own delay; what matters is that the
  * hits keep one distance from the grid). The median offset is returned in
  * *delay: near half a beat means the grid is on that band's off-beat. */
-static double locked_to_grid(const RXOnsets *o, const float *v, const Result *r, double *delay)
+static double locked_to_grid(const CBOnsets *o, const float *v, const Result *r, double *delay)
 {
     int n = o->nb, np = 0;
     double *pk = malloc((size_t)n * sizeof(*pk));
@@ -632,9 +632,9 @@ static double locked_to_grid(const RXOnsets *o, const float *v, const Result *r,
     return frac;
 }
 
-static void dump_files(const char *base, int idx, const RXBeatDebug *d, const Result *r)
+static void dump_files(const char *base, int idx, const CBBeatDebug *d, const Result *r)
 {
-    char *fn = rx_asprintf("%s.%d.onsets.csv", base, idx);
+    char *fn = cb_asprintf("%s.%d.onsets.csv", base, idx);
     FILE *f = fn ? fopen(fn, "w") : NULL;
     if (f) {
         fprintf(f, "time,full,low,mid,high,accent\n");
@@ -644,12 +644,12 @@ static void dump_files(const char *base, int idx, const RXBeatDebug *d, const Re
         fclose(f);
     }
     free(fn);
-    fn = rx_asprintf("%s.%d.beats.csv", base, idx);
+    fn = cb_asprintf("%s.%d.beats.csv", base, idx);
     f = fn ? fopen(fn, "w") : NULL;
     if (f) {
         fprintf(f, "index,tracked,attack,weight,kick,grid,residual_ms\n");
         for (int i = 0; i < d->nb_beats; i++) {
-            const RXBeatObs *b = &d->beats[i];
+            const CBBeatObs *b = &d->beats[i];
             double g = nearest_beat(r, isnan(b->attack) ? b->time : b->attack);
             fprintf(f, "%d,%.5f,%.5f,%.4f,%.3f,%.5f,%.2f\n", b->index, b->time, b->attack,
                     b->weight, b->kick, g, isnan(b->attack) ? NAN : (b->attack - g) * 1e3);
@@ -699,12 +699,12 @@ static void peak_reset(void)
     }
 }
 
-/* --all: the whole rx_analyse, as the app runs it (native channels;
+/* --all: the whole cb_analyse, as the app runs it (native channels;
  * waveforms and key too). Fills the beat result only. */
 /* The grid into the result: the straight sections as they are, a dynamic
  * passage as one measured entry (its first beat) with the count and the
  * tempo range of the measured beats kept beside. */
-static void take_grid(Result *r, const RXGrid *g)
+static void take_grid(Result *r, const CBGrid *g)
 {
     r->ok = g->nb_sections > 0;
     r->nb_secs = 0;
@@ -712,7 +712,7 @@ static void take_grid(Result *r, const RXGrid *g)
     r->bpm_lo = INFINITY;
     r->bpm_hi = 0.0;
     for (int i = 0; i < g->nb_sections; i++) {
-        const RXTempoSection *s = &g->sections[i];
+        const CBTempoSection *s = &g->sections[i];
         if (s->measured) {
             r->nb_dynamic++;
             r->bpm_lo = fmin(r->bpm_lo, s->bpm);
@@ -725,13 +725,13 @@ static void take_grid(Result *r, const RXGrid *g)
     }
     if (!r->nb_dynamic)
         r->bpm_lo = r->bpm_hi = 0.0;
-    rx_grid_copy(&r->grid, g);
+    cb_grid_copy(&r->grid, g);
 }
 
-static int analyse_all(Job *job, Result *r, RXBeatResult *br)
+static int analyse_all(Job *job, Result *r, CBBeatResult *br)
 {
-    RXAudio au = { 0 };
-    if (rx_decode(r->path, 0, 0, &au) < 0) {
+    CBAudio au = { 0 };
+    if (cb_decode(r->path, 0, 0, &au) < 0) {
         fprintf(stderr, "%s: decoding failed\n", r->path);
         return -1;
     }
@@ -739,21 +739,21 @@ static int analyse_all(Job *job, Result *r, RXBeatResult *br)
     double peak0 = peak_mb();
     peak_reset();
     double rss0 = rss_mb();
-    RXAnalysis an;
+    CBAnalysis an;
     double t0 = cpu_ms();
-    int ret = rx_analyse(&au, &job->opt, job->what ? job->what : RX_ANALYSE_ALL, &an);
+    int ret = cb_analyse(&au, &job->opt, job->what ? job->what : CB_ANALYSE_ALL, &an);
     r->ms = cpu_ms() - t0;
-    rx_audio_free(&au);
+    cb_audio_free(&au);
     if (job->mem)
         printf("memory: decoded %.0f MB resident (peak %.0f), peak after analysis %.0f MB: "
                "analysis %.0f MB above its input  %s\n", rss0, peak0, peak_mb(),
-               peak_mb() - rss0, rx_path_base(r->path));
+               peak_mb() - rss0, cb_path_base(r->path));
     if (ret < 0) {
         fprintf(stderr, "%s: analysis failed (%d)\n", r->path, ret);
-        rx_analysis_free(&an);
+        cb_analysis_free(&an);
         return -1;
     }
-    if (an.done & RX_ANALYSE_KEY) {
+    if (an.done & CB_ANALYSE_KEY) {
         r->has_key = true;
         snprintf(r->key, sizeof(r->key), "%s", an.key.key);
         r->key_confidence = an.key.confidence;
@@ -761,7 +761,7 @@ static int analyse_all(Job *job, Result *r, RXBeatResult *br)
     }
     uint8_t *blob = NULL;
     size_t size = 0;
-    if ((an.done & RX_ANALYSE_WAVES) && rx_waveforms_pack(&an.waves, &blob, &size) >= 0) {
+    if ((an.done & CB_ANALYSE_WAVES) && cb_waveforms_pack(&an.waves, &blob, &size) >= 0) {
         r->has_waves = true;
         r->wave_columns = an.waves.nb_detail;
         r->wave_hash = 0xcbf29ce484222325ULL;
@@ -770,8 +770,8 @@ static int analyse_all(Job *job, Result *r, RXBeatResult *br)
         free(blob);
     }
     *br = an.beats;
-    an.beats = (RXBeatResult) { 0 };
-    rx_analysis_free(&an);
+    an.beats = (CBBeatResult) { 0 };
+    cb_analysis_free(&an);
     return 0;
 }
 
@@ -781,14 +781,14 @@ static void start_one(Job *job, Result *r, const float *x, int64_t n, int rate)
     (void)job;
     float *own = NULL;
     int64_t n44 = n;
-    if (rate != RX_BEAT_RATE) {
-        if (rx_resample_mono(x, n, rate, RX_BEAT_RATE, &own, &n44) < 0)
+    if (rate != CB_BEAT_RATE) {
+        if (cb_resample_mono(x, n, rate, CB_BEAT_RATE, &own, &n44) < 0)
             return;
         x = own;
     }
-    RXMusicStart st;
+    CBMusicStart st;
     double t0 = cpu_ms();
-    if (rx_music_start(x, n44, &st) == 0) {
+    if (cb_music_start(x, n44, &st) == 0) {
         r->ok = true;
         r->music_start = st.start;
         r->audible = st.audible;
@@ -808,7 +808,7 @@ static void analyse_one(Job *job, int i)
     r->path = job->paths[i];
     r->start_section = -1;
     if (job->all) {
-        RXBeatResult br;
+        CBBeatResult br;
         if (analyse_all(job, r, &br) < 0)
             return;
         take_grid(r, &br.grid);
@@ -825,15 +825,15 @@ static void analyse_one(Job *job, int i)
             while (r->downbeat < 0.0)
                 r->downbeat += bar;
         }
-        rx_beat_result_free(&br);
+        cb_beat_result_free(&br);
         return;
     }
     float *x = NULL;
     int64_t n = 0;
-    int rate = RX_BEAT_RATE;
-    RXSpectrum spec = { 0 };
-    const uint32_t decoder = job->ffmpeg || rx_str_ends(r->path, ".f32");
-    int64_t t0 = rx_time_us();
+    int rate = CB_BEAT_RATE;
+    CBSpectrum spec = { 0 };
+    const uint32_t decoder = job->ffmpeg || cb_str_ends(r->path, ".f32");
+    int64_t t0 = cb_time_us();
     r->cached = !job->starts && job->cache &&
                 cache_load(job->cache, r->path, decoder, &x, &n, &r->duration, &spec);
     if (!r->cached) {
@@ -843,10 +843,10 @@ static void analyse_one(Job *job, int i)
                 return;
             }
         } else {
-            /* As rx_analyse sees it: mono at the file's own rate, on the
+            /* As cb_analyse sees it: mono at the file's own rate, on the
              * players' timeline. */
-            RXAudio au = { 0 };
-            if (rx_decode(r->path, 1, 0, &au) < 0) {
+            CBAudio au = { 0 };
+            if (cb_decode(r->path, 1, 0, &au) < 0) {
                 fprintf(stderr, "%s: decoding failed\n", r->path);
                 return;
             }
@@ -854,7 +854,7 @@ static void analyse_one(Job *job, int i)
             au.samples = NULL;
             n = au.nb_frames;
             rate = au.rate;
-            rx_audio_free(&au);
+            cb_audio_free(&au);
         }
         r->duration = (double)n / rate;
         if (job->starts) {
@@ -863,10 +863,10 @@ static void analyse_one(Job *job, int i)
             return;
         }
         /* At 44.1 kHz, resampled as the analyser itself would. */
-        if (rate != RX_BEAT_RATE) {
+        if (rate != CB_BEAT_RATE) {
             float *x44 = NULL;
             int64_t n44 = 0;
-            int ret = rx_resample_mono(x, n, rate, RX_BEAT_RATE, &x44, &n44);
+            int ret = cb_resample_mono(x, n, rate, CB_BEAT_RATE, &x44, &n44);
             free(x);
             if (ret < 0) {
                 fprintf(stderr, "%s: resampling failed\n", r->path);
@@ -878,19 +878,19 @@ static void analyse_one(Job *job, int i)
         if (job->cache)
             quantize16(x, n);
     }
-    r->dec_ms = (rx_time_us() - t0) / 1000.0;
-    r->tag_bpm = rx_str_ends(r->path, ".f32") ? 0.0 : read_tag_bpm(r->path);
+    r->dec_ms = (cb_time_us() - t0) / 1000.0;
+    r->tag_bpm = cb_str_ends(r->path, ".f32") ? 0.0 : read_tag_bpm(r->path);
 
-    RXBeatResult br;
-    RXBeatDebug dbg;
+    CBBeatResult br;
+    CBBeatDebug dbg;
     double peak0 = peak_mb();
     peak_reset();
     double rss0 = rss_mb();
     double c0 = cpu_ms();
     if (!r->cached) {
-        int64_t t1 = rx_time_us();
-        int ret = rx_spectrum_compute(x, n, job->opt.compute, &spec);
-        r->fe_ms = (rx_time_us() - t1) / 1000.0;
+        int64_t t1 = cb_time_us();
+        int ret = cb_spectrum_compute(x, n, job->opt.compute, &spec);
+        r->fe_ms = (cb_time_us() - t1) / 1000.0;
         if (ret < 0) {
             fprintf(stderr, "%s: the front end failed (%d)\n", r->path, ret);
             free(x);
@@ -900,14 +900,14 @@ static void analyse_one(Job *job, int i)
                                              &spec)) < 0)
             fprintf(stderr, "%s: not cached: %s\n", r->path, strerror(-ret));
     }
-    int64_t t2 = rx_time_us();
-    int ret = rx_analyse_beats_spec(x, n, &spec, &job->opt, &br, job->mem ? NULL : &dbg);
-    r->beats_ms = (rx_time_us() - t2) / 1000.0;
+    int64_t t2 = cb_time_us();
+    int ret = cb_analyse_beats_spec(x, n, &spec, &job->opt, &br, job->mem ? NULL : &dbg);
+    r->beats_ms = (cb_time_us() - t2) / 1000.0;
     r->ms = cpu_ms() - c0;
     if (job->mem) {
         printf("memory: decoded %.0f MB resident (peak %.0f), peak after analysis %.0f MB: "
                "analysis %.0f MB above its input  %s\n", rss0, peak0, peak_mb(),
-               peak_mb() - rss0, rx_path_base(r->path));
+               peak_mb() - rss0, cb_path_base(r->path));
         memset(&dbg, 0, sizeof(dbg));
     }
     free(x);
@@ -961,8 +961,8 @@ static void analyse_one(Job *job, int i)
         if (job->dump)
             dump_files(job->dump, i, &dbg, r);
     }
-    rx_beat_debug_free(&dbg);
-    rx_beat_result_free(&br);
+    cb_beat_debug_free(&dbg);
+    cb_beat_result_free(&br);
 }
 
 static void *worker(void *arg)
@@ -1122,12 +1122,12 @@ static int read_csv(const char *fn, Result **out)
         }
         Result *r = &res[nb++];
         memset(r, 0, sizeof(*r));
-        r->path = rx_strdup(fl[0]);
+        r->path = cb_strdup(fl[0]);
         r->duration = atof(fl[1]);
         r->closest = INFINITY;
         char *sp = fl[3];
         while (*sp && r->nb_secs < MAX_SECS) {
-            RXTempoSection *s = &r->secs[r->nb_secs++];
+            CBTempoSection *s = &r->secs[r->nb_secs++];
             if (sp[0] == 'D' && sp[1] == ':') {
                 s->measured = true;
                 sp += 2;
@@ -1230,7 +1230,7 @@ static void compare(const Result *res, int nb, const char *ref_fn)
             if (okp && eq && fabs(dd) <= 0.015)
                 continue;
         }
-        printf("%-8.3f %-8.3f %-9s %-9s %s\n", ba, bb, ph, dn, rx_path_base(a->path));
+        printf("%-8.3f %-8.3f %-9s %-9s %s\n", ba, bb, ph, dn, cb_path_base(a->path));
     }
     printf("\ncompared %d files with %s\n", n, ref_fn);
     if (!n)
@@ -1239,11 +1239,11 @@ static void compare(const Result *res, int nb, const char *ref_fn)
     printf("  octave related         %3d  %5.1f %%\n", octave, 100.0 * octave / n);
     printf("  other                  %3d  %5.1f %%\n", other, 100.0 * other / n);
     printf("  phase within 15 ms     %3d  %5.1f %% (of bpm equal or octave)\n", phase,
-           100.0 * phase / RX_MAX(same + octave, 1));
+           100.0 * phase / CB_MAX(same + octave, 1));
     printf("  downbeat within 15 ms  %3d  %5.1f %% (of bpm equal)\n", down15,
-           100.0 * down15 / RX_MAX(same, 1));
+           100.0 * down15 / CB_MAX(same, 1));
     printf("  downbeat on a beat     %3d  %5.1f %% (of bpm equal; phase agrees)\n", down_beat,
-           100.0 * down_beat / RX_MAX(same, 1));
+           100.0 * down_beat / CB_MAX(same, 1));
     if (tagged)
         printf("  BPM tag agreement      ours %d/%d  ref %d/%d\n", tag_ours, tagged, tag_ref,
                tagged);
@@ -1256,7 +1256,7 @@ static void compare(const Result *res, int nb, const char *ref_fn)
 
 static void usage(void)
 {
-    fprintf(stderr, "usage: rxbox-eval [-j N] [-l LIST] [--csv OUT] [--from CSV]\n"
+    fprintf(stderr, "usage: cyanbox-eval [-j N] [-l LIST] [--csv OUT] [--from CSV]\n"
                     "                  [--compare REF.csv]\n"
                     "                  [--dump-onsets BASE] [--bpm-range LO HI] [--no-sections]\n"
                     "                  [--no-dynamic]\n"
@@ -1268,10 +1268,10 @@ static void usage(void)
 int main(int argc, char **argv)
 {
     Job job = { 0 };
-    rx_analysis_options_default(&job.opt);
+    cb_analysis_options_default(&job.opt);
     const char *csv = NULL, *from = NULL, *ref = NULL, *list = NULL, *device = NULL;
     bool no_gpu = false;
-    int threads = (int)RX_MAX(sysconf(_SC_NPROCESSORS_ONLN) / 2, 1);
+    int threads = (int)CB_MAX(sysconf(_SC_NPROCESSORS_ONLN) / 2, 1);
     bool verbose = false;
     char **paths = malloc(argc * sizeof(*paths));
     int np = 0;
@@ -1279,7 +1279,7 @@ int main(int argc, char **argv)
         const char *a = argv[i];
         if ((!strcmp(a, "-j") || !strcmp(a, "--threads")) && i + 1 < argc) {
             threads = atoi(argv[++i]);
-            threads = RX_MAX(threads, 1);
+            threads = CB_MAX(threads, 1);
         } else if ((!strcmp(a, "-l") || !strcmp(a, "--list")) && i + 1 < argc) {
             list = argv[++i];
         } else if (!strcmp(a, "--csv") && i + 1 < argc) {
@@ -1318,7 +1318,7 @@ int main(int argc, char **argv)
             verbose = true;
         } else if (!strcmp(a, "-vv")) {
             verbose = true;
-            rx_log_set_level(RX_LOG_DEBUG);
+            cb_log_set_level(CB_LOG_DEBUG);
         } else if (a[0] == '-' && a[1]) {
             usage();
             return 1;
@@ -1328,21 +1328,21 @@ int main(int argc, char **argv)
     }
 
     /* The front end's GPU, shared by the threads. */
-    RXCompute *gpu = NULL;
-    if (!from && !job.starts && !no_gpu && rx_compute_mode() != RX_COMPUTE_OFF) {
-        RXComputeOptions co;
-        rx_compute_options_default(&co);
+    CBCompute *gpu = NULL;
+    if (!from && !job.starts && !no_gpu && cb_compute_mode() != CB_COMPUTE_OFF) {
+        CBComputeOptions co;
+        cb_compute_options_default(&co);
         co.device = device;
-        int ret = rx_compute_create(&gpu, &co);
-        if (ret < 0 && rx_compute_mode() == RX_COMPUTE_REQUIRED) {
-            fprintf(stderr, "rxbox-eval: RXBOX_ANALYSIS_GPU=1, but there is no GPU (%s)\n",
+        int ret = cb_compute_create(&gpu, &co);
+        if (ret < 0 && cb_compute_mode() == CB_COMPUTE_REQUIRED) {
+            fprintf(stderr, "cyanbox-eval: CYANBOX_ANALYSIS_GPU=1, but there is no GPU (%s)\n",
                     strerror(-ret));
             return 1;
         }
     }
     job.opt.compute = gpu;
     if (job.cache) {
-        if (rx_mkdir_p(job.cache) < 0) {
+        if (cb_mkdir_p(job.cache) < 0) {
             fprintf(stderr, "%s: cannot create the cache directory\n", job.cache);
             return 1;
         }
@@ -1374,7 +1374,7 @@ int main(int argc, char **argv)
                 if (!pn)
                     return 1;
                 paths = pn;
-                paths[np++] = rx_strdup(line);
+                paths[np++] = cb_strdup(line);
             }
             free(line);
             fclose(f);
@@ -1389,7 +1389,7 @@ int main(int argc, char **argv)
         job.nb = nb;
         job.res = res;
         atomic_init(&job.next, 0);
-        threads = RX_MIN(threads, nb);
+        threads = CB_MIN(threads, nb);
         pthread_t *th = calloc(threads, sizeof(*th));
         for (int i = 0; i < threads; i++)
             pthread_create(&th[i], NULL, worker, &job);
@@ -1419,7 +1419,7 @@ int main(int argc, char **argv)
     for (int i = 0; i < nb; i++) {
         const Result *r = &res[i];
         if (!r->ok) {
-            printf("%-60s  no grid\n", r->path ? rx_path_base(r->path) : "?");
+            printf("%-60s  no grid\n", r->path ? cb_path_base(r->path) : "?");
             continue;
         }
         ok++;
@@ -1445,7 +1445,7 @@ int main(int argc, char **argv)
                r->confidence, r->ms, r->flagstr);
         if (r->tag_bpm > 0)
             printf("  tag %g", r->tag_bpm);
-        printf("  %s%s%s\n", rx_path_base(r->path), secs,
+        printf("  %s%s%s\n", cb_path_base(r->path), secs,
                r->closest < 0.5 ? "  NEAR-DUPLICATE BEATS" : "");
         if (!verbose || from)
             continue;
@@ -1469,7 +1469,7 @@ int main(int argc, char **argv)
                r->scatter * 1e3, r->band, r->strong_on_grid, r->kick_delay * 1e3, r->full_on_grid,
                r->full_delay * 1e3);
         printf("          start %.4f (%s", r->music_start, kind_name(r->start_kind));
-        if (r->start_kind != RX_START_AT_ONCE)
+        if (r->start_kind != CB_START_AT_ONCE)
             printf(", over the threshold at %.4f, floor %.1f dB, loud %.1f dB, jump %.1f dB, "
                    "rise %.3f s", r->audible, r->floor_db, r->loud_db, r->jump_db, r->rise);
         printf(")  first beat %.4f (beat %d)  beat 1 %.4f  cue %.4f\n", r->first_beat,
@@ -1516,7 +1516,7 @@ int main(int argc, char **argv)
         }
         printf("per file, wall: decoding (or the cache) %.0f ms, front end %.0f ms (%s), "
                "decisions %.0f ms\n",
-               dec / ok, fe / ok, gpu ? rx_compute_device_name(gpu) : "CPU", dm / ok);
+               dec / ok, fe / ok, gpu ? cb_compute_device_name(gpu) : "CPU", dm / ok);
         if (job.cache)
             printf("cache %s: %d of %d files from it\n", job.cache, hits, ok);
     }
@@ -1525,10 +1525,10 @@ int main(int argc, char **argv)
     if (ref)
         compare(res, nb, ref);
     if (gpu) {
-        int errors = rx_compute_validation_errors(gpu);
-        rx_compute_destroy(&gpu);
+        int errors = cb_compute_validation_errors(gpu);
+        cb_compute_destroy(&gpu);
         if (errors) {
-            fprintf(stderr, "rxbox-eval: %d Vulkan validation errors\n", errors);
+            fprintf(stderr, "cyanbox-eval: %d Vulkan validation errors\n", errors);
             return 1;
         }
     }

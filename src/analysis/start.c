@@ -52,7 +52,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define FRAME        RX_BEAT_HOP
+#define FRAME        CB_BEAT_HOP
 #define SILENT_DB    (-200.0)
 #define HIST_LO      (-160)         /* level histogram, 1 dB bins */
 #define HIST_HI      30
@@ -89,14 +89,14 @@ static double level_db(double e)
 
 static int bin_of(double db)
 {
-    return RX_CLAMP((int)floor(db) - HIST_LO, 0, HIST_N - 1);
+    return CB_CLAMP((int)floor(db) - HIST_LO, 0, HIST_N - 1);
 }
 
 /* The level of frames [f - 1, f + 1]: 20 ms, so that a low note's cycle
  * does not make a frame look silent. */
 static double smooth_db(const float *e, int nf, int f)
 {
-    int a = RX_MAX(f - 1, 0), b = RX_MIN(f + 1, nf - 1);
+    int a = CB_MAX(f - 1, 0), b = CB_MIN(f + 1, nf - 1);
     double s = 0.0;
     for (int i = a; i <= b; i++)
         s += e[i];
@@ -107,8 +107,8 @@ static double smooth_db(const float *e, int nf, int f)
  * SUSTAIN_S: music does, a click or a tick in a CD's pregap does not. */
 static bool sustained(const float *e, int nf, int f, double thr)
 {
-    int n = (int)(SUSTAIN_S * RX_BEAT_RATE / FRAME), over = 0;
-    for (int i = f; i < RX_MIN(f + n, nf); i++)
+    int n = (int)(SUSTAIN_S * CB_BEAT_RATE / FRAME), over = 0;
+    for (int i = f; i < CB_MIN(f + n, nf); i++)
         over += smooth_db(e, nf, i) >= thr;
     return over * SUSTAIN_PART >= n;
 }
@@ -144,7 +144,7 @@ static bool fast_attack(const float *e, int nf, int f)
 {
     double peak = SILENT_DB;
     int at = f;
-    for (int i = f; i <= RX_MIN(f + ATTACK_LOOK, nf - 1); i++) {
+    for (int i = f; i <= CB_MIN(f + ATTACK_LOOK, nf - 1); i++) {
         double l = smooth_db(e, nf, i);
         if (l > peak) {
             peak = l;
@@ -159,39 +159,39 @@ static bool fast_attack(const float *e, int nf, int f)
  * and, after a fade, above the fade's own peaks of the 50 ms before. */
 static double hit_sample(const float *x, int64_t n, int fs, double floor_amp, bool after_fade)
 {
-    int64_t a = (int64_t)RX_MAX(fs - 2, 0) * FRAME;
-    int64_t b = RX_MIN((int64_t)(fs + 4) * FRAME + RX_BEAT_RATE * 3 / 100, n);
+    int64_t a = (int64_t)CB_MAX(fs - 2, 0) * FRAME;
+    int64_t b = CB_MIN((int64_t)(fs + 4) * FRAME + CB_BEAT_RATE * 3 / 100, n);
     float peak = 0.0f;
     for (int64_t i = a; i < b; i++)
         peak = fmaxf(peak, fabsf(x[i]));
     double amp = fmax(HIT_PEAK * peak, floor_amp);
     if (after_fade) {
         float before = 0.0f;
-        for (int64_t i = RX_MAX(a - 7 * FRAME, 0); i < a; i++)
+        for (int64_t i = CB_MAX(a - 7 * FRAME, 0); i < a; i++)
             before = fmaxf(before, fabsf(x[i]));
         amp = fmax(amp, HIT_OVER_BEFORE * before);
     }
     int64_t at = a;
     while (at < b && fabsf(x[at]) < amp)
         at++;
-    return (double)at / RX_BEAT_RATE;
+    return (double)at / CB_BEAT_RATE;
 }
 
-int rx_music_start(const float *x, int64_t n, RXMusicStart *out)
+int cb_music_start(const float *x, int64_t n, CBMusicStart *out)
 {
-    *out = (RXMusicStart) {
-        .kind     = RX_START_AT_ONCE,
+    *out = (CBMusicStart) {
+        .kind     = CB_START_AT_ONCE,
         .floor_db = SILENT_DB,
         .loud_db  = SILENT_DB,
     };
-    const double fsec = (double)FRAME / RX_BEAT_RATE;
+    const double fsec = (double)FRAME / CB_BEAT_RATE;
     int64_t nf64 = n / FRAME;
     if (nf64 < 16 || nf64 > INT32_MAX)
         return 0;
     const int nf = (int)nf64;
     float *e = malloc((size_t)nf * sizeof(*e));
     if (!e)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
 
     /* The frames' mean squares, and the loud level from their histogram. */
     int hist[HIST_N] = { 0 }, audible = 0;
@@ -245,8 +245,8 @@ int rx_music_start(const float *x, int64_t n, RXMusicStart *out)
     /* How the music arrives: how far over the threshold the level is two
      * frames on, and how long it takes to come within 15 dB of the loud
      * level. */
-    out->jump_db = smooth_db(e, nf, RX_MIN(fs + 2, nf - 1)) - thr;
-    int fend = RX_MIN(nf, fs + (int)(RISE_MAX_S / fsec)), fl = fs;
+    out->jump_db = smooth_db(e, nf, CB_MIN(fs + 2, nf - 1)) - thr;
+    int fend = CB_MIN(nf, fs + (int)(RISE_MAX_S / fsec)), fl = fs;
     while (fl < fend && smooth_db(e, nf, fl) < loud - RISE_WITHIN)
         fl++;
     out->rise = (fl - fs) * fsec;
@@ -254,7 +254,7 @@ int rx_music_start(const float *x, int64_t n, RXMusicStart *out)
 
     const double floor_amp = pow(10.0, (base + START_ABOVE) / 20.0);
     if (out->jump_db >= HIT_JUMP) {
-        out->kind = RX_START_HIT;
+        out->kind = CB_START_HIT;
         out->start = hit_sample(x, n, fs, floor_amp, false);
         out->intro = out->start;
     } else {
@@ -287,8 +287,8 @@ int rx_music_start(const float *x, int64_t n, RXMusicStart *out)
          * such a fade. Both stay a fade. The rise out of digital silence
          * is no transient. */
         int f1 = -1;
-        int fstop = RX_MIN(nf - 3, fl + (int)(TRANSIENT_AFTER_S / fsec));
-        for (int f = RX_MAX(fo, 2); !fast_attack(e, nf, fo) && f < fstop; f++) {
+        int fstop = CB_MIN(nf - 3, fl + (int)(TRANSIENT_AFTER_S / fsec));
+        for (int f = CB_MAX(fo, 2); !fast_attack(e, nf, fo) && f < fstop; f++) {
             double pre = smooth_db(e, nf, f - 2), post = smooth_db(e, nf, f + 2);
             if (pre > SILENT_DB && post >= thr && post - pre >= TRANSIENT_JUMP) {
                 f1 = f;
@@ -297,17 +297,17 @@ int rx_music_start(const float *x, int64_t n, RXMusicStart *out)
         }
         if (f1 > fo + 2) {
             double post = smooth_db(e, nf, f1 + 2), before = SILENT_DB;
-            for (int f = RX_MAX(f1 - 2 - (int)(QUIET_BEFORE_S / fsec), 0); f <= f1 - 2; f++)
+            for (int f = CB_MAX(f1 - 2 - (int)(QUIET_BEFORE_S / fsec), 0); f <= f1 - 2; f++)
                 before = fmax(before, smooth_db(e, nf, f));
             if (post - before >= QUIET_BELOW) {
-                out->kind = RX_START_HIT;
+                out->kind = CB_START_HIT;
                 out->jump_db = post - before;
                 out->start = hit_sample(x, n, f1, floor_amp, true);
                 free(e);
                 return 0;
             }
         }
-        out->kind = out->rise >= FADE_RISE ? RX_START_FADE : RX_START_SWELL;
+        out->kind = out->rise >= FADE_RISE ? CB_START_FADE : CB_START_SWELL;
         out->start = fo * fsec;
     }
     free(e);

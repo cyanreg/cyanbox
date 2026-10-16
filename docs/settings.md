@@ -144,11 +144,11 @@ confirmed by a real rekordbox file that changes only that setting [ME].
 | 38–39 | 0x8E | unknown | `00 00` | `00 00` |
 
 * [PRB]'s doc lists hot-cue-autoload "rekordbox" as `0x83`. Its code and the real file use **0x82**.
-* **rxbox's default TEMPO RANGE is ±6 % (`0x80`)**, not rekordbox's ±10 %: a library with no
-  `player.tempo_range` exports `0x80`, and rxbox's own deck starts at ±6 % as a CDJ switched on
-  does. **rxbox's default WAVEFORM COLOR is 3-band (`0x04`)**, not rekordbox's blue, for the
+* **cyanbox's default TEMPO RANGE is ±6 % (`0x80`)**, not rekordbox's ±10 %: a library with no
+  `player.tempo_range` exports `0x80`, and cyanbox's own deck starts at ±6 % as a CDJ switched on
+  does. **cyanbox's default WAVEFORM COLOR is 3-band (`0x04`)**, not rekordbox's blue, for the
   same reason: the interface draws the palette this setting holds. Every other default is
-  rekordbox's. rxbox's interface follows these settings (docs/UI.md, Player settings), so the
+  rekordbox's. cyanbox's interface follows these settings (docs/UI.md, Player settings), so the
   range the deck starts at and the palette it draws are the ones the stick carries.
 * CDJ-3000 factory defaults [MAN] mostly equal these. The CDJ-3000 jog-ring brightness is labelled "OFF, 1, 2".
 * Real rekordbox 7.2.8 MYSETTING payload [SB] ([ME]): same 40-byte layout, no new fields
@@ -224,7 +224,7 @@ rekordbox 5.8.6 / 6.6.1 / 6.6.2 / 7.2.8 files, [MAN] (CDJ-3000 "Device settings"
 |---|---|---|---|---|
 | 0–8 | 0x68 | magic/version | `78 56 34 12 01 00 00 00 01` | – |
 | 9 | 0x71 | Type of the overview waveform | 0x01 half waveform, 0x02 full waveform ✓ | 0x01 |
-| 10 | 0x72 | WAVEFORM COLOR | 0x01 BLUE, 0x03 RGB ✓, 0x04 3BAND ✓ (**no 0x02**) | 0x01 (rxbox: 0x04) |
+| 10 | 0x72 | WAVEFORM COLOR | 0x01 BLUE, 0x03 RGB ✓, 0x04 3BAND ✓ (**no 0x02**) | 0x01 (cyanbox: 0x04) |
 | 11 | 0x73 | unknown | `0x01` | 0x01 |
 | 12 | 0x74 | Key display format | 0x01 classic, 0x02 alphanumeric ✓ | 0x01 |
 | 13 | 0x75 | WAVEFORM CURRENT POSITION | 0x01 center, 0x02 left ✓ | 0x01 |

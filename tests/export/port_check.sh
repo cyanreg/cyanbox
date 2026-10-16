@@ -1,18 +1,18 @@
 #!/bin/sh
 # Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md.
 #
-# Port check: the same small library exported by the Python dj and by rxbox,
+# Port check: the same small library exported by the Python dj and by cyanbox,
 # then export.pdb, exportExt.pdb, the settings files and the ANLZ .DAT/.EXT
 # compared byte for byte (docs/OVERVIEW.md 7). Not run by meson: it needs
 # dj's virtualenv and takes a while.
 #
-#   tests/export/port_check.sh            (after building rx_port_export)
+#   tests/export/port_check.sh            (after building cb_port_export)
 #   BUILD=build-formats DJ=~/projects/dj/.venv/bin/dj tests/export/port_check.sh
 #
 # Both libraries live in one directory, so both derive the same per-library
-# constant (crc32 of the root), and rxbox adds the tracks in path order, so
+# constant (crc32 of the root), and cyanbox adds the tracks in path order, so
 # its library ids are dj's track ids. Expected differences, each a fix
-# rxbox carries in on purpose (docs/OVERVIEW.md 3):
+# cyanbox carries in on purpose (docs/OVERVIEW.md 3):
 #   - PWAV/PWV2 (.DAT): heights below 2 / 1 raised (Nexus firmware rejects a
 #     preview with a zero column; rbxport);
 #   - PCO2 hot cue entries (.EXT): the pad RGB after the colour code comes
@@ -34,10 +34,10 @@ ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 BUILD=${BUILD:-$ROOT/build-formats}
 DJ=${DJ:-$HOME/projects/dj/.venv/bin/dj}
 PY=${PY:-$(dirname "$DJ")/python}
-TOOL=$BUILD/src/export/rx_port_export
+TOOL=$BUILD/src/export/cb_port_export
 W=$BUILD/port-check
 
-[ -x "$TOOL" ] || { echo "build $TOOL first (ninja -C $BUILD src/export/rx_port_export)"; exit 1; }
+[ -x "$TOOL" ] || { echo "build $TOOL first (ninja -C $BUILD src/export/cb_port_export)"; exit 1; }
 [ -x "$DJ" ] || { echo "no dj at $DJ"; exit 1; }
 
 rm -rf "$W"
@@ -105,17 +105,17 @@ tempo_range = "6"
 EOF
 echo "setting device.waveform_color 3band" >> "$W/spec"
 echo "setting player.quantize true" >> "$W/spec"
-# Given to both: rxbox's default tempo range is ±6 %, dj's rekordbox's ±10 %.
+# Given to both: cyanbox's default tempo range is ±6 %, dj's rekordbox's ±10 %.
 echo "setting player.tempo_range 6" >> "$W/spec"
 
-mkdir -p "$W/stick-dj" "$W/stick-rx"
+mkdir -p "$W/stick-dj" "$W/stick-cb"
 echo "== dj export"
 "$DJ" -c "$W/dj.toml" export "$W/stick-dj"
-echo "== rxbox export"
-"$TOOL" "$W/spec" "$W" "$W/stick-rx"
+echo "== cyanbox export"
+"$TOOL" "$W/spec" "$W" "$W/stick-cb"
 
 echo "== comparison"
-"$PY" -I - "$W/stick-dj" "$W/stick-rx" "$HOME/projects/dj/src" <<'EOF'
+"$PY" -I - "$W/stick-dj" "$W/stick-cb" "$HOME/projects/dj/src" <<'EOF'
 import struct, sys
 from pathlib import Path
 sys.path.insert(0, sys.argv[3])
@@ -130,7 +130,7 @@ def note(msg):
 for name in ("MYSETTING.DAT", "MYSETTING2.DAT", "DJMMYSETTING.DAT", "DEVSETTING.DAT"):
     a, b = dj / "PIONEER" / name, rx / "PIONEER" / name
     if a.exists() != b.exists():
-        note(f"{name}: only in {'dj' if a.exists() else 'rxbox'}"); bad += 1
+        note(f"{name}: only in {'dj' if a.exists() else 'cyanbox'}"); bad += 1
     elif a.exists():
         same = a.read_bytes() == b.read_bytes()
         note(f"{name}: {'identical' if same else 'DIFFERENT'}"); bad += not same
@@ -143,7 +143,7 @@ def tables(path):
 for name in ("export.pdb", "exportExt.pdb"):
     a, b = dj / "PIONEER/rekordbox" / name, rx / "PIONEER/rekordbox" / name
     if a.exists() != b.exists():
-        note(f"{name}: only in {'dj' if a.exists() else 'rxbox'}"); bad += 1
+        note(f"{name}: only in {'dj' if a.exists() else 'cyanbox'}"); bad += 1
         continue
     if not a.exists():
         note(f"{name}: written by neither (no My Tags)")
@@ -156,7 +156,7 @@ for name in ("export.pdb", "exportExt.pdb"):
         rows_a = [pos for _, _, pos in pdb.iter_rows(ba, ta[t])]
         rows_b = [pos for _, _, pos in pdb.iter_rows(bb, tb[t])]
         if len(rows_a) != len(rows_b):
-            note(f"{name} table {t}: {len(rows_a)} rows in dj, {len(rows_b)} in rxbox"); bad += 1
+            note(f"{name} table {t}: {len(rows_a)} rows in dj, {len(rows_b)} in cyanbox"); bad += 1
             continue
         # Compare each page's bytes from 0x18 on (the header words before
         # hold page numbers and sequences, which follow the layout).
@@ -186,8 +186,8 @@ waves = {b"PWAV", b"PWV2", b"PWV3", b"PWV4", b"PWV5"}
 ta, tb = tracks(dj), tracks(rx)
 for path in sorted(ta):
     if path not in tb:
-        note(f"{path}: not on the rxbox stick"); bad += 1; continue
-    # The MP3 rule: the detail waveform one frame longer in rxbox.
+        note(f"{path}: not on the cyanbox stick"); bad += 1; continue
+    # The MP3 rule: the detail waveform one frame longer in cyanbox.
     shifted = False
     if path.endswith(".mp3"):
         ea = dict(anlz.parse((dj / (ta[path]["analyze_path"][1:-4] + ".EXT")).read_bytes()))

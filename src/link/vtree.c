@@ -36,7 +36,7 @@
 #include <string.h>
 #include <time.h>
 
-#include "rxbox/common.h"
+#include "cyanbox/common.h"
 
 #include "nfs.h"
 
@@ -55,8 +55,8 @@ typedef struct IdIndex {
     uint32_t node;
 } IdIndex;
 
-struct RXVTree {
-    const RXPlan *plan;
+struct CBVTree {
+    const CBPlan *plan;
     VNode    *nodes;
     uint32_t  nb_nodes;
     uint32_t *kids;             /* every node but the root, by parent then name */
@@ -127,7 +127,7 @@ static bool valid_component(const char *s, size_t len)
     if (!len || (len == 1 && s[0] == '.') || (len == 2 && s[0] == '.' && s[1] == '.'))
         return false;
     int units = utf16_units((const uint8_t *)s, len);
-    return units > 0 && units <= RX_NFS_NAME_MAX;
+    return units > 0 && units <= CB_NFS_NAME_MAX;
 }
 
 /* -------------------------------------------------------------------- ids */
@@ -168,7 +168,7 @@ static int cmp_node(const void *a, const void *b)
 /* ------------------------------------------------------------------ build */
 
 typedef struct Build {
-    RXVTree  *t;
+    CBVTree  *t;
     uint32_t *map;              /* node + 1 by (parent, name); 0 empty */
     size_t    map_mask;
     size_t    pool;
@@ -197,7 +197,7 @@ static uint32_t *find(Build *b, uint32_t parent, const char *name, size_t len)
 static uint32_t add_node(Build *b, uint32_t *slot, uint32_t parent, const char *name, size_t len,
                          int32_t track)
 {
-    RXVTree *t = b->t;
+    CBVTree *t = b->t;
     uint32_t k = t->nb_nodes++;
     memcpy(t->names + b->pool, name, len);
     t->names[b->pool + len] = '\0';
@@ -249,7 +249,7 @@ static bool add_track(Build *b, int index, const char *path)
 
 static int cmp_kids(const void *a, const void *b, void *opaque)
 {
-    const RXVTree *t = opaque;
+    const CBVTree *t = opaque;
     const VNode *x = &t->nodes[*(const uint32_t *)a], *y = &t->nodes[*(const uint32_t *)b];
     if (x->parent != y->parent)
         return x->parent < y->parent ? -1 : 1;
@@ -260,7 +260,7 @@ static int cmp_kids(const void *a, const void *b, void *opaque)
 
 /* Makes the directory ids unique: a later directory sharing an id has
  * its id moved on until none does. */
-static void unique_ids(RXVTree *t)
+static void unique_ids(CBVTree *t)
 {
     bool again = true;
     while (again) {
@@ -277,10 +277,10 @@ static void unique_ids(RXVTree *t)
     }
 }
 
-int rx_vtree_new(RXVTree **out, const RXPlan *plan)
+int cb_vtree_new(CBVTree **out, const CBPlan *plan)
 {
     if (!out || !plan || plan->nb_tracks < 0 || (plan->nb_tracks && !plan->tracks))
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
     *out = NULL;
 
     /* A component per '/' at most, and the names fit in the paths' bytes. */
@@ -294,7 +294,7 @@ int rx_vtree_new(RXVTree **out, const RXPlan *plan)
         pool += strlen(p) + 1;
     }
     if (max_nodes > UINT32_MAX / 4 || pool > UINT32_MAX)
-        return RX_ERROR(E2BIG);
+        return CB_ERROR(E2BIG);
 
     int ret = 0;
     IdIndex *order = NULL;
@@ -304,7 +304,7 @@ int rx_vtree_new(RXVTree **out, const RXPlan *plan)
         map_size *= 2;
     b.map_mask = map_size - 1;
 
-    RXVTree *t = calloc(1, sizeof(*t));
+    CBVTree *t = calloc(1, sizeof(*t));
     b.t = t;
     b.map = calloc(map_size, sizeof(*b.map));
     if (!t || !b.map)
@@ -312,7 +312,7 @@ int rx_vtree_new(RXVTree **out, const RXPlan *plan)
     t->plan  = plan;
     t->nodes = calloc(max_nodes, sizeof(*t->nodes));
     t->names = malloc(pool);
-    t->files = calloc((size_t)RX_MAX(plan->nb_tracks, 1), sizeof(*t->files));
+    t->files = calloc((size_t)CB_MAX(plan->nb_tracks, 1), sizeof(*t->files));
     if (!t->nodes || !t->names || !t->files)
         goto nomem;
 
@@ -325,7 +325,7 @@ int rx_vtree_new(RXVTree **out, const RXPlan *plan)
     /* A file handle names its track by id, so of two tracks with one id
      * the later is left out, before anything of it is added (the plan's
      * ids are unique: this is a guard). */
-    order = malloc((size_t)RX_MAX(plan->nb_tracks, 1) * sizeof(*order));
+    order = malloc((size_t)CB_MAX(plan->nb_tracks, 1) * sizeof(*order));
     if (!order)
         goto nomem;
     for (int i = 0; i < plan->nb_tracks; i++)
@@ -341,22 +341,22 @@ int rx_vtree_new(RXVTree **out, const RXPlan *plan)
     qsort(order, (size_t)plan->nb_tracks, sizeof(*order), cmp_node);
 
     for (int i = 0; i < plan->nb_tracks; i++) {
-        const RXPlanTrack *pt = &plan->tracks[i];
+        const CBPlanTrack *pt = &plan->tracks[i];
         bool dup = order[i].id == UINT64_MAX;
         if (dup || !add_track(&b, i, pt->usb_path)) {
-            rx_warn("link: track %u is not served over NFS: %s %s", pt->id,
+            cb_warn("link: track %u is not served over NFS: %s %s", pt->id,
                     dup ? "its id is taken, path" : "path refused,",
                     pt->usb_path ? pt->usb_path : "(none)");
             continue;
         }
         t->files[t->nb_files++] = (IdIndex) { .id = pt->id, .node = t->nb_nodes - 1 };
-        t->total_size += (uint64_t)RX_MAX(pt->file_size, 0);
+        t->total_size += (uint64_t)CB_MAX(pt->file_size, 0);
     }
     qsort(t->files, t->nb_files, sizeof(*t->files), cmp_index);
 
     /* Children: every node but the root, sorted by parent, then name
      * ignoring ASCII case, then exactly. */
-    t->kids = malloc((size_t)RX_MAX(t->nb_nodes, 1) * sizeof(*t->kids));
+    t->kids = malloc((size_t)CB_MAX(t->nb_nodes, 1) * sizeof(*t->kids));
     t->dirs = malloc((size_t)t->nb_nodes * sizeof(*t->dirs));
     if (!t->kids || !t->dirs)
         goto nomem;
@@ -385,18 +385,18 @@ int rx_vtree_new(RXVTree **out, const RXPlan *plan)
     return 0;
 
 nomem:
-    ret = RX_ERROR(ENOMEM);
+    ret = CB_ERROR(ENOMEM);
     free(order);
     free(b.map);
-    rx_vtree_free(&t);
+    cb_vtree_free(&t);
     return ret;
 }
 
-void rx_vtree_free(RXVTree **pt)
+void cb_vtree_free(CBVTree **pt)
 {
     if (!pt || !*pt)
         return;
-    RXVTree *t = *pt;
+    CBVTree *t = *pt;
     free(t->nodes);
     free(t->kids);
     free(t->names);
@@ -408,52 +408,52 @@ void rx_vtree_free(RXVTree **pt)
 
 /* ---------------------------------------------------------------- queries */
 
-static bool is_node(const RXVTree *t, int node)
+static bool is_node(const CBVTree *t, int node)
 {
     return t && node >= 0 && (uint32_t)node < t->nb_nodes;
 }
 
-int rx_vtree_root(const RXVTree *t)
+int cb_vtree_root(const CBVTree *t)
 {
     return t ? 0 : -1;
 }
 
-bool rx_vtree_is_dir(const RXVTree *t, int node)
+bool cb_vtree_is_dir(const CBVTree *t, int node)
 {
     return is_node(t, node) && t->nodes[node].track < 0;
 }
 
-const char *rx_vtree_name(const RXVTree *t, int node)
+const char *cb_vtree_name(const CBVTree *t, int node)
 {
     return is_node(t, node) ? t->names + t->nodes[node].name : NULL;
 }
 
-uint64_t rx_vtree_dir_id(const RXVTree *t, int node)
+uint64_t cb_vtree_dir_id(const CBVTree *t, int node)
 {
-    return rx_vtree_is_dir(t, node) ? t->nodes[node].id : 0;
+    return cb_vtree_is_dir(t, node) ? t->nodes[node].id : 0;
 }
 
-const RXPlanTrack *rx_vtree_track(const RXVTree *t, int node)
+const CBPlanTrack *cb_vtree_track(const CBVTree *t, int node)
 {
     return is_node(t, node) && t->nodes[node].track >= 0 ? &t->plan->tracks[t->nodes[node].track]
                                                         : NULL;
 }
 
-int rx_vtree_nb_children(const RXVTree *t, int dir)
+int cb_vtree_nb_children(const CBVTree *t, int dir)
 {
-    return rx_vtree_is_dir(t, dir) ? (int)t->nodes[dir].nb : 0;
+    return cb_vtree_is_dir(t, dir) ? (int)t->nodes[dir].nb : 0;
 }
 
-int rx_vtree_child(const RXVTree *t, int dir, int i)
+int cb_vtree_child(const CBVTree *t, int dir, int i)
 {
-    if (!rx_vtree_is_dir(t, dir) || i < 0 || (uint32_t)i >= t->nodes[dir].nb)
+    if (!cb_vtree_is_dir(t, dir) || i < 0 || (uint32_t)i >= t->nodes[dir].nb)
         return -1;
     return (int)t->kids[t->nodes[dir].first + (uint32_t)i];
 }
 
-int rx_vtree_lookup(const RXVTree *t, int dir, const char *name, size_t len)
+int cb_vtree_lookup(const CBVTree *t, int dir, const char *name, size_t len)
 {
-    if (!rx_vtree_is_dir(t, dir) || !name || !len || memchr(name, '\0', len))
+    if (!cb_vtree_is_dir(t, dir) || !name || !len || memchr(name, '\0', len))
         return -1;
     const uint32_t *k = t->kids + t->nodes[dir].first;
     uint32_t lo = 0, hi = t->nodes[dir].nb;
@@ -492,17 +492,17 @@ static int find_index(const IdIndex *idx, uint32_t nb, uint64_t id)
     return lo < nb && idx[lo].id == id ? (int)idx[lo].node : -1;
 }
 
-int rx_vtree_find_dir(const RXVTree *t, uint64_t id)
+int cb_vtree_find_dir(const CBVTree *t, uint64_t id)
 {
     return t ? find_index(t->dirs, t->nb_dirs, id) : -1;
 }
 
-int rx_vtree_find_file(const RXVTree *t, uint32_t track_id)
+int cb_vtree_find_file(const CBVTree *t, uint32_t track_id)
 {
     return t ? find_index(t->files, t->nb_files, track_id) : -1;
 }
 
-int rx_vtree_walk(const RXVTree *t, const char *path)
+int cb_vtree_walk(const CBVTree *t, const char *path)
 {
     if (!t || !path)
         return -1;
@@ -514,16 +514,16 @@ int rx_vtree_walk(const RXVTree *t, const char *path)
             break;
         const char *e = strchr(path, '/');
         size_t len = e ? (size_t)(e - path) : strlen(path);
-        if ((at = rx_vtree_lookup(t, at, path, len)) < 0)
+        if ((at = cb_vtree_lookup(t, at, path, len)) < 0)
             return -1;
         path += len;
     }
     return at;
 }
 
-void rx_vtree_stats(const RXVTree *t, RXVTreeStats *s)
+void cb_vtree_stats(const CBVTree *t, CBVTreeStats *s)
 {
-    *s = (RXVTreeStats) { 0 };
+    *s = (CBVTreeStats) { 0 };
     if (!t)
         return;
     s->nb_files   = (int)t->nb_files;

@@ -1,7 +1,7 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
-/* Text for a display that shows Latin-1 only (rxbox/common.h,
- * rx_utf8_latin1). A CDJ-900's main processor hands its display names as
+/* Text for a display that shows Latin-1 only (cyanbox/common.h,
+ * cb_utf8_latin1). A CDJ-900's main processor hands its display names as
  * 8-bit text, and whatever is not Latin-1 shows as '?': kana, kanji,
  * typographic and CJK punctuation alike (an emulated one, firmware 4.32,
  * 2026-10-15). So for such a display:
@@ -28,12 +28,12 @@
  *   "Akina"). Without MeCab or a dictionary, kanji are left as they are;
  * - any other script (Greek, Cyrillic, Hangul, Latin beyond Latin-1) goes
  *   through ICU's Any-Latin, folded to ASCII where it is still not Latin-1
- *   (Москва as Moskva, Łódź as Lódz), when rxbox is built with ICU; never
+ *   (Москва as Moskva, Łódź as Lódz), when cyanbox is built with ICU; never
  *   kanji, which it reads as Mandarin;
  * - ♡ and ♥ become <3, ∞ oo; the rest is left as it is (☆, which a
  *   CDJ-900 shows). */
 
-#include "rxbox/common.h"
+#include "cyanbox/common.h"
 
 #include <pthread.h>
 #include <stdio.h>
@@ -42,12 +42,12 @@
 
 #include "config.h"
 
-#if RXBOX_MECAB
+#if CYANBOX_MECAB
 #include <mecab.h>
 
 #include "src/common/kanji_readings.h"
 #endif
-#if RXBOX_ICU
+#if CYANBOX_ICU
 #include <unicode/ustring.h>
 #include <unicode/utrans.h>
 #endif
@@ -218,7 +218,7 @@ static void puts_(Out *o, const char *s)
 static void putc_(Out *o, uint32_t c)
 {
     char b[4];
-    put(o, b, (size_t)rx_utf8_put(b, c));
+    put(o, b, (size_t)cb_utf8_put(b, c));
 }
 
 static char last_byte(const Out *o)
@@ -362,7 +362,7 @@ static char *romaji(const char *s, size_t len)
         return NULL;
     int n = 0;
     for (const char *p = s; p < s + len;) {
-        uint32_t c = rx_utf8_next(&p);
+        uint32_t c = cb_utf8_next(&p);
         uint32_t kc = kana_of(c);
         if (!kc && !(c >= 0x309B && c <= 0x309E)) {
             free(k);
@@ -375,15 +375,15 @@ static char *romaji(const char *s, size_t len)
     free(k);
     if (o.oom || !o.p) {
         free(o.p);
-        return o.oom ? NULL : rx_strdup("");
+        return o.oom ? NULL : cb_strdup("");
     }
     return o.p;
 }
 
-#if RXBOX_MECAB
+#if CYANBOX_MECAB
 static mecab_t *tagger;
 #endif
-#if RXBOX_ICU
+#if CYANBOX_ICU
 static UTransliterator *latin;
 #endif
 static pthread_once_t readers_once = PTHREAD_ONCE_INIT;
@@ -393,30 +393,30 @@ static pthread_mutex_t readers_lock = PTHREAD_MUTEX_INITIALIZER;   /* neither is
  * once, the first time one is needed; kept until the process ends. */
 static void readers_open(void)
 {
-#if RXBOX_MECAB
+#if CYANBOX_MECAB
     tagger = mecab_new2("");
     if (!tagger)
-        rx_info("romaji: MeCab found no dictionary (/etc/mecabrc; Debian's mecab-ipadic-utf8): "
+        cb_info("romaji: MeCab found no dictionary (/etc/mecabrc; Debian's mecab-ipadic-utf8): "
                 "kanji go as they are");
 #endif
-#if RXBOX_ICU
+#if CYANBOX_ICU
     UErrorCode st = U_ZERO_ERROR;
     UChar id[16], rules[64];
-    u_strFromUTF8(id, 16, NULL, "rxbox-latin1", -1, &st);
+    u_strFromUTF8(id, 16, NULL, "cyanbox-latin1", -1, &st);
     u_strFromUTF8(rules, 64, NULL, "::Any-Latin; ::[^\\u0000-\\u00FF] Latin-ASCII;", -1, &st);
     UParseError pe;
     if (U_SUCCESS(st))
         latin = utrans_openU(id, -1, UTRANS_FORWARD, rules, -1, &pe, &st);
     if (U_FAILURE(st)) {
-        rx_info("romaji: no ICU transform (%s): other scripts go as they are", u_errorName(st));
+        cb_info("romaji: no ICU transform (%s): other scripts go as they are", u_errorName(st));
         latin = NULL;
     }
 #endif
 }
 
-bool rx_utf8_latin1_reads_kanji(void)
+bool cb_utf8_latin1_reads_kanji(void)
 {
-#if RXBOX_MECAB
+#if CYANBOX_MECAB
     pthread_once(&readers_once, readers_open);
     return tagger;
 #else
@@ -424,7 +424,7 @@ bool rx_utf8_latin1_reads_kanji(void)
 #endif
 }
 
-#if RXBOX_MECAB
+#if CYANBOX_MECAB
 /* How a word goes next to the one before it. */
 enum Join {
     J_WORD,                     /* apart, capitalised */
@@ -451,7 +451,7 @@ static bool field(const char *f, int i, char *out, size_t size)
         if ((f = strchr(f, ',')))
             f++;
     size_t n = f ? strcspn(f, ",") : 0;
-    n = RX_MIN(n, size - 1);
+    n = CB_MIN(n, size - 1);
     if (f)
         memcpy(out, f, n);
     out[n] = 0;
@@ -477,7 +477,7 @@ static enum Join join_of(const char *pos, const char *pos1, const char *pos2, co
 static bool all_kanji(const char *s, size_t len)
 {
     for (const char *p = s; p < s + len;)
-        if (!kanji(rx_utf8_next(&p)))
+        if (!kanji(cb_utf8_next(&p)))
             return false;
     return len > 0;
 }
@@ -506,10 +506,10 @@ static char *by_kanji(const char *s, size_t len)
     char prev[64] = "";
     for (const char *p = s; p < s + len;) {
         const char *at = p;
-        uint32_t c = rx_utf8_next(&p);
+        uint32_t c = cb_utf8_next(&p);
         char *r = NULL, reading[64];
         if (c == 0x3005 && prev[0]) {
-            r = rx_strdup(prev);
+            r = cb_strdup(prev);
         } else if (kanji(c)) {
             const mecab_node_t *n = mecab_sparse_tonode2(tagger, at, (size_t)(p - at));
             while (n && n->stat != MECAB_NOR_NODE)
@@ -518,7 +518,7 @@ static char *by_kanji(const char *s, size_t len)
                 r = romaji(reading, strlen(reading));
             const char *u = r ? NULL : unihan(c);
             if (u)
-                r = rx_strdup(u);
+                r = cb_strdup(u);
         } else {
             r = romaji(at, (size_t)(p - at));
         }
@@ -535,7 +535,7 @@ static char *by_kanji(const char *s, size_t len)
         free(o.p);
         return NULL;
     }
-    return o.p ? o.p : rx_strdup("");
+    return o.p ? o.p : cb_strdup("");
 }
 #endif
 
@@ -543,8 +543,8 @@ static char *by_kanji(const char *s, size_t len)
  * the top). False without MeCab or its dictionary. */
 static bool read_run(Out *o, const char *run, size_t len)
 {
-#if RXBOX_MECAB
-    if (!rx_utf8_latin1_reads_kanji())
+#if CYANBOX_MECAB
+    if (!cb_utf8_latin1_reads_kanji())
         return false;
     Word *w = NULL;
     int nb = 0, cap = 0;
@@ -623,12 +623,12 @@ static bool read_run(Out *o, const char *run, size_t len)
  * Sets *changed when the text came out otherwise. */
 static bool icu_run(Out *o, const char *s, size_t len, bool *changed)
 {
-#if RXBOX_ICU
+#if CYANBOX_ICU
     pthread_once(&readers_once, readers_open);
     if (!latin)
         return false;
     UErrorCode st = U_ZERO_ERROR;
-    int32_t n = 0, cap = (int32_t)RX_MIN(len * 8 + 16, (size_t)INT32_MAX / 2);
+    int32_t n = 0, cap = (int32_t)CB_MIN(len * 8 + 16, (size_t)INT32_MAX / 2);
     UChar *b = malloc((size_t)cap * sizeof(*b));
     char *u = NULL;
     if (b)
@@ -701,7 +701,7 @@ static bool other(uint32_t c)
 
 /* -------------------------------------------------------------------- it */
 
-char *rx_utf8_latin1(const char *s)
+char *cb_utf8_latin1(const char *s)
 {
     if (!s)
         return NULL;
@@ -719,14 +719,14 @@ char *rx_utf8_latin1(const char *s)
         return NULL;
     for (const char *p = s; *p;) {
         const char *at = p;
-        uint32_t c = rx_utf8_next(&p);
+        uint32_t c = cb_utf8_next(&p);
         /* Japanese with kanji in it: MeCab's words */
         if (japanese(c)) {
             const char *q = p;
             bool has_kanji = kanji(c);
             while (*q) {
                 const char *r = q;
-                uint32_t d = rx_utf8_next(&r);
+                uint32_t d = cb_utf8_next(&r);
                 if (!japanese(d))
                     break;
                 has_kanji |= kanji(d);
@@ -743,7 +743,7 @@ char *rx_utf8_latin1(const char *s)
             const char *q = p;
             while (*q) {
                 const char *r = q;
-                if (!other(rx_utf8_next(&r)))
+                if (!other(cb_utf8_next(&r)))
                     break;
                 q = r;
             }
@@ -757,7 +757,7 @@ char *rx_utf8_latin1(const char *s)
             const char *q = at;
             while (*q) {
                 const char *r = q;
-                uint32_t d = rx_utf8_next(&r);
+                uint32_t d = cb_utf8_next(&r);
                 uint32_t kd = kana_of(d);
                 if (kd) {
                     run[n++] = kd;
@@ -787,7 +787,7 @@ char *rx_utf8_latin1(const char *s)
                 put(&o, &b, 1);
             if (closing(c) && *p) {
                 const char *r = p;
-                if (texty(rx_utf8_next(&r)))
+                if (texty(cb_utf8_next(&r)))
                     puts_(&o, " ");
             }
             changed = true;

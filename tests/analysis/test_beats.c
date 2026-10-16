@@ -38,31 +38,31 @@
  * the hats and the bass), which was read at 200, and UK hardcore at 175
  * (a kick on every beat), whose 87.5 the kick veto keeps out.
  *
- * The GPU front end (rxbox/compute.h) must give the same results. When a
+ * The GPU front end (cyanbox/compute.h) must give the same results. When a
  * device is there, every case runs on both paths: each must pass on its
  * own, and the two grids must be the same (sections, their tempo and
  * beat numbers, their starts within 0.1 ms, the same flags and start of
  * the music). The front end's arrays are compared directly too: the
  * spectrum's and the envelopes' (see check_frontend for the tolerance).
- * RXBOX_ANALYSIS_GPU=0 runs the CPU path only; =1 the GPU path only, and
+ * CYANBOX_ANALYSIS_GPU=0 runs the CPU path only; =1 the GPU path only, and
  * fails without a device; unset, the GPU half is skipped with a note when
- * there is no device. RXBOX_GPU_VALIDATION=1 runs the GPU half under the
+ * there is no device. CYANBOX_GPU_VALIDATION=1 runs the GPU half under the
  * Khronos validation layer and fails on any error it reports.
  *
  *   test_beats            run every case
  *   test_beats -v         print the details of every case
  *   test_beats -c N       run case N alone, on the CPU path
  *   test_beats -w N FILE  write case N as raw 44.1 kHz mono f32 (for
- *                         rxbox-eval --dump-onsets) */
+ *                         cyanbox-eval --dump-onsets) */
 
-#include "rxbox/analysis.h"
+#include "cyanbox/analysis.h"
 
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include "rxbox/compute.h"
+#include "cyanbox/compute.h"
 #include "src/analysis/beats_internal.h"
 
 #define RATE 44100
@@ -311,7 +311,7 @@ static double *curve_beats(const Spec *sp)
             bpm *= 1.0 - sp->rubato * sin(M_PI * (x - sp->rubato_from) / (sp->rubato_to - sp->rubato_from));
         if (sp->walk_sigma > 0.0) {
             logt += sp->walk_sigma * lcg_gauss(&l);
-            logt = RX_CLAMP(logt, log(0.9), log(1.1));
+            logt = CB_CLAMP(logt, log(0.9), log(1.1));
             bpm *= exp(logt);
         }
         t += 60.0 / bpm;
@@ -420,7 +420,7 @@ static int synth(const Spec *sp, Track *t, Truth *truth)
              * the hats going on. */
             if (b == sp->fill_bar) {
                 double at = tb + 8.0 * p;
-                for (int k = (int)RX_ARRAY_ELEMS(fill_gaps) - 1; k >= 0; k--) {
+                for (int k = (int)CB_ARRAY_ELEMS(fill_gaps) - 1; k >= 0; k--) {
                     at -= fill_gaps[k];
                     add_kick(t, at, 1.0);
                     add_snare(t, at, 0.8, &l);
@@ -514,7 +514,7 @@ static int synth(const Spec *sp, Track *t, Truth *truth)
      * downbeat to 0 dB `fade` seconds later. */
     if (sp->fade > 0.0) {
         int64_t a = (int64_t)llround(sp->first_downbeat * RATE);
-        int64_t b = RX_MIN(a + (int64_t)llround(sp->fade * RATE), t->n);
+        int64_t b = CB_MIN(a + (int64_t)llround(sp->fade * RATE), t->n);
         for (int64_t i = a; i < b; i++)
             t->x[i] *= (float)pow(10.0, (-60.0 + 60.0 * (i - a) / (sp->fade * RATE)) / 20.0);
     }
@@ -525,7 +525,7 @@ static int synth(const Spec *sp, Track *t, Truth *truth)
      * pushover's "PASSIVE" does. */
     if (sp->pad > 0.0) {
         int64_t b = (int64_t)llround(sp->first_downbeat * RATE);
-        int64_t a = RX_MAX(b - (int64_t)llround(sp->pad * RATE), 0);
+        int64_t a = CB_MAX(b - (int64_t)llround(sp->pad * RATE), 0);
         static const double hz[3] = { 220.0, 277.18, 329.63 };
         for (int64_t i = a; i < b; i++) {
             double g = 0.06 * pow(10.0, (-36.0 + 36.0 * (i - a) / (double)(b - a)) / 20.0);
@@ -645,41 +645,41 @@ typedef struct Want {
 } Want;
 
 /* One section: neither kind of cut. */
-#define CUTS (RX_GRID_FLAG_TEMPO_CHANGE | RX_GRID_FLAG_PHASE_CUT)
+#define CUTS (CB_GRID_FLAG_TEMPO_CHANGE | CB_GRID_FLAG_PHASE_CUT)
 
 static const Want wants[] = {
-    { 0, CUTS | RX_GRID_FLAG_UNSTEADY | RX_GRID_FLAG_LOW_CONFIDENCE },
-    { 0, CUTS | RX_GRID_FLAG_UNSTEADY },
-    { 0, CUTS | RX_GRID_FLAG_UNSTEADY },
-    { 0, CUTS | RX_GRID_FLAG_UNSTEADY },
-    { 0, CUTS | RX_GRID_FLAG_UNSTEADY },
-    { 0, CUTS | RX_GRID_FLAG_UNSTEADY },
-    { RX_GRID_FLAG_UNSTEADY, CUTS },
-    { RX_GRID_FLAG_TEMPO_CHANGE, RX_GRID_FLAG_UNSTEADY | RX_GRID_FLAG_PHASE_CUT },
-    { RX_GRID_FLAG_PHASE_CUT, RX_GRID_FLAG_UNSTEADY | RX_GRID_FLAG_TEMPO_CHANGE },
-    { RX_GRID_FLAG_TEMPO_CHANGE, RX_GRID_FLAG_UNSTEADY | RX_GRID_FLAG_PHASE_CUT },
-    { 0, CUTS | RX_GRID_FLAG_UNSTEADY },
-    { 0, CUTS | RX_GRID_FLAG_UNSTEADY },
-    { 0, CUTS | RX_GRID_FLAG_UNSTEADY },
-    { 0, CUTS | RX_GRID_FLAG_UNSTEADY },
-    { 0, CUTS | RX_GRID_FLAG_UNSTEADY },
-    { 0, CUTS | RX_GRID_FLAG_UNSTEADY },
-    { 0, CUTS | RX_GRID_FLAG_UNSTEADY },
-    { 0, CUTS | RX_GRID_FLAG_UNSTEADY },
-    { 0, CUTS | RX_GRID_FLAG_UNSTEADY },
-    { 0, CUTS | RX_GRID_FLAG_UNSTEADY },
-    { 0, CUTS | RX_GRID_FLAG_UNSTEADY },
-    { 0, CUTS | RX_GRID_FLAG_UNSTEADY },
-    { 0, CUTS | RX_GRID_FLAG_UNSTEADY },
-    { RX_GRID_FLAG_DYNAMIC, CUTS },
-    { RX_GRID_FLAG_DYNAMIC, CUTS },
-    { RX_GRID_FLAG_DYNAMIC, CUTS },
-    { 0, CUTS | RX_GRID_FLAG_UNSTEADY | RX_GRID_FLAG_DYNAMIC },
-    { 0, CUTS | RX_GRID_FLAG_UNSTEADY },
-    { 0, CUTS | RX_GRID_FLAG_UNSTEADY },
-    { 0, CUTS | RX_GRID_FLAG_UNSTEADY },
-    { 0, CUTS | RX_GRID_FLAG_UNSTEADY | RX_GRID_FLAG_OCTAVE_UNCERTAIN },
-    { 0, CUTS | RX_GRID_FLAG_UNSTEADY | RX_GRID_FLAG_OCTAVE_UNCERTAIN },
+    { 0, CUTS | CB_GRID_FLAG_UNSTEADY | CB_GRID_FLAG_LOW_CONFIDENCE },
+    { 0, CUTS | CB_GRID_FLAG_UNSTEADY },
+    { 0, CUTS | CB_GRID_FLAG_UNSTEADY },
+    { 0, CUTS | CB_GRID_FLAG_UNSTEADY },
+    { 0, CUTS | CB_GRID_FLAG_UNSTEADY },
+    { 0, CUTS | CB_GRID_FLAG_UNSTEADY },
+    { CB_GRID_FLAG_UNSTEADY, CUTS },
+    { CB_GRID_FLAG_TEMPO_CHANGE, CB_GRID_FLAG_UNSTEADY | CB_GRID_FLAG_PHASE_CUT },
+    { CB_GRID_FLAG_PHASE_CUT, CB_GRID_FLAG_UNSTEADY | CB_GRID_FLAG_TEMPO_CHANGE },
+    { CB_GRID_FLAG_TEMPO_CHANGE, CB_GRID_FLAG_UNSTEADY | CB_GRID_FLAG_PHASE_CUT },
+    { 0, CUTS | CB_GRID_FLAG_UNSTEADY },
+    { 0, CUTS | CB_GRID_FLAG_UNSTEADY },
+    { 0, CUTS | CB_GRID_FLAG_UNSTEADY },
+    { 0, CUTS | CB_GRID_FLAG_UNSTEADY },
+    { 0, CUTS | CB_GRID_FLAG_UNSTEADY },
+    { 0, CUTS | CB_GRID_FLAG_UNSTEADY },
+    { 0, CUTS | CB_GRID_FLAG_UNSTEADY },
+    { 0, CUTS | CB_GRID_FLAG_UNSTEADY },
+    { 0, CUTS | CB_GRID_FLAG_UNSTEADY },
+    { 0, CUTS | CB_GRID_FLAG_UNSTEADY },
+    { 0, CUTS | CB_GRID_FLAG_UNSTEADY },
+    { 0, CUTS | CB_GRID_FLAG_UNSTEADY },
+    { 0, CUTS | CB_GRID_FLAG_UNSTEADY },
+    { CB_GRID_FLAG_DYNAMIC, CUTS },
+    { CB_GRID_FLAG_DYNAMIC, CUTS },
+    { CB_GRID_FLAG_DYNAMIC, CUTS },
+    { 0, CUTS | CB_GRID_FLAG_UNSTEADY | CB_GRID_FLAG_DYNAMIC },
+    { 0, CUTS | CB_GRID_FLAG_UNSTEADY },
+    { 0, CUTS | CB_GRID_FLAG_UNSTEADY },
+    { 0, CUTS | CB_GRID_FLAG_UNSTEADY },
+    { 0, CUTS | CB_GRID_FLAG_UNSTEADY | CB_GRID_FLAG_OCTAVE_UNCERTAIN },
+    { 0, CUTS | CB_GRID_FLAG_UNSTEADY | CB_GRID_FLAG_OCTAVE_UNCERTAIN },
 };
 
 /* ----------------------------------------------------------- the checks */
@@ -693,12 +693,12 @@ typedef struct BeatError {
     int    nb, down_ok, down;
 } BeatError;
 
-static BeatError beat_error(const RXGrid *g, double dur, const double *truth, int nb_truth)
+static BeatError beat_error(const CBGrid *g, double dur, const double *truth, int nb_truth)
 {
     BeatError e = { 0 };
-    RXBeat *b = NULL;
+    CBBeat *b = NULL;
     int nb = 0;
-    if (rx_grid_beats(g, dur, &b, &nb) < 0 || nb == 0) {
+    if (cb_grid_beats(g, dur, &b, &nb) < 0 || nb == 0) {
         free(b);
         e.rms = e.max = INFINITY;
         return e;
@@ -737,7 +737,7 @@ static bool verbose;
 
 /* Case idx on the CPU (gpu NULL) or the GPU. The result is kept in *keep
  * for the comparison of the two, when keep is given. */
-static int check(int idx, RXCompute *gpu, RXBeatResult *keep)
+static int check(int idx, CBCompute *gpu, CBBeatResult *keep)
 {
     const Spec *sp = &cases[idx];
     const char *path = gpu ? "[gpu] " : "";
@@ -745,11 +745,11 @@ static int check(int idx, RXCompute *gpu, RXBeatResult *keep)
     Truth truth;
     if (synth(sp, &t, &truth) < 0)
         return 1;
-    RXAnalysisOptions opt;
-    rx_analysis_options_default(&opt);
+    CBAnalysisOptions opt;
+    cb_analysis_options_default(&opt);
     opt.compute = gpu;
-    RXBeatResult r;
-    int ret = rx_analyse_beats(t.x, t.n, RATE, &opt, &r);
+    CBBeatResult r;
+    int ret = cb_analyse_beats(t.x, t.n, RATE, &opt, &r);
     if (ret < 0) {
         printf("FAIL %s%s: analysis returned %d\n", path, sp->name, ret);
         free(t.x);
@@ -777,16 +777,16 @@ static int check(int idx, RXCompute *gpu, RXBeatResult *keep)
             FAILF(" max %.1f ms", d.max * 1e3);
         if (d.down_ok < d.down)
             FAILF(" downbeats %d of %d", d.down_ok, d.down);
-        if (!rx_grid_dynamic(&r.grid))
+        if (!cb_grid_dynamic(&r.grid))
             FAILF(" not a dynamic grid");
         snprintf(curve_note, sizeof(curve_note), "      dynamic: rms %.1f ms, max %.1f ms, "
                  "downbeats %d/%d, %d beats", d.rms * 1e3, d.max * 1e3, d.down_ok, d.down,
                  r.grid.nb_sections);
         if (!gpu) {
-            RXAnalysisOptions so = opt;
+            CBAnalysisOptions so = opt;
             so.allow_dynamic = false;
-            RXBeatResult sr;
-            if (rx_analyse_beats(t.x, t.n, RATE, &so, &sr) == 0) {
+            CBBeatResult sr;
+            if (cb_analyse_beats(t.x, t.n, RATE, &so, &sr) == 0) {
                 BeatError e = beat_error(&sr.grid, dur, truth.beats, truth.nb_beats);
                 size_t l = strlen(curve_note);
                 snprintf(curve_note + l, sizeof(curve_note) - l,
@@ -794,7 +794,7 @@ static int check(int idx, RXCompute *gpu, RXBeatResult *keep)
                          e.max * 1e3, sr.grid.nb_sections, sr.grid.nb_sections == 1 ? "" : "s");
                 if (!(d.rms < e.rms))
                     FAILF(" no better than straight (%.1f ms)", e.rms * 1e3);
-                rx_beat_result_free(&sr);
+                cb_beat_result_free(&sr);
             }
         }
     }
@@ -806,10 +806,10 @@ static int check(int idx, RXCompute *gpu, RXBeatResult *keep)
         for (int k = 4 * (sp->fill_bar - 1); k < 4 * (sp->fill_bar + 3); k++)
             pulse[np++] = sp->first_downbeat + k * 60.0 / sp->bpm;
         BeatError d = beat_error(&r.grid, dur, pulse, np);
-        RXBeat *gb = NULL;
+        CBBeat *gb = NULL;
         int ngb = 0, extra = -np;
         double half = 30.0 / sp->bpm;
-        if (rx_grid_beats(&r.grid, dur, &gb, &ngb) == 0) {
+        if (cb_grid_beats(&r.grid, dur, &gb, &ngb) == 0) {
             for (int i = 0; i < ngb; i++)
                 extra += gb[i].time > pulse[0] - half && gb[i].time < pulse[np - 1] + half;
         }
@@ -822,10 +822,10 @@ static int check(int idx, RXCompute *gpu, RXBeatResult *keep)
     free(t.x);
     if (!truth.beats && r.grid.nb_sections != truth.nb_secs)
         FAILF(" sections %d (want %d)", r.grid.nb_sections, truth.nb_secs);
-    for (int s = 0; s < RX_MIN(r.grid.nb_sections, truth.nb_secs); s++) {
-        const RXTempoSection *g = &r.grid.sections[s];
+    for (int s = 0; s < CB_MIN(r.grid.nb_sections, truth.nb_secs); s++) {
+        const CBTempoSection *g = &r.grid.sections[s];
         bool twice = sp->double_ok && fabs(g->bpm - 2.0 * truth.bpm[s]) <= 0.05;
-        if (twice && !(r.flags & RX_GRID_FLAG_OCTAVE_UNCERTAIN))
+        if (twice && !(r.flags & CB_GRID_FLAG_OCTAVE_UNCERTAIN))
             FAILF(" bpm[%d] %.4f, twice the tempo, not flagged", s, g->bpm);
         if (fabs(g->bpm - truth.bpm[s]) > 0.05 && !twice)
             FAILF(" bpm[%d] %.4f (want %g)", s, g->bpm, truth.bpm[s]);
@@ -856,7 +856,7 @@ static int check(int idx, RXCompute *gpu, RXBeatResult *keep)
                 FAILF(" boundary at %.4f (want %.4f)", g->start, truth.start[s]);
             int num = g->beat;
             if (!num) {
-                const RXTempoSection *pg = &r.grid.sections[s - 1];
+                const CBTempoSection *pg = &r.grid.sections[s - 1];
                 int pnum = pg->beat ? pg->beat : 1;
                 long beats = lrint((g->start - pg->start) * pg->bpm / 60.0);
                 num = (int)((pnum - 1 + beats) % 4) + 1;
@@ -865,12 +865,12 @@ static int check(int idx, RXCompute *gpu, RXBeatResult *keep)
                 FAILF(" boundary is beat %d of its bar (beat field %d)", num, g->beat);
         }
     }
-    /* The grid as the stick gets it (rxbox/model.h's expansion): no two
+    /* The grid as the stick gets it (cyanbox/model.h's expansion): no two
      * beats closer than half a period, and every section's first downbeat
      * numbered 1. */
-    RXBeat *bt = NULL;
+    CBBeat *bt = NULL;
     int nbt = 0;
-    if (rx_grid_beats(&r.grid, dur, &bt, &nbt) == 0) {
+    if (cb_grid_beats(&r.grid, dur, &bt, &nbt) == 0) {
         for (int i = 1; i < nbt; i++) {
             double gap = bt[i].time - bt[i - 1].time;
             if (gap < 0.5 * 60.0 / fmax(bt[i].bpm, bt[i - 1].bpm)) {
@@ -892,7 +892,7 @@ static int check(int idx, RXCompute *gpu, RXBeatResult *keep)
      * bar), and the automatic cue on the first downbeat. */
     if (sp->start_checks) {
         double p = 60.0 / truth.bpm[0];
-        if (rx_grid_beats(&r.grid, dur, &bt, &nbt) == 0 && nbt > 0) {
+        if (cb_grid_beats(&r.grid, dur, &bt, &nbt) == 0 && nbt > 0) {
             if (fabs(bt[0].time - truth.first_beat) > 0.005)
                 FAILF(" first beat %.4f (want %.4f)", bt[0].time, truth.first_beat);
             if (bt[0].number != truth.first_number)
@@ -903,17 +903,17 @@ static int check(int idx, RXCompute *gpu, RXBeatResult *keep)
         }
         double before = truth.first_beat - 1.5 * p;
         int bar = -1, beat = -1;
-        rx_grid_bar_of(&r.grid, before, &bar, &beat);
-        if (rx_grid_quantize(&r.grid, before) < truth.first_beat - 0.005 || bar || beat)
+        cb_grid_bar_of(&r.grid, before, &bar, &beat);
+        if (cb_grid_quantize(&r.grid, before) < truth.first_beat - 0.005 || bar || beat)
             FAILF(" a beat before the first (bar %d.%d)", bar, beat);
-        RXTrack *tr = rx_track_new("/test/start.flac");
+        CBTrack *tr = cb_track_new("/test/start.flac");
         if (tr) {
             tr->duration = dur;
-            rx_analysis_auto_cues(tr, &r);
+            cb_analysis_auto_cues(tr, &r);
             if (tr->nb_cues != 1 || fabs(tr->cues[0].time - truth.start[0]) > 0.005)
                 FAILF(" auto cue at %.4f (want %.4f)", tr->nb_cues ? tr->cues[0].time : NAN,
                       truth.start[0]);
-            rx_track_free(tr);
+            cb_track_free(tr);
         }
     }
     const Want *w = &wants[idx];
@@ -937,7 +937,7 @@ static int check(int idx, RXCompute *gpu, RXBeatResult *keep)
     if (keep)
         *keep = r;
     else
-        rx_beat_result_free(&r);
+        cb_beat_result_free(&r);
     return fails ? 1 : 0;
 }
 
@@ -948,7 +948,7 @@ static double max_dstart, max_dbpm, max_dconf;
  * their tempo, beat numbers and starts), the flags and where the music
  * starts. The starts may differ by float rounding carried through the line
  * fits; 0.1 ms is a tenth of what anyone could hear. */
-static int compare(int idx, const RXBeatResult *a, const RXBeatResult *b)
+static int compare(int idx, const CBBeatResult *a, const CBBeatResult *b)
 {
     const char *name = cases[idx].name;
     int fails = 0;
@@ -960,7 +960,7 @@ static int compare(int idx, const RXBeatResult *a, const RXBeatResult *b)
         return 1;
     }
     for (int s = 0; s < a->grid.nb_sections; s++) {
-        const RXTempoSection *x = &a->grid.sections[s], *y = &b->grid.sections[s];
+        const CBTempoSection *x = &a->grid.sections[s], *y = &b->grid.sections[s];
         double ds = fabs(x->start - y->start), db = fabs(x->bpm - y->bpm);
         max_dstart = fmax(max_dstart, ds);
         max_dbpm = fmax(max_dbpm, db);
@@ -998,62 +998,62 @@ static double rel_diff(const float *a, const float *b, size_t n)
  * differences of them, alike. Both GPUs here (RADV, ANV) stay under 5e-7,
  * on real tracks too. The comparison is not per element: where a value is
  * near zero, its relative error means nothing. */
-static int check_frontend(RXCompute *gpu)
+static int check_frontend(CBCompute *gpu)
 {
     static const int which[] = { 0, 3, 6, 9, 16, 17 };
     int fails = 0;
     double worst_spec = 0.0, worst_env = 0.0;
-    for (size_t w = 0; w < RX_ARRAY_ELEMS(which); w++) {
+    for (size_t w = 0; w < CB_ARRAY_ELEMS(which); w++) {
         Track t;
         Truth truth;
         if (synth(&cases[which[w]], &t, &truth) < 0)
             return fails + 1;
         free(truth.beats);
-        RXSpectrum a, b;
-        if (rx_spectrum_compute(t.x, t.n, NULL, &a) < 0) {
+        CBSpectrum a, b;
+        if (cb_spectrum_compute(t.x, t.n, NULL, &a) < 0) {
             free(t.x);
             return fails + 1;
         }
-        if (rx_spectrum_compute(t.x, t.n, gpu, &b) < 0) {
-            rx_spectrum_free(&a);
+        if (cb_spectrum_compute(t.x, t.n, gpu, &b) < 0) {
+            cb_spectrum_free(&a);
             free(t.x);
             return fails + 1;
         }
         const size_t nf = (size_t)a.nb_frames;
         const double d[] = {
-            rel_diff(a.prof, b.prof, nf * RX_BEAT_NPROF),
+            rel_diff(a.prof, b.prof, nf * CB_BEAT_NPROF),
             rel_diff(a.kick, b.kick, nf),
             rel_diff(a.flux_full, b.flux_full, nf),
             rel_diff(a.flux_mid, b.flux_mid, nf),
             rel_diff(a.flux_high, b.flux_high, nf),
         };
         double dmax = 0.0;
-        for (size_t i = 0; i < RX_ARRAY_ELEMS(d); i++)
+        for (size_t i = 0; i < CB_ARRAY_ELEMS(d); i++)
             dmax = fmax(dmax, d[i]);
-        rx_spectrum_free(&a);
-        rx_spectrum_free(&b);
+        cb_spectrum_free(&a);
+        cb_spectrum_free(&b);
 
         /* Every beat of the first section's tempo, from its first downbeat. */
         const double p = 60.0 / truth.bpm[0];
         const int nb = (int)(((double)t.n / RATE - truth.start[0]) / p);
-        const size_t len = (size_t)RX_NB_BANDS * RX_ENV_LEN;
+        const size_t len = (size_t)CB_NB_BANDS * CB_ENV_LEN;
         double *tm = malloc((size_t)nb * sizeof(*tm));
         double *ca = malloc((size_t)nb * sizeof(*ca)), *cb = malloc((size_t)nb * sizeof(*cb));
         float *ea = malloc((size_t)nb * len * sizeof(*ea));
         float *eb = malloc((size_t)nb * len * sizeof(*eb));
-        RXEnvCtx *c1 = NULL, *c2 = NULL;
+        CBEnvCtx *c1 = NULL, *c2 = NULL;
         double de = 1.0;
-        if (tm && ca && cb && ea && eb && rx_env_alloc(&c1, t.x, t.n, NULL) >= 0 &&
-            rx_env_alloc(&c2, t.x, t.n, gpu) >= 0) {
+        if (tm && ca && cb && ea && eb && cb_env_alloc(&c1, t.x, t.n, NULL) >= 0 &&
+            cb_env_alloc(&c2, t.x, t.n, gpu) >= 0) {
             for (int i = 0; i < nb; i++)
                 tm[i] = truth.start[0] + i * p;
-            if (rx_env_windows(c1, tm, nb, ea, ca) >= 0 &&
-                rx_env_windows(c2, tm, nb, eb, cb) >= 0 &&
+            if (cb_env_windows(c1, tm, nb, ea, ca) >= 0 &&
+                cb_env_windows(c2, tm, nb, eb, cb) >= 0 &&
                 !memcmp(ca, cb, (size_t)nb * sizeof(*ca)))
                 de = rel_diff(ea, eb, (size_t)nb * len);
         }
-        rx_env_free(&c1);
-        rx_env_free(&c2);
+        cb_env_free(&c1);
+        cb_env_free(&c2);
         free(tm);
         free(ca);
         free(cb);
@@ -1072,27 +1072,27 @@ static int check_frontend(RXCompute *gpu)
     }
     if (!fails)
         printf("ok   [gpu] front end on %d tracks: spectrum within %.1e, envelopes within %.1e "
-               "of the CPU's (of the largest values)\n", (int)RX_ARRAY_ELEMS(which), worst_spec,
+               "of the CPU's (of the largest values)\n", (int)CB_ARRAY_ELEMS(which), worst_spec,
                worst_env);
     return fails;
 }
 
-static int check_misc(RXCompute *gpu)
+static int check_misc(CBCompute *gpu)
 {
     const char *path = gpu ? "[gpu] " : "";
-    RXAnalysisOptions opt;
-    rx_analysis_options_default(&opt);
+    CBAnalysisOptions opt;
+    cb_analysis_options_default(&opt);
     opt.compute = gpu;
     int fails = 0;
     /* Flag names round-trip. */
-    for (unsigned f = 1; f <= RX_GRID_FLAG_DYNAMIC; f <<= 1) {
-        const char *n = rx_grid_flag_name((enum RXGridFlag)f);
-        if (!n || !*n || rx_grid_flag_parse(n) != f) {
+    for (unsigned f = 1; f <= CB_GRID_FLAG_DYNAMIC; f <<= 1) {
+        const char *n = cb_grid_flag_name((enum CBGridFlag)f);
+        if (!n || !*n || cb_grid_flag_parse(n) != f) {
             printf("FAIL flag name 0x%x\n", f);
             fails++;
         }
     }
-    if (rx_grid_flag_parse("bogus") != 0) {
+    if (cb_grid_flag_parse("bogus") != 0) {
         printf("FAIL flag parse bogus\n");
         fails++;
     }
@@ -1107,13 +1107,13 @@ static int check_misc(RXCompute *gpu)
         static const double off[] = { 0.060, 0.120, 0.160, 0.160, 0.165, 0.155, 0.160, 0.170,
                                       0.160, 0.160, 0.110, 0.050 };
         const double P = 60.0 / 130.0;
-        RXBeatObs ob[80];
+        CBBeatObs ob[80];
         for (int k = 0; k < 80; k++) {
             double a = k * P + (k >= 34 && k < 46 ? off[k - 34] : 0.0);
-            ob[k] = (RXBeatObs) { .time = a, .attack = a, .weight = 1.0, .index = k };
+            ob[k] = (CBBeatObs) { .time = a, .attack = a, .weight = 1.0, .index = k };
         }
         double step = INFINITY, far = INFINITY;
-        if (rx_walk_beats(ob, 0, 79, 0.0005) == 0) {
+        if (cb_walk_beats(ob, 0, 79, 0.0005) == 0) {
             step = far = 0.0;
             for (int k = 1; k + 1 < 80; k++)
                 step = fmax(step, fabs((ob[k + 1].time - ob[k].time) /
@@ -1132,7 +1132,7 @@ static int check_misc(RXCompute *gpu)
         }
     }
 
-    /* The confidence's windows (rx_fold's rise; grid_confidence): a kick
+    /* The confidence's windows (cb_fold's rise; grid_confidence): a kick
      * and a click on every beat at 128, sixteen beats folded on their
      * hits rise within 15 ms by at least half their contrast, which is on
      * the grid. Folded 60 ms after them, on the hits' decaying tails, the
@@ -1150,23 +1150,23 @@ static int check_misc(RXCompute *gpu)
             add_kick(&t, 0.5 + k * P, 0.8);
             add_hat(&t, 0.5 + k * P, 0.5, &l);
         }
-        const size_t len = (size_t)RX_NB_BANDS * RX_ENV_LEN;
-        RXEnvCtx *ec = NULL;
-        RXBeatObs ob[NB];
+        const size_t len = (size_t)CB_NB_BANDS * CB_ENV_LEN;
+        CBEnvCtx *ec = NULL;
+        CBBeatObs ob[NB];
         double tm[NB], centre[NB], on[3], late[3];
         float *env = malloc(NB * len * sizeof(*env));
-        bool ok = env && rx_env_alloc(&ec, t.x, t.n, gpu) >= 0;
+        bool ok = env && cb_env_alloc(&ec, t.x, t.n, gpu) >= 0;
         for (int pass = 0; ok && pass < 2; pass++) {
             for (int k = 0; k < NB; k++) {
                 tm[k] = 0.5 + (2 + k) * P + (pass ? 0.060 : 0.0);
-                ob[k] = (RXBeatObs) { .time = tm[k], .index = k };
+                ob[k] = (CBBeatObs) { .time = tm[k], .index = k };
             }
-            RXBeatEnvs e = { .env = env, .centre = centre, .nb = NB };
-            ok = rx_env_windows(ec, tm, NB, env, centre) >= 0;
+            CBBeatEnvs e = { .env = env, .centre = centre, .nb = NB };
+            ok = cb_env_windows(ec, tm, NB, env, centre) >= 0;
             double *v = pass ? late : on;
-            rx_fold(&e, ob, 0, NB - 1, NULL, RX_BAND_MID, search, &v[0], &v[2], &v[1]);
+            cb_fold(&e, ob, 0, NB - 1, NULL, CB_BAND_MID, search, &v[0], &v[2], &v[1]);
         }
-        rx_env_free(&ec);
+        cb_env_free(&ec);
         free(env);
         free(t.x);
         if (!ok || !(fabs(on[2]) <= 0.015 && on[1] >= 0.5 * on[0]) || !(late[1] < 0.5 * late[0])) {
@@ -1183,17 +1183,17 @@ static int check_misc(RXCompute *gpu)
 
     /* Silence and a too-short input give an empty grid, not an error. */
     float *z = calloc(RATE * 20, sizeof(*z));
-    RXBeatResult r;
-    if (rx_analyse_beats(z, RATE * 20, RATE, &opt, &r) < 0 || r.grid.nb_sections != 0) {
+    CBBeatResult r;
+    if (cb_analyse_beats(z, RATE * 20, RATE, &opt, &r) < 0 || r.grid.nb_sections != 0) {
         printf("FAIL %ssilence: %d sections\n", path, r.grid.nb_sections);
         fails++;
     }
-    rx_beat_result_free(&r);
-    if (rx_analyse_beats(z, RATE * 2, RATE, &opt, &r) < 0 || r.grid.nb_sections != 0) {
+    cb_beat_result_free(&r);
+    if (cb_analyse_beats(z, RATE * 2, RATE, &opt, &r) < 0 || r.grid.nb_sections != 0) {
         printf("FAIL %sshort input\n", path);
         fails++;
     }
-    rx_beat_result_free(&r);
+    cb_beat_result_free(&r);
     free(z);
 
     /* Determinism, and another sample rate: the same track at 48 kHz
@@ -1202,9 +1202,9 @@ static int check_misc(RXCompute *gpu)
     Truth truth;
     if (synth(&cases[0], &t, &truth) < 0)
         return fails + 1;
-    RXBeatResult a, b;
-    rx_analyse_beats(t.x, t.n, RATE, &opt, &a);
-    rx_analyse_beats(t.x, t.n, RATE, &opt, &b);
+    CBBeatResult a, b;
+    cb_analyse_beats(t.x, t.n, RATE, &opt, &a);
+    cb_analyse_beats(t.x, t.n, RATE, &opt, &b);
     if (a.grid.nb_sections != b.grid.nb_sections || !a.grid.nb_sections ||
         a.grid.sections[0].start != b.grid.sections[0].start ||
         a.grid.sections[0].bpm != b.grid.sections[0].bpm || a.confidence != b.confidence) {
@@ -1220,8 +1220,8 @@ static int check_misc(RXCompute *gpu)
         double f = pos - j;
         x48[i] = (float)(j + 1 < t.n ? t.x[j] * (1 - f) + t.x[j + 1] * f : 0.0);
     }
-    RXBeatResult c;
-    rx_analyse_beats(x48, n48, 48000, &opt, &c);
+    CBBeatResult c;
+    cb_analyse_beats(x48, n48, 48000, &opt, &c);
     if (!c.grid.nb_sections || fabs(c.grid.sections[0].start - a.grid.sections[0].start) > 0.0005 ||
         fabs(c.grid.sections[0].bpm - a.grid.sections[0].bpm) > 0.01) {
         printf("FAIL %s48 kHz: start %.5f bpm %.4f vs %.5f %.4f\n", path,
@@ -1232,32 +1232,32 @@ static int check_misc(RXCompute *gpu)
     } else {
         printf("ok   %sdeterminism and 48 kHz input\n", path);
     }
-    rx_beat_result_free(&a);
-    rx_beat_result_free(&b);
-    rx_beat_result_free(&c);
+    cb_beat_result_free(&a);
+    cb_beat_result_free(&b);
+    cb_beat_result_free(&c);
     free(x48);
     free(t.x);
     return fails;
 }
 
-/* rx_analyse on a stereo 48 kHz track (everything requested), and the
+/* cb_analyse on a stereo 48 kHz track (everything requested), and the
  * automatic memory cue. */
-static int check_analyse(RXCompute *gpu)
+static int check_analyse(CBCompute *gpu)
 {
     const char *path = gpu ? "[gpu] " : "";
-    RXAnalysisOptions opt;
-    rx_analysis_options_default(&opt);
+    CBAnalysisOptions opt;
+    cb_analysis_options_default(&opt);
     opt.compute = gpu;
     int fails = 0;
     Track t;
     Truth truth;
     if (synth(&cases[0], &t, &truth) < 0)
         return 1;
-    RXBeatResult mono;
-    rx_analyse_beats(t.x, t.n, RATE, &opt, &mono);
+    CBBeatResult mono;
+    cb_analyse_beats(t.x, t.n, RATE, &opt, &mono);
 
     int64_t n48 = t.n * 48000 / RATE;
-    RXAudio au = {
+    CBAudio au = {
         .samples   = malloc(n48 * 2 * sizeof(float)),
         .channels  = 2,
         .rate      = 48000,
@@ -1274,39 +1274,39 @@ static int check_analyse(RXCompute *gpu)
         float v = (float)(j + 1 < t.n ? t.x[j] * (1 - f) + t.x[j + 1] * f : 0.0);
         au.samples[2 * i] = au.samples[2 * i + 1] = v;
     }
-    RXAnalysis a;
-    int ret = rx_analyse(&au, &opt, RX_ANALYSE_ALL, &a);
-    if (ret < 0 || a.done != RX_ANALYSE_ALL) {
-        printf("FAIL %srx_analyse: ret %d done 0x%x\n", path, ret, a.done);
+    CBAnalysis a;
+    int ret = cb_analyse(&au, &opt, CB_ANALYSE_ALL, &a);
+    if (ret < 0 || a.done != CB_ANALYSE_ALL) {
+        printf("FAIL %scb_analyse: ret %d done 0x%x\n", path, ret, a.done);
         fails++;
     } else if (!a.beats.grid.nb_sections || !mono.grid.nb_sections ||
                fabs(a.beats.grid.sections[0].start - mono.grid.sections[0].start) > 0.0005 ||
                fabs(a.beats.grid.sections[0].bpm - mono.grid.sections[0].bpm) > 0.01 ||
                a.waves.nb_detail <= 0) {
-        printf("FAIL %srx_analyse: grid %.5f@%.3f vs %.5f@%.3f, %d detail columns\n", path,
+        printf("FAIL %scb_analyse: grid %.5f@%.3f vs %.5f@%.3f, %d detail columns\n", path,
                a.beats.grid.nb_sections ? a.beats.grid.sections[0].start : 0.0,
                a.beats.grid.nb_sections ? a.beats.grid.sections[0].bpm : 0.0,
                mono.grid.sections[0].start, mono.grid.sections[0].bpm, a.waves.nb_detail);
         fails++;
     } else {
-        printf("ok   %srx_analyse (stereo 48 kHz): grid, key \"%s\", %d waveform columns\n",
+        printf("ok   %scb_analyse (stereo 48 kHz): grid, key \"%s\", %d waveform columns\n",
                path, a.key.key, a.waves.nb_detail);
     }
 
     /* The cue: the first downbeat at or after the music starts, musical,
      * once; nothing for a track that already has cues. */
-    RXTrack *tr = rx_track_new("/test/house124.flac");
+    CBTrack *tr = cb_track_new("/test/house124.flac");
     if (tr && a.beats.grid.nb_sections) {
         tr->duration = a.duration;
         double first = a.beats.music_start;
-        rx_analysis_auto_cues(tr, &a.beats);
-        rx_analysis_auto_cues(tr, &a.beats);
+        cb_analysis_auto_cues(tr, &a.beats);
+        cb_analysis_auto_cues(tr, &a.beats);
         double want = truth.start[0];
         double bar = 4.0 * 60.0 / truth.bpm[0];
         while (want < first - 0.05)
             want += bar;
         if (tr->nb_cues != 1 || fabs(tr->cues[0].time - want) > 0.003 ||
-            !rx_cue_is_musical(&tr->cues[0]) || rx_cue_is_hot(&tr->cues[0])) {
+            !cb_cue_is_musical(&tr->cues[0]) || cb_cue_is_hot(&tr->cues[0])) {
             printf("FAIL %sauto cue: %d cues, at %.4f (want %.4f)\n", path, tr->nb_cues,
                    tr->nb_cues ? tr->cues[0].time : 0.0, want);
             fails++;
@@ -1314,23 +1314,23 @@ static int check_analyse(RXCompute *gpu)
             printf("ok   %sauto cue at the first downbeat (%.3f s)\n", path, tr->cues[0].time);
         }
         /* A track with a cue of its own gets none. */
-        RXTrack *t2 = rx_track_new("/test/has-cue.flac");
+        CBTrack *t2 = cb_track_new("/test/has-cue.flac");
         if (t2) {
             t2->duration = a.duration;
-            RXCue own;
-            rx_cue_init(&own, 30.0);
-            rx_track_add_cue(t2, &own);
-            rx_analysis_auto_cues(t2, &a.beats);
+            CBCue own;
+            cb_cue_init(&own, 30.0);
+            cb_track_add_cue(t2, &own);
+            cb_analysis_auto_cues(t2, &a.beats);
             if (t2->nb_cues != 1) {
                 printf("FAIL %sauto cue added to a track that has cues\n", path);
                 fails++;
             }
-            rx_track_free(t2);
+            cb_track_free(t2);
         }
     }
-    rx_track_free(tr);
-    rx_analysis_free(&a);
-    rx_beat_result_free(&mono);
+    cb_track_free(tr);
+    cb_analysis_free(&a);
+    cb_beat_result_free(&mono);
     free(au.samples);
     free(t.x);
     return fails;
@@ -1340,7 +1340,7 @@ int main(int argc, char **argv)
 {
     if (argc == 4 && !strcmp(argv[1], "-w")) {
         int i = atoi(argv[2]);
-        if (i < 0 || i >= (int)RX_ARRAY_ELEMS(cases))
+        if (i < 0 || i >= (int)CB_ARRAY_ELEMS(cases))
             return 1;
         Track t;
         Truth truth;
@@ -1361,7 +1361,7 @@ int main(int argc, char **argv)
     }
     if (argc == 3 && !strcmp(argv[1], "-c")) {
         int i = atoi(argv[2]);
-        if (i < 0 || i >= (int)RX_ARRAY_ELEMS(cases))
+        if (i < 0 || i >= (int)CB_ARRAY_ELEMS(cases))
             return 1;
         verbose = true;
         return check(i, NULL, NULL);
@@ -1369,20 +1369,20 @@ int main(int argc, char **argv)
     verbose = argc > 1 && !strcmp(argv[1], "-v");
 
     /* Which paths: see the top of the file. */
-    enum RXComputeMode mode = rx_compute_mode();
-    RXCompute *gpu = NULL;
-    if (mode != RX_COMPUTE_OFF) {
-        int ret = rx_compute_create(&gpu, NULL);
-        if (ret < 0 && mode == RX_COMPUTE_REQUIRED) {
-            printf("FAIL RXBOX_ANALYSIS_GPU=1, but there is no GPU (%s)\n", strerror(-ret));
+    enum CBComputeMode mode = cb_compute_mode();
+    CBCompute *gpu = NULL;
+    if (mode != CB_COMPUTE_OFF) {
+        int ret = cb_compute_create(&gpu, NULL);
+        if (ret < 0 && mode == CB_COMPUTE_REQUIRED) {
+            printf("FAIL CYANBOX_ANALYSIS_GPU=1, but there is no GPU (%s)\n", strerror(-ret));
             return 1;
         }
         if (ret < 0)
             printf("note: no GPU (%s): the GPU half is skipped\n", strerror(-ret));
         else
-            printf("note: the GPU half runs on %s\n", rx_compute_device_name(gpu));
+            printf("note: the GPU half runs on %s\n", cb_compute_device_name(gpu));
     }
-    const bool cpu = mode != RX_COMPUTE_REQUIRED, both = cpu && gpu;
+    const bool cpu = mode != CB_COMPUTE_REQUIRED, both = cpu && gpu;
 
     int fails = 0;
     if (cpu) {
@@ -1395,8 +1395,8 @@ int main(int argc, char **argv)
         fails += check_analyse(gpu);
     }
     int same = 0;
-    for (size_t i = 0; i < RX_ARRAY_ELEMS(cases); i++) {
-        RXBeatResult a = { 0 }, b = { 0 };
+    for (size_t i = 0; i < CB_ARRAY_ELEMS(cases); i++) {
+        CBBeatResult a = { 0 }, b = { 0 };
         if (cpu)
             fails += check((int)i, NULL, both ? &a : NULL);
         if (gpu)
@@ -1406,20 +1406,20 @@ int main(int argc, char **argv)
             fails += f;
             same += !f;
         }
-        rx_beat_result_free(&a);
-        rx_beat_result_free(&b);
+        cb_beat_result_free(&a);
+        cb_beat_result_free(&b);
     }
     if (both)
         printf("%s cpu/gpu: %d of %d grids the same; largest differences: start %.2g ms, "
-               "%.2g BPM, confidence %.2g\n", same == (int)RX_ARRAY_ELEMS(cases) ? "ok  " : "FAIL",
-               same, (int)RX_ARRAY_ELEMS(cases), max_dstart * 1e3, max_dbpm, max_dconf);
+               "%.2g BPM, confidence %.2g\n", same == (int)CB_ARRAY_ELEMS(cases) ? "ok  " : "FAIL",
+               same, (int)CB_ARRAY_ELEMS(cases), max_dstart * 1e3, max_dbpm, max_dconf);
     if (gpu) {
-        int errors = rx_compute_validation_errors(gpu);
+        int errors = cb_compute_validation_errors(gpu);
         if (errors) {
             printf("FAIL %d Vulkan validation errors\n", errors);
             fails++;
         }
-        rx_compute_destroy(&gpu);
+        cb_compute_destroy(&gpu);
     }
     printf("%s: %d failure(s)\n", fails ? "FAIL" : "PASS", fails);
     return fails ? 1 : 0;

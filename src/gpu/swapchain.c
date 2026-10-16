@@ -48,7 +48,7 @@
 
 /* --------------------------------------------------------------- swapchain */
 
-static void destroy_images(RXWindow *w)
+static void destroy_images(CBWindow *w)
 {
     for (uint32_t i = 0; i < w->nb_images; i++) {
         if (w->views && w->views[i])
@@ -65,16 +65,16 @@ static void destroy_images(RXWindow *w)
     w->nb_images = 0;
 }
 
-static int pick_format(RXWindow *w, VkSurfaceFormatKHR *out)
+static int pick_format(CBWindow *w, VkSurfaceFormatKHR *out)
 {
     uint32_t nb = 0;
     VkResult res = vkGetPhysicalDeviceSurfaceFormatsKHR(w->vk.phys, w->surface, &nb, NULL);
     if (res != VK_SUCCESS || !nb)
-        return res != VK_SUCCESS ? rx_vk_ret2err(res) : RX_ERROR(ENODEV);
+        return res != VK_SUCCESS ? cb_vk_ret2err(res) : CB_ERROR(ENODEV);
 
     VkSurfaceFormatKHR *fmts = calloc(nb, sizeof(*fmts));
     if (!fmts)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     vkGetPhysicalDeviceSurfaceFormatsKHR(w->vk.phys, w->surface, &nb, fmts);
 
     static const VkFormat prefer[] = {
@@ -95,11 +95,11 @@ static int pick_format(RXWindow *w, VkSurfaceFormatKHR *out)
         }
         free(fmts);
         if (!found)
-            rx_err("gpu: the surface no longer offers the swapchain format");
-        return found ? 0 : RX_ERROR(ENODEV);
+            cb_err("gpu: the surface no longer offers the swapchain format");
+        return found ? 0 : CB_ERROR(ENODEV);
     }
 
-    for (size_t p = 0; p < RX_ARRAY_ELEMS(prefer) && !found; p++) {
+    for (size_t p = 0; p < CB_ARRAY_ELEMS(prefer) && !found; p++) {
         for (uint32_t i = 0; i < nb && !found; i++) {
             if (fmts[i].format == prefer[p] &&
                 fmts[i].colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
@@ -110,7 +110,7 @@ static int pick_format(RXWindow *w, VkSurfaceFormatKHR *out)
     }
     if (!found) {
         *out = fmts[0];
-        rx_warn("gpu: no 8-bit UNORM swapchain format, using format %d; colours may be off",
+        cb_warn("gpu: no 8-bit UNORM swapchain format, using format %d; colours may be off",
                 (int)fmts[0].format);
     }
 
@@ -118,11 +118,11 @@ static int pick_format(RXWindow *w, VkSurfaceFormatKHR *out)
     return 0;
 }
 
-static VkPresentModeKHR pick_present_mode(RXWindow *w)
+static VkPresentModeKHR pick_present_mode(CBWindow *w)
 {
     uint32_t nb = 0;
     vkGetPhysicalDeviceSurfacePresentModesKHR(w->vk.phys, w->surface, &nb, NULL);
-    VkPresentModeKHR *modes = calloc(RX_MAX(nb, 1), sizeof(*modes));
+    VkPresentModeKHR *modes = calloc(CB_MAX(nb, 1), sizeof(*modes));
     if (!modes)
         return VK_PRESENT_MODE_FIFO_KHR;
     vkGetPhysicalDeviceSurfacePresentModesKHR(w->vk.phys, w->surface, &nb, modes);
@@ -136,13 +136,13 @@ static VkPresentModeKHR pick_present_mode(RXWindow *w)
 }
 
 /* Returns 1 when the window has no area (nothing to create yet). */
-int rx_swapchain_create(RXWindow *w)
+int cb_swapchain_create(CBWindow *w)
 {
     VkSurfaceCapabilitiesKHR caps;
     VkResult res = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(w->vk.phys, w->surface, &caps);
     if (res != VK_SUCCESS) {
-        rx_err("gpu: surface capabilities: %s", rx_vk_strerror(res));
-        return rx_vk_ret2err(res);
+        cb_err("gpu: surface capabilities: %s", cb_vk_strerror(res));
+        return cb_vk_ret2err(res);
     }
 
     /* Wayland leaves the size to the client (0xFFFFFFFF): the window's
@@ -151,9 +151,9 @@ int rx_swapchain_create(RXWindow *w)
     if (extent.width == UINT32_MAX) {
         int pw = 0, ph = 0;
         SDL_GetWindowSizeInPixels(w->win, &pw, &ph);
-        extent.width  = RX_CLAMP((uint32_t)RX_MAX(pw, 0), caps.minImageExtent.width,
+        extent.width  = CB_CLAMP((uint32_t)CB_MAX(pw, 0), caps.minImageExtent.width,
                                  caps.maxImageExtent.width);
-        extent.height = RX_CLAMP((uint32_t)RX_MAX(ph, 0), caps.minImageExtent.height,
+        extent.height = CB_CLAMP((uint32_t)CB_MAX(ph, 0), caps.minImageExtent.height,
                                  caps.maxImageExtent.height);
     }
 
@@ -172,9 +172,9 @@ int rx_swapchain_create(RXWindow *w)
     }
     VkPresentModeKHR mode = pick_present_mode(w);
 
-    uint32_t nb_images = RX_MAX(caps.minImageCount, 3u);
+    uint32_t nb_images = CB_MAX(caps.minImageCount, 3u);
     if (caps.maxImageCount)
-        nb_images = RX_MIN(nb_images, caps.maxImageCount);
+        nb_images = CB_MIN(nb_images, caps.maxImageCount);
 
     VkImageUsageFlags usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
     w->can_capture = caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
@@ -215,14 +215,14 @@ int rx_swapchain_create(RXWindow *w)
      * presents, so everything of it goes only once the device is idle. */
     if (old) {
         vkDeviceWaitIdle(w->vk.dev);
-        rx_vk_poll_completed(w);
+        cb_vk_poll_completed(w);
         destroy_images(w);
         vkDestroySwapchainKHR(w->vk.dev, old, NULL);
         w->swapchain = VK_NULL_HANDLE;
     }
     if (res != VK_SUCCESS) {
-        rx_err("gpu: unable to create the swapchain: %s", rx_vk_strerror(res));
-        return rx_vk_ret2err(res);
+        cb_err("gpu: unable to create the swapchain: %s", cb_vk_strerror(res));
+        return cb_vk_ret2err(res);
     }
     w->swapchain = sc;
 
@@ -233,7 +233,7 @@ int rx_swapchain_create(RXWindow *w)
     w->rendered = calloc(nb, sizeof(*w->rendered));
     if (!w->images || !w->views || !w->rendered) {
         destroy_images(w);
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     }
     vkGetSwapchainImagesKHR(w->vk.dev, sc, &nb, w->images);
     w->nb_images = nb;
@@ -252,21 +252,21 @@ int rx_swapchain_create(RXWindow *w)
         };
         res = vkCreateImageView(w->vk.dev, &vinfo, NULL, &w->views[i]);
         if (res != VK_SUCCESS)
-            return rx_vk_ret2err(res);
+            return cb_vk_ret2err(res);
 
         VkSemaphoreCreateInfo sinfo = {
             .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
         };
         res = vkCreateSemaphore(w->vk.dev, &sinfo, NULL, &w->rendered[i]);
         if (res != VK_SUCCESS)
-            return rx_vk_ret2err(res);
+            return cb_vk_ret2err(res);
     }
 
     /* w->extent is only ever set here, so zero means the first swapchain. */
     if (!w->extent.width)
-        rx_info("gpu: presenting %s, format %d", mode == VK_PRESENT_MODE_MAILBOX_KHR ?
+        cb_info("gpu: presenting %s, format %d", mode == VK_PRESENT_MODE_MAILBOX_KHR ?
                 "MAILBOX" : "FIFO", (int)format.format);
-    rx_debug("gpu: swapchain %ux%u, %u images", extent.width, extent.height, nb);
+    cb_debug("gpu: swapchain %ux%u, %u images", extent.width, extent.height, nb);
 
     w->format = format;
     w->present_mode = mode;
@@ -276,7 +276,7 @@ int rx_swapchain_create(RXWindow *w)
     return 0;
 }
 
-void rx_swapchain_destroy(RXWindow *w)
+void cb_swapchain_destroy(CBWindow *w)
 {
     if (!w->vk.dev)
         return;
@@ -287,8 +287,8 @@ void rx_swapchain_destroy(RXWindow *w)
         vkDestroySwapchainKHR(w->vk.dev, w->swapchain, NULL);
     w->swapchain = VK_NULL_HANDLE;
     if (w->cap.buf)
-        rx_vk_defer_unreserve(w, 1);
-    rx_vk_buffer_free(w, &w->cap);
+        cb_vk_defer_unreserve(w, 1);
+    cb_vk_buffer_free(w, &w->cap);
 }
 
 /* ------------------------------------------------------------------- frame */
@@ -325,26 +325,26 @@ static void image_barrier(VkCommandBuffer cmd, VkImage img,
 }
 
 /* The readback buffer for a capture, sized for the current extent. */
-static int ensure_capture(RXWindow *w)
+static int ensure_capture(CBWindow *w)
 {
     if (w->cap.buf && w->cap_width == w->extent.width && w->cap_height == w->extent.height)
         return 0;
 
     if (w->cap.buf) {
-        RXDeferred d = { .buf = w->cap.buf, .alloc = w->cap.alloc };
-        rx_vk_defer(w, &d);
-        w->cap = (RXVkBuffer) { 0 };
+        CBDeferred d = { .buf = w->cap.buf, .alloc = w->cap.alloc };
+        cb_vk_defer(w, &d);
+        w->cap = (CBVkBuffer) { 0 };
     }
 
     /* Room to defer it when the extent changes (vk.c). */
-    int ret = rx_vk_defer_reserve(w, 1);
+    int ret = cb_vk_defer_reserve(w, 1);
     if (ret < 0)
         return ret;
     VkDeviceSize size = (VkDeviceSize)w->extent.width * w->extent.height * 4;
-    ret = rx_vk_buffer_create(w, &w->cap, size, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                              RX_MEM_READBACK);
+    ret = cb_vk_buffer_create(w, &w->cap, size, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                              CB_MEM_READBACK);
     if (ret < 0) {
-        rx_vk_defer_unreserve(w, 1);
+        cb_vk_defer_unreserve(w, 1);
         return ret;
     }
 
@@ -357,7 +357,7 @@ static int ensure_capture(RXWindow *w)
 /* Records the copy of the rendered image into the readback buffer. The
  * image comes from the pass in COLOR_ATTACHMENT_OPTIMAL and leaves in
  * PRESENT_SRC. */
-static void record_capture(RXWindow *w, VkCommandBuffer cmd, VkImage img)
+static void record_capture(CBWindow *w, VkCommandBuffer cmd, VkImage img)
 {
     image_barrier(cmd, img,
                   VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
@@ -405,7 +405,7 @@ static void record_capture(RXWindow *w, VkCommandBuffer cmd, VkImage img)
                   VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
 }
 
-static VkResult acquire(RXWindow *w, RXFrame *f, uint32_t *idx)
+static VkResult acquire(CBWindow *w, CBFrame *f, uint32_t *idx)
 {
     /* A finite timeout: a compositor holding every buffer must not hang
      * the loop. The semaphore is left unsignalled on a timeout. */
@@ -413,7 +413,7 @@ static VkResult acquire(RXWindow *w, RXFrame *f, uint32_t *idx)
                                  VK_NULL_HANDLE, idx);
 }
 
-int rx_swapchain_frame(RXWindow *w, void *draw_data, bool capture)
+int cb_swapchain_frame(CBWindow *w, void *draw_data, bool capture)
 {
     int pw = 0, ph = 0;
     SDL_GetWindowSizeInPixels(w->win, &pw, &ph);
@@ -425,30 +425,30 @@ int rx_swapchain_frame(RXWindow *w, void *draw_data, bool capture)
      * moves on with every submission, and its fence is what protects
      * ImGui's buffers: a frame ImGui would not draw is not submitted, so
      * the two stay in step. */
-    if (draw_data && !rx_imgui_drawable(draw_data))
+    if (draw_data && !cb_imgui_drawable(draw_data))
         return 1;
 
     int ret;
     if (!w->swapchain || w->swap_dirty || (uint32_t)pw != w->extent.width ||
         (uint32_t)ph != w->extent.height) {
-        ret = rx_swapchain_create(w);
+        ret = cb_swapchain_create(w);
         if (ret != 0)
             return ret;
     }
 
-    RXFrame *f = &w->frames[w->frame_idx];
+    CBFrame *f = &w->frames[w->frame_idx];
 
     /* The slot's last submission must be done before its command buffer,
      * its acquire semaphore and ImGui's vertex buffers for it are reused. */
     VkResult res = vkWaitForFences(w->vk.dev, 1, &f->fence, VK_TRUE, UINT64_MAX);
     if (res != VK_SUCCESS) {
-        rx_err("gpu: waiting for a frame: %s", rx_vk_strerror(res));
-        return rx_vk_ret2err(res);
+        cb_err("gpu: waiting for a frame: %s", cb_vk_strerror(res));
+        return cb_vk_ret2err(res);
     }
     if (f->serial > w->completed)
         w->completed = f->serial;
-    rx_vk_poll_completed(w);
-    rx_vk_collect(w, false);
+    cb_vk_poll_completed(w);
+    cb_vk_collect(w, false);
 
     /* The slot's last frame is done, so its timestamps are there. */
     if (f->timed) {
@@ -464,7 +464,7 @@ int rx_swapchain_frame(RXWindow *w, void *draw_data, bool capture)
     res = acquire(w, f, &idx);
     if (res == VK_ERROR_OUT_OF_DATE_KHR) {
         w->swap_dirty = true;
-        ret = rx_swapchain_create(w);
+        ret = cb_swapchain_create(w);
         if (ret != 0)
             return ret;
         res = acquire(w, f, &idx);
@@ -478,8 +478,8 @@ int rx_swapchain_frame(RXWindow *w, void *draw_data, bool capture)
          * recreate before the next. */
         w->swap_dirty = true;
     } else if (res != VK_SUCCESS) {
-        rx_err("gpu: acquiring an image: %s", rx_vk_strerror(res));
-        return rx_vk_ret2err(res);
+        cb_err("gpu: acquiring an image: %s", cb_vk_strerror(res));
+        return cb_vk_ret2err(res);
     }
 
     /* From here on the frame is always submitted: the acquire semaphore is
@@ -500,7 +500,7 @@ int rx_swapchain_frame(RXWindow *w, void *draw_data, bool capture)
         vkCmdResetQueryPool(f->cmd, f->times, 0, 2);
 
     const uint64_t serial = w->serial + 1;
-    rx_vk_record_uploads(w, f->cmd, serial);
+    cb_vk_record_uploads(w, f->cmd, serial);
 
     VkImage img = w->images[idx];
     image_barrier(f->cmd, img,
@@ -516,7 +516,7 @@ int rx_swapchain_frame(RXWindow *w, void *draw_data, bool capture)
         .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
         .loadOp      = VK_ATTACHMENT_LOAD_OP_CLEAR,
         .storeOp     = VK_ATTACHMENT_STORE_OP_STORE,
-        .clearValue  = { .color = { .float32 = { RX_CLEAR_R, RX_CLEAR_G, RX_CLEAR_B, 1.0f } } },
+        .clearValue  = { .color = { .float32 = { CB_CLEAR_R, CB_CLEAR_G, CB_CLEAR_B, 1.0f } } },
     };
     VkRenderingInfo rinfo = {
         .sType                = VK_STRUCTURE_TYPE_RENDERING_INFO,
@@ -531,7 +531,7 @@ int rx_swapchain_frame(RXWindow *w, void *draw_data, bool capture)
         vkCmdWriteTimestamp2(f->cmd, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, f->times, 0);
     vkCmdBeginRendering(f->cmd, &rinfo);
     if (draw_data)
-        rx_imgui_record(w, draw_data, f->cmd);
+        cb_imgui_record(w, draw_data, f->cmd);
     vkCmdEndRendering(f->cmd);
     if (f->times)
         vkCmdWriteTimestamp2(f->cmd, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, f->times, 1);
@@ -550,8 +550,8 @@ int rx_swapchain_frame(RXWindow *w, void *draw_data, bool capture)
      * signalled, so it is fatal to the window (EIO), not retried. */
     res = vkEndCommandBuffer(f->cmd);
     if (res != VK_SUCCESS) {
-        rx_err("gpu: recording a frame: %s", rx_vk_strerror(res));
-        return RX_ERROR(EIO);
+        cb_err("gpu: recording a frame: %s", cb_vk_strerror(res));
+        return CB_ERROR(EIO);
     }
 
     VkSemaphoreSubmitInfo wait = {
@@ -579,19 +579,19 @@ int rx_swapchain_frame(RXWindow *w, void *draw_data, bool capture)
     };
     res = vkQueueSubmit2(w->vk.queue, 1, &submit, f->fence);
     if (res != VK_SUCCESS) {
-        rx_err("gpu: submitting a frame: %s", rx_vk_strerror(res));
-        return RX_ERROR(EIO);
+        cb_err("gpu: submitting a frame: %s", cb_vk_strerror(res));
+        return CB_ERROR(EIO);
     }
     f->serial = serial;
     f->timed = f->times != VK_NULL_HANDLE;
     w->serial = serial;
-    w->frame_idx = (w->frame_idx + 1) % RX_FRAMES_IN_FLIGHT;
+    w->frame_idx = (w->frame_idx + 1) % CB_FRAMES_IN_FLIGHT;
 
     /* Before the present: wl_surface.frame is double-buffered state that
      * applies with the next commit, and the commit is the one the WSI makes
      * inside vkQueuePresentKHR. Asked for after it, the request would wait
      * for a commit that only the next frame - which waits for it - makes. */
-    rx_window_want_frame_cb(w);
+    cb_window_want_frame_cb(w);
 
     VkPresentInfoKHR pinfo = {
         .sType              = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
@@ -612,12 +612,12 @@ int rx_swapchain_frame(RXWindow *w, void *draw_data, bool capture)
         /* Not shown, so nothing will answer the frame request until some
          * later commit; the next frame must not wait for it. */
         w->swap_dirty = true;
-        rx_window_frame_skipped(w);
+        cb_window_frame_skipped(w);
         return 1;
     } else if (res != VK_SUCCESS) {
-        rx_window_frame_skipped(w);
-        rx_err("gpu: presenting: %s", rx_vk_strerror(res));
-        return rx_vk_ret2err(res);
+        cb_window_frame_skipped(w);
+        cb_err("gpu: presenting: %s", cb_vk_strerror(res));
+        return cb_vk_ret2err(res);
     }
 
     return 0;
@@ -625,28 +625,28 @@ int rx_swapchain_frame(RXWindow *w, void *draw_data, bool capture)
 
 /* -------------------------------------------------------------- screenshot */
 
-int rx_swapchain_readback(RXWindow *w, uint8_t **rgba, int *width, int *height)
+int cb_swapchain_readback(CBWindow *w, uint8_t **rgba, int *width, int *height)
 {
     if (!w->cap.buf || !w->cap_serial)
-        return RX_ERROR(EAGAIN);
+        return CB_ERROR(EAGAIN);
 
     /* The capture's submission, if a slot still holds it; otherwise it is
      * long done. */
-    for (int i = 0; i < RX_FRAMES_IN_FLIGHT; i++) {
-        RXFrame *f = &w->frames[i];
+    for (int i = 0; i < CB_FRAMES_IN_FLIGHT; i++) {
+        CBFrame *f = &w->frames[i];
         if (f->serial == w->cap_serial)
             vkWaitForFences(w->vk.dev, 1, &f->fence, VK_TRUE, UINT64_MAX);
     }
-    rx_vk_poll_completed(w);
+    cb_vk_poll_completed(w);
 
-    int ret = rx_vk_buffer_invalidate(w, &w->cap);
+    int ret = cb_vk_buffer_invalidate(w, &w->cap);
     if (ret < 0)
         return ret;
 
     size_t nb = (size_t)w->cap_width * w->cap_height;
     uint8_t *out = malloc(nb * 4);
     if (!out)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
 
     /* BGRA or RGBA in, RGBA out; the window is opaque, whatever the alpha
      * channel ended up holding. */
@@ -671,8 +671,8 @@ static int write_png(const char *path, const uint8_t *rgba, int width, int heigh
 {
     const AVCodec *codec = avcodec_find_encoder(AV_CODEC_ID_PNG);
     if (!codec) {
-        rx_err("gpu: libavcodec has no PNG encoder");
-        return RX_ERROR(ENOSYS);
+        cb_err("gpu: libavcodec has no PNG encoder");
+        return CB_ERROR(ENOSYS);
     }
 
     int ret = 0;
@@ -680,7 +680,7 @@ static int write_png(const char *path, const uint8_t *rgba, int width, int heigh
     AVFrame *frame = av_frame_alloc();
     AVPacket *pkt = av_packet_alloc();
     if (!ctx || !frame || !pkt) {
-        ret = RX_ERROR(ENOMEM);
+        ret = CB_ERROR(ENOMEM);
         goto fail;
     }
 
@@ -716,56 +716,56 @@ static int write_png(const char *path, const uint8_t *rgba, int width, int heigh
     if (ret < 0)
         goto fail;
 
-    ret = rx_file_write_atomic(path, pkt->data, (size_t)pkt->size);
+    ret = cb_file_write_atomic(path, pkt->data, (size_t)pkt->size);
 
 fail:
     if (ret < 0)
-        rx_err("gpu: unable to write %s (%d)", path, ret);
+        cb_err("gpu: unable to write %s (%d)", path, ret);
     av_packet_free(&pkt);
     av_frame_free(&frame);
     avcodec_free_context(&ctx);
     return ret;
 }
 
-int rx_window_screenshot(RXWindow *w, const char *png_path)
+int cb_window_screenshot(CBWindow *w, const char *png_path)
 {
     if (!w || !png_path)
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
     if (!w->can_capture) {
-        rx_err("gpu: the swapchain images cannot be read back");
-        return RX_ERROR(ENOTSUP);
+        cb_err("gpu: the swapchain images cannot be read back");
+        return CB_ERROR(ENOTSUP);
     }
 
     /* The last presented frame was captured only if it was asked for in
      * time (the last of opts.max_frames always is). Otherwise ImGui's draw
      * data of that frame is still there: present it once more, captured. */
     if (!w->cap_serial || w->cap_serial != w->last_present_serial) {
-        void *dd = rx_imgui_last_draw_data(w);
+        void *dd = cb_imgui_last_draw_data(w);
         if (!dd)
-            return RX_ERROR(EAGAIN);
+            return CB_ERROR(EAGAIN);
         /* That draw data may use what was released while it was built
          * (deferred to its own submission, which may be complete by now):
          * it is kept until the submission drawing it again completes. */
-        rx_vk_defer_hold(w, w->last_present_serial, w->serial + 1);
-        int ret = rx_swapchain_frame(w, dd, true);
+        cb_vk_defer_hold(w, w->last_present_serial, w->serial + 1);
+        int ret = cb_swapchain_frame(w, dd, true);
         if (ret < 0)
             return ret;
         if (ret > 0 || w->cap_serial != w->last_present_serial)
-            return RX_ERROR(EAGAIN);
+            return CB_ERROR(EAGAIN);
     }
 
-    return rx_swapchain_save_png(w, png_path);
+    return cb_swapchain_save_png(w, png_path);
 }
 
-void rx_window_screenshot_next(RXWindow *w, const char *png_path)
+void cb_window_screenshot_next(CBWindow *w, const char *png_path)
 {
     if (!w || !png_path)
         return;
     if (!w->can_capture) {
-        rx_err("gpu: the swapchain images cannot be read back");
+        cb_err("gpu: the swapchain images cannot be read back");
         return;
     }
-    char *path = rx_strdup(png_path);
+    char *path = cb_strdup(png_path);
     if (!path)
         return;
     free(w->shot_path);
@@ -773,20 +773,20 @@ void rx_window_screenshot_next(RXWindow *w, const char *png_path)
     w->capture_next = true;
 }
 
-int rx_swapchain_save_png(RXWindow *w, const char *png_path)
+int cb_swapchain_save_png(CBWindow *w, const char *png_path)
 {
     if (!w->cap_serial || w->cap_serial != w->last_present_serial)
-        return RX_ERROR(EAGAIN);
+        return CB_ERROR(EAGAIN);
 
     uint8_t *rgba = NULL;
     int width = 0, height = 0;
-    int ret = rx_swapchain_readback(w, &rgba, &width, &height);
+    int ret = cb_swapchain_readback(w, &rgba, &width, &height);
     if (ret < 0)
         return ret;
 
     ret = write_png(png_path, rgba, width, height);
     free(rgba);
     if (ret >= 0)
-        rx_info("gpu: wrote %s (%dx%d)", png_path, width, height);
+        cb_info("gpu: wrote %s (%dx%d)", png_path, width, height);
     return ret < 0 ? ret : 0;
 }

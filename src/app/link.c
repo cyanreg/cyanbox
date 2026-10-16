@@ -1,7 +1,7 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
-/* PRO DJ LINK in the app (rxbox/app.h, rx_app_link_start): a set of
- * services (rxbox/link.h RXLinkSet), one on every Ethernet interface,
+/* PRO DJ LINK in the app (cyanbox/app.h, cb_app_link_start): a set of
+ * services (cyanbox/link.h CBLinkSet), one on every Ethernet interface,
  * started with the app when it runs with --pro-link and serving from then
  * on; the set's own thread starts and stops them as interfaces come and
  * go, so the interface never waits for that. Each tick copies the set's
@@ -11,11 +11,11 @@
  * What the players send back is applied here, on the owner thread: the
  * services never write the library. That is the plays, and the cues a
  * player saves on the deck or deletes and the ratings it gives, which the
- * services have served since and hand over (rx_link_set_edits).
+ * services have served since and hand over (cb_link_set_edits).
  *
  * With the player's ring backend (--pro-link) the deck is heard only in a
  * mixer's LINK CUE: the services take its audio from the ring as the mixer
- * asks (rx_player_ring_take), and each tick tells them whether it plays. */
+ * asks (cb_player_ring_take), and each tick tells them whether it plays. */
 
 #include "applink.h"
 
@@ -25,7 +25,7 @@
 #include <string.h>
 #include <time.h>
 
-#include "rxbox/common.h"
+#include "cyanbox/common.h"
 
 /* The library is read again this long after its last change, or this
  * long after the first of a run of changes that does not settle (an
@@ -39,44 +39,44 @@ typedef struct Counter {
     char interface[16];
     int  number;                /* 0 a free slot */
     bool used;                  /* seen in this tick's devices */
-    RXLinkPlays plays;
-    RXLinkRun run;
+    CBLinkPlays plays;
+    CBLinkRun run;
 } Counter;
 
-typedef struct RXAppLink {
-    RXLinkSet *set;
-    RXLinkTagList *tags;        /* the TAG LIST, for as long as the app runs */
-    RXLinkCue *cue;             /* LINK CUE, with the ring backend; as long as the app runs */
+typedef struct CBAppLink {
+    CBLinkSet *set;
+    CBLinkTagList *tags;        /* the TAG LIST, for as long as the app runs */
+    CBLinkCue *cue;             /* LINK CUE, with the ring backend; as long as the app runs */
     bool cue_playing;           /* the deck played at the last tick */
     unsigned tags_generation;   /* the one the rows were made for */
     unsigned generation;        /* lib.generation the services read last */
     unsigned seen_generation;   /* the last one seen, since changed_us */
     int64_t changed_us, first_change_us;
-    Counter counters[RX_APP_LINK_DEVICES];
-} RXAppLink;
+    Counter counters[CB_APP_LINK_DEVICES];
+} CBAppLink;
 
 /* ---------------------------------------------------------------- plays */
 
-void rx_link_plays_reset(RXLinkPlays *p)
+void cb_link_plays_reset(CBLinkPlays *p)
 {
     memset(p, 0, sizeof(*p));
     p->last_beat = -1;
 }
 
-bool rx_link_plays_feed(RXLinkPlays *p, const RXLinkPlayer *pl, int ours, int64_t now_us)
+bool cb_link_plays_feed(CBLinkPlays *p, const CBLinkPlayer *pl, int ours, int64_t now_us)
 {
     /* A rekordbox track (type 1) of ours: our device number is where the
      * player says it is from, whichever slot it names (a CDJ-3000 on
      * EP122 says USB for a computer's: link.h). */
-    bool loaded = ours > 0 && pl->type == RX_LINK_DEVICE_PLAYER && pl->has_status &&
+    bool loaded = ours > 0 && pl->type == CB_LINK_DEVICE_PLAYER && pl->has_status &&
                   pl->track_device == ours && pl->track_type == 1 && pl->track_id;
     if (!loaded) {
         if (p->track_id || p->last_us)
-            rx_link_plays_reset(p);
+            cb_link_plays_reset(p);
         return false;
     }
     if (pl->track_id != p->track_id) {
-        rx_link_plays_reset(p);
+        cb_link_plays_reset(p);
         p->track_id = pl->track_id;
     }
 
@@ -88,17 +88,17 @@ bool rx_link_plays_feed(RXLinkPlays *p, const RXLinkPlayer *pl, int ours, int64_
     if (p->recorded || !pl->playing || !last_us || !(since > 0))
         return false;
 
-    double speed = RX_MAX(1.0 + pl->pitch / 100.0, 0.0);
+    double speed = CB_MAX(1.0 + pl->pitch / 100.0, 0.0);
     if (pl->beat >= 1 && pl->bpm > 0) {
         /* Beats played forward since the last look, no more than its
          * tempo allows in the time between (and a beat or two of slack:
          * status packets come every 200 ms, the looks at any time). */
         int step = pl->beat - last_beat;
-        double allowed = since * pl->bpm / 60.0 * RX_MAX(speed, 1.0) * 1.25 + 2.0;
+        double allowed = since * pl->bpm / 60.0 * CB_MAX(speed, 1.0) * 1.25 + 2.0;
         if (last_beat < 1 || step <= 0 || step > allowed)
             return false;
         for (int b = last_beat + 1; b <= pl->beat; b++) {
-            int bin = RX_MIN(b, RX_LINK_PLAY_BEATS - 1);
+            int bin = CB_MIN(b, CB_LINK_PLAY_BEATS - 1);
             uint8_t bit = (uint8_t)(1u << (bin & 7));
             if (p->seen[bin >> 3] & bit)
                 continue;
@@ -109,32 +109,32 @@ bool rx_link_plays_feed(RXLinkPlays *p, const RXLinkPlayer *pl, int ours, int64_
         /* No beat numbers (no grid): the time it played, at its pitch; a
          * look long after the last (the interface held up) counts a
          * second at most. */
-        p->seconds += RX_MIN(since, 1.0) * speed;
+        p->seconds += CB_MIN(since, 1.0) * speed;
     }
-    if (p->seconds < RX_LINK_PLAY_SECONDS)
+    if (p->seconds < CB_LINK_PLAY_SECONDS)
         return false;
     p->recorded = true;
     return true;
 }
 /* -------------------------------------------------------------- history */
 
-void rx_link_run_reset(RXLinkRun *r)
+void cb_link_run_reset(CBLinkRun *r)
 {
-    *r = (RXLinkRun) { .last_beat = -1 };
+    *r = (CBLinkRun) { .last_beat = -1 };
 }
 
-bool rx_link_run_feed(RXLinkRun *r, const RXLinkPlayer *pl, int ours, int64_t now_us,
+bool cb_link_run_feed(CBLinkRun *r, const CBLinkPlayer *pl, int ours, int64_t now_us,
                       int64_t now_at)
 {
-    bool loaded = ours > 0 && pl->type == RX_LINK_DEVICE_PLAYER && pl->has_status &&
+    bool loaded = ours > 0 && pl->type == CB_LINK_DEVICE_PLAYER && pl->has_status &&
                   pl->track_device == ours && pl->track_type == 1 && pl->track_id;
     if (!loaded) {
         if (r->track_id)
-            rx_link_run_reset(r);
+            cb_link_run_reset(r);
         return false;
     }
     if (pl->track_id != r->track_id) {
-        rx_link_run_reset(r);
+        cb_link_run_reset(r);
         r->track_id = pl->track_id;
     }
     int64_t last_us = r->last_us;
@@ -149,11 +149,11 @@ bool rx_link_run_feed(RXLinkRun *r, const RXLinkPlayer *pl, int ours, int64_t no
     }
     /* Straight on since the last look: its beats moved forward no more
      * than its tempo plays in the time between (and a beat or two of
-     * slack, as rx_link_plays_feed allows). */
+     * slack, as cb_link_plays_feed allows). */
     bool straight = r->start_us != 0;
     if (straight && pl->beat >= 1 && last_beat >= 1 && pl->bpm > 0) {
         double since = (double)(now_us - last_us) * 1e-6;
-        double speed = RX_MAX(1.0 + pl->pitch / 100.0, 1.0);
+        double speed = CB_MAX(1.0 + pl->pitch / 100.0, 1.0);
         int step = pl->beat - last_beat;
         straight = step >= 0 && step <= since * pl->bpm / 60.0 * speed * 1.25 + 2.0;
     }
@@ -162,7 +162,7 @@ bool rx_link_run_feed(RXLinkRun *r, const RXLinkPlayer *pl, int ours, int64_t no
         r->start_at = now_at;
         return false;
     }
-    if ((double)(now_us - r->start_us) * 1e-6 < RX_LINK_HISTORY_SECONDS)
+    if ((double)(now_us - r->start_us) * 1e-6 < CB_LINK_HISTORY_SECONDS)
         return false;
     r->recorded = true;
     return true;
@@ -170,51 +170,51 @@ bool rx_link_run_feed(RXLinkRun *r, const RXLinkPlayer *pl, int ours, int64_t no
 
 /* -------------------------------------------------------- start and stop */
 
-static void state_clear(RXApp *app)
+static void state_clear(CBApp *app)
 {
     app->link_state.on = false;
     app->link_state.nb_interfaces = 0;
     app->link_state.nb_devices = 0;
     app->link_state.cue_enabled = false;
-    app->link_state.cue = (RXLinkCueState) { 0 };
+    app->link_state.cue = (CBLinkCueState) { 0 };
 }
 
 static int ring_take(void *opaque, int16_t *out, int frames)
 {
-    return rx_player_ring_take(opaque, out, frames);
+    return cb_player_ring_take(opaque, out, frames);
 }
 
-int rx_app_link_start(RXApp *app, const RXLinkOptions *o)
+int cb_app_link_start(CBApp *app, const CBLinkOptions *o)
 {
     if (!app->link_state.enabled)
-        return RX_ERROR(EPERM);
+        return CB_ERROR(EPERM);
     if (app->link_state.on)
-        return RX_ERROR(EALREADY);
+        return CB_ERROR(EALREADY);
     if (!app->link && !(app->link = calloc(1, sizeof(*app->link))))
-        return RX_ERROR(ENOMEM);
-    RXAppLink *l = app->link;
-    RXLinkOptions opt;
+        return CB_ERROR(ENOMEM);
+    CBAppLink *l = app->link;
+    CBLinkOptions opt;
     if (o)
         opt = *o;
     else
-        rx_link_options_default(&opt);
+        cb_link_options_default(&opt);
     if (!opt.library)
         opt.library = app->lib.root;
-    if (!opt.tag_list && !(opt.tag_list = rx_app_tag_list(app)))
-        return RX_ERROR(ENOMEM);
+    if (!opt.tag_list && !(opt.tag_list = cb_app_tag_list(app)))
+        return CB_ERROR(ENOMEM);
     /* The deck heard only in a mixer's LINK CUE. */
-    if (!opt.cue && app->player && rx_player_backend(app->player) == RX_AUDIO_RING) {
-        if (!l->cue && rx_link_cue_new(&l->cue, ring_take, app->player) < 0)
-            return RX_ERROR(ENOMEM);
+    if (!opt.cue && app->player && cb_player_backend(app->player) == CB_AUDIO_RING) {
+        if (!l->cue && cb_link_cue_new(&l->cue, ring_take, app->player) < 0)
+            return CB_ERROR(ENOMEM);
         opt.cue = l->cue;
     }
-    int ret = rx_link_set_start(&l->set, &opt);
+    int ret = cb_link_set_start(&l->set, &opt);
     if (ret < 0) {
         app->last_error_count++;
-        rx_app_set_status(app, "PRO DJ LINK cannot start: %s", strerror(-ret));
+        cb_app_set_status(app, "PRO DJ LINK cannot start: %s", strerror(-ret));
         return ret;
     }
-    *l = (RXAppLink) {
+    *l = (CBAppLink) {
         .set = l->set,
         .tags = l->tags,
         .cue = l->cue,
@@ -225,7 +225,7 @@ int rx_app_link_start(RXApp *app, const RXLinkOptions *o)
     /* What changed before is in the library the services read first. */
     uint64_t *ids = NULL;
     int nb = 0;
-    rx_library_take_changes(&app->lib, &ids, &nb);
+    cb_library_take_changes(&app->lib, &ids, &nb);
     free(ids);
     state_clear(app);
     app->link_state.on = true;
@@ -234,26 +234,26 @@ int rx_app_link_start(RXApp *app, const RXLinkOptions *o)
     return 0;
 }
 
-int rx_app_link_load(RXApp *app, int index, uint64_t track_id)
+int cb_app_link_load(CBApp *app, int index, uint64_t track_id)
 {
-    RXAppLink *l = app->link;
+    CBAppLink *l = app->link;
     if (!l || !l->set || !app->link_state.on || index < 0 || index >= app->link_state.nb_devices ||
         track_id > UINT32_MAX)
-        return RX_ERROR(ENOENT);
-    const RXLinkPlayer *p = &app->link_state.devices[index];
-    return rx_link_set_load(l->set, app->link_state.device_if[index], p->number, (uint32_t)track_id);
+        return CB_ERROR(ENOENT);
+    const CBLinkPlayer *p = &app->link_state.devices[index];
+    return cb_link_set_load(l->set, app->link_state.device_if[index], p->number, (uint32_t)track_id);
 }
 
-static void take_edits(RXApp *app);
+static void take_edits(CBApp *app);
 
-void rx_app_link_stop(RXApp *app)
+void cb_app_link_stop(CBApp *app)
 {
-    RXAppLink *l = app->link;
+    CBAppLink *l = app->link;
     if (!l || !l->set)
         return;
     take_edits(app);
-    rx_link_set_stop(&l->set);
-    for (int i = 0; i < RX_APP_LINK_DEVICES; i++)
+    cb_link_set_stop(&l->set);
+    for (int i = 0; i < CB_APP_LINK_DEVICES; i++)
         l->counters[i].number = 0;
     state_clear(app);
     app->dirty = true;
@@ -261,10 +261,10 @@ void rx_app_link_stop(RXApp *app)
 
 /* ------------------------------------------------------------------ tick */
 
-static Counter *counter_of(RXAppLink *l, const char *interface, int number)
+static Counter *counter_of(CBAppLink *l, const char *interface, int number)
 {
     Counter *free_slot = NULL;
-    for (int i = 0; i < RX_APP_LINK_DEVICES; i++) {
+    for (int i = 0; i < CB_APP_LINK_DEVICES; i++) {
         Counter *c = &l->counters[i];
         if (c->number == number && !strcmp(c->interface, interface))
             return c;
@@ -274,79 +274,79 @@ static Counter *counter_of(RXAppLink *l, const char *interface, int number)
     /* Never NULL: there are as many slots as devices kept. */
     free_slot->number = number;
     snprintf(free_slot->interface, sizeof(free_slot->interface), "%s", interface);
-    rx_link_plays_reset(&free_slot->plays);
-    rx_link_run_reset(&free_slot->run);
+    cb_link_plays_reset(&free_slot->plays);
+    cb_link_run_reset(&free_slot->run);
     return free_slot;
 }
 
-static void record(RXApp *app, const RXLinkPlayer *p)
+static void record(CBApp *app, const CBLinkPlayer *p)
 {
-    RXTrack *t = rx_library_find_id(&app->lib, p->track_id);
+    CBTrack *t = cb_library_find_id(&app->lib, p->track_id);
     if (!t)
         return;
     char name[256];
-    rx_track_display(t, name, sizeof(name));
-    int ret = rx_library_record_play(&app->lib, t);
+    cb_track_display(t, name, sizeof(name));
+    int ret = cb_library_record_play(&app->lib, t);
     if (ret < 0) {
         app->last_error_count++;
-        rx_app_set_status(app, "Cannot record the play of %s on player %d: %s", name, p->number,
+        cb_app_set_status(app, "Cannot record the play of %s on player %d: %s", name, p->number,
                           strerror(-ret));
         return;
     }
-    rx_app_set_status(app, "Played on player %d: %s", p->number, name);
+    cb_app_set_status(app, "Played on player %d: %s", p->number, name);
     app->rows_dirty = true;
 }
 
 /* A cue a player saved on the deck or deleted, or a rating it gave,
  * into the library. */
-static void apply_edit(RXApp *app, const RXLinkEdit *e)
+static void apply_edit(CBApp *app, const CBLinkEdit *e)
 {
-    RXTrack *t = rx_library_find_id(&app->lib, e->track_id);
+    CBTrack *t = cb_library_find_id(&app->lib, e->track_id);
     if (!t)
         return;
     char name[256], what[16];
-    rx_track_display(t, name, sizeof(name));
-    if (e->what == RX_LINK_EDIT_RATING) {
-        int ret = rx_link_edit_apply(t, e);
+    cb_track_display(t, name, sizeof(name));
+    if (e->what == CB_LINK_EDIT_RATING) {
+        int ret = cb_link_edit_apply(t, e);
         if (ret > 0)
-            ret = rx_library_save_track(&app->lib, t);
+            ret = cb_library_save_track(&app->lib, t);
         if (ret < 0) {
             app->last_error_count++;
-            rx_app_set_status(app, "Cannot keep the rating player %d gave %s: %s", e->player, name,
+            cb_app_set_status(app, "Cannot keep the rating player %d gave %s: %s", e->player, name,
                               strerror(-ret));
             return;
         }
-        rx_app_set_status(app, "Player %d rated %s %d star%s", e->player, name, e->rating,
+        cb_app_set_status(app, "Player %d rated %s %d star%s", e->player, name, e->rating,
                           e->rating == 1 ? "" : "s");
         app->rows_dirty = true;
         app->dirty = true;
         return;
     }
     if (e->cue.hot >= 0)
-        snprintf(what, sizeof(what), "hot cue %c", rx_cue_letter(&e->cue));
+        snprintf(what, sizeof(what), "hot cue %c", cb_cue_letter(&e->cue));
     else
-        snprintf(what, sizeof(what), "a memory %s", rx_cue_is_loop(&e->cue) ? "loop" : "cue");
-    int ret = rx_link_edit_apply(t, e);
+        snprintf(what, sizeof(what), "a memory %s", cb_cue_is_loop(&e->cue) ? "loop" : "cue");
+    int ret = cb_link_edit_apply(t, e);
     if (ret > 0)
-        ret = rx_library_save_track(&app->lib, t);
+        ret = cb_library_save_track(&app->lib, t);
     if (ret < 0) {
         app->last_error_count++;
-        rx_app_set_status(app, "Cannot keep %s player %d %s on %s: %s", what, e->player,
+        cb_app_set_status(app, "Cannot keep %s player %d %s on %s: %s", what, e->player,
                           e->remove ? "deleted" : "saved", name, strerror(-ret));
         return;
     }
-    rx_app_set_status(app, "Player %d %s %s on %s", e->player, e->remove ? "deleted" : "saved",
+    cb_app_set_status(app, "Player %d %s %s on %s", e->player, e->remove ? "deleted" : "saved",
                       what, name);
     app->rows_dirty = true;
     app->dirty = true;
 }
 
-static void take_edits(RXApp *app)
+static void take_edits(CBApp *app)
 {
-    RXLinkEdit e[16];
+    CBLinkEdit e[16];
     int n;
     do {
-        n = rx_link_set_edits(app->link->set, e, 16);
+        n = cb_link_set_edits(app->link->set, e, 16);
         for (int i = 0; i < n; i++)
             apply_edit(app, &e[i]);
     } while (n == 16);
@@ -354,25 +354,25 @@ static void take_edits(RXApp *app)
 
 /* A load a player has played straight on for 1.5 minutes, on the History
  * from when it started. */
-static void to_history(RXApp *app, const RXLinkPlayer *p, int64_t at)
+static void to_history(CBApp *app, const CBLinkPlayer *p, int64_t at)
 {
-    RXTrack *t = rx_library_find_id(&app->lib, p->track_id);
+    CBTrack *t = cb_library_find_id(&app->lib, p->track_id);
     if (!t)
         return;
     char name[256];
-    rx_track_display(t, name, sizeof(name));
-    int ret = rx_library_history_add(&app->lib, t, at, p->number);
+    cb_track_display(t, name, sizeof(name));
+    int ret = cb_library_history_add(&app->lib, t, at, p->number);
     if (ret < 0) {
         app->last_error_count++;
-        rx_app_set_status(app, "Cannot put %s on the History: %s", name, strerror(-ret));
+        cb_app_set_status(app, "Cannot put %s on the History: %s", name, strerror(-ret));
         return;
     }
-    rx_app_set_status(app, "On the History from player %d: %s", p->number, name);
+    cb_app_set_status(app, "On the History from player %d: %s", p->number, name);
     app->rows_dirty = true;
 }
 
 /* What the window shows of a device. */
-static bool shown_same(const RXLinkPlayer *a, const RXLinkPlayer *b)
+static bool shown_same(const CBLinkPlayer *a, const CBLinkPlayer *b)
 {
     return a->number == b->number && a->type == b->type && a->addr == b->addr &&
            !strcmp(a->name, b->name) && a->has_status == b->has_status &&
@@ -382,7 +382,7 @@ static bool shown_same(const RXLinkPlayer *a, const RXLinkPlayer *b)
            a->pitch == b->pitch;
 }
 
-static bool served_same(const RXLinkServed *a, const RXLinkServed *b)
+static bool served_same(const CBLinkServed *a, const CBLinkServed *b)
 {
     return !strcmp(a->interface, b->interface) && a->addr == b->addr &&
            a->running == b->running && a->err == b->err && a->state == b->state &&
@@ -391,36 +391,36 @@ static bool served_same(const RXLinkServed *a, const RXLinkServed *b)
 
 /* The set's state into link_state, plays counted on the way; true when
  * what is shown changed. */
-static bool follow(RXApp *app, int64_t now)
+static bool follow(CBApp *app, int64_t now)
 {
-    RXAppLink *l = app->link;
-    RXLinkServed ifs[RX_APP_LINK_IFS];
-    int nb_ifs = RX_MIN(rx_link_set_interfaces(l->set, ifs, RX_APP_LINK_IFS), RX_APP_LINK_IFS);
-    RXLinkPlayer dev[RX_APP_LINK_DEVICES];
-    int where[RX_APP_LINK_DEVICES];
-    int nb = RX_MIN(rx_link_set_players(l->set, dev, where, RX_APP_LINK_DEVICES),
-                    RX_APP_LINK_DEVICES);
+    CBAppLink *l = app->link;
+    CBLinkServed ifs[CB_APP_LINK_IFS];
+    int nb_ifs = CB_MIN(cb_link_set_interfaces(l->set, ifs, CB_APP_LINK_IFS), CB_APP_LINK_IFS);
+    CBLinkPlayer dev[CB_APP_LINK_DEVICES];
+    int where[CB_APP_LINK_DEVICES];
+    int nb = CB_MIN(cb_link_set_players(l->set, dev, where, CB_APP_LINK_DEVICES),
+                    CB_APP_LINK_DEVICES);
 
-    double played[RX_APP_LINK_DEVICES];
-    bool counted[RX_APP_LINK_DEVICES];
-    for (int i = 0; i < RX_APP_LINK_DEVICES; i++)
+    double played[CB_APP_LINK_DEVICES];
+    bool counted[CB_APP_LINK_DEVICES];
+    for (int i = 0; i < CB_APP_LINK_DEVICES; i++)
         l->counters[i].used = false;
     for (int i = 0; i < nb; i++) {
         /* Our number on the device's own network: its loads of a track
          * of ours name that number. */
-        const RXLinkServed *s = where[i] < nb_ifs ? &ifs[where[i]] : NULL;
-        int ours = s && s->running && s->state == RX_LINK_UP ? s->number : 0;
+        const CBLinkServed *s = where[i] < nb_ifs ? &ifs[where[i]] : NULL;
+        int ours = s && s->running && s->state == CB_LINK_UP ? s->number : 0;
         Counter *c = counter_of(l, s ? s->interface : "", dev[i].number);
         c->used = true;
-        if (rx_link_plays_feed(&c->plays, &dev[i], ours, now))
+        if (cb_link_plays_feed(&c->plays, &dev[i], ours, now))
             record(app, &dev[i]);
-        if (rx_link_run_feed(&c->run, &dev[i], ours, now, (int64_t)time(NULL)))
+        if (cb_link_run_feed(&c->run, &dev[i], ours, now, (int64_t)time(NULL)))
             to_history(app, &dev[i], c->run.start_at);
         played[i] = c->plays.track_id ? c->plays.seconds : 0.0;
         counted[i] = c->plays.track_id && c->plays.recorded;
     }
     /* A device gone from the link: a load of its own when it is back. */
-    for (int i = 0; i < RX_APP_LINK_DEVICES; i++) {
+    for (int i = 0; i < CB_APP_LINK_DEVICES; i++) {
         if (!l->counters[i].used)
             l->counters[i].number = 0;
     }
@@ -445,10 +445,10 @@ static bool follow(RXApp *app, int64_t now)
 /* The library read again once its changes have settled: every change
  * bumps lib.generation (an analysis applied, a cue set, a play). Only the
  * tracks changed are, when the library's record says which
- * (rx_library_take_changes); the whole of it when anything else did. */
-static void follow_library(RXApp *app, int64_t now)
+ * (cb_library_take_changes); the whole of it when anything else did. */
+static void follow_library(CBApp *app, int64_t now)
 {
-    RXAppLink *l = app->link;
+    CBAppLink *l = app->link;
     unsigned gen = app->lib.generation;
     if (gen == l->generation)
         return;
@@ -462,31 +462,31 @@ static void follow_library(RXApp *app, int64_t now)
         return;
     uint64_t *ids = NULL;
     int nb = 0;
-    if (rx_library_take_changes(&app->lib, &ids, &nb) != 0)
-        rx_link_set_library_changed(l->set);
+    if (cb_library_take_changes(&app->lib, &ids, &nb) != 0)
+        cb_link_set_library_changed(l->set);
     else if (nb)
-        rx_link_set_tracks_changed(l->set, ids, nb);
+        cb_link_set_tracks_changed(l->set, ids, nb);
     free(ids);
     l->generation = gen;
     l->first_change_us = 0;
 }
 
-RXLinkTagList *rx_app_tag_list(RXApp *app)
+CBLinkTagList *cb_app_tag_list(CBApp *app)
 {
     if (!app->link_state.enabled)
         return NULL;
     if (!app->link && !(app->link = calloc(1, sizeof(*app->link))))
         return NULL;
-    if (!app->link->tags && rx_link_tag_list_new(&app->link->tags) < 0)
+    if (!app->link->tags && cb_link_tag_list_new(&app->link->tags) < 0)
         return NULL;
     return app->link->tags;
 }
 
 /* A change to the TAG LIST, from a player or here: its view made again. */
-static bool follow_tags(RXApp *app)
+static bool follow_tags(CBApp *app)
 {
-    RXAppLink *l = app->link;
-    unsigned gen = l->tags ? rx_link_tag_list_generation(l->tags) : 0;
+    CBAppLink *l = app->link;
+    unsigned gen = l->tags ? cb_link_tag_list_generation(l->tags) : 0;
     if (gen == l->tags_generation)
         return false;
     l->tags_generation = gen;
@@ -495,7 +495,7 @@ static bool follow_tags(RXApp *app)
     return true;
 }
 
-static bool cue_same(const RXLinkCueState *a, const RXLinkCueState *b)
+static bool cue_same(const CBLinkCueState *a, const CBLinkCueState *b)
 {
     return a->mixer == b->mixer && a->number == b->number && a->on == b->on &&
            a->source == b->source && a->ours == b->ours && a->sending == b->sending &&
@@ -505,31 +505,31 @@ static bool cue_same(const RXLinkCueState *a, const RXLinkCueState *b)
 /* LINK CUE: the deck told the services (playing, scrubbing, and a start,
  * which asks the mixer for the cue), and where it stands copied. True when
  * that changed. */
-static bool follow_cue(RXApp *app)
+static bool follow_cue(CBApp *app)
 {
-    RXAppLink *l = app->link;
+    CBAppLink *l = app->link;
     if (!app->link_state.cue_enabled)
         return false;
-    RXDeckState s;
-    rx_deck_state(app->player, 0, &s);
+    CBDeckState s;
+    cb_deck_state(app->player, 0, &s);
     bool playing = s.loaded && (s.playing || s.scrubbing);
-    rx_link_cue_decks(l->cue, playing, playing && !l->cue_playing);
+    cb_link_cue_decks(l->cue, playing, playing && !l->cue_playing);
     l->cue_playing = playing;
-    RXLinkCueState st;
-    rx_link_cue_state(l->cue, &st);
+    CBLinkCueState st;
+    cb_link_cue_state(l->cue, &st);
     bool changed = !cue_same(&st, &app->link_state.cue);
     app->link_state.cue = st;
     return changed;
 }
 
-bool rx_app_link_tick(RXApp *app)
+bool cb_app_link_tick(CBApp *app)
 {
-    RXAppLink *l = app->link;
+    CBAppLink *l = app->link;
     if (l && follow_tags(app))
         app->dirty = true;
     if (!l || !l->set)
         return false;
-    int64_t now = rx_time_us();
+    int64_t now = cb_time_us();
     bool changed = follow(app, now);
     changed |= follow_cue(app);
     take_edits(app);
@@ -537,12 +537,12 @@ bool rx_app_link_tick(RXApp *app)
     return changed;
 }
 
-void rx_app_link_destroy(RXApp *app)
+void cb_app_link_destroy(CBApp *app)
 {
-    rx_app_link_stop(app);
+    cb_app_link_stop(app);
     if (app->link) {
-        rx_link_tag_list_free(&app->link->tags);
-        rx_link_cue_free(&app->link->cue);
+        cb_link_tag_list_free(&app->link->tags);
+        cb_link_cue_free(&app->link->cue);
     }
     free(app->link);
     app->link = NULL;

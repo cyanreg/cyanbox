@@ -1,15 +1,15 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
 /* The helpers of src/common/common.c at their edges: mkdir -p on an empty
- * path and on a file, rx_path_join onto the root, rx_path_abs on paths
+ * path and on a file, cb_path_join onto the root, cb_path_abs on paths
  * that do not exist (at the root, in a directory, bare),
- * rx_file_write_atomic's error paths and two threads saving the same file
- * at once, and rx_str_contains_fold with needles longer than its old
+ * cb_file_write_atomic's error paths and two threads saving the same file
+ * at once, and cb_str_contains_fold with needles longer than its old
  * decode buffer and with invalid UTF-8 (in heap copies of exactly their
  * length, so ASan sees any read past the end). Everything happens in a
  * fresh directory under /tmp, removed at the end. */
 
-#include "rxbox/common.h"
+#include "cyanbox/common.h"
 
 #include <dirent.h>
 #include <ftw.h>
@@ -37,7 +37,7 @@ static char dir[64];
 
 static char *in_dir(const char *name)
 {
-    char *p = rx_path_join(dir, name);
+    char *p = cb_path_join(dir, name);
     if (!p)
         abort();
     return p;
@@ -46,7 +46,7 @@ static char *in_dir(const char *name)
 /* Files in the test directory whose name contains `part`. */
 static int count_files(const char *sub, const char *part)
 {
-    char *d = sub ? in_dir(sub) : rx_strdup(dir);
+    char *d = sub ? in_dir(sub) : cb_strdup(dir);
     DIR *dh = opendir(d);
     free(d);
     if (!dh)
@@ -64,18 +64,18 @@ static int count_files(const char *sub, const char *part)
 static void test_mkdir(void)
 {
     /* An empty path: an error, without reading past the one byte. */
-    CHECK(rx_mkdir_p("") < 0, "empty path");
+    CHECK(cb_mkdir_p("") < 0, "empty path");
 
     char *nested = in_dir("a/b/c");
-    CHECK(rx_mkdir_p(nested) == 0 && rx_dir_exists(nested), "nested");
-    CHECK(rx_mkdir_p(nested) == 0, "again: already there");
+    CHECK(cb_mkdir_p(nested) == 0 && cb_dir_exists(nested), "nested");
+    CHECK(cb_mkdir_p(nested) == 0, "again: already there");
 
     /* A file where the directory should be is not a directory. */
     char *file = in_dir("a/file");
-    CHECK(rx_file_write_atomic(file, "x", 1) == 0, "file");
-    CHECK(rx_mkdir_p(file) < 0, "mkdir -p on a file");
+    CHECK(cb_file_write_atomic(file, "x", 1) == 0, "file");
+    CHECK(cb_mkdir_p(file) < 0, "mkdir -p on a file");
     char *below = in_dir("a/file/sub");
-    CHECK(rx_mkdir_p(below) < 0, "below a file");
+    CHECK(cb_mkdir_p(below) < 0, "below a file");
     free(below);
     free(file);
     free(nested);
@@ -85,7 +85,7 @@ static void test_mkdir(void)
 
 static void check_join(const char *a, const char *b, const char *want)
 {
-    char *j = rx_path_join(a, b);
+    char *j = cb_path_join(a, b);
     CHECK(j && !strcmp(j, want), "join(%s, %s) = %s, want %s", a, b, j, want);
     free(j);
 }
@@ -99,28 +99,28 @@ static void test_path_abs(void)
     check_join("a///", "b/c", "a/b/c");
     check_join("a", "/b", "/b");
 
-    char *real_dir = rx_path_abs(dir);
+    char *real_dir = cb_path_abs(dir);
     CHECK(real_dir && real_dir[0] == '/', "the test directory");
 
     /* Not there yet, in a directory that is. */
     char *missing = in_dir("not-yet.txt");
-    char *abs = rx_path_abs(missing);
-    char *want = rx_path_join(real_dir, "not-yet.txt");
+    char *abs = cb_path_abs(missing);
+    char *want = cb_path_join(real_dir, "not-yet.txt");
     CHECK(abs && want && !strcmp(abs, want), "%s, want %s", abs, want);
     free(abs);
     free(want);
     free(missing);
 
     /* Not there, directly under the root: the directory part is "/". */
-    abs = rx_path_abs("/rxbox-test-no-such-file");
-    CHECK(abs && !strcmp(abs, "/rxbox-test-no-such-file"), "at the root: %s", abs);
+    abs = cb_path_abs("/cyanbox-test-no-such-file");
+    CHECK(abs && !strcmp(abs, "/cyanbox-test-no-such-file"), "at the root: %s", abs);
     free(abs);
 
     /* A bare name that does not exist is in the working directory. */
     char cwd[PATH_MAX];
     if (getcwd(cwd, sizeof(cwd))) {
-        abs = rx_path_abs("rxbox-test-no-such-file");
-        want = rx_path_join(cwd, "rxbox-test-no-such-file");
+        abs = cb_path_abs("cyanbox-test-no-such-file");
+        want = cb_path_join(cwd, "cyanbox-test-no-such-file");
         CHECK(abs && want && !strcmp(abs, want), "bare: %s", abs);
         free(abs);
         free(want);
@@ -128,7 +128,7 @@ static void test_path_abs(void)
 
     /* A missing directory part is a failure, as for realpath. */
     char *deep = in_dir("no/such/dir/file");
-    CHECK(rx_path_abs(deep) == NULL, "missing directory");
+    CHECK(cb_path_abs(deep) == NULL, "missing directory");
     free(deep);
     free(real_dir);
 }
@@ -152,7 +152,7 @@ static void *writer(void *arg)
         abort();
     memset(buf, w->byte, WRITE_SIZE);
     for (int i = 0; i < WRITES; i++)
-        w->errors += rx_file_write_atomic(w->path, buf, WRITE_SIZE) < 0;
+        w->errors += cb_file_write_atomic(w->path, buf, WRITE_SIZE) < 0;
     free(buf);
     return NULL;
 }
@@ -161,15 +161,15 @@ static void test_write_atomic(void)
 {
     /* Into a directory that does not exist: the error, and no temporary. */
     char *nowhere = in_dir("nowhere/file");
-    CHECK(rx_file_write_atomic(nowhere, "x", 1) == RX_ERROR(ENOENT), "missing directory");
+    CHECK(cb_file_write_atomic(nowhere, "x", 1) == CB_ERROR(ENOENT), "missing directory");
     free(nowhere);
 
     /* Over a directory: rename fails, and the temporary is removed. */
     char *sub = in_dir("w");
-    CHECK(rx_mkdir_p(sub) == 0, "mkdir");
+    CHECK(cb_mkdir_p(sub) == 0, "mkdir");
     char *over = in_dir("w/dir");
-    CHECK(rx_mkdir_p(over) == 0, "mkdir");
-    CHECK(rx_file_write_atomic(over, "x", 1) < 0, "over a directory");
+    CHECK(cb_mkdir_p(over) == 0, "mkdir");
+    CHECK(cb_file_write_atomic(over, "x", 1) < 0, "over a directory");
     CHECK(count_files("w", ".tmp") == 0, "no temporary left");
 
     /* Two threads saving the same file: every save succeeds and the file
@@ -188,7 +188,7 @@ static void test_write_atomic(void)
 
     uint8_t *data;
     size_t size;
-    CHECK(rx_file_read(path, &data, &size) == 0, "read back");
+    CHECK(cb_file_read(path, &data, &size) == 0, "read back");
     if (data) {
         size_t same = 0;
         while (same < size && data[same] == data[0])
@@ -220,7 +220,7 @@ static char *exact(const char *s)
 static bool contains(const char *h, const char *n)
 {
     char *hh = exact(h), *nn = exact(n);
-    bool r = rx_str_contains_fold(hh, nn);
+    bool r = cb_str_contains_fold(hh, nn);
     free(hh);
     free(nn);
     return r;
@@ -232,7 +232,7 @@ static void test_contains_fold(void)
     CHECK(contains("ＤＡＦＴ", "daft"), "full width");
     CHECK(contains("a\xe3\x80\x80" "b", "a b"), "ideographic space");
     CHECK(!contains("Daft", "Punk"), "absent");
-    CHECK(contains("x", "") && !rx_str_contains_fold(NULL, "x"), "empty and NULL");
+    CHECK(contains("x", "") && !cb_str_contains_fold(NULL, "x"), "empty and NULL");
 
     /* Needles longer than 256 characters compare in full. */
     char hay[400], needle[400];
@@ -260,42 +260,42 @@ static void test_contains_fold(void)
         "\xf0", "\xf0\x9f", "\xf0\x9f\x8e", "\xe2\x82", "\xc3", "\x80", "\xbf\xbf",
         "\xff\xfe", "\xc0\x80", "abc\xf0", "abc\xe2\x82", "\xf8\x88\x80\x80\x80",
     };
-    for (size_t i = 0; i < RX_ARRAY_ELEMS(bad); i++) {
-        for (size_t j = 0; j < RX_ARRAY_ELEMS(bad); j++)
+    for (size_t i = 0; i < CB_ARRAY_ELEMS(bad); i++) {
+        for (size_t j = 0; j < CB_ARRAY_ELEMS(bad); j++)
             contains(bad[i], bad[j]);
         CHECK(contains(bad[i], bad[i]), "%zu finds itself", i);
-        char *h = rx_asprintf("%sKey%s", bad[i], bad[i]);
+        char *h = cb_asprintf("%sKey%s", bad[i], bad[i]);
         CHECK(h && contains(h, "key"), "%zu: ASCII between invalid bytes", i);
         free(h);
     }
     CHECK(contains("\x80" "abc", "ABC") && contains("abc\xc3", "\xc3"), "stray bytes");
 }
 
-/* rx_strnatcasecmp: numbers as numbers, case folded, leading zeros a
- * tie-break, 0 only where rx_strcasecmp says equal. */
+/* cb_strnatcasecmp: numbers as numbers, case folded, leading zeros a
+ * tie-break, 0 only where cb_strcasecmp says equal. */
 static void test_natural(void)
 {
-    CHECK(rx_strnatcasecmp("AD:HOUSE 3", "AD:HOUSE 10") < 0, "3 before 10");
-    CHECK(rx_strnatcasecmp("AD:HOUSE 10", "AD:HOUSE 3") > 0, "10 after 3");
-    CHECK(rx_strnatcasecmp("AD:HOUSE 9 [FLAC]", "AD:HOUSE 11 [FLAC]") < 0, "a number mid-name");
-    CHECK(rx_strnatcasecmp("Track 2", "track 10") < 0, "case folded around numbers");
-    CHECK(rx_strnatcasecmp("abc", "ABC") == 0 && rx_strcasecmp("abc", "ABC") == 0, "case only");
-    CHECK(rx_strnatcasecmp("1", "01") < 0 && rx_strnatcasecmp("01", "1") > 0, "fewer zeros first");
-    CHECK(rx_strnatcasecmp("a01b", "a1c") < 0, "a later difference beats the zeros");
-    CHECK(rx_strnatcasecmp("x", "x1") < 0 && rx_strnatcasecmp("x1", "x") > 0, "a prefix first");
-    CHECK(rx_strnatcasecmp("99999999999999999999", "100000000000000000000") < 0,
+    CHECK(cb_strnatcasecmp("AD:HOUSE 3", "AD:HOUSE 10") < 0, "3 before 10");
+    CHECK(cb_strnatcasecmp("AD:HOUSE 10", "AD:HOUSE 3") > 0, "10 after 3");
+    CHECK(cb_strnatcasecmp("AD:HOUSE 9 [FLAC]", "AD:HOUSE 11 [FLAC]") < 0, "a number mid-name");
+    CHECK(cb_strnatcasecmp("Track 2", "track 10") < 0, "case folded around numbers");
+    CHECK(cb_strnatcasecmp("abc", "ABC") == 0 && cb_strcasecmp("abc", "ABC") == 0, "case only");
+    CHECK(cb_strnatcasecmp("1", "01") < 0 && cb_strnatcasecmp("01", "1") > 0, "fewer zeros first");
+    CHECK(cb_strnatcasecmp("a01b", "a1c") < 0, "a later difference beats the zeros");
+    CHECK(cb_strnatcasecmp("x", "x1") < 0 && cb_strnatcasecmp("x1", "x") > 0, "a prefix first");
+    CHECK(cb_strnatcasecmp("99999999999999999999", "100000000000000000000") < 0,
           "numbers longer than any integer");
-    CHECK(rx_strnatcasecmp("夏恋 2", "夏恋 12") < 0, "after UTF-8");
-    CHECK(rx_strnatcasecmp("", "") == 0 && rx_strnatcasecmp("", "a") < 0, "empty");
+    CHECK(cb_strnatcasecmp("夏恋 2", "夏恋 12") < 0, "after UTF-8");
+    CHECK(cb_strnatcasecmp("", "") == 0 && cb_strnatcasecmp("", "a") < 0, "empty");
 }
 
 static int fuzzy(const char *text, const char *query)
 {
     int s = 0;
-    return rx_fuzzy_match(text, query, &s, NULL, 0, NULL) ? s : -1;
+    return cb_fuzzy_match(text, query, &s, NULL, 0, NULL) ? s : -1;
 }
 
-/* rx_fuzzy_match, the Add dialog's finder: words in any order, letters in
+/* cb_fuzzy_match, the Add dialog's finder: words in any order, letters in
  * order with gaps, folded; a letter at the start of a component or a word
  * and a run of letters rank higher, a word in the last component higher
  * still; the hits are byte offsets; invalid UTF-8 and long texts are safe. */
@@ -303,7 +303,7 @@ static void test_fuzzy(void)
 {
     const char *felic = "AD:HOUSE 11 [FLAC]/2.01 - Felicidade.flac";
     int hits[16], nh = 0, s = 0;
-    CHECK(rx_fuzzy_match(felic, "felic", &s, hits, 16, &nh) && nh == 5, "felic: %d hits", nh);
+    CHECK(cb_fuzzy_match(felic, "felic", &s, hits, 16, &nh) && nh == 5, "felic: %d hits", nh);
     const char *at = strstr(felic, "Felic");
     for (int i = 0; i < nh; i++)
         CHECK(hits[i] == (int)(at - felic) + i, "hit %d at %d", i, hits[i]);
@@ -324,17 +324,17 @@ static void test_fuzzy(void)
     CHECK(fuzzy("ＤＡＦＴ ＰＵＮＫ/one.flac", "daft punk") >= 0, "full width folds");
 
     /* Byte offsets after multibyte characters. */
-    CHECK(rx_fuzzy_match("夏恋/Summer.flac", "sum", NULL, hits, 16, &nh) && nh == 3 &&
+    CHECK(cb_fuzzy_match("夏恋/Summer.flac", "sum", NULL, hits, 16, &nh) && nh == 3 &&
           hits[0] == 7 && hits[1] == 8 && hits[2] == 9, "hits after UTF-8: %d %d", nh, hits[0]);
     /* At most max_hits, but the match is still the whole query's. */
-    CHECK(rx_fuzzy_match(felic, "felicidade", NULL, hits, 3, &nh) && nh == 3, "max_hits");
+    CHECK(cb_fuzzy_match(felic, "felicidade", NULL, hits, 3, &nh) && nh == 3, "max_hits");
 
     /* A text longer than the 1024 characters looked at: its end counts. */
     char *long_path = malloc(3000);
     if (long_path) {
         memset(long_path, 'a', 2000);
         strcpy(long_path + 2000, "/target.flac");
-        CHECK(rx_fuzzy_match(long_path, "target", &s, hits, 16, &nh) && nh == 6 &&
+        CHECK(cb_fuzzy_match(long_path, "target", &s, hits, 16, &nh) && nh == 6 &&
               hits[0] == 2001, "the end of a long text: %d", nh ? hits[0] : -1);
         long_path[0] = 'z';
         CHECK(fuzzy(long_path, "zt") < 0, "its start is not looked at");
@@ -345,15 +345,15 @@ static void test_fuzzy(void)
     static const char *const bad[] = {
         "\xf0", "\xf0\x9f", "\xe2\x82", "\xc3", "\x80", "\xff\xfe", "abc\xf0", "\xc0\x80",
     };
-    for (size_t i = 0; i < RX_ARRAY_ELEMS(bad); i++) {
-        for (size_t j = 0; j < RX_ARRAY_ELEMS(bad); j++)
+    for (size_t i = 0; i < CB_ARRAY_ELEMS(bad); i++) {
+        for (size_t j = 0; j < CB_ARRAY_ELEMS(bad); j++)
             fuzzy(bad[i], bad[j]);
-        char *t = rx_asprintf("%sKey/name%s", bad[i], bad[i]);
+        char *t = cb_asprintf("%sKey/name%s", bad[i], bad[i]);
         CHECK(t && fuzzy(t, "key name") >= 0, "%zu: ASCII between invalid bytes", i);
         free(t);
     }
-    CHECK(!rx_fuzzy_match(NULL, "a", NULL, NULL, 0, NULL) &&
-          !rx_fuzzy_match("a", NULL, NULL, NULL, 0, NULL), "NULL");
+    CHECK(!cb_fuzzy_match(NULL, "a", NULL, NULL, 0, NULL) &&
+          !cb_fuzzy_match("a", NULL, NULL, NULL, 0, NULL), "NULL");
 }
 
 static int remove_entry(const char *path, const struct stat *st, int flag, struct FTW *ftw)
@@ -376,10 +376,10 @@ static void test_nfc(void)
         { "a\xff" "b", "a\xef\xbf\xbd" "b" },
         { "", "" },
     };
-    for (size_t i = 0; i < RX_ARRAY_ELEMS(v); i++) {
-        char *n = rx_utf8_nfc(v[i].in);
+    for (size_t i = 0; i < CB_ARRAY_ELEMS(v); i++) {
+        char *n = cb_utf8_nfc(v[i].in);
         CHECK(n && !strcmp(n, v[i].out), "nfc %zu: %s", i, n ? n : "(null)");
-        CHECK(rx_utf8_is_nfc(v[i].in) == !strcmp(v[i].in, v[i].out), "is_nfc %zu", i);
+        CHECK(cb_utf8_is_nfc(v[i].in) == !strcmp(v[i].in, v[i].out), "is_nfc %zu", i);
         free(n);
     }
 }
@@ -418,14 +418,14 @@ static void test_latin1(void)
         { "A ー B", "A - B" },
         { "Pettit Rabbit's　Mix", "Pettit Rabbit's Mix" },
     };
-    for (size_t i = 0; i < RX_ARRAY_ELEMS(v); i++) {
-        char *l = rx_utf8_latin1(v[i].in);
+    for (size_t i = 0; i < CB_ARRAY_ELEMS(v); i++) {
+        char *l = cb_utf8_latin1(v[i].in);
         CHECK(l && !strcmp(l, v[i].out), "latin1 %zu: %s -> %s", i, v[i].in, l ? l : "(null)");
         free(l);
     }
-#if RXBOX_ICU
+#if CYANBOX_ICU
     /* Other scripts through ICU, Latin-1 kept, the rest folded. */
-    char *g = rx_utf8_latin1("Ελλάδα Москва Łódź ✓");
+    char *g = cb_utf8_latin1("Ελλάδα Москва Łódź ✓");
     CHECK(g && !strcmp(g, "Ell\xc3\xa1" "da Moskva L\xc3\xb3" "dz ✓"), "latin1 icu: %s", g ? g : "(null)");
     free(g);
 #endif
@@ -444,11 +444,11 @@ static void test_latin1(void)
         { "雨模様 (feat.秋奈)", "Ame Moyou (feat.Akina)", "雨模様 (feat.秋奈)" },
         { "夜一夜の戰", "Yoru Ichiya no Sen", "夜一夜no戰" },
     };
-    bool reads = rx_utf8_latin1_reads_kanji();
+    bool reads = cb_utf8_latin1_reads_kanji();
     if (!reads)
         fprintf(stderr, "test_common: no MeCab dictionary, kanji checked as they are\n");
-    for (size_t i = 0; i < RX_ARRAY_ELEMS(k); i++) {
-        char *l = rx_utf8_latin1(k[i].in);
+    for (size_t i = 0; i < CB_ARRAY_ELEMS(k); i++) {
+        char *l = cb_utf8_latin1(k[i].in);
         const char *want = reads ? k[i].read : k[i].as_is;
         CHECK(!strcmp(l ? l : k[i].in, want), "latin1 kanji %zu: %s -> %s", i, k[i].in, l ? l : "(same)");
         free(l);
@@ -457,13 +457,13 @@ static void test_latin1(void)
     /* Nothing to change: NULL. */
     static const char *const same[] = { "Let me down (mitama. mashup)", "Café crème ☆", "", NULL };
     for (int i = 0; same[i]; i++)
-        CHECK(!rx_utf8_latin1(same[i]), "latin1 changed %s", same[i]);
-    CHECK(!rx_utf8_latin1(NULL), "latin1 NULL");
+        CHECK(!cb_utf8_latin1(same[i]), "latin1 changed %s", same[i]);
+    CHECK(!cb_utf8_latin1(NULL), "latin1 NULL");
 }
 
 int main(void)
 {
-    snprintf(dir, sizeof(dir), "/tmp/rxbox-test-common-XXXXXX");
+    snprintf(dir, sizeof(dir), "/tmp/cyanbox-test-common-XXXXXX");
     if (!mkdtemp(dir)) {
         perror("mkdtemp");
         return 1;

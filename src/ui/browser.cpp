@@ -38,7 +38,7 @@ enum UiCol {
 struct UiColSpec {
     const char *name;
     float width;            // fixed width, or the stretch weight
-    int   sort;             // RXColumn, -1 = the view's order, NO_SORT
+    int   sort;             // CBColumn, -1 = the view's order, NO_SORT
     ImGuiTableColumnFlags flags;
     bool  right;            // right-aligned (numbers)
 };
@@ -63,17 +63,17 @@ static const UiColSpec COLS[COL_N] = {
     { "#",            40, -1,            FIXED | ALWAYS | ImGuiTableColumnFlags_DefaultSort, true },
     { "Preview",       1, NO_SORT,       STRETCH | UNSORTED, false },
     { "Artwork",      70, NO_SORT,       FIXED | UNSORTED, false },
-    { "Track Title", 330, RX_COL_TITLE,  FIXED | ALWAYS, false },
-    { "Key",          52, RX_COL_KEY,    FIXED, false },
-    { "BPM",          62, RX_COL_BPM,    FIXED, true },
-    { "Time",         52, RX_COL_TIME,   FIXED, true },
-    { "Rating",       74, RX_COL_RATING, FIXED, false },
-    { "Artist",      170, RX_COL_ARTIST, FIXED, false },
-    { "Year",         56, RX_COL_YEAR,   FIXED, false },
-    { "Album",       160, RX_COL_ALBUM,  FIXED | HIDDEN, false },
-    { "Location",    260, RX_COL_PATH,   FIXED | HIDDEN, false },
-    { "Plays",        46, RX_COL_PLAYS,  FIXED | HIDDEN, true },
-    { "Last Played",  84, RX_COL_LAST_PLAYED, FIXED | HIDDEN, true },
+    { "Track Title", 330, CB_COL_TITLE,  FIXED | ALWAYS, false },
+    { "Key",          52, CB_COL_KEY,    FIXED, false },
+    { "BPM",          62, CB_COL_BPM,    FIXED, true },
+    { "Time",         52, CB_COL_TIME,   FIXED, true },
+    { "Rating",       74, CB_COL_RATING, FIXED, false },
+    { "Artist",      170, CB_COL_ARTIST, FIXED, false },
+    { "Year",         56, CB_COL_YEAR,   FIXED, false },
+    { "Album",       160, CB_COL_ALBUM,  FIXED | HIDDEN, false },
+    { "Location",    260, CB_COL_PATH,   FIXED | HIDDEN, false },
+    { "Plays",        46, CB_COL_PLAYS,  FIXED | HIDDEN, true },
+    { "Last Played",  84, CB_COL_LAST_PLAYED, FIXED | HIDDEN, true },
 };
 
 static const char DASH[] = "\xE2\x80\x94";
@@ -82,7 +82,7 @@ static const char DASH[] = "\xE2\x80\x94";
 
 bool ui_is_selected(const UiState *ui, uint64_t id)
 {
-    const RXApp *app = ui->app;
+    const CBApp *app = ui->app;
     for (int i = 0; i < app->nb_selection; i++) {
         if (app->selection[i] == id)
             return true;
@@ -90,7 +90,7 @@ bool ui_is_selected(const UiState *ui, uint64_t id)
     return false;
 }
 
-static bool selection_reserve(RXApp *app, int n)
+static bool selection_reserve(CBApp *app, int n)
 {
     uint64_t *s = (uint64_t *)realloc(app->selection, sizeof(uint64_t) * (size_t)ImMax(n, 1));
     if (!s)
@@ -101,7 +101,7 @@ static bool selection_reserve(RXApp *app, int n)
 
 void ui_select_only(UiState *ui, uint64_t id)
 {
-    RXApp *app = ui->app;
+    CBApp *app = ui->app;
     if (!selection_reserve(app, 1))
         return;
     app->selection[0] = id;
@@ -110,7 +110,7 @@ void ui_select_only(UiState *ui, uint64_t id)
 
 static void select_toggle(UiState *ui, uint64_t id)
 {
-    RXApp *app = ui->app;
+    CBApp *app = ui->app;
     for (int i = 0; i < app->nb_selection; i++) {
         if (app->selection[i] == id) {
             memmove(app->selection + i, app->selection + i + 1,
@@ -124,7 +124,7 @@ static void select_toggle(UiState *ui, uint64_t id)
     app->selection[app->nb_selection++] = id;
 }
 
-static RXTrack *row_track(const RXApp *app, int row)
+static CBTrack *row_track(const CBApp *app, int row)
 {
     if (row < 0 || row >= app->nb_rows)
         return nullptr;
@@ -134,7 +134,7 @@ static RXTrack *row_track(const RXApp *app, int row)
 
 static void select_range(UiState *ui, int from, int to)
 {
-    RXApp *app = ui->app;
+    CBApp *app = ui->app;
     if (from > to)
         ImSwap(from, to);
     from = ImMax(from, 0);
@@ -143,7 +143,7 @@ static void select_range(UiState *ui, int from, int to)
         return;
     app->nb_selection = 0;
     for (int r = from; r <= to; r++) {
-        RXTrack *t = row_track(app, r);
+        CBTrack *t = row_track(app, r);
         if (t)
             app->selection[app->nb_selection++] = t->id;
     }
@@ -155,10 +155,10 @@ static void select_all(UiState *ui)
         select_range(ui, 0, ui->app->nb_rows - 1);
 }
 
-static int focus_row(const RXApp *app)
+static int focus_row(const CBApp *app)
 {
     for (int r = 0; r < app->nb_rows; r++) {
-        RXTrack *t = row_track(app, r);
+        CBTrack *t = row_track(app, r);
         if (t && t->id == app->focus_track)
             return r;
     }
@@ -168,12 +168,12 @@ static int focus_row(const RXApp *app)
 // Up/down move the focus and the selection with it, as rekordbox's list does.
 void ui_move_focus(UiState *ui, int delta)
 {
-    RXApp *app = ui->app;
+    CBApp *app = ui->app;
     if (app->nb_rows <= 0)
         return;
     int r = focus_row(app);
     r = r < 0 ? 0 : ImClamp(r + delta, 0, app->nb_rows - 1);
-    RXTrack *t = row_track(app, r);
+    CBTrack *t = row_track(app, r);
     if (!t)
         return;
     app->focus_track = t->id;
@@ -182,16 +182,16 @@ void ui_move_focus(UiState *ui, int delta)
     ui->scroll_to_focus = true;
 }
 
-RXTrack *ui_focus_track(UiState *ui)
+CBTrack *ui_focus_track(UiState *ui)
 {
-    return ui->app->focus_track ? rx_library_find_id(&ui->app->lib, ui->app->focus_track) : nullptr;
+    return ui->app->focus_track ? cb_library_find_id(&ui->app->lib, ui->app->focus_track) : nullptr;
 }
 
 // Delete: the selected tracks leave the playlist shown (never the library).
 void ui_remove_from_playlist(UiState *ui)
 {
-    RXApp *app = ui->app;
-    RXPlaylist *p = app->current_playlist;
+    CBApp *app = ui->app;
+    CBPlaylist *p = app->current_playlist;
     if (!p || app->nb_selection == 0)
         return;
     int removed = 0;
@@ -199,15 +199,15 @@ void ui_remove_from_playlist(UiState *ui)
         for (int i = p->nb - 1; i >= 0; i--) {
             if (p->track_ids[i] != app->selection[s])
                 continue;
-            if (rx_library_playlist_remove_at(&app->lib, p, i) >= 0) {
+            if (cb_library_playlist_remove_at(&app->lib, p, i) >= 0) {
                 removed++;
                 break;
             }
         }
     }
     app->nb_selection = 0;
-    rx_app_rebuild_rows(app);
-    rx_app_set_status(app, "Removed %d track%s from %s", removed, removed == 1 ? "" : "s", p->name);
+    cb_app_rebuild_rows(app);
+    cb_app_set_status(app, "Removed %d track%s from %s", removed, removed == 1 ? "" : "s", p->name);
 }
 
 bool ui_accept_tracks(UiState *ui, std::vector<uint64_t> &ids)
@@ -225,20 +225,20 @@ bool ui_accept_tracks(UiState *ui, std::vector<uint64_t> &ids)
 
 static void analyse_selection(UiState *ui, unsigned what, bool force)
 {
-    RXApp *app = ui->app;
-    if (rx_app_analyse_tracks(app, app->selection, app->nb_selection, what, force) <= 0)
-        rx_app_set_status(app, "Nothing to analyse");
+    CBApp *app = ui->app;
+    if (cb_app_analyse_tracks(app, app->selection, app->nb_selection, what, force) <= 0)
+        cb_app_set_status(app, "Nothing to analyse");
 }
 
 // The playlists under `f` as menu items, folders as submenus; the one
 // picked, or NULL.
-static RXPlaylist *playlist_menu(RXPlaylistFolder *f)
+static CBPlaylist *playlist_menu(CBPlaylistFolder *f)
 {
-    RXPlaylist *picked = nullptr;
+    CBPlaylist *picked = nullptr;
     for (int i = 0; i < f->nb_folders; i++) {
         ImGui::PushID(i);
         if (ImGui::BeginMenu(f->folders[i]->name)) {
-            RXPlaylist *p = playlist_menu(f->folders[i]);
+            CBPlaylist *p = playlist_menu(f->folders[i]);
             if (p)
                 picked = p;
             ImGui::EndMenu();
@@ -258,9 +258,9 @@ static RXPlaylist *playlist_menu(RXPlaylistFolder *f)
 
 // The tracks a menu item acts on, as Add to playlist takes them: the
 // selection when the clicked track is in it, else that track alone.
-static std::vector<uint64_t> menu_tracks(UiState *ui, const RXTrack *t)
+static std::vector<uint64_t> menu_tracks(UiState *ui, const CBTrack *t)
 {
-    RXApp *app = ui->app;
+    CBApp *app = ui->app;
     std::vector<uint64_t> ids;
     if (ui_is_selected(ui, t->id))
         ids.assign(app->selection, app->selection + app->nb_selection);
@@ -271,8 +271,8 @@ static std::vector<uint64_t> menu_tracks(UiState *ui, const RXTrack *t)
 
 static void track_menu(UiState *ui)
 {
-    RXApp *app = ui->app;
-    RXTrack *t = ui_focus_track(ui);
+    CBApp *app = ui->app;
+    CBTrack *t = ui_focus_track(ui);
     if (!t)
         return;
     int n = app->nb_selection;
@@ -280,21 +280,21 @@ static void track_menu(UiState *ui)
     ui_link_load_menu(ui, t);
     if (ImGui::BeginMenu("Analyse", !t->missing)) {
         if (ImGui::MenuItem("BPM and grid"))
-            analyse_selection(ui, RX_ANALYSE_BEATS | RX_ANALYSE_WAVES, false);
+            analyse_selection(ui, CB_ANALYSE_BEATS | CB_ANALYSE_WAVES, false);
         if (ImGui::MenuItem("Key"))
-            analyse_selection(ui, RX_ANALYSE_KEY, false);
+            analyse_selection(ui, CB_ANALYSE_KEY, false);
         if (ImGui::MenuItem("Both"))
-            analyse_selection(ui, RX_ANALYSE_ALL, false);
+            analyse_selection(ui, CB_ANALYSE_ALL, false);
         ImGui::Separator();
         if (ImGui::MenuItem("Force re-analysis"))
-            analyse_selection(ui, RX_ANALYSE_ALL, true);
+            analyse_selection(ui, CB_ANALYSE_ALL, true);
         ImGui::EndMenu();
     }
     // The model listens to each track for its genre, colour and comment:
     // seconds a track on the GPU, so only ever when asked for here.
     if (ImGui::MenuItem("Analyse tags", nullptr, false, !t->missing)) {
         std::vector<uint64_t> ids = menu_tracks(ui, t);
-        rx_app_tag_tracks(app, ids.data(), (int)ids.size());
+        cb_app_tag_tracks(app, ids.data(), (int)ids.size());
     }
     ImGui::Separator();
     if (ImGui::BeginMenu("Set colour")) {
@@ -303,11 +303,11 @@ static void track_menu(UiState *ui)
         double hue = t->meta.hue;
         if (ui_colour_picker(ui, "##menucolour", &hue, 220)) {
             for (int i = 0; i < app->nb_selection; i++) {
-                RXTrack *s = rx_library_find_id(&app->lib, app->selection[i]);
+                CBTrack *s = cb_library_find_id(&app->lib, app->selection[i]);
                 if (!s)
                     continue;
                 s->meta.hue = hue;
-                rx_app_save_track(app, s);
+                cb_app_save_track(app, s);
             }
             ImGui::CloseCurrentPopup();
         }
@@ -320,11 +320,11 @@ static void track_menu(UiState *ui)
                 snprintf(label, sizeof(label), "%d star%s", r, r == 1 ? "" : "s");
             if (ImGui::MenuItem(label, nullptr, n == 1 && t->meta.rating == r)) {
                 for (int i = 0; i < app->nb_selection; i++) {
-                    RXTrack *s = rx_library_find_id(&app->lib, app->selection[i]);
+                    CBTrack *s = cb_library_find_id(&app->lib, app->selection[i]);
                     if (!s)
                         continue;
                     s->meta.rating = r;
-                    rx_app_save_track(app, s);
+                    cb_app_save_track(app, s);
                 }
             }
         }
@@ -336,30 +336,30 @@ static void track_menu(UiState *ui)
     // Every playlist, folders as submenus, in the tree's order.
     if (ImGui::BeginMenu("Add to playlist", app->lib.root_folder != nullptr)) {
         std::vector<uint64_t> ids = menu_tracks(ui, t);
-        if (RXPlaylist *p = playlist_menu(app->lib.root_folder))
+        if (CBPlaylist *p = playlist_menu(app->lib.root_folder))
             ui_add_to_playlist(ui, p, ids);
         ImGui::EndMenu();
     }
     if (ImGui::MenuItem("Remove from playlist", "Delete", false, app->current_playlist != nullptr))
         ui_remove_from_playlist(ui);
     // The TAG LIST shared with the players (--pro-link only).
-    if (RXLinkTagList *tags = rx_app_tag_list(app)) {
+    if (CBLinkTagList *tags = cb_app_tag_list(app)) {
         if (ImGui::MenuItem("Add to Tag List")) {
             int added = 0, full = 0;
             for (uint64_t id : menu_tracks(ui, t)) {
-                int ret = rx_link_tag_list_add(tags, (uint32_t)id);
+                int ret = cb_link_tag_list_add(tags, (uint32_t)id);
                 added += ret > 0;
                 full += ret < 0;
             }
             if (full)
-                rx_app_set_status(app, "The Tag List is full (%d tracks)", RX_LINK_TAG_LIST_MAX);
+                cb_app_set_status(app, "The Tag List is full (%d tracks)", CB_LINK_TAG_LIST_MAX);
             else
-                rx_app_set_status(app, "Added %d track%s to the Tag List", added,
+                cb_app_set_status(app, "Added %d track%s to the Tag List", added,
                                   added == 1 ? "" : "s");
         }
         if (app->current_tag_list && ImGui::MenuItem("Remove from Tag List")) {
             for (uint64_t id : menu_tracks(ui, t))
-                rx_link_tag_list_remove(tags, (uint32_t)id);
+                cb_link_tag_list_remove(tags, (uint32_t)id);
         }
     }
     // The History (--pro-link only): added by hand as played now.
@@ -367,14 +367,14 @@ static void track_menu(UiState *ui)
         if (ImGui::MenuItem("Add to History")) {
             int added = 0;
             for (uint64_t id : menu_tracks(ui, t)) {
-                RXTrack *s = rx_library_find_id(&app->lib, id);
-                added += s && rx_library_history_add(&app->lib, s, (int64_t)time(nullptr), 0) >= 0;
+                CBTrack *s = cb_library_find_id(&app->lib, id);
+                added += s && cb_library_history_add(&app->lib, s, (int64_t)time(nullptr), 0) >= 0;
             }
-            rx_app_set_status(app, "Added %d track%s to the History", added, added == 1 ? "" : "s");
+            cb_app_set_status(app, "Added %d track%s to the History", added, added == 1 ? "" : "s");
         }
         if (app->current_history && ImGui::MenuItem("Remove from History")) {
             for (uint64_t id : menu_tracks(ui, t))
-                rx_library_history_remove(&app->lib, id);
+                cb_library_history_remove(&app->lib, id);
         }
     }
     if (ImGui::MenuItem("Remove from library...")) {
@@ -423,7 +423,7 @@ static void warning_glyph(ImDrawList *dl, ImVec2 c, float r, ImU32 col)
 }
 
 // Five stars; a click sets the rating, the same star again clears it.
-static void rating_cell(UiState *ui, RXTrack *t, ImVec2 p, float w, float row_h, bool dim)
+static void rating_cell(UiState *ui, CBTrack *t, ImVec2 p, float w, float row_h, bool dim)
 {
     ImDrawList *dl = ImGui::GetWindowDrawList();
     float r = PX(5.5f), step = PX(13.5f);
@@ -434,7 +434,7 @@ static void rating_cell(UiState *ui, RXTrack *t, ImVec2 p, float w, float row_h,
     int hover = hot ? ImClamp((int)((ImGui::GetIO().MousePos.x - p.x) / step) + 1, 1, 5) : 0;
     if (ImGui::IsItemClicked()) {
         t->meta.rating = t->meta.rating == hover ? 0 : hover;
-        rx_app_save_track(ui->app, t);
+        cb_app_save_track(ui->app, t);
     }
     int shown = hover ? hover : t->meta.rating;
     for (int i = 0; i < 5; i++) {
@@ -446,17 +446,17 @@ static void rating_cell(UiState *ui, RXTrack *t, ImVec2 p, float w, float row_h,
     }
 }
 
-static void row_cells(UiState *ui, RXTrack *t, int row, float row_h, const uint64_t *active,
+static void row_cells(UiState *ui, CBTrack *t, int row, float row_h, const uint64_t *active,
                       int nb_active)
 {
-    RXApp *app = ui->app;
+    CBApp *app = ui->app;
     ImDrawList *dl = ImGui::GetWindowDrawList();
     bool dim = t->missing;
     ImU32 text = dim ? UI_FAINT : UI_TEXT;
     ImU32 sub = dim ? UI_FAINT : UI_DIM;
     char buf[160];
     // The Traffic Light's reference: the loaded track's key.
-    const RXTrack *loaded = app->decks[0].track;
+    const CBTrack *loaded = app->decks[0].track;
     const char *ref = loaded && loaded->key[0] ? loaded->key : nullptr;
 
     for (int c = 0; c < COL_N; c++) {
@@ -497,7 +497,7 @@ static void row_cells(UiState *ui, RXTrack *t, int row, float row_h, const uint6
             float pad = ImGui::GetStyle().CellPadding.x;
             ImVec2 a(p.x - pad, p.y), b(p.x + w + pad, p.y + row_h);
             float cw = b.x - a.x, ch = b.y - a.y;
-            uint64_t tex = rx_app_artwork_texture(app, t);
+            uint64_t tex = cb_app_artwork_texture(app, t);
             if (tex && cw > 0 && ch > 0) {
                 ImVec2 uv0(0, 0), uv1(1, 1);
                 if (cw >= ch) {
@@ -513,7 +513,7 @@ static void row_cells(UiState *ui, RXTrack *t, int row, float row_h, const uint6
                 ui_record_icon(dl, a, ImVec2(b.x, a.y + cw));
                 dl->PopClipRect();
             }
-            if (!tex && rx_app_artwork_pending(app, t))
+            if (!tex && cb_app_artwork_pending(app, t))
                 ui->previews_pending = true;
             break;
         }
@@ -537,7 +537,7 @@ static void row_cells(UiState *ui, RXTrack *t, int row, float row_h, const uint6
             // The fill covers the padding: the cell, not its text, is lit.
             const char *k = ui_key_text(ui, t->key, buf, sizeof(buf));
             ImU32 col = k[0] ? text : UI_FAINT;
-            if (k[0] && ref && !dim && rx_key_traffic_light(t->key, ref, (RXKeyReach)ui->traffic_light)) {
+            if (k[0] && ref && !dim && cb_key_traffic_light(t->key, ref, (CBKeyReach)ui->traffic_light)) {
                 float pad = ImGui::GetStyle().CellPadding.x;
                 dl->AddRectFilled(ImVec2(p.x - pad, p.y), ImVec2(p.x + w + pad, p.y + row_h), UI_QUANTIZE);
                 col = UI_BLACK;
@@ -547,8 +547,8 @@ static void row_cells(UiState *ui, RXTrack *t, int row, float row_h, const uint6
         }
         case COL_BPM: {
             // A dynamic grid's typical tempo (the stick's), else the first section's.
-            double bpm = rx_grid_dynamic(&t->grid) ? rx_grid_bpm_median(&t->grid, t->duration)
-                                                   : rx_grid_bpm(&t->grid);
+            double bpm = cb_grid_dynamic(&t->grid) ? cb_grid_bpm_median(&t->grid, t->duration)
+                                                   : cb_grid_bpm(&t->grid);
             if (bpm > 0)
                 snprintf(buf, sizeof(buf), "%.2f", bpm);
             cell_text(ui, p, w, row_h, bpm > 0 ? buf : DASH, bpm > 0 ? text : UI_FAINT, true);
@@ -595,7 +595,7 @@ static void row_cells(UiState *ui, RXTrack *t, int row, float row_h, const uint6
 
 static void table(UiState *ui, ImVec2 size)
 {
-    RXApp *app = ui->app;
+    CBApp *app = ui->app;
     ImGuiIO &io = ImGui::GetIO();
     ImGuiTableFlags flags = ImGuiTableFlags_Resizable | ImGuiTableFlags_Reorderable |
                             ImGuiTableFlags_Hideable | ImGuiTableFlags_Sortable |
@@ -658,7 +658,7 @@ static void table(UiState *ui, ImVec2 size)
                 app->sort_column = -1;
                 app->sort_descending = false;
             }
-            rx_app_rebuild_rows(app);
+            cb_app_rebuild_rows(app);
             ss->SpecsDirty = false;
         }
     }
@@ -667,10 +667,10 @@ static void table(UiState *ui, ImVec2 size)
     bool art = ImGui::TableGetColumnFlags(COL_ART) & ImGuiTableColumnFlags_IsEnabled;
     float row_h = art ? PX(40) : PX(22);
     uint64_t active[32];
-    int nb_active = app->jobs ? rx_jobs_active_tracks(app->jobs, active, 32) : 0;
+    int nb_active = app->jobs ? cb_jobs_active_tracks(app->jobs, active, 32) : 0;
     int frow = ui->scroll_to_focus ? focus_row(app) : -1;
     ImRect clip = ImGui::GetCurrentWindow()->InnerClipRect;
-    const RXTrack *loaded = app->decks[0].track;
+    const CBTrack *loaded = app->decks[0].track;
     float outline = ImMax(1.0f, PX(1.5f));
 
     ImGuiListClipper clipper;
@@ -681,7 +681,7 @@ static void table(UiState *ui, ImVec2 size)
     bool double_clicked = false;
     while (clipper.Step()) {
         for (int r = clipper.DisplayStart; r < clipper.DisplayEnd; r++) {
-            RXTrack *t = row_track(app, r);
+            CBTrack *t = row_track(app, r);
             if (!t)
                 continue;
             ImGui::TableNextRow(ImGuiTableRowFlags_None, row_h);
@@ -727,7 +727,7 @@ static void table(UiState *ui, ImVec2 size)
                 ImGui::SetDragDropPayload(UI_DND_TRACKS, ids.data(), sizeof(uint64_t) * ids.size());
                 if (ids.size() == 1) {
                     char name[200];
-                    ImGui::TextUnformatted(rx_track_display(t, name, sizeof(name)));
+                    ImGui::TextUnformatted(cb_track_display(t, name, sizeof(name)));
                 } else {
                     ImGui::Text("%d tracks", (int)ids.size());
                 }
@@ -769,7 +769,7 @@ static void table(UiState *ui, ImVec2 size)
         ui->scroll_to_focus = false;
 
     if (clicked_row >= 0) {
-        RXTrack *t = row_track(app, clicked_row);
+        CBTrack *t = row_track(app, clicked_row);
         if (t) {
             if (double_clicked) {
                 ui_load(ui, t);
@@ -806,7 +806,7 @@ static void table(UiState *ui, ImVec2 size)
 
 void ui_browser(UiState *ui, ImVec2 size)
 {
-    RXApp *app = ui->app;
+    CBApp *app = ui->app;
     ImGui::BeginChild("##browser", size, ImGuiChildFlags_None, ImGuiWindowFlags_NoScrollbar);
     ImDrawList *dl = ImGui::GetWindowDrawList();
     ImVec2 a = ImGui::GetWindowPos();
@@ -844,7 +844,7 @@ void ui_browser(UiState *ui, ImVec2 size)
     // Esc clears the search (and a second Esc leaves the field).
     if (ImGui::InputTextWithHint("##search", "Search  (Ctrl+F)", app->search, sizeof(app->search),
                                  ImGuiInputTextFlags_EscapeClearsAll))
-        rx_app_rebuild_rows(app);
+        cb_app_rebuild_rows(app);
     ImGui::PopStyleColor();
     ImGui::PopStyleVar(2);
     if (app->search[0]) {
@@ -856,7 +856,7 @@ void ui_browser(UiState *ui, ImVec2 size)
         cb.fill = IM_COL32(0x10, 0x10, 0x10, 0xFF);
         if (ui_button(ui, "clearsearch", ImVec2(PX(16), PX(16)), cb)) {
             app->search[0] = 0;
-            rx_app_rebuild_rows(app);
+            cb_app_rebuild_rows(app);
         }
     }
 
@@ -886,7 +886,7 @@ static const char *const FIELD_NAMES[F_NB] = {
     "Original artist", "Comment", "Year", "Track", "Disc",
 };
 
-static char **meta_field(RXMeta *m, int f)
+static char **meta_field(CBMeta *m, int f)
 {
     switch (f) {
     case F_TITLE:           return &m->title;
@@ -903,7 +903,7 @@ static char **meta_field(RXMeta *m, int f)
     }
 }
 
-static int *meta_int(RXMeta *m, int f)
+static int *meta_int(CBMeta *m, int f)
 {
     switch (f) {
     case F_YEAR:            return &m->year;
@@ -913,7 +913,7 @@ static int *meta_int(RXMeta *m, int f)
     }
 }
 
-static void info_load(UiState *ui, RXTrack *t)
+static void info_load(UiState *ui, CBTrack *t)
 {
     ui->info_track = t->id;
     ui->info_generation = ui->app->lib.generation;
@@ -936,20 +936,20 @@ static void info_load(UiState *ui, RXTrack *t)
     ui->info_tags = tags;
 }
 
-static void info_commit(UiState *ui, RXTrack *t, int f)
+static void info_commit(UiState *ui, CBTrack *t, int f)
 {
     char **s = meta_field(&t->meta, f);
     int *n = meta_int(&t->meta, f);
     if (s)
-        rx_meta_set(s, ui->info_buf[f].c_str());
+        cb_meta_set(s, ui->info_buf[f].c_str());
     else if (n)
         *n = atoi(ui->info_buf[f].c_str());
-    rx_app_save_track(ui->app, t);
+    cb_app_save_track(ui->app, t);
 }
 
-static void info_commit_tags(UiState *ui, RXTrack *t)
+static void info_commit_tags(UiState *ui, CBTrack *t)
 {
-    rx_meta_clear_tags(&t->meta);
+    cb_meta_clear_tags(&t->meta);
     const char *p = ui->info_tags.c_str();
     while (*p) {
         const char *e = strchr(p, ',');
@@ -957,19 +957,19 @@ static void info_commit_tags(UiState *ui, RXTrack *t)
         std::string tag(p, len);
         size_t b = tag.find_first_not_of(" \t"), z = tag.find_last_not_of(" \t");
         if (b != std::string::npos)
-            rx_meta_add_tag(&t->meta, tag.substr(b, z - b + 1).c_str());
+            cb_meta_add_tag(&t->meta, tag.substr(b, z - b + 1).c_str());
         if (!e)
             break;
         p = e + 1;
     }
-    rx_app_save_track(ui->app, t);
+    cb_app_save_track(ui->app, t);
 }
 
 // What the model said of the track beyond the genre, colour and comment
 // it wrote (src/ml/tag.c): the tagging's version, the colour it picked
 // with its probability, in the legend's words, and the runner-up, then
 // its measures, 0 to 1. A colour picked with words since edited says so.
-static void tags_line(UiState *ui, const RXTrack *t, float label_w)
+static void tags_line(UiState *ui, const CBTrack *t, float label_w)
 {
     ImGui::TextDisabled("Tags");
     ImGui::SameLine(label_w);
@@ -980,28 +980,28 @@ static void tags_line(UiState *ui, const RXTrack *t, float label_w)
     char pick[256] = "";
     if (!isnan(t->ml_colors[0])) {
         int best = 1;
-        for (int i = 2; i <= RX_TRACK_COLORS; i++) {
+        for (int i = 2; i <= CB_TRACK_COLORS; i++) {
             if (t->ml_colors[i - 1] > t->ml_colors[best - 1])
                 best = i;
         }
         int second = best == 1 ? 2 : 1;
-        for (int i = 1; i <= RX_TRACK_COLORS; i++) {
+        for (int i = 1; i <= CB_TRACK_COLORS; i++) {
             if (i != best && t->ml_colors[i - 1] > t->ml_colors[second - 1])
                 second = i;
         }
-        const char *legend[RX_TRACK_COLORS];
-        rx_config_legend(&ui->app->lib.cfg, legend);
-        bool same = t->ml_legend == rx_ml_legend_hash(legend);
+        const char *legend[CB_TRACK_COLORS];
+        cb_config_legend(&ui->app->lib.cfg, legend);
+        bool same = t->ml_legend == cb_ml_legend_hash(legend);
         snprintf(pick, sizeof(pick), " \xC2\xB7 %s %.2f (%s), then %s %.2f",
-                 rx_track_color_name(best), t->ml_colors[best - 1],
-                 same ? legend[best - 1] : "asked with other words", rx_track_color_name(second),
+                 cb_track_color_name(best), t->ml_colors[best - 1],
+                 same ? legend[best - 1] : "asked with other words", cb_track_color_name(second),
                  t->ml_colors[second - 1]);
     }
     // A group, so the lines it wraps into start under its first.
     ImGui::BeginGroup();
     ImGui::TextWrapped("v%d%s%s \xC2\xB7 intensity %.2f \xC2\xB7 club %.2f \xC2\xB7 mood %.2f "
                        "\xC2\xB7 %s", t->tags_version,
-                       t->tags_version < RX_ML_TAGS_VERSION ? " (older)" : "", pick,
+                       t->tags_version < CB_ML_TAGS_VERSION ? " (older)" : "", pick,
                        t->ml_intensity, t->ml_club, t->ml_valence,
                        t->ml_vocals >= 0.5f ? "vocals" : "instrumental");
     ImGui::EndGroup();
@@ -1048,7 +1048,7 @@ static void path_fact(const char *name, const char *path)
 
 void ui_info_panel(UiState *ui, ImVec2 size)
 {
-    RXApp *app = ui->app;
+    CBApp *app = ui->app;
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(PX(10), PX(8)));
     ImGui::PushStyleColor(ImGuiCol_ChildBg, UI_PANEL);
     ImGui::BeginChild("##info", size, ImGuiChildFlags_AlwaysUseWindowPadding, 0);
@@ -1057,8 +1057,8 @@ void ui_info_panel(UiState *ui, ImVec2 size)
     // The fields edit the track they were loaded from; a new focus is
     // taken only when no field is being edited, so a commit can never land
     // on the wrong track.
-    RXTrack *focus = ui_focus_track(ui);
-    RXTrack *t = ui->info_track ? rx_library_find_id(&app->lib, ui->info_track) : nullptr;
+    CBTrack *focus = ui_focus_track(ui);
+    CBTrack *t = ui->info_track ? cb_library_find_id(&app->lib, ui->info_track) : nullptr;
     bool editing = ImGui::IsAnyItemActive() && t;
     if (focus && !editing && (t != focus || ui->info_generation != app->lib.generation)) {
         info_load(ui, focus);
@@ -1115,7 +1115,7 @@ void ui_info_panel(UiState *ui, ImVec2 size)
     {
         ImGui::BeginGroup();
         char text[192];
-        uint32_t rgb = rx_track_hue_rgb(t->meta.hue);
+        uint32_t rgb = cb_track_hue_rgb(t->meta.hue);
         if (rgb) {
             ImVec2 p = ImGui::GetCursorScreenPos();
             float s = PX(12), fh = ImGui::GetFrameHeight();
@@ -1129,7 +1129,7 @@ void ui_info_panel(UiState *ui, ImVec2 size)
         double hue = t->meta.hue;
         if (ui_colour_picker(ui, "##infocolour", &hue, 0)) {
             t->meta.hue = hue;
-            rx_app_save_track(app, t);
+            cb_app_save_track(app, t);
         }
         ImGui::EndGroup();
     }
@@ -1155,15 +1155,15 @@ void ui_info_panel(UiState *ui, ImVec2 size)
         fact("Bit rate", buf);
     }
     fact("Duration", ui_fmt_time(t->duration, buf, sizeof(buf), true));
-    if (rx_track_analysed(t) && rx_grid_dynamic(&t->grid)) {
+    if (cb_track_analysed(t) && cb_grid_dynamic(&t->grid)) {
         int nm = 0;
         for (int i = 0; i < t->grid.nb_sections; i++)
             nm += t->grid.sections[i].measured;
         snprintf(buf, sizeof(buf), "%.2f BPM, dynamic (%d beats), %.2f",
-                 rx_grid_bpm_median(&t->grid, t->duration), nm, t->grid_confidence);
+                 cb_grid_bpm_median(&t->grid, t->duration), nm, t->grid_confidence);
         fact("Grid", buf);
-    } else if (rx_track_analysed(t)) {
-        snprintf(buf, sizeof(buf), "%.2f BPM, %d section%s, %.2f", rx_grid_bpm(&t->grid),
+    } else if (cb_track_analysed(t)) {
+        snprintf(buf, sizeof(buf), "%.2f BPM, %d section%s, %.2f", cb_grid_bpm(&t->grid),
                  t->grid.nb_sections,
                  t->grid.nb_sections == 1 ? "" : "s", t->grid_confidence);
         fact("Grid", buf);

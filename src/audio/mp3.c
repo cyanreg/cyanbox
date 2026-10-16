@@ -20,7 +20,7 @@
  * The whole file is mapped and walked header to header: MP3s are small and
  * every header is four bytes. */
 
-#include "rxbox/audio.h"
+#include "cyanbox/audio.h"
 
 #include <math.h>
 
@@ -127,14 +127,14 @@ static int64_t find_first_frame(const uint8_t *data, size_t size, size_t pos, He
 /* Calls fn for every audio frame from pos on. Junk between frames is
  * skipped when two chained frames follow it. ffmpeg's parser would make the
  * junk and the frame after it one packet that fails to decode, a frame of
- * silence in rxbox: the same count either way, and rx_decode, which feeds
+ * silence in cyanbox: the same count either way, and cb_decode, which feeds
  * these frames itself, plays the frame. dj stopped counting at the first
  * junk instead. A truncated last frame is passed short; dj counted it as a
  * frame and decoders play it as one. fn returning 1 stops the walk after
  * that frame (returns 0, *end is where to go on); 1 is returned at the end
  * of the file. */
 static int walk_frames(const char *path, const uint8_t *d, size_t size, size_t pos,
-                       RXMp3FrameFn fn, void *opaque, size_t *end)
+                       CBMp3FrameFn fn, void *opaque, size_t *end)
 {
     *end = pos;
     while (pos + 4 <= size) {
@@ -144,15 +144,15 @@ static int walk_frames(const char *path, const uint8_t *d, size_t size, size_t p
             int64_t resync = find_first_frame(d, size, pos + 1, &next);
             if (resync < 0)
                 break;
-            rx_debug("%s: %zu bytes of junk at %zu", path, (size_t)resync - pos, pos);
+            cb_debug("%s: %zu bytes of junk at %zu", path, (size_t)resync - pos, pos);
             pos = (size_t)resync;
             continue;
         }
-        int ret = fn(opaque, d + pos, RX_MIN((size_t)h.length, size - pos), h.samples, h.kbps);
+        int ret = fn(opaque, d + pos, CB_MIN((size_t)h.length, size - pos), h.samples, h.kbps);
         if (ret < 0)
             return ret;
         pos += h.length;
-        *end = RX_MIN(pos, size);
+        *end = CB_MIN(pos, size);
         if (ret > 0)
             return 0;
     }
@@ -169,22 +169,22 @@ static int count_frame(void *opaque, const uint8_t *frame, size_t size, int samp
     Stats *s = opaque;
     s->frames++;
     s->total_kbps += kbps;
-    s->min_kbps = RX_MIN(s->min_kbps, kbps);
-    s->max_kbps = RX_MAX(s->max_kbps, kbps);
+    s->min_kbps = CB_MIN(s->min_kbps, kbps);
+    s->max_kbps = CB_MAX(s->max_kbps, kbps);
     return 0;
 }
 
-int rx_mp3_scan_mapped(const char *path, const RXMap *m, RXMp3Info *info)
+int cb_mp3_scan_mapped(const char *path, const CBMap *m, CBMp3Info *info)
 {
-    *info = (RXMp3Info) { 0 };
+    *info = (CBMp3Info) { 0 };
     const uint8_t *d = m->data;
     size_t size = m->size;
 
     Header first;
-    int64_t start = find_first_frame(d, size, rx_audio_skip_id3v2(d, size), &first);
+    int64_t start = find_first_frame(d, size, cb_audio_skip_id3v2(d, size), &first);
     if (start < 0) {
-        rx_debug("%s: no MPEG Layer III frames", path);
-        return RX_ERROR(EINVAL);
+        cb_debug("%s: no MPEG Layer III frames", path);
+        return CB_ERROR(EINVAL);
     }
 
     /* dj's test: "Xing"/"Info" straight after the side information, or
@@ -218,7 +218,7 @@ int rx_mp3_scan_mapped(const char *path, const RXMap *m, RXMp3Info *info)
     walk_frames(path, d, size, pos, count_frame, &st, &end);
 
     int audio_start = header_frame ? 1 : 0;
-    *info = (RXMp3Info) {
+    *info = (CBMp3Info) {
         .valid              = true,
         .version            = first.version == 3 ? 1 : first.version == 2 ? 2 : 25,
         .sample_rate        = first.rate,
@@ -227,7 +227,7 @@ int rx_mp3_scan_mapped(const char *path, const RXMap *m, RXMp3Info *info)
         .nb_frames          = st.frames,
         .header_frame       = header_frame,
         .header_counts      = header_frame && map_start == 0,
-        .skip_frames        = RX_MAX(map_start - audio_start, 0),
+        .skip_frames        = CB_MAX(map_start - audio_start, 0),
         .vbr                = xing || vbri || (st.frames && st.min_kbps != st.max_kbps),
         /* dj: round(total / frames); Python rounds half to even, as rint does */
         .bitrate_kbps       = st.frames ? (int)rint((double)st.total_kbps / (double)st.frames) : 0,
@@ -235,46 +235,46 @@ int rx_mp3_scan_mapped(const char *path, const RXMap *m, RXMp3Info *info)
         .audio_bytes        = (int64_t)(end - (size_t)start),
     };
     if (info->skip_frames)
-        rx_debug("%s: frame map restarts at frame %d, %d audio frames off the timeline",
+        cb_debug("%s: frame map restarts at frame %d, %d audio frames off the timeline",
                  path, map_start, info->skip_frames);
     return 0;
 }
 
-int rx_mp3_frames(const char *path, const RXMap *m, const RXMp3Info *info,
-                  RXMp3FrameFn fn, void *opaque)
+int cb_mp3_frames(const char *path, const CBMap *m, const CBMp3Info *info,
+                  CBMp3FrameFn fn, void *opaque)
 {
     size_t pos = (size_t)info->first_frame_offset;
     Header first;
     if (!info->valid || !parse_header(m->data, m->size, pos, &first))
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
     if (info->header_frame)
         pos += (size_t)first.length;
     size_t end;
     return walk_frames(path, m->data, m->size, pos, fn, opaque, &end);
 }
 
-int rx_mp3_frames_step(const char *path, const RXMap *m, const RXMp3Info *info, size_t *pos,
-                       RXMp3FrameFn fn, void *opaque)
+int cb_mp3_frames_step(const char *path, const CBMap *m, const CBMp3Info *info, size_t *pos,
+                       CBMp3FrameFn fn, void *opaque)
 {
     if (!*pos) {
         Header first;
         *pos = (size_t)info->first_frame_offset;
         if (!info->valid || !parse_header(m->data, m->size, *pos, &first))
-            return RX_ERROR(EINVAL);
+            return CB_ERROR(EINVAL);
         if (info->header_frame)
             *pos += (size_t)first.length;
     }
     return walk_frames(path, m->data, m->size, *pos, fn, opaque, pos);
 }
 
-int rx_mp3_scan(const char *path, RXMp3Info *info)
+int cb_mp3_scan(const char *path, CBMp3Info *info)
 {
-    *info = (RXMp3Info) { 0 };
-    RXMap m;
-    int ret = rx_audio_map(path, &m);
+    *info = (CBMp3Info) { 0 };
+    CBMap m;
+    int ret = cb_audio_map(path, &m);
     if (ret < 0)
         return ret;
-    ret = rx_mp3_scan_mapped(path, &m, info);
-    rx_audio_unmap(&m);
+    ret = cb_mp3_scan_mapped(path, &m, info);
+    cb_audio_unmap(&m);
     return ret;
 }

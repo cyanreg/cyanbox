@@ -1,6 +1,6 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
-// The PRO DJ LINK window (rxbox --pro-link): the Ethernet interfaces
+// The PRO DJ LINK window (cyanbox --pro-link): the Ethernet interfaces
 // served, each with where it stands, and the devices on them, each with
 // what it has loaded, whether it plays and, for a track of ours, how far
 // its play has been counted. The state is the app's (app->link_state,
@@ -25,7 +25,7 @@ const char *ui_link_summary(UiState *ui, char *buf, size_t size, ImU32 *col)
     const auto &ls = ui->app->link_state;
     int players = 0, up = 0, failed = 0;
     for (int i = 0; i < ls.nb_devices; i++)
-        players += ls.devices[i].type == RX_LINK_DEVICE_PLAYER;
+        players += ls.devices[i].type == CB_LINK_DEVICE_PLAYER;
     for (int i = 0; i < ls.nb_interfaces; i++) {
         up += ls.interfaces[i].running;
         failed += !ls.interfaces[i].running && ls.interfaces[i].err;
@@ -53,7 +53,7 @@ static void error_text(const char *ifname, int err, char *buf, size_t size)
 {
     switch (-err) {
     case EADDRINUSE:
-        snprintf(buf, size, "The players' ports are taken: is rekordbox, or another rxbox, "
+        snprintf(buf, size, "The players' ports are taken: is rekordbox, or another cyanbox, "
                  "serving on this computer?");
         break;
     case ENODEV:
@@ -90,9 +90,9 @@ static const char *slot_name(int slot)
 static const char *type_name(int type)
 {
     switch (type) {
-    case RX_LINK_DEVICE_PLAYER:   return "player";
-    case RX_LINK_DEVICE_MIXER:    return "mixer";
-    case RX_LINK_DEVICE_COMPUTER: return "computer";
+    case CB_LINK_DEVICE_PLAYER:   return "player";
+    case CB_LINK_DEVICE_MIXER:    return "mixer";
+    case CB_LINK_DEVICE_COMPUTER: return "computer";
     default:                      return "device";
     }
 }
@@ -105,7 +105,7 @@ static void tag(const char *text, ImU32 col)
 
 static void devices_table(UiState *ui)
 {
-    RXApp *app = ui->app;
+    CBApp *app = ui->app;
     const auto &ls = app->link_state;
     if (!ls.nb_devices) {
         ImGui::TextDisabled("No player heard yet: a player shows up here once it is switched on");
@@ -124,7 +124,7 @@ static void devices_table(UiState *ui)
     ImGui::TableSetupColumn("State", ImGuiTableColumnFlags_WidthFixed, PX(200));
     ImGui::TableHeadersRow();
     for (int i = 0; i < ls.nb_devices; i++) {
-        const RXLinkPlayer &d = ls.devices[i];
+        const CBLinkPlayer &d = ls.devices[i];
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0);
         ImGui::Text("%d", d.number);
@@ -134,7 +134,7 @@ static void devices_table(UiState *ui)
         char a[16];
         snprintf(a, sizeof(a), "%u.%u.%u.%u", d.addr >> 24, d.addr >> 16 & 0xFF,
                  d.addr >> 8 & 0xFF, d.addr & 0xFF);
-        const RXLinkServed *on = ls.device_if[i] < ls.nb_interfaces
+        const CBLinkServed *on = ls.device_if[i] < ls.nb_interfaces
                                  ? &ls.interfaces[ls.device_if[i]] : nullptr;
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("%s %d at %s, on %s", type_name(d.type), d.number, a,
@@ -142,19 +142,19 @@ static void devices_table(UiState *ui)
 
         ImGui::TableSetColumnIndex(2);
         // Ours: loaded from our number on the device's own network.
-        bool ours = on && on->running && on->state == RX_LINK_UP && d.track_device == on->number &&
+        bool ours = on && on->running && on->state == CB_LINK_UP && d.track_device == on->number &&
                     d.track_id;
-        if (d.type != RX_LINK_DEVICE_PLAYER) {
+        if (d.type != CB_LINK_DEVICE_PLAYER) {
             ImGui::TextDisabled("%s", a);
         } else if (!d.has_status) {
             ImGui::TextDisabled("(no status yet)");
         } else if (!d.track_device || !d.track_id) {
             ImGui::TextDisabled("Nothing loaded");
         } else if (ours) {
-            RXTrack *t = rx_library_find_id(&app->lib, d.track_id);
+            CBTrack *t = cb_library_find_id(&app->lib, d.track_id);
             char name[256];
             if (t)
-                ImGui::TextUnformatted(rx_track_display(t, name, sizeof(name)));
+                ImGui::TextUnformatted(cb_track_display(t, name, sizeof(name)));
             else
                 ImGui::TextDisabled("Track %u, gone from the library", d.track_id);
         } else if (d.track_device == d.number) {
@@ -174,7 +174,7 @@ static void devices_table(UiState *ui)
         }
 
         ImGui::TableSetColumnIndex(4);
-        if (d.type == RX_LINK_DEVICE_PLAYER && d.has_status && d.track_id) {
+        if (d.type == CB_LINK_DEVICE_PLAYER && d.has_status && d.track_id) {
             ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(d.playing ? UI_PLAY : UI_DIM), "%s",
                                d.playing ? "Playing" : "Paused");
             if (d.on_air)
@@ -200,7 +200,7 @@ static void devices_table(UiState *ui)
 
 void ui_link_window(UiState *ui)
 {
-    RXApp *app = ui->app;
+    CBApp *app = ui->app;
     const auto &ls = app->link_state;
     if (!ls.enabled || !ui->dlg_link)
         return;
@@ -217,10 +217,10 @@ void ui_link_window(UiState *ui)
         ImGui::TextDisabled("Off.");
     else if (!ls.nb_interfaces)
         ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(UI_ACCENT),
-                           "No Ethernet interface is up with an address: rxbox serves on one as "
+                           "No Ethernet interface is up with an address: cyanbox serves on one as "
                            "soon as it is.");
     for (int i = 0; i < ls.nb_interfaces; i++) {
-        const RXLinkServed &s = ls.interfaces[i];
+        const CBLinkServed &s = ls.interfaces[i];
         char a[16], line[256];
         snprintf(a, sizeof(a), "%u.%u.%u.%u", s.addr >> 24, s.addr >> 16 & 0xFF,
                  s.addr >> 8 & 0xFF, s.addr & 0xFF);
@@ -231,7 +231,7 @@ void ui_link_window(UiState *ui)
             col = UI_RED;
         } else if (!s.running) {
             snprintf(line, sizeof(line), "%s (%s): starting...", s.interface, a);
-        } else if (s.state == RX_LINK_UP) {
+        } else if (s.state == CB_LINK_UP) {
             snprintf(line, sizeof(line), "%s (%s): on the link as rekordbox, device %d.",
                      s.interface, a, s.number);
             col = UI_PLAY;
@@ -241,7 +241,7 @@ void ui_link_window(UiState *ui)
         ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(col), "%s", line);
     }
     ImGui::PushTextWrapPos(0);
-    ImGui::TextDisabled("rxbox serves on every Ethernet interface while it runs with --pro-link. "
+    ImGui::TextDisabled("cyanbox serves on every Ethernet interface while it runs with --pro-link. "
                         "Anything on those networks can read the library's audio, artwork and "
                         "analysis (never other files, never writes): the best network has only "
                         "the players on it, a cable or a switch of their own.");

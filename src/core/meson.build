@@ -2,7 +2,7 @@
 # settings, waveforms, artwork). Depends on common and audio (probing);
 # wavestore.c calls the analysis module's waveform packer and is only linked
 # where waveforms are stored (see the comment there).
-rx_core_lib = static_library('rx_core',
+cb_core_lib = static_library('cb_core',
     files(
         'clean.c',
         'config.c',
@@ -14,15 +14,15 @@ rx_core_lib = static_library('rx_core',
         'playlist.c',
         'wavestore.c',
     ),
-    include_directories: rx_inc,
-    dependencies: [ rx_common_dep, rx_audio_dep, sqlite3_dep, m_dep ],
+    include_directories: cb_inc,
+    dependencies: [ cb_common_dep, cb_audio_dep, sqlite3_dep, m_dep ],
 )
-rx_core_dep = declare_dependency(link_with: rx_core_lib,
-    dependencies: [ rx_common_dep, rx_audio_dep, sqlite3_dep, m_dep ])
+cb_core_dep = declare_dependency(link_with: cb_core_lib,
+    dependencies: [ cb_common_dep, cb_audio_dep, sqlite3_dep, m_dep ])
 
 # Tests make their files (WAVs, m3u8s, the library) under this directory.
 core_test_env = environment()
-core_test_env.set('RX_TEST_DIR', meson.current_build_dir() / 'test-tmp')
+core_test_env.set('CB_TEST_DIR', meson.current_build_dir() / 'test-tmp')
 
 # The library test checks the schema 4 migration's hues against the
 # formats module's colour table, which core does not link: colors.c (plain
@@ -33,8 +33,8 @@ foreach t : [ 'grid', 'cues', 'notation', 'library', 'playlist' ]
             '../../tests/core/test_' + t + '.c',
             '../../tests/core/util.c',
             t == 'library' ? [ '../formats/colors.c' ] : [],
-            include_directories: rx_inc,
-            dependencies: [ rx_core_dep, m_dep ],
+            include_directories: cb_inc,
+            dependencies: [ cb_core_dep, m_dep ],
         ),
         env: core_test_env,
         suite: 'core',

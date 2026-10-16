@@ -1,18 +1,18 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
 /* The fake player's database connection, for the tests, which ask what
- * rx_link_client_browse does not (rxbox/link.h). */
+ * cb_link_client_browse does not (cyanbox/link.h). */
 
-#ifndef RXBOX_LINK_CLIENT_H
-#define RXBOX_LINK_CLIENT_H
+#ifndef CYANBOX_LINK_CLIENT_H
+#define CYANBOX_LINK_CLIENT_H
 
-#include "rxbox/link.h"
+#include "cyanbox/link.h"
 
 #include "dbserver.h"
 
 /* The connection to the source's database, made on first use from our
  * address (the port query, then the database port, set up as our
  * number); NULL with *err set when it cannot be made. */
-RXDbClient *rx_link_client_db(RXLinkClient *c, int *err);
+CBDbClient *cb_link_client_db(CBLinkClient *c, int *err);
 
-#endif /* RXBOX_LINK_CLIENT_H */
+#endif /* CYANBOX_LINK_CLIENT_H */

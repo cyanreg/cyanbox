@@ -6,7 +6,7 @@
  * tensors past the end, overlapping or off the alignment), and moss.c every
  * tensor whose shape or size is not the model's. The files are built in
  * memory (memfd, sparse where the tensors are large: nothing is written but
- * the header). Needs no GPU: rx_ml_open stops at the tensor table, before
+ * the header). Needs no GPU: cb_ml_open stops at the tensor table, before
  * the tokenizer and the device, and the full table's positive control is
  * told from a refusal by what is logged. */
 
@@ -36,7 +36,7 @@ typedef struct Buf {
 static void put(Buf *b, const void *d, size_t n)
 {
     if (b->n + n > b->cap) {
-        b->cap = RX_MAX(b->cap * 2, b->n + n + 4096);
+        b->cap = CB_MAX(b->cap * 2, b->n + n + 4096);
         if (!(b->p = realloc(b->p, b->cap)))
             abort();
     }
@@ -88,8 +88,8 @@ static uint64_t lay_out(Tensor *t, int nb, uint64_t align)
     uint64_t end = 0;
     for (int i = 0; i < nb; i++) {
         if (t[i].offset == UINT64_MAX)
-            t[i].offset = RX_ALIGN(end, align);
-        end = RX_MAX(end, t[i].offset + bytes_of(&t[i]));
+            t[i].offset = CB_ALIGN(end, align);
+        end = CB_MAX(end, t[i].offset + bytes_of(&t[i]));
     }
     return end;
 }
@@ -122,7 +122,7 @@ static int write_gguf(const KV *kv, int nb_kv, const Tensor *t, int nb, uint64_t
         put_u32(&b, t[i].type);
         put_u64(&b, t[i].offset);
     }
-    uint64_t start = align ? RX_ALIGN((uint64_t)b.n, align) : b.n;
+    uint64_t start = align ? CB_ALIGN((uint64_t)b.n, align) : b.n;
     if (data_offset)
         *data_offset = start;
 
@@ -187,20 +187,20 @@ static void test_header(void)
     }
 
     static const uint64_t aligns[] = { 0, 3, 48, UINT64_C(1) << 40 };
-    for (size_t i = 0; i < RX_ARRAY_ELEMS(aligns); i++) {
+    for (size_t i = 0; i < CB_ARRAY_ELEMS(aligns); i++) {
         KV kv = { "general.alignment", aligns[i] >> 32 ? T_U64 : T_U32, aligns[i], NULL };
         Tensor t = tensor1("a", ML_TYPE_F32, 4, 0);
         char what[64];
         snprintf(what, sizeof(what), "alignment %llu is refused", (unsigned long long)aligns[i]);
-        expect(what, try_open(&kv, 1, &t, 1, 4096, 32), RX_ERROR(EINVAL));
+        expect(what, try_open(&kv, 1, &t, 1, 4096, 32), CB_ERROR(EINVAL));
     }
 
     static const uint64_t dims[] = { 0, UINT64_C(1) << 63, UINT64_MAX };
-    for (size_t i = 0; i < RX_ARRAY_ELEMS(dims); i++) {
+    for (size_t i = 0; i < CB_ARRAY_ELEMS(dims); i++) {
         Tensor t = tensor1("a", ML_TYPE_F32, dims[i], 0);
         char what[64];
         snprintf(what, sizeof(what), "a dimension of %llu is refused", (unsigned long long)dims[i]);
-        expect(what, try_open(NULL, 0, &t, 1, 4096, 0), RX_ERROR(EINVAL));
+        expect(what, try_open(NULL, 0, &t, 1, 4096, 0), CB_ERROR(EINVAL));
     }
 
     {
@@ -208,16 +208,16 @@ static void test_header(void)
         Tensor t = { .name = "a", .nb_dims = 3, .ne = { 1u << 31, 1u << 31, 1u << 31, 1 },
                      .type = ML_TYPE_F32, .offset = 0 };
         expect("a size that overflows is refused", try_open(NULL, 0, &t, 1, 4096, 0),
-               RX_ERROR(EINVAL));
+               CB_ERROR(EINVAL));
         /* 2^32 F16 halves: 8 GB, in range but past a segment's 1 GB. */
         Tensor u = { .name = "a", .nb_dims = 2, .ne = { 1u << 16, 1u << 16, 1, 1 },
                      .type = ML_TYPE_F16, .offset = 0 };
         expect("a tensor of more than 1 GB is refused", try_open(NULL, 0, &u, 1, 0, 0),
-               RX_ERROR(EINVAL));
+               CB_ERROR(EINVAL));
         /* A Q4_K row shorter than a block. */
         Tensor q = { .name = "a", .nb_dims = 2, .ne = { 128, 4, 1, 1 }, .type = ML_TYPE_Q4_K };
         expect("a Q4_K row of 128 is refused", try_open(NULL, 0, &q, 1, 4096, 0),
-               RX_ERROR(EINVAL));
+               CB_ERROR(EINVAL));
     }
 
     {
@@ -229,30 +229,30 @@ static void test_header(void)
         close(fd);
         t.offset = (uint64_t)0 - start;
         expect("an offset that wraps is refused", try_open(NULL, 0, &t, 1, 4096, 32),
-               RX_ERROR(EINVAL));
+               CB_ERROR(EINVAL));
     }
 
     {
         Tensor t = tensor1("a", ML_TYPE_F32, 64, 0);
         expect("a tensor past the end is refused", try_open(NULL, 0, &t, 1, 128, 32),
-               RX_ERROR(EINVAL));
+               CB_ERROR(EINVAL));
     }
 
     {
         /* b inside a: uploaded, the smaller would have cut a's segment. */
         Tensor t[2] = { tensor1("a", ML_TYPE_F32, 64, 0), tensor1("b", ML_TYPE_F32, 8, 64) };
         expect("overlapping tensors are refused", try_open(NULL, 0, t, 2, 4096, 32),
-               RX_ERROR(EINVAL));
+               CB_ERROR(EINVAL));
     }
 
     {
         Tensor t[2] = { tensor1("a", ML_TYPE_F32, 4, 0), tensor1("b", ML_TYPE_F32, 4, 16) };
         expect("an offset off the alignment is refused", try_open(NULL, 0, t, 2, 4096, 32),
-               RX_ERROR(EINVAL));
+               CB_ERROR(EINVAL));
         KV kv = { "general.alignment", T_U32, 8, NULL };
         Tensor u[2] = { tensor1("a", ML_TYPE_F32, 2, 0), tensor1("b", ML_TYPE_F32, 2, 8) };
         expect("an offset off the GPU's 16 bytes is refused", try_open(&kv, 1, u, 2, 4096, 8),
-               RX_ERROR(EINVAL));
+               CB_ERROR(EINVAL));
     }
 }
 
@@ -331,17 +331,17 @@ typedef struct Log {
     size_t len;
 } Log;
 
-static void log_sink(void *opaque, enum RXLogLevel level, const char *line)
+static void log_sink(void *opaque, enum CBLogLevel level, const char *line)
 {
     Log *l = opaque;
-    if (level == RX_LOG_ERROR) {
+    if (level == CB_LOG_ERROR) {
         int n = snprintf(l->text + l->len, sizeof(l->text) - l->len, "%s\n", line);
         if (n > 0)
-            l->len = RX_MIN(l->len + (size_t)n, sizeof(l->text) - 1);
+            l->len = CB_MIN(l->len + (size_t)n, sizeof(l->text) - 1);
     }
 }
 
-/* rx_ml_open on the model's table with `edit` applied to one tensor;
+/* cb_ml_open on the model's table with `edit` applied to one tensor;
  * returns what it returned and what it logged. */
 static int try_model(const char *name, void (*edit)(Tensor *), Log *log)
 {
@@ -380,21 +380,21 @@ static int try_model(const char *name, void (*edit)(Tensor *), Log *log)
         { "moss_audio.audio_start_id", 151669 },
         { "moss_audio.audio_end_id", 151670 },
     };
-    KV kv[RX_ARRAY_ELEMS(shape) + 1];
+    KV kv[CB_ARRAY_ELEMS(shape) + 1];
     kv[0] = (KV) { "general.architecture", T_STRING, 0, "moss_audio" };
-    for (size_t i = 0; i < RX_ARRAY_ELEMS(shape); i++)
+    for (size_t i = 0; i < CB_ARRAY_ELEMS(shape); i++)
         kv[i + 1] = (KV) { shape[i].key, T_U32, shape[i].v, NULL };
 
     /* 4 GB of tensors, all of it a hole in the memfd. */
-    int fd = write_gguf(kv, RX_ARRAY_ELEMS(kv), t, nb, need, 32, NULL);
+    int fd = write_gguf(kv, CB_ARRAY_ELEMS(kv), t, nb, need, 32, NULL);
     char path[64];
     snprintf(path, sizeof(path), "/proc/self/fd/%d", fd);
     *log = (Log) { 0 };
-    rx_log_set_sink(log_sink, log);
-    RXML *ml = NULL;
-    int ret = rx_ml_open(&ml, path, NULL);
-    rx_log_set_sink(NULL, NULL);
-    rx_ml_close(&ml);
+    cb_log_set_sink(log_sink, log);
+    CBML *ml = NULL;
+    int ret = cb_ml_open(&ml, path, NULL);
+    cb_log_set_sink(NULL, NULL);
+    cb_ml_close(&ml);
     close(fd);
     return ret;
 }
@@ -410,7 +410,7 @@ static void test_model(void)
      * (silently, ml_tok_create), after every tensor passed. */
     Log log;
     int ret = try_model(NULL, NULL, &log);
-    expect("the model's table passes its checks", ret == RX_ERROR(EINVAL) && !log.len, true);
+    expect("the model's table passes its checks", ret == CB_ERROR(EINVAL) && !log.len, true);
     if (log.len)
         printf("%s", log.text);
 
@@ -423,12 +423,12 @@ static void test_model(void)
         { "llm.blk.35.ffn.down.weight", down_f16 },
         { "llm.blk.7.attn.q_norm.weight", q_norm_short },
     };
-    for (size_t i = 0; i < RX_ARRAY_ELEMS(bad); i++) {
+    for (size_t i = 0; i < CB_ARRAY_ELEMS(bad); i++) {
         ret = try_model(bad[i].name, bad[i].edit, &log);
         char what[96];
         snprintf(what, sizeof(what), "a wrong %s is refused", bad[i].name);
         bool named = strstr(log.text, bad[i].name) != NULL;
-        expect(what, ret == RX_ERROR(EINVAL) && named, true);
+        expect(what, ret == CB_ERROR(EINVAL) && named, true);
         if (!named)
             printf("%s", log.text);
     }

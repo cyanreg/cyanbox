@@ -1,4 +1,4 @@
-[rxbox](#rxbox)
+[cyanbox](#cyanbox)
 ===============
 A DJ library manager that prepares USB sticks for Pioneer/AlphaTheta CDJs
 and XDJs without rekordbox, and serves the library to players over PRO DJ
@@ -83,8 +83,8 @@ ninja -C build
 meson test -C build
 ```
 
-This builds `build/rxbox`, the interface with every command, and
-`build/src/app/rxbox-cli`, the commands without the window code. The
+This builds `build/cyanbox`, the interface with every command, and
+`build/src/app/cyanbox-cli`, the commands without the window code. The
 interface and GPU tests are skipped unless pointed at a private compositor;
 see `docs/HACKING.md`.
 
@@ -95,7 +95,7 @@ memory.
 
 CLI
 ---
-`rxbox [OPTIONS] COMMAND [ARGS]`. Without a command, rxbox opens the
+`cyanbox [OPTIONS] COMMAND [ARGS]`. Without a command, cyanbox opens the
 [interface](#the-interface). A `TRACK` is an audio file in the library (any
 path to it), a folder (every library track under it) or a library id. The
 commands open no window and no audio device.
@@ -134,10 +134,10 @@ commands open no window and no audio device.
 | Option                          | Description                                                                                  |
 |---------------------------------|----------------------------------------------------------------------------------------------|
 |                                 | **General options**                                                                          |
-| `-c`, `--library DIR`           | The library (default `$RXBOX_LIBRARY`, else `~/.local/share/rxbox`)                          |
+| `-c`, `--library DIR`           | The library (default `$CYANBOX_LIBRARY`, else `~/.local/share/cyanbox`)                          |
 | `-v`, `--verbose`               | More messages                                                                                |
-| `--device NAME`                 | The GPU whose name contains NAME, for the analysis and the interface (`$RXBOX_GPU_DEVICE`)  |
-| `--no-gpu`                      | Analyse on the CPU only, with the same results (`RXBOX_ANALYSIS_GPU=0`)                      |
+| `--device NAME`                 | The GPU whose name contains NAME, for the analysis and the interface (`$CYANBOX_GPU_DEVICE`)  |
+| `--no-gpu`                      | Analyse on the CPU only, with the same results (`CYANBOX_ANALYSIS_GPU=0`)                      |
 | `-h`, `--help`                  | Print usage                                                                                  |
 | `-V`, `--version`               | Print the version                                                                            |
 |                                 | **Analysis options**                                                                         |
@@ -158,14 +158,14 @@ commands open no window and no audio device.
 | `--pro-link`                    | Serve the library to players over [PRO DJ LINK](#pro-dj-link) while the interface runs     |
 | `--validation`                  | Enable the Vulkan validation layer                                                           |
 
-`rxbox --help` lists every option, those of `link serve` and `link browse`
+`cyanbox --help` lists every option, those of `link serve` and `link browse`
 included.
 
 Settings
 --------
-The settings live in the library. `rxbox config` lists them, `rxbox config
-KEY VALUE` changes one and `rxbox config KEY ""` puts its default back. A
-value a key cannot take, or a key rxbox does not know, is refused.
+The settings live in the library. `cyanbox config` lists them, `cyanbox config
+KEY VALUE` changes one and `cyanbox config KEY ""` puts its default back. A
+value a key cannot take, or a key cyanbox does not know, is refused.
 
 | Key                                    | Default            | Description                                                                 |
 |----------------------------------------|--------------------|-----------------------------------------------------------------------------|
@@ -183,23 +183,23 @@ value a key cannot take, or a key rxbox does not know, is refused.
 | `export.background_color`              | `default`          | The players' background for the stick's library, or one of the eight colours |
 | `link.mp3`                             | `false`            | Serve tracks over PRO DJ LINK as 320 kbps MP3 instead of 16-bit WAV         |
 | `audio.sink`                           | the default output | The PipeWire node to play to                                                |
-| `ml.model`                             | `models/...gguf`   | The tagging model's file (also `$RXBOX_ML_MODEL`)                           |
+| `ml.model`                             | `models/...gguf`   | The tagging model's file (also `$CYANBOX_ML_MODEL`)                           |
 | `color.pink` ... `color.purple`        | the legend         | What each colour stands for, in the words the [tagging](#tagging) picks by  |
 | `ui.traffic_light`                     | `related3`         | The browser's key highlight (View → Traffic Light)                          |
 | `ui.detail_bars`                       | `12`               | How many bars the detail waveform shows                                     |
 
 The players' My Settings are settings too, as `player.*`, `mixer.*` and
-`device.*`: `rxbox settings` lists their names and values, and see
+`device.*`: `cyanbox settings` lists their names and values, and see
 [My Settings](#my-settings).
 
 The library
 -----------
 The library is a directory holding `library.db`: `-c DIR` or `--library
-DIR`, else `$RXBOX_LIBRARY`, else `~/.local/share/rxbox`. `rxbox init [DIR]`
+DIR`, else `$CYANBOX_LIBRARY`, else `~/.local/share/cyanbox`. `cyanbox init [DIR]`
 creates one. It holds the tracks' tags and your edits to them, grids, keys,
 cues, ratings, colours, My Tags, play counts and history, waveforms,
 artwork thumbnails, playlists and folders, and the settings. The audio
-files stay where they are, and rxbox never writes to them.
+files stay where they are, and cyanbox never writes to them.
 
 A folder is added album by album, each album in disc and track order, so an
 album sits in the collection as it runs. The browser's Albums and Album
@@ -209,7 +209,7 @@ A track whose file goes missing stays in the library, greyed out, until the
 file comes back or is relocated. A track's library id is also its id on
 every stick, so the players keep their cached data across exports.
 
-Whatever the library holds that is not valid, or that rxbox does not know,
+Whatever the library holds that is not valid, or that cyanbox does not know,
 is removed when it opens, and the log says what went: a colour that is not
 one of the eight, a grid that is not valid (the track is analysed again), a
 cue at an impossible time, a setting a key does not take. A library on
@@ -220,7 +220,7 @@ green, aqua, blue and purple, or none. What each colour means is up to
 you: the [legend](#tagging) says it in words, which the tagging model picks
 by.
 
-The comment field is left for the tagging: rxbox reads a file's tags when
+The comment field is left for the tagging: cyanbox reads a file's tags when
 it adds the track but leaves its comment tag out. The `import.comment`
 setting takes the file's comment instead.
 
@@ -235,7 +235,7 @@ with the deck showing the local tempo. The players play both as they are.
 The grid can be edited on the deck: type the BPM, tap it, nudge the grid,
 set the downbeat, split and merge sections, double or halve the tempo.
 Cues set in bars follow. A locked grid is never replaced by an analysis
-unless you name the track: `rxbox analyze --force TRACK`, RE-ANALYSE on the
+unless you name the track: `cyanbox analyze --force TRACK`, RE-ANALYSE on the
 deck, or a forced re-analysis of that one track.
 
 `docs/BEATS.md` describes the analyser and how well it works.
@@ -245,7 +245,7 @@ Keys
 | Key detector                     | GiantSteps key (604 tracks) | Time for 5 minutes of audio |
 |----------------------------------|-----------------------------|-----------------------------|
 | libKeyFinder 2                   | 60.4 %, MIREX 0.674         | ~700 ms                     |
-| rxbox                            | 64.7 %, MIREX 0.704         | ~110 ms                     |
+| cyanbox                            | 64.7 %, MIREX 0.704         | ~110 ms                     |
 
 Keys show in the players' key display, classic names or Camelot codes, on
 the deck, in the browser and in the info panel; the stick can carry
@@ -257,19 +257,19 @@ Traffic Light). `docs/KEY.md` describes the detector.
 Analyser versions
 -----------------
 The library keeps the version of the analyser that made each track's grid,
-key and waveforms. When a new rxbox improves one of them, what an older
+key and waveforms. When a new cyanbox improves one of them, what an older
 version made counts as missing: the interface analyses those tracks again
-in the background when it opens the library, and `rxbox analyze`, adding a
+in the background when it opens the library, and `cyanbox analyze`, adding a
 track and exporting do the same. Only the stale parts are redone, and
 locked grids are kept.
 
 A grid you edit by hand keeps the version it was edited from, so lock a
-grid you corrected to keep it through the next upgrade. `rxbox check`
-counts the stale tracks and `rxbox show` prints a track's versions.
+grid you corrected to keep it through the next upgrade. `cyanbox check`
+counts the stale tracks and `cyanbox show` prints a track's versions.
 
 Tagging
 -------
-rxbox can listen to a track with MOSS-Audio-4B (OpenMOSS, Apache-2.0), an
+cyanbox can listen to a track with MOSS-Audio-4B (OpenMOSS, Apache-2.0), an
 audio-language model, on the GPU, and tag it with:
 
  * a colour, the one of the eight whose description fits the track best
@@ -293,13 +293,13 @@ The colours' descriptions are the legend. By default:
 The model gives each description a probability and the most probable wins,
 so the eight colours are the model's own division of the music. Describe
 what can be heard (energy, brightness, darkness, groove), not where a track
-goes in a set. Change the words in Analysis settings or with `rxbox config
+goes in a set. Change the words in Analysis settings or with `cyanbox config
 color.red "..."`; tracks tagged before keep their colour until they are
-tagged again, and `rxbox show` and the info panel say when a colour was
+tagged again, and `cyanbox show` and the info panel say when a colour was
 picked with words since changed.
 
 Tagging only runs when you ask: the track menu's Analyse tags, Analysis →
-Analyse tags of selection, or `rxbox tag TRACK...`. Never when a track is
+Analyse tags of selection, or `cyanbox tag TRACK...`. Never when a track is
 added, at startup or before an export. The model loads once per batch (3.5
 s, 4 GB of the GPU's memory, up to 7 GB while it listens), takes about 6 s
 a track on an RX 6900 XT, takes tracks asked for meanwhile into the same
@@ -308,21 +308,21 @@ tagging). The colours' probabilities and the model's measures (intensity,
 club, mood, vocals) are kept too.
 
 The model's file, `moss-audio-4b-instruct-q4_k.gguf` (4.1 GB, not in git),
-goes in `models/` at the top of the source tree: rxbox looks there beside
+goes in `models/` at the top of the source tree: cyanbox looks there beside
 its executable, beside the executable's directory and in the current
-directory. `ml.model` or `$RXBOX_ML_MODEL` names another file.
+directory. `ml.model` or `$CYANBOX_ML_MODEL` names another file.
 `docs/ML.md` describes what the model can tell and how it runs.
 
 The interface
 -------------
-`rxbox` without a command opens the interface (Wayland with Vulkan):
+`cyanbox` without a command opens the interface (Wayland with Vulkan):
 
 ```sh
-rxbox                                          # the default library and output
-rxbox --library ~/dj/library                   # another library
-rxbox --audio-sink alsa_output.usb-headphones  # play to this PipeWire node
-rxbox --audio none                             # no audio device at all
-rxbox --pro-link                               # serve the library to players
+cyanbox                                          # the default library and output
+cyanbox --library ~/dj/library                   # another library
+cyanbox --audio-sink alsa_output.usb-headphones  # play to this PipeWire node
+cyanbox --audio none                             # no audio device at all
+cyanbox --pro-link                               # serve the library to players
 ```
 
 It is laid out as rekordbox's Export mode with one player:
@@ -357,7 +357,7 @@ follows as NEXT, and the deck stops after the last track.
 
 ### MPRIS
 The player is an MPRIS 2 media player on the D-Bus session bus
-(`org.mpris.MediaPlayer2.rxbox`), so media keys, `playerctl` and a
+(`org.mpris.MediaPlayer2.cyanbox`), so media keys, `playerctl` and a
 desktop's media controls show the loaded track and drive it: play, pause,
 stop (back to the cue point, as CUE), seek, volume, next and previous (the
 rows after and before it), and a library track opened by its `file://` URL.
@@ -367,7 +367,7 @@ it.
 
 Exporting
 ---------
-File → Export to USB, or `rxbox export STICK`, writes the settings, the
+File → Export to USB, or `cyanbox export STICK`, writes the settings, the
 playlists and the tracks in them: every playlist by default, only the
 chosen ones (`-p NAME`), or the whole library (`--all`).
 
@@ -405,7 +405,7 @@ chosen ones (`-p NAME`), or the whole library (`--all`).
 | `/PIONEER/USBANLZ/.../ANLZ0000.DAT`, `.EXT`, `.2EX`     | Beat grid, cues and loops, waveforms (blue, RGB and 3-band)  |
 | `/PIONEER/Artwork/...`                                  | Cover art, 80 and 240 px                                     |
 | `/PIONEER/MYSETTING.DAT`, `MYSETTING2.DAT`, `DJMMYSETTING.DAT`, `DEVSETTING.DAT` | My Settings                         |
-| `/PIONEER/rxbox/sync.txt`                               | What this export wrote, so a player's later changes are told |
+| `/PIONEER/cyanbox/sync.txt`                               | What this export wrote, so a player's later changes are told |
 
 Both databases are written by default, so one stick works on every player
 generation.
@@ -413,7 +413,7 @@ generation.
 The tests check the writers against files rekordbox wrote: the fixed tables
 of `export.pdb` are byte-identical to rekordbox 7.2.18's, its
 `exportLibrary.db` opens with every page's HMAC verified and its schema
-and rows equal rxbox's, the My Settings files are byte-identical to
+and rows equal cyanbox's, the My Settings files are byte-identical to
 rekordbox 7.2.8's, and rekordbox's analysis files read back. These check
 the files; the tests do not run a player.
 
@@ -443,43 +443,43 @@ The players' My Settings (quantize, auto cue level, tempo range, the
 mixer's fader curves, the waveform colour...) go on the stick for the
 sections the library has values for, and the players apply them when you
 LOAD My Settings. File → Player settings (`Ctrl+,`) shows every one of them
-in Player, Mixer and Device tabs, and `rxbox config player.NAME VALUE` sets
+in Player, Mixer and Device tabs, and `cyanbox config player.NAME VALUE` sets
 one. The tempo range defaults to ±6 %, not rekordbox's ±10 %.
 
 Syncing after a gig
 -------------------
-`rxbox sync STICK`, or File → Sync from USB, reads what the players left on
+`cyanbox sync STICK`, or File → Sync from USB, reads what the players left on
 the stick and compares it with the library: hot cues set or cleared, memory
 cues and loops added or removed, plays from the history, and My Settings
 changed on the player. The command line lists them and `--apply` (or
-`rxbox pull STICK`) takes them all; the interface shows one row per change
+`cyanbox pull STICK`) takes them all; the interface shows one row per change
 to accept or reject. A play the library already has within a minute is not
 counted twice.
 
 PRO DJ LINK
 -----------
-With `--pro-link`, or `rxbox link serve` on the command line, rxbox does
+With `--pro-link`, or `cyanbox link serve` on the command line, cyanbox does
 what rekordbox's Link Export does: it joins the players' network as a
 computer, appears on their SOURCE screen, and the players browse the
 library and load its tracks with their grids, cues and waveforms, with no
-stick. Without it, rxbox never opens a Link socket.
+stick. Without it, cyanbox never opens a Link socket.
 
  * **Every Ethernet player** that speaks standard PRO DJ LINK, from the
    CDJ-900 to the CDJ-3000X. Every track is served as a 16-bit WAV decoded
    as it is read (or a 320 kbps MP3 with `link.mp3`), so a player plays the
    very samples the grid and cues were made on, whatever the codec.
- * **Plug and play**: rxbox serves on every Ethernet interface as soon as
+ * **Plug and play**: cyanbox serves on every Ethernet interface as soon as
    it is up with an address, and joins the link at once, before any player
    is on.
  * **The players in view**: the PRO DJ LINK window (Link → Players…) and
    the deck's title row show each player, what it has loaded, its state,
    key, tempo and time left over the track's overview.
- * **Load from rxbox**: Load in deck N in the track menu, or drop a track on
+ * **Load from cyanbox**: Load in deck N in the track menu, or drop a track on
    a player, unless it plays and Eject/Load Lock is on.
  * **Edits on the deck are kept**: a cue saved or deleted on a player (MEMORY,
    a hot cue pad) and a rating given there go into the library, as with
    rekordbox.
- * **TAG LIST** is shared with the interface for as long as rxbox runs.
+ * **TAG LIST** is shared with the interface for as long as cyanbox runs.
  * **Plays and history**: a track a player plays for 30 s counts as a play,
    and one it plays straight on for 1.5 minutes goes on the History.
 
@@ -487,7 +487,7 @@ Tried with two real CDJ-900s, a real CDJ-3000 and DJM-A9 (a 1.5 hour set
 without a fault), and emulated CDJ-900, CDJ-2000, CDJ-2000NXS2, CDJ-3000
 and CDJ-3000X players running Pioneer's own firmware.
 
-PRO DJ LINK has no authentication and no encryption. While rxbox serves,
+PRO DJ LINK has no authentication and no encryption. While cyanbox serves,
 anything on those networks can read the library's audio, artwork and
 analysis (never other files, and nothing can be written), so use a network
 with only the players on it. `docs/LINK.md` describes the protocol, the
@@ -496,7 +496,7 @@ security and what was tested.
 ### LINK CUE
 With `--pro-link`, the interface's deck is heard only in a DJM's headphone
 cue, as rekordbox's Link Monitor feeds it: no audio device is opened. When
-the deck starts playing, rxbox asks the mixer for the cue and streams the
+the deck starts playing, cyanbox asks the mixer for the cue and streams the
 deck to it, paced by the mixer's clock. It never poses as a player, and
 gives way to a player that takes the cue over until the deck starts again.
 The status bar says where the cue stands.
@@ -506,7 +506,7 @@ DJM-900NXS (firmware 1.32), but has not yet been tried on a real mixer.
 
 Documentation
 -------------
- * `docs/OVERVIEW.md`: what rxbox is, and the decisions behind it
+ * `docs/OVERVIEW.md`: what cyanbox is, and the decisions behind it
  * `docs/HACKING.md`: code style, layout, tests, running the interface while
    developing
  * `docs/UI.md`: the interface, control by control
@@ -517,4 +517,4 @@ Documentation
  * `docs/pdb.md`, `docs/anlz.md`, `docs/onelibrary.md`, `docs/settings.md`:
    the stick formats
 
-rxbox is under the BSD 2-Clause licence (`LICENSE.md`).
+cyanbox is under the BSD 2-Clause licence (`LICENSE.md`).

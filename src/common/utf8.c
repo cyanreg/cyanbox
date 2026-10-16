@@ -1,6 +1,6 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
-/* UTF-8 and Unicode NFC (rxbox/common.h). Every text rxbox keeps or gives
+/* UTF-8 and Unicode NFC (cyanbox/common.h). Every text cyanbox keeps or gives
  * out is NFC: the library's (core/model.c sets it so, core/clean.c makes
  * what an older library kept so), and so the stick's databases, its paths
  * (dj stores every stick path in NFC, export.py _clean; HFS+ hands out NFD
@@ -8,7 +8,7 @@
  * CDJ-2000 as two characters, the mark drawn apart (an emulated one,
  * 2026-10-15); tags written on macOS are often so. */
 
-#include "rxbox/common.h"
+#include "cyanbox/common.h"
 
 #include <stddef.h>
 #include <stdlib.h>
@@ -18,7 +18,7 @@
 
 /* ------------------------------------------------------------------ UTF-8 */
 
-uint32_t rx_utf8_next(const char **p)
+uint32_t cb_utf8_next(const char **p)
 {
     const uint8_t *s = (const uint8_t *)*p;
     uint32_t c = s[0];
@@ -60,7 +60,7 @@ uint32_t rx_utf8_next(const char **p)
     return c;
 }
 
-int rx_utf8_put(char *buf, uint32_t c)
+int cb_utf8_put(char *buf, uint32_t c)
 {
     uint8_t *b = (uint8_t *)buf;
     if (c < 0x80) {
@@ -83,11 +83,11 @@ int rx_utf8_put(char *buf, uint32_t c)
     return 4;
 }
 
-size_t rx_utf8_length(const char *s)
+size_t cb_utf8_length(const char *s)
 {
     size_t n = 0;
     while (*s) {
-        rx_utf8_next(&s);
+        cb_utf8_next(&s);
         n++;
     }
     return n;
@@ -107,7 +107,7 @@ size_t rx_utf8_length(const char *s)
 
 static const NfcTriple *find_decomposition(uint32_t c)
 {
-    size_t lo = 0, hi = RX_ARRAY_ELEMS(nfc_decompositions);
+    size_t lo = 0, hi = CB_ARRAY_ELEMS(nfc_decompositions);
     while (lo < hi) {
         size_t mid = (lo + hi) / 2;
         if (nfc_decompositions[mid].a == c)
@@ -122,7 +122,7 @@ static const NfcTriple *find_decomposition(uint32_t c)
 
 static int combining_class(uint32_t c)
 {
-    size_t lo = 0, hi = RX_ARRAY_ELEMS(nfc_combining);
+    size_t lo = 0, hi = CB_ARRAY_ELEMS(nfc_combining);
     while (lo < hi) {
         size_t mid = (lo + hi) / 2;
         if (c < nfc_combining[mid].a)
@@ -142,7 +142,7 @@ static uint32_t compose(uint32_t a, uint32_t b)
     if (a >= HANGUL_S && a < HANGUL_S + HANGUL_SCOUNT && (a - HANGUL_S) % HANGUL_TCOUNT == 0 &&
         b > HANGUL_T && b < HANGUL_T + HANGUL_TCOUNT)
         return a + (b - HANGUL_T);
-    size_t lo = 0, hi = RX_ARRAY_ELEMS(nfc_compositions);
+    size_t lo = 0, hi = CB_ARRAY_ELEMS(nfc_compositions);
     while (lo < hi) {
         size_t mid = (lo + hi) / 2;
         const NfcTriple *t = &nfc_compositions[mid];
@@ -178,7 +178,7 @@ static size_t decompose(uint32_t c, uint32_t *out, size_t n)
     return n;
 }
 
-char *rx_utf8_nfc(const char *s)
+char *cb_utf8_nfc(const char *s)
 {
     size_t len = strlen(s);
     /* A code point decomposes into at most 4 (the longest canonical
@@ -189,7 +189,7 @@ char *rx_utf8_nfc(const char *s)
     size_t n = 0;
     const char *p = s;
     while (*p)
-        n = decompose(rx_utf8_next(&p), cp, n);
+        n = decompose(cb_utf8_next(&p), cp, n);
 
     /* Canonical ordering: stable sort of each run of non-starters. */
     for (size_t i = 1; i < n; i++) {
@@ -233,7 +233,7 @@ char *rx_utf8_nfc(const char *s)
     if (out) {
         size_t b = 0;
         for (size_t i = 0; i < o; i++)
-            b += (size_t)rx_utf8_put(out + b, cp[i]);
+            b += (size_t)cb_utf8_put(out + b, cp[i]);
         out[b] = '\0';
     }
     free(cp);
@@ -241,7 +241,7 @@ char *rx_utf8_nfc(const char *s)
 }
 
 
-bool rx_utf8_is_nfc(const char *s)
+bool cb_utf8_is_nfc(const char *s)
 {
     /* ASCII is NFC as it is. */
     const unsigned char *p = (const unsigned char *)s;
@@ -249,17 +249,17 @@ bool rx_utf8_is_nfc(const char *s)
         p++;
     if (!*p)
         return true;
-    char *n = rx_utf8_nfc(s);
+    char *n = cb_utf8_nfc(s);
     bool same = n && !strcmp(n, s);
     free(n);
     return same;
 }
 
-bool rx_utf8_valid(const char *s)
+bool cb_utf8_valid(const char *s)
 {
     while (*s) {
         const char *at = s;
-        if (rx_utf8_next(&s) == 0xFFFD && memcmp(at, "\xef\xbf\xbd", 3))
+        if (cb_utf8_next(&s) == 0xFFFD && memcmp(at, "\xef\xbf\xbd", 3))
             return false;
     }
     return true;

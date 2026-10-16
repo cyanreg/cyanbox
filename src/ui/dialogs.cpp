@@ -6,27 +6,27 @@
 // dialog under a bare Wayland compositor, with a fuzzy finder over
 // everything under the folder: finder.cpp), the keyboard map and About.
 //
-// Player settings is rekordbox's My Settings, built from rx_settings_list:
+// Player settings is rekordbox's My Settings, built from cb_settings_list:
 // a field settings.c gains shows up with no change here. Its values are
-// RXConfig's player/mixer/device groups, set and saved at once with
-// rx_library_config_save, the way Sync from USB's apply sets them. The
+// CBConfig's player/mixer/device groups, set and saved at once with
+// cb_library_config_save, the way Sync from USB's apply sets them. The
 // interface follows several of them from the next frame on (ui.cpp,
 // follow_settings), and the View menu's waveform colour and key notation
 // set theirs through here (ui_setting_pick).
 //
-// Export follows the app's flow (rxbox/app.h export_state): Export starts
+// Export follows the app's flow (cyanbox/app.h export_state): Export starts
 // a dry run; when it finds stick files to prune or player changes not yet
 // synced back it stops with `confirm` set, both known by then, and the
 // dialog asks once ("The stick has N changes you have not synced", the
 // files to delete), each button an answer to both, before the real run.
 // Sync from USB reads the stick on a worker
-// (rx_app_read_stick: rx_stick_read/rx_stick_diff) and lists what the
+// (cb_app_read_stick: cb_stick_read/cb_stick_diff) and lists what the
 // player wrote for review; the accepted rows are applied with
-// rx_stick_apply on this thread, which owns the library. Inspect USB runs
-// rx_inspect on a worker too (rx_app_inspect_stick). Both take their
+// cb_stick_apply on this thread, which owns the library. Inspect USB runs
+// cb_inspect on a worker too (cb_app_inspect_stick). Both take their
 // result from app->stick_result when its request is theirs and drop a
 // result of their kind that is not (a read given up on); closing or
-// reopening either gives up its request in flight (rx_app_cancel_stick),
+// reopening either gives up its request in flight (cb_app_cancel_stick),
 // so a later read never shows an earlier one's result.
 
 #include "ui_internal.h"
@@ -99,7 +99,7 @@ void ui_scan_volumes(UiState *ui)
                 m += *p;
             }
         }
-        if (rx_str_starts(m.c_str(), "/run/media/") || rx_str_starts(m.c_str(), "/media/"))
+        if (cb_str_starts(m.c_str(), "/run/media/") || cb_str_starts(m.c_str(), "/media/"))
             ui->volumes.push_back(m);
     }
     fclose(f);
@@ -121,9 +121,9 @@ static bool volume_picker(UiState *ui, char *path, size_t size)
         ImGui::TextDisabled("No removable volume is mounted under /run/media or /media.");
     for (const std::string &v : ui->volumes) {
         char label[64] = "";
-        rx_stick_label(v.c_str(), label, sizeof(label));
+        cb_stick_label(v.c_str(), label, sizeof(label));
         char row[1200];
-        snprintf(row, sizeof(row), "%s   %s", label[0] ? label : rx_path_base(v.c_str()), v.c_str());
+        snprintf(row, sizeof(row), "%s   %s", label[0] ? label : cb_path_base(v.c_str()), v.c_str());
         if (ImGui::Selectable(row, !strcmp(path, v.c_str()))) {
             snprintf(path, size, "%s", v.c_str());
             changed = true;
@@ -152,13 +152,13 @@ static std::string first_gone(const char *path)
 
 void ui_open_remove_missing(UiState *ui)
 {
-    RXApp *app = ui->app;
-    if (rx_app_rescan(app) < 0)
+    CBApp *app = ui->app;
+    if (cb_app_rescan(app) < 0)
         return;
     ui->remove_ids.clear();
     ui->remove_gone.clear();
     for (int i = 0; i < app->lib.nb_tracks; i++) {
-        const RXTrack *t = app->lib.tracks[i];
+        const CBTrack *t = app->lib.tracks[i];
         if (!t->missing)
             continue;
         ui->remove_ids.push_back(t->id);
@@ -173,7 +173,7 @@ void ui_open_remove_missing(UiState *ui)
             ui->remove_gone.emplace_back(gone, 1);
     }
     if (ui->remove_ids.empty()) {
-        rx_app_set_status(app, "No track is missing its file");
+        cb_app_set_status(app, "No track is missing its file");
         return;
     }
     std::sort(ui->remove_gone.begin(), ui->remove_gone.end(),
@@ -186,7 +186,7 @@ void ui_open_remove_missing(UiState *ui)
 // them, which say the files may well be fine on a drive not plugged in.
 static void missing_list(UiState *ui)
 {
-    RXApp *app = ui->app;
+    CBApp *app = ui->app;
     int n = (int)ui->remove_ids.size();
     ImGui::Text("Remove %d track%s whose file%s cannot be found?", n, n == 1 ? "" : "s",
                 n == 1 ? "" : "s");
@@ -197,7 +197,7 @@ static void missing_list(UiState *ui)
     clip.Begin(n);
     while (clip.Step()) {
         for (int i = clip.DisplayStart; i < clip.DisplayEnd; i++) {
-            const RXTrack *t = rx_library_find_id(&app->lib, ui->remove_ids[(size_t)i]);
+            const CBTrack *t = cb_library_find_id(&app->lib, ui->remove_ids[(size_t)i]);
             ImGui::TextUnformatted(t ? t->path : "?");
         }
     }
@@ -223,7 +223,7 @@ static void missing_list(UiState *ui)
 
 static void confirm_remove(UiState *ui)
 {
-    RXApp *app = ui->app;
+    CBApp *app = ui->app;
     if (ui->want_confirm_remove) {
         ImGui::OpenPopup("Remove from library?");
         ui->want_confirm_remove = false;
@@ -245,14 +245,14 @@ static void confirm_remove(UiState *ui)
     if (remove) {
         int removed = 0;
         for (uint64_t id : ui->remove_ids) {
-            RXTrack *t = rx_library_find_id(&app->lib, id);
+            CBTrack *t = cb_library_find_id(&app->lib, id);
             if (!t)
                 continue;
-            for (int d = 0; d < RX_DECKS; d++) {
+            for (int d = 0; d < CB_DECKS; d++) {
                 if (app->decks[d].track == t || app->decks[d].loading_track_id == id)
-                    rx_app_unload_deck(app, d);
+                    cb_app_unload_deck(app, d);
             }
-            if (rx_library_remove(&app->lib, t) >= 0)
+            if (cb_library_remove(&app->lib, t) >= 0)
                 removed++;
         }
         ui->remove_ids.clear();
@@ -260,8 +260,8 @@ static void confirm_remove(UiState *ui)
         ui->remove_missing = false;
         app->nb_selection = 0;
         app->focus_track = 0;
-        rx_app_rebuild_rows(app);
-        rx_app_set_status(app, "Removed %d track%s from the library", removed, removed == 1 ? "" : "s");
+        cb_app_rebuild_rows(app);
+        cb_app_set_status(app, "Removed %d track%s from the library", removed, removed == 1 ? "" : "s");
         ImGui::CloseCurrentPopup();
     }
     ImGui::SameLine();
@@ -276,7 +276,7 @@ static void confirm_remove(UiState *ui)
 
 /* ----------------------------------------------------------------- relocate */
 
-void ui_open_relocate(UiState *ui, RXTrack *t)
+void ui_open_relocate(UiState *ui, CBTrack *t)
 {
     ui->relocate_id = t->id;
     snprintf(ui->relocate_buf, sizeof(ui->relocate_buf), "%s", t->path);
@@ -285,7 +285,7 @@ void ui_open_relocate(UiState *ui, RXTrack *t)
 
 static void relocate(UiState *ui)
 {
-    RXApp *app = ui->app;
+    CBApp *app = ui->app;
     if (ui->want_relocate) {
         ImGui::OpenPopup("Relocate");
         ui->want_relocate = false;
@@ -294,7 +294,7 @@ static void relocate(UiState *ui)
     if (!ImGui::BeginPopupModal("Relocate", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
         return;
     ui_settle_centred();
-    RXTrack *t = rx_library_find_id(&app->lib, ui->relocate_id);
+    CBTrack *t = cb_library_find_id(&app->lib, ui->relocate_id);
     if (!t) {
         ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
@@ -309,22 +309,22 @@ static void relocate(UiState *ui)
         ImGui::SetKeyboardFocusHere();
     bool enter = ImGui::InputText("##newpath", ui->relocate_buf, sizeof(ui->relocate_buf),
                                   ImGuiInputTextFlags_EnterReturnsTrue);
-    char *expanded = rx_path_expand(ui->relocate_buf);
-    bool exists = expanded && rx_file_exists(expanded);
+    char *expanded = cb_path_expand(ui->relocate_buf);
+    bool exists = expanded && cb_file_exists(expanded);
     if (!exists)
         ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(UI_ACCENT), "No file there.");
     else
         ImGui::TextDisabled("Found.");
     ImGui::BeginDisabled(!exists);
     if (ImGui::Button("Relocate", ImVec2(PX(110), 0)) || (enter && exists)) {
-        char *abs = rx_path_abs(expanded);
-        int ret = abs ? rx_library_relocate(&app->lib, t, abs) : RX_ERROR(ENOENT);
+        char *abs = cb_path_abs(expanded);
+        int ret = abs ? cb_library_relocate(&app->lib, t, abs) : CB_ERROR(ENOENT);
         if (ret < 0)
-            rx_app_set_status(app, "Could not relocate: %s", strerror(-ret));
+            cb_app_set_status(app, "Could not relocate: %s", strerror(-ret));
         else
-            rx_app_set_status(app, "Relocated %s", ui_title(t));
+            cb_app_set_status(app, "Relocated %s", ui_title(t));
         free(abs);
-        rx_app_rebuild_rows(app);
+        cb_app_rebuild_rows(app);
         ImGui::CloseCurrentPopup();
     }
     ImGui::EndDisabled();
@@ -347,9 +347,9 @@ static const BpmPreset BPM_PRESETS[] = {
 };
 
 // The legend: a swatch, the colour's name and its words per row, edited in
-// place and saved when a field is left. A field shows RXConfig's words
+// place and saved when a field is left. A field shows CBConfig's words
 // unless it is being typed in.
-static bool legend_section(UiState *ui, RXConfig *cfg)
+static bool legend_section(UiState *ui, CBConfig *cfg)
 {
     bool changed = false;
     ImGui::SeparatorText("Track colours");
@@ -358,7 +358,7 @@ static bool legend_section(UiState *ui, RXConfig *cfg)
                         "what can be heard (energy, brightness, darkness, groove).");
     ImGui::PopTextWrapPos();
     float name_w = ImGui::CalcTextSize("purple").x + PX(8);
-    for (int id = 1; id <= RX_TRACK_COLORS; id++) {
+    for (int id = 1; id <= CB_TRACK_COLORS; id++) {
         ImGui::PushID(id);
         char *buf = ui->vibe_buf[id - 1];
         ImGui::AlignTextToFramePadding();
@@ -366,31 +366,31 @@ static bool legend_section(UiState *ui, RXConfig *cfg)
         float s = PX(14), fh = ImGui::GetFrameHeight();
         ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(p.x, p.y + (fh - s) * 0.5f),
                                                   ImVec2(p.x + s, p.y + (fh + s) * 0.5f),
-                                                  ui_rgb(rx_track_color_rgb(id)), PX(2));
+                                                  ui_rgb(cb_track_color_rgb(id)), PX(2));
         ImGui::Dummy(ImVec2(s, fh));
         ImGui::SameLine();
         float x = ImGui::GetCursorPosX();
-        ImGui::TextUnformatted(rx_track_color_name(id));
+        ImGui::TextUnformatted(cb_track_color_name(id));
         ImGui::SameLine(x + name_w);
         ImGui::SetNextItemWidth(PX(300));
         if (ImGui::GetActiveID() != ImGui::GetID("##vibe"))
-            snprintf(buf, sizeof(ui->vibe_buf[0]), "%s", rx_config_vibe(cfg, id));
+            snprintf(buf, sizeof(ui->vibe_buf[0]), "%s", cb_config_vibe(cfg, id));
         ImGui::InputText("##vibe", buf, sizeof(ui->vibe_buf[0]));
-        if (ImGui::IsItemDeactivatedAfterEdit() && rx_config_set_vibe(cfg, id, buf) >= 0)
+        if (ImGui::IsItemDeactivatedAfterEdit() && cb_config_set_vibe(cfg, id, buf) >= 0)
             changed = true;
         char tip[192];
-        snprintf(tip, sizeof(tip), "%s; by default \"%s\"", rx_config_vibe_key(id),
-                 rx_config_vibe_default(id));
+        snprintf(tip, sizeof(tip), "%s; by default \"%s\"", cb_config_vibe_key(id),
+                 cb_config_vibe_default(id));
         ui_tooltip(tip);
         ImGui::PopID();
     }
     bool defaults = true;
-    for (int id = 1; id <= RX_TRACK_COLORS; id++)
+    for (int id = 1; id <= CB_TRACK_COLORS; id++)
         defaults &= !cfg->vibes[id - 1];
     ImGui::BeginDisabled(defaults);
     if (ImGui::Button("Reset to defaults")) {
-        for (int id = 1; id <= RX_TRACK_COLORS; id++)
-            rx_config_set_vibe(cfg, id, NULL);
+        for (int id = 1; id <= CB_TRACK_COLORS; id++)
+            cb_config_set_vibe(cfg, id, NULL);
         changed = true;
     }
     ImGui::EndDisabled();
@@ -404,7 +404,7 @@ static void analysis_settings(UiState *ui)
 {
     if (!ui->dlg_analysis)
         return;
-    RXConfig *cfg = &ui->app->lib.cfg;
+    CBConfig *cfg = &ui->app->lib.cfg;
     ui_centre_next(ui, 380, 0);
     if (!ImGui::Begin("Analysis settings", &ui->dlg_analysis, ImGuiWindowFlags_NoCollapse |
                       ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings)) {
@@ -415,10 +415,10 @@ static void analysis_settings(UiState *ui)
     ui_settle_centred();
     bool changed = false;
     ImGui::SeparatorText("Analyse");
-    bool beats = cfg->analyse_what & RX_ANALYSE_BEATS, key = cfg->analyse_what & RX_ANALYSE_KEY;
+    bool beats = cfg->analyse_what & CB_ANALYSE_BEATS, key = cfg->analyse_what & CB_ANALYSE_KEY;
     if (ImGui::Checkbox("BPM and beat grid", &beats) | ImGui::Checkbox("Key", &key)) {
-        cfg->analyse_what = RX_ANALYSE_WAVES | (beats ? RX_ANALYSE_BEATS : 0) |
-                            (key ? RX_ANALYSE_KEY : 0);
+        cfg->analyse_what = CB_ANALYSE_WAVES | (beats ? CB_ANALYSE_BEATS : 0) |
+                            (key ? CB_ANALYSE_KEY : 0);
         changed = true;
     }
     ImGui::TextDisabled("Waveforms are always made.");
@@ -462,7 +462,7 @@ void ui_open_settings(UiState *ui)
     ui->settings_focus = true;
 }
 
-static RXKv **setting_group(RXConfig *cfg, int section, int **nb)
+static CBKv **setting_group(CBConfig *cfg, int section, int **nb)
 {
     switch (section) {
     case UI_SETTINGS_PLAYER:
@@ -477,12 +477,12 @@ static RXKv **setting_group(RXConfig *cfg, int section, int **nb)
     }
 }
 
-// The library's value: RXConfig's copy of the "<prefix>.<name>" row, NULL
+// The library's value: CBConfig's copy of the "<prefix>.<name>" row, NULL
 // when there is none (the field is at its default).
 static const char *setting_stored(UiState *ui, const UiSetting &f)
 {
     int *nb;
-    RXKv **kv = setting_group(&ui->app->lib.cfg, f.section, &nb);
+    CBKv **kv = setting_group(&ui->app->lib.cfg, f.section, &nb);
     for (int i = 0; i < *nb; i++) {
         if (!strcmp((*kv)[i].key, f.name.c_str()))
             return (*kv)[i].value ? (*kv)[i].value : "";
@@ -491,13 +491,13 @@ static const char *setting_stored(UiState *ui, const UiSetting &f)
 }
 
 // The value the export would write, an index into the field's values; -1
-// for a value it would refuse (`rxbox config` takes anything).
+// for a value it would refuse (`cyanbox config` takes anything).
 static int setting_current(UiState *ui, const UiSetting &f)
 {
     const char *v = setting_stored(ui, f);
     if (!v)
         return f.deflt;
-    const char *listed = rx_settings_value(f.file.c_str(), f.name.c_str(), v);
+    const char *listed = cb_settings_value(f.file.c_str(), f.name.c_str(), v);
     for (int i = 0; listed && i < (int)f.values.size(); i++) {
         if (f.values[i] == listed)
             return i;
@@ -505,18 +505,18 @@ static int setting_current(UiState *ui, const UiSetting &f)
     return -1;
 }
 
-// Sets one field in RXConfig; the caller saves it. The row lands in the
-// setting table as `rxbox config player.NAME VALUE` writes it, and RXConfig
-// stays in step, as Sync from USB keeps it (rx_stick_apply): written with
-// rx_library_setting_set alone, the row would be put back to RXConfig's old
-// copy by the next rx_library_config_save (any preference changed).
+// Sets one field in CBConfig; the caller saves it. The row lands in the
+// setting table as `cyanbox config player.NAME VALUE` writes it, and CBConfig
+// stays in step, as Sync from USB keeps it (cb_stick_apply): written with
+// cb_library_setting_set alone, the row would be put back to CBConfig's old
+// copy by the next cb_library_config_save (any preference changed).
 static int setting_put(UiState *ui, const UiSetting &f, const std::string &value)
 {
     int *nb;
-    RXKv **kv = setting_group(&ui->app->lib.cfg, f.section, &nb);
-    char *v = rx_strdup(value.c_str());
+    CBKv **kv = setting_group(&ui->app->lib.cfg, f.section, &nb);
+    char *v = cb_strdup(value.c_str());
     if (!v)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     for (int i = 0; i < *nb; i++) {
         if (!strcmp((*kv)[i].key, f.name.c_str())) {
             free((*kv)[i].value);
@@ -524,33 +524,33 @@ static int setting_put(UiState *ui, const UiSetting &f, const std::string &value
             return 0;
         }
     }
-    char *k = rx_strdup(f.name.c_str());
-    RXKv *n = k ? (RXKv *)realloc(*kv, (size_t)(*nb + 1) * sizeof(*n)) : nullptr;
+    char *k = cb_strdup(f.name.c_str());
+    CBKv *n = k ? (CBKv *)realloc(*kv, (size_t)(*nb + 1) * sizeof(*n)) : nullptr;
     if (!n) {
         free(k);
         free(v);
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     }
     *kv = n;
-    n[(*nb)++] = RXKv { k, v };
+    n[(*nb)++] = CBKv { k, v };
     return 0;
 }
 
 // A value picked: into the library at once, and said in the status bar.
 static void setting_write(UiState *ui, const UiSetting &f, int value)
 {
-    RXApp *app = ui->app;
+    CBApp *app = ui->app;
     int ret = setting_put(ui, f, f.values[value]);
     if (ret >= 0)
-        ret = rx_library_config_save(&app->lib);
+        ret = cb_library_config_save(&app->lib);
     if (ret < 0) {
-        rx_app_set_status(app, "Could not save the setting: %s", strerror(-ret));
+        cb_app_set_status(app, "Could not save the setting: %s", strerror(-ret));
         return;
     }
     char label[64], text[64];
     ui_setting_label(f.name.c_str(), label, sizeof(label));
     ui_setting_value(f.name.c_str(), f.values[value].c_str(), text, sizeof(text));
-    rx_app_set_status(app, "%s setting %s: %s", ui_setting_titles[f.section], label, text);
+    cb_app_set_status(app, "%s setting %s: %s", ui_setting_titles[f.section], label, text);
 }
 
 void ui_setting_pick(UiState *ui, const char *key, const char *value)
@@ -567,7 +567,7 @@ void ui_setting_pick(UiState *ui, const char *key, const char *value)
             }
         }
     }
-    rx_warn("ui: %s = %s is not a My Setting", key, value);
+    cb_warn("ui: %s = %s is not a My Setting", key, value);
 }
 
 // Every field of the section that is not at its default goes back to it.
@@ -576,7 +576,7 @@ void ui_setting_pick(UiState *ui, const char *key, const char *value)
 // replaced by defaults rather than left as they were.
 static void settings_reset(UiState *ui, int section)
 {
-    RXApp *app = ui->app;
+    CBApp *app = ui->app;
     int changed = 0, ret = 0;
     for (const UiSetting &f : ui_settings(ui)) {
         if (f.section != section || setting_current(ui, f) == f.deflt)
@@ -586,14 +586,14 @@ static void settings_reset(UiState *ui, int section)
         changed++;
     }
     if (changed) {
-        int err = rx_library_config_save(&app->lib);
+        int err = cb_library_config_save(&app->lib);
         if (ret >= 0)
             ret = err;
     }
     if (ret < 0)
-        rx_app_set_status(app, "Could not save the settings: %s", strerror(-ret));
+        cb_app_set_status(app, "Could not save the settings: %s", strerror(-ret));
     else
-        rx_app_set_status(app, "%s settings back to the defaults (%d changed)",
+        cb_app_set_status(app, "%s settings back to the defaults (%d changed)",
                           ui_setting_titles[section], changed);
 }
 
@@ -707,7 +707,7 @@ static void settings_tab(UiState *ui, int section, int rows, float label_w, floa
 }
 
 // rekordbox's My Settings: what the export writes for the players to LOAD.
-// Generated from rx_settings_list; the values are the library's (RXConfig's
+// Generated from cb_settings_list; the values are the library's (CBConfig's
 // player/mixer/device groups), so the dialog keeps nothing of its own.
 static void settings_dialog(UiState *ui)
 {
@@ -768,7 +768,7 @@ static void settings_dialog(UiState *ui)
 
 void ui_open_export(UiState *ui)
 {
-    RXApp *app = ui->app;
+    CBApp *app = ui->app;
     ui->dlg_export = true;
     app->export_state.open = true;
     // Closed on its summary with the title bar's x: the choices again.
@@ -779,7 +779,7 @@ void ui_open_export(UiState *ui)
         snprintf(app->export_state.dest, sizeof(app->export_state.dest), "%s", ui->volumes[0].c_str());
 }
 
-static bool playlist_in(const RXPlaylistFolder *f, const RXPlaylist *p)
+static bool playlist_in(const CBPlaylistFolder *f, const CBPlaylist *p)
 {
     for (int i = 0; i < f->nb_playlists; i++) {
         if (f->playlists[i] == p)
@@ -793,17 +793,17 @@ static bool playlist_in(const RXPlaylistFolder *f, const RXPlaylist *p)
 }
 
 // The chosen playlists that still exist: the tree can delete one while the
-// dialog is open, and the pointer must not reach rx_app_start_export().
+// dialog is open, and the pointer must not reach cb_app_start_export().
 static void playlists_prune(UiState *ui)
 {
-    const RXPlaylistFolder *root = ui->app->lib.root_folder;
+    const CBPlaylistFolder *root = ui->app->lib.root_folder;
     auto &sel = ui->export_playlists;
-    sel.erase(std::remove_if(sel.begin(), sel.end(), [root](RXPlaylist *p) {
+    sel.erase(std::remove_if(sel.begin(), sel.end(), [root](CBPlaylist *p) {
         return !root || !playlist_in(root, p);
     }), sel.end());
 }
 
-static void playlist_checks(UiState *ui, RXPlaylistFolder *f)
+static void playlist_checks(UiState *ui, CBPlaylistFolder *f)
 {
     for (int i = 0; i < f->nb_folders; i++) {
         ImGui::PushID(f->folders[i]);
@@ -814,7 +814,7 @@ static void playlist_checks(UiState *ui, RXPlaylistFolder *f)
         ImGui::PopID();
     }
     for (int i = 0; i < f->nb_playlists; i++) {
-        RXPlaylist *p = f->playlists[i];
+        CBPlaylist *p = f->playlists[i];
         auto &sel = ui->export_playlists;
         auto it = std::find(sel.begin(), sel.end(), p);
         bool on = it != sel.end();
@@ -831,7 +831,7 @@ static void playlist_checks(UiState *ui, RXPlaylistFolder *f)
 
 static void export_start(UiState *ui)
 {
-    RXApp *app = ui->app;
+    CBApp *app = ui->app;
     auto &es = app->export_state;
     playlists_prune(ui);
     if (ui->export_scope == 1 && ui->export_playlists.empty())
@@ -850,9 +850,9 @@ static void export_start(UiState *ui)
         es.playlists = nullptr;
         es.nb_playlists = 0;
     }
-    int ret = rx_app_start_export(app);
+    int ret = cb_app_start_export(app);
     if (ret < 0) {
-        rx_app_set_status(app, "Export could not start: %s", strerror(-ret));
+        cb_app_set_status(app, "Export could not start: %s", strerror(-ret));
         return;
     }
     ui->export_seen_running = true;
@@ -864,8 +864,8 @@ static void export_start(UiState *ui)
 // the export reads the library's settings when it starts.
 static void background_picker(UiState *ui)
 {
-    RXApp *app = ui->app;
-    RXConfig *cfg = &app->lib.cfg;
+    CBApp *app = ui->app;
+    CBConfig *cfg = &app->lib.cfg;
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("Background colour on the players");
     ImGui::SameLine();
@@ -874,25 +874,25 @@ static void background_picker(UiState *ui)
     if (ui_swatch(ui, "##bgdefault", 0, cfg->background_color == 0, 18))
         picked = 0;
     ui_tooltip("default (the player's own)");
-    for (int i = 1; i <= RX_TRACK_COLORS; i++) {
+    for (int i = 1; i <= CB_TRACK_COLORS; i++) {
         char id[16];
         snprintf(id, sizeof(id), "##bg%d", i);
         ImGui::SameLine();
-        if (ui_swatch(ui, id, rx_track_color_rgb(i), cfg->background_color == i, 18))
+        if (ui_swatch(ui, id, cb_track_color_rgb(i), cfg->background_color == i, 18))
             picked = i;
-        ui_tooltip(rx_track_color_name(i));
+        ui_tooltip(cb_track_color_name(i));
     }
     ImGui::PopStyleVar();
     ImGui::SameLine();
-    ImGui::TextDisabled("%s", cfg->background_color ? rx_track_color_name(cfg->background_color)
+    ImGui::TextDisabled("%s", cfg->background_color ? cb_track_color_name(cfg->background_color)
                                                     : "default");
     if (picked >= 0 && picked != cfg->background_color) {
         int old = cfg->background_color;
         cfg->background_color = picked;
-        int ret = rx_library_config_save(&app->lib);
+        int ret = cb_library_config_save(&app->lib);
         if (ret < 0) {
             cfg->background_color = old;
-            rx_app_set_status(app, "The background colour could not be saved: %s",
+            cb_app_set_status(app, "The background colour could not be saved: %s",
                               strerror(-ret));
         }
     }
@@ -900,7 +900,7 @@ static void background_picker(UiState *ui)
 
 static void export_dialog(UiState *ui)
 {
-    RXApp *app = ui->app;
+    CBApp *app = ui->app;
     auto &es = app->export_state;
     if (!ui->dlg_export)
         return;
@@ -940,7 +940,7 @@ static void export_dialog(UiState *ui)
             ImGui::EndChild();
         }
         ImGui::SeparatorText("Options");
-        // What the stick's audio is (RXStickFormat): encoded from the
+        // What the stick's audio is (CBStickFormat): encoded from the
         // decoded samples as it is written, when not copied.
         static const char *const formats[] = {
             "Each file as it is",
@@ -1000,8 +1000,8 @@ static void export_dialog(UiState *ui)
             if (unsynced)
                 es.ignore_unsynced = true;
             es.prune = prune;
-            if (rx_app_start_export(app) < 0)
-                rx_app_set_status(app, "Export could not continue");
+            if (cb_app_start_export(app) < 0)
+                cb_app_set_status(app, "Export could not continue");
         };
         float bw = PX(unsynced ? 160 : 140);
         if (unsynced) {
@@ -1038,14 +1038,14 @@ static void export_dialog(UiState *ui)
             ImGui::SameLine();
             ImGui::TextDisabled("%d / %d", es.done, es.total);
             char rate[64];
-            rx_export_rate_text(copying ? es.rate : 0, es.seconds_left, rate, sizeof(rate));
+            cb_export_rate_text(copying ? es.rate : 0, es.seconds_left, rate, sizeof(rate));
             if (rate[0]) {
                 ImGui::SameLine();
                 ImGui::TextDisabled("%s", rate);
             }
             ImGui::ProgressBar(frac, ImVec2(-FLT_MIN, PX(6)), "");
             ImGui::TextDisabled("%s", es.item);
-        } else if (es.result == RX_ERROR(ECANCELED)) {
+        } else if (es.result == CB_ERROR(ECANCELED)) {
             ImGui::TextUnformatted("Export cancelled.");
         } else if (es.result < 0) {
             ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(UI_RED), "Export failed: %s",
@@ -1083,7 +1083,7 @@ static void export_dialog(UiState *ui)
 static void sync_free(UiState *ui)
 {
     if (ui->sync_state_valid)
-        rx_stick_state_free(&ui->sync_state);
+        cb_stick_state_free(&ui->sync_state);
     ui->sync_state_valid = false;
     free(ui->sync_items);
     ui->sync_items = nullptr;
@@ -1093,7 +1093,7 @@ static void sync_free(UiState *ui)
 // Gives up the read in flight, if any: the dialog closes or starts afresh.
 static void sync_cancel(UiState *ui)
 {
-    rx_app_cancel_stick(ui->app, ui->sync_request);
+    cb_app_cancel_stick(ui->app, ui->sync_request);
     ui->sync_request = 0;
 }
 
@@ -1113,34 +1113,34 @@ void ui_open_sync(UiState *ui)
 static const char *sync_kind_name(int k)
 {
     switch (k) {
-    case RX_SYNC_HOT_CUE_SET:       return "Hot cue set";
-    case RX_SYNC_HOT_CUE_CLEARED:   return "Hot cue cleared";
-    case RX_SYNC_MEMORY_ADDED:      return "Memory cue added";
-    case RX_SYNC_MEMORY_REMOVED:    return "Memory cue removed";
-    case RX_SYNC_PLAY:              return "Play";
-    case RX_SYNC_SETTING:           return "Setting";
+    case CB_SYNC_HOT_CUE_SET:       return "Hot cue set";
+    case CB_SYNC_HOT_CUE_CLEARED:   return "Hot cue cleared";
+    case CB_SYNC_MEMORY_ADDED:      return "Memory cue added";
+    case CB_SYNC_MEMORY_REMOVED:    return "Memory cue removed";
+    case CB_SYNC_PLAY:              return "Play";
+    case CB_SYNC_SETTING:           return "Setting";
     default:                        return "?";
     }
 }
 
-static void sync_detail(const RXSyncItem *it, char *buf, size_t size)
+static void sync_detail(const CBSyncItem *it, char *buf, size_t size)
 {
     char t[32], len[32] = "";
     switch (it->kind) {
-    case RX_SYNC_HOT_CUE_SET:
-    case RX_SYNC_HOT_CUE_CLEARED:
-    case RX_SYNC_MEMORY_ADDED:
-    case RX_SYNC_MEMORY_REMOVED:
+    case CB_SYNC_HOT_CUE_SET:
+    case CB_SYNC_HOT_CUE_CLEARED:
+    case CB_SYNC_MEMORY_ADDED:
+    case CB_SYNC_MEMORY_REMOVED:
         ui_fmt_time(it->cue.time, t, sizeof(t), true);
-        if (rx_cue_is_loop(&it->cue))
+        if (cb_cue_is_loop(&it->cue))
             snprintf(len, sizeof(len), ", loop to %s", ui_fmt_time(it->cue.loop_end, t + 16, 16, true));
-        if (it->kind == RX_SYNC_HOT_CUE_SET || it->kind == RX_SYNC_HOT_CUE_CLEARED)
+        if (it->kind == CB_SYNC_HOT_CUE_SET || it->kind == CB_SYNC_HOT_CUE_CLEARED)
             snprintf(buf, size, "%c at %.15s%s%s%s", 'A' + ImClamp(it->slot, 0, 7), t, len,
                      it->cue.name[0] ? " - " : "", it->cue.name);
         else
             snprintf(buf, size, "at %.15s%s%s%s", t, len, it->cue.name[0] ? " - " : "", it->cue.name);
         break;
-    case RX_SYNC_PLAY:
+    case CB_SYNC_PLAY:
         if (it->played_at > 0) {
             time_t tt = (time_t)it->played_at;
             struct tm tm;
@@ -1150,9 +1150,9 @@ static void sync_detail(const RXSyncItem *it, char *buf, size_t size)
             snprintf(buf, size, "played (history entry %d, no time)", it->play_index + 1);
         }
         break;
-    case RX_SYNC_SETTING: {
+    case CB_SYNC_SETTING: {
         // As the Player settings dialog shows them: both values are in
-        // the listed form (rx_stick_diff decodes the stick's bytes and the
+        // the listed form (cb_stick_diff decodes the stick's bytes and the
         // library's value alike).
         const char *name;
         ui_setting_key(it->setting_key, &name);
@@ -1181,29 +1181,29 @@ static bool sync_progress(void *opaque, const char *stage, int done, int total, 
 
 static void sync_read(UiState *ui)
 {
-    RXApp *app = ui->app;
+    CBApp *app = ui->app;
     sync_free(ui);
     ui->sync_error.clear();
-    int ret = rx_app_read_stick(app, ui->stick_path);
+    int ret = cb_app_read_stick(app, ui->stick_path);
     if (ret < 0) {
         ui->sync_error = std::string("Could not read the stick: ") + strerror(-ret);
         return;
     }
     ui->sync_request = app->stick_request;
-    rx_app_set_status(app, "Reading %s...", ui->stick_path);
+    cb_app_set_status(app, "Reading %s...", ui->stick_path);
 }
 
 // The read's result, once the worker has posted it. A read's result for
 // another request is one given up on: dropped, never shown as this one's.
 static void sync_take(UiState *ui)
 {
-    RXApp *app = ui->app;
-    RXJobResult *r = app->stick_result;
-    if (!r || r->kind != RX_JOB_STICK_READ)
+    CBApp *app = ui->app;
+    CBJobResult *r = app->stick_result;
+    if (!r || r->kind != CB_JOB_STICK_READ)
         return;
     app->stick_result = nullptr;
     if (!ui->sync_request || r->request != ui->sync_request) {
-        rx_job_result_free(r);
+        cb_job_result_free(r);
         return;
     }
     ui->sync_request = 0;
@@ -1213,34 +1213,34 @@ static void sync_take(UiState *ui)
         free(r->stick);
         r->stick = nullptr;
     }
-    if (r->err == RX_ERROR(ENOENT) && !ui->sync_state_valid) {
-        // rx_stick_read: no export.pdb, no exportLibrary.db, no My Settings.
+    if (r->err == CB_ERROR(ENOENT) && !ui->sync_state_valid) {
+        // cb_stick_read: no export.pdb, no exportLibrary.db, no My Settings.
         ui->sync_error = std::string(ui->stick_path) + " is not a stick: it holds no rekordbox "
                          "database or player settings.";
-        rx_job_result_free(r);
+        cb_job_result_free(r);
         return;
     }
     if (r->err < 0) {
         ui->sync_error = std::string(ui->sync_state_valid ?
                                      "Could not compare the stick with the library: " :
                                      "Could not read the stick: ") + strerror(-r->err);
-        rx_job_result_free(r);
+        cb_job_result_free(r);
         return;
     }
     ui->sync_items = r->sync_items;
     ui->nb_sync_items = r->nb_sync_items;
     r->sync_items = nullptr;
-    rx_job_result_free(r);
+    cb_job_result_free(r);
     for (int i = 0; i < ui->nb_sync_items; i++)
         ui->sync_items[i].accepted = true;
     ui->sync_stage = 1;
-    rx_app_set_status(app, "%d change%s on %s", ui->nb_sync_items, ui->nb_sync_items == 1 ? "" : "s",
+    cb_app_set_status(app, "%d change%s on %s", ui->nb_sync_items, ui->nb_sync_items == 1 ? "" : "s",
                       ui->stick_path);
 }
 
 static void sync_dialog(UiState *ui)
 {
-    RXApp *app = ui->app;
+    CBApp *app = ui->app;
     if (!ui->dlg_sync)
         return;
     sync_take(ui);
@@ -1286,7 +1286,7 @@ static void sync_dialog(UiState *ui)
             ImGui::TextDisabled("Reading the stick...");
         }
     } else if (ui->sync_stage == 1) {
-        RXStickState &s = ui->sync_state;
+        CBStickState &s = ui->sync_state;
         ImGui::Text("%d track%s on the stick", s.nb_tracks, s.nb_tracks == 1 ? "" : "s");
         if (s.nb_tracks_unknown > 0) {
             ImGui::SameLine();
@@ -1312,7 +1312,7 @@ static void sync_dialog(UiState *ui)
             if (ImGui::BeginCombo("##kind", fname)) {
                 if (ImGui::Selectable("Every kind", ui->sync_filter < 0))
                     ui->sync_filter = -1;
-                for (int k = RX_SYNC_HOT_CUE_SET; k <= RX_SYNC_SETTING; k++) {
+                for (int k = CB_SYNC_HOT_CUE_SET; k <= CB_SYNC_SETTING; k++) {
                     if (ImGui::Selectable(sync_kind_name(k), ui->sync_filter == k))
                         ui->sync_filter = k;
                 }
@@ -1332,7 +1332,7 @@ static void sync_dialog(UiState *ui)
                 ImGui::TableSetupScrollFreeze(0, 1);
                 ImGui::TableHeadersRow();
                 for (int i = 0; i < ui->nb_sync_items; i++) {
-                    RXSyncItem *it = &ui->sync_items[i];
+                    CBSyncItem *it = &ui->sync_items[i];
                     if (ui->sync_filter >= 0 && (int)it->kind != ui->sync_filter)
                         continue;
                     ImGui::TableNextRow();
@@ -1342,16 +1342,16 @@ static void sync_dialog(UiState *ui)
                     ImGui::TableSetColumnIndex(1);
                     ImGui::TextUnformatted(sync_kind_name(it->kind));
                     ImGui::TableSetColumnIndex(2);
-                    RXTrack *t = it->track_id ? rx_library_find_id(&app->lib, it->track_id) : nullptr;
+                    CBTrack *t = it->track_id ? cb_library_find_id(&app->lib, it->track_id) : nullptr;
                     char name[200] = "-";
                     const char *field;
-                    int section = it->kind == RX_SYNC_SETTING ?
+                    int section = it->kind == CB_SYNC_SETTING ?
                                   ui_setting_key(it->setting_key, &field) : -1;
                     if (t)
-                        rx_track_display(t, name, sizeof(name));
+                        cb_track_display(t, name, sizeof(name));
                     else if (section >= 0)
                         snprintf(name, sizeof(name), "%s settings", ui_setting_titles[section]);
-                    else if (it->kind == RX_SYNC_SETTING)
+                    else if (it->kind == CB_SYNC_SETTING)
                         snprintf(name, sizeof(name), "My Settings");
                     ImGui::TextUnformatted(name);
                     ImGui::TableSetColumnIndex(3);
@@ -1366,12 +1366,12 @@ static void sync_dialog(UiState *ui)
         ImGui::BeginDisabled(accepted == 0);
         if (ImGui::Button("Apply", ImVec2(PX(120), PX(28)))) {
             ui->sync_progress.clear();
-            int ret = rx_stick_apply(&app->lib, ui->sync_items, ui->nb_sync_items, sync_progress, ui);
+            int ret = cb_stick_apply(&app->lib, ui->sync_items, ui->nb_sync_items, sync_progress, ui);
             ui->sync_applied = ret;
             if (ret < 0)
                 ui->sync_error = std::string("Could not apply: ") + strerror(-ret);
             ui->sync_stage = 2;
-            rx_app_rebuild_rows(app);
+            cb_app_rebuild_rows(app);
         }
         ImGui::EndDisabled();
         ImGui::SameLine();
@@ -1382,12 +1382,12 @@ static void sync_dialog(UiState *ui)
             ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(UI_PLAY),
                                "Applied %d change%s to the library.",
                                ui->sync_applied, ui->sync_applied == 1 ? "" : "s");
-            int counts[RX_SYNC_SETTING + 1] = {};
+            int counts[CB_SYNC_SETTING + 1] = {};
             for (int i = 0; i < ui->nb_sync_items; i++) {
-                if (ui->sync_items[i].accepted && ui->sync_items[i].kind <= RX_SYNC_SETTING)
+                if (ui->sync_items[i].accepted && ui->sync_items[i].kind <= CB_SYNC_SETTING)
                     counts[ui->sync_items[i].kind]++;
             }
-            for (int k = RX_SYNC_HOT_CUE_SET; k <= RX_SYNC_SETTING; k++) {
+            for (int k = CB_SYNC_HOT_CUE_SET; k <= CB_SYNC_SETTING; k++) {
                 if (counts[k])
                     ImGui::BulletText("%s: %d", sync_kind_name(k), counts[k]);
             }
@@ -1409,7 +1409,7 @@ static void sync_dialog(UiState *ui)
 
 void ui_open_inspect(UiState *ui)
 {
-    rx_app_cancel_stick(ui->app, ui->inspect_request);
+    cb_app_cancel_stick(ui->app, ui->inspect_request);
     ui->inspect_request = 0;
     ui->dlg_inspect = true;
     ui->inspect_done = false;
@@ -1421,11 +1421,11 @@ void ui_open_inspect(UiState *ui)
 
 static void inspect_dialog(UiState *ui)
 {
-    RXApp *app = ui->app;
+    CBApp *app = ui->app;
     if (!ui->dlg_inspect)
         return;
-    RXJobResult *r = app->stick_result;
-    if (r && r->kind == RX_JOB_INSPECT) {
+    CBJobResult *r = app->stick_result;
+    if (r && r->kind == CB_JOB_INSPECT) {
         app->stick_result = nullptr;
         if (ui->inspect_request && r->request == ui->inspect_request) {
             ui->inspect_request = 0;
@@ -1433,7 +1433,7 @@ static void inspect_dialog(UiState *ui)
             ui->inspect_result = r->err < 0 ? r->err : r->problems;
             ui->inspect_done = true;
         }
-        rx_job_result_free(r);
+        cb_job_result_free(r);
     }
     ui_centre_next(ui, 700, 500);
     if (!ImGui::Begin("Inspect USB", &ui->dlg_inspect,
@@ -1445,7 +1445,7 @@ static void inspect_dialog(UiState *ui)
     ui_settle_centred();
     if (!ui->dlg_inspect) {
         // Closed: the inspection in flight is given up.
-        rx_app_cancel_stick(app, ui->inspect_request);
+        cb_app_cancel_stick(app, ui->inspect_request);
         ui->inspect_request = 0;
     }
     volume_picker(ui, ui->stick_path, sizeof(ui->stick_path));
@@ -1453,7 +1453,7 @@ static void inspect_dialog(UiState *ui)
     if (ImGui::Button("Inspect", ImVec2(PX(120), 0))) {
         ui->inspect_report.clear();
         ui->inspect_done = false;
-        int ret = rx_app_inspect_stick(app, ui->stick_path);
+        int ret = cb_app_inspect_stick(app, ui->stick_path);
         if (ret < 0) {
             ui->inspect_result = ret;
             ui->inspect_done = true;
@@ -1516,7 +1516,7 @@ static void fb_scan(UiState *ui)
         UiFileEntry fe;
         fe.name = e->d_name;
         fe.dir = S_ISDIR(stt.st_mode);
-        fe.audio = !fe.dir && rx_is_audio_path(full.c_str());
+        fe.audio = !fe.dir && cb_is_audio_path(full.c_str());
         if (fe.dir || fe.audio)
             ui->fb_entries.push_back(fe);
     }
@@ -1525,14 +1525,14 @@ static void fb_scan(UiState *ui)
               [](const UiFileEntry &a, const UiFileEntry &b) {
         if (a.dir != b.dir)
             return a.dir;
-        return rx_strcasecmp(a.name.c_str(), b.name.c_str()) < 0;
+        return cb_strcasecmp(a.name.c_str(), b.name.c_str()) < 0;
     });
 }
 
 static void fb_go(UiState *ui, const std::string &path)
 {
-    char *abs = rx_path_abs(path.c_str());
-    if (!abs || !rx_dir_exists(abs)) {
+    char *abs = cb_path_abs(path.c_str());
+    if (!abs || !cb_dir_exists(abs)) {
         free(abs);
         return;
     }
@@ -1575,7 +1575,7 @@ void ui_open_add(UiState *ui)
     if (ui->fb_path.empty()) {
         const char *home = getenv("HOME");
         std::string music = std::string(home ? home : "/") + "/Music";
-        fb_go(ui, rx_dir_exists(music.c_str()) ? music : std::string(home ? home : "/"));
+        fb_go(ui, cb_dir_exists(music.c_str()) ? music : std::string(home ? home : "/"));
     } else {
         fb_scan(ui);
     }
@@ -1590,7 +1590,7 @@ static void fb_path_text(UiState *ui, ImVec2 pos, const UiFinderEntry &fe, float
     float size = ImGui::GetFontSize();
     std::string text = fe.rel + (fe.dir ? "/" : "");
     int hits[64], nh = 0;
-    rx_fuzzy_match(fe.rel.c_str(), ui->fb_find, nullptr, hits, 64, &nh);
+    cb_fuzzy_match(fe.rel.c_str(), ui->fb_find, nullptr, hits, 64, &nh);
     std::vector<bool> lit(text.size(), false);
     for (int i = 0; i < nh; i++) {
         if (hits[i] >= 0 && (size_t)hits[i] < lit.size())
@@ -1630,7 +1630,7 @@ static void fb_path_text(UiState *ui, ImVec2 pos, const UiFinderEntry &fe, float
 // Adds what is ticked, or `fallback` when nothing is, and closes.
 static void fb_add(UiState *ui, const std::string &fallback)
 {
-    RXApp *app = ui->app;
+    CBApp *app = ui->app;
     std::vector<std::string> items(ui->fb_picked.begin(), ui->fb_picked.end());
     if (items.empty() && !fallback.empty())
         items.push_back(fallback);
@@ -1640,16 +1640,16 @@ static void fb_add(UiState *ui, const std::string &fallback)
     // the failures in it (each is in the log).
     int added = 0, failed = 0;
     for (const std::string &p : items) {
-        if (rx_app_add_path(app, p.c_str()) >= 0)
+        if (cb_app_add_path(app, p.c_str()) >= 0)
             added++;
         else
             failed++;
     }
     int n = (int)items.size();
     if (n > 1 && failed)
-        rx_app_set_status(app, "Added %d of %d items; %d could not be added", added, n, failed);
+        cb_app_set_status(app, "Added %d of %d items; %d could not be added", added, n, failed);
     else if (n > 1)
-        rx_app_set_status(app, "Added %d items", added);
+        cb_app_set_status(app, "Added %d items", added);
     ui->fb_picked.clear();
     ui->dlg_add = false;
 }
@@ -1694,7 +1694,7 @@ static std::string fb_find_rows(UiState *ui)
 
 static void add_dialog(UiState *ui)
 {
-    RXApp *app = ui->app;
+    CBApp *app = ui->app;
     if (!ui->dlg_add) {
         // Closed: the walk stops, its list goes.
         ui_finder_free(&ui->finder);
@@ -1719,7 +1719,7 @@ static void add_dialog(UiState *ui)
     ImGui::SetNextItemWidth(-FLT_MIN);
     if (ImGui::InputText("##path", ui->fb_edit, sizeof(ui->fb_edit),
                          ImGuiInputTextFlags_EnterReturnsTrue)) {
-        char *e = rx_path_expand(ui->fb_edit);
+        char *e = cb_path_expand(ui->fb_edit);
         if (e)
             fb_go(ui, e);
         free(e);
@@ -1840,8 +1840,8 @@ static void add_dialog(UiState *ui)
         if (ImGui::Button("Clear", ImVec2(PX(80), PX(28))))
             ui->fb_picked.clear();
     } else if (ImGui::Button("Add this folder", ImVec2(PX(160), PX(28)))) {
-        // rx_app_add_path's status says what came of it.
-        rx_app_add_path(app, ui->fb_path.c_str());
+        // cb_app_add_path's status says what came of it.
+        cb_app_add_path(app, ui->fb_path.c_str());
         ui->dlg_add = false;
     }
     ImGui::SameLine();
@@ -1887,7 +1887,7 @@ static void about_dialog(UiState *ui)
     if (!ui->dlg_about)
         return;
     ui_centre_next(ui, 0, 0);
-    if (!ImGui::Begin("About rxbox", &ui->dlg_about,
+    if (!ImGui::Begin("About cyanbox", &ui->dlg_about,
                       ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize |
                       ImGuiWindowFlags_NoSavedSettings)) {
         ImGui::End();
@@ -1896,9 +1896,9 @@ static void about_dialog(UiState *ui)
     ui_escape_closes(&ui->dlg_about);
     ui_settle_centred();
     ImGui::PushFont(ui->font_bold, ui->font_base * 1.6f);
-    ImGui::TextUnformatted("rxbox");
+    ImGui::TextUnformatted("cyanbox");
     ImGui::PopFont();
-    ImGui::TextDisabled("version %s", RXBOX_VERSION);
+    ImGui::TextDisabled("version %s", CYANBOX_VERSION);
     ImGui::Spacing();
     ImGui::TextUnformatted("A DJ library manager and CDJ stick writer.");
     ImGui::TextUnformatted("Prepares cues, loops, beat grids and playlists, and writes sticks\n"

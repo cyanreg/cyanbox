@@ -26,7 +26,7 @@
 //    time stretches beyond 2x, which a time ratio of one never asks for.
 
 extern "C" {
-#include "rxbox/common.h"
+#include "cyanbox/common.h"
 #include "stretch.h"
 }
 
@@ -36,52 +36,52 @@ extern "C" {
 
 using Stretch = signalsmith::stretch::SignalsmithStretch<float>;
 
-struct RXStretch {
+struct CBStretch {
     Stretch st;
 
-    RXStretch() : st(1) {}
+    CBStretch() : st(1) {}
 };
 
-int rx_stretch_create(RXStretch **out, int channels, int rate)
+int cb_stretch_create(CBStretch **out, int channels, int rate)
 {
     *out = nullptr;
     if (channels < 1 || rate <= 0)
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
 
-    RXStretch *s = nullptr;
+    CBStretch *s = nullptr;
     try {
-        s = new RXStretch();
+        s = new CBStretch();
         s->st.presetDefault(channels, (float)rate, false);
     } catch (...) {
         delete s;
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     }
 
     *out = s;
     return 0;
 }
 
-void rx_stretch_destroy(RXStretch *s)
+void cb_stretch_destroy(CBStretch *s)
 {
     delete s;
 }
 
-int rx_stretch_latency(const RXStretch *s)
+int cb_stretch_latency(const CBStretch *s)
 {
     return s->st.inputLatency() + s->st.outputLatency();
 }
 
-int rx_stretch_input_latency(const RXStretch *s)
+int cb_stretch_input_latency(const CBStretch *s)
 {
     return s->st.inputLatency();
 }
 
-void rx_stretch_set_pitch(RXStretch *s, float factor)
+void cb_stretch_set_pitch(CBStretch *s, float factor)
 {
     s->st.setTransposeFactor(factor);
 }
 
-void rx_stretch_reset(RXStretch *s)
+void cb_stretch_reset(CBStretch *s)
 {
     s->st.reset();
 }
@@ -90,12 +90,12 @@ void rx_stretch_reset(RXStretch *s)
 // the start and turns the remaining outputLatency() frames into the output
 // that precedes it, folded back so the start is clean. At a time ratio of
 // one it wants exactly the latency in frames (outputSeekLength(1.0)).
-void rx_stretch_seek(RXStretch *s, const float *const *in, int frames)
+void cb_stretch_seek(CBStretch *s, const float *const *in, int frames)
 {
     s->st.outputSeek(in, frames);
 }
 
-void rx_stretch_process(RXStretch *s, const float *const *in, float *const *out, int frames)
+void cb_stretch_process(CBStretch *s, const float *const *in, float *const *out, int frames)
 {
     s->st.process(in, frames, out, frames);
 }

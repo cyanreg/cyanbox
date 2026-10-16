@@ -5,7 +5,7 @@
 // in the push constants, no descriptors) and works out its own colour, so
 // the picture is exact at any zoom and nothing is drawn on the CPU.
 //
-// The rules are rekordbox's as measured by rbxport (see include/rxbox/gpu.h
+// The rules are rekordbox's as measured by rbxport (see include/cyanbox/gpu.h
 // and docs/OVERVIEW.md section 6); the facts are rbxport's, the code is
 // not. Per device-pixel column, with c0, c1 the column positions of its
 // left and right edges:
@@ -71,8 +71,8 @@ layout(push_constant, std430) uniform Push {
     float   col_per_px;     // columns per framebuffer pixel
     int     col_base;       // integer part of the first column, for precision
     int     nb_columns;
-    int     kind;           // enum RXWaveKind
-    int     mode;           // enum RXWaveMode
+    int     kind;           // enum CBWaveKind
+    int     mode;           // enum CBWaveMode
     float   inset_top;      // framebuffer pixels
     float   inset_bottom;
     float   unit;           // framebuffer pixels per logical pixel

@@ -40,13 +40,13 @@
 
 /* ------------------------------------------------------------------ device */
 
-/* Why a device cannot run the interface, or NULL if it can (RXVkDevCheck,
+/* Why a device cannot run the interface, or NULL if it can (CBVkDevCheck,
  * `opaque` the window); `qfam` gets a queue family that draws and
  * presents to the window's surface. */
 static const char *device_unusable(void *opaque, VkPhysicalDevice pd,
                                    const VkPhysicalDeviceProperties *props, uint32_t *qfam)
 {
-    RXWindow *w = opaque;
+    CBWindow *w = opaque;
     VkPhysicalDeviceVulkan13Features f13 = {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
     };
@@ -66,12 +66,12 @@ static const char *device_unusable(void *opaque, VkPhysicalDevice pd,
     if (!f12.bufferDeviceAddress)
         return "no bufferDeviceAddress";
 
-    if (!rx_vkdev_has_ext(pd, VK_KHR_SWAPCHAIN_EXTENSION_NAME))
+    if (!cb_vkdev_has_ext(pd, VK_KHR_SWAPCHAIN_EXTENSION_NAME))
         return "no VK_KHR_swapchain";
 
     uint32_t nb = 0;
     vkGetPhysicalDeviceQueueFamilyProperties(pd, &nb, NULL);
-    VkQueueFamilyProperties *qf = calloc(RX_MAX(nb, 1), sizeof(*qf));
+    VkQueueFamilyProperties *qf = calloc(CB_MAX(nb, 1), sizeof(*qf));
     if (!qf)
         return "out of memory";
     vkGetPhysicalDeviceQueueFamilyProperties(pd, &nb, qf);
@@ -106,7 +106,7 @@ static const char *device_unusable(void *opaque, VkPhysicalDevice pd,
     return NULL;
 }
 
-static int create_device(RXWindow *w)
+static int create_device(CBWindow *w)
 {
     VkPhysicalDeviceVulkan13Features f13 = {
         .sType            = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
@@ -124,15 +124,15 @@ static int create_device(RXWindow *w)
     };
 
     const char *exts[] = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
-    return rx_vkdev_device(&w->vk, &f2, exts, RX_ARRAY_ELEMS(exts));
+    return cb_vkdev_device(&w->vk, &f2, exts, CB_ARRAY_ELEMS(exts));
 }
 
-static int create_frames(RXWindow *w)
+static int create_frames(CBWindow *w)
 {
     /* Timestamps only measure (the demo's frame times): a queue without
      * them (vk.ts_mask 0) just goes without. */
-    for (int i = 0; i < RX_FRAMES_IN_FLIGHT; i++) {
-        RXFrame *f = &w->frames[i];
+    for (int i = 0; i < CB_FRAMES_IN_FLIGHT; i++) {
+        CBFrame *f = &w->frames[i];
 
         /* The pool is reset as a whole each time the slot comes round. */
         VkCommandPoolCreateInfo pinfo = {
@@ -142,7 +142,7 @@ static int create_frames(RXWindow *w)
         };
         VkResult res = vkCreateCommandPool(w->vk.dev, &pinfo, NULL, &f->pool);
         if (res != VK_SUCCESS)
-            return rx_vk_ret2err(res);
+            return cb_vk_ret2err(res);
 
         VkCommandBufferAllocateInfo cinfo = {
             .sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
@@ -152,7 +152,7 @@ static int create_frames(RXWindow *w)
         };
         res = vkAllocateCommandBuffers(w->vk.dev, &cinfo, &f->cmd);
         if (res != VK_SUCCESS)
-            return rx_vk_ret2err(res);
+            return cb_vk_ret2err(res);
 
         /* Signalled, so the first wait on a slot that never ran returns. */
         VkFenceCreateInfo finfo = {
@@ -161,14 +161,14 @@ static int create_frames(RXWindow *w)
         };
         res = vkCreateFence(w->vk.dev, &finfo, NULL, &f->fence);
         if (res != VK_SUCCESS)
-            return rx_vk_ret2err(res);
+            return cb_vk_ret2err(res);
 
         VkSemaphoreCreateInfo sinfo = {
             .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
         };
         res = vkCreateSemaphore(w->vk.dev, &sinfo, NULL, &f->acquired);
         if (res != VK_SUCCESS)
-            return rx_vk_ret2err(res);
+            return cb_vk_ret2err(res);
 
         if (w->vk.ts_mask) {
             VkQueryPoolCreateInfo qinfo = {
@@ -178,27 +178,27 @@ static int create_frames(RXWindow *w)
             };
             res = vkCreateQueryPool(w->vk.dev, &qinfo, NULL, &f->times);
             if (res != VK_SUCCESS)
-                return rx_vk_ret2err(res);
+                return cb_vk_ret2err(res);
         }
     }
 
     return 0;
 }
 
-int rx_vk_create(RXWindow *w)
+int cb_vk_create(CBWindow *w)
 {
-    rx_array_init(&w->garbage, sizeof(RXDeferred));
-    rx_array_init(&w->uploads, sizeof(RXUpload));
-    rx_array_init(&w->textures, sizeof(RXTexture));
+    cb_array_init(&w->garbage, sizeof(CBDeferred));
+    cb_array_init(&w->uploads, sizeof(CBUpload));
+    cb_array_init(&w->textures, sizeof(CBTexture));
 
     /* SDL's instance extensions: surface and wayland_surface. */
     Uint32 nb_sdl = 0;
     const char *const *sdl_exts = SDL_Vulkan_GetInstanceExtensions(&nb_sdl);
     if (!sdl_exts) {
-        rx_err("gpu: SDL_Vulkan_GetInstanceExtensions: %s", SDL_GetError());
-        return RX_ERROR(ENODEV);
+        cb_err("gpu: SDL_Vulkan_GetInstanceExtensions: %s", SDL_GetError());
+        return CB_ERROR(ENODEV);
     }
-    RXVkDevOptions vo = {
+    CBVkDevOptions vo = {
         .tag         = "gpu",
         .validation  = w->opts.validation,
         .performance = true,
@@ -209,20 +209,20 @@ int rx_vk_create(RXWindow *w)
         .check       = device_unusable,
         .opaque      = w,
     };
-    int ret = rx_vkdev_instance(&w->vk, &vo);
+    int ret = cb_vkdev_instance(&w->vk, &vo);
     if (ret < 0) {
-        rx_err("gpu: unable to create a Vulkan 1.3 instance: %s", strerror(-ret));
+        cb_err("gpu: unable to create a Vulkan 1.3 instance: %s", strerror(-ret));
         return ret;
     }
 
     if (!SDL_Vulkan_CreateSurface(w->win, w->vk.inst, NULL, &w->surface)) {
-        rx_err("gpu: SDL_Vulkan_CreateSurface: %s", SDL_GetError());
-        return RX_ERROR(ENODEV);
+        cb_err("gpu: SDL_Vulkan_CreateSurface: %s", SDL_GetError());
+        return CB_ERROR(ENODEV);
     }
 
-    ret = rx_vkdev_pick(&w->vk, &vo);
+    ret = cb_vkdev_pick(&w->vk, &vo);
     if (ret < 0) {
-        rx_err("gpu: no Vulkan 1.3 device can draw to this window");
+        cb_err("gpu: no Vulkan 1.3 device can draw to this window");
         return ret;
     }
 
@@ -232,39 +232,39 @@ int rx_vk_create(RXWindow *w)
 
     ret = create_frames(w);
     if (ret < 0) {
-        rx_err("gpu: unable to create the frame resources");
+        cb_err("gpu: unable to create the frame resources");
         return ret;
     }
 
-    rx_info("gpu: %s, Vulkan %u.%u, queue family %u", w->vk.props.deviceName,
+    cb_info("gpu: %s, Vulkan %u.%u, queue family %u", w->vk.props.deviceName,
             VK_API_VERSION_MAJOR(w->vk.props.apiVersion),
             VK_API_VERSION_MINOR(w->vk.props.apiVersion), w->vk.qfam);
 
     return 0;
 }
 
-const char *rx_window_gpu_name(const RXWindow *w)
+const char *cb_window_gpu_name(const CBWindow *w)
 {
     return w->vk.props.deviceName;
 }
 
-static void free_upload(RXWindow *w, RXUpload *up)
+static void free_upload(CBWindow *w, CBUpload *up)
 {
-    rx_vk_buffer_free(w, &up->staging);
+    cb_vk_buffer_free(w, &up->staging);
 }
 
-void rx_vk_destroy(RXWindow *w)
+void cb_vk_destroy(CBWindow *w)
 {
     if (w->vk.dev) {
         vkDeviceWaitIdle(w->vk.dev);
 
-        rx_vk_collect(w, true);
+        cb_vk_collect(w, true);
         for (size_t i = 0; i < w->uploads.nb; i++)
-            free_upload(w, rx_array_at(&w->uploads, i));
-        rx_array_clear(&w->uploads);
+            free_upload(w, cb_array_at(&w->uploads, i));
+        cb_array_clear(&w->uploads);
 
-        for (int i = 0; i < RX_FRAMES_IN_FLIGHT; i++) {
-            RXFrame *f = &w->frames[i];
+        for (int i = 0; i < CB_FRAMES_IN_FLIGHT; i++) {
+            CBFrame *f = &w->frames[i];
             if (f->times)
                 vkDestroyQueryPool(w->vk.dev, f->times, NULL);
             if (f->acquired)
@@ -273,7 +273,7 @@ void rx_vk_destroy(RXWindow *w)
                 vkDestroyFence(w->vk.dev, f->fence, NULL);
             if (f->pool)
                 vkDestroyCommandPool(w->vk.dev, f->pool, NULL);
-            *f = (RXFrame) { 0 };
+            *f = (CBFrame) { 0 };
         }
 
     }
@@ -284,21 +284,21 @@ void rx_vk_destroy(RXWindow *w)
     if (w->surface && w->vk.inst)
         SDL_Vulkan_DestroySurface(w->vk.inst, w->surface, NULL);
     w->surface = VK_NULL_HANDLE;
-    rx_vkdev_destroy(&w->vk);
+    cb_vkdev_destroy(&w->vk);
 
-    rx_array_free(&w->garbage);
-    rx_array_free(&w->uploads);
-    rx_array_free(&w->textures);
+    cb_array_free(&w->garbage);
+    cb_array_free(&w->uploads);
+    cb_array_free(&w->textures);
 }
 
 /* ----------------------------------------------------------------- buffers */
 
-int rx_vk_buffer_create(RXWindow *w, RXVkBuffer *b, VkDeviceSize size,
-                        VkBufferUsageFlags usage, enum RXMemUsage mem)
+int cb_vk_buffer_create(CBWindow *w, CBVkBuffer *b, VkDeviceSize size,
+                        VkBufferUsageFlags usage, enum CBMemUsage mem)
 {
-    *b = (RXVkBuffer) { 0 };
+    *b = (CBVkBuffer) { 0 };
     if (!size)
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
 
     VkBufferCreateInfo info = {
         .sType       = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
@@ -311,17 +311,17 @@ int rx_vk_buffer_create(RXWindow *w, RXVkBuffer *b, VkDeviceSize size,
      * frame back on the CPU fast. */
     VmaAllocationCreateInfo ci = { 0 };
     switch (mem) {
-    case RX_MEM_UPLOAD:
+    case CB_MEM_UPLOAD:
         ci.usage = VMA_MEMORY_USAGE_AUTO;
         ci.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT |
                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
         break;
-    case RX_MEM_READBACK:
+    case CB_MEM_READBACK:
         ci.usage = VMA_MEMORY_USAGE_AUTO;
         ci.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT |
                    VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT;
         break;
-    case RX_MEM_DEVICE:
+    case CB_MEM_DEVICE:
     default:
         ci.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
         break;
@@ -330,10 +330,10 @@ int rx_vk_buffer_create(RXWindow *w, RXVkBuffer *b, VkDeviceSize size,
     VmaAllocationInfo ai = { 0 };
     VkResult res = vmaCreateBuffer(w->vk.vma, &info, &ci, &b->buf, &b->alloc, &ai);
     if (res != VK_SUCCESS) {
-        rx_err("gpu: unable to allocate a %llu byte buffer: %s", (unsigned long long)size,
-               rx_vk_strerror(res));
-        *b = (RXVkBuffer) { 0 };
-        return rx_vk_ret2err(res);
+        cb_err("gpu: unable to allocate a %llu byte buffer: %s", (unsigned long long)size,
+               cb_vk_strerror(res));
+        *b = (CBVkBuffer) { 0 };
+        return cb_vk_ret2err(res);
     }
 
     b->size = size;
@@ -350,27 +350,27 @@ int rx_vk_buffer_create(RXWindow *w, RXVkBuffer *b, VkDeviceSize size,
     return 0;
 }
 
-void rx_vk_buffer_free(RXWindow *w, RXVkBuffer *b)
+void cb_vk_buffer_free(CBWindow *w, CBVkBuffer *b)
 {
     if (!b || !b->buf)
         return;
     vmaDestroyBuffer(w->vk.vma, b->buf, b->alloc);
-    *b = (RXVkBuffer) { 0 };
+    *b = (CBVkBuffer) { 0 };
 }
 
-int rx_vk_buffer_invalidate(RXWindow *w, RXVkBuffer *b)
+int cb_vk_buffer_invalidate(CBWindow *w, CBVkBuffer *b)
 {
     if (!b->map)
         return 0;
-    return rx_vk_ret2err(vmaInvalidateAllocation(w->vk.vma, b->alloc, 0, VK_WHOLE_SIZE));
+    return cb_vk_ret2err(vmaInvalidateAllocation(w->vk.vma, b->alloc, 0, VK_WHOLE_SIZE));
 }
 
 /* ------------------------------------------------------ deferred destruction */
 
-static void free_deferred(RXWindow *w, const RXDeferred *d)
+static void free_deferred(CBWindow *w, const CBDeferred *d)
 {
     if (d->tex_id)
-        rx_imgui_remove_texture(w, d->tex_id);
+        cb_imgui_remove_texture(w, d->tex_id);
     if (d->view)
         vkDestroyImageView(w->vk.dev, d->view, NULL);
     if (d->img)
@@ -381,79 +381,79 @@ static void free_deferred(RXWindow *w, const RXDeferred *d)
         vmaFreeMemory(w->vk.vma, d->alloc);
 }
 
-int rx_vk_defer_reserve(RXWindow *w, size_t n)
+int cb_vk_defer_reserve(CBWindow *w, size_t n)
 {
     size_t need = w->garbage.nb + w->defer_room + n;
     if (need > w->garbage.cap &&
-        rx_array_reserve(&w->garbage, RX_MAX(need, w->garbage.cap * 2)) < 0)
-        return RX_ERROR(ENOMEM);
+        cb_array_reserve(&w->garbage, CB_MAX(need, w->garbage.cap * 2)) < 0)
+        return CB_ERROR(ENOMEM);
     w->defer_room += n;
     return 0;
 }
 
-void rx_vk_defer_unreserve(RXWindow *w, size_t n)
+void cb_vk_defer_unreserve(CBWindow *w, size_t n)
 {
-    w->defer_room -= RX_MIN(n, w->defer_room);
+    w->defer_room -= CB_MIN(n, w->defer_room);
 }
 
-static void defer_at(RXWindow *w, const RXDeferred *d, uint64_t serial)
+static void defer_at(CBWindow *w, const CBDeferred *d, uint64_t serial)
 {
     /* The room taken when it was made: the push below does not allocate. */
     if (w->defer_room)
         w->defer_room--;
-    RXDeferred *item = rx_array_push(&w->garbage, d);
+    CBDeferred *item = cb_array_push(&w->garbage, d);
     if (!item) {
         /* Deferred without room taken for it, and no memory to grow:
          * everything submitted is done once the device is idle, and its
          * garbage makes room. */
         vkDeviceWaitIdle(w->vk.dev);
         w->completed = w->serial;
-        rx_vk_collect(w, false);
-        item = rx_array_push(&w->garbage, d);
+        cb_vk_collect(w, false);
+        item = cb_array_push(&w->garbage, d);
     }
     if (!item) {
         /* The frame being built may still use it: leaked, not freed. */
-        rx_err("gpu: out of memory to defer the destruction of a resource; it is leaked");
+        cb_err("gpu: out of memory to defer the destruction of a resource; it is leaked");
         return;
     }
     item->serial = serial;
 }
 
-void rx_vk_defer(RXWindow *w, const RXDeferred *d)
+void cb_vk_defer(CBWindow *w, const CBDeferred *d)
 {
     defer_at(w, d, w->serial + 1);
 }
 
-void rx_vk_defer_hold(RXWindow *w, uint64_t from, uint64_t until)
+void cb_vk_defer_hold(CBWindow *w, uint64_t from, uint64_t until)
 {
     for (size_t i = 0; i < w->garbage.nb; i++) {
-        RXDeferred *d = rx_array_at(&w->garbage, i);
+        CBDeferred *d = cb_array_at(&w->garbage, i);
         if (d->serial >= from && d->serial < until)
             d->serial = until;
     }
 }
 
-void rx_vk_poll_completed(RXWindow *w)
+void cb_vk_poll_completed(CBWindow *w)
 {
-    for (int i = 0; i < RX_FRAMES_IN_FLIGHT; i++) {
-        RXFrame *f = &w->frames[i];
+    for (int i = 0; i < CB_FRAMES_IN_FLIGHT; i++) {
+        CBFrame *f = &w->frames[i];
         if (f->serial > w->completed && vkGetFenceStatus(w->vk.dev, f->fence) == VK_SUCCESS)
             w->completed = f->serial;
     }
 }
 
-void rx_vk_collect(RXWindow *w, bool all)
+void cb_vk_collect(CBWindow *w, bool all)
 {
     size_t kept = 0;
 
     for (size_t i = 0; i < w->garbage.nb; i++) {
-        RXDeferred *d = rx_array_at(&w->garbage, i);
+        CBDeferred *d = cb_array_at(&w->garbage, i);
         if (all || d->serial <= w->completed) {
             free_deferred(w, d);
             continue;
         }
         if (kept != i)
-            memcpy(rx_array_at(&w->garbage, kept), d, sizeof(*d));
+            memcpy(cb_array_at(&w->garbage, kept), d, sizeof(*d));
         kept++;
     }
 
@@ -462,20 +462,20 @@ void rx_vk_collect(RXWindow *w, bool all)
 
 /* ----------------------------------------------------------------- uploads */
 
-int rx_vk_upload(RXWindow *w, const RXUpload *up)
+int cb_vk_upload(CBWindow *w, const CBUpload *up)
 {
-    if (!rx_array_push(&w->uploads, up))
-        return RX_ERROR(ENOMEM);
+    if (!cb_array_push(&w->uploads, up))
+        return CB_ERROR(ENOMEM);
     return 0;
 }
 
-void rx_vk_record_uploads(RXWindow *w, VkCommandBuffer cmd, uint64_t serial)
+void cb_vk_record_uploads(CBWindow *w, VkCommandBuffer cmd, uint64_t serial)
 {
     if (!w->uploads.nb)
         return;
 
     for (size_t i = 0; i < w->uploads.nb; i++) {
-        RXUpload *up = rx_array_at(&w->uploads, i);
+        CBUpload *up = cb_array_at(&w->uploads, i);
 
         /* The staging memory was written and flushed on the host before
          * this submission; vkQueueSubmit makes host writes visible to the
@@ -556,12 +556,12 @@ void rx_vk_record_uploads(RXWindow *w, VkCommandBuffer cmd, uint64_t serial)
         }
 
         /* The staging buffer goes once this submission is done with it. */
-        RXDeferred d = {
+        CBDeferred d = {
             .buf   = up->staging.buf,
             .alloc = up->staging.alloc,
         };
         defer_at(w, &d, serial);
     }
 
-    rx_array_clear(&w->uploads);
+    cb_array_clear(&w->uploads);
 }

@@ -22,7 +22,7 @@
  *    playlist entries point at tracks, the history row counts the tracks
  *    (docs/pdb.md G2). */
 
-#include "rxbox/export.h"
+#include "cyanbox/export.h"
 
 #include <stdio.h>
 #include <sys/stat.h>
@@ -32,33 +32,33 @@
 #include "src/formats/formats_priv.h"
 
 typedef struct Report {
-    rx_report_cb line;
+    cb_report_cb line;
     void        *opaque;
     int          problems;
 } Report;
 
-static void say(Report *r, const char *fmt, ...) RX_PRINTF(2, 3);
+static void say(Report *r, const char *fmt, ...) CB_PRINTF(2, 3);
 static void say(Report *r, const char *fmt, ...)
 {
     va_list ap;
     va_start(ap, fmt);
-    char *msg = rx_vasprintf(fmt, ap);
+    char *msg = cb_vasprintf(fmt, ap);
     va_end(ap);
     if (msg && r->line)
         r->line(r->opaque, msg);
     free(msg);
 }
 
-static void problem(Report *r, const char *fmt, ...) RX_PRINTF(2, 3);
+static void problem(Report *r, const char *fmt, ...) CB_PRINTF(2, 3);
 static void problem(Report *r, const char *fmt, ...)
 {
     va_list ap;
     va_start(ap, fmt);
-    char *msg = rx_vasprintf(fmt, ap);
+    char *msg = cb_vasprintf(fmt, ap);
     va_end(ap);
     r->problems++;
     if (msg && r->line) {
-        char *l = rx_asprintf("   %s", msg);
+        char *l = cb_asprintf("   %s", msg);
         r->line(r->opaque, l ? l : msg);
         free(l);
     }
@@ -75,8 +75,8 @@ static void pdb_problem(void *opaque, const char *p)
  * stick with a Unix file system could point at /dev/zero). */
 static bool stick_exists(const char *stick, const char *path)
 {
-    char *p = rx_stick_path_safe(path) ? rx_stick_file(stick, path) : NULL;
-    bool ok = p && rx_file_exists(p);
+    char *p = cb_stick_path_safe(path) ? cb_stick_file(stick, path) : NULL;
+    bool ok = p && cb_file_exists(p);
     free(p);
     return ok;
 }
@@ -84,8 +84,8 @@ static bool stick_exists(const char *stick, const char *path)
 /* The file's size on the stick, -1 when it is not there. */
 static int64_t stick_size_of(const char *stick, const char *path)
 {
-    char *p = rx_stick_path_safe(path) ? rx_stick_file(stick, path) : NULL;
-    int64_t n = p ? rx_file_size(p) : -1;
+    char *p = cb_stick_path_safe(path) ? cb_stick_file(stick, path) : NULL;
+    int64_t n = p ? cb_file_size(p) : -1;
     free(p);
     return n;
 }
@@ -94,15 +94,15 @@ static int read_stick(const char *stick, const char *path, uint8_t **data, size_
 {
     *data = NULL;
     *size = 0;
-    if (!rx_stick_path_safe(path))
-        return RX_ERROR(EINVAL);
-    char *p = rx_stick_file(stick, path);
+    if (!cb_stick_path_safe(path))
+        return CB_ERROR(EINVAL);
+    char *p = cb_stick_file(stick, path);
     if (!p)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     struct stat st;
-    int ret = lstat(p, &st) < 0 ? RX_ERROR(errno) : S_ISREG(st.st_mode) ? 0 : RX_ERROR(EINVAL);
+    int ret = lstat(p, &st) < 0 ? CB_ERROR(errno) : S_ISREG(st.st_mode) ? 0 : CB_ERROR(EINVAL);
     if (ret >= 0)
-        ret = rx_file_read(p, data, size);
+        ret = cb_file_read(p, data, size);
     free(p);
     return ret;
 }
@@ -112,7 +112,7 @@ static int read_stick(const char *stick, const char *path, uint8_t **data, size_
 static bool type_matches(const char *path, int type)
 {
     char ext[16];
-    rx_path_ext(path, ext, sizeof(ext));
+    cb_path_ext(path, ext, sizeof(ext));
     if (!strcmp(ext, ".mp3"))
         return type == 1;
     if (!strcmp(ext, ".m4a") || !strcmp(ext, ".mp4") || !strcmp(ext, ".aac"))
@@ -136,35 +136,35 @@ static void check_anlz(Report *r, const char *stick, const char *path, const cha
         problem(r, "missing %s (for %s)", path, audio);
         return;
     }
-    RXAnlzTag *tags;
+    CBAnlzTag *tags;
     int nt;
-    if (rx_anlz_parse(b, n, &tags, &nt) < 0) {
+    if (cb_anlz_parse(b, n, &tags, &nt) < 0) {
         problem(r, "%s does not parse", path);
         free(b);
         return;
     }
     char *pp = NULL;
-    if (rx_anlz_read_path(b, n, &pp) < 0 || strcmp(pp, audio))
+    if (cb_anlz_read_path(b, n, &pp) < 0 || strcmp(pp, audio))
         problem(r, "%s: PPTH is \"%s\", not %s", path, pp ? pp : "(none)", audio);
     free(pp);
     for (int i = 0; i < nt; i++) {
-        const RXAnlzTag *t = &tags[i];
+        const CBAnlzTag *t = &tags[i];
         if (!memcmp(t->fourcc, "PCOB", 4) || !memcmp(t->fourcc, "PCO2", 4)) {
-            RXAnlzCueEntry *e;
+            CBAnlzCueEntry *e;
             int ne, declared;
-            if (rx_anlz_tag_cues(t, &e, &ne, &declared) < 0) {
+            if (cb_anlz_tag_cues(t, &e, &ne, &declared) < 0) {
                 problem(r, "%s: unreadable %s", path, t->fourcc);
                 continue;
             }
             if (ne != declared)
                 problem(r, "%s: %s declares %d cues, %d parse", path, t->fourcc, declared, ne);
             uint32_t type, count;
-            if (!rx_anlz_pcob_header(t, &type, &count) && type == 0 && ne > 0 && count != (uint32_t)ne - 1)
+            if (!cb_anlz_pcob_header(t, &type, &count) && type == 0 && ne > 0 && count != (uint32_t)ne - 1)
                 problem(r, "%s: memory cue list of %d with memory_count 0x%x (an XDJ-RX2 drops it and hangs)",
                         path, ne, count);
-            rx_anlz_cue_entries_free(e, ne);
+            cb_anlz_cue_entries_free(e, ne);
         } else if ((!memcmp(t->fourcc, "PWAV", 4) || !memcmp(t->fourcc, "PWV2", 4)) && t->raw_size >= 0x14) {
-            uint32_t cols = rx_rd_be32(t->raw + 0x0C);
+            uint32_t cols = cb_rd_be32(t->raw + 0x0C);
             uint8_t mask = t->fourcc[3] == 'V' ? 31 : 15;
             int zero = 0;
             for (uint32_t k = 0; k < cols && 0x14 + k < t->raw_size; k++)
@@ -189,12 +189,12 @@ static int cmp_u32(const void *a, const void *b)
     return x < y ? -1 : x > y;
 }
 
-static void check_tracks(Report *r, const char *stick, const RXPdbRawTrack *t, int nb, bool verbose)
+static void check_tracks(Report *r, const char *stick, const CBPdbRawTrack *t, int nb, bool verbose)
 {
     for (int i = 0; i < nb; i++) {
-        const RXPdbRawTrack *x = &t[i];
-        const char *path = x->strings[RX_PDB_STR_FILE_PATH];
-        const char *anlz = x->strings[RX_PDB_STR_ANALYZE_PATH];
+        const CBPdbRawTrack *x = &t[i];
+        const char *path = x->strings[CB_PDB_STR_FILE_PATH];
+        const char *anlz = x->strings[CB_PDB_STR_ANALYZE_PATH];
         if (x->subtype != 0x24 || x->unk56 != 0x29 || x->magic != 3 ||
             (x->bitmask != 0x000C0700 && x->bitmask != 0x000D0700))
             problem(r, "%s: track row fixed values %04x/%08x/%04x/%04x, not 0024/000C0700/0029/0003",
@@ -207,30 +207,30 @@ static void check_tracks(Report *r, const char *stick, const RXPdbRawTrack *t, i
         else if ((uint32_t)size != x->file_size)
             problem(r, "%s: %lld bytes, the row says %u", path, (long long)size, x->file_size);
         char dir[64];
-        if (rx_anlz_dir(path, dir, sizeof(dir)) < 0 || !rx_str_starts(anlz, dir) || strlen(anlz) < 4) {
+        if (cb_anlz_dir(path, dir, sizeof(dir)) < 0 || !cb_str_starts(anlz, dir) || strlen(anlz) < 4) {
             problem(r, "%s: analyze_path %s not under %s", path, anlz, dir);
             continue;
         }
-        char *base = rx_strndup(anlz, strlen(anlz) - 4);
+        char *base = cb_strndup(anlz, strlen(anlz) - 4);
         const char *ext[3] = { ".DAT", ".EXT", ".2EX" };
         for (int k = 0; base && k < 3; k++) {
-            char *p = rx_asprintf("%s%s", base, ext[k]);
+            char *p = cb_asprintf("%s%s", base, ext[k]);
             if (p)
                 check_anlz(r, stick, p, path);
             free(p);
         }
         free(base);
         if (verbose)
-            say(r, "   %4u %6.2f BPM  %s  (%s)", x->id, x->tempo / 100.0, x->strings[RX_PDB_STR_TITLE], path);
+            say(r, "   %4u %6.2f BPM  %s  (%s)", x->id, x->tempo / 100.0, x->strings[CB_PDB_STR_TITLE], path);
     }
 
-    uint32_t *ids = malloc((size_t)RX_MAX(nb, 1) * sizeof(*ids));
-    char **paths = calloc((size_t)RX_MAX(nb, 1), sizeof(*paths));
+    uint32_t *ids = malloc((size_t)CB_MAX(nb, 1) * sizeof(*ids));
+    char **paths = calloc((size_t)CB_MAX(nb, 1), sizeof(*paths));
     for (int i = 0; ids && paths && i < nb; i++) {
         ids[i] = t[i].id;
-        paths[i] = rx_plan_fold_case(t[i].strings[RX_PDB_STR_FILE_PATH]);
+        paths[i] = cb_plan_fold_case(t[i].strings[CB_PDB_STR_FILE_PATH]);
         if (!paths[i])
-            paths[i] = rx_strdup("");
+            paths[i] = cb_strdup("");
     }
     if (ids && paths) {
         qsort(ids, (size_t)nb, sizeof(*ids), cmp_u32);
@@ -249,20 +249,20 @@ static void check_tracks(Report *r, const char *stick, const RXPdbRawTrack *t, i
 }
 
 static void check_pdb_refs(Report *r, const char *stick, const uint8_t *b, size_t size,
-                           const RXPdbRawTrack *t, int nb)
+                           const CBPdbRawTrack *t, int nb)
 {
     uint32_t *art_ids;
     char **art_paths;
     int na;
-    if (rx_pdb_artwork(b, size, &art_ids, &art_paths, &na) >= 0) {
+    if (cb_pdb_artwork(b, size, &art_ids, &art_paths, &na) >= 0) {
         for (int i = 0; i < na; i++) {
             if (!stick_exists(stick, art_paths[i]))
                 problem(r, "missing artwork %s", art_paths[i]);
-            char *m = rx_strdup(art_paths[i]);
+            char *m = cb_strdup(art_paths[i]);
             char *dot = m ? strrchr(m, '.') : NULL;
             if (dot) {
                 *dot = '\0';
-                char *mp = rx_asprintf("%s_m.jpg", m);
+                char *mp = cb_asprintf("%s_m.jpg", m);
                 if (mp && !stick_exists(stick, mp))
                     problem(r, "missing artwork %s", mp);
                 free(mp);
@@ -276,7 +276,7 @@ static void check_pdb_refs(Report *r, const char *stick, const uint8_t *b, size_
             for (int k = 0; k < na && !found; k++)
                 found = art_ids[k] == t[i].artwork_id;
             if (!found)
-                problem(r, "%s: artwork id %u has no artwork row", t[i].strings[RX_PDB_STR_FILE_PATH],
+                problem(r, "%s: artwork id %u has no artwork row", t[i].strings[CB_PDB_STR_FILE_PATH],
                         t[i].artwork_id);
         }
         for (int i = 0; i < na; i++)
@@ -285,8 +285,8 @@ static void check_pdb_refs(Report *r, const char *stick, const uint8_t *b, size_
         free(art_ids);
     }
 
-    RXPdb pdb;
-    if (rx_pdb_read(b, size, &pdb) >= 0) {
+    CBPdb pdb;
+    if (cb_pdb_read(b, size, &pdb) >= 0) {
         int nl = 0;
         for (int i = 0; i < pdb.nb_playlists; i++) {
             nl += !pdb.playlists[i].is_folder;
@@ -300,12 +300,12 @@ static void check_pdb_refs(Report *r, const char *stick, const uint8_t *b, size_
             }
         }
         say(r, "export.pdb: %d playlists in %d folders", nl, pdb.nb_playlists - nl);
-        rx_pdb_free(&pdb);
+        cb_pdb_free(&pdb);
     }
 
     uint32_t num;
     char *date = NULL;
-    if (rx_pdb_history(b, size, &num, &date) >= 0) {
+    if (cb_pdb_history(b, size, &num, &date) >= 0) {
         if (num != (uint32_t)nb)
             problem(r, "history row counts %u tracks, the table has %d (the CDJ-3000 shows that count)",
                     num, nb);
@@ -322,39 +322,39 @@ static char *query_text(sqlite3 *db, const char *sql)
     if (sqlite3_prepare_v2(db, sql, -1, &st, NULL) != SQLITE_OK)
         return NULL;
     if (sqlite3_step(st) == SQLITE_ROW && sqlite3_column_text(st, 0))
-        v = rx_strdup((const char *)sqlite3_column_text(st, 0));
+        v = cb_strdup((const char *)sqlite3_column_text(st, 0));
     sqlite3_finalize(st);
     return v;
 }
 
 static int cmp_track_path(const void *a, const void *b)
 {
-    const RXPdbRawTrack *x = *(const RXPdbRawTrack *const *)a, *y = *(const RXPdbRawTrack *const *)b;
-    return strcmp(x->strings[RX_PDB_STR_FILE_PATH], y->strings[RX_PDB_STR_FILE_PATH]);
+    const CBPdbRawTrack *x = *(const CBPdbRawTrack *const *)a, *y = *(const CBPdbRawTrack *const *)b;
+    return strcmp(x->strings[CB_PDB_STR_FILE_PATH], y->strings[CB_PDB_STR_FILE_PATH]);
 }
 
 /* The first of the sorted tracks whose path is `path`, or NULL. */
-static const RXPdbRawTrack *find_track_path(const RXPdbRawTrack **v, int n, const char *path)
+static const CBPdbRawTrack *find_track_path(const CBPdbRawTrack **v, int n, const char *path)
 {
     int lo = 0, hi = n;
     while (lo < hi) {
         int mid = lo + (hi - lo) / 2;
-        if (strcmp(v[mid]->strings[RX_PDB_STR_FILE_PATH], path) < 0)
+        if (strcmp(v[mid]->strings[CB_PDB_STR_FILE_PATH], path) < 0)
             lo = mid + 1;
         else
             hi = mid;
     }
-    return lo < n && !strcmp(v[lo]->strings[RX_PDB_STR_FILE_PATH], path) ? v[lo] : NULL;
+    return lo < n && !strcmp(v[lo]->strings[CB_PDB_STR_FILE_PATH], path) ? v[lo] : NULL;
 }
 
-static void check_onelibrary(Report *r, const char *stick, const RXPdbRawTrack *t, int nb, bool have_pdb)
+static void check_onelibrary(Report *r, const char *stick, const CBPdbRawTrack *t, int nb, bool have_pdb)
 {
     uint8_t *data, *wal = NULL, *plain;
     size_t size, wal_size = 0, plain_size;
     if (read_stick(stick, "/PIONEER/rekordbox/exportLibrary.db", &data, &size) < 0)
         return;
     read_stick(stick, "/PIONEER/rekordbox/exportLibrary.db-wal", &wal, &wal_size);
-    int ret = rx_sqlcipher_decrypt(data, size, rx_onelibrary_passphrase, wal, wal_size, &plain, &plain_size);
+    int ret = cb_sqlcipher_decrypt(data, size, cb_onelibrary_passphrase, wal, wal_size, &plain, &plain_size);
     free(data);
     free(wal);
     if (ret < 0) {
@@ -362,7 +362,7 @@ static void check_onelibrary(Report *r, const char *stick, const RXPdbRawTrack *
         return;
     }
     sqlite3 *db;
-    if (rx_onelibrary_open_plain(plain, plain_size, &db) < 0) {
+    if (cb_onelibrary_open_plain(plain, plain_size, &db) < 0) {
         problem(r, "exportLibrary.db does not open");
         free(plain);
         return;
@@ -373,7 +373,7 @@ static void check_onelibrary(Report *r, const char *stick, const RXPdbRawTrack *
 
     /* The pdb's tracks by path, for a lookup per row rather than a scan:
      * a stick of thousands of tracks made the check quadratic. */
-    const RXPdbRawTrack **by_path = nb > 0 ? malloc(sizeof(*by_path) * (size_t)nb) : NULL;
+    const CBPdbRawTrack **by_path = nb > 0 ? malloc(sizeof(*by_path) * (size_t)nb) : NULL;
     int nb_by_path = by_path ? nb : 0;
     for (int i = 0; i < nb_by_path; i++)
         by_path[i] = &t[i];
@@ -387,18 +387,18 @@ static void check_onelibrary(Report *r, const char *stick, const RXPdbRawTrack *
             const char *path = (const char *)sqlite3_column_text(st, 0);
             int autoload = sqlite3_column_int(st, 1);
             n++;
-            const RXPdbRawTrack *m = NULL;
+            const CBPdbRawTrack *m = NULL;
             if (path && by_path) {
                 m = find_track_path(by_path, nb_by_path, path);
             } else {
                 /* Out of memory for the index: the plain scan. */
                 for (int i = 0; path && i < nb && !m; i++)
-                    if (!strcmp(t[i].strings[RX_PDB_STR_FILE_PATH], path))
+                    if (!strcmp(t[i].strings[CB_PDB_STR_FILE_PATH], path))
                         m = &t[i];
             }
             if (m) {
                 same++;
-                bool on = !strcmp(m->strings[RX_PDB_STR_AUTOLOAD_HOTCUES], "ON");
+                bool on = !strcmp(m->strings[CB_PDB_STR_AUTOLOAD_HOTCUES], "ON");
                 if (on != (autoload != 0))
                     problem(r, "%s: hot cue auto load is %s in export.pdb, %s in exportLibrary.db", path,
                             on ? "on" : "off", autoload ? "on" : "off");
@@ -440,47 +440,47 @@ static void settings_line(Report *r, const char *stick)
         size_t n;
         if (read_stick(stick, path, &b, &n) < 0)
             continue;
-        RXKv *kv;
+        CBKv *kv;
         int nk;
-        if (rx_settings_decode(files[i], b, n, &kv, &nk) < 0) {
+        if (cb_settings_decode(files[i], b, n, &kv, &nk) < 0) {
             problem(r, "%s does not decode", files[i]);
             free(b);
             continue;
         }
-        char *line = rx_asprintf("%s:", files[i]);
+        char *line = cb_asprintf("%s:", files[i]);
         for (int k = 0; line && k < nk; k++) {
-            char *l = rx_asprintf("%s%s %s=%s", line, k ? "," : "", kv[k].key, kv[k].value);
+            char *l = cb_asprintf("%s%s %s=%s", line, k ? "," : "", kv[k].key, kv[k].value);
             free(line);
             line = l;
         }
         if (line)
             say(r, "%s", line);
         free(line);
-        rx_kv_free(kv, nk);
+        cb_kv_free(kv, nk);
         free(b);
     }
 }
 
-int rx_inspect(const char *stick, rx_report_cb line, void *opaque)
+int cb_inspect(const char *stick, cb_report_cb line, void *opaque)
 {
     Report r = { .line = line, .opaque = opaque };
     uint8_t *b = NULL;
     size_t size = 0;
     bool have_pdb = read_stick(stick, "/PIONEER/rekordbox/export.pdb", &b, &size) >= 0;
-    RXPdbRawTrack *t = NULL;
+    CBPdbRawTrack *t = NULL;
     int nb = 0;
     if (have_pdb) {
         int before = r.problems;
-        rx_pdb_check(b, size, pdb_problem, &r);
-        if (rx_pdb_raw_tracks(b, size, &t, &nb) < 0)
+        cb_pdb_check(b, size, pdb_problem, &r);
+        if (cb_pdb_raw_tracks(b, size, &t, &nb) < 0)
             problem(&r, "export.pdb: track table unreadable");
-        say(&r, "export.pdb: %d tracks, %zu pages, %s", nb, size / RX_PDB_PAGE,
+        say(&r, "export.pdb: %d tracks, %zu pages, %s", nb, size / CB_PDB_PAGE,
             r.problems == before ? "OK" : "PROBLEMS");
         check_tracks(&r, stick, t, nb, false);
         check_pdb_refs(&r, stick, b, size, t, nb);
     } else if (!stick_exists(stick, "/PIONEER/rekordbox/exportLibrary.db")) {
         say(&r, "%s: no export.pdb and no exportLibrary.db", stick);
-        return RX_ERROR(ENOENT);
+        return CB_ERROR(ENOENT);
     }
     check_onelibrary(&r, stick, t, nb, have_pdb);
 
@@ -488,15 +488,15 @@ int rx_inspect(const char *stick, rx_report_cb line, void *opaque)
     size_t ext_size;
     if (read_stick(stick, "/PIONEER/rekordbox/exportExt.pdb", &ext, &ext_size) >= 0) {
         int before = r.problems;
-        rx_pdb_check(ext, ext_size, pdb_problem, &r);
-        say(&r, "exportExt.pdb: %zu pages, %s", ext_size / RX_PDB_PAGE,
+        cb_pdb_check(ext, ext_size, pdb_problem, &r);
+        say(&r, "exportExt.pdb: %zu pages, %s", ext_size / CB_PDB_PAGE,
             r.problems == before ? "OK" : "PROBLEMS");
         free(ext);
     }
     /* The count is the caller's to report (the CLI prints its own
      * verdict line). */
     settings_line(&r, stick);
-    rx_pdb_raw_tracks_free(t, nb);
+    cb_pdb_raw_tracks_free(t, nb);
     free(b);
     return r.problems;
 }

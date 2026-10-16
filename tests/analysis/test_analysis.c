@@ -1,6 +1,6 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
-/* rx_analyse and the analysis module's edges, beside the beat cases
+/* cb_analyse and the analysis module's edges, beside the beat cases
  * (test_beats.c), the key (test_key.c) and the waveforms (test_waveform.c):
  *
  *  - a float WAV with NaN and infinite samples, decoded as the application
@@ -20,9 +20,9 @@
  *    downbeat it gets with a length, from a grid expanded only that far
  *    (it was a million seconds: the process grew by 45 MB).
  *
- * Media are written under $RX_TEST_DIR. */
+ * Media are written under $CB_TEST_DIR. */
 
-#include "rxbox/analysis.h"
+#include "cyanbox/analysis.h"
 
 #include <errno.h>
 #include <math.h>
@@ -60,7 +60,7 @@ static float *make_track(int64_t *n)
     static const double notes[] = { 110.0, 220.0, 261.63, 329.63 };
     for (int64_t i = 0; i < *n; i++) {
         double t = (double)i / RATE, v = 0.0;
-        for (size_t k = 0; k < RX_ARRAY_ELEMS(notes); k++)
+        for (size_t k = 0; k < CB_ARRAY_ELEMS(notes); k++)
             v += 0.1 * sin(2.0 * M_PI * notes[k] * t);
         x[i] = (float)v;
     }
@@ -132,10 +132,10 @@ typedef struct Lines {
     char last[256];
 } Lines;
 
-static void count_line(void *opaque, enum RXLogLevel level, const char *line)
+static void count_line(void *opaque, enum CBLogLevel level, const char *line)
 {
     Lines *l = opaque;
-    if (level == RX_LOG_WARN && strstr(line, "not finite")) {
+    if (level == CB_LOG_WARN && strstr(line, "not finite")) {
         l->n++;
         snprintf(l->last, sizeof(l->last), "%s", line);
     }
@@ -144,36 +144,36 @@ static void count_line(void *opaque, enum RXLogLevel level, const char *line)
 /* Decodes path as the application does (mono, its own rate) and
  * analyses it; the warnings about samples that were not finite are
  * counted in *lines. */
-static int analyse_file(const char *path, RXAnalysis *a, RXAudio *au, Lines *lines)
+static int analyse_file(const char *path, CBAnalysis *a, CBAudio *au, Lines *lines)
 {
     *lines = (Lines) { 0 };
-    rx_log_set_sink(count_line, lines);
-    int ret = rx_decode(path, 1, 0, au);
-    rx_log_set_sink(NULL, NULL);
+    cb_log_set_sink(count_line, lines);
+    int ret = cb_decode(path, 1, 0, au);
+    cb_log_set_sink(NULL, NULL);
     if (ret < 0) {
         memset(a, 0, sizeof(*a));
         return ret;
     }
-    return rx_analyse(au, NULL, RX_ANALYSE_ALL, a);
+    return cb_analyse(au, NULL, CB_ANALYSE_ALL, a);
 }
 
-static bool same_waves(const RXWaveforms *a, const RXWaveforms *b)
+static bool same_waves(const CBWaveforms *a, const CBWaveforms *b)
 {
     uint8_t *pa = NULL, *pb = NULL;
     size_t na = 0, nb = 0;
-    bool same = rx_waveforms_pack(a, &pa, &na) >= 0 && rx_waveforms_pack(b, &pb, &nb) >= 0 &&
+    bool same = cb_waveforms_pack(a, &pa, &na) >= 0 && cb_waveforms_pack(b, &pb, &nb) >= 0 &&
                 na == nb && !memcmp(pa, pb, na);
     free(pa);
     free(pb);
     return same;
 }
 
-static bool same_grid(const RXGrid *a, const RXGrid *b)
+static bool same_grid(const CBGrid *a, const CBGrid *b)
 {
     if (a->nb_sections != b->nb_sections || a->beats_per_bar != b->beats_per_bar)
         return false;
     for (int i = 0; i < a->nb_sections; i++) {
-        const RXTempoSection *p = &a->sections[i], *q = &b->sections[i];
+        const CBTempoSection *p = &a->sections[i], *q = &b->sections[i];
         if (p->start != q->start || p->bpm != q->bpm || p->beat != q->beat ||
             p->measured != q->measured)
             return false;
@@ -209,17 +209,17 @@ static void test_nonfinite(const char *dir)
         { "zero64.wav",  64, zero,  0 },
         { "bad64.wav",   64, bad64, 3 },
     };
-    RXAnalysis an[RX_ARRAY_ELEMS(files)];
-    RXAudio au[RX_ARRAY_ELEMS(files)];
+    CBAnalysis an[CB_ARRAY_ELEMS(files)];
+    CBAudio au[CB_ARRAY_ELEMS(files)];
     memset(an, 0, sizeof(an));
     memset(au, 0, sizeof(au));
-    for (size_t f = 0; f < RX_ARRAY_ELEMS(files); f++) {
-        char *path = rx_asprintf("%s/%s", dir, files[f].name);
+    for (size_t f = 0; f < CB_ARRAY_ELEMS(files); f++) {
+        char *path = cb_asprintf("%s/%s", dir, files[f].name);
         CHECK(path && write_float_wav(path, x, n, files[f].bits, at, files[f].v,
                                       files[f].v ? 3 : 0) == 0, "writing %s", files[f].name);
         Lines lines;
         int ret = path ? analyse_file(path, &an[f], &au[f], &lines) : -ENOMEM;
-        CHECK(ret == 0 && an[f].done == RX_ANALYSE_ALL, "%s: ret %d, done 0x%x", files[f].name,
+        CHECK(ret == 0 && an[f].done == CB_ANALYSE_ALL, "%s: ret %d, done 0x%x", files[f].name,
               ret, an[f].done);
         /* One warning for the file, with the count */
         char want[32];
@@ -263,9 +263,9 @@ static void test_nonfinite(const char *dir)
         printf("ok   NaN and infinite samples: key %s %.3f, %d waveform columns, as with zeros\n",
                an[2].key.key, an[2].key.confidence, an[2].waves.nb_detail);
 
-    for (size_t f = 0; f < RX_ARRAY_ELEMS(files); f++) {
-        rx_analysis_free(&an[f]);
-        rx_audio_free(&au[f]);
+    for (size_t f = 0; f < CB_ARRAY_ELEMS(files); f++) {
+        cb_analysis_free(&an[f]);
+        cb_audio_free(&au[f]);
     }
     free(x);
 }
@@ -274,25 +274,25 @@ static void test_nonfinite(const char *dir)
 
 /* The onsets of n frames: the kick band's level `kick` (NULL silent) and
  * a full band whose flux is 1 at frame `hit` (-1 none). */
-static int onsets_of(int n, const float *kick, int hit, RXOnsets *o)
+static int onsets_of(int n, const float *kick, int hit, CBOnsets *o)
 {
-    RXSpectrum s = {
+    CBSpectrum s = {
         .nb_frames = n,
-        .fps       = (double)RX_BEAT_RATE / RX_BEAT_HOP,
+        .fps       = (double)CB_BEAT_RATE / CB_BEAT_HOP,
         .kick      = calloc(n, sizeof(float)),
         .flux_full = calloc(n, sizeof(float)),
         .flux_mid  = calloc(n, sizeof(float)),
         .flux_high = calloc(n, sizeof(float)),
     };
-    int ret = RX_ERROR(ENOMEM);
+    int ret = CB_ERROR(ENOMEM);
     if (s.kick && s.flux_full && s.flux_mid && s.flux_high) {
         if (kick)
             memcpy(s.kick, kick, (size_t)n * sizeof(float));
         if (hit >= 0)
             s.flux_full[hit] = 1.0f;
-        ret = rx_onsets_compute(&s, o);
+        ret = cb_onsets_compute(&s, o);
     }
-    rx_spectrum_free(&s);
+    cb_spectrum_free(&s);
     return ret;
 }
 
@@ -312,9 +312,9 @@ static void test_onsets(void)
     /* Silence of every short length: nothing moves, nothing is written
      * outside the bands (run under valgrind or ASan to see the latter) */
     static const int lengths[] = { 1, 2, 4, 7, 8, 9, 20 };
-    for (size_t k = 0; k < RX_ARRAY_ELEMS(lengths); k++) {
+    for (size_t k = 0; k < CB_ARRAY_ELEMS(lengths); k++) {
         int n = lengths[k];
-        RXOnsets o;
+        CBOnsets o;
         int ret = onsets_of(n, NULL, -1, &o);
         CHECK(ret == 0, "%d frames of silence: %d", n, ret);
         if (ret < 0)
@@ -323,7 +323,7 @@ static void test_onsets(void)
         for (int i = 0; i < n; i++)
             silent &= !o.full[i] && !o.low[i] && !o.mid[i] && !o.high[i] && !o.accent[i];
         CHECK(silent, "%d frames of silence have onsets", n);
-        rx_onsets_free(&o);
+        cb_onsets_free(&o);
     }
 
     /* A kick over a silent full band: the kick band's flux (the rise of
@@ -333,13 +333,13 @@ static void test_onsets(void)
     float kick[N];
     for (int i = 0; i < N; i++)
         kick[i] = i >= 26 ? 1.0f : 0.0f;
-    RXOnsets o;
+    CBOnsets o;
     int ret = onsets_of(N, kick, -1, &o);
     CHECK(ret == 0, "a kick over silence: %d", ret);
     if (ret == 0) {
         CHECK(peak_of(o.low, N) == 27 && o.low[28] > 0.0f && o.low[29] == 0.0f,
               "a kick over silence: the kick band peaks at frame %d", peak_of(o.low, N));
-        rx_onsets_free(&o);
+        cb_onsets_free(&o);
     }
 
     /* The same kick 3 frames before a hit in the full band (flux 1 at 28,
@@ -350,7 +350,7 @@ static void test_onsets(void)
         CHECK(peak_of(o.full, N) == 30 && peak_of(o.low, N) == 30 && o.low[29] == 0.0f,
               "a kick before a hit: the full band at %d, the kick band at %d", peak_of(o.full, N),
               peak_of(o.low, N));
-        rx_onsets_free(&o);
+        cb_onsets_free(&o);
     }
     if (fails == fails0)
         printf("ok   onsets: short silences, a kick over silence, a kick before a hit\n");
@@ -363,14 +363,14 @@ static int cmp_float(const void *a, const void *b)
 }
 
 /* dj's rule as it was written, on a sorted copy */
-static double first_sorted(const RXOnsets *o)
+static double first_sorted(const CBOnsets *o)
 {
     float *tmp = malloc((size_t)o->nb * sizeof(*tmp));
     if (!tmp)
         return NAN;
     memcpy(tmp, o->full, (size_t)o->nb * sizeof(*tmp));
     qsort(tmp, o->nb, sizeof(*tmp), cmp_float);
-    double p99 = tmp[(int)RX_MIN((int64_t)(0.99 * (o->nb - 1) + 0.5), o->nb - 1)];
+    double p99 = tmp[(int)CB_MIN((int64_t)(0.99 * (o->nb - 1) + 0.5), o->nb - 1)];
     free(tmp);
     for (int i = 0; i < o->nb; i++) {
         if (o->full[i] > 0.25 * p99)
@@ -384,7 +384,7 @@ static void test_first_onset(void)
     int fails0 = fails;
     uint64_t s = 12345;
     static const int lengths[] = { 1, 2, 3, 100, 101, 1000, 54321 };
-    for (size_t k = 0; k < RX_ARRAY_ELEMS(lengths); k++) {
+    for (size_t k = 0; k < CB_ARRAY_ELEMS(lengths); k++) {
         int n = lengths[k];
         float *v = malloc((size_t)n * sizeof(*v));
         if (!v) {
@@ -397,15 +397,15 @@ static void test_first_onset(void)
             uint32_t r = (uint32_t)(s >> 33);
             v[i] = r % 3 == 0 ? 0.0f : r % 97 == 0 ? (float)(r % 50) : (float)(r % 1000) / 997.0f;
         }
-        RXOnsets o = { .nb = n, .fps = 150.0, .full = v };
-        double want = first_sorted(&o), got = rx_onsets_first(&o);
+        CBOnsets o = { .nb = n, .fps = 150.0, .full = v };
+        double want = first_sorted(&o), got = cb_onsets_first(&o);
         CHECK(got == want, "%d values: first onset %.6f, sorted %.6f", n, got, want);
         /* All equal, and all zero */
         for (float c = 0.0f; c <= 1.0f; c += 1.0f) {
             for (int i = 0; i < n; i++)
                 v[i] = c;
             want = first_sorted(&o);
-            got = rx_onsets_first(&o);
+            got = cb_onsets_first(&o);
             CHECK(got == want, "%d values of %g: first onset %.6f, sorted %.6f", n, c, got, want);
         }
         free(v);
@@ -417,21 +417,21 @@ static void test_first_onset(void)
 /* ------------------------------------------------------------- auto cue */
 
 /* The cue of a track of length `duration` (0: not known) */
-static double cue_of(const RXGrid *g, double start, double duration)
+static double cue_of(const CBGrid *g, double start, double duration)
 {
-    RXTrack *t = rx_track_new("/test/cue.flac");
+    CBTrack *t = cb_track_new("/test/cue.flac");
     if (!t)
         return -1.0;
     t->duration = duration;
-    RXBeatResult br = { .music_start = start };
-    if (rx_grid_copy(&br.grid, g) < 0) {
-        rx_track_free(t);
+    CBBeatResult br = { .music_start = start };
+    if (cb_grid_copy(&br.grid, g) < 0) {
+        cb_track_free(t);
         return -1.0;
     }
-    int ret = rx_analysis_auto_cues(t, &br);
+    int ret = cb_analysis_auto_cues(t, &br);
     double at = ret < 0 ? -1.0 : t->nb_cues == 1 ? t->cues[0].time : NAN;
-    rx_grid_free(&br.grid);
-    rx_track_free(t);
+    cb_grid_free(&br.grid);
+    cb_track_free(t);
     return at;
 }
 
@@ -445,17 +445,17 @@ static double peak_mb(void)
 static void test_auto_cue(void)
 {
     int fails0 = fails;
-    RXGrid g[3];
+    CBGrid g[3];
     memset(g, 0, sizeof(g));
-    bool ok = rx_grid_init(&g[0], 0.5, 120.0) >= 0;
+    bool ok = cb_grid_init(&g[0], 0.5, 120.0) >= 0;
     /* 120 BPM, then 128 BPM from 60 s counting from beat 3 */
-    ok = ok && rx_grid_init(&g[1], 0.5, 120.0) >= 0 && rx_grid_add_section(&g[1], 60.0, 128.0, 3) >= 0;
+    ok = ok && cb_grid_init(&g[1], 0.5, 120.0) >= 0 && cb_grid_add_section(&g[1], 60.0, 128.0, 3) >= 0;
     /* A dynamic stretch: measured beats from 10 s, a little slower each */
-    ok = ok && rx_grid_init(&g[2], 0.5, 120.0) >= 0;
+    ok = ok && cb_grid_init(&g[2], 0.5, 120.0) >= 0;
     double t = 10.0;
     for (int k = 0; ok && k < 40; k++) {
         double bpm = 120.0 - 0.25 * k;
-        ok = rx_grid_add_beat(&g[2], t, bpm, k ? 0 : 1) >= 0;
+        ok = cb_grid_add_beat(&g[2], t, bpm, k ? 0 : 1) >= 0;
         t += 60.0 / bpm;
     }
     CHECK(ok, "making the grids");
@@ -472,8 +472,8 @@ static void test_auto_cue(void)
         { 2,  40.0, NAN },
         { 0, 500.0, 500.5 },
     };
-    for (size_t k = 0; ok && k < RX_ARRAY_ELEMS(cases); k++) {
-        const RXGrid *gr = &g[cases[k].grid];
+    for (size_t k = 0; ok && k < CB_ARRAY_ELEMS(cases); k++) {
+        const CBGrid *gr = &g[cases[k].grid];
         double peak0 = peak_mb();
         double unknown = cue_of(gr, cases[k].start, 0.0);
         double grew = peak_mb() - peak0;
@@ -487,16 +487,16 @@ static void test_auto_cue(void)
               cases[k].start, known, cases[k].want);
     }
     for (int i = 0; i < 3; i++)
-        rx_grid_free(&g[i]);
+        cb_grid_free(&g[i]);
     if (fails == fails0)
         printf("ok   the automatic cue without the track's length\n");
 }
 
 int main(void)
 {
-    const char *base = getenv("RX_TEST_DIR");
-    char *dir = rx_asprintf("%s/analysis", base ? base : "build/test-media");
-    if (!dir || rx_mkdir_p(dir) < 0) {
+    const char *base = getenv("CB_TEST_DIR");
+    char *dir = cb_asprintf("%s/analysis", base ? base : "build/test-media");
+    if (!dir || cb_mkdir_p(dir) < 0) {
         printf("FAIL: cannot make %s\n", dir ? dir : "the test directory");
         free(dir);
         return 1;

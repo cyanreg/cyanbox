@@ -1,13 +1,13 @@
 # The beat-grid analyser
 
-How rxbox finds a track's beat grid, why each step is the way it is, and how
+How cyanbox finds a track's beat grid, why each step is the way it is, and how
 well it works. The code is in `src/analysis/` (`spectrum.c`, `onset.c`,
 `start.c`, `tempo.c`, `grid_fit.c`, `walk.c`, `downbeat.c`, `beats.c`,
 `analysis.c`, the private interface `beats_internal.h`); the tests in
-`tests/analysis/test_beats.c`; the evaluation tool in `tools/rxbox-eval.c` and
+`tests/analysis/test_beats.c`; the evaluation tool in `tools/cyanbox-eval.c` and
 `tests/analysis/py_beats.py`.
 
-The result (`rxbox/analysis.h`, `RXBeatResult`) is what a DJ player wants: a
+The result (`cyanbox/analysis.h`, `CBBeatResult`) is what a DJ player wants: a
 piecewise-constant grid (one section per tempo or phase, each a start beat, a
 BPM and a beat number) that begins where the music begins, a confidence,
 flags saying what is uncertain, and where and how the music starts. Where
@@ -96,10 +96,10 @@ and the CPU's share falls to about a third: 656 ms to 204 ms per file on the
   signal block-averaged to 2756 Hz, where a 2048-point transform resolves
   1.35 Hz, enough to tell bass notes apart, which 21.5 Hz bins cannot.
 
-**On the GPU.** Given a compute context (`RXAnalysisOptions.compute`,
-`rxbox/compute.h`; the jobs pool, the CLI and `rxbox-eval` make one when
-there is a Vulkan 1.3 device, `--no-gpu` or `RXBOX_ANALYSIS_GPU=0` says not
-to, `--device` or `RXBOX_GPU_DEVICE` picks one), the STFT and the envelopes
+**On the GPU.** Given a compute context (`CBAnalysisOptions.compute`,
+`cyanbox/compute.h`; the jobs pool, the CLI and `cyanbox-eval` make one when
+there is a Vulkan 1.3 device, `--no-gpu` or `CYANBOX_ANALYSIS_GPU=0` says not
+to, `--device` or `CYANBOX_GPU_DEVICE` picks one), the STFT and the envelopes
 run as compute shaders (`src/gpu/shaders/`). One workgroup per frame
 windows 2048 samples into shared memory, transforms them (a Stockham
 radix-4 FFT of 1024 complex points; twiddles computed on the CPU in double
@@ -139,12 +139,12 @@ amplitude into an absolute error no larger, so the bands, and the fluxes
 summed from them, differ by about 1e-6 of their largest values; both GPUs
 stay under 1e-6 (envelopes under 2e-7). Most of that is the CPU's: against
 av_tx in double precision the GPU kernels are within 2e-7 at every size
-from 64 to 8192 points (`tests/gpu/test_compute.c`). `RXBOX_ANALYSIS_GPU=0` or `1`
+from 64 to 8192 points (`tests/gpu/test_compute.c`). `CYANBOX_ANALYSIS_GPU=0` or `1`
 forces either path in the test, the tools and the app;
-`RXBOX_GPU_VALIDATION=1` runs the GPU half under the Khronos validation
+`CYANBOX_GPU_VALIDATION=1` runs the GPU half under the Khronos validation
 layer (with synchronisation checks; it reports nothing).
 
-On the 58 acceptance tracks (`rxbox-eval -j 2`, once on each path), 56
+On the 58 acceptance tracks (`cyanbox-eval -j 2`, once on each path), 56
 grids were identical to the CSV's precision, flags and starts of the music
 included. Two first beats moved: AZKi's エントロピー by 10 µs (the fifth
 decimal rounding the other way) and Orange Pekoe's Adagio, a live
@@ -194,7 +194,7 @@ the tempo), so the octave is not chosen here: the working octave is the
 family member nearest the prior (125 BPM), and the octave is decided later
 on the fitted grid (section 8).
 
-**The tempogram** (`rx_tempo_regions`): 12-second windows every 3 s, each
+**The tempogram** (`cb_tempo_regions`): 12-second windows every 3 s, each
 window's autocorrelation comb over the octave around the working tempo (the
 comb sums the beat, two-beat and bar lags, so a half-time stretch still
 reads as the main tempo). A *region* is a run of at least four windows
@@ -298,17 +298,17 @@ Maiden remix, flagged `tempo-change`). The line kept is the one with more
 attacks, if it holds both; otherwise the other one, if it does.
 
 **The exported beats.** The first section's start is the grid's first beat:
-there is none before it (`rxbox/model.h`), and the analyser puts it at the
+there is none before it (`cyanbox/model.h`), and the analyser puts it at the
 first beat at or after the start of the music (section 11). A section's
 beats run up to the next section's
 start, less the last one when it lies within half a period of that start
-(`rx_grid_beats` in `src/core/grid.c`, rbxport's SAME_HIT): that beat and
+(`cb_grid_beats` in `src/core/grid.c`, rbxport's SAME_HIT): that beat and
 the new section's first are the same hit. A section boundary that survives
 therefore never puts two beats closer than half a period, and the beat count
 across it stays right (a section that continues the count numbers its first
 beat after the last beat kept). `test_beats` expands every synthetic grid
 this way and fails on two beats closer than half a period or a section
-downbeat not numbered 1; `rxbox-eval` counts such grids ("grids with two
+downbeat not numbered 1; `cyanbox-eval` counts such grids ("grids with two
 beats closer than half a period": 0 of the 150 sample tracks and 0 of the 58
 acceptance tracks).
 
@@ -324,8 +324,8 @@ beat by far more than a straight line can hold: a 1 % wobble over sixteen
 bars at 120 is 300 ms. The sections of section 5 can only cut such music
 into straight pieces of 32 beats or more, each off the beat somewhere; the
 old `unsteady` flag said as much and gave up. Now the measured beats
-themselves become the grid there (`RXTempoSection.measured`,
-`rxbox/model.h`): one measured beat per beat, each with the local tempo
+themselves become the grid there (`CBTempoSection.measured`,
+`cyanbox/model.h`): one measured beat per beat, each with the local tempo
 of its interval, which is what rekordbox's "dynamic" analysis writes and
 every player plays (PQTZ, docs/anlz.md 4.3). A sequenced track keeps its
 straight grid, bit for bit.
@@ -335,7 +335,7 @@ each section's attacks are measured again around the *tracked* beats (the
 line's own 35 ms search loses the beats a drift has carried furthest),
 attacks lighter than a quarter of their median dropped as the
 segmentation drops them, and the *strain* of the line on them read
-(`rx_line_strain`): a robust local line through the attacks eight beats
+(`cb_line_strain`): a robust local line through the attacks eight beats
 either side of each (Tukey's biweight on the section's scatter), its
 residual from the section's line, and the running median over nine of
 that: the *deviation*, how far the music sits from the line along it; the
@@ -412,7 +412,7 @@ reaching further lets a hat end it half a beat short). The first beat
 kept sits on the old count within three tenths of a period, so the
 numbering through the stretch holds; the sections after move by the
 difference in count. Then the attacks within 25 ms of the new beats, and
-the walk (`rx_walk_beats`): a robust local *quadratic* through the
+the walk (`cb_walk_beats`): a robust local *quadratic* through the
 attacks a bar either side of every beat, evaluated at the beat. A local
 line sits off a tempo that moves by four times its curvature per beat
 squared (the window's second moment), 17 ms at the steepest point of the
@@ -453,7 +453,7 @@ themselves and at the line's beats alike (judged on envelopes cut around
 the tracked beats, a line far from the music has no data where it is
 wrong and scores on the windows where it is right), a window whose
 average beat rises by less than half the walked beats' median contrast
-counted at the search width (`rx_fold` reports no rise as an offset of
+counted at the search width (`cb_fold` reports no rise as an offset of
 0). The confidence's own yes-or-no at 15 ms is too coarse here: a line
 20 ms off scores as the beats do.
 
@@ -495,7 +495,7 @@ kept nowhere near that bar.
 **Phase, downbeat, the rest.** A dynamic stretch is a section like any
 other to what follows, on its beats' own times: the half beats are the
 beats and the midpoints after them, the kicks are weighed on those
-(`support_at`), the structure votes over them (`rx_downbeat_vote_times`,
+(`support_at`), the structure votes over them (`cb_downbeat_vote_times`,
 the line version a wrapper that builds the same arrays), a move by half
 a beat puts every beat on the midpoint after it and walks again, and the
 downbeat is counted from the stretch's first beat as from a line's t0.
@@ -512,7 +512,7 @@ the first with the section's number, the rest continuing the count; a
 dynamic first section reaches back to time 0 at its first interval as a
 line does, before the music's start moves the grid on. The last measured
 beat of a track runs on at its tempo. Nothing of this runs with
-`allow_dynamic` off (`rxbox-eval --no-dynamic`), and nothing of it touches
+`allow_dynamic` off (`cyanbox-eval --no-dynamic`), and nothing of it touches
 the GPU front end: the decisions stay in C on both paths, and the two
 agree on every synthetic grid, dynamic ones included.
 
@@ -768,7 +768,7 @@ out of its reach: a grid off by more than the fold reaches everywhere,
 whose windows hold no hit at all and so set their own median (one 100 ms
 late on that loop reads up to 0.24, as before).
 
-Flags (`RXGridFlag`), and what they should mean to the DJ in the interface:
+Flags (`CBGridFlag`), and what they should mean to the DJ in the interface:
 
 | Flag | Set when | Meaning for the user |
 | --- | --- | --- |
@@ -826,7 +826,7 @@ automatic memory cue.
 **Measured on the level.** The onset signals are normalised to the whole
 track (section 2), so a fade-in's first seconds are nothing to them, and
 dj's rule for the start (the first frame of full-band flux above a quarter
-of its 99th percentile, `rx_onsets_first`) finds the first *loud* onset: on
+of its 99th percentile, `cb_onsets_first`) finds the first *loud* onset: on
 pushover's "PASSIVE feat. Shiina", a hit 3.6 s in and two seconds into the
 fade, half a beat off the grid. `start.c` reads the level of the 6.7 ms
 frames, smoothed over three (20 ms, so that a low note's cycle does not
@@ -881,13 +881,13 @@ fade; both stay a fade. The synthetic case: a pad fading in for two
 seconds, then the hit on beat 1.
 
 **The grid** begins at the first beat at or after the start, less 50 ms (a
-line a few ms early on a hit): `rx_grid_start_at` moves the first section's
+line a few ms early on a hit): `cb_grid_start_at` moves the first section's
 start forward by whole beats, every later beat keeping its time and number,
 so bar 1 is the first downbeat at or after the start. dj, rbxport
 (`first_beat_secs`: "the first grid position at or after time zero, as
 rekordbox does") and rekordbox's own analysis extend the first tempo back to
-the start of the file, beats and a bar 1 in the silence; rxbox's grids no
-longer do (`rxbox/model.h`, `src/core/grid.c`). **The automatic cue** is the
+the start of the file, beats and a bar 1 in the silence; cyanbox's grids no
+longer do (`cyanbox/model.h`, `src/core/grid.c`). **The automatic cue** is the
 first downbeat at or after the start (it was the first after dj's first
 loud onset).
 
@@ -898,7 +898,7 @@ the second hit (a kick loop at 128 whose line sits 2.3 ms early: its
 first beat at 0.4665 s). On the acceptance list AD:Drum'n Bass 5's "Keeps
 Me High" and AD:HOUSE 7's "A Small Happiness", which start at once, have
 their line's beat 21 and 16 ms before 0. A beat before 0 is no beat on
-the players' timeline: `rx_grid_beats` lists none (`src/core/grid.c`), so
+the players' timeline: `cb_grid_beats` lists none (`src/core/grid.c`), so
 the stick's PQTZ (its times unsigned milliseconds, docs/anlz.md 4.3), the
 automatic cue and the waveform would never see it, and rekordbox's own
 grids begin at the first position at or after zero (rbxport's
@@ -1045,7 +1045,7 @@ drums (Orange Pekoe, yanaginagi, AZKi, D4DJ Photon Maiden, ReoNa, Yutaka
 Yokokura) and 30 Opus from `music_temp` (10 from AD:Drum'n Bass 5).
 
 To iterate on the decisions without decoding and transforming every file
-on every run, give `rxbox-eval` a cache on a disk: `--cache DIR` keeps each
+on every run, give `cyanbox-eval` a cache on a disk: `--cache DIR` keeps each
 file's decoded audio and front end, and later runs only analyse
 ("Reproducing the evaluation").
 
@@ -1057,7 +1057,7 @@ GPU's, with the same answers and the same grids (section 1).
 All pass: tempo within 0.05 BPM (all exact), phase within 3 ms (all within
 1.8 ms), downbeat right, sections and boundaries right (boundaries within
 1.3 ms), flags as required. Every grid is also expanded as a player gets it
-(`rx_grid_beats`): no two beats closer than half a period, and each section's
+(`cb_grid_beats`): no two beats closer than half a period, and each section's
 first downbeat numbered 1. Every track starts after digital silence with a
 hit on beat 1; the cases on where the music starts also check the grid's
 first beat (within 5 ms of the first sound on a beat), its number, that no
@@ -1077,7 +1077,7 @@ beat, bar or snap lies before it, and the automatic cue.
 | DJ edit house 128 → drum & bass 174 at bar 32 | two sections, boundary +0.0 ms, `tempo-change` |
 | re-entry 8 ms late at bar 32 (within the merge tolerance) | one section, no flags |
 | determinism; 48 kHz input | identical; within 0.5 ms of 44.1 kHz |
-| `rx_analyse` on stereo 48 kHz; auto cue | grid as mono, key "Am", cue on the first downbeat |
+| `cb_analyse` on stereo 48 kHz; auto cue | grid as mono, key "Am", cue on the first downbeat |
 | 0.5, 1.7, 3.3 s of silence, a hit on beat 1 | music starts at the hit's sample; first beat 1.3, 1.3, 0.9 ms before it, beat 1 |
 | fade-in over 2, 4, 8 s, linear in dB from -60 dB | a fade from its first hit; first beat on it, beat 1 |
 | a -75 dB noise floor, then a hit | the floor is no music; first beat on the hit, beat 1 |
@@ -1107,7 +1107,7 @@ score worse, as it should.
 
 ### Against dj's analyser (`py_beats.py`)
 
-| | rxbox vs dj |
+| | cyanbox vs dj |
 | --- | --- |
 | BPM equal within 0.1 | 110 of 150 (73 %) |
 | octave related | 11 |
@@ -1120,17 +1120,17 @@ Where they disagree, independent evidence says:
 
 - **Octave, on the 83 tracks whose octave is certain from their album**
   (house, techno, garage between 100 and 160; drum & bass between 150 and
-  200): rxbox right on all 83, dj on 77. The prior alone would get 78.
+  200): cyanbox right on all 83, dj on 77. The prior alone would get 78.
 - **Phase.** Of the 34 tracks where both agree on tempo and differ in phase
   by more than 10 ms, the click band (Butterworth above 2.5 kHz, scipy, folded
   over the whole track: `build-beats/eval/judge.py`) starts rising within 10 ms
-  of rxbox's beats on 33, of dj's on 14.
+  of cyanbox's beats on 33, of dj's on 14.
 - **Downbeat.** Of the electronic tracks whose music starts on a beat, all 74
-  start on rxbox's beat 1 (dj: 52 of 52; dj's start vote decides nearly
+  start on cyanbox's beat 1 (dj: 52 of 52; dj's start vote decides nearly
   every track because its summed novelty is nearly flat).
 - **BPM tags.** The whole library has 14 tagged files; 7 are one album with
   "135" on every track (acoustic songs between 117 and 170: the tag is
-  wrong). Of the other 7, rxbox and dj both agree with the tag within 0.5 BPM
+  wrong). Of the other 7, cyanbox and dj both agree with the tag within 0.5 BPM
   on the same 5; on the other two both say 175 for a "170" and 139.000 for a
   "140" (rounded tags, most likely).
 
@@ -1170,7 +1170,7 @@ mostly the transfers, while the Iris Xe shares the CPU's memory and power):
 | CPU path / Iris Xe | 371 / 236 ms (152 ms CPU) | 171 / 100 ms (59 ms CPU) |
 | GPU time (timestamps), STFT + envelopes, 6900 XT | 18.8 + 27.1 ms | 17.6 + 7.4 ms |
 | GPU time, STFT + envelopes, Iris Xe | 48.6 + 43.2 ms | 36.7 + 12.0 ms |
-| Decoding, then `rx_analyse` (all stages), CPU path / 6900 XT | 1013 / 815 ms | 791 / 650 ms |
+| Decoding, then `cb_analyse` (all stages), CPU path / 6900 XT | 1013 / 815 ms | 791 / 650 ms |
 | the same, CPU path / Iris Xe | 1256 / 1137 ms | 624 / 589 ms |
 
 What is left on the CPU is the decisions (and copying the signal up);
@@ -1183,12 +1183,12 @@ the first time they are used (once per process; Mesa caches them on disk).
 
 ### Memory
 
-Peak resident memory above the decoded input (`rxbox-eval --mem`, which
+Peak resident memory above the decoded input (`cyanbox-eval --mem`, which
 resets the kernel's high-water mark after decoding; `--all` runs the whole
-`rx_analyse`: waveforms, beats and key). Files made by concatenating
+`cb_analyse`: waveforms, beats and key). Files made by concatenating
 AD:HOUSE albums with ffmpeg; mono 44.1 kHz as the application decodes:
 
-| Length | Input (mono float) | Beats | `rx_analyse` | `rx_analyse` before 2026-10-14 | Whole process, before |
+| Length | Input (mono float) | Beats | `cb_analyse` | `cb_analyse` before 2026-10-14 | Whole process, before |
 | --- | --- | --- | --- | --- | --- |
 | 5 min | 53 MB | 8 MB | 9 MB | 17 MB | 96 MB |
 | 10 min | 106 MB | 14 MB | 17 MB | 32 MB | 162 MB |
@@ -1197,29 +1197,29 @@ AD:HOUSE albums with ffmpeg; mono 44.1 kHz as the application decodes:
 
 The beat analyser grows by about 1.35 MB per minute: the onset signals, the
 per-half-beat profiles and the tracked beats, but not the spectrum. The
-largest stage of `rx_analyse` on an hour is the beats (82 MB above the
+largest stage of `cb_analyse` on an hour is the beats (82 MB above the
 input), then the waveforms (68); the key takes 2 MB. Until 2026-10-14 the
 key kept a decimated copy of the track (a quarter of the input at 44.1
 kHz) and took 151 MB, the largest stage; it now decimates as it reads,
 once per pass (docs/KEY.md), and the key and its confidence came out the
 same to the bit (225 synthetic tracks, the 58 acceptance tracks). The
-`rx_analyse` column was measured again then on a synthetic loop of each
+`cb_analyse` column was measured again then on a synthetic loop of each
 length (mono 16-bit FLAC, the GPU front end, three runs alike to 1 MB):
 the analyser before the change took 16, 33, 89 and 177 MB above the input
 there, as on the albums, and the whole process peaked at 150, 218, 477
 and 866 MB (the Vulkan context included), now 144, 203, 431 and 776.
 
 At 48 kHz an hour costs 687 MB in the beat analyser and 781 MB in
-`rx_analyse`, of which 606 MB is the one 44.1 kHz copy the analysers read;
-stereo input at 44.1 kHz costs 781 MB in `rx_analyse`, of which 635 MB is
+`cb_analyse`, of which 606 MB is the one 44.1 kHz copy the analysers read;
+stereo input at 44.1 kHz costs 781 MB in `cb_analyse`, of which 635 MB is
 the mono mix that the waveform and key interfaces take. The decoder's own
 transient peak (the audio module's) comes on top before the analysis starts.
 
 Before this was measured, an hour cost 180 MB in the beat analyser and 790
-MB in `rx_analyse` above a mono 44.1 kHz input, 1840 MB in the beat analyser
-at 48 kHz and 1395 MB in `rx_analyse` for stereo. What changed, with every
-result bit-identical (the synthetic suite, and `rxbox-eval --csv` over the
-150 tracks with `--ffmpeg` decoding; with `rx_decode` too, except one file's
+MB in `cb_analyse` above a mono 44.1 kHz input, 1840 MB in the beat analyser
+at 48 kHz and 1395 MB in `cb_analyse` for stereo. What changed, with every
+result bit-identical (the synthetic suite, and `cyanbox-eval --csv` over the
+150 tracks with `--ffmpeg` decoding; with `cb_decode` too, except one file's
 duration, which the decoder itself now reports differently):
 
 - The mel frames are not kept. The STFT loop keeps three frames (SuperFlux
@@ -1227,7 +1227,7 @@ duration, which the decoder itself now reports differently):
   as it goes, and keeps only what later stages read: the kick band, and the
   16-band profiles (sums of four mel bands) that the downbeat's structure
   novelty reads per half beat. An hour was 580 000 frames of 64 floats.
-- `rx_analyse` does not copy a 44.1 kHz input: the beat and key analysers
+- `cb_analyse` does not copy a 44.1 kHz input: the beat and key analysers
   read it in place. At other rates the waveforms are computed first, then
   one resampled copy is made and the own mono mix freed before beats and key.
 - The resampler works in chunks of 65 536 samples, with each call's output
@@ -1242,22 +1242,22 @@ Checked by folding scipy band envelopes over the whole track on each grid
 (`build-beats/eval/judge.py`, `foldcmp.py`), by bar patterns of the onset
 bands in 16ths (`pattern.py`), and by musical reasoning about the genre.
 
-| Track | rxbox | dj | Who is right, and why |
+| Track | cyanbox | dj | Who is right, and why |
 | --- | --- | --- | --- |
-| AD:HOUSE 8 / Unclear | 127 | 63.5 | rxbox: kick on every beat at 127; at 63.5 the claps fall on the half beats. |
-| AD:HOUSE 7 / groovin more groovin | 124 | 186 | rxbox: four-on-the-floor house; 186 is the 3:2 reading. |
-| AD:Garage / 4:00 AM | 134 | 201 | rxbox: a garage tempo; 201 is 3:2. Confidence 1.00 vs 0.85. |
-| AD:HOUSE 3 / Over the Azure | 130 | 195 | rxbox, probably: kick on every beat at 130. dj's confidence (0.91) is fooled by the kick on every third beat of a 3:2 grid. Forced to 180-210, rxbox fits 195 at 0.73. |
-| AD:HOUSE 4 / Ocean Peridot | 132 | 198 | rxbox, probably: as above; a forced 180-210 fit is poor. |
-| AD:Drum'n Bass 5 / Make You Better | 172 | 128.9 | rxbox: drum & bass; 128.9 is a 3:4 reading (dj's confidence 0.29). |
+| AD:HOUSE 8 / Unclear | 127 | 63.5 | cyanbox: kick on every beat at 127; at 63.5 the claps fall on the half beats. |
+| AD:HOUSE 7 / groovin more groovin | 124 | 186 | cyanbox: four-on-the-floor house; 186 is the 3:2 reading. |
+| AD:Garage / 4:00 AM | 134 | 201 | cyanbox: a garage tempo; 201 is 3:2. Confidence 1.00 vs 0.85. |
+| AD:HOUSE 3 / Over the Azure | 130 | 195 | cyanbox, probably: kick on every beat at 130. dj's confidence (0.91) is fooled by the kick on every third beat of a 3:2 grid. Forced to 180-210, cyanbox fits 195 at 0.73. |
+| AD:HOUSE 4 / Ocean Peridot | 132 | 198 | cyanbox, probably: as above; a forced 180-210 fit is poor. |
+| AD:Drum'n Bass 5 / Make You Better | 172 | 128.9 | cyanbox: drum & bass; 128.9 is a 3:4 reading (dj's confidence 0.29). |
 | AD:Drum'n Bass 5 / Divine Riptide | 177 | 177 | Same tempo; dj's grid is a sixteenth off (bar pattern: every hit on x.2 and x.4 of dj's beats). |
-| AD:Drum'n Bass 5 / Firewall | 177 | 177 | Same. A busy breakbeat: on some versions rxbox halved it, its working grid at 88.5 sitting on the "and"s; fixed by choosing the levels' beats from the finest level down. |
-| AD:HOUSE 10 / Shine | on the click | 35 ms early | rxbox: scipy fold has the click rising at 0 ms on rxbox's beats (dj's confidence 0.17). Before the click-band rule rxbox was 15 ms late (low-band body). |
+| AD:Drum'n Bass 5 / Firewall | 177 | 177 | Same. A busy breakbeat: on some versions cyanbox halved it, its working grid at 88.5 sitting on the "and"s; fixed by choosing the levels' beats from the finest level down. |
+| AD:HOUSE 10 / Shine | on the click | 35 ms early | cyanbox: scipy fold has the click rising at 0 ms on cyanbox's beats (dj's confidence 0.17). Before the click-band rule cyanbox was 15 ms late (low-band body). |
 | AD:TECHNO 4 / Blaster Weapon | 130 | 130 | Same grid. Ambiguous to the eye: a rolling 16th bass fills the kick band, open hats burst half a beat before a sharp mid-band click with a sidechain dip after it; both analysers put the beat on the click. |
 | AD:HOUSE Winter 3 / White Lie | 127 | 127 | Same. Showed the need for the four-on-the-floor rule: a stab on the "and" of 1 and 3 made the snare test halve it. |
-| ADvantage / Kneading | 104 | 138.66 | Undecided: 208 = 1.5 × 138.667 exactly, so one is a 3:2 reading; versions of rxbox have given 208, 138.667 and 104. |
-| emome CASE01 / FVERTEX | 150 | 75 | rxbox, probably (dj's confidence 0.01). |
-| COLORS / INTO THE LIGHT (Nhato remix) | 150, one section | 112.5 | rxbox, probably: a trance remix at 150. Earlier versions said 75 in three sections, flagged octave-uncertain and unsteady; choosing the line's beats by kick and snare (section 8) fixed it. |
+| ADvantage / Kneading | 104 | 138.66 | Undecided: 208 = 1.5 × 138.667 exactly, so one is a 3:2 reading; versions of cyanbox have given 208, 138.667 and 104. |
+| emome CASE01 / FVERTEX | 150 | 75 | cyanbox, probably (dj's confidence 0.01). |
+| COLORS / INTO THE LIGHT (Nhato remix) | 150, one section | 112.5 | cyanbox, probably: a trance remix at 150. Earlier versions said 75 in three sections, flagged octave-uncertain and unsteady; choosing the line's beats by kick and snare (section 8) fixed it. |
 | AD:Drum'n Bass 5 / Penglaishan | 190 | 190 | Same, flagged octave-uncertain: 95 and 190 were nearly tied. |
 | AD:HOUSE 13 / When the Salsa Turns Orange | 123 | 123 | Same; an earlier version halved it (the octave test read the phase of the DFT's fundamental, 42 ms before the kick). |
 | Taiyou no Kakera (Electric Sheep Remix) | 118.99 | 118.99 | Same. Showed that the tempogram must not override a 4:3 family (it gave 158.65). |
@@ -1265,7 +1265,7 @@ bands in 16ths (`pattern.py`), and by musical reasoning about the genre.
 | AD:TECHNO 4 / nakanoshima | 125, one section | 125 | Same. The last 74 beats have only an off-beat element left; a 32-bar minimum for half-beat phase cuts keeps the body's grid. |
 | STYLEY NiGHT ii / Love me, myself, and its instrumental | 100 (margin 2.4, 2.7) | not run | 100 by ear. Was 200 (1.66; the instrumental 1.50, `octave-uncertain`): a snare on 2 and 4, a kick on 1, the "and" of 3 and late in 4, eighths on the hats; the kick veto took the parity's 0.77 at 200 for a four-on-the-floor. Section 8. |
 | Clean Tears / Skyscraper (Heat Haze) | 98 (margin 1.9) | not run | About 98 by ear. Was 196 (6.3): four-on-the-floor at 196 by parity (0.77; by the bar 0.27: eighths in the low band of its louder sections), and 98 too slow by its snares, which are alone at 196. Its pattern varies by section and was not settled by eye. |
-| Bootleg (eKiog UKHardcore) | 175 | 175 | Tag says 170; both say 175. Before the four-on-the-floor kick veto rxbox said 87.5. |
+| Bootleg (eKiog UKHardcore) | 175 | 175 | Tag says 170; both say 175. Before the four-on-the-floor kick veto cyanbox said 87.5. |
 | TRY UNITE! (Uplifting Trance Mix) | 139 | 139 | Tag says 140; both independently 139.000: the tag is rounded. |
 | Orange Pekoe / Taiyou no Flight (live) | 142.7, two sections | 140.3 | Neither is trustworthy: rubato live jazz; both have low confidence (0.27, 0.14). |
 
@@ -1290,7 +1290,7 @@ All seven album mates of Determination are now 172-180, and none of the 58
 grids has two beats closer than half a period. On the 150-track sample the
 same changes left the agreement with dj as it was (110 equal, 11 octave, 29
 other; downbeat 72), moved one phase into agreement (86), fixed the one
-labelled octave rxbox had wrong (INTO THE LIGHT: 83 of 83), and otherwise
+labelled octave cyanbox had wrong (INTO THE LIGHT: 83 of 83), and otherwise
 changed only flags.
 
 **Dynamic grids** (section 6), the same 58 tracks analysed from the
@@ -1358,8 +1358,8 @@ went back to their straight grids. Whether AZKi's recordings are played
 or sequenced was not checked by ear; their attacks on the line read 3.5
 and 3.7-5.1 ms beat to beat, live by the rule.
 
-**The bar's kick and the lone snare** (section 8; `RX_BEATS_VERSION` 6),
-the 57 acceptance tracks still on disk analysed from `rxbox-eval`'s cache
+**The bar's kick and the lone snare** (section 8; `CB_BEATS_VERSION` 6),
+the 57 acceptance tracks still on disk analysed from `cyanbox-eval`'s cache
 before and after, every column of the CSV compared: 56 grids are the
 same to the last digit, sections, flags, confidence and starts. One
 changed, a fix:
@@ -1486,28 +1486,28 @@ synthetic pop case at 100 was 200 before.
 
 ```sh
 meson setup build-beats
-ninja -C build-beats src/analysis/test_beats tools/rxbox-eval
+ninja -C build-beats src/analysis/test_beats tools/cyanbox-eval
 meson test -C build-beats --no-rebuild --suite analysis beats
 
 # dj's analyser over the sample (re-executes itself under dj's venv)
 tests/analysis/py_beats.py -j 6 -o build-beats/eval/dj.csv -l build-beats/eval/sample.txt
 
-# rxbox over the sample, compared with dj
-build-beats/tools/rxbox-eval -v -j 8 -l build-beats/eval/sample.txt \
-    --csv build-beats/eval/rx.csv --compare build-beats/eval/dj.csv
+# cyanbox over the sample, compared with dj
+build-beats/tools/cyanbox-eval -v -j 8 -l build-beats/eval/sample.txt \
+    --csv build-beats/eval/cb.csv --compare build-beats/eval/dj.csv
 
 # one track in detail: stage timings, sections, octave, the onset signals
 # (-v prints each octave level's evidence, by parity and by the bar, and
 # the levels' first beats, for pattern.py on BASE.0.onsets.csv)
-build-beats/tools/rxbox-eval -vv --dump-onsets build-beats/dump/x FILE
+build-beats/tools/cyanbox-eval -vv --dump-onsets build-beats/dump/x FILE
 
 # iterating on the decisions: the first run fills the cache, later ones read it
-build-beats/tools/rxbox-eval -j 8 -l build-beats/eval/sample.txt --cache ~/rxbox-cache \
-    --csv build-beats/eval/rx.csv
+build-beats/tools/cyanbox-eval -j 8 -l build-beats/eval/sample.txt --cache ~/cyanbox-cache \
+    --csv build-beats/eval/cb.csv
 ```
 
-`rxbox-eval` decodes with `rx_decode` (mono, the file's own rate, as
-`rx_analyse` sees it); `--ffmpeg` pipes from the ffmpeg command line at
+`cyanbox-eval` decodes with `cb_decode` (mono, the file's own rate, as
+`cb_analyse` sees it); `--ffmpeg` pipes from the ffmpeg command line at
 44.1 kHz exactly as dj decodes. Its front end runs on the GPU when there is
 one (`--device`, `--no-gpu`); each file's wall time is split into decoding,
 the front end and the decisions (`-v`, and summed at the end).
@@ -1515,7 +1515,7 @@ the front end and the decisions (`-v`, and summed at the end).
 **Iterating without decoding again**: `--cache DIR` keeps, per file, the
 decoded mono 44.1 kHz audio as 16-bit PCM and the front end's arrays
 (exactly), found by the file's path, size, modification time, the decoder
-and `RX_FRONTEND_VERSION`, so that a second run over the same list skips
+and `CB_FRONTEND_VERSION`, so that a second run over the same list skips
 decoding and the STFT and only runs the decisions; it prints how many files
 came from it. About 6 MB a minute of audio (21 MB of PCM and 3 MB of arrays
 for a four-minute track), in whatever directory is named: put it on a disk,
@@ -1523,7 +1523,7 @@ never under /tmp (a tmpfs is RAM; the tool warns). A run that fills the
 cache analyses the 16-bit copy it stores, so every run with the cache sees
 the same samples; against a run without it only levels below -96 dB move
 (on a test track the same grid, flags and start, confidence 0.964 against
-0.965). Bump `RX_FRONTEND_VERSION` when the front end's output changes. `--bpm-range LO HI`, `--no-sections`,
+0.965). Bump `CB_FRONTEND_VERSION` when the front end's output changes. `--bpm-range LO HI`, `--no-sections`,
 `--from CSV` (compare without analysing) and `--no-dynamic` (the best
 straight sections everywhere) are also there, and `--starts`
 measures only where the music starts (no beat analysis), one line per file.

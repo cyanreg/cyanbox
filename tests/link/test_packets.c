@@ -198,16 +198,16 @@ static Pkt pkt(const char *hex)
     return k;
 }
 
-#define WR(name) uint8_t name##_buf[RX_PKT_MAX]; RXWr name = rx_wr(name##_buf, sizeof(name##_buf))
+#define WR(name) uint8_t name##_buf[CB_PKT_MAX]; CBWr name = cb_wr(name##_buf, sizeof(name##_buf))
 
 /* -------------------------------------------------- a presence on a wire */
 
 typedef struct Out {
     int64_t at;
-    enum RXLinkPort port;
+    enum CBLinkPort port;
     uint32_t to;
     size_t len;
-    uint8_t b[RX_PKT_MAX];
+    uint8_t b[CB_PKT_MAX];
 } Out;
 
 /* What one presence sent, at what time; the clock the test drives. */
@@ -217,12 +217,12 @@ typedef struct Cap {
     int64_t now;
 } Cap;
 
-static void cap_send(void *opaque, enum RXLinkPort port, uint32_t to, const uint8_t *buf,
+static void cap_send(void *opaque, enum CBLinkPort port, uint32_t to, const uint8_t *buf,
                      size_t len)
 {
     Cap *c = opaque;
-    CHECK(len <= RX_PKT_MAX && len >= 0x24 && !memcmp(buf, rx_link_magic, 10));
-    if (len > RX_PKT_MAX)
+    CHECK(len <= CB_PKT_MAX && len >= 0x24 && !memcmp(buf, cb_link_magic, 10));
+    if (len > CB_PKT_MAX)
         return;
     if (c->nb == c->size) {
         c->size = c->size ? 2 * c->size : 256;
@@ -235,10 +235,10 @@ static void cap_send(void *opaque, enum RXLinkPort port, uint32_t to, const uint
     memcpy(o->b, buf, len);
 }
 
-static RXPresence *computer(Cap *c, bool start_up, const char *host)
+static CBPresence *computer(Cap *c, bool start_up, const char *host)
 {
-    RXPresenceConfig cfg = {
-        .role     = RX_PRESENCE_COMPUTER,
+    CBPresenceConfig cfg = {
+        .role     = CB_PRESENCE_COMPUTER,
         .name     = "rekordbox",
         .addr     = RB_ADDR,
         .start_up = start_up,
@@ -246,39 +246,39 @@ static RXPresence *computer(Cap *c, bool start_up, const char *host)
     memcpy(cfg.mac, rb_mac, 6);
     if (host)
         snprintf(cfg.host, sizeof(cfg.host), "%s", host);
-    RXPresence *p = NULL;
-    CHECK_EQ(rx_presence_new(&p, &cfg, cap_send, c), 0);
+    CBPresence *p = NULL;
+    CHECK_EQ(cb_presence_new(&p, &cfg, cap_send, c), 0);
     if (!p)
         abort();
     return p;
 }
 
 /* Ticks at every deadline up to `until`. */
-static void run_until(RXPresence *p, Cap *c, int64_t until)
+static void run_until(CBPresence *p, Cap *c, int64_t until)
 {
-    int64_t next = rx_presence_tick(p, c->now);
+    int64_t next = cb_presence_tick(p, c->now);
     while (next <= until) {
         c->now = next;
-        next = rx_presence_tick(p, c->now);
+        next = cb_presence_tick(p, c->now);
     }
     c->now = until;
 }
 
 /* A datagram in, then a tick, as the service does it. */
-static void feed(RXPresence *p, Cap *c, enum RXLinkPort port, uint32_t from, const char *hex)
+static void feed(CBPresence *p, Cap *c, enum CBLinkPort port, uint32_t from, const char *hex)
 {
     Pkt k = pkt(hex);
-    rx_presence_input(p, port, from, k.b, k.len, c->now);
-    rx_presence_tick(p, c->now);
+    cb_presence_input(p, port, from, k.b, k.len, c->now);
+    cb_presence_tick(p, c->now);
 }
 
-static void feed_w(RXPresence *p, Cap *c, enum RXLinkPort port, uint32_t from, const RXWr *w)
+static void feed_w(CBPresence *p, Cap *c, enum CBLinkPort port, uint32_t from, const CBWr *w)
 {
-    rx_presence_input(p, port, from, w->p, w->len, c->now);
-    rx_presence_tick(p, c->now);
+    cb_presence_input(p, port, from, w->p, w->len, c->now);
+    cb_presence_tick(p, c->now);
 }
 
-static int count_kind(const Cap *c, int from, enum RXLinkPort port, int kind)
+static int count_kind(const Cap *c, int from, enum CBLinkPort port, int kind)
 {
     int n = 0;
     for (int i = from; i < c->nb; i++)
@@ -286,7 +286,7 @@ static int count_kind(const Cap *c, int from, enum RXLinkPort port, int kind)
     return n;
 }
 
-static const Out *find_kind(const Cap *c, int from, enum RXLinkPort port, int kind)
+static const Out *find_kind(const Cap *c, int from, enum CBLinkPort port, int kind)
 {
     for (int i = from; i < c->nb; i++) {
         if (c->out[i].port == port && c->out[i].b[0x0a] == kind)
@@ -299,14 +299,14 @@ static const Out *find_kind(const Cap *c, int from, enum RXLinkPort port, int ki
 #define MS INT64_C(1000)
 
 /* Field by field: the structs have padding. */
-static bool same_keep_alive(const RXPktKeepAlive *a, const RXPktKeepAlive *b)
+static bool same_keep_alive(const CBPktKeepAlive *a, const CBPktKeepAlive *b)
 {
     return !strcmp(a->name, b->name) && a->proto == b->proto && a->number == b->number &&
            a->first == b->first && !memcmp(a->mac, b->mac, 6) && a->addr == b->addr &&
            a->peers == b->peers && a->flag == b->flag && a->type == b->type && a->tail == b->tail;
 }
 
-static bool same_claim(const RXPktClaim *a, const RXPktClaim *b)
+static bool same_claim(const CBPktClaim *a, const CBPktClaim *b)
 {
     return a->kind == b->kind && a->subtype == b->subtype && !strcmp(a->name, b->name) &&
            a->proto == b->proto && a->number == b->number && a->counter == b->counter &&
@@ -315,7 +315,7 @@ static bool same_claim(const RXPktClaim *a, const RXPktClaim *b)
            a->hello == b->hello;
 }
 
-static bool same_status(const RXPktStatus *a, const RXPktStatus *b)
+static bool same_status(const CBPktStatus *a, const CBPktStatus *b)
 {
     return a->kind == b->kind && a->subtype == b->subtype && !strcmp(a->name, b->name) &&
            a->number == b->number && a->track_device == b->track_device &&
@@ -331,7 +331,7 @@ static bool same_status(const RXPktStatus *a, const RXPktStatus *b)
 static void keep_alives(void)
 {
     /* rekordbox's own, built from its fields, and read back. */
-    RXPktKeepAlive k = {
+    CBPktKeepAlive k = {
         .name   = "rekordbox",
         .proto  = 0x03,
         .number = 17,
@@ -344,146 +344,146 @@ static void keep_alives(void)
     };
     memcpy(k.mac, rb_mac, 6);
     WR(w);
-    rx_pkt_keep_alive(&w, &k);
+    cb_pkt_keep_alive(&w, &k);
     CHECK_W("rekordbox keep-alive", w, rb_keep_alive);
-    RXPktKeepAlive r;
-    CHECK_EQ(rx_pkt_keep_alive_parse(&r, w.p, w.len), 0);
+    CBPktKeepAlive r;
+    CHECK_EQ(cb_pkt_keep_alive_parse(&r, w.p, w.len), 0);
     CHECK(same_keep_alive(&r, &k));
 
     /* A CDJ-3000's reads as a player and builds back to its bytes. */
     Pkt c = pkt(cdj_keep_alive);
-    CHECK_EQ(rx_pkt_keep_alive_parse(&r, c.b, c.len), 0);
+    CHECK_EQ(cb_pkt_keep_alive_parse(&r, c.b, c.len), 0);
     CHECK_STR(r.name, "CDJ-3000");
     CHECK_EQ(r.number, 1);
     CHECK_EQ(r.addr, CDJ_ADDR);
     CHECK_EQ(r.peers, 3);
     CHECK_EQ(r.proto, 3);
-    CHECK_EQ(rx_pkt_device_kind(r.type), RX_LINK_DEVICE_PLAYER);
+    CHECK_EQ(cb_pkt_device_kind(r.type), CB_LINK_DEVICE_PLAYER);
     WR(w2);
-    rx_pkt_keep_alive(&w2, &r);
+    cb_pkt_keep_alive(&w2, &r);
     CHECK_W("CDJ-3000 keep-alive", w2, cdj_keep_alive);
 
     /* A DJM-V5 says 03 and is a mixer. */
     Pkt d = pkt(djm_keep_alive);
-    CHECK_EQ(rx_pkt_keep_alive_parse(&r, d.b, d.len), 0);
+    CHECK_EQ(cb_pkt_keep_alive_parse(&r, d.b, d.len), 0);
     CHECK_STR(r.name, "DJM-V5");
     CHECK_EQ(r.number, 33);
-    CHECK_EQ(rx_pkt_device_kind(r.type), RX_LINK_DEVICE_MIXER);
-    CHECK_EQ(rx_pkt_device_kind(4), RX_LINK_DEVICE_COMPUTER);
-    CHECK_EQ(rx_pkt_device_kind(0x42), 0);
+    CHECK_EQ(cb_pkt_device_kind(r.type), CB_LINK_DEVICE_MIXER);
+    CHECK_EQ(cb_pkt_device_kind(4), CB_LINK_DEVICE_COMPUTER);
+    CHECK_EQ(cb_pkt_device_kind(0x42), 0);
 
     /* A DJM-900NXS writes its lengths little-endian: read all the same;
      * built back, ours is big-endian and nothing else differs. */
     Pkt n = pkt(djm900_keep_alive);
-    CHECK_EQ(rx_pkt_keep_alive_parse(&r, n.b, n.len), 0);
+    CHECK_EQ(cb_pkt_keep_alive_parse(&r, n.b, n.len), 0);
     CHECK_STR(r.name, "DJM-900nexus");
     CHECK(r.number == 33 && r.proto == 2 && r.addr == 0xa9fe0021 && r.peers == 1 &&
-          rx_pkt_device_kind(r.type) == RX_LINK_DEVICE_MIXER);
+          cb_pkt_device_kind(r.type) == CB_LINK_DEVICE_MIXER);
     WR(w3);
-    rx_pkt_keep_alive(&w3, &r);
+    cb_pkt_keep_alive(&w3, &r);
     CHECK(w3.len == n.len && w3_buf[0x22] == 0x00 && w3_buf[0x23] == 0x36 &&
           !memcmp(w3_buf, n.b, 0x22) && !memcmp(w3_buf + 0x24, n.b + 0x24, n.len - 0x24));
-    RXPktClaim cl;
+    CBPktClaim cl;
     Pkt h = pkt(djm900_hello);
-    CHECK(rx_pkt_claim_parse(&cl, h.b, h.len) == 0 && cl.kind == RX_ANN_HELLO && cl.type == 3);
+    CHECK(cb_pkt_claim_parse(&cl, h.b, h.len) == 0 && cl.kind == CB_ANN_HELLO && cl.type == 3);
     Pkt c1 = pkt(djm900_claim1);
-    CHECK(rx_pkt_claim_parse(&cl, c1.b, c1.len) == 0 && cl.kind == RX_ANN_CLAIM1 &&
+    CHECK(cb_pkt_claim_parse(&cl, c1.b, c1.len) == 0 && cl.kind == CB_ANN_CLAIM1 &&
           cl.counter == 1 && cl.type == 3);
     /* A length that fits neither way round is still refused. */
     n.b[0x22] = 0x37;
-    CHECK(rx_pkt_keep_alive_parse(&r, n.b, n.len) < 0);
+    CHECK(cb_pkt_keep_alive_parse(&r, n.b, n.len) < 0);
 
     /* A keep-alive with another subtype is not one. */
     c.b[0x0b] = 1;
-    CHECK(rx_pkt_keep_alive_parse(&r, c.b, c.len) < 0);
+    CHECK(cb_pkt_keep_alive_parse(&r, c.b, c.len) < 0);
 }
 
 static void claims(void)
 {
-    RXPktClaim c = { .kind = RX_ANN_CLAIM1, .name = "rekordbox", .proto = 3, .counter = 1,
+    CBPktClaim c = { .kind = CB_ANN_CLAIM1, .name = "rekordbox", .proto = 3, .counter = 1,
                      .type = 4 };
     memcpy(c.mac, rb_mac, 6);
     WR(w);
-    rx_pkt_claim(&w, &c);
+    cb_pkt_claim(&w, &c);
     CHECK_W("first-stage claim", w, rb_claim1);
 
-    RXPktClaim p = {
-        .kind = RX_ANN_CLAIM2, .name = "rekordbox", .proto = 3, .number = 17, .counter = 1,
+    CBPktClaim p = {
+        .kind = CB_ANN_CLAIM2, .name = "rekordbox", .proto = 3, .number = 17, .counter = 1,
         .type = 4, .flag = 1, .addr = RB_ADDR,
     };
     memcpy(p.mac, rb_mac, 6);
     WR(w2);
-    rx_pkt_claim(&w2, &p);
+    cb_pkt_claim(&w2, &p);
     CHECK_W("probe of 17", w2, rb_probe_17_1);
     p.number = 44;
     p.counter = 6;
     WR(w3);
-    rx_pkt_claim(&w3, &p);
+    cb_pkt_claim(&w3, &p);
     CHECK_W("probe of 44", w3, rb_probe_44_6);
 
-    RXPktClaim r;
-    CHECK_EQ(rx_pkt_claim_parse(&r, w3.p, w3.len), 0);
+    CBPktClaim r;
+    CHECK_EQ(cb_pkt_claim_parse(&r, w3.p, w3.len), 0);
     CHECK(same_claim(&r, &p));
-    CHECK_EQ(rx_pkt_claim_parse(&r, w.p, w.len), 0);
+    CHECK_EQ(cb_pkt_claim_parse(&r, w.p, w.len), 0);
     CHECK(same_claim(&r, &c));
 
     /* The final stage and the CDJ-3000's announcement, by djl-analysis's
      * figures: D and N after the header, 0x26 bytes; type and 40. */
-    RXPktClaim f = { .kind = RX_ANN_CLAIM3, .name = "CDJ-3000", .proto = 3, .number = 2,
+    CBPktClaim f = { .kind = CB_ANN_CLAIM3, .name = "CDJ-3000", .proto = 3, .number = 2,
                      .counter = 3 };
     WR(w4);
-    rx_pkt_claim(&w4, &f);
+    cb_pkt_claim(&w4, &f);
     CHECK_EQ(w4.len, 0x26);
     CHECK_EQ(w4.p[0x0a], 0x04);
     CHECK_EQ(w4.p[0x23], 0x26);
     CHECK_EQ(w4.p[0x24], 2);
     CHECK_EQ(w4.p[0x25], 3);
-    RXPktClaim h = { .kind = RX_ANN_HELLO, .name = "CDJ-3000", .proto = 4, .type = 1,
+    CBPktClaim h = { .kind = CB_ANN_HELLO, .name = "CDJ-3000", .proto = 4, .type = 1,
                      .hello = 0x40 };
     WR(w5);
-    rx_pkt_claim(&w5, &h);
+    cb_pkt_claim(&w5, &h);
     CHECK_EQ(w5.len, 0x26);
     CHECK_EQ(w5.p[0x21], 0x04);
     CHECK_EQ(w5.p[0x24], 0x01);
     CHECK_EQ(w5.p[0x25], 0x40);
-    CHECK_EQ(rx_pkt_claim_parse(&r, w5.p, w5.len), 0);
+    CHECK_EQ(cb_pkt_claim_parse(&r, w5.p, w5.len), 0);
     CHECK(same_claim(&r, &h));
 
     /* A block of numbers (68 bytes, masks at 0x30 and 0x33, counter 0x43). */
-    RXPktClaim b = {
-        .kind = RX_ANN_CLAIM2, .subtype = RX_CLAIM2_BLOCK, .name = "x", .proto = 3,
+    CBPktClaim b = {
+        .kind = CB_ANN_CLAIM2, .subtype = CB_CLAIM2_BLOCK, .name = "x", .proto = 3,
         .addr = 0x0a000005, .wired = 2, .wireless = 5, .counter = 255,
     };
     WR(w6);
-    rx_pkt_claim(&w6, &b);
+    cb_pkt_claim(&w6, &b);
     CHECK_EQ(w6.len, 68);
     CHECK_EQ(w6.p[0x30], 2);
     CHECK_EQ(w6.p[0x33], 5);
     CHECK_EQ(w6.p[0x43], 255);
-    CHECK_EQ(rx_pkt_claim_parse(&r, w6.p, w6.len), 0);
+    CHECK_EQ(cb_pkt_claim_parse(&r, w6.p, w6.len), 0);
     CHECK(same_claim(&r, &b));
 
     /* The number in use (rbxport's reading of rekordbox: number, counter,
      * 01) and a conflict as beat-link sends it. */
-    RXPktNumberReply n = { .name = "rekordbox", .number = 17, .counter = 3, .status = 1 };
+    CBPktNumberReply n = { .name = "rekordbox", .number = 17, .counter = 3, .status = 1 };
     WR(w7);
-    rx_pkt_number_reply(&w7, &n);
+    cb_pkt_number_reply(&w7, &n);
     CHECK_W("in use", w7, "5173707431576d4a4f4c030072656b6f7264626f78000000000000000000000001"
                          "030027110301");
-    RXPktNumberReply nr;
-    CHECK_EQ(rx_pkt_number_reply_parse(&nr, w7.p, w7.len), 0);
+    CBPktNumberReply nr;
+    CHECK_EQ(cb_pkt_number_reply_parse(&nr, w7.p, w7.len), 0);
     CHECK(nr.subtype == n.subtype && !strcmp(nr.name, n.name) && nr.number == n.number &&
           nr.counter == n.counter && nr.status == n.status);
     /* rekordbox's own 41-byte 08 (rbxport's reading of its readReject):
      * number 18, 192.168.50.2. */
-    RXPktConflict k = { .kind = RX_ANN_CONFLICT, .name = "rekordbox", .proto = 3, .number = 18,
+    CBPktConflict k = { .kind = CB_ANN_CONFLICT, .name = "rekordbox", .proto = 3, .number = 18,
                         .addr = 0xc0a83202 };
     WR(w8);
-    rx_pkt_conflict(&w8, &k);
+    cb_pkt_conflict(&w8, &k);
     CHECK_W("conflict", w8, "5173707431576d4a4f4c080072656b6f7264626f780000000000000000000000"
                             "0103002912c0a83202");
-    RXPktConflict kr;
-    CHECK_EQ(rx_pkt_conflict_parse(&kr, w8.p, w8.len), 0);
+    CBPktConflict kr;
+    CHECK_EQ(cb_pkt_conflict_parse(&kr, w8.p, w8.len), 0);
     CHECK(kr.kind == k.kind && !strcmp(kr.name, k.name) && kr.proto == k.proto &&
           kr.number == k.number && kr.addr == k.addr);
 }
@@ -491,19 +491,19 @@ static void claims(void)
 static void status_packets(void)
 {
     WR(w);
-    rx_pkt_mixer_status(&w, "rekordbox", 17, 0, 0, false);
+    cb_pkt_mixer_status(&w, "rekordbox", 17, 0, 0, false);
     CHECK_W("idle status", w, rb_status_idle);
     WR(w2);
-    rx_pkt_mixer_status(&w2, "rekordbox", 17, 7808, 1, false);
+    cb_pkt_mixer_status(&w2, "rekordbox", 17, 7808, 1, false);
     CHECK_W("mirroring status", w2, rb_status_mirror);
     WR(w3);
-    rx_pkt_mixer_status(&w3, "rekordbox", 17, 13000, 1, true);
+    cb_pkt_mixer_status(&w3, "rekordbox", 17, 13000, 1, true);
     CHECK_W("master status", w3, rb_status_master);
 
     /* Read as a mixer's: 0x29 with subtype 01 counts the whole packet. */
-    RXPktStatus s;
-    CHECK_EQ(rx_pkt_status_parse(&s, w3.p, w3.len), 0);
-    CHECK_EQ(s.kind, RX_ST_MIXER);
+    CBPktStatus s;
+    CHECK_EQ(cb_pkt_status_parse(&s, w3.p, w3.len), 0);
+    CHECK_EQ(s.kind, CB_ST_MIXER);
     CHECK_EQ(s.number, 17);
     CHECK(s.master);
     CHECK_EQ(s.bpm_x100, 13000);
@@ -513,12 +513,12 @@ static void status_packets(void)
     /* The CDJ-3000 playing one of device 17's tracks. */
     Pkt p = pkt(cdj_status_playing);
     CHECK_EQ(p.len, 0x124);
-    CHECK_EQ(rx_pkt_status_parse(&s, p.b, p.len), 0);
-    CHECK_EQ(s.kind, RX_ST_CDJ);
+    CHECK_EQ(cb_pkt_status_parse(&s, p.b, p.len), 0);
+    CHECK_EQ(s.kind, CB_ST_CDJ);
     CHECK_STR(s.name, "CDJ-3000");
     CHECK_EQ(s.number, 1);
     CHECK_EQ(s.track_device, 17);
-    CHECK_EQ(s.track_slot, RX_SLOT_USB);
+    CHECK_EQ(s.track_slot, CB_SLOT_USB);
     CHECK_EQ(s.track_type, 1);
     CHECK_EQ(s.track_id, 17181);
     CHECK(s.playing);
@@ -533,22 +533,22 @@ static void status_packets(void)
 
     /* Built from what was read, it reads back the same. */
     WR(w4);
-    rx_pkt_cdj_status(&w4, &s);
+    cb_pkt_cdj_status(&w4, &s);
     CHECK_EQ(w4.len, 0x124);
-    RXPktStatus s2;
-    CHECK_EQ(rx_pkt_status_parse(&s2, w4.p, w4.len), 0);
+    CBPktStatus s2;
+    CHECK_EQ(cb_pkt_status_parse(&s2, w4.p, w4.len), 0);
     CHECK(same_status(&s, &s2));
 
     /* Nothing loaded: what the fake player sends is the CDJ-3000's own. */
     Pkt e = pkt(cdj_status_empty);
-    CHECK_EQ(rx_pkt_status_parse(&s, e.b, e.len), 0);
+    CHECK_EQ(cb_pkt_status_parse(&s, e.b, e.len), 0);
     CHECK_EQ(s.track_device, 0);
     CHECK_EQ(s.bpm_x100, 0);
     CHECK_EQ(s.beat, -1);
     CHECK(!s.playing && !s.master);
-    RXPktStatus fake = { .name = "CDJ-3000", .number = 1, .beat = -1 };
+    CBPktStatus fake = { .name = "CDJ-3000", .number = 1, .beat = -1 };
     WR(w5);
-    rx_pkt_cdj_status(&w5, &fake);
+    cb_pkt_cdj_status(&w5, &fake);
     CHECK_W("fake player's empty status", w5, cdj_status_empty);
 
     /* A pre-nexus player's 0xd0 bytes have no flags: P_1 says it plays. */
@@ -558,27 +558,27 @@ static void status_packets(void)
     old[0x23] = 0xd0 - 0x24;
     old[0x89] = 0;
     old[0x7b] = 0x03;
-    CHECK_EQ(rx_pkt_status_parse(&s, old, sizeof(old)), 0);
+    CHECK_EQ(cb_pkt_status_parse(&s, old, sizeof(old)), 0);
     CHECK(s.playing);
     old[0x7b] = 0x05;
-    CHECK_EQ(rx_pkt_status_parse(&s, old, sizeof(old)), 0);
+    CHECK_EQ(cb_pkt_status_parse(&s, old, sizeof(old)), 0);
     CHECK(!s.playing);
     /* A status whose length field disagrees is still read (an XDJ-1000
      * does that, beat-link); one shorter than 0xcc is not. */
     old[0x23] = 0x10;
-    CHECK_EQ(rx_pkt_status_parse(&s, old, sizeof(old)), 0);
-    CHECK(rx_pkt_status_parse(&s, old, 0xcb) < 0);
+    CHECK_EQ(cb_pkt_status_parse(&s, old, sizeof(old)), 0);
+    CHECK(cb_pkt_status_parse(&s, old, 0xcb) < 0);
 }
 
 /* The load command, byte for byte as beat-link sends it (the bytes an
- * emulated CDJ-900 and CDJ-2000NXS2 loaded from): rxbox (17) tells player
+ * emulated CDJ-900 and CDJ-2000NXS2 loaded from): cyanbox (17) tells player
  * 3 to load track 2158 of its own collection; and the answer. */
 static void load_command(void)
 {
     WR(w);
-    RXPktLoad l = { .name = "rxbox", .number = 17, .target = 3, .device = 17, .slot = 4,
+    CBPktLoad l = { .name = "cyanbox", .number = 17, .target = 3, .device = 17, .slot = 4,
                     .type = 1, .id = 2158 };
-    rx_pkt_load_track(&w, &l);
+    cb_pkt_load_track(&w, &l);
     /* beat-link's payload after the name: 01 00 17 00 34 17, then the
      * source, slot and type at 9, the id at 0x0d, 32 at 0x14, the target
      * less one at 0x21. */
@@ -591,67 +591,67 @@ static void load_command(void)
     want[0x14] = 0x32;
     want[0x21] = 2;
     CHECK_EQ(w.len, 0x58);
-    CHECK_EQ(w_buf[0x0a], RX_ST_LOAD_TRACK);
+    CHECK_EQ(w_buf[0x0a], CB_ST_LOAD_TRACK);
     CHECK(!memcmp(w_buf + 0x1f, want, sizeof(want)));
-    RXPktLoad back;
-    CHECK_EQ(rx_pkt_load_track_parse(&back, w_buf, w.len), 0);
+    CBPktLoad back;
+    CHECK_EQ(cb_pkt_load_track_parse(&back, w_buf, w.len), 0);
     CHECK(back.number == 17 && back.target == 3 && back.device == 17 && back.slot == 4 &&
-          back.type == 1 && back.id == 2158 && !strcmp(back.name, "rxbox"));
-    CHECK(rx_pkt_load_track_parse(&back, w_buf, 0x50) < 0);
+          back.type == 1 && back.id == 2158 && !strcmp(back.name, "cyanbox"));
+    CHECK(cb_pkt_load_track_parse(&back, w_buf, 0x50) < 0);
 
     WR(a);
-    rx_pkt_load_ack(&a, "CDJ-2000NXS2", 3);
+    cb_pkt_load_ack(&a, "CDJ-2000NXS2", 3);
     static const uint8_t nxs2[] = { 0x01, 0x00, 0x03, 0x00, 0x04, 0x03, 0x01, 0x00, 0x00 };
-    CHECK(a.len == 0x28 && a_buf[0x0a] == RX_ST_LOAD_ACK && !memcmp(a_buf + 0x1f, nxs2, sizeof(nxs2)));
+    CHECK(a.len == 0x28 && a_buf[0x0a] == CB_ST_LOAD_ACK && !memcmp(a_buf + 0x1f, nxs2, sizeof(nxs2)));
 }
 
 static void questions(void)
 {
     /* Media queries from both firmwares, and rekordbox's answers. */
     Pkt q = pkt(cdj_media_query_3);
-    RXPktMediaQuery mq;
-    CHECK_EQ(rx_pkt_media_query_parse(&mq, q.b, q.len), 0);
+    CBPktMediaQuery mq;
+    CHECK_EQ(cb_pkt_media_query_parse(&mq, q.b, q.len), 0);
     CHECK_STR(mq.name, "CDJ-3000");
     CHECK_EQ(mq.number, 1);
     CHECK_EQ(mq.addr, CDJ_ADDR);
     CHECK_EQ(mq.device, 17);
     CHECK_EQ(mq.slot, 3);
     WR(w);
-    rx_pkt_media_query(&w, &mq);
+    cb_pkt_media_query(&w, &mq);
     CHECK_W("media query", w, cdj_media_query_3);
 
-    RXPktMedia m = { .name = "rekordbox", .number = 17, .device = 17, .slot = 3,
+    CBPktMedia m = { .name = "rekordbox", .number = 17, .device = 17, .slot = 3,
                      .tracks = 38681, .playlists = 627 };
     WR(w2);
-    rx_pkt_media(&w2, &m);
+    cb_pkt_media(&w2, &m);
     CHECK_W("media response, slot 03", w2, rb_media_3);
-    RXPktMedia mr;
-    CHECK_EQ(rx_pkt_media_parse(&mr, w2.p, w2.len), 0);
+    CBPktMedia mr;
+    CHECK_EQ(cb_pkt_media_parse(&mr, w2.p, w2.len), 0);
     CHECK(!strcmp(mr.name, m.name) && mr.number == m.number && mr.device == m.device &&
           mr.slot == m.slot && mr.tracks == m.tracks && mr.playlists == m.playlists);
     m.slot = 4;
     m.tracks = 54;
     m.playlists = 2;
     WR(w3);
-    rx_pkt_media(&w3, &m);
+    cb_pkt_media(&w3, &m);
     CHECK_W("media response, slot 04", w3, rb_media_4);
 
     WR(w4);
-    rx_pkt_greeting(&w4, "rekordbox", 17);
+    cb_pkt_greeting(&w4, "rekordbox", 17);
     CHECK_W("greeting", w4, rb_greeting);
 
     WR(w5);
-    rx_pkt_identity(&w5, "rekordbox", 17, "chrisles-MBP");
+    cb_pkt_identity(&w5, "rekordbox", 17, "chrisles-MBP");
     CHECK_W("identity", w5, rb_identity);
 
     WR(w6);
-    rx_pkt_settings_query(&w6, "CDJ-3000", 1);
+    cb_pkt_settings_query(&w6, "CDJ-3000", 1);
     CHECK_W("settings request", w6, cdj_settings_query);
     static const uint8_t devsetting[32] = {
         0x78, 0x56, 0x34, 0x12, 0x01, 0, 0, 0, 0x01, 0x01, 0x04, 0x01, 0x01, 0x01, 0, 0, 0x02,
     };
     WR(w7);
-    rx_pkt_settings(&w7, "rekordbox", 17, devsetting);
+    cb_pkt_settings(&w7, "rekordbox", 17, devsetting);
     CHECK_W("settings", w7, rb_settings);
 }
 
@@ -660,66 +660,66 @@ static void questions(void)
  * answers none of them. */
 static void malformed(void)
 {
-    static const struct { const char *hex; enum RXLinkPort port; } all[] = {
-        { rb_keep_alive, RX_LINK_ANNOUNCE }, { cdj_keep_alive, RX_LINK_ANNOUNCE },
-        { djm_keep_alive, RX_LINK_ANNOUNCE }, { rb_claim1, RX_LINK_ANNOUNCE },
-        { djm900_keep_alive, RX_LINK_ANNOUNCE }, { djm900_hello, RX_LINK_ANNOUNCE },
-        { djm900_claim1, RX_LINK_ANNOUNCE },
-        { rb_probe_17_1, RX_LINK_ANNOUNCE }, { rb_probe_44_6, RX_LINK_ANNOUNCE },
-        { rb_status_idle, RX_LINK_STATUS }, { rb_status_master, RX_LINK_STATUS },
-        { cdj_media_query_3, RX_LINK_STATUS }, { cdj_media_query_4, RX_LINK_STATUS },
-        { rb_media_3, RX_LINK_STATUS }, { cdj_settings_query, RX_LINK_STATUS },
-        { rb_settings, RX_LINK_STATUS }, { cdj_load_ack, RX_LINK_STATUS },
-        { cdj_status_empty, RX_LINK_STATUS }, { cdj_status_playing, RX_LINK_STATUS },
+    static const struct { const char *hex; enum CBLinkPort port; } all[] = {
+        { rb_keep_alive, CB_LINK_ANNOUNCE }, { cdj_keep_alive, CB_LINK_ANNOUNCE },
+        { djm_keep_alive, CB_LINK_ANNOUNCE }, { rb_claim1, CB_LINK_ANNOUNCE },
+        { djm900_keep_alive, CB_LINK_ANNOUNCE }, { djm900_hello, CB_LINK_ANNOUNCE },
+        { djm900_claim1, CB_LINK_ANNOUNCE },
+        { rb_probe_17_1, CB_LINK_ANNOUNCE }, { rb_probe_44_6, CB_LINK_ANNOUNCE },
+        { rb_status_idle, CB_LINK_STATUS }, { rb_status_master, CB_LINK_STATUS },
+        { cdj_media_query_3, CB_LINK_STATUS }, { cdj_media_query_4, CB_LINK_STATUS },
+        { rb_media_3, CB_LINK_STATUS }, { cdj_settings_query, CB_LINK_STATUS },
+        { rb_settings, CB_LINK_STATUS }, { cdj_load_ack, CB_LINK_STATUS },
+        { cdj_status_empty, CB_LINK_STATUS }, { cdj_status_playing, CB_LINK_STATUS },
     };
     Cap c = { .now = T0 };
-    RXPresence *p = computer(&c, false, NULL);
-    feed(p, &c, RX_LINK_ANNOUNCE, CDJ_ADDR, cdj_keep_alive);
+    CBPresence *p = computer(&c, false, NULL);
+    feed(p, &c, CB_LINK_ANNOUNCE, CDJ_ADDR, cdj_keep_alive);
     run_until(p, &c, T0 + 4000 * MS);
-    CHECK_EQ(rx_presence_state(p, NULL), RX_LINK_UP);
+    CHECK_EQ(cb_presence_state(p, NULL), CB_LINK_UP);
     int sent = c.nb;
 
-    for (size_t i = 0; i < RX_ARRAY_ELEMS(all); i++) {
+    for (size_t i = 0; i < CB_ARRAY_ELEMS(all); i++) {
         Pkt k = pkt(all[i].hex);
-        bool cdj = all[i].port == RX_LINK_STATUS && k.b[0x0a] == RX_ST_CDJ;
+        bool cdj = all[i].port == CB_LINK_STATUS && k.b[0x0a] == CB_ST_CDJ;
         size_t need = cdj ? 0xcc : k.len;
         for (size_t cut = 0; cut < need; cut++) {
-            RXPktKeepAlive ka;
-            RXPktClaim cl;
-            RXPktStatus st;
-            RXPktMediaQuery mq;
-            RXPktMedia md;
-            bool ok = rx_pkt_keep_alive_parse(&ka, k.b, cut) == 0 ||
-                      rx_pkt_claim_parse(&cl, k.b, cut) == 0 ||
-                      rx_pkt_status_parse(&st, k.b, cut) == 0 ||
-                      rx_pkt_media_query_parse(&mq, k.b, cut) == 0 ||
-                      rx_pkt_media_parse(&md, k.b, cut) == 0;
+            CBPktKeepAlive ka;
+            CBPktClaim cl;
+            CBPktStatus st;
+            CBPktMediaQuery mq;
+            CBPktMedia md;
+            bool ok = cb_pkt_keep_alive_parse(&ka, k.b, cut) == 0 ||
+                      cb_pkt_claim_parse(&cl, k.b, cut) == 0 ||
+                      cb_pkt_status_parse(&st, k.b, cut) == 0 ||
+                      cb_pkt_media_query_parse(&mq, k.b, cut) == 0 ||
+                      cb_pkt_media_parse(&md, k.b, cut) == 0;
             if (ok)
                 fprintf(stderr, "packet %zu read when cut to %zu bytes\n", i, cut);
             CHECK(!ok);
             /* The CDJ's own media query, cut, from the CDJ: no answer. */
-            rx_presence_input(p, all[i].port, CDJ_ADDR, k.b, cut, c.now);
+            cb_presence_input(p, all[i].port, CDJ_ADDR, k.b, cut, c.now);
         }
         if (!cdj) {
             /* The length field one more than arrived. */
             k.b[0x23]++;
-            RXPktHeader h;
-            CHECK(rx_pkt_header(&h, all[i].port, k.b, k.len) < 0);
-            rx_presence_input(p, all[i].port, CDJ_ADDR, k.b, k.len, c.now);
+            CBPktHeader h;
+            CHECK(cb_pkt_header(&h, all[i].port, k.b, k.len) < 0);
+            cb_presence_input(p, all[i].port, CDJ_ADDR, k.b, k.len, c.now);
             k.b[0x23]--;
         }
         k.b[3] ^= 0x20;
-        RXPktHeader h;
-        CHECK(rx_pkt_header(&h, all[i].port, k.b, k.len) < 0);
-        rx_presence_input(p, all[i].port, CDJ_ADDR, k.b, k.len, c.now);
+        CBPktHeader h;
+        CHECK(cb_pkt_header(&h, all[i].port, k.b, k.len) < 0);
+        cb_presence_input(p, all[i].port, CDJ_ADDR, k.b, k.len, c.now);
     }
     /* A keep-alive saying it is shorter than its fields. */
     Pkt k = pkt(cdj_keep_alive);
     k.b[0x23] = 0x30;
-    RXPktKeepAlive ka;
-    CHECK(rx_pkt_keep_alive_parse(&ka, k.b, k.len) < 0);
+    CBPktKeepAlive ka;
+    CHECK(cb_pkt_keep_alive_parse(&ka, k.b, k.len) < 0);
     CHECK_EQ(c.nb, sent);
-    rx_presence_free(&p);
+    cb_presence_free(&p);
     CHECK(!p);
     free(c.out);
 }
@@ -732,22 +732,22 @@ static void malformed(void)
 static void join_timeline(void)
 {
     Cap c = { .now = T0 - 5000 * MS };
-    RXPresence *p = computer(&c, false, NULL);
+    CBPresence *p = computer(&c, false, NULL);
     run_until(p, &c, T0);
     CHECK_EQ(c.nb, 0);
     int number = -1;
-    CHECK_EQ(rx_presence_state(p, &number), RX_LINK_WAITING);
+    CHECK_EQ(cb_presence_state(p, &number), CB_LINK_WAITING);
     CHECK_EQ(number, 0);
 
-    feed(p, &c, RX_LINK_ANNOUNCE, CDJ_ADDR, cdj_keep_alive);
-    CHECK_EQ(rx_presence_state(p, NULL), RX_LINK_JOINING);
+    feed(p, &c, CB_LINK_ANNOUNCE, CDJ_ADDR, cdj_keep_alive);
+    CHECK_EQ(cb_presence_state(p, NULL), CB_LINK_JOINING);
     run_until(p, &c, T0 + 3899 * MS);
     CHECK_EQ(c.nb, 39);
     for (int i = 0; i < c.nb && i < 39; i++) {
         const Out *o = &c.out[i];
         CHECK_EQ(o->at, T0 + i * 100 * MS);
-        CHECK_EQ(o->port, RX_LINK_ANNOUNCE);
-        CHECK_EQ(o->to, RX_PRESENCE_BROADCAST);
+        CHECK_EQ(o->port, CB_LINK_ANNOUNCE);
+        CHECK_EQ(o->to, CB_PRESENCE_BROADCAST);
         if (i < 3) {
             Pkt want = pkt(rb_claim1);
             want.b[0x24] = (uint8_t)(i + 1);
@@ -760,22 +760,22 @@ static void join_timeline(void)
             check_bytes(__LINE__, "probe", o->b, o->len, want.b, want.len);
         }
     }
-    CHECK_EQ(rx_presence_state(p, NULL), RX_LINK_JOINING);
+    CHECK_EQ(cb_presence_state(p, NULL), CB_LINK_JOINING);
 
     run_until(p, &c, T0 + 3900 * MS);
-    CHECK_EQ(rx_presence_state(p, &number), RX_LINK_UP);
+    CHECK_EQ(cb_presence_state(p, &number), CB_LINK_UP);
     CHECK_EQ(number, 17);
     CHECK_EQ(c.nb, 42);
     if (c.nb >= 42) {
         Pkt ka = pkt(rb_keep_alive);
         ka.b[0x30] = 1;         /* one other device: the CDJ */
         CHECK_EQ(c.out[39].at, T0 + 3900 * MS);
-        CHECK_EQ(c.out[39].to, RX_PRESENCE_BROADCAST);
+        CHECK_EQ(c.out[39].to, CB_PRESENCE_BROADCAST);
         check_bytes(__LINE__, "keep-alive", c.out[39].b, c.out[39].len, ka.b, ka.len);
-        CHECK_EQ(c.out[40].port, RX_LINK_STATUS);
-        CHECK_EQ(c.out[40].to, RX_PRESENCE_BROADCAST);
+        CHECK_EQ(c.out[40].port, CB_LINK_STATUS);
+        CHECK_EQ(c.out[40].to, CB_PRESENCE_BROADCAST);
         CHECK_HEX("status", c.out[40].b, c.out[40].len, rb_status_idle);
-        CHECK_EQ(c.out[41].port, RX_LINK_STATUS);
+        CHECK_EQ(c.out[41].port, CB_LINK_STATUS);
         CHECK_EQ(c.out[41].to, CDJ_ADDR);
         CHECK_HEX("greeting", c.out[41].b, c.out[41].len, rb_greeting);
     }
@@ -783,16 +783,16 @@ static void join_timeline(void)
     /* Then the status every 200 ms and a keep-alive every 2 s. */
     int from = c.nb;
     run_until(p, &c, T0 + 5900 * MS);
-    CHECK_EQ(count_kind(&c, from, RX_LINK_STATUS, RX_ST_MIXER), 10);
-    CHECK_EQ(count_kind(&c, from, RX_LINK_ANNOUNCE, RX_ANN_KEEP_ALIVE), 1);
-    const Out *k = find_kind(&c, from, RX_LINK_ANNOUNCE, RX_ANN_KEEP_ALIVE);
+    CHECK_EQ(count_kind(&c, from, CB_LINK_STATUS, CB_ST_MIXER), 10);
+    CHECK_EQ(count_kind(&c, from, CB_LINK_ANNOUNCE, CB_ANN_KEEP_ALIVE), 1);
+    const Out *k = find_kind(&c, from, CB_LINK_ANNOUNCE, CB_ANN_KEEP_ALIVE);
     CHECK(k && k->at == T0 + 5900 * MS);
     for (int i = from; i < c.nb; i++) {
-        if (c.out[i].port == RX_LINK_STATUS)
+        if (c.out[i].port == CB_LINK_STATUS)
             CHECK_EQ((c.out[i].at - T0 - 3900 * MS) % (200 * MS), 0);
     }
-    CHECK_EQ(count_kind(&c, from, RX_LINK_STATUS, RX_ST_GREETING), 0);
-    rx_presence_free(&p);
+    CHECK_EQ(count_kind(&c, from, CB_LINK_STATUS, CB_ST_GREETING), 0);
+    cb_presence_free(&p);
     free(c.out);
 }
 
@@ -801,18 +801,18 @@ static int probes_of(const Cap *c, int from, int number)
     int n = 0;
     for (int i = from; i < c->nb; i++) {
         const Out *o = &c->out[i];
-        n += o->b[0x0a] == RX_ANN_CLAIM2 && o->b[0x0b] == RX_CLAIM2_PROBE && o->b[0x2e] == number;
+        n += o->b[0x0a] == CB_ANN_CLAIM2 && o->b[0x0b] == CB_CLAIM2_PROBE && o->b[0x2e] == number;
     }
     return n;
 }
 
-static void in_use(RXPresence *p, Cap *c, int number, int subtype, int status)
+static void in_use(CBPresence *p, Cap *c, int number, int subtype, int status)
 {
-    RXPktNumberReply r = { .subtype = subtype, .name = "rekordbox", .number = number,
+    CBPktNumberReply r = { .subtype = subtype, .name = "rekordbox", .number = number,
                            .counter = 1, .status = status };
     WR(w);
-    rx_pkt_number_reply(&w, &r);
-    feed_w(p, c, RX_LINK_ANNOUNCE, 0xc0a80114, &w);
+    cb_pkt_number_reply(&w, &r);
+    feed_w(p, c, CB_LINK_ANNOUNCE, 0xc0a80114, &w);
 }
 
 static void join_variants(void)
@@ -821,11 +821,11 @@ static void join_variants(void)
      * again, the rest of round one and five rounds of five follow, 18 is
      * taken (rbxport's join test). */
     Cap c = { .now = T0 };
-    RXPresence *p = computer(&c, false, NULL);
-    feed(p, &c, RX_LINK_ANNOUNCE, CDJ_ADDR, cdj_keep_alive);
+    CBPresence *p = computer(&c, false, NULL);
+    feed(p, &c, CB_LINK_ANNOUNCE, CDJ_ADDR, cdj_keep_alive);
     run_until(p, &c, T0 + 300 * MS);
     CHECK_EQ(probes_of(&c, 0, 17), 1);
-    in_use(p, &c, 17, RX_CLAIM2_PROBE, 1);
+    in_use(p, &c, 17, CB_CLAIM2_PROBE, 1);
     int from = c.nb;
     run_until(p, &c, T0 + 5000 * MS);
     CHECK_EQ(probes_of(&c, from, 17), 0);
@@ -834,11 +834,11 @@ static void join_variants(void)
         probes += probes_of(&c, from, n);
     CHECK_EQ(probes, 5 + 5 * 5);
     int number = 0;
-    CHECK_EQ(rx_presence_state(p, &number), RX_LINK_UP);
+    CHECK_EQ(cb_presence_state(p, &number), CB_LINK_UP);
     CHECK_EQ(number, 18);
-    const Out *k = find_kind(&c, from, RX_LINK_ANNOUNCE, RX_ANN_KEEP_ALIVE);
+    const Out *k = find_kind(&c, from, CB_LINK_ANNOUNCE, CB_ANN_KEEP_ALIVE);
     CHECK(k && k->b[0x24] == 18);
-    rx_presence_free(&p);
+    cb_presence_free(&p);
     free(c.out);
 
     /* 17 and 18 held: four numbers six times, then six requests to be
@@ -846,10 +846,10 @@ static void join_variants(void)
      * does not start it again, one heard after it does. */
     c = (Cap) { .now = T0 };
     p = computer(&c, false, NULL);
-    feed(p, &c, RX_LINK_ANNOUNCE, CDJ_ADDR, cdj_keep_alive);
+    feed(p, &c, CB_LINK_ANNOUNCE, CDJ_ADDR, cdj_keep_alive);
     run_until(p, &c, T0 + 250 * MS);
-    in_use(p, &c, 17, RX_CLAIM2_PROBE, 1);
-    in_use(p, &c, 18, RX_CLAIM2_PROBE, 1);
+    in_use(p, &c, 17, CB_CLAIM2_PROBE, 1);
+    in_use(p, &c, 18, CB_CLAIM2_PROBE, 1);
     from = c.nb;
     run_until(p, &c, T0 + 6000 * MS);
     probes = 0;
@@ -859,37 +859,37 @@ static void join_variants(void)
     int assigns = 0;
     for (int i = from; i < c.nb; i++) {
         const Out *o = &c.out[i];
-        if (o->b[0x0a] == RX_ANN_CLAIM2 && o->b[0x0b] == RX_CLAIM2_ASSIGN) {
+        if (o->b[0x0a] == CB_ANN_CLAIM2 && o->b[0x0b] == CB_CLAIM2_ASSIGN) {
             CHECK_EQ(o->b[0x2e], 17);
             CHECK_EQ(o->b[0x2f], assigns + 1);
             assigns++;
         }
     }
     CHECK_EQ(assigns, 6);
-    CHECK_EQ(rx_presence_state(p, NULL), RX_LINK_WAITING);
-    feed(p, &c, RX_LINK_ANNOUNCE, CDJ_ADDR, cdj_keep_alive);
-    CHECK_EQ(rx_presence_state(p, NULL), RX_LINK_WAITING);
+    CHECK_EQ(cb_presence_state(p, NULL), CB_LINK_WAITING);
+    feed(p, &c, CB_LINK_ANNOUNCE, CDJ_ADDR, cdj_keep_alive);
+    CHECK_EQ(cb_presence_state(p, NULL), CB_LINK_WAITING);
     run_until(p, &c, T0 + 16000 * MS);
-    feed(p, &c, RX_LINK_ANNOUNCE, CDJ_ADDR, cdj_keep_alive);
-    CHECK_EQ(rx_presence_state(p, NULL), RX_LINK_JOINING);
-    rx_presence_free(&p);
+    feed(p, &c, CB_LINK_ANNOUNCE, CDJ_ADDR, cdj_keep_alive);
+    CHECK_EQ(cb_presence_state(p, NULL), CB_LINK_JOINING);
+    cb_presence_free(&p);
     free(c.out);
 
     /* The same, with an assigning device accepting the first request. */
     c = (Cap) { .now = T0 };
     p = computer(&c, false, NULL);
-    feed(p, &c, RX_LINK_ANNOUNCE, CDJ_ADDR, cdj_keep_alive);
+    feed(p, &c, CB_LINK_ANNOUNCE, CDJ_ADDR, cdj_keep_alive);
     run_until(p, &c, T0 + 250 * MS);
-    in_use(p, &c, 17, RX_CLAIM2_PROBE, 1);
-    in_use(p, &c, 18, RX_CLAIM2_PROBE, 1);
+    in_use(p, &c, 17, CB_CLAIM2_PROBE, 1);
+    in_use(p, &c, 18, CB_CLAIM2_PROBE, 1);
     run_until(p, &c, T0 + 2700 * MS);
-    CHECK_EQ(rx_presence_state(p, NULL), RX_LINK_JOINING);
-    in_use(p, &c, 17, RX_CLAIM2_ASSIGN, 2);         /* a retry: nothing */
-    CHECK_EQ(rx_presence_state(p, NULL), RX_LINK_JOINING);
-    in_use(p, &c, 17, RX_CLAIM2_ASSIGN, 0);
-    CHECK_EQ(rx_presence_state(p, &number), RX_LINK_UP);
+    CHECK_EQ(cb_presence_state(p, NULL), CB_LINK_JOINING);
+    in_use(p, &c, 17, CB_CLAIM2_ASSIGN, 2);         /* a retry: nothing */
+    CHECK_EQ(cb_presence_state(p, NULL), CB_LINK_JOINING);
+    in_use(p, &c, 17, CB_CLAIM2_ASSIGN, 0);
+    CHECK_EQ(cb_presence_state(p, &number), CB_LINK_UP);
     CHECK_EQ(number, 17);
-    rx_presence_free(&p);
+    cb_presence_free(&p);
     free(c.out);
 
     /* Another rekordbox's keep-alive does not bring the link up; a mixer's
@@ -899,53 +899,53 @@ static void join_variants(void)
     Pkt rb = pkt(rb_keep_alive);
     rb.b[0x2f] = 0x20;  /* another address */
     rb.b[0x2b] = 0x99;  /* and MAC */
-    rx_presence_input(p, RX_LINK_ANNOUNCE, 0xc0a80120, rb.b, rb.len, c.now);
+    cb_presence_input(p, CB_LINK_ANNOUNCE, 0xc0a80120, rb.b, rb.len, c.now);
     run_until(p, &c, T0 + 1000 * MS);
-    CHECK_EQ(rx_presence_state(p, NULL), RX_LINK_WAITING);
+    CHECK_EQ(cb_presence_state(p, NULL), CB_LINK_WAITING);
     CHECK_EQ(c.nb, 0);
-    CHECK(rx_presence_is_peer(p, 0xc0a80120));
-    feed(p, &c, RX_LINK_ANNOUNCE, 0xc0a80142, djm_keep_alive);
-    CHECK_EQ(rx_presence_state(p, NULL), RX_LINK_JOINING);
+    CHECK(cb_presence_is_peer(p, 0xc0a80120));
+    feed(p, &c, CB_LINK_ANNOUNCE, 0xc0a80142, djm_keep_alive);
+    CHECK_EQ(cb_presence_state(p, NULL), CB_LINK_JOINING);
     /* That rekordbox holds 17: its keep-alive during the probing marks it. */
     run_until(p, &c, T0 + 2000 * MS);
-    rx_presence_input(p, RX_LINK_ANNOUNCE, 0xc0a80120, rb.b, rb.len, c.now);
+    cb_presence_input(p, CB_LINK_ANNOUNCE, 0xc0a80120, rb.b, rb.len, c.now);
     run_until(p, &c, T0 + 6000 * MS);
-    CHECK_EQ(rx_presence_state(p, &number), RX_LINK_UP);
+    CHECK_EQ(cb_presence_state(p, &number), CB_LINK_UP);
     CHECK_EQ(number, 18);
     /* Its own packets, come back, change nothing. */
     Pkt own = pkt(rb_probe_17_1);
     own.b[0x2e] = 18;
     from = c.nb;
-    rx_presence_input(p, RX_LINK_ANNOUNCE, 0xc0a80177, own.b, own.len, c.now);
-    rx_presence_input(p, RX_LINK_ANNOUNCE, RB_ADDR, own.b, own.len, c.now);
+    cb_presence_input(p, CB_LINK_ANNOUNCE, 0xc0a80177, own.b, own.len, c.now);
+    cb_presence_input(p, CB_LINK_ANNOUNCE, RB_ADDR, own.b, own.len, c.now);
     CHECK_EQ(c.nb, from);
-    rx_presence_free(&p);
+    cb_presence_free(&p);
     free(c.out);
 
     /* A device defending 17 with a conflict, as a CDJ does: 18. */
     c = (Cap) { .now = T0 };
     p = computer(&c, false, NULL);
-    feed(p, &c, RX_LINK_ANNOUNCE, CDJ_ADDR, cdj_keep_alive);
+    feed(p, &c, CB_LINK_ANNOUNCE, CDJ_ADDR, cdj_keep_alive);
     run_until(p, &c, T0 + 350 * MS);
-    RXPktConflict cf = { .kind = RX_ANN_CONFLICT, .name = "beat-link", .proto = 2, .number = 17,
+    CBPktConflict cf = { .kind = CB_ANN_CONFLICT, .name = "beat-link", .proto = 2, .number = 17,
                          .addr = 0xc0a8011e };
     WR(w);
-    rx_pkt_conflict(&w, &cf);
-    feed_w(p, &c, RX_LINK_ANNOUNCE, 0xc0a8011e, &w);
+    cb_pkt_conflict(&w, &cf);
+    feed_w(p, &c, CB_LINK_ANNOUNCE, 0xc0a8011e, &w);
     run_until(p, &c, T0 + 5000 * MS);
-    CHECK_EQ(rx_presence_state(p, &number), RX_LINK_UP);
+    CHECK_EQ(cb_presence_state(p, &number), CB_LINK_UP);
     CHECK_EQ(number, 18);
-    rx_presence_free(&p);
+    cb_presence_free(&p);
     free(c.out);
 
     /* Told to start up, it joins with nobody there. */
     c = (Cap) { .now = T0 };
     p = computer(&c, true, NULL);
     run_until(p, &c, T0 + 3900 * MS);
-    CHECK_EQ(rx_presence_state(p, &number), RX_LINK_UP);
+    CHECK_EQ(cb_presence_state(p, &number), CB_LINK_UP);
     CHECK_EQ(number, 17);
     CHECK_EQ(c.nb, 3 + 36 + 2);
-    rx_presence_free(&p);
+    cb_presence_free(&p);
     free(c.out);
 }
 
@@ -956,132 +956,132 @@ static void join_variants(void)
 static void djm900_on_link(void)
 {
     Cap c = { .now = T0 };
-    RXPresence *p = computer(&c, true, NULL);
+    CBPresence *p = computer(&c, true, NULL);
     run_until(p, &c, T0 + 3900 * MS);
-    CHECK_EQ(rx_presence_state(p, NULL), RX_LINK_UP);
-    feed(p, &c, RX_LINK_ANNOUNCE, 0xa9fe0021, djm900_hello);
-    feed(p, &c, RX_LINK_ANNOUNCE, 0xa9fe0021, djm900_keep_alive);
-    CHECK(rx_presence_is_peer(p, 0xa9fe0021));
-    RXLinkPlayer seen[4];
-    CHECK_EQ(rx_presence_players(p, seen, 4), 1);
-    CHECK(seen[0].number == 33 && seen[0].type == RX_LINK_DEVICE_MIXER &&
+    CHECK_EQ(cb_presence_state(p, NULL), CB_LINK_UP);
+    feed(p, &c, CB_LINK_ANNOUNCE, 0xa9fe0021, djm900_hello);
+    feed(p, &c, CB_LINK_ANNOUNCE, 0xa9fe0021, djm900_keep_alive);
+    CHECK(cb_presence_is_peer(p, 0xa9fe0021));
+    CBLinkPlayer seen[4];
+    CHECK_EQ(cb_presence_players(p, seen, 4), 1);
+    CHECK(seen[0].number == 33 && seen[0].type == CB_LINK_DEVICE_MIXER &&
           seen[0].addr == 0xa9fe0021 && !strcmp(seen[0].name, "DJM-900nexus"));
-    rx_presence_free(&p);
+    cb_presence_free(&p);
     free(c.out);
 }
 
 static void serving(void)
 {
     Cap c = { .now = T0 };
-    RXPresence *p = computer(&c, false, "chrisles-MBP");
-    rx_presence_set_media(p, 38681, 627);
-    feed(p, &c, RX_LINK_ANNOUNCE, CDJ_ADDR, cdj_keep_alive);
+    CBPresence *p = computer(&c, false, "chrisles-MBP");
+    cb_presence_set_media(p, 38681, 627);
+    feed(p, &c, CB_LINK_ANNOUNCE, CDJ_ADDR, cdj_keep_alive);
     run_until(p, &c, T0 + 3950 * MS);
-    CHECK_EQ(rx_presence_state(p, NULL), RX_LINK_UP);
-    CHECK(rx_presence_is_peer(p, CDJ_ADDR));
-    CHECK(!rx_presence_is_peer(p, 0xc0a80199));
+    CHECK_EQ(cb_presence_state(p, NULL), CB_LINK_UP);
+    CHECK(cb_presence_is_peer(p, CDJ_ADDR));
+    CHECK(!cb_presence_is_peer(p, 0xc0a80199));
 
     /* A probe of 17 is answered to the prober with its counter; a probe of
      * another number, an assign request and our own probe are not. */
-    RXPktClaim probe = { .kind = RX_ANN_CLAIM2, .name = "rekordbox", .proto = 3, .number = 17,
+    CBPktClaim probe = { .kind = CB_ANN_CLAIM2, .name = "rekordbox", .proto = 3, .number = 17,
                          .counter = 3, .type = 4, .flag = 1, .addr = 0xc0a80114,
                          .mac = { 1, 2, 3, 4, 5, 6 } };
     WR(w);
-    rx_pkt_claim(&w, &probe);
+    cb_pkt_claim(&w, &probe);
     int from = c.nb;
-    rx_presence_input(p, RX_LINK_ANNOUNCE, 0xc0a80114, w.p, w.len, c.now);
+    cb_presence_input(p, CB_LINK_ANNOUNCE, 0xc0a80114, w.p, w.len, c.now);
     CHECK_EQ(c.nb, from + 1);
     if (c.nb == from + 1) {
         CHECK_EQ(c.out[from].to, 0xc0a80114);
-        CHECK_EQ(c.out[from].port, RX_LINK_ANNOUNCE);
+        CHECK_EQ(c.out[from].port, CB_LINK_ANNOUNCE);
         CHECK_HEX("in use", c.out[from].b, c.out[from].len,
                   "5173707431576d4a4f4c030072656b6f7264626f78000000000000000000000001"
                   "030027110301");
     }
     probe.number = 18;
-    w = rx_wr(w_buf, sizeof(w_buf));
-    rx_pkt_claim(&w, &probe);
-    rx_presence_input(p, RX_LINK_ANNOUNCE, 0xc0a80114, w.p, w.len, c.now);
+    w = cb_wr(w_buf, sizeof(w_buf));
+    cb_pkt_claim(&w, &probe);
+    cb_presence_input(p, CB_LINK_ANNOUNCE, 0xc0a80114, w.p, w.len, c.now);
     probe.number = 17;
-    probe.subtype = RX_CLAIM2_ASSIGN;
-    w = rx_wr(w_buf, sizeof(w_buf));
-    rx_pkt_claim(&w, &probe);
-    rx_presence_input(p, RX_LINK_ANNOUNCE, 0xc0a80114, w.p, w.len, c.now);
+    probe.subtype = CB_CLAIM2_ASSIGN;
+    w = cb_wr(w_buf, sizeof(w_buf));
+    cb_pkt_claim(&w, &probe);
+    cb_presence_input(p, CB_LINK_ANNOUNCE, 0xc0a80114, w.p, w.len, c.now);
     Pkt own = pkt(rb_probe_17_1);
-    rx_presence_input(p, RX_LINK_ANNOUNCE, 0xc0a80114, own.b, own.len, c.now);
+    cb_presence_input(p, CB_LINK_ANNOUNCE, 0xc0a80114, own.b, own.len, c.now);
     CHECK_EQ(c.nb, from + 1);
 
     /* A block naming 17 in its wired mask is answered with its counter. */
-    RXPktClaim block = { .kind = RX_ANN_CLAIM2, .subtype = RX_CLAIM2_BLOCK, .name = "rekordbox",
+    CBPktClaim block = { .kind = CB_ANN_CLAIM2, .subtype = CB_CLAIM2_BLOCK, .name = "rekordbox",
                          .proto = 3, .addr = 0xc0a80114, .wired = 1, .counter = 255,
                          .mac = { 1, 2, 3, 4, 5, 6 } };
-    w = rx_wr(w_buf, sizeof(w_buf));
-    rx_pkt_claim(&w, &block);
-    rx_presence_input(p, RX_LINK_ANNOUNCE, 0xc0a80114, w.p, w.len, c.now);
+    w = cb_wr(w_buf, sizeof(w_buf));
+    cb_pkt_claim(&w, &block);
+    cb_presence_input(p, CB_LINK_ANNOUNCE, 0xc0a80114, w.p, w.len, c.now);
     CHECK_EQ(c.nb, from + 2);
     if (c.nb == from + 2)
         CHECK_EQ(c.out[from + 1].b[0x25], 255);
     block.wired = 2;
-    w = rx_wr(w_buf, sizeof(w_buf));
-    rx_pkt_claim(&w, &block);
-    rx_presence_input(p, RX_LINK_ANNOUNCE, 0xc0a80114, w.p, w.len, c.now);
+    w = cb_wr(w_buf, sizeof(w_buf));
+    cb_pkt_claim(&w, &block);
+    cb_presence_input(p, CB_LINK_ANNOUNCE, 0xc0a80114, w.p, w.len, c.now);
     CHECK_EQ(c.nb, from + 2);
 
     /* The media query, from the player, about us: rekordbox's answers. */
     from = c.nb;
-    feed(p, &c, RX_LINK_STATUS, CDJ_ADDR, cdj_media_query_3);
-    const Out *o = find_kind(&c, from, RX_LINK_STATUS, RX_ST_MEDIA_RESPONSE);
+    feed(p, &c, CB_LINK_STATUS, CDJ_ADDR, cdj_media_query_3);
+    const Out *o = find_kind(&c, from, CB_LINK_STATUS, CB_ST_MEDIA_RESPONSE);
     CHECK(o && o->to == CDJ_ADDR);
     if (o)
         CHECK_HEX("media response", o->b, o->len, rb_media_3);
-    rx_presence_set_media(p, 54, 2);
+    cb_presence_set_media(p, 54, 2);
     from = c.nb;
-    feed(p, &c, RX_LINK_STATUS, CDJ_ADDR, cdj_media_query_4);
-    o = find_kind(&c, from, RX_LINK_STATUS, RX_ST_MEDIA_RESPONSE);
+    feed(p, &c, CB_LINK_STATUS, CDJ_ADDR, cdj_media_query_4);
+    o = find_kind(&c, from, CB_LINK_STATUS, CB_ST_MEDIA_RESPONSE);
     if (o)
         CHECK_HEX("media response 4", o->b, o->len, rb_media_4);
     CHECK(o != NULL);
     /* Not from a stranger, not about device 18, not about slot 02. */
     from = c.nb;
-    feed(p, &c, RX_LINK_STATUS, 0xc0a80199, cdj_media_query_4);
+    feed(p, &c, CB_LINK_STATUS, 0xc0a80199, cdj_media_query_4);
     Pkt mq = pkt(cdj_media_query_4);
     mq.b[0x2b] = 18;
-    rx_presence_input(p, RX_LINK_STATUS, CDJ_ADDR, mq.b, mq.len, c.now);
+    cb_presence_input(p, CB_LINK_STATUS, CDJ_ADDR, mq.b, mq.len, c.now);
     mq.b[0x2b] = 17;
     mq.b[0x2f] = 2;
-    rx_presence_input(p, RX_LINK_STATUS, CDJ_ADDR, mq.b, mq.len, c.now);
-    CHECK_EQ(count_kind(&c, from, RX_LINK_STATUS, RX_ST_MEDIA_RESPONSE), 0);
+    cb_presence_input(p, CB_LINK_STATUS, CDJ_ADDR, mq.b, mq.len, c.now);
+    CHECK_EQ(count_kind(&c, from, CB_LINK_STATUS, CB_ST_MEDIA_RESPONSE), 0);
 
     /* Who we are and the display settings. */
     WR(iq);
-    rx_pkt_identity_query(&iq, "CDJ-3000", 1);
+    cb_pkt_identity_query(&iq, "CDJ-3000", 1);
     from = c.nb;
-    feed_w(p, &c, RX_LINK_STATUS, CDJ_ADDR, &iq);
-    o = find_kind(&c, from, RX_LINK_STATUS, RX_ST_IDENTITY);
+    feed_w(p, &c, CB_LINK_STATUS, CDJ_ADDR, &iq);
+    o = find_kind(&c, from, CB_LINK_STATUS, CB_ST_IDENTITY);
     CHECK(o && o->to == CDJ_ADDR);
     if (o)
         CHECK_HEX("identity", o->b, o->len, rb_identity);
     from = c.nb;
-    feed(p, &c, RX_LINK_STATUS, CDJ_ADDR, cdj_settings_query);
-    o = find_kind(&c, from, RX_LINK_STATUS, RX_ST_SETTINGS);
+    feed(p, &c, CB_LINK_STATUS, CDJ_ADDR, cdj_settings_query);
+    o = find_kind(&c, from, CB_LINK_STATUS, CB_ST_SETTINGS);
     CHECK(o != NULL);
     if (o)
         CHECK_HEX("settings", o->b, o->len, rb_settings);
     /* A load acknowledgement is only read. */
     from = c.nb;
     Pkt ack = pkt(cdj_load_ack);
-    rx_presence_input(p, RX_LINK_STATUS, CDJ_ADDR, ack.b, ack.len, c.now);
+    cb_presence_input(p, CB_LINK_STATUS, CDJ_ADDR, ack.b, ack.len, c.now);
     CHECK_EQ(c.nb, from);
 
     /* The player's status: what it has loaded, from where, that it plays
      * and is master; our status then carries its tempo and its beat. */
     from = c.nb;
-    feed(p, &c, RX_LINK_STATUS, CDJ_ADDR, cdj_status_playing);
-    RXLinkPlayer pl[4];
-    CHECK_EQ(rx_presence_players(p, pl, 4), 1);
+    feed(p, &c, CB_LINK_STATUS, CDJ_ADDR, cdj_status_playing);
+    CBLinkPlayer pl[4];
+    CHECK_EQ(cb_presence_players(p, pl, 4), 1);
     CHECK_EQ(pl[0].number, 1);
     CHECK_STR(pl[0].name, "CDJ-3000");
-    CHECK_EQ(pl[0].type, RX_LINK_DEVICE_PLAYER);
+    CHECK_EQ(pl[0].type, CB_LINK_DEVICE_PLAYER);
     CHECK_EQ(pl[0].addr, CDJ_ADDR);
     CHECK(pl[0].has_status);
     CHECK_EQ(pl[0].track_device, 17);
@@ -1092,7 +1092,7 @@ static void serving(void)
     CHECK(fabs(pl[0].bpm - 125.39) < 1e-9);
     CHECK_EQ(pl[0].beat, 1);
     run_until(p, &c, c.now + 200 * MS);
-    o = find_kind(&c, from, RX_LINK_STATUS, RX_ST_MIXER);
+    o = find_kind(&c, from, CB_LINK_STATUS, CB_ST_MIXER);
     CHECK(o != NULL);
     if (o) {
         CHECK_EQ(o->b[0x2c], 0x80);
@@ -1102,100 +1102,100 @@ static void serving(void)
     /* A status from another address, or for a number not heard, is not
      * taken. */
     Pkt e = pkt(cdj_status_empty);
-    rx_presence_input(p, RX_LINK_STATUS, 0xc0a80199, e.b, e.len, c.now);
+    cb_presence_input(p, CB_LINK_STATUS, 0xc0a80199, e.b, e.len, c.now);
     e.b[0x21] = 2;
-    rx_presence_input(p, RX_LINK_STATUS, CDJ_ADDR, e.b, e.len, c.now);
-    rx_presence_players(p, pl, 4);
+    cb_presence_input(p, CB_LINK_STATUS, CDJ_ADDR, e.b, e.len, c.now);
+    cb_presence_players(p, pl, 4);
     CHECK_EQ(pl[0].track_id, 17181);
-    feed(p, &c, RX_LINK_STATUS, CDJ_ADDR, cdj_status_empty);
-    rx_presence_players(p, pl, 4);
+    feed(p, &c, CB_LINK_STATUS, CDJ_ADDR, cdj_status_empty);
+    cb_presence_players(p, pl, 4);
     CHECK(pl[0].track_device == 0 && !pl[0].playing);
 
     /* The player was greeted once, however often it spoke since. */
-    CHECK_EQ(count_kind(&c, 0, RX_LINK_STATUS, RX_ST_GREETING), 1);
+    CHECK_EQ(count_kind(&c, 0, CB_LINK_STATUS, CB_ST_GREETING), 1);
 
     /* Silent, it is forgotten 10 s after its last keep-alive. */
     int64_t last = c.now;
-    feed(p, &c, RX_LINK_ANNOUNCE, CDJ_ADDR, cdj_keep_alive);
+    feed(p, &c, CB_LINK_ANNOUNCE, CDJ_ADDR, cdj_keep_alive);
     run_until(p, &c, last + 10000 * MS);
-    CHECK(rx_presence_is_peer(p, CDJ_ADDR));
+    CHECK(cb_presence_is_peer(p, CDJ_ADDR));
     run_until(p, &c, last + 10001 * MS);
-    CHECK(!rx_presence_is_peer(p, CDJ_ADDR));
-    CHECK_EQ(rx_presence_players(p, pl, 4), 0);
+    CHECK(!cb_presence_is_peer(p, CDJ_ADDR));
+    CHECK_EQ(cb_presence_players(p, pl, 4), 0);
     /* Its media query now goes unanswered. */
     from = c.nb;
-    feed(p, &c, RX_LINK_STATUS, CDJ_ADDR, cdj_media_query_3);
-    CHECK_EQ(count_kind(&c, from, RX_LINK_STATUS, RX_ST_MEDIA_RESPONSE), 0);
+    feed(p, &c, CB_LINK_STATUS, CDJ_ADDR, cdj_media_query_3);
+    CHECK_EQ(count_kind(&c, from, CB_LINK_STATUS, CB_ST_MEDIA_RESPONSE), 0);
     /* Back, it is greeted again. */
     from = c.nb;
-    feed(p, &c, RX_LINK_ANNOUNCE, CDJ_ADDR, cdj_keep_alive);
-    CHECK_EQ(count_kind(&c, from, RX_LINK_STATUS, RX_ST_GREETING), 1);
+    feed(p, &c, CB_LINK_ANNOUNCE, CDJ_ADDR, cdj_keep_alive);
+    CHECK_EQ(count_kind(&c, from, CB_LINK_STATUS, CB_ST_GREETING), 1);
     /* Leaving with a disconnect, it is gone at once. */
-    RXPktConflict bye = { .kind = RX_ANN_DISCONNECT, .name = "CDJ-3000", .proto = 3, .number = 1 };
-    w = rx_wr(w_buf, sizeof(w_buf));
-    rx_pkt_conflict(&w, &bye);
-    feed_w(p, &c, RX_LINK_ANNOUNCE, CDJ_ADDR, &w);
-    CHECK(!rx_presence_is_peer(p, CDJ_ADDR));
+    CBPktConflict bye = { .kind = CB_ANN_DISCONNECT, .name = "CDJ-3000", .proto = 3, .number = 1 };
+    w = cb_wr(w_buf, sizeof(w_buf));
+    cb_pkt_conflict(&w, &bye);
+    feed_w(p, &c, CB_LINK_ANNOUNCE, CDJ_ADDR, &w);
+    CHECK(!cb_presence_is_peer(p, CDJ_ADDR));
 
-    rx_presence_free(&p);
+    cb_presence_free(&p);
     free(c.out);
 }
 
 static void listing(void)
 {
     Cap c = { .now = T0 };
-    RXPresence *p = computer(&c, false, NULL);
-    RXPktKeepAlive k;
+    CBPresence *p = computer(&c, false, NULL);
+    CBPktKeepAlive k;
     Pkt cdj = pkt(cdj_keep_alive);
-    rx_pkt_keep_alive_parse(&k, cdj.b, cdj.len);
+    cb_pkt_keep_alive_parse(&k, cdj.b, cdj.len);
     /* A mixer, players 2 and 1, another rekordbox on 18. */
-    feed(p, &c, RX_LINK_ANNOUNCE, 0xc0a80142, djm_keep_alive);
+    feed(p, &c, CB_LINK_ANNOUNCE, 0xc0a80142, djm_keep_alive);
     k.number = 2;
     k.addr = 0xc0a80199;
     k.mac[5] = 0x99;
     WR(w);
-    rx_pkt_keep_alive(&w, &k);
-    feed_w(p, &c, RX_LINK_ANNOUNCE, 0xc0a80199, &w);
-    feed(p, &c, RX_LINK_ANNOUNCE, CDJ_ADDR, cdj_keep_alive);
+    cb_pkt_keep_alive(&w, &k);
+    feed_w(p, &c, CB_LINK_ANNOUNCE, 0xc0a80199, &w);
+    feed(p, &c, CB_LINK_ANNOUNCE, CDJ_ADDR, cdj_keep_alive);
     Pkt rb = pkt(rb_keep_alive);
     rb.b[0x24] = 18;
     rb.b[0x2b] = 0x77;
-    rx_presence_input(p, RX_LINK_ANNOUNCE, 0xc0a80177, rb.b, rb.len, c.now);
-    RXLinkPlayer pl[8];
-    CHECK_EQ(rx_presence_players(p, pl, 8), 4);
+    cb_presence_input(p, CB_LINK_ANNOUNCE, 0xc0a80177, rb.b, rb.len, c.now);
+    CBLinkPlayer pl[8];
+    CHECK_EQ(cb_presence_players(p, pl, 8), 4);
     CHECK_EQ(pl[0].number, 1);
     CHECK_EQ(pl[1].number, 2);
     CHECK_EQ(pl[2].number, 18);
-    CHECK_EQ(pl[2].type, RX_LINK_DEVICE_COMPUTER);
+    CHECK_EQ(pl[2].type, CB_LINK_DEVICE_COMPUTER);
     CHECK_EQ(pl[3].number, 33);
-    CHECK_EQ(pl[3].type, RX_LINK_DEVICE_MIXER);
+    CHECK_EQ(pl[3].type, CB_LINK_DEVICE_MIXER);
     CHECK_EQ(pl[3].last_seen, T0);
     CHECK(!memcmp(pl[0].mac, cdj.b + 0x26, 6));
-    RXLinkPlayer two[2] = { 0 };
-    CHECK_EQ(rx_presence_players(p, two, 2), 4);
+    CBLinkPlayer two[2] = { 0 };
+    CHECK_EQ(cb_presence_players(p, two, 2), 4);
     CHECK_EQ(two[1].number, 2);
-    CHECK_EQ(rx_presence_players(p, NULL, 0), 4);
+    CHECK_EQ(cb_presence_players(p, NULL, 0), 4);
     /* A device starting over (its first-stage claim) is forgotten. */
-    RXPktClaim again = { .kind = RX_ANN_CLAIM1, .name = "CDJ-3000", .proto = 3, .counter = 1,
+    CBPktClaim again = { .kind = CB_ANN_CLAIM1, .name = "CDJ-3000", .proto = 3, .counter = 1,
                          .type = 1 };
     memcpy(again.mac, k.mac, 6);
-    w = rx_wr(w_buf, sizeof(w_buf));
-    rx_pkt_claim(&w, &again);
-    feed_w(p, &c, RX_LINK_ANNOUNCE, 0xc0a80199, &w);
-    CHECK(!rx_presence_is_peer(p, 0xc0a80199));
-    CHECK_EQ(rx_presence_players(p, NULL, 0), 3);
+    w = cb_wr(w_buf, sizeof(w_buf));
+    cb_pkt_claim(&w, &again);
+    feed_w(p, &c, CB_LINK_ANNOUNCE, 0xc0a80199, &w);
+    CHECK(!cb_presence_is_peer(p, 0xc0a80199));
+    CHECK_EQ(cb_presence_players(p, NULL, 0), 3);
     /* Numbers and types out of rekordbox's range are not devices. */
     k.number = 0;
-    w = rx_wr(w_buf, sizeof(w_buf));
-    rx_pkt_keep_alive(&w, &k);
-    feed_w(p, &c, RX_LINK_ANNOUNCE, 0xc0a80199, &w);
+    w = cb_wr(w_buf, sizeof(w_buf));
+    cb_pkt_keep_alive(&w, &k);
+    feed_w(p, &c, CB_LINK_ANNOUNCE, 0xc0a80199, &w);
     k.number = 3;
     k.type = 10;
-    w = rx_wr(w_buf, sizeof(w_buf));
-    rx_pkt_keep_alive(&w, &k);
-    feed_w(p, &c, RX_LINK_ANNOUNCE, 0xc0a80199, &w);
-    CHECK_EQ(rx_presence_players(p, NULL, 0), 3);
-    rx_presence_free(&p);
+    w = cb_wr(w_buf, sizeof(w_buf));
+    cb_pkt_keep_alive(&w, &k);
+    feed_w(p, &c, CB_LINK_ANNOUNCE, 0xc0a80199, &w);
+    CHECK_EQ(cb_presence_players(p, NULL, 0), 3);
+    cb_presence_free(&p);
     free(c.out);
 }
 
@@ -1208,7 +1208,7 @@ typedef struct Net Net;
 typedef struct Node {
     Net *net;
     int idx;
-    RXPresence *p;
+    CBPresence *p;
     uint32_t addr;
     int64_t next;
     bool plugged;
@@ -1218,10 +1218,10 @@ typedef struct Node {
 
 typedef struct Dgram {
     int from;
-    enum RXLinkPort port;
+    enum CBLinkPort port;
     uint32_t to;
     size_t len;
-    uint8_t b[RX_PKT_MAX];
+    uint8_t b[CB_PKT_MAX];
 } Dgram;
 
 struct Net {
@@ -1232,12 +1232,12 @@ struct Net {
     int64_t now;
 };
 
-static void net_send(void *opaque, enum RXLinkPort port, uint32_t to, const uint8_t *buf,
+static void net_send(void *opaque, enum CBLinkPort port, uint32_t to, const uint8_t *buf,
                      size_t len)
 {
     Node *n = opaque;
     Net *net = n->net;
-    if (!n->plugged || len > RX_PKT_MAX)
+    if (!n->plugged || len > CB_PKT_MAX)
         return;
     n->sent[port][buf[0x0a]]++;
     if (net->nq == net->size) {
@@ -1251,12 +1251,12 @@ static void net_send(void *opaque, enum RXLinkPort port, uint32_t to, const uint
     memcpy(d->b, buf, len);
 }
 
-static Node *net_add(Net *net, const RXPresenceConfig *cfg)
+static Node *net_add(Net *net, const CBPresenceConfig *cfg)
 {
     Node *n = &net->node[net->nb];
     *n = (Node) { .net = net, .idx = net->nb, .addr = cfg->addr, .plugged = true };
     net->nb++;
-    CHECK_EQ(rx_presence_new(&n->p, cfg, net_send, n), 0);
+    CHECK_EQ(cb_presence_new(&n->p, cfg, net_send, n), 0);
     if (!n->p)
         abort();
     n->next = net->now;
@@ -1272,11 +1272,11 @@ static void net_pump(Net *net)
         uint32_t from = net->node[d.from].addr;
         for (int j = 0; j < net->nb; j++) {
             Node *n = &net->node[j];
-            if (!n->plugged || (d.to != RX_PRESENCE_BROADCAST && d.to != n->addr))
+            if (!n->plugged || (d.to != CB_PRESENCE_BROADCAST && d.to != n->addr))
                 continue;
             n->got[d.port][d.b[0x0a]]++;
-            rx_presence_input(n->p, d.port, from, d.b, d.len, net->now);
-            n->next = rx_presence_tick(n->p, net->now);
+            cb_presence_input(n->p, d.port, from, d.b, d.len, net->now);
+            n->next = cb_presence_tick(n->p, net->now);
         }
     }
     net->nq = 0;
@@ -1289,15 +1289,15 @@ static void net_run(Net *net, int64_t until)
         int64_t t = INT64_MAX;
         for (int i = 0; i < net->nb; i++) {
             if (net->node[i].plugged)
-                t = RX_MIN(t, net->node[i].next);
+                t = CB_MIN(t, net->node[i].next);
         }
         if (t > until)
             break;
-        net->now = RX_MAX(t, net->now);
+        net->now = CB_MAX(t, net->now);
         for (int i = 0; i < net->nb; i++) {
             Node *n = &net->node[i];
             if (n->plugged && n->next <= net->now)
-                n->next = rx_presence_tick(n->p, net->now);
+                n->next = cb_presence_tick(n->p, net->now);
         }
         net_pump(net);
     }
@@ -1307,65 +1307,65 @@ static void net_run(Net *net, int64_t until)
 static void net_free(Net *net)
 {
     for (int i = 0; i < net->nb; i++)
-        rx_presence_free(&net->node[i].p);
+        cb_presence_free(&net->node[i].p);
     free(net->q);
 }
 
-static RXPresenceConfig node_cfg(enum RXPresenceRole role, uint32_t addr, int number)
+static CBPresenceConfig node_cfg(enum CBPresenceRole role, uint32_t addr, int number)
 {
-    RXPresenceConfig cfg = {
+    CBPresenceConfig cfg = {
         .role   = role,
         .addr   = addr,
         .number = number,
         .mac    = { 0x02, 0, 0, 0, 0, (uint8_t)addr },
     };
     snprintf(cfg.name, sizeof(cfg.name), "%s",
-             role == RX_PRESENCE_COMPUTER ? "rekordbox" : "CDJ-3000");
+             role == CB_PRESENCE_COMPUTER ? "rekordbox" : "CDJ-3000");
     return cfg;
 }
 
 static int state(const Node *n, int *number)
 {
-    return (int)rx_presence_state(n->p, number);
+    return (int)cb_presence_state(n->p, number);
 }
 
 static void back_to_back(void)
 {
     Net net = { .now = T0 };
-    RXPresenceConfig cc = node_cfg(RX_PRESENCE_COMPUTER, 0x0a000001, 0);
-    snprintf(cc.host, sizeof(cc.host), "rxbox-test");
+    CBPresenceConfig cc = node_cfg(CB_PRESENCE_COMPUTER, 0x0a000001, 0);
+    snprintf(cc.host, sizeof(cc.host), "cyanbox-test");
     Node *pc = net_add(&net, &cc);
-    RXPresenceConfig pcfg = node_cfg(RX_PRESENCE_PLAYER, 0x0a000002, 2);
+    CBPresenceConfig pcfg = node_cfg(CB_PRESENCE_PLAYER, 0x0a000002, 2);
     Node *cdj = net_add(&net, &pcfg);
-    rx_presence_set_media(pc->p, 1234, 56);
+    cb_presence_set_media(pc->p, 1234, 56);
 
     /* The player claims its number; the computer hears the claims and says
      * nothing: only a keep-alive brings it up. */
     net_run(&net, T0 + 3500 * MS);
     int number = -1;
-    CHECK_EQ(state(cdj, &number), RX_LINK_JOINING);
-    CHECK_EQ(cdj->sent[RX_LINK_ANNOUNCE][RX_ANN_HELLO], 3);
-    CHECK_EQ(cdj->sent[RX_LINK_ANNOUNCE][RX_ANN_CLAIM1], 3);
-    CHECK_EQ(cdj->sent[RX_LINK_ANNOUNCE][RX_ANN_CLAIM2], 3);
-    CHECK_EQ(cdj->sent[RX_LINK_ANNOUNCE][RX_ANN_CLAIM3], 3);
-    CHECK_EQ(state(pc, NULL), RX_LINK_WAITING);
+    CHECK_EQ(state(cdj, &number), CB_LINK_JOINING);
+    CHECK_EQ(cdj->sent[CB_LINK_ANNOUNCE][CB_ANN_HELLO], 3);
+    CHECK_EQ(cdj->sent[CB_LINK_ANNOUNCE][CB_ANN_CLAIM1], 3);
+    CHECK_EQ(cdj->sent[CB_LINK_ANNOUNCE][CB_ANN_CLAIM2], 3);
+    CHECK_EQ(cdj->sent[CB_LINK_ANNOUNCE][CB_ANN_CLAIM3], 3);
+    CHECK_EQ(state(pc, NULL), CB_LINK_WAITING);
     int any = 0;
     for (int k = 0; k < 256; k++)
         any += pc->sent[0][k] + pc->sent[1][k];
     CHECK_EQ(any, 0);
-    CHECK(!rx_presence_is_peer(pc->p, cdj->addr));
+    CHECK(!cb_presence_is_peer(pc->p, cdj->addr));
 
     /* Up at 3.6 s; its keep-alive starts the computer's join, which takes
      * 17 3.9 s later. */
     net_run(&net, T0 + 3600 * MS);
-    CHECK_EQ(state(cdj, &number), RX_LINK_UP);
+    CHECK_EQ(state(cdj, &number), CB_LINK_UP);
     CHECK_EQ(number, 2);
-    CHECK_EQ(state(pc, NULL), RX_LINK_JOINING);
-    CHECK(rx_presence_is_peer(pc->p, cdj->addr));
+    CHECK_EQ(state(pc, NULL), CB_LINK_JOINING);
+    CHECK(cb_presence_is_peer(pc->p, cdj->addr));
     net_run(&net, T0 + 7499 * MS);
-    CHECK_EQ(state(pc, NULL), RX_LINK_JOINING);
+    CHECK_EQ(state(pc, NULL), CB_LINK_JOINING);
     net_run(&net, T0 + 7500 * MS);
-    CHECK_EQ(state(pc, &number), RX_LINK_UP);
+    CHECK_EQ(state(pc, &number), CB_LINK_UP);
     CHECK_EQ(number, 17);
 
     /* The player hears the computer, asks who it is and what it holds, is
@@ -1373,55 +1373,55 @@ static void back_to_back(void)
     net_run(&net, T0 + 9000 * MS);
     int src = 0, tracks = 0, playlists = 0;
     uint32_t src_addr = 0;
-    CHECK(rx_presence_source(cdj->p, &src, &src_addr, &tracks, &playlists));
+    CHECK(cb_presence_source(cdj->p, &src, &src_addr, &tracks, &playlists));
     CHECK_EQ(src, 17);
     CHECK_EQ(src_addr, pc->addr);
     CHECK_EQ(tracks, 1234);
     CHECK_EQ(playlists, 56);
-    CHECK_EQ(cdj->got[RX_LINK_STATUS][RX_ST_GREETING], 1);
-    CHECK_EQ(cdj->got[RX_LINK_STATUS][RX_ST_IDENTITY], 1);
-    CHECK_EQ(cdj->got[RX_LINK_STATUS][RX_ST_SETTINGS], 1);
-    CHECK_EQ(cdj->got[RX_LINK_STATUS][RX_ST_MEDIA_RESPONSE], 1);
-    RXLinkPlayer pl[4];
-    CHECK_EQ(rx_presence_players(cdj->p, pl, 4), 1);
+    CHECK_EQ(cdj->got[CB_LINK_STATUS][CB_ST_GREETING], 1);
+    CHECK_EQ(cdj->got[CB_LINK_STATUS][CB_ST_IDENTITY], 1);
+    CHECK_EQ(cdj->got[CB_LINK_STATUS][CB_ST_SETTINGS], 1);
+    CHECK_EQ(cdj->got[CB_LINK_STATUS][CB_ST_MEDIA_RESPONSE], 1);
+    CBLinkPlayer pl[4];
+    CHECK_EQ(cb_presence_players(cdj->p, pl, 4), 1);
     CHECK_EQ(pl[0].number, 17);
-    CHECK_EQ(pl[0].type, RX_LINK_DEVICE_COMPUTER);
+    CHECK_EQ(pl[0].type, CB_LINK_DEVICE_COMPUTER);
     CHECK(pl[0].has_status);
 
     /* The computer lists the player, nothing loaded. */
-    CHECK_EQ(rx_presence_players(pc->p, pl, 4), 1);
+    CHECK_EQ(cb_presence_players(pc->p, pl, 4), 1);
     CHECK_EQ(pl[0].number, 2);
-    CHECK_EQ(pl[0].type, RX_LINK_DEVICE_PLAYER);
+    CHECK_EQ(pl[0].type, CB_LINK_DEVICE_PLAYER);
     CHECK_STR(pl[0].name, "CDJ-3000");
     CHECK_EQ(pl[0].addr, cdj->addr);
     CHECK(pl[0].has_status);
     CHECK_EQ(pl[0].track_device, 0);
-    CHECK(rx_presence_is_peer(pc->p, cdj->addr));
-    CHECK(!rx_presence_is_peer(pc->p, 0x0a000009));
+    CHECK(cb_presence_is_peer(pc->p, cdj->addr));
+    CHECK(!cb_presence_is_peer(pc->p, 0x0a000009));
 
     /* It loads one of ours and plays it; then pauses. */
-    rx_presence_set_loaded(cdj->p, 17, RX_SLOT_REKORDBOX, 4242, true);
+    cb_presence_set_loaded(cdj->p, 17, CB_SLOT_REKORDBOX, 4242, true);
     net_run(&net, T0 + 9300 * MS);
-    rx_presence_players(pc->p, pl, 4);
+    cb_presence_players(pc->p, pl, 4);
     CHECK_EQ(pl[0].track_device, 17);
-    CHECK_EQ(pl[0].track_slot, RX_SLOT_REKORDBOX);
+    CHECK_EQ(pl[0].track_slot, CB_SLOT_REKORDBOX);
     CHECK_EQ(pl[0].track_type, 1);
     CHECK_EQ(pl[0].track_id, 4242);
     CHECK(pl[0].playing);
-    rx_presence_set_loaded(cdj->p, 17, RX_SLOT_REKORDBOX, 4242, false);
+    cb_presence_set_loaded(cdj->p, 17, CB_SLOT_REKORDBOX, 4242, false);
     net_run(&net, T0 + 9600 * MS);
-    rx_presence_players(pc->p, pl, 4);
+    cb_presence_players(pc->p, pl, 4);
     CHECK(!pl[0].playing);
     CHECK_EQ(pl[0].track_id, 4242);
 
     /* A second player claiming number 2 is told it is held, and never gets
      * it. */
-    RXPresenceConfig qcfg = node_cfg(RX_PRESENCE_PLAYER, 0x0a000004, 2);
+    CBPresenceConfig qcfg = node_cfg(CB_PRESENCE_PLAYER, 0x0a000004, 2);
     Node *rival = net_add(&net, &qcfg);
     net_run(&net, T0 + 20000 * MS);
-    CHECK(cdj->sent[RX_LINK_ANNOUNCE][RX_ANN_CONFLICT] > 0);
-    CHECK_EQ(state(rival, NULL), RX_LINK_JOINING);
-    CHECK_EQ(state(cdj, &number), RX_LINK_UP);
+    CHECK(cdj->sent[CB_LINK_ANNOUNCE][CB_ANN_CONFLICT] > 0);
+    CHECK_EQ(state(rival, NULL), CB_LINK_JOINING);
+    CHECK_EQ(state(cdj, &number), CB_LINK_UP);
     CHECK_EQ(number, 2);
     rival->plugged = false;
 
@@ -1430,11 +1430,11 @@ static void back_to_back(void)
     cdj->plugged = false;
     int64_t gone = net.now;
     net_run(&net, gone + 8500 * MS);
-    CHECK(rx_presence_is_peer(pc->p, cdj->addr));
+    CHECK(cb_presence_is_peer(pc->p, cdj->addr));
     net_run(&net, gone + 11000 * MS);
-    CHECK(!rx_presence_is_peer(pc->p, cdj->addr));
-    CHECK_EQ(rx_presence_players(pc->p, pl, 4), 0);
-    CHECK_EQ(state(pc, &number), RX_LINK_UP);
+    CHECK(!cb_presence_is_peer(pc->p, cdj->addr));
+    CHECK_EQ(cb_presence_players(pc->p, pl, 4), 0);
+    CHECK_EQ(state(pc, &number), CB_LINK_UP);
     CHECK_EQ(number, 17);
     net_free(&net);
 }
@@ -1444,34 +1444,34 @@ static void back_to_back(void)
 static void conflict_on_17(void)
 {
     Net net = { .now = T0 };
-    RXPresenceConfig bc = node_cfg(RX_PRESENCE_COMPUTER, 0x0a000003, 0);
+    CBPresenceConfig bc = node_cfg(CB_PRESENCE_COMPUTER, 0x0a000003, 0);
     bc.start_up = true;
     Node *b = net_add(&net, &bc);
     net_run(&net, T0 + 4000 * MS);
     int number = 0;
-    CHECK_EQ(state(b, &number), RX_LINK_UP);
+    CHECK_EQ(state(b, &number), CB_LINK_UP);
     CHECK_EQ(number, 17);
 
-    RXPresenceConfig ac = node_cfg(RX_PRESENCE_COMPUTER, 0x0a000001, 0);
+    CBPresenceConfig ac = node_cfg(CB_PRESENCE_COMPUTER, 0x0a000001, 0);
     Node *a = net_add(&net, &ac);
-    RXPresenceConfig pcfg = node_cfg(RX_PRESENCE_PLAYER, 0x0a000002, 1);
+    CBPresenceConfig pcfg = node_cfg(CB_PRESENCE_PLAYER, 0x0a000002, 1);
     Node *cdj = net_add(&net, &pcfg);
     net_run(&net, T0 + 12000 * MS);
-    CHECK_EQ(state(cdj, NULL), RX_LINK_UP);
-    CHECK_EQ(state(a, &number), RX_LINK_UP);
+    CHECK_EQ(state(cdj, NULL), CB_LINK_UP);
+    CHECK_EQ(state(a, &number), CB_LINK_UP);
     CHECK_EQ(number, 18);
-    CHECK_EQ(state(b, &number), RX_LINK_UP);
+    CHECK_EQ(state(b, &number), CB_LINK_UP);
     CHECK_EQ(number, 17);
-    CHECK(b->sent[RX_LINK_ANNOUNCE][RX_ANN_NUMBER_REPLY] > 0);
+    CHECK(b->sent[CB_LINK_ANNOUNCE][CB_ANN_NUMBER_REPLY] > 0);
     /* Each lists the other and the player; the player sees both. */
-    RXLinkPlayer pl[4];
-    CHECK_EQ(rx_presence_players(a->p, pl, 4), 2);
+    CBLinkPlayer pl[4];
+    CHECK_EQ(cb_presence_players(a->p, pl, 4), 2);
     CHECK_EQ(pl[0].number, 1);
     CHECK_EQ(pl[1].number, 17);
-    CHECK_EQ(rx_presence_players(cdj->p, pl, 4), 2);
+    CHECK_EQ(cb_presence_players(cdj->p, pl, 4), 2);
     /* The player talks to the first computer it heard. */
     int src = 0;
-    CHECK(rx_presence_source(cdj->p, &src, NULL, NULL, NULL));
+    CHECK(cb_presence_source(cdj->p, &src, NULL, NULL, NULL));
     CHECK_EQ(src, 17);
     net_free(&net);
 }
@@ -1487,66 +1487,66 @@ static const char djm_cue_timing[] =
 static void cue_packets(void)
 {
     Pkt k = pkt(djm_cue_timing);
-    RXPktCueTiming t;
-    CHECK_EQ(rx_pkt_cue_timing_parse(&t, k.b, k.len), 0);
+    CBPktCueTiming t;
+    CHECK_EQ(cb_pkt_cue_timing_parse(&t, k.b, k.len), 0);
     CHECK_STR(t.name, "DJM-900nxs2");
     CHECK(t.mixer == 33 && t.counter == 0xa73 && t.on && t.source == 3);
     WR(w);
-    rx_pkt_cue_timing(&w, &t);
+    cb_pkt_cue_timing(&w, &t);
     CHECK_W("LINK CUE timing", w, djm_cue_timing);
     for (size_t cut = 0; cut < k.len; cut++)
-        CHECK(rx_pkt_cue_timing_parse(&t, k.b, cut) < 0);
+        CHECK(cb_pkt_cue_timing_parse(&t, k.b, cut) < 0);
     /* Not a timing: a handover, or the same bytes as another kind. */
     int mixer = 0;
-    CHECK(rx_pkt_cue_handover_parse(&mixer, k.b, k.len) < 0);
+    CHECK(cb_pkt_cue_handover_parse(&mixer, k.b, k.len) < 0);
 
     WR(h);
-    rx_pkt_cue_handover(&h, "DJM-A9", 33);
-    CHECK(h.len == 0x24 && h_buf[0x0a] == RX_CUE_HANDOVER && h_buf[0x1f] == 1 &&
+    cb_pkt_cue_handover(&h, "DJM-A9", 33);
+    CHECK(h.len == 0x24 && h_buf[0x0a] == CB_CUE_HANDOVER && h_buf[0x1f] == 1 &&
           h_buf[0x20] == 0 && h_buf[0x21] == 33 && !h_buf[0x22] && !h_buf[0x23]);
-    CHECK(rx_pkt_cue_handover_parse(&mixer, h.p, h.len) == 0 && mixer == 33);
-    CHECK(rx_pkt_cue_timing_parse(&t, h.p, h.len) < 0);
+    CHECK(cb_pkt_cue_handover_parse(&mixer, h.p, h.len) == 0 && mixer == 33);
+    CHECK(cb_pkt_cue_timing_parse(&t, h.p, h.len) < 0);
 
     /* Our audio: always 0x56c bytes; the mode at 0x24, the counter echoed
      * at 0x28, the samples little-endian from 0x2c. */
-    static RXPktCueAudio a, back;
-    a = (RXPktCueAudio) { .name = "rekordbox", .number = 17, .mode = RX_CUE_TAKE,
+    static CBPktCueAudio a, back;
+    a = (CBPktCueAudio) { .name = "rekordbox", .number = 17, .mode = CB_CUE_TAKE,
                           .counter = 0xa74, .audio = true };
-    for (int i = 0; i < RX_CUE_FRAMES * 2; i++)
+    for (int i = 0; i < CB_CUE_FRAMES * 2; i++)
         a.pcm[i] = (int16_t)(i * 97 - 30000);
-    static uint8_t buf[RX_CUE_AUDIO_SIZE + 16];
-    RXWr aw = rx_wr(buf, sizeof(buf));
-    rx_pkt_cue_audio(&aw, &a);
-    static const uint8_t head[] = { 0x01, 0x06, 17, 0x05, 0x6c, RX_CUE_TAKE, 0, 0, 0,
+    static uint8_t buf[CB_CUE_AUDIO_SIZE + 16];
+    CBWr aw = cb_wr(buf, sizeof(buf));
+    cb_pkt_cue_audio(&aw, &a);
+    static const uint8_t head[] = { 0x01, 0x06, 17, 0x05, 0x6c, CB_CUE_TAKE, 0, 0, 0,
                                     0x00, 0x00, 0x0a, 0x74 };
-    CHECK(aw.len == RX_CUE_AUDIO_SIZE && buf[0x0a] == RX_CUE_AUDIO &&
+    CHECK(aw.len == CB_CUE_AUDIO_SIZE && buf[0x0a] == CB_CUE_AUDIO &&
           !memcmp(buf + 0x0b, "rekordbox", 10) && !memcmp(buf + 0x1f, head, sizeof(head)));
     CHECK(buf[0x2c] == (uint8_t)(-30000 & 0xff) && buf[0x2d] == (uint8_t)((-30000 >> 8) & 0xff));
     CHECK(buf[0x56a] == (uint8_t)((671 * 97 - 30000) & 0xff));
-    CHECK_EQ(rx_pkt_cue_audio_parse(&back, buf, aw.len), 0);
-    CHECK(back.number == 17 && back.mode == RX_CUE_TAKE && back.counter == 0xa74 && back.audio &&
+    CHECK_EQ(cb_pkt_cue_audio_parse(&back, buf, aw.len), 0);
+    CHECK(back.number == 17 && back.mode == CB_CUE_TAKE && back.counter == 0xa74 && back.audio &&
           !strcmp(back.name, "rekordbox") && !memcmp(back.pcm, a.pcm, sizeof(a.pcm)));
-    CHECK(rx_pkt_cue_audio_parse(&back, buf, aw.len - 1) < 0);
+    CHECK(cb_pkt_cue_audio_parse(&back, buf, aw.len - 1) < 0);
     /* Without audio: the length says the header alone, the rest zeros. */
     a.audio = false;
-    a.mode = RX_CUE_GO_ON;
-    aw = rx_wr(buf, sizeof(buf));
-    rx_pkt_cue_audio(&aw, &a);
+    a.mode = CB_CUE_GO_ON;
+    aw = cb_wr(buf, sizeof(buf));
+    cb_pkt_cue_audio(&aw, &a);
     bool zeros = true;
-    for (size_t i = 0x2c; i < RX_CUE_AUDIO_SIZE; i++)
+    for (size_t i = 0x2c; i < CB_CUE_AUDIO_SIZE; i++)
         zeros &= !buf[i];
-    CHECK(aw.len == RX_CUE_AUDIO_SIZE && buf[0x22] == 0x00 && buf[0x23] == 0x2c && zeros);
-    CHECK(rx_pkt_cue_audio_parse(&back, buf, aw.len) == 0 && !back.audio && !back.mode);
+    CHECK(aw.len == CB_CUE_AUDIO_SIZE && buf[0x22] == 0x00 && buf[0x23] == 0x2c && zeros);
+    CHECK(cb_pkt_cue_audio_parse(&back, buf, aw.len) == 0 && !back.audio && !back.mode);
     /* Too small a buffer: nothing written that could go out. */
     uint8_t small[0x100];
-    RXWr sw = rx_wr(small, sizeof(small));
-    rx_pkt_cue_audio(&sw, &a);
+    CBWr sw = cb_wr(small, sizeof(small));
+    cb_pkt_cue_audio(&sw, &a);
     CHECK(sw.err);
 }
 
 int main(void)
 {
-    rx_log_set_level(RX_LOG_WARN);
+    cb_log_set_level(CB_LOG_WARN);
     keep_alives();
     claims();
     status_packets();

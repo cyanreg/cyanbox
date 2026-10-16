@@ -14,13 +14,13 @@ extern char **environ;
 
 char *test_dir(const char *name)
 {
-    if (getenv("RX_TEST_VERBOSE"))
-        rx_log_set_level(RX_LOG_DEBUG);
+    if (getenv("CB_TEST_VERBOSE"))
+        cb_log_set_level(CB_LOG_DEBUG);
     else
         av_log_set_level(AV_LOG_FATAL);
-    const char *root = getenv("RX_TEST_DIR");
-    char *dir = rx_path_join(root ? root : "test-media", name);
-    if (!dir || rx_mkdir_p(dir) < 0) {
+    const char *root = getenv("CB_TEST_DIR");
+    char *dir = cb_path_join(root ? root : "test-media", name);
+    if (!dir || cb_mkdir_p(dir) < 0) {
         fprintf(stderr, "cannot create %s\n", dir ? dir : name);
         exit(1);
     }
@@ -29,7 +29,7 @@ char *test_dir(const char *name)
 
 char *test_path(const char *dir, const char *file)
 {
-    char *p = rx_path_join(dir, file);
+    char *p = cb_path_join(dir, file);
     if (!p)
         exit(1);
     return p;
@@ -142,7 +142,7 @@ int copy_file(const char *from, const char *to)
 {
     uint8_t *d;
     size_t n;
-    int ret = rx_file_read(from, &d, &n);
+    int ret = cb_file_read(from, &d, &n);
     if (ret < 0)
         return ret;
     FILE *f = fopen(to, "wb");

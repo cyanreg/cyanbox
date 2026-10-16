@@ -1,6 +1,6 @@
 # Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md.
 
-project('rxbox',
+project('cyanbox',
     [ 'c', 'cpp' ],
     license: 'BSD-2-Clause',
     license_files: [ 'LICENSE.md' ],
@@ -105,26 +105,26 @@ stretch_dep = [
 # Configure file
 #============================================================================
 conf = configuration_data()
-conf.set_quoted('RXBOX_VERSION', meson.project_version())
-conf.set10('RXBOX_MPRIS', sdbus_dep.found())
-conf.set10('RXBOX_MECAB', mecab_dep.found())
-conf.set10('RXBOX_ICU', icu_dep.found())
+conf.set_quoted('CYANBOX_VERSION', meson.project_version())
+conf.set10('CYANBOX_MPRIS', sdbus_dep.found())
+conf.set10('CYANBOX_MECAB', mecab_dep.found())
+conf.set10('CYANBOX_ICU', icu_dep.found())
 configure_file(output: 'config.h', configuration: conf)
 
-rx_inc = include_directories('include', '.')
+cb_inc = include_directories('include', '.')
 
 # Third party (vendored)
 #============================================================================
 subdir('third_party')
 
-# Modules, in dependency order. Each defines rx_<module>_lib / rx_<module>_dep
+# Modules, in dependency order. Each defines cb_<module>_lib / cb_<module>_dep
 # and registers its own tests (suite: '<module>').
 #============================================================================
 subdir('src/common')
 # The compute context first (a library the analysis uses); the window's
 # sources from the same directory go into the executables below.
 subdir('src/gpu')
-# The model that tags tracks on request (rxbox/ml.h): a Vulkan device of its
+# The model that tags tracks on request (cyanbox/ml.h): a Vulkan device of its
 # own, only for as long as a batch of tracks is being tagged.
 subdir('src/ml')
 subdir('src/audio')
@@ -138,16 +138,16 @@ subdir('src/player')
 subdir('src/app')
 
 # Everything without a window, for the CLI, the tests and the tools.
-rxbox_dep = rx_app_dep
+cyanbox_dep = cb_app_dep
 
 subdir('src/ui')
 
-executable('rxbox',
+executable('cyanbox',
     'src/main.c',
     'src/cli.c',
     gpu_sources, ui_sources,
-    include_directories: rx_inc,
-    dependencies: [ rxbox_dep, vulkan_dep, sdl3_dep, wayland_client, imgui_dep, vma_dep ] + gpu_deps,
+    include_directories: cb_inc,
+    dependencies: [ cyanbox_dep, vulkan_dep, sdl3_dep, wayland_client, imgui_dep, vma_dep ] + gpu_deps,
     install: true,
 )
 

@@ -5,7 +5,7 @@
  * waveform draw callback, and the few ImGui calls the demo makes from C.
  *
  * The Vulkan backend renders with dynamic rendering into the swapchain's
- * UNORM format, and rotates its vertex buffers over RX_FRAMES_IN_FLIGHT,
+ * UNORM format, and rotates its vertex buffers over CB_FRAMES_IN_FLIGHT,
  * the same count the frame fences cover. Textures (the font atlas
  * included) go through the 1.92+ texture protocol
  * (ImGuiBackendFlags_RendererHasTextures), so the atlas grows on demand
@@ -48,9 +48,9 @@ extern "C" {
 
 /* The backend's descriptor pool: one sampled-image descriptor per live
  * texture. textures.c refuses new textures before it runs out. */
-#define RX_IMGUI_POOL_SIZE 4096
+#define CB_IMGUI_POOL_SIZE 4096
 
-static ImGuiContext *ctx_of(RXWindow *w)
+static ImGuiContext *ctx_of(CBWindow *w)
 {
     return static_cast<ImGuiContext *>(w->imgui);
 }
@@ -58,7 +58,7 @@ static ImGuiContext *ctx_of(RXWindow *w)
 static void check_vk(VkResult res)
 {
     if (res < 0)
-        rx_err("gpu: imgui vulkan backend: %s", rx_vk_strerror(res));
+        cb_err("gpu: imgui vulkan backend: %s", cb_vk_strerror(res));
 }
 
 /* ------------------------------------------------------------------- fonts */
@@ -112,7 +112,7 @@ static bool fc_find(const char *pattern, const FcChar32 *need, int nb_need,
     return ok;
 }
 
-static void load_fonts(RXWindow *w)
+static void load_fonts(CBWindow *w)
 {
     ImGuiIO &io = ImGui::GetIO();
     const float size = w->opts.font_size;
@@ -120,7 +120,7 @@ static void load_fonts(RXWindow *w)
     int main_index = 0, cjk_index = 0;
 
     if (!FcInit())
-        rx_warn("gpu: fontconfig did not initialise");
+        cb_warn("gpu: fontconfig did not initialise");
 
     if (w->opts.font)
         snprintf(main_path, sizeof(main_path), "%s", w->opts.font);
@@ -133,7 +133,7 @@ static void load_fonts(RXWindow *w)
         cfg.FontNo = (ImU32)main_index;
         font = io.Fonts->AddFontFromFileTTF(main_path, size, &cfg);
         if (!font)
-            rx_warn("gpu: cannot load the font %s", main_path);
+            cb_warn("gpu: cannot load the font %s", main_path);
     }
     if (!font) {
         ImFontConfig cfg;
@@ -151,8 +151,8 @@ static void load_fonts(RXWindow *w)
         ":lang=ja",
     };
     bool have_cjk = false;
-    for (size_t i = 0; i < RX_ARRAY_ELEMS(cjk_patterns) && !have_cjk; i++)
-        have_cjk = fc_find(cjk_patterns[i], kana, (int)RX_ARRAY_ELEMS(kana), cjk_path,
+    for (size_t i = 0; i < CB_ARRAY_ELEMS(cjk_patterns) && !have_cjk; i++)
+        have_cjk = fc_find(cjk_patterns[i], kana, (int)CB_ARRAY_ELEMS(kana), cjk_path,
                            sizeof(cjk_path), &cjk_index);
 
     if (have_cjk && (strcmp(cjk_path, main_path) || cjk_index != main_index)) {
@@ -160,22 +160,22 @@ static void load_fonts(RXWindow *w)
         cfg.MergeMode = true;
         cfg.FontNo = (ImU32)cjk_index;
         if (!io.Fonts->AddFontFromFileTTF(cjk_path, size, &cfg)) {
-            rx_warn("gpu: cannot load the CJK font %s", cjk_path);
+            cb_warn("gpu: cannot load the CJK font %s", cjk_path);
             have_cjk = false;
         }
     }
 
-    rx_info("gpu: font %s%s%s, %.1f px", main_path[0] ? main_path : "(ImGui default)",
+    cb_info("gpu: font %s%s%s, %.1f px", main_path[0] ? main_path : "(ImGui default)",
             have_cjk ? " + " : "", have_cjk ? cjk_path : "", size);
     if (!have_cjk)
-        rx_warn("gpu: no font covers Japanese; such titles will show as boxes");
+        cb_warn("gpu: no font covers Japanese; such titles will show as boxes");
 
     ImGui::GetStyle().FontSizeBase = size;
 }
 
 /* -------------------------------------------------------------------- init */
 
-extern "C" void rx_imgui_set_scale(RXWindow *w)
+extern "C" void cb_imgui_set_scale(CBWindow *w)
 {
     ImGui::SetCurrentContext(ctx_of(w));
     ImGuiStyle &style = ImGui::GetStyle();
@@ -191,12 +191,12 @@ extern "C" void rx_imgui_set_scale(RXWindow *w)
     w->imgui_scale = s;
 }
 
-extern "C" int rx_imgui_init(RXWindow *w)
+extern "C" int cb_imgui_init(CBWindow *w)
 {
     IMGUI_CHECKVERSION();
     ImGuiContext *ctx = ImGui::CreateContext();
     if (!ctx)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     w->imgui = ctx;
     ImGui::SetCurrentContext(ctx);
 
@@ -208,12 +208,12 @@ extern "C" int rx_imgui_init(RXWindow *w)
 
     ImGui::StyleColorsDark();
     w->imgui_scale = 0.0f;
-    rx_imgui_set_scale(w);
+    cb_imgui_set_scale(w);
     load_fonts(w);
 
     if (!ImGui_ImplSDL3_InitForVulkan(w->win)) {
-        rx_err("gpu: ImGui's SDL3 backend did not start");
-        return RX_ERROR(ENODEV);
+        cb_err("gpu: ImGui's SDL3 backend did not start");
+        return CB_ERROR(ENODEV);
     }
     w->imgui_sdl = true;
 
@@ -224,9 +224,9 @@ extern "C" int rx_imgui_init(RXWindow *w)
     info.Device             = w->vk.dev;
     info.QueueFamily        = w->vk.qfam;
     info.Queue              = w->vk.queue;
-    info.DescriptorPoolSize = RX_IMGUI_POOL_SIZE;
+    info.DescriptorPoolSize = CB_IMGUI_POOL_SIZE;
     info.MinImageCount      = 2;
-    info.ImageCount         = RX_FRAMES_IN_FLIGHT;
+    info.ImageCount         = CB_FRAMES_IN_FLIGHT;
     info.UseDynamicRendering = true;
     info.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
     info.PipelineInfoMain.PipelineRenderingCreateInfo = {};
@@ -236,15 +236,15 @@ extern "C" int rx_imgui_init(RXWindow *w)
     info.PipelineInfoMain.PipelineRenderingCreateInfo.pColorAttachmentFormats = &w->format.format;
     info.CheckVkResultFn = check_vk;
     if (!ImGui_ImplVulkan_Init(&info)) {
-        rx_err("gpu: ImGui's Vulkan backend did not start");
-        return RX_ERROR(ENODEV);
+        cb_err("gpu: ImGui's Vulkan backend did not start");
+        return CB_ERROR(ENODEV);
     }
     w->imgui_vk = true;
 
     return 0;
 }
 
-extern "C" void rx_imgui_shutdown(RXWindow *w)
+extern "C" void cb_imgui_shutdown(CBWindow *w)
 {
     if (!w->imgui)
         return;
@@ -262,13 +262,13 @@ extern "C" void rx_imgui_shutdown(RXWindow *w)
 
 /* ------------------------------------------------------------------ frames */
 
-extern "C" void rx_imgui_process_event(RXWindow *w, const union SDL_Event *ev)
+extern "C" void cb_imgui_process_event(CBWindow *w, const union SDL_Event *ev)
 {
     ImGui::SetCurrentContext(ctx_of(w));
     ImGui_ImplSDL3_ProcessEvent(ev);
 }
 
-extern "C" void rx_imgui_new_frame(RXWindow *w)
+extern "C" void cb_imgui_new_frame(CBWindow *w)
 {
     ImGui::SetCurrentContext(ctx_of(w));
     ImGui_ImplVulkan_NewFrame();
@@ -276,14 +276,14 @@ extern "C" void rx_imgui_new_frame(RXWindow *w)
     ImGui::NewFrame();
 }
 
-extern "C" void *rx_imgui_render(RXWindow *w)
+extern "C" void *cb_imgui_render(CBWindow *w)
 {
     ImGui::SetCurrentContext(ctx_of(w));
     ImGui::Render();
     return ImGui::GetDrawData();
 }
 
-extern "C" void *rx_imgui_last_draw_data(RXWindow *w)
+extern "C" void *cb_imgui_last_draw_data(CBWindow *w)
 {
     if (!w->imgui || w->in_frame)
         return nullptr;
@@ -293,7 +293,7 @@ extern "C" void *rx_imgui_last_draw_data(RXWindow *w)
 
 /* What ImGui_ImplVulkan_RenderDrawData tests before it draws anything (and
  * moves on to its next vertex buffers). */
-extern "C" bool rx_imgui_drawable(const void *draw_data)
+extern "C" bool cb_imgui_drawable(const void *draw_data)
 {
     const ImDrawData *dd = static_cast<const ImDrawData *>(draw_data);
     int fb_width = (int)(dd->DisplaySize.x * dd->FramebufferScale.x + 0.5f);
@@ -301,7 +301,7 @@ extern "C" bool rx_imgui_drawable(const void *draw_data)
     return fb_width > 0 && fb_height > 0;
 }
 
-extern "C" void rx_imgui_record(RXWindow *w, void *draw_data, VkCommandBuffer cmd)
+extern "C" void cb_imgui_record(CBWindow *w, void *draw_data, VkCommandBuffer cmd)
 {
     ImGui::SetCurrentContext(ctx_of(w));
     ImGui_ImplVulkan_RenderDrawData(static_cast<ImDrawData *>(draw_data), cmd);
@@ -309,7 +309,7 @@ extern "C" void rx_imgui_record(RXWindow *w, void *draw_data, VkCommandBuffer cm
 
 /* ---------------------------------------------------------------- textures */
 
-extern "C" uint64_t rx_imgui_add_texture(RXWindow *w, VkImageView view)
+extern "C" uint64_t cb_imgui_add_texture(CBWindow *w, VkImageView view)
 {
     ImGui::SetCurrentContext(ctx_of(w));
     VkDescriptorSet set = ImGui_ImplVulkan_AddTexture(view,
@@ -317,7 +317,7 @@ extern "C" uint64_t rx_imgui_add_texture(RXWindow *w, VkImageView view)
     return (uint64_t)(uintptr_t)set;
 }
 
-extern "C" void rx_imgui_remove_texture(RXWindow *w, uint64_t id)
+extern "C" void cb_imgui_remove_texture(CBWindow *w, uint64_t id)
 {
     if (!w->imgui_vk || !id)
         return;
@@ -333,7 +333,7 @@ extern "C" void rx_imgui_remove_texture(RXWindow *w, uint64_t id)
  * draw list, with no promise of alignment. */
 static void wave_callback(const ImDrawList *, const ImDrawCmd *pcmd)
 {
-    RXWaveCmd c;
+    CBWaveCmd c;
     if (!pcmd->UserCallbackData || pcmd->UserCallbackDataSize != (int)sizeof(c))
         return;
     memcpy(&c, pcmd->UserCallbackData, sizeof(c));
@@ -344,7 +344,7 @@ static void wave_callback(const ImDrawList *, const ImDrawCmd *pcmd)
         return;
 
     /* The same projection the backend uses for its own clip rectangles. */
-    RXWaveView v;
+    CBWaveView v;
     v.off_x     = dd->DisplayPos.x;
     v.off_y     = dd->DisplayPos.y;
     v.scale_x   = dd->FramebufferScale.x;
@@ -358,17 +358,17 @@ static void wave_callback(const ImDrawList *, const ImDrawCmd *pcmd)
     if (v.clip[2] <= v.clip[0] || v.clip[3] <= v.clip[1])
         return;
 
-    rx_wave_record(&c, rs->CommandBuffer, &v);
+    cb_wave_record(&c, rs->CommandBuffer, &v);
 }
 
-extern "C" void rx_imgui_add_wave(void *draw_list, const RXWaveCmd *c)
+extern "C" void cb_imgui_add_wave(void *draw_list, const CBWaveCmd *c)
 {
     ImDrawList *dl = static_cast<ImDrawList *>(draw_list);
     ImDrawCallback reset = ImGui::GetPlatformIO().DrawCallback_ResetRenderState;
     if (!reset)
         return;
 
-    dl->AddCallback(wave_callback, const_cast<RXWaveCmd *>(c), sizeof(*c));
+    dl->AddCallback(wave_callback, const_cast<CBWaveCmd *>(c), sizeof(*c));
     dl->AddCallback(reset, nullptr);
 }
 
@@ -379,12 +379,12 @@ static ImU32 col32(uint32_t rgba)
     return IM_COL32((rgba >> 24) & 0xFF, (rgba >> 16) & 0xFF, (rgba >> 8) & 0xFF, rgba & 0xFF);
 }
 
-extern "C" void rx_demo_show_demo_window(void)
+extern "C" void cb_demo_show_demo_window(void)
 {
     ImGui::ShowDemoWindow();
 }
 
-extern "C" bool rx_demo_begin(const char *title, float x, float y, float width, float height)
+extern "C" bool cb_demo_begin(const char *title, float x, float y, float width, float height)
 {
     ImGui::SetNextWindowPos(ImVec2(x, y), ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2(width, height), ImGuiCond_Always);
@@ -393,12 +393,12 @@ extern "C" bool rx_demo_begin(const char *title, float x, float y, float width, 
                                         ImGuiWindowFlags_NoSavedSettings);
 }
 
-extern "C" void rx_demo_end(void)
+extern "C" void cb_demo_end(void)
 {
     ImGui::End();
 }
 
-extern "C" void rx_demo_text(const char *fmt, ...)
+extern "C" void cb_demo_text(const char *fmt, ...)
 {
     va_list args;
     va_start(args, fmt);
@@ -406,63 +406,63 @@ extern "C" void rx_demo_text(const char *fmt, ...)
     va_end(args);
 }
 
-extern "C" void *rx_demo_window_draw_list(void)
+extern "C" void *cb_demo_window_draw_list(void)
 {
     return ImGui::GetWindowDrawList();
 }
 
-extern "C" void *rx_demo_background_draw_list(void)
+extern "C" void *cb_demo_background_draw_list(void)
 {
     return ImGui::GetBackgroundDrawList();
 }
 
-extern "C" void *rx_demo_foreground_draw_list(void)
+extern "C" void *cb_demo_foreground_draw_list(void)
 {
     return ImGui::GetForegroundDrawList();
 }
 
-extern "C" void rx_demo_cursor(float *x, float *y)
+extern "C" void cb_demo_cursor(float *x, float *y)
 {
     ImVec2 p = ImGui::GetCursorScreenPos();
     *x = p.x;
     *y = p.y;
 }
 
-extern "C" float rx_demo_avail_width(void)
+extern "C" float cb_demo_avail_width(void)
 {
     return ImGui::GetContentRegionAvail().x;
 }
 
-extern "C" void rx_demo_dummy(float width, float height)
+extern "C" void cb_demo_dummy(float width, float height)
 {
     ImGui::Dummy(ImVec2(width, height));
 }
 
-extern "C" void rx_demo_rect(void *draw_list, float x0, float y0, float x1, float y1,
+extern "C" void cb_demo_rect(void *draw_list, float x0, float y0, float x1, float y1,
                              uint32_t rgba)
 {
     static_cast<ImDrawList *>(draw_list)->AddRectFilled(ImVec2(x0, y0), ImVec2(x1, y1),
                                                         col32(rgba));
 }
 
-extern "C" void rx_demo_line(void *draw_list, float x0, float y0, float x1, float y1,
+extern "C" void cb_demo_line(void *draw_list, float x0, float y0, float x1, float y1,
                              uint32_t rgba, float thickness)
 {
     static_cast<ImDrawList *>(draw_list)->AddLine(ImVec2(x0, y0), ImVec2(x1, y1), col32(rgba),
                                                   thickness);
 }
 
-extern "C" void rx_demo_image(uint64_t tex, float width, float height)
+extern "C" void cb_demo_image(uint64_t tex, float width, float height)
 {
     ImGui::Image(ImTextureRef((ImTextureID)tex), ImVec2(width, height));
 }
 
-extern "C" bool rx_demo_checkbox(const char *label, bool *v)
+extern "C" bool cb_demo_checkbox(const char *label, bool *v)
 {
     return ImGui::Checkbox(label, v);
 }
 
-extern "C" bool rx_demo_slider(const char *label, float *v, float lo, float hi)
+extern "C" bool cb_demo_slider(const char *label, float *v, float lo, float hi)
 {
     return ImGui::SliderFloat(label, v, lo, hi);
 }

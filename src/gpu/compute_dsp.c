@@ -1,6 +1,6 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
-/* The plans of rxbox/compute.h: STFT band energies (shaders/stft.comp) and
+/* The plans of cyanbox/compute.h: STFT band energies (shaders/stft.comp) and
  * band envelopes of windows (shaders/env.comp). A plan holds its tables on
  * the GPU, its own command pool, two slots of buffers and timestamps; it
  * is used by one thread at a time (the analysis that made it).
@@ -37,8 +37,8 @@
 
 typedef struct Slot {
     VkCommandBuffer cmd;
-    RXCBuf in, in_dev;              /* in_dev only when `in` is not device local */
-    RXCBuf out;
+    CBCBuf in, in_dev;              /* in_dev only when `in` is not device local */
+    CBCBuf out;
     uint64_t value;                 /* the timeline value of its submission */
     int64_t first;                  /* frame or window */
     int nb;
@@ -46,24 +46,24 @@ typedef struct Slot {
 
 /* What both kinds of plan share. */
 typedef struct Plan {
-    RXCompute *c;
+    CBCompute *c;
     int log2n, nfft;
     VkPipeline pipe;
-    RXCBuf tables;
+    CBCBuf tables;
     VkCommandPool pool;
     VkQueryPool times;              /* two per slot, when the queue has timestamps */
     Slot slots[2];
     double gpu_ms, wall_ms;
 } Plan;
 
-struct RXComputeSTFTPlan {
+struct CBComputeSTFTPlan {
     Plan p;
     int hop, nb_bands;
     float scale;
     VkDeviceAddress tw, window, bands, weights;
 };
 
-struct RXComputeEnvPlan {
+struct CBComputeEnvPlan {
     Plan p;
     int nb_bands, step, half;
     VkDeviceAddress tw, taper, gains, smooth;
@@ -96,17 +96,17 @@ static int log2_exact(int n)
 
 static void plan_uninit(Plan *p)
 {
-    RXCompute *c = p->c;
+    CBCompute *c = p->c;
     if (!c)
         return;
     for (int i = 0; i < 2; i++) {
         Slot *s = &p->slots[i];
         /* Every run waits for its submissions before it returns. */
-        rx_cbuf_free(c, &s->in);
-        rx_cbuf_free(c, &s->in_dev);
-        rx_cbuf_free(c, &s->out);
+        cb_cbuf_free(c, &s->in);
+        cb_cbuf_free(c, &s->in_dev);
+        cb_cbuf_free(c, &s->out);
     }
-    rx_cbuf_free(c, &p->tables);
+    cb_cbuf_free(c, &p->tables);
     if (p->times)
         vkDestroyQueryPool(c->vk.dev, p->times, NULL);
     if (p->pool)
@@ -114,15 +114,15 @@ static void plan_uninit(Plan *p)
     memset(p, 0, sizeof(*p));
 }
 
-static int plan_init(Plan *p, RXCompute *c, enum RXComputeKernel kernel, int nfft)
+static int plan_init(Plan *p, CBCompute *c, enum CBComputeKernel kernel, int nfft)
 {
     p->c = c;
     p->nfft = nfft;
     p->log2n = log2_exact(nfft);
-    if (p->log2n < RX_COMPUTE_MIN_LOG2 || p->log2n > RX_COMPUTE_MAX_LOG2)
-        return RX_ERROR(EINVAL);
+    if (p->log2n < CB_COMPUTE_MIN_LOG2 || p->log2n > CB_COMPUTE_MAX_LOG2)
+        return CB_ERROR(EINVAL);
 
-    int ret = rx_compute_pipeline(c, kernel, p->log2n, &p->pipe);
+    int ret = cb_compute_pipeline(c, kernel, p->log2n, &p->pipe);
     if (ret < 0)
         return ret;
 
@@ -133,7 +133,7 @@ static int plan_init(Plan *p, RXCompute *c, enum RXComputeKernel kernel, int nff
     };
     VkResult res = vkCreateCommandPool(c->vk.dev, &pinfo, NULL, &p->pool);
     if (res != VK_SUCCESS)
-        return rx_vk_ret2err(res);
+        return cb_vk_ret2err(res);
     VkCommandBuffer cmds[2];
     VkCommandBufferAllocateInfo cinfo = {
         .sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
@@ -143,7 +143,7 @@ static int plan_init(Plan *p, RXCompute *c, enum RXComputeKernel kernel, int nff
     };
     res = vkAllocateCommandBuffers(c->vk.dev, &cinfo, cmds);
     if (res != VK_SUCCESS)
-        return rx_vk_ret2err(res);
+        return cb_vk_ret2err(res);
     p->slots[0].cmd = cmds[0];
     p->slots[1].cmd = cmds[1];
 
@@ -155,7 +155,7 @@ static int plan_init(Plan *p, RXCompute *c, enum RXComputeKernel kernel, int nff
         };
         res = vkCreateQueryPool(c->vk.dev, &qinfo, NULL, &p->times);
         if (res != VK_SUCCESS)
-            return rx_vk_ret2err(res);
+            return cb_vk_ret2err(res);
     }
     return 0;
 }
@@ -203,14 +203,14 @@ static void barrier(VkCommandBuffer cmd, VkPipelineStageFlags2 src, VkAccessFlag
  * for). */
 static int upload_tables(Plan *p, const void *data, size_t size)
 {
-    RXCompute *c = p->c;
-    RXCBuf staging;
-    int ret = rx_cbuf_create(c, &staging, size, RX_CMEM_UPLOAD);
+    CBCompute *c = p->c;
+    CBCBuf staging;
+    int ret = cb_cbuf_create(c, &staging, size, CB_CMEM_UPLOAD);
     if (ret < 0)
         return ret;
     memcpy(staging.map, data, size);
-    if ((ret = rx_cbuf_flush(c, &staging, size)) < 0) {
-        rx_cbuf_free(c, &staging);
+    if ((ret = cb_cbuf_flush(c, &staging, size)) < 0) {
+        cb_cbuf_free(c, &staging);
         return ret;
     }
     if (staging.device_local) {
@@ -218,9 +218,9 @@ static int upload_tables(Plan *p, const void *data, size_t size)
         return 0;
     }
 
-    ret = rx_cbuf_create(c, &p->tables, size, RX_CMEM_DEVICE);
+    ret = cb_cbuf_create(c, &p->tables, size, CB_CMEM_DEVICE);
     if (ret < 0) {
-        rx_cbuf_free(c, &staging);
+        cb_cbuf_free(c, &staging);
         return ret;
     }
     VkCommandBuffer cmd = p->slots[0].cmd;
@@ -233,29 +233,29 @@ static int upload_tables(Plan *p, const void *data, size_t size)
     /* A failed wait returns with the device idle: the staging buffer can
      * go either way. */
     uint64_t value = 0;
-    ret = rx_compute_submit(c, cmd, &value);
+    ret = cb_compute_submit(c, cmd, &value);
     if (ret >= 0)
-        ret = rx_compute_wait(c, value);
-    rx_cbuf_free(c, &staging);
+        ret = cb_compute_wait(c, value);
+    cb_cbuf_free(c, &staging);
     return ret;
 }
 
 /* Grows a slot's buffers to hold `in` input and `out` output bytes. */
 static int slot_reserve(Plan *p, Slot *s, size_t in, size_t out)
 {
-    RXCompute *c = p->c;
+    CBCompute *c = p->c;
     int ret = 0;
     if (s->in.size < in) {
-        rx_cbuf_free(c, &s->in);
-        rx_cbuf_free(c, &s->in_dev);
-        if ((ret = rx_cbuf_create(c, &s->in, in, RX_CMEM_UPLOAD)) < 0)
+        cb_cbuf_free(c, &s->in);
+        cb_cbuf_free(c, &s->in_dev);
+        if ((ret = cb_cbuf_create(c, &s->in, in, CB_CMEM_UPLOAD)) < 0)
             return ret;
-        if (!s->in.device_local && (ret = rx_cbuf_create(c, &s->in_dev, in, RX_CMEM_DEVICE)) < 0)
+        if (!s->in.device_local && (ret = cb_cbuf_create(c, &s->in_dev, in, CB_CMEM_DEVICE)) < 0)
             return ret;
     }
     if (s->out.size < out) {
-        rx_cbuf_free(c, &s->out);
-        if ((ret = rx_cbuf_create(c, &s->out, out, RX_CMEM_READBACK)) < 0)
+        cb_cbuf_free(c, &s->out);
+        if ((ret = cb_cbuf_create(c, &s->out, out, CB_CMEM_READBACK)) < 0)
             return ret;
     }
     return 0;
@@ -305,17 +305,17 @@ static int slot_submit(Plan *p, int i, size_t in_bytes)
         vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, p->times, 2 * i + 1);
     VkResult res = vkEndCommandBuffer(cmd);
     if (res != VK_SUCCESS)
-        return rx_vk_ret2err(res);
-    int ret = rx_cbuf_flush(p->c, &s->in, in_bytes);
+        return cb_vk_ret2err(res);
+    int ret = cb_cbuf_flush(p->c, &s->in, in_bytes);
     if (ret < 0)
         return ret;
-    return rx_compute_submit(p->c, cmd, &s->value);
+    return cb_compute_submit(p->c, cmd, &s->value);
 }
 
 static int slot_wait(Plan *p, int i)
 {
     Slot *s = &p->slots[i];
-    int ret = rx_compute_wait(p->c, s->value);
+    int ret = cb_compute_wait(p->c, s->value);
     if (ret < 0)
         return ret;
     s->value = 0;
@@ -326,18 +326,18 @@ static int slot_wait(Plan *p, int i)
             p->gpu_ms += (double)((ts[1] - ts[0]) & p->c->vk.ts_mask) *
                          p->c->vk.props.limits.timestampPeriod * 1e-6;
     }
-    return rx_cbuf_invalidate(p->c, &s->out);
+    return cb_cbuf_invalidate(p->c, &s->out);
 }
 
 /* After an error: nothing may still be using the slots. A wait that fails
- * has waited for the device to go idle (rx_compute_wait), so after this
+ * has waited for the device to go idle (cb_compute_wait), so after this
  * neither slot is in flight, whatever the waits returned. */
 static void slots_drain(Plan *p)
 {
     for (int i = 0; i < 2; i++) {
         Slot *s = &p->slots[i];
         if (s->value)
-            rx_compute_wait(p->c, s->value);
+            cb_compute_wait(p->c, s->value);
         s->value = 0;
     }
 }
@@ -345,7 +345,7 @@ static void slots_drain(Plan *p)
 /* x[a .. a + len) with zeros outside [0, n). */
 static void copy_padded(float *dst, const float *x, int64_t n, int64_t a, int64_t len)
 {
-    int64_t lo = RX_CLAMP(a, 0, n), hi = RX_CLAMP(a + len, 0, n);
+    int64_t lo = CB_CLAMP(a, 0, n), hi = CB_CLAMP(a + len, 0, n);
     if (hi <= lo) {
         memset(dst, 0, (size_t)len * sizeof(*dst));
         return;
@@ -359,17 +359,17 @@ static void copy_padded(float *dst, const float *x, int64_t n, int64_t a, int64_
 
 /* ----------------------------------------------------------------- STFT */
 
-int rx_compute_stft_plan(RXCompute *c, const RXComputeSTFT *sp, RXComputeSTFTPlan **out)
+int cb_compute_stft_plan(CBCompute *c, const CBComputeSTFT *sp, CBComputeSTFTPlan **out)
 {
     *out = NULL;
     if (!sp->window || !sp->k0 || !sp->k1 || !sp->weights || sp->hop <= 0 ||
         sp->nb_bands <= 0 || sp->nb_bands > 256)
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
 
-    RXComputeSTFTPlan *plan = calloc(1, sizeof(*plan));
+    CBComputeSTFTPlan *plan = calloc(1, sizeof(*plan));
     if (!plan)
-        return RX_ERROR(ENOMEM);
-    int ret = plan_init(&plan->p, c, RX_KERNEL_STFT, sp->nfft);
+        return CB_ERROR(ENOMEM);
+    int ret = plan_init(&plan->p, c, CB_KERNEL_STFT, sp->nfft);
     if (ret < 0)
         goto fail;
     plan->hop = sp->hop;
@@ -381,7 +381,7 @@ int rx_compute_stft_plan(RXCompute *c, const RXComputeSTFT *sp, RXComputeSTFTPla
     int nb_w = 0;
     for (int b = 0; b < sp->nb_bands; b++) {
         if (sp->k0[b] < 0 || sp->k1[b] < sp->k0[b] || sp->k1[b] > nbins) {
-            ret = RX_ERROR(EINVAL);
+            ret = CB_ERROR(EINVAL);
             goto fail;
         }
         nb_w += sp->k1[b] - sp->k0[b];
@@ -389,10 +389,10 @@ int rx_compute_stft_plan(RXCompute *c, const RXComputeSTFT *sp, RXComputeSTFTPla
     size_t o_win = (size_t)n * 2 * sizeof(float);
     size_t o_bands = o_win + (size_t)n * sizeof(float);
     size_t o_w = o_bands + (size_t)sp->nb_bands * 3 * sizeof(int32_t);
-    size_t size = o_w + (size_t)RX_MAX(nb_w, 1) * sizeof(float);
+    size_t size = o_w + (size_t)CB_MAX(nb_w, 1) * sizeof(float);
     uint8_t *t = calloc(1, size);
     if (!t) {
-        ret = RX_ERROR(ENOMEM);
+        ret = CB_ERROR(ENOMEM);
         goto fail;
     }
     twiddles((float *)t, n);
@@ -418,11 +418,11 @@ int rx_compute_stft_plan(RXCompute *c, const RXComputeSTFT *sp, RXComputeSTFTPla
     return 0;
 
 fail:
-    rx_compute_stft_free(&plan);
+    cb_compute_stft_free(&plan);
     return ret;
 }
 
-void rx_compute_stft_free(RXComputeSTFTPlan **pp)
+void cb_compute_stft_free(CBComputeSTFTPlan **pp)
 {
     if (!*pp)
         return;
@@ -431,15 +431,15 @@ void rx_compute_stft_free(RXComputeSTFTPlan **pp)
     *pp = NULL;
 }
 
-int rx_compute_stft_run(RXComputeSTFTPlan *plan, const float *x, int64_t n, int64_t nb_frames,
-                        RXComputeFramesFn fn, void *opaque)
+int cb_compute_stft_run(CBComputeSTFTPlan *plan, const float *x, int64_t n, int64_t nb_frames,
+                        CBComputeFramesFn fn, void *opaque)
 {
     Plan *p = &plan->p;
     const int64_t hop = plan->hop, nfft = p->nfft;
-    const int chunk = (int)RX_MIN((int64_t)STFT_CHUNK, RX_MAX(nb_frames, 1));
+    const int chunk = (int)CB_MIN((int64_t)STFT_CHUNK, CB_MAX(nb_frames, 1));
     const size_t in_max = ((size_t)(chunk - 1) * hop + nfft) * sizeof(float);
     const size_t out_max = (size_t)chunk * plan->nb_bands * sizeof(float);
-    int64_t t0 = rx_time_us();
+    int64_t t0 = cb_time_us();
 
     int ret = 0;
     int64_t next = 0;
@@ -451,7 +451,7 @@ int rx_compute_stft_run(RXComputeSTFTPlan *plan, const float *x, int64_t n, int6
             if ((ret = slot_reserve(p, s, in_max, out_max)) < 0)
                 break;
             s->first = next;
-            s->nb = (int)RX_MIN((int64_t)chunk, nb_frames - next);
+            s->nb = (int)CB_MIN((int64_t)chunk, nb_frames - next);
             int64_t len = (int64_t)(s->nb - 1) * hop + nfft;
             copy_padded(s->in.map, x, n, next * hop - nfft / 2, len);
 
@@ -488,11 +488,11 @@ int rx_compute_stft_run(RXComputeSTFTPlan *plan, const float *x, int64_t n, int6
     }
     if (ret < 0)
         slots_drain(p);
-    p->wall_ms += (rx_time_us() - t0) / 1000.0;
+    p->wall_ms += (cb_time_us() - t0) / 1000.0;
     return ret;
 }
 
-void rx_compute_stft_times(const RXComputeSTFTPlan *plan, double *gpu_ms, double *wall_ms)
+void cb_compute_stft_times(const CBComputeSTFTPlan *plan, double *gpu_ms, double *wall_ms)
 {
     *gpu_ms = plan->p.gpu_ms;
     *wall_ms = plan->p.wall_ms;
@@ -500,22 +500,22 @@ void rx_compute_stft_times(const RXComputeSTFTPlan *plan, double *gpu_ms, double
 
 /* ------------------------------------------------------------ envelopes */
 
-int rx_compute_env_plan(RXCompute *c, const RXComputeEnv *ep, RXComputeEnvPlan **out)
+int cb_compute_env_plan(CBCompute *c, const CBComputeEnv *ep, CBComputeEnvPlan **out)
 {
     *out = NULL;
     if (!ep->taper || !ep->gains || !ep->smooth || ep->nb_bands <= 0 || ep->nb_bands > 8 ||
         ep->step <= 0 || ep->half < 0)
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
     for (int b = 0; b < ep->nb_bands; b++) {
         int64_t reach = (int64_t)ep->half * ep->step + ep->smooth[b];
         if (ep->smooth[b] < 0 || reach >= ep->nfft / 2)
-            return RX_ERROR(EINVAL);
+            return CB_ERROR(EINVAL);
     }
 
-    RXComputeEnvPlan *plan = calloc(1, sizeof(*plan));
+    CBComputeEnvPlan *plan = calloc(1, sizeof(*plan));
     if (!plan)
-        return RX_ERROR(ENOMEM);
-    int ret = plan_init(&plan->p, c, RX_KERNEL_ENV, ep->nfft);
+        return CB_ERROR(ENOMEM);
+    int ret = plan_init(&plan->p, c, CB_KERNEL_ENV, ep->nfft);
     if (ret < 0)
         goto fail;
     plan->nb_bands = ep->nb_bands;
@@ -530,7 +530,7 @@ int rx_compute_env_plan(RXCompute *c, const RXComputeEnv *ep, RXComputeEnvPlan *
     size_t size = o_smooth + (size_t)ep->nb_bands * sizeof(int32_t);
     uint8_t *t = calloc(1, size);
     if (!t) {
-        ret = RX_ERROR(ENOMEM);
+        ret = CB_ERROR(ENOMEM);
         goto fail;
     }
     twiddles((float *)t, n);
@@ -552,11 +552,11 @@ int rx_compute_env_plan(RXCompute *c, const RXComputeEnv *ep, RXComputeEnvPlan *
     return 0;
 
 fail:
-    rx_compute_env_free(&plan);
+    cb_compute_env_free(&plan);
     return ret;
 }
 
-void rx_compute_env_free(RXComputeEnvPlan **pp)
+void cb_compute_env_free(CBComputeEnvPlan **pp)
 {
     if (!*pp)
         return;
@@ -565,17 +565,17 @@ void rx_compute_env_free(RXComputeEnvPlan **pp)
     *pp = NULL;
 }
 
-int rx_compute_env_run(RXComputeEnvPlan *plan, const float *x, int64_t n, const int64_t *start,
+int cb_compute_env_run(CBComputeEnvPlan *plan, const float *x, int64_t n, const int64_t *start,
                        int nb, float *out)
 {
     Plan *p = &plan->p;
     const int nfft = p->nfft;
     const int len = 2 * plan->half + 1;
     const size_t per_win = (size_t)plan->nb_bands * len;
-    const int batch = RX_MIN(ENV_BATCH, RX_MAX(nb, 1));
+    const int batch = CB_MIN(ENV_BATCH, CB_MAX(nb, 1));
     const size_t in_max = (size_t)batch * nfft * sizeof(float);
     const size_t out_max = (size_t)batch * per_win * sizeof(float);
-    int64_t t0 = rx_time_us();
+    int64_t t0 = cb_time_us();
 
     int ret = 0, next = 0;
     int head = 0, inflight = 0;
@@ -586,7 +586,7 @@ int rx_compute_env_run(RXComputeEnvPlan *plan, const float *x, int64_t n, const 
             if ((ret = slot_reserve(p, s, in_max, out_max)) < 0)
                 break;
             s->first = next;
-            s->nb = RX_MIN(batch, nb - next);
+            s->nb = CB_MIN(batch, nb - next);
             float *dst = s->in.map;
             for (int w = 0; w < s->nb; w++)
                 copy_padded(dst + (size_t)w * nfft, x, n, start[next + w], nfft);
@@ -625,11 +625,11 @@ int rx_compute_env_run(RXComputeEnvPlan *plan, const float *x, int64_t n, const 
     }
     if (ret < 0)
         slots_drain(p);
-    p->wall_ms += (rx_time_us() - t0) / 1000.0;
+    p->wall_ms += (cb_time_us() - t0) / 1000.0;
     return ret;
 }
 
-void rx_compute_env_times(const RXComputeEnvPlan *plan, double *gpu_ms, double *wall_ms)
+void cb_compute_env_times(const CBComputeEnvPlan *plan, double *gpu_ms, double *wall_ms)
 {
     *gpu_ms = plan->p.gpu_ms;
     *wall_ms = plan->p.wall_ms;

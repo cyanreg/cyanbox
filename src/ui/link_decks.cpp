@@ -10,21 +10,21 @@
 // it when the player says where it is; over it, the cover and the title,
 // the player's state and model, and right-aligned the key, the tempo at
 // the player's pitch and the time left. The rest of the deck is unchanged:
-// rxbox's own, for editing tracks before they go to a player.
+// cyanbox's own, for editing tracks before they go to a player.
 //
 // Where the player is: the beat number of its status on the track's grid
-// (the beats Link serves it: rx_grid_beats, anlz.c PQTZ; 0 before the
+// (the beats Link serves it: cb_grid_beats, anlz.c PQTZ; 0 before the
 // first), carried forward between statuses (about five a second) at the
 // pitch it plays at and kept within the beat the last one named. A
 // pre-nexus player (a CDJ-900, a CDJ-2000) sends no beat number: no
 // playhead, no time left.
 //
 // Tracks dropped on a cell, and the table's "Load in deck" items, go to
-// the player as a load command (rx_app_link_load: it loads the track as
+// the player as a load command (cb_app_link_load: it loads the track as
 // one dragged onto it in rekordbox), but not while it plays with the
 // players' EJECT/LOAD LOCK on (player.eject_lock).
 //
-// RXBOX_UI_LINK_DECKS (the headless tests) makes up the players instead:
+// CYANBOX_UI_LINK_DECKS (the headless tests) makes up the players instead:
 // a comma-separated list of NUMBER:NAME:TRACK:FLAGS:BEAT, TRACK a library
 // id (0 nothing loaded), FLAGS any of p (plays), a (on air), m (master),
 // s (synced), BEAT its first beat number (-1 none sent); a playing one's
@@ -40,15 +40,15 @@
 
 
 // The players heard, by number: their indices in link_state.devices.
-static int players(const RXApp *app, int *idx, int max)
+static int players(const CBApp *app, int *idx, int max)
 {
     const auto &ls = app->link_state;
     int n = 0;
     if (!ls.on)
         return 0;
     for (int i = 0; i < ls.nb_devices && n < max; i++) {
-        const RXLinkPlayer &d = ls.devices[i];
-        if (d.type == RX_LINK_DEVICE_PLAYER && d.number >= 1 && d.number < UI_LINK_DECKS)
+        const CBLinkPlayer &d = ls.devices[i];
+        if (d.type == CB_LINK_DEVICE_PLAYER && d.number >= 1 && d.number < UI_LINK_DECKS)
             idx[n++] = i;
     }
     std::sort(idx, idx + n, [&](int a, int b) { return ls.devices[a].number < ls.devices[b].number; });
@@ -57,40 +57,40 @@ static int players(const RXApp *app, int *idx, int max)
 
 // The library track a player has loaded, when it is ours: a rekordbox
 // track loaded from our device number on the player's own link.
-static RXTrack *ours(RXApp *app, int index)
+static CBTrack *ours(CBApp *app, int index)
 {
     const auto &ls = app->link_state;
-    const RXLinkPlayer &d = ls.devices[index];
+    const CBLinkPlayer &d = ls.devices[index];
     int w = ls.device_if[index];
-    const RXLinkServed *on = w >= 0 && w < ls.nb_interfaces ? &ls.interfaces[w] : nullptr;
-    if (!on || !on->running || on->state != RX_LINK_UP || !d.has_status || d.track_type != 1 ||
+    const CBLinkServed *on = w >= 0 && w < ls.nb_interfaces ? &ls.interfaces[w] : nullptr;
+    if (!on || !on->running || on->state != CB_LINK_UP || !d.has_status || d.track_type != 1 ||
         d.track_device != on->number || !d.track_id)
         return nullptr;
-    return rx_library_find_id(&app->lib, d.track_id);
+    return cb_library_find_id(&app->lib, d.track_id);
 }
 
 // The players' EJECT/LOAD LOCK keeps a track off a deck that plays.
-static bool locked(UiState *ui, const RXLinkPlayer &d)
+static bool locked(UiState *ui, const CBLinkPlayer &d)
 {
     return d.playing && !strcmp(ui_my_setting(ui, "player.eject_lock"), "true");
 }
 
-static void load_on(UiState *ui, int index, RXTrack *t)
+static void load_on(UiState *ui, int index, CBTrack *t)
 {
-    RXApp *app = ui->app;
-    const RXLinkPlayer &d = app->link_state.devices[index];
-    int ret = rx_app_link_load(app, index, t->id);
+    CBApp *app = ui->app;
+    const CBLinkPlayer &d = app->link_state.devices[index];
+    int ret = cb_app_link_load(app, index, t->id);
     if (ret >= 0)
-        rx_app_set_status(app, "Deck %d (%s): loading %s", d.number, d.name, ui_title(t));
-    else if (ret == RX_ERROR(EAGAIN))
-        rx_app_set_status(app, "Deck %d: not on its link yet", d.number);
+        cb_app_set_status(app, "Deck %d (%s): loading %s", d.number, d.name, ui_title(t));
+    else if (ret == CB_ERROR(EAGAIN))
+        cb_app_set_status(app, "Deck %d: not on its link yet", d.number);
     else
-        rx_app_set_status(app, "Deck %d is not on the link any more", d.number);
+        cb_app_set_status(app, "Deck %d is not on the link any more", d.number);
 }
 
-void ui_link_load_menu(UiState *ui, RXTrack *t)
+void ui_link_load_menu(UiState *ui, CBTrack *t)
 {
-    RXApp *app = ui->app;
+    CBApp *app = ui->app;
     int idx[UI_LINK_DECKS];
     int n = players(app, idx, UI_LINK_DECKS);
     if (!n)
@@ -98,7 +98,7 @@ void ui_link_load_menu(UiState *ui, RXTrack *t)
     ui->link_menu_frame = ui->frame_no;
     ui->link_menu_locked.clear();
     for (int k = 0; k < n; k++) {
-        const RXLinkPlayer &d = app->link_state.devices[idx[k]];
+        const CBLinkPlayer &d = app->link_state.devices[idx[k]];
         char label[64];
         snprintf(label, sizeof(label), "Load in deck %d (%s)", d.number, d.name[0] ? d.name : "player");
         bool lock = locked(ui, d);
@@ -114,11 +114,11 @@ void ui_link_load_menu(UiState *ui, RXTrack *t)
 }
 
 // Where the player is in its track, in seconds; < 0 when it does not say.
-static double position(UiState *ui, const RXLinkPlayer &d, const RXTrack *t)
+static double position(UiState *ui, const CBLinkPlayer &d, const CBTrack *t)
 {
     UiLinkDeck *ld = &ui->link_decks[d.number];
-    int64_t now = rx_time_us();
-    if (!t || d.beat < 0 || !rx_track_analysed(t)) {
+    int64_t now = cb_time_us();
+    if (!t || d.beat < 0 || !cb_track_analysed(t)) {
         ld->pos = -1;
         return -1;
     }
@@ -127,7 +127,7 @@ static double position(UiState *ui, const RXLinkPlayer &d, const RXTrack *t)
         ld->beats = nullptr;
         ld->nb_beats = 0;
         ld->beats_track = t->id;
-        if (rx_grid_beats(&t->grid, t->duration, &ld->beats, &ld->nb_beats) < 0)
+        if (cb_grid_beats(&t->grid, t->duration, &ld->beats, &ld->nb_beats) < 0)
             ld->nb_beats = 0;
     }
     if (d.beat > ld->nb_beats) {
@@ -138,7 +138,7 @@ static double position(UiState *ui, const RXLinkPlayer &d, const RXTrack *t)
     // from its start, as an NXS2 says).
     double b0 = 0, b1 = ld->nb_beats ? ld->beats[0].time : t->duration;
     if (d.beat > 0) {
-        const RXBeat *bt = &ld->beats[d.beat - 1];
+        const CBBeat *bt = &ld->beats[d.beat - 1];
         b0 = bt->time;
         b1 = d.beat < ld->nb_beats ? ld->beats[d.beat].time : b0 + 60.0 / ImMax(bt->bpm, 1.0);
     }
@@ -213,29 +213,29 @@ static void readout(UiState *ui, ImDrawList *dl, float right, float y, const cha
 // The track's overview behind a cell, drawn as the deck's overview is
 // (the players' overview type), the part played dimmed as there and the
 // playhead on it in red.
-static void background(UiState *ui, const RXTrack *t, double pos, ImVec2 a, ImVec2 b)
+static void background(UiState *ui, const CBTrack *t, double pos, ImVec2 a, ImVec2 b)
 {
-    RXApp *app = ui->app;
+    CBApp *app = ui->app;
     ImDrawList *dl = ImGui::GetWindowDrawList();
     dl->AddRectFilled(a, b, UI_WAVE_BG, PX(3));
     if (!t)
         return;
-    if (RXWaveGpu *g = t->has_waveforms ? rx_app_preview_wave(app, t) : nullptr) {
-        RXWaveDraw d = {};
+    if (CBWaveGpu *g = t->has_waveforms ? cb_app_preview_wave(app, t) : nullptr) {
+        CBWaveDraw d = {};
         d.x0 = a.x;
         d.y0 = a.y + PX(3);
         d.x1 = b.x;
         d.y1 = b.y - PX(3);
         d.col0 = 0;
-        d.col1 = rx_wave_columns(g);
-        d.mode = ui->overview_full ? RX_WAVE_CENTRED : RX_WAVE_HALF_STACKED;
+        d.col1 = cb_wave_columns(g);
+        d.mode = ui->overview_full ? CB_WAVE_CENTRED : CB_WAVE_HALF_STACKED;
         d.gain = 1.0f;
         d.alpha = 1.0f;
         if (pos >= 0 && t->duration > 0) {
             d.dim = 0.45f;
-            d.dim_until = pos / t->duration * rx_wave_columns(g);
+            d.dim_until = pos / t->duration * cb_wave_columns(g);
         }
-        rx_wave_draw(app->window, dl, g, &d);
+        cb_wave_draw(app->window, dl, g, &d);
     } else if (t->has_waveforms) {
         ui->previews_pending = true;
     }
@@ -247,9 +247,9 @@ static void background(UiState *ui, const RXTrack *t, double pos, ImVec2 a, ImVe
 
 static void deck_cell(UiState *ui, int index, ImVec2 a, ImVec2 b)
 {
-    RXApp *app = ui->app;
-    const RXLinkPlayer &d = app->link_state.devices[index];
-    RXTrack *t = ours(app, index);
+    CBApp *app = ui->app;
+    const CBLinkPlayer &d = app->link_state.devices[index];
+    CBTrack *t = ours(app, index);
     ImDrawList *dl = ImGui::GetWindowDrawList();
     double pos = position(ui, d, t);
     bool loaded = d.has_status && d.track_id;
@@ -266,7 +266,7 @@ static void deck_cell(UiState *ui, int index, ImVec2 a, ImVec2 b)
     ui_text_centre(ui, dl, ui->font_bold, NUMBER_SIZE, a, ImVec2(a.x + nw, b.y), UI_TEXT, buf);
     float art = h - PX(8);
     ImVec2 p0(a.x + nw + PX(4), a.y + PX(4)), p1(p0.x + art, p0.y + art);
-    uint64_t tex = t ? rx_app_artwork_texture(app, t) : 0;
+    uint64_t tex = t ? cb_app_artwork_texture(app, t) : 0;
     if (tex)
         dl->AddImage(ImTextureRef((ImTextureID)tex), p0, p1);
     else
@@ -305,7 +305,7 @@ static void deck_cell(UiState *ui, int index, ImVec2 a, ImVec2 b)
         { "KEY", kt[0] ? kt : "-", UI_TEXT },
     };
     float x = b.x - PX(10), ry = a.y + floorf((h - PX(LABEL_SIZE + 3 + VALUE_SIZE)) * 0.5f);
-    for (size_t i = 0; i < RX_ARRAY_ELEMS(reads); i++) {
+    for (size_t i = 0; i < CB_ARRAY_ELEMS(reads); i++) {
         float rw = readout_w(ui, reads[i].label, reads[i].value);
         if (i && x - rw - tx < PX(120))
             break;
@@ -359,7 +359,7 @@ static void deck_cell(UiState *ui, int index, ImVec2 a, ImVec2 b)
                  slot_name(d.track_slot));
     const char *line1 = t ? ui_title(t) : !d.has_status ? "Waiting for its status"
                       : loaded ? buf : "No track loaded";
-    const char *line2 = t ? ui_artist(t) : loaded ? "Not one of rxbox's tracks" : "Drop a track here";
+    const char *line2 = t ? ui_artist(t) : loaded ? "Not one of cyanbox's tracks" : "Drop a track here";
     ImU32 col1 = t ? UI_TEXT : UI_FAINT, col2 = t ? UI_DIM : UI_FAINT;
     stext(ui, dl, ui->font_bold, TITLE_SIZE, ImVec2(tx, ty), col1, line1, max_w);
     float w1 = ImMin(ui_text_width(ui, ui->font_bold, TITLE_SIZE, line1), max_w), w2 = cx - space - tx;
@@ -390,9 +390,9 @@ static void deck_cell(UiState *ui, int index, ImVec2 a, ImVec2 b)
     if (ImGui::BeginDragDropTargetCustom(r, ImGui::GetID("##linkdrop"))) {
         std::vector<uint64_t> ids;
         if (ui_accept_tracks(ui, ids) && !ids.empty()) {
-            RXTrack *dropped = rx_library_find_id(&app->lib, ids[0]);
+            CBTrack *dropped = cb_library_find_id(&app->lib, ids[0]);
             if (locked(ui, d))
-                rx_app_set_status(app, "Deck %d is playing and the players' Eject/Load Lock is on",
+                cb_app_set_status(app, "Deck %d is playing and the players' Eject/Load Lock is on",
                                   d.number);
             else if (dropped && !dropped->missing)
                 load_on(ui, index, dropped);
@@ -403,7 +403,7 @@ static void deck_cell(UiState *ui, int index, ImVec2 a, ImVec2 b)
 
 void ui_link_decks_row(UiState *ui, ImVec2 a, ImVec2 b)
 {
-    RXApp *app = ui->app;
+    CBApp *app = ui->app;
     int idx[UI_LINK_DECKS];
     int n = players(app, idx, UI_LINK_DECKS);
     ui->link_decks_drawn = n;
@@ -420,7 +420,7 @@ void ui_link_decks_row(UiState *ui, ImVec2 a, ImVec2 b)
     float share = (b.x - a.x + gap) / (float)slots;
     bool moving = false;
     for (int k = 0; k < n; k++) {
-        const RXLinkPlayer &d = app->link_state.devices[idx[k]];
+        const CBLinkPlayer &d = app->link_state.devices[idx[k]];
         int slot = n == 1 ? (d.number % 2 ? 0 : 1) : k;
         ImVec2 ca(floorf(a.x + slot * share), a.y);
         ImVec2 cb(floorf(ca.x + share - gap), b.y);
@@ -447,9 +447,9 @@ void ui_link_decks_test_tick(UiState *ui)
 {
     if (ui->link_decks_fake.empty())
         return;
-    RXApp *app = ui->app;
+    CBApp *app = ui->app;
     auto &ls = app->link_state;
-    int64_t now = rx_time_us();
+    int64_t now = cb_time_us();
     if (!ui->link_decks_fake_us) {
         ui->link_decks_fake_us = now;
         ls = {};
@@ -458,15 +458,15 @@ void ui_link_decks_test_tick(UiState *ui)
         snprintf(ls.interfaces[0].interface, sizeof(ls.interfaces[0].interface), "lo");
         ls.interfaces[0].addr = 0x7F000001;
         ls.interfaces[0].running = true;
-        ls.interfaces[0].state = RX_LINK_UP;
+        ls.interfaces[0].state = CB_LINK_UP;
         ls.interfaces[0].number = 17;
         const char *s = ui->link_decks_fake.c_str();
-        while (*s && ls.nb_devices < RX_APP_LINK_DEVICES) {
+        while (*s && ls.nb_devices < CB_APP_LINK_DEVICES) {
             int number = 0, beat = -1, used = 0;
             unsigned id = 0;
             char name[24] = "", flags[8] = "";
             if (sscanf(s, "%d:%23[^:]:%u:%n", &number, name, &id, &used) < 3 || !used) {
-                rx_warn("RXBOX_UI_LINK_DECKS: %s is not NUMBER:NAME:TRACK:FLAGS:BEAT", s);
+                cb_warn("CYANBOX_UI_LINK_DECKS: %s is not NUMBER:NAME:TRACK:FLAGS:BEAT", s);
                 break;
             }
             // FLAGS may be empty.
@@ -474,10 +474,10 @@ void ui_link_decks_test_tick(UiState *ui)
             const char *colon = strchr(s + used, ':');
             if (colon && (!strchr(s + used, ',') || colon < strchr(s + used, ',')))
                 beat = atoi(colon + 1);
-            RXLinkPlayer &d = ls.devices[ls.nb_devices];
-            d = RXLinkPlayer();
+            CBLinkPlayer &d = ls.devices[ls.nb_devices];
+            d = CBLinkPlayer();
             d.number = number;
-            d.type = RX_LINK_DEVICE_PLAYER;
+            d.type = CB_LINK_DEVICE_PLAYER;
             snprintf(d.name, sizeof(d.name), "%s", name);
             d.addr = 0x7F000000u | (uint32_t)(10 + number);
             d.has_status = true;
@@ -489,8 +489,8 @@ void ui_link_decks_test_tick(UiState *ui)
             d.on_air = strchr(flags, 'a');
             d.master = strchr(flags, 'm');
             d.synced = strchr(flags, 's');
-            const RXTrack *t = id ? rx_library_find_id(&app->lib, id) : nullptr;
-            d.bpm = t ? rx_grid_bpm(&t->grid) : 0;
+            const CBTrack *t = id ? cb_library_find_id(&app->lib, id) : nullptr;
+            d.bpm = t ? cb_grid_bpm(&t->grid) : 0;
             d.beat = beat;
             ui->link_decks_fake_beat[ls.nb_devices] = beat;
             ls.device_if[ls.nb_devices] = 0;
@@ -503,7 +503,7 @@ void ui_link_decks_test_tick(UiState *ui)
     // fifth of a second apart, as a player's.
     double since = (double)(now - ui->link_decks_fake_us) * 1e-6;
     for (int i = 0; i < ls.nb_devices; i++) {
-        RXLinkPlayer &d = ls.devices[i];
+        CBLinkPlayer &d = ls.devices[i];
         int b0 = ui->link_decks_fake_beat[i];
         double at = floor(since * 5.0) / 5.0;
         d.beat = b0 > 0 && d.playing && d.bpm > 0 ? b0 + (int)floor(at * d.bpm / 60.0) : b0;

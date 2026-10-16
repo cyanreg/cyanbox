@@ -4,7 +4,7 @@
  * and the export plan over all of it (dbserver.h). The plan gives what a
  * stick would: ids, names, the path the NFS tree serves, the artwork, the
  * cues; the analysis replies are the ANLZ tags the export writes
- * (rx_anlz_build), made in memory when a player asks and kept for the last
+ * (cb_anlz_build), made in memory when a player asks and kept for the last
  * few tracks, since a player asks for several tags of one track in a row
  * (rbxport's capture: grid, PQT2, VBR, PWV6, preview, PWV7, PWV5, detail,
  * PSSI, one after the other).
@@ -31,10 +31,10 @@
 #include <string.h>
 #include <time.h>
 
-#include "rxbox/colors.h"
-#include "rxbox/common.h"
-#include "rxbox/export.h"
-#include "rxbox/notation.h"
+#include "cyanbox/colors.h"
+#include "cyanbox/common.h"
+#include "cyanbox/export.h"
+#include "cyanbox/notation.h"
 
 #define ALBUM_BIT   0x40000000u
 #define NB_ANALYSIS 4
@@ -71,7 +71,7 @@ enum Sort {
 #define DEFAULT_COLUMN SORT_ARTIST
 
 typedef struct CatTrack {
-    RXPlanTrack *pt;
+    CBPlanTrack *pt;
     const char  *title;         /* the tag, else the file's name without extension */
     const char  *file;          /* the file's name on the virtual stick */
     uint32_t     tempo;         /* BPM x100 */
@@ -87,28 +87,28 @@ typedef struct CatTrack {
 typedef struct Analysis {
     uint32_t    id;             /* 0: unused */
     uint64_t    used;
-    RXAnlzFiles files;
-    RXAnlzTag  *tags[3];        /* .DAT, .EXT, .2EX */
+    CBAnlzFiles files;
+    CBAnlzTag  *tags[3];        /* .DAT, .EXT, .2EX */
     int         nb_tags[3];
 } Analysis;
 
-struct RXCatalog {
-    RXLibrary *lib;
-    RXPlan    *plan;
+struct CBCatalog {
+    CBLibrary *lib;
+    CBPlan    *plan;
     CatTrack  *t;               /* by the plan's track index */
     int        nb;
     char      *stems;
     uint32_t  *order[NB_SORTS]; /* track indices by each sort, made when first asked */
     Analysis   analysis[NB_ANALYSIS];
     uint64_t   clock;
-    int      (*check)(void *opaque, const RXPlanTrack *pt);
+    int      (*check)(void *opaque, const CBPlanTrack *pt);
     void      *check_opaque;
     /* Every play of a track served, oldest first (load_plays). */
     struct CatPlay { uint32_t track; int32_t day; int64_t at; int seq; } *plays;
     int        nb_plays;
-    void     (*edit)(void *opaque, const RXLinkEdit *e);
+    void     (*edit)(void *opaque, const CBLinkEdit *e);
     void      *edit_opaque;
-    RXLinkTagList *tags;
+    CBLinkTagList *tags;
 };
 
 /* ------------------------------------------------------------- building */
@@ -125,13 +125,13 @@ static int32_t ymd_of(int64_t when)
 }
 
 /* When the track came into the library, as the stick's databases say it
- * (rx_plan_date_added, src/formats/util.c): the library's date, else the
+ * (cb_plan_date_added, src/formats/util.c): the library's date, else the
  * file's time. */
-static int32_t added_of(const RXTrack *t)
+static int32_t added_of(const CBTrack *t)
 {
     int64_t when = t->added;
     if (!when && t->path)
-        when = rx_file_mtime(t->path);
+        when = cb_file_mtime(t->path);
     if (!when)
         when = t->mtime;
     return ymd_of(when);
@@ -144,7 +144,7 @@ static uint8_t key_index(const char *classic)
     char cam[8];
     int n;
     char letter;
-    if (!classic || !classic[0] || !rx_key_to_camelot(classic, cam, sizeof(cam))[0] ||
+    if (!classic || !classic[0] || !cb_key_to_camelot(classic, cam, sizeof(cam))[0] ||
         sscanf(cam, "%d%c", &n, &letter) != 2 || n < 1 || n > 12)
         return 0;
     return (uint8_t)((n - 1) * 2 + (letter == 'A' ? 1 : 2));
@@ -156,21 +156,21 @@ static const char *const key_classic[24] = {
     "Dm", "F", "Am", "C", "Em", "G", "Bm", "D", "F#m", "A", "Dbm", "E",
 };
 
-static size_t stem_len(const RXTrack *t)
+static size_t stem_len(const CBTrack *t)
 {
     if (!t || (t->meta.title && t->meta.title[0]) || !t->path)
         return 0;
-    const char *base = rx_path_base(t->path);
+    const char *base = cb_path_base(t->path);
     const char *dot = strrchr(base, '.');
     return (dot && dot != base ? (size_t)(dot - base) : strlen(base)) + 1;
 }
 
-static int load_plays(RXCatalog *c);
+static int load_plays(CBCatalog *c);
 
 /* The tempo the stick's track row carries (src/formats/pdb.c), x100. */
-static uint32_t tempo_of(const RXPlanTrack *pt)
+static uint32_t tempo_of(const CBPlanTrack *pt)
 {
-    double bpm = rx_grid_bpm_median(&pt->grid, pt->duration);
+    double bpm = cb_grid_bpm_median(&pt->grid, pt->duration);
     return bpm > 0 && bpm < 1000 ? (uint32_t)nearbyint(bpm * 100.0) : 0;
 }
 
@@ -178,10 +178,10 @@ static uint32_t tempo_of(const RXPlanTrack *pt)
  * pieces"): a track's is its album's album artist, else the artist all
  * the album's tracks share; 0 for a track of no album, or of an album
  * with neither. */
-static int album_artists(RXCatalog *c)
+static int album_artists(CBCatalog *c)
 {
-    const RXPlan *p = c->plan;
-    uint32_t n = (uint32_t)RX_MAX(p->nb_albums, 0);
+    const CBPlan *p = c->plan;
+    uint32_t n = (uint32_t)CB_MAX(p->nb_albums, 0);
     /* Each album's own (by id), then the artist its tracks share:
      * UINT32_MAX when they share none. */
     uint32_t *own = calloc((size_t)n + 1, sizeof(*own));
@@ -189,7 +189,7 @@ static int album_artists(RXCatalog *c)
     if (!own || !shared) {
         free(own);
         free(shared);
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     }
     for (uint32_t i = 0; i < n; i++)
         if (p->albums[i].id >= 1 && p->albums[i].id <= n)
@@ -211,44 +211,44 @@ static int album_artists(RXCatalog *c)
     return 0;
 }
 
-int rx_catalog_new(RXCatalog **out, RXLibrary *lib, RXPlan *plan)
+int cb_catalog_new(CBCatalog **out, CBLibrary *lib, CBPlan *plan)
 {
     *out = NULL;
-    RXCatalog *c = calloc(1, sizeof(*c));
+    CBCatalog *c = calloc(1, sizeof(*c));
     if (!c)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     c->lib = lib;
     c->plan = plan;
     c->nb = plan->nb_tracks;
-    c->t = calloc((size_t)RX_MAX(c->nb, 1), sizeof(*c->t));
+    c->t = calloc((size_t)CB_MAX(c->nb, 1), sizeof(*c->t));
     size_t stems = 1;
     for (int i = 0; i < c->nb; i++)
         stems += stem_len(plan->tracks[i].track);
     c->stems = malloc(stems);
     if (!c->t || !c->stems) {
-        rx_catalog_free(&c);
-        return RX_ERROR(ENOMEM);
+        cb_catalog_free(&c);
+        return CB_ERROR(ENOMEM);
     }
     c->stems[0] = '\0';
     char *s = c->stems + 1;
     for (int i = 0; i < c->nb; i++) {
-        RXPlanTrack *pt = &plan->tracks[i];
-        const RXTrack *t = pt->track;
+        CBPlanTrack *pt = &plan->tracks[i];
+        const CBTrack *t = pt->track;
         CatTrack *ct = &c->t[i];
         *ct = (CatTrack) {
             .pt    = pt,
             .title = c->stems,
-            .file  = pt->usb_path ? rx_path_base(pt->usb_path) : "",
+            .file  = pt->usb_path ? cb_path_base(pt->usb_path) : "",
             .color = (uint8_t)(pt->color_id <= 8 ? pt->color_id : 0),
         };
         ct->tempo = tempo_of(pt);
         if (!t)
             continue;
         /* The title as both databases write it: the tag, else the file's
-         * name without its extension (rx_plan_title, src/formats/util.c). */
+         * name without its extension (cb_plan_title, src/formats/util.c). */
         size_t n = stem_len(t);
         if (n) {
-            memcpy(s, rx_path_base(t->path), n - 1);
+            memcpy(s, cb_path_base(t->path), n - 1);
             s[n - 1] = '\0';
             ct->title = s;
             s += n;
@@ -256,31 +256,31 @@ int rx_catalog_new(RXCatalog **out, RXLibrary *lib, RXPlan *plan)
             ct->title = t->meta.title;
         }
         ct->key = key_index(t->key);
-        ct->rating = (uint8_t)RX_CLAMP(t->meta.rating, 0, 5);
+        ct->rating = (uint8_t)CB_CLAMP(t->meta.rating, 0, 5);
         ct->added = added_of(t);
         ct->played = ymd_of(t->last_played);
     }
     if (load_plays(c) < 0 || album_artists(c) < 0) {
-        rx_catalog_free(&c);
-        return RX_ERROR(ENOMEM);
+        cb_catalog_free(&c);
+        return CB_ERROR(ENOMEM);
     }
     *out = c;
     return 0;
 }
 
-void rx_catalog_set_check(RXCatalog *c, int (*check)(void *opaque, const RXPlanTrack *pt),
+void cb_catalog_set_check(CBCatalog *c, int (*check)(void *opaque, const CBPlanTrack *pt),
                           void *opaque)
 {
     c->check = check;
     c->check_opaque = opaque;
 }
 
-void rx_catalog_set_tag_list(RXCatalog *c, RXLinkTagList *tl)
+void cb_catalog_set_tag_list(CBCatalog *c, CBLinkTagList *tl)
 {
     c->tags = tl;
 }
 
-void rx_catalog_set_edit(RXCatalog *c, void (*edit)(void *opaque, const RXLinkEdit *e),
+void cb_catalog_set_edit(CBCatalog *c, void (*edit)(void *opaque, const CBLinkEdit *e),
                          void *opaque)
 {
     c->edit = edit;
@@ -291,13 +291,13 @@ static void analysis_clear(Analysis *a)
 {
     for (int i = 0; i < 3; i++)
         free(a->tags[i]);
-    rx_anlz_files_free(&a->files);
+    cb_anlz_files_free(&a->files);
     *a = (Analysis) { 0 };
 }
 
-void rx_catalog_free(RXCatalog **cp)
+void cb_catalog_free(CBCatalog **cp)
 {
-    RXCatalog *c = *cp;
+    CBCatalog *c = *cp;
     if (!c)
         return;
     for (int i = 0; i < NB_SORTS; i++)
@@ -321,24 +321,24 @@ static int cmp_play(const void *a, const void *b)
     return x->at != y->at ? (x->at < y->at ? -1 : 1) : x->seq - y->seq;
 }
 
-static int track_index(const RXCatalog *c, uint32_t id);
+static int track_index(const CBCatalog *c, uint32_t id);
 
 /* The history (HISTORY): every play the library recorded of a track
  * served, as rekordbox's keeps each session's plays; a track played
  * before the library kept them (a last play and no row) counts that play
  * once. A play table that does not read leaves the last plays alone. */
-static int load_plays(RXCatalog *c)
+static int load_plays(CBCatalog *c)
 {
-    RXPlay *p = NULL;
+    CBPlay *p = NULL;
     int n = 0;
-    if (!c->lib || !c->lib->db || rx_library_plays(c->lib, &p, &n) < 0)
+    if (!c->lib || !c->lib->db || cb_library_plays(c->lib, &p, &n) < 0)
         n = 0;
-    bool *has = calloc((size_t)RX_MAX(c->nb, 1), sizeof(*has));
-    c->plays = malloc((size_t)RX_MAX(n + c->nb, 1) * sizeof(*c->plays));
+    bool *has = calloc((size_t)CB_MAX(c->nb, 1), sizeof(*has));
+    c->plays = malloc((size_t)CB_MAX(n + c->nb, 1) * sizeof(*c->plays));
     if (!has || !c->plays) {
         free(has);
         free(p);
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     }
     for (int i = 0; i < n; i++) {
         int k = p[i].track_id > 0 && p[i].track_id <= UINT32_MAX ? track_index(c, (uint32_t)p[i].track_id)
@@ -352,7 +352,7 @@ static int load_plays(RXCatalog *c)
         c->nb_plays++;
     }
     for (int k = 0; k < c->nb; k++) {
-        const RXTrack *t = c->plan->tracks[k].track;
+        const CBTrack *t = c->plan->tracks[k].track;
         if (has[k] || !t || t->last_played <= 0)
             continue;
         c->plays[c->nb_plays] = (struct CatPlay) {
@@ -366,7 +366,7 @@ static int load_plays(RXCatalog *c)
     return 0;
 }
 
-static int track_index(const RXCatalog *c, uint32_t id)
+static int track_index(const CBCatalog *c, uint32_t id)
 {
     if (!c)
         return -1;
@@ -384,9 +384,9 @@ static int track_index(const RXCatalog *c, uint32_t id)
     return -1;
 }
 
-static const RXMeta *meta_of(const CatTrack *t)
+static const CBMeta *meta_of(const CatTrack *t)
 {
-    static const RXMeta none = { .hue = RX_HUE_NONE };
+    static const CBMeta none = { .hue = CB_HUE_NONE };
     return t->pt->track ? &t->pt->track->meta : &none;
 }
 
@@ -397,15 +397,15 @@ static const char *nonnull(const char *s)
 
 /* A name by id. The plan numbers each table from 1 in order, so the id
  * is the index; a search otherwise. */
-static const char *table_name(const RXCatalog *c, int table, uint32_t id)
+static const char *table_name(const CBCatalog *c, int table, uint32_t id)
 {
-    const RXPlanName *v = NULL;
+    const CBPlanName *v = NULL;
     int nb = 0;
     switch (table) {
-    case RX_CAT_ARTIST: v = c->plan->artists; nb = c->plan->nb_artists; break;
-    case RX_CAT_ALBUM:  v = c->plan->albums;  nb = c->plan->nb_albums;  break;
-    case RX_CAT_GENRE:  v = c->plan->genres;  nb = c->plan->nb_genres;  break;
-    case RX_CAT_LABEL:  v = c->plan->labels;  nb = c->plan->nb_labels;  break;
+    case CB_CAT_ARTIST: v = c->plan->artists; nb = c->plan->nb_artists; break;
+    case CB_CAT_ALBUM:  v = c->plan->albums;  nb = c->plan->nb_albums;  break;
+    case CB_CAT_GENRE:  v = c->plan->genres;  nb = c->plan->nb_genres;  break;
+    case CB_CAT_LABEL:  v = c->plan->labels;  nb = c->plan->nb_labels;  break;
     }
     if (!v || !id)
         return NULL;
@@ -417,7 +417,7 @@ static const char *table_name(const RXCatalog *c, int table, uint32_t id)
     return NULL;
 }
 
-static const char *name_or_empty(const RXCatalog *c, int table, uint32_t id)
+static const char *name_or_empty(const CBCatalog *c, int table, uint32_t id)
 {
     const char *s = table_name(c, table, id);
     return s ? s : "";
@@ -428,7 +428,7 @@ static uint32_t album_wire(uint32_t id)
     return id ? id | ALBUM_BIT : 0;
 }
 
-static const RXPlanArtwork *artwork_of(const RXPlan *p, uint32_t id)
+static const CBPlanArtwork *artwork_of(const CBPlan *p, uint32_t id)
 {
     if (!id)
         return NULL;
@@ -460,14 +460,14 @@ static uint32_t field_id(const CatTrack *t, int field)
 static int field_table(int field)
 {
     switch (field) {
-    case F_ALBUM: return RX_CAT_ALBUM;
-    case F_GENRE: return RX_CAT_GENRE;
-    case F_LABEL: return RX_CAT_LABEL;
+    case F_ALBUM: return CB_CAT_ALBUM;
+    case F_GENRE: return CB_CAT_GENRE;
+    case F_LABEL: return CB_CAT_LABEL;
     }
-    return RX_CAT_ARTIST;
+    return CB_CAT_ARTIST;
 }
 
-static const char *field_name(const RXCatalog *c, const CatTrack *t, int field)
+static const char *field_name(const CBCatalog *c, const CatTrack *t, int field)
 {
     uint32_t id = field_id(t, field);
     return name_or_empty(c, field_table(field), field == F_ALBUM ? id & ~ALBUM_BIT : id);
@@ -482,7 +482,7 @@ static int cmp_text(const char *a, const char *b)
     b = nonnull(b);
     if (!*a != !*b)
         return *a ? -1 : 1;
-    return rx_strnatcasecmp(a, b);
+    return cb_strnatcasecmp(a, b);
 }
 
 static int cmp_u(uint64_t a, uint64_t b)
@@ -499,15 +499,15 @@ static int cmp_u_set(uint64_t a, uint64_t b)
 }
 
 typedef struct SortCtx {
-    const RXCatalog *c;
+    const CBCatalog *c;
     int              sort;
 } SortCtx;
 
 /* Rating, play count and date added put the most first, the rest
  * ascending (assumed; rekordbox's directions are not captured). */
-static int cmp_by(const RXCatalog *c, int sort, const CatTrack *x, const CatTrack *y)
+static int cmp_by(const CBCatalog *c, int sort, const CatTrack *x, const CatTrack *y)
 {
-    const RXTrack *tx = x->pt->track, *ty = y->pt->track;
+    const CBTrack *tx = x->pt->track, *ty = y->pt->track;
     switch (sort) {
     case SORT_ARTIST:   return cmp_text(field_name(c, x, F_ARTIST), field_name(c, y, F_ARTIST));
     case SORT_ALBUM: {
@@ -524,13 +524,13 @@ static int cmp_by(const RXCatalog *c, int sort, const CatTrack *x, const CatTrac
     case SORT_ORIGINAL: return cmp_text(field_name(c, x, F_ALBUM_ARTIST),
                                         field_name(c, y, F_ALBUM_ARTIST));
     case SORT_KEY:      return cmp_u_set(x->key, y->key);
-    case SORT_BITRATE:  return cmp_u_set((uint64_t)RX_MAX(x->pt->bit_rate, 0),
-                                         (uint64_t)RX_MAX(y->pt->bit_rate, 0));
+    case SORT_BITRATE:  return cmp_u_set((uint64_t)CB_MAX(x->pt->bit_rate, 0),
+                                         (uint64_t)CB_MAX(y->pt->bit_rate, 0));
     case SORT_COLOR:    return cmp_u_set(x->color, y->color);
-    case SORT_PLAYS:    return -cmp_u(tx ? (uint64_t)RX_MAX(tx->play_count, 0) : 0,
-                                      ty ? (uint64_t)RX_MAX(ty->play_count, 0) : 0);
-    case SORT_ADDED:    return -cmp_u(tx ? (uint64_t)RX_MAX(tx->added, 0) : 0,
-                                      ty ? (uint64_t)RX_MAX(ty->added, 0) : 0);
+    case SORT_PLAYS:    return -cmp_u(tx ? (uint64_t)CB_MAX(tx->play_count, 0) : 0,
+                                      ty ? (uint64_t)CB_MAX(ty->play_count, 0) : 0);
+    case SORT_ADDED:    return -cmp_u(tx ? (uint64_t)CB_MAX(tx->added, 0) : 0,
+                                      ty ? (uint64_t)CB_MAX(ty->added, 0) : 0);
     case SORT_FILE:     return cmp_text(x->file, y->file);
     }
     return 0;
@@ -549,13 +549,13 @@ static int cmp_tracks(const void *a, const void *b, void *opaque)
 /* The order of a sort, made the first time it is asked for; the default
  * sort is the title's, as rekordbox sent TRACK (rbxport's capture). NULL
  * when out of memory. */
-static const uint32_t *order_of(RXCatalog *c, int sort)
+static const uint32_t *order_of(CBCatalog *c, int sort)
 {
     if (sort <= SORT_DEFAULT || sort >= NB_SORTS)
         sort = SORT_TITLE;
     if (c->order[sort])
         return c->order[sort];
-    uint32_t *o = malloc((size_t)RX_MAX(c->nb, 1) * sizeof(*o));
+    uint32_t *o = malloc((size_t)CB_MAX(c->nb, 1) * sizeof(*o));
     if (!o)
         return NULL;
     for (int i = 0; i < c->nb; i++)
@@ -580,7 +580,7 @@ static int sort_id(uint32_t v)
 
 /* --------------------------------------------------------------- menus */
 
-/* What a list of tracks is narrowed to. ids are RX_DB_ALL for any. */
+/* What a list of tracks is narrowed to. ids are CB_DB_ALL for any. */
 enum FilterKind {
     FILTER_ALL,
     FILTER_GENRE,               /* a genre, b artist, c album */
@@ -611,26 +611,26 @@ typedef struct Filter {
 
 static bool any_or(uint32_t want, uint32_t have)
 {
-    return want == RX_DB_ALL || want == have;
+    return want == CB_DB_ALL || want == have;
 }
 
-static bool search_match(const RXCatalog *c, const CatTrack *t, const char *text)
+static bool search_match(const CBCatalog *c, const CatTrack *t, const char *text)
 {
-    const RXMeta *m = meta_of(t);
+    const CBMeta *m = meta_of(t);
     const char *fields[] = {
         t->title, field_name(c, t, F_ARTIST), field_name(c, t, F_ALBUM),
         field_name(c, t, F_GENRE), field_name(c, t, F_LABEL), field_name(c, t, F_REMIXER),
         field_name(c, t, F_ALBUM_ARTIST), m->comment,
     };
-    for (size_t i = 0; i < RX_ARRAY_ELEMS(fields); i++)
-        if (fields[i] && rx_str_contains_fold(fields[i], text))
+    for (size_t i = 0; i < CB_ARRAY_ELEMS(fields); i++)
+        if (fields[i] && cb_str_contains_fold(fields[i], text))
             return true;
     return false;
 }
 
-static bool match(const RXCatalog *c, const CatTrack *t, const Filter *f)
+static bool match(const CBCatalog *c, const CatTrack *t, const Filter *f)
 {
-    const RXMeta *m = meta_of(t);
+    const CBMeta *m = meta_of(t);
     switch (f->kind) {
     case FILTER_ALL:
         return true;
@@ -667,7 +667,7 @@ static bool match(const RXCatalog *c, const CatTrack *t, const Filter *f)
     case FILTER_TIME:
         return (uint32_t)(t->pt->duration / 60) == f->a;
     case FILTER_BITRATE:
-        return (uint32_t)RX_MAX(t->pt->bit_rate, 0) == f->a;
+        return (uint32_t)CB_MAX(t->pt->bit_rate, 0) == f->a;
     case FILTER_KEYS:
         for (int i = 0; i < f->nb_keys; i++)
             if (t->key && t->key == f->keys[i])
@@ -684,26 +684,26 @@ static bool match(const RXCatalog *c, const CatTrack *t, const Filter *f)
     return false;
 }
 
-static int menu_alloc(RXCatMenu *m, uint32_t n, bool nums)
+static int menu_alloc(CBCatMenu *m, uint32_t n, bool nums)
 {
-    m->ids = malloc((size_t)RX_MAX(n, 1) * sizeof(*m->ids));
-    m->nums = nums ? calloc((size_t)RX_MAX(n, 1), sizeof(*m->nums)) : NULL;
+    m->ids = malloc((size_t)CB_MAX(n, 1) * sizeof(*m->ids));
+    m->nums = nums ? calloc((size_t)CB_MAX(n, 1), sizeof(*m->nums)) : NULL;
     if (!m->ids || (nums && !m->nums)) {
-        rx_catalog_menu_free(m);
-        return RX_ERROR(ENOMEM);
+        cb_catalog_menu_free(m);
+        return CB_ERROR(ENOMEM);
     }
     return 0;
 }
 
-void rx_catalog_menu_free(RXCatMenu *m)
+void cb_catalog_menu_free(CBCatMenu *m)
 {
     free(m->ids);
     free(m->nums);
-    *m = (RXCatMenu) { 0 };
+    *m = (CBCatMenu) { 0 };
 }
 
 typedef struct AlbumCtx {
-    const RXCatalog *c;
+    const CBCatalog *c;
     const uint32_t  *idx;       /* track index of each row */
 } AlbumCtx;
 
@@ -716,29 +716,29 @@ static int cmp_album_rows(const void *a, const void *b, void *opaque)
     const AlbumCtx *s = opaque;
     const CatTrack *x = &s->c->t[s->idx[*(const uint32_t *)a]];
     const CatTrack *y = &s->c->t[s->idx[*(const uint32_t *)b]];
-    const RXMeta *mx = meta_of(x), *my = meta_of(y);
+    const CBMeta *mx = meta_of(x), *my = meta_of(y);
     int r = cmp_text(field_name(s->c, x, F_ALBUM), field_name(s->c, y, F_ALBUM));
     if (!r)
         r = cmp_u(field_id(x, F_ALBUM), field_id(y, F_ALBUM));
     if (!r)
-        r = cmp_u_set((uint64_t)RX_MAX(mx->disc_number, 0), (uint64_t)RX_MAX(my->disc_number, 0));
+        r = cmp_u_set((uint64_t)CB_MAX(mx->disc_number, 0), (uint64_t)CB_MAX(my->disc_number, 0));
     if (!r)
-        r = cmp_u_set((uint64_t)RX_MAX(mx->track_number, 0), (uint64_t)RX_MAX(my->track_number, 0));
+        r = cmp_u_set((uint64_t)CB_MAX(mx->track_number, 0), (uint64_t)CB_MAX(my->track_number, 0));
     return r ? r : cmp_u(*(const uint32_t *)a, *(const uint32_t *)b);
 }
 
 /* The tracks a filter lets through, in the order of the sort, or for an
  * album with its default sort in the album's own order, the track number
  * the position each row shows. */
-static int list_tracks(RXCatalog *c, const Filter *f, int sort, bool album, uint32_t flags,
-                       RXCatMenu *m)
+static int list_tracks(CBCatalog *c, const Filter *f, int sort, bool album, uint32_t flags,
+                       CBCatMenu *m)
 {
     const uint32_t *o = order_of(c, sort);
     if (!o)
-        return RX_ERROR(ENOMEM);
-    uint32_t *idx = malloc((size_t)RX_MAX(c->nb, 1) * sizeof(*idx));
+        return CB_ERROR(ENOMEM);
+    uint32_t *idx = malloc((size_t)CB_MAX(c->nb, 1) * sizeof(*idx));
     if (!idx)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     uint32_t n = 0;
     for (int i = 0; i < c->nb; i++)
         if (match(c, &c->t[o[i]], f))
@@ -748,13 +748,13 @@ static int list_tracks(RXCatalog *c, const Filter *f, int sort, bool album, uint
         free(idx);
         return ret;
     }
-    *m = (RXCatMenu) { .what = RX_CAT_TRACKS, .sort = sort, .flags = flags, .ids = m->ids,
+    *m = (CBCatMenu) { .what = CB_CAT_TRACKS, .sort = sort, .flags = flags, .ids = m->ids,
                        .nums = m->nums, .nb = n };
-    uint32_t *rows = malloc((size_t)RX_MAX(n, 1) * sizeof(*rows));
+    uint32_t *rows = malloc((size_t)CB_MAX(n, 1) * sizeof(*rows));
     if (!rows) {
         free(idx);
-        rx_catalog_menu_free(m);
-        return RX_ERROR(ENOMEM);
+        cb_catalog_menu_free(m);
+        return CB_ERROR(ENOMEM);
     }
     for (uint32_t i = 0; i < n; i++)
         rows[i] = i;
@@ -765,7 +765,7 @@ static int list_tracks(RXCatalog *c, const Filter *f, int sort, bool album, uint
     for (uint32_t i = 0; i < n; i++) {
         const CatTrack *t = &c->t[idx[rows[i]]];
         m->ids[i] = t->pt->id;
-        m->nums[i] = album ? (uint32_t)RX_MAX(meta_of(t)->track_number, 0) : 0;
+        m->nums[i] = album ? (uint32_t)CB_MAX(meta_of(t)->track_number, 0) : 0;
     }
     free(rows);
     free(idx);
@@ -773,7 +773,7 @@ static int list_tracks(RXCatalog *c, const Filter *f, int sort, bool album, uint
 }
 
 typedef struct OwnCtx {
-    const RXCatalog *c;
+    const CBCatalog *c;
     const int32_t   *idx;
     int              sort;
 } OwnCtx;
@@ -792,15 +792,15 @@ static int cmp_own_rows(const void *a, const void *b, void *opaque)
 /* A list in an order of its own (a playlist, a history), each row's
  * position from 1; re-sorted when the player asks for another sort. Ids
  * no longer in the catalog are left out. */
-static int own_tracks(RXCatalog *c, const uint32_t *ids, uint32_t nb, int sort, uint32_t flags,
-                      RXCatMenu *m)
+static int own_tracks(CBCatalog *c, const uint32_t *ids, uint32_t nb, int sort, uint32_t flags,
+                      CBCatMenu *m)
 {
-    int32_t *idx = malloc((size_t)RX_MAX(nb, 1) * sizeof(*idx));
-    uint32_t *rows = malloc((size_t)RX_MAX(nb, 1) * sizeof(*rows));
+    int32_t *idx = malloc((size_t)CB_MAX(nb, 1) * sizeof(*idx));
+    uint32_t *rows = malloc((size_t)CB_MAX(nb, 1) * sizeof(*rows));
     if (!idx || !rows) {
         free(idx);
         free(rows);
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     }
     uint32_t n = 0;
     for (uint32_t i = 0; i < nb; i++) {
@@ -812,7 +812,7 @@ static int own_tracks(RXCatalog *c, const uint32_t *ids, uint32_t nb, int sort, 
     }
     int ret = menu_alloc(m, n, true);
     if (ret >= 0) {
-        *m = (RXCatMenu) { .what = RX_CAT_TRACKS, .sort = sort, .flags = flags, .ids = m->ids,
+        *m = (CBCatMenu) { .what = CB_CAT_TRACKS, .sort = sort, .flags = flags, .ids = m->ids,
                            .nums = m->nums, .nb = n };
         if (sort != SORT_DEFAULT) {
             OwnCtx ctx = { .c = c, .idx = idx, .sort = sort };
@@ -829,7 +829,7 @@ static int own_tracks(RXCatalog *c, const uint32_t *ids, uint32_t nb, int sort, 
 }
 
 typedef struct NameCtx {
-    const RXCatalog *c;
+    const CBCatalog *c;
     int              table;
 } NameCtx;
 
@@ -837,18 +837,18 @@ static int cmp_name_ids(const void *a, const void *b, void *opaque)
 {
     const NameCtx *s = opaque;
     uint32_t x = *(const uint32_t *)a, y = *(const uint32_t *)b;
-    uint32_t mask = s->table == RX_CAT_ALBUM ? ~ALBUM_BIT : ~0u;
+    uint32_t mask = s->table == CB_CAT_ALBUM ? ~ALBUM_BIT : ~0u;
     int r = cmp_text(table_name(s->c, s->table, x & mask), table_name(s->c, s->table, y & mask));
     return r ? r : cmp_u(x, y);
 }
 
-static uint32_t table_size(const RXCatalog *c, int table)
+static uint32_t table_size(const CBCatalog *c, int table)
 {
     switch (table) {
-    case RX_CAT_ARTIST: return (uint32_t)RX_MAX(c->plan->nb_artists, 0);
-    case RX_CAT_ALBUM:  return (uint32_t)RX_MAX(c->plan->nb_albums, 0);
-    case RX_CAT_GENRE:  return (uint32_t)RX_MAX(c->plan->nb_genres, 0);
-    case RX_CAT_LABEL:  return (uint32_t)RX_MAX(c->plan->nb_labels, 0);
+    case CB_CAT_ARTIST: return (uint32_t)CB_MAX(c->plan->nb_artists, 0);
+    case CB_CAT_ALBUM:  return (uint32_t)CB_MAX(c->plan->nb_albums, 0);
+    case CB_CAT_GENRE:  return (uint32_t)CB_MAX(c->plan->nb_genres, 0);
+    case CB_CAT_LABEL:  return (uint32_t)CB_MAX(c->plan->nb_labels, 0);
     }
     return 0;
 }
@@ -858,13 +858,13 @@ static uint32_t table_size(const RXCatalog *c, int table)
  * capture: an artist's albums, ALL then six albums); an "Unknown" album
  * for tracks without one, last, as rekordbox sent it, and so an
  * "Unknown" album artist. */
-static int list_names(RXCatalog *c, int field, const Filter *f, bool all, RXCatMenu *m)
+static int list_names(CBCatalog *c, int field, const Filter *f, bool all, CBCatMenu *m)
 {
     int table = field_table(field);
     uint32_t size = table_size(c, table);
     uint8_t *seen = calloc((size_t)size + 1, 1);
     if (!seen)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     bool unknown = false;
     uint32_t n = 0;
     for (int i = 0; i < c->nb; i++) {
@@ -887,11 +887,11 @@ static int list_names(RXCatalog *c, int field, const Filter *f, bool all, RXCatM
         free(seen);
         return ret;
     }
-    m->what = RX_CAT_NAMES;
+    m->what = CB_CAT_NAMES;
     m->table = table;
     m->nb = 0;
     if (with_all)
-        m->ids[m->nb++] = RX_DB_ALL;
+        m->ids[m->nb++] = CB_DB_ALL;
     uint32_t first = m->nb;
     for (uint32_t id = 1; id <= size; id++)
         if (seen[id])
@@ -917,7 +917,7 @@ enum Value { V_BPM, V_RATING, V_DECADE, V_YEAR, V_TIME, V_BITRATE, V_ADDED_YEAR,
 
 static bool value_of(const CatTrack *t, int what, uint32_t *v)
 {
-    const RXMeta *m = meta_of(t);
+    const CBMeta *m = meta_of(t);
     switch (what) {
     case V_BPM:         *v = (t->tempo + 50) / 100 * 100; return t->tempo > 0;
     case V_RATING:      *v = t->rating; return true;
@@ -934,12 +934,12 @@ static bool value_of(const CatTrack *t, int what, uint32_t *v)
     return false;
 }
 
-static int list_values(RXCatalog *c, int what, const Filter *f, bool descending, int all,
-                       int menu_what, uint32_t type, RXCatMenu *m)
+static int list_values(CBCatalog *c, int what, const Filter *f, bool descending, int all,
+                       int menu_what, uint32_t type, CBCatMenu *m)
 {
-    uint32_t *v = malloc((size_t)RX_MAX(c->nb, 1) * sizeof(*v));
+    uint32_t *v = malloc((size_t)CB_MAX(c->nb, 1) * sizeof(*v));
     if (!v)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     uint32_t n = 0;
     for (int i = 0; i < c->nb; i++)
         if (match(c, &c->t[i], f) && value_of(&c->t[i], what, &v[n]))
@@ -959,7 +959,7 @@ static int list_values(RXCatalog *c, int what, const Filter *f, bool descending,
     m->type = type;
     m->nb = 0;
     if (with_all)
-        m->ids[m->nb++] = RX_DB_ALL;
+        m->ids[m->nb++] = CB_DB_ALL;
     for (uint32_t i = 0; i < k; i++)
         m->ids[m->nb++] = descending ? v[k - 1 - i] : v[i];
     free(v);
@@ -1016,8 +1016,8 @@ static const struct {
     const char *name;
     uint32_t    type;
 } sort_rows[] = {
-    { SORT_DEFAULT, "DEFAULT",  RX_DB_ITEM_MENU_DEFAULT },
-    { SORT_TITLE,   "ALPHABET", RX_DB_ITEM_MENU_ALPHABET },
+    { SORT_DEFAULT, "DEFAULT",  CB_DB_ITEM_MENU_DEFAULT },
+    { SORT_TITLE,   "ALPHABET", CB_DB_ITEM_MENU_ALPHABET },
     { SORT_ARTIST,  "ARTIST",   0x81 },
     { SORT_ALBUM,   "ALBUM",    0x82 },
     { SORT_BPM,     "BPM",      0x85 },
@@ -1025,21 +1025,21 @@ static const struct {
     { SORT_KEY,     "KEY",      0x8b },
 };
 
-static int root_menu(uint32_t mask, RXCatMenu *m)
+static int root_menu(uint32_t mask, CBCatMenu *m)
 {
-    int ret = menu_alloc(m, RX_ARRAY_ELEMS(root_rows), false);
+    int ret = menu_alloc(m, CB_ARRAY_ELEMS(root_rows), false);
     if (ret < 0)
         return ret;
-    m->what = RX_CAT_ROOT;
-    for (size_t i = 0; i < RX_ARRAY_ELEMS(root_rows); i++)
+    m->what = CB_CAT_ROOT;
+    for (size_t i = 0; i < CB_ARRAY_ELEMS(root_rows); i++)
         if (mask & 1u << root_rows[i].bit)
             m->ids[m->nb++] = root_rows[i].id;
     return 0;
 }
 
-static int fixed_menu(int what, uint32_t nb, RXCatMenu *m)
+static int fixed_menu(int what, uint32_t nb, CBCatMenu *m)
 {
-    int ret = menu_alloc(m, nb, what == RX_CAT_RELATED);
+    int ret = menu_alloc(m, nb, what == CB_CAT_RELATED);
     if (ret < 0)
         return ret;
     m->what = what;
@@ -1067,9 +1067,9 @@ static int related_keys(uint32_t key, uint32_t distance, uint32_t out[4])
     return n;
 }
 
-static int playlist_folder(RXCatalog *c, uint32_t id, RXCatMenu *m)
+static int playlist_folder(CBCatalog *c, uint32_t id, CBCatMenu *m)
 {
-    const RXPlan *p = c->plan;
+    const CBPlan *p = c->plan;
     bool exists = id == 0;
     for (int i = 0; i < p->nb_playlists && !exists; i++)
         exists = p->playlists[i].id == id && p->playlists[i].is_folder;
@@ -1079,11 +1079,11 @@ static int playlist_folder(RXCatalog *c, uint32_t id, RXCatMenu *m)
     int ret = menu_alloc(m, n, true);
     if (ret < 0)
         return ret;
-    m->what = RX_CAT_PLAYLISTS;
+    m->what = CB_CAT_PLAYLISTS;
     /* In the order the plan gives them among their siblings, each with its
      * position from 1 (rbxport's capture shows positions on folder rows). */
     for (int i = 0; exists && i < p->nb_playlists; i++) {
-        const RXPlanPlaylist *pl = &p->playlists[i];
+        const CBPlanPlaylist *pl = &p->playlists[i];
         if (pl->parent_id != id || pl->id == id)
             continue;
         uint32_t at = m->nb++;
@@ -1098,25 +1098,25 @@ static int playlist_folder(RXCatalog *c, uint32_t id, RXCatMenu *m)
     return 0;
 }
 
-static int playlist_tracks(RXCatalog *c, uint32_t id, int sort, RXCatMenu *m)
+static int playlist_tracks(CBCatalog *c, uint32_t id, int sort, CBCatMenu *m)
 {
     for (int i = 0; i < c->plan->nb_playlists; i++) {
-        const RXPlanPlaylist *pl = &c->plan->playlists[i];
+        const CBPlanPlaylist *pl = &c->plan->playlists[i];
         if (pl->id == id && !pl->is_folder)
-            return own_tracks(c, pl->track_ids, (uint32_t)RX_MAX(pl->nb, 0), sort,
-                              RX_DB_TRACK_LISTED, m);
+            return own_tracks(c, pl->track_ids, (uint32_t)CB_MAX(pl->nb, 0), sort,
+                              CB_DB_TRACK_LISTED, m);
     }
-    m->what = RX_CAT_EMPTY;
+    m->what = CB_CAT_EMPTY;
     return 0;
 }
 
 /* The histories: each day a track served was played, newest first. */
-static int history_days(RXCatalog *c, RXCatMenu *m)
+static int history_days(CBCatalog *c, CBCatMenu *m)
 {
     int ret = menu_alloc(m, (uint32_t)c->nb_plays, false);
     if (ret < 0)
         return ret;
-    m->what = RX_CAT_HISTORIES;
+    m->what = CB_CAT_HISTORIES;
     m->type = 0;
     m->nb = 0;
     for (int i = c->nb_plays - 1; i >= 0; i--) {
@@ -1139,14 +1139,14 @@ static int history_days(RXCatalog *c, RXCatMenu *m)
 
 /* The TAG LIST's tracks, in the order they were added (CMD_PREPARE_ROOT;
  * rbxport lists them as it lists a playlist's). */
-static int tag_list_tracks(RXCatalog *c, int sort, RXCatMenu *m)
+static int tag_list_tracks(CBCatalog *c, int sort, CBCatMenu *m)
 {
-    uint32_t *ids = malloc(RX_LINK_TAG_LIST_MAX * sizeof(*ids));
+    uint32_t *ids = malloc(CB_LINK_TAG_LIST_MAX * sizeof(*ids));
     if (!ids)
-        return RX_ERROR(ENOMEM);
-    int n = c->tags ? rx_link_tag_list_get(c->tags, ids, RX_LINK_TAG_LIST_MAX) : 0;
-    int ret = own_tracks(c, ids, (uint32_t)RX_CLAMP(n, 0, RX_LINK_TAG_LIST_MAX), sort,
-                         RX_DB_TRACK_LISTED, m);
+        return CB_ERROR(ENOMEM);
+    int n = c->tags ? cb_link_tag_list_get(c->tags, ids, CB_LINK_TAG_LIST_MAX) : 0;
+    int ret = own_tracks(c, ids, (uint32_t)CB_CLAMP(n, 0, CB_LINK_TAG_LIST_MAX), sort,
+                         CB_DB_TRACK_LISTED, m);
     free(ids);
     return ret;
 }
@@ -1154,28 +1154,28 @@ static int tag_list_tracks(RXCatalog *c, int sort, RXCatMenu *m)
 /* A day's history: each play that day in the order it was, a track
  * played twice twice. Every row of a history carries the played bit
  * (rbxport's capture). */
-static int history_tracks(RXCatalog *c, uint32_t day, int sort, RXCatMenu *m)
+static int history_tracks(CBCatalog *c, uint32_t day, int sort, CBCatMenu *m)
 {
-    uint32_t *ids = malloc((size_t)RX_MAX(c->nb_plays, 1) * sizeof(*ids));
+    uint32_t *ids = malloc((size_t)CB_MAX(c->nb_plays, 1) * sizeof(*ids));
     if (!ids)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     uint32_t n = 0;
     for (int i = 0; i < c->nb_plays; i++)
         if ((uint32_t)c->plays[i].day == day)
             ids[n++] = c->plays[i].track;
-    int ret = own_tracks(c, ids, n, sort, RX_DB_TRACK_PLAYED, m);
+    int ret = own_tracks(c, ids, n, sort, CB_DB_TRACK_PLAYED, m);
     free(ids);
     return ret;
 }
 
 /* Makes the track's transcode when the plan names one that is not made
- * yet (a dry plan names the cache file before it exists, rx_plan_build_cb),
+ * yet (a dry plan names the cache file before it exists, cb_plan_build_cb),
  * and takes the size of the file that will be read. The plan names the
  * compatibility transcode or the plain one; which is found by asking for
  * both names. The string stays the same: only its file comes to exist. */
-static int prepare_source(RXCatalog *c, RXPlanTrack *pt)
+static int prepare_source(CBCatalog *c, CBPlanTrack *pt)
 {
-    const RXTrack *t = pt->track;
+    const CBTrack *t = pt->track;
     /* A WAV made as it is read: nothing to make, unless the file will not
      * decode that way, when the WAV is made whole now and served instead
      * (the track info reply is the first a player hears of the file). */
@@ -1183,37 +1183,37 @@ static int prepare_source(RXCatalog *c, RXPlanTrack *pt)
         if (!c->check || c->check(c->check_opaque, pt) >= 0 || !t || !t->path || !c->lib)
             return 0;
         char *made = NULL;
-        rx_info("link: transcoding %s for a player", t->path);
-        int ret = rx_plan_transcode(c->lib, t, RX_TRANSCODE_LINK_ANY, &made);
+        cb_info("link: transcoding %s for a player", t->path);
+        int ret = cb_plan_transcode(c->lib, t, CB_TRANSCODE_LINK_ANY, &made);
         if (ret < 0 || !made) {
-            rx_warn("link: transcoding %s failed: %s", t->path, strerror(ret < 0 ? -ret : ENOMEM));
+            cb_warn("link: transcoding %s failed: %s", t->path, strerror(ret < 0 ? -ret : ENOMEM));
             free(made);
-            return ret < 0 ? ret : RX_ERROR(ENOMEM);
+            return ret < 0 ? ret : CB_ERROR(ENOMEM);
         }
         free(pt->source);
         pt->source = made;
         pt->pcm = false;
-        int64_t size = rx_file_size(made);
+        int64_t size = cb_file_size(made);
         if (size > 0)
             pt->file_size = size;
         return 0;
     }
     if (!t || !t->path || !pt->source || !strcmp(pt->source, t->path) || !c->lib)
         return 0;
-    if (!rx_plan_transcode_fresh(t, pt->source)) {
-        for (int compat = RX_TRANSCODE_PLAIN; compat <= RX_TRANSCODE_LINK_ANY; compat++) {
+    if (!cb_plan_transcode_fresh(t, pt->source)) {
+        for (int compat = CB_TRANSCODE_PLAIN; compat <= CB_TRANSCODE_LINK_ANY; compat++) {
             char *cache = NULL;
             int max_rate = 0;
-            int ret = rx_plan_transcode_path(c->lib, t, compat, false, &cache, &max_rate);
+            int ret = cb_plan_transcode_path(c->lib, t, compat, false, &cache, &max_rate);
             bool named = ret > 0 && cache && !strcmp(cache, pt->source);
             free(cache);
             if (!named)
                 continue;
             char *made = NULL;
-            rx_info("link: transcoding %s for a player", t->path);
-            ret = rx_plan_transcode(c->lib, t, compat, &made);
+            cb_info("link: transcoding %s for a player", t->path);
+            ret = cb_plan_transcode(c->lib, t, compat, &made);
             if (ret < 0) {
-                rx_warn("link: transcoding %s failed: %s", t->path, strerror(-ret));
+                cb_warn("link: transcoding %s failed: %s", t->path, strerror(-ret));
                 return ret;
             }
             free(made);
@@ -1225,250 +1225,250 @@ static int prepare_source(RXCatalog *c, RXPlanTrack *pt)
             break;
         }
     }
-    int64_t size = rx_file_size(pt->source);
+    int64_t size = cb_file_size(pt->source);
     if (size > 0)
         pt->file_size = size;
     return 0;
 }
 
-static int track_menu(RXCatalog *c, int what, uint32_t id, RXCatMenu *m)
+static int track_menu(CBCatalog *c, int what, uint32_t id, CBCatMenu *m)
 {
     int ti = track_index(c, id);
     if (ti < 0)
         return 0;
-    if (what == RX_CAT_TRACK_INFO && prepare_source(c, c->t[ti].pt) < 0)
+    if (what == CB_CAT_TRACK_INFO && prepare_source(c, c->t[ti].pt) < 0)
         return 0;
-    *m = (RXCatMenu) {
+    *m = (CBCatMenu) {
         .what  = what,
         .track = id,
-        .nb    = what == RX_CAT_METADATA ? 16 : what == RX_CAT_TRACK_INFO ? 7 : 13,
+        .nb    = what == CB_CAT_METADATA ? 16 : what == CB_CAT_TRACK_INFO ? 7 : 13,
     };
     return 0;
 }
 
 /* The search text: the string argument (menus.adoc: sort, the text's size,
  * the text in capitals, 0). */
-static char *search_text(const RXDbMsg *q)
+static char *search_text(const CBDbMsg *q)
 {
     for (int i = 1; i < q->nb_args; i++)
-        if (q->args[i].type == RX_DB_STR)
-            return rx_dbmsg_str(q, i);
-    return rx_strdup("");
+        if (q->args[i].type == CB_DB_STR)
+            return cb_dbmsg_str(q, i);
+    return cb_strdup("");
 }
 
-int rx_catalog_menu(RXCatalog *c, const RXDbMsg *q, RXCatMenu *m)
+int cb_catalog_menu(CBCatalog *c, const CBDbMsg *q, CBCatMenu *m)
 {
-    *m = (RXCatMenu) { 0 };
+    *m = (CBCatMenu) { 0 };
     if (!c)
-        return RX_ERROR(ENOENT);
-    uint32_t a1 = rx_dbmsg_num(q, 1), a2 = rx_dbmsg_num(q, 2), a3 = rx_dbmsg_num(q, 3);
-    uint32_t a4 = rx_dbmsg_num(q, 4);
+        return CB_ERROR(ENOENT);
+    uint32_t a1 = cb_dbmsg_num(q, 1), a2 = cb_dbmsg_num(q, 2), a3 = cb_dbmsg_num(q, 3);
+    uint32_t a4 = cb_dbmsg_num(q, 4);
     int sort = sort_id(a1);
     Filter f = { .kind = FILTER_ALL };
     switch (q->kind) {
-    case RX_DB_ROOT:
+    case CB_DB_ROOT:
         /* Without a mask, everything (the older root request has none). */
-        return root_menu(q->nb_args > 2 ? a2 : RX_DB_ALL, m);
-    case RX_DB_SORTS: {
-        int ret = fixed_menu(RX_CAT_SORTS, RX_ARRAY_ELEMS(sort_rows), m);
+        return root_menu(q->nb_args > 2 ? a2 : CB_DB_ALL, m);
+    case CB_DB_SORTS: {
+        int ret = fixed_menu(CB_CAT_SORTS, CB_ARRAY_ELEMS(sort_rows), m);
         for (uint32_t i = 0; ret >= 0 && i < m->nb; i++)
             m->ids[i] = sort_rows[i].id;
         return ret;
     }
 
-    case RX_DB_TRACKS:
+    case CB_DB_TRACKS:
         return list_tracks(c, &f, sort, false, 0, m);
-    case RX_DB_TAG_LIST:
+    case CB_DB_TAG_LIST:
         return tag_list_tracks(c, sort, m);
-    case RX_DB_FILE_NAMES: {
+    case CB_DB_FILE_NAMES: {
         /* By the file's name unless a sort is asked for (an emulated
          * CDJ-2000 got it in the titles' order, 2026-10-15). */
         int ret = list_tracks(c, &f, sort == SORT_DEFAULT ? SORT_FILE : sort, false, 0, m);
         if (ret >= 0)
-            m->what = RX_CAT_FILE_NAMES;
+            m->what = CB_CAT_FILE_NAMES;
         return ret;
     }
 
-    case RX_DB_GENRES:
+    case CB_DB_GENRES:
         return list_names(c, F_GENRE, &f, false, m);
-    case RX_DB_GENRE_ARTISTS:
-        f = (Filter) { .kind = FILTER_GENRE, .a = a2, .b = RX_DB_ALL, .c = RX_DB_ALL };
+    case CB_DB_GENRE_ARTISTS:
+        f = (Filter) { .kind = FILTER_GENRE, .a = a2, .b = CB_DB_ALL, .c = CB_DB_ALL };
         return list_names(c, F_ARTIST, &f, true, m);
-    case RX_DB_GENRE_ARTIST_ALBUMS:
-        f = (Filter) { .kind = FILTER_GENRE, .a = a2, .b = a3, .c = RX_DB_ALL };
+    case CB_DB_GENRE_ARTIST_ALBUMS:
+        f = (Filter) { .kind = FILTER_GENRE, .a = a2, .b = a3, .c = CB_DB_ALL };
         return list_names(c, F_ALBUM, &f, true, m);
-    case RX_DB_GENRE_TRACKS:
+    case CB_DB_GENRE_TRACKS:
         f = (Filter) { .kind = FILTER_GENRE, .a = a2, .b = a3, .c = a4 };
-        return list_tracks(c, &f, sort, a4 != RX_DB_ALL, RX_DB_TRACK_LISTED, m);
+        return list_tracks(c, &f, sort, a4 != CB_DB_ALL, CB_DB_TRACK_LISTED, m);
 
-    case RX_DB_ARTISTS:
+    case CB_DB_ARTISTS:
         return list_names(c, F_ARTIST, &f, false, m);
-    case RX_DB_ARTIST_ALBUMS:
-        f = (Filter) { .kind = FILTER_ARTIST, .a = a2, .b = RX_DB_ALL };
+    case CB_DB_ARTIST_ALBUMS:
+        f = (Filter) { .kind = FILTER_ARTIST, .a = a2, .b = CB_DB_ALL };
         return list_names(c, F_ALBUM, &f, true, m);
-    case RX_DB_ARTIST_ALBUM_TRACKS:
+    case CB_DB_ARTIST_ALBUM_TRACKS:
         f = (Filter) { .kind = FILTER_ARTIST, .a = a2, .b = a3 };
-        return list_tracks(c, &f, sort, a3 != RX_DB_ALL, RX_DB_TRACK_LISTED, m);
+        return list_tracks(c, &f, sort, a3 != CB_DB_ALL, CB_DB_TRACK_LISTED, m);
 
-    case RX_DB_ALBUMS:
+    case CB_DB_ALBUMS:
         return list_names(c, F_ALBUM, &f, false, m);
-    case RX_DB_ALBUM_TRACKS:
+    case CB_DB_ALBUM_TRACKS:
         f = (Filter) { .kind = FILTER_ALBUM, .a = a2 };
-        return list_tracks(c, &f, sort, true, RX_DB_TRACK_LISTED, m);
+        return list_tracks(c, &f, sort, true, CB_DB_TRACK_LISTED, m);
 
-    case RX_DB_LABELS:
+    case CB_DB_LABELS:
         return list_names(c, F_LABEL, &f, false, m);
-    case RX_DB_LABEL_ARTISTS:
-        f = (Filter) { .kind = FILTER_LABEL, .a = a2, .b = RX_DB_ALL, .c = RX_DB_ALL };
+    case CB_DB_LABEL_ARTISTS:
+        f = (Filter) { .kind = FILTER_LABEL, .a = a2, .b = CB_DB_ALL, .c = CB_DB_ALL };
         return list_names(c, F_ARTIST, &f, true, m);
-    case RX_DB_LABEL_ARTIST_ALBUMS:
-        f = (Filter) { .kind = FILTER_LABEL, .a = a2, .b = a3, .c = RX_DB_ALL };
+    case CB_DB_LABEL_ARTIST_ALBUMS:
+        f = (Filter) { .kind = FILTER_LABEL, .a = a2, .b = a3, .c = CB_DB_ALL };
         return list_names(c, F_ALBUM, &f, true, m);
-    case RX_DB_LABEL_TRACKS:
+    case CB_DB_LABEL_TRACKS:
         f = (Filter) { .kind = FILTER_LABEL, .a = a2, .b = a3, .c = a4 };
-        return list_tracks(c, &f, sort, a4 != RX_DB_ALL, RX_DB_TRACK_LISTED, m);
+        return list_tracks(c, &f, sort, a4 != CB_DB_ALL, CB_DB_TRACK_LISTED, m);
 
-    case RX_DB_ORIGINALS:
-    case RX_DB_REMIXERS:
+    case CB_DB_ORIGINALS:
+    case CB_DB_REMIXERS:
         f.kind = FILTER_ALL;
-        return list_names(c, q->kind == RX_DB_ORIGINALS ? F_ALBUM_ARTIST : F_REMIXER, &f, false, m);
-    case RX_DB_ORIGINAL_ALBUMS:
-    case RX_DB_REMIXER_ALBUMS:
-        f = (Filter) { .kind = q->kind == RX_DB_ORIGINAL_ALBUMS ? FILTER_ORIGINAL : FILTER_REMIXER,
-                       .a = a2, .b = RX_DB_ALL };
+        return list_names(c, q->kind == CB_DB_ORIGINALS ? F_ALBUM_ARTIST : F_REMIXER, &f, false, m);
+    case CB_DB_ORIGINAL_ALBUMS:
+    case CB_DB_REMIXER_ALBUMS:
+        f = (Filter) { .kind = q->kind == CB_DB_ORIGINAL_ALBUMS ? FILTER_ORIGINAL : FILTER_REMIXER,
+                       .a = a2, .b = CB_DB_ALL };
         return list_names(c, F_ALBUM, &f, true, m);
-    case RX_DB_ORIGINAL_TRACKS:
-    case RX_DB_REMIXER_TRACKS:
+    case CB_DB_ORIGINAL_TRACKS:
+    case CB_DB_REMIXER_TRACKS:
         /* An album artist's ALL: its albums one after the other, each in
          * its own order (cmp_album_rows). */
-        f = (Filter) { .kind = q->kind == RX_DB_ORIGINAL_TRACKS ? FILTER_ORIGINAL : FILTER_REMIXER,
+        f = (Filter) { .kind = q->kind == CB_DB_ORIGINAL_TRACKS ? FILTER_ORIGINAL : FILTER_REMIXER,
                        .a = a2, .b = a3 };
-        return list_tracks(c, &f, sort, a3 != RX_DB_ALL || q->kind == RX_DB_ORIGINAL_TRACKS,
-                           RX_DB_TRACK_LISTED, m);
+        return list_tracks(c, &f, sort, a3 != CB_DB_ALL || q->kind == CB_DB_ORIGINAL_TRACKS,
+                           CB_DB_TRACK_LISTED, m);
 
     /* The numeric menus' rows are values the player prints (rbxport). */
-    case RX_DB_BPMS:
-        return list_values(c, V_BPM, &f, false, 0, RX_CAT_NUMBERS, RX_DB_ITEM_TEMPO, m);
-    case RX_DB_BPM_RANGES: {
+    case CB_DB_BPMS:
+        return list_values(c, V_BPM, &f, false, 0, CB_CAT_NUMBERS, CB_DB_ITEM_TEMPO, m);
+    case CB_DB_BPM_RANGES: {
         /* The tolerances, 0 to 6 % (menus.adoc 1206). */
-        int ret = fixed_menu(RX_CAT_NUMBERS, 7, m);
+        int ret = fixed_menu(CB_CAT_NUMBERS, 7, m);
         for (uint32_t i = 0; ret >= 0 && i < 7; i++)
             m->ids[i] = i;
-        m->type = RX_DB_ITEM_TEMPO;
+        m->type = CB_DB_ITEM_TEMPO;
         return ret;
     }
-    case RX_DB_BPM_TRACKS:
-        f = (Filter) { .kind = FILTER_BPM, .a = a2, .b = RX_MIN(a3, 6u) };
+    case CB_DB_BPM_TRACKS:
+        f = (Filter) { .kind = FILTER_BPM, .a = a2, .b = CB_MIN(a3, 6u) };
         return list_tracks(c, &f, sort, false, 0, m);
-    case RX_DB_RATINGS:
-        return list_values(c, V_RATING, &f, true, 0, RX_CAT_NUMBERS, RX_DB_ITEM_RATING, m);
-    case RX_DB_RATING_TRACKS:
+    case CB_DB_RATINGS:
+        return list_values(c, V_RATING, &f, true, 0, CB_CAT_NUMBERS, CB_DB_ITEM_RATING, m);
+    case CB_DB_RATING_TRACKS:
         f = (Filter) { .kind = FILTER_RATING, .a = a2 };
         return list_tracks(c, &f, sort, false, 0, m);
-    case RX_DB_DECADES:
-        return list_values(c, V_DECADE, &f, true, 0, RX_CAT_NUMBERS, RX_DB_ITEM_YEAR, m);
-    case RX_DB_DECADE_YEARS:
-        f = (Filter) { .kind = FILTER_YEAR, .a = a2, .b = RX_DB_ALL };
-        return list_values(c, V_YEAR, &f, true, 1, RX_CAT_NUMBERS, RX_DB_ITEM_YEAR, m);
-    case RX_DB_YEAR_TRACKS:
+    case CB_DB_DECADES:
+        return list_values(c, V_DECADE, &f, true, 0, CB_CAT_NUMBERS, CB_DB_ITEM_YEAR, m);
+    case CB_DB_DECADE_YEARS:
+        f = (Filter) { .kind = FILTER_YEAR, .a = a2, .b = CB_DB_ALL };
+        return list_values(c, V_YEAR, &f, true, 1, CB_CAT_NUMBERS, CB_DB_ITEM_YEAR, m);
+    case CB_DB_YEAR_TRACKS:
         f = (Filter) { .kind = FILTER_YEAR, .a = a2, .b = a3 };
         return list_tracks(c, &f, sort, false, 0, m);
-    case RX_DB_COLORS:
-        return list_values(c, V_COLOR, &f, false, 0, RX_CAT_COLORS, 0, m);
-    case RX_DB_COLOR_TRACKS:
+    case CB_DB_COLORS:
+        return list_values(c, V_COLOR, &f, false, 0, CB_CAT_COLORS, 0, m);
+    case CB_DB_COLOR_TRACKS:
         f = (Filter) { .kind = FILTER_COLOR, .a = a2 };
         return list_tracks(c, &f, sort, false, 0, m);
-    case RX_DB_TIMES:
-        return list_values(c, V_TIME, &f, false, 0, RX_CAT_NUMBERS, RX_DB_ITEM_DURATION, m);
-    case RX_DB_TIME_TRACKS:
+    case CB_DB_TIMES:
+        return list_values(c, V_TIME, &f, false, 0, CB_CAT_NUMBERS, CB_DB_ITEM_DURATION, m);
+    case CB_DB_TIME_TRACKS:
         f = (Filter) { .kind = FILTER_TIME, .a = a2 };
         return list_tracks(c, &f, sort, false, 0, m);
-    case RX_DB_BITRATES:
-        return list_values(c, V_BITRATE, &f, true, 0, RX_CAT_NUMBERS, RX_DB_ITEM_BIT_RATE, m);
-    case RX_DB_BITRATE_TRACKS:
+    case CB_DB_BITRATES:
+        return list_values(c, V_BITRATE, &f, true, 0, CB_CAT_NUMBERS, CB_DB_ITEM_BIT_RATE, m);
+    case CB_DB_BITRATE_TRACKS:
         f = (Filter) { .kind = FILTER_BITRATE, .a = a2 };
         return list_tracks(c, &f, sort, false, 0, m);
 
-    case RX_DB_ADDED_YEARS:
-        return list_values(c, V_ADDED_YEAR, &f, true, 0, RX_CAT_NUMBERS, RX_DB_ITEM_DATE_ADDED, m);
-    case RX_DB_ADDED_MONTHS:
-        f = (Filter) { .kind = FILTER_ADDED, .a = a2, .b = RX_DB_ALL, .c = RX_DB_ALL };
-        return list_values(c, V_ADDED_MONTH, &f, false, 2, RX_CAT_NUMBERS, RX_DB_ITEM_DATE_ADDED, m);
-    case RX_DB_ADDED_DAYS:
+    case CB_DB_ADDED_YEARS:
+        return list_values(c, V_ADDED_YEAR, &f, true, 0, CB_CAT_NUMBERS, CB_DB_ITEM_DATE_ADDED, m);
+    case CB_DB_ADDED_MONTHS:
+        f = (Filter) { .kind = FILTER_ADDED, .a = a2, .b = CB_DB_ALL, .c = CB_DB_ALL };
+        return list_values(c, V_ADDED_MONTH, &f, false, 2, CB_CAT_NUMBERS, CB_DB_ITEM_DATE_ADDED, m);
+    case CB_DB_ADDED_DAYS:
         /* ALL months: only the ALL row, the year's tracks come next (rbxport). */
-        f = (Filter) { .kind = FILTER_ADDED, .a = a2, .b = a3, .c = RX_DB_ALL };
-        if (a3 == RX_DB_ALL)
+        f = (Filter) { .kind = FILTER_ADDED, .a = a2, .b = a3, .c = CB_DB_ALL };
+        if (a3 == CB_DB_ALL)
             f.a = 0;
-        return list_values(c, V_ADDED_DAY, &f, false, 2, RX_CAT_NUMBERS, RX_DB_ITEM_DATE_ADDED, m);
-    case RX_DB_ADDED_TRACKS:
+        return list_values(c, V_ADDED_DAY, &f, false, 2, CB_CAT_NUMBERS, CB_DB_ITEM_DATE_ADDED, m);
+    case CB_DB_ADDED_TRACKS:
         f = (Filter) { .kind = FILTER_ADDED, .a = a2, .b = a3, .c = a4 };
         return list_tracks(c, &f, sort, false, 0, m);
 
-    case RX_DB_KEYS:
-    case RX_DB_KEYS_2000: {
+    case CB_DB_KEYS:
+    case CB_DB_KEYS_2000: {
         /* All 24, by their ids (rbxport's capture of the KEY menu). A
          * CDJ-2000 asks for the menu by the root row's type, not its id:
          * the same list. */
-        int ret = fixed_menu(RX_CAT_KEYS, 24, m);
+        int ret = fixed_menu(CB_CAT_KEYS, 24, m);
         for (uint32_t i = 0; ret >= 0 && i < 24; i++)
             m->ids[i] = i + 1;
         return ret;
     }
-    case RX_DB_RELATED_KEYS: {
-        int ret = fixed_menu(RX_CAT_RELATED, a2 >= 1 && a2 <= 24 ? 3 : 0, m);
+    case CB_DB_RELATED_KEYS: {
+        int ret = fixed_menu(CB_CAT_RELATED, a2 >= 1 && a2 <= 24 ? 3 : 0, m);
         for (uint32_t i = 0; ret >= 0 && i < m->nb; i++) {
             m->ids[i] = a2;
             m->nums[i] = i;
         }
         return ret;
     }
-    case RX_DB_KEY_TRACKS:
+    case CB_DB_KEY_TRACKS:
         f = (Filter) { .kind = FILTER_KEYS };
-        f.nb_keys = related_keys(a2, RX_MIN(a3, 2u), f.keys);
+        f.nb_keys = related_keys(a2, CB_MIN(a3, 2u), f.keys);
         return list_tracks(c, &f, sort, false, 0, m);
-    case RX_DB_KEY_TRACKS_2000:
+    case CB_DB_KEY_TRACKS_2000:
         f = (Filter) { .kind = FILTER_KEYS };
         f.nb_keys = related_keys(a2, 0, f.keys);
         return list_tracks(c, &f, sort, false, 0, m);
 
-    case RX_DB_PLAYLIST:
+    case CB_DB_PLAYLIST:
         if (a3 == 1)
             return playlist_folder(c, a2, m);
         return playlist_tracks(c, a2, sort, m);
 
-    case RX_DB_HISTORIES:
+    case CB_DB_HISTORIES:
         return history_days(c, m);
-    case RX_DB_HISTORY_TRACKS:
+    case CB_DB_HISTORY_TRACKS:
         return history_tracks(c, a2, sort, m);
 
-    case RX_DB_SEARCH:
-    case RX_DB_SEARCH_LIVE: {
+    case CB_DB_SEARCH:
+    case CB_DB_SEARCH_LIVE: {
         char *text = search_text(q);
         if (!text)
-            return RX_ERROR(ENOMEM);
+            return CB_ERROR(ENOMEM);
         f = (Filter) { .kind = FILTER_SEARCH, .text = text };
         int ret = list_tracks(c, &f, sort, false, 0, m);
         free(text);
         return ret;
     }
 
-    case RX_DB_METADATA:
-        return track_menu(c, RX_CAT_METADATA, a1, m);
-    case RX_DB_TRACK_INFO:
-        return track_menu(c, RX_CAT_TRACK_INFO, a1, m);
-    case RX_DB_DELIVERY:
-        return track_menu(c, RX_CAT_DELIVERY, a1, m);
+    case CB_DB_METADATA:
+        return track_menu(c, CB_CAT_METADATA, a1, m);
+    case CB_DB_TRACK_INFO:
+        return track_menu(c, CB_CAT_TRACK_INFO, a1, m);
+    case CB_DB_DELIVERY:
+        return track_menu(c, CB_CAT_DELIVERY, a1, m);
     }
-    return RX_ERROR(ENOENT);
+    return CB_ERROR(ENOENT);
 }
 
-uint32_t rx_catalog_menu_find(const RXCatMenu *m, uint32_t id)
+uint32_t cb_catalog_menu_find(const CBCatMenu *m, uint32_t id)
 {
     if (m->ids)
         for (uint32_t i = 0; i < m->nb; i++)
             if (m->ids[i] == id)
                 return i;
-    return RX_DB_ALL;
+    return CB_DB_ALL;
 }
 
 /* -------------------------------------------------------------- render */
@@ -1484,19 +1484,19 @@ typedef struct Texts {
     char t1[512], t2[512];
 } Texts;
 
-static void heading(RXDbItem *it, uint32_t id, const char *label, uint32_t type, bool own,
+static void heading(CBDbItem *it, uint32_t id, const char *label, uint32_t type, bool own,
                     Texts *tx)
 {
     snprintf(tx->t1, sizeof(tx->t1), own ? "%s" : FFFA "%s" FFFB, label);
-    *it = (RXDbItem) { .id = id, .text = tx->t1, .type = type };
+    *it = (CBDbItem) { .id = id, .text = tx->t1, .type = type };
 }
 
-static const char *key_name(const RXCatalog *c, uint32_t key, char *buf, size_t size)
+static const char *key_name(const CBCatalog *c, uint32_t key, char *buf, size_t size)
 {
     if (key < 1 || key > 24)
         return "";
     const char *notation = c->plan->key_notation[0] ? c->plan->key_notation : "classic";
-    return rx_key_display(key_classic[key - 1], notation, buf, size);
+    return cb_key_display(key_classic[key - 1], notation, buf, size);
 }
 
 static void fmt_date(int32_t ymd, char *buf, size_t size)
@@ -1512,46 +1512,46 @@ static void fmt_date(int32_t ymd, char *buf, size_t size)
  * title type with the column's in its second byte, the flags, the id
  * again (the older layout's artwork id), the position, 0x100, the key's
  * place on the wheel, its id and name, the tempo. */
-static void track_item(const RXCatalog *c, const CatTrack *t, int column, bool extended,
-                       uint32_t flags, uint32_t pos, RXDbItem *it, Texts *tx)
+static void track_item(const CBCatalog *c, const CatTrack *t, int column, bool extended,
+                       uint32_t flags, uint32_t pos, CBDbItem *it, Texts *tx)
 {
-    const RXPlanTrack *pt = t->pt;
-    const RXMeta *m = meta_of(t);
+    const CBPlanTrack *pt = t->pt;
+    const CBMeta *m = meta_of(t);
     uint32_t a = pt->id, sub = 0;
     const char *text2 = "";
     switch (column ? column : DEFAULT_COLUMN) {
-    case SORT_ARTIST:   sub = RX_DB_ITEM_ARTIST; a = pt->artist_id;
+    case SORT_ARTIST:   sub = CB_DB_ITEM_ARTIST; a = pt->artist_id;
                         text2 = field_name(c, t, F_ARTIST); break;
-    case SORT_ALBUM:    sub = RX_DB_ITEM_ALBUM; a = field_id(t, F_ALBUM);
+    case SORT_ALBUM:    sub = CB_DB_ITEM_ALBUM; a = field_id(t, F_ALBUM);
                         text2 = field_name(c, t, F_ALBUM); break;
-    case SORT_GENRE:    sub = RX_DB_ITEM_GENRE; a = pt->genre_id;
+    case SORT_GENRE:    sub = CB_DB_ITEM_GENRE; a = pt->genre_id;
                         text2 = field_name(c, t, F_GENRE); break;
-    case SORT_LABEL:    sub = RX_DB_ITEM_LABEL; a = pt->label_id;
+    case SORT_LABEL:    sub = CB_DB_ITEM_LABEL; a = pt->label_id;
                         text2 = field_name(c, t, F_LABEL); break;
-    case SORT_REMIXER:  sub = RX_DB_ITEM_REMIXER; a = pt->remixer_id;
+    case SORT_REMIXER:  sub = CB_DB_ITEM_REMIXER; a = pt->remixer_id;
                         text2 = field_name(c, t, F_REMIXER); break;
-    case SORT_ORIGINAL: sub = RX_DB_ITEM_ORIGINAL; a = t->album_artist;
+    case SORT_ORIGINAL: sub = CB_DB_ITEM_ORIGINAL; a = t->album_artist;
                         text2 = field_name(c, t, F_ALBUM_ARTIST); break;
-    case SORT_COMMENT:  sub = RX_DB_ITEM_COMMENT; text2 = nonnull(m->comment); break;
-    case SORT_RATING:   sub = RX_DB_ITEM_RATING; a = t->rating; break;
-    case SORT_TIME:     sub = RX_DB_ITEM_DURATION; a = (uint32_t)pt->duration; break;
-    case SORT_BITRATE:  sub = RX_DB_ITEM_BIT_RATE; a = (uint32_t)RX_MAX(pt->bit_rate, 0); break;
-    case SORT_COLOR:    sub = RX_DB_ITEM_COLOR_NONE + t->color; a = t->color; break;
-    case SORT_PLAYS:    sub = RX_DB_ITEM_PLAY_COUNT;
-                        a = pt->track ? (uint32_t)RX_MAX(pt->track->play_count, 0) : 0; break;
-    case SORT_ADDED:    sub = RX_DB_ITEM_DATE_ADDED; fmt_date(t->added, tx->t2, sizeof(tx->t2));
+    case SORT_COMMENT:  sub = CB_DB_ITEM_COMMENT; text2 = nonnull(m->comment); break;
+    case SORT_RATING:   sub = CB_DB_ITEM_RATING; a = t->rating; break;
+    case SORT_TIME:     sub = CB_DB_ITEM_DURATION; a = (uint32_t)pt->duration; break;
+    case SORT_BITRATE:  sub = CB_DB_ITEM_BIT_RATE; a = (uint32_t)CB_MAX(pt->bit_rate, 0); break;
+    case SORT_COLOR:    sub = CB_DB_ITEM_COLOR_NONE + t->color; a = t->color; break;
+    case SORT_PLAYS:    sub = CB_DB_ITEM_PLAY_COUNT;
+                        a = pt->track ? (uint32_t)CB_MAX(pt->track->play_count, 0) : 0; break;
+    case SORT_ADDED:    sub = CB_DB_ITEM_DATE_ADDED; fmt_date(t->added, tx->t2, sizeof(tx->t2));
                         text2 = tx->t2; break;
-    case SORT_BPM:      sub = RX_DB_ITEM_TEMPO; a = t->tempo; break;
-    case SORT_KEY:      sub = RX_DB_ITEM_KEY; a = pt->key_id; text2 = pt->key_name; break;
+    case SORT_BPM:      sub = CB_DB_ITEM_TEMPO; a = t->tempo; break;
+    case SORT_KEY:      sub = CB_DB_ITEM_KEY; a = pt->key_id; text2 = pt->key_name; break;
     }
-    *it = (RXDbItem) {
+    *it = (CBDbItem) {
         .a     = a,
         .id    = pt->id,
         .text  = t->title,
         .text2 = text2,
-        .type  = sub << 8 | RX_DB_ITEM_TITLE,
+        .type  = sub << 8 | CB_DB_ITEM_TITLE,
         /* Bit 0: on the TAG LIST, which a player marks (rbxport). */
-        .flags = flags | (c->tags && rx_link_tag_list_has(c->tags, pt->id)),
+        .flags = flags | (c->tags && cb_link_tag_list_has(c->tags, pt->id)),
         /* The djl-analysis' older layout has the artwork id here, which
          * its clients ask 2003 for; rekordbox's has the track's id, which
          * a CDJ-3000 asks for (rbxport's capture). */
@@ -1565,9 +1565,9 @@ static void track_item(const RXCatalog *c, const CatTrack *t, int column, bool e
     };
 }
 
-static RXDbItem line(uint32_t a, uint32_t id, const char *text, uint32_t type)
+static CBDbItem line(uint32_t a, uint32_t id, const char *text, uint32_t type)
 {
-    return (RXDbItem) { .a = a, .id = id, .text = text, .type = type };
+    return (CBDbItem) { .a = a, .id = id, .text = text, .type = type };
 }
 
 /* The rows of a track's metadata (2002): sixteen, in the order rekordbox
@@ -1586,51 +1586,51 @@ static const uint8_t meta_rows[2][16] = {
       M_ADDED, M_COMMENT, M_YEAR, M_BITRATE, M_LABEL, M_ORIGINAL, M_REMIXER },
 };
 
-static void metadata_item(const RXCatalog *c, const CatTrack *t, uint32_t row, bool extended,
-                          RXDbItem *it, Texts *tx)
+static void metadata_item(const CBCatalog *c, const CatTrack *t, uint32_t row, bool extended,
+                          CBDbItem *it, Texts *tx)
 {
-    const RXPlanTrack *pt = t->pt;
-    const RXMeta *m = meta_of(t);
+    const CBPlanTrack *pt = t->pt;
+    const CBMeta *m = meta_of(t);
     switch (meta_rows[extended][row]) {
     case M_TITLE:
         track_item(c, t, DEFAULT_COLUMN, extended, 0, 0, it, tx);
         if (!extended) {
-            it->type = RX_DB_ITEM_TITLE;
+            it->type = CB_DB_ITEM_TITLE;
             it->text2 = "";
         }
         break;
     case M_ARTIST:
-        *it = line(1, pt->artist_id, field_name(c, t, F_ARTIST), RX_DB_ITEM_ARTIST);
+        *it = line(1, pt->artist_id, field_name(c, t, F_ARTIST), CB_DB_ITEM_ARTIST);
         break;
     case M_ALBUM:
-        *it = line(1, field_id(t, F_ALBUM), field_name(c, t, F_ALBUM), RX_DB_ITEM_ALBUM);
+        *it = line(1, field_id(t, F_ALBUM), field_name(c, t, F_ALBUM), CB_DB_ITEM_ALBUM);
         break;
-    case M_DURATION: *it = line(0, (uint32_t)pt->duration, "", RX_DB_ITEM_DURATION); break;
-    case M_TEMPO:    *it = line(0, t->tempo, "", RX_DB_ITEM_TEMPO); break;
-    case M_KEY:      *it = line(1, pt->key_id, pt->key_name, RX_DB_ITEM_KEY); break;
-    case M_RATING:   *it = line(0, t->rating, "", RX_DB_ITEM_RATING); break;
+    case M_DURATION: *it = line(0, (uint32_t)pt->duration, "", CB_DB_ITEM_DURATION); break;
+    case M_TEMPO:    *it = line(0, t->tempo, "", CB_DB_ITEM_TEMPO); break;
+    case M_KEY:      *it = line(1, pt->key_id, pt->key_name, CB_DB_ITEM_KEY); break;
+    case M_RATING:   *it = line(0, t->rating, "", CB_DB_ITEM_RATING); break;
     /* The colour in the item type and its name in the text, as players
      * send it (track_metadata.adoc, item 9); 0x13 with nothing for none,
      * as rekordbox did (rbxport's capture). */
     case M_COLOR:
-        *it = line(0, t->color, color_names[t->color], RX_DB_ITEM_COLOR_NONE + t->color);
+        *it = line(0, t->color, color_names[t->color], CB_DB_ITEM_COLOR_NONE + t->color);
         break;
-    case M_GENRE:    *it = line(0, pt->genre_id, field_name(c, t, F_GENRE), RX_DB_ITEM_GENRE); break;
+    case M_GENRE:    *it = line(0, pt->genre_id, field_name(c, t, F_GENRE), CB_DB_ITEM_GENRE); break;
     case M_ADDED:
         fmt_date(t->added, tx->t1, sizeof(tx->t1));
-        *it = line(1, pt->id, tx->t1, RX_DB_ITEM_DATE_ADDED);
+        *it = line(1, pt->id, tx->t1, CB_DB_ITEM_DATE_ADDED);
         break;
-    case M_COMMENT:  *it = line(0, pt->id, nonnull(m->comment), RX_DB_ITEM_COMMENT); break;
+    case M_COMMENT:  *it = line(0, pt->id, nonnull(m->comment), CB_DB_ITEM_COMMENT); break;
     case M_BITRATE:
-        *it = line(0, (uint32_t)RX_MAX(pt->bit_rate, 0), "", RX_DB_ITEM_BIT_RATE);
+        *it = line(0, (uint32_t)CB_MAX(pt->bit_rate, 0), "", CB_DB_ITEM_BIT_RATE);
         break;
-    case M_YEAR:     *it = line(0, (uint32_t)RX_MAX(m->year, 0), "", RX_DB_ITEM_YEAR); break;
-    case M_LABEL:    *it = line(0, pt->label_id, field_name(c, t, F_LABEL), RX_DB_ITEM_LABEL); break;
+    case M_YEAR:     *it = line(0, (uint32_t)CB_MAX(m->year, 0), "", CB_DB_ITEM_YEAR); break;
+    case M_LABEL:    *it = line(0, pt->label_id, field_name(c, t, F_LABEL), CB_DB_ITEM_LABEL); break;
     case M_ORIGINAL:
-        *it = line(0, t->album_artist, field_name(c, t, F_ALBUM_ARTIST), RX_DB_ITEM_ORIGINAL);
+        *it = line(0, t->album_artist, field_name(c, t, F_ALBUM_ARTIST), CB_DB_ITEM_ORIGINAL);
         break;
     case M_REMIXER:
-        *it = line(0, pt->remixer_id, field_name(c, t, F_REMIXER), RX_DB_ITEM_REMIXER);
+        *it = line(0, pt->remixer_id, field_name(c, t, F_REMIXER), CB_DB_ITEM_REMIXER);
         break;
     }
 }
@@ -1647,29 +1647,29 @@ static void metadata_item(const RXCatalog *c, const CatTrack *t, uint32_t row, b
  * for a WAV hunts through it for MPEG frames and never plays it
  * (2026-10-14, two CDJ-900s). In the older layout the row is the nexus's,
  * a title row and nothing more; a CDJ-3000's is rekordbox's, shaped as a
- * track row, in which rekordbox sent a copyright text the file had (rxbox
+ * track row, in which rekordbox sent a copyright text the file had (cyanbox
  * has none: blank). The 2f row is 1 for every format in both captures. */
-static void info_item(const CatTrack *t, uint32_t row, bool extended, RXDbItem *it)
+static void info_item(const CatTrack *t, uint32_t row, bool extended, CBDbItem *it)
 {
-    const RXPlanTrack *pt = t->pt;
+    const CBPlanTrack *pt = t->pt;
     uint32_t type = (uint32_t)pt->file_type;
     switch (row) {
     case 0:
         if (extended)
-            *it = (RXDbItem) { .a = 1, .id = type, .type = 0x2304, .e = 0x100, .key = t->key,
+            *it = (CBDbItem) { .a = 1, .id = type, .type = 0x2304, .e = 0x100, .key = t->key,
                                .art = pt->key_id, .text3 = pt->key_name, .f = t->tempo };
         else
-            *it = (RXDbItem) { .id = type, .type = RX_DB_ITEM_TITLE };
+            *it = (CBDbItem) { .id = type, .type = CB_DB_ITEM_TITLE };
         break;
-    case 1: *it = line(0, (uint32_t)pt->duration, "", RX_DB_ITEM_DURATION); break;
-    case 2: *it = line(0, t->tempo, "", RX_DB_ITEM_TEMPO); break;
-    case 3: *it = line(0, pt->id, nonnull(meta_of(t)->comment), RX_DB_ITEM_COMMENT); break;
+    case 1: *it = line(0, (uint32_t)pt->duration, "", CB_DB_ITEM_DURATION); break;
+    case 2: *it = line(0, t->tempo, "", CB_DB_ITEM_TEMPO); break;
+    case 3: *it = line(0, pt->id, nonnull(meta_of(t)->comment), CB_DB_ITEM_COMMENT); break;
     case 4:
-        *it = line((uint32_t)RX_CLAMP(pt->file_size, 0, (int64_t)UINT32_MAX), pt->id,
-                   nonnull(pt->usb_path), RX_DB_ITEM_PATH);
+        *it = line((uint32_t)CB_CLAMP(pt->file_size, 0, (int64_t)UINT32_MAX), pt->id,
+                   nonnull(pt->usb_path), CB_DB_ITEM_PATH);
         break;
-    case 5: *it = line(0, 1, "", RX_DB_ITEM_INFO_2F); break;
-    default: *it = line(0, pt->key_id, pt->key_name, RX_DB_ITEM_KEY); break;
+    case 5: *it = line(0, 1, "", CB_DB_ITEM_INFO_2F); break;
+    default: *it = line(0, pt->key_id, pt->key_name, CB_DB_ITEM_KEY); break;
     }
 }
 
@@ -1677,30 +1677,30 @@ static void info_item(const CatTrack *t, uint32_t row, bool extended, RXDbItem *
  * thirteen rows rekordbox 7.2.11 sent in its order (rbxport,
  * verification/link/kuvo-delivery-20260919.txt, as its tests/session.rs
  * holds them). */
-static void delivery_item(const RXCatalog *c, const CatTrack *t, uint32_t row, RXDbItem *it)
+static void delivery_item(const CBCatalog *c, const CatTrack *t, uint32_t row, CBDbItem *it)
 {
-    const RXPlanTrack *pt = t->pt;
+    const CBPlanTrack *pt = t->pt;
     switch (row) {
-    case 0:  *it = line(0, 0, "", RX_DB_ITEM_DELIVERY_36); break;
-    case 1:  *it = line(0, pt->artist_id, field_name(c, t, F_ARTIST), RX_DB_ITEM_ARTIST); break;
-    case 2:  *it = line(0, pt->key_id, "", RX_DB_ITEM_KEY); break;
-    case 3:  *it = line(0, (uint32_t)pt->duration, "", RX_DB_ITEM_DURATION); break;
+    case 0:  *it = line(0, 0, "", CB_DB_ITEM_DELIVERY_36); break;
+    case 1:  *it = line(0, pt->artist_id, field_name(c, t, F_ARTIST), CB_DB_ITEM_ARTIST); break;
+    case 2:  *it = line(0, pt->key_id, "", CB_DB_ITEM_KEY); break;
+    case 3:  *it = line(0, (uint32_t)pt->duration, "", CB_DB_ITEM_DURATION); break;
     case 4:
-        *it = (RXDbItem) { .a = pt->id, .id = pt->id, .text = t->title, .type = RX_DB_ITEM_TITLE,
-                           .flags = RX_DB_TRACK_LISTED, .c = pt->id, .e = 0x100, .f = t->tempo };
+        *it = (CBDbItem) { .a = pt->id, .id = pt->id, .text = t->title, .type = CB_DB_ITEM_TITLE,
+                           .flags = CB_DB_TRACK_LISTED, .c = pt->id, .e = 0x100, .f = t->tempo };
         break;
-    case 5:  *it = line(0, pt->id, nonnull(meta_of(t)->comment), RX_DB_ITEM_COMMENT); break;
-    case 6:  *it = line(0, field_id(t, F_ALBUM), field_name(c, t, F_ALBUM), RX_DB_ITEM_ALBUM); break;
-    case 7:  *it = line(0, t->tempo, "", RX_DB_ITEM_TEMPO); break;
-    case 8:  *it = line(0, pt->id, "", RX_DB_ITEM_DELIVERY_37); break;
-    case 9:  *it = line(0, pt->label_id, field_name(c, t, F_LABEL), RX_DB_ITEM_LABEL); break;
-    case 10: *it = line(0, (uint32_t)pt->file_type, "", RX_DB_ITEM_FILE_TYPE); break;
-    case 11: *it = line(0, pt->genre_id, field_name(c, t, F_GENRE), RX_DB_ITEM_GENRE); break;
-    default: *it = (RXDbItem) { .a = pt->id, .type = RX_DB_ITEM_DELIVERY_ID, .c = 1 }; break;
+    case 5:  *it = line(0, pt->id, nonnull(meta_of(t)->comment), CB_DB_ITEM_COMMENT); break;
+    case 6:  *it = line(0, field_id(t, F_ALBUM), field_name(c, t, F_ALBUM), CB_DB_ITEM_ALBUM); break;
+    case 7:  *it = line(0, t->tempo, "", CB_DB_ITEM_TEMPO); break;
+    case 8:  *it = line(0, pt->id, "", CB_DB_ITEM_DELIVERY_37); break;
+    case 9:  *it = line(0, pt->label_id, field_name(c, t, F_LABEL), CB_DB_ITEM_LABEL); break;
+    case 10: *it = line(0, (uint32_t)pt->file_type, "", CB_DB_ITEM_FILE_TYPE); break;
+    case 11: *it = line(0, pt->genre_id, field_name(c, t, F_GENRE), CB_DB_ITEM_GENRE); break;
+    default: *it = (CBDbItem) { .a = pt->id, .type = CB_DB_ITEM_DELIVERY_ID, .c = 1 }; break;
     }
 }
 
-static const RXPlanPlaylist *playlist_of(const RXPlan *p, uint32_t id)
+static const CBPlanPlaylist *playlist_of(const CBPlan *p, uint32_t id)
 {
     for (int i = 0; i < p->nb_playlists; i++)
         if (p->playlists[i].id == id)
@@ -1709,68 +1709,68 @@ static const RXPlanPlaylist *playlist_of(const RXPlan *p, uint32_t id)
 }
 
 /* One row of a menu; false when its id is gone from the catalog. */
-static bool item_of(RXCatalog *c, const RXCatMenu *m, uint32_t i, int column, bool extended,
-                    RXDbItem *it, Texts *tx)
+static bool item_of(CBCatalog *c, const CBCatMenu *m, uint32_t i, int column, bool extended,
+                    CBDbItem *it, Texts *tx)
 {
     uint32_t id = m->ids ? m->ids[i] : 0, num = m->nums ? m->nums[i] : 0;
     char buf[64];
-    if (id == RX_DB_ALL && (m->what == RX_CAT_NAMES || m->what == RX_CAT_NUMBERS)) {
-        heading(it, RX_DB_ALL, "ALL", RX_DB_ITEM_ALL, false, tx);
+    if (id == CB_DB_ALL && (m->what == CB_CAT_NAMES || m->what == CB_CAT_NUMBERS)) {
+        heading(it, CB_DB_ALL, "ALL", CB_DB_ITEM_ALL, false, tx);
         return true;
     }
     switch (m->what) {
-    case RX_CAT_ROOT:
-        for (size_t k = 0; k < RX_ARRAY_ELEMS(root_rows); k++)
+    case CB_CAT_ROOT:
+        for (size_t k = 0; k < CB_ARRAY_ELEMS(root_rows); k++)
             if (root_rows[k].id == id) {
                 heading(it, id, root_rows[k].name, root_rows[k].type, root_rows[k].own, tx);
                 return true;
             }
         return false;
-    case RX_CAT_SORTS:
-        for (size_t k = 0; k < RX_ARRAY_ELEMS(sort_rows); k++)
+    case CB_CAT_SORTS:
+        for (size_t k = 0; k < CB_ARRAY_ELEMS(sort_rows); k++)
             if (sort_rows[k].id == id) {
                 heading(it, id, sort_rows[k].name, sort_rows[k].type, false, tx);
                 return true;
             }
         return false;
-    case RX_CAT_TRACKS:
-    case RX_CAT_FILE_NAMES: {
+    case CB_CAT_TRACKS:
+    case CB_CAT_FILE_NAMES: {
         int ti = track_index(c, id);
         if (ti < 0)
             return false;
         track_item(c, &c->t[ti], column, extended, m->flags, num, it, tx);
-        if (m->what == RX_CAT_FILE_NAMES)
+        if (m->what == CB_CAT_FILE_NAMES)
             it->text = c->t[ti].file;
         return true;
     }
-    case RX_CAT_NAMES: {
+    case CB_CAT_NAMES: {
         /* An album row carries its id again (rbxport's capture); its
          * "Unknown" for tracks without one, as rekordbox sent it. */
         static const uint32_t types[] = {
-            [RX_CAT_ARTIST] = RX_DB_ITEM_ARTIST, [RX_CAT_ALBUM] = RX_DB_ITEM_ALBUM,
-            [RX_CAT_GENRE] = RX_DB_ITEM_GENRE, [RX_CAT_LABEL] = RX_DB_ITEM_LABEL,
+            [CB_CAT_ARTIST] = CB_DB_ITEM_ARTIST, [CB_CAT_ALBUM] = CB_DB_ITEM_ALBUM,
+            [CB_CAT_GENRE] = CB_DB_ITEM_GENRE, [CB_CAT_LABEL] = CB_DB_ITEM_LABEL,
         };
-        bool album = m->table == RX_CAT_ALBUM;
+        bool album = m->table == CB_CAT_ALBUM;
         const char *name = id ? table_name(c, m->table, album ? id & ~ALBUM_BIT : id) :
-                           album || m->table == RX_CAT_ARTIST ? "Unknown" : NULL;
+                           album || m->table == CB_CAT_ARTIST ? "Unknown" : NULL;
         if (!name)
             return false;
-        *it = (RXDbItem) { .id = id, .text = name, .type = types[m->table], .c = album ? id : 0 };
+        *it = (CBDbItem) { .id = id, .text = name, .type = types[m->table], .c = album ? id : 0 };
         return true;
     }
-    case RX_CAT_NUMBERS:
-        *it = (RXDbItem) { .id = id, .type = m->type };
+    case CB_CAT_NUMBERS:
+        *it = (CBDbItem) { .id = id, .type = m->type };
         return true;
-    case RX_CAT_COLORS:
+    case CB_CAT_COLORS:
         if (id < 1 || id > 8)
             return false;
-        *it = (RXDbItem) { .id = id, .text = color_names[id], .type = RX_DB_ITEM_COLOR_NONE + id };
+        *it = (CBDbItem) { .id = id, .text = color_names[id], .type = CB_DB_ITEM_COLOR_NONE + id };
         return true;
-    case RX_CAT_KEYS:
+    case CB_CAT_KEYS:
         snprintf(tx->t1, sizeof(tx->t1), "%s", key_name(c, id, buf, sizeof(buf)));
-        *it = (RXDbItem) { .id = id, .text = tx->t1, .type = RX_DB_ITEM_KEY };
+        *it = (CBDbItem) { .id = id, .text = tx->t1, .type = CB_DB_ITEM_KEY };
         return true;
-    case RX_CAT_RELATED: {
+    case CB_CAT_RELATED: {
         uint32_t keys[4];
         int n = related_keys(id, num, keys);
         size_t len = 0;
@@ -1778,35 +1778,35 @@ static bool item_of(RXCatalog *c, const RXCatMenu *m, uint32_t i, int column, bo
         for (int k = 0; k < n && len < sizeof(tx->t1); k++)
             len += (size_t)snprintf(tx->t1 + len, sizeof(tx->t1) - len, "%s%s", k ? ", " : "",
                                     key_name(c, keys[k], buf, sizeof(buf)));
-        *it = (RXDbItem) { .a = num, .id = id, .text = tx->t1, .type = RX_DB_ITEM_KEY };
+        *it = (CBDbItem) { .a = num, .id = id, .text = tx->t1, .type = CB_DB_ITEM_KEY };
         return true;
     }
-    case RX_CAT_PLAYLISTS: {
-        const RXPlanPlaylist *pl = playlist_of(c->plan, id);
+    case CB_CAT_PLAYLISTS: {
+        const CBPlanPlaylist *pl = playlist_of(c->plan, id);
         if (!pl)
             return false;
-        *it = (RXDbItem) {
+        *it = (CBDbItem) {
             .id   = id,
             .text = nonnull(pl->name),
-            .type = pl->is_folder ? RX_DB_ITEM_FOLDER : RX_DB_ITEM_PLAYLIST,
+            .type = pl->is_folder ? CB_DB_ITEM_FOLDER : CB_DB_ITEM_PLAYLIST,
             .d    = num,
         };
         return true;
     }
-    case RX_CAT_HISTORIES:
+    case CB_CAT_HISTORIES:
         fmt_date((int32_t)id, buf, sizeof(buf));
         snprintf(tx->t1, sizeof(tx->t1), "HISTORY %s", buf);
-        *it = (RXDbItem) { .id = id, .text = tx->t1, .type = RX_DB_ITEM_HISTORY };
+        *it = (CBDbItem) { .id = id, .text = tx->t1, .type = CB_DB_ITEM_HISTORY };
         return true;
-    case RX_CAT_METADATA:
-    case RX_CAT_TRACK_INFO:
-    case RX_CAT_DELIVERY: {
+    case CB_CAT_METADATA:
+    case CB_CAT_TRACK_INFO:
+    case CB_CAT_DELIVERY: {
         int ti = track_index(c, m->track);
         if (ti < 0)
             return false;
-        if (m->what == RX_CAT_METADATA)
+        if (m->what == CB_CAT_METADATA)
             metadata_item(c, &c->t[ti], i, extended, it, tx);
-        else if (m->what == RX_CAT_TRACK_INFO)
+        else if (m->what == CB_CAT_TRACK_INFO)
             info_item(&c->t[ti], i, extended, it);
         else
             delivery_item(c, &c->t[ti], i, it);
@@ -1816,26 +1816,26 @@ static bool item_of(RXCatalog *c, const RXCatMenu *m, uint32_t i, int column, bo
     return false;
 }
 
-void rx_catalog_render(RXCatalog *c, const RXCatMenu *m, uint32_t offset, uint32_t count,
-                       int column, bool extended, bool latin1, uint32_t txid, RXWr *w)
+void cb_catalog_render(CBCatalog *c, const CBCatMenu *m, uint32_t offset, uint32_t count,
+                       int column, bool extended, bool latin1, uint32_t txid, CBWr *w)
 {
     for (uint32_t i = offset; c && i < m->nb && i - offset < count; i++) {
-        RXDbItem it;
+        CBDbItem it;
         Texts tx;
         if (item_of(c, m, i, column, extended, &it, &tx))
-            rx_dbmsg_item_latin1(w, txid, &it, extended, latin1);
+            cb_dbmsg_item_latin1(w, txid, &it, extended, latin1);
     }
 }
 
 /* ------------------------------------------------------------- artwork */
 
-int rx_catalog_artwork(RXCatalog *c, uint32_t id, bool item, bool large,
+int cb_catalog_artwork(CBCatalog *c, uint32_t id, bool item, bool large,
                        const uint8_t **jpeg, size_t *size)
 {
     *jpeg = NULL;
     *size = 0;
     if (!c)
-        return RX_ERROR(ENOENT);
+        return CB_ERROR(ENOENT);
     uint32_t art = id;
     if (item && id & ALBUM_BIT) {
         /* An album's: its first track's that has one (assumed; rekordbox
@@ -1848,17 +1848,17 @@ int rx_catalog_artwork(RXCatalog *c, uint32_t id, bool item, bool large,
         int ti = track_index(c, id);
         art = ti >= 0 ? c->t[ti].pt->artwork_id : 0;
     }
-    const RXPlanArtwork *a = artwork_of(c->plan, art);
+    const CBPlanArtwork *a = artwork_of(c->plan, art);
     if (!a)
-        return RX_ERROR(ENOENT);
+        return CB_ERROR(ENOENT);
     *jpeg = large ? a->jpeg240 : a->jpeg80;
     *size = large ? a->size240 : a->size80;
-    return *jpeg && *size ? 0 : RX_ERROR(ENOENT);
+    return *jpeg && *size ? 0 : CB_ERROR(ENOENT);
 }
 
 /* ------------------------------------------------------------ analysis */
 
-static Analysis *analysis_of(RXCatalog *c, uint32_t id)
+static Analysis *analysis_of(CBCatalog *c, uint32_t id)
 {
     int ti = track_index(c, id);
     if (ti < 0)
@@ -1874,35 +1874,35 @@ static Analysis *analysis_of(RXCatalog *c, uint32_t id)
             old = a;
     }
     analysis_clear(old);
-    /* The frame tables Link's plan leaves out (RX_PLAN_STORED reads no
+    /* The frame tables Link's plan leaves out (CB_PLAN_STORED reads no
      * audio) and the analysis needs (anlz.c): an MP3's frame count for its
      * PVBR, a FLAC's seek points for its PVB2, read from this one file now
      * that a player asks for it. */
-    RXPlanTrack full = *c->t[ti].pt;
-    RXFlacInfo flac = { 0 };
+    CBPlanTrack full = *c->t[ti].pt;
+    CBFlacInfo flac = { 0 };
     if (!strcmp(full.probe.codec, "mp3") && !full.probe.mp3.valid) {
-        RXMp3Info mp3;
-        if (rx_mp3_scan(full.source, &mp3) >= 0)
+        CBMp3Info mp3;
+        if (cb_mp3_scan(full.source, &mp3) >= 0)
             full.probe.mp3 = mp3;
     } else if (!strcmp(full.probe.codec, "flac") && !full.probe.flac.valid &&
-               rx_file_exists(full.source) && rx_flac_scan(full.source, &flac) >= 0) {
+               cb_file_exists(full.source) && cb_flac_scan(full.source, &flac) >= 0) {
         full.probe.flac = flac;
     }
-    RXWaveforms w = { 0 };
-    bool waves = c->lib && c->lib->db && rx_library_waveforms_load(c->lib, id, &w) >= 0;
-    int ret = rx_anlz_build(&full, waves ? &w : NULL, &old->files);
-    rx_flac_info_free(&flac);
+    CBWaveforms w = { 0 };
+    bool waves = c->lib && c->lib->db && cb_library_waveforms_load(c->lib, id, &w) >= 0;
+    int ret = cb_anlz_build(&full, waves ? &w : NULL, &old->files);
+    cb_flac_info_free(&flac);
     if (waves)
-        rx_waveforms_free(&w);
+        cb_waveforms_free(&w);
     if (ret < 0) {
-        rx_warn("link: the analysis of track %u: %s", id, strerror(-ret));
+        cb_warn("link: the analysis of track %u: %s", id, strerror(-ret));
         analysis_clear(old);
         return NULL;
     }
     const uint8_t *data[3] = { old->files.dat, old->files.ext, old->files.ex2 };
     const size_t size[3] = { old->files.dat_size, old->files.ext_size, old->files.ex2_size };
     for (int i = 0; i < 3; i++)
-        if (data[i] && rx_anlz_parse(data[i], size[i], &old->tags[i], &old->nb_tags[i]) < 0)
+        if (data[i] && cb_anlz_parse(data[i], size[i], &old->tags[i], &old->nb_tags[i]) < 0)
             old->nb_tags[i] = 0;
     old->id = id;
     old->used = ++c->clock;
@@ -1911,14 +1911,14 @@ static Analysis *analysis_of(RXCatalog *c, uint32_t id)
 
 /* A tag's data after its header, as the file holds it. */
 static const uint8_t *tag_data(const Analysis *a, int file, const char *fourcc, size_t *len,
-                               const RXAnlzTag **tag)
+                               const CBAnlzTag **tag)
 {
     for (int i = 0; i < a->nb_tags[file]; i++) {
-        const RXAnlzTag *t = &a->tags[file][i];
+        const CBAnlzTag *t = &a->tags[file][i];
         if (memcmp(t->fourcc, fourcc, 4))
             continue;
-        RXRd r = rx_rd(t->raw, t->raw_size);
-        uint32_t header = rx_rd_at_u32(&r, 4);
+        CBRd r = cb_rd(t->raw, t->raw_size);
+        uint32_t header = cb_rd_at_u32(&r, 4);
         if (header < 12 || header > t->raw_size)
             return NULL;
         if (tag)
@@ -1933,13 +1933,13 @@ static const uint8_t *tag_data(const Analysis *a, int file, const char *fourcc, 
  * capture: 9e eb 78 10 after both tracks' columns). */
 static const uint8_t preview_tail[4] = { 0x9e, 0xeb, 0x78, 0x10 };
 
-int rx_catalog_preview(RXCatalog *c, uint32_t track, RXWr *blob)
+int cb_catalog_preview(CBCatalog *c, uint32_t track, CBWr *blob)
 {
     Analysis *a = analysis_of(c, track);
     size_t n, n2 = 0;
     const uint8_t *pwav = a ? tag_data(a, 0, "PWAV", &n, NULL) : NULL;
     if (!pwav)
-        return RX_ERROR(ENOENT);
+        return CB_ERROR(ENOENT);
     const uint8_t *pwv2 = tag_data(a, 0, "PWV2", &n2, NULL);
     /* Each PWAV column as two bytes, height then whiteness, then the PWV2
      * columns, the height alone, 1 to 15: a Nexus player drops a preview
@@ -1947,86 +1947,86 @@ int rx_catalog_preview(RXCatalog *c, uint32_t track, RXWr *blob)
      * "Waveform Previews": 900 bytes; rbxport's capture: 904 with the
      * tail, and its issue 278). */
     for (size_t i = 0; i < n; i++) {
-        rx_wr_u8(blob, pwav[i] & 0x1f);
-        rx_wr_u8(blob, pwav[i] >> 5);
+        cb_wr_u8(blob, pwav[i] & 0x1f);
+        cb_wr_u8(blob, pwav[i] >> 5);
     }
     for (size_t i = 0; pwv2 && i < n2; i++)
-        rx_wr_u8(blob, (uint8_t)RX_MAX(pwv2[i] & 0x0f, 1));
-    rx_wr_bytes(blob, preview_tail, sizeof(preview_tail));
+        cb_wr_u8(blob, (uint8_t)CB_MAX(pwv2[i] & 0x0f, 1));
+    cb_wr_bytes(blob, preview_tail, sizeof(preview_tail));
     return 0;
 }
 
-int rx_catalog_detail(RXCatalog *c, uint32_t track, RXWr *blob)
+int cb_catalog_detail(CBCatalog *c, uint32_t track, CBWr *blob)
 {
     Analysis *a = analysis_of(c, track);
     size_t n;
     const uint8_t *pwv3 = a ? tag_data(a, 1, "PWV3", &n, NULL) : NULL;
     if (!pwv3 || n > UINT32_MAX)
-        return RX_ERROR(ENOENT);
+        return CB_ERROR(ENOENT);
     /* A header of the column count, 1, the count, 150 columns a second,
      * 1, little-endian, then the PWV3 columns (rbxport's capture). */
-    rx_wr_u32le(blob, (uint32_t)n);
-    rx_wr_u32le(blob, 1);
-    rx_wr_u32le(blob, (uint32_t)n);
-    rx_wr_u32le(blob, 150);
-    rx_wr_u32le(blob, 1);
-    rx_wr_bytes(blob, pwv3, n);
+    cb_wr_u32le(blob, (uint32_t)n);
+    cb_wr_u32le(blob, 1);
+    cb_wr_u32le(blob, (uint32_t)n);
+    cb_wr_u32le(blob, 150);
+    cb_wr_u32le(blob, 1);
+    cb_wr_bytes(blob, pwv3, n);
     return 0;
 }
 
-int rx_catalog_grid(RXCatalog *c, uint32_t track, RXWr *blob)
+int cb_catalog_grid(CBCatalog *c, uint32_t track, CBWr *blob)
 {
     Analysis *a = analysis_of(c, track);
     size_t n;
-    const RXAnlzTag *tag = NULL;
+    const CBAnlzTag *tag = NULL;
     const uint8_t *beats = a ? tag_data(a, 0, "PQTZ", &n, &tag) : NULL;
     if (!beats)
-        return RX_ERROR(ENOENT);
-    RXRd hdr = rx_rd(tag->raw, tag->raw_size);
-    uint32_t nb = RX_MIN(rx_rd_at_u32(&hdr, 0x14), (uint32_t)(n / 8));
+        return CB_ERROR(ENOENT);
+    CBRd hdr = cb_rd(tag->raw, tag->raw_size);
+    uint32_t nb = CB_MIN(cb_rd_at_u32(&hdr, 0x14), (uint32_t)(n / 8));
     /* The PQTZ word 0x00080000, the beat count, the bytes of the entries,
      * 1, 1; then each beat: its number in the bar, 0, the tempo x100 and
      * the time in ms, little-endian, and eight ff bytes (rbxport's capture;
      * track_metadata.adoc "Beat Grids" for the entries). */
-    rx_wr_u32le(blob, 0x00080000);
-    rx_wr_u32le(blob, nb);
-    rx_wr_u32le(blob, nb * 16);
-    rx_wr_u32le(blob, 1);
-    rx_wr_u32le(blob, 1);
-    RXRd r = rx_rd(beats, n);
+    cb_wr_u32le(blob, 0x00080000);
+    cb_wr_u32le(blob, nb);
+    cb_wr_u32le(blob, nb * 16);
+    cb_wr_u32le(blob, 1);
+    cb_wr_u32le(blob, 1);
+    CBRd r = cb_rd(beats, n);
     for (uint32_t i = 0; i < nb; i++) {
-        uint16_t number = rx_rd_u16(&r), tempo = rx_rd_u16(&r);
-        uint32_t ms = rx_rd_u32(&r);
-        rx_wr_u8(blob, (uint8_t)number);
-        rx_wr_u8(blob, 0);
-        rx_wr_u16le(blob, tempo);
-        rx_wr_u32le(blob, ms);
-        rx_wr_u32(blob, 0xffffffff);
-        rx_wr_u32(blob, 0xffffffff);
+        uint16_t number = cb_rd_u16(&r), tempo = cb_rd_u16(&r);
+        uint32_t ms = cb_rd_u32(&r);
+        cb_wr_u8(blob, (uint8_t)number);
+        cb_wr_u8(blob, 0);
+        cb_wr_u16le(blob, tempo);
+        cb_wr_u32le(blob, ms);
+        cb_wr_u32(blob, 0xffffffff);
+        cb_wr_u32(blob, 0xffffffff);
     }
     return 0;
 }
 
-int rx_catalog_vbr(RXCatalog *c, uint32_t track, RXWr *blob)
+int cb_catalog_vbr(CBCatalog *c, uint32_t track, CBWr *blob)
 {
     Analysis *a = analysis_of(c, track);
     size_t n;
     const uint8_t *pvbr = a ? tag_data(a, 0, "PVBR", &n, NULL) : NULL;
     if (!pvbr)
-        return RX_ERROR(ENOENT);
+        return CB_ERROR(ENOENT);
     /* The PVBR tag's 400 index words and its trailer, the track's samples,
      * little-endian: rekordbox's reply was 1600 zero bytes and then a word
      * that is each track's MPEG frames x 1152 for those CBR MP3s
      * (rbxport's capture: 11106 x 1152 for a 290 s track, read as
      * little-endian), the PVBR trailer (docs/anlz.md 4.2). That a VBR
      * file's index goes the same way is assumed. */
-    RXRd r = rx_rd(pvbr, n);
+    CBRd r = cb_rd(pvbr, n);
     for (size_t i = 0; i < n / 4; i++)
-        rx_wr_u32le(blob, rx_rd_u32(&r));
+        cb_wr_u32le(blob, cb_rd_u32(&r));
     return 0;
 }
 
-int rx_catalog_tag(RXCatalog *c, uint32_t track, uint32_t fourcc, uint32_t ext, RXWr *blob)
+int cb_catalog_tag(CBCatalog *c, uint32_t track, uint32_t fourcc, uint32_t ext, CBWr *blob)
 {
     /* Both as the ASCII bytes in a little-endian number, an extension of
      * three padded with a NUL (track_metadata.adoc "Requesting New Tags":
@@ -2041,32 +2041,32 @@ int rx_catalog_tag(RXCatalog *c, uint32_t track, uint32_t fourcc, uint32_t ext, 
                (ext & 0xff) == '2' && !memcmp(e + 1, "EX", 3) ? 2 : -1;
     Analysis *a = file >= 0 ? analysis_of(c, track) : NULL;
     if (!a)
-        return RX_ERROR(ENOENT);
+        return CB_ERROR(ENOENT);
     for (int i = 0; i < a->nb_tags[file]; i++) {
-        const RXAnlzTag *t = &a->tags[file][i];
+        const CBAnlzTag *t = &a->tags[file][i];
         if (memcmp(t->fourcc, name, 4) || t->raw_size > UINT32_MAX - 3)
             continue;
         /* Its length padded to four, little-endian, then the tag as the
          * file holds it, header and all, zero-padded (rbxport's capture:
          * 381c0000 then "PWV4" ...). */
         uint32_t padded = ((uint32_t)t->raw_size + 3) & ~3u;
-        rx_wr_u32le(blob, padded);
-        rx_wr_bytes(blob, t->raw, t->raw_size);
-        rx_wr_zeros(blob, padded - t->raw_size);
+        cb_wr_u32le(blob, padded);
+        cb_wr_bytes(blob, t->raw, t->raw_size);
+        cb_wr_zeros(blob, padded - t->raw_size);
         return 0;
     }
-    return RX_ERROR(ENOENT);
+    return CB_ERROR(ENOENT);
 }
 
 static int cmp_cue_time(const void *a, const void *b)
 {
-    const RXPlanCue *x = *(const RXPlanCue *const *)a, *y = *(const RXPlanCue *const *)b;
+    const CBPlanCue *x = *(const CBPlanCue *const *)a, *y = *(const CBPlanCue *const *)b;
     if (x->hot != y->hot && (x->hot >= 0 || y->hot >= 0))
         return x->hot < 0 ? 1 : y->hot < 0 ? -1 : x->hot - y->hot;
     return x->time < y->time ? -1 : x->time > y->time;
 }
 
-/* Milliseconds as the ANLZ files have them (rx_anlz_ms, dj's ms()). */
+/* Milliseconds as the ANLZ files have them (cb_anlz_ms, dj's ms()). */
 static uint32_t ms_of(double t)
 {
     double v = floor(t * 1000.0 + 0.5);
@@ -2074,12 +2074,12 @@ static uint32_t ms_of(double t)
 }
 
 /* Hot cues by slot, then memory cues by time. NULL with *nb 0 for none. */
-static const RXPlanCue **cues_sorted(const RXPlanTrack *pt, int *nb)
+static const CBPlanCue **cues_sorted(const CBPlanTrack *pt, int *nb)
 {
     *nb = 0;
     if (pt->nb_cues <= 0)
         return NULL;
-    const RXPlanCue **v = malloc((size_t)pt->nb_cues * sizeof(*v));
+    const CBPlanCue **v = malloc((size_t)pt->nb_cues * sizeof(*v));
     if (!v)
         return NULL;
     for (int i = 0; i < pt->nb_cues; i++)
@@ -2089,17 +2089,17 @@ static const RXPlanCue **cues_sorted(const RXPlanTrack *pt, int *nb)
     return v;
 }
 
-int rx_catalog_cues_ext(RXCatalog *c, uint32_t track, RXWr *blob, uint32_t *count)
+int cb_catalog_cues_ext(CBCatalog *c, uint32_t track, CBWr *blob, uint32_t *count)
 {
     *count = 0;
     int ti = track_index(c, track);
     if (ti < 0)
-        return RX_ERROR(ENOENT);
-    const RXPlanTrack *pt = c->t[ti].pt;
+        return CB_ERROR(ENOENT);
+    const CBPlanTrack *pt = c->t[ti].pt;
     int nb;
-    const RXPlanCue **v = cues_sorted(pt, &nb);
+    const CBPlanCue **v = cues_sorted(pt, &nb);
     if (pt->nb_cues > 0 && !v)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     int nb_mem = 0, mem = 0;
     for (int i = 0; i < nb; i++)
         nb_mem += v[i]->hot < 0;
@@ -2113,64 +2113,64 @@ int rx_catalog_cues_ext(RXCatalog *c, uint32_t track, RXWr *blob, uint32_t *coun
      * bytes. track_metadata.adoc "Requesting Nxs2 Cue Points" for the
      * fields it names. */
     for (int i = 0; i < nb; i++) {
-        const RXPlanCue *q = v[i];
+        const CBPlanCue *q = v[i];
         bool hot = q->hot >= 0 && q->hot < 8;
         bool loop = q->loop_end > q->time;
-        size_t name_units = q->name[0] ? rx_link_utf16_units(q->name) + 1 : 0;
+        size_t name_units = q->name[0] ? cb_link_utf16_units(q->name) + 1 : 0;
         size_t len = 0x4a + 2 * name_units + 8 + 0x2a;
         size_t at = blob->len;
-        rx_wr_u32le(blob, (uint32_t)len);
-        rx_wr_u8(blob, hot ? (uint8_t)(q->hot + 1) : 0);
-        rx_wr_u8(blob, 0);
-        rx_wr_u8(blob, loop ? 2 : 1);
-        rx_wr_zeros(blob, 3);
-        rx_wr_u16le(blob, 1000);
-        rx_wr_u32le(blob, ms_of(q->time));
-        rx_wr_u32le(blob, loop ? ms_of(q->loop_end) : 0xffffffff);
-        rx_wr_zeros(blob, 0x20 - 0x14);
+        cb_wr_u32le(blob, (uint32_t)len);
+        cb_wr_u8(blob, hot ? (uint8_t)(q->hot + 1) : 0);
+        cb_wr_u8(blob, 0);
+        cb_wr_u8(blob, loop ? 2 : 1);
+        cb_wr_zeros(blob, 3);
+        cb_wr_u16le(blob, 1000);
+        cb_wr_u32le(blob, ms_of(q->time));
+        cb_wr_u32le(blob, loop ? ms_of(q->loop_end) : 0xffffffff);
+        cb_wr_zeros(blob, 0x20 - 0x14);
         if (hot) {
-            rx_wr_u32(blob, 0xffffffff);
+            cb_wr_u32(blob, 0xffffffff);
         } else {
-            rx_wr_u16le(blob, mem > 0 ? (uint16_t)(mem - 1) : 0xffff);
-            rx_wr_u16le(blob, mem + 1 < nb_mem ? (uint16_t)(mem + 1) : 0xffff);
+            cb_wr_u16le(blob, mem > 0 ? (uint16_t)(mem - 1) : 0xffff);
+            cb_wr_u16le(blob, mem + 1 < nb_mem ? (uint16_t)(mem + 1) : 0xffff);
             mem++;
         }
-        rx_wr_zeros(blob, 0x34 - 0x24);
-        rx_wr_u8(blob, 0x56);
-        rx_wr_zeros(blob, 0x3a - 0x35);
+        cb_wr_zeros(blob, 0x34 - 0x24);
+        cb_wr_u8(blob, 0x56);
+        cb_wr_zeros(blob, 0x3a - 0x35);
         /* A memory cue's colour id (1..8) here, where rekordbox reads it from
          * a player's saved cue (rbxport, from rekordbox 7.2.19's
          * SavUsbCueExt): assumed to be where it sends it too. */
-        rx_wr_u8(blob, hot ? 0 : (uint8_t)RX_CLAMP(q->color_code, 0, 8));
-        rx_wr_zeros(blob, 0x48 - 0x3b);
-        rx_wr_u16le(blob, (uint16_t)(2 * name_units));
+        cb_wr_u8(blob, hot ? 0 : (uint8_t)CB_CLAMP(q->color_code, 0, 8));
+        cb_wr_zeros(blob, 0x48 - 0x3b);
+        cb_wr_u16le(blob, (uint16_t)(2 * name_units));
         if (name_units)
-            rx_wr_utf16(blob, q->name, false, true);
-        rx_wr_u32le(blob, 0x2c);
+            cb_wr_utf16(blob, q->name, false, true);
+        cb_wr_u32le(blob, 0x2c);
         /* The four bytes the stick's PCP2 entry carries (src/formats/anlz.c). */
-        rx_wr_u8(blob, hot ? (uint8_t)q->color_code : 0);
-        rx_wr_u8(blob, hot ? (uint8_t)(q->rgb >> 16) : 0);
-        rx_wr_u8(blob, hot ? (uint8_t)(q->rgb >> 8) : 0);
-        rx_wr_u8(blob, hot ? (uint8_t)q->rgb : 0);
-        rx_wr_zeros(blob, len - (blob->len - at));
+        cb_wr_u8(blob, hot ? (uint8_t)q->color_code : 0);
+        cb_wr_u8(blob, hot ? (uint8_t)(q->rgb >> 16) : 0);
+        cb_wr_u8(blob, hot ? (uint8_t)(q->rgb >> 8) : 0);
+        cb_wr_u8(blob, hot ? (uint8_t)q->rgb : 0);
+        cb_wr_zeros(blob, len - (blob->len - at));
         (*count)++;
     }
     free(v);
     return 0;
 }
 
-int rx_catalog_cues(RXCatalog *c, uint32_t track, RXWr *records, RXWr *times,
+int cb_catalog_cues(CBCatalog *c, uint32_t track, CBWr *records, CBWr *times,
                     uint32_t *hot, uint32_t *memory)
 {
     *hot = *memory = 0;
     int ti = track_index(c, track);
     if (ti < 0)
-        return RX_ERROR(ENOENT);
-    const RXPlanTrack *pt = c->t[ti].pt;
+        return CB_ERROR(ENOENT);
+    const CBPlanTrack *pt = c->t[ti].pt;
     int nb;
-    const RXPlanCue **v = cues_sorted(pt, &nb);
+    const CBPlanCue **v = cues_sorted(pt, &nb);
     if (pt->nb_cues > 0 && !v)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     /* The older list holds hot cues A to C and memory cues
      * (track_metadata.adoc "Requesting Cue Points and Loops"): 36 bytes
      * each, little-endian: the loop flag, the cue flag and the hot cue's
@@ -2188,7 +2188,7 @@ int rx_catalog_cues(RXCatalog *c, uint32_t track, RXWr *records, RXWr *times,
      * nothing (an emulated one's memory, 2026-10-15). */
     for (int pass = 0; pass < 2; pass++) {
         for (int i = 0; i < nb; i++) {
-            const RXPlanCue *q = v[i];
+            const CBPlanCue *q = v[i];
             if (q->hot >= 3 || (q->hot >= 0) != (pass == 1))
                 continue;
             bool loop = q->loop_end > q->time;
@@ -2200,9 +2200,9 @@ int rx_catalog_cues(RXCatalog *c, uint32_t track, RXWr *records, RXWr *times,
                 0, 0, 0,
             };
             for (int k = 0; k < 9; k++)
-                rx_wr_u32le(records, words[k]);
-            rx_wr_u32le(times, in);
-            rx_wr_u32le(times, out);
+                cb_wr_u32le(records, words[k]);
+            cb_wr_u32le(times, in);
+            cb_wr_u32le(times, out);
             if (slot)
                 (*hot)++;
             else
@@ -2216,7 +2216,7 @@ int rx_catalog_cues(RXCatalog *c, uint32_t track, RXWr *records, RXWr *times,
 /* ------------------------------------------------------- cues saved */
 
 /* The same place, loop, state, name and colour, to the ms. */
-static bool cue_same(const RXCue *a, const RXCue *b)
+static bool cue_same(const CBCue *a, const CBCue *b)
 {
     return a->hot == b->hot && fabs(a->time - b->time) < 0.0015 &&
            (a->loop_end >= 0) == (b->loop_end >= 0) &&
@@ -2224,54 +2224,54 @@ static bool cue_same(const RXCue *a, const RXCue *b)
            a->active == b->active && !strcmp(a->name, b->name) && !strcmp(a->color, b->color);
 }
 
-int rx_link_edit_apply(RXTrack *t, const RXLinkEdit *e)
+int cb_link_edit_apply(CBTrack *t, const CBLinkEdit *e)
 {
-    if (e->what == RX_LINK_EDIT_RATING) {
+    if (e->what == CB_LINK_EDIT_RATING) {
         if (e->rating < 0 || e->rating > 5)
-            return RX_ERROR(EINVAL);
+            return CB_ERROR(EINVAL);
         if (t->meta.rating == e->rating)
             return 0;
         t->meta.rating = e->rating;
         return 1;
     }
-    const RXCue *c = &e->cue;
-    if (c->hot >= RX_HOT_CUE_SLOTS)
-        return RX_ERROR(EINVAL);
+    const CBCue *c = &e->cue;
+    if (c->hot >= CB_HOT_CUE_SLOTS)
+        return CB_ERROR(EINVAL);
     /* A memory cue within 20 ms is the one meant, as a stick's read back
-     * finds it (rx_stick_apply). */
-    int at = c->hot >= 0 ? rx_track_hot_cue(t, c->hot) : rx_track_memory_cue_at(t, c->time, 0.020);
+     * finds it (cb_stick_apply). */
+    int at = c->hot >= 0 ? cb_track_hot_cue(t, c->hot) : cb_track_memory_cue_at(t, c->time, 0.020);
     if (e->remove) {
         if (at < 0)
             return 0;
-        int ret = rx_track_remove_cue(t, at);
+        int ret = cb_track_remove_cue(t, at);
         return ret < 0 ? ret : 1;
     }
     if (at >= 0 && cue_same(&t->cues[at], c))
         return 0;
-    /* A hot cue takes its slot over by itself (rx_track_add_cue). */
+    /* A hot cue takes its slot over by itself (cb_track_add_cue). */
     if (at >= 0 && c->hot < 0) {
-        int ret = rx_track_remove_cue(t, at);
+        int ret = cb_track_remove_cue(t, at);
         if (ret < 0)
             return ret;
     }
-    int ret = rx_track_add_cue(t, c);
+    int ret = cb_track_add_cue(t, c);
     return ret < 0 ? ret : 1;
 }
 
 /* An edit applied to the library's track and to what the catalog serves
  * of it: 1 when it changed something, 0 when not, or a negative errno. */
-static int apply(RXCatalog *c, int ti, RXTrack *t, const RXLinkEdit *e)
+static int apply(CBCatalog *c, int ti, CBTrack *t, const CBLinkEdit *e)
 {
-    int ret = rx_link_edit_apply(t, e);
+    int ret = cb_link_edit_apply(t, e);
     if (ret <= 0)
         return ret;
-    if (e->what == RX_LINK_EDIT_RATING) {
+    if (e->what == CB_LINK_EDIT_RATING) {
         c->t[ti].rating = (uint8_t)e->rating;
         free(c->order[SORT_RATING]);
         c->order[SORT_RATING] = NULL;
         return 1;
     }
-    if ((ret = rx_plan_track_cues(c->t[ti].pt, t)) < 0)
+    if ((ret = cb_plan_track_cues(c->t[ti].pt, t)) < 0)
         return ret;
     /* The ANLZ files made for it (their cue tags) are made again. */
     for (int i = 0; i < NB_ANALYSIS; i++)
@@ -2280,58 +2280,58 @@ static int apply(RXCatalog *c, int ti, RXTrack *t, const RXLinkEdit *e)
     return 1;
 }
 
-int rx_catalog_apply_edit(RXCatalog *c, const RXLinkEdit *e)
+int cb_catalog_apply_edit(CBCatalog *c, const CBLinkEdit *e)
 {
     int ti = track_index(c, e->track_id);
-    RXTrack *t = ti >= 0 ? rx_library_find_id(c->lib, e->track_id) : NULL;
-    return t ? apply(c, ti, t, e) : RX_ERROR(ENOENT);
+    CBTrack *t = ti >= 0 ? cb_library_find_id(c->lib, e->track_id) : NULL;
+    return t ? apply(c, ti, t, e) : CB_ERROR(ENOENT);
 }
 
-int rx_catalog_cue_edit(RXCatalog *c, uint32_t track, int player, bool remove,
-                        const RXStickCue *cue)
+int cb_catalog_cue_edit(CBCatalog *c, uint32_t track, int player, bool remove,
+                        const CBStickCue *cue)
 {
     int ti = track_index(c, track);
-    RXTrack *t = ti >= 0 ? rx_library_find_id(c->lib, track) : NULL;
+    CBTrack *t = ti >= 0 ? cb_library_find_id(c->lib, track) : NULL;
     if (!t)
-        return RX_ERROR(ENOENT);
-    RXLinkEdit e = { .track_id = track, .player = player, .remove = remove };
-    rx_stick_cue_to_track(cue, rx_track_analysed(t) ? &t->grid : NULL, &e.cue);
+        return CB_ERROR(ENOENT);
+    CBLinkEdit e = { .track_id = track, .player = player, .remove = remove };
+    cb_stick_cue_to_track(cue, cb_track_analysed(t) ? &t->grid : NULL, &e.cue);
     /* A hot cue saved with no colour code comes with the pad colour the
      * deck gave it (00ff00 from a CDJ-3000, 1aff00 from a 3000X, whatever
      * the slot; emulated, 2026-10-15), which rekordbox keeps (rbxport). A
-     * stick's 00ff00 is no colour (rx_stick_cue_to_track); here it is so
+     * stick's 00ff00 is no colour (cb_stick_cue_to_track); here it is so
      * only as the slot's own default. */
     if (cue->hot >= 0 && !cue->code && cue->rgb && !e.cue.color[0] &&
-        cue->rgb != rx_hot_cue_default_rgb(cue->hot))
+        cue->rgb != cb_hot_cue_default_rgb(cue->hot))
         snprintf(e.cue.color, sizeof(e.cue.color), "#%06x", cue->rgb);
     int ret = apply(c, ti, t, &e);
     if (ret <= 0)
         return ret;
     char what[16], at[32];
     if (e.cue.hot >= 0)
-        snprintf(what, sizeof(what), "hot cue %c", rx_cue_letter(&e.cue));
+        snprintf(what, sizeof(what), "hot cue %c", cb_cue_letter(&e.cue));
     else
-        snprintf(what, sizeof(what), "a memory %s", rx_cue_is_loop(&e.cue) ? "loop" : "cue");
-    rx_info("link: player %d %s %s at %s on track %u", player, remove ? "deleted" : "saved", what,
-            rx_fmt_time(e.cue.time, at, sizeof(at)), track);
+        snprintf(what, sizeof(what), "a memory %s", cb_cue_is_loop(&e.cue) ? "loop" : "cue");
+    cb_info("link: player %d %s %s at %s on track %u", player, remove ? "deleted" : "saved", what,
+            cb_fmt_time(e.cue.time, at, sizeof(at)), track);
     if (c->edit)
         c->edit(c->edit_opaque, &e);
     return 0;
 }
 
-int rx_catalog_rating_edit(RXCatalog *c, uint32_t track, int player, int stars)
+int cb_catalog_rating_edit(CBCatalog *c, uint32_t track, int player, int stars)
 {
     int ti = track_index(c, track);
-    RXTrack *t = ti >= 0 ? rx_library_find_id(c->lib, track) : NULL;
+    CBTrack *t = ti >= 0 ? cb_library_find_id(c->lib, track) : NULL;
     if (!t)
-        return RX_ERROR(ENOENT);
-    RXLinkEdit e = {
-        .what = RX_LINK_EDIT_RATING, .track_id = track, .player = player, .rating = stars,
+        return CB_ERROR(ENOENT);
+    CBLinkEdit e = {
+        .what = CB_LINK_EDIT_RATING, .track_id = track, .player = player, .rating = stars,
     };
     int ret = apply(c, ti, t, &e);
     if (ret <= 0)
         return ret;
-    rx_info("link: player %d rated track %u %d star%s", player, track, stars, stars == 1 ? "" : "s");
+    cb_info("link: player %d rated track %u %d star%s", player, track, stars, stars == 1 ? "" : "s");
     if (c->edit)
         c->edit(c->edit_opaque, &e);
     return 0;
@@ -2347,10 +2347,10 @@ static bool same_text(const char *a, const char *b)
 /* Whether `b` is `a` in everything the plan is made of (its file, the
  * names it interns, the paths it makes, its key, its My Tags, its
  * cover): what may differ is what the catalog reads of the track as it
- * goes, or patches (rx_catalog_update_track). */
-static bool same_shape(const RXTrack *a, const RXTrack *b)
+ * goes, or patches (cb_catalog_update_track). */
+static bool same_shape(const CBTrack *a, const CBTrack *b)
 {
-    const RXMeta *x = &a->meta, *y = &b->meta;
+    const CBMeta *x = &a->meta, *y = &b->meta;
     if (!same_text(a->path, b->path) || a->missing != b->missing || a->added != b->added ||
         a->mtime != b->mtime || a->file_size != b->file_size || strcmp(a->codec, b->codec) ||
         a->duration != b->duration || a->total_samples != b->total_samples ||
@@ -2370,32 +2370,32 @@ static bool same_shape(const RXTrack *a, const RXTrack *b)
     return true;
 }
 
-int rx_catalog_update_track(RXCatalog *c, RXTrack *fresh)
+int cb_catalog_update_track(CBCatalog *c, CBTrack *fresh)
 {
-    RXTrack *t = rx_library_find_id(c->lib, fresh->id);
+    CBTrack *t = cb_library_find_id(c->lib, fresh->id);
     if (!t || !same_shape(t, fresh))
         return 1;
     bool played = t->play_count != fresh->play_count || t->last_played != fresh->last_played;
     /* In place: the plan and the catalog point at the track. */
-    RXTrack old = *t;
+    CBTrack old = *t;
     *t = *fresh;
     *fresh = old;
     int ti = fresh->id <= UINT32_MAX ? track_index(c, (uint32_t)fresh->id) : -1;
     if (ti < 0)
         return 0;
-    RXPlanTrack *pt = c->t[ti].pt;
+    CBPlanTrack *pt = c->t[ti].pt;
     CatTrack *ct = &c->t[ti];
     int ret;
-    if ((ret = rx_grid_copy(&pt->grid, &t->grid)) < 0 || (ret = rx_plan_track_cues(pt, t)) < 0)
+    if ((ret = cb_grid_copy(&pt->grid, &t->grid)) < 0 || (ret = cb_plan_track_cues(pt, t)) < 0)
         return ret;
-    pt->color_id = (uint32_t)rx_track_color_nearest_hue(t->meta.hue);
+    pt->color_id = (uint32_t)cb_track_color_nearest_hue(t->meta.hue);
     /* The title is the stem made of the path, which is the same, or the
      * tag, whose string was the old copy's. */
     if (!stem_len(t) && t->meta.title)
         ct->title = t->meta.title;
     ct->tempo = tempo_of(pt);
     ct->color = (uint8_t)(pt->color_id <= 8 ? pt->color_id : 0);
-    ct->rating = (uint8_t)RX_CLAMP(t->meta.rating, 0, 5);
+    ct->rating = (uint8_t)CB_CLAMP(t->meta.rating, 0, 5);
     ct->played = ymd_of(t->last_played);
     for (int i = 0; i < NB_SORTS; i++) {
         free(c->order[i]);
@@ -2414,12 +2414,12 @@ int rx_catalog_update_track(RXCatalog *c, RXTrack *fresh)
     return 0;
 }
 
-RXLinkTagList *rx_catalog_tag_list(RXCatalog *c)
+CBLinkTagList *cb_catalog_tag_list(CBCatalog *c)
 {
     return c->tags;
 }
 
-bool rx_catalog_serves(RXCatalog *c, uint32_t track)
+bool cb_catalog_serves(CBCatalog *c, uint32_t track)
 {
     return track_index(c, track) >= 0;
 }

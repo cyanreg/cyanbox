@@ -4,21 +4,21 @@
 # The interface's headless run (meson test --suite ui): builds a small
 # library of synthetic tracks with the CLI, gives one of them hot cues,
 # memory cues and loops, then runs the interface with the first track
-# loaded and playing (RXBOX_UI_AUTOLOAD) and saves frame 100
-# (RXBOX_UI_SCREENSHOT; --frames 120 bounds the run). Audio goes nowhere
+# loaded and playing (CYANBOX_UI_AUTOLOAD) and saves frame 100
+# (CYANBOX_UI_SCREENSHOT; --frames 120 bounds the run). Audio goes nowhere
 # (--audio none), and the player stays off the session bus (--no-mpris).
 # The first two tracks have one cover, which the library then holds once.
 #
-# It never runs on the user's session: it needs RXBOX_UI_TEST=1 and a
+# It never runs on the user's session: it needs CYANBOX_UI_TEST=1 and a
 # WAYLAND_DISPLAY of a private compositor (docs/HACKING.md, "Running the
 # interface while developing"), else it reports skipped (77). With
-# RXBOX_UI_SWAYSOCK set to that private sway's socket it shoots every size
-# in RXBOX_UI_SIZES ("1600x900 1280x720" by default) by resizing the
-# headless output; without it, one shot at the output's size. RXBOX_UI_SHOW
+# CYANBOX_UI_SWAYSOCK set to that private sway's socket it shoots every size
+# in CYANBOX_UI_SIZES ("1600x900 1280x720" by default) by resizing the
+# headless output; without it, one shot at the output's size. CYANBOX_UI_SHOW
 # (passed through) opens panels and dialogs for the shot (src/ui/ui.cpp).
 #
 # Then the variants, each a run with input given at set frames
-# (RXBOX_UI_EVENTS) and the state the interface logs with the screenshot
+# (CYANBOX_UI_EVENTS) and the state the interface logs with the screenshot
 # checked: CUE held while the window loses the keyboard is let go; Enter on
 # another track while one plays loads it at once (the playing one pauses
 # for the swap, the new one plays on, no question asked); the Add browser on
@@ -26,44 +26,44 @@
 # the folder and ticks the row Enter is pressed on; the tree's finder
 # lists what it finds and opens the one Enter is pressed on; Delete after a click on a cue in the
 # player's cue list deletes that cue and nothing else (with
-# RXBOX_UI_SWAYSOCK only: the click needs a known size). Then the Player
+# CYANBOX_UI_SWAYSOCK only: the click needs a known size). Then the Player
 # settings dialog, shot open, and a value picked in it with two clicks,
 # which must land in the library's setting table (the clicks with
-# RXBOX_UI_SWAYSOCK only). Then the interface following two of those
+# CYANBOX_UI_SWAYSOCK only). Then the interface following two of those
 # settings: the overview type for the overview and the row previews, and
 # the key display for the deck's KEY. Then the Link decks in the deck's
 # title row with made-up players, the track menu's "Load in deck" items under the
 # players' Eject/Load Lock, a track added to the TAG LIST and shown, and
 # one added to the History and shown. Last, File > Remove missing tracks
-# (RXBOX_UI_SHOW=remove-missing): it lists the fourth track and a fifth
+# (CYANBOX_UI_SHOW=remove-missing): it lists the fourth track and a fifth
 # whose folder is gone too, names that folder, and a click on Remove takes
 # both out of the library, the rest kept. Then Album Artists: opened and an
-# artist shown with two clicks (with RXBOX_UI_SWAYSOCK only).
+# artist shown with two clicks (with CYANBOX_UI_SWAYSOCK only).
 #
-# usage: screenshot.sh RXBOX OUTDIR
+# usage: screenshot.sh CYANBOX OUTDIR
 
 set -eu
 
-[ "${RXBOX_UI_TEST:-0}" = 1 ] || { echo "RXBOX_UI_TEST is not 1: skipped"; exit 77; }
+[ "${CYANBOX_UI_TEST:-0}" = 1 ] || { echo "CYANBOX_UI_TEST is not 1: skipped"; exit 77; }
 [ -n "${WAYLAND_DISPLAY:-}" ] || { echo "no WAYLAND_DISPLAY: skipped"; exit 77; }
 case "$WAYLAND_DISPLAY" in
 wayland-0|wayland-1)
     echo "$WAYLAND_DISPLAY looks like the user's session; use a private headless sway: skipped"
     exit 77;;
 esac
-[ $# -eq 2 ] || { echo "usage: $0 RXBOX OUTDIR" >&2; exit 2; }
+[ $# -eq 2 ] || { echo "usage: $0 CYANBOX OUTDIR" >&2; exit 2; }
 command -v ffmpeg > /dev/null || { echo "no ffmpeg: skipped"; exit 77; }
 
-RXBOX=$1
+CYANBOX=$1
 OUT=$2
 LIB=$OUT/library
 AUDIO=$OUT/audio
 rm -rf "$LIB" "$AUDIO"
 mkdir -p "$LIB" "$AUDIO"
-unset RXBOX_LIBRARY
+unset CYANBOX_LIBRARY
 
 rx() {
-    "$RXBOX" -c "$LIB" "$@"
+    "$CYANBOX" -c "$LIB" "$@"
 }
 
 # A cover for the first two tracks: a gradient, embedded as the attached
@@ -86,11 +86,11 @@ synth() {
         ffmpeg -nostdin -v error -y -f lavfi -i "aevalsrc=$expr:s=44100:d=$dur" -i "$cover" \
             -map 0:a -map 1:v -c:a flac -c:v png -disposition:v attached_pic -ac 2 \
             -metadata title="$title" -metadata artist="$artist" -metadata genre="$genre" \
-            -metadata album="rxbox test tones" -metadata date=2026 "$AUDIO/$name.flac"
+            -metadata album="cyanbox test tones" -metadata date=2026 "$AUDIO/$name.flac"
     else
         ffmpeg -nostdin -v error -y -f lavfi -i "aevalsrc=$expr:s=44100:d=$dur" -c:a flac -ac 2 \
             -metadata title="$title" -metadata artist="$artist" -metadata genre="$genre" \
-            -metadata album="rxbox test tones" -metadata date=2026 "$AUDIO/$name.flac"
+            -metadata album="cyanbox test tones" -metadata date=2026 "$AUDIO/$name.flac"
     fi
 }
 
@@ -145,35 +145,35 @@ rm -f "$AUDIO/04-techno.flac"
 shoot() {
     png=$1
     rm -f "$png"
-    RXBOX_UI_AUTOLOAD=$ID RXBOX_UI_AUTOLOAD_AT=${RXBOX_UI_AUTOLOAD_AT:-13.5} \
-    RXBOX_UI_SCREENSHOT=$png timeout 120 \
-        "$RXBOX" -c "$LIB" --audio none --no-mpris --frames ${FRAMES:-120} > "$png.log" 2>&1 || {
-        echo "rxbox failed:"; cat "$png.log"; exit 1; }
+    CYANBOX_UI_AUTOLOAD=$ID CYANBOX_UI_AUTOLOAD_AT=${CYANBOX_UI_AUTOLOAD_AT:-13.5} \
+    CYANBOX_UI_SCREENSHOT=$png timeout 120 \
+        "$CYANBOX" -c "$LIB" --audio none --no-mpris --frames ${FRAMES:-120} > "$png.log" 2>&1 || {
+        echo "cyanbox failed:"; cat "$png.log"; exit 1; }
     [ -s "$png" ] || { echo "no screenshot at $png"; cat "$png.log"; exit 1; }
     echo "screenshot: $png"
 }
 
-# variant NAME EVENTS STATE: a shot with RXBOX_UI_EVENTS, whose logged
+# variant NAME EVENTS STATE: a shot with CYANBOX_UI_EVENTS, whose logged
 # state ("ui test: frame N track ID playing P position S popup Q") must
 # match the extended regular expression STATE.
 variant() {
     name=$1 events=$2 want=$3
-    export RXBOX_UI_EVENTS="$events"
+    export CYANBOX_UI_EVENTS="$events"
     shoot "$OUT/variant-$name.png"
-    unset RXBOX_UI_EVENTS
+    unset CYANBOX_UI_EVENTS
     state=$(grep "ui test:" "$OUT/variant-$name.png.log" || true)
     echo "$name: $state"
     echo "$state" | grep -Eq "$want" || {
         echo "FAIL: variant $name: want \"$want\""; cat "$OUT/variant-$name.png.log"; exit 1; }
 }
 
-if [ -n "${RXBOX_UI_SWAYSOCK:-}" ]; then
-    for size in ${RXBOX_UI_SIZES:-1600x900 1280x720}; do
-        SWAYSOCK=$RXBOX_UI_SWAYSOCK swaymsg -q output '*' resolution "$size"
-        shoot "$OUT/rxbox-$size.png"
+if [ -n "${CYANBOX_UI_SWAYSOCK:-}" ]; then
+    for size in ${CYANBOX_UI_SIZES:-1600x900 1280x720}; do
+        SWAYSOCK=$CYANBOX_UI_SWAYSOCK swaymsg -q output '*' resolution "$size"
+        shoot "$OUT/cyanbox-$size.png"
     done
 else
-    shoot "$OUT/rxbox.png"
+    shoot "$OUT/cyanbox.png"
 fi
 
 # The table showed both covered tracks, whose thumbnails the library
@@ -203,10 +203,10 @@ variant cue-focus "70:down:C,72:up:C,80:down:C,88:up:C,88:focus-out" \
 # pauses for the swap and the other track loads and plays on; nothing
 # asks.
 FRAMES=160
-export RXBOX_UI_SCREENSHOT_FRAME=140
+export CYANBOX_UI_SCREENSHOT_FRAME=140
 variant enter-loads "70:down:UpArrow,71:up:UpArrow,75:down:Enter,76:up:Enter" \
     "track $ID2 playing 1 .*popup 0"
-unset FRAMES RXBOX_UI_SCREENSHOT_FRAME
+unset FRAMES CYANBOX_UI_SCREENSHOT_FRAME
 
 # The Add browser on a folder it cannot read ($HOME/Music) says why.
 if [ "$(id -u)" != 0 ]; then
@@ -215,7 +215,7 @@ if [ "$(id -u)" != 0 ]; then
     mkdir -p "$OUT/home/Music/inside"
     chmod 000 "$OUT/home/Music"
     (
-        export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}" HOME="$OUT/home" RXBOX_UI_SHOW=add
+        export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}" HOME="$OUT/home" CYANBOX_UI_SHOW=add
         shoot "$OUT/variant-add-noperm.png"
     ) || { chmod 755 "$OUT/home/Music"; exit 1; }
     chmod 755 "$OUT/home/Music"
@@ -235,7 +235,7 @@ touch "$m/AD:HOUSE 11 [FLAC]/2.01 - Felicidade.flac" "$m/AD:HOUSE 11 [FLAC]/2.02
       "$m/Bossa/Felicidade (live).mp3" "$m/Felix the Cat/Theme.flac" "$m/Notes/felicidade.txt" \
       "$m/.hidden/Felicidade.flac"
 (
-    export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}" HOME="$OUT/findhome" RXBOX_UI_SHOW=add
+    export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}" HOME="$OUT/findhome" CYANBOX_UI_SHOW=add
     variant add-find "40:text:felic,60:down:DownArrow,62:up:DownArrow,70:down:Enter,72:up:Enter" \
         'find "felic" matches 4 of 8 best "Bossa/Felicidade \(live\)\.mp3" cursor "AD:HOUSE 11 \[FLAC\]/2\.01 - Felicidade\.flac" picked 1'
 )
@@ -250,39 +250,39 @@ variant tree-find "40:down:Ctrl,41:down:P,43:up:P,44:up:Ctrl,50:text:pea" \
 variant tree-find-playlist "40:down:Ctrl,41:down:P,43:up:P,44:up:Ctrl,50:text:main,70:down:Enter,72:up:Enter" \
     'view "Main room"'
 variant tree-find-album "40:down:Ctrl,41:down:P,43:up:P,44:up:Ctrl,50:text:tones,70:down:Enter,72:up:Enter" \
-    'view "rxbox test tones"'
+    'view "cyanbox test tones"'
 
 # Delete on a selected cue: a click on the cue list's first row (the
 # memory cue at 0, where the list sits at 1600x900) selects it, Delete
 # deletes it and only it (nine cues, eight left: a second Delete finds
 # nothing selected and leaves the rest alone), Escape gives the keyboard
 # back to the track list. The click needs a known layout, so only with
-# RXBOX_UI_SWAYSOCK to size the output.
-if [ -n "${RXBOX_UI_SWAYSOCK:-}" ]; then
-    SWAYSOCK=$RXBOX_UI_SWAYSOCK swaymsg -q output '*' resolution 1600x900
+# CYANBOX_UI_SWAYSOCK to size the output.
+if [ -n "${CYANBOX_UI_SWAYSOCK:-}" ]; then
+    SWAYSOCK=$CYANBOX_UI_SWAYSOCK swaymsg -q output '*' resolution 1600x900
     variant cue-delete "70:click:1320:409,75:down:Delete,76:up:Delete,80:down:Delete,81:up:Delete,85:down:Escape,86:up:Escape" \
         "track $ID .*cues 8 cue-keys 0"
 fi
 
-# Player settings (RXBOX_UI_SHOW=settings): a shot of the dialog on its
+# Player settings (CYANBOX_UI_SHOW=settings): a shot of the dialog on its
 # Player tab. Then, at 1600x900 where the dialog sits centred, a click on
 # the first field's combo (On Air Display, On by default) and one on its
 # second item, Off: the library's setting table must hold
-# player.on_air_display = false afterwards, as `rxbox config` reads it
+# player.on_air_display = false afterwards, as `cyanbox config` reads it
 # back, so a change that never reaches the library fails here. The clicks
-# need a known layout, so only with RXBOX_UI_SWAYSOCK.
+# need a known layout, so only with CYANBOX_UI_SWAYSOCK.
 (
-    export RXBOX_UI_SHOW=settings
+    export CYANBOX_UI_SHOW=settings
     shoot "$OUT/settings.png"
 ) || exit 1
-if [ -n "${RXBOX_UI_SWAYSOCK:-}" ]; then
-    SWAYSOCK=$RXBOX_UI_SWAYSOCK swaymsg -q output '*' resolution 1600x900
+if [ -n "${CYANBOX_UI_SWAYSOCK:-}" ]; then
+    SWAYSOCK=$CYANBOX_UI_SWAYSOCK swaymsg -q output '*' resolution 1600x900
     was=$(rx config player.on_air_display)
     [ "$was" = "player.on_air_display is not set" ] || {
         echo "FAIL: settings-write: the library already has a value: $was"; exit 1; }
-    export RXBOX_UI_SHOW=settings
+    export CYANBOX_UI_SHOW=settings
     variant settings-write "70:click:685:303,80:click:685:350" "track $ID .*popup 0"
-    unset RXBOX_UI_SHOW
+    unset CYANBOX_UI_SHOW
     now=$(rx config player.on_air_display)
     echo "settings-write: $now"
     [ "$now" = "player.on_air_display = false" ] || {
@@ -294,10 +294,10 @@ fi
 # The players' My Settings drive the interface: at their defaults the
 # overview and the row previews are the stacked half and the deck's KEY is
 # the classic name; with device.overview_waveform full and
-# device.key_display alphanumeric set (by `rxbox config`, as the Player
+# device.key_display alphanumeric set (by `cyanbox config`, as the Player
 # settings dialog writes them) both are drawn centred and KEY is the
 # Camelot code. The log says how the last frame drew them and what KEY
-# read; the names to expect are the ones `rxbox show` gives for the track.
+# read; the names to expect are the ones `cyanbox show` gives for the track.
 keys=$(rx show "$AUDIO/01-house.flac" | sed -n 's/^  key: \([^ ]*\) (Camelot \([0-9]*[AB]\),.*/\1 \2/p')
 [ -n "$keys" ] || { echo "FAIL: settings-follow: the first track has no key"; exit 1; }
 classic=${keys% *}
@@ -307,16 +307,16 @@ rx config device.overview_waveform full > /dev/null
 rx config device.key_display alphanumeric > /dev/null
 variant settings-follow "" "track $ID .*overview centred previews centred key $camelot\$"
 
-# The Link decks (RXBOX_UI_LINK_DECKS: players made up, no network): two
+# The Link decks (CYANBOX_UI_LINK_DECKS: players made up, no network): two
 # share the deck's title row. With the players' Eject/Load Lock on, a right
 # click on the first row (at 1600x900, under the taller title row) opens
 # the track menu, whose "Load
 # in deck" items offer deck 1, which plays, greyed out, and deck 2 not.
 (
-    export RXBOX_UI_LINK_DECKS="1:CDJ-900:$ID:pa:-1,2:CDJ-2000NXS2:$ID2:m:40"
+    export CYANBOX_UI_LINK_DECKS="1:CDJ-900:$ID:pa:-1,2:CDJ-2000NXS2:$ID2:m:40"
     variant link-decks "" "link decks 2"
-    if [ -n "${RXBOX_UI_SWAYSOCK:-}" ]; then
-        SWAYSOCK=$RXBOX_UI_SWAYSOCK swaymsg -q output '*' resolution 1600x900
+    if [ -n "${CYANBOX_UI_SWAYSOCK:-}" ]; then
+        SWAYSOCK=$CYANBOX_UI_SWAYSOCK swaymsg -q output '*' resolution 1600x900
         rx config player.eject_lock true > /dev/null
         variant link-load-locked "60:rclick:600:571" 'load menu locked "1"'
         rx config player.eject_lock false > /dev/null
@@ -343,7 +343,7 @@ cp "$AUDIO/02-dnb.flac" "$OUT/gone/05-gone.flac"
 rx add "$OUT/gone/05-gone.flac" > "$OUT/add-gone.log" 2>&1 || { cat "$OUT/add-gone.log"; exit 1; }
 rm -rf "$OUT/gone"
 (
-    export RXBOX_UI_SHOW=remove-missing
+    export CYANBOX_UI_SHOW=remove-missing
     variant remove-missing-ask "" "remove-missing 2 gone 1 button [0-9]+ [0-9]+"
     xy=$(sed -n 's/.*remove-missing 2 gone 1 button \([0-9]*\) \([0-9]*\).*/\1:\2/p' \
          "$OUT/variant-remove-missing-ask.png.log" | tail -n 1)
@@ -362,7 +362,7 @@ echo "remove-missing: the two missing tracks removed, three kept"
 # edit, as the library keeps one), which is then the album's; at 1600x900
 # a click on the node's arrow opens it, one on its first row shows the
 # artist's tracks, the whole album.
-if [ -n "${RXBOX_UI_SWAYSOCK:-}" ] && command -v python3 > /dev/null; then
+if [ -n "${CYANBOX_UI_SWAYSOCK:-}" ] && command -v python3 > /dev/null; then
     python3 - "$LIB/library.db" "$ID" "$ID2" <<'EOF' || exit 1
 import sqlite3, sys
 db = sqlite3.connect(sys.argv[1])
@@ -372,6 +372,6 @@ db.commit()
 if n != 2:
     sys.exit(f"FAIL: album-artists: {n} tracks given an album artist, want 2")
 EOF
-    SWAYSOCK=$RXBOX_UI_SWAYSOCK swaymsg -q output '*' resolution 1600x900
+    SWAYSOCK=$CYANBOX_UI_SWAYSOCK swaymsg -q output '*' resolution 1600x900
     variant album-artists "70:click:19:593,80:click:100:621" 'view "Test Tones" rows 3'
 fi

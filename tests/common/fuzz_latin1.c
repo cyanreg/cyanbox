@@ -1,13 +1,13 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
-/* A deterministic fuzzer for rx_utf8_latin1 (src/common/latin1.c), run
+/* A deterministic fuzzer for cb_utf8_latin1 (src/common/latin1.c), run
  * under AddressSanitizer and UndefinedBehaviorSanitizer
  * (src/common/meson.build): strings of the code points it treats apart
  * (kana small and large, the marks, kanji, halfwidth forms, punctuation,
  * other scripts, ASCII) with invalid bytes among them, through MeCab and
- * ICU when rxbox has them. What comes out must be UTF-8.
+ * ICU when cyanbox has them. What comes out must be UTF-8.
  *
- * RX_FUZZ_SEED sets the seed, RX_FUZZ_ITERS the number of strings. A
+ * CB_FUZZ_SEED sets the seed, CB_FUZZ_ITERS the number of strings. A
  * finding aborts (the sanitizers, or a check here); 0 when clean. */
 
 #include <inttypes.h>
@@ -15,7 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "rxbox/common.h"
+#include "cyanbox/common.h"
 
 #define DEFAULT_SEED  UINT64_C(0x6c6174696e316b61)
 #define DEFAULT_ITERS 300000
@@ -43,14 +43,14 @@ static const uint32_t pool[] = {
 
 int main(void)
 {
-    const char *e = getenv("RX_FUZZ_SEED");
+    const char *e = getenv("CB_FUZZ_SEED");
     state = e ? strtoull(e, NULL, 0) : DEFAULT_SEED;
     if (!state)
         state = DEFAULT_SEED;
-    e = getenv("RX_FUZZ_ITERS");
+    e = getenv("CB_FUZZ_ITERS");
     long iters = e ? strtol(e, NULL, 0) : DEFAULT_ITERS;
     fprintf(stderr, "fuzz_latin1: seed 0x%" PRIx64 ", %ld strings, kanji %s\n", state, iters,
-            rx_utf8_latin1_reads_kanji() ? "read" : "as they are");
+            cb_utf8_latin1_reads_kanji() ? "read" : "as they are");
 
     char s[512];
     for (long it = 0; it < iters; it++) {
@@ -60,11 +60,11 @@ int main(void)
             if (rnd() % 16 == 0)
                 s[n++] = (char)(rnd() | 0x80);          /* not UTF-8 */
             else
-                n += (size_t)rx_utf8_put(s + n, pool[rnd() % RX_ARRAY_ELEMS(pool)]);
+                n += (size_t)cb_utf8_put(s + n, pool[rnd() % CB_ARRAY_ELEMS(pool)]);
         }
         s[n] = 0;
-        char *l = rx_utf8_latin1(s);
-        if (l && !rx_utf8_valid(l)) {
+        char *l = cb_utf8_latin1(s);
+        if (l && !cb_utf8_valid(l)) {
             fprintf(stderr, "fuzz_latin1: not UTF-8 out of string %ld\n", it);
             abort();
         }

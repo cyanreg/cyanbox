@@ -1,6 +1,6 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
-/* MOSS-Audio (rxbox/ml.h): the network, run kernel by kernel on the GPU.
+/* MOSS-Audio (cyanbox/ml.h): the network, run kernel by kernel on the GPU.
  * The reference is OpenMOSS's modeling_moss_audio.py and
  * processing_moss_audio.py (github.com/OpenMOSS/MOSS-Audio); every step
  * below names the part of it that it does.
@@ -25,7 +25,7 @@
  *    markers (the seconds, every 2 s, as digits between the audio tokens;
  *    MOSS-Audio's own scripts turn them on), and the question after the
  *    audio. Everything up to the audio's end is read into the cache once
- *    (rx_ml_listen); each question starts again from there.
+ *    (cb_ml_listen); each question starts again from there.
  *  - The prefill goes through the decoder 512 tokens at a time, so its
  *    scratch buffers do not grow with the audio; the decoder's single
  *    tokens use the GEMV kernel, which reads each weight once.
@@ -39,7 +39,7 @@
  *    desktop and the analyses. Each listen allocates it again, at the size
  *    it needs.
  *  - The context left for the questions is what they need, measured by the
- *    caller (rx_ml_tag: the colour question grows with the legend's
+ *    caller (cb_ml_tag: the colour question grows with the legend's
  *    words), and never less than QUESTION_ROOM. */
 
 #include "ml_priv.h"
@@ -102,7 +102,7 @@ typedef struct Scratch {
     MLBuf b;
 } Scratch;
 
-struct RXML {
+struct CBML {
     MLGpu g;
     MLGguf f;
     MLTokenizer *tok;
@@ -140,14 +140,14 @@ struct RXML {
 /* The tensor `fmt` (with i), of exactly this type, shape and size: the
  * kernels read as much of it as the shape says, unchecked. The sizes past
  * a tensor's own dimensions are 1 (gguf.c), so the four say everything. */
-static const MLTensor *tensor4(RXML *ml, const char *fmt, int i, enum MLType type,
+static const MLTensor *tensor4(CBML *ml, const char *fmt, int i, enum MLType type,
                                int64_t ne0, int64_t ne1, int64_t ne2, int64_t ne3)
 {
     char name[96];
     snprintf(name, sizeof(name), fmt, i);
     const MLTensor *t = ml_gguf_tensor(&ml->f, name);
     if (!t) {
-        rx_err("ml: the model has no tensor %s", name);
+        cb_err("ml: the model has no tensor %s", name);
         return NULL;
     }
     uint64_t n = (uint64_t)(ne0 * ne1 * ne2 * ne3);
@@ -155,7 +155,7 @@ static const MLTensor *tensor4(RXML *ml, const char *fmt, int i, enum MLType typ
                     n * (type == ML_TYPE_F16 ? 2 : 4);
     if (t->type != type || t->ne[0] != ne0 || t->ne[1] != ne1 || t->ne[2] != ne2 ||
         t->ne[3] != ne3 || t->size != size) {
-        rx_err("ml: tensor %s is type %d, %lld x %lld x %lld x %lld; expected type %d, "
+        cb_err("ml: tensor %s is type %d, %lld x %lld x %lld x %lld; expected type %d, "
                "%lld x %lld x %lld x %lld", name, t->type, (long long)t->ne[0],
                (long long)t->ne[1], (long long)t->ne[2], (long long)t->ne[3], type,
                (long long)ne0, (long long)ne1, (long long)ne2, (long long)ne3);
@@ -164,25 +164,25 @@ static const MLTensor *tensor4(RXML *ml, const char *fmt, int i, enum MLType typ
     return t;
 }
 
-static const MLTensor *tensor(RXML *ml, const char *fmt, int i, enum MLType type,
+static const MLTensor *tensor(CBML *ml, const char *fmt, int i, enum MLType type,
                               int64_t ne0, int64_t ne1)
 {
     return tensor4(ml, fmt, i, type, ne0, ne1, 1, 1);
 }
 
-#define T_(dst, ...) do { if (!((dst) = tensor(ml, __VA_ARGS__))) return RX_ERROR(EINVAL); } while (0)
+#define T_(dst, ...) do { if (!((dst) = tensor(ml, __VA_ARGS__))) return CB_ERROR(EINVAL); } while (0)
 
-static int find_tensors(RXML *ml)
+static int find_tensors(CBML *ml)
 {
     T_(ml->mel_filters, "audio.mel_filters", 0, ML_TYPE_F32, N_MEL, N_FFT / 2 + 1);
     T_(ml->mel_window, "audio.mel_window", 0, ML_TYPE_F32, N_FFT, 1);
     if (!(ml->conv1_w = tensor4(ml, "enc.conv1.weight", 0, ML_TYPE_F16, 3, 3, 1, C_DIM)))
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
     /* conv2 and conv3 are read once, by permute_convs: checked here, before
      * the weights go up. */
     for (int i = 2; i <= 3; i++) {
         if (!tensor4(ml, "enc.conv%d.weight", i, ML_TYPE_F16, 3, 3, C_DIM, C_DIM))
-            return RX_ERROR(EINVAL);
+            return CB_ERROR(EINVAL);
     }
     T_(ml->conv1_b, "enc.conv1.bias", 0, ML_TYPE_F32, C_DIM, 1);
     T_(ml->conv2_b, "enc.conv2.bias", 0, ML_TYPE_F32, C_DIM, 1);
@@ -239,7 +239,7 @@ static int find_tensors(RXML *ml)
 
 #undef T_
 
-static int check_shape(RXML *ml)
+static int check_shape(CBML *ml)
 {
     static const struct { const char *key; int64_t want; } keys[] = {
         { "moss_audio.enc.num_mel_bins", N_MEL },
@@ -266,15 +266,15 @@ static int check_shape(RXML *ml)
     };
     const MLValue *arch = ml_gguf_value(&ml->f, "general.architecture");
     if (!arch || arch->type != ML_GGUF_STRING || strcmp(arch->s, "moss_audio")) {
-        rx_err("ml: the file is not a MOSS-Audio model");
-        return RX_ERROR(EINVAL);
+        cb_err("ml: the file is not a MOSS-Audio model");
+        return CB_ERROR(EINVAL);
     }
-    for (size_t i = 0; i < RX_ARRAY_ELEMS(keys); i++) {
+    for (size_t i = 0; i < CB_ARRAY_ELEMS(keys); i++) {
         int64_t v = ml_gguf_int(&ml->f, keys[i].key, -1);
         if (v != keys[i].want) {
-            rx_err("ml: %s is %lld, this runs %lld", keys[i].key, (long long)v,
+            cb_err("ml: %s is %lld, this runs %lld", keys[i].key, (long long)v,
                    (long long)keys[i].want);
-            return RX_ERROR(EINVAL);
+            return CB_ERROR(EINVAL);
         }
     }
     return 0;
@@ -282,7 +282,7 @@ static int check_shape(RXML *ml)
 
 /* ---------------------------------------------------------------- helpers */
 
-static int reserve(RXML *ml, Scratch *s, size_t size)
+static int reserve(CBML *ml, Scratch *s, size_t size)
 {
     if (s->b.size >= size)
         return 0;
@@ -290,12 +290,12 @@ static int reserve(RXML *ml, Scratch *s, size_t size)
      * does not reallocate every time; the first is the size asked. */
     size_t want = s->b.size ? size + size / 2 : size;
     ml_buf_free(&ml->g, &s->b);
-    return ml_buf_create(&ml->g, &s->b, RX_ALIGN(want, 65536), ML_MEM_DEVICE);
+    return ml_buf_create(&ml->g, &s->b, CB_ALIGN(want, 65536), ML_MEM_DEVICE);
 }
 
 /* The audio's buffers: the encoder's scratch and the rows it made, which
- * only rx_ml_listen reads. */
-static void free_audio_scratch(RXML *ml)
+ * only cb_ml_listen reads. */
+static void free_audio_scratch(CBML *ml)
 {
     Scratch *all[] = {
         &ml->pcm, &ml->mel, &ml->maxbits, &ml->c1, &ml->c2, &ml->c3, &ml->stem,
@@ -303,27 +303,27 @@ static void free_audio_scratch(RXML *ml)
         &ml->ds_x[0], &ml->ds_x[1], &ml->ds_x[2], &ml->ag, &ml->au,
         &ml->audio, &ml->ds_out[0], &ml->ds_out[1], &ml->ds_out[2],
     };
-    for (size_t i = 0; i < RX_ARRAY_ELEMS(all); i++)
+    for (size_t i = 0; i < CB_ARRAY_ELEMS(all); i++)
         ml_buf_free(&ml->g, &all[i]->b);
 }
 
 /* x and y dims of a dispatch of `groups` workgroups along one axis. */
 static void groups_2d(uint64_t groups, uint32_t *x, uint32_t *y)
 {
-    *x = (uint32_t)RX_MIN(groups, 65535);
+    *x = (uint32_t)CB_MIN(groups, 65535);
     *y = (uint32_t)((groups + *x - 1) / *x);
 }
 
-static void dispatch_elems(RXML *ml, enum MLKernel k, const void *push, size_t size,
+static void dispatch_elems(CBML *ml, enum MLKernel k, const void *push, size_t size,
                            uint64_t count)
 {
     uint32_t x, y;
     groups_2d((count + 255) / 256, &x, &y);
-    ml_gpu_dispatch(&ml->g, k, push, size, x, RX_MAX(y, 1), 1);
+    ml_gpu_dispatch(&ml->g, k, push, size, x, CB_MAX(y, 1), 1);
 }
 
 /* y[M][N] (ldy) = x[M][K] (ldx) w^T, with flags. */
-static void gemm(RXML *ml, VkDeviceAddress x, uint32_t ldx, const MLTensor *w,
+static void gemm(CBML *ml, VkDeviceAddress x, uint32_t ldx, const MLTensor *w,
                  VkDeviceAddress bias, VkDeviceAddress y, uint32_t ldy, uint32_t M,
                  uint32_t flags)
 {
@@ -349,7 +349,7 @@ static void gemm(RXML *ml, VkDeviceAddress x, uint32_t ldx, const MLTensor *w,
     ml_gpu_dispatch(&ml->g, k, &p, sizeof(p), (N + 127) / 128, (M + 127) / 128, 1);
 }
 
-static void norm(RXML *ml, bool rms, VkDeviceAddress x, const MLTensor *w, const MLTensor *b,
+static void norm(CBML *ml, bool rms, VkDeviceAddress x, const MLTensor *w, const MLTensor *b,
                  VkDeviceAddress y, uint32_t rows, uint32_t n, float eps)
 {
     NormPush p = {
@@ -360,7 +360,7 @@ static void norm(RXML *ml, bool rms, VkDeviceAddress x, const MLTensor *w, const
     ml_gpu_dispatch(&ml->g, rms ? ML_K_RMSNORM : ML_K_LAYERNORM, &p, sizeof(p), rows, 1, 1);
 }
 
-static void act(RXML *ml, int op, VkDeviceAddress a, VkDeviceAddress b, VkDeviceAddress idx,
+static void act(CBML *ml, int op, VkDeviceAddress a, VkDeviceAddress b, VkDeviceAddress idx,
                 uint64_t count, uint32_t n, uint32_t period)
 {
     ActPush p = {
@@ -372,15 +372,15 @@ static void act(RXML *ml, int op, VkDeviceAddress a, VkDeviceAddress b, VkDevice
 
 /* A SwiGLU MLP (MOSS-Audio's GatedMLP): y = down(silu(gate(x)) * up(x)),
  * from E_DIM to L_DIM, ADAPT_ROWS rows at a time. */
-static int mlp(RXML *ml, const MLP *m, VkDeviceAddress x, VkDeviceAddress y, uint32_t rows)
+static int mlp(CBML *ml, const MLP *m, VkDeviceAddress x, VkDeviceAddress y, uint32_t rows)
 {
     int ret;
-    uint32_t step = RX_MIN(rows, ADAPT_ROWS);
+    uint32_t step = CB_MIN(rows, ADAPT_ROWS);
     if ((ret = reserve(ml, &ml->ag, (size_t)step * A_HIDDEN * 4)) < 0 ||
         (ret = reserve(ml, &ml->au, (size_t)step * A_HIDDEN * 4)) < 0)
         return ret;
     for (uint32_t r = 0; r < rows; r += step) {
-        uint32_t n = RX_MIN(step, rows - r);
+        uint32_t n = CB_MIN(step, rows - r);
         VkDeviceAddress xr = x + (VkDeviceAddress)r * E_DIM * 4;
         gemm(ml, xr, E_DIM, m->gate, 0, ml->ag.b.addr, A_HIDDEN, n, 0);
         gemm(ml, xr, E_DIM, m->up, 0, ml->au.b.addr, A_HIDDEN, n, 0);
@@ -396,7 +396,7 @@ static int mlp(RXML *ml, const MLP *m, VkDeviceAddress x, VkDeviceAddress y, uin
 
 /* --------------------------------------------------------------- tables */
 
-static int make_tables(RXML *ml)
+static int make_tables(CBML *ml)
 {
     size_t nb_basis = (size_t)N_FFT * (N_FFT / 2 + 1) * 2;
     size_t nb_pos = (size_t)CHUNK_TOK * E_DIM;
@@ -404,7 +404,7 @@ static int make_tables(RXML *ml)
     size_t total = nb_basis + nb_pos + nb_rope;
     float *t = malloc(total * sizeof(float));
     if (!t)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
 
     /* The DFT, [n][k] (cos, -sin): X_k = sum x_n e^(-2 pi i k n / 400).
      * (The sign of the sine does not matter to the power.) */
@@ -461,13 +461,13 @@ static int make_tables(RXML *ml)
     return 0;
 }
 
-static int permute_convs(RXML *ml)
+static int permute_convs(CBML *ml)
 {
     for (int i = 0; i < 2; i++) {
         const MLTensor *w = tensor4(ml, "enc.conv%d.weight", i + 2, ML_TYPE_F16, 3, 3, C_DIM,
                                     C_DIM);
         if (!w)
-            return RX_ERROR(EINVAL);
+            return CB_ERROR(EINVAL);
         int ret = ml_buf_create(&ml->g, &ml->conv_w[i], w->size, ML_MEM_DEVICE);
         if (ret < 0)
             return ret;
@@ -482,28 +482,28 @@ static int permute_convs(RXML *ml)
 
 /* ------------------------------------------------------------- open/close */
 
-void rx_ml_options_default(RXMLOptions *o)
+void cb_ml_options_default(CBMLOptions *o)
 {
-    *o = (RXMLOptions) { 0 };
+    *o = (CBMLOptions) { 0 };
 }
 
-int rx_ml_open(RXML **out, const char *path, const RXMLOptions *opt)
+int cb_ml_open(CBML **out, const char *path, const CBMLOptions *opt)
 {
     *out = NULL;
-    RXMLOptions defopt;
+    CBMLOptions defopt;
     if (!opt) {
-        rx_ml_options_default(&defopt);
+        cb_ml_options_default(&defopt);
         opt = &defopt;
     }
 
-    RXML *ml = calloc(1, sizeof(*ml));
+    CBML *ml = calloc(1, sizeof(*ml));
     if (!ml)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     ml->f.fd = -1;
     ml->max_ctx = opt->max_context > 0 ? opt->max_context : 8192;
-    ml->max_ctx = RX_ALIGN(ml->max_ctx, 64);
+    ml->max_ctx = CB_ALIGN(ml->max_ctx, 64);
 
-    int64_t t0 = rx_time_us();
+    int64_t t0 = cb_time_us();
     int ret;
     if ((ret = ml_gguf_open(&ml->f, path)) < 0)
         goto fail;
@@ -513,7 +513,7 @@ int rx_ml_open(RXML **out, const char *path, const RXMLOptions *opt)
         goto fail;
     if ((ret = ml_gpu_create(&ml->g, opt->device, opt->validation)) < 0)
         goto fail;
-    rx_info("ml: %s on %s", path, ml->g.vk.props.deviceName);
+    cb_info("ml: %s on %s", path, ml->g.vk.props.deviceName);
     if ((ret = ml_gguf_upload(&ml->f, &ml->g)) < 0)
         goto fail;
     if ((ret = permute_convs(ml)) < 0 || (ret = make_tables(ml)) < 0)
@@ -527,19 +527,19 @@ int rx_ml_open(RXML **out, const char *path, const RXMLOptions *opt)
         (ret = ml_buf_create(&ml->g, &ml->down, (size_t)VOCAB * 8 * 4, ML_MEM_READBACK)) < 0)
         goto fail;
 
-    rx_debug("ml: ready in %.1f s, context of %d tokens", (rx_time_us() - t0) * 1e-6,
+    cb_debug("ml: ready in %.1f s, context of %d tokens", (cb_time_us() - t0) * 1e-6,
              ml->max_ctx);
     *out = ml;
     return 0;
 
 fail:
-    rx_ml_close(&ml);
+    cb_ml_close(&ml);
     return ret;
 }
 
-void rx_ml_close(RXML **pml)
+void cb_ml_close(CBML **pml)
 {
-    RXML *ml = *pml;
+    CBML *ml = *pml;
     if (!ml)
         return;
     if (ml->g.vk.dev) {
@@ -553,7 +553,7 @@ void rx_ml_close(RXML **pml)
             &ml->x, &ml->h, &ml->q, &ml->k, &ml->v, &ml->o, &ml->fg, &ml->fu,
             &ml->logits, &ml->ids, &ml->aidx, &ml->part,
         };
-        for (size_t i = 0; i < RX_ARRAY_ELEMS(all); i++)
+        for (size_t i = 0; i < CB_ARRAY_ELEMS(all); i++)
             ml_buf_free(&ml->g, &all[i]->b);
         ml_buf_free(&ml->g, &ml->up);
         ml_buf_free(&ml->g, &ml->down);
@@ -570,12 +570,12 @@ void rx_ml_close(RXML **pml)
     *pml = NULL;
 }
 
-const char *rx_ml_device_name(const RXML *ml)
+const char *cb_ml_device_name(const CBML *ml)
 {
     return ml->g.vk.props.deviceName;
 }
 
-void rx_ml_times(const RXML *ml, double *listen_ms, double *ask_ms)
+void cb_ml_times(const CBML *ml, double *listen_ms, double *ask_ms)
 {
     if (listen_ms)
         *listen_ms = ml->listen_ms;
@@ -585,13 +585,13 @@ void rx_ml_times(const RXML *ml, double *listen_ms, double *ask_ms)
 
 /* ---------------------------------------------------------------- encoder */
 
-/* With RXBOX_ML_DUMP=DIR, the encoder's intermediate tensors are written
+/* With CYANBOX_ML_DUMP=DIR, the encoder's intermediate tensors are written
  * there as raw f32, for checking the network against the reference
  * implementation outside of the model (tools/ml_check.py). Waits for the
  * GPU. */
-static void dump(RXML *ml, const char *name, const MLBuf *b, size_t size)
+static void dump(CBML *ml, const char *name, const MLBuf *b, size_t size)
 {
-    const char *dir = getenv("RXBOX_ML_DUMP");
+    const char *dir = getenv("CYANBOX_ML_DUMP");
     if (!dir || !dir[0] || ml_gpu_run(&ml->g) < 0)
         return;
     MLBuf rb;
@@ -599,7 +599,7 @@ static void dump(RXML *ml, const char *name, const MLBuf *b, size_t size)
         return;
     ml_gpu_copy(&ml->g, b, 0, &rb, 0, size);
     if (ml_gpu_run(&ml->g) >= 0 && ml_buf_invalidate(&ml->g, &rb) >= 0) {
-        char *path = rx_asprintf("%s/%s.f32", dir, name);
+        char *path = cb_asprintf("%s/%s.f32", dir, name);
         FILE *f = path ? fopen(path, "wb") : NULL;
         if (f) {
             fwrite(rb.map, 1, size, f);
@@ -620,7 +620,7 @@ static int chunk_tokens(int frames)
 
 /* The audio to the adapter's rows (ml->audio) and the deepstack's
  * (ml->ds_out); returns the number of rows. */
-static int encode(RXML *ml, const float *pcm, int64_t n, RXCancel *cancel)
+static int encode(CBML *ml, const float *pcm, int64_t n, CBCancel *cancel)
 {
     MLGpu *g = &ml->g;
     int ret;
@@ -655,7 +655,7 @@ static int encode(RXML *ml, const float *pcm, int64_t n, RXCancel *cancel)
             .maxbits = ml->maxbits.b.addr,
             .nb_samples = (uint32_t)n, .nb_frames = (uint32_t)nb_frames, .frame0 = (uint32_t)f0,
         };
-        int nb = RX_MIN(nb_frames - f0, 8 * 32768);
+        int nb = CB_MIN(nb_frames - f0, 8 * 32768);
         ml_gpu_dispatch(g, ML_K_MEL, &mp, sizeof(mp), (nb + 7) / 8, 1, 1);
     }
     ml_gpu_barrier(g);
@@ -690,7 +690,7 @@ static int encode(RXML *ml, const float *pcm, int64_t n, RXCancel *cancel)
     }
 
     for (int c0 = 0; c0 < nb_chunks; c0 += CONV_BATCH) {
-        int nb = RX_MIN(CONV_BATCH, nb_chunks - c0);
+        int nb = CB_MIN(CONV_BATCH, nb_chunks - c0);
         Conv1Push cp = {
             .mel = ml->mel.b.addr, .weight = ml->conv1_w->addr, .bias = ml->conv1_b->addr,
             .dst = ml->c1.b.addr,
@@ -742,8 +742,8 @@ static int encode(RXML *ml, const float *pcm, int64_t n, RXCancel *cancel)
         ml_gpu_barrier(g);
         if ((ret = ml_gpu_run(g)) < 0)
             return ret;
-        if (rx_cancelled(cancel))
-            return RX_ERROR(ECANCELED);
+        if (cb_cancelled(cancel))
+            return CB_ERROR(ECANCELED);
     }
 
     dump(ml, "stem", &ml->ex.b, xs);
@@ -785,8 +785,8 @@ static int encode(RXML *ml, const float *pcm, int64_t n, RXCancel *cancel)
         if ((i % 8) == 7) {
             if ((ret = ml_gpu_run(g)) < 0)
                 return ret;
-            if (rx_cancelled(cancel))
-                return RX_ERROR(ECANCELED);
+            if (cb_cancelled(cancel))
+                return CB_ERROR(ECANCELED);
         }
     }
     dump(ml, "enc31", &ml->ex.b, xs);
@@ -821,7 +821,7 @@ static int encode(RXML *ml, const float *pcm, int64_t n, RXCancel *cancel)
 /* Layer i's attention for m queries at [pos0, pos0 + m) (in ml->q, after
  * qk_rope) over the cache, into ml->o: flash attention for a prefill,
  * flash decoding (split over the keys) for one or two tokens. */
-static void attention(RXML *ml, int i, uint32_t m, int pos0)
+static void attention(CBML *ml, int i, uint32_t m, int pos0)
 {
     size_t layer_cache = (size_t)L_KV * ml->max_ctx * L_HEAD * 2;
     VkDeviceAddress kc = ml->kc.addr + i * layer_cache, vc = ml->vc.addr + i * layer_cache;
@@ -847,11 +847,11 @@ static void attention(RXML *ml, int i, uint32_t m, int pos0)
      * whose 64-row tiles are mostly empty, 1024 workgroups of 128 keys. */
     uint32_t qblocks = (m + 63) / 64, nkeys = pos0 + m;
     uint32_t want = m <= 16 ? 1024 : 256, least = m <= 16 ? 128 : 256;
-    uint32_t nsplit = RX_MAX(1, want / (qblocks * L_HEADS));
-    nsplit = RX_MIN(nsplit, RX_MAX(1, nkeys / least));
-    nsplit = RX_MIN(nsplit, ATTN_MAX_PARTS / m);
-    nsplit = RX_MAX(nsplit, 1);
-    uint32_t split_len = RX_ALIGN((nkeys + nsplit - 1) / nsplit, 32);
+    uint32_t nsplit = CB_MAX(1, want / (qblocks * L_HEADS));
+    nsplit = CB_MIN(nsplit, CB_MAX(1, nkeys / least));
+    nsplit = CB_MIN(nsplit, ATTN_MAX_PARTS / m);
+    nsplit = CB_MAX(nsplit, 1);
+    uint32_t split_len = CB_ALIGN((nkeys + nsplit - 1) / nsplit, 32);
     nsplit = (nkeys + split_len - 1) / split_len;
     AttnPush p = {
         .q = ml->q.b.addr, .o = ml->o.b.addr, .kc = kc, .vc = vc, .part = ml->part.b.addr,
@@ -872,15 +872,15 @@ static void attention(RXML *ml, int i, uint32_t m, int pos0)
  * embedding (and adds the deepstack's rows after the first layers). The
  * logits of the last nb_logits tokens (at most 8, and n when n is no more
  * than LLM_CHUNK) end in ml->logits, [nb_logits][VOCAB]. */
-static int decode(RXML *ml, const int32_t *ids, const int32_t *aidx, int n, int pos0,
-                  int nb_logits, RXCancel *cancel)
+static int decode(CBML *ml, const int32_t *ids, const int32_t *aidx, int n, int pos0,
+                  int nb_logits, CBCancel *cancel)
 {
     MLGpu *g = &ml->g;
     int ret;
     if (pos0 + n > ml->max_ctx)
-        return RX_ERROR(E2BIG);
+        return CB_ERROR(E2BIG);
 
-    int step = RX_MIN(n, LLM_CHUNK);
+    int step = CB_MIN(n, LLM_CHUNK);
     if ((ret = reserve(ml, &ml->x, (size_t)step * L_DIM * 4)) < 0 ||
         (ret = reserve(ml, &ml->h, (size_t)step * L_DIM * 4)) < 0 ||
         (ret = reserve(ml, &ml->q, (size_t)step * L_HEADS * L_HEAD * 4)) < 0 ||
@@ -893,7 +893,7 @@ static int decode(RXML *ml, const int32_t *ids, const int32_t *aidx, int n, int 
         (ret = reserve(ml, &ml->ids, (size_t)ml->max_ctx * 4)) < 0 ||
         (ret = reserve(ml, &ml->aidx, (size_t)ml->max_ctx * 4)) < 0 ||
         (ret = reserve(ml, &ml->part,
-                       RX_MAX((size_t)L_KV * (ml->max_ctx / ATTN_SPLIT + 1) * ATTN_DEC_ROWS,
+                       CB_MAX((size_t)L_KV * (ml->max_ctx / ATTN_SPLIT + 1) * ATTN_DEC_ROWS,
                               (size_t)ATTN_MAX_PARTS * L_HEADS) * ATTN_PART * 4)) < 0)
         return ret;
 
@@ -911,7 +911,7 @@ static int decode(RXML *ml, const int32_t *ids, const int32_t *aidx, int n, int 
 
     size_t layer_cache = (size_t)L_KV * ml->max_ctx * L_HEAD * 2;
     for (int c0 = 0; c0 < n; c0 += step) {
-        uint32_t m = (uint32_t)RX_MIN(step, n - c0);
+        uint32_t m = (uint32_t)CB_MIN(step, n - c0);
         VkDeviceAddress x = ml->x.b.addr, h = ml->h.b.addr;
         EmbedPush ep = {
             .table = ml->embed->addr,
@@ -964,7 +964,7 @@ static int decode(RXML *ml, const int32_t *ids, const int32_t *aidx, int n, int 
         }
 
         if (c0 + (int)m == n) {
-            uint32_t nl = (uint32_t)RX_CLAMP(nb_logits, 1, RX_MIN(8, (int)m));
+            uint32_t nl = (uint32_t)CB_CLAMP(nb_logits, 1, CB_MIN(8, (int)m));
             VkDeviceAddress last = x + (VkDeviceAddress)(m - nl) * L_DIM * 4;
             norm(ml, true, last, ml->final_norm, NULL, h, nl, L_DIM, 1e-6f);
             ml_gpu_barrier(g);
@@ -973,14 +973,14 @@ static int decode(RXML *ml, const int32_t *ids, const int32_t *aidx, int n, int 
         }
         if ((ret = ml_gpu_run(g)) < 0)
             return ret;
-        if (rx_cancelled(cancel))
-            return RX_ERROR(ECANCELED);
+        if (cb_cancelled(cancel))
+            return CB_ERROR(ECANCELED);
     }
     return 0;
 }
 
 /* The most likely next token after decode(). */
-static int next_token(RXML *ml, int32_t *tok)
+static int next_token(CBML *ml, int32_t *tok)
 {
     ArgmaxPush p = {
         .logits = ml->logits.b.addr,
@@ -1009,14 +1009,14 @@ typedef struct Tokens {
 static int tok_push(Tokens *t, int32_t id, int32_t a)
 {
     if (t->nb == t->cap) {
-        int c = RX_MAX(t->cap * 2, 256);
+        int c = CB_MAX(t->cap * 2, 256);
         int32_t *ids = realloc(t->ids, c * sizeof(*ids));
         if (!ids)
-            return RX_ERROR(ENOMEM);
+            return CB_ERROR(ENOMEM);
         t->ids = ids;
         int32_t *aidx = realloc(t->aidx, c * sizeof(*aidx));
         if (!aidx)
-            return RX_ERROR(ENOMEM);
+            return CB_ERROR(ENOMEM);
         t->aidx = aidx;
         t->cap = c;
     }
@@ -1026,7 +1026,7 @@ static int tok_push(Tokens *t, int32_t id, int32_t a)
     return 0;
 }
 
-static int tok_text(RXML *ml, Tokens *t, const char *text)
+static int tok_text(CBML *ml, Tokens *t, const char *text)
 {
     int32_t *ids = NULL;
     int nb = 0, cap = 0;
@@ -1071,7 +1071,7 @@ static int tok_audio(Tokens *t, int nb_audio)
 
 /* "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n
  * <|im_start|>user\n" (the processor's _build_default_prompt). */
-static int tok_head(RXML *ml, Tokens *t)
+static int tok_head(CBML *ml, Tokens *t)
 {
     int ret;
     if ((ret = tok_push(t, TOK_IM_START, -1)) < 0 ||
@@ -1100,31 +1100,31 @@ static int audio_prompt_tokens(int64_t n)
     return tokens;
 }
 
-int ml_max_context(const RXML *ml)
+int ml_max_context(const CBML *ml)
 {
     return ml->max_ctx;
 }
 
-int ml_listen(RXML *ml, const float *pcm, int64_t n, int room, RXCancel *cancel)
+int ml_listen(CBML *ml, const float *pcm, int64_t n, int room, CBCancel *cancel)
 {
-    int64_t t0 = rx_time_us();
+    int64_t t0 = cb_time_us();
     ml->nb_prefix = 0;
     ml->nb_audio = 0;
-    room = RX_MAX(room, QUESTION_ROOM);
+    room = CB_MAX(room, QUESTION_ROOM);
 
     /* What fits: the head, the audio and its markers, and room for the
      * questions and their answers; whole seconds are cut from the end
      * until it does. */
     int64_t fit = n;
-    while (fit > RX_ML_RATE && HEAD_TOKENS + audio_prompt_tokens(fit) + room > ml->max_ctx)
-        fit -= RX_ML_RATE;
+    while (fit > CB_ML_RATE && HEAD_TOKENS + audio_prompt_tokens(fit) + room > ml->max_ctx)
+        fit -= CB_ML_RATE;
     if (fit < n) {
-        rx_debug("ml: %.1f s of audio, %.1f s fit in the context beside %d tokens of questions",
-                 n / (double)RX_ML_RATE, fit / (double)RX_ML_RATE, room);
+        cb_debug("ml: %.1f s of audio, %.1f s fit in the context beside %d tokens of questions",
+                 n / (double)CB_ML_RATE, fit / (double)CB_ML_RATE, room);
         n = fit;
     }
     if (n < N_FFT || HEAD_TOKENS + audio_prompt_tokens(n) + room > ml->max_ctx)
-        return RX_ERROR(E2BIG);
+        return CB_ERROR(E2BIG);
 
     Tokens t = { 0 };
     int ret = encode(ml, pcm, n, cancel);
@@ -1135,7 +1135,7 @@ int ml_listen(RXML *ml, const float *pcm, int64_t n, int room, RXCancel *cancel)
         (ret = tok_audio(&t, nb_audio)) < 0 || (ret = tok_push(&t, TOK_AUDIO_EOS, -1)) < 0)
         goto end;
     if (t.nb + room > ml->max_ctx) {
-        ret = RX_ERROR(E2BIG);
+        ret = CB_ERROR(E2BIG);
         goto end;
     }
     if ((ret = decode(ml, t.ids, t.aidx, t.nb, 0, 1, cancel)) < 0)
@@ -1149,19 +1149,19 @@ end:
         ml_gpu_discard(&ml->g);
     uint64_t during = ml_gpu_allocated(&ml->g);
     free_audio_scratch(ml);
-    rx_debug("ml: %.2f GB on the GPU while listening, %.2f GB after", during * 1e-9,
+    cb_debug("ml: %.2f GB on the GPU while listening, %.2f GB after", during * 1e-9,
              ml_gpu_allocated(&ml->g) * 1e-9);
-    ml->listen_ms = (rx_time_us() - t0) * 1e-3;
+    ml->listen_ms = (cb_time_us() - t0) * 1e-3;
     ml->ask_ms = 0.0;
     return ret;
 }
 
-int rx_ml_listen(RXML *ml, const float *pcm, int64_t n, RXCancel *cancel)
+int cb_ml_listen(CBML *ml, const float *pcm, int64_t n, CBCancel *cancel)
 {
     return ml_listen(ml, pcm, n, QUESTION_ROOM, cancel);
 }
 
-void rx_ml_forget(RXML *ml)
+void cb_ml_forget(CBML *ml)
 {
     ml->nb_prefix = 0;
     ml->nb_audio = 0;
@@ -1169,15 +1169,15 @@ void rx_ml_forget(RXML *ml)
 
 /* The question's tokens, after the cached head and audio (or after a head
  * of its own when there is none). */
-static int tok_question(RXML *ml, Tokens *t, const char *question, const char *prefix,
+static int tok_question(CBML *ml, Tokens *t, const char *question, const char *prefix,
                         bool after_audio)
 {
     int ret;
     if (!after_audio && (ret = tok_head(ml, t)) < 0)
         return ret;
-    char *q = rx_asprintf("%s%s", after_audio ? "\n" : "", question);
+    char *q = cb_asprintf("%s%s", after_audio ? "\n" : "", question);
     if (!q)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     ret = tok_text(ml, t, q);
     free(q);
     if (ret < 0 || (ret = tok_push(t, TOK_IM_END, -1)) < 0 || (ret = tok_text(ml, t, "\n")) < 0 ||
@@ -1188,7 +1188,7 @@ static int tok_question(RXML *ml, Tokens *t, const char *question, const char *p
     return ret;
 }
 
-int ml_question_tokens(RXML *ml, const char *question, const char *prefix)
+int ml_question_tokens(CBML *ml, const char *question, const char *prefix)
 {
     Tokens t = { 0 };
     int ret = tok_question(ml, &t, question, prefix, true);
@@ -1198,10 +1198,10 @@ int ml_question_tokens(RXML *ml, const char *question, const char *prefix)
     return ret;
 }
 
-int rx_ml_ask(RXML *ml, const char *question, int max_tokens, char **answer)
+int cb_ml_ask(CBML *ml, const char *question, int max_tokens, char **answer)
 {
     *answer = NULL;
-    int64_t t0 = rx_time_us();
+    int64_t t0 = cb_time_us();
     Tokens t = { 0 };
     char *out = NULL;
     size_t len = 0, cap = 0;
@@ -1216,7 +1216,7 @@ int rx_ml_ask(RXML *ml, const char *question, int max_tokens, char **answer)
 
     cap = 256;
     if (!(out = calloc(1, cap))) {
-        ret = RX_ERROR(ENOMEM);
+        ret = CB_ERROR(ENOMEM);
         goto end;
     }
     for (int i = 0; i < max_tokens; i++) {
@@ -1241,17 +1241,17 @@ end:
     tok_free(&t);
     if (ret < 0)
         ml_gpu_discard(&ml->g);
-    ml->ask_ms += (rx_time_us() - t0) * 1e-3;
+    ml->ask_ms += (cb_time_us() - t0) * 1e-3;
     return ret;
 }
 
-int rx_ml_choose(RXML *ml, const char *question, const char *prefix,
+int cb_ml_choose(CBML *ml, const char *question, const char *prefix,
                  const char *const *choices, int nb, float *probs, float *mass)
 {
-    int64_t t0 = rx_time_us();
-    int32_t *ids = calloc(RX_MAX(nb, 1), sizeof(*ids));
+    int64_t t0 = cb_time_us();
+    int32_t *ids = calloc(CB_MAX(nb, 1), sizeof(*ids));
     if (!ids)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
 
     Tokens t = { 0 };
     int ret = 0;
@@ -1260,8 +1260,8 @@ int rx_ml_choose(RXML *ml, const char *question, const char *prefix,
         int cn = 0, ccap = 0;
         ret = ml_tok_encode(ml->tok, choices[i], &c, &cn, &ccap);
         if (ret >= 0 && cn != 1) {
-            rx_err("ml: choice \"%s\" is %d tokens, not one", choices[i], cn);
-            ret = RX_ERROR(EINVAL);
+            cb_err("ml: choice \"%s\" is %d tokens, not one", choices[i], cn);
+            ret = CB_ERROR(EINVAL);
         }
         if (ret >= 0)
             ids[i] = c[0];
@@ -1287,8 +1287,8 @@ int rx_ml_choose(RXML *ml, const char *question, const char *prefix,
     double mx = -INFINITY;
     for (int i = 0; i < VOCAB; i++) {
         if (!isfinite(logits[i])) {
-            rx_err("ml: the model's logits are not finite");
-            ret = RX_ERROR(EIO);
+            cb_err("ml: the model's logits are not finite");
+            ret = CB_ERROR(EIO);
             goto end;
         }
         mx = fmax(mx, logits[i]);
@@ -1302,8 +1302,8 @@ int rx_ml_choose(RXML *ml, const char *question, const char *prefix,
         sum += probs[i];
     }
     if (!(sum > 0.0) || !isfinite(sum)) {
-        rx_err("ml: the choices have no probability at all");
-        ret = RX_ERROR(EIO);
+        cb_err("ml: the choices have no probability at all");
+        ret = CB_ERROR(EIO);
         goto end;
     }
     for (int i = 0; i < nb; i++)
@@ -1316,7 +1316,7 @@ end:
     tok_free(&t);
     if (ret < 0)
         ml_gpu_discard(&ml->g);
-    ml->ask_ms += (rx_time_us() - t0) * 1e-3;
+    ml->ask_ms += (cb_time_us() - t0) * 1e-3;
     return ret;
 }
 
@@ -1333,7 +1333,7 @@ static double log_prob(const float *logits, int32_t id)
 }
 
 /* The logits of the last decode(), rows [0, nb), into ml->down. */
-static int read_logits(RXML *ml, int nb)
+static int read_logits(CBML *ml, int nb)
 {
     ml_gpu_copy(&ml->g, &ml->logits.b, 0, &ml->down, 0, (size_t)nb * VOCAB * 4);
     int ret = ml_gpu_run(&ml->g);
@@ -1342,10 +1342,10 @@ static int read_logits(RXML *ml, int nb)
     return ml_buf_invalidate(&ml->g, &ml->down);
 }
 
-int rx_ml_rank(RXML *ml, const char *question, const char *prefix,
+int cb_ml_rank(CBML *ml, const char *question, const char *prefix,
                const char *const *answers, int nb, double *logprob)
 {
-    int64_t t0 = rx_time_us();
+    int64_t t0 = cb_time_us();
     Tokens t = { 0 };
     float *first = NULL;
     int ret = tok_question(ml, &t, question, prefix, ml->nb_prefix);
@@ -1359,7 +1359,7 @@ int rx_ml_rank(RXML *ml, const char *question, const char *prefix,
     /* The answer's first token is predicted by the question's last
      * logits: keep them. */
     if (!(first = malloc((size_t)VOCAB * sizeof(*first)))) {
-        ret = RX_ERROR(ENOMEM);
+        ret = CB_ERROR(ENOMEM);
         goto end;
     }
     memcpy(first, ml->down.map, (size_t)VOCAB * sizeof(*first));
@@ -1375,9 +1375,9 @@ int rx_ml_rank(RXML *ml, const char *question, const char *prefix,
          * once: their logits predict the tokens after them. */
         int k = at.nb - 1;
         if (k < 1 || k > 8 || pos + k > ml->max_ctx) {
-            rx_err("ml: answer \"%s\" is %d tokens; 1 to 8 can be ranked", answers[a], k);
+            cb_err("ml: answer \"%s\" is %d tokens; 1 to 8 can be ranked", answers[a], k);
             tok_free(&at);
-            ret = RX_ERROR(EINVAL);
+            ret = CB_ERROR(EINVAL);
             break;
         }
         double lp = log_prob(first, at.ids[0]);
@@ -1396,6 +1396,6 @@ end:
     tok_free(&t);
     if (ret < 0)
         ml_gpu_discard(&ml->g);
-    ml->ask_ms += (rx_time_us() - t0) * 1e-3;
+    ml->ask_ms += (cb_time_us() - t0) * 1e-3;
     return ret;
 }

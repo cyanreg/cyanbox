@@ -1,6 +1,6 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
-/* Writing a stick, rekordbox's sync-manager model (rxbox/export.h): the
+/* Writing a stick, rekordbox's sync-manager model (cyanbox/export.h): the
  * settings, the chosen playlists (all by default) and the union of their
  * tracks, or the whole library. A port of dj's export.py write_stick with
  * the checks docs/OVERVIEW.md 3.5 asks for.
@@ -20,7 +20,7 @@
  * exportLibrary.db are rebuilt (the history a player appended to them goes
  * with them, which is why a stick with unsynced history blocks the
  * export), exportLibrary.db-wal/-shm and a stale exportExt.pdb are removed
- * (docs/pdb.md 1.1). Files players write and rxbox does not (export.pdb.bak,
+ * (docs/pdb.md 1.1). Files players write and cyanbox does not (export.pdb.bak,
  * RBFLTR.DAT, PIONEER/CDJ, LOG, MPJ ...) are never touched. With `prune`,
  * audio, ANLZ and artwork files that are not part of this export are
  * deleted; without it they are only reported.
@@ -33,9 +33,9 @@
  * run writes nothing anywhere: the transcodes it would make are listed as
  * "transcode" items (and the plan describes them from the originals), and
  * every file it would write as "copy", "skip" or "rewrite". The plan reads
- * no file the library describes already (RX_PLAN_STORED): a file is read
+ * no file the library describes already (CB_PLAN_STORED): a file is read
  * once, as it is written, copied or encoded from its decoded samples
- * (rx_encode; RXStickFormat says which), and what the analysis files need
+ * (cb_encode; CBStickFormat says which), and what the analysis files need
  * of it is learnt then.
  *
  * What keeps the stick and the library safe:
@@ -44,7 +44,7 @@
  *    is written;
  *  - every file written, read back or deleted is resolved below the
  *    stick's root with no symbolic link followed and no other file system
- *    entered (rx_stick_open; FAT has no links, a staging directory may,
+ *    entered (cb_stick_open; FAT has no links, a staging directory may,
  *    at any depth), and the checks name such a path before anything is
  *    written, so nothing is written or deleted out of the stick;
  *  - the old sync record is removed before the databases are replaced and
@@ -56,7 +56,7 @@
  *    under the library's root, wherever those are; its walk follows no
  *    link and does not leave the stick's file system. */
 
-#include "rxbox/export.h"
+#include "cyanbox/export.h"
 
 #include <dirent.h>
 #include <fcntl.h>
@@ -69,23 +69,23 @@
 
 #include <pthread.h>
 
-#include "rxbox/audio.h"
-#include "rxbox/thread.h"
+#include "cyanbox/audio.h"
+#include "cyanbox/thread.h"
 #include "src/export/export_priv.h"
 #include "src/formats/buf.h"
 #include "src/formats/formats_priv.h"
 
 #define DB_RESERVE (64ll << 20)
 
-void rx_export_options_default(RXExportOptions *o)
+void cb_export_options_default(CBExportOptions *o)
 {
-    *o = (RXExportOptions) { 0 };
+    *o = (CBExportOptions) { 0 };
 }
 
 typedef struct Ctx {
-    RXLibrary              *lib;
+    CBLibrary              *lib;
     const char             *dest;
-    /* The stick's root (rx_stick_root): every file written, read back or
+    /* The stick's root (cb_stick_root): every file written, read back or
      * deleted is resolved below it (export_priv.h), and the device it is
      * on, which prune's walk does not leave. */
     int                     root;
@@ -97,8 +97,8 @@ typedef struct Ctx {
     /* Changes a player left on the stick that this export would lose
      * (checks); it refuses on them. */
     int                     unsynced;
-    const RXExportOptions  *opt;
-    rx_progress_cb          cb;
+    const CBExportOptions  *opt;
+    cb_progress_cb          cb;
     void                   *opaque;
     bool                    cancelled;
     /* The databases, built by the checks and written last. */
@@ -111,11 +111,11 @@ typedef struct Ctx {
     int                     nb_samples, head;
     /* The small files' writes and the audio files' closes, in parallel
      * (PutJob); the jobs of the stage, checked by puts_wait. */
-    RXThreadPool           *pool;
-    RXArray                 puts;       /* PutJob * */
+    CBThreadPool           *pool;
+    CBArray                 puts;       /* PutJob * */
 } Ctx;
 
-static void reportf(Ctx *c, const char *stage, const char *fmt, ...) RX_PRINTF(3, 4);
+static void reportf(Ctx *c, const char *stage, const char *fmt, ...) CB_PRINTF(3, 4);
 
 /* A stick mounted with flush (udisks' default for removable FAT) sleeps a
  * tenth of a second in the kernel on every close of a file written
@@ -142,10 +142,10 @@ static void put_job(void *arg)
 {
     PutJob *j = arg;
     if (j->fd >= 0) {
-        j->ret = close(j->fd) < 0 ? RX_ERROR(errno) : 0;
+        j->ret = close(j->fd) < 0 ? CB_ERROR(errno) : 0;
         j->fd = -1;
     } else {
-        j->ret = rx_stick_write(j->root, j->path, j->data, j->size);
+        j->ret = cb_stick_write(j->root, j->path, j->data, j->size);
     }
     if (j->owns)
         free(j->data);
@@ -170,26 +170,26 @@ static void put_free(PutJob *j)
 static int put_submit(Ctx *c, const char *path, uint8_t *data, size_t size, bool owns, int fd)
 {
     int ret = 0;
-    if (!c->pool && (ret = rx_pool_create(&c->pool, PUT_THREADS)) < 0)
+    if (!c->pool && (ret = cb_pool_create(&c->pool, PUT_THREADS)) < 0)
         return ret;
     PutJob *j = calloc(1, sizeof(*j));
-    char *p = path ? rx_strdup(path) : NULL;
+    char *p = path ? cb_strdup(path) : NULL;
     if (!j || (path && !p)) {
         free(j);
         free(p);
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     }
     *j = (PutJob) { .root = c->root, .path = p, .data = data, .size = size, .owns = owns, .fd = fd };
-    if (!rx_array_push(&c->puts, &j)) {
+    if (!cb_array_push(&c->puts, &j)) {
         j->owns = false;
         j->fd = -1;
         put_free(j);
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     }
     /* No more than a queue's worth ahead of the writers. */
-    while (rx_pool_pending(c->pool) >= PUT_QUEUE)
+    while (cb_pool_pending(c->pool) >= PUT_QUEUE)
         nanosleep(&(struct timespec) { .tv_nsec = 2000000 }, NULL);
-    if ((ret = rx_pool_submit(c->pool, put_job, j)) < 0) {
+    if ((ret = cb_pool_submit(c->pool, put_job, j)) < 0) {
         c->puts.nb--;
         j->owns = false;
         j->fd = -1;
@@ -202,10 +202,10 @@ static int put_submit(Ctx *c, const char *path, uint8_t *data, size_t size, bool
 static int puts_wait(Ctx *c, const char *stage)
 {
     if (c->pool)
-        rx_pool_wait(c->pool);
+        cb_pool_wait(c->pool);
     int ret = 0;
     for (size_t i = 0; i < c->puts.nb; i++) {
-        PutJob *j = *(PutJob **)rx_array_at(&c->puts, i);
+        PutJob *j = *(PutJob **)cb_array_at(&c->puts, i);
         if (j->ret < 0) {
             reportf(c, stage, "cannot write %s: %s", j->path ? j->path : "an audio file", strerror(-j->ret));
             ret = ret ? ret : j->ret;
@@ -232,7 +232,7 @@ static void stats_start(Ctx *c, int64_t bytes_total)
     c->bytes_done = 0;
     c->nb_samples = 1;
     c->head = 0;
-    c->t_sample[0] = rx_time_us();
+    c->t_sample[0] = cb_time_us();
     c->b_sample[0] = 0;
     stats_store(c, 0, 0, -1);
 }
@@ -245,7 +245,7 @@ static void stats_add(Ctx *c, int64_t bytes)
     c->bytes_done += bytes;
     if (!c->opt->stats)
         return;
-    int64_t now = rx_time_us();
+    int64_t now = cb_time_us();
     int last = (c->head + c->nb_samples - 1) % 16;
     if (now - c->t_sample[last] < 250000) {
         __atomic_store_n(&c->opt->stats->bytes_done, c->bytes_done, __ATOMIC_RELAXED);
@@ -260,7 +260,7 @@ static void stats_add(Ctx *c, int64_t bytes)
     c->b_sample[idx] = c->bytes_done;
     int64_t dt = now - c->t_sample[c->head], db = c->bytes_done - c->b_sample[c->head];
     int64_t rate = dt >= 500000 ? db * 1000000 / dt : 0;
-    int64_t left = rate > 0 ? (RX_MAX(c->bytes_total - c->bytes_done, 0) + rate - 1) / rate : -1;
+    int64_t left = rate > 0 ? (CB_MAX(c->bytes_total - c->bytes_done, 0) + rate - 1) / rate : -1;
     stats_store(c, c->bytes_done, rate, left);
 }
 
@@ -273,12 +273,12 @@ static bool progress(Ctx *c, const char *stage, int done, int total, const char 
     return !c->cancelled;
 }
 
-static void reportf(Ctx *c, const char *stage, const char *fmt, ...) RX_PRINTF(3, 4);
+static void reportf(Ctx *c, const char *stage, const char *fmt, ...) CB_PRINTF(3, 4);
 static void reportf(Ctx *c, const char *stage, const char *fmt, ...)
 {
     va_list ap;
     va_start(ap, fmt);
-    char *msg = rx_vasprintf(fmt, ap);
+    char *msg = cb_vasprintf(fmt, ap);
     va_end(ap);
     progress(c, stage, 0, 0, msg);
     free(msg);
@@ -286,14 +286,14 @@ static void reportf(Ctx *c, const char *stage, const char *fmt, ...)
 
 /* What the export says at its end, cancelled or not: the callback's answer
  * no longer matters. */
-static void notify(Ctx *c, const char *stage, int done, int total, const char *fmt, ...) RX_PRINTF(5, 6);
+static void notify(Ctx *c, const char *stage, int done, int total, const char *fmt, ...) CB_PRINTF(5, 6);
 static void notify(Ctx *c, const char *stage, int done, int total, const char *fmt, ...)
 {
     char *msg = NULL;
     if (fmt) {
         va_list ap;
         va_start(ap, fmt);
-        msg = rx_vasprintf(fmt, ap);
+        msg = cb_vasprintf(fmt, ap);
         va_end(ap);
     }
     if (c->cb)
@@ -304,7 +304,7 @@ static void notify(Ctx *c, const char *stage, int done, int total, const char *f
 /* "1.7 GB", "320 MB", "12 kB": decimal units, as the rate is shown. */
 static void size_text(int64_t bytes, char *buf, size_t size)
 {
-    double b = (double)RX_MAX(bytes, 0);
+    double b = (double)CB_MAX(bytes, 0);
     if (b >= 1e9)
         snprintf(buf, size, "%.1f GB", b / 1e9);
     else if (b >= 1e6)
@@ -317,32 +317,32 @@ static void size_text(int64_t bytes, char *buf, size_t size)
 
 static int cmp_ptr_id(const void *a, const void *b)
 {
-    uint64_t x = (*(RXTrack *const *)a)->id, y = (*(RXTrack *const *)b)->id;
+    uint64_t x = (*(CBTrack *const *)a)->id, y = (*(CBTrack *const *)b)->id;
     return x < y ? -1 : x > y;
 }
 
 /* The tracks to export: the union of the playlists' tracks, or the whole
  * library; missing files and unanalysed tracks reported and left out. */
-static int select_tracks(Ctx *c, const RXPlaylist *const *pls, int nb_pls, RXTrack ***out, int *nb)
+static int select_tracks(Ctx *c, const CBPlaylist *const *pls, int nb_pls, CBTrack ***out, int *nb)
 {
-    RXLibrary *lib = c->lib;
-    RXTrack **v = malloc((size_t)RX_MAX(lib->nb_tracks, 1) * sizeof(*v));
+    CBLibrary *lib = c->lib;
+    CBTrack **v = malloc((size_t)CB_MAX(lib->nb_tracks, 1) * sizeof(*v));
     if (!v)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     int n = 0;
     if (c->opt->whole_library) {
         for (int i = 0; i < lib->nb_tracks; i++)
             v[n++] = lib->tracks[i];
     } else {
-        uint8_t *in = calloc((size_t)RX_MAX(lib->nb_tracks, 1), 1);
+        uint8_t *in = calloc((size_t)CB_MAX(lib->nb_tracks, 1), 1);
         if (!in) {
             free(v);
-            return RX_ERROR(ENOMEM);
+            return CB_ERROR(ENOMEM);
         }
         for (int p = 0; p < nb_pls; p++) {
             for (int k = 0; k < pls[p]->nb; k++) {
-                RXTrack *t = rx_library_find_id(lib, pls[p]->track_ids[k]);
-                int idx = t ? rx_library_index_of(lib, t) : -1;
+                CBTrack *t = cb_library_find_id(lib, pls[p]->track_ids[k]);
+                int idx = t ? cb_library_index_of(lib, t) : -1;
                 if (idx >= 0 && !in[idx]) {
                     in[idx] = 1;
                     v[n++] = t;
@@ -355,12 +355,12 @@ static int select_tracks(Ctx *c, const RXPlaylist *const *pls, int nb_pls, RXTra
     int k = 0;
     for (int i = 0; i < n; i++) {
         char name[512];
-        rx_track_display(v[i], name, sizeof(name));
+        cb_track_display(v[i], name, sizeof(name));
         if (v[i]->missing) {
             reportf(c, "check", "skipped, file missing: %s", name);
             continue;
         }
-        if (!rx_track_analysed(v[i])) {
+        if (!cb_track_analysed(v[i])) {
             reportf(c, "check", "skipped, not analysed (no beat grid): %s", name);
             continue;
         }
@@ -382,7 +382,7 @@ static int select_tracks(Ctx *c, const RXPlaylist *const *pls, int nb_pls, RXTra
 static bool same_file(int root, const char *src, const char *stick_path)
 {
     struct stat a, b;
-    if (root < 0 || stat(src, &a) < 0 || rx_stick_stat(root, stick_path, &b) < 0 || !S_ISREG(b.st_mode))
+    if (root < 0 || stat(src, &a) < 0 || cb_stick_stat(root, stick_path, &b) < 0 || !S_ISREG(b.st_mode))
         return false;
     return a.st_size == b.st_size && llabs((long long)a.st_mtime - (long long)b.st_mtime) <= 2;
 }
@@ -391,7 +391,7 @@ static bool same_file(int root, const char *src, const char *stick_path)
  * returns. */
 static int write_file(Ctx *c, const char *stick_path, const void *data, size_t size)
 {
-    int ret = rx_stick_write(c->root, stick_path, data, size);
+    int ret = cb_stick_write(c->root, stick_path, data, size);
     if (ret < 0)
         reportf(c, "database", "cannot write %s%s: %s", c->dest, stick_path, strerror(-ret));
     return ret;
@@ -401,11 +401,11 @@ static int write_file(Ctx *c, const char *stick_path, const void *data, size_t s
 static bool unchanged(Ctx *c, const char *stick_path, const void *data, size_t size)
 {
     struct stat st;
-    if (rx_stick_stat(c->root, stick_path, &st) < 0 || !S_ISREG(st.st_mode) || st.st_size != (off_t)size)
+    if (cb_stick_stat(c->root, stick_path, &st) < 0 || !S_ISREG(st.st_mode) || st.st_size != (off_t)size)
         return false;
     uint8_t *old;
     size_t n;
-    if (rx_stick_read_file(c->root, stick_path, &old, &n) < 0)
+    if (cb_stick_read_file(c->root, stick_path, &old, &n) < 0)
         return false;
     bool same = n == size && !memcmp(old, data, size);
     free(old);
@@ -434,21 +434,21 @@ static int put_file(Ctx *c, const char *stick_path, uint8_t *data, size_t size, 
 
 static void remove_file(Ctx *c, const char *stick_path)
 {
-    if (rx_stick_unlink(c->root, stick_path, 0) == 0)
+    if (cb_stick_unlink(c->root, stick_path, 0) == 0)
         reportf(c, "database", "removed stale %s", stick_path);
 }
 
 /* --------------------------------------------------- the encoded record */
 
 /* What the stick holds of the files the export encoded (Made), in
- * RX_ENCODED_PATH: a line each, the stick path, how it was encoded, the
+ * CB_ENCODED_PATH: a line each, the stick path, how it was encoded, the
  * source's size and time when it was, the file's size and frames, and
  * the FLAC's first frame and the frames its PVB2 tag names (the 400 a
  * player seeks by, docs/anlz.md 4.15). An encoded file is not its
  * source, so "the same size and time" (same_file) cannot tell it is
  * there already; this record can, and lets the analysis files be made
  * again without reading the file back. */
-#define RX_ENCODED_PATH "/PIONEER/rxbox/encoded.txt"
+#define CB_ENCODED_PATH "/PIONEER/cyanbox/encoded.txt"
 #define SEEKS 400
 
 typedef struct Made {
@@ -495,10 +495,10 @@ static const Made *record_find(const Record *r, const char *path)
     return NULL;
 }
 
-static void spec_of(const RXPlanEncode *e, char out[48])
+static void spec_of(const CBPlanEncode *e, char out[48])
 {
     static const char *const names[] = { "flac", "wav", "aiff", "mp3" };
-    snprintf(out, 48, "%s/%d/%d/%d/%d", names[RX_CLAMP(e->format, 0, 3)], e->bits, e->max_rate,
+    snprintf(out, 48, "%s/%d/%d/%d/%d", names[CB_CLAMP(e->format, 0, 3)], e->bits, e->max_rate,
              e->channels, e->exact);
 }
 
@@ -508,7 +508,7 @@ static void record_read(int root, Record *r)
     *r = (Record) { 0 };
     uint8_t *data;
     size_t size;
-    if (root < 0 || rx_stick_read_file(root, RX_ENCODED_PATH, &data, &size) < 0)
+    if (root < 0 || cb_stick_read_file(root, CB_ENCODED_PATH, &data, &size) < 0)
         return;
     char *text = realloc(data, size + 1);
     if (!text) {
@@ -535,14 +535,14 @@ static void record_read(int root, Record *r)
         Made *m;
         if (nf < 9 || f[0][0] != '/' || !(m = record_add(r)))
             continue;
-        m->path = rx_strdup(f[0]);
+        m->path = cb_strdup(f[0]);
         snprintf(m->spec, sizeof(m->spec), "%s", f[1]);
         m->src_size = strtoll(f[2], NULL, 10);
         m->src_mtime = strtoll(f[3], NULL, 10);
         m->size = strtoll(f[4], NULL, 10);
         m->frames = strtoll(f[5], NULL, 10);
         m->first = strtoll(f[6], NULL, 10);
-        int nb = (int)RX_CLAMP(strtol(f[7], NULL, 10), 0, SEEKS);
+        int nb = (int)CB_CLAMP(strtol(f[7], NULL, 10), 0, SEEKS);
         char *s = f[8];
         for (int k = 0; k < nb && s && *s; k++) {
             long long a, b;
@@ -561,39 +561,39 @@ static void record_read(int root, Record *r)
 
 static int record_write(Ctx *c, const Record *r)
 {
-    RXBuf b = { 0 };
+    CBBuf b = { 0 };
     for (int i = 0; i < r->nb; i++) {
         const Made *m = &r->v[i];
-        char *line = rx_asprintf("%s\t%s\t%lld\t%lld\t%lld\t%lld\t%lld\t%d\t", m->path, m->spec,
+        char *line = cb_asprintf("%s\t%s\t%lld\t%lld\t%lld\t%lld\t%lld\t%d\t", m->path, m->spec,
                                  (long long)m->src_size, (long long)m->src_mtime, (long long)m->size,
                                  (long long)m->frames, (long long)m->first, m->nb);
         if (!line) {
-            rx_buf_free(&b);
-            return RX_ERROR(ENOMEM);
+            cb_buf_free(&b);
+            return CB_ERROR(ENOMEM);
         }
-        rx_buf_put(&b, line, strlen(line));
+        cb_buf_put(&b, line, strlen(line));
         free(line);
         for (int k = 0; k < m->nb; k++) {
             char e[80];
             int n = snprintf(e, sizeof(e), "%s%lld,%lld,%d", k ? ";" : "",
                              (long long)m->seek[k].sample, (long long)m->seek[k].offset, m->seek[k].block);
-            rx_buf_put(&b, e, (size_t)n);
+            cb_buf_put(&b, e, (size_t)n);
         }
-        rx_buf_put(&b, "\n", 1);
+        cb_buf_put(&b, "\n", 1);
     }
     if (b.err) {
-        rx_buf_free(&b);
-        return RX_ERROR(ENOMEM);
+        cb_buf_free(&b);
+        return CB_ERROR(ENOMEM);
     }
-    int ret = r->nb ? write_file(c, RX_ENCODED_PATH, b.data, b.len)
-                    : rx_stick_unlink(c->root, RX_ENCODED_PATH, 0);
-    rx_buf_free(&b);
-    return ret == RX_ERROR(ENOENT) ? 0 : ret;
+    int ret = r->nb ? write_file(c, CB_ENCODED_PATH, b.data, b.len)
+                    : cb_stick_unlink(c->root, CB_ENCODED_PATH, 0);
+    cb_buf_free(&b);
+    return ret == CB_ERROR(ENOENT) ? 0 : ret;
 }
 
 /* The frames PVB2 names (anlz.c, pvb2): for each of its 400 entries the
  * last frame starting at or before i * (total / 400). */
-static void seeks_of(const RXFlacInfo *fi, Made *m)
+static void seeks_of(const CBFlacInfo *fi, Made *m)
 {
     m->nb = 0;
     m->first = fi->first_frame_offset;
@@ -609,15 +609,15 @@ static void seeks_of(const RXFlacInfo *fi, Made *m)
 
 /* Back from the record: those frames, which give PVB2 what the file's
  * whole table would. */
-static int flac_of(const Made *m, int rate, int channels, int bits, RXFlacInfo *fi)
+static int flac_of(const Made *m, int rate, int channels, int bits, CBFlacInfo *fi)
 {
-    *fi = (RXFlacInfo) {
+    *fi = (CBFlacInfo) {
         .valid = true, .sample_rate = rate, .channels = channels, .bit_depth = bits,
         .total_samples = m->frames, .first_frame_offset = m->first,
     };
-    fi->frames = calloc((size_t)RX_MAX(m->nb, 1), sizeof(*fi->frames));
+    fi->frames = calloc((size_t)CB_MAX(m->nb, 1), sizeof(*fi->frames));
     if (!fi->frames)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     for (int k = 0; k < m->nb; k++)
         fi->frames[k] = (typeof(fi->frames[0])) { m->seek[k].sample, m->seek[k].offset, m->seek[k].block };
     fi->nb_frames = m->nb;
@@ -626,7 +626,7 @@ static int flac_of(const Made *m, int rate, int channels, int bits, RXFlacInfo *
 
 /* Whether the stick holds the track's file as this export would write
  * it: a copy by same_file(), an encoded file by the record. */
-static bool on_stick(int root, const Record *r, const RXPlanTrack *t)
+static bool on_stick(int root, const Record *r, const CBPlanTrack *t)
 {
     if (!t->encode.on)
         return same_file(root, t->source, t->usb_path);
@@ -635,14 +635,14 @@ static bool on_stick(int root, const Record *r, const RXPlanTrack *t)
     spec_of(&t->encode, spec);
     struct stat a, b;
     return m && !strcmp(m->spec, spec) && stat(t->source, &a) == 0 && a.st_size == m->src_size &&
-           (int64_t)a.st_mtime == m->src_mtime && rx_stick_stat(root, t->usb_path, &b) == 0 &&
+           (int64_t)a.st_mtime == m->src_mtime && cb_stick_stat(root, t->usb_path, &b) == 0 &&
            S_ISREG(b.st_mode) && b.st_size == m->size;
 }
 
 /* ---------------------------------------------------------- our files */
 
 /* A stick path and its key under the stick's case rules
- * (rx_plan_fold_case: two paths with one key are one file on FAT and
+ * (cb_plan_fold_case: two paths with one key are one file on FAT and
  * exFAT). */
 typedef struct OurPath {
     char *key, *path;
@@ -659,15 +659,15 @@ static int ours_add(Ours *o, const char *stick_path)
         int cap = o->cap ? 2 * o->cap : 256;
         OurPath *v = realloc(o->v, (size_t)cap * sizeof(*v));
         if (!v)
-            return RX_ERROR(ENOMEM);
+            return CB_ERROR(ENOMEM);
         o->v = v;
         o->cap = cap;
     }
-    char *key = rx_plan_fold_case(stick_path), *path = rx_strdup(stick_path);
+    char *key = cb_plan_fold_case(stick_path), *path = cb_strdup(stick_path);
     if (!key || !path) {
         free(key);
         free(path);
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     }
     o->v[o->nb++] = (OurPath) { .key = key, .path = path };
     return 0;
@@ -708,30 +708,30 @@ static void ours_free(Ours *o)
     *o = (Ours) { 0 };
 }
 
-static int collect_ours(const RXPlan *plan, Ours *o)
+static int collect_ours(const CBPlan *plan, Ours *o)
 {
     int ret = 0;
     for (int i = 0; i < plan->nb_tracks && ret >= 0; i++) {
-        const RXPlanTrack *t = &plan->tracks[i];
+        const CBPlanTrack *t = &plan->tracks[i];
         ret = ours_add(o, t->usb_path);
         const char *ext[3] = { ".DAT", ".EXT", ".2EX" };
         for (int k = 0; k < 3 && ret >= 0; k++) {
-            char *p = rx_plan_anlz_path(t, ext[k]);
-            ret = p ? ours_add(o, p) : RX_ERROR(ENOMEM);
+            char *p = cb_plan_anlz_path(t, ext[k]);
+            ret = p ? ours_add(o, p) : CB_ERROR(ENOMEM);
             free(p);
         }
     }
     for (int i = 0; i < plan->nb_artworks && ret >= 0; i++) {
         uint32_t id = plan->artworks[i].id;
-        char *dir = rx_plan_artwork_dir(id);
+        char *dir = cb_plan_artwork_dir(id);
         const char *fmt[4] = { "%s/a%u.jpg", "%s/a%u_m.jpg", "%s/b%u.jpg", "%s/b%u_m.jpg" };
         for (int k = 0; k < 4 && ret >= 0 && dir; k++) {
-            char *p = rx_asprintf(fmt[k], dir, id);
-            ret = p ? ours_add(o, p) : RX_ERROR(ENOMEM);
+            char *p = cb_asprintf(fmt[k], dir, id);
+            ret = p ? ours_add(o, p) : CB_ERROR(ENOMEM);
             free(p);
         }
         if (!dir)
-            ret = RX_ERROR(ENOMEM);
+            ret = CB_ERROR(ENOMEM);
         free(dir);
     }
     ours_sort(o);
@@ -752,7 +752,7 @@ typedef struct Keep {
 
 typedef struct KeepSet {
     Ours    lib;                 /* the library's files on the stick */
-    RXArray inodes;              /* Keep, sorted */
+    CBArray inodes;              /* Keep, sorted */
     char   *lib_root;            /* the library's root, resolved; NULL if unknown */
 } KeepSet;
 
@@ -773,7 +773,7 @@ static bool keep_has(const KeepSet *k, const struct stat *st)
 static void keep_free(KeepSet *k)
 {
     ours_free(&k->lib);
-    rx_array_free(&k->inodes);
+    cb_array_free(&k->inodes);
     free(k->lib_root);
 }
 
@@ -785,8 +785,8 @@ static int keep_add(const Ctx *c, KeepSet *k, const char *dest, size_t n, const 
     if (!path || stat(path, &st) < 0 || !S_ISREG(st.st_mode))
         return 0;
     Keep e = { st.st_dev, st.st_ino };
-    if (!rx_array_push(&k->inodes, &e))
-        return RX_ERROR(ENOMEM);
+    if (!cb_array_push(&k->inodes, &e))
+        return CB_ERROR(ENOMEM);
     if (!dest || st.st_dev != c->dev)
         return 0;
     char *real = realpath(path, NULL);
@@ -797,9 +797,9 @@ static int keep_add(const Ctx *c, KeepSet *k, const char *dest, size_t n, const 
     return ret;
 }
 
-static int collect_keep(Ctx *c, const RXPlan *plan, KeepSet *k)
+static int collect_keep(Ctx *c, const CBPlan *plan, KeepSet *k)
 {
-    rx_array_init(&k->inodes, sizeof(Keep));
+    cb_array_init(&k->inodes, sizeof(Keep));
     k->lib_root = c->lib->root ? realpath(c->lib->root, NULL) : NULL;
     char *dest = realpath(c->dest, NULL);
     size_t n = dest ? strlen(dest) : 0;
@@ -807,12 +807,12 @@ static int collect_keep(Ctx *c, const RXPlan *plan, KeepSet *k)
         n--;
     int ret = 0;
     for (int i = 0; i < plan->nb_tracks && ret >= 0; i++) {
-        const RXPlanTrack *t = &plan->tracks[i];
+        const CBPlanTrack *t = &plan->tracks[i];
         struct stat st;
-        if (rx_stick_stat(c->root, t->usb_path, &st) >= 0 && S_ISREG(st.st_mode)) {
+        if (cb_stick_stat(c->root, t->usb_path, &st) >= 0 && S_ISREG(st.st_mode)) {
             Keep e = { st.st_dev, st.st_ino };
-            if (!rx_array_push(&k->inodes, &e))
-                ret = RX_ERROR(ENOMEM);
+            if (!cb_array_push(&k->inodes, &e))
+                ret = CB_ERROR(ENOMEM);
         }
         if (ret >= 0)
             ret = keep_add(c, k, dest, n, t->source);
@@ -831,7 +831,7 @@ static bool same_as(const Ctx *c, const Ours *o, const char *key, const struct s
 {
     for (int i = ours_find(o, key); i >= 0 && i < o->nb && !strcmp(o->v[i].key, key); i++) {
         struct stat s;
-        if (rx_stick_stat(c->root, o->v[i].path, &s) >= 0 && s.st_dev == st->st_dev &&
+        if (cb_stick_stat(c->root, o->v[i].path, &s) >= 0 && s.st_dev == st->st_dev &&
             s.st_ino == st->st_ino)
             return true;
     }
@@ -848,7 +848,7 @@ static bool same_as(const Ctx *c, const Ours *o, const char *key, const struct s
 static bool keep_file(const Ctx *c, const Ours *o, const KeepSet *k, int dir, const char *name,
                       const char *stick_path)
 {
-    char *key = rx_plan_fold_case(stick_path);
+    char *key = cb_plan_fold_case(stick_path);
     int fd = openat(dir, name, O_PATH | O_NOFOLLOW | O_CLOEXEC);
     struct stat st;
     bool keep = !key || fd < 0 || fstat(fd, &st) < 0 || !S_ISREG(st.st_mode) || st.st_dev != c->dev ||
@@ -872,7 +872,7 @@ static bool is_lib_root(const KeepSet *k, int fd)
  * the descriptor over) that this export does not write. Nothing through a
  * link or on another file system mounted on the stick is looked at. */
 static int find_extra(const Ctx *c, const Ours *o, const KeepSet *k, int fd, const char *stick_dir,
-                      RXArray *extra)
+                      CBArray *extra)
 {
     DIR *d = fdopendir(fd);
     if (!d) {
@@ -884,10 +884,10 @@ static int find_extra(const Ctx *c, const Ours *o, const KeepSet *k, int fd, con
     while (ret >= 0 && (e = readdir(d))) {
         if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, ".."))
             continue;
-        char *sub = rx_asprintf("%s/%s", stick_dir, e->d_name);
+        char *sub = cb_asprintf("%s/%s", stick_dir, e->d_name);
         struct stat st;
         if (!sub) {
-            ret = RX_ERROR(ENOMEM);
+            ret = CB_ERROR(ENOMEM);
         } else if (fstatat(dirfd(d), e->d_name, &st, AT_SYMLINK_NOFOLLOW) < 0 || st.st_dev != c->dev) {
             /* Gone meanwhile, unreadable, or another file system: not ours
              * to judge. */
@@ -898,10 +898,10 @@ static int find_extra(const Ctx *c, const Ours *o, const KeepSet *k, int fd, con
             else if (sfd >= 0)
                 close(sfd);
         } else if (S_ISREG(st.st_mode) && !keep_file(c, o, k, dirfd(d), e->d_name, sub)) {
-            if (rx_array_push(extra, &sub))
+            if (cb_array_push(extra, &sub))
                 sub = NULL;
             else
-                ret = RX_ERROR(ENOMEM);
+                ret = CB_ERROR(ENOMEM);
         }
         free(sub);
     }
@@ -914,14 +914,14 @@ static int find_extra(const Ctx *c, const Ours *o, const KeepSet *k, int fd, con
 static int delete_extra(const Ctx *c, const Ours *o, const KeepSet *k, const char *stick_path)
 {
     const char *base = strrchr(stick_path, '/') + 1;
-    char *parent = rx_strndup(stick_path, (size_t)(base - 1 - stick_path));
-    int dir = parent ? rx_stick_open(c->root, parent, O_PATH | O_DIRECTORY, 0) : RX_ERROR(ENOMEM);
+    char *parent = cb_strndup(stick_path, (size_t)(base - 1 - stick_path));
+    int dir = parent ? cb_stick_open(c->root, parent, O_PATH | O_DIRECTORY, 0) : CB_ERROR(ENOMEM);
     free(parent);
     if (dir < 0)
         return dir;
     int ret = 0;
     if (!keep_file(c, o, k, dir, base, stick_path))
-        ret = unlinkat(dir, base, 0) < 0 ? RX_ERROR(errno) : 1;
+        ret = unlinkat(dir, base, 0) < 0 ? CB_ERROR(errno) : 1;
     close(dir);
     return ret;
 }
@@ -961,14 +961,14 @@ static bool prune_empty(int fd, dev_t dev)
 /* The directories the export writes into and prunes: real directories
  * on the stick, never links out of it. */
 static const char *const stick_dirs[] = {
-    "/Contents", "/PIONEER", "/PIONEER/rekordbox", "/PIONEER/USBANLZ", "/PIONEER/Artwork", "/PIONEER/rxbox",
+    "/Contents", "/PIONEER", "/PIONEER/rekordbox", "/PIONEER/USBANLZ", "/PIONEER/Artwork", "/PIONEER/cyanbox",
 };
 
 static bool stick_dir_ok(const Ctx *c, const char *stick_dir)
 {
     struct stat st;
-    int ret = rx_stick_stat(c->root, stick_dir, &st);
-    return ret < 0 ? ret == RX_ERROR(ENOENT) : S_ISDIR(st.st_mode);
+    int ret = cb_stick_stat(c->root, stick_dir, &st);
+    return ret < 0 ? ret == CB_ERROR(ENOENT) : S_ISDIR(st.st_mode);
 }
 
 static int64_t round_up(int64_t n, int64_t cluster)
@@ -981,25 +981,25 @@ static int64_t round_up(int64_t n, int64_t cluster)
 static void account(int64_t new_size, int64_t old_size, int64_t cluster, int64_t *need)
 {
     int64_t n = round_up(new_size, cluster), o = round_up(old_size, cluster);
-    *need += RX_MAX(n - o, 0);
+    *need += CB_MAX(n - o, 0);
 }
 
 static int64_t stick_size(int root, const char *stick_path)
 {
     struct stat st;
-    return root >= 0 && rx_stick_stat(root, stick_path, &st) >= 0 && S_ISREG(st.st_mode) ? st.st_size : 0;
+    return root >= 0 && cb_stick_stat(root, stick_path, &st) >= 0 && S_ISREG(st.st_mode) ? st.st_size : 0;
 }
 
-int64_t rx_export_space_needed(const RXPlan *plan, const char *dest, int64_t cluster)
+int64_t cb_export_space_needed(const CBPlan *plan, const char *dest, int64_t cluster)
 {
-    cluster = RX_MAX(cluster, 1);
+    cluster = CB_MAX(cluster, 1);
     int64_t need = DB_RESERVE;
     /* Without the stick, everything counts as new. */
-    int root = rx_stick_root(dest);
+    int root = cb_stick_root(dest);
     Record rec;
     record_read(root, &rec);
     for (int i = 0; i < plan->nb_tracks; i++) {
-        const RXPlanTrack *t = &plan->tracks[i];
+        const CBPlanTrack *t = &plan->tracks[i];
         if (!on_stick(root, &rec, t))
             account(t->file_size, stick_size(root, t->usb_path), cluster, &need);
         /* The analysis files, counted as if rewritten: the waveform details
@@ -1007,7 +1007,7 @@ int64_t rx_export_space_needed(const RXPlan *plan, const char *dest, int64_t clu
          * columns a second (docs/anlz.md 4.9-4.12), the beats 8 bytes each
          * (4.3; up to 5 a second here), the previews, PVBR, PVB2 and cue
          * lists a few KiB a file. */
-        double dur = RX_MAX(t->duration, 0.0);
+        double dur = CB_MAX(t->duration, 0.0);
         int64_t cols = (int64_t)ceil(dur * 150.0);
         int64_t sizes[3] = {
             12288 + (int64_t)(40 * dur) + 120 * (int64_t)t->nb_cues,
@@ -1016,17 +1016,17 @@ int64_t rx_export_space_needed(const RXPlan *plan, const char *dest, int64_t clu
         };
         const char *ext[3] = { ".DAT", ".EXT", ".2EX" };
         for (int k = 0; k < 3; k++) {
-            char *p = t->anlz_dir ? rx_plan_anlz_path(t, ext[k]) : NULL;
+            char *p = t->anlz_dir ? cb_plan_anlz_path(t, ext[k]) : NULL;
             account(sizes[k], p ? stick_size(root, p) : 0, cluster, &need);
             free(p);
         }
     }
     for (int i = 0; i < plan->nb_artworks; i++) {
-        const RXPlanArtwork *a = &plan->artworks[i];
-        char *dir = rx_plan_artwork_dir(a->id);
+        const CBPlanArtwork *a = &plan->artworks[i];
+        char *dir = cb_plan_artwork_dir(a->id);
         const char *fmt[4] = { "%s/a%u.jpg", "%s/a%u_m.jpg", "%s/b%u.jpg", "%s/b%u_m.jpg" };
         for (int k = 0; dir && k < 4; k++) {
-            char *p = rx_asprintf(fmt[k], dir, a->id);
+            char *p = cb_asprintf(fmt[k], dir, a->id);
             account((int64_t)(k & 1 ? a->size240 : a->size80), p ? stick_size(root, p) : 0, cluster, &need);
             free(p);
         }
@@ -1040,12 +1040,12 @@ int64_t rx_export_space_needed(const RXPlan *plan, const char *dest, int64_t clu
 
 /* Names longer than any export.pdb row holds (docs/pdb.md 2.6: a row and
  * its index entry within one page), reported by name. */
-static void report_long_names(Ctx *c, const char *what, const RXPlanName *v, int nb)
+static void report_long_names(Ctx *c, const char *what, const CBPlanName *v, int nb)
 {
     for (int i = 0; i < nb; i++) {
         uint8_t *enc;
         size_t n;
-        int ret = rx_pdb_string_encode(v[i].name, &enc, &n);
+        int ret = cb_pdb_string_encode(v[i].name, &enc, &n);
         if (ret >= 0)
             free(enc);
         if (ret < 0 || n > 4000)
@@ -1056,12 +1056,12 @@ static void report_long_names(Ctx *c, const char *what, const RXPlanName *v, int
 
 /* Both databases built now, so nothing is written for a library they
  * cannot hold; write_databases() puts these bytes on the stick. */
-static int build_databases(Ctx *c, const RXPlan *plan)
+static int build_databases(Ctx *c, const CBPlan *plan)
 {
-    const RXConfig *cfg = &c->lib->cfg;
+    const CBConfig *cfg = &c->lib->cfg;
     int ret = 0;
     if (cfg->export_pdb || !cfg->export_onelibrary) {
-        if ((ret = rx_pdb_build(plan, &c->pdb, &c->pdb_size)) < 0) {
+        if ((ret = cb_pdb_build(plan, &c->pdb, &c->pdb_size)) < 0) {
             reportf(c, "check", "export.pdb cannot be built: %s", strerror(-ret));
             report_long_names(c, "artist", plan->artists, plan->nb_artists);
             report_long_names(c, "album", plan->albums, plan->nb_albums);
@@ -1069,11 +1069,11 @@ static int build_databases(Ctx *c, const RXPlan *plan)
             report_long_names(c, "label", plan->labels, plan->nb_labels);
             report_long_names(c, "key", plan->keys, plan->nb_keys);
             for (int i = 0; i < plan->nb_playlists; i++) {
-                RXPlanName n = { plan->playlists[i].id, plan->playlists[i].name, 0 };
+                CBPlanName n = { plan->playlists[i].id, plan->playlists[i].name, 0 };
                 report_long_names(c, "playlist", &n, 1);
             }
             for (int i = 0; i < plan->nb_tags; i++) {
-                RXPlanName n = { plan->tags[i].id, plan->tags[i].name, 0 };
+                CBPlanName n = { plan->tags[i].id, plan->tags[i].name, 0 };
                 report_long_names(c, "My Tag", &n, 1);
             }
             return ret;
@@ -1081,56 +1081,56 @@ static int build_databases(Ctx *c, const RXPlan *plan)
         bool tags = false;
         for (int i = 0; i < plan->nb_tags; i++)
             tags |= !plan->tags[i].is_category;
-        if (tags && (ret = rx_pdb_ext_build(plan, &c->ext, &c->ext_size)) < 0) {
+        if (tags && (ret = cb_pdb_ext_build(plan, &c->ext, &c->ext_size)) < 0) {
             reportf(c, "check", "exportExt.pdb cannot be built: %s", strerror(-ret));
             return ret;
         }
     }
-    if (cfg->export_onelibrary && (ret = rx_onelibrary_build(plan, &c->olib, &c->olib_size)) < 0)
+    if (cfg->export_onelibrary && (ret = cb_onelibrary_build(plan, &c->olib, &c->olib_size)) < 0)
         reportf(c, "check", "exportLibrary.db cannot be built: %s", strerror(-ret));
     return ret;
 }
 
 /* A file the export writes, looked up before anything is written: a link
- * or another file system on its way (rx_stick_open's rules) is refused
+ * or another file system on its way (cb_stick_open's rules) is refused
  * now rather than half way through. `bad` counts them; the first few are
  * named. */
 static void check_path(Ctx *c, const char *stick_path, int *bad)
 {
-    int fd = rx_stick_open(c->root, stick_path, O_PATH | O_NOFOLLOW, 0);
+    int fd = cb_stick_open(c->root, stick_path, O_PATH | O_NOFOLLOW, 0);
     struct stat st;
     int ret = fd;
     if (fd >= 0) {
-        ret = fstat(fd, &st) < 0 ? RX_ERROR(errno) : S_ISLNK(st.st_mode) ? RX_ERROR(ELOOP) : 0;
+        ret = fstat(fd, &st) < 0 ? CB_ERROR(errno) : S_ISLNK(st.st_mode) ? CB_ERROR(ELOOP) : 0;
         close(fd);
     }
-    if (ret != RX_ERROR(ELOOP) && ret != RX_ERROR(EXDEV))
+    if (ret != CB_ERROR(ELOOP) && ret != CB_ERROR(EXDEV))
         return;
     if ((*bad)++ < 10)
         reportf(c, "check", "%s%s: %s; not writing through it", c->dest, stick_path,
-                ret == RX_ERROR(EXDEV) ? "another file system is mounted on the way"
+                ret == CB_ERROR(EXDEV) ? "another file system is mounted on the way"
                                        : "a symbolic link on the way");
 }
 
-static int check_paths(Ctx *c, const RXPlan *plan)
+static int check_paths(Ctx *c, const CBPlan *plan)
 {
     static const char *const fixed[] = {
         "/PIONEER/MYSETTING.DAT", "/PIONEER/MYSETTING2.DAT", "/PIONEER/DJMMYSETTING.DAT",
         "/PIONEER/DEVSETTING.DAT", "/PIONEER/rekordbox/export.pdb", "/PIONEER/rekordbox/exportExt.pdb",
         "/PIONEER/rekordbox/exportLibrary.db", "/PIONEER/rekordbox/exportLibrary.db-wal",
-        "/PIONEER/rekordbox/exportLibrary.db-shm", RX_SYNC_PATH, RX_ENCODED_PATH,
+        "/PIONEER/rekordbox/exportLibrary.db-shm", CB_SYNC_PATH, CB_ENCODED_PATH,
     };
     int bad = 0;
-    for (size_t i = 0; i < RX_ARRAY_ELEMS(fixed); i++)
+    for (size_t i = 0; i < CB_ARRAY_ELEMS(fixed); i++)
         check_path(c, fixed[i], &bad);
     const char *ext[3] = { ".DAT", ".EXT", ".2EX" };
     for (int i = 0; i < plan->nb_tracks; i++) {
-        const RXPlanTrack *t = &plan->tracks[i];
+        const CBPlanTrack *t = &plan->tracks[i];
         check_path(c, t->usb_path, &bad);
         for (int k = 0; k < 3; k++) {
-            char *p = rx_plan_anlz_path(t, ext[k]);
+            char *p = cb_plan_anlz_path(t, ext[k]);
             if (!p)
-                return RX_ERROR(ENOMEM);
+                return CB_ERROR(ENOMEM);
             check_path(c, p, &bad);
             free(p);
         }
@@ -1138,12 +1138,12 @@ static int check_paths(Ctx *c, const RXPlan *plan)
     const char *fmt[4] = { "%s/a%u.jpg", "%s/a%u_m.jpg", "%s/b%u.jpg", "%s/b%u_m.jpg" };
     for (int i = 0; i < plan->nb_artworks; i++) {
         uint32_t id = plan->artworks[i].id;
-        char *dir = rx_plan_artwork_dir(id);
+        char *dir = cb_plan_artwork_dir(id);
         for (int k = 0; k < 4; k++) {
-            char *p = dir ? rx_asprintf(fmt[k], dir, id) : NULL;
+            char *p = dir ? cb_asprintf(fmt[k], dir, id) : NULL;
             if (!p) {
                 free(dir);
-                return RX_ERROR(ENOMEM);
+                return CB_ERROR(ENOMEM);
             }
             check_path(c, p, &bad);
             free(p);
@@ -1152,31 +1152,31 @@ static int check_paths(Ctx *c, const RXPlan *plan)
     }
     if (bad > 10)
         reportf(c, "check", "and %d more paths through a link or another file system", bad - 10);
-    return bad ? RX_ERROR(ELOOP) : 0;
+    return bad ? CB_ERROR(ELOOP) : 0;
 }
 
 /* The checks before anything is written; the first failure is returned.
  * Unsynced changes a player left are counted in c->unsynced, not
  * returned: the caller refuses on them, after the dry run's listing. */
-static int checks(Ctx *c, const RXPlan *plan)
+static int checks(Ctx *c, const CBPlan *plan)
 {
     int ret = 0;
     char fs[64];
 
-    for (size_t i = 0; i < RX_ARRAY_ELEMS(stick_dirs); i++) {
+    for (size_t i = 0; i < CB_ARRAY_ELEMS(stick_dirs); i++) {
         if (!stick_dir_ok(c, stick_dirs[i])) {
             reportf(c, "check", "%s%s is not a directory on the stick (a link?); not writing through it",
                     c->dest, stick_dirs[i]);
-            ret = ret ? ret : RX_ERROR(ENOTDIR);
+            ret = ret ? ret : CB_ERROR(ENOTDIR);
         }
     }
     int r = check_paths(c, plan);
     if (r < 0)
         ret = ret ? ret : r;
 
-    if (!rx_stick_is_mounted(c->dest))
+    if (!cb_stick_is_mounted(c->dest))
         reportf(c, "check", "warning: %s is not a mount point; writing into a directory", c->dest);
-    else if (rx_stick_fs_type(c->dest, fs, sizeof(fs)) >= 0 && strcmp(fs, "vfat") && strcmp(fs, "exfat") &&
+    else if (cb_stick_fs_type(c->dest, fs, sizeof(fs)) >= 0 && strcmp(fs, "vfat") && strcmp(fs, "exfat") &&
              strcmp(fs, "msdos") && strcmp(fs, "fat"))
         /* FAT32 on MBR is what every player reads; exFAT only the newer
          * ones (docs/pdb.md G14). */
@@ -1186,32 +1186,32 @@ static int checks(Ctx *c, const RXPlan *plan)
     /* Track rows that do not fit a DeviceSQL page (docs/pdb.md 2.6),
      * named rather than failing half way. */
     for (int i = 0; i < plan->nb_tracks; i++) {
-        int over = rx_pdb_track_row_overflow(&plan->tracks[i], plan);
+        int over = cb_pdb_track_row_overflow(&plan->tracks[i], plan);
         if (over > 0) {
             char name[512];
-            rx_track_display(plan->tracks[i].track, name, sizeof(name));
+            cb_track_display(plan->tracks[i].track, name, sizeof(name));
             reportf(c, "check", "too much text for one export.pdb page (%d bytes over): %s", over, name);
-            ret = ret ? ret : RX_ERROR(EFBIG);
+            ret = ret ? ret : CB_ERROR(EFBIG);
         }
     }
 
     /* Stick paths on the stick and unique as FAT and exFAT compare names
-     * (rx_plan_fold_case). */
+     * (cb_plan_fold_case). */
     Ours o = { 0 };
     for (int i = 0; i < plan->nb_tracks; i++) {
-        if (!rx_stick_path_safe(plan->tracks[i].usb_path)) {
+        if (!cb_stick_path_safe(plan->tracks[i].usb_path)) {
             reportf(c, "check", "not a path on the stick: %s", plan->tracks[i].usb_path);
-            ret = ret ? ret : RX_ERROR(EINVAL);
+            ret = ret ? ret : CB_ERROR(EINVAL);
         }
         if (ours_add(&o, plan->tracks[i].usb_path) < 0)
-            ret = ret ? ret : RX_ERROR(ENOMEM);
+            ret = ret ? ret : CB_ERROR(ENOMEM);
     }
     ours_sort(&o);
     for (int i = 1; i < o.nb; i++) {
         if (!strcmp(o.v[i].key, o.v[i - 1].key)) {
             reportf(c, "check", "two tracks map to one file on the stick: %s and %s", o.v[i - 1].path,
                     o.v[i].path);
-            ret = ret ? ret : RX_ERROR(EEXIST);
+            ret = ret ? ret : CB_ERROR(EEXIST);
         }
     }
     ours_free(&o);
@@ -1220,14 +1220,14 @@ static int checks(Ctx *c, const RXPlan *plan)
      * would be lost: export.pdb and exportLibrary.db are rebuilt, the ANLZ
      * cue lists rewritten. A stick with no database and no settings file
      * (a new one) has nothing to lose. */
-    RXStickState s;
-    r = rx_stick_read(c->lib, c->dest, &s);
-    if (r == RX_ERROR(ENOENT)) {
+    CBStickState s;
+    r = cb_stick_read(c->lib, c->dest, &s);
+    if (r == CB_ERROR(ENOENT)) {
         r = 0;
     } else if (r >= 0) {
-        RXSyncItem *items;
+        CBSyncItem *items;
         int nb;
-        if ((r = rx_stick_diff(c->lib, &s, &items, &nb)) >= 0) {
+        if ((r = cb_stick_diff(c->lib, &s, &items, &nb)) >= 0) {
             if (nb && !c->opt->ignore_unsynced) {
                 reportf(c, "check", "stick has %d unsynced change%s (cues, history or settings a player "
                         "wrote); pull them first or export ignoring them", nb, nb == 1 ? "" : "s");
@@ -1238,7 +1238,7 @@ static int checks(Ctx *c, const RXPlan *plan)
             }
             free(items);
         }
-        rx_stick_state_free(&s);
+        cb_stick_state_free(&s);
     }
     /* Not knowing is not the same as nothing to lose. */
     if (r < 0 && !c->opt->ignore_unsynced) {
@@ -1254,14 +1254,14 @@ static int checks(Ctx *c, const RXPlan *plan)
 
     struct statvfs vfs;
     int64_t cluster = statvfs(c->dest, &vfs) == 0 && vfs.f_frsize ? (int64_t)vfs.f_frsize : 4096;
-    int64_t need = rx_export_space_needed(plan, c->dest, cluster);
-    int64_t free_bytes = rx_fs_free_bytes(c->dest);
+    int64_t need = cb_export_space_needed(plan, c->dest, cluster);
+    int64_t free_bytes = cb_fs_free_bytes(c->dest);
     char need_text[32], free_text[32];
     size_text(need, need_text, sizeof(need_text));
     size_text(free_bytes, free_text, sizeof(free_text));
     if (free_bytes >= 0 && free_bytes < need) {
         reportf(c, "check", "not enough space on %s: %s free, %s needed", c->dest, free_text, need_text);
-        ret = ret ? ret : RX_ERROR(ENOSPC);
+        ret = ret ? ret : CB_ERROR(ENOSPC);
     } else if (free_bytes >= 0) {
         reportf(c, "check", "takes %s on the stick (%s free)", need_text, free_text);
     }
@@ -1275,20 +1275,20 @@ static int checks(Ctx *c, const RXPlan *plan)
  * nothing is analysed here. A track's step names it when a file of its
  * was written and carries no item otherwise, so the interface counts
  * rewrites, not tracks. */
-static int write_anlz(Ctx *c, const RXPlan *plan)
+static int write_anlz(Ctx *c, const CBPlan *plan)
 {
     for (int i = 0; i < plan->nb_tracks; i++) {
-        const RXPlanTrack *t = &plan->tracks[i];
+        const CBPlanTrack *t = &plan->tracks[i];
         char name[512];
-        rx_track_display(t->track, name, sizeof(name));
-        RXWaveforms w = { 0 };
-        bool have = rx_library_waveforms_load(c->lib, t->id, &w) >= 0;
+        cb_track_display(t->track, name, sizeof(name));
+        CBWaveforms w = { 0 };
+        bool have = cb_library_waveforms_load(c->lib, t->id, &w) >= 0;
         if (!have)
             reportf(c, "analysis files", "no waveforms for %s (analyse it to add them)", name);
-        RXAnlzFiles f;
-        int ret = rx_anlz_build(t, have ? &w : NULL, &f);
+        CBAnlzFiles f;
+        int ret = cb_anlz_build(t, have ? &w : NULL, &f);
         if (have)
-            rx_waveforms_free(&w);
+            cb_waveforms_free(&w);
         if (ret < 0)
             return ret;
         /* The buffers go to the jobs. */
@@ -1297,69 +1297,70 @@ static int write_anlz(Ctx *c, const RXPlan *plan)
         size_t size[3] = { f.dat_size, f.ext_size, f.ex2_size };
         int written = 0;
         for (int k = 0; k < 3; k++) {
-            char *p = ret >= 0 ? rx_plan_anlz_path(t, ext[k]) : NULL;
+            char *p = ret >= 0 ? cb_plan_anlz_path(t, ext[k]) : NULL;
             if (p)
                 ret = put_file(c, p, data[k], size[k], true, &written);
             else
                 free(data[k]);
             if (!p && ret >= 0)
-                ret = RX_ERROR(ENOMEM);
+                ret = CB_ERROR(ENOMEM);
             free(p);
         }
         if (ret < 0)
             return ret;
         if (!progress(c, "analysis files", i + 1, plan->nb_tracks, written ? name : NULL))
-            return RX_ERROR(ECANCELED);
+            return CB_ERROR(ECANCELED);
     }
     return puts_wait(c, "analysis files");
 }
 
 /* a<id>.jpg (80 px) and a<id>_m.jpg (240 px) for export.pdb, the same as
  * b<id>... for OneLibrary's image paths (docs/onelibrary.md 3.3). */
-static int write_artwork(Ctx *c, const RXPlan *plan)
+static int write_artwork(Ctx *c, const CBPlan *plan)
 {
     for (int i = 0; i < plan->nb_artworks; i++) {
-        const RXPlanArtwork *a = &plan->artworks[i];
-        char *dir = rx_plan_artwork_dir(a->id);
+        const CBPlanArtwork *a = &plan->artworks[i];
+        char *dir = cb_plan_artwork_dir(a->id);
         if (!dir)
-            return RX_ERROR(ENOMEM);
+            return CB_ERROR(ENOMEM);
         int ret = 0, written = 0;
         const char *fmt[4] = { "%s/a%u.jpg", "%s/a%u_m.jpg", "%s/b%u.jpg", "%s/b%u_m.jpg" };
         for (int k = 0; k < 4 && ret >= 0; k++) {
-            char *p = rx_asprintf(fmt[k], dir, a->id);
+            char *p = cb_asprintf(fmt[k], dir, a->id);
             /* The plan's bytes, which outlive the jobs. */
             ret = p ? put_file(c, p, (uint8_t *)(k & 1 ? a->jpeg240 : a->jpeg80),
                                k & 1 ? a->size240 : a->size80, false, &written)
-                    : RX_ERROR(ENOMEM);
+                    : CB_ERROR(ENOMEM);
             free(p);
         }
         free(dir);
         if (ret < 0)
             return ret;
         if (!progress(c, "artwork", i + 1, plan->nb_artworks, written ? a->path80 : NULL))
-            return RX_ERROR(ECANCELED);
+            return CB_ERROR(ECANCELED);
     }
     return puts_wait(c, "artwork");
 }
 
-static int write_databases(Ctx *c, const RXPlan *plan)
+static int write_databases(Ctx *c, const CBPlan *plan)
 {
-    const RXConfig *cfg = &c->lib->cfg;
+    const CBConfig *cfg = &c->lib->cfg;
     int ret;
 
     /* The old sync record first: from here on it would describe databases
      * the stick no longer has, and the sync would trust its ids. Without
      * one the sync only proposes additions. */
-    ret = rx_stick_unlink(c->root, RX_SYNC_PATH, 0);
-    if (ret < 0 && ret != RX_ERROR(ENOENT)) {
-        reportf(c, "database", "cannot replace %s%s: %s", c->dest, RX_SYNC_PATH, strerror(-ret));
+    ret = cb_stick_unlink(c->root, CB_SYNC_PATH, 0);
+    if (ret < 0 && ret != CB_ERROR(ENOENT)) {
+        reportf(c, "database", "cannot replace %s%s: %s", c->dest, CB_SYNC_PATH, strerror(-ret));
         return ret;
     }
 
-    RXSettingsFile files[4];
+    CBSettingsFile files[4];
     int nf = 0;
-    if ((ret = rx_settings_from_config(cfg, files, &nf)) < 0) {
-        reportf(c, "database", "the My Settings in the library are invalid; see `rxbox settings`");
+    if ((ret = cb_settings_from_config(cfg, files, &nf)) < 0) {
+        reportf(c, "database",
+                "the My Settings in the library are invalid; see `cyanbox settings`");
         return ret;
     }
     for (int i = 0; i < nf; i++) {
@@ -1403,31 +1404,31 @@ static int write_databases(Ctx *c, const RXPlan *plan)
 
     /* The sync record: what the stick holds now, so later changes can be
      * told to be a player's, and whose library wrote it. */
-    RXSyncRecord r;
-    if ((ret = rx_sync_record_from_plan(plan, &r)) < 0)
+    CBSyncRecord r;
+    if ((ret = cb_sync_record_from_plan(plan, &r)) < 0)
         return ret;
-    if ((ret = rx_sync_library_key(c->lib, r.library)) >= 0) {
-        rx_sync_record_add_settings(&r, c->root);
-        ret = rx_sync_record_write(c->root, &r);
+    if ((ret = cb_sync_library_key(c->lib, r.library)) >= 0) {
+        cb_sync_record_add_settings(&r, c->root);
+        ret = cb_sync_record_write(c->root, &r);
     }
-    rx_sync_record_free(&r);
+    cb_sync_record_free(&r);
     return ret;
 }
 
-static int prune(Ctx *c, const RXPlan *plan, bool dry)
+static int prune(Ctx *c, const CBPlan *plan, bool dry)
 {
     Ours o = { 0 };
     KeepSet k = { 0 };
-    RXArray extra;
-    rx_array_init(&extra, sizeof(char *));
+    CBArray extra;
+    cb_array_init(&extra, sizeof(char *));
     int ret = collect_ours(plan, &o);
     if (ret >= 0)
         ret = collect_keep(c, plan, &k);
     /* Through no link (checks() refused them already; this keeps it so). */
     const char *roots[3] = { "/Contents", "/PIONEER/USBANLZ", "/PIONEER/Artwork" };
     for (int i = 0; i < 3 && ret >= 0; i++) {
-        int fd = rx_stick_open(c->root, roots[i], O_RDONLY | O_DIRECTORY, 0);
-        if (fd == RX_ERROR(ENOENT))
+        int fd = cb_stick_open(c->root, roots[i], O_RDONLY | O_DIRECTORY, 0);
+        if (fd == CB_ERROR(ENOENT))
             continue;
         if (fd < 0) {
             reportf(c, "prune", "cannot look in %s%s: %s", c->dest, roots[i], strerror(-fd));
@@ -1437,16 +1438,16 @@ static int prune(Ctx *c, const RXPlan *plan, bool dry)
         ret = find_extra(c, &o, &k, fd, roots[i], &extra);
     }
     for (size_t i = 0; i < extra.nb && ret >= 0; i++) {
-        const char *p = *(char **)rx_array_at(&extra, i);
+        const char *p = *(char **)cb_array_at(&extra, i);
         /* Decided again as it is deleted, the file system looking up both
          * names at that moment. */
         int r = 0;
         if (!dry && c->opt->prune && !(r = delete_extra(c, &o, &k, p))) {
-            rx_info("export: %s on %s is a file this export or the library keeps; not deleted", p, c->dest);
+            cb_info("export: %s on %s is a file this export or the library keeps; not deleted", p, c->dest);
             continue;
         }
         if (!progress(c, "prune", (int)i + 1, (int)extra.nb, p)) {
-            ret = RX_ERROR(ECANCELED);
+            ret = CB_ERROR(ECANCELED);
             break;
         }
         if (r < 0)
@@ -1454,7 +1455,7 @@ static int prune(Ctx *c, const RXPlan *plan, bool dry)
     }
     if (!dry && c->opt->prune && ret >= 0) {
         for (int i = 0; i < 3; i++) {
-            int fd = rx_stick_open(c->root, roots[i], O_RDONLY | O_DIRECTORY, 0);
+            int fd = cb_stick_open(c->root, roots[i], O_RDONLY | O_DIRECTORY, 0);
             if (fd >= 0)
                 prune_empty(fd, c->dev);
         }
@@ -1463,8 +1464,8 @@ static int prune(Ctx *c, const RXPlan *plan, bool dry)
                 extra.nb, extra.nb == 1 ? "" : "s", extra.nb == 1 ? "is" : "are");
     }
     for (size_t i = 0; i < extra.nb; i++)
-        free(*(char **)rx_array_at(&extra, i));
-    rx_array_free(&extra);
+        free(*(char **)cb_array_at(&extra, i));
+    cb_array_free(&extra);
     keep_free(&k);
     ours_free(&o);
     return ret;
@@ -1472,7 +1473,7 @@ static int prune(Ctx *c, const RXPlan *plan, bool dry)
 
 /* Every file a real run would write (or keep, finding it on the stick
  * unchanged), in the order it would. */
-static void dry_run_report(Ctx *c, const RXPlan *plan, const bool *skip)
+static void dry_run_report(Ctx *c, const CBPlan *plan, const bool *skip)
 {
     /* The files that would be encoded, then every file. */
     int nb = 0, listed = 0;
@@ -1482,21 +1483,21 @@ static void dry_run_report(Ctx *c, const RXPlan *plan, const bool *skip)
         if (!plan->tracks[i].encode.on || skip[i])
             continue;
         char name[512];
-        rx_track_display(plan->tracks[i].track, name, sizeof(name));
+        cb_track_display(plan->tracks[i].track, name, sizeof(name));
         progress(c, "transcode", ++listed, nb, name);
     }
     for (int i = 0; i < plan->nb_tracks; i++)
         progress(c, skip[i] ? "skip" : "copy", i + 1, plan->nb_tracks, plan->tracks[i].usb_path);
-    RXSettingsFile files[4];
+    CBSettingsFile files[4];
     int nf = 0;
-    if (rx_settings_from_config(&c->lib->cfg, files, &nf) < 0)
+    if (cb_settings_from_config(&c->lib->cfg, files, &nf) < 0)
         nf = 0;
     int total = 3 * plan->nb_tracks + 4 * plan->nb_artworks + nf + !!c->pdb + !!c->ext + !!c->olib + 1;
     int n = 0;
     const char *ext[3] = { ".DAT", ".EXT", ".2EX" };
     for (int i = 0; i < plan->nb_tracks; i++) {
         for (int k = 0; k < 3; k++) {
-            char *p = rx_plan_anlz_path(&plan->tracks[i], ext[k]);
+            char *p = cb_plan_anlz_path(&plan->tracks[i], ext[k]);
             progress(c, "rewrite", ++n, total, p);
             free(p);
         }
@@ -1504,9 +1505,9 @@ static void dry_run_report(Ctx *c, const RXPlan *plan, const bool *skip)
     const char *fmt[4] = { "%s/a%u.jpg", "%s/a%u_m.jpg", "%s/b%u.jpg", "%s/b%u_m.jpg" };
     for (int i = 0; i < plan->nb_artworks; i++) {
         uint32_t id = plan->artworks[i].id;
-        char *dir = rx_plan_artwork_dir(id);
+        char *dir = cb_plan_artwork_dir(id);
         for (int k = 0; dir && k < 4; k++) {
-            char *p = rx_asprintf(fmt[k], dir, id);
+            char *p = cb_asprintf(fmt[k], dir, id);
             progress(c, "rewrite", ++n, total, p);
             free(p);
         }
@@ -1524,13 +1525,13 @@ static void dry_run_report(Ctx *c, const RXPlan *plan, const bool *skip)
         progress(c, "rewrite", ++n, total, "/PIONEER/rekordbox/exportExt.pdb");
     if (c->olib)
         progress(c, "rewrite", ++n, total, "/PIONEER/rekordbox/exportLibrary.db");
-    progress(c, "rewrite", ++n, total, RX_SYNC_PATH);
+    progress(c, "rewrite", ++n, total, CB_SYNC_PATH);
 }
 
 /* ------------------------------------------------------------- the audio */
 
 /* The audio goes through two threads: a producer that reads each file to
- * copy, or encodes it (rx_encode, from the decoded samples), into pieces
+ * copy, or encodes it (cb_encode, from the decoded samples), into pieces
  * of a MiB at most, and this one, which writes them on the stick and keeps
  * the rate, the time left and the interface going.
  *
@@ -1566,15 +1567,15 @@ typedef struct Piece {
 } Piece;
 
 typedef struct Learnt {
-    RXEncoded  enc;             /* encoded */
-    RXMp3Info  mp3;
-    RXFlacInfo flac;            /* a copy's, or from the record */
+    CBEncoded  enc;             /* encoded */
+    CBMp3Info  mp3;
+    CBFlacInfo flac;            /* a copy's, or from the record */
     bool       has_mp3, has_flac;
 } Learnt;
 
 typedef struct Audio {
     Ctx            *c;
-    RXPlan         *plan;
+    CBPlan         *plan;
     const bool     *skip;
     const Record   *old;
     Learnt         *learnt;
@@ -1605,7 +1606,7 @@ static int put_piece(Audio *a, Piece p)
     if (a->stop) {
         pthread_mutex_unlock(&a->lock);
         piece_free(&p);
-        return RX_ERROR(ECANCELED);
+        return CB_ERROR(ECANCELED);
     }
     a->q[(a->head + a->nb++) % QUEUE] = p;
     pthread_cond_signal(&a->can_take);
@@ -1654,25 +1655,25 @@ static uint8_t *block(void)
 }
 
 /* What the analysis files need of a file written as it is. */
-static void learn_copy(Learnt *l, const RXPlanTrack *t)
+static void learn_copy(Learnt *l, const CBPlanTrack *t)
 {
     if (!strcmp(t->probe.codec, "mp3"))
-        l->has_mp3 = rx_mp3_scan(t->source, &l->mp3) >= 0;
+        l->has_mp3 = cb_mp3_scan(t->source, &l->mp3) >= 0;
     else if (!strcmp(t->probe.codec, "flac"))
-        l->has_flac = rx_flac_scan(t->source, &l->flac) >= 0;
+        l->has_flac = cb_flac_scan(t->source, &l->flac) >= 0;
 }
 
 static int produce_copy(Audio *a, int i)
 {
-    const RXPlanTrack *t = &a->plan->tracks[i];
+    const CBPlanTrack *t = &a->plan->tracks[i];
     int fd = open(t->source, O_RDONLY | O_CLOEXEC);
     if (fd < 0)
-        return RX_ERROR(errno);
+        return CB_ERROR(errno);
     int ret = put_piece(a, (Piece) { .kind = P_OPEN, .track = i });
     for (int64_t off = 0; ret >= 0;) {
         uint8_t *b = block();
         if (!b) {
-            ret = RX_ERROR(ENOMEM);
+            ret = CB_ERROR(ENOMEM);
             break;
         }
         size_t n = 0;
@@ -1682,7 +1683,7 @@ static int produce_copy(Audio *a, int i)
                 continue;
             if (r <= 0) {
                 if (r < 0)
-                    ret = RX_ERROR(errno);
+                    ret = CB_ERROR(errno);
                 break;
             }
             n += (size_t)r;
@@ -1702,21 +1703,21 @@ static int produce_copy(Audio *a, int i)
     return ret < 0 ? ret : put_piece(a, (Piece) { .kind = P_DONE, .track = i });
 }
 
-/* rx_encode's bytes: appended to the block being filled and sent whole;
+/* cb_encode's bytes: appended to the block being filled and sent whole;
  * bytes for a place already sent go as a patch. */
 static int enc_write(void *opaque, const uint8_t *b, int n)
 {
     Audio *a = opaque;
     while (n > 0) {
         if (a->pos < a->buf_off) {
-            int k = (int)RX_MIN((int64_t)n, a->buf_off - a->pos);
+            int k = (int)CB_MIN((int64_t)n, a->buf_off - a->pos);
             uint8_t *copy = malloc((size_t)k);
             if (!copy)
-                return RX_ERROR(ENOMEM);
+                return CB_ERROR(ENOMEM);
             memcpy(copy, b, (size_t)k);
             if (put_piece(a, (Piece) { .kind = P_PATCH, .track = a->track, .offset = a->pos,
                                        .data = copy, .len = (size_t)k }) < 0)
-                return RX_ERROR(ECANCELED);
+                return CB_ERROR(ECANCELED);
             a->pos += k;
             b += k;
             n -= k;
@@ -1727,17 +1728,17 @@ static int enc_write(void *opaque, const uint8_t *b, int n)
             if (put_piece(a, (Piece) { .kind = P_DATA, .track = a->track, .offset = a->buf_off,
                                        .data = a->buf, .len = PIECE }) < 0) {
                 a->buf = NULL;
-                return RX_ERROR(ECANCELED);
+                return CB_ERROR(ECANCELED);
             }
             a->buf_off += PIECE;
             a->fill = 0;
             if (!(a->buf = block()))
-                return RX_ERROR(ENOMEM);
+                return CB_ERROR(ENOMEM);
             continue;
         }
-        size_t k = RX_MIN((size_t)n, PIECE - at);
+        size_t k = CB_MIN((size_t)n, PIECE - at);
         memcpy(a->buf + at, b, k);
-        a->fill = RX_MAX(a->fill, at + k);
+        a->fill = CB_MAX(a->fill, at + k);
         a->pos += (int64_t)k;
         b += k;
         n -= (int)k;
@@ -1749,33 +1750,33 @@ static int64_t enc_seek(void *opaque, int64_t off, int whence)
 {
     Audio *a = opaque;
     if (whence != SEEK_SET || off < 0 || off > a->buf_off + (int64_t)a->fill)
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
     a->pos = off;
     return off;
 }
 
 static int produce_encode(Audio *a, int i)
 {
-    const RXPlanTrack *t = &a->plan->tracks[i];
-    const RXPlanEncode *e = &t->encode;
+    const CBPlanTrack *t = &a->plan->tracks[i];
+    const CBPlanEncode *e = &t->encode;
     a->track = i;
     a->pos = a->buf_off = 0;
     a->fill = 0;
     if (!(a->buf = block()))
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     int ret = put_piece(a, (Piece) { .kind = P_OPEN, .track = i });
     /* A WAV's or AIFF's size known before it is written: the plan's
      * frames, when they are the source's. */
-    const RXTrack *src = t->track;
+    const CBTrack *src = t->track;
     bool same_rate = !e->max_rate || !src || src->sample_rate <= e->max_rate;
-    RXEncodeOptions o = {
+    CBEncodeOptions o = {
         .format = e->format, .bits = e->bits, .exact = e->exact, .channels = e->channels,
-        .max_rate = e->max_rate, .tags = e->format == RX_ENCODE_FLAC,
-        .frames = e->format != RX_ENCODE_FLAC && same_rate ? t->total_samples : 0,
+        .max_rate = e->max_rate, .tags = e->format == CB_ENCODE_FLAC,
+        .frames = e->format != CB_ENCODE_FLAC && same_rate ? t->total_samples : 0,
         .write = enc_write, .seek = enc_seek, .opaque = a, .cancelled = stopped,
     };
     if (ret >= 0)
-        ret = rx_encode(t->source, &o, &a->learnt[i].enc);
+        ret = cb_encode(t->source, &o, &a->learnt[i].enc);
     if (ret >= 0 && a->fill) {
         ret = put_piece(a, (Piece) { .kind = P_DATA, .track = i, .offset = a->buf_off,
                                      .data = a->buf, .len = a->fill });
@@ -1790,11 +1791,11 @@ static int produce_encode(Audio *a, int i)
  * the source (a copy) or the record (an encoded file). */
 static int produce_skip(Audio *a, int i)
 {
-    const RXPlanTrack *t = &a->plan->tracks[i];
+    const CBPlanTrack *t = &a->plan->tracks[i];
     Learnt *l = &a->learnt[i];
     if (!t->encode.on) {
         learn_copy(l, t);
-    } else if (t->encode.format == RX_ENCODE_FLAC) {
+    } else if (t->encode.format == CB_ENCODE_FLAC) {
         const Made *m = record_find(a->old, t->usb_path);
         if (m && flac_of(m, t->probe.sample_rate, t->probe.channels, t->encode.bits, &l->flac) >= 0)
             l->has_flac = true;
@@ -1806,7 +1807,7 @@ static void *produce(void *arg)
 {
     Audio *a = arg;
     for (int i = 0; i < a->plan->nb_tracks && !stopped(a); i++) {
-        const RXPlanTrack *t = &a->plan->tracks[i];
+        const CBPlanTrack *t = &a->plan->tracks[i];
         int ret = a->skip[i] ? produce_skip(a, i) : t->encode.on ? produce_encode(a, i)
                                                                   : produce_copy(a, i);
         if (ret < 0) {
@@ -1823,7 +1824,7 @@ static int write_at(int fd, bool *direct, const uint8_t *data, size_t len, int64
     if (*direct && (off % ALIGN || len % ALIGN)) {
         int fl = fcntl(fd, F_GETFL);
         if (fl < 0 || fcntl(fd, F_SETFL, fl & ~O_DIRECT) < 0)
-            return RX_ERROR(errno);
+            return CB_ERROR(errno);
         *direct = false;
     }
     for (size_t o = 0; o < len;) {
@@ -1831,7 +1832,7 @@ static int write_at(int fd, bool *direct, const uint8_t *data, size_t len, int64
         if (w < 0 && errno == EINTR)
             continue;
         if (w < 0)
-            return RX_ERROR(errno);
+            return CB_ERROR(errno);
         o += (size_t)w;
     }
     return 0;
@@ -1839,7 +1840,7 @@ static int write_at(int fd, bool *direct, const uint8_t *data, size_t len, int64
 
 /* The audio of every track, skipped, copied or encoded; `*copied` counts
  * the files written. The plan learns each file's real size and frames. */
-static int write_audio(Ctx *c, RXPlan *plan, const bool *skip, const Record *old, Learnt *learnt,
+static int write_audio(Ctx *c, CBPlan *plan, const bool *skip, const Record *old, Learnt *learnt,
                        int *copied)
 {
     Audio a = { .c = c, .plan = plan, .skip = skip, .old = old, .learnt = learnt };
@@ -1847,30 +1848,30 @@ static int write_audio(Ctx *c, RXPlan *plan, const bool *skip, const Record *old
     pthread_cond_init(&a.can_put, NULL);
     pthread_cond_init(&a.can_take, NULL);
     pthread_t th;
-    int ret = pthread_create(&th, NULL, produce, &a) ? RX_ERROR(EAGAIN) : 0;
+    int ret = pthread_create(&th, NULL, produce, &a) ? CB_ERROR(EAGAIN) : 0;
     bool running = ret >= 0;
     int fd = -1, cur = -1, n = plan->nb_tracks;
     bool direct = false;
-    int64_t last_tick = rx_time_us();
+    int64_t last_tick = cb_time_us();
     while (running) {
         Piece p;
         if (take_piece(&a, &p)) {
-            if (!progress(c, cur >= 0 && fd >= 0 ? "copy" : "skip", RX_MAX(cur + 1, 1), n, NULL))
-                ret = RX_ERROR(ECANCELED);
+            if (!progress(c, cur >= 0 && fd >= 0 ? "copy" : "skip", CB_MAX(cur + 1, 1), n, NULL))
+                ret = CB_ERROR(ECANCELED);
         } else {
-            const RXPlanTrack *t = p.track >= 0 ? &plan->tracks[p.track] : NULL;
+            const CBPlanTrack *t = p.track >= 0 ? &plan->tracks[p.track] : NULL;
             switch (p.kind) {
             case P_OPEN: {
                 cur = p.track;
                 if (!progress(c, "copy", cur + 1, n, t->usb_path)) {
-                    ret = RX_ERROR(ECANCELED);
+                    ret = CB_ERROR(ECANCELED);
                     break;
                 }
                 int flags = O_WRONLY | O_CREAT | O_TRUNC;
-                fd = rx_stick_open(c->root, t->usb_path, flags | O_DIRECT, 0644);
+                fd = cb_stick_open(c->root, t->usb_path, flags | O_DIRECT, 0644);
                 direct = fd >= 0;
-                if (fd == RX_ERROR(EINVAL))
-                    fd = rx_stick_open(c->root, t->usb_path, flags, 0644);
+                if (fd == CB_ERROR(EINVAL))
+                    fd = cb_stick_open(c->root, t->usb_path, flags, 0644);
                 if (fd < 0) {
                     reportf(c, "copy", "cannot write %s%s: %s", c->dest, t->usb_path, strerror(-fd));
                     ret = fd;
@@ -1904,7 +1905,7 @@ static int write_audio(Ctx *c, RXPlan *plan, const bool *skip, const Record *old
                 progress(c, "skip", p.track + 1, n, t->usb_path);
                 break;
             case P_FAIL:
-                if (p.err != RX_ERROR(ECANCELED))
+                if (p.err != CB_ERROR(ECANCELED))
                     reportf(c, "copy", "cannot %s %s: %s", t->encode.on ? "encode" : "copy", t->source,
                             strerror(-p.err));
                 ret = p.err;
@@ -1915,11 +1916,11 @@ static int write_audio(Ctx *c, RXPlan *plan, const bool *skip, const Record *old
                 break;
             }
             piece_free(&p);
-            int64_t now = rx_time_us();
+            int64_t now = cb_time_us();
             if (ret >= 0 && running && now - last_tick >= 250000) {
                 last_tick = now;
-                if (!progress(c, "copy", RX_MAX(cur + 1, 1), n, NULL))
-                    ret = RX_ERROR(ECANCELED);
+                if (!progress(c, "copy", CB_MAX(cur + 1, 1), n, NULL))
+                    ret = CB_ERROR(ECANCELED);
             }
         }
         if (ret < 0)
@@ -1930,7 +1931,7 @@ static int write_audio(Ctx *c, RXPlan *plan, const bool *skip, const Record *old
     a.stop = true;
     pthread_cond_broadcast(&a.can_put);
     pthread_mutex_unlock(&a.lock);
-    if (ret >= 0 || ret != RX_ERROR(EAGAIN))
+    if (ret >= 0 || ret != CB_ERROR(EAGAIN))
         pthread_join(th, NULL);
     while (a.nb) {
         piece_free(&a.q[a.head]);
@@ -1948,45 +1949,45 @@ static int write_audio(Ctx *c, RXPlan *plan, const bool *skip, const Record *old
 /* What the files written taught: each track's size and frames, what its
  * PVB2 or PVBR tag is made of; the record of what is encoded, kept for
  * the next export. */
-static int learn(RXPlan *plan, const bool *skip, const Record *old, Learnt *learnt, Record *now)
+static int learn(CBPlan *plan, const bool *skip, const Record *old, Learnt *learnt, Record *now)
 {
     for (int i = 0; i < plan->nb_tracks; i++) {
-        RXPlanTrack *t = &plan->tracks[i];
+        CBPlanTrack *t = &plan->tracks[i];
         Learnt *l = &learnt[i];
         if (l->has_mp3)
             t->probe.mp3 = l->mp3;
         if (l->has_flac) {
-            rx_flac_info_free(&t->probe.flac);
+            cb_flac_info_free(&t->probe.flac);
             t->probe.flac = l->flac;
-            l->flac = (RXFlacInfo) { 0 };
+            l->flac = (CBFlacInfo) { 0 };
         }
         if (!t->encode.on)
             continue;
         Made *m = record_add(now);
         if (!m)
-            return RX_ERROR(ENOMEM);
+            return CB_ERROR(ENOMEM);
         const Made *was = skip[i] ? record_find(old, t->usb_path) : NULL;
         if (was) {
             *m = *was;
-            m->path = rx_strdup(was->path);
+            m->path = cb_strdup(was->path);
         } else {
             struct stat st;
-            const RXEncoded *e = &l->enc;
-            *m = (Made) { .path = rx_strdup(t->usb_path), .size = e->size, .frames = e->frames };
+            const CBEncoded *e = &l->enc;
+            *m = (Made) { .path = cb_strdup(t->usb_path), .size = e->size, .frames = e->frames };
             spec_of(&t->encode, m->spec);
             if (stat(t->source, &st) == 0) {
                 m->src_size = st.st_size;
                 m->src_mtime = st.st_mtime;
             }
-            if (t->encode.format == RX_ENCODE_FLAC) {
+            if (t->encode.format == CB_ENCODE_FLAC) {
                 seeks_of(&e->flac, m);
-                rx_flac_info_free(&t->probe.flac);
+                cb_flac_info_free(&t->probe.flac);
                 t->probe.flac = e->flac;
-                l->enc.flac = (RXFlacInfo) { 0 };
+                l->enc.flac = (CBFlacInfo) { 0 };
             }
         }
         if (!m->path)
-            return RX_ERROR(ENOMEM);
+            return CB_ERROR(ENOMEM);
         t->file_size = m->size;
         t->total_samples = t->probe.total_samples = m->frames;
         if (t->sample_rate > 0)
@@ -1998,8 +1999,8 @@ static int learn(RXPlan *plan, const bool *skip, const Record *old, Learnt *lear
 static void learnt_free(Learnt *l, int nb)
 {
     for (int i = 0; l && i < nb; i++) {
-        rx_flac_info_free(&l[i].flac);
-        rx_flac_info_free(&l[i].enc.flac);
+        cb_flac_info_free(&l[i].flac);
+        cb_flac_info_free(&l[i].enc.flac);
     }
     free(l);
 }
@@ -2007,36 +2008,36 @@ static void learnt_free(Learnt *l, int nb)
 /* "copy", "flac", "wav", "aiff". */
 static const char *const stick_formats[] = { "copy", "flac", "wav", "aiff" };
 
-const char *rx_stick_format_name(int format)
+const char *cb_stick_format_name(int format)
 {
-    return stick_formats[RX_CLAMP(format, 0, (int)RX_ARRAY_ELEMS(stick_formats) - 1)];
+    return stick_formats[CB_CLAMP(format, 0, (int)CB_ARRAY_ELEMS(stick_formats) - 1)];
 }
 
-int rx_stick_format_parse(const char *name)
+int cb_stick_format_parse(const char *name)
 {
-    for (size_t i = 0; name && i < RX_ARRAY_ELEMS(stick_formats); i++)
+    for (size_t i = 0; name && i < CB_ARRAY_ELEMS(stick_formats); i++)
         if (!strcmp(name, stick_formats[i]))
             return (int)i;
     return -1;
 }
 
-/* The plan's kind of transcode for the options (rxbox/export.h). */
-static int stick_kind(const RXExportOptions *opt)
+/* The plan's kind of transcode for the options (cyanbox/export.h). */
+static int stick_kind(const CBExportOptions *opt)
 {
     switch (opt->format) {
-    case RX_STICK_FLAC: return opt->compat_transcode ? RX_TRANSCODE_STICK_FLAC_COMPAT : RX_TRANSCODE_STICK_FLAC;
-    case RX_STICK_WAV:  return RX_TRANSCODE_STICK_WAV;
-    case RX_STICK_AIFF: return RX_TRANSCODE_STICK_AIFF;
-    default:            return opt->compat_transcode ? RX_TRANSCODE_STICK_COPY_COMPAT : RX_TRANSCODE_STICK_COPY;
+    case CB_STICK_FLAC: return opt->compat_transcode ? CB_TRANSCODE_STICK_FLAC_COMPAT : CB_TRANSCODE_STICK_FLAC;
+    case CB_STICK_WAV:  return CB_TRANSCODE_STICK_WAV;
+    case CB_STICK_AIFF: return CB_TRANSCODE_STICK_AIFF;
+    default:            return opt->compat_transcode ? CB_TRANSCODE_STICK_COPY_COMPAT : CB_TRANSCODE_STICK_COPY;
     }
 }
 
-int rx_export(RXLibrary *lib, const char *dest, const RXExportOptions *opt_in, rx_progress_cb cb,
+int cb_export(CBLibrary *lib, const char *dest, const CBExportOptions *opt_in, cb_progress_cb cb,
               void *opaque)
 {
-    RXExportOptions defaults;
-    rx_export_options_default(&defaults);
-    const RXExportOptions *opt = opt_in ? opt_in : &defaults;
+    CBExportOptions defaults;
+    cb_export_options_default(&defaults);
+    const CBExportOptions *opt = opt_in ? opt_in : &defaults;
     Ctx c = {
         .lib    = lib,
         .dest   = dest,
@@ -2045,23 +2046,23 @@ int rx_export(RXLibrary *lib, const char *dest, const RXExportOptions *opt_in, r
         .cb     = cb,
         .opaque = opaque,
     };
-    rx_array_init(&c.puts, sizeof(PutJob *));
-    if (!rx_dir_exists(dest)) {
+    cb_array_init(&c.puts, sizeof(PutJob *));
+    if (!cb_dir_exists(dest)) {
         reportf(&c, "check", "%s is not a directory (mount the stick first)", dest);
-        return RX_ERROR(ENOTDIR);
+        return CB_ERROR(ENOTDIR);
     }
 
-    RXPlaylist **all = NULL;
-    RXTrack **tracks = NULL;
+    CBPlaylist **all = NULL;
+    CBTrack **tracks = NULL;
     int nb_tracks = 0, copied = 0;
-    RXPlan plan = { 0 };
+    CBPlan plan = { 0 };
     Record old = { 0 }, now = { 0 };
     bool *skip = NULL;
     Learnt *learnt = NULL;
     struct stat st;
-    int ret = c.root = rx_stick_root(dest);
+    int ret = c.root = cb_stick_root(dest);
     if (ret >= 0)
-        ret = fstat(c.root, &st) < 0 ? RX_ERROR(errno) : 0;
+        ret = fstat(c.root, &st) < 0 ? CB_ERROR(errno) : 0;
     if (ret < 0) {
         reportf(&c, "check", "cannot open %s: %s", dest, strerror(-ret));
         goto out;
@@ -2069,19 +2070,19 @@ int rx_export(RXLibrary *lib, const char *dest, const RXExportOptions *opt_in, r
     c.dev = st.st_dev;
 
     /* Every playlist unless some were chosen. */
-    const RXPlaylist *const *pls = opt->playlists;
+    const CBPlaylist *const *pls = opt->playlists;
     int nb_pls = opt->nb_playlists;
     if (!pls) {
-        int n = rx_library_playlists_flat(lib, NULL, 0);
-        all = calloc((size_t)RX_MAX(n, 1), sizeof(*all));
+        int n = cb_library_playlists_flat(lib, NULL, 0);
+        all = calloc((size_t)CB_MAX(n, 1), sizeof(*all));
         if (!all) {
-            ret = RX_ERROR(ENOMEM);
+            ret = CB_ERROR(ENOMEM);
             goto out;
         }
-        nb_pls = rx_library_playlists_flat(lib, all, RX_MAX(n, 0));
+        nb_pls = cb_library_playlists_flat(lib, all, CB_MAX(n, 0));
     }
 
-    ret = select_tracks(&c, all ? (const RXPlaylist *const *)all : pls, nb_pls, &tracks, &nb_tracks);
+    ret = select_tracks(&c, all ? (const CBPlaylist *const *)all : pls, nb_pls, &tracks, &nb_tracks);
     if (ret < 0)
         goto out;
 
@@ -2090,15 +2091,15 @@ int rx_export(RXLibrary *lib, const char *dest, const RXExportOptions *opt_in, r
      * encoded as it is written. The compatibility option alone decides,
      * not the setting, which is only its default (the dialog's checkbox,
      * --compat and --no-compat start from it). */
-    if ((ret = rx_plan_build_cb(lib, tracks, nb_tracks, opt->playlists,
+    if ((ret = cb_plan_build_cb(lib, tracks, nb_tracks, opt->playlists,
                                 opt->playlists ? opt->nb_playlists : 0, opt->device_name,
-                                stick_kind(opt), RX_PLAN_STORED, &plan, cb, opaque)) < 0)
+                                stick_kind(opt), CB_PLAN_STORED, &plan, cb, opaque)) < 0)
         goto out;
     if (!opt->device_name && !lib->cfg.device_name) {
         char label[64];
-        if (rx_stick_label(dest, label, sizeof(label)) >= 0) {
+        if (cb_stick_label(dest, label, sizeof(label)) >= 0) {
             free(plan.device_name);
-            plan.device_name = rx_strdup(label);
+            plan.device_name = cb_strdup(label);
         }
     }
 
@@ -2107,10 +2108,10 @@ int rx_export(RXLibrary *lib, const char *dest, const RXExportOptions *opt_in, r
 
     /* What the stick holds already, as this export would write it. */
     record_read(c.root, &old);
-    skip = calloc((size_t)RX_MAX(plan.nb_tracks, 1), sizeof(*skip));
-    learnt = calloc((size_t)RX_MAX(plan.nb_tracks, 1), sizeof(*learnt));
+    skip = calloc((size_t)CB_MAX(plan.nb_tracks, 1), sizeof(*skip));
+    learnt = calloc((size_t)CB_MAX(plan.nb_tracks, 1), sizeof(*learnt));
     if (!skip || !learnt) {
-        ret = RX_ERROR(ENOMEM);
+        ret = CB_ERROR(ENOMEM);
         goto out;
     }
     for (int i = 0; i < plan.nb_tracks; i++)
@@ -2123,11 +2124,11 @@ int rx_export(RXLibrary *lib, const char *dest, const RXExportOptions *opt_in, r
         dry_run_report(&c, &plan, skip);
         ret = prune(&c, &plan, true);
         if (ret >= 0 && c.unsynced)
-            ret = RX_ERROR(EBUSY);
+            ret = CB_ERROR(EBUSY);
         goto out;
     }
     if (c.unsynced) {
-        ret = RX_ERROR(EBUSY);
+        ret = CB_ERROR(EBUSY);
         goto out;
     }
 
@@ -2135,16 +2136,16 @@ int rx_export(RXLibrary *lib, const char *dest, const RXExportOptions *opt_in, r
     int64_t bytes = 0;
     for (int i = 0; i < plan.nb_tracks; i++)
         if (!skip[i])
-            bytes += RX_MAX(plan.tracks[i].file_size, 0);
+            bytes += CB_MAX(plan.tracks[i].file_size, 0);
     stats_start(&c, bytes);
     c.writing = true;
     ret = write_audio(&c, &plan, skip, &old, learnt, &copied);
-    if (ret >= 0 || ret == RX_ERROR(ECANCELED)) {
+    if (ret >= 0 || ret == CB_ERROR(ECANCELED)) {
         int r = puts_wait(&c, "copy");
         ret = ret < 0 ? ret : r;
     }
     if (ret >= 0 && c.cancelled)
-        ret = RX_ERROR(ECANCELED);
+        ret = CB_ERROR(ECANCELED);
     if (ret < 0)
         goto out;
 
@@ -2171,10 +2172,10 @@ out:
     /* Jobs a failed or cancelled stage left: run out (before the sync),
      * their results dropped. */
     if (c.pool)
-        rx_pool_destroy(c.pool);
+        cb_pool_destroy(c.pool);
     for (size_t i = 0; i < c.puts.nb; i++)
-        put_free(*(PutJob **)rx_array_at(&c.puts, i));
-    rx_array_free(&c.puts);
+        put_free(*(PutJob **)cb_array_at(&c.puts, i));
+    cb_array_free(&c.puts);
     /* The one sync, whenever a real run wrote anything: what the file
      * system still holds back (the audio went through already), so "done"
      * means on the stick, and a cancelled or failed run does not leave the
@@ -2183,13 +2184,13 @@ out:
      * the databases go last, so what is on the stick is consistent. */
     if (c.writing) {
         notify(&c, "flush", 1, 1, NULL);
-        int r = rx_stick_sync(dest);
+        int r = cb_stick_sync(dest);
         if (r < 0) {
             notify(&c, "flush", 0, 0, "cannot write out %s: %s", dest, strerror(-r));
             ret = ret < 0 ? ret : r;
         } else if (!c.finished) {
-            rx_info("export to %s %s: what it wrote is written out", dest,
-                    c.cancelled || ret == RX_ERROR(ECANCELED) ? "cancelled" : "failed");
+            cb_info("export to %s %s: what it wrote is written out", dest,
+                    c.cancelled || ret == CB_ERROR(ECANCELED) ? "cancelled" : "failed");
             notify(&c, "flush", 0, 0, "what was written so far is on %s", dest);
         }
     }
@@ -2197,7 +2198,7 @@ out:
         notify(&c, "done", 0, 0, "%d tracks, %d copied, %d playlists, %d artworks", plan.nb_tracks, copied,
                plan.nb_playlists, plan.nb_artworks);
     else if (c.cancelled && ret >= 0)
-        ret = RX_ERROR(ECANCELED);
+        ret = CB_ERROR(ECANCELED);
     if (c.root >= 0)
         close(c.root);
     free(c.pdb);
@@ -2207,7 +2208,7 @@ out:
     free(skip);
     record_free(&old);
     record_free(&now);
-    rx_plan_free(&plan);
+    cb_plan_free(&plan);
     free(tracks);
     free(all);
     return ret;

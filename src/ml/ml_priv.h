@@ -1,20 +1,20 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
-/* Private to the model (rxbox/ml.h): the GPU it runs on (gpu.c), the GGUF
+/* Private to the model (cyanbox/ml.h): the GPU it runs on (gpu.c), the GGUF
  * file its weights come from (gguf.c), the kernels (shaders/, their push
  * constants in kernels.h), the tokenizer (tokenizer.c), the network
  * (moss.c) and the tags made from its answers (tag.c).
  *
- * The model owns its VkDevice rather than share rxbox/compute.h's (or the
+ * The model owns its VkDevice rather than share cyanbox/compute.h's (or the
  * window's), set up as theirs are (src/gpu/vkdev.h): its weights (4 GB)
  * go with it when the model closes after a batch, a device lost to a
  * hung kernel takes no other with it, and its shaders need 16-bit floats
  * and 8-bit storage, which the compute context does not enable. */
 
-#ifndef RXBOX_ML_PRIV_H
-#define RXBOX_ML_PRIV_H
+#ifndef CYANBOX_ML_PRIV_H
+#define CYANBOX_ML_PRIV_H
 
-#include "rxbox/ml.h"
+#include "cyanbox/ml.h"
 
 #include <stdatomic.h>
 
@@ -67,7 +67,7 @@ enum MLMem {
 };
 
 typedef struct MLGpu {
-    RXVkDev vk;
+    CBVkDev vk;
     uint32_t sub_size;          /* the subgroup size gemv and attention require, 0: any */
     bool full_sub;              /* and full subgroups (gpu.c says why) */
 
@@ -83,7 +83,7 @@ typedef struct MLGpu {
     bool recording;
     bool lost;                  /* a wait failed: nothing runs any more (-EIO) */
 
-    /* Per-kernel GPU time, when RXBOX_ML_PROFILE=1: a timestamp after
+    /* Per-kernel GPU time, when CYANBOX_ML_PROFILE=1: a timestamp after
      * every dispatch, read back at each wait. */
     bool profile;
     VkQueryPool times;
@@ -202,14 +202,14 @@ int32_t ml_tok_id(const MLTokenizer *t, const char *token);
 
 /* ---------------------------------------------------------------- moss.c */
 
-/* rx_ml_listen with `room` tokens of the context left for the questions
+/* cb_ml_listen with `room` tokens of the context left for the questions
  * after the audio and their answers (QUESTION_ROOM at least): the audio is
  * cut until they fit. */
-int ml_listen(RXML *ml, const float *pcm, int64_t n, int room, RXCancel *cancel);
+int ml_listen(CBML *ml, const float *pcm, int64_t n, int room, CBCancel *cancel);
 /* The tokens `question` (and the answer's start, `prefix`, may be NULL)
- * takes asked after the audio, as rx_ml_ask, rx_ml_choose and rx_ml_pick
+ * takes asked after the audio, as cb_ml_ask, cb_ml_choose and cb_ml_pick
  * ask it. */
-int ml_question_tokens(RXML *ml, const char *question, const char *prefix);
-int ml_max_context(const RXML *ml);
+int ml_question_tokens(CBML *ml, const char *question, const char *prefix);
+int ml_max_context(const CBML *ml);
 
-#endif /* RXBOX_ML_PRIV_H */
+#endif /* CYANBOX_ML_PRIV_H */

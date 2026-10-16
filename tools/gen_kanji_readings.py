@@ -2,7 +2,7 @@
 # Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md.
 #
 # Writes src/common/kanji_readings.h, one reading per kanji for
-# rx_utf8_latin1 (src/common/latin1.c) to fall back on when MeCab has none,
+# cb_utf8_latin1 (src/common/latin1.c) to fall back on when MeCab has none,
 # from Unicode's Unihan_Readings.txt (in Unihan.zip of the Unicode
 # Character Database): the first on'yomi (kJapaneseOn), skipping the
 # historical spellings with KUW/GUW when there is another, else the first

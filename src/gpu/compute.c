@@ -1,6 +1,6 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
-/* The compute context (rxbox/compute.h): a Vulkan instance with no surface,
+/* The compute context (cyanbox/compute.h): a Vulkan instance with no surface,
  * the best device that can run the analysis' shaders, one compute queue,
  * VMA (all set up by vkdev.c, as the window's and the model's are), a
  * timeline semaphore and the pipelines.
@@ -45,22 +45,22 @@
 
 /* ----------------------------------------------------------------- options */
 
-void rx_compute_options_default(RXComputeOptions *o)
+void cb_compute_options_default(CBComputeOptions *o)
 {
-    *o = (RXComputeOptions) { 0 };
+    *o = (CBComputeOptions) { 0 };
 }
 
-enum RXComputeMode rx_compute_mode(void)
+enum CBComputeMode cb_compute_mode(void)
 {
-    const char *env = getenv("RXBOX_ANALYSIS_GPU");
+    const char *env = getenv("CYANBOX_ANALYSIS_GPU");
     if (!env || !env[0])
-        return RX_COMPUTE_AUTO;
+        return CB_COMPUTE_AUTO;
     if (!strcmp(env, "0"))
-        return RX_COMPUTE_OFF;
+        return CB_COMPUTE_OFF;
     if (!strcmp(env, "1"))
-        return RX_COMPUTE_REQUIRED;
-    rx_warn("compute: RXBOX_ANALYSIS_GPU is \"%s\", not 0 or 1; ignored", env);
-    return RX_COMPUTE_AUTO;
+        return CB_COMPUTE_REQUIRED;
+    cb_warn("compute: CYANBOX_ANALYSIS_GPU is \"%s\", not 0 or 1; ignored", env);
+    return CB_COMPUTE_AUTO;
 }
 
 /* ------------------------------------------------------------------ device */
@@ -70,7 +70,7 @@ enum RXComputeMode rx_compute_mode(void)
  * timeline semaphore. */
 #define NEED_SHARED (4096 * 8)
 
-/* Why a device cannot run the shaders, or NULL (RXVkDevCheck); `qfam`
+/* Why a device cannot run the shaders, or NULL (CBVkDevCheck); `qfam`
  * gets the queue family to use: compute-only if there is one, else any
  * with compute. */
 static const char *device_unusable(void *opaque, VkPhysicalDevice pd,
@@ -98,15 +98,15 @@ static const char *device_unusable(void *opaque, VkPhysicalDevice pd,
     const VkPhysicalDeviceLimits *l = &props->limits;
     if (l->maxComputeSharedMemorySize < NEED_SHARED)
         return "too little shared memory";
-    if (l->maxComputeWorkGroupInvocations < RX_COMPUTE_THREADS ||
-        l->maxComputeWorkGroupSize[0] < RX_COMPUTE_THREADS)
+    if (l->maxComputeWorkGroupInvocations < CB_COMPUTE_THREADS ||
+        l->maxComputeWorkGroupSize[0] < CB_COMPUTE_THREADS)
         return "workgroups too small";
-    if (l->maxPushConstantsSize < RX_COMPUTE_PUSH_SIZE)
+    if (l->maxPushConstantsSize < CB_COMPUTE_PUSH_SIZE)
         return "push constants too small";
-    return rx_vkdev_compute_family(pd, qfam);
+    return cb_vkdev_compute_family(pd, qfam);
 }
 
-static int create_device(RXCompute *c)
+static int create_device(CBCompute *c)
 {
     VkPhysicalDeviceVulkan13Features f13 = {
         .sType            = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
@@ -122,74 +122,74 @@ static int create_device(RXCompute *c)
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
         .pNext = &f12,
     };
-    int ret = rx_vkdev_device(&c->vk, &f2, NULL, 0);
-    if (ret < 0 || (ret = rx_vkdev_timeline(&c->vk, &c->timeline)) < 0)
+    int ret = cb_vkdev_device(&c->vk, &f2, NULL, 0);
+    if (ret < 0 || (ret = cb_vkdev_timeline(&c->vk, &c->timeline)) < 0)
         return ret;
 
     VkPushConstantRange range = {
         .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
-        .size       = RX_COMPUTE_PUSH_SIZE,
+        .size       = CB_COMPUTE_PUSH_SIZE,
     };
     VkPipelineLayoutCreateInfo linfo = {
         .sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
         .pushConstantRangeCount = 1,
         .pPushConstantRanges    = &range,
     };
-    return rx_vk_ret2err(vkCreatePipelineLayout(c->vk.dev, &linfo, NULL, &c->layout));
+    return cb_vk_ret2err(vkCreatePipelineLayout(c->vk.dev, &linfo, NULL, &c->layout));
 }
 
-int rx_compute_create(RXCompute **out, const RXComputeOptions *opt)
+int cb_compute_create(CBCompute **out, const CBComputeOptions *opt)
 {
     *out = NULL;
-    if (rx_compute_mode() == RX_COMPUTE_OFF) {
-        rx_debug("compute: RXBOX_ANALYSIS_GPU=0, no GPU");
-        return RX_ERROR(ENODEV);
+    if (cb_compute_mode() == CB_COMPUTE_OFF) {
+        cb_debug("compute: CYANBOX_ANALYSIS_GPU=0, no GPU");
+        return CB_ERROR(ENODEV);
     }
 
-    RXComputeOptions defopt;
+    CBComputeOptions defopt;
     if (!opt) {
-        rx_compute_options_default(&defopt);
+        cb_compute_options_default(&defopt);
         opt = &defopt;
     }
-    const char *want = opt->device && opt->device[0] ? opt->device : getenv("RXBOX_GPU_DEVICE");
+    const char *want = opt->device && opt->device[0] ? opt->device : getenv("CYANBOX_GPU_DEVICE");
     if (want && !want[0])
         want = NULL;
-    const char *val = getenv("RXBOX_GPU_VALIDATION");
+    const char *val = getenv("CYANBOX_GPU_VALIDATION");
     bool validation = opt->validation || (val && !strcmp(val, "1"));
 
-    RXCompute *c = calloc(1, sizeof(*c));
+    CBCompute *c = calloc(1, sizeof(*c));
     if (!c)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     atomic_init(&c->lost, false);
     int ret = pthread_mutex_init(&c->qlock, NULL);
     if (ret) {
         free(c);
-        return RX_ERROR(ret);
+        return CB_ERROR(ret);
     }
     ret = pthread_mutex_init(&c->plock, NULL);
     if (ret) {
         pthread_mutex_destroy(&c->qlock);
         free(c);
-        return RX_ERROR(ret);
+        return CB_ERROR(ret);
     }
 
-    RXVkDevOptions vo = {
+    CBVkDevOptions vo = {
         .tag         = "compute",
         .validation  = validation,
         .performance = true,
         .device      = want,
         .check       = device_unusable,
     };
-    if ((ret = rx_vkdev_instance(&c->vk, &vo)) < 0)
+    if ((ret = cb_vkdev_instance(&c->vk, &vo)) < 0)
         goto fail;
-    if ((ret = rx_vkdev_pick(&c->vk, &vo)) < 0) {
-        rx_debug("compute: no Vulkan 1.3 device can run the analysis shaders");
+    if ((ret = cb_vkdev_pick(&c->vk, &vo)) < 0) {
+        cb_debug("compute: no Vulkan 1.3 device can run the analysis shaders");
         goto fail;
     }
     if ((ret = create_device(c)) < 0)
         goto fail;
 
-    rx_debug("compute: %s, Vulkan %u.%u, queue family %u%s", c->vk.props.deviceName,
+    cb_debug("compute: %s, Vulkan %u.%u, queue family %u%s", c->vk.props.deviceName,
              VK_API_VERSION_MAJOR(c->vk.props.apiVersion),
              VK_API_VERSION_MINOR(c->vk.props.apiVersion), c->vk.qfam,
              c->vk.ts_mask ? "" : " (no timestamps)");
@@ -197,20 +197,20 @@ int rx_compute_create(RXCompute **out, const RXComputeOptions *opt)
     return 0;
 
 fail:
-    rx_compute_destroy(&c);
+    cb_compute_destroy(&c);
     return ret;
 }
 
-void rx_compute_destroy(RXCompute **pc)
+void cb_compute_destroy(CBCompute **pc)
 {
-    RXCompute *c = *pc;
+    CBCompute *c = *pc;
     if (!c)
         return;
 
     if (c->vk.dev) {
         vkDeviceWaitIdle(c->vk.dev);
-        for (int k = 0; k < RX_NB_KERNELS; k++) {
-            for (int i = 0; i <= RX_COMPUTE_MAX_LOG2; i++) {
+        for (int k = 0; k < CB_NB_KERNELS; k++) {
+            for (int i = 0; i <= CB_COMPUTE_MAX_LOG2; i++) {
                 if (c->pipes[k][i])
                     vkDestroyPipeline(c->vk.dev, c->pipes[k][i], NULL);
             }
@@ -220,7 +220,7 @@ void rx_compute_destroy(RXCompute **pc)
         if (c->timeline)
             vkDestroySemaphore(c->vk.dev, c->timeline, NULL);
     }
-    rx_vkdev_destroy(&c->vk);
+    cb_vkdev_destroy(&c->vk);
 
     pthread_mutex_destroy(&c->plock);
     pthread_mutex_destroy(&c->qlock);
@@ -228,23 +228,23 @@ void rx_compute_destroy(RXCompute **pc)
     *pc = NULL;
 }
 
-const char *rx_compute_device_name(const RXCompute *c)
+const char *cb_compute_device_name(const CBCompute *c)
 {
     return c->vk.props.deviceName;
 }
 
-int rx_compute_validation_errors(const RXCompute *c)
+int cb_compute_validation_errors(const CBCompute *c)
 {
-    return rx_vkdev_validation_errors(&c->vk);
+    return cb_vkdev_validation_errors(&c->vk);
 }
 
 /* ----------------------------------------------------------------- buffers */
 
-int rx_cbuf_create(RXCompute *c, RXCBuf *b, VkDeviceSize size, enum RXCMem mem)
+int cb_cbuf_create(CBCompute *c, CBCBuf *b, VkDeviceSize size, enum CBCMem mem)
 {
-    *b = (RXCBuf) { 0 };
+    *b = (CBCBuf) { 0 };
     if (!size)
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
 
     /* Every buffer can be a shader's storage (through its address) and
      * either end of a copy: which one is which depends on whether the
@@ -265,17 +265,17 @@ int rx_cbuf_create(RXCompute *c, RXCBuf *b, VkDeviceSize size, enum RXCMem mem)
      * RANDOM asks for cached memory, which the CPU reads quickly. */
     VmaAllocationCreateInfo ci = { 0 };
     switch (mem) {
-    case RX_CMEM_UPLOAD:
+    case CB_CMEM_UPLOAD:
         ci.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
         ci.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT |
                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
         break;
-    case RX_CMEM_READBACK:
+    case CB_CMEM_READBACK:
         ci.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
         ci.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT |
                    VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT;
         break;
-    case RX_CMEM_DEVICE:
+    case CB_CMEM_DEVICE:
     default:
         ci.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
         break;
@@ -284,10 +284,10 @@ int rx_cbuf_create(RXCompute *c, RXCBuf *b, VkDeviceSize size, enum RXCMem mem)
     VmaAllocationInfo ai = { 0 };
     VkResult res = vmaCreateBuffer(c->vk.vma, &info, &ci, &b->buf, &b->alloc, &ai);
     if (res != VK_SUCCESS) {
-        rx_warn("compute: unable to allocate a %llu byte buffer: %s", (unsigned long long)size,
-                rx_vk_strerror(res));
-        *b = (RXCBuf) { 0 };
-        return rx_vk_ret2err(res);
+        cb_warn("compute: unable to allocate a %llu byte buffer: %s", (unsigned long long)size,
+                cb_vk_strerror(res));
+        *b = (CBCBuf) { 0 };
+        return cb_vk_ret2err(res);
     }
 
     VkMemoryPropertyFlags props = 0;
@@ -304,35 +304,35 @@ int rx_cbuf_create(RXCompute *c, RXCBuf *b, VkDeviceSize size, enum RXCMem mem)
     return 0;
 }
 
-void rx_cbuf_free(RXCompute *c, RXCBuf *b)
+void cb_cbuf_free(CBCompute *c, CBCBuf *b)
 {
     if (!b || !b->buf)
         return;
     vmaDestroyBuffer(c->vk.vma, b->buf, b->alloc);
-    *b = (RXCBuf) { 0 };
+    *b = (CBCBuf) { 0 };
 }
 
-int rx_cbuf_invalidate(RXCompute *c, RXCBuf *b)
+int cb_cbuf_invalidate(CBCompute *c, CBCBuf *b)
 {
     if (!b->map)
         return 0;
-    return rx_vk_ret2err(vmaInvalidateAllocation(c->vk.vma, b->alloc, 0, VK_WHOLE_SIZE));
+    return cb_vk_ret2err(vmaInvalidateAllocation(c->vk.vma, b->alloc, 0, VK_WHOLE_SIZE));
 }
 
-int rx_cbuf_flush(RXCompute *c, RXCBuf *b, VkDeviceSize size)
+int cb_cbuf_flush(CBCompute *c, CBCBuf *b, VkDeviceSize size)
 {
     if (!b->map)
         return 0;
-    return rx_vk_ret2err(vmaFlushAllocation(c->vk.vma, b->alloc, 0, size));
+    return cb_vk_ret2err(vmaFlushAllocation(c->vk.vma, b->alloc, 0, size));
 }
 
 /* --------------------------------------------------------------- pipelines */
 
-int rx_compute_pipeline(RXCompute *c, enum RXComputeKernel kernel, int log2n, VkPipeline *out)
+int cb_compute_pipeline(CBCompute *c, enum CBComputeKernel kernel, int log2n, VkPipeline *out)
 {
-    if (kernel < 0 || kernel >= RX_NB_KERNELS || log2n < RX_COMPUTE_MIN_LOG2 ||
-        log2n > RX_COMPUTE_MAX_LOG2)
-        return RX_ERROR(EINVAL);
+    if (kernel < 0 || kernel >= CB_NB_KERNELS || log2n < CB_COMPUTE_MIN_LOG2 ||
+        log2n > CB_COMPUTE_MAX_LOG2)
+        return CB_ERROR(EINVAL);
 
     pthread_mutex_lock(&c->plock);
     if (c->pipes[kernel][log2n]) {
@@ -341,8 +341,8 @@ int rx_compute_pipeline(RXCompute *c, enum RXComputeKernel kernel, int log2n, Vk
         return 0;
     }
 
-    const uint8_t *code = kernel == RX_KERNEL_STFT ? rx_stft_comp_spv : rx_env_comp_spv;
-    size_t size = kernel == RX_KERNEL_STFT ? rx_stft_comp_spv_size : rx_env_comp_spv_size;
+    const uint8_t *code = kernel == CB_KERNEL_STFT ? cb_stft_comp_spv : cb_env_comp_spv;
+    size_t size = kernel == CB_KERNEL_STFT ? cb_stft_comp_spv_size : cb_env_comp_spv_size;
     VkShaderModuleCreateInfo minfo = {
         .sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
         .codeSize = size,
@@ -352,7 +352,7 @@ int rx_compute_pipeline(RXCompute *c, enum RXComputeKernel kernel, int log2n, Vk
     VkResult res = vkCreateShaderModule(c->vk.dev, &minfo, NULL, &mod);
     if (res != VK_SUCCESS) {
         pthread_mutex_unlock(&c->plock);
-        return rx_vk_ret2err(res);
+        return cb_vk_ret2err(res);
     }
 
     /* Constant 0 is the log2 of the complex transform the real one of
@@ -387,8 +387,8 @@ int rx_compute_pipeline(RXCompute *c, enum RXComputeKernel kernel, int log2n, Vk
         c->pipes[kernel][log2n] = pipe;
     pthread_mutex_unlock(&c->plock);
     if (res != VK_SUCCESS) {
-        rx_warn("compute: unable to create a pipeline: %s", rx_vk_strerror(res));
-        return rx_vk_ret2err(res);
+        cb_warn("compute: unable to create a pipeline: %s", cb_vk_strerror(res));
+        return cb_vk_ret2err(res);
     }
 
     *out = pipe;
@@ -397,12 +397,12 @@ int rx_compute_pipeline(RXCompute *c, enum RXComputeKernel kernel, int log2n, Vk
 
 /* ------------------------------------------------------------- submission */
 
-int rx_compute_submit(RXCompute *c, VkCommandBuffer cmd, uint64_t *value)
+int cb_compute_submit(CBCompute *c, VkCommandBuffer cmd, uint64_t *value)
 {
     pthread_mutex_lock(&c->qlock);
     if (atomic_load(&c->lost)) {
         pthread_mutex_unlock(&c->qlock);
-        return RX_ERROR(EIO);
+        return CB_ERROR(EIO);
     }
     uint64_t v = c->submitted + 1;
     VkSemaphoreSubmitInfo signal = {
@@ -428,14 +428,14 @@ int rx_compute_submit(RXCompute *c, VkCommandBuffer cmd, uint64_t *value)
     pthread_mutex_unlock(&c->qlock);
 
     if (res != VK_SUCCESS) {
-        rx_warn("compute: submission failed: %s", rx_vk_strerror(res));
-        return rx_vk_ret2err(res);
+        cb_warn("compute: submission failed: %s", cb_vk_strerror(res));
+        return cb_vk_ret2err(res);
     }
     *value = v;
     return 0;
 }
 
-int rx_compute_wait(RXCompute *c, uint64_t value)
+int cb_compute_wait(CBCompute *c, uint64_t value)
 {
     /* A transform of a whole stretch takes milliseconds; a minute means
      * the GPU is hung, and the analysis goes on without it. */
@@ -453,12 +453,12 @@ int rx_compute_wait(RXCompute *c, uint64_t value)
          * uses may be freed before the device is idle. vkDeviceWaitIdle
          * needs the queue to itself. */
         if (!atomic_exchange(&c->lost, true))
-            rx_err("compute: waiting for the GPU failed: %s; the GPU is not used again",
-                   rx_vk_strerror(res));
+            cb_err("compute: waiting for the GPU failed: %s; the GPU is not used again",
+                   cb_vk_strerror(res));
         pthread_mutex_lock(&c->qlock);
         vkDeviceWaitIdle(c->vk.dev);
         pthread_mutex_unlock(&c->qlock);
-        return rx_vk_ret2err(res);
+        return cb_vk_ret2err(res);
     }
     return 0;
 }

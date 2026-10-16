@@ -3,14 +3,14 @@
 /* Cover art: the embedded picture or one next to the file, decoded to RGBA,
  * scaled, and encoded as the JPEGs that go on a stick. A port of dj's
  * audio.artwork, export._artwork_image and export._jpeg, with the folder
- * lookup of rxbox/audio.h (front, cover, folder, album, art; numbered firsts;
+ * lookup of cyanbox/audio.h (front, cover, folder, album, art; numbered firsts;
  * a lone image; never back/obi/booklet scans; the parent directory below a
  * disc folder), where dj only tried cover, folder and front.
  *
  * dj's _jpeg (Pillow) converts to RGB (alpha dropped, not composited), crops
  * the centred square of side min(w, h) with integer halving, resizes it with
  * Lanczos to size x size and saves a baseline JPEG at quality 90 with 4:2:0
- * chroma. rx_image_jpeg_square does the same with libswscale and libavcodec's
+ * chroma. cb_image_jpeg_square does the same with libswscale and libavcodec's
  * MJPEG encoder. SWS_LANCZOS with accurate rounding and full chroma is
  * within one level of Pillow's resize (mean 0.09 on a test picture).
  *
@@ -27,7 +27,7 @@
  * own JPEG is 6.4 levels from the picture it encoded.
  * Huffman tables are optimised (smaller files, same pixels). */
 
-#include "rxbox/audio.h"
+#include "cyanbox/audio.h"
 
 #include <dirent.h>
 #include <stdio.h>
@@ -64,7 +64,7 @@ static const uint8_t std_chroma[64] = {
     99, 99, 99, 99, 99, 99, 99, 99,
 };
 
-/* Cover files next to the audio, in order of preference (rxbox/audio.h:
+/* Cover files next to the audio, in order of preference (cyanbox/audio.h:
  * measured on the user's library, 200 of 232 album folders use front.*,
  * the rest cover.* or folder.*). dj looked for cover, folder, front. */
 static const char *const cover_names[] = { "front", "cover", "folder", "album", "art" };
@@ -84,18 +84,18 @@ static int embedded_raw(const char *path, uint8_t **data, size_t *size, char cod
     codec[0] = '\0';
 
     AVFormatContext *fmt;
-    int ret = rx_audio_open(path, &fmt, false);
+    int ret = cb_audio_open(path, &fmt, false);
     if (ret < 0)
         return ret;
 
-    ret = RX_ERROR(ENOENT);
+    ret = CB_ERROR(ENOENT);
     for (unsigned i = 0; i < fmt->nb_streams; i++) {
         const AVStream *st = fmt->streams[i];
         if (!(st->disposition & AV_DISPOSITION_ATTACHED_PIC) || st->attached_pic.size <= 0)
             continue;
         uint8_t *d = malloc((size_t)st->attached_pic.size);
         if (!d) {
-            ret = RX_ERROR(ENOMEM);
+            ret = CB_ERROR(ENOMEM);
             break;
         }
         memcpy(d, st->attached_pic.data, (size_t)st->attached_pic.size);
@@ -127,7 +127,7 @@ static int wrap_rgba(AVFrame *f, const uint8_t *rgba, int stride, int w, int h)
     f->buf[0] = av_buffer_create((uint8_t *)rgba, (size_t)stride * h, no_free, NULL,
                                  AV_BUFFER_FLAG_READONLY);
     if (!f->buf[0])
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     f->data[0] = (uint8_t *)rgba;
     f->linesize[0] = stride;
     return 0;
@@ -140,7 +140,7 @@ static int convert(const AVFrame *src, enum AVPixelFormat format, int w, int h,
     *out = NULL;
     AVFrame *dst = av_frame_alloc();
     SwsContext *sws = sws_alloc_context();
-    int ret = RX_ERROR(ENOMEM);
+    int ret = CB_ERROR(ENOMEM);
     if (!dst || !sws)
         goto fail;
 
@@ -171,7 +171,7 @@ static int convert(const AVFrame *src, enum AVPixelFormat format, int w, int h,
 fail:
     sws_free_context(&sws);
     av_frame_free(&dst);
-    return ret < 0 ? rx_audio_error(ret) : ret;
+    return ret < 0 ? cb_audio_error(ret) : ret;
 }
 
 /* RGBA scaled to w x h into a new tightly packed buffer. */
@@ -181,7 +181,7 @@ static int scale_rgba(const uint8_t *rgba, int stride, int sw, int sh, int w, in
     *out = NULL;
     uint8_t *px = malloc((size_t)w * h * 4);
     if (!px)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     if (sw == w && sh == h) {
         for (int y = 0; y < h; y++)
             memcpy(px + (size_t)y * w * 4, rgba + (size_t)y * stride, (size_t)w * 4);
@@ -190,7 +190,7 @@ static int scale_rgba(const uint8_t *rgba, int stride, int sw, int sh, int w, in
     }
 
     AVFrame *src = av_frame_alloc(), *dst = NULL;
-    int ret = src ? wrap_rgba(src, rgba, stride, sw, sh) : RX_ERROR(ENOMEM);
+    int ret = src ? wrap_rgba(src, rgba, stride, sw, sh) : CB_ERROR(ENOMEM);
     if (ret >= 0)
         ret = convert(src, AV_PIX_FMT_RGBA, w, h, flags, &dst);
     if (ret >= 0) {
@@ -225,23 +225,23 @@ static enum AVCodecID sniff(const uint8_t *d, size_t n)
     return AV_CODEC_ID_NONE;
 }
 
-int rx_image_decode(const uint8_t *data, size_t size, uint8_t **rgba, int *width, int *height)
+int cb_image_decode(const uint8_t *data, size_t size, uint8_t **rgba, int *width, int *height)
 {
-    rx_audio_init_logging();
+    cb_audio_init_logging();
     *rgba = NULL;
     *width = *height = 0;
 
     enum AVCodecID id = sniff(data, size);
     const AVCodec *codec = id != AV_CODEC_ID_NONE ? avcodec_find_decoder(id) : NULL;
     if (!codec || size > INT32_MAX - AV_INPUT_BUFFER_PADDING_SIZE) {
-        rx_debug("image of %zu bytes: unknown format", size);
-        return RX_ERROR(ENOTSUP);
+        cb_debug("image of %zu bytes: unknown format", size);
+        return CB_ERROR(ENOTSUP);
     }
 
     AVCodecContext *dec = avcodec_alloc_context3(codec);
     AVPacket *pkt = av_packet_alloc();
     AVFrame *frame = av_frame_alloc(), *out = NULL;
-    int ret = RX_ERROR(ENOMEM);
+    int ret = CB_ERROR(ENOMEM);
     if (!dec || !pkt || !frame)
         goto end;
     dec->thread_count = 1;
@@ -278,7 +278,7 @@ int rx_image_decode(const uint8_t *data, size_t size, uint8_t **rgba, int *width
         { AV_PIX_FMT_YUVJ440P, AV_PIX_FMT_YUV440P },
         { AV_PIX_FMT_YUVJ411P, AV_PIX_FMT_YUV411P },
     };
-    for (size_t i = 0; i < RX_ARRAY_ELEMS(yuvj); i++) {
+    for (size_t i = 0; i < CB_ARRAY_ELEMS(yuvj); i++) {
         if (frame->format == yuvj[i][0]) {
             frame->format = yuvj[i][1];
             frame->color_range = AVCOL_RANGE_JPEG;
@@ -292,7 +292,7 @@ int rx_image_decode(const uint8_t *data, size_t size, uint8_t **rgba, int *width
     int w = out->width, h = out->height;
     uint8_t *px = malloc((size_t)w * h * 4);
     if (!px) {
-        ret = RX_ERROR(ENOMEM);
+        ret = CB_ERROR(ENOMEM);
         goto end;
     }
     for (int y = 0; y < h; y++)
@@ -304,12 +304,12 @@ int rx_image_decode(const uint8_t *data, size_t size, uint8_t **rgba, int *width
 
 end:
     if (ret < 0)
-        rx_debug("image decode: %s", av_err2str(ret));
+        cb_debug("image decode: %s", av_err2str(ret));
     av_frame_free(&out);
     av_frame_free(&frame);
     av_packet_free(&pkt);
     avcodec_free_context(&dec);
-    return ret < 0 ? rx_audio_error(ret) : 0;
+    return ret < 0 ? cb_audio_error(ret) : 0;
 }
 
 /* -------------------------------------------------------------- next to it */
@@ -333,7 +333,7 @@ static bool first_number(const char *stem, size_t n)
     for (; i < n; i++) {
         if (stem[i] < '0' || stem[i] > '9')
             return false;
-        value = RX_MIN(value * 10 + (stem[i] - '0'), 1000);
+        value = CB_MIN(value * 10 + (stem[i] - '0'), 1000);
     }
     return value == 1;
 }
@@ -354,7 +354,7 @@ static bool never_cover(const char *stem, size_t n)
         size_t start = i;
         while (i < n && is_letter(stem[i]))
             i++;
-        for (size_t w = 0; w < RX_ARRAY_ELEMS(never_words); w++) {
+        for (size_t w = 0; w < CB_ARRAY_ELEMS(never_words); w++) {
             size_t wl = strlen(never_words[w]);
             if (i - start == wl && !strncasecmp(stem + start, never_words[w], wl))
                 return true;
@@ -373,15 +373,15 @@ static int cover_rank(const char *name, bool *never)
     if (!dot || dot == name)
         return -1;
     int e = -1;
-    for (size_t i = 0; i < RX_ARRAY_ELEMS(cover_exts) && e < 0; i++)
-        if (!rx_strcasecmp(dot, cover_exts[i]))
+    for (size_t i = 0; i < CB_ARRAY_ELEMS(cover_exts) && e < 0; i++)
+        if (!cb_strcasecmp(dot, cover_exts[i]))
             e = (int)i;
     if (e < 0)
         return -1;
 
     size_t stem = (size_t)(dot - name);
-    int ne = (int)RX_ARRAY_ELEMS(cover_exts);
-    for (size_t k = 0; k < RX_ARRAY_ELEMS(cover_names); k++) {
+    int ne = (int)CB_ARRAY_ELEMS(cover_exts);
+    for (size_t k = 0; k < CB_ARRAY_ELEMS(cover_names); k++) {
         size_t cl = strlen(cover_names[k]);
         if (stem < cl || strncasecmp(name, cover_names[k], cl))
             continue;
@@ -433,9 +433,9 @@ static int dir_candidates(const char *dir, Candidate **out, int *nb_out)
         images++;
         if (rank == RANK_OTHER) {
             if (!never && !lone.name) {
-                lone = (Candidate) { .rank = rank, .name = rx_strdup(e->d_name) };
+                lone = (Candidate) { .rank = rank, .name = cb_strdup(e->d_name) };
                 if (!lone.name) {
-                    ret = RX_ERROR(ENOMEM);
+                    ret = CB_ERROR(ENOMEM);
                     break;
                 }
             }
@@ -444,9 +444,9 @@ static int dir_candidates(const char *dir, Candidate **out, int *nb_out)
         Candidate *nc = realloc(cand, ((size_t)nb + 1) * sizeof(*nc));
         if (nc)
             cand = nc;
-        char *name = nc ? rx_strdup(e->d_name) : NULL;
+        char *name = nc ? cb_strdup(e->d_name) : NULL;
         if (!name) {
-            ret = RX_ERROR(ENOMEM);
+            ret = CB_ERROR(ENOMEM);
             break;
         }
         cand[nb++] = (Candidate) { .rank = rank, .name = name };
@@ -459,7 +459,7 @@ static int dir_candidates(const char *dir, Candidate **out, int *nb_out)
             cand[nb++] = lone;
             lone.name = NULL;
         } else {
-            ret = RX_ERROR(ENOMEM);
+            ret = CB_ERROR(ENOMEM);
         }
     }
     free(lone.name);
@@ -481,37 +481,37 @@ static int dir_candidates(const char *dir, Candidate **out, int *nb_out)
 static int track_dirs(const char *path, char **dir, char **parent)
 {
     *dir = *parent = NULL;
-    const char *base = rx_path_base(path);
+    const char *base = cb_path_base(path);
     if (base == path)
-        *dir = rx_strdup(".");
+        *dir = cb_strdup(".");
     else if (base == path + 1)
-        *dir = rx_strdup("/");
+        *dir = cb_strdup("/");
     else
-        *dir = rx_strndup(path, (size_t)(base - path - 1));
+        *dir = cb_strndup(path, (size_t)(base - path - 1));
     if (!*dir)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
 
     if (!strcmp(*dir, "/"))
         return 0;
     const char *slash = strrchr(*dir, '/');
     if (!slash)
-        *parent = rx_strdup(!strcmp(*dir, ".") ? ".." : ".");
+        *parent = cb_strdup(!strcmp(*dir, ".") ? ".." : ".");
     else if (slash == *dir)
-        *parent = rx_strdup("/");
+        *parent = cb_strdup("/");
     else
-        *parent = rx_strndup(*dir, (size_t)(slash - *dir));
-    return *parent ? 0 : RX_ERROR(ENOMEM);
+        *parent = cb_strndup(*dir, (size_t)(slash - *dir));
+    return *parent ? 0 : CB_ERROR(ENOMEM);
 }
 
 /* "CD1", "Disc 2", "[DISK_03] title", "dvd1": a disc of a release whose
  * cover sits one level up. */
 static bool disc_folder(const char *dir)
 {
-    const char *name = rx_path_base(dir);
+    const char *name = cb_path_base(dir);
     while (*name == '[' || *name == '(' || *name == ' ')
         name++;
     static const char *const words[] = { "cd", "disc", "disk", "dvd" };
-    for (size_t i = 0; i < RX_ARRAY_ELEMS(words); i++) {
+    for (size_t i = 0; i < CB_ARRAY_ELEMS(words); i++) {
         size_t n = strlen(words[i]);
         if (strncasecmp(name, words[i], n))
             continue;
@@ -544,8 +544,8 @@ static int lookup(const char *audio_path, TakeFn take, void *opaque)
         dirs[1] = NULL;
     }
 
-    ret = RX_ERROR(ENOENT);
-    for (int k = 0; k < 2 && dirs[k] && ret == RX_ERROR(ENOENT); k++) {
+    ret = CB_ERROR(ENOENT);
+    for (int k = 0; k < 2 && dirs[k] && ret == CB_ERROR(ENOENT); k++) {
         Candidate *cand;
         int nb;
         int err = dir_candidates(dirs[k], &cand, &nb);
@@ -553,14 +553,14 @@ static int lookup(const char *audio_path, TakeFn take, void *opaque)
             ret = err;
             break;
         }
-        for (int i = 0; i < nb && ret == RX_ERROR(ENOENT); i++) {
-            char *file = rx_path_join(dirs[k], cand[i].name);
+        for (int i = 0; i < nb && ret == CB_ERROR(ENOENT); i++) {
+            char *file = cb_path_join(dirs[k], cand[i].name);
             if (!file) {
-                ret = RX_ERROR(ENOMEM);
+                ret = CB_ERROR(ENOMEM);
                 break;
             }
             err = take(opaque, file);
-            if (err == 0 || err == RX_ERROR(ENOMEM))
+            if (err == 0 || err == CB_ERROR(ENOMEM))
                 ret = err;
             free(file);
         }
@@ -587,14 +587,14 @@ static int take_bytes(Take *t, const char *file)
 {
     uint8_t *d;
     size_t n;
-    int ret = rx_file_read(file, &d, &n);
+    int ret = cb_file_read(file, &d, &n);
     if (ret < 0)
-        return ret == RX_ERROR(ENOMEM) ? ret : RX_ERROR(ENOENT);
+        return ret == CB_ERROR(ENOMEM) ? ret : CB_ERROR(ENOENT);
     enum AVCodecID id = sniff(d, n);
     if (id == AV_CODEC_ID_NONE) {
-        rx_debug("%s: not an image", file);
+        cb_debug("%s: not an image", file);
         free(d);
-        return RX_ERROR(ENOENT);
+        return CB_ERROR(ENOENT);
     }
     snprintf(t->codec, sizeof(t->codec), "%s", avcodec_get_name(id));
     t->data = d;
@@ -602,7 +602,7 @@ static int take_bytes(Take *t, const char *file)
     return 0;
 }
 
-/* The same test as take_bytes on the first bytes only: rx_probe asks this
+/* The same test as take_bytes on the first bytes only: cb_probe asks this
  * for every track it probes, and a cover can be megabytes. */
 static int take_path(void *opaque, const char *file)
 {
@@ -610,15 +610,15 @@ static int take_path(void *opaque, const char *file)
     uint8_t head[16];
     FILE *f = fopen(file, "rbe");
     if (!f)
-        return RX_ERROR(ENOENT);
+        return CB_ERROR(ENOENT);
     size_t n = fread(head, 1, sizeof(head), f);
     fclose(f);
     if (sniff(head, n) == AV_CODEC_ID_NONE) {
-        rx_debug("%s: not an image", file);
-        return RX_ERROR(ENOENT);
+        cb_debug("%s: not an image", file);
+        return CB_ERROR(ENOENT);
     }
-    t->path = rx_strdup(file);
-    return t->path ? 0 : RX_ERROR(ENOMEM);
+    t->path = cb_strdup(file);
+    return t->path ? 0 : CB_ERROR(ENOMEM);
 }
 
 static int take_raw(void *opaque, const char *file)
@@ -632,19 +632,19 @@ static int take_rgba(void *opaque, const char *file)
     int ret = take_bytes(t, file);
     if (ret < 0)
         return ret;
-    ret = rx_image_decode(t->data, t->size, &t->rgba, &t->width, &t->height);
+    ret = cb_image_decode(t->data, t->size, &t->rgba, &t->width, &t->height);
     free(t->data);
     t->data = NULL;
-    if (ret == RX_ERROR(ENOMEM))
+    if (ret == CB_ERROR(ENOMEM))
         return ret;
     if (ret < 0) {
-        rx_debug("%s: unreadable image", file);
-        return RX_ERROR(ENOENT);
+        cb_debug("%s: unreadable image", file);
+        return CB_ERROR(ENOENT);
     }
     return 0;
 }
 
-int rx_artwork_find_file(const char *audio_path, char **image_path)
+int cb_artwork_find_file(const char *audio_path, char **image_path)
 {
     Take t = { 0 };
     int ret = lookup(audio_path, take_path, &t);
@@ -652,12 +652,12 @@ int rx_artwork_find_file(const char *audio_path, char **image_path)
     return ret;
 }
 
-int rx_artwork_raw(const char *path, uint8_t **data, size_t *size, char codec[16])
+int cb_artwork_raw(const char *path, uint8_t **data, size_t *size, char codec[16])
 {
     /* Embedded, else next to the file (also when libavformat cannot read
      * the file: its folder's cover is still its cover) */
     int ret = embedded_raw(path, data, size, codec);
-    if (ret >= 0 || ret == RX_ERROR(ENOMEM))
+    if (ret >= 0 || ret == CB_ERROR(ENOMEM))
         return ret;
 
     Take t = { 0 };
@@ -670,7 +670,7 @@ int rx_artwork_raw(const char *path, uint8_t **data, size_t *size, char codec[16
     return 0;
 }
 
-int rx_artwork_rgba(const char *path, uint8_t **rgba, int *width, int *height)
+int cb_artwork_rgba(const char *path, uint8_t **rgba, int *width, int *height)
 {
     *rgba = NULL;
     *width = *height = 0;
@@ -680,12 +680,12 @@ int rx_artwork_rgba(const char *path, uint8_t **rgba, int *width, int *height)
     char codec[16];
     int ret = embedded_raw(path, &raw, &size, codec);
     if (ret >= 0) {
-        ret = rx_image_decode(raw, size, rgba, width, height);
+        ret = cb_image_decode(raw, size, rgba, width, height);
         free(raw);
         if (ret >= 0)
             return 0;
-        rx_debug("%s: embedded %s cover unreadable, looking next to it", path, codec);
-    } else if (ret == RX_ERROR(ENOMEM)) {
+        cb_debug("%s: embedded %s cover unreadable, looking next to it", path, codec);
+    } else if (ret == CB_ERROR(ENOMEM)) {
         return ret;
     }
 
@@ -701,18 +701,18 @@ int rx_artwork_rgba(const char *path, uint8_t **rgba, int *width, int *height)
 
 /* ------------------------------------------------------------------- scale */
 
-int rx_image_scale(const uint8_t *rgba, int width, int height, int max_w, int max_h,
+int cb_image_scale(const uint8_t *rgba, int width, int height, int max_w, int max_h,
                    uint8_t **out, int *out_w, int *out_h)
 {
-    rx_audio_init_logging();
+    cb_audio_init_logging();
     *out = NULL;
     *out_w = *out_h = 0;
     if (width <= 0 || height <= 0 || max_w <= 0 || max_h <= 0)
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
 
-    double s = RX_MIN(RX_MIN((double)max_w / width, (double)max_h / height), 1.0);
-    int w = RX_CLAMP((int)(width * s + 0.5), 1, max_w);
-    int h = RX_CLAMP((int)(height * s + 0.5), 1, max_h);
+    double s = CB_MIN(CB_MIN((double)max_w / width, (double)max_h / height), 1.0);
+    int w = CB_CLAMP((int)(width * s + 0.5), 1, max_w);
+    int h = CB_CLAMP((int)(height * s + 0.5), 1, max_h);
     int ret = scale_rgba(rgba, width * 4, width, height, w, h, SWS_AREA, out);
     if (ret < 0)
         return ret;
@@ -725,7 +725,7 @@ int rx_image_scale(const uint8_t *rgba, int width, int height, int max_w, int ma
 
 static int quant_scale(int quality)
 {
-    quality = RX_CLAMP(quality, 1, 100);
+    quality = CB_CLAMP(quality, 1, 100);
     return quality < 50 ? 5000 / quality : 200 - quality * 2;
 }
 
@@ -735,7 +735,7 @@ static uint16_t *quant_table(const uint8_t *std, int scale)
     if (!t)
         return NULL;
     for (int i = 0; i < 64; i++)
-        t[i] = (uint16_t)RX_CLAMP((std[i] * scale + 50) / 100, 1, 255);
+        t[i] = (uint16_t)CB_CLAMP((std[i] * scale + 50) / 100, 1, 255);
     return t;
 }
 
@@ -743,10 +743,10 @@ static int encode_jpeg(AVFrame *yuv, int quality, uint8_t **jpeg, size_t *jpeg_s
 {
     const AVCodec *codec = avcodec_find_encoder(AV_CODEC_ID_MJPEG);
     if (!codec)
-        return RX_ERROR(ENOTSUP);
+        return CB_ERROR(ENOTSUP);
     AVCodecContext *enc = avcodec_alloc_context3(codec);
     AVPacket *pkt = av_packet_alloc();
-    int ret = RX_ERROR(ENOMEM);
+    int ret = CB_ERROR(ENOMEM);
     if (!enc || !pkt)
         goto end;
 
@@ -782,7 +782,7 @@ static int encode_jpeg(AVFrame *yuv, int quality, uint8_t **jpeg, size_t *jpeg_s
 
     *jpeg = malloc((size_t)pkt->size);
     if (!*jpeg) {
-        ret = RX_ERROR(ENOMEM);
+        ret = CB_ERROR(ENOMEM);
         goto end;
     }
     memcpy(*jpeg, pkt->data, (size_t)pkt->size);
@@ -792,20 +792,20 @@ static int encode_jpeg(AVFrame *yuv, int quality, uint8_t **jpeg, size_t *jpeg_s
 end:
     av_packet_free(&pkt);
     avcodec_free_context(&enc);
-    return ret < 0 ? rx_audio_error(ret) : 0;
+    return ret < 0 ? cb_audio_error(ret) : 0;
 }
 
-int rx_image_jpeg_square(const uint8_t *rgba, int width, int height, int size, int quality,
+int cb_image_jpeg_square(const uint8_t *rgba, int width, int height, int size, int quality,
                          uint8_t **jpeg, size_t *jpeg_size)
 {
-    rx_audio_init_logging();
+    cb_audio_init_logging();
     *jpeg = NULL;
     *jpeg_size = 0;
     if (width <= 0 || height <= 0 || size <= 0)
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
 
     /* Pillow: crop((w - s) // 2, (h - s) // 2, ...), then resize(LANCZOS) */
-    int s = RX_MIN(width, height);
+    int s = CB_MIN(width, height);
     const uint8_t *crop = rgba + ((size_t)((height - s) / 2) * width + (width - s) / 2) * 4;
     uint8_t *square;
     int ret = scale_rgba(crop, width * 4, s, s, size, size, SWS_LANCZOS, &square);
@@ -813,7 +813,7 @@ int rx_image_jpeg_square(const uint8_t *rgba, int width, int height, int size, i
         return ret;
 
     AVFrame *src = av_frame_alloc(), *yuv = NULL;
-    ret = src ? wrap_rgba(src, square, size * 4, size, size) : RX_ERROR(ENOMEM);
+    ret = src ? wrap_rgba(src, square, size * 4, size, size) : CB_ERROR(ENOMEM);
     if (ret >= 0)
         ret = convert(src, AV_PIX_FMT_YUV420P, size, size, SWS_AREA, &yuv);
     if (ret >= 0)

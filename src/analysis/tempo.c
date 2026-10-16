@@ -20,14 +20,14 @@
  *    has as many lines at twice the tempo as at the tempo.
  * 3. The octave is not chosen here. The working octave is the family's
  *    member nearest the prior (125 BPM); the grid is fitted there, and on
- *    the fitted grid, whose beats sit on the hits, rx_tempo_octave_decide
+ *    the fitted grid, whose beats sit on the hits, cb_tempo_octave_decide
  *    weighs half, same and double by the rhythm: where the snares and
  *    claps fall, whether a four-on-the-floor kick marks the level, and the
  *    prior where the rhythm leaves it open. If another octave wins, the
  *    grid is fitted again there. Rhythm evidence needs beats placed on
  *    the hits, which a whole-track estimate does not have.
  *
- * The tempogram (rx_tempo_regions) asks the same question locally, over
+ * The tempogram (cb_tempo_regions) asks the same question locally, over
  * 12-second windows, to find stretches that settle on a tempo outside the
  * main tempo's octave family (a DJ edit from 128 to 174, say), and to catch
  * a whole-track estimate that chose the wrong family (most windows agree
@@ -44,12 +44,12 @@
 #include <libavutil/tx.h>
 
 #define DEFAULT_PRIOR 125.0
-/* The prior's width in octaves (rx_tempo_octave_decide explains it). */
+/* The prior's width in octaves (cb_tempo_octave_decide explains it). */
 #define OCTAVE_PRIOR_WIDTH 0.4
 /* The least each rhythm likelihood can be: how far the rhythm can
  * overrule the prior. */
 #define OCTAVE_FLOOR 0.25
-/* The automatic range's comfortable octave (rx_tempo_octave_decide). */
+/* The automatic range's comfortable octave (cb_tempo_octave_decide). */
 #define OCTAVE_AUTO_LO 60.0
 #define OCTAVE_AUTO_HI 200.0
 
@@ -79,7 +79,7 @@ static int next_pow2(int64_t n)
  * by maxlag samples, by FFT, summed. Any track length, small transforms. */
 static int autocorr(const float *o, int n, float *ac, int maxlag)
 {
-    const int M = RX_MIN(next_pow2((int64_t)n + maxlag), 1 << 16), B = M - maxlag;
+    const int M = CB_MIN(next_pow2((int64_t)n + maxlag), 1 << 16), B = M - maxlag;
     AVTXContext *fwd = NULL, *inv = NULL;
     av_tx_fn ffn, ifn;
     float *buf = av_malloc((M + 2) * sizeof(*buf));
@@ -89,18 +89,18 @@ static int autocorr(const float *o, int n, float *ac, int maxlag)
     float scale = 1.0f;
     int ret = 0;
     if (B <= 0) {
-        ret = RX_ERROR(EINVAL);
+        ret = CB_ERROR(EINVAL);
         goto end;
     }
     if (!buf || !acc || !sa || !sb) {
-        ret = RX_ERROR(ENOMEM);
+        ret = CB_ERROR(ENOMEM);
         goto end;
     }
     if ((ret = av_tx_init(&fwd, &ffn, AV_TX_FLOAT_RDFT, 0, M, &scale, 0)) < 0 ||
         (ret = av_tx_init(&inv, &ifn, AV_TX_FLOAT_RDFT, 1, M, &scale, 0)) < 0)
         goto end;
     for (int b0 = 0; b0 < n; b0 += B) {
-        int lb = RX_MIN(B, n - b0), le = RX_MIN(B + maxlag, n - b0);
+        int lb = CB_MIN(B, n - b0), le = CB_MIN(B + maxlag, n - b0);
         /* a = the block, b = the block and the maxlag samples after it:
          * sum_t a[t] b[t + l] = IDFT(conj(A) B)[l]. */
         memset(buf, 0, M * sizeof(*buf));
@@ -153,7 +153,7 @@ static double comb(const float *ac, int n, double fps, double bpm)
 
 /* --------------------------------------------------- harmonic strength */
 
-double rx_tempo_phase(const float *o, int n, double fps, double bpm, double *strength)
+double cb_tempo_phase(const float *o, int n, double fps, double bpm, double *strength)
 {
     double w = 2.0 * M_PI * bpm / 60.0 / fps;
     double cr = cos(w), ci = -sin(w), zr = 1.0, zi = 0.0, ar = 0.0, ai = 0.0;
@@ -170,7 +170,7 @@ double rx_tempo_phase(const float *o, int n, double fps, double bpm, double *str
         }
     }
     if (strength)
-        *strength = hypot(ar, ai) / RX_MAX(n, 1);
+        *strength = hypot(ar, ai) / CB_MAX(n, 1);
     /* sum o[i] e^{-iwi} peaks in phase when the onsets sit at i = phase. */
     double period = 60.0 / bpm;
     double ph = -atan2(ai, ar) / (2.0 * M_PI * bpm / 60.0);
@@ -196,8 +196,8 @@ static int bigspec_init(BigSpec *b, const float *o, int n, double fps)
     memset(b, 0, sizeof(*b));
     /* Zero-padded four times or more for tracks up to 7 minutes; a longer
      * one is read from its middle 2^18 frames (29 minutes). */
-    int M = next_pow2(RX_MAX((int64_t)n * 4, 1 << 16));
-    M = RX_MIN(M, TX_MAX_REAL);
+    int M = next_pow2(CB_MAX((int64_t)n * 4, 1 << 16));
+    M = CB_MIN(M, TX_MAX_REAL);
     AVTXContext *tx = NULL;
     av_tx_fn fn;
     float scale = 1.0f;
@@ -206,12 +206,12 @@ static int bigspec_init(BigSpec *b, const float *o, int n, double fps)
     b->mag = malloc((M / 2 + 1) * sizeof(*b->mag));
     int ret = 0;
     if (!buf || !spec || !b->mag) {
-        ret = RX_ERROR(ENOMEM);
+        ret = CB_ERROR(ENOMEM);
         goto end;
     }
     if ((ret = av_tx_init(&tx, &fn, AV_TX_FLOAT_RDFT, 0, M, &scale, 0)) < 0)
         goto end;
-    int len = RX_MIN(n, M);
+    int len = CB_MIN(n, M);
     memcpy(buf, o + (n - len) / 2, len * sizeof(*buf));
     memset(buf + len, 0, (M - len) * sizeof(*buf));
     fn(tx, spec, buf, sizeof(float));
@@ -220,7 +220,7 @@ static int bigspec_init(BigSpec *b, const float *o, int n, double fps)
     b->M = M;
     b->nb = M / 2 + 1;
     b->fps = fps;
-    b->norm = 1.0 / RX_MAX(len, 1);
+    b->norm = 1.0 / CB_MAX(len, 1);
 
 end:
     av_tx_uninit(&tx);
@@ -293,27 +293,27 @@ static bool octave_related(double a, double b, double tol)
     return fabs(r - round(r)) < tol / M_LN2;
 }
 
-int rx_tempo_estimate(const RXOnsets *o, double lo, double hi, double prior,
-                      RXTempoEstimate *out)
+int cb_tempo_estimate(const CBOnsets *o, double lo, double hi, double prior,
+                      CBTempoEstimate *out)
 {
     memset(out, 0, sizeof(*out));
     const int n = o->nb;
     const double fps = o->fps;
     if (n < (int)(4 * fps))
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
     if (prior <= 0.0)
         prior = DEFAULT_PRIOR;
     bool ranged = lo > 0.0 && hi > lo;
     if (!ranged) {
-        lo = RX_TEMPO_MIN;
-        hi = RX_TEMPO_MAX;
+        lo = CB_TEMPO_MIN;
+        hi = CB_TEMPO_MAX;
     }
 
     /* Lags up to four beats at the slowest tempo, plus room to interpolate. */
-    const int nlag = (int)(4 * 60.0 * fps / RX_TEMPO_MIN) + 4;
+    const int nlag = (int)(4 * 60.0 * fps / CB_TEMPO_MIN) + 4;
     float *ac = malloc((size_t)nlag * sizeof(*ac));
     if (!ac)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     int ret = autocorr(o->full, n, ac, nlag);
     if (ret < 0) {
         free(ac);
@@ -321,13 +321,13 @@ int rx_tempo_estimate(const RXOnsets *o, double lo, double hi, double prior,
     }
 
     /* Comb over 50..220 BPM in 0.05 steps; the six strongest peaks. */
-    const int nc = (int)((RX_TEMPO_MAX - RX_TEMPO_MIN) / 0.05);
+    const int nc = (int)((CB_TEMPO_MAX - CB_TEMPO_MIN) / 0.05);
     double peaks[6] = { 0 }, pv[6] = { 0 };
     double prev2 = 0.0, prev = 0.0;
     for (int i = 0; i <= nc; i++) {
-        double v = comb(ac, nlag, fps, RX_TEMPO_MIN + i * 0.05);
+        double v = comb(ac, nlag, fps, CB_TEMPO_MIN + i * 0.05);
         if (i >= 2 && prev > prev2 && prev >= v) {
-            double b = RX_TEMPO_MIN + (i - 1) * 0.05;
+            double b = CB_TEMPO_MIN + (i - 1) * 0.05;
             for (int j = 0; j < 6; j++) {
                 if (prev > pv[j]) {
                     memmove(peaks + j + 1, peaks + j, (5 - j) * sizeof(*peaks));
@@ -350,14 +350,14 @@ int rx_tempo_estimate(const RXOnsets *o, double lo, double hi, double prior,
     /* Candidates: each peak and its simple relatives, rescored by their
      * harmonic series. */
     static const double ratios[] = { 1.0, 2.0, 0.5, 1.5, 2.0 / 3.0 };
-    Cand cands[6 * RX_ARRAY_ELEMS(ratios)];
+    Cand cands[6 * CB_ARRAY_ELEMS(ratios)];
     int nb = 0;
     for (int p = 0; p < 6; p++) {
         if (peaks[p] <= 0.0)
             continue;
-        for (size_t r = 0; r < RX_ARRAY_ELEMS(ratios); r++) {
+        for (size_t r = 0; r < CB_ARRAY_ELEMS(ratios); r++) {
             double c = peaks[p] * ratios[r];
-            if (c < RX_TEMPO_MIN || c > RX_TEMPO_MAX)
+            if (c < CB_TEMPO_MIN || c > CB_TEMPO_MAX)
                 continue;
             double st;
             c = bigspec_refine(&bs, c, &st);
@@ -374,13 +374,13 @@ int rx_tempo_estimate(const RXOnsets *o, double lo, double hi, double prior,
     }
     if (!nb) {
         free(bs.mag);
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
     }
 
     /* Octave families; a family's strength is its strongest member's. */
     int nfam = 0;
-    double fam_strength[RX_ARRAY_ELEMS(cands)];
-    double fam_bpm[RX_ARRAY_ELEMS(cands)];
+    double fam_strength[CB_ARRAY_ELEMS(cands)];
+    double fam_bpm[CB_ARRAY_ELEMS(cands)];
     for (int i = 0; i < nb; i++) {
         for (int f = 0; f < nfam && cands[i].family < 0; f++) {
             if (octave_related(cands[i].bpm, fam_bpm[f], 0.01))
@@ -431,7 +431,7 @@ int rx_tempo_estimate(const RXOnsets *o, double lo, double hi, double prior,
      * refined on its own harmonic series. The one nearest the prior is
      * the working octave: the rhythm evidence needs beats placed on the
      * hits, so the octave is decided again on the fitted grid
-     * (rx_tempo_octave_decide). */
+     * (cb_tempo_octave_decide). */
     double base = fam_bpm[best_fam];
     while (base / 2.0 >= lo * 0.999)
         base /= 2.0;
@@ -503,8 +503,8 @@ int rx_tempo_estimate(const RXOnsets *o, double lo, double hi, double prior,
  * band is not above its own (mid / mean - low / mean): a kick's body
  * reaches into the mid band, and on drum & bass ("Desolate") the
  * strongest mid-band beat is the kick on 1, not a snare. */
-static void level_evidence(const RXOnsets *o, double t0, double P, double from, double to,
-                           RXOctaveEvidence *ev)
+static void level_evidence(const CBOnsets *o, double t0, double P, double from, double to,
+                           CBOctaveEvidence *ev)
 {
     const double fps = o->fps;
     const int n = o->nb;
@@ -575,7 +575,7 @@ static void level_evidence(const RXOnsets *o, double t0, double P, double from, 
 
 /* Of the beats t0 + k * P and those moved by `alt`, the set whose beats
  * carry more of a (+ b) in [from, to). */
-static double level_phase(const RXOnsets *o, const float *a, const float *b, double t0, double P,
+static double level_phase(const CBOnsets *o, const float *a, const float *b, double t0, double P,
                           double alt, double from, double to)
 {
     double sum[2] = { 0 };
@@ -601,7 +601,7 @@ static double level_phase(const RXOnsets *o, const float *a, const float *b, dou
  * 0.29: by the bar 5.1, 4.1, 2.1, 1.5, a kick on 1 and 2, no
  * four-on-the-floor), whose octave stands (margin 68, now 27); the rest
  * have 0.45 or more. */
-static bool kick_on_every_beat(const RXOctaveEvidence *ev)
+static bool kick_on_every_beat(const CBOctaveEvidence *ev)
 {
     return ev->kick_alt >= 0.7 && ev->kick_bar >= 0.4;
 }
@@ -624,8 +624,8 @@ static bool kick_on_every_beat(const RXOctaveEvidence *ev)
  * Measured on the 81 tracks of the evaluation sample whose octave is
  * certain (house, techno, garage at 100-160; drum & bass at 150-200): the
  * prior alone is right on 78, this rule on all 81 (docs/BEATS.md). */
-void rx_tempo_octave_decide(const RXOnsets *o, double t0, double period, double from, double to,
-                            double lo, double hi, double prior, RXOctaveDecision *out)
+void cb_tempo_octave_decide(const CBOnsets *o, double t0, double period, double from, double to,
+                            double lo, double hi, double prior, CBOctaveDecision *out)
 {
     memset(out, 0, sizeof(*out));
     out->factor = 1.0;
@@ -634,8 +634,8 @@ void rx_tempo_octave_decide(const RXOnsets *o, double t0, double period, double 
         prior = DEFAULT_PRIOR;
     bool automatic = !(lo > 0.0 && hi > lo);
     if (automatic) {
-        lo = RX_TEMPO_MIN;
-        hi = RX_TEMPO_MAX;
+        lo = CB_TEMPO_MIN;
+        hi = CB_TEMPO_MAX;
     }
     /* The levels' beats, chosen from the finest down. The line may sit on
      * any eighth of the double level (a tracker held at half the tempo can
@@ -662,8 +662,8 @@ void rx_tempo_octave_decide(const RXOnsets *o, double t0, double period, double 
         level_evidence(o, lt0[l], lp[l], from, to, &out->ev[l]);
     }
     for (int l = 0; l < 3; l++) {
-        double slow = RX_CLAMP((1.0 - out->ev[l].subdiv) / 0.5, OCTAVE_FLOOR, 1.0);
-        double fast = RX_CLAMP(out->ev[l].balance / 0.8, OCTAVE_FLOOR, 1.0);
+        double slow = CB_CLAMP((1.0 - out->ev[l].subdiv) / 0.5, OCTAVE_FLOOR, 1.0);
+        double fast = CB_CLAMP(out->ev[l].balance / 0.8, OCTAVE_FLOOR, 1.0);
         double pr = exp(-0.5 * pow(log2(out->bpm[l] / prior) / OCTAVE_PRIOR_WIDTH, 2.0));
         /* The snares on the half beats make a level too slow because
          * they are the next level's backbeat, its 2 and 4. Where the
@@ -699,7 +699,7 @@ void rx_tempo_octave_decide(const RXOnsets *o, double t0, double period, double 
          * no four-on-the-floor at 344. */
         double up_hi = automatic ? OCTAVE_AUTO_HI : hi;
         if (l < 2 && kick_on_every_beat(&out->ev[l + 1]) && out->bpm[l + 1] <= up_hi * 1.001)
-            slow = fmin(slow, RX_CLAMP((1.0 - out->ev[l].kick_sub) / 0.5, OCTAVE_FLOOR, 1.0));
+            slow = fmin(slow, CB_CLAMP((1.0 - out->ev[l].kick_sub) / 0.5, OCTAVE_FLOOR, 1.0));
         /* Without a requested range, a level above 200 or below 60 BPM
          * must win by a factor of four: a pop song at 105 with sixteenths
          * on the hats reads as a four-on-the-floor 210. (Drum & bass at
@@ -733,8 +733,8 @@ void rx_tempo_octave_decide(const RXOnsets *o, double t0, double period, double 
 #define TG_RUN   4         /* windows a different tempo must hold: 21 s */
 #define TG_STEP  0.005     /* log2 step of the tempo states: 0.35 % */
 
-int rx_tempo_regions(const RXOnsets *o, double bpm, double lo, double hi,
-                     RXTempoRegion **regions, int *nb)
+int cb_tempo_regions(const CBOnsets *o, double bpm, double lo, double hi,
+                     CBTempoRegion **regions, int *nb)
 {
     *regions = NULL;
     *nb = 0;
@@ -750,14 +750,14 @@ int rx_tempo_regions(const RXOnsets *o, double bpm, double lo, double hi,
         e_hi = fmin(e_hi, log2(hi / bpm));
     }
 
-    double *best = calloc(RX_MAX(nw, 1), sizeof(*best));
-    double *ratio = calloc(RX_MAX(nw, 1), sizeof(*ratio));
-    double *power = calloc(RX_MAX(nw, 1), sizeof(*power));
+    double *best = calloc(CB_MAX(nw, 1), sizeof(*best));
+    double *ratio = calloc(CB_MAX(nw, 1), sizeof(*ratio));
+    double *power = calloc(CB_MAX(nw, 1), sizeof(*power));
     float *seg = malloc((size_t)W * sizeof(*seg));
-    float *ac = malloc((size_t)RX_MAX(nlag, 1) * sizeof(*ac));
+    float *ac = malloc((size_t)CB_MAX(nlag, 1) * sizeof(*ac));
     int ret = 0;
     if (!best || !ratio || !power || !seg || !ac) {
-        ret = RX_ERROR(ENOMEM);
+        ret = CB_ERROR(ENOMEM);
         goto end;
     }
     if (nlag >= W / 2)
@@ -820,13 +820,13 @@ int rx_tempo_regions(const RXOnsets *o, double bpm, double lo, double hi,
          * windows' autocorrelation cannot do as well. */
         bool rel = false;
         static const double fam[] = { 1.5, 2.0 / 3.0, 4.0 / 3.0, 0.75 };
-        for (size_t q = 0; q < RX_ARRAY_ELEMS(fam); q++) {
+        for (size_t q = 0; q < CB_ARRAY_ELEMS(fam); q++) {
             if (fabs(log2(cand / bpm / fam[q])) < log2(1.01))
                 rel = true;
         }
         if (nr_w >= 2 * TG_RUN && votes > nr_w / 2 && own < nr_w / 4 && !rel &&
             fabs(log2(cand / bpm)) > log2(1.03)) {
-            rx_debug("tempo: windows settle on %.2f, not %.2f\n", cand, bpm);
+            cb_debug("tempo: windows settle on %.2f, not %.2f\n", cand, bpm);
             bpm = cand;
             for (int k = 0; k < nw; k++) {
                 /* The main tempo's comb relative to each window's best is
@@ -844,21 +844,21 @@ int rx_tempo_regions(const RXOnsets *o, double bpm, double lo, double hi,
      * tempo doing clearly worse there (below 0.7 of the best). The region
      * takes the run's median tempo. Anything shorter is a fill, a riser or
      * a triplet passage, and the tracker's own slack covers small drifts. */
-    RXTempoRegion *r = malloc(sizeof(*r) * (size_t)(nw + 1));
+    CBTempoRegion *r = malloc(sizeof(*r) * (size_t)(nw + 1));
     if (!r) {
-        ret = RX_ERROR(ENOMEM);
+        ret = CB_ERROR(ENOMEM);
         goto end;
     }
     int nr = 0;
     int w = 0;
-    r[nr++] = (RXTempoRegion) { .start = 0.0, .end = dur, .bpm = bpm };
+    r[nr++] = (CBTempoRegion) { .start = 0.0, .end = dur, .bpm = bpm };
     while (w < nw) {
         /* Not a tempo a rhythm makes on its own at the main tempo: a
          * triplet or dotted passage reads at 3:2, 2:3, 4:3 or 3:4 of it
          * (rbxport's rule, within 1 %: 128 to 174 is 1.9 % from 4:3). */
         static const double rhythmic[] = { 1.5, 2.0 / 3.0, 4.0 / 3.0, 0.75 };
         bool ratio_of_beat = false;
-        for (size_t q = 0; q < RX_ARRAY_ELEMS(rhythmic); q++) {
+        for (size_t q = 0; q < CB_ARRAY_ELEMS(rhythmic); q++) {
             if (fabs(log2(best[w] / bpm / rhythmic[q])) < log2(1.01))
                 ratio_of_beat = true;
         }
@@ -875,16 +875,16 @@ int rx_tempo_regions(const RXOnsets *o, double bpm, double lo, double hi,
         if (e - w >= TG_RUN) {
             /* The median tempo of the run. */
             double tmp[256];
-            int m = RX_MIN(e - w, 256);
+            int m = CB_MIN(e - w, 256);
             for (int k = 0; k < m; k++)
                 tmp[k] = best[w + k];
             qsort(tmp, (size_t)m, sizeof(*tmp), cmp_double);
             double t0 = (w * H + W / 2.0) / fps - TG_HOP / 2.0;
             double t1 = ((e - 1) * H + W / 2.0) / fps + TG_HOP / 2.0;
             r[nr - 1].end = t0;
-            r[nr++] = (RXTempoRegion) { .start = t0, .end = t1, .bpm = tmp[m / 2] };
-            r[nr++] = (RXTempoRegion) { .start = t1, .end = dur, .bpm = bpm };
-            rx_debug("tempo: region %.1f-%.1f s at %.2f BPM\n", t0, t1, tmp[m / 2]);
+            r[nr++] = (CBTempoRegion) { .start = t0, .end = t1, .bpm = tmp[m / 2] };
+            r[nr++] = (CBTempoRegion) { .start = t1, .end = dur, .bpm = bpm };
+            cb_debug("tempo: region %.1f-%.1f s at %.2f BPM\n", t0, t1, tmp[m / 2]);
         }
         w = e;
     }

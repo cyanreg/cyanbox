@@ -8,8 +8,8 @@
  * combining class. Hangul syllables are composed algorithmically and are
  * not listed. dj normalises stick paths to NFC (export.py _clean). */
 
-#ifndef RXBOX_COMMON_NFC_TABLES_H
-#define RXBOX_COMMON_NFC_TABLES_H
+#ifndef CYANBOX_COMMON_NFC_TABLES_H
+#define CYANBOX_COMMON_NFC_TABLES_H
 
 #include <stdint.h>
 
@@ -888,4 +888,4 @@ static const NfcTriple nfc_combining[] = {
     { 0x1E94A, 0x1E94A, 7 },
 };
 
-#endif /* RXBOX_COMMON_NFC_TABLES_H */
+#endif /* CYANBOX_COMMON_NFC_TABLES_H */

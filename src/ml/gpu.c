@@ -4,11 +4,11 @@
  * can run the kernels, one compute queue, VMA (all set up by
  * src/gpu/vkdev.c, as the window's and the compute context's are), a
  * timeline semaphore, the pipelines and one command buffer. Kept like
- * rxbox's compute context (src/gpu/compute.c), with what the model needs
+ * cyanbox's compute context (src/gpu/compute.c), with what the model needs
  * on top.
  *
  * Choices, and why:
- *  - Its own device (ml_priv.h says why not rxbox's compute context). The
+ *  - Its own device (ml_priv.h says why not cyanbox's compute context). The
  *    device is picked by the same rules: a named one wins, else discrete
  *    before integrated, and a CPU implementation (llvmpipe) only when
  *    named: the model is 4 billion parameters.
@@ -73,7 +73,7 @@ static const struct {
     size_t size;
     const char *name;
 } kernels[ML_NB_KERNELS] = {
-#define K(e, n) [e] = { rx_##n##_comp_spv, sizeof(rx_##n##_comp_spv), #n }
+#define K(e, n) [e] = { cb_##n##_comp_spv, sizeof(cb_##n##_comp_spv), #n }
     K(ML_K_MEL,           mel),
     K(ML_K_MEL_NORM,      mel_norm),
     K(ML_K_CONV1,         conv1),
@@ -112,7 +112,7 @@ typedef struct DevChoice {
     bool full_sub;              /* computeFullSubgroups */
 } DevChoice;
 
-/* Why a device cannot run the model, or NULL (RXVkDevCheck): `qfam` gets
+/* Why a device cannot run the model, or NULL (CBVkDevCheck): `qfam` gets
  * the queue family to use, the DevChoice `opaque` how the subgroup
  * kernels are run. */
 static const char *device_unusable(void *opaque, VkPhysicalDevice pd,
@@ -172,10 +172,10 @@ static const char *device_unusable(void *opaque, VkPhysicalDevice pd,
     c->sub_size = 0;
     c->full_sub = f13.computeFullSubgroups;
     if (p13.minSubgroupSize < SUB_MIN || p13.maxSubgroupSize > SUB_MAX) {
-        uint32_t size = RX_MAX(p13.minSubgroupSize, SUB_MIN);
+        uint32_t size = CB_MAX(p13.minSubgroupSize, SUB_MIN);
         if (!f13.subgroupSizeControl ||
             !(p13.requiredSubgroupSizeStages & VK_SHADER_STAGE_COMPUTE_BIT) ||
-            size > RX_MIN(p13.maxSubgroupSize, SUB_MAX) ||
+            size > CB_MIN(p13.maxSubgroupSize, SUB_MAX) ||
             (uint64_t)size * p13.maxComputeWorkgroupSubgroups < 256)
             return "no subgroups of 16 to 64 lanes";
         c->sub_size = size;
@@ -188,7 +188,7 @@ static const char *device_unusable(void *opaque, VkPhysicalDevice pd,
         return "workgroups too small";
     if (l->maxPushConstantsSize < ML_PUSH_SIZE)
         return "push constants too small";
-    return rx_vkdev_compute_family(pd, qfam);
+    return cb_vkdev_compute_family(pd, qfam);
 }
 
 static int create_pipelines(MLGpu *g)
@@ -204,7 +204,7 @@ static int create_pipelines(MLGpu *g)
     };
     VkResult res = vkCreatePipelineLayout(g->vk.dev, &linfo, NULL, &g->layout);
     if (res != VK_SUCCESS)
-        return rx_vk_ret2err(res);
+        return cb_vk_ret2err(res);
 
     for (int k = 0; k < ML_NB_KERNELS; k++) {
         VkShaderModuleCreateInfo minfo = {
@@ -215,7 +215,7 @@ static int create_pipelines(MLGpu *g)
         VkShaderModule mod = VK_NULL_HANDLE;
         res = vkCreateShaderModule(g->vk.dev, &minfo, NULL, &mod);
         if (res != VK_SUCCESS)
-            return rx_vk_ret2err(res);
+            return cb_vk_ret2err(res);
 
         bool sub = k == ML_K_GEMV_Q4K || k == ML_K_ATTN || k == ML_K_ATTN_DEC;
         VkPipelineShaderStageRequiredSubgroupSizeCreateInfo size = {
@@ -238,9 +238,9 @@ static int create_pipelines(MLGpu *g)
         res = vkCreateComputePipelines(g->vk.dev, VK_NULL_HANDLE, 1, &pinfo, NULL, &g->pipes[k]);
         vkDestroyShaderModule(g->vk.dev, mod, NULL);
         if (res != VK_SUCCESS) {
-            rx_warn("ml: unable to create the %s pipeline: %s", kernels[k].name,
-                    rx_vk_strerror(res));
-            return rx_vk_ret2err(res);
+            cb_warn("ml: unable to create the %s pipeline: %s", kernels[k].name,
+                    cb_vk_strerror(res));
+            return cb_vk_ret2err(res);
         }
     }
     return 0;
@@ -277,8 +277,8 @@ static int create_device(MLGpu *g)
         },
     };
 
-    int ret = rx_vkdev_device(&g->vk, &f2, NULL, 0);
-    if (ret < 0 || (ret = rx_vkdev_timeline(&g->vk, &g->timeline)) < 0)
+    int ret = cb_vkdev_device(&g->vk, &f2, NULL, 0);
+    if (ret < 0 || (ret = cb_vkdev_timeline(&g->vk, &g->timeline)) < 0)
         return ret;
 
     VkCommandPoolCreateInfo pinfo = {
@@ -288,7 +288,7 @@ static int create_device(MLGpu *g)
     };
     VkResult res = vkCreateCommandPool(g->vk.dev, &pinfo, NULL, &g->pool);
     if (res != VK_SUCCESS)
-        return rx_vk_ret2err(res);
+        return cb_vk_ret2err(res);
     VkCommandBufferAllocateInfo cinfo = {
         .sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
         .commandPool        = g->pool,
@@ -297,17 +297,17 @@ static int create_device(MLGpu *g)
     };
     res = vkAllocateCommandBuffers(g->vk.dev, &cinfo, &g->cmd);
     if (res != VK_SUCCESS)
-        return rx_vk_ret2err(res);
+        return cb_vk_ret2err(res);
 
     if (g->profile && g->vk.ts_mask) {
         VkQueryPoolCreateInfo qpinfo = {
             .sType      = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
             .queryType  = VK_QUERY_TYPE_TIMESTAMP,
-            .queryCount = RX_ARRAY_ELEMS(g->time_kernel) + 1,
+            .queryCount = CB_ARRAY_ELEMS(g->time_kernel) + 1,
         };
         res = vkCreateQueryPool(g->vk.dev, &qpinfo, NULL, &g->times);
         if (res != VK_SUCCESS)
-            return rx_vk_ret2err(res);
+            return cb_vk_ret2err(res);
     } else {
         g->profile = false;
     }
@@ -319,16 +319,16 @@ int ml_gpu_create(MLGpu *g, const char *device, bool validation)
 {
     *g = (MLGpu) { 0 };
 
-    const char *want = device && device[0] ? device : getenv("RXBOX_GPU_DEVICE");
+    const char *want = device && device[0] ? device : getenv("CYANBOX_GPU_DEVICE");
     if (want && !want[0])
         want = NULL;
-    const char *val = getenv("RXBOX_GPU_VALIDATION");
+    const char *val = getenv("CYANBOX_GPU_VALIDATION");
     validation = validation || (val && !strcmp(val, "1"));
-    const char *prof = getenv("RXBOX_ML_PROFILE");
+    const char *prof = getenv("CYANBOX_ML_PROFILE");
     g->profile = prof && !strcmp(prof, "1");
 
     DevChoice choice = { 0 };
-    RXVkDevOptions vo = {
+    CBVkDevOptions vo = {
         .tag        = "ml",
         .validation = validation,
         .device     = want,
@@ -336,10 +336,10 @@ int ml_gpu_create(MLGpu *g, const char *device, bool validation)
         .opaque     = &choice,
     };
     int ret;
-    if ((ret = rx_vkdev_instance(&g->vk, &vo)) < 0)
+    if ((ret = cb_vkdev_instance(&g->vk, &vo)) < 0)
         goto fail;
-    if ((ret = rx_vkdev_pick(&g->vk, &vo)) < 0) {
-        rx_debug("ml: no Vulkan device can run the model");
+    if ((ret = cb_vkdev_pick(&g->vk, &vo)) < 0) {
+        cb_debug("ml: no Vulkan device can run the model");
         goto fail;
     }
     g->sub_size = choice.sub_size;
@@ -350,7 +350,7 @@ int ml_gpu_create(MLGpu *g, const char *device, bool validation)
     char sub[32] = "as the driver picks";
     if (g->sub_size)
         snprintf(sub, sizeof(sub), "of %u", g->sub_size);
-    rx_debug("ml: %s, Vulkan %u.%u, queue family %u%s, subgroups %s", g->vk.props.deviceName,
+    cb_debug("ml: %s, Vulkan %u.%u, queue family %u%s, subgroups %s", g->vk.props.deviceName,
              VK_API_VERSION_MAJOR(g->vk.props.apiVersion),
              VK_API_VERSION_MINOR(g->vk.props.apiVersion), g->vk.qfam,
              g->vk.ts_mask ? "" : " (no timestamps)", sub);
@@ -378,7 +378,7 @@ void ml_gpu_destroy(MLGpu *g)
         if (g->timeline)
             vkDestroySemaphore(g->vk.dev, g->timeline, NULL);
     }
-    rx_vkdev_destroy(&g->vk);
+    cb_vkdev_destroy(&g->vk);
 
     *g = (MLGpu) { 0 };
 }
@@ -389,7 +389,7 @@ int ml_buf_create(MLGpu *g, MLBuf *b, VkDeviceSize size, enum MLMem mem)
 {
     *b = (MLBuf) { 0 };
     if (!size)
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
 
     VkBufferCreateInfo info = {
         .sType       = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
@@ -400,7 +400,7 @@ int ml_buf_create(MLGpu *g, MLBuf *b, VkDeviceSize size, enum MLMem mem)
         .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
     };
 
-    /* As rxbox's compute context: host memory for both directions, never
+    /* As cyanbox's compute context: host memory for both directions, never
      * the BAR window into VRAM. The staging buffers are dedicated
      * allocations, so their mapping starts on a page: the weights are read
      * into them with O_DIRECT (gguf.c). */
@@ -426,10 +426,10 @@ int ml_buf_create(MLGpu *g, MLBuf *b, VkDeviceSize size, enum MLMem mem)
     VmaAllocationInfo ai = { 0 };
     VkResult res = vmaCreateBuffer(g->vk.vma, &info, &ci, &b->buf, &b->alloc, &ai);
     if (res != VK_SUCCESS) {
-        rx_warn("ml: unable to allocate a %llu byte buffer: %s", (unsigned long long)size,
-                rx_vk_strerror(res));
+        cb_warn("ml: unable to allocate a %llu byte buffer: %s", (unsigned long long)size,
+                cb_vk_strerror(res));
         *b = (MLBuf) { 0 };
-        return rx_vk_ret2err(res);
+        return cb_vk_ret2err(res);
     }
 
     b->size = size;
@@ -467,14 +467,14 @@ int ml_buf_invalidate(MLGpu *g, MLBuf *b)
 {
     if (!b->map)
         return 0;
-    return rx_vk_ret2err(vmaInvalidateAllocation(g->vk.vma, b->alloc, 0, VK_WHOLE_SIZE));
+    return cb_vk_ret2err(vmaInvalidateAllocation(g->vk.vma, b->alloc, 0, VK_WHOLE_SIZE));
 }
 
 int ml_buf_flush(MLGpu *g, MLBuf *b, VkDeviceSize size)
 {
     if (!b->map)
         return 0;
-    return rx_vk_ret2err(vmaFlushAllocation(g->vk.vma, b->alloc, 0, size));
+    return cb_vk_ret2err(vmaFlushAllocation(g->vk.vma, b->alloc, 0, size));
 }
 
 /* --------------------------------------------------------------- recording */
@@ -490,7 +490,7 @@ static void begin(MLGpu *g)
     vkBeginCommandBuffer(g->cmd, &binfo);
     g->recording = true;
     if (g->profile) {
-        vkCmdResetQueryPool(g->cmd, g->times, 0, RX_ARRAY_ELEMS(g->time_kernel) + 1);
+        vkCmdResetQueryPool(g->cmd, g->times, 0, CB_ARRAY_ELEMS(g->time_kernel) + 1);
         vkCmdWriteTimestamp2(g->cmd, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, g->times, 0);
         g->nb_times = 0;
     }
@@ -507,7 +507,7 @@ void ml_gpu_dispatch(MLGpu *g, enum MLKernel k, const void *push, size_t size,
     /* The timestamp after a dispatch waits for it (and for what ran
      * alongside it since the last one): with a barrier after nearly every
      * dispatch, that is the dispatch's own time. */
-    if (g->profile && g->nb_times < (int)RX_ARRAY_ELEMS(g->time_kernel)) {
+    if (g->profile && g->nb_times < (int)CB_ARRAY_ELEMS(g->time_kernel)) {
         g->time_kernel[g->nb_times++] = k;
         vkCmdWriteTimestamp2(g->cmd, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, g->times,
                              (uint32_t)g->nb_times);
@@ -558,7 +558,7 @@ static void read_times(MLGpu *g)
 {
     if (!g->profile || !g->nb_times)
         return;
-    uint64_t ts[RX_ARRAY_ELEMS(g->time_kernel) + 1];
+    uint64_t ts[CB_ARRAY_ELEMS(g->time_kernel) + 1];
     if (vkGetQueryPoolResults(g->vk.dev, g->times, 0, (uint32_t)g->nb_times + 1, sizeof(ts), ts,
                               sizeof(uint64_t), VK_QUERY_RESULT_64_BIT) != VK_SUCCESS)
         return;
@@ -585,7 +585,7 @@ int ml_gpu_run(MLGpu *g)
 {
     if (g->lost) {
         ml_gpu_discard(g);
-        return RX_ERROR(EIO);
+        return CB_ERROR(EIO);
     }
     if (!g->recording)
         return 0;
@@ -611,10 +611,10 @@ int ml_gpu_run(MLGpu *g)
     VkResult res = vkEndCommandBuffer(g->cmd);
     g->recording = false;
     if (res != VK_SUCCESS) {
-        rx_warn("ml: recording failed: %s", rx_vk_strerror(res));
+        cb_warn("ml: recording failed: %s", cb_vk_strerror(res));
         vkResetCommandBuffer(g->cmd, 0);
         g->nb_times = 0;
-        return rx_vk_ret2err(res);
+        return cb_vk_ret2err(res);
     }
 
     uint64_t v = g->submitted + 1;
@@ -637,10 +637,10 @@ int ml_gpu_run(MLGpu *g)
     };
     res = vkQueueSubmit2(g->vk.queue, 1, &info, VK_NULL_HANDLE);
     if (res != VK_SUCCESS) {
-        rx_warn("ml: submission failed: %s", rx_vk_strerror(res));
+        cb_warn("ml: submission failed: %s", cb_vk_strerror(res));
         vkResetCommandBuffer(g->cmd, 0);
         g->nb_times = 0;
-        return rx_vk_ret2err(res);
+        return cb_vk_ret2err(res);
     }
     g->submitted = v;
 
@@ -658,12 +658,12 @@ int ml_gpu_run(MLGpu *g)
          * until the device is idle (a hung GPU is reset by its driver,
          * and the wait ends with the device lost) before its buffers can
          * be freed, and use the context no more. */
-        rx_err("ml: waiting for the GPU failed: %s; the model stops", rx_vk_strerror(res));
+        cb_err("ml: waiting for the GPU failed: %s; the model stops", cb_vk_strerror(res));
         vkDeviceWaitIdle(g->vk.dev);
         g->lost = true;
         vkResetCommandBuffer(g->cmd, 0);
         g->nb_times = 0;
-        return rx_vk_ret2err(res);
+        return cb_vk_ret2err(res);
     }
     read_times(g);
     vkResetCommandBuffer(g->cmd, 0);
@@ -677,11 +677,11 @@ void ml_gpu_profile_print(MLGpu *g)
     double total = 0.0;
     for (int k = 0; k < ML_NB_KERNELS; k++)
         total += g->kernel_ms[k];
-    rx_info("ml: GPU time by kernel, %.1f ms in all:", total);
+    cb_info("ml: GPU time by kernel, %.1f ms in all:", total);
     for (int k = 0; k < ML_NB_KERNELS; k++) {
         if (!g->kernel_calls[k])
             continue;
-        rx_info("  %-14s %9.1f ms %5.1f %%  %7lld calls", kernels[k].name, g->kernel_ms[k],
+        cb_info("  %-14s %9.1f ms %5.1f %%  %7lld calls", kernels[k].name, g->kernel_ms[k],
                 total > 0 ? 100.0 * g->kernel_ms[k] / total : 0.0,
                 (long long)g->kernel_calls[k]);
     }

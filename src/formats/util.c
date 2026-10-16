@@ -15,15 +15,15 @@
 
 /* ------------------------------------------------------------------ UTF-16 */
 
-int rx_utf8_to_utf16(const char *s, uint16_t **units, size_t *nb)
+int cb_utf8_to_utf16(const char *s, uint16_t **units, size_t *nb)
 {
     size_t len = strlen(s);
     uint16_t *u = malloc((2 * len + 1) * sizeof(*u));
     if (!u)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     size_t n = 0;
     while (*s) {
-        uint32_t c = rx_utf8_next(&s);
+        uint32_t c = cb_utf8_next(&s);
         if (c >= 0x10000) {
             c -= 0x10000;
             u[n++] = (uint16_t)(0xD800 | c >> 10);
@@ -45,9 +45,9 @@ static char *utf16_to_utf8(const uint8_t *p, size_t bytes, bool be)
         return NULL;
     size_t o = 0;
     for (size_t i = 0; i < n; i++) {
-        uint32_t c = be ? rx_rd_be16(p + 2 * i) : rx_rd_le16(p + 2 * i);
+        uint32_t c = be ? cb_rd_be16(p + 2 * i) : cb_rd_le16(p + 2 * i);
         if (c >= 0xD800 && c <= 0xDBFF && i + 1 < n) {
-            uint32_t d = be ? rx_rd_be16(p + 2 * i + 2) : rx_rd_le16(p + 2 * i + 2);
+            uint32_t d = be ? cb_rd_be16(p + 2 * i + 2) : cb_rd_le16(p + 2 * i + 2);
             if (d >= 0xDC00 && d <= 0xDFFF) {
                 c = 0x10000 + ((c - 0xD800) << 10) + (d - 0xDC00);
                 i++;
@@ -57,25 +57,25 @@ static char *utf16_to_utf8(const uint8_t *p, size_t bytes, bool be)
         } else if (c >= 0xD800 && c <= 0xDFFF) {
             c = 0xFFFD;
         }
-        o += (size_t)rx_utf8_put(out + o, c);
+        o += (size_t)cb_utf8_put(out + o, c);
     }
     out[o] = '\0';
     return out;
 }
 
-char *rx_utf16le_to_utf8(const uint8_t *p, size_t bytes)
+char *cb_utf16le_to_utf8(const uint8_t *p, size_t bytes)
 {
     return utf16_to_utf8(p, bytes, false);
 }
 
-char *rx_utf16be_to_utf8(const uint8_t *p, size_t bytes)
+char *cb_utf16be_to_utf8(const uint8_t *p, size_t bytes)
 {
     return utf16_to_utf8(p, bytes, true);
 }
 
 /* ------------------------------------------------------------------ CRC-32 */
 
-uint32_t rx_crc32(uint32_t crc, const void *data, size_t size)
+uint32_t cb_crc32(uint32_t crc, const void *data, size_t size)
 {
     const uint8_t *p = data;
     crc = ~crc;
@@ -89,20 +89,20 @@ uint32_t rx_crc32(uint32_t crc, const void *data, size_t size)
 
 /* ------------------------------------------------------------ plan values */
 
-const char *const rx_my_tag_columns[4] = { "Genre", "Components", "Situation", "Tags" };
+const char *const cb_my_tag_columns[4] = { "Genre", "Components", "Situation", "Tags" };
 
-uint32_t rx_plan_library_id(const RXPlan *plan)
+uint32_t cb_plan_library_id(const CBPlan *plan)
 {
     return plan->library_id;
 }
 
-uint32_t rx_plan_master_id(const RXPlanTrack *t)
+uint32_t cb_plan_master_id(const CBPlanTrack *t)
 {
-    uint32_t id = t->usb_path ? rx_crc32(0, t->usb_path, strlen(t->usb_path)) : 0;
+    uint32_t id = t->usb_path ? cb_crc32(0, t->usb_path, strlen(t->usb_path)) : 0;
     return id ? id : 1;
 }
 
-void rx_plan_date_added(const RXPlanTrack *t, char buf[16])
+void cb_plan_date_added(const CBPlanTrack *t, char buf[16])
 {
     buf[0] = '\0';
     if (!t->track)
@@ -112,7 +112,7 @@ void rx_plan_date_added(const RXPlanTrack *t, char buf[16])
      * moves. The file's time only for a track without one. */
     int64_t when = t->track->added;
     if (!when)
-        when = t->track->path ? rx_file_mtime(t->track->path) : 0;
+        when = t->track->path ? cb_file_mtime(t->track->path) : 0;
     if (!when)
         when = t->track->mtime;
     if (!when)
@@ -123,14 +123,14 @@ void rx_plan_date_added(const RXPlanTrack *t, char buf[16])
         strftime(buf, 16, "%Y-%m-%d", &tm);
 }
 
-char *rx_plan_anlz_path(const RXPlanTrack *t, const char *ext)
+char *cb_plan_anlz_path(const CBPlanTrack *t, const char *ext)
 {
-    return rx_asprintf("%s/ANLZ%04d%s", t->anlz_dir, t->anlz_index, ext);
+    return cb_asprintf("%s/ANLZ%04d%s", t->anlz_dir, t->anlz_index, ext);
 }
 
-char *rx_plan_artwork_dir(uint32_t art_id)
+char *cb_plan_artwork_dir(uint32_t art_id)
 {
-    return rx_asprintf("/PIONEER/Artwork/%05u", art_id / 20 + 1);
+    return cb_asprintf("/PIONEER/Artwork/%05u", art_id / 20 + 1);
 }
 
 /* A string cut to a buffer ends on a whole UTF-8 sequence: half a
@@ -150,7 +150,7 @@ static void cut_utf8(char *buf, size_t want, size_t size)
         buf[k - 1] = '\0';
 }
 
-const char *rx_plan_title(const RXPlanTrack *t, char *buf, size_t size)
+const char *cb_plan_title(const CBPlanTrack *t, char *buf, size_t size)
 {
     buf[0] = '\0';
     if (!t->track)
@@ -165,7 +165,7 @@ const char *rx_plan_title(const RXPlanTrack *t, char *buf, size_t size)
         return buf;
     /* pathlib's stem: the name without its last suffix, a leading dot
      * not counting as one. */
-    const char *base = rx_path_base(t->track->path);
+    const char *base = cb_path_base(t->track->path);
     const char *dot = strrchr(base, '.');
     size_t n = dot && dot != base ? (size_t)(dot - base) : strlen(base);
     snprintf(buf, size, "%.*s", (int)n, base);
@@ -173,13 +173,13 @@ const char *rx_plan_title(const RXPlanTrack *t, char *buf, size_t size)
     return buf;
 }
 
-void rx_plan_ascii_label(const char *name, char *buf, size_t size)
+void cb_plan_ascii_label(const char *name, char *buf, size_t size)
 {
     size_t o = 0;
     if (!size)
         return;
     while (name && *name && o + 1 < size && o < 32) {
-        uint32_t c = rx_utf8_next(&name);
+        uint32_t c = cb_utf8_next(&name);
         buf[o++] = c >= 0x20 && c < 0x7F ? (char)c : '_';
     }
     buf[o] = '\0';

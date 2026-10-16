@@ -14,7 +14,7 @@
 // beside it), which the library keeps as positions.
 //
 // Above it, a finder (Ctrl+P): what is typed is matched fuzzily
-// (rx_fuzzy_match, as the Add dialog's finder) against Collection, every
+// (cb_fuzzy_match, as the Add dialog's finder) against Collection, every
 // album as "artist/album" and every playlist as "folder/playlist", and
 // while it holds text the tree is the list of the matches, best first.
 // Up and Down move along it, Enter or a click opens the one picked, as a
@@ -27,7 +27,7 @@
 
 #include <algorithm>
 
-#define UI_DND_NODE "RX_TREE_NODE"
+#define UI_DND_NODE "CB_TREE_NODE"
 
 struct TreeNodePayload {
     bool  folder;
@@ -36,7 +36,7 @@ struct TreeNodePayload {
 
 /* ------------------------------------------------------------------ helpers */
 
-static bool folder_contains(const RXPlaylistFolder *f, const void *node)
+static bool folder_contains(const CBPlaylistFolder *f, const void *node)
 {
     if (f == node)
         return true;
@@ -51,7 +51,7 @@ static bool folder_contains(const RXPlaylistFolder *f, const void *node)
     return false;
 }
 
-static bool name_taken(const RXPlaylistFolder *in, const char *name)
+static bool name_taken(const CBPlaylistFolder *in, const char *name)
 {
     for (int i = 0; i < in->nb_playlists; i++) {
         if (!strcmp(in->playlists[i]->name, name))
@@ -64,7 +64,7 @@ static bool name_taken(const RXPlaylistFolder *in, const char *name)
     return false;
 }
 
-static void unique_name(const RXPlaylistFolder *in, const char *base, char *out, size_t size)
+static void unique_name(const CBPlaylistFolder *in, const char *base, char *out, size_t size)
 {
     snprintf(out, size, "%s", base);
     for (int n = 2; name_taken(in, out) && n < 1000; n++)
@@ -81,7 +81,7 @@ static void start_rename(UiState *ui, void *target, bool folder, const char *nam
 
 // New playlists and folders are made after the tree is drawn (they change
 // the arrays being walked), then renamed in place.
-static void create(UiState *ui, RXPlaylistFolder *in, bool folder)
+static void create(UiState *ui, CBPlaylistFolder *in, bool folder)
 {
     ui->create_pending = true;
     ui->create_folder = folder;
@@ -90,8 +90,8 @@ static void create(UiState *ui, RXPlaylistFolder *in, bool folder)
 
 static void create_now(UiState *ui)
 {
-    RXApp *app = ui->app;
-    RXPlaylistFolder *in = ui->create_in;
+    CBApp *app = ui->app;
+    CBPlaylistFolder *in = ui->create_in;
     ui->create_pending = false;
     if (!in)
         return;
@@ -100,60 +100,60 @@ static void create_now(UiState *ui)
     // The folder it goes in is opened, so the rename field is seen.
     ui->reveal = in;
     if (ui->create_folder) {
-        RXPlaylistFolder *f = rx_library_folder_create(&app->lib, in, name);
+        CBPlaylistFolder *f = cb_library_folder_create(&app->lib, in, name);
         if (f)
             start_rename(ui, f, true, f->name);
         else
-            rx_app_set_status(app, "Could not create the folder");
+            cb_app_set_status(app, "Could not create the folder");
     } else {
-        RXPlaylist *p = rx_library_playlist_create(&app->lib, in, name);
+        CBPlaylist *p = cb_library_playlist_create(&app->lib, in, name);
         if (p)
             start_rename(ui, p, false, p->name);
         else
-            rx_app_set_status(app, "Could not create the playlist");
+            cb_app_set_status(app, "Could not create the playlist");
     }
 }
 
 static void commit_rename(UiState *ui)
 {
-    RXApp *app = ui->app;
+    CBApp *app = ui->app;
     if (!ui->rename_target || !ui->rename_buf[0]) {
         ui->rename_target = nullptr;
         return;
     }
     int ret = ui->rename_folder
-            ? rx_library_folder_rename(&app->lib, (RXPlaylistFolder *)ui->rename_target, ui->rename_buf)
-            : rx_library_playlist_rename(&app->lib, (RXPlaylist *)ui->rename_target, ui->rename_buf);
+            ? cb_library_folder_rename(&app->lib, (CBPlaylistFolder *)ui->rename_target, ui->rename_buf)
+            : cb_library_playlist_rename(&app->lib, (CBPlaylist *)ui->rename_target, ui->rename_buf);
     if (ret < 0)
-        rx_app_set_status(app, "Could not rename: %s", strerror(-ret));
+        cb_app_set_status(app, "Could not rename: %s", strerror(-ret));
     ui->rename_target = nullptr;
 }
 
-void ui_add_to_playlist(UiState *ui, RXPlaylist *p, const std::vector<uint64_t> &ids)
+void ui_add_to_playlist(UiState *ui, CBPlaylist *p, const std::vector<uint64_t> &ids)
 {
-    RXApp *app = ui->app;
+    CBApp *app = ui->app;
     int added = 0;
     for (uint64_t id : ids) {
-        RXTrack *t = rx_library_find_id(&app->lib, id);
-        if (t && rx_library_playlist_add(&app->lib, p, t, -1) >= 0)
+        CBTrack *t = cb_library_find_id(&app->lib, id);
+        if (t && cb_library_playlist_add(&app->lib, p, t, -1) >= 0)
             added++;
     }
     if (app->current_playlist == p)
-        rx_app_rebuild_rows(app);
+        cb_app_rebuild_rows(app);
     int dup = (int)ids.size() - added;
     if (dup > 0)
-        rx_app_set_status(app, "Added %d track%s to %s (%d already in it)", added,
+        cb_app_set_status(app, "Added %d track%s to %s (%d already in it)", added,
                           added == 1 ? "" : "s", p->name, dup);
     else
-        rx_app_set_status(app, "Added %d track%s to %s", added, added == 1 ? "" : "s", p->name);
+        cb_app_set_status(app, "Added %d track%s to %s", added, added == 1 ? "" : "s", p->name);
 }
 
 // Moves the dragged node under `to` at `position` (-1: last), once the
 // tree has been drawn.
-static void reparent(UiState *ui, const TreeNodePayload &n, RXPlaylistFolder *to, int position)
+static void reparent(UiState *ui, const TreeNodePayload &n, CBPlaylistFolder *to, int position)
 {
-    if (n.folder && folder_contains((RXPlaylistFolder *)n.ptr, to)) {
-        rx_app_set_status(ui->app, "A folder cannot go inside itself");
+    if (n.folder && folder_contains((CBPlaylistFolder *)n.ptr, to)) {
+        cb_app_set_status(ui->app, "A folder cannot go inside itself");
         return;
     }
     ui->move_pending = true;
@@ -165,15 +165,15 @@ static void reparent(UiState *ui, const TreeNodePayload &n, RXPlaylistFolder *to
 
 static void reparent_now(UiState *ui)
 {
-    RXApp *app = ui->app;
+    CBApp *app = ui->app;
     ui->move_pending = false;
     int ret = ui->move_folder
-            ? rx_library_folder_reparent(&app->lib, (RXPlaylistFolder *)ui->move_ptr, ui->move_to,
+            ? cb_library_folder_reparent(&app->lib, (CBPlaylistFolder *)ui->move_ptr, ui->move_to,
                                          ui->move_pos)
-            : rx_library_playlist_reparent(&app->lib, (RXPlaylist *)ui->move_ptr, ui->move_to,
+            : cb_library_playlist_reparent(&app->lib, (CBPlaylist *)ui->move_ptr, ui->move_to,
                                            ui->move_pos);
     if (ret < 0)
-        rx_app_set_status(app, "Could not move: %s", strerror(-ret));
+        cb_app_set_status(app, "Could not move: %s", strerror(-ret));
 }
 
 /* -------------------------------------------------------------------- icons */
@@ -285,9 +285,9 @@ static void node_label(UiState *ui, ImVec2 a, ImVec2 b, int icon, const char *na
             selected ? UI_TEXT : IM_COL32(0xC8, 0xC8, 0xC8, 0xFF), name, b.x - a.x - s - PX(10) - nw);
 }
 
-static void node_menu(UiState *ui, RXPlaylistFolder *parent, RXPlaylistFolder *folder, RXPlaylist *pl)
+static void node_menu(UiState *ui, CBPlaylistFolder *parent, CBPlaylistFolder *folder, CBPlaylist *pl)
 {
-    RXPlaylistFolder *in = folder ? folder : parent;
+    CBPlaylistFolder *in = folder ? folder : parent;
     if (ImGui::MenuItem("New playlist"))
         create(ui, in, false);
     if (ImGui::MenuItem("New folder"))
@@ -348,11 +348,11 @@ static bool accept_node(TreeNodePayload &n)
     return true;
 }
 
-static void draw_folder(UiState *ui, RXPlaylistFolder *f, RXPlaylistFolder *parent);
+static void draw_folder(UiState *ui, CBPlaylistFolder *f, CBPlaylistFolder *parent);
 
-static void draw_playlist(UiState *ui, RXPlaylist *p, RXPlaylistFolder *parent, int index)
+static void draw_playlist(UiState *ui, CBPlaylist *p, CBPlaylistFolder *parent, int index)
 {
-    RXApp *app = ui->app;
+    CBApp *app = ui->app;
     ImGui::PushID(p);
     bool sel = app->current_playlist == p;
     ImGuiTreeNodeFlags fl = ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen |
@@ -369,7 +369,7 @@ static void draw_playlist(UiState *ui, RXPlaylist *p, RXPlaylistFolder *parent, 
         app->current_playlist = p;
         app->current_folder = parent;
         app->nb_selection = 0;
-        rx_app_show_album(app, nullptr);
+        cb_app_show_album(app, nullptr);
     }
     if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
         start_rename(ui, p, false, p->name);
@@ -395,7 +395,7 @@ static void draw_playlist(UiState *ui, RXPlaylist *p, RXPlaylistFolder *parent, 
     ImGui::PopID();
 }
 
-static void draw_folder(UiState *ui, RXPlaylistFolder *f, RXPlaylistFolder *parent)
+static void draw_folder(UiState *ui, CBPlaylistFolder *f, CBPlaylistFolder *parent)
 {
     ImGui::PushID(f);
     ImGuiTreeNodeFlags fl = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick |
@@ -436,7 +436,7 @@ static void draw_folder(UiState *ui, RXPlaylistFolder *f, RXPlaylistFolder *pare
 
 static void delete_popup(UiState *ui)
 {
-    RXApp *app = ui->app;
+    CBApp *app = ui->app;
     if (ui->want_delete_popup) {
         ImGui::OpenPopup("Delete?##tree");
         ui->want_delete_popup = false;
@@ -448,9 +448,9 @@ static void delete_popup(UiState *ui)
     ui_settle_centred();
     const char *name = "";
     if (ui->delete_target && ui->delete_folder)
-        name = ((RXPlaylistFolder *)ui->delete_target)->name;
+        name = ((CBPlaylistFolder *)ui->delete_target)->name;
     else if (ui->delete_target)
-        name = ((RXPlaylist *)ui->delete_target)->name;
+        name = ((CBPlaylist *)ui->delete_target)->name;
     if (ui->delete_folder)
         ImGui::Text("Delete the folder \"%s\" and every playlist in it?", name);
     else
@@ -460,22 +460,22 @@ static void delete_popup(UiState *ui)
     if (ImGui::Button("Delete", ImVec2(PX(100), 0)) && ui->delete_target) {
         int ret;
         if (ui->delete_folder) {
-            RXPlaylistFolder *f = (RXPlaylistFolder *)ui->delete_target;
+            CBPlaylistFolder *f = (CBPlaylistFolder *)ui->delete_target;
             if (app->current_playlist && folder_contains(f, app->current_playlist))
                 app->current_playlist = nullptr;
             if (app->current_folder && folder_contains(f, app->current_folder))
                 app->current_folder = nullptr;
-            ret = rx_library_folder_delete(&app->lib, f);
+            ret = cb_library_folder_delete(&app->lib, f);
         } else {
-            RXPlaylist *p = (RXPlaylist *)ui->delete_target;
+            CBPlaylist *p = (CBPlaylist *)ui->delete_target;
             if (app->current_playlist == p)
                 app->current_playlist = nullptr;
-            ret = rx_library_playlist_delete(&app->lib, p);
+            ret = cb_library_playlist_delete(&app->lib, p);
         }
         if (ret < 0)
-            rx_app_set_status(app, "Could not delete: %s", strerror(-ret));
+            cb_app_set_status(app, "Could not delete: %s", strerror(-ret));
         ui->delete_target = nullptr;
-        rx_app_rebuild_rows(app);
+        cb_app_rebuild_rows(app);
         ImGui::CloseCurrentPopup();
     }
     ImGui::SameLine();
@@ -488,10 +488,10 @@ static void delete_popup(UiState *ui)
 
 /* ------------------------------------------------------------------- finder */
 
-static void add_playlists(std::vector<UiTreeHit> &out, RXPlaylistFolder *f, const std::string &path)
+static void add_playlists(std::vector<UiTreeHit> &out, CBPlaylistFolder *f, const std::string &path)
 {
     for (int i = 0; i < f->nb_playlists; i++) {
-        RXPlaylist *p = f->playlists[i];
+        CBPlaylist *p = f->playlists[i];
         out.push_back({ UiTreeHit::PLAYLIST, path + p->name, "", p, f, p->nb, 0 });
     }
     for (int i = 0; i < f->nb_folders; i++)
@@ -503,7 +503,7 @@ static void add_playlists(std::vector<UiTreeHit> &out, RXPlaylistFolder *f, cons
 // does.
 static void find_update(UiState *ui)
 {
-    RXApp *app = ui->app;
+    CBApp *app = ui->app;
     if (ui->tree_hits_query == ui->tree_find && ui->tree_hits_generation == app->lib.generation)
         return;
     if (ui->tree_hits_query != ui->tree_find)
@@ -513,10 +513,10 @@ static void find_update(UiState *ui)
 
     std::vector<UiTreeHit> all;
     all.push_back({ UiTreeHit::COLLECTION, "Collection", "", nullptr, nullptr, app->lib.nb_tracks, 0 });
-    const RXAlbum *albums = nullptr;
-    int nb_albums = rx_app_albums(app, &albums);
+    const CBAlbum *albums = nullptr;
+    int nb_albums = cb_app_albums(app, &albums);
     for (int i = 0; i < nb_albums; i++) {
-        const RXAlbum &al = albums[i];
+        const CBAlbum &al = albums[i];
         std::string text = !al.name[0] ? std::string("None")
                          : al.artist ? std::string(al.artist) + "/" + al.name : std::string(al.name);
         all.push_back({ UiTreeHit::ALBUM, text, al.name, nullptr, nullptr, al.nb, 0 });
@@ -526,7 +526,7 @@ static void find_update(UiState *ui)
 
     ui->tree_hits.clear();
     for (UiTreeHit &h : all) {
-        if (rx_fuzzy_match(h.text.c_str(), ui->tree_find, &h.score, nullptr, 0, nullptr))
+        if (cb_fuzzy_match(h.text.c_str(), ui->tree_find, &h.score, nullptr, 0, nullptr))
             ui->tree_hits.push_back(std::move(h));
     }
     // Best first; between equals Collection, the albums, then the
@@ -537,14 +537,14 @@ static void find_update(UiState *ui)
             return x.score > y.score;
         if (x.kind != y.kind)
             return x.kind < y.kind;
-        return rx_strnatcasecmp(x.text.c_str(), y.text.c_str()) < 0;
+        return cb_strnatcasecmp(x.text.c_str(), y.text.c_str()) < 0;
     });
     if (ui->tree_hits.size() > 300)
         ui->tree_hits.resize(300);
     ui->tree_hit = ImClamp(ui->tree_hit, 0, ImMax((int)ui->tree_hits.size() - 1, 0));
 }
 
-static bool playlist_in(const RXPlaylistFolder *f, const RXPlaylist *p)
+static bool playlist_in(const CBPlaylistFolder *f, const CBPlaylist *p)
 {
     for (int i = 0; i < f->nb_playlists; i++) {
         if (f->playlists[i] == p)
@@ -559,17 +559,17 @@ static bool playlist_in(const RXPlaylistFolder *f, const RXPlaylist *p)
 
 // Opens a match as a click in the tree does, empties the finder, and
 // says which folder the tree opens down to (the picked playlist's).
-static RXPlaylistFolder *find_pick(UiState *ui, const UiTreeHit &h)
+static CBPlaylistFolder *find_pick(UiState *ui, const UiTreeHit &h)
 {
-    RXApp *app = ui->app;
-    RXPlaylistFolder *reveal = nullptr;
+    CBApp *app = ui->app;
+    CBPlaylistFolder *reveal = nullptr;
     switch (h.kind) {
     case UiTreeHit::COLLECTION:
         app->current_playlist = nullptr;
-        rx_app_show_album(app, nullptr);
+        cb_app_show_album(app, nullptr);
         break;
     case UiTreeHit::ALBUM:
-        rx_app_show_album(app, h.album.c_str());
+        cb_app_show_album(app, h.album.c_str());
         ui->tree_reveal_album = true;
         ui->tree_reveal_album_name = h.album;
         break;
@@ -579,7 +579,7 @@ static RXPlaylistFolder *find_pick(UiState *ui, const UiTreeHit &h)
             return nullptr;
         app->current_playlist = h.playlist;
         app->current_folder = h.parent;
-        rx_app_show_album(app, nullptr);
+        cb_app_show_album(app, nullptr);
         ui->tree_reveal_playlist = h.playlist;
         reveal = h.parent;
         break;
@@ -598,7 +598,7 @@ static void lit_text(UiState *ui, ImVec2 pos, const char *text, float max_w)
     float size = PX(NAME_PX);
     size_t len = strlen(text);
     int hits[64], nh = 0;
-    rx_fuzzy_match(text, ui->tree_find, nullptr, hits, 64, &nh);
+    cb_fuzzy_match(text, ui->tree_find, nullptr, hits, 64, &nh);
     std::vector<bool> lit(len, false);
     for (int i = 0; i < nh; i++) {
         if (hits[i] >= 0 && (size_t)hits[i] < len)
@@ -628,7 +628,7 @@ static void lit_text(UiState *ui, ImVec2 pos, const char *text, float max_w)
 // The field, and while it holds text the matches in the tree's place; true
 // then. *picked_out when one was opened, *reveal the folder the tree then
 // opens down to.
-static bool finder(UiState *ui, bool *picked_out, RXPlaylistFolder **reveal)
+static bool finder(UiState *ui, bool *picked_out, CBPlaylistFolder **reveal)
 {
     ImGui::SetNextItemWidth(-FLT_MIN);
     if (ui->tree_find_focus) {
@@ -717,8 +717,8 @@ static bool finder(UiState *ui, bool *picked_out, RXPlaylistFolder **reveal)
 // Collection, Albums and the playlists.
 static void tree_nodes(UiState *ui)
 {
-    RXApp *app = ui->app;
-    RXPlaylistFolder *root = app->lib.root_folder;
+    CBApp *app = ui->app;
+    CBPlaylistFolder *root = app->lib.root_folder;
     // Collection: every track.
     bool sel = app->current_playlist == nullptr && app->current_album == nullptr &&
                app->current_album_artist == nullptr && !app->current_tag_list &&
@@ -732,7 +732,7 @@ static void tree_nodes(UiState *ui)
     if (ImGui::IsItemClicked() && !sel) {
         app->current_playlist = nullptr;
         app->nb_selection = 0;
-        rx_app_show_album(app, nullptr);
+        cb_app_show_album(app, nullptr);
     }
     if (ImGui::BeginPopupContextItem("##menu")) {
         node_menu(ui, root, nullptr, nullptr);
@@ -748,15 +748,15 @@ static void tree_nodes(UiState *ui)
     node_label(ui, ImVec2(lx, a.y), b, 0, "Collection", app->lib.nb_tracks, sel);
 
     // Albums: every album of the library, one flat list by artist and then
-    // name (rx_app_albums), each shown like a playlist of its tracks in
+    // name (cb_app_albums), each shown like a playlist of its tracks in
     // disc and track order, and None first (the album "": the tracks
     // without an album or with one no other track has, by title); the
     // collection is the list's tracks one after the other. Nothing can be
     // dropped on one, nothing renames or deletes one, and the export does
     // not know them: they are the tags' view of the collection. The count
     // beside Albums is of albums, None aside.
-    const RXAlbum *albums = nullptr;
-    int nb_albums = rx_app_albums(app, &albums);
+    const CBAlbum *albums = nullptr;
+    int nb_albums = cb_app_albums(app, &albums);
     int nb_named = nb_albums - (nb_albums > 0 && !albums[0].name[0]);
     ImGuiTreeNodeFlags afl = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick |
                              ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_FramePadding;
@@ -797,10 +797,10 @@ static void tree_nodes(UiState *ui)
                 }
                 if (ImGui::IsItemClicked() && !asel) {
                     app->nb_selection = 0;
-                    rx_app_show_album(app, albums[i].name);
+                    cb_app_show_album(app, albums[i].name);
                     // The list may have been made again: this frame's names
                     // are gone with it.
-                    nb_albums = rx_app_albums(app, &albums);
+                    nb_albums = cb_app_albums(app, &albums);
                 }
                 float llx = la.x + ImGui::GetTreeNodeToLabelSpacing() - PX(14);
                 if (i < nb_albums)
@@ -818,8 +818,8 @@ static void tree_nodes(UiState *ui)
     // name "": None's tracks and the albums of no artist), each shown like
     // a playlist of its albums' tracks, the albums one after the other as
     // Albums lists them. The count beside it is of artists, None aside.
-    const RXAlbumArtist *artists = nullptr;
-    int nb_artists = rx_app_album_artists(app, &artists);
+    const CBAlbumArtist *artists = nullptr;
+    int nb_artists = cb_app_album_artists(app, &artists);
     int nb_named_artists = nb_artists - (nb_artists > 0 && !artists[0].name[0]);
     bool artists_open = ImGui::TreeNodeEx("##album_artists", afl);
     a = ImGui::GetItemRectMin();
@@ -844,8 +844,8 @@ static void tree_nodes(UiState *ui)
                 ImVec2 la = ImGui::GetItemRectMin(), lb = ImGui::GetItemRectMax();
                 if (ImGui::IsItemClicked() && !asel) {
                     app->nb_selection = 0;
-                    rx_app_show_album_artist(app, artists[i].name);
-                    nb_artists = rx_app_album_artists(app, &artists);
+                    cb_app_show_album_artist(app, artists[i].name);
+                    nb_artists = cb_app_album_artists(app, &artists);
                 }
                 float llx = la.x + ImGui::GetTreeNodeToLabelSpacing() - PX(14);
                 if (i < nb_artists)
@@ -862,9 +862,9 @@ static void tree_nodes(UiState *ui)
     // The TAG LIST, shared with the players (--pro-link only): the tracks
     // collected with TAG TRACK on a deck or Add to Tag List here, for this
     // session; the context menu clears it.
-    if (RXLinkTagList *tags = rx_app_tag_list(app)) {
+    if (CBLinkTagList *tags = cb_app_tag_list(app)) {
         uint32_t none;
-        int nb_tags = rx_link_tag_list_get(tags, &none, 0);
+        int nb_tags = cb_link_tag_list_get(tags, &none, 0);
         ImGuiTreeNodeFlags tf = ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen |
                                 ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_FramePadding;
         if (app->current_tag_list)
@@ -874,11 +874,11 @@ static void tree_nodes(UiState *ui)
         b = ImGui::GetItemRectMax();
         if (ImGui::IsItemClicked() && !app->current_tag_list) {
             app->nb_selection = 0;
-            rx_app_show_tag_list(app);
+            cb_app_show_tag_list(app);
         }
         if (ImGui::BeginPopupContextItem("##tag_list_menu")) {
             if (ImGui::MenuItem("Clear Tag List", nullptr, false, nb_tags > 0))
-                rx_link_tag_list_clear(tags);
+                cb_link_tag_list_clear(tags);
             ImGui::EndPopup();
         }
         node_label(ui, ImVec2(a.x + ImGui::GetTreeNodeToLabelSpacing() - PX(14), a.y), b, 5,
@@ -898,10 +898,10 @@ static void tree_nodes(UiState *ui)
         b = ImGui::GetItemRectMax();
         if (ImGui::IsItemClicked() && !app->current_history) {
             app->nb_selection = 0;
-            rx_app_show_history(app);
+            cb_app_show_history(app);
         }
         node_label(ui, ImVec2(a.x + ImGui::GetTreeNodeToLabelSpacing() - PX(14), a.y), b, 6,
-                   "History", rx_app_history_count(app), app->current_history);
+                   "History", cb_app_history_count(app), app->current_history);
     }
 
     ImGui::Dummy(ImVec2(0, PX(2)));
@@ -918,15 +918,15 @@ static void tree_nodes(UiState *ui)
 
 void ui_tree(UiState *ui, ImVec2 size)
 {
-    RXApp *app = ui->app;
-    RXPlaylistFolder *root = app->lib.root_folder;
+    CBApp *app = ui->app;
+    CBPlaylistFolder *root = app->lib.root_folder;
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(PX(4), PX(6)));
     ImGui::BeginChild("##tree", size, ImGuiChildFlags_AlwaysUseWindowPadding, 0);
     ImGui::PopStyleVar();
     ImDrawList *dl = ImGui::GetWindowDrawList();
     ImVec2 wa = ImGui::GetWindowPos();
     dl->AddRectFilled(wa, ImVec2(wa.x + size.x, wa.y + size.y), UI_PANEL, PX(4));
-    RXPlaylistFolder *reveal = nullptr;
+    CBPlaylistFolder *reveal = nullptr;
     bool picked = false;
     bool finding = finder(ui, &picked, &reveal);
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(PX(4), PX(5.5f)));

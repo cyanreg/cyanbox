@@ -3,7 +3,7 @@
 #
 # A private two-host network for PRO DJ LINK: runs SERVER on host A and,
 # once it is up, CLIENT on host B, each in a network namespace of its own,
-# joined by a veth pair (A: interface rxa, 169.254.1.1; B: rxb,
+# joined by a veth pair (A: interface cba, 169.254.1.1; B: cbb,
 # 169.254.1.2; broadcast 169.254.255.255). Real ports, real broadcasts,
 # and nothing of it reaches any other network: the namespaces have no
 # other interface. Needs unprivileged user namespaces, ip(8), nsenter(1);
@@ -11,11 +11,11 @@
 #
 #   tests/link/netns.sh [-w SECONDS] SERVER-COMMAND -- CLIENT-COMMAND
 #
-# The commands run through bash -c; $RXA and $RXB name the interfaces and
+# The commands run through bash -c; $CBA and $CBB name the interfaces and
 # $ADDR_A and $ADDR_B the addresses. The server's output is printed after
 # the client exits; the script exits with the client's status. -w is how
 # long the server gets to start (default 1 second). Used by the link
-# suite and by hand to run rxbox against rbxport's client and server.
+# suite and by hand to run cyanbox against rbxport's client and server.
 #
 # Everything runs in a PID namespace of its own too, so that whatever the
 # commands start ends with the script: a server command of several
@@ -43,10 +43,10 @@ if ! unshare -rnmp --fork --mount-proc true 2>/dev/null; then
     exit 77
 fi
 
-log=$(mktemp "${TMPDIR:-/tmp}/rxbox-netns.XXXXXX")
+log=$(mktemp "${TMPDIR:-/tmp}/cyanbox-netns.XXXXXX")
 trap 'rm -f "$log"' EXIT
 
-export RXA=rxa RXB=rxb ADDR_A=169.254.1.1 ADDR_B=169.254.1.2 SERVER="$server" CLIENT="$client" \
+export CBA=cba CBB=cbb ADDR_A=169.254.1.1 ADDR_B=169.254.1.2 SERVER="$server" CLIENT="$client" \
        WAIT_S="$wait_s" LOG="$log"
 unshare -rnmp --fork --mount-proc --kill-child bash -c '
     ip link set lo up
@@ -56,12 +56,12 @@ unshare -rnmp --fork --mount-proc --kill-child bash -c '
     while [ "$(readlink /proc/$holder/ns/net)" = "$(readlink /proc/self/ns/net)" ]; do
         sleep 0.01
     done
-    ip link add $RXA type veth peer name $RXB netns $holder
-    ip addr add $ADDR_A/16 broadcast 169.254.255.255 dev $RXA
-    ip link set $RXA up
+    ip link add $CBA type veth peer name $CBB netns $holder
+    ip addr add $ADDR_A/16 broadcast 169.254.255.255 dev $CBA
+    ip link set $CBA up
     nsenter -t $holder -n bash -c "ip link set lo up
-        ip addr add $ADDR_B/16 broadcast 169.254.255.255 dev $RXB
-        ip link set $RXB up"
+        ip addr add $ADDR_B/16 broadcast 169.254.255.255 dev $CBB
+        ip link set $CBB up"
     bash -c "$SERVER" > "$LOG" 2>&1 &
     server=$!
     sleep "$WAIT_S"

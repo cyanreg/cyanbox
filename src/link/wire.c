@@ -7,20 +7,20 @@
 
 #include <stdlib.h>
 
-#include "rxbox/common.h"
+#include "cyanbox/common.h"
 
 #include "link_priv.h"
 
-const uint8_t rx_link_magic[10] = { 0x51, 0x73, 0x70, 0x74, 0x31, 0x57, 0x6d, 0x4a, 0x4f, 0x4c };
+const uint8_t cb_link_magic[10] = { 0x51, 0x73, 0x70, 0x74, 0x31, 0x57, 0x6d, 0x4a, 0x4f, 0x4c };
 
-void rx_wr_free(RXWr *w)
+void cb_wr_free(CBWr *w)
 {
     if (w->grow)
         free(w->p);
-    *w = rx_wr_dyn();
+    *w = cb_wr_dyn();
 }
 
-uint8_t *rx_wr_room(RXWr *w, size_t n)
+uint8_t *cb_wr_room(CBWr *w, size_t n)
 {
     if (w->err)
         return NULL;
@@ -74,7 +74,7 @@ static uint32_t utf8_next(const uint8_t **sp)
     return c;
 }
 
-size_t rx_link_utf16_units(const char *utf8)
+size_t cb_link_utf16_units(const char *utf8)
 {
     const uint8_t *s = (const uint8_t *)utf8;
     size_t n = 0;
@@ -83,15 +83,15 @@ size_t rx_link_utf16_units(const char *utf8)
     return n;
 }
 
-static void put_unit(RXWr *w, uint16_t u, bool be)
+static void put_unit(CBWr *w, uint16_t u, bool be)
 {
     if (be)
-        rx_wr_u16(w, u);
+        cb_wr_u16(w, u);
     else
-        rx_wr_u16le(w, u);
+        cb_wr_u16le(w, u);
 }
 
-void rx_wr_utf16(RXWr *w, const char *utf8, bool be, bool nul)
+void cb_wr_utf16(CBWr *w, const char *utf8, bool be, bool nul)
 {
     const uint8_t *s = (const uint8_t *)utf8;
     while (*s) {
@@ -108,7 +108,7 @@ void rx_wr_utf16(RXWr *w, const char *utf8, bool be, bool nul)
         put_unit(w, 0, be);
 }
 
-char *rx_link_utf16_to_utf8(const uint8_t *p, size_t bytes, bool be)
+char *cb_link_utf16_to_utf8(const uint8_t *p, size_t bytes, bool be)
 {
     size_t n = bytes / 2;
     char *out = malloc(3 * n + 1);     /* a pair is 4 bytes for 2 units */

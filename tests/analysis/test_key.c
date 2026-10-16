@@ -17,7 +17,7 @@
  *   with a pedal pluck on the tonic, the tonic again). See synth() and
  *   docs/KEY.md. `meson test` runs the quick subset marked in the list (44
  *   cases: every progression and variant in two keys, and the cases the
- *   previous detector got wrong); RXBOX_KEY_FULL=1 runs all 216.
+ *   previous detector got wrong); CYANBOX_KEY_FULL=1 runs all 216.
  *
  * Every case must come out in its true key, and the tuning estimate must
  * find the generated detune within 3 cents (it is within 2 on all of them;
@@ -44,11 +44,11 @@
 #include <math.h>
 #include <stdio.h>
 
-#include "rxbox/analysis.h"
-#include "rxbox/common.h"
+#include "cyanbox/analysis.h"
+#include "cyanbox/common.h"
 
 /* The detector's own source, for --features: the training data of its
- * templates must be exactly what it computes. rx_analyse_key is then
+ * templates must be exactly what it computes. cb_analyse_key is then
  * defined here, and the library's copy is not linked in. */
 #include "../../src/analysis/key.c"
 
@@ -104,7 +104,7 @@ typedef struct Tally {
     double score, conf;
 } Tally;
 
-static void tally(Tally *t, const char *truth, const RXKeyResult *k)
+static void tally(Tally *t, const char *truth, const CBKeyResult *k)
 {
     t->nb++;
     t->right += !strcmp(truth, k->key);
@@ -320,7 +320,7 @@ static float *synth(const Case *c, int64_t *nb)
         double t = (double)i / rate;
         int b = (int)(t / bar);
         double tb = t - b * bar;
-        int beat = RX_MIN((int)(tb / period), 3);
+        int beat = CB_MIN((int)(tb / period), 3);
         double tq = tb - beat * period;
         int kq = (int)(tq * rate);
 
@@ -356,7 +356,7 @@ static float *synth(const Case *c, int64_t *nb)
                 double ts = tq >= eighth ? tq - eighth : tq + eighth;
                 /* No tail before the first stab */
                 bool first = b == INTRO_DRUMS && beat == 0 && tq < eighth;
-                int ks = RX_MIN((int)(ts * rate), beat_len - 1);
+                int ks = CB_MIN((int)(ts * rate), beat_len - 1);
                 env = first ? 0 : fmin(1, ts / 0.003) * stab_tab[ks] * 1.6;
             } else {
                 env = fmin(1, tb / 0.02) * fmax(0, fmin(1, (bar - tb) / 0.06));
@@ -398,7 +398,7 @@ static float *synth(const Case *c, int64_t *nb)
             int q = (int)(tq / sixteenth);
             /* Since the last pluck: this sixteenth's, or the one before */
             double tp = tq - q * sixteenth + (q & 1 ? 0 : sixteenth);
-            int kp = RX_MIN((int)(tp * rate), beat_len - 1);
+            int kp = CB_MIN((int)(tp * rate), beat_len - 1);
             bool before_first = q == 0 && beat == 0 && b == INTRO_DRUMS + INTRO_TONIC;
             double penv = before_first ? 0 : fmin(1, tp / 0.002) * pluck_tab[kp];
             svf_run(&pluck_lp, saw(&pluck_ph, pluck_dt) * penv, &lo, &band);
@@ -409,10 +409,10 @@ static float *synth(const Case *c, int64_t *nb)
         if (kq < kick_len)
             out += 0.8 * kick_tab[kq];
         double w = noise(&rng);
-        double clap = beat & 1 ? clap_tab[RX_MIN(kq, beat_len - 1)] : 0;
+        double clap = beat & 1 ? clap_tab[CB_MIN(kq, beat_len - 1)] : 0;
         svf_run(&clap_bp, w * clap, &lo, &band);
         out += 0.5 * band;
-        double hat = tq >= eighth ? hat_tab[RX_MIN((int)((tq - eighth) * rate), beat_len - 1)] : 0;
+        double hat = tq >= eighth ? hat_tab[CB_MIN((int)((tq - eighth) * rate), beat_len - 1)] : 0;
         out += 0.12 * (w - last_noise) * hat;
         last_noise = w;
 
@@ -433,7 +433,7 @@ static int read_cases(Case **out, int *nb_out)
     FILE *f = fopen(SYNTH_FILE, "r");
     if (!f) {
         printf("FAIL: cannot open %s\n", SYNTH_FILE);
-        return RX_ERROR(ENOENT);
+        return CB_ERROR(ENOENT);
     }
     Case *cases = NULL;
     int nb = 0, cap = 0, ret = 0;
@@ -445,7 +445,7 @@ static int read_cases(Case **out, int *nb_out)
             cap = cap ? 2 * cap : 256;
             Case *tmp = realloc(cases, sizeof(*cases) * cap);
             if (!tmp) {
-                ret = RX_ERROR(ENOMEM);
+                ret = CB_ERROR(ENOMEM);
                 break;
             }
             cases = tmp;
@@ -456,13 +456,13 @@ static int read_cases(Case **out, int *nb_out)
         if (sscanf(line, "%47s %d %lf %d %d %15s %15s %lf %u %7s %d", c->name, &c->rate, &c->bpm,
                    &c->tonic, &minor, prog, variant, &c->cents, &c->seed, c->truth, &quick) != 11) {
             printf("FAIL: bad line in %s: %s", SYNTH_FILE, line);
-            ret = RX_ERROR(EINVAL);
+            ret = CB_ERROR(EINVAL);
             break;
         }
         c->minor = minor;
         c->quick = quick;
         c->prog = c->variant = -1;
-        for (int i = 0; i < (int)RX_ARRAY_ELEMS(PROGS); i++)
+        for (int i = 0; i < (int)CB_ARRAY_ELEMS(PROGS); i++)
             if (!strcmp(prog, PROGS[i].name))
                 c->prog = i;
         for (int i = 0; i < NB_VARIANTS; i++)
@@ -470,7 +470,7 @@ static int read_cases(Case **out, int *nb_out)
                 c->variant = i;
         if (c->prog < 0 || c->variant < 0 || PROGS[c->prog].minor != c->minor) {
             printf("FAIL: bad case in %s: %s", SYNTH_FILE, line);
-            ret = RX_ERROR(EINVAL);
+            ret = CB_ERROR(EINVAL);
             break;
         }
         nb++;
@@ -498,7 +498,7 @@ static int test_tonal(void)
     }
     char line[256];
     printf("%-10s %6s %6s  %-4s  %-4s %6s %7s  |  dj: %-4s %6s %7s\n", "signal", "rate", "cents",
-           "true", "rx", "conf", "cents", "key", "conf", "cents");
+           "true", "cb", "conf", "cents", "key", "conf", "cents");
     while (fgets(line, sizeof(line), f)) {
         if (line[0] == '#')
             continue;
@@ -511,17 +511,17 @@ static int test_tonal(void)
             fails++;
             continue;
         }
-        /* keys.txt and rxbox spell the keys the same way */
+        /* keys.txt and cyanbox spell the keys the same way */
         CHECK(!strcmp(truth, minor ? MINOR[tonic] : MAJOR[tonic]));
 
         int64_t nb;
         float *x = tonal(rate, tonic, minor, cents, &nb);
         if (!x)
             return fails + 1;
-        RXKeyResult k;
-        int64_t t0 = rx_time_us();
-        int ret = rx_analyse_key(x, nb, rate, &k);
-        int64_t t1 = rx_time_us();
+        CBKeyResult k;
+        int64_t t0 = cb_time_us();
+        int ret = cb_analyse_key(x, nb, rate, &k);
+        int64_t t1 = cb_time_us();
         free(x);
         CHECK(ret == 0);
 
@@ -544,8 +544,8 @@ static int test_tonal(void)
         nb_dj_true += !strcmp(dj_key, truth);
     }
     fclose(f);
-    printf("dj's tonal loops: rxbox finds the true key of %d of %d, dj of %d\n", all.right, all.nb,
-           nb_dj_true);
+    printf("dj's tonal loops: cyanbox finds the true key of %d of %d, dj of %d\n", all.right,
+           all.nb, nb_dj_true);
     tally_print("tonal", &all);
     CHECK(all.nb >= 9);
     return fails;
@@ -557,14 +557,14 @@ static int test_synth(void)
     int nb_cases, fails = 0, nb_run = 0;
     if (read_cases(&cases, &nb_cases) < 0)
         return 1;
-    const char *full = getenv("RXBOX_KEY_FULL");
+    const char *full = getenv("CYANBOX_KEY_FULL");
     bool all_cases = full && strcmp(full, "0");
 
-    Tally all = { 0 }, by_var[NB_VARIANTS] = { 0 }, by_prog[RX_ARRAY_ELEMS(PROGS)] = { 0 };
+    Tally all = { 0 }, by_var[NB_VARIANTS] = { 0 }, by_prog[CB_ARRAY_ELEMS(PROGS)] = { 0 };
     int64_t us = 0;
     double secs = 0;
     printf("\n%-24s %6s %4s %6s  %-4s  %-4s %6s %7s\n", "track", "rate", "bpm", "cents", "true",
-           "rx", "conf", "cents");
+           "cb", "conf", "cents");
     for (int i = 0; i < nb_cases; i++) {
         const Case *c = &cases[i];
         int tonic;
@@ -580,10 +580,10 @@ static int test_synth(void)
             free(cases);
             return fails + 1;
         }
-        RXKeyResult k;
-        int64_t t0 = rx_time_us();
-        int ret = rx_analyse_key(x, nb, c->rate, &k);
-        us += rx_time_us() - t0;
+        CBKeyResult k;
+        int64_t t0 = cb_time_us();
+        int ret = cb_analyse_key(x, nb, c->rate, &k);
+        us += cb_time_us() - t0;
         secs += (double)nb / c->rate;
         free(x);
         CHECK(ret == 0);
@@ -608,12 +608,12 @@ static int test_synth(void)
         tally(&by_prog[c->prog], c->truth, &k);
     }
     printf("synthetic tracks, %s (%.0f ms per minute of audio):\n",
-           all_cases ? "all" : "the quick subset; RXBOX_KEY_FULL=1 runs all",
+           all_cases ? "all" : "the quick subset; CYANBOX_KEY_FULL=1 runs all",
            us / 1000.0 / (secs / 60));
     tally_print("all", &all);
     for (int i = 0; i < NB_VARIANTS; i++)
         tally_print(VARIANTS[i], &by_var[i]);
-    for (int i = 0; i < (int)RX_ARRAY_ELEMS(PROGS); i++)
+    for (int i = 0; i < (int)CB_ARRAY_ELEMS(PROGS); i++)
         tally_print(PROGS[i].name, &by_prog[i]);
     CHECK(nb_cases >= 216 && nb_run >= 40);
     free(cases);
@@ -623,17 +623,17 @@ static int test_synth(void)
 static int test_edges(void)
 {
     int fails = 0;
-    RXKeyResult k;
+    CBKeyResult k;
 
     /* Silence has no key */
     float *z = calloc(44100 * 5, sizeof(*z));
     if (!z)
         return 1;
-    CHECK(rx_analyse_key(z, 44100 * 5, 44100, &k) == 0);
+    CHECK(cb_analyse_key(z, 44100 * 5, 44100, &k) == 0);
     CHECK(k.key[0] == '\0' && k.confidence == 0 && k.tuning_cents == 0);
-    CHECK(rx_analyse_key(z, 0, 44100, &k) == 0 && k.key[0] == '\0');
-    CHECK(rx_analyse_key(z, 100, 0, &k) == RX_ERROR(EINVAL));
-    CHECK(rx_analyse_key(NULL, 100, 44100, &k) == RX_ERROR(EINVAL));
+    CHECK(cb_analyse_key(z, 0, 44100, &k) == 0 && k.key[0] == '\0');
+    CHECK(cb_analyse_key(z, 100, 0, &k) == CB_ERROR(EINVAL));
+    CHECK(cb_analyse_key(NULL, 100, 44100, &k) == CB_ERROR(EINVAL));
     free(z);
 
     /* A second of a chord, shorter than any smoothing span: still a key,
@@ -642,7 +642,7 @@ static int test_edges(void)
     float *x = tonal(48000, 9, true, 0.0, &nb);
     if (!x)
         return fails + 1;
-    CHECK(rx_analyse_key(x, 48000, 48000, &k) == 0);
+    CHECK(cb_analyse_key(x, 48000, 48000, &k) == 0);
     int tonic;
     bool minor;
     CHECK(parse_key(k.key, &tonic, &minor));
@@ -672,13 +672,13 @@ static float *read_samples(const char *path, int64_t *nb)
         if (!buf)
             return NULL;
     } else {
-        int ret = rx_file_read(path, &buf, &size);
+        int ret = cb_file_read(path, &buf, &size);
         if (ret < 0) {
             printf("cannot read %s: %s\n", path, strerror(-ret));
             return NULL;
         }
     }
-    float *x = malloc(RX_MAX(size, 4));
+    float *x = malloc(CB_MAX(size, 4));
     if (x)
         memcpy(x, buf, size);
     free(buf);
@@ -692,13 +692,13 @@ static int key_of_file(const char *path, int rate)
     float *x = read_samples(path, &nb);
     if (!x)
         return 1;
-    RXKeyResult k;
-    int64_t t0 = rx_time_us();
-    int ret = rx_analyse_key(x, nb, rate, &k);
-    int64_t t1 = rx_time_us();
+    CBKeyResult k;
+    int64_t t0 = cb_time_us();
+    int ret = cb_analyse_key(x, nb, rate, &k);
+    int64_t t1 = cb_time_us();
     free(x);
     if (ret < 0) {
-        printf("rx_analyse_key failed: %s\n", strerror(-ret));
+        printf("cb_analyse_key failed: %s\n", strerror(-ret));
         return 1;
     }
     printf("%d %s %.6f %.6f %.0f ms\n", rate, k.key[0] ? k.key : "-", k.confidence,
@@ -718,10 +718,10 @@ static int features_of_file(const char *path, int rate)
     if (ret < 0)
         return 1;
     double v[NB_FEAT];
-    int64_t seg = RX_MAX(llrint(SEG_SECONDS * kf.fs / HOP), 1);
+    int64_t seg = CB_MAX(llrint(SEG_SECONDS * kf.fs / HOP), 1);
     printf("%.6f %.3f %" PRId64 "\n", kf.tuning, kf.fs, seg);
     for (int64_t f0 = -1; f0 < kf.nb_frames; f0 = f0 < 0 ? 0 : f0 + seg) {
-        int64_t a = f0 < 0 ? 0 : f0, b = f0 < 0 ? kf.nb_frames : RX_MIN(f0 + seg, kf.nb_frames);
+        int64_t a = f0 < 0 ? 0 : f0, b = f0 < 0 ? kf.nb_frames : CB_MIN(f0 + seg, kf.nb_frames);
         if (f0 > 0 && b - a < seg / 2)
             break;
         key_chroma(&kf, a, b, v);

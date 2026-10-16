@@ -20,9 +20,9 @@
  * every beat at 128 BPM whose height encodes the beat number (negated on
  * the right channel), so any frame of output says which track frame it
  * came from. The output is read by calling the mix directly, which in
- * manual mode is exactly what rx_player_null_advance does. */
+ * manual mode is exactly what cb_player_null_advance does. */
 
-#include "rxbox/player.h"
+#include "cyanbox/player.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -59,9 +59,9 @@ static float click_amp(int k)
     return 0.25f + 0.005f * (k % 100);
 }
 
-static RXAudio *make_track_frames(int channels, int64_t nb_frames)
+static CBAudio *make_track_frames(int channels, int64_t nb_frames)
 {
-    RXAudio *a = calloc(1, sizeof(*a));
+    CBAudio *a = calloc(1, sizeof(*a));
     if (!a)
         abort();
     a->rate = RATE;
@@ -79,59 +79,59 @@ static RXAudio *make_track_frames(int channels, int64_t nb_frames)
     return a;
 }
 
-static RXAudio *make_track(int channels, double seconds)
+static CBAudio *make_track(int channels, double seconds)
 {
     return make_track_frames(channels, (int64_t)(seconds * RATE));
 }
 
 /* Releases are recorded so the tests can see when they happen. */
-static RXAudio *released[16];
+static CBAudio *released[16];
 static int nb_released;
 
-static void on_release(void *opaque, RXAudio *audio)
+static void on_release(void *opaque, CBAudio *audio)
 {
-    if (nb_released < (int)RX_ARRAY_ELEMS(released))
+    if (nb_released < (int)CB_ARRAY_ELEMS(released))
         released[nb_released] = audio;
     nb_released++;
     free(audio->samples);
     free(audio);
 }
 
-static RXPlayer *make_player(int rate)
+static CBPlayer *make_player(int rate)
 {
-    RXPlayerOptions opt;
-    rx_player_options_default(&opt);
-    opt.backend = RX_AUDIO_NULL;
+    CBPlayerOptions opt;
+    cb_player_options_default(&opt);
+    opt.backend = CB_AUDIO_NULL;
     opt.rate = rate;
     opt.period = -PERIOD;
     opt.release = on_release;
 
-    RXPlayer *p = NULL;
-    int ret = rx_player_create(&p, &opt);
+    CBPlayer *p = NULL;
+    int ret = cb_player_create(&p, &opt);
     CHECK(ret == 0 && p, "create: %d", ret);
     if (!p)
         exit(1);
-    CHECK(rx_player_running(p), "null backend is running");
-    CHECK(rx_player_error(p) == NULL, "no error while running");
-    CHECK(rx_player_rate(p) == rate, "rate %d", rx_player_rate(p));
+    CHECK(cb_player_running(p), "null backend is running");
+    CHECK(cb_player_error(p) == NULL, "no error while running");
+    CHECK(cb_player_rate(p) == rate, "rate %d", cb_player_rate(p));
     return p;
 }
 
-static RXDeckState st(RXPlayer *p)
+static CBDeckState st(CBPlayer *p)
 {
-    RXDeckState s;
-    rx_deck_state(p, 0, &s);
+    CBDeckState s;
+    cb_deck_state(p, 0, &s);
     return s;
 }
 
 /* Renders `frames` into out (or a scratch buffer) in callback-sized
  * pieces, as the manual null backend does. */
-static void render(RXPlayer *p, float *out, int frames)
+static void render(CBPlayer *p, float *out, int frames)
 {
     static float scratch[2 * PERIOD];
     while (frames > 0) {
-        int n = RX_MIN(frames, PERIOD);
-        rx_player_mix(p, out ? out : scratch, n);
+        int n = CB_MIN(frames, PERIOD);
+        cb_player_mix(p, out ? out : scratch, n);
         if (out)
             out += 2 * n;
         frames -= n;
@@ -146,66 +146,66 @@ static void test_positions(void)
 
     for (int pass = 0; pass < 2; pass++) {
         double tempo = pass ? 1.08 : 1.0;
-        RXPlayer *p = make_player(48000);
-        CHECK(rx_deck_load(p, 0, make_track(2, SECONDS), NULL) == 0, "load");
-        rx_deck_set_tempo(p, 0, tempo);
+        CBPlayer *p = make_player(48000);
+        CHECK(cb_deck_load(p, 0, make_track(2, SECONDS), NULL) == 0, "load");
+        cb_deck_set_tempo(p, 0, tempo);
 
-        RXDeckState s = st(p);
+        CBDeckState s = st(p);
         CHECK(s.loaded && !s.playing && s.position == 0.0, "loaded at 0, paused");
         CHECK(fabs(s.duration - SECONDS) < 1e-9, "duration %f", s.duration);
         CHECK(s.tempo == tempo, "tempo %f", s.tempo);
 
-        rx_deck_play(p, 0);
+        cb_deck_play(p, 0);
         CHECK(st(p).playing, "playing at once");
         int n = 48000 * 7 + 123;
-        rx_player_null_advance(p, n);
+        cb_player_null_advance(p, n);
         s = st(p);
         double want = n * ratio * tempo;
         CHECK(fabs(s.position * RATE - want) < 1.0, "tempo %.2f: %.3f frames, want %.3f",
               tempo, s.position * RATE, want);
         CHECK(llabs(s.frame - (int64_t)floor(want)) <= 1, "frame %lld", (long long)s.frame);
         CHECK(s.playing, "still playing");
-        rx_player_destroy(p);
+        cb_player_destroy(p);
     }
 }
 
 static void test_seek(void)
 {
     double ratio = (double)RATE / 48000;
-    RXPlayer *p = make_player(48000);
-    rx_deck_load(p, 0, make_track(2, SECONDS), NULL);
-    rx_player_null_advance(p, PERIOD);
+    CBPlayer *p = make_player(48000);
+    cb_deck_load(p, 0, make_track(2, SECONDS), NULL);
+    cb_player_null_advance(p, PERIOD);
 
     uint64_t serial = st(p).serial;
-    rx_deck_seek(p, 0, 10.0);
-    RXDeckState s = st(p);
+    cb_deck_seek(p, 0, 10.0);
+    CBDeckState s = st(p);
     CHECK(s.position == 10.0, "seek reported at once: %f", s.position);
     CHECK(s.serial == serial, "not applied yet");
-    rx_player_null_advance(p, PERIOD);
+    cb_player_null_advance(p, PERIOD);
     s = st(p);
     CHECK(s.position == 10.0 && !s.playing, "paused at 10: %f", s.position);
     CHECK(s.serial > serial, "applied");
 
-    rx_deck_play(p, 0);
-    rx_player_null_advance(p, 4800);
-    rx_deck_seek(p, 0, 20.0);
+    cb_deck_play(p, 0);
+    cb_player_null_advance(p, 4800);
+    cb_deck_seek(p, 0, 20.0);
     CHECK(st(p).position == 20.0, "seek while playing reported at once");
-    rx_player_null_advance(p, 4800);
+    cb_player_null_advance(p, 4800);
     s = st(p);
     CHECK(fabs(s.position * RATE - (20.0 * RATE + 4800 * ratio)) < 1.0, "playing on from 20: %f",
           s.position);
     CHECK(s.playing, "a seek keeps playing");
 
-    rx_deck_seek(p, 0, -5.0);
+    cb_deck_seek(p, 0, -5.0);
     CHECK(st(p).position == 0.0, "clamped to the start");
-    rx_deck_seek(p, 0, 1e9);
+    cb_deck_seek(p, 0, 1e9);
     s = st(p);
     CHECK(s.position == SECONDS && !s.playing, "clamped to the end, stopped");
 
-    rx_deck_play_from(p, 0, 30.0);
+    cb_deck_play_from(p, 0, 30.0);
     s = st(p);
     CHECK(s.position == 30.0 && s.playing, "play_from");
-    rx_player_destroy(p);
+    cb_player_destroy(p);
 }
 
 /* Output frame by frame against the track: 44.1 kHz in and out, tempo 1,
@@ -213,17 +213,17 @@ static void test_seek(void)
  * must be the track frame the loop arithmetic says, wraps included. */
 static void test_loop_exact(void)
 {
-    RXPlayer *p = make_player(RATE);
-    RXAudio *a = make_track(2, SECONDS);
-    rx_deck_load(p, 0, a, NULL);
+    CBPlayer *p = make_player(RATE);
+    CBAudio *a = make_track(2, SECONDS);
+    cb_deck_load(p, 0, a, NULL);
 
     double in = 8 * 60.0 / BPM, out = 16 * 60.0 / BPM;   /* 3.75 s, 7.5 s */
     int64_t in_f = (int64_t)(in * RATE), out_f = (int64_t)(out * RATE);
     CHECK(in_f == 165375 && out_f == 330750, "whole frames");
 
-    rx_deck_set_loop(p, 0, in, out, true);
-    rx_deck_play_from(p, 0, 3.0);
-    RXDeckState s = st(p);
+    cb_deck_set_loop(p, 0, in, out, true);
+    cb_deck_play_from(p, 0, 3.0);
+    CBDeckState s = st(p);
     CHECK(s.loop_enabled && s.loop_in == in && s.loop_out == out, "loop reported");
 
     int64_t t = 3 * RATE;
@@ -255,39 +255,39 @@ static void test_loop_exact(void)
     CHECK(clicks > 100, "%d clicks seen", clicks);
 
     /* Off: plays through the out point. */
-    rx_deck_loop_enable(p, 0, false);
-    rx_player_null_advance(p, 10 * RATE);
+    cb_deck_loop_enable(p, 0, false);
+    cb_player_null_advance(p, 10 * RATE);
     s = st(p);
     CHECK(!s.loop_enabled && s.position > out, "loop off plays on: %f", s.position);
 
     /* On again with the playhead more than a loop length past it: it is
      * not pulled back. */
-    rx_deck_loop_enable(p, 0, true);
+    cb_deck_loop_enable(p, 0, true);
     double before = st(p).position;
-    rx_player_null_advance(p, RATE);
+    cb_player_null_advance(p, RATE);
     CHECK(st(p).position > before, "a loop behind the playhead does not engage");
 
-    rx_deck_clear_loop(p, 0);
+    cb_deck_clear_loop(p, 0);
     s = st(p);
     CHECK(s.loop_in < 0 && s.loop_out < 0 && !s.loop_enabled, "cleared");
-    rx_player_destroy(p);
+    cb_player_destroy(p);
 }
 
 /* A loop whose length is not a whole number of frames, resampled: the
  * position stays inside it and on the arithmetic's track. */
 static void test_loop_fractional(void)
 {
-    RXPlayer *p = make_player(48000);
-    rx_deck_load(p, 0, make_track(2, SECONDS), NULL);
+    CBPlayer *p = make_player(48000);
+    cb_deck_load(p, 0, make_track(2, SECONDS), NULL);
     double in = 8 * 60.0 / BPM, out = 12 * 60.0 / BPM;   /* 165375 .. 248062.5 */
     double inc = (double)RATE / 48000;
-    rx_deck_set_loop(p, 0, in, out, true);
-    rx_deck_play_from(p, 0, 4.0);
+    cb_deck_set_loop(p, 0, in, out, true);
+    cb_deck_play_from(p, 0, 4.0);
 
     double in_f = in * RATE, len = (out - in) * RATE, start = 4.0 * RATE;
     for (int i = 1; i <= 400; i++) {
-        rx_player_null_advance(p, 4 * PERIOD + 17);
-        RXDeckState s = st(p);
+        cb_player_null_advance(p, 4 * PERIOD + 17);
+        CBDeckState s = st(p);
         double want = start + (double)i * (4 * PERIOD + 17) * inc;
         want = in_f + fmod(want - in_f, len);
         CHECK(s.position >= in && s.position < out, "inside: %f", s.position);
@@ -295,28 +295,28 @@ static void test_loop_fractional(void)
         if (failures)
             break;
     }
-    rx_player_destroy(p);
+    cb_player_destroy(p);
 }
 
 /* Switching a loop on with the playhead just past its out point (LOOP OUT
  * quantised behind the playhead) folds it back at the same phase. */
 static void test_loop_fold(void)
 {
-    RXPlayer *p = make_player(RATE);
-    rx_deck_load(p, 0, make_track(2, SECONDS), NULL);
-    rx_deck_seek(p, 0, 7.6);
-    rx_player_null_advance(p, PERIOD);
-    rx_deck_set_loop(p, 0, 3.75, 7.5, true);
-    rx_player_null_advance(p, PERIOD);
-    RXDeckState s = st(p);
+    CBPlayer *p = make_player(RATE);
+    cb_deck_load(p, 0, make_track(2, SECONDS), NULL);
+    cb_deck_seek(p, 0, 7.6);
+    cb_player_null_advance(p, PERIOD);
+    cb_deck_set_loop(p, 0, 3.75, 7.5, true);
+    cb_player_null_advance(p, PERIOD);
+    CBDeckState s = st(p);
     CHECK(fabs(s.position - 3.85) < 1e-9, "folded to 3.85: %f", s.position);
 
-    rx_deck_seek(p, 0, 12.0);
-    rx_player_null_advance(p, PERIOD);
-    rx_deck_set_loop(p, 0, 3.75, 7.5, true);
-    rx_player_null_advance(p, PERIOD);
+    cb_deck_seek(p, 0, 12.0);
+    cb_player_null_advance(p, PERIOD);
+    cb_deck_set_loop(p, 0, 3.75, 7.5, true);
+    cb_player_null_advance(p, PERIOD);
     CHECK(st(p).position == 12.0, "more than a length past: left alone, %f", st(p).position);
-    rx_player_destroy(p);
+    cb_player_destroy(p);
 }
 
 /* A loop that ends at the end of the track. For about one track length in
@@ -329,146 +329,146 @@ static void test_loop_at_end(void)
     int64_t n = 10 * RATE;
     while ((double)n / RATE * RATE <= (double)n)
         n++;
-    RXPlayer *p = make_player(RATE);
-    rx_deck_load(p, 0, make_track_frames(2, n), NULL);
+    CBPlayer *p = make_player(RATE);
+    cb_deck_load(p, 0, make_track_frames(2, n), NULL);
     double dur = (double)n / RATE;
 
     /* From a whole frame, so every step lands on one. */
     int64_t start = n - RATE / 2;
     while ((double)start / RATE * RATE != (double)start)
         start--;
-    rx_deck_set_loop(p, 0, dur - 1.0, dur, true);
-    rx_deck_play_from(p, 0, (double)start / RATE);
+    cb_deck_set_loop(p, 0, dur - 1.0, dur, true);
+    cb_deck_play_from(p, 0, (double)start / RATE);
     for (int i = 0; i < 8; i++) {
-        rx_player_null_advance(p, RATE / 4);
-        RXDeckState s = st(p);
+        cb_player_null_advance(p, RATE / 4);
+        CBDeckState s = st(p);
         CHECK(s.playing, "%lld frames: still looping after %d/4 s", (long long)n, i + 1);
         CHECK(s.position >= dur - 1.0 && s.position < dur, "inside the loop: %f of %f",
               s.position, dur);
         if (!s.playing)
             break;
     }
-    rx_player_destroy(p);
+    cb_player_destroy(p);
 }
 
 /* Positions keep their fraction in [0, 1): a difference of two fractions
  * one ulp apart must not round up to a fraction of exactly 1.0, which
- * rx_pos_cmp would order before the equal whole frame. */
+ * cb_pos_cmp would order before the equal whole frame. */
 static void test_pos_arith(void)
 {
-    RXPos a = { .i = 10, .f = 0.3 }, b = { .i = 3, .f = nextafter(0.3, 1.0) };
-    RXPos r = rx_pos_sub(a, b);
+    CBPos a = { .i = 10, .f = 0.3 }, b = { .i = 3, .f = nextafter(0.3, 1.0) };
+    CBPos r = cb_pos_sub(a, b);
     CHECK(r.f >= 0.0 && r.f < 1.0, "fraction %.17g", r.f);
-    CHECK(rx_pos_cmp(r, (RXPos) { .i = 7 }) == 0, "7 - 2^-54 rounds to frame 7: %lld + %.17g",
+    CHECK(cb_pos_cmp(r, (CBPos) { .i = 7 }) == 0, "7 - 2^-54 rounds to frame 7: %lld + %.17g",
           (long long)r.i, r.f);
 
-    RXPos c = { .i = 5, .f = 0.25 };
-    rx_pos_add(&c, 2.75);
+    CBPos c = { .i = 5, .f = 0.25 };
+    cb_pos_add(&c, 2.75);
     CHECK(c.i == 8 && c.f == 0.0, "add carries: %lld + %f", (long long)c.i, c.f);
-    RXPos d = rx_pos_sub((RXPos) { .i = 8, .f = 0.25 }, (RXPos) { .i = 2, .f = 0.5 });
+    CBPos d = cb_pos_sub((CBPos) { .i = 8, .f = 0.25 }, (CBPos) { .i = 2, .f = 0.5 });
     CHECK(d.i == 5 && d.f == 0.75, "sub borrows: %lld + %f", (long long)d.i, d.f);
 }
 
 static void test_pause_resume(void)
 {
     double ratio = (double)RATE / 48000;
-    RXPlayer *p = make_player(48000);
-    rx_deck_load(p, 0, make_track(2, SECONDS), NULL);
+    CBPlayer *p = make_player(48000);
+    cb_deck_load(p, 0, make_track(2, SECONDS), NULL);
 
-    rx_deck_play(p, 0);
-    rx_player_null_advance(p, 10000);
-    rx_deck_pause(p, 0);
+    cb_deck_play(p, 0);
+    cb_player_null_advance(p, 10000);
+    cb_deck_pause(p, 0);
     CHECK(!st(p).playing, "paused at once");
-    rx_player_null_advance(p, PERIOD);
+    cb_player_null_advance(p, PERIOD);
     double paused = st(p).position;
     CHECK(fabs(paused * RATE - 10000 * ratio) < 1.0, "paused at %f", paused * RATE);
-    rx_player_null_advance(p, 20000);
+    cb_player_null_advance(p, 20000);
     CHECK(st(p).position == paused, "a paused deck does not move");
 
-    rx_deck_play(p, 0);
-    rx_player_null_advance(p, 30000);
-    RXDeckState s = st(p);
+    cb_deck_play(p, 0);
+    cb_player_null_advance(p, 30000);
+    CBDeckState s = st(p);
     CHECK(fabs(s.position * RATE - 40000 * ratio) < 1.0, "resumed: %f, want %f",
           s.position * RATE, 40000 * ratio);
-    rx_player_destroy(p);
+    cb_player_destroy(p);
 }
 
 static void test_tempo_change(void)
 {
     double ratio = (double)RATE / 48000;
-    RXPlayer *p = make_player(48000);
-    rx_deck_load(p, 0, make_track(2, SECONDS), NULL);
-    rx_deck_play(p, 0);
-    rx_player_null_advance(p, 48000);
-    rx_deck_set_tempo(p, 0, 1.08);
-    rx_player_null_advance(p, 48000 * 3);
+    CBPlayer *p = make_player(48000);
+    cb_deck_load(p, 0, make_track(2, SECONDS), NULL);
+    cb_deck_play(p, 0);
+    cb_player_null_advance(p, 48000);
+    cb_deck_set_tempo(p, 0, 1.08);
+    cb_player_null_advance(p, 48000 * 3);
     double want = 48000 * ratio + 48000 * 3 * ratio * 1.08;
     CHECK(fabs(st(p).position * RATE - want) < 1.0, "%f, want %f", st(p).position * RATE, want);
 
     /* Bend adds to the ratio while held. */
-    rx_deck_set_tempo(p, 0, 1.0);
-    rx_deck_set_bend(p, 0, 0.02);
-    rx_player_null_advance(p, 48000);
-    rx_deck_set_bend(p, 0, 0.0);
-    rx_player_null_advance(p, 48000);
+    cb_deck_set_tempo(p, 0, 1.0);
+    cb_deck_set_bend(p, 0, 0.02);
+    cb_player_null_advance(p, 48000);
+    cb_deck_set_bend(p, 0, 0.0);
+    cb_player_null_advance(p, 48000);
     want += 48000 * ratio * 1.02 + 48000 * ratio;
     CHECK(fabs(st(p).position * RATE - want) < 1.0, "bend: %f, want %f", st(p).position * RATE,
           want);
 
-    CHECK(rx_deck_set_master_tempo(p, 0, true), "master tempo is offered");
+    CHECK(cb_deck_set_master_tempo(p, 0, true), "master tempo is offered");
     CHECK(st(p).master_tempo, "and reported");
-    rx_player_destroy(p);
+    cb_player_destroy(p);
 }
 
 static void test_end(void)
 {
-    RXPlayer *p = make_player(48000);
-    rx_deck_load(p, 0, make_track(2, SECONDS), NULL);
-    rx_deck_play_from(p, 0, SECONDS - 0.5);
-    rx_player_null_advance(p, 48000);
-    RXDeckState s = st(p);
+    CBPlayer *p = make_player(48000);
+    cb_deck_load(p, 0, make_track(2, SECONDS), NULL);
+    cb_deck_play_from(p, 0, SECONDS - 0.5);
+    cb_player_null_advance(p, 48000);
+    CBDeckState s = st(p);
     CHECK(!s.playing, "stops at the end");
     CHECK(s.position == SECONDS, "at the end: %f", s.position);
-    rx_deck_play(p, 0);
-    rx_player_null_advance(p, PERIOD);
+    cb_deck_play(p, 0);
+    cb_player_null_advance(p, PERIOD);
     CHECK(!st(p).playing, "PLAY at the end does nothing");
-    rx_player_destroy(p);
+    cb_player_destroy(p);
 }
 
 static void test_release(void)
 {
     nb_released = 0;
-    RXPlayer *p = make_player(48000);
-    RXAudio *a = make_track(2, 10.0), *b = make_track(1, 10.0);
+    CBPlayer *p = make_player(48000);
+    CBAudio *a = make_track(2, 10.0), *b = make_track(1, 10.0);
 
-    CHECK(rx_deck_load(p, RX_DECKS, a, NULL) == RX_ERROR(EINVAL), "deck out of range");
-    CHECK(rx_deck_load(p, 0, a, NULL) == 0, "load a");
-    CHECK(rx_deck_audio(p, 0) == a, "a is the deck's buffer");
-    rx_deck_play(p, 0);
-    rx_player_null_advance(p, PERIOD);
+    CHECK(cb_deck_load(p, CB_DECKS, a, NULL) == CB_ERROR(EINVAL), "deck out of range");
+    CHECK(cb_deck_load(p, 0, a, NULL) == 0, "load a");
+    CHECK(cb_deck_audio(p, 0) == a, "a is the deck's buffer");
+    cb_deck_play(p, 0);
+    cb_player_null_advance(p, PERIOD);
 
     /* The swap is queued, not applied: a may still be read. */
-    CHECK(rx_deck_load(p, 0, b, NULL) == 0, "load b");
+    CHECK(cb_deck_load(p, 0, b, NULL) == 0, "load b");
     st(p);
     CHECK(nb_released == 0, "nothing released before the acknowledgement");
-    CHECK(rx_deck_audio(p, 0) == b && !st(p).playing && st(p).position == 0.0,
+    CHECK(cb_deck_audio(p, 0) == b && !st(p).playing && st(p).position == 0.0,
           "the owner sees b at once");
 
-    rx_player_null_advance(p, PERIOD);
+    cb_player_null_advance(p, PERIOD);
     st(p);
     CHECK(nb_released == 1 && released[0] == a, "a released after the acknowledgement");
 
-    rx_deck_unload(p, 0);
-    CHECK(!rx_deck_loaded(p, 0) && !rx_deck_audio(p, 0) && !st(p).loaded, "unloaded at once");
+    cb_deck_unload(p, 0);
+    CHECK(!cb_deck_loaded(p, 0) && !cb_deck_audio(p, 0) && !st(p).loaded, "unloaded at once");
     CHECK(nb_released == 1, "b still held");
-    rx_player_null_advance(p, PERIOD);
+    cb_player_null_advance(p, PERIOD);
     st(p);
     CHECK(nb_released == 2 && released[1] == b, "b released");
 
     /* Destroying with a buffer loaded and one pending releases both. */
-    rx_deck_load(p, 0, make_track(2, 1.0), NULL);
-    rx_deck_load(p, 0, make_track(2, 1.0), NULL);
-    rx_player_destroy(p);
+    cb_deck_load(p, 0, make_track(2, 1.0), NULL);
+    cb_deck_load(p, 0, make_track(2, 1.0), NULL);
+    cb_player_destroy(p);
     CHECK(nb_released == 4, "destroy releases everything: %d", nb_released);
 }
 
@@ -481,20 +481,20 @@ static void test_release(void)
 static void test_release_voices(void)
 {
     nb_released = 0;
-    RXPlayer *p = make_player(48000);
-    RXAudio *a = make_track(2, 10.0);
-    rx_deck_load(p, 0, a, NULL);
-    rx_deck_play_from(p, 0, 1.0);
-    rx_player_null_advance(p, PERIOD);
+    CBPlayer *p = make_player(48000);
+    CBAudio *a = make_track(2, 10.0);
+    cb_deck_load(p, 0, a, NULL);
+    cb_deck_play_from(p, 0, 1.0);
+    cb_player_null_advance(p, PERIOD);
 
-    rx_deck_scrub_begin(p, 0);
-    rx_deck_scrub_to(p, 0, 2.0);
+    cb_deck_scrub_begin(p, 0);
+    cb_deck_scrub_to(p, 0, 2.0);
     render(p, NULL, 100);
 
-    RXAudio *b = make_track(2, 5.0);
+    CBAudio *b = make_track(2, 5.0);
     for (int64_t i = 0; i < 2 * b->nb_frames; i++)
         b->samples[i] = 0.5f;
-    CHECK(rx_deck_load(p, 0, b, NULL) == 0, "load b");
+    CHECK(cb_deck_load(p, 0, b, NULL) == 0, "load b");
     render(p, NULL, 1);
     st(p);
     CHECK(nb_released == 1 && released[0] == a, "a released after the swap");
@@ -506,10 +506,10 @@ static void test_release_voices(void)
         peak = fmaxf(peak, fabsf(buf[n]));
     CHECK(peak == 0.0f, "nothing of a is heard: %f", peak);
     CHECK(!st(p).scrubbing && !st(p).playing, "b waits");
-    rx_player_destroy(p);
+    cb_player_destroy(p);
 }
 
-static void unmap_release(void *opaque, RXAudio *audio)
+static void unmap_release(void *opaque, CBAudio *audio)
 {
     munmap(audio->samples, (size_t)audio->nb_frames * audio->channels * sizeof(float));
     free(audio);
@@ -528,32 +528,32 @@ static void test_long_track(void)
         printf("skipping the long track: no address space\n");
         return;
     }
-    RXAudio *a = calloc(1, sizeof(*a));
+    CBAudio *a = calloc(1, sizeof(*a));
     if (!a)
         abort();
-    *a = (RXAudio) {
+    *a = (CBAudio) {
         .samples   = samples,
         .channels  = 1,
         .rate      = 48000,
         .nb_frames = n,
     };
 
-    RXPlayerOptions opt;
-    rx_player_options_default(&opt);
-    opt.backend = RX_AUDIO_NULL;
+    CBPlayerOptions opt;
+    cb_player_options_default(&opt);
+    opt.backend = CB_AUDIO_NULL;
     opt.rate = 44100;
     opt.period = -PERIOD;
     opt.release = unmap_release;
-    RXPlayer *p = NULL;
-    if (rx_player_create(&p, &opt) < 0)
+    CBPlayer *p = NULL;
+    if (cb_player_create(&p, &opt) < 0)
         abort();
-    CHECK(rx_deck_load(p, 0, a, NULL) == 0, "load");
+    CHECK(cb_deck_load(p, 0, a, NULL) == 0, "load");
 
     double dur = (double)n / 48000;
     double inc = 48000.0 / 44100;
-    rx_deck_play_from(p, 0, dur - 20.0);
-    rx_player_null_advance(p, 44100);
-    RXDeckState s = st(p);
+    cb_deck_play_from(p, 0, dur - 20.0);
+    cb_player_null_advance(p, 44100);
+    CBDeckState s = st(p);
     double want = (dur - 20.0) * 48000 + 44100 * inc;
     CHECK(fabs(s.position * 48000 - want) < 1e-3, "%f frames, want %f", s.position * 48000, want);
     CHECK(s.frame == (int64_t)floor(want) && s.frame > INT32_MAX, "frame %lld",
@@ -562,36 +562,36 @@ static void test_long_track(void)
     /* A loop of 1.5 beats at 128 BPM, 10 s before the end, wraps on its
      * arithmetic as it does at the start of a track. */
     double in = dur - 10.0, out = in + 1.5 * 60.0 / 128.0;
-    rx_deck_set_loop(p, 0, in, out, true);
-    rx_deck_play_from(p, 0, in);
+    cb_deck_set_loop(p, 0, in, out, true);
+    cb_deck_play_from(p, 0, in);
     double start = in * 48000, len = (out - in) * 48000;
     for (int i = 1; i <= 20; i++) {
-        rx_player_null_advance(p, 4 * PERIOD + 17);
+        cb_player_null_advance(p, 4 * PERIOD + 17);
         double t = start + fmod(i * (4 * PERIOD + 17) * inc, len);
         s = st(p);
         CHECK(fabs(s.position * 48000 - t) < 1e-3, "loop: %f, want %f", s.position * 48000, t);
     }
 
-    rx_deck_clear_loop(p, 0);
-    rx_deck_play_from(p, 0, dur - 0.5);
-    rx_player_null_advance(p, 44100);
+    cb_deck_clear_loop(p, 0);
+    cb_deck_play_from(p, 0, dur - 0.5);
+    cb_player_null_advance(p, 44100);
     s = st(p);
     CHECK(!s.playing && s.frame == n && s.position == dur, "stops at the end: %lld",
           (long long)s.frame);
-    rx_player_destroy(p);
+    cb_player_destroy(p);
 }
 
 /* A drag: the deck follows the pointer, grains sound while it moves,
  * silence when it stops, and on release it resumes as it was. */
 static void test_scrub(void)
 {
-    RXPlayer *p = make_player(48000);
-    rx_deck_load(p, 0, make_track(2, SECONDS), NULL);
-    rx_deck_play_from(p, 0, 5.0);
-    rx_player_null_advance(p, 4800);
+    CBPlayer *p = make_player(48000);
+    cb_deck_load(p, 0, make_track(2, SECONDS), NULL);
+    cb_deck_play_from(p, 0, 5.0);
+    cb_player_null_advance(p, 4800);
 
-    rx_deck_scrub_begin(p, 0);
-    RXDeckState s = st(p);
+    cb_deck_scrub_begin(p, 0);
+    CBDeckState s = st(p);
     CHECK(s.scrubbing && !s.playing, "scrubbing");
 
     static float buf[2 * 48000];
@@ -599,7 +599,7 @@ static void test_scrub(void)
     bool finite = true;
     for (int i = 0; i < 50; i++) {
         double t = 6.0 + i * 0.02;
-        rx_deck_scrub_to(p, 0, t);
+        cb_deck_scrub_to(p, 0, t);
         CHECK(fabs(st(p).position - t) < 1e-9, "follows the pointer");
         render(p, buf, 800);
         for (int n = 0; n < 2 * 800; n++) {
@@ -619,31 +619,31 @@ static void test_scrub(void)
         still = fmax(still, fabsf(buf[n]));
     CHECK(still == 0.0, "silent when still: %f", still);
 
-    rx_deck_scrub_end(p, 0);
+    cb_deck_scrub_end(p, 0);
     s = st(p);
     CHECK(!s.scrubbing && s.playing, "resumes: it was playing");
     CHECK(fabs(s.position - 6.98) < 1e-9, "from the drag position: %f", s.position);
-    rx_player_null_advance(p, PERIOD);
+    cb_player_null_advance(p, PERIOD);
     CHECK(st(p).playing && st(p).position > 6.98, "playing on");
 
-    rx_deck_pause(p, 0);
-    rx_deck_scrub_begin(p, 0);
-    rx_deck_scrub_to(p, 0, 2.0);
-    rx_deck_scrub_end(p, 0);
-    rx_player_null_advance(p, PERIOD);
+    cb_deck_pause(p, 0);
+    cb_deck_scrub_begin(p, 0);
+    cb_deck_scrub_to(p, 0, 2.0);
+    cb_deck_scrub_end(p, 0);
+    cb_player_null_advance(p, PERIOD);
     s = st(p);
     CHECK(!s.playing && s.position == 2.0, "stays paused: it was paused");
-    rx_player_destroy(p);
+    cb_player_destroy(p);
 }
 
 static void test_levels_and_limits(void)
 {
-    RXPlayer *p = make_player(RATE);
-    RXAudio *a = make_track(1, 2.0);
+    CBPlayer *p = make_player(RATE);
+    CBAudio *a = make_track(1, 2.0);
     for (int64_t i = 0; i < a->nb_frames; i++)
         a->samples[i] = (i & 1) ? 1.0f : -1.0f;
-    rx_deck_load(p, 0, a, NULL);
-    rx_deck_play(p, 0);
+    cb_deck_load(p, 0, a, NULL);
+    cb_deck_play(p, 0);
 
     static float buf[2 * RATE / 2];
     render(p, buf, RATE / 2);
@@ -655,10 +655,10 @@ static void test_levels_and_limits(void)
     }
     CHECK(mono, "a mono track plays on both sides");
     CHECK(peak < 1.0f && peak > 0.8f, "limited below full scale: %f", peak);
-    RXDeckState s = st(p);
+    CBDeckState s = st(p);
     CHECK(s.level_l > 0.9f && s.level_r > 0.9f, "meters: %f %f", s.level_l, s.level_r);
 
-    rx_deck_set_volume(p, 0, 0.5f);
+    cb_deck_set_volume(p, 0, 0.5f);
     render(p, buf, RATE / 10);
     render(p, buf, PERIOD);
     peak = 0.0f;
@@ -666,7 +666,7 @@ static void test_levels_and_limits(void)
         peak = fmaxf(peak, fabsf(buf[n]));
     CHECK(fabsf(peak - 0.5f) < 1e-6f, "deck volume: %f", peak);
 
-    rx_player_set_master_volume(p, 0.0f);
+    cb_player_set_master_volume(p, 0.0f);
     render(p, buf, PERIOD);
     render(p, buf, PERIOD);
     peak = 0.0f;
@@ -677,29 +677,29 @@ static void test_levels_and_limits(void)
     /* The deck meters are the channel's, before the master: they fall
      * back once the deck stops. */
     CHECK(st(p).level_l > 0.45f, "deck meter before the master: %f", st(p).level_l);
-    rx_deck_pause(p, 0);
+    cb_deck_pause(p, 0);
     render(p, buf, RATE / 2);
     s = st(p);
     CHECK(s.level_l < 0.25f, "meter released: %f", s.level_l);
-    rx_player_destroy(p);
+    cb_player_destroy(p);
 }
 
 /* The ring drops commands rather than block when nothing consumes them,
  * and the owner's view keeps to what was accepted. */
 static void test_ring_full(void)
 {
-    RXPlayer *p = make_player(48000);
-    rx_deck_load(p, 0, make_track(2, SECONDS), NULL);
-    enum RXLogLevel level = rx_log_level();
-    rx_log_set_level(RX_LOG_ERROR);
-    for (int i = 0; i < RX_CMD_RING + 10; i++)
-        rx_deck_seek(p, 0, 1.0 + i * 0.001);
-    rx_log_set_level(level);
+    CBPlayer *p = make_player(48000);
+    cb_deck_load(p, 0, make_track(2, SECONDS), NULL);
+    enum CBLogLevel level = cb_log_level();
+    cb_log_set_level(CB_LOG_ERROR);
+    for (int i = 0; i < CB_CMD_RING + 10; i++)
+        cb_deck_seek(p, 0, 1.0 + i * 0.001);
+    cb_log_set_level(level);
     double owner = st(p).position;
-    CHECK(owner < 1.0 + RX_CMD_RING * 0.001, "the dropped seeks are not reported: %f", owner);
-    rx_player_null_advance(p, PERIOD);
+    CHECK(owner < 1.0 + CB_CMD_RING * 0.001, "the dropped seeks are not reported: %f", owner);
+    cb_player_null_advance(p, PERIOD);
     CHECK(st(p).position == owner, "the last accepted seek is where the deck is");
-    rx_player_destroy(p);
+    cb_player_destroy(p);
 }
 
 static void sleep_ms(int ms)
@@ -714,22 +714,22 @@ static void sleep_ms(int ms)
 static void test_threaded(void)
 {
     nb_released = 0;
-    RXPlayerOptions opt;
-    rx_player_options_default(&opt);
-    opt.backend = RX_AUDIO_NULL;
+    CBPlayerOptions opt;
+    cb_player_options_default(&opt);
+    opt.backend = CB_AUDIO_NULL;
     opt.rate = 48000;
     opt.release = on_release;
-    RXPlayer *p = NULL;
-    CHECK(rx_player_create(&p, &opt) == 0 && p, "create");
+    CBPlayer *p = NULL;
+    CHECK(cb_player_create(&p, &opt) == 0 && p, "create");
     if (!p)
         return;
-    CHECK(rx_player_running(p), "running");
+    CHECK(cb_player_running(p), "running");
 
-    RXAudio *a = make_track(2, SECONDS);
-    rx_deck_load(p, 0, a, NULL);
-    rx_deck_play_from(p, 0, 10.0);
+    CBAudio *a = make_track(2, SECONDS);
+    cb_deck_load(p, 0, a, NULL);
+    cb_deck_play_from(p, 0, 10.0);
     sleep_ms(300);
-    RXDeckState s = st(p);
+    CBDeckState s = st(p);
     CHECK(s.playing && s.position > 10.1 && s.position < 11.0, "plays in real time: %f",
           s.position);
 
@@ -745,22 +745,22 @@ static void test_threaded(void)
     }
     CHECK(steps > 100, "smooth: %d distinct positions", steps);
 
-    rx_deck_set_loop(p, 0, 20.0, 20.5, true);
-    rx_deck_seek(p, 0, 20.0);
+    cb_deck_set_loop(p, 0, 20.0, 20.5, true);
+    cb_deck_seek(p, 0, 20.0);
     for (int i = 0; i < 100; i++) {
         double t = st(p).position;
         CHECK(t >= 20.0 && t <= 20.5, "inside the loop: %f", t);
         sleep_ms(5);
     }
 
-    rx_deck_unload(p, 0);
+    cb_deck_unload(p, 0);
     for (int i = 0; i < 200 && nb_released == 0; i++) {
         sleep_ms(5);
         st(p);
     }
     CHECK(nb_released == 1 && released[0] == a, "released from the other thread");
-    rx_player_null_advance(p, 1000);
-    rx_player_destroy(p);
+    cb_player_null_advance(p, 1000);
+    cb_player_destroy(p);
 }
 
 /* ---------------------------------------------------------- master tempo */
@@ -768,9 +768,9 @@ static void test_threaded(void)
 #define MT_RATE 48000
 
 /* A stereo sine at the device rate, so tempo is the only resampling. */
-static RXAudio *make_sine(double hz, double seconds)
+static CBAudio *make_sine(double hz, double seconds)
 {
-    RXAudio *a = calloc(1, sizeof(*a));
+    CBAudio *a = calloc(1, sizeof(*a));
     if (!a)
         abort();
     a->rate = MT_RATE;
@@ -803,7 +803,7 @@ static double sine_freq(const float *buf, int frames, int rate)
     return count > 1 ? (count - 1) * (double)rate / (last - first) : 0.0;
 }
 
-static int mt_latency(const RXPlayer *p)
+static int mt_latency(const CBPlayer *p)
 {
     return p->rt[0].mt.latency;
 }
@@ -815,11 +815,11 @@ static void test_mt_pitch(void)
 {
     static float buf[2 * MT_RATE];
     for (int pass = 0; pass < 2; pass++) {
-        RXPlayer *p = make_player(MT_RATE);
-        rx_deck_load(p, 0, make_sine(440.0, 10.0), NULL);
-        rx_deck_set_tempo(p, 0, 1.08);
-        CHECK(rx_deck_set_master_tempo(p, 0, pass == 1), "set master tempo");
-        rx_deck_play(p, 0);
+        CBPlayer *p = make_player(MT_RATE);
+        cb_deck_load(p, 0, make_sine(440.0, 10.0), NULL);
+        cb_deck_set_tempo(p, 0, 1.08);
+        CHECK(cb_deck_set_master_tempo(p, 0, pass == 1), "set master tempo");
+        cb_deck_play(p, 0);
         render(p, NULL, mt_latency(p) + MT_RATE / 4);
         render(p, buf, MT_RATE);
         double f = sine_freq(buf, MT_RATE, MT_RATE);
@@ -827,7 +827,7 @@ static void test_mt_pitch(void)
         CHECK(fabs(f / want - 1.0) < 0.01, "master tempo %s: %.2f Hz, want %.1f",
               pass ? "on" : "off", f, want);
         printf("master tempo %s at 1.08: %.2f Hz\n", pass ? "on" : "off", f);
-        rx_player_destroy(p);
+        cb_player_destroy(p);
     }
 }
 
@@ -837,20 +837,20 @@ static void test_mt_pitch(void)
  * loop shorter than the delay, inside the loop. */
 static void test_mt_position(void)
 {
-    RXPlayer *p = make_player(MT_RATE);
-    rx_deck_load(p, 0, make_track(2, SECONDS), NULL);
-    rx_deck_set_tempo(p, 0, 1.08);
-    rx_deck_set_master_tempo(p, 0, true);
+    CBPlayer *p = make_player(MT_RATE);
+    cb_deck_load(p, 0, make_track(2, SECONDS), NULL);
+    cb_deck_set_tempo(p, 0, 1.08);
+    cb_deck_set_master_tempo(p, 0, true);
     int lat = mt_latency(p);
     printf("master tempo delay: %d frames, %.1f ms at %d Hz\n", lat, lat * 1000.0 / MT_RATE,
            MT_RATE);
 
     double inc = 1.08 * RATE / MT_RATE;
-    rx_deck_play_from(p, 0, 5.0);
+    cb_deck_play_from(p, 0, 5.0);
     for (int i = 0; i < 20; i++) {
-        rx_player_null_advance(p, 3 * PERIOD + 11);
+        cb_player_null_advance(p, 3 * PERIOD + 11);
         double heard = st(p).position * RATE;
-        double read = rx_pos_get(p->rt[0].pos);
+        double read = cb_pos_get(p->rt[0].pos);
         CHECK(fabs(read - heard - lat * inc) < 1e-6, "lag %f frames, want %f", read - heard,
               lat * inc);
         double want = 5.0 * RATE + (i + 1) * (3 * PERIOD + 11) * inc;
@@ -861,39 +861,39 @@ static void test_mt_position(void)
     double targets[] = { 20.0, 8.0, 8.5, 30.0 };
     for (int i = 0; i < 4; i++) {
         double t = targets[i];
-        rx_deck_seek(p, 0, t);
+        cb_deck_seek(p, 0, t);
         CHECK(st(p).position == t, "reported at once: %f", st(p).position);
-        rx_player_null_advance(p, PERIOD);
+        cb_player_null_advance(p, PERIOD);
         double heard = st(p).position;
         CHECK(heard >= t, "never before the target: %f < %f", heard, t);
         CHECK(fabs(heard * RATE - (t * RATE + PERIOD * inc)) < 1e-6, "%f after %f", heard, t);
     }
 
     /* Paused, it is where it stopped; moved while stopped, where it went. */
-    rx_deck_pause(p, 0);
-    rx_player_null_advance(p, PERIOD);
+    cb_deck_pause(p, 0);
+    cb_player_null_advance(p, PERIOD);
     double paused = st(p).position;
-    CHECK(fabs(rx_pos_get(p->rt[0].pos) - paused * RATE) < 1e-6, "paused where heard");
-    rx_player_null_advance(p, lat + PERIOD);
+    CHECK(fabs(cb_pos_get(p->rt[0].pos) - paused * RATE) < 1e-6, "paused where heard");
+    cb_player_null_advance(p, lat + PERIOD);
     CHECK(st(p).position == paused, "stays: %f, %f", st(p).position, paused);
-    rx_deck_scrub_begin(p, 0);
-    rx_deck_scrub_to(p, 0, 12.0);
-    rx_player_null_advance(p, PERIOD);
+    cb_deck_scrub_begin(p, 0);
+    cb_deck_scrub_to(p, 0, 12.0);
+    cb_player_null_advance(p, PERIOD);
     CHECK(st(p).position == 12.0, "a scrub is where the pointer is: %f", st(p).position);
-    rx_deck_scrub_end(p, 0);
+    cb_deck_scrub_end(p, 0);
 
     /* A quarter of a beat at 128 BPM, 0.117 s: shorter than the delay. */
     double in = 16 * 60.0 / BPM, out = in + 0.25 * 60.0 / BPM;
-    rx_deck_set_loop(p, 0, in, out, true);
-    rx_deck_play_from(p, 0, in);
+    cb_deck_set_loop(p, 0, in, out, true);
+    cb_deck_play_from(p, 0, in);
     bool inside = true;
     for (int i = 0; i < 200; i++) {
-        rx_player_null_advance(p, PERIOD);
+        cb_player_null_advance(p, PERIOD);
         double t = st(p).position;
         inside &= t >= in && t < out;
     }
     CHECK(inside, "a short loop is reported inside itself");
-    rx_player_destroy(p);
+    cb_player_destroy(p);
 }
 
 /* (e) A jump is heard in the very next block. At tempo 1.0 on a device at
@@ -908,18 +908,18 @@ static void test_mt_position(void)
  * reported position is the frame heard. */
 static void test_mt_seek_exact(void)
 {
-    RXPlayer *p = make_player(RATE);
-    RXAudio *a = make_track(2, SECONDS);
-    rx_deck_load(p, 0, a, NULL);
-    rx_deck_set_master_tempo(p, 0, true);
-    rx_deck_play_from(p, 0, 2.0);
-    rx_player_null_advance(p, RATE);
-    int xf = (int)(RATE * RX_FADE_SECONDS);
+    CBPlayer *p = make_player(RATE);
+    CBAudio *a = make_track(2, SECONDS);
+    cb_deck_load(p, 0, a, NULL);
+    cb_deck_set_master_tempo(p, 0, true);
+    cb_deck_play_from(p, 0, 2.0);
+    cb_player_null_advance(p, RATE);
+    int xf = (int)(RATE * CB_FADE_SECONDS);
 
     float buf[2 * PERIOD];
     for (int k = 120; k > 0; k -= 13) {
         int64_t target = click_frame(k) - 200;
-        rx_deck_seek(p, 0, (double)target / RATE);
+        cb_deck_seek(p, 0, (double)target / RATE);
         render(p, buf, PERIOD);
         float other = 0.0f;
         for (int n = xf; n < PERIOD; n++) {
@@ -935,8 +935,8 @@ static void test_mt_seek_exact(void)
 
     double in = 8 * 60.0 / BPM, out = 16 * 60.0 / BPM;
     int64_t in_f = (int64_t)(in * RATE), out_f = (int64_t)(out * RATE);
-    rx_deck_set_loop(p, 0, in, out, true);
-    rx_deck_play_from(p, 0, 3.0);
+    cb_deck_set_loop(p, 0, in, out, true);
+    cb_deck_play_from(p, 0, 3.0);
     int64_t t = 3 * RATE;
     int wraps = 0, bad = 0, bad_pos = 0;
     double err = 0.0;
@@ -960,7 +960,7 @@ static void test_mt_seek_exact(void)
           bad_pos);
     CHECK(wraps >= 4, "%d wraps", wraps);
     printf("master tempo at tempo 1.0: worst difference from the track %g\n", err);
-    rx_player_destroy(p);
+    cb_player_destroy(p);
 }
 
 /* (c) Switching the button while a tone plays, and jumping, pausing and
@@ -972,12 +972,12 @@ static void test_mt_seek_exact(void)
  * more. */
 static void test_mt_toggle(void)
 {
-    RXPlayer *p = make_player(MT_RATE);
-    rx_deck_load(p, 0, make_sine(440.0, 30.0), NULL);
-    rx_deck_set_tempo(p, 0, 1.08);
-    rx_deck_play(p, 0);
+    CBPlayer *p = make_player(MT_RATE);
+    cb_deck_load(p, 0, make_sine(440.0, 30.0), NULL);
+    cb_deck_set_tempo(p, 0, 1.08);
+    cb_deck_play(p, 0);
 
-    int xf = (int)(MT_RATE * RX_FADE_SECONDS);
+    int xf = (int)(MT_RATE * CB_FADE_SECONDS);
     double amp = 0.5 * 1.1;
     double bound = 2 * M_PI * 440.0 * 1.08 * amp / MT_RATE + 2 * amp / xf;
 
@@ -998,23 +998,23 @@ static void test_mt_toggle(void)
     };
     static float buf[2 * 3 * MT_RATE];
     int total = 0, pause_at = 0, play_at = 0;
-    for (size_t i = 0; i < RX_ARRAY_ELEMS(steps); i++) {
+    for (size_t i = 0; i < CB_ARRAY_ELEMS(steps); i++) {
         render(p, buf + 2 * total, steps[i].frames);
         total += steps[i].frames;
         switch (steps[i].what) {
         case ON:
         case OFF:
-            rx_deck_set_master_tempo(p, 0, steps[i].what == ON);
+            cb_deck_set_master_tempo(p, 0, steps[i].what == ON);
             break;
         case JUMP:
-            rx_deck_seek(p, 0, 7.123);
+            cb_deck_seek(p, 0, 7.123);
             break;
         case PAUSE:
-            rx_deck_pause(p, 0);
+            cb_deck_pause(p, 0);
             pause_at = total;
             break;
         case PLAY:
-            rx_deck_play(p, 0);
+            cb_deck_play(p, 0);
             play_at = total;
             break;
         }
@@ -1046,35 +1046,35 @@ static void test_mt_toggle(void)
         quiet += sqrt(e / PERIOD) < 0.2;
     }
     CHECK(quiet == 0, "%d blocks drop out", quiet);
-    rx_player_destroy(p);
+    cb_player_destroy(p);
 }
 
 /* (d) The button is the deck's, not the track's: it survives loads and
  * unloads, and an empty deck reports it too. */
 static void test_mt_flag(void)
 {
-    RXPlayer *p = make_player(MT_RATE);
+    CBPlayer *p = make_player(MT_RATE);
     CHECK(!st(p).master_tempo, "off by default");
-    CHECK(rx_deck_set_master_tempo(p, 0, true), "on, with nothing loaded");
+    CHECK(cb_deck_set_master_tempo(p, 0, true), "on, with nothing loaded");
     CHECK(st(p).master_tempo, "reported on an empty deck");
-    rx_deck_load(p, 0, make_track(2, 5.0), NULL);
-    rx_player_null_advance(p, PERIOD);
+    cb_deck_load(p, 0, make_track(2, 5.0), NULL);
+    cb_player_null_advance(p, PERIOD);
     CHECK(st(p).master_tempo && p->rt[0].mt.on, "kept by a load");
-    rx_deck_unload(p, 0);
-    rx_player_null_advance(p, PERIOD);
+    cb_deck_unload(p, 0);
+    cb_player_null_advance(p, PERIOD);
     CHECK(st(p).master_tempo && p->rt[0].mt.on, "kept by an unload");
-    rx_deck_load(p, 0, make_track(2, 5.0), NULL);
-    rx_deck_load(p, 0, make_track(2, 5.0), NULL);
-    rx_player_null_advance(p, PERIOD);
+    cb_deck_load(p, 0, make_track(2, 5.0), NULL);
+    cb_deck_load(p, 0, make_track(2, 5.0), NULL);
+    cb_player_null_advance(p, PERIOD);
     CHECK(st(p).master_tempo && p->rt[0].mt.on, "kept by a reload");
-    CHECK(rx_deck_set_master_tempo(p, 0, false), "off");
-    rx_player_null_advance(p, PERIOD);
+    CHECK(cb_deck_set_master_tempo(p, 0, false), "off");
+    cb_player_null_advance(p, PERIOD);
     CHECK(!st(p).master_tempo && !p->rt[0].mt.on, "switched off");
-    CHECK(!rx_deck_set_master_tempo(p, RX_DECKS, true), "no such deck");
-    rx_player_destroy(p);
+    CHECK(!cb_deck_set_master_tempo(p, CB_DECKS, true), "no such deck");
+    cb_player_destroy(p);
 }
 
-/* (g) A buffer queued to follow (rx_deck_queue_next), with the button on:
+/* (g) A buffer queued to follow (cb_deck_queue_next), with the button on:
  * the deck reads on into it at the end of its track; the move is reported
  * when it is heard, the shifter's delay later, with the position in the
  * new track from then on, and the old buffer is released once the move is
@@ -1083,73 +1083,73 @@ static void test_mt_flag(void)
 static void test_next_buffer(void)
 {
     nb_released = 0;
-    RXPlayer *p = make_player(MT_RATE);
-    RXAudio *a = make_track(2, 10.0), *b = make_track(2, 10.0);
-    CHECK(rx_deck_queue_next(p, 0, b, NULL) == RX_ERROR(ENOENT), "nothing loaded to follow");
-    rx_deck_load(p, 0, a, NULL);
-    rx_deck_set_master_tempo(p, 0, true);
-    CHECK(rx_deck_queue_next(p, 0, b, NULL) == 0, "queue b");
-    CHECK(st(p).has_next && rx_deck_audio(p, 0) == a, "a plays, b is queued");
+    CBPlayer *p = make_player(MT_RATE);
+    CBAudio *a = make_track(2, 10.0), *b = make_track(2, 10.0);
+    CHECK(cb_deck_queue_next(p, 0, b, NULL) == CB_ERROR(ENOENT), "nothing loaded to follow");
+    cb_deck_load(p, 0, a, NULL);
+    cb_deck_set_master_tempo(p, 0, true);
+    CHECK(cb_deck_queue_next(p, 0, b, NULL) == 0, "queue b");
+    CHECK(st(p).has_next && cb_deck_audio(p, 0) == a, "a plays, b is queued");
     int lat = mt_latency(p);
     unsigned adv0 = st(p).advanced;
 
     /* Up to the read side's move (the track the real-time deck reads). */
     uint64_t next_id = p->own[0].next.id;
-    rx_deck_play_from(p, 0, 10.0 - 0.25);
+    cb_deck_play_from(p, 0, 10.0 - 0.25);
     int steps = 0;
     while (p->rt[0].src.id != next_id && steps < 1000) {
-        rx_player_null_advance(p, PERIOD);
+        cb_player_null_advance(p, PERIOD);
         steps++;
     }
     CHECK(p->rt[0].src.id == next_id, "the read side moved on after %d steps", steps);
-    RXDeckState s = st(p);
-    CHECK(s.advanced == adv0 && rx_deck_audio(p, 0) == a && nb_released == 0,
+    CBDeckState s = st(p);
+    CHECK(s.advanced == adv0 && cb_deck_audio(p, 0) == a && nb_released == 0,
           "not heard yet: advanced %u, released %d", s.advanced, nb_released);
     int since = 0;
     while (st(p).advanced == adv0 && since < 4 * lat) {
-        rx_player_null_advance(p, PERIOD);
+        cb_player_null_advance(p, PERIOD);
         since += PERIOD;
     }
     s = st(p);
     CHECK(s.advanced == adv0 + 1, "heard");
     CHECK(since >= lat - PERIOD && since <= lat + PERIOD, "heard %d frames after the read, delay %d",
           since, lat);
-    CHECK(rx_deck_audio(p, 0) == b && !s.has_next, "b is the deck's buffer, nothing queued");
+    CHECK(cb_deck_audio(p, 0) == b && !s.has_next, "b is the deck's buffer, nothing queued");
     CHECK(s.playing && s.position < 3.0 * PERIOD / MT_RATE, "at the start of b: %f", s.position);
     CHECK(s.duration == 10.0, "b's duration: %f", s.duration);
-    rx_player_null_advance(p, PERIOD);
+    cb_player_null_advance(p, PERIOD);
     st(p);
     CHECK(nb_released == 1 && released[0] == a, "a released: %d", nb_released);
 
     /* A pause inside the delay lands at the start of the new track. */
-    RXAudio *c = make_track(2, 10.0);
-    CHECK(rx_deck_queue_next(p, 0, c, NULL) == 0, "queue c");
+    CBAudio *c = make_track(2, 10.0);
+    CHECK(cb_deck_queue_next(p, 0, c, NULL) == 0, "queue c");
     next_id = p->own[0].next.id;
-    rx_deck_play_from(p, 0, 10.0 - 0.25);
+    cb_deck_play_from(p, 0, 10.0 - 0.25);
     adv0 = st(p).advanced;
     steps = 0;
     while (p->rt[0].src.id != next_id && steps < 1000) {
-        rx_player_null_advance(p, PERIOD);
+        cb_player_null_advance(p, PERIOD);
         steps++;
     }
     CHECK(p->rt[0].src.id == next_id, "the read side moved on to c");
-    rx_deck_pause(p, 0);
-    rx_player_null_advance(p, PERIOD);
+    cb_deck_pause(p, 0);
+    cb_player_null_advance(p, PERIOD);
     s = st(p);
-    CHECK(!s.playing && s.advanced == adv0 + 1 && s.position == 0.0 && rx_deck_audio(p, 0) == c,
+    CHECK(!s.playing && s.advanced == adv0 + 1 && s.position == 0.0 && cb_deck_audio(p, 0) == c,
           "paused at the start of c: advanced %u (want %u), position %f", s.advanced, adv0 + 1,
           s.position);
 
     /* A load drops what was queued. */
-    RXAudio *d = make_track(2, 10.0), *e = make_track(2, 10.0);
-    CHECK(rx_deck_queue_next(p, 0, d, NULL) == 0, "queue d");
+    CBAudio *d = make_track(2, 10.0), *e = make_track(2, 10.0);
+    CHECK(cb_deck_queue_next(p, 0, d, NULL) == 0, "queue d");
     int before = nb_released;
-    rx_deck_load(p, 0, e, NULL);
-    CHECK(!st(p).has_next && rx_deck_audio(p, 0) == e, "a load drops the queued track");
-    rx_player_null_advance(p, PERIOD);
+    cb_deck_load(p, 0, e, NULL);
+    CHECK(!st(p).has_next && cb_deck_audio(p, 0) == e, "a load drops the queued track");
+    cb_player_null_advance(p, PERIOD);
     st(p);
     CHECK(nb_released == before + 2, "c and d released: %d", nb_released - before);
-    rx_player_destroy(p);
+    cb_player_destroy(p);
 }
 
 /* (h) Commands the owner meant for a track the deck has left are dropped
@@ -1159,49 +1159,49 @@ static void test_next_buffer(void)
  * and the callback (the races test), so this applies them by hand. */
 static void test_stale_commands(void)
 {
-    RXPlayer *p = make_player(RATE);
-    RXAudio *a = make_track(2, 5.0), *b = make_track(2, 5.0);
-    rx_deck_load(p, 0, a, NULL);
-    CHECK(rx_deck_queue_next(p, 0, b, NULL) == 0, "queue b");
+    CBPlayer *p = make_player(RATE);
+    CBAudio *a = make_track(2, 5.0), *b = make_track(2, 5.0);
+    cb_deck_load(p, 0, a, NULL);
+    CHECK(cb_deck_queue_next(p, 0, b, NULL) == 0, "queue b");
     uint64_t a_id = p->own[0].cur.id, b_id = p->own[0].next.id;
-    rx_deck_play_from(p, 0, 5.0 - 0.01);
+    cb_deck_play_from(p, 0, 5.0 - 0.01);
     render(p, NULL, RATE / 10);
-    RXDeckRT *d = &p->rt[0];
+    CBDeckRT *d = &p->rt[0];
     CHECK(d->src.id == b_id && !d->next.id, "the deck plays b");
 
-    RXPos pos = d->pos;
+    CBPos pos = d->pos;
     uint64_t applied = d->applied;
-    RXCmd cmds[] = {
-        { .type = RX_CMD_SEEK, .deck = 0, .a = 1000.0, .track = a_id },
-        { .type = RX_CMD_PLAY_FROM, .deck = 0, .a = 1000.0, .track = a_id },
-        { .type = RX_CMD_LOOP_SET, .deck = 0, .a = 100.0, .b = 4000.0, .flag = true,
+    CBCmd cmds[] = {
+        { .type = CB_CMD_SEEK, .deck = 0, .a = 1000.0, .track = a_id },
+        { .type = CB_CMD_PLAY_FROM, .deck = 0, .a = 1000.0, .track = a_id },
+        { .type = CB_CMD_LOOP_SET, .deck = 0, .a = 100.0, .b = 4000.0, .flag = true,
           .track = a_id },
-        { .type = RX_CMD_LOOP_ENABLE, .deck = 0, .flag = true, .track = a_id },
-        { .type = RX_CMD_SCRUB_TO, .deck = 0, .a = 1000.0, .track = a_id },
-        { .type = RX_CMD_NEXT, .deck = 0, .samples = a->samples, .channels = 2, .rate = RATE,
+        { .type = CB_CMD_LOOP_ENABLE, .deck = 0, .flag = true, .track = a_id },
+        { .type = CB_CMD_SCRUB_TO, .deck = 0, .a = 1000.0, .track = a_id },
+        { .type = CB_CMD_NEXT, .deck = 0, .samples = a->samples, .channels = 2, .rate = RATE,
           .nb_frames = a->nb_frames, .id = 9999, .track = a_id },
     };
-    for (int i = 0; i < (int)RX_ARRAY_ELEMS(cmds); i++)
-        rx_player_deck_apply(d, &cmds[i], RATE);
-    CHECK(!rx_pos_cmp(d->pos, pos) && !d->loop_set && !d->loop_enabled && !d->next.id &&
-          d->playing && d->applied == applied + RX_ARRAY_ELEMS(cmds),
+    for (int i = 0; i < (int)CB_ARRAY_ELEMS(cmds); i++)
+        cb_player_deck_apply(d, &cmds[i], RATE);
+    CHECK(!cb_pos_cmp(d->pos, pos) && !d->loop_set && !d->loop_enabled && !d->next.id &&
+          d->playing && d->applied == applied + CB_ARRAY_ELEMS(cmds),
           "stale commands changed the deck: at %f, loop %d, next %llu, applied %llu",
-          rx_pos_get(d->pos), d->loop_enabled, (unsigned long long)d->next.id,
+          cb_pos_get(d->pos), d->loop_enabled, (unsigned long long)d->next.id,
           (unsigned long long)(d->applied - applied));
 
     /* The same, meant for b, apply. */
-    RXCmd seek = { .type = RX_CMD_SEEK, .deck = 0, .a = 1000.0, .track = b_id };
-    rx_player_deck_apply(d, &seek, RATE);
-    CHECK(d->pos.i == 1000, "a seek meant for b: at %f", rx_pos_get(d->pos));
-    rx_player_destroy(p);
+    CBCmd seek = { .type = CB_CMD_SEEK, .deck = 0, .a = 1000.0, .track = b_id };
+    cb_player_deck_apply(d, &seek, RATE);
+    CHECK(d->pos.i == 1000, "a seek meant for b: at %f", cb_pos_get(d->pos));
+    cb_player_destroy(p);
 }
 
 /* Frames [from, from + nb) of one signal, 44.1 kHz stereo: a 441 Hz
  * cosine on the left and its sine on the right, so frame RATE (a whole
  * number of cycles) is a crest of the left. */
-static RXAudio *make_cos(int64_t from, int64_t nb)
+static CBAudio *make_cos(int64_t from, int64_t nb)
 {
-    RXAudio *a = calloc(1, sizeof(*a));
+    CBAudio *a = calloc(1, sizeof(*a));
     if (!a)
         abort();
     a->rate = RATE;
@@ -1239,20 +1239,20 @@ static void test_next_junction(void)
             abort();
         for (int ti = 0; ti < 3; ti++) {
             double tempo = tempos[ti];
-            RXPlayer *p = make_player(rate);
-            rx_deck_load(p, 0, make_cos(0, total), NULL);
-            rx_deck_set_tempo(p, 0, tempo);
-            rx_deck_play_from(p, 0, 0.9);
+            CBPlayer *p = make_player(rate);
+            cb_deck_load(p, 0, make_cos(0, total), NULL);
+            cb_deck_set_tempo(p, 0, tempo);
+            cb_deck_play_from(p, 0, 0.9);
             render(p, ref, n);
-            rx_player_destroy(p);
+            cb_player_destroy(p);
 
             p = make_player(rate);
-            rx_deck_load(p, 0, make_cos(0, cut), NULL);
-            CHECK(rx_deck_queue_next(p, 0, make_cos(cut, total - cut), NULL) == 0, "queue");
-            rx_deck_set_tempo(p, 0, tempo);
-            rx_deck_play_from(p, 0, 0.9);
+            cb_deck_load(p, 0, make_cos(0, cut), NULL);
+            CHECK(cb_deck_queue_next(p, 0, make_cos(cut, total - cut), NULL) == 0, "queue");
+            cb_deck_set_tempo(p, 0, tempo);
+            cb_deck_play_from(p, 0, 0.9);
             render(p, out, n);
-            RXDeckState s = st(p);
+            CBDeckState s = st(p);
             CHECK(s.advanced == 1 && s.duration == 1.0, "%d Hz, tempo %.2f: moved on %u, %f s",
                   rate, tempo, s.advanced, s.duration);
 
@@ -1266,16 +1266,16 @@ static void test_next_junction(void)
                   worst);
             printf("next junction at %d Hz, tempo %.2f: %.4f (whole %.4f), largest difference "
                    "%g\n", rate, tempo, out[2 * at], ref[2 * at], worst);
-            rx_player_destroy(p);
+            cb_player_destroy(p);
         }
         free(ref);
         free(out);
     }
 }
 
-static bool was_released(const RXAudio *a)
+static bool was_released(const CBAudio *a)
 {
-    for (int i = 0; i < RX_MIN(nb_released, (int)RX_ARRAY_ELEMS(released)); i++)
+    for (int i = 0; i < CB_MIN(nb_released, (int)CB_ARRAY_ELEMS(released)); i++)
         if (released[i] == a)
             return true;
     return false;
@@ -1294,26 +1294,26 @@ static void test_next_seek_end(void)
     float one[2 * 4 * PERIOD], out[2 * 4 * PERIOD];
 
     nb_released = 0;
-    RXPlayer *p = make_player(RATE);
-    rx_deck_load(p, 0, make_cos(0, total), NULL);
-    rx_deck_play_from(p, 0, 0.5);
+    CBPlayer *p = make_player(RATE);
+    cb_deck_load(p, 0, make_cos(0, total), NULL);
+    cb_deck_play_from(p, 0, 0.5);
     render(p, NULL, PERIOD);
-    rx_deck_seek(p, 0, 1.0);
+    cb_deck_seek(p, 0, 1.0);
     for (int k = 0; k < n; k += cb)
-        rx_player_mix(p, one + 2 * k, cb);
-    rx_player_destroy(p);
+        cb_player_mix(p, one + 2 * k, cb);
+    cb_player_destroy(p);
 
     nb_released = 0;
     p = make_player(RATE);
-    RXAudio *a = make_cos(0, cut);
-    rx_deck_load(p, 0, a, NULL);
-    CHECK(rx_deck_queue_next(p, 0, make_cos(cut, total - cut), NULL) == 0, "queue");
-    rx_deck_play_from(p, 0, 0.5);
+    CBAudio *a = make_cos(0, cut);
+    cb_deck_load(p, 0, a, NULL);
+    CHECK(cb_deck_queue_next(p, 0, make_cos(cut, total - cut), NULL) == 0, "queue");
+    cb_deck_play_from(p, 0, 0.5);
     render(p, NULL, PERIOD);
-    rx_deck_seek(p, 0, 1.0);
+    cb_deck_seek(p, 0, 1.0);
     bool early = false;
     for (int k = 0; k < n; k += cb) {
-        rx_player_mix(p, out + 2 * k, cb);
+        cb_player_mix(p, out + 2 * k, cb);
         st(p);
         early |= p->rt[0].tail_left > 0 && was_released(a);
     }
@@ -1325,7 +1325,7 @@ static void test_next_seek_end(void)
     CHECK(!early, "the old track released while the tail read it");
     CHECK(was_released(a), "the old track kept after the tail");
     printf("seek to the end into the next: largest difference %g from one buffer\n", worst);
-    rx_player_destroy(p);
+    cb_player_destroy(p);
 }
 
 /* (k) Scrub grains still sounding when the deck moves on (a scrub ended
@@ -1335,27 +1335,27 @@ static void test_next_seek_end(void)
  * sound across the change. */
 static void test_next_grains(void)
 {
-    RXPlayer *p = make_player(RATE);
-    RXAudio *a = calloc(1, sizeof(*a)), *b = make_cos(0, 2 * RATE);
+    CBPlayer *p = make_player(RATE);
+    CBAudio *a = calloc(1, sizeof(*a)), *b = make_cos(0, 2 * RATE);
     if (!a)
         abort();
-    *a = (RXAudio) { .rate = RATE, .channels = 2, .nb_frames = RATE };
+    *a = (CBAudio) { .rate = RATE, .channels = 2, .nb_frames = RATE };
     a->samples = calloc((size_t)RATE * 2, sizeof(float));
     if (!a->samples)
         abort();
     memset(b->samples, 0, sizeof(float) * RATE);    /* its first half second */
-    rx_deck_load(p, 0, a, NULL);
-    CHECK(rx_deck_queue_next(p, 0, b, NULL) == 0, "queue");
-    rx_deck_play_from(p, 0, 0.5);
+    cb_deck_load(p, 0, a, NULL);
+    CHECK(cb_deck_queue_next(p, 0, b, NULL) == 0, "queue");
+    cb_deck_play_from(p, 0, 0.5);
     render(p, NULL, PERIOD);
-    rx_deck_scrub_begin(p, 0);
-    rx_deck_scrub_to(p, 0, 0.97);
+    cb_deck_scrub_begin(p, 0);
+    cb_deck_scrub_to(p, 0, 0.97);
     render(p, NULL, RATE / 100);
     bool grains = false;
-    for (int i = 0; i < RX_GRAINS; i++)
+    for (int i = 0; i < CB_GRAINS; i++)
         grains |= p->rt[0].grains[i].len > 0;
     CHECK(grains, "no grain sounds");
-    rx_deck_scrub_end(p, 0);
+    cb_deck_scrub_end(p, 0);
     static float out[2 * RATE / 10];
     render(p, out, RATE / 10);
     CHECK(st(p).advanced == 1, "moved on");
@@ -1363,7 +1363,7 @@ static void test_next_grains(void)
     for (int k = 0; k < 2 * RATE / 10; k++)
         loud = fmax(loud, fabs(out[k]));
     CHECK(loud == 0.0, "the old track's grains played the next: %g", loud);
-    rx_player_destroy(p);
+    cb_player_destroy(p);
 }
 
 int main(void)

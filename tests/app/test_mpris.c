@@ -1,6 +1,6 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
-/* MPRIS (rxbox/mpris.h) on a private bus of the test's own, never the
+/* MPRIS (cyanbox/mpris.h) on a private bus of the test's own, never the
  * session's: a dbus-daemon listening on a socket in the scratch directory
  * or, where there is no dbus-daemon (a system on dbus-broker),
  * dbus-broker-launch handed a socket bound there; skipped (77) without
@@ -27,7 +27,7 @@
  *
  * Usage: test_mpris FILE.wav SCRATCH_DIR */
 
-#include "rxbox/mpris.h"
+#include "cyanbox/mpris.h"
 
 #include <fcntl.h>
 #include <ftw.h>
@@ -48,7 +48,7 @@
 
 extern char **environ;
 
-#define NAME   "org.mpris.MediaPlayer2.rxbox"
+#define NAME   "org.mpris.MediaPlayer2.cyanbox"
 #define PATH   "/org/mpris/MediaPlayer2"
 #define ROOT   "org.mpris.MediaPlayer2"
 #define PLAYER "org.mpris.MediaPlayer2.Player"
@@ -81,10 +81,10 @@ static int copy_file(const char *from, const char *to)
 {
     uint8_t *data = NULL;
     size_t size = 0;
-    int ret = rx_file_read(from, &data, &size);
+    int ret = cb_file_read(from, &data, &size);
     if (ret < 0)
         return ret;
-    ret = rx_file_write_atomic(to, data, size);
+    ret = cb_file_write_atomic(to, data, size);
     free(data);
     return ret;
 }
@@ -133,7 +133,7 @@ static char *find_program(const char *name)
         dirs = "/usr/bin:/bin";
     while (*dirs) {
         const char *end = strchrnul(dirs, ':');
-        char *full = rx_asprintf("%.*s/%s", (int)(end - dirs), dirs, name);
+        char *full = cb_asprintf("%.*s/%s", (int)(end - dirs), dirs, name);
         if (full && !access(full, X_OK))
             return full;
         free(full);
@@ -186,7 +186,7 @@ static char *start_daemon(const char *prog, const char *listen)
     int fds[2];
     if (pipe2(fds, O_CLOEXEC) < 0)
         return NULL;
-    char *opt = rx_asprintf("--address=%s", listen);
+    char *opt = cb_asprintf("--address=%s", listen);
     char *argv[] = { (char *)prog, "--session", "--nofork", "--print-address=1", opt, NULL };
     posix_spawn_file_actions_t fa;
     posix_spawn_file_actions_init(&fa);
@@ -212,7 +212,7 @@ static char *start_daemon(const char *prog, const char *listen)
         return NULL;
     }
     *nl = '\0';
-    return rx_strdup(line);
+    return cb_strdup(line);
 }
 
 /* dbus-broker-launch on a socket bound here (it takes its socket as
@@ -256,10 +256,10 @@ static char *start_broker(const char *prog, const char *dir, const char *path, b
         "  </policy>\n"
         "</busconfig>\n";
     char *address = socket_address(path, abstract);
-    char *conf = rx_path_join(dir, "bus.conf");
-    char *log = rx_path_join(dir, "bus.log");
+    char *conf = cb_path_join(dir, "bus.conf");
+    char *log = cb_path_join(dir, "bus.log");
     int ret = fd >= 0 && address && conf && log &&
-              rx_file_write(conf, conf_xml, strlen(conf_xml)) >= 0 ? 0 : -1;
+              cb_file_write(conf, conf_xml, strlen(conf_xml)) >= 0 ? 0 : -1;
     if (ret >= 0) {
         char *argv[] = {
             "/bin/sh", "-c",
@@ -301,11 +301,11 @@ static char *start_bus(const char *dir, bool *skip)
         return NULL;
     }
 
-    char *path = rx_path_join(dir, "bus");
+    char *path = cb_path_join(dir, "bus");
     bool abstract = !path || strlen(path) > 99;
     if (abstract) {
         free(path);
-        path = rx_asprintf("rxbox-test-mpris-%d", (int)getpid());
+        path = cb_asprintf("cyanbox-test-mpris-%d", (int)getpid());
     }
 
     char *address = NULL;
@@ -326,7 +326,7 @@ static char *start_bus(const char *dir, bool *skip)
 /* ---------------------------------------------------------------- the client */
 
 typedef struct Ctx {
-    RXApp app;
+    CBApp app;
     sd_bus *client;
 } Ctx;
 
@@ -384,9 +384,9 @@ static int on_signal(sd_bus_message *msg, void *opaque, sd_bus_error *err)
 static void tick(Ctx *c, bool play)
 {
     if (play)
-        rx_player_null_advance(c->app.player, 480);
-    rx_app_tick(&c->app);
-    rx_mpris_tick(&c->app);
+        cb_player_null_advance(c->app.player, 480);
+    cb_app_tick(&c->app);
+    cb_mpris_tick(&c->app);
     if (c->client) {
         while (sd_bus_process(c->client, NULL) > 0)
             ;
@@ -407,8 +407,8 @@ static void steps(Ctx *c, int n)
 
 static bool wait_until(Ctx *c, bool (*done)(Ctx *c), int seconds)
 {
-    int64_t t0 = rx_time_us();
-    while (rx_time_us() - t0 < seconds * 1000000LL) {
+    int64_t t0 = cb_time_us();
+    while (cb_time_us() - t0 < seconds * 1000000LL) {
         step(c);
         if (done(c))
             return true;
@@ -443,8 +443,8 @@ static sd_bus_message *vcall(Ctx *c, const char *iface, const char *member, cons
         fprintf(stderr, "%s.%s: %s\n", iface, member, strerror(-ret));
         return NULL;
     }
-    int64_t t0 = rx_time_us();
-    while (!reply && rx_time_us() - t0 < 10000000)
+    int64_t t0 = cb_time_us();
+    while (!reply && cb_time_us() - t0 < 10000000)
         tick(c, false);
     /* Cancels the callback if it never came. */
     sd_bus_slot_unref(slot);
@@ -653,7 +653,7 @@ static int wait_signal(Ctx *c, int from, const char *member, const char *prop, c
 {
     char key[64];
     snprintf(key, sizeof(key), " %s ", prop ? prop : "");
-    int64_t t0 = rx_time_us();
+    int64_t t0 = cb_time_us();
     while (1) {
         for (int i = from; i < nb_seen; i++) {
             if (strcmp(seen[i].member, member) || (prop && !strstr(seen[i].changed, key)) ||
@@ -661,7 +661,7 @@ static int wait_signal(Ctx *c, int from, const char *member, const char *prop, c
                 continue;
             return i;
         }
-        if (rx_time_us() - t0 > 5000000)
+        if (cb_time_us() - t0 > 5000000)
             return -1;
         step(c);
     }
@@ -670,14 +670,14 @@ static int wait_signal(Ctx *c, int from, const char *member, const char *prop, c
 /* A Seeked at or after `from` to within `tolerance` of `seconds`. */
 static int wait_seeked(Ctx *c, int from, double seconds, double tolerance)
 {
-    int64_t t0 = rx_time_us();
+    int64_t t0 = cb_time_us();
     while (1) {
         for (int i = from; i < nb_seen; i++) {
             if (!strcmp(seen[i].member, "Seeked") &&
                 fabs(seen[i].position * 1e-6 - seconds) <= tolerance)
                 return i;
         }
-        if (rx_time_us() - t0 > 5000000)
+        if (cb_time_us() - t0 > 5000000)
             return -1;
         step(c);
     }
@@ -757,11 +757,11 @@ static void client_close(Ctx *c)
 
 /* ----------------------------------------------------------------- the deck */
 
-static RXTrack *want_track;
+static CBTrack *want_track;
 
 static bool analysis_done(Ctx *c)
 {
-    return !c->app.analysing_total && !rx_jobs_pending(c->app.jobs);
+    return !c->app.analysing_total && !cb_jobs_pending(c->app.jobs);
 }
 
 static bool deck_loaded(Ctx *c)
@@ -771,22 +771,22 @@ static bool deck_loaded(Ctx *c)
 
 static bool deck_playing_want(Ctx *c)
 {
-    RXDeckState st;
-    rx_deck_state(c->app.player, 0, &st);
+    CBDeckState st;
+    cb_deck_state(c->app.player, 0, &st);
     return deck_loaded(c) && st.playing;
 }
 
-static RXDeckState deck(Ctx *c)
+static CBDeckState deck(Ctx *c)
 {
-    RXDeckState st;
-    rx_deck_state(c->app.player, 0, &st);
+    CBDeckState st;
+    cb_deck_state(c->app.player, 0, &st);
     return st;
 }
 
-static RXTrack *track_named(RXApp *app, const char *base)
+static CBTrack *track_named(CBApp *app, const char *base)
 {
     for (int i = 0; i < app->lib.nb_tracks; i++) {
-        if (!strcmp(rx_path_base(app->lib.tracks[i]->path), base))
+        if (!strcmp(cb_path_base(app->lib.tracks[i]->path), base))
             return app->lib.tracks[i];
     }
     return NULL;
@@ -817,25 +817,25 @@ int main(int argc, char **argv)
     sigemptyset(&sa.sa_mask);
     static const int fatal[] = { SIGTERM, SIGINT, SIGHUP, SIGALRM, SIGABRT, SIGSEGV, SIGBUS,
                                  SIGFPE, SIGILL };
-    for (size_t i = 0; i < RX_ARRAY_ELEMS(fatal); i++)
+    for (size_t i = 0; i < CB_ARRAY_ELEMS(fatal); i++)
         sigaction(fatal[i], &sa, NULL);
     atexit(bus_kill);
     alarm(240);
 
     remove_tree(argv[2]);
-    if (rx_mkdir_p(argv[2]) < 0) {
+    if (cb_mkdir_p(argv[2]) < 0) {
         fprintf(stderr, "cannot make %s\n", argv[2]);
         return 2;
     }
-    char *dir = rx_path_abs(argv[2]);
-    char *music = dir ? rx_path_join(dir, "music") : NULL;
-    char *run = dir ? rx_path_join(dir, "run") : NULL;
-    char *root = dir ? rx_path_join(dir, "lib") : NULL;
-    char *root2 = dir ? rx_path_join(dir, "lib2") : NULL;
-    char *a_wav = music ? rx_path_join(music, "a.wav") : NULL;
+    char *dir = cb_path_abs(argv[2]);
+    char *music = dir ? cb_path_join(dir, "music") : NULL;
+    char *run = dir ? cb_path_join(dir, "run") : NULL;
+    char *root = dir ? cb_path_join(dir, "lib") : NULL;
+    char *root2 = dir ? cb_path_join(dir, "lib2") : NULL;
+    char *a_wav = music ? cb_path_join(music, "a.wav") : NULL;
     /* A name a URL must escape: spaces, '#' and UTF-8 (U+00E9). */
-    char *b_wav = music ? rx_path_join(music, "b side #2 \xc3\xa9.wav") : NULL;
-    if (!root || !root2 || !run || !a_wav || !b_wav || rx_mkdir_p(music) < 0 ||
+    char *b_wav = music ? cb_path_join(music, "b side #2 \xc3\xa9.wav") : NULL;
+    if (!root || !root2 || !run || !a_wav || !b_wav || cb_mkdir_p(music) < 0 ||
         mkdir(run, 0700) < 0 || copy_file(wav, a_wav) < 0 || copy_file(wav, b_wav) < 0) {
         fprintf(stderr, "cannot set up %s\n", argv[2]);
         return 2;
@@ -857,45 +857,45 @@ int main(int argc, char **argv)
     setenv("XDG_RUNTIME_DIR", run, 1);
 
     /* Manual: nothing plays unless the test advances it. */
-    RXPlayerOptions po;
-    rx_player_options_default(&po);
-    po.backend = RX_AUDIO_NULL;
+    CBPlayerOptions po;
+    cb_player_options_default(&po);
+    po.backend = CB_AUDIO_NULL;
     po.period = -480;
 
     static Ctx ctx;
     Ctx *c = &ctx;
-    int ret = rx_app_create(&c->app, root, &po, NULL);
-    CHECK(ret == 0, "rx_app_create: %s", strerror(-ret));
+    int ret = cb_app_create(&c->app, root, &po, NULL);
+    CHECK(ret == 0, "cb_app_create: %s", strerror(-ret));
     if (ret < 0)
         return 1;
-    ret = rx_app_add_path(&c->app, music);
+    ret = cb_app_add_path(&c->app, music);
     CHECK(ret == 2, "added %d", ret);
     CHECK(wait_until(c, analysis_done, 300), "the analysis did not finish");
 
-    RXTrack *a = track_named(&c->app, "a.wav");
-    RXTrack *b = track_named(&c->app, rx_path_base(b_wav));
+    CBTrack *a = track_named(&c->app, "a.wav");
+    CBTrack *b = track_named(&c->app, cb_path_base(b_wav));
     CHECK(a && b, "tracks a %p b %p", (void *)a, (void *)b);
     if (!a || !b)
         goto end;
     char a_id[64], b_id[64];
-    snprintf(a_id, sizeof(a_id), "/org/rxbox/track/%llu", (unsigned long long)a->id);
-    snprintf(b_id, sizeof(b_id), "/org/rxbox/track/%llu", (unsigned long long)b->id);
+    snprintf(a_id, sizeof(a_id), "/org/cyanbox/track/%llu", (unsigned long long)a->id);
+    snprintf(b_id, sizeof(b_id), "/org/cyanbox/track/%llu", (unsigned long long)b->id);
 
     /* A thumbnail for a, as the artwork job stores one: the cover file
      * must hold these bytes. */
     static const uint8_t jpeg[] = { 0xff, 0xd8, 0xff, 0xe0, 'r', 'x', 'b', 'o', 'x', 0xff, 0xd9 };
-    ret = rx_library_artwork_save(&c->app.lib, a->id, jpeg, sizeof(jpeg), 240, 240);
+    ret = cb_library_artwork_save(&c->app.lib, a->id, jpeg, sizeof(jpeg), 240, 240);
     CHECK(ret >= 0, "artwork save: %s", strerror(-ret));
 
     /* The view: a then b, by path. */
-    c->app.sort_column = RX_COL_PATH;
+    c->app.sort_column = CB_COL_PATH;
     c->app.sort_descending = false;
-    rx_app_rebuild_rows(&c->app);
+    cb_app_rebuild_rows(&c->app);
     CHECK(c->app.nb_rows == 2 && c->app.lib.tracks[c->app.rows[0]] == a &&
           c->app.lib.tracks[c->app.rows[1]] == b, "the view is not a, b");
 
-    ret = rx_mpris_create(&c->app);
-    CHECK(ret == 0 && c->app.mpris, "rx_mpris_create: %s", strerror(-ret));
+    ret = cb_mpris_create(&c->app);
+    CHECK(ret == 0 && c->app.mpris, "cb_mpris_create: %s", strerror(-ret));
     if (ret < 0)
         goto end;
 
@@ -926,12 +926,12 @@ int main(int argc, char **argv)
               strstr(xml, "<interface name=\"" PROPS "\">") &&
               strstr(xml, "<signal name=\"Seeked\">") && strstr(xml, "<method name=\"OpenUri\">"),
               "the introspection lacks an interface:\n%s", xml);
-        for (size_t i = 0; i < RX_ARRAY_ELEMS(root_props); i++) {
+        for (size_t i = 0; i < CB_ARRAY_ELEMS(root_props); i++) {
             char want[96];
             snprintf(want, sizeof(want), "<property name=\"%s\"", root_props[i]);
             CHECK(strstr(xml, want), "the introspection lacks %s", root_props[i]);
         }
-        for (size_t i = 0; i < RX_ARRAY_ELEMS(player_props); i++) {
+        for (size_t i = 0; i < CB_ARRAY_ELEMS(player_props); i++) {
             char want[96];
             snprintf(want, sizeof(want), "<property name=\"%s\"", player_props[i]);
             CHECK(strstr(xml, want), "the introspection lacks %s", player_props[i]);
@@ -939,9 +939,9 @@ int main(int argc, char **argv)
     }
     sd_bus_message_unref(reply);
 
-    CHECK(get_all(c, ROOT, root_props, RX_ARRAY_ELEMS(root_props)), "GetAll root");
-    CHECK(get_all(c, PLAYER, player_props, RX_ARRAY_ELEMS(player_props)), "GetAll player");
-    CHECK(!strcmp(get_string(c, ROOT, "Identity"), "rxbox"), "Identity");
+    CHECK(get_all(c, ROOT, root_props, CB_ARRAY_ELEMS(root_props)), "GetAll root");
+    CHECK(get_all(c, PLAYER, player_props, CB_ARRAY_ELEMS(player_props)), "GetAll player");
+    CHECK(!strcmp(get_string(c, ROOT, "Identity"), "cyanbox"), "Identity");
     CHECK(get_bool(c, ROOT, "CanQuit") == 1, "CanQuit");
     CHECK(get_bool(c, ROOT, "CanRaise") == 0, "CanRaise");
     CHECK(get_bool(c, ROOT, "HasTrackList") == 0, "HasTrackList");
@@ -967,12 +967,12 @@ int main(int argc, char **argv)
     /* A load: the metadata, Paused, the signal. */
     int mark = nb_seen;
     want_track = a;
-    ret = rx_app_load_deck(&c->app, 0, a);
+    ret = cb_app_load_deck(&c->app, 0, a);
     CHECK(ret == 0, "load: %s", strerror(-ret));
     CHECK(wait_until(c, deck_loaded, 60), "the deck did not load");
     CHECK(get_meta(c, &meta), "Metadata");
     char *a_url = expect_url(a->path);
-    char *a_art = rx_asprintf("%s/rxbox/mpris-%d/%llu.jpg", run, (int)getpid(),
+    char *a_art = cb_asprintf("%s/cyanbox/mpris-%d/%llu.jpg", run, (int)getpid(),
                               (unsigned long long)a->id);
     char *a_art_url = expect_url(a_art);
     CHECK(!strcmp(meta.trackid, a_id), "trackid %s, want %s", meta.trackid, a_id);
@@ -983,7 +983,7 @@ int main(int argc, char **argv)
     CHECK(!strcmp(meta.art, a_art_url), "artUrl %s, want %s", meta.art, a_art_url);
     uint8_t *art = NULL;
     size_t art_size = 0;
-    CHECK(rx_file_read(a_art, &art, &art_size) >= 0 && art_size == sizeof(jpeg) &&
+    CHECK(cb_file_read(a_art, &art, &art_size) >= 0 && art_size == sizeof(jpeg) &&
           !memcmp(art, jpeg, sizeof(jpeg)), "the cover file %s", a_art);
     free(art);
     CHECK(!strcmp(status(c), "Paused"), "loaded: %s", status(c));
@@ -1020,7 +1020,7 @@ int main(int argc, char **argv)
     mark = nb_seen;
     double before = deck(c).position;
     CHECK(!*method_x(c, "Seek", 3000000), "Seek");
-    RXDeckState st = deck(c);
+    CBDeckState st = deck(c);
     CHECK(fabs(st.position - (before + 3.0)) < 1e-3, "Seek +3 s from %.3f: at %.3f", before,
           st.position);
     int64_t pos = get_int64(c, PLAYER, "Position");
@@ -1028,7 +1028,7 @@ int main(int argc, char **argv)
           "Position %lld, the deck %.6f", (long long)pos, st.position);
     CHECK(wait_seeked(c, mark, st.position, 1e-3) >= 0, "no Seeked after Seek");
     mark = nb_seen;
-    rx_ctl_seek(&c->app.decks[0].ctl, 1.0);
+    cb_ctl_seek(&c->app.decks[0].ctl, 1.0);
     CHECK(wait_seeked(c, mark, 1.0, 0.25) >= 0, "no Seeked after a seek on the deck");
     mark = nb_seen;
     CHECK(!*method_x(c, "Seek", -60000000), "Seek back past the start");
@@ -1042,18 +1042,18 @@ int main(int argc, char **argv)
           "no PropertiesChanged to Paused");
     double cue = c->app.decks[0].ctl.cue_point;
     printf("cue point %.3f\n", cue);
-    rx_ctl_seek(&c->app.decks[0].ctl, 6.0);
+    cb_ctl_seek(&c->app.decks[0].ctl, 6.0);
     steps(c, 3);
     CHECK(!*method(c, PLAYER, "Stop", NULL), "Stop");
     st = deck(c);
-    CHECK(!st.playing && fabs(st.position - RX_MAX(cue, 0.0)) < 1e-3,
+    CHECK(!st.playing && fabs(st.position - CB_MAX(cue, 0.0)) < 1e-3,
           "Stop from paused: at %.3f, playing %d", st.position, st.playing);
     CHECK(!*method(c, PLAYER, "PlayPause", NULL), "PlayPause");
     CHECK(deck(c).playing, "PlayPause did not play");
     steps(c, 30);
     CHECK(!*method(c, PLAYER, "Stop", NULL), "Stop");
     st = deck(c);
-    CHECK(!st.playing && fabs(st.position - RX_MAX(cue, 0.0)) < 1e-3,
+    CHECK(!st.playing && fabs(st.position - CB_MAX(cue, 0.0)) < 1e-3,
           "Stop from playing: at %.3f, playing %d", st.position, st.playing);
     CHECK(!strcmp(status(c), "Paused"), "after Stop: %s", status(c));
 
@@ -1062,7 +1062,7 @@ int main(int argc, char **argv)
     CHECK(!*set_position(c, a_id, 5000000), "SetPosition");
     CHECK(fabs(deck(c).position - 5.0) < 1e-3, "SetPosition 5 s: at %.3f", deck(c).position);
     CHECK(wait_seeked(c, mark, 5.0, 1e-3) >= 0, "no Seeked after SetPosition");
-    CHECK(!*set_position(c, "/org/rxbox/track/999999", 2000000), "SetPosition, a stale id");
+    CHECK(!*set_position(c, "/org/cyanbox/track/999999", 2000000), "SetPosition, a stale id");
     CHECK(!*set_position(c, a_id, -1), "SetPosition before the start");
     CHECK(!*set_position(c, a_id, 13000000), "SetPosition past the end");
     CHECK(fabs(deck(c).position - 5.0) < 1e-3, "an ignored SetPosition moved the deck to %.3f",
@@ -1080,7 +1080,7 @@ int main(int argc, char **argv)
     char *b_url = expect_url(b->path);
     CHECK(get_meta(c, &meta) && !strcmp(meta.trackid, b_id) && !strcmp(meta.url, b_url),
           "after Next: trackid %s url %s, want %s %s", meta.trackid, meta.url, b_id, b_url);
-    CHECK(rx_str_ends(meta.url, "/b%20side%20%232%20%C3%A9.wav"), "url %s", meta.url);
+    CHECK(cb_str_ends(meta.url, "/b%20side%20%232%20%C3%A9.wav"), "url %s", meta.url);
     CHECK(!strcmp(meta.title, "b side #2 \xc3\xa9"), "title %s", meta.title);
     CHECK(!meta.art[0], "b has a cover: %s", meta.art);
     CHECK(!strcmp(status(c), "Playing"), "after Next: %s", status(c));
@@ -1113,7 +1113,7 @@ int main(int argc, char **argv)
     CHECK(!*e, "OpenUri %s: %s", b_url, e);
     CHECK(wait_until(c, deck_playing_want, 60), "OpenUri: the deck has %p, want b playing",
           (void *)c->app.decks[0].track);
-    char *gone = rx_asprintf("file://%s/nothing.wav", music);
+    char *gone = cb_asprintf("file://%s/nothing.wav", music);
     e = method(c, PLAYER, "OpenUri", "s", gone);
     CHECK(!strcmp(e, SD_BUS_ERROR_FILE_NOT_FOUND), "OpenUri of a file not in the library: %s", e);
     free(gone);
@@ -1156,47 +1156,47 @@ int main(int argc, char **argv)
      * without a socket in $XDG_RUNTIME_DIR (when its path fits a socket's:
      * sd-bus refuses a longer one as E2BIG), then without either
      * variable. */
-    RXApp app2;
-    ret = rx_app_create(&app2, root2, &po, NULL);
+    CBApp app2;
+    ret = cb_app_create(&app2, root2, &po, NULL);
     CHECK(ret == 0, "the second app: %s", strerror(-ret));
     if (ret == 0) {
-        ret = rx_mpris_create(&app2);
-        CHECK(ret == RX_ERROR(EEXIST) && !app2.mpris, "the name was not refused: %s",
+        ret = cb_mpris_create(&app2);
+        CHECK(ret == CB_ERROR(EEXIST) && !app2.mpris, "the name was not refused: %s",
               strerror(-ret));
         unsetenv("DBUS_SESSION_BUS_ADDRESS");
         if (strlen(run) + sizeof("/bus") <= sizeof(((struct sockaddr_un *)0)->sun_path)) {
-            ret = rx_mpris_create(&app2);
-            CHECK(ret == RX_ERROR(ENOENT) && !app2.mpris, "no bus in %s: %s", run,
+            ret = cb_mpris_create(&app2);
+            CHECK(ret == CB_ERROR(ENOENT) && !app2.mpris, "no bus in %s: %s", run,
                   strerror(-ret));
         }
         unsetenv("XDG_RUNTIME_DIR");
-        ret = rx_mpris_create(&app2);
-        CHECK(ret == RX_ERROR(ENOENT) && !app2.mpris, "no bus: %s", strerror(-ret));
+        ret = cb_mpris_create(&app2);
+        CHECK(ret == CB_ERROR(ENOENT) && !app2.mpris, "no bus: %s", strerror(-ret));
         setenv("XDG_RUNTIME_DIR", run, 1);
         setenv("DBUS_SESSION_BUS_ADDRESS", address, 1);
-        rx_mpris_tick(&app2);
-        rx_app_destroy(&app2);
+        cb_mpris_tick(&app2);
+        cb_app_destroy(&app2);
     }
 
     /* Destroy: the name and the cover go. */
-    rx_mpris_destroy(&c->app);
+    cb_mpris_destroy(&c->app);
     CHECK(!c->app.mpris, "still on the bus");
-    CHECK(!rx_file_exists(a_art), "%s is still there", a_art);
-    char *art_dir = rx_asprintf("%s/rxbox/mpris-%d", run, (int)getpid());
-    CHECK(art_dir && !rx_dir_exists(art_dir), "%s is still there", art_dir);
+    CHECK(!cb_file_exists(a_art), "%s is still there", a_art);
+    char *art_dir = cb_asprintf("%s/cyanbox/mpris-%d", run, (int)getpid());
+    CHECK(art_dir && !cb_dir_exists(art_dir), "%s is still there", art_dir);
     free(art_dir);
-    int64_t t0 = rx_time_us();
-    while (name_owned(c) && rx_time_us() - t0 < 2000000)
+    int64_t t0 = cb_time_us();
+    while (name_owned(c) && cb_time_us() - t0 < 2000000)
         usleep(10000);
     CHECK(!name_owned(c), "%s still has an owner", NAME);
 
     /* A bus that goes away ends MPRIS, not the app. */
-    ret = rx_mpris_create(&c->app);
+    ret = cb_mpris_create(&c->app);
     CHECK(ret == 0, "on the bus again: %s", strerror(-ret));
     client_close(c);
     bus_kill();
-    t0 = rx_time_us();
-    while (c->app.mpris && rx_time_us() - t0 < 5000000)
+    t0 = cb_time_us();
+    while (c->app.mpris && cb_time_us() - t0 < 5000000)
         step(c);
     CHECK(!c->app.mpris, "MPRIS outlived its bus");
 
@@ -1207,7 +1207,7 @@ int main(int argc, char **argv)
 
 end:
     client_close(c);
-    rx_app_destroy(&c->app);
+    cb_app_destroy(&c->app);
     bus_kill();
     free(address);
     free(dir);

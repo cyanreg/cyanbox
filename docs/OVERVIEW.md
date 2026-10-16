@@ -1,12 +1,12 @@
-# rxbox: overview and plan
+# cyanbox: overview and plan
 
-rxbox is a DJ library manager and stick writer in C: the `dj` Python tool ported
+cyanbox is a DJ library manager and stick writer in C: the `dj` Python tool ported
 to C23, with a rekordbox-style interface (SDL3, Vulkan, Dear ImGui), PipeWire
 playback, and a new beat-grid analyser. It never needs rekordbox, AlphaTheta
 software or a rekordbox database.
 
 This document is the high-level survey written before any code: what the two
-earlier attempts are, what each got right, what rxbox keeps, takes and fixes,
+earlier attempts are, what each got right, what cyanbox keeps, takes and fixes,
 and how it is built. Format details stay in `docs/pdb.md`, `docs/anlz.md`,
 `docs/onelibrary.md` and `docs/settings.md` (carried over from dj).
 
@@ -19,7 +19,7 @@ library as plain text (`dj.toml`, one TOML sidecar per track, m3u8 playlists)
 and writes everything a player reads: `export.pdb`, the OneLibrary
 `exportLibrary.db` (SQLCipher), ANLZ `.DAT/.EXT/.2EX`, artwork, My Settings.
 
-What it got right, and rxbox keeps:
+What it got right, and cyanbox keeps:
 
 - **Byte-level format fidelity**, checked against real rekordbox files:
   export.pdb fixed tables byte-identical to rekordbox 7.2.18, settings files
@@ -32,7 +32,7 @@ What it got right, and rxbox keeps:
   generation.
 - A small, readable codebase with real tests and fixtures.
 
-What it lacks, and rxbox adds:
+What it lacks, and cyanbox adds:
 
 - No interface. Cues had to be typed into TOML files; waveforms could not be
   seen; nothing could be auditioned.
@@ -58,35 +58,35 @@ What is worth taking from it (facts, not code; it is GPL):
 - rekordbox's complete 64-entry hot-cue colour palette
   (`crates/rbl-anlz/src/cues.rs`, `DEVICE_PALETTE`), and the default pad colours.
 - The measured 3-band waveform colours and stacking scales (section 6), and
-  its three-band analysis, which rxbox writes as PWV7/PWV6 (section 3).
+  its three-band analysis, which cyanbox writes as PWV7/PWV6 (section 3).
 - The rekordbox keyboard map and the deck's control semantics (memory cue
   tolerance, beat-jump sizes, zoom steps in bars).
 - Its beat-grid *rules* (kicks establish tempo, cuts need support, structure
   identifies beat 1) are sensible, but its implementation is 5k lines tuned on
-  private playlists and is slow. rxbox writes its own (section 5).
+  private playlists and is slow. cyanbox writes its own (section 5).
 
-Where dj is right and rbxport is wrong, and rxbox follows dj: OneLibrary hot-cue
+Where dj is right and rbxport is wrong, and cyanbox follows dj: OneLibrary hot-cue
 `kind` numbering (A–H are 1–8), loop end for non-loops (repeat the start),
 the RGB and blue waveform byte fits (PWAV, PWV2, PWV3, PWV4, PWV5).
 
-## 2. What rxbox is
+## 2. What cyanbox is
 
-One binary, `rxbox`:
+One binary, `cyanbox`:
 
 ```
-rxbox                      the interface
-rxbox add <path>...        add files or folders to the library and analyse them
-rxbox analyze [paths]      (re)analyse; by default only what is missing or stale
-rxbox show <track>         print the resolved grid, key and cues
-rxbox export <stick>       write a stick (both libraries, ANLZ, artwork, presets)
-rxbox inspect <stick>      re-read and validate a stick
-rxbox sync <stick>         review what the player wrote on the stick (cues, history, presets); --apply
-rxbox pull <stick>         sync and accept everything
-rxbox settings             list the My Settings names and values
+cyanbox                      the interface
+cyanbox add <path>...        add files or folders to the library and analyse them
+cyanbox analyze [paths]      (re)analyse; by default only what is missing or stale
+cyanbox show <track>         print the resolved grid, key and cues
+cyanbox export <stick>       write a stick (both libraries, ANLZ, artwork, presets)
+cyanbox inspect <stick>      re-read and validate a stick
+cyanbox sync <stick>         review what the player wrote on the stick (cues, history, presets); --apply
+cyanbox pull <stick>         sync and accept everything
+cyanbox settings             list the My Settings names and values
 ```
 
 The library is one SQLite database, `library.db`, in a directory
-(`$RXBOX_LIBRARY`, `-c DIR`, default `~/.local/share/rxbox`). It holds
+(`$CYANBOX_LIBRARY`, `-c DIR`, default `~/.local/share/cyanbox`). It holds
 everything: file facts and tags, the user's overrides, grid, key, cues,
 rating, colour, My Tags, play counts and history, the waveforms (the
 previews the browser draws kept apart from the detail only the players
@@ -100,7 +100,7 @@ exports. dj's sidecar files are not read or written: nothing was ever
 analysed with dj, and the user does not want the compatibility.
 
 A track's colour is one of rekordbox's eight, kept as its hue in degrees
-(the HSV hue angle of the RGB rekordbox draws it in, `rxbox/colors.h`), or
+(the HSV hue angle of the RGB rekordbox draws it in, `cyanbox/colors.h`), or
 none; a hue between them is removed when the library opens, as anything
 else it holds that is not valid. The interface and the tagging model pick
 one of the eight and store its hue: the model by which of a
@@ -108,9 +108,9 @@ legend of descriptions, one per colour and the user's to edit, fits the
 track best. The comment is the user's: a
 file's comment tag is left out on import unless the `import.comment`
 setting asks for it, so the field starts empty for the DJ and for tagging
-later. rxbox never writes to the audio files.
+later. cyanbox never writes to the audio files.
 
-After a gig, `rxbox sync STICK` (and File → Sync from USB in the interface)
+After a gig, `cyanbox sync STICK` (and File → Sync from USB in the interface)
 reads back what the player wrote to the stick: hot cues and memory cues it
 saved into the analysis files, the play history it appended, and My
 Settings it saved. The interface shows the differences for review; accepted
@@ -126,7 +126,7 @@ All of the items the earlier session listed as worth importing are in scope:
 4. Stable track ids across exports (via the library id).
 5. Checks before writing anything: free space on the stick, no track row too
    long for a DeviceSQL page (named, not a crash).
-6. `rxbox sync` / `pull`: read player-saved cues, play history and presets
+6. `cyanbox sync` / `pull`: read player-saved cues, play history and presets
    from the stick back into the library, matched by track id, with review.
 7. More `inspect` checks: ANLZ embedded path matches the audio, folder matches
    the path hash, fixed track-row values, both libraries agree on hot-cue
@@ -148,7 +148,7 @@ Plus: an optional "maximum compatibility" transcode (AAC and hi-res FLAC to
 16/44.1 FLAC) at export, since nobody knows what players do with AAC priming;
 and the stick's format (`export.format`: as it is, FLAC, or WAV/AIFF for the
 players before the CDJ-2000NXS2), anything not copied encoded from the decoded
-samples as it is written (rx_encode).
+samples as it is written (cb_encode).
 
 ## 4. Architecture
 
@@ -160,8 +160,8 @@ src/formats   export.pdb, ANLZ read/write, OneLibrary (sqlite3 + SQLCipher pages
 src/export    stick plan, writer, inspect, pull
 src/player    PipeWire stream, the player, lock-free command queue, the decks' decoding threads, cue/loop/quantize controls, MASTER TEMPO, null backend for tests
 src/gpu       SDL3 window (Wayland), Vulkan device + VMA, swapchain, Wayland frame-callback pacing, ImGui glue, waveform shader;
-              the compute context without a window and the analysis' STFT and envelope shaders (rx_compute);
-              the Vulkan set-up the window, the compute context and the model share, each a device of its own (rx_vkdev)
+              the compute context without a window and the analysis' STFT and envelope shaders (cb_compute);
+              the Vulkan set-up the window, the compute context and the model share, each a device of its own (cb_vkdev)
 src/ml        MOSS-Audio-4B on Vulkan compute, a device of its own: a track's genre, colour and comment, only when asked (docs/ML.md)
 src/ui        Dear ImGui screens (C++, as are only vendored code and the player's Signalsmith Stretch interface)
 src/cli.c     the subcommands
@@ -197,14 +197,14 @@ Decisions and why:
   over a pixel's columns. ImGui draws everything else.
 - **The track's packets in memory, decoded around the playhead** for
   playback. Loading reads the file's audio packets into a packet store
-  (rxbox/audio.h), placed on the players' timeline, in a few milliseconds;
+  (cyanbox/audio.h), placed on the players' timeline, in a few milliseconds;
   a thread of the deck's own decodes a window of 4 s behind and 8 s ahead of
   the playhead, half a second at every cue point, and the target of every
   jump as it is asked for, so cues, hot cues and loops play at once and a
   click anywhere on the waveform a callback or two later. Decoding the whole
   track first took one to five seconds per load and 450 MB for ten minutes
   at 96 kHz. A jump decodes from enough packets before its target that the
-  samples are the analyser's (rx_decode's) exactly, for every codec but
+  samples are the analyser's (cb_decode's) exactly, for every codec but
   HE-AAC: no seek inaccuracy, sample-exact loops, and grid and audio agree on
   MP3s too. Resampling and varispeed are one cubic interpolator in the
   real-time callback.
@@ -225,7 +225,7 @@ Decisions and why:
   jobs pool analyses many tracks at once (12 cores here). The beat
   analyser's spectral front end (the STFT, its mel and kick bands, and the
   band envelopes around beats) runs as Vulkan compute shaders when there is
-  a device (`rxbox/compute.h`, docs/BEATS.md section 1), on a compute
+  a device (`cyanbox/compute.h`, docs/BEATS.md section 1), on a compute
   context of its own that the pool's workers share: no window, so the CLI
   and the tests use it too, and the interface's is separate from the
   window's device (the frame loop keeps its queue to itself). The GPU only
@@ -291,7 +291,7 @@ new one, and a hand-checked sample where the two disagree.
 
 ## 6. Interface
 
-Layout, top to bottom (rekordbox's "1 PLAYER" Export layout). rxbox is a
+Layout, top to bottom (rekordbox's "1 PLAYER" Export layout). cyanbox is a
 preparation tool for the stick, not a mixer, so there is exactly one player
 and no sync:
 
@@ -330,17 +330,17 @@ Keyboard follows rekordbox's Export preset (space, C, M, I/O/R, 1–3 hot cues,
   the null audio backend, analysis on synthetic tracks, and waveform bytes
   compared with the Python implementation's output on a fixture.
 - A port check: the same tracks, grids and cues exported by the Python `dj`
-  and by `rxbox` must produce identical `export.pdb`, settings and ANLZ
+  and by `cyanbox` must produce identical `export.pdb`, settings and ANLZ
   bytes, apart from the documented fixes.
 - The interface runs on a private headless sway (`WLR_BACKENDS=headless`), never
-  on the user's session; screenshots with `grim`. `rxbox --frames N` runs N
+  on the user's session; screenshots with `grim`. `cyanbox --frames N` runs N
   frames and exits for that.
 - Audio tests use the null backend; headless runs use a PipeWire null sink,
   never the Focusrite.
 
 ## 8. Work split
 
-Implemented by subagents against the interfaces in `include/rxbox/`:
+Implemented by subagents against the interfaces in `include/cyanbox/`:
 
 | Module | Scope |
 | --- | --- |

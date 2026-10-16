@@ -17,7 +17,7 @@
  * disappears is not replaced by another. PIPEWIRE_NODE is honoured by
  * pw_stream_connect itself and gets the same guards. Without either, the
  * session manager picks the default sink, which is the one case where
- * rxbox lets something else choose. */
+ * cyanbox lets something else choose. */
 
 #include "player_internal.h"
 
@@ -27,7 +27,7 @@
 #include <spa/param/audio/format-utils.h>
 #include <spa/pod/builder.h>
 
-struct RXPwOut {
+struct CBPwOut {
     struct pw_thread_loop *loop;
     struct pw_stream      *stream;
     bool                   inited;
@@ -35,7 +35,7 @@ struct RXPwOut {
 
 static void on_process(void *data)
 {
-    RXPlayer *p = data;
+    CBPlayer *p = data;
     struct pw_stream *stream = p->pw->stream;
     struct pw_buffer *b = pw_stream_dequeue_buffer(stream);
     if (!b)
@@ -53,7 +53,7 @@ static void on_process(void *data)
     if (b->requested)
         frames = SPA_MIN(frames, (uint32_t)b->requested);
 
-    rx_player_mix(p, d->data, (int)frames);
+    cb_player_mix(p, d->data, (int)frames);
 
     d->chunk->offset = 0;
     d->chunk->stride = stride;
@@ -64,27 +64,27 @@ static void on_process(void *data)
 static void on_state_changed(void *data, enum pw_stream_state old,
                              enum pw_stream_state state, const char *error)
 {
-    RXPlayer *p = data;
-    enum RXOutState s;
+    CBPlayer *p = data;
+    enum CBOutState s;
 
     switch (state) {
     case PW_STREAM_STATE_STREAMING:
-        s = RX_OUT_RUNNING;
+        s = CB_OUT_RUNNING;
         break;
     case PW_STREAM_STATE_PAUSED:
-        s = RX_OUT_PAUSED;
+        s = CB_OUT_PAUSED;
         break;
     case PW_STREAM_STATE_CONNECTING:
-        s = RX_OUT_CONNECTING;
+        s = CB_OUT_CONNECTING;
         break;
     case PW_STREAM_STATE_UNCONNECTED:
-        s = RX_OUT_UNCONNECTED;
+        s = CB_OUT_UNCONNECTED;
         break;
     case PW_STREAM_STATE_ERROR:
     default:
-        s = RX_OUT_ERROR;
+        s = CB_OUT_ERROR;
         /* The message is written once, before the release store below;
-         * rx_player_error reads it only after seeing ERROR. */
+         * cb_player_error reads it only after seeing ERROR. */
         if (!atomic_exchange_explicit(&p->error_set, true, memory_order_relaxed))
             snprintf(p->error, sizeof(p->error), "PipeWire: %s",
                      error ? error : "stream error");
@@ -92,14 +92,14 @@ static void on_state_changed(void *data, enum pw_stream_state old,
     }
 
     /* ERROR is final: a later UNCONNECTED (teardown) must not hide it. */
-    if (atomic_load_explicit(&p->out_state, memory_order_relaxed) == RX_OUT_ERROR)
+    if (atomic_load_explicit(&p->out_state, memory_order_relaxed) == CB_OUT_ERROR)
         return;
     atomic_store_explicit(&p->out_state, s, memory_order_release);
 
-    if (s == RX_OUT_ERROR)
-        rx_err("player: %s", p->error);
+    if (s == CB_OUT_ERROR)
+        cb_err("player: %s", p->error);
     else
-        rx_debug("player: PipeWire stream %s", pw_stream_state_as_string(state));
+        cb_debug("player: PipeWire stream %s", pw_stream_state_as_string(state));
 }
 
 /* The negotiated format. The stream asks for exactly one rate and the
@@ -107,7 +107,7 @@ static void on_state_changed(void *data, enum pw_stream_state old,
  * but the mix reads the rate from here every callback either way. */
 static void on_param_changed(void *data, uint32_t id, const struct spa_pod *param)
 {
-    RXPlayer *p = data;
+    CBPlayer *p = data;
     if (!param || id != SPA_PARAM_Format)
         return;
 
@@ -115,7 +115,7 @@ static void on_param_changed(void *data, uint32_t id, const struct spa_pod *para
     if (spa_format_audio_raw_parse(param, &info) < 0 || !info.rate)
         return;
     atomic_store_explicit(&p->device_rate, (int)info.rate, memory_order_relaxed);
-    rx_debug("player: PipeWire format %u Hz, %u channels", info.rate, info.channels);
+    cb_debug("player: PipeWire format %u Hz, %u channels", info.rate, info.channels);
 }
 
 static const struct pw_stream_events stream_events = {
@@ -125,19 +125,19 @@ static const struct pw_stream_events stream_events = {
     .process       = on_process,
 };
 
-int rx_player_pw_open(RXPlayer *p)
+int cb_player_pw_open(CBPlayer *p)
 {
-    RXPwOut *pw = calloc(1, sizeof(*pw));
+    CBPwOut *pw = calloc(1, sizeof(*pw));
     if (!pw)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     p->pw = pw;
 
     pw_init(NULL, NULL);
     pw->inited = true;
 
-    pw->loop = pw_thread_loop_new("rxbox-audio", NULL);
+    pw->loop = pw_thread_loop_new("cyanbox-audio", NULL);
     if (!pw->loop)
-        return RX_ERROR(errno ? errno : ENOMEM);
+        return CB_ERROR(errno ? errno : ENOMEM);
 
     const char *name = p->app_name;
     struct pw_properties *props = pw_properties_new(PW_KEY_MEDIA_TYPE, "Audio",
@@ -147,7 +147,7 @@ int rx_player_pw_open(RXPlayer *p)
                                                     PW_KEY_NODE_NAME, name,
                                                     NULL);
     if (!props)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     int rate = p->opt.rate;
     pw_properties_setf(props, PW_KEY_NODE_LATENCY, "%d/%d", p->period, rate);
     if (p->sink)
@@ -171,7 +171,7 @@ int rx_player_pw_open(RXPlayer *p)
 
     if (pw_thread_loop_start(pw->loop) < 0) {
         pw_properties_free(props);
-        return RX_ERROR(EIO);
+        return CB_ERROR(EIO);
     }
 
     int ret = 0;
@@ -180,7 +180,7 @@ int rx_player_pw_open(RXPlayer *p)
     pw->stream = pw_stream_new_simple(pw_thread_loop_get_loop(pw->loop), name, props,
                                       &stream_events, p);
     if (!pw->stream)
-        ret = RX_ERROR(errno ? errno : ENOMEM);
+        ret = CB_ERROR(errno ? errno : ENOMEM);
     else
         ret = pw_stream_connect(pw->stream, PW_DIRECTION_OUTPUT, PW_ID_ANY,
                                 PW_STREAM_FLAG_AUTOCONNECT |
@@ -190,17 +190,17 @@ int rx_player_pw_open(RXPlayer *p)
     pw_thread_loop_unlock(pw->loop);
 
     if (ret < 0) {
-        rx_err("player: cannot connect a PipeWire stream: %s", strerror(-ret));
+        cb_err("player: cannot connect a PipeWire stream: %s", strerror(-ret));
         return ret;
     }
-    rx_debug("player: PipeWire stream to %s, %d Hz, latency %d/%d",
+    cb_debug("player: PipeWire stream to %s, %d Hz, latency %d/%d",
              p->sink ? p->sink : "the default sink", rate, p->period, rate);
     return 0;
 }
 
-void rx_player_pw_close(RXPlayer *p)
+void cb_player_pw_close(CBPlayer *p)
 {
-    RXPwOut *pw = p->pw;
+    CBPwOut *pw = p->pw;
     if (!pw)
         return;
 

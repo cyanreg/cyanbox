@@ -14,7 +14,7 @@
  * Destroying is deferred until every submission that may have sampled the
  * texture, including the frame being built now, has completed. */
 
-#include "rxbox/gpu.h"
+#include "cyanbox/gpu.h"
 
 #include <string.h>
 
@@ -22,27 +22,27 @@
 
 /* ImGui's descriptor pool holds 4096 (imgui_glue.cpp); destroyed textures
  * keep theirs for a frame or two, the font atlas needs a few. */
-#define RX_MAX_TEXTURES 3584
+#define CB_MAX_TEXTURES 3584
 
-uint64_t rx_texture_create(RXWindow *w, const uint8_t *rgba, int width, int height)
+uint64_t cb_texture_create(CBWindow *w, const uint8_t *rgba, int width, int height)
 {
     if (!w || !rgba || width <= 0 || height <= 0 ||
         (uint32_t)width > w->vk.props.limits.maxImageDimension2D ||
         (uint32_t)height > w->vk.props.limits.maxImageDimension2D)
         return 0;
-    if (w->textures.nb >= RX_MAX_TEXTURES) {
-        rx_err("gpu: too many textures (%d)", RX_MAX_TEXTURES);
+    if (w->textures.nb >= CB_MAX_TEXTURES) {
+        cb_err("gpu: too many textures (%d)", CB_MAX_TEXTURES);
         return 0;
     }
 
     /* Room to defer the texture and its staging buffer (vk.c). */
-    if (rx_vk_defer_reserve(w, 2) < 0) {
-        rx_err("gpu: out of memory for a %dx%d texture", width, height);
+    if (cb_vk_defer_reserve(w, 2) < 0) {
+        cb_err("gpu: out of memory for a %dx%d texture", width, height);
         return 0;
     }
 
-    RXTexture tex = { 0 };
-    RXUpload up = { 0 };
+    CBTexture tex = { 0 };
+    CBUpload up = { 0 };
     const VkDeviceSize size = (VkDeviceSize)width * height * 4;
 
     VkImageCreateInfo iinfo = {
@@ -63,9 +63,9 @@ uint64_t rx_texture_create(RXWindow *w, const uint8_t *rgba, int width, int heig
     };
     VkResult res = vmaCreateImage(w->vk.vma, &iinfo, &ainfo, &tex.img, &tex.alloc, NULL);
     if (res != VK_SUCCESS) {
-        rx_err("gpu: unable to create a %dx%d texture: %s", width, height,
-               rx_vk_strerror(res));
-        rx_vk_defer_unreserve(w, 2);
+        cb_err("gpu: unable to create a %dx%d texture: %s", width, height,
+               cb_vk_strerror(res));
+        cb_vk_defer_unreserve(w, 2);
         return 0;
     }
 
@@ -84,8 +84,8 @@ uint64_t rx_texture_create(RXWindow *w, const uint8_t *rgba, int width, int heig
     if (res != VK_SUCCESS)
         goto fail;
 
-    if (rx_vk_buffer_create(w, &up.staging, size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                            RX_MEM_UPLOAD) < 0)
+    if (cb_vk_buffer_create(w, &up.staging, size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                            CB_MEM_UPLOAD) < 0)
         goto fail;
     memcpy(up.staging.map, rgba, size);
     vmaFlushAllocation(w->vk.vma, up.staging.alloc, 0, VK_WHOLE_SIZE);
@@ -93,13 +93,13 @@ uint64_t rx_texture_create(RXWindow *w, const uint8_t *rgba, int width, int heig
     up.width   = (uint32_t)width;
     up.height  = (uint32_t)height;
 
-    tex.id = rx_imgui_add_texture(w, tex.view);
+    tex.id = cb_imgui_add_texture(w, tex.view);
     if (!tex.id)
         goto fail;
 
-    if (!rx_array_push(&w->textures, &tex))
+    if (!cb_array_push(&w->textures, &tex))
         goto fail;
-    if (rx_vk_upload(w, &up) < 0) {
+    if (cb_vk_upload(w, &up) < 0) {
         w->textures.nb--;
         goto fail;
     }
@@ -108,45 +108,45 @@ uint64_t rx_texture_create(RXWindow *w, const uint8_t *rgba, int width, int heig
 
 fail:
     /* Nothing of it was ever submitted: it can all go at once. */
-    rx_err("gpu: unable to create a %dx%d texture", width, height);
-    rx_vk_defer_unreserve(w, 2);
+    cb_err("gpu: unable to create a %dx%d texture", width, height);
+    cb_vk_defer_unreserve(w, 2);
     if (tex.id)
-        rx_imgui_remove_texture(w, tex.id);
-    rx_vk_buffer_free(w, &up.staging);
+        cb_imgui_remove_texture(w, tex.id);
+    cb_vk_buffer_free(w, &up.staging);
     if (tex.view)
         vkDestroyImageView(w->vk.dev, tex.view, NULL);
     vmaDestroyImage(w->vk.vma, tex.img, tex.alloc);
     return 0;
 }
 
-void rx_texture_destroy(RXWindow *w, uint64_t id)
+void cb_texture_destroy(CBWindow *w, uint64_t id)
 {
     if (!w || !id)
         return;
 
     for (size_t i = 0; i < w->textures.nb; i++) {
-        RXTexture *t = rx_array_at(&w->textures, i);
+        CBTexture *t = cb_array_at(&w->textures, i);
         if (t->id != id)
             continue;
 
-        RXDeferred d = {
+        CBDeferred d = {
             .img    = t->img,
             .view   = t->view,
             .alloc  = t->alloc,
             .tex_id = t->id,
         };
-        rx_vk_defer(w, &d);
-        rx_array_remove(&w->textures, i);
+        cb_vk_defer(w, &d);
+        cb_array_remove(&w->textures, i);
         return;
     }
 
-    rx_warn("gpu: destroying a texture that does not exist");
+    cb_warn("gpu: destroying a texture that does not exist");
 }
 
-void rx_textures_destroy_all(RXWindow *w)
+void cb_textures_destroy_all(CBWindow *w)
 {
     while (w->textures.nb) {
-        RXTexture *t = rx_array_at(&w->textures, w->textures.nb - 1);
-        rx_texture_destroy(w, t->id);
+        CBTexture *t = cb_array_at(&w->textures, w->textures.nb - 1);
+        cb_texture_destroy(w, t->id);
     }
 }

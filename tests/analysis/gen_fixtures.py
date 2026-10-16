@@ -10,11 +10,11 @@ writes, into tests/data/analysis/, a few deterministic synthetic signals (closed
 form, no random numbers) as raw little-endian float32 mono (`<name>.f32`) and
 the waveform tags for each of them (`<name>.tags`): PWAV, PWV2, PWV3, PWV4,
 PWV5 and PWVC exactly as dj.analysis.waveform.compute produced them (without
-rxbox's firmware minimums; the C test applies those to this side before
-comparing), PWV6 and PWV7 by rbxport's rules, which rxbox writes instead of
+cyanbox's firmware minimums; the C test applies those to this side before
+comparing), PWV6 and PWV7 by rbxport's rules, which cyanbox writes instead of
 dj's (three_band() below), and keys.txt, the
 expectations of test_key.c: the true key of each tonal() signal, with dj's
-answer for information (rxbox fixes dj's tuning estimate, so they differ).
+answer for information (cyanbox fixes dj's tuning estimate, so they differ).
 
     gen_fixtures.py --real OUTDIR AUDIO...
 
@@ -22,7 +22,7 @@ does the same for real files (not committed: too large): each file is decoded
 with the ffmpeg CLI to f32le mono at its native rate, and next to the .f32 and
 .tags it writes `<name>.key`, dj's key analysis of the same samples on dj's own
 path (resample_poly to 44.1 kHz, then analyse_key), as "rate name confidence
-tuning", for an informational comparison (rxbox deliberately differs from dj
+tuning", for an informational comparison (cyanbox deliberately differs from dj
 there, see src/analysis/key.c). The C side reads the same .f32, so both see
 identical input.
 
@@ -169,7 +169,7 @@ def tonal(rate, tonic, minor, cents=0.0, bpm=124.0, bars=16):
 
 
 # The expectations of test_key.c, written to keys.txt: name, rate, tonic,
-# minor, detune in cents, and the key rxbox is known to give instead of the
+# minor, detune in cents, and the key cyanbox is known to give instead of the
 # true one (None: it must find the true key). With the key detector of
 # docs/KEY.md every one of these is found, so there are no known misses;
 # the entries dj's Temperley matcher got wrong (g96k as C, e22k as Dbm) are
@@ -232,7 +232,7 @@ def _seqsum(v: np.ndarray) -> float:
 
 
 def three_band(x: np.ndarray, rate: int):
-    """rxbox's PWV7 and PWV6, which replace dj's: rbxport's analyser
+    """cyanbox's PWV7 and PWV6, which replace dj's: rbxport's analyser
     (src/analysis/waveform.c, "PWV7" and "PWV6"), written here on whole
     arrays as an independent check of the C, which streams. Every sum is
     added in the C's order so the bytes agree exactly.

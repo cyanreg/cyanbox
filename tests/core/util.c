@@ -23,17 +23,17 @@ void test_rm_rf(const char *path)
 
 char *test_dir(const char *name)
 {
-    const char *base = getenv("RX_TEST_DIR");
-    char *dir = rx_asprintf("%s/%s", base && *base ? base : "test-tmp", name);
+    const char *base = getenv("CB_TEST_DIR");
+    char *dir = cb_asprintf("%s/%s", base && *base ? base : "test-tmp", name);
     if (!dir)
         return NULL;
     test_rm_rf(dir);
-    if (rx_mkdir_p(dir) < 0) {
+    if (cb_mkdir_p(dir) < 0) {
         fprintf(stderr, "cannot create %s\n", dir);
         free(dir);
         return NULL;
     }
-    char *abs = rx_path_abs(dir);
+    char *abs = cb_path_abs(dir);
     free(dir);
     return abs;
 }
@@ -75,14 +75,14 @@ int test_write_wav(const char *path, double seconds, int rate, int channels,
 static int write_wav(const char *path, double seconds, int rate, int channels,
                      const char *const ids[], const char *const values[], int nb_tags)
 {
-    char *dir = rx_strdup(path);
+    char *dir = cb_strdup(path);
     *strrchr(dir, '/') = '\0';
-    rx_mkdir_p(dir);
+    cb_mkdir_p(dir);
     free(dir);
 
     FILE *f = fopen(path, "wb");
     if (!f)
-        return RX_ERROR(errno);
+        return CB_ERROR(errno);
     uint32_t frames = (uint32_t)(seconds * rate);
     uint32_t data = frames * (uint32_t)channels * 2;
     uint32_t list = 0;
@@ -115,7 +115,7 @@ static int write_wav(const char *path, double seconds, int rate, int channels,
         for (int c = 0; c < channels; c++)
             put_le(f, (uint16_t)v, 2);
     }
-    return fclose(f) ? RX_ERROR(EIO) : 0;
+    return fclose(f) ? CB_ERROR(EIO) : 0;
 }
 
 int test_write_wav_comment(const char *path, double seconds, int rate, int channels,

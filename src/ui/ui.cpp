@@ -1,37 +1,37 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
-// The interface's entry points (rx_ui_init, rx_ui_frame, rx_ui_shutdown),
+// The interface's entry points (cb_ui_init, cb_ui_frame, cb_ui_shutdown),
 // the window layout (rekordbox's "1 PLAYER" Export layout: the player across
 // the top, the browser under it, a status bar at the bottom), the menu bar,
 // the style, and the small drawing helpers every screen shares. There is
-// one player: rxbox prepares a stick, it does not mix.
+// one player: cyanbox prepares a stick, it does not mix.
 //
 // Preferences live in the library: the detail zoom, the Traffic Light and
-// the two splits in RXConfig (ui.* settings); the rest of the layout (the
+// the two splits in CBConfig (ui.* settings); the rest of the layout (the
 // table's columns, the detail's style, the grid tools) is ImGui's ini text,
 // stored whole in the "ui.layout" setting instead of a file. What the
 // players' My Settings also say (the waveform colour, the overview type,
 // the key notation, the playhead's place, hot cue colours, and the deck's
 // state at startup: quantize, beat jump, tempo range, master tempo, time
-// mode) comes from them alone (follow_settings), so rxbox shows and
+// mode) comes from them alone (follow_settings), so cyanbox shows and
 // starts as the players will.
 //
 // The headless test hooks are environment variables read here:
-// RXBOX_UI_LINK_DECKS=<players> makes up players on the link for the Link
+// CYANBOX_UI_LINK_DECKS=<players> makes up players on the link for the Link
 // decks' panel (link_decks.cpp);
-// RXBOX_UI_AUTOLOAD=<id> loads that track on the first frame and starts it
-// once it is loaded (RXBOX_UI_AUTOLOAD_AT=<seconds>: from there);
-// RXBOX_UI_SHOW=<list> opens panels and dialogs on the first frame (grid,
+// CYANBOX_UI_AUTOLOAD=<id> loads that track on the first frame and starts it
+// once it is loaded (CYANBOX_UI_AUTOLOAD_AT=<seconds>: from there);
+// CYANBOX_UI_SHOW=<list> opens panels and dialogs on the first frame (grid,
 // half, export, sync, inspect, analysis, settings, add, keys, about, link,
 // remove-missing), and
 // `tags` asks for the autoloaded track's tags from the model;
-// RXBOX_UI_SCREENSHOT=<png> saves frame 100 (RXBOX_UI_SCREENSHOT_FRAME=<n>:
-// frame n) through rx_window_screenshot_next(), which writes it once it is
+// CYANBOX_UI_SCREENSHOT=<png> saves frame 100 (CYANBOX_UI_SCREENSHOT_FRAME=<n>:
+// frame n) through cb_window_screenshot_next(), which writes it once it is
 // presented, and the run goes on; a run that ends before that frame
 // (--frames below it) saves its last frame at shutdown instead. The state
 // the tests look at (the loaded track, playing, a popup open, how the
 // overview and the row previews were drawn, the deck's KEY readout, the
-// view the table shows) is logged with it. RXBOX_UI_EVENTS=<frame>:<event>,...
+// view the table shows) is logged with it. CYANBOX_UI_EVENTS=<frame>:<event>,...
 // gives ImGui input at those frames: down:<key> and up:<key> (ImGui's key
 // names: C, Enter, DownArrow...; Ctrl the modifier), focus-out and focus-in, click:<x>:<y> (the pointer moved
 // there, in logical pixels, and the left button pressed and let go two
@@ -77,45 +77,45 @@ const char *ui_key_text(const UiState *ui, const char *classic, char *buf, size_
 {
     if (!classic || !classic[0])
         return "";
-    const char *k = rx_key_display(classic, ui->key_camelot ? "camelot" : "classic", buf, size);
+    const char *k = cb_key_display(classic, ui->key_camelot ? "camelot" : "classic", buf, size);
     return k ? k : classic;
 }
 
-const char *ui_title(const RXTrack *t)
+const char *ui_title(const CBTrack *t)
 {
     if (t->meta.title && t->meta.title[0])
         return t->meta.title;
-    return t->path ? rx_path_base(t->path) : "";
+    return t->path ? cb_path_base(t->path) : "";
 }
 
-const char *ui_artist(const RXTrack *t)
+const char *ui_artist(const CBTrack *t)
 {
     return t->meta.artist ? t->meta.artist : "";
 }
 
 // A hot cue's pad colour: with the players' HOT CUE COLOR on, its stored
 // colour through rekordbox's 64-entry palette; with it off, or with no
-// colour, the slot's default pad colour (rxbox/colors.h). The pads, the
+// colour, the slot's default pad colour (cyanbox/colors.h). The pads, the
 // badges on the waveforms and in the cue list and the row previews all
 // draw through here.
-uint32_t ui_hot_cue_rgb(const UiState *ui, const RXCue *c)
+uint32_t ui_hot_cue_rgb(const UiState *ui, const CBCue *c)
 {
     int code = 0;
     uint32_t rgb = 0;
-    if (ui->hot_cue_colour && c->color[0] && rx_hot_cue_color(c->color, &code, &rgb) == 0 && rgb)
+    if (ui->hot_cue_colour && c->color[0] && cb_hot_cue_color(c->color, &code, &rgb) == 0 && rgb)
         return rgb;
-    return rx_hot_cue_default_rgb(c->hot >= 0 ? c->hot : 0);
+    return cb_hot_cue_default_rgb(c->hot >= 0 ? c->hot : 0);
 }
 
 // Memory cues are rekordbox's red unless given one of the track colours.
-uint32_t ui_memory_cue_rgb(const RXCue *c)
+uint32_t ui_memory_cue_rgb(const CBCue *c)
 {
     if (c->color[0]) {
-        int id = rx_memory_cue_color_id(c->color);
+        int id = cb_memory_cue_color_id(c->color);
         if (id > 0)
-            return rx_memory_cue_color_rgb(id);
+            return cb_memory_cue_color_rgb(id);
         uint32_t rgb;
-        if (rx_parse_hex_rgb(c->color, &rgb) == 0)
+        if (cb_parse_hex_rgb(c->color, &rgb) == 0)
             return rgb;
     }
     return 0xEA3323;
@@ -123,9 +123,9 @@ uint32_t ui_memory_cue_rgb(const RXCue *c)
 
 // The track's hue at full saturation and the value the track colours are
 // drawn at; 0 for none.
-uint32_t ui_track_rgb(const RXTrack *t)
+uint32_t ui_track_rgb(const CBTrack *t)
 {
-    return rx_track_hue_rgb(t->meta.hue);
+    return cb_track_hue_rgb(t->meta.hue);
 }
 
 // Black or white text for a filled colour, by its luma.
@@ -344,21 +344,21 @@ bool ui_swatch(UiState *ui, const char *id, uint32_t rgb, bool selected, float s
     return pressed;
 }
 
-bool ui_hot_cue_colour_menu(UiState *ui, const char *current, char out[RX_COLOR_MAX])
+bool ui_hot_cue_colour_menu(UiState *ui, const char *current, char out[CB_COLOR_MAX])
 {
     bool picked = false;
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(PX(4), PX(4)));
-    for (int i = 0; i < RX_HOT_CUE_COLORS; i++) {
-        const char *name = rx_hot_cue_color_names[i];
+    for (int i = 0; i < CB_HOT_CUE_COLORS; i++) {
+        const char *name = cb_hot_cue_color_names[i];
         int code = 0;
         uint32_t rgb = 0;
-        rx_hot_cue_color(name, &code, &rgb);
+        cb_hot_cue_color(name, &code, &rgb);
         char id[32];
         snprintf(id, sizeof(id), "##hc%d", i);
         if (i % 8)
             ImGui::SameLine();
         if (ui_swatch(ui, id, rgb, current && !strcmp(current, name), 18)) {
-            snprintf(out, RX_COLOR_MAX, "%s", name);
+            snprintf(out, CB_COLOR_MAX, "%s", name);
             picked = true;
         }
         ui_tooltip(name);
@@ -372,7 +372,7 @@ bool ui_hot_cue_colour_menu(UiState *ui, const char *current, char out[RX_COLOR_
     return picked;
 }
 
-bool ui_track_colour_menu(UiState *ui, const char *current, char out[RX_COLOR_MAX])
+bool ui_track_colour_menu(UiState *ui, const char *current, char out[CB_COLOR_MAX])
 {
     bool picked = false;
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(PX(4), PX(4)));
@@ -381,13 +381,13 @@ bool ui_track_colour_menu(UiState *ui, const char *current, char out[RX_COLOR_MA
         picked = true;
     }
     ui_tooltip("No colour");
-    for (int i = 0; i < RX_TRACK_COLORS; i++) {
-        const char *name = rx_track_color_names[i];
+    for (int i = 0; i < CB_TRACK_COLORS; i++) {
+        const char *name = cb_track_color_names[i];
         char id[32];
         snprintf(id, sizeof(id), "##tc%d", i);
         ImGui::SameLine();
-        if (ui_swatch(ui, id, rx_track_color_rgb(i + 1), current && !strcmp(current, name), 18)) {
-            snprintf(out, RX_COLOR_MAX, "%s", name);
+        if (ui_swatch(ui, id, cb_track_color_rgb(i + 1), current && !strcmp(current, name), 18)) {
+            snprintf(out, CB_COLOR_MAX, "%s", name);
             picked = true;
         }
         ui_tooltip(name);
@@ -401,28 +401,28 @@ bool ui_track_colour_menu(UiState *ui, const char *current, char out[RX_COLOR_MA
 // row fits the info panel's field column and the menu alike.
 bool ui_colour_picker(UiState *ui, const char *id, double *hue, float width)
 {
-    const RXConfig *cfg = &ui->app->lib.cfg;
+    const CBConfig *cfg = &ui->app->lib.cfg;
     bool picked = false;
     ImGui::PushID(id);
     float gap = PX(4);
     float w = width > 0 ? PX(width) : ImGui::GetContentRegionAvail().x;
     float size = ImClamp((w - 8 * gap) / 9 / ui->s, 12.0f, 20.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(gap, gap));
-    int current = rx_track_color_of_hue(*hue);
-    if (ui_swatch(ui, "##none", 0, !rx_hue_valid(*hue), size)) {
-        *hue = RX_HUE_NONE;
+    int current = cb_track_color_of_hue(*hue);
+    if (ui_swatch(ui, "##none", 0, !cb_hue_valid(*hue), size)) {
+        *hue = CB_HUE_NONE;
         picked = true;
     }
     ui_tooltip("No colour");
-    for (int i = 1; i <= RX_TRACK_COLORS; i++) {
+    for (int i = 1; i <= CB_TRACK_COLORS; i++) {
         char sid[16], tip[192];
         snprintf(sid, sizeof(sid), "##c%d", i);
         ImGui::SameLine();
-        if (ui_swatch(ui, sid, rx_track_color_rgb(i), i == current, size)) {
-            *hue = rx_track_color_hue(i);
+        if (ui_swatch(ui, sid, cb_track_color_rgb(i), i == current, size)) {
+            *hue = cb_track_color_hue(i);
             picked = true;
         }
-        snprintf(tip, sizeof(tip), "%s: %s", rx_track_color_name(i), rx_config_vibe(cfg, i));
+        snprintf(tip, sizeof(tip), "%s: %s", cb_track_color_name(i), cb_config_vibe(cfg, i));
         ui_tooltip(tip);
     }
     ImGui::PopStyleVar();
@@ -434,11 +434,11 @@ const char *ui_colour_text(UiState *ui, double hue, char *buf, size_t size)
 {
     // One of the eight, or none: the library keeps no other colour
     // (src/core/clean.c removes one between them when it opens).
-    int id = rx_track_color_of_hue(hue);
+    int id = cb_track_color_of_hue(hue);
     if (!id)
         return "none";
-    snprintf(buf, size, "%s \xC2\xB7 %s", rx_track_color_name(id),
-             rx_config_vibe(&ui->app->lib.cfg, id));
+    snprintf(buf, size, "%s \xC2\xB7 %s", cb_track_color_name(id),
+             cb_config_vibe(&ui->app->lib.cfg, id));
     return buf;
 }
 
@@ -517,13 +517,13 @@ bool ui_button(UiState *ui, const char *id, ImVec2 size, const UiButton &b)
 const char *const ui_setting_titles[UI_NB_SETTING_SECTIONS] = { "Player", "Mixer", "Device" };
 const char *const ui_setting_prefixes[UI_NB_SETTING_SECTIONS] = { "player", "mixer", "device" };
 
-// The section `rxbox settings` prints a file's fields under (cli.c,
+// The section `cyanbox settings` prints a file's fields under (cli.c,
 // settings_section).
 static int setting_section(const char *file)
 {
-    if (!rx_strcasecmp(file, "MYSETTING.DAT") || !rx_strcasecmp(file, "MYSETTING2.DAT"))
+    if (!cb_strcasecmp(file, "MYSETTING.DAT") || !cb_strcasecmp(file, "MYSETTING2.DAT"))
         return UI_SETTINGS_PLAYER;
-    if (!rx_strcasecmp(file, "DJMMYSETTING.DAT"))
+    if (!cb_strcasecmp(file, "DJMMYSETTING.DAT"))
         return UI_SETTINGS_MIXER;
     return UI_SETTINGS_DEVICE;
 }
@@ -550,7 +550,7 @@ static void setting_listed(void *opaque, const char *file, const char *name,
 const std::vector<UiSetting> &ui_settings(UiState *ui)
 {
     if (ui->settings.empty())
-        rx_settings_list(setting_listed, &ui->settings);
+        cb_settings_list(setting_listed, &ui->settings);
     return ui->settings;
 }
 
@@ -604,7 +604,7 @@ const char *ui_setting_label(const char *name, char *buf, size_t size)
     return buf;
 }
 
-// `value` is as `rxbox settings` lists it (rx_settings_value gives that
+// `value` is as `cyanbox settings` lists it (cb_settings_value gives that
 // form for what the library holds). The switches are On and Off; numbers
 // stay as they are, with the unit the listing leaves out; words are
 // written out with the first capitalised ("steep_top" is "Steep top"),
@@ -663,7 +663,7 @@ const char *ui_setting_value(const char *name, const char *value, char *buf, siz
 
 const char *ui_my_setting(UiState *ui, const char *key)
 {
-    const char *v = rx_settings_get(&ui->app->lib.cfg, key);
+    const char *v = cb_settings_get(&ui->app->lib.cfg, key);
     return v ? v : "";
 }
 
@@ -675,19 +675,19 @@ void ui_want_frames(UiState *ui, int n)
 
 void ui_save_config(UiState *ui)
 {
-    int ret = rx_library_config_save(&ui->app->lib);
+    int ret = cb_library_config_save(&ui->app->lib);
     if (ret < 0)
-        rx_app_set_status(ui->app, "Could not save the settings: %s", strerror(-ret));
+        cb_app_set_status(ui->app, "Could not save the settings: %s", strerror(-ret));
 }
 
 /* -------------------------------------------------------------- deck loading */
 
-static void load_now(UiState *ui, int deck, RXTrack *t)
+static void load_now(UiState *ui, int deck, CBTrack *t)
 {
     char name[256];
-    int ret = rx_app_load_deck(ui->app, deck, t);
+    int ret = cb_app_load_deck(ui->app, deck, t);
     if (ret < 0)
-        rx_app_set_status(ui->app, "Could not load %s: %s", rx_track_display(t, name, sizeof(name)),
+        cb_app_set_status(ui->app, "Could not load %s: %s", cb_track_display(t, name, sizeof(name)),
                           strerror(-ret));
     ui_want_frames(ui, 3);
 }
@@ -696,27 +696,27 @@ static bool deck_playing(UiState *ui, int deck)
 {
     if (!ui->app->player)
         return false;
-    RXDeckState st;
-    rx_deck_state(ui->app->player, deck, &st);
+    CBDeckState st;
+    cb_deck_state(ui->app->player, deck, &st);
     return st.loaded && st.playing;
 }
 
 // A load replaces whatever the player holds, playing or not: the app
-// refuses to swap a playing deck (rx_app_load_deck says EBUSY), so the
+// refuses to swap a playing deck (cb_app_load_deck says EBUSY), so the
 // player pauses first and the new track waits at its auto-cue.
-void ui_load(UiState *ui, RXTrack *t)
+void ui_load(UiState *ui, CBTrack *t)
 {
     if (!t)
         return;
     if (t->missing) {
-        rx_app_set_status(ui->app, "%s is missing: relocate it first", ui_title(t));
+        cb_app_set_status(ui->app, "%s is missing: relocate it first", ui_title(t));
         return;
     }
     // A track loaded over a playing one plays on: the deck pauses for the
     // swap and starts the new track from its cue once it is in.
     bool playing = deck_playing(ui, 0);
     if (playing)
-        rx_deck_pause(ui->app->player, 0);
+        cb_deck_pause(ui->app->player, 0);
     // The cue list's selection was the old track's: Delete is the table's
     // again (the list also lets go when it sees another track loaded).
     ui_cue_list_release(ui, 0);
@@ -842,7 +842,7 @@ static void load_bold_font(UiState *ui)
         return;
     ImFontConfig cfg;
     cfg.FontNo = (ImU32)index;
-    snprintf(cfg.Name, sizeof(cfg.Name), "rxbox bold");
+    snprintf(cfg.Name, sizeof(cfg.Name), "cyanbox bold");
     ImFont *f = io.Fonts->AddFontFromFileTTF(path.c_str(), ui->font_base, &cfg);
     if (!f)
         return;
@@ -865,7 +865,7 @@ static void *ini_open(ImGuiContext *, ImGuiSettingsHandler *, const char *name)
 static void ini_line(ImGuiContext *, ImGuiSettingsHandler *h, void *, const char *line)
 {
     UiState *ui = (UiState *)h->UserData;
-    RXDeckView *dv = &ui->app->decks[0];
+    CBDeckView *dv = &ui->app->decks[0];
     int i;
     if (sscanf(line, "DetailHalf=%d", &i) == 1)
         ui->detail_half = i != 0;
@@ -882,8 +882,8 @@ static void ini_line(ImGuiContext *, ImGuiSettingsHandler *h, void *, const char
 static void ini_write(ImGuiContext *, ImGuiSettingsHandler *h, ImGuiTextBuffer *out)
 {
     UiState *ui = (UiState *)h->UserData;
-    RXDeckView *dv = &ui->app->decks[0];
-    out->appendf("[rxbox][ui]\n");
+    CBDeckView *dv = &ui->app->decks[0];
+    out->appendf("[cyanbox][ui]\n");
     out->appendf("DetailHalf=%d\n", ui->detail_half);
     out->appendf("GridTools=%d\n\n", dv->grid_edit);
 }
@@ -898,8 +898,8 @@ static void save_layout(UiState *ui)
 {
     size_t size = 0;
     const char *text = ImGui::SaveIniSettingsToMemory(&size);
-    if (text && rx_library_setting_set(&ui->app->lib, "ui.layout", text) < 0)
-        rx_warn("ui: could not save the layout");
+    if (text && cb_library_setting_set(&ui->app->lib, "ui.layout", text) < 0)
+        cb_warn("ui: could not save the layout");
     ImGui::GetIO().WantSaveIniSettings = false;
 }
 
@@ -907,8 +907,8 @@ static void save_layout(UiState *ui)
 
 static void menu_bar(UiState *ui)
 {
-    RXApp *app = ui->app;
-    RXConfig *cfg = &app->lib.cfg;
+    CBApp *app = ui->app;
+    CBConfig *cfg = &app->lib.cfg;
     if (!ImGui::BeginMenuBar())
         return;
 
@@ -926,11 +926,11 @@ static void menu_bar(UiState *ui)
             ui_open_settings(ui);
         ImGui::Separator();
         if (ImGui::MenuItem("Rescan missing files")) {
-            int n = rx_app_rescan(app);
+            int n = cb_app_rescan(app);
             if (n > 0)
-                rx_app_set_status(app, "%d track%s changed state", n, n == 1 ? "" : "s");
+                cb_app_set_status(app, "%d track%s changed state", n, n == 1 ? "" : "s");
             else
-                rx_app_set_status(app, "No change in missing files");
+                cb_app_set_status(app, "No change in missing files");
         }
         if (ImGui::MenuItem("Remove missing tracks..."))
             ui_open_remove_missing(ui);
@@ -938,7 +938,7 @@ static void menu_bar(UiState *ui)
         if (ImGui::MenuItem("Quit", "Ctrl+Q")) {
             app->quit = true;
             if (app->window)
-                rx_window_request_close(app->window);
+                cb_window_request_close(app->window);
         }
         ImGui::EndMenu();
     }
@@ -983,7 +983,7 @@ static void menu_bar(UiState *ui)
                 if (ImGui::MenuItem(reaches[i], nullptr, on) && !on) {
                     ui->traffic_light = i;
                     snprintf(cfg->traffic_light, sizeof(cfg->traffic_light), "%s",
-                             rx_key_reach_name((RXKeyReach)i));
+                             cb_key_reach_name((CBKeyReach)i));
                     ui_save_config(ui);
                 }
             }
@@ -1012,24 +1012,24 @@ static void menu_bar(UiState *ui)
         bool any = app->nb_selection > 0;
         if (ImGui::MenuItem("Analyse selection", nullptr, false, any)) {
             for (int i = 0; i < app->nb_selection; i++) {
-                RXTrack *t = rx_library_find_id(&app->lib, app->selection[i]);
+                CBTrack *t = cb_library_find_id(&app->lib, app->selection[i]);
                 if (t)
-                    rx_app_analyse_track(app, t, app->lib.cfg.analyse_what, false);
+                    cb_app_analyse_track(app, t, app->lib.cfg.analyse_what, false);
             }
         }
         if (ImGui::MenuItem("Analyse all unanalysed"))
-            rx_app_analyse_all(app, false);
+            cb_app_analyse_all(app, false);
         if (ImGui::MenuItem("Re-analyse selection", nullptr, false, any))
-            rx_app_analyse_tracks(app, app->selection, app->nb_selection,
+            cb_app_analyse_tracks(app, app->selection, app->nb_selection,
                                   app->lib.cfg.analyse_what, true);
         // The model's genre, colour and comment: asked for here or in the
         // track menu, never by "Analyse all" (seconds a track on the GPU).
         ImGui::Separator();
         if (ImGui::MenuItem("Analyse tags of selection", nullptr, false, any))
-            rx_app_tag_tracks(app, app->selection, app->nb_selection);
+            cb_app_tag_tracks(app, app->selection, app->nb_selection);
         if (ImGui::MenuItem("Stop tagging", nullptr, false,
-                            rx_app_tag_progress(app, nullptr, nullptr, nullptr)))
-            rx_app_cancel_tags(app);
+                            cb_app_tag_progress(app, nullptr, nullptr, nullptr)))
+            cb_app_cancel_tags(app);
         ImGui::Separator();
         if (ImGui::MenuItem("Analysis settings..."))
             ui->dlg_analysis = true;
@@ -1046,7 +1046,7 @@ static void menu_bar(UiState *ui)
     if (ImGui::BeginMenu("Help")) {
         if (ImGui::MenuItem("Keyboard map"))
             ui->dlg_keys = true;
-        if (ImGui::MenuItem("About rxbox"))
+        if (ImGui::MenuItem("About cyanbox"))
             ui->dlg_about = true;
         ImGui::EndMenu();
     }
@@ -1057,7 +1057,7 @@ static void menu_bar(UiState *ui)
 
 static void status_bar(UiState *ui, ImVec2 a, ImVec2 b)
 {
-    RXApp *app = ui->app;
+    CBApp *app = ui->app;
     ImDrawList *dl = ImGui::GetWindowDrawList();
     dl->AddRectFilled(a, b, IM_COL32(0x1A, 0x1A, 0x1A, 0xFF));
     dl->AddLine(a, ImVec2(b.x, a.y), IM_COL32(0x2E, 0x2E, 0x2E, 0xFF));
@@ -1068,7 +1068,7 @@ static void status_bar(UiState *ui, ImVec2 a, ImVec2 b)
     // Right, inwards from the edge: the GPU, the library size, the audio
     // state (the stream's error in red while it is not running).
     float x = b.x - PX(8);
-    const char *gpu = rx_window_gpu_name(app->window);
+    const char *gpu = cb_window_gpu_name(app->window);
     if (gpu && gpu[0]) {
         x -= ui_text_width(ui, nullptr, fs, gpu);
         ui_text(ui, dl, nullptr, fs, ImVec2(x, ty), UI_DIM, gpu);
@@ -1099,14 +1099,14 @@ static void status_bar(UiState *ui, ImVec2 a, ImVec2 b)
     char audio[160];
     const char *err = nullptr;
     ImU32 acol = UI_DIM;
-    if (!app->player || rx_player_backend(app->player) == RX_AUDIO_NULL) {
+    if (!app->player || cb_player_backend(app->player) == CB_AUDIO_NULL) {
         snprintf(audio, sizeof(audio), "Audio: none");
-    } else if ((err = rx_player_error(app->player))) {
+    } else if ((err = cb_player_error(app->player))) {
         snprintf(audio, sizeof(audio), "%s", err);
         acol = UI_RED;
-    } else if (rx_player_backend(app->player) == RX_AUDIO_RING) {
+    } else if (cb_player_backend(app->player) == CB_AUDIO_RING) {
         // --pro-link: the deck heard only in a mixer's headphone cue.
-        const RXLinkCueState &c = app->link_state.cue;
+        const CBLinkCueState &c = app->link_state.cue;
         if (!app->link_state.cue_enabled || !c.mixer)
             snprintf(audio, sizeof(audio), "LINK CUE: no mixer");
         else if (!c.on)
@@ -1121,9 +1121,9 @@ static void status_bar(UiState *ui, ImVec2 a, ImVec2 b)
         if (c.ours && c.sending)
             acol = UI_PLAY;
     } else {
-        const char *sink = rx_player_sink(app->player);
+        const char *sink = cb_player_sink(app->player);
         snprintf(audio, sizeof(audio), "PipeWire %g kHz \xC2\xB7 %s",
-                 rx_player_rate(app->player) / 1000.0, sink ? sink : "default");
+                 cb_player_rate(app->player) / 1000.0, sink ? sink : "default");
     }
     x -= PX(16) + ui_text_width(ui, nullptr, fs, audio);
     ui_text(ui, dl, nullptr, fs, ImVec2(x, ty), acol, audio);
@@ -1155,7 +1155,7 @@ static void status_bar(UiState *ui, ImVec2 a, ImVec2 b)
         const auto &es = app->export_state;
         bool copying = !strcmp(es.stage, "copy") && es.bytes_total > 0;
         char rate[64];
-        rx_export_rate_text(copying ? es.rate : 0, es.seconds_left, rate, sizeof(rate));
+        cb_export_rate_text(copying ? es.rate : 0, es.seconds_left, rate, sizeof(rate));
         snprintf(mid, sizeof(mid), "Export %s %d/%d%s%s  %s", es.stage, es.done, es.total, rate[0] ? "  " : "",
                  rate, es.item);
         frac = copying ? (float)((double)es.bytes_done / (double)es.bytes_total)
@@ -1163,25 +1163,25 @@ static void status_bar(UiState *ui, ImVec2 a, ImVec2 b)
     } else if (app->analysing_total > 0 && app->analysing_done < app->analysing_total) {
         char name[200] = "";
         uint64_t ids[16];
-        int n = app->jobs ? rx_jobs_active_tracks(app->jobs, ids, 16) : 0;
+        int n = app->jobs ? cb_jobs_active_tracks(app->jobs, ids, 16) : 0;
         for (int i = 0; i < n; i++) {
-            RXTrack *t = ids[i] ? rx_library_find_id(&app->lib, ids[i]) : nullptr;
+            CBTrack *t = ids[i] ? cb_library_find_id(&app->lib, ids[i]) : nullptr;
             if (t) {
-                rx_track_display(t, name, sizeof(name));
+                cb_track_display(t, name, sizeof(name));
                 break;
             }
         }
         snprintf(mid, sizeof(mid), "Analysing %d/%d%s%s", app->analysing_done + 1, app->analysing_total,
                  name[0] ? ": " : "", name);
         frac = (float)app->analysing_done / app->analysing_total;
-    } else if (rx_app_tag_progress(app, &tag_done, &tag_total, &tag_current)) {
+    } else if (cb_app_tag_progress(app, &tag_done, &tag_total, &tag_current)) {
         // The track being tagged; none while the model loads, or unloads
         // after the last.
         char name[200];
         snprintf(name, sizeof(name), "%s the model", tag_done < tag_total ? "loading" : "unloading");
-        RXTrack *t = tag_current ? rx_library_find_id(&app->lib, tag_current) : nullptr;
+        CBTrack *t = tag_current ? cb_library_find_id(&app->lib, tag_current) : nullptr;
         if (t)
-            rx_track_display(t, name, sizeof(name));
+            cb_track_display(t, name, sizeof(name));
         snprintf(mid, sizeof(mid), "Tagging %d/%d: %s", ImMin(tag_done + 1, tag_total), tag_total,
                  name);
         frac = tag_total > 0 ? (float)tag_done / tag_total : 0;
@@ -1202,7 +1202,7 @@ static void status_bar(UiState *ui, ImVec2 a, ImVec2 b)
 
     // Left: the last message, dimmed after a while.
     if (app->status[0]) {
-        int64_t age = rx_time_us() - app->status_time;
+        int64_t age = cb_time_us() - app->status_time;
         bool fresh = app->status_time == 0 || age < 8000000;
         ui_text(ui, dl, nullptr, fs, ImVec2(a.x + PX(8), ty), fresh ? UI_TEXT : UI_DIM, app->status,
                 mid_x - a.x - PX(24));
@@ -1239,7 +1239,7 @@ static float splitter(UiState *ui, const char *id, ImVec2 pos, ImVec2 size, bool
 
 /* ------------------------------------------------------------ test hooks */
 
-// RXBOX_UI_EVENTS (see the top of the file).
+// CYANBOX_UI_EVENTS (see the top of the file).
 static void parse_test_events(UiState *ui, const char *spec)
 {
     std::string all = spec;
@@ -1262,7 +1262,7 @@ static void parse_test_events(UiState *ui, const char *spec)
         } else if (!strcmp(what, "click") || !strcmp(what, "rclick")) {
             ev.type = what[0] == 'r' ? 6 : 4;
             if (sscanf(key, "%f:%f", &ev.x, &ev.y) != 2) {
-                rx_warn("RXBOX_UI_EVENTS: click wants x:y, not %s", key);
+                cb_warn("CYANBOX_UI_EVENTS: click wants x:y, not %s", key);
                 continue;
             }
         } else if (!strcmp(what, "down") || !strcmp(what, "up")) {
@@ -1274,11 +1274,11 @@ static void parse_test_events(UiState *ui, const char *spec)
                     ev.key = (ImGuiKey)k;
             }
             if (ev.key == ImGuiKey_None) {
-                rx_warn("RXBOX_UI_EVENTS: no key %s", key);
+                cb_warn("CYANBOX_UI_EVENTS: no key %s", key);
                 continue;
             }
         } else {
-            rx_warn("RXBOX_UI_EVENTS: no event %s", what);
+            cb_warn("CYANBOX_UI_EVENTS: no event %s", what);
             continue;
         }
         ui->test_events.push_back(ev);
@@ -1321,21 +1321,21 @@ static void test_events(UiState *ui)
 static const char *mode_drawn(int mode)
 {
     switch (mode) {
-    case RX_WAVE_CENTRED:       return "centred";
-    case RX_WAVE_HALF_STACKED:  return "half";
-    case RX_WAVE_HALF_OVERLAID: return "overlaid";
+    case CB_WAVE_CENTRED:       return "centred";
+    case CB_WAVE_HALF_STACKED:  return "half";
+    case CB_WAVE_HALF_OVERLAID: return "overlaid";
     default:                    return "none";
     }
 }
 
 static void log_test_state(UiState *ui)
 {
-    RXApp *app = ui->app;
-    RXDeckState st;
+    CBApp *app = ui->app;
+    CBDeckState st;
     ui_deck_position(ui, 0, &st);
     bool popup = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
-    const RXTrack *t = app->decks[0].track;
-    rx_info("ui test: frame %d track %llu playing %d position %.2f popup %d cues %d cue-keys %d "
+    const CBTrack *t = app->decks[0].track;
+    cb_info("ui test: frame %d track %llu playing %d position %.2f popup %d cues %d cue-keys %d "
             "overview %s previews %s key %s",
             ui->frame_no, (unsigned long long)(t ? t->id : 0), st.playing, st.position, popup,
             t ? t->nb_cues : 0, ui_cue_list_has_keys(ui, 0), mode_drawn(ui->overview_mode_drawn),
@@ -1350,23 +1350,23 @@ static void log_test_state(UiState *ui)
                      : !app->current_album   ? "Collection"
                      : app->current_album[0] ? app->current_album
                                              : "None";
-    rx_info("ui test: view \"%s\" rows %d", view, app->nb_rows);
+    cb_info("ui test: view \"%s\" rows %d", view, app->nb_rows);
     if (ui->link_decks_drawn)
-        rx_info("ui test: link decks %d", ui->link_decks_drawn);
+        cb_info("ui test: link decks %d", ui->link_decks_drawn);
     if (ui->link_menu_frame && ui->frame_no - ui->link_menu_frame <= 2)
-        rx_info("ui test: load menu locked \"%s\"", ui->link_menu_locked.c_str());
+        cb_info("ui test: load menu locked \"%s\"", ui->link_menu_locked.c_str());
     // File > Remove missing tracks: what it lists, the folders gone, and
     // where its Remove button is (logical pixels, for a click).
     if (ui->remove_missing) {
         int gone = 0;
         for (const auto &g : ui->remove_gone)
             gone += g.second;
-        rx_info("ui test: remove-missing %zu gone %d button %.0f %.0f", ui->remove_ids.size(), gone,
+        cb_info("ui test: remove-missing %zu gone %d button %.0f %.0f", ui->remove_ids.size(), gone,
                 ui->remove_button.x / ui->s, ui->remove_button.y / ui->s);
     }
     if (ui->tree_find[0]) {
         int c = ui->tree_hit;
-        rx_info("ui test: tree find \"%s\" matches %zu cursor \"%s\"", ui->tree_find,
+        cb_info("ui test: tree find \"%s\" matches %zu cursor \"%s\"", ui->tree_find,
                 ui->tree_hits.size(),
                 c >= 0 && (size_t)c < ui->tree_hits.size() ? ui->tree_hits[(size_t)c].text.c_str()
                                                            : "");
@@ -1376,7 +1376,7 @@ static void log_test_state(UiState *ui)
     if (ui->finder && ui->fb_find[0]) {
         const std::vector<int> &res = ui_finder_results(ui->finder);
         int c = ui->fb_cursor;
-        rx_info("ui test: find \"%s\" matches %zu of %zu best \"%s\" cursor \"%s\" picked %zu",
+        cb_info("ui test: find \"%s\" matches %zu of %zu best \"%s\" cursor \"%s\" picked %zu",
                 ui->fb_find, ui_finder_matches(ui->finder), ui_finder_count(ui->finder),
                 res.empty() ? "" : ui_finder_entry(ui->finder, res[0]).rel.c_str(),
                 c >= 0 && (size_t)c < res.size() ? ui_finder_entry(ui->finder, res[(size_t)c]).rel.c_str()
@@ -1388,8 +1388,8 @@ static void log_test_state(UiState *ui)
 /* -------------------------------------------------------------- My Settings */
 
 // The players' My Settings drive the interface the way they drive the
-// players (docs/UI.md, Player settings): one setting for both, so rxbox
-// shows what the stick will. They are read from RXConfig at every frame;
+// players (docs/UI.md, Player settings): one setting for both, so cyanbox
+// shows what the stick will. They are read from CBConfig at every frame;
 // the Player settings dialog, the View menu and Sync from USB write it,
 // and the next frame shows the change. The waveform palette, auto cue,
 // the quantize beat value and play mode are app.c's, which owns what they
@@ -1422,13 +1422,13 @@ static int jump_index(const char *beats)
 // (MASTER TEMPO needs the player), to be tried again on the next frame.
 static bool apply_startup(UiState *ui, int which, const char *v)
 {
-    RXApp *app = ui->app;
-    for (int d = 0; d < RX_DECKS; d++) {
+    CBApp *app = ui->app;
+    for (int d = 0; d < CB_DECKS; d++) {
         UiDeck *ud = &ui->decks[d];
-        RXDeckCtl *c = &app->decks[d].ctl;
+        CBDeckCtl *c = &app->decks[d].ctl;
         switch (which) {
         case 0:
-            rx_ctl_set_quantize(c, !strcmp(v, "true"));
+            cb_ctl_set_quantize(c, !strcmp(v, "true"));
             break;
         case 1:
             ud->jump_size = jump_index(v);
@@ -1439,11 +1439,11 @@ static bool apply_startup(UiState *ui, int which, const char *v)
             ud->tempo_range = r;
             // A tempo past the new range is brought to its edge, as the
             // range button does.
-            RXDeckState st;
+            CBDeckState st;
             ui_deck_position(ui, d, &st);
             double pct = (st.tempo - 1.0) * 100.0;
             if (app->player && fabs(pct) > UI_TEMPO_RANGES[r])
-                rx_deck_set_tempo(app->player, d, 1.0 + copysign(UI_TEMPO_RANGES[r], pct) / 100.0);
+                cb_deck_set_tempo(app->player, d, 1.0 + copysign(UI_TEMPO_RANGES[r], pct) / 100.0);
             break;
         }
         case 3: {
@@ -1452,10 +1452,10 @@ static bool apply_startup(UiState *ui, int which, const char *v)
             if (!app->player)
                 return false;
             bool on = !strcmp(v, "true");
-            bool ok = rx_deck_set_master_tempo(app->player, d, on);
+            bool ok = cb_deck_set_master_tempo(app->player, d, on);
             ud->master_tempo = on && ok;
             if (on && !ok)
-                rx_info("ui: master tempo is not available, the deck plays without it");
+                cb_info("ui: master tempo is not available, the deck plays without it");
             break;
         }
         default:
@@ -1484,11 +1484,11 @@ static void follow_settings(UiState *ui)
 
 /* ------------------------------------------------------------- entry points */
 
-int rx_ui_init(RXApp *app)
+int cb_ui_init(CBApp *app)
 {
     UiState *ui = new (std::nothrow) UiState();
     if (!ui)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     ui->app = app;
     ui->s = 1.0f;
     ui->deck_split = -1.0f;
@@ -1497,23 +1497,23 @@ int rx_ui_init(RXApp *app)
     ui->overview_mode_drawn = ui->preview_mode_drawn = -1;
     // The jump size, tempo range, time mode and MASTER TEMPO come from the
     // players' settings at the first frame (follow_settings).
-    for (int i = 0; i < RX_DECKS; i++) {
+    for (int i = 0; i < CB_DECKS; i++) {
         UiDeck *ud = &ui->decks[i];
         ud->ctx_cue = -1;
         ud->editing = false;
     }
     app->ui = ui;
 
-    // Preferences from the library's settings (RXConfig ui.*).
-    RXConfig *cfg = &app->lib.cfg;
+    // Preferences from the library's settings (CBConfig ui.*).
+    CBConfig *cfg = &app->lib.cfg;
     if (cfg->split_player > 0)
         ui->deck_split = ImClamp(cfg->split_player, 0.2f, 0.8f);
     if (cfg->split_tree > 0)
         ui->tree_width = ImClamp(cfg->split_tree, 120.0f, 600.0f);
-    int reach = rx_key_reach_parse(cfg->traffic_light);
-    ui->traffic_light = reach >= 0 ? reach : RX_KEY_REACH_RELATED3;
+    int reach = cb_key_reach_parse(cfg->traffic_light);
+    ui->traffic_light = reach >= 0 ? reach : CB_KEY_REACH_RELATED3;
     double bars = cfg->detail_bars > 0 ? cfg->detail_bars : 12;
-    for (int i = 0; i < RX_DECKS; i++)
+    for (int i = 0; i < CB_DECKS; i++)
         app->decks[i].zoom_bars = bars;
     ui->saved_zoom = bars;
 
@@ -1534,8 +1534,8 @@ int rx_ui_init(RXApp *app)
     // The rest of the layout (table columns, jump size...) is ImGui's ini
     // text, kept in the library rather than in a file next to the binary.
     ImGuiSettingsHandler h;
-    h.TypeName = "rxbox";
-    h.TypeHash = ImHashStr("rxbox");
+    h.TypeName = "cyanbox";
+    h.TypeHash = ImHashStr("cyanbox");
     h.ReadOpenFn = ini_open;
     h.ReadLineFn = ini_line;
     h.WriteAllFn = ini_write;
@@ -1543,35 +1543,35 @@ int rx_ui_init(RXApp *app)
     ImGui::AddSettingsHandler(&h);
     io.IniFilename = nullptr;
     char *layout = nullptr;
-    if (rx_library_setting_get(&app->lib, "ui.layout", &layout) == 0 && layout) {
+    if (cb_library_setting_get(&app->lib, "ui.layout", &layout) == 0 && layout) {
         ImGui::LoadIniSettingsFromMemory(layout, strlen(layout));
         free(layout);
     }
 
     // Headless test hooks.
-    const char *autoload = getenv("RXBOX_UI_AUTOLOAD");
+    const char *autoload = getenv("CYANBOX_UI_AUTOLOAD");
     if (autoload && autoload[0])
         ui->autoload = strtoull(autoload, nullptr, 10);
-    const char *at = getenv("RXBOX_UI_AUTOLOAD_AT");
+    const char *at = getenv("CYANBOX_UI_AUTOLOAD_AT");
     ui->autoload_at = at && at[0] ? atof(at) : -1.0;
-    const char *show = getenv("RXBOX_UI_SHOW");
+    const char *show = getenv("CYANBOX_UI_SHOW");
     if (show)
         ui->autoshow = show;
-    const char *shot = getenv("RXBOX_UI_SCREENSHOT");
+    const char *shot = getenv("CYANBOX_UI_SCREENSHOT");
     if (shot && shot[0])
         ui->screenshot_path = shot;
-    const char *shot_frame = getenv("RXBOX_UI_SCREENSHOT_FRAME");
+    const char *shot_frame = getenv("CYANBOX_UI_SCREENSHOT_FRAME");
     ui->screenshot_frame = shot_frame && atoi(shot_frame) > 0 ? atoi(shot_frame) : 100;
-    const char *events = getenv("RXBOX_UI_EVENTS");
+    const char *events = getenv("CYANBOX_UI_EVENTS");
     if (events && events[0])
         parse_test_events(ui, events);
-    const char *link_decks = getenv("RXBOX_UI_LINK_DECKS");
+    const char *link_decks = getenv("CYANBOX_UI_LINK_DECKS");
     if (link_decks && link_decks[0])
         ui->link_decks_fake = link_decks;
     return 0;
 }
 
-void rx_ui_shutdown(RXApp *app)
+void cb_ui_shutdown(CBApp *app)
 {
     UiState *ui = ui_of(app);
     if (!ui)
@@ -1579,17 +1579,17 @@ void rx_ui_shutdown(RXApp *app)
     // The screenshot hook, when the run ended before the frame asked for
     // (--frames N below it): the last frame.
     if (app->window && !ui->screenshot_path.empty()) {
-        int ret = rx_window_screenshot(app->window, ui->screenshot_path.c_str());
+        int ret = cb_window_screenshot(app->window, ui->screenshot_path.c_str());
         if (ret < 0)
-            rx_err("ui: screenshot to %s failed: %s", ui->screenshot_path.c_str(), strerror(-ret));
+            cb_err("ui: screenshot to %s failed: %s", ui->screenshot_path.c_str(), strerror(-ret));
     }
     if (app->window && ImGui::GetCurrentContext()) {
         save_layout(ui);
-        ImGui::RemoveSettingsHandler("rxbox");
+        ImGui::RemoveSettingsHandler("cyanbox");
     }
     if (app->decks[0].zoom_bars != ui->saved_zoom && app->decks[0].zoom_bars >= 1) {
         app->lib.cfg.detail_bars = (int)app->decks[0].zoom_bars;
-        rx_library_config_save(&app->lib);
+        cb_library_config_save(&app->lib);
     }
     ui_dialogs_shutdown(ui);
     ui_link_decks_shutdown(ui);
@@ -1616,7 +1616,7 @@ static bool shown(const UiState *ui, const char *what)
 
 static void autoshow(UiState *ui)
 {
-    RXApp *app = ui->app;
+    CBApp *app = ui->app;
     if (ui->autoshow.empty())
         return;
     if (shown(ui, "grid"))
@@ -1647,9 +1647,9 @@ static void autoshow(UiState *ui)
 
 static void autoload_tick(UiState *ui)
 {
-    RXApp *app = ui->app;
+    CBApp *app = ui->app;
     UiDeck *ud = &ui->decks[0];
-    RXDeckView *dv = &app->decks[0];
+    CBDeckView *dv = &app->decks[0];
     if (!ui->autoload_done) {
         ui->autoload_done = true;
         autoshow(ui);
@@ -1657,31 +1657,31 @@ static void autoload_tick(UiState *ui)
             return;
         app->focus_track = ui->autoload;
         ui_select_only(ui, ui->autoload);
-        RXTrack *t = rx_library_find_id(&app->lib, ui->autoload);
+        CBTrack *t = cb_library_find_id(&app->lib, ui->autoload);
         if (!t) {
-            rx_app_set_status(app, "RXBOX_UI_AUTOLOAD: no track %llu",
+            cb_app_set_status(app, "CYANBOX_UI_AUTOLOAD: no track %llu",
                               (unsigned long long)ui->autoload);
             return;
         }
         load_now(ui, 0, t);
         ud->autoplay = true;
         if (shown(ui, "tags"))
-            rx_app_tag_tracks(app, &t->id, 1);
+            cb_app_tag_tracks(app, &t->id, 1);
     }
     if (!ud->autoplay || dv->loading_request || !dv->ctl.track || !app->player)
         return;
-    if (!rx_deck_loaded(app->player, 0))
+    if (!cb_deck_loaded(app->player, 0))
         return;
     ud->autoplay = false;
     if (ui->autoload_at >= 0)
-        rx_ctl_seek(&dv->ctl, ui->autoload_at);
-    RXDeckState st;
-    rx_deck_state(app->player, 0, &st);
+        cb_ctl_seek(&dv->ctl, ui->autoload_at);
+    CBDeckState st;
+    cb_deck_state(app->player, 0, &st);
     if (!st.playing)
-        rx_ctl_play_pause(&dv->ctl);
+        cb_ctl_play_pause(&dv->ctl);
 }
 
-bool rx_ui_frame(RXApp *app)
+bool cb_ui_frame(CBApp *app)
 {
     UiState *ui = ui_of(app);
     if (!ui || !app->window)
@@ -1690,7 +1690,7 @@ bool rx_ui_frame(RXApp *app)
     ui->frame_no++;
 
     int lw = 0, lh = 0;
-    rx_window_size(app->window, &lw, &lh);
+    cb_window_size(app->window, &lw, &lh);
     ui->s = lw > 0 && io.DisplaySize.x > 0 ? io.DisplaySize.x / (float)lw : 1.0f;
     if (ui->s < 0.5f || ui->s > 4.0f)
         ui->s = 1.0f;
@@ -1703,14 +1703,14 @@ bool rx_ui_frame(RXApp *app)
     // The screenshot hook: this is the frame to keep; the window saves it
     // once it is presented.
     if (!ui->screenshot_path.empty() &&
-        rx_window_frames_drawn(app->window) + 1 >= ui->screenshot_frame) {
-        rx_window_screenshot_next(app->window, ui->screenshot_path.c_str());
+        cb_window_frames_drawn(app->window) + 1 >= ui->screenshot_frame) {
+        cb_window_screenshot_next(app->window, ui->screenshot_path.c_str());
         ui->screenshot_path.clear();
         log_test_state(ui);
     }
     // The rows follow the library (app.c may have rebuilt them already).
     if (app->rows_dirty || app->rows_generation != app->lib.generation || !app->rows)
-        rx_app_rebuild_rows(app);
+        cb_app_rebuild_rows(app);
     ui->overview_mode_drawn = ui->preview_mode_drawn = -1;
     ui->key_drawn[0] = '\0';
 
@@ -1727,7 +1727,7 @@ bool rx_ui_frame(RXApp *app)
                           ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_MenuBar |
                           ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoScrollWithMouse |
                           ImGuiWindowFlags_NoScrollbar;
-    ImGui::Begin("##rxbox", nullptr, wf);
+    ImGui::Begin("##cyanbox", nullptr, wf);
     ImGui::PopStyleVar(3);
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 4));
     menu_bar(ui);
@@ -1798,9 +1798,9 @@ bool rx_ui_frame(RXApp *app)
 
     // Another frame is wanted while anything moves.
     bool more = false;
-    for (int i = 0; i < RX_DECKS && app->player; i++) {
-        RXDeckState st;
-        rx_deck_state(app->player, i, &st);
+    for (int i = 0; i < CB_DECKS && app->player; i++) {
+        CBDeckState st;
+        cb_deck_state(app->player, i, &st);
         if (st.playing || st.scrubbing || app->decks[i].loading_request || app->decks[i].ctl.cue_held)
             more = true;
         if (ui->decks[i].autoplay)
@@ -1811,7 +1811,7 @@ bool rx_ui_frame(RXApp *app)
     // An export waiting for an answer is not moving.
     if (app->export_state.running && !app->export_state.confirm)
         more = true;
-    // Previews and thumbnails are made a few per tick (rx_app_preview_wave);
+    // Previews and thumbnails are made a few per tick (cb_app_preview_wave);
     // keep drawing while visible rows still wait, but not forever.
     if (ui->previews_pending && ui->pending_frames < 120) {
         ui->pending_frames++;
@@ -1821,7 +1821,7 @@ bool rx_ui_frame(RXApp *app)
     }
     if (app->analysing_total > 0 && app->analysing_done < app->analysing_total)
         more = true;
-    if (rx_app_tag_progress(app, nullptr, nullptr, nullptr))
+    if (cb_app_tag_progress(app, nullptr, nullptr, nullptr))
         more = true;
     // The Add dialog's finder walking: its matches come in as it goes.
     if (ui->finder && ui_finder_walking(ui->finder))

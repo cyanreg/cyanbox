@@ -1,7 +1,7 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
-/* A track encoded as it is decoded (rxbox/audio.h, rx_encode): the frames
- * rx_decode_stream hands over, converted to the encoder's samples,
+/* A track encoded as it is decoded (cyanbox/audio.h, cb_encode): the frames
+ * cb_decode_stream hands over, converted to the encoder's samples,
  * encoded and muxed into the caller's write and seek, in memory that does
  * not grow with the file. What a stick gets (src/export), what the
  * transcodes in the library's cache are (transcode.c), what Link serves
@@ -32,7 +32,7 @@
  * sizes in a WAV or an AIFF) through the caller's seek; without one the
  * header keeps what it had at the start. */
 
-#include "rxbox/audio.h"
+#include "cyanbox/audio.h"
 
 #include <math.h>
 #include <stdlib.h>
@@ -47,7 +47,7 @@
 #define PCM_FRAME 4096          /* frames per PCM packet */
 
 typedef struct Enc {
-    const RXEncodeOptions *o;
+    const CBEncodeOptions *o;
     const char *path;
     AVFormatContext *in;        /* tags and the cover (FLAC) */
     AVFormatContext *oc;
@@ -66,7 +66,7 @@ typedef struct Enc {
     int64_t pos, size;
     /* FLAC */
     int64_t packet_bytes;
-    RXFlacInfo flac;
+    CBFlacInfo flac;
     int frames_cap;
     uint8_t md5[16];
     bool md5_set;
@@ -82,7 +82,7 @@ static int io_write(void *opaque, const uint8_t *buf, int n)
     if (ret < 0)
         return ret;
     e->pos += n;
-    e->size = RX_MAX(e->size, e->pos);
+    e->size = CB_MAX(e->size, e->pos);
     return n;
 }
 
@@ -110,7 +110,7 @@ static int keep_frame(Enc *e, const AVPacket *p)
         int cap = e->frames_cap ? e->frames_cap * 2 : 1024;
         void *f = realloc(e->flac.frames, (size_t)cap * sizeof(*e->flac.frames));
         if (!f)
-            return RX_ERROR(ENOMEM);
+            return CB_ERROR(ENOMEM);
         e->flac.frames = f;
         e->frames_cap = cap;
     }
@@ -118,8 +118,8 @@ static int keep_frame(Enc *e, const AVPacket *p)
         .sample = p->pts, .offset = e->packet_bytes, .block = (int)p->duration,
     };
     e->flac.min_block = e->flac.nb_frames == 1 ? (int)p->duration
-                      : RX_MIN(e->flac.min_block, (int)p->duration);
-    e->flac.max_block = RX_MAX(e->flac.max_block, (int)p->duration);
+                      : CB_MIN(e->flac.min_block, (int)p->duration);
+    e->flac.max_block = CB_MAX(e->flac.max_block, (int)p->duration);
     return 0;
 }
 
@@ -134,11 +134,11 @@ static int drain(Enc *e)
         /* The last FLAC packet carries the final STREAMINFO, MD5 and all. */
         size_t sd_size = 0;
         const uint8_t *sd = av_packet_get_side_data(e->pkt, AV_PKT_DATA_NEW_EXTRADATA, &sd_size);
-        if (sd && sd_size >= 34 && e->o->format == RX_ENCODE_FLAC) {
+        if (sd && sd_size >= 34 && e->o->format == CB_ENCODE_FLAC) {
             memcpy(e->md5, sd + 18, 16);
             e->md5_set = true;
         }
-        if (e->o->format == RX_ENCODE_FLAC && e->pkt->size > 0) {
+        if (e->o->format == CB_ENCODE_FLAC && e->pkt->size > 0) {
             if ((ret = keep_frame(e, e->pkt)) < 0)
                 return ret;
             e->packet_bytes += e->pkt->size;
@@ -197,7 +197,7 @@ static void put_samples(Enc *e, const float *x, int n, int64_t first)
             }
             uint64_t k = (uint64_t)(first + i) * (uint64_t)e->channels + (uint64_t)c;
             long s = lrint(v * scale + (e->exact ? 0.0 : tpdf(k)));
-            s = RX_CLAMP(s, lo, hi);
+            s = CB_CLAMP(s, lo, hi);
             if (fmt == AV_SAMPLE_FMT_S16)
                 ((int16_t *)f->data[0])[at * e->channels + c] = (int16_t)s;
             else if (fmt == AV_SAMPLE_FMT_S32)
@@ -210,17 +210,17 @@ static void put_samples(Enc *e, const float *x, int n, int64_t first)
 static int take(Enc *e, const float *x, int64_t n)
 {
     if (e->o->cancelled && e->o->cancelled(e->o->opaque))
-        return RX_ERROR(ECANCELED);
+        return CB_ERROR(ECANCELED);
     if (e->skip > 0) {
-        int64_t d = RX_MIN(e->skip, n);
+        int64_t d = CB_MIN(e->skip, n);
         e->skip -= d;
         x += d * e->channels;
         n -= d;
     }
     if (e->limit >= 0)
-        n = RX_MIN(n, e->limit - (e->sent + e->filled));
+        n = CB_MIN(n, e->limit - (e->sent + e->filled));
     while (n > 0) {
-        int k = (int)RX_MIN(n, (int64_t)(e->frame_size - e->filled));
+        int k = (int)CB_MIN(n, (int64_t)(e->frame_size - e->filled));
         put_samples(e, x, k, e->sent + e->filled);
         x += (int64_t)k * e->channels;
         n -= k;
@@ -238,14 +238,14 @@ static int take(Enc *e, const float *x, int64_t n)
 static int copy_tags(AVDictionary **dst, const AVFormatContext *in)
 {
     static const char *const drop[] = { "encoder", "encoded_by", "itunsmpb", "itunnorm" };
-    int idx = rx_audio_first_stream((AVFormatContext *)in, AVMEDIA_TYPE_AUDIO);
+    int idx = cb_audio_first_stream((AVFormatContext *)in, AVMEDIA_TYPE_AUDIO);
     const AVDictionary *src[] = { idx >= 0 ? in->streams[idx]->metadata : NULL, in->metadata };
     for (int s = 0; s < 2; s++) {
         const AVDictionaryEntry *t = NULL;
         while ((t = av_dict_iterate(src[s], t))) {
             bool skip = false;
-            for (size_t i = 0; i < RX_ARRAY_ELEMS(drop); i++)
-                skip |= !rx_strcasecmp(t->key, drop[i]);
+            for (size_t i = 0; i < CB_ARRAY_ELEMS(drop); i++)
+                skip |= !cb_strcasecmp(t->key, drop[i]);
             int ret = skip ? 0 : av_dict_set(dst, t->key, t->value, 0);
             if (ret < 0)
                 return ret;
@@ -256,23 +256,23 @@ static int copy_tags(AVDictionary **dst, const AVFormatContext *in)
 
 static int open_output(Enc *e)
 {
-    const RXEncodeOptions *o = e->o;
+    const CBEncodeOptions *o = e->o;
     static const enum AVCodecID codecs[] = {
-        [RX_ENCODE_FLAC] = AV_CODEC_ID_FLAC, [RX_ENCODE_WAV] = AV_CODEC_ID_PCM_S16LE,
-        [RX_ENCODE_AIFF] = AV_CODEC_ID_PCM_S16BE, [RX_ENCODE_MP3] = AV_CODEC_ID_MP3,
+        [CB_ENCODE_FLAC] = AV_CODEC_ID_FLAC, [CB_ENCODE_WAV] = AV_CODEC_ID_PCM_S16LE,
+        [CB_ENCODE_AIFF] = AV_CODEC_ID_PCM_S16BE, [CB_ENCODE_MP3] = AV_CODEC_ID_MP3,
     };
     static const char *const muxers[] = {
-        [RX_ENCODE_FLAC] = "flac", [RX_ENCODE_WAV] = "wav", [RX_ENCODE_AIFF] = "aiff",
-        [RX_ENCODE_MP3] = "mp3",
+        [CB_ENCODE_FLAC] = "flac", [CB_ENCODE_WAV] = "wav", [CB_ENCODE_AIFF] = "aiff",
+        [CB_ENCODE_MP3] = "mp3",
     };
     enum AVCodecID id = codecs[o->format];
-    if (e->bits == 24 && o->format == RX_ENCODE_WAV)
+    if (e->bits == 24 && o->format == CB_ENCODE_WAV)
         id = AV_CODEC_ID_PCM_S24LE;
-    else if (e->bits == 24 && o->format == RX_ENCODE_AIFF)
+    else if (e->bits == 24 && o->format == CB_ENCODE_AIFF)
         id = AV_CODEC_ID_PCM_S24BE;
     const AVCodec *codec = avcodec_find_encoder(id);
     if (!codec)
-        return RX_ERROR(ENOTSUP);
+        return CB_ERROR(ENOTSUP);
     int ret = avformat_alloc_output_context2(&e->oc, NULL, muxers[o->format], NULL);
     if (ret < 0)
         return ret;
@@ -283,29 +283,29 @@ static int open_output(Enc *e)
     e->pkt = av_packet_alloc();
     e->frame = av_frame_alloc();
     if (!e->enc || !e->pkt || !e->frame)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     e->enc->sample_rate = e->rate;
     e->enc->time_base = (AVRational) { 1, e->rate };
     av_channel_layout_default(&e->enc->ch_layout, e->channels);
-    if (o->format == RX_ENCODE_MP3) {
+    if (o->format == CB_ENCODE_MP3) {
         e->enc->sample_fmt = AV_SAMPLE_FMT_FLTP;
         e->enc->bit_rate = e->rate >= 32000 ? 320000 : 160000;
     } else {
         e->enc->sample_fmt = e->bits == 24 ? AV_SAMPLE_FMT_S32 : AV_SAMPLE_FMT_S16;
         e->enc->bits_per_raw_sample = e->bits;
     }
-    if (o->format == RX_ENCODE_FLAC && o->compression > 0)
+    if (o->format == CB_ENCODE_FLAC && o->compression > 0)
         e->enc->compression_level = o->compression;
     if (e->oc->oformat->flags & AVFMT_GLOBALHEADER)
         e->enc->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
     if ((ret = avcodec_open2(e->enc, codec, NULL)) < 0)
         return ret;
     e->frame_size = e->enc->frame_size > 0 ? e->enc->frame_size : PCM_FRAME;
-    e->skip = o->format == RX_ENCODE_MP3 ? RX_MAX(e->enc->initial_padding, 0) : 0;
+    e->skip = o->format == CB_ENCODE_MP3 ? CB_MAX(e->enc->initial_padding, 0) : 0;
 
     e->st = avformat_new_stream(e->oc, NULL);
     if (!e->st)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     e->st->time_base = e->enc->time_base;
     if ((ret = avcodec_parameters_from_context(e->st->codecpar, e->enc)) < 0)
         return ret;
@@ -315,7 +315,7 @@ static int open_output(Enc *e)
      * them before the audio). */
     const AVStream *pic_in = NULL;
     AVStream *pic_out = NULL;
-    if (o->format == RX_ENCODE_FLAC && o->tags && rx_audio_open(e->path, &e->in, true) >= 0) {
+    if (o->format == CB_ENCODE_FLAC && o->tags && cb_audio_open(e->path, &e->in, true) >= 0) {
         if ((ret = copy_tags(&e->oc->metadata, e->in)) < 0)
             return ret;
         for (unsigned i = 0; i < e->in->nb_streams && !pic_in; i++) {
@@ -325,7 +325,7 @@ static int open_output(Enc *e)
         }
         if (pic_in) {
             if (!(pic_out = avformat_new_stream(e->oc, NULL)))
-                return RX_ERROR(ENOMEM);
+                return CB_ERROR(ENOMEM);
             if ((ret = avcodec_parameters_copy(pic_out->codecpar, pic_in->codecpar)) < 0 ||
                 (ret = av_dict_copy(&pic_out->metadata, pic_in->metadata, 0)) < 0)
                 return ret;
@@ -337,19 +337,19 @@ static int open_output(Enc *e)
 
     uint8_t *buf = av_malloc(1 << 16);
     if (!buf)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     e->oc->pb = avio_alloc_context(buf, 1 << 16, 1, e, NULL, io_write, o->seek ? io_seek : NULL);
     if (!e->oc->pb) {
         av_free(buf);
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     }
     e->oc->pb->seekable = o->seek ? AVIO_SEEKABLE_NORMAL : 0;
 
     AVDictionary *mux = NULL;
-    if (o->format == RX_ENCODE_MP3) {
+    if (o->format == CB_ENCODE_MP3) {
         av_dict_set(&mux, "write_xing", "0", 0);
         av_dict_set(&mux, "id3v2_version", "0", 0);
-    } else if (o->format == RX_ENCODE_AIFF) {
+    } else if (o->format == CB_ENCODE_AIFF) {
         av_dict_set(&mux, "write_id3v2", "0", 0);
     }
     ret = avformat_write_header(e->oc, &mux);
@@ -360,7 +360,7 @@ static int open_output(Enc *e)
     if (pic_out) {
         AVPacket *pp = av_packet_clone(&pic_in->attached_pic);
         if (!pp)
-            return RX_ERROR(ENOMEM);
+            return CB_ERROR(ENOMEM);
         pp->stream_index = pic_out->index;
         pp->pts = pp->dts = 0;
         pp->flags |= AV_PKT_FLAG_KEY;
@@ -382,44 +382,44 @@ static int open_output(Enc *e)
 static int on_start(void *opaque, int channels, int rate)
 {
     Enc *e = opaque;
-    const RXEncodeOptions *o = e->o;
+    const CBEncodeOptions *o = e->o;
     e->channels = channels;
     e->rate = o->max_rate > 0 && rate > o->max_rate ? o->max_rate : rate;
     int ret = open_output(e);
     if (ret < 0)
-        return rx_audio_error(ret);
+        return cb_audio_error(ret);
     return e->rate == rate ? 0 : e->rate;
 }
 
 static int on_frames(void *opaque, const float *x, int64_t n)
 {
     int ret = take(opaque, x, n);
-    return ret < 0 ? rx_audio_error(ret) : 0;
+    return ret < 0 ? cb_audio_error(ret) : 0;
 }
 
-int rx_encode(const char *path, const RXEncodeOptions *o, RXEncoded *out)
+int cb_encode(const char *path, const CBEncodeOptions *o, CBEncoded *out)
 {
     if (out)
-        *out = (RXEncoded) { 0 };
-    if (!path || !o || !o->write || (unsigned)o->format > RX_ENCODE_MP3 ||
-        (o->format != RX_ENCODE_MP3 && o->bits != 16 && o->bits != 24) ||
+        *out = (CBEncoded) { 0 };
+    if (!path || !o || !o->write || (unsigned)o->format > CB_ENCODE_MP3 ||
+        (o->format != CB_ENCODE_MP3 && o->bits != 16 && o->bits != 24) ||
         o->channels < 0 || o->channels > 2)
-        return RX_ERROR(EINVAL);
-    rx_audio_init_logging();
+        return CB_ERROR(EINVAL);
+    cb_audio_init_logging();
     Enc e = {
-        .o = o, .path = path, .bits = o->format == RX_ENCODE_MP3 ? 0 : o->bits,
+        .o = o, .path = path, .bits = o->format == CB_ENCODE_MP3 ? 0 : o->bits,
         .exact = o->exact, .limit = o->frames > 0 ? o->frames : -1,
     };
-    RXDecodeTo to = { .start = on_start, .frames = on_frames, .opaque = &e };
-    int ret = rx_decode_stream(path, o->channels, &to);
+    CBDecodeTo to = { .start = on_start, .frames = on_frames, .opaque = &e };
+    int ret = cb_decode_stream(path, o->channels, &to);
     /* Silence to the length asked for when the decode ended first. */
     if (ret >= 0 && e.limit > 0 && e.enc) {
         static const float zeros[2 * 1024];
         while (ret >= 0 && e.sent + e.filled < e.limit)
-            ret = take(&e, zeros, RX_MIN((int64_t)1024, e.limit - e.sent - e.filled));
+            ret = take(&e, zeros, CB_MIN((int64_t)1024, e.limit - e.sent - e.filled));
     }
     if (ret >= 0 && !e.enc)
-        ret = RX_ERROR(ENODATA);
+        ret = CB_ERROR(ENODATA);
     if (ret >= 0)
         ret = send_frame(&e);
     if (ret >= 0 && (ret = avcodec_send_frame(e.enc, NULL)) >= 0)
@@ -431,13 +431,13 @@ int rx_encode(const char *path, const RXEncodeOptions *o, RXEncoded *out)
         ret = e.oc->pb->error;
     }
     if (ret < 0) {
-        if (ret != RX_ERROR(ECANCELED) && ret != AVERROR(ECANCELED))
-            rx_err("%s: encoding failed: %s", path, av_err2str(ret));
+        if (ret != CB_ERROR(ECANCELED) && ret != AVERROR(ECANCELED))
+            cb_err("%s: encoding failed: %s", path, av_err2str(ret));
     } else if (out) {
-        *out = (RXEncoded) {
+        *out = (CBEncoded) {
             .rate = e.rate, .channels = e.channels, .bits = e.bits, .frames = e.sent, .size = e.size,
         };
-        if (o->format == RX_ENCODE_FLAC) {
+        if (o->format == CB_ENCODE_FLAC) {
             e.flac.valid = true;
             e.flac.sample_rate = e.rate;
             e.flac.channels = e.channels;
@@ -445,7 +445,7 @@ int rx_encode(const char *path, const RXEncodeOptions *o, RXEncoded *out)
             e.flac.total_samples = e.sent;
             e.flac.first_frame_offset = e.size - e.packet_bytes;
             out->flac = e.flac;
-            e.flac = (RXFlacInfo) { 0 };
+            e.flac = (CBFlacInfo) { 0 };
             if (e.md5_set)
                 memcpy(out->md5, e.md5, 16);
         }
@@ -459,6 +459,6 @@ int rx_encode(const char *path, const RXEncodeOptions *o, RXEncoded *out)
     avcodec_free_context(&e.enc);
     av_packet_free(&e.pkt);
     av_frame_free(&e.frame);
-    rx_flac_info_free(&e.flac);
-    return ret < 0 ? rx_audio_error(ret) : 0;
+    cb_flac_info_free(&e.flac);
+    return ret < 0 ? cb_audio_error(ret) : 0;
 }

@@ -24,7 +24,7 @@
  * PBKDF2 are sha512.h's, which keeps the HMAC pad states so the 256000
  * rounds of the key derivation cost two compressions each. */
 
-#include "rxbox/formats.h"
+#include "cyanbox/formats.h"
 
 #include <sys/random.h>
 
@@ -35,8 +35,8 @@
 #include "src/formats/formats_priv.h"
 #include "src/formats/sha512.h"
 
-#define PAGE    RX_SQLCIPHER_PAGE
-#define RESERVE RX_SQLCIPHER_RESERVE
+#define PAGE    CB_SQLCIPHER_PAGE
+#define RESERVE CB_SQLCIPHER_RESERVE
 #define IV      16
 #define SALT    16
 #define KDF_ITER 256000
@@ -47,7 +47,7 @@ static const uint8_t sqlite_magic[16] = "SQLite format 3";
  * HMAC keyed with the page-HMAC key. */
 typedef struct Codec {
     struct AVAES *aes;
-    RXHMACSHA512 hmac;
+    CBHMACSHA512 hmac;
     bool decrypt;
 } Codec;
 
@@ -66,21 +66,21 @@ static int codec_init(Codec *c, const char *passphrase, const uint8_t salt[SALT]
     *c = (Codec) { .decrypt = decrypt };
     c->aes = av_aes_alloc();
     if (!c->aes)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
 
     uint8_t key[32], mac[32], mac_salt[SALT];
     for (int i = 0; i < SALT; i++)
         mac_salt[i] = salt[i] ^ 0x3A;
-    rx_pbkdf2_sha512((const uint8_t *)passphrase, strlen(passphrase), salt, SALT, KDF_ITER,
+    cb_pbkdf2_sha512((const uint8_t *)passphrase, strlen(passphrase), salt, SALT, KDF_ITER,
                      key, sizeof(key));
-    rx_pbkdf2_sha512(key, sizeof(key), mac_salt, SALT, 2, mac, sizeof(mac));
-    rx_hmac_sha512_init(&c->hmac, mac, sizeof(mac));
+    cb_pbkdf2_sha512(key, sizeof(key), mac_salt, SALT, 2, mac, sizeof(mac));
+    cb_hmac_sha512_init(&c->hmac, mac, sizeof(mac));
     int ret = av_aes_init(c->aes, key, 256, decrypt);
     memset_explicit(key, 0, sizeof(key));
     memset_explicit(mac, 0, sizeof(mac));
     if (ret < 0) {
         codec_free(c);
-        return RX_ERROR(EIO);
+        return CB_ERROR(EIO);
     }
     return 0;
 }
@@ -89,10 +89,10 @@ static int codec_init(Codec *c, const char *passphrase, const uint8_t salt[SALT]
 static void page_hmac(Codec *c, const uint8_t *data, size_t n, uint32_t pgno, uint8_t out[64])
 {
     uint8_t le[4];
-    rx_wr_le32(le, pgno);
-    rx_hmac_sha512_update(&c->hmac, data, n);
-    rx_hmac_sha512_update(&c->hmac, le, sizeof(le));
-    rx_hmac_sha512_final(&c->hmac, out);
+    cb_wr_le32(le, pgno);
+    cb_hmac_sha512_update(&c->hmac, data, n);
+    cb_hmac_sha512_update(&c->hmac, le, sizeof(le));
+    cb_hmac_sha512_final(&c->hmac, out);
 }
 
 /* AES-256-CBC over whole blocks (a page body is 4016 or 4000 bytes, no
@@ -124,7 +124,7 @@ static int random_bytes(uint8_t *buf, size_t n)
         if (got < 0) {
             if (errno == EINTR)
                 continue;
-            return RX_ERROR(errno);
+            return CB_ERROR(errno);
         }
         buf += got;
         n -= (size_t)got;
@@ -145,7 +145,7 @@ static int decrypt_page(Codec *c, const uint8_t *page, uint32_t pgno, uint8_t *o
     uint8_t want[64];
     page_hmac(c, body, n + IV, pgno, want);
     if (differ(want, iv + IV, sizeof(want)))
-        return RX_ERROR(EBADMSG);
+        return CB_ERROR(EBADMSG);
     memset(out, 0, PAGE);
     if (pgno == 1)
         memcpy(out, sqlite_magic, 16);
@@ -153,13 +153,13 @@ static int decrypt_page(Codec *c, const uint8_t *page, uint32_t pgno, uint8_t *o
     return 0;
 }
 
-int rx_sqlcipher_decrypt(const uint8_t *data, size_t size, const char *passphrase,
+int cb_sqlcipher_decrypt(const uint8_t *data, size_t size, const char *passphrase,
                          const uint8_t *wal, size_t wal_size, uint8_t **out, size_t *out_size)
 {
     *out = NULL;
     *out_size = 0;
     if (size < PAGE)
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
     Codec c;
     int ret = codec_init(&c, passphrase, data, true);
     if (ret < 0)
@@ -168,7 +168,7 @@ int rx_sqlcipher_decrypt(const uint8_t *data, size_t size, const char *passphras
     size_t nb = size / PAGE;
     uint8_t *pages = malloc(nb * PAGE);
     if (!pages) {
-        ret = RX_ERROR(ENOMEM);
+        ret = CB_ERROR(ENOMEM);
         goto fail;
     }
     for (size_t i = 0; i < nb; i++)
@@ -180,25 +180,25 @@ int rx_sqlcipher_decrypt(const uint8_t *data, size_t size, const char *passphras
      * a page. Frames apply when their transaction commits. */
     if (wal && wal_size > 32) {
         typedef struct Pending { uint32_t pgno; uint8_t page[PAGE]; } Pending;
-        RXArray pending;
-        rx_array_init(&pending, sizeof(Pending));
+        CBArray pending;
+        cb_array_init(&pending, sizeof(Pending));
         /* Every page past the end of the file is in some frame. */
         size_t max_pgno = nb + (wal_size - 32) / (24 + PAGE);
         size_t pos = 32;
         while (pos + 24 + PAGE <= wal_size) {
-            uint32_t pgno = rx_rd_be32(wal + pos), commit = rx_rd_be32(wal + pos + 4);
+            uint32_t pgno = cb_rd_be32(wal + pos), commit = cb_rd_be32(wal + pos + 4);
             if (!pgno || pgno > max_pgno || memcmp(wal + pos + 8, wal + 16, 8))
                 break;
             Pending *p = NULL;
             for (size_t k = 0; k < pending.nb; k++)
-                if (((Pending *)rx_array_at(&pending, k))->pgno == pgno)
-                    p = rx_array_at(&pending, k);
+                if (((Pending *)cb_array_at(&pending, k))->pgno == pgno)
+                    p = cb_array_at(&pending, k);
             uint8_t page[PAGE];
             if (decrypt_page(&c, wal + pos + 24, pgno, page) < 0)
                 break;
-            if (!p && !(p = rx_array_push(&pending, NULL))) {
-                ret = RX_ERROR(ENOMEM);
-                rx_array_free(&pending);
+            if (!p && !(p = cb_array_push(&pending, NULL))) {
+                ret = CB_ERROR(ENOMEM);
+                cb_array_free(&pending);
                 goto fail;
             }
             p->pgno = pgno;
@@ -207,12 +207,12 @@ int rx_sqlcipher_decrypt(const uint8_t *data, size_t size, const char *passphras
             if (!commit)
                 continue;
             for (size_t k = 0; k < pending.nb; k++) {
-                Pending *pg = rx_array_at(&pending, k);
+                Pending *pg = cb_array_at(&pending, k);
                 if (pg->pgno > nb) {
                     uint8_t *np = realloc(pages, (size_t)pg->pgno * PAGE);
                     if (!np) {
-                        ret = RX_ERROR(ENOMEM);
-                        rx_array_free(&pending);
+                        ret = CB_ERROR(ENOMEM);
+                        cb_array_free(&pending);
                         goto fail;
                     }
                     memset(np + nb * PAGE, 0, ((size_t)pg->pgno - nb) * PAGE);
@@ -223,9 +223,9 @@ int rx_sqlcipher_decrypt(const uint8_t *data, size_t size, const char *passphras
             }
             if (commit < nb)
                 nb = commit;
-            rx_array_clear(&pending);
+            cb_array_clear(&pending);
         }
-        rx_array_free(&pending);
+        cb_array_free(&pending);
     }
     *out = pages;
     *out_size = nb * PAGE;
@@ -238,17 +238,17 @@ fail:
     return ret;
 }
 
-int rx_sqlcipher_encrypt(const uint8_t *plain, size_t size, const char *passphrase,
+int cb_sqlcipher_encrypt(const uint8_t *plain, size_t size, const char *passphrase,
                          const uint8_t salt_in[16], uint8_t **out, size_t *out_size)
 {
     *out = NULL;
     *out_size = 0;
     if (size < 100 || memcmp(plain, sqlite_magic, 16))
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
     /* The plaintext must already reserve the IV and HMAC on every page:
      * SQLite keeps the reserve of the file it was given (dj). */
-    if (rx_rd_be16(plain + 16) != PAGE || plain[20] != RESERVE || size % PAGE)
-        return RX_ERROR(EINVAL);
+    if (cb_rd_be16(plain + 16) != PAGE || plain[20] != RESERVE || size % PAGE)
+        return CB_ERROR(EINVAL);
 
     uint8_t salt[SALT];
     int ret = 0;
@@ -263,7 +263,7 @@ int rx_sqlcipher_encrypt(const uint8_t *plain, size_t size, const char *passphra
     uint8_t *enc = malloc(size);
     if (!enc) {
         codec_free(&c);
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     }
     for (size_t i = 0; i < size / PAGE; i++) {
         const uint8_t *page = plain + i * PAGE;

@@ -5,7 +5,7 @@
  * with -b, the speed of the matrix products at the model's sizes.
  * Each check prints the largest error relative to the reference's
  * largest magnitude and fails above its tolerance; with
- * RXBOX_GPU_VALIDATION=1, any error the validation layer reports fails it
+ * CYANBOX_GPU_VALIDATION=1, any error the validation layer reports fails it
  * too. Skipped (77) without a device that can run the model. */
 
 #include <math.h>
@@ -213,7 +213,7 @@ static void test_gemm(bool q4k, int M, int N, int K, uint32_t flags, bool bench)
     enum MLKernel k = gemv ? ML_K_GEMV_Q4K : small ? ML_K_GEMM_Q4K_SMALL :
                       q4k ? ML_K_GEMM_Q4K : ML_K_GEMM_F16;
     int reps = bench ? 20 : 1;
-    int64_t t0 = rx_time_us();
+    int64_t t0 = cb_time_us();
     for (int r = 0; r < reps; r++) {
         if (gemv)
             ml_gpu_dispatch(&gpu, k, &p, sizeof(p), (N + 3) / 4, 1, 1);
@@ -224,7 +224,7 @@ static void test_gemm(bool q4k, int M, int N, int K, uint32_t flags, bool bench)
         ml_gpu_barrier(&gpu);
     }
     ml_gpu_run(&gpu);
-    double ms = (rx_time_us() - t0) * 1e-3 / reps;
+    double ms = (cb_time_us() - t0) * 1e-3 / reps;
 
     char name[64];
     snprintf(name, sizeof(name), "%s %dx%dx%d%s%s%s",
@@ -367,7 +367,7 @@ static void test_attn(int nq, int pos0, bool dec, bool split)
         ml_gpu_dispatch(&gpu, ML_K_ATTN_COMB, &p, sizeof(p), nq * (H / KV), KV, 1);
     } else {
         /* Split the keys whenever there are 128 or more. */
-        uint32_t fsplit = RX_MAX(1, nk / 128), len = RX_ALIGN((nk + fsplit - 1) / fsplit, 32);
+        uint32_t fsplit = CB_MAX(1, nk / 128), len = CB_ALIGN((nk + fsplit - 1) / fsplit, 32);
         fsplit = (nk + len - 1) / len;
         bp = zeros((size_t)fsplit * nq * H * ATTN_PART * 4);
         AttnPush p = {
@@ -403,7 +403,7 @@ static void bench_attn(int nq, int pos0)
     MLBuf bp = zeros((size_t)ATTN_MAX_PARTS * H * ATTN_PART * 4);
     int nk = pos0 + nq;
     int reps = 20;
-    int64_t t0 = rx_time_us();
+    int64_t t0 = cb_time_us();
     for (int r = 0; r < reps; r++) {
         if (nq * 4 <= ATTN_DEC_ROWS) {
             uint32_t nsplit = (nk + ATTN_SPLIT - 1) / ATTN_SPLIT;
@@ -417,10 +417,10 @@ static void bench_attn(int nq, int pos0)
             ml_gpu_dispatch(&gpu, ML_K_ATTN_COMB, &p, sizeof(p), nq * 4, KV, 1);
         } else {
             uint32_t qblocks = (nq + 63) / 64;
-            uint32_t nsplit = RX_MAX(1, 256 / (qblocks * H));
-            nsplit = RX_MIN(nsplit, RX_MAX(1, nk / 256));
-            nsplit = RX_MAX(1, RX_MIN(nsplit, ATTN_MAX_PARTS / nq));
-            uint32_t len = RX_ALIGN((nk + nsplit - 1) / nsplit, 32);
+            uint32_t nsplit = CB_MAX(1, 256 / (qblocks * H));
+            nsplit = CB_MIN(nsplit, CB_MAX(1, nk / 256));
+            nsplit = CB_MAX(1, CB_MIN(nsplit, ATTN_MAX_PARTS / nq));
+            uint32_t len = CB_ALIGN((nk + nsplit - 1) / nsplit, 32);
             nsplit = (nk + len - 1) / len;
             AttnPush p = {
                 .q = bq.addr, .o = bo.addr, .kc = bk.addr, .vc = bv.addr, .part = bp.addr,
@@ -436,7 +436,7 @@ static void bench_attn(int nq, int pos0)
         ml_gpu_barrier(&gpu);
     }
     ml_gpu_run(&gpu);
-    double ms = (rx_time_us() - t0) * 1e-3 / reps;
+    double ms = (cb_time_us() - t0) * 1e-3 / reps;
     double flops = 4.0 * H * D * ((double)nq * pos0 + (double)nq * nq / 2);
     printf("attn %4d queries after %5d   %8.3f ms  %6.2f TFLOPS\n", nq, pos0, ms,
            flops / (ms * 1e9));
@@ -727,9 +727,9 @@ int main(int argc, char **argv)
         test_norm(true);
     }
 
-    /* With RXBOX_GPU_VALIDATION=1: what the layer found fails the test, as
+    /* With CYANBOX_GPU_VALIDATION=1: what the layer found fails the test, as
      * test_compute's does. */
-    int errors = rx_vkdev_validation_errors(&gpu.vk);
+    int errors = cb_vkdev_validation_errors(&gpu.vk);
     if (errors) {
         printf("FAIL %d Vulkan validation errors\n", errors);
         failures++;

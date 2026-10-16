@@ -1,6 +1,6 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
-/* The compute kernels (rxbox/compute.h) against a double-precision
+/* The compute kernels (cyanbox/compute.h) against a double-precision
  * reference (av_tx's double RDFT), at every transform size they take, 64 to
  * 8192 points: the analysis uses two of them (2048 and 8192, both radix 4
  * all the way), and this is what covers the radix-2 stage of the others.
@@ -15,9 +15,9 @@
  *
  * Every array must agree within 2e-5 of its largest value (fp32
  * transforms of up to 2^13 points are good to about 1e-6 of it). Needs no
- * window; skipped (77) without a device or with RXBOX_ANALYSIS_GPU=0. */
+ * window; skipped (77) without a device or with CYANBOX_ANALYSIS_GPU=0. */
 
-#include "rxbox/compute.h"
+#include "cyanbox/compute.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -84,7 +84,7 @@ static int take(void *opaque, int64_t f0, int nb, const float *bands)
     return 0;
 }
 
-static int check_stft(RXCompute *c, int n, float scale)
+static int check_stft(CBCompute *c, int n, float scale)
 {
     const int hop = n / 4, nbins = n / 2 + 1, nb_frames = 23;
     const int64_t len = (int64_t)(nb_frames - 3) * hop + n / 3;
@@ -104,19 +104,19 @@ static int check_stft(RXCompute *c, int n, float scale)
         w[k] = (float)(0.25 + 0.75 * (k % 7) / 6.0);
     for (int b = 0; b < nb_bands; b++) {
         k0[b] = b * width;
-        k1[b] = RX_MIN((b + 1) * width, nbins);
+        k1[b] = CB_MIN((b + 1) * width, nbins);
     }
 
-    RXComputeSTFT p = {
+    CBComputeSTFT p = {
         .nfft = n, .hop = hop, .window = win, .nb_bands = nb_bands,
         .k0 = k0, .k1 = k1, .weights = w, .scale = scale,
     };
-    RXComputeSTFTPlan *plan = NULL;
+    CBComputeSTFTPlan *plan = NULL;
     Frames fr = { .out = got, .nb_bands = nb_bands };
-    int ret = rx_compute_stft_plan(c, &p, &plan);
+    int ret = cb_compute_stft_plan(c, &p, &plan);
     if (ret >= 0)
-        ret = rx_compute_stft_run(plan, x, len, nb_frames, take, &fr);
-    rx_compute_stft_free(&plan);
+        ret = cb_compute_stft_run(plan, x, len, nb_frames, take, &fr);
+    cb_compute_stft_free(&plan);
 
     for (int f = 0; f < nb_frames; f++) {
         for (int i = 0; i < n; i++) {
@@ -147,10 +147,10 @@ static int check_stft(RXCompute *c, int n, float scale)
     return fail;
 }
 
-static int check_env(RXCompute *c, int n)
+static int check_env(CBCompute *c, int n)
 {
     enum { BANDS = 3, NB = 7 };
-    const int nbins = n / 2 + 1, step = RX_MAX(n / 512, 1), half = n / (8 * step);
+    const int nbins = n / 2 + 1, step = CB_MAX(n / 512, 1), half = n / (8 * step);
     const int smooth[BANDS] = { n / 40, n / 100, n / 200 };
     const int len = 2 * half + 1;
     const int64_t sig = 3 * n;
@@ -165,7 +165,7 @@ static int check_env(RXCompute *c, int n)
     for (int64_t i = 0; i < sig; i++)
         x[i] = (float)noise();
     for (int i = 0; i < n; i++) {
-        int e = RX_MIN(i, n - 1 - i);
+        int e = CB_MIN(i, n - 1 - i);
         taper[i] = e < n / 10 ? (float)(0.5 - 0.5 * cos(M_PI * e / (n / 10))) : 1.0f;
     }
     /* Low-pass, band-pass, high-pass, with raised-cosine edges. */
@@ -187,15 +187,15 @@ static int check_env(RXCompute *c, int n)
     for (int i = 0; i < NB; i++)
         start[i] = -n / 2 + (int64_t)i * (sig + n / 2) / NB;
 
-    RXComputeEnv p = {
+    CBComputeEnv p = {
         .nfft = n, .taper = taper, .nb_bands = BANDS, .gains = gains, .smooth = smooth,
         .step = step, .half = half,
     };
-    RXComputeEnvPlan *plan = NULL;
-    int ret = rx_compute_env_plan(c, &p, &plan);
+    CBComputeEnvPlan *plan = NULL;
+    int ret = cb_compute_env_plan(c, &p, &plan);
     if (ret >= 0)
-        ret = rx_compute_env_run(plan, x, sig, start, NB, got);
-    rx_compute_env_free(&plan);
+        ret = cb_compute_env_run(plan, x, sig, start, NB, got);
+    cb_compute_env_free(&plan);
 
     for (int w = 0; w < NB; w++) {
         for (int i = 0; i < n; i++) {
@@ -237,13 +237,13 @@ static int check_env(RXCompute *c, int n)
 
 int main(void)
 {
-    RXCompute *c = NULL;
-    int ret = rx_compute_create(&c, NULL);
+    CBCompute *c = NULL;
+    int ret = cb_compute_create(&c, NULL);
     if (ret < 0) {
         printf("no GPU (%s): skipped\n", strerror(-ret));
-        return rx_compute_mode() == RX_COMPUTE_REQUIRED ? 1 : 77;
+        return cb_compute_mode() == CB_COMPUTE_REQUIRED ? 1 : 77;
     }
-    printf("on %s\n", rx_compute_device_name(c));
+    printf("on %s\n", cb_compute_device_name(c));
 
     int fails = 0;
     for (int n = 64; n <= 8192; n *= 2) {
@@ -253,12 +253,12 @@ int main(void)
     for (int n = 256; n <= 8192; n *= 2)
         fails += check_env(c, n);
 
-    int errors = rx_compute_validation_errors(c);
+    int errors = cb_compute_validation_errors(c);
     if (errors) {
         printf("FAIL %d Vulkan validation errors\n", errors);
         fails++;
     }
-    rx_compute_destroy(&c);
+    cb_compute_destroy(&c);
     printf("%s: %d failure(s)\n", fails ? "FAIL" : "PASS", fails);
     return fails ? 1 : 0;
 }

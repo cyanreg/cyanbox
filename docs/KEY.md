@@ -1,12 +1,12 @@
 # The key detector
 
-How rxbox names a track's key, why each step is the way it is, and how well
+How cyanbox names a track's key, why each step is the way it is, and how well
 it works. The code is `src/analysis/key.c`; the tests
 `tests/analysis/test_key.c`; the evaluation and the template fitting
 `tests/analysis/gen_key_fixtures.py`; the case lists
 `tests/data/analysis/keys.txt` and `keys_synth.txt`.
 
-The result (`rxbox/analysis.h`, `RXKeyResult`) is a classic key name in dj's
+The result (`cyanbox/analysis.h`, `CBKeyResult`) is a classic key name in dj's
 spelling (C Db D Eb E F F# G Ab A Bb B, "m" for minor), a confidence and the
 tuning offset from A440 in cents.
 
@@ -33,7 +33,7 @@ confidences 0.26-0.95 (median 0.60), and ties are broken by rule.
 
 1. **Decimation** to about 11 kHz by an integer factor (4 at 44.1 kHz, 12 kHz
    from 48 kHz) through a 16d + 1-tap Kaiser-windowed sinc. Any rate works;
-   `rx_analyse` hands the detector 44.1 kHz.
+   `cb_analyse` hands the detector 44.1 kHz.
 2. **STFT**: 8192-point Hann frames (0.74 s) every 4096 samples, av_tx.
 3. **Tuning**: the spectral peaks between 150 Hz and 4 kHz, within 40 dB of
    their frame's loudest, in non-overlapping frames, each located by a
@@ -60,7 +60,7 @@ confidences 0.26-0.95 (median 0.60), and ties are broken by rule.
 Memory is 288 bytes per frame (2.8 MB an hour) and a ring of 8192
 decimated samples: each pass decimates the signal again as it reads it.
 A copy of the decimated track (a quarter of the input at 44.1 kHz, 159 MB
-an hour) made the key the largest stage of `rx_analyse` until 2026-10-14,
+an hour) made the key the largest stage of `cb_analyse` until 2026-10-14,
 for a decimation less (~80 ms for five minutes). Time, five minutes at
 44.1 kHz on one core: 30 ms for each of the two decimations, 30 ms tuning
 pass, 20 ms band pass.
@@ -78,7 +78,7 @@ python3 -I $G gs build-key/giantsteps --set key --prog $TK --out key.tsv
 python3 -I $G gs build-key/giantsteps --set mtg --prog $TK --out mtg.tsv
 python3 -I $G features build-key/giantsteps --set mtg --prog $TK --out feat-mtg.npz
 python3 -I $G train feat-mtg.npz                              # the constants of key.c
-RXBOX_KEY_FULL=1 $TK                                          # all synthetic tracks
+CYANBOX_KEY_FULL=1 $TK                                          # all synthetic tracks
 python3 -I $G real build-check/acceptance/list.txt --prog $TK
 ```
 
@@ -111,7 +111,7 @@ the old detector and libKeyFinder were measured on the same decodes.
   hats; two bars of drums, two of the tonic chord, the loop four times, the
   tonic again. `meson test` runs a quick subset of 44 (two keys of every
   progression and variant, and every case the old detector got wrong);
-  `RXBOX_KEY_FULL=1` runs all.
+  `CYANBOX_KEY_FULL=1` runs all.
 - **Real tracks**: 20 of `build-check/acceptance/list.txt` (every third:
   Japanese house, drum & bass, J-pop, a jazz-pop band, a film soundtrack).
   No ground truth; the check is that the key does not change with the level
@@ -202,9 +202,9 @@ third in its chords.
   ones with the lowest confidence (0.30-0.49, against 0.61 on average):
   J-pop that modulates, where a single key is a compromise.
 - Agreement with libKeyFinder: 13 of 20 exactly and 4 more as the relative
-  key (before: 7 exactly). Where they differ by a relative, rxbox says
+  key (before: 7 exactly). Where they differ by a relative, cyanbox says
   major: it names major as often as the annotators of its development set
-  did, KeyFinder less (it named 109 tracks major on GiantSteps key, rxbox
+  did, KeyFinder less (it named 109 tracks major on GiantSteps key, cyanbox
   116, the truth is 93).
 
 ### Confidence

@@ -26,16 +26,16 @@
  * nearest around the circle, so each of the eight hues comes back as its
  * own entry and anything between goes to the closer neighbour. The
  * interface's swatches and the tagging model set one of the eight hues;
- * rx_track_color_of_hue tells those from a hue between them, which an
+ * cb_track_color_of_hue tells those from a hue between them, which an
  * older library may hold. */
 
-#include "rxbox/colors.h"
+#include "cyanbox/colors.h"
 
 #include <math.h>
 #include <stdio.h>
 #include <strings.h>
 
-#include "rxbox/model.h"
+#include "cyanbox/model.h"
 
 /* RGB rekordbox stores in PCP2 per colour code, and lights the pads with.
  * 0 is the "no colour" sentinel, 63 and 64 are black and white. */
@@ -56,23 +56,23 @@ static const uint32_t device_palette[65] = {
 #define PALETTE_FIRST 1
 #define PALETTE_LAST  62
 
-const char *const rx_hot_cue_color_names[RX_HOT_CUE_COLORS] = {
+const char *const cb_hot_cue_color_names[CB_HOT_CUE_COLORS] = {
     "blue", "sky", "aqua", "teal", "mint", "green", "lime", "yellow",
     "orange", "red", "rose", "pink", "magenta", "violet", "purple", "lavender",
 };
 
-static const int hot_cue_name_codes[RX_HOT_CUE_COLORS] = {
+static const int hot_cue_name_codes[CB_HOT_CUE_COLORS] = {
     0x01, 0x08, 0x09, 0x0D, 0x13, 0x15, 0x17, 0x20,
     0x24, 0x2A, 0x2B, 0x2D, 0x35, 0x38, 0x3C, 0x3D,
 };
 
-const char *const rx_track_color_names[RX_TRACK_COLORS] = {
+const char *const cb_track_color_names[CB_TRACK_COLORS] = {
     "pink", "red", "orange", "yellow", "green", "aqua", "blue", "purple",
 };
 
-static const uint32_t track_color_rgb[RX_TRACK_COLORS] = {
-    RX_TRACK_RGB_PINK, RX_TRACK_RGB_RED,   RX_TRACK_RGB_ORANGE, RX_TRACK_RGB_YELLOW,
-    RX_TRACK_RGB_GREEN, RX_TRACK_RGB_AQUA, RX_TRACK_RGB_BLUE,   RX_TRACK_RGB_PURPLE,
+static const uint32_t track_color_rgb[CB_TRACK_COLORS] = {
+    CB_TRACK_RGB_PINK, CB_TRACK_RGB_RED,   CB_TRACK_RGB_ORANGE, CB_TRACK_RGB_YELLOW,
+    CB_TRACK_RGB_GREEN, CB_TRACK_RGB_AQUA, CB_TRACK_RGB_BLUE,   CB_TRACK_RGB_PURPLE,
 };
 
 /* Pad colour of a hot cue without a colour. A to D: the RGB rekordbox 7
@@ -80,7 +80,7 @@ static const uint32_t track_color_rgb[RX_TRACK_COLORS] = {
  * 43, 8, 23 and 60 of the table above, read from rekordbox exports). E to
  * H: rbxport has no reading; dj's 00FF00, the most common code-0 RGB in a
  * rekordbox 7 stick (docs/anlz.md 4.6, 75 entries). */
-static const uint32_t default_pad_rgb[RX_HOT_CUE_SLOTS] = {
+static const uint32_t default_pad_rgb[CB_HOT_CUE_SLOTS] = {
     0xFF0017, 0x00C4FF, 0x33FF00, 0x4D00FF, 0x00FF00, 0x00FF00, 0x00FF00, 0x00FF00,
 };
 
@@ -104,10 +104,10 @@ static uint32_t rgb_distance(uint32_t a, uint32_t b)
     return d;
 }
 
-int rx_parse_hex_rgb(const char *s, uint32_t *rgb)
+int cb_parse_hex_rgb(const char *s, uint32_t *rgb)
 {
     if (!s)
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
     while (*s == ' ')
         s++;
     if (*s == '#')
@@ -123,35 +123,35 @@ int rx_parse_hex_rgb(const char *s, uint32_t *rgb)
         else if (c >= 'A' && c <= 'F')
             d = c - 'A' + 10;
         else
-            return RX_ERROR(EINVAL);
+            return CB_ERROR(EINVAL);
         v = v << 4 | (uint32_t)d;
     }
     if (n != 6)
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
     *rgb = v;
     return 0;
 }
 
 /* ----------------------------------------------------------- track colours */
 
-int rx_track_color_id(const char *name)
+int cb_track_color_id(const char *name)
 {
     if (!name)
         return 0;
-    for (int i = 0; i < RX_TRACK_COLORS; i++)
-        if (name_eq(name, rx_track_color_names[i]))
+    for (int i = 0; i < CB_TRACK_COLORS; i++)
+        if (name_eq(name, cb_track_color_names[i]))
             return i + 1;
     return 0;
 }
 
-const char *rx_track_color_name(int id)
+const char *cb_track_color_name(int id)
 {
-    return id >= 1 && id <= RX_TRACK_COLORS ? rx_track_color_names[id - 1] : NULL;
+    return id >= 1 && id <= CB_TRACK_COLORS ? cb_track_color_names[id - 1] : NULL;
 }
 
-uint32_t rx_track_color_rgb(int id)
+uint32_t cb_track_color_rgb(int id)
 {
-    return id >= 1 && id <= RX_TRACK_COLORS ? track_color_rgb[id - 1] : 0;
+    return id >= 1 && id <= CB_TRACK_COLORS ? track_color_rgb[id - 1] : 0;
 }
 
 /* --------------------------------------------------------------------- hue */
@@ -159,10 +159,10 @@ uint32_t rx_track_color_rgb(int id)
 static uint32_t channel(double v)
 {
     long c = lround(v * 255.0);
-    return (uint32_t)RX_CLAMP(c, 0, 255);
+    return (uint32_t)CB_CLAMP(c, 0, 255);
 }
 
-uint32_t rx_hue_rgb(double hue, double saturation, double value)
+uint32_t cb_hue_rgb(double hue, double saturation, double value)
 {
     double h = isfinite(hue) ? fmod(hue, 360.0) : 0.0;
     if (h < 0)
@@ -170,8 +170,8 @@ uint32_t rx_hue_rgb(double hue, double saturation, double value)
     /* A hue a hair below 0 wraps to 360.0 itself. */
     if (h >= 360.0)
         h = 0.0;
-    double v = RX_CLAMP(value, 0.0, 1.0);
-    double c = v * RX_CLAMP(saturation, 0.0, 1.0);
+    double v = CB_CLAMP(value, 0.0, 1.0);
+    double c = v * CB_CLAMP(saturation, 0.0, 1.0);
     double x = c * (1.0 - fabs(fmod(h / 60.0, 2.0) - 1.0));
     double r = 0, g = 0, b = 0;
     switch ((int)(h / 60.0)) {
@@ -186,10 +186,10 @@ uint32_t rx_hue_rgb(double hue, double saturation, double value)
     return channel(r + m) << 16 | channel(g + m) << 8 | channel(b + m);
 }
 
-double rx_rgb_hue(uint32_t rgb)
+double cb_rgb_hue(uint32_t rgb)
 {
     int r = (int)(rgb >> 16 & 0xFF), g = (int)(rgb >> 8 & 0xFF), b = (int)(rgb & 0xFF);
-    int max = RX_MAX(r, RX_MAX(g, b)), min = RX_MIN(r, RX_MIN(g, b));
+    int max = CB_MAX(r, CB_MAX(g, b)), min = CB_MIN(r, CB_MIN(g, b));
     if (max == min)
         return -1.0;
     double d = max - min, h;
@@ -203,12 +203,12 @@ double rx_rgb_hue(uint32_t rgb)
     return h < 0 ? h + 360.0 : h;
 }
 
-double rx_track_color_hue(int id)
+double cb_track_color_hue(int id)
 {
-    return id >= 1 && id <= RX_TRACK_COLORS ? rx_rgb_hue(track_color_rgb[id - 1]) : -1.0;
+    return id >= 1 && id <= CB_TRACK_COLORS ? cb_rgb_hue(track_color_rgb[id - 1]) : -1.0;
 }
 
-int rx_track_color_nearest_hue(double hue)
+int cb_track_color_nearest_hue(double hue)
 {
     if (!isfinite(hue) || hue < 0)
         return 0;
@@ -216,9 +216,9 @@ int rx_track_color_nearest_hue(double hue)
     /* Ties (330 sits halfway between pink and red) go to the lower id. */
     int best = 0;
     double best_d = INFINITY;
-    for (int i = 0; i < RX_TRACK_COLORS; i++) {
-        double d = fabs(hue - rx_rgb_hue(track_color_rgb[i]));
-        d = RX_MIN(d, 360.0 - d);
+    for (int i = 0; i < CB_TRACK_COLORS; i++) {
+        double d = fabs(hue - cb_rgb_hue(track_color_rgb[i]));
+        d = CB_MIN(d, 360.0 - d);
         if (d < best_d) {
             best_d = d;
             best = i + 1;
@@ -227,59 +227,59 @@ int rx_track_color_nearest_hue(double hue)
     return best;
 }
 
-int rx_track_color_of_hue(double hue)
+int cb_track_color_of_hue(double hue)
 {
-    int id = rx_track_color_nearest_hue(hue);
+    int id = cb_track_color_nearest_hue(hue);
     if (!id)
         return 0;
-    double d = fabs(fmod(hue, 360.0) - rx_track_color_hue(id));
-    return RX_MIN(d, 360.0 - d) < 0.01 ? id : 0;
+    double d = fabs(fmod(hue, 360.0) - cb_track_color_hue(id));
+    return CB_MIN(d, 360.0 - d) < 0.01 ? id : 0;
 }
 
-uint32_t rx_track_hue_rgb(double hue)
+uint32_t cb_track_hue_rgb(double hue)
 {
     if (!isfinite(hue) || hue < 0)
         return 0;
-    return rx_hue_rgb(hue, 1.0, 0xF8 / 255.0);
+    return cb_hue_rgb(hue, 1.0, 0xF8 / 255.0);
 }
 
-int rx_parse_hue(const char *s, double *hue)
+int cb_parse_hue(const char *s, double *hue)
 {
     if (!s)
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
     while (*s == ' ' || *s == '\t')
         s++;
     if (!*s || name_eq(s, "none")) {
         *hue = -1.0;
         return 0;
     }
-    int id = rx_track_color_id(s);
+    int id = cb_track_color_id(s);
     if (id) {
-        *hue = rx_track_color_hue(id);
+        *hue = cb_track_color_hue(id);
         return 0;
     }
     char *end;
     double v = strtod(s, &end);
     if (end == s || !isfinite(v) || v < 0 || v > 360)
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
     if (!strncmp(end, "\xC2\xB0", 2))
         end += 2;
     while (*end == ' ' || *end == '\t')
         end++;
     if (*end)
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
     /* Degrees only where they name one of the eight: a colour between
      * them is not one the library keeps (src/core/clean.c). */
-    int named = rx_track_color_of_hue(v == 360 ? 0.0 : v);
+    int named = cb_track_color_of_hue(v == 360 ? 0.0 : v);
     if (!named)
-        return RX_ERROR(EINVAL);
-    *hue = rx_track_color_hue(named);
+        return CB_ERROR(EINVAL);
+    *hue = cb_track_color_hue(named);
     return 0;
 }
 
-const char *rx_hue_format(double hue, char *buf, size_t size)
+const char *cb_hue_format(double hue, char *buf, size_t size)
 {
-    int id = rx_track_color_nearest_hue(hue);
+    int id = cb_track_color_nearest_hue(hue);
     if (!id) {
         snprintf(buf, size, "none");
         return buf;
@@ -289,27 +289,27 @@ const char *rx_hue_format(double hue, char *buf, size_t size)
     size_t n = strlen(deg);
     if (n > 2 && !strcmp(deg + n - 2, ".0"))
         deg[n - 2] = '\0';
-    snprintf(buf, size, "%s\xC2\xB0 (%s)", deg, rx_track_color_names[id - 1]);
+    snprintf(buf, size, "%s\xC2\xB0 (%s)", deg, cb_track_color_names[id - 1]);
     return buf;
 }
 
 /* --------------------------------------------------------------- hot cues */
 
-uint32_t rx_cue_palette_rgb(int code)
+uint32_t cb_cue_palette_rgb(int code)
 {
     return code >= 1 && code <= 64 ? device_palette[code] : 0;
 }
 
-int rx_hot_cue_led(int code)
+int cb_hot_cue_led(int code)
 {
     /* The PCP2 entry stores the code followed by this RGB (docs/anlz.md
      * 4.6: "The RGB bytes are an LED colour"); it is the same table. */
-    return (int)rx_cue_palette_rgb(code);
+    return (int)cb_cue_palette_rgb(code);
 }
 
-uint32_t rx_hot_cue_default_rgb(int slot)
+uint32_t cb_hot_cue_default_rgb(int slot)
 {
-    return slot >= 0 && slot < RX_HOT_CUE_SLOTS ? default_pad_rgb[slot] : 0x00FF00;
+    return slot >= 0 && slot < CB_HOT_CUE_SLOTS ? default_pad_rgb[slot] : 0x00FF00;
 }
 
 static int nearest_code(uint32_t rgb)
@@ -326,7 +326,7 @@ static int nearest_code(uint32_t rgb)
     return best;
 }
 
-int rx_hot_cue_color(const char *name_or_hex, int *code, uint32_t *rgb)
+int cb_hot_cue_color(const char *name_or_hex, int *code, uint32_t *rgb)
 {
     *code = 0;
     *rgb = 0;
@@ -338,8 +338,8 @@ int rx_hot_cue_color(const char *name_or_hex, int *code, uint32_t *rgb)
     if (!*s)
         return 0;
 
-    for (int i = 0; i < RX_HOT_CUE_COLORS; i++) {
-        if (name_eq(s, rx_hot_cue_color_names[i])) {
+    for (int i = 0; i < CB_HOT_CUE_COLORS; i++) {
+        if (name_eq(s, cb_hot_cue_color_names[i])) {
             *code = hot_cue_name_codes[i];
             *rgb = device_palette[*code];
             return 0;
@@ -353,7 +353,7 @@ int rx_hot_cue_color(const char *name_or_hex, int *code, uint32_t *rgb)
     }
 
     uint32_t want;
-    if (s[0] == '#' && !rx_parse_hex_rgb(s, &want)) {
+    if (s[0] == '#' && !cb_parse_hex_rgb(s, &want)) {
         *code = nearest_code(want);
         *rgb = device_palette[*code];
         return 0;
@@ -369,35 +369,35 @@ int rx_hot_cue_color(const char *name_or_hex, int *code, uint32_t *rgb)
         *rgb = device_palette[*code];
         return 0;
     }
-    if (!rx_parse_hex_rgb(s, &want)) {
+    if (!cb_parse_hex_rgb(s, &want)) {
         *code = nearest_code(want);
         *rgb = device_palette[*code];
         return 0;
     }
-    return RX_ERROR(EINVAL);
+    return CB_ERROR(EINVAL);
 }
 
-const char *rx_cue_palette_name(int code)
+const char *cb_cue_palette_name(int code)
 {
     if (code < 1 || code > 64)
         return NULL;
     int best = 0;
     uint32_t best_d = UINT32_MAX;
-    for (int i = 0; i < RX_HOT_CUE_COLORS; i++) {
+    for (int i = 0; i < CB_HOT_CUE_COLORS; i++) {
         if (hot_cue_name_codes[i] == code)
-            return rx_hot_cue_color_names[i];
+            return cb_hot_cue_color_names[i];
         uint32_t d = rgb_distance(device_palette[code], device_palette[hot_cue_name_codes[i]]);
         if (d < best_d) {
             best_d = d;
             best = i;
         }
     }
-    return rx_hot_cue_color_names[best];
+    return cb_hot_cue_color_names[best];
 }
 
 /* ------------------------------------------------------------ memory cues */
 
-int rx_memory_cue_color_id(const char *name)
+int cb_memory_cue_color_id(const char *name)
 {
     if (!name)
         return 0;
@@ -406,7 +406,7 @@ int rx_memory_cue_color_id(const char *name)
         s++;
     if (!*s)
         return 0;
-    int id = rx_track_color_id(s);
+    int id = cb_track_color_id(s);
     if (id)
         return id;
     /* dj's aliases: the hot cue names outside the eight map to the nearest. */
@@ -415,14 +415,14 @@ int rx_memory_cue_color_id(const char *name)
         { "lime", "green" }, { "magenta", "pink" }, { "rose", "pink" }, { "violet", "purple" },
         { "lavender", "purple" },
     };
-    for (size_t i = 0; i < RX_ARRAY_ELEMS(aliases); i++)
+    for (size_t i = 0; i < CB_ARRAY_ELEMS(aliases); i++)
         if (name_eq(s, aliases[i].alias))
-            return rx_track_color_id(aliases[i].name);
+            return cb_track_color_id(aliases[i].name);
     uint32_t want;
-    if (!rx_parse_hex_rgb(s, &want)) {
+    if (!cb_parse_hex_rgb(s, &want)) {
         int best = 1;
         uint32_t best_d = UINT32_MAX;
-        for (int i = 0; i < RX_TRACK_COLORS; i++) {
+        for (int i = 0; i < CB_TRACK_COLORS; i++) {
             uint32_t d = rgb_distance(want, track_color_rgb[i]);
             if (d < best_d) {
                 best_d = d;
@@ -431,10 +431,10 @@ int rx_memory_cue_color_id(const char *name)
         }
         return best;
     }
-    return RX_ERROR(EINVAL);
+    return CB_ERROR(EINVAL);
 }
 
-uint32_t rx_memory_cue_color_rgb(int id)
+uint32_t cb_memory_cue_color_rgb(int id)
 {
-    return rx_track_color_rgb(id);
+    return cb_track_color_rgb(id);
 }

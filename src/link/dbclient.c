@@ -24,7 +24,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-#include "rxbox/common.h"
+#include "cyanbox/common.h"
 
 #include "dbmsg.h"
 
@@ -37,7 +37,7 @@
 #define LINK_SLOT   3
 #define LINK_TYPE   1
 
-struct RXDbClient {
+struct CBDbClient {
     int      fd;
     int      timeout_ms;
     int      number, server;
@@ -57,9 +57,9 @@ static int wait_fd(int fd, short events, int timeout_ms)
         if (r > 0)
             return 0;
         if (r == 0)
-            return RX_ERROR(ETIMEDOUT);
+            return CB_ERROR(ETIMEDOUT);
         if (errno != EINTR)
-            return RX_ERROR(errno);
+            return CB_ERROR(errno);
     }
 }
 
@@ -73,7 +73,7 @@ static int send_all(int fd, const uint8_t *p, size_t n, int timeout_ms)
         if (w < 0) {
             if (errno == EINTR || errno == EAGAIN)
                 continue;
-            return RX_ERROR(errno);
+            return CB_ERROR(errno);
         }
         p += w;
         n -= (size_t)w;
@@ -82,13 +82,13 @@ static int send_all(int fd, const uint8_t *p, size_t n, int timeout_ms)
 }
 
 /* More bytes into the buffer: -ECONNRESET when the peer closed. */
-static int fill(RXDbClient *c)
+static int fill(CBDbClient *c)
 {
     if (c->len == c->cap) {
         size_t cap = c->cap ? c->cap * 2 : 65536;
         uint8_t *b = realloc(c->buf, cap);
         if (!b)
-            return RX_ERROR(ENOMEM);
+            return CB_ERROR(ENOMEM);
         c->buf = b;
         c->cap = cap;
     }
@@ -97,15 +97,15 @@ static int fill(RXDbClient *c)
         return ret;
     ssize_t r = recv(c->fd, c->buf + c->len, c->cap - c->len, 0);
     if (r < 0)
-        return errno == EINTR || errno == EAGAIN ? 0 : RX_ERROR(errno);
+        return errno == EINTR || errno == EAGAIN ? 0 : CB_ERROR(errno);
     if (r == 0)
-        return RX_ERROR(ECONNRESET);
+        return CB_ERROR(ECONNRESET);
     c->len += (size_t)r;
     return 0;
 }
 
 /* Drops the last message read, keeping what came after it. */
-static void consume(RXDbClient *c)
+static void consume(CBDbClient *c)
 {
     if (c->used) {
         memmove(c->buf, c->buf + c->used, c->len - c->used);
@@ -114,11 +114,11 @@ static void consume(RXDbClient *c)
     }
 }
 
-static int read_msg(RXDbClient *c, RXDbMsg *m)
+static int read_msg(CBDbClient *c, CBDbMsg *m)
 {
     consume(c);
     while (1) {
-        int r = rx_dbmsg_parse(c->buf, c->len, REPLY_MAX, m);
+        int r = cb_dbmsg_parse(c->buf, c->len, REPLY_MAX, m);
         if (r > 0) {
             c->used = (size_t)r;
             return 0;
@@ -130,12 +130,12 @@ static int read_msg(RXDbClient *c, RXDbMsg *m)
     }
 }
 
-static int send_msg(RXDbClient *c, const RXDbMsg *m)
+static int send_msg(CBDbClient *c, const CBDbMsg *m)
 {
-    RXWr w = rx_wr_dyn();
-    rx_dbmsg_write(&w, m);
-    int ret = w.err ? RX_ERROR(ENOMEM) : send_all(c->fd, w.p, w.len, c->timeout_ms);
-    rx_wr_free(&w);
+    CBWr w = cb_wr_dyn();
+    cb_dbmsg_write(&w, m);
+    int ret = w.err ? CB_ERROR(ENOMEM) : send_all(c->fd, w.p, w.len, c->timeout_ms);
+    cb_wr_free(&w);
     return ret;
 }
 
@@ -145,21 +145,21 @@ static int tcp_connect(const char *host, uint16_t port, int timeout_ms, int *out
 {
     struct sockaddr_in a = { .sin_family = AF_INET, .sin_port = htons(port) };
     if (inet_pton(AF_INET, host, &a.sin_addr) != 1)
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
     int fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
     if (fd < 0)
-        return RX_ERROR(errno);
+        return CB_ERROR(errno);
     int ret = 0;
     if (connect(fd, (struct sockaddr *)&a, sizeof(a)) < 0) {
         if (errno != EINPROGRESS) {
-            ret = RX_ERROR(errno);
+            ret = CB_ERROR(errno);
         } else if ((ret = wait_fd(fd, POLLOUT, timeout_ms)) >= 0) {
             int err = 0;
             socklen_t len = sizeof(err);
             if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len) < 0)
-                ret = RX_ERROR(errno);
+                ret = CB_ERROR(errno);
             else if (err)
-                ret = RX_ERROR(err);
+                ret = CB_ERROR(err);
         }
     }
     if (ret < 0) {
@@ -170,7 +170,7 @@ static int tcp_connect(const char *host, uint16_t port, int timeout_ms, int *out
     return 0;
 }
 
-int rx_dbclient_query_port(const char *host, uint16_t query_port, int timeout_ms, uint16_t *port)
+int cb_dbclient_query_port(const char *host, uint16_t query_port, int timeout_ms, uint16_t *port)
 {
     /* What a player sends to 12523 (track_metadata.adoc "Connecting to
      * the Database"): the name's length with its NUL, the name. */
@@ -187,9 +187,9 @@ int rx_dbclient_query_port(const char *host, uint16_t query_port, int timeout_ms
     while (ret >= 0 && got < 2 && (ret = wait_fd(fd, POLLIN, timeout_ms)) >= 0) {
         ssize_t r = recv(fd, reply + got, 2 - got, 0);
         if (r == 0)
-            ret = RX_ERROR(ECONNRESET);
+            ret = CB_ERROR(ECONNRESET);
         else if (r < 0 && errno != EINTR && errno != EAGAIN)
-            ret = RX_ERROR(errno);
+            ret = CB_ERROR(errno);
         else if (r > 0)
             got += (size_t)r;
     }
@@ -200,41 +200,41 @@ int rx_dbclient_query_port(const char *host, uint16_t query_port, int timeout_ms
     return 0;
 }
 
-int rx_dbclient_open(RXDbClient **out, int fd, int number, bool legacy, int timeout_ms)
+int cb_dbclient_open(CBDbClient **out, int fd, int number, bool legacy, int timeout_ms)
 {
     *out = NULL;
-    RXDbClient *c = calloc(1, sizeof(*c));
+    CBDbClient *c = calloc(1, sizeof(*c));
     if (!c) {
         close(fd);
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     }
-    *c = (RXDbClient) { .fd = fd, .timeout_ms = timeout_ms, .number = number, .legacy = legacy,
+    *c = (CBDbClient) { .fd = fd, .timeout_ms = timeout_ms, .number = number, .legacy = legacy,
                         .txid = 1 };
     /* The greeting, answered in kind. */
-    int ret = send_all(fd, rx_db_greeting, RX_DB_GREETING_LEN, timeout_ms);
-    while (ret >= 0 && c->len < RX_DB_GREETING_LEN)
+    int ret = send_all(fd, cb_db_greeting, CB_DB_GREETING_LEN, timeout_ms);
+    while (ret >= 0 && c->len < CB_DB_GREETING_LEN)
         ret = fill(c);
-    if (ret >= 0 && memcmp(c->buf, rx_db_greeting, RX_DB_GREETING_LEN))
-        ret = RX_ERROR(EPROTO);
-    c->used = RX_DB_GREETING_LEN;
+    if (ret >= 0 && memcmp(c->buf, cb_db_greeting, CB_DB_GREETING_LEN))
+        ret = CB_ERROR(EPROTO);
+    c->used = CB_DB_GREETING_LEN;
 
-    RXDbMsg m = { .txid = RX_DB_SETUP_TXID, .kind = RX_DB_SETUP, .nb_args = legacy ? 1 : 2 };
-    m.args[0] = (RXDbArg) { .type = RX_DB_NUM, .num = (uint32_t)number };
-    m.args[1] = (RXDbArg) { .type = RX_DB_NUM, .num = RX_DB_SETUP_MAGIC };
+    CBDbMsg m = { .txid = CB_DB_SETUP_TXID, .kind = CB_DB_SETUP, .nb_args = legacy ? 1 : 2 };
+    m.args[0] = (CBDbArg) { .type = CB_DB_NUM, .num = (uint32_t)number };
+    m.args[1] = (CBDbArg) { .type = CB_DB_NUM, .num = CB_DB_SETUP_MAGIC };
     if (ret >= 0)
         ret = send_msg(c, &m);
-    RXDbMsg r;
+    CBDbMsg r;
     if (ret >= 0)
         ret = read_msg(c, &r);
     /* rekordbox: its own kind, [its number, 0x14]; the older answer:
      * 4000 [0, its number] (dbserver.c). */
     if (ret >= 0) {
-        if (!legacy && r.kind == RX_DB_SETUP && r.nb_args >= 1)
-            c->server = (int)rx_dbmsg_num(&r, 0);
-        else if (legacy && r.kind == RX_DB_AVAILABLE && r.nb_args >= 2)
-            c->server = (int)rx_dbmsg_num(&r, 1);
+        if (!legacy && r.kind == CB_DB_SETUP && r.nb_args >= 1)
+            c->server = (int)cb_dbmsg_num(&r, 0);
+        else if (legacy && r.kind == CB_DB_AVAILABLE && r.nb_args >= 2)
+            c->server = (int)cb_dbmsg_num(&r, 1);
         else
-            ret = RX_ERROR(EPROTO);
+            ret = CB_ERROR(EPROTO);
     }
     if (ret < 0) {
         close(c->fd);
@@ -246,21 +246,21 @@ int rx_dbclient_open(RXDbClient **out, int fd, int number, bool legacy, int time
     return 0;
 }
 
-int rx_dbclient_connect(RXDbClient **out, const char *host, uint16_t port, int number,
+int cb_dbclient_connect(CBDbClient **out, const char *host, uint16_t port, int number,
                         int timeout_ms)
 {
     *out = NULL;
     int fd;
     int ret = tcp_connect(host, port, timeout_ms, &fd);
-    return ret < 0 ? ret : rx_dbclient_open(out, fd, number, false, timeout_ms);
+    return ret < 0 ? ret : cb_dbclient_open(out, fd, number, false, timeout_ms);
 }
 
-void rx_dbclient_close(RXDbClient **cp)
+void cb_dbclient_close(CBDbClient **cp)
 {
-    RXDbClient *c = *cp;
+    CBDbClient *c = *cp;
     if (!c)
         return;
-    RXDbMsg m = { .txid = RX_DB_SETUP_TXID, .kind = RX_DB_TEARDOWN };
+    CBDbMsg m = { .txid = CB_DB_SETUP_TXID, .kind = CB_DB_TEARDOWN };
     send_msg(c, &m);
     close(c->fd);
     free(c->buf);
@@ -268,39 +268,39 @@ void rx_dbclient_close(RXDbClient **cp)
     *cp = NULL;
 }
 
-int rx_dbclient_server_number(const RXDbClient *c)
+int cb_dbclient_server_number(const CBDbClient *c)
 {
     return c->server;
 }
 
 /* ------------------------------------------------------------ requests */
 
-static uint32_t rmst(const RXDbClient *c, int location)
+static uint32_t rmst(const CBDbClient *c, int location)
 {
-    return rx_db_rmst(c->number, location, LINK_SLOT, LINK_TYPE);
+    return cb_db_rmst(c->number, location, LINK_SLOT, LINK_TYPE);
 }
 
-static int request(RXDbClient *c, uint16_t kind, const RXDbArg *args, int nb, RXDbMsg *reply)
+static int request(CBDbClient *c, uint16_t kind, const CBDbArg *args, int nb, CBDbMsg *reply)
 {
-    RXDbMsg m = { .txid = c->txid++, .kind = kind, .nb_args = RX_MIN(nb, RX_DB_MAX_ARGS) };
+    CBDbMsg m = { .txid = c->txid++, .kind = kind, .nb_args = CB_MIN(nb, CB_DB_MAX_ARGS) };
     memcpy(m.args, args, (size_t)m.nb_args * sizeof(*args));
     int ret = send_msg(c, &m);
     if (ret < 0)
         return ret;
     ret = read_msg(c, reply);
     if (ret >= 0 && reply->txid != m.txid)
-        ret = RX_ERROR(EPROTO);
+        ret = CB_ERROR(EPROTO);
     return ret;
 }
 
-int rx_dbclient_request(RXDbClient *c, uint16_t kind, int location, const uint32_t *args, int nb,
-                        RXDbMsg *reply)
+int cb_dbclient_request(CBDbClient *c, uint16_t kind, int location, const uint32_t *args, int nb,
+                        CBDbMsg *reply)
 {
-    RXDbArg a[RX_DB_MAX_ARGS];
-    nb = RX_CLAMP(nb, 0, RX_DB_MAX_ARGS - 1);
-    a[0] = (RXDbArg) { .type = RX_DB_NUM, .num = rmst(c, location) };
+    CBDbArg a[CB_DB_MAX_ARGS];
+    nb = CB_CLAMP(nb, 0, CB_DB_MAX_ARGS - 1);
+    a[0] = (CBDbArg) { .type = CB_DB_NUM, .num = rmst(c, location) };
     for (int i = 0; i < nb; i++)
-        a[i + 1] = (RXDbArg) { .type = RX_DB_NUM, .num = args[i] };
+        a[i + 1] = (CBDbArg) { .type = CB_DB_NUM, .num = args[i] };
     return request(c, kind, a, nb + 1, reply);
 }
 
@@ -310,12 +310,12 @@ static uint32_t cue_ms(double t)
     return v <= 0 ? 0 : v >= 4294967294.0 ? 0xfffffffeu : (uint32_t)v;
 }
 
-int rx_dbclient_save_cue(RXDbClient *c, uint32_t track, bool remove, const RXPlanCue *cue,
-                         bool older, RXDbMsg *reply)
+int cb_dbclient_save_cue(CBDbClient *c, uint32_t track, bool remove, const CBPlanCue *cue,
+                         bool older, CBDbMsg *reply)
 {
     bool hot = cue->hot >= 0, loop = cue->loop_end > cue->time;
     uint32_t in = cue_ms(cue->time), out = loop ? cue_ms(cue->loop_end) : 0xffffffffu;
-    RXWr rec = rx_wr_dyn(), ms = rx_wr_dyn();
+    CBWr rec = cb_wr_dyn(), ms = cb_wr_dyn();
     if (older) {
         /* The 36-byte record of the older list and its milliseconds. */
         uint32_t flags = (uint32_t)(hot ? cue->hot + 1 : 0) << 16 | loop |
@@ -325,87 +325,87 @@ int rx_dbclient_save_cue(RXDbClient *c, uint32_t track, bool remove, const RXPla
             loop ? (uint32_t)((uint64_t)out * 3 / 20) : 0xffffffffu, 0, 0, 0, 0,
         };
         for (int k = 0; k < 9; k++)
-            rx_wr_u32le(&rec, words[k]);
-        rx_wr_u32le(&ms, in);
-        rx_wr_u32le(&ms, out);
+            cb_wr_u32le(&rec, words[k]);
+        cb_wr_u32le(&ms, in);
+        cb_wr_u32le(&ms, out);
     } else {
         /* An entry of the extended list as a CDJ-3000X sent one (84 bytes
          * without a comment, cdj3k-emu 2026-10-15): the list's own layout,
          * no neighbours, the comment if there is one, then a length and a
          * hot cue's colour code and RGB, and two bytes to spare. */
-        size_t units = cue->name[0] ? rx_link_utf16_units(cue->name) + 1 : 0;
+        size_t units = cue->name[0] ? cb_link_utf16_units(cue->name) + 1 : 0;
         size_t len = 0x4a + 2 * units + 10;
-        rx_wr_u32le(&rec, (uint32_t)len);
-        rx_wr_u16le(&rec, hot ? (uint16_t)(cue->hot + 1) : 0);
-        rx_wr_u8(&rec, loop ? 2 : 1);
-        rx_wr_zeros(&rec, 3);
-        rx_wr_u16le(&rec, 1000);
-        rx_wr_u32le(&rec, in);
-        rx_wr_u32le(&rec, out);
-        rx_wr_zeros(&rec, 0x18 - 0x14);
-        rx_wr_u16le(&rec, cue->active ? 4 : 0);
-        rx_wr_zeros(&rec, 0x20 - 0x1a);
-        rx_wr_u32(&rec, 0xffffffff);
-        rx_wr_zeros(&rec, 0x34 - 0x24);
-        rx_wr_u32le(&rec, (uint32_t)(len - 0x38));
-        rx_wr_zeros(&rec, 0x3a - 0x38);
-        rx_wr_u8(&rec, hot ? 0 : (uint8_t)RX_CLAMP(cue->color_code, 0, 8));
-        rx_wr_zeros(&rec, 0x48 - 0x3b);
-        rx_wr_u16le(&rec, (uint16_t)(2 * units));
+        cb_wr_u32le(&rec, (uint32_t)len);
+        cb_wr_u16le(&rec, hot ? (uint16_t)(cue->hot + 1) : 0);
+        cb_wr_u8(&rec, loop ? 2 : 1);
+        cb_wr_zeros(&rec, 3);
+        cb_wr_u16le(&rec, 1000);
+        cb_wr_u32le(&rec, in);
+        cb_wr_u32le(&rec, out);
+        cb_wr_zeros(&rec, 0x18 - 0x14);
+        cb_wr_u16le(&rec, cue->active ? 4 : 0);
+        cb_wr_zeros(&rec, 0x20 - 0x1a);
+        cb_wr_u32(&rec, 0xffffffff);
+        cb_wr_zeros(&rec, 0x34 - 0x24);
+        cb_wr_u32le(&rec, (uint32_t)(len - 0x38));
+        cb_wr_zeros(&rec, 0x3a - 0x38);
+        cb_wr_u8(&rec, hot ? 0 : (uint8_t)CB_CLAMP(cue->color_code, 0, 8));
+        cb_wr_zeros(&rec, 0x48 - 0x3b);
+        cb_wr_u16le(&rec, (uint16_t)(2 * units));
         if (units)
-            rx_wr_utf16(&rec, cue->name, false, true);
-        rx_wr_u32le(&rec, 4);
-        rx_wr_u8(&rec, hot ? (uint8_t)cue->color_code : 0);
-        rx_wr_u8(&rec, hot ? (uint8_t)(cue->rgb >> 16) : 0);
-        rx_wr_u8(&rec, hot ? (uint8_t)(cue->rgb >> 8) : 0);
-        rx_wr_u8(&rec, hot ? (uint8_t)cue->rgb : 0);
-        rx_wr_zeros(&rec, 2);
+            cb_wr_utf16(&rec, cue->name, false, true);
+        cb_wr_u32le(&rec, 4);
+        cb_wr_u8(&rec, hot ? (uint8_t)cue->color_code : 0);
+        cb_wr_u8(&rec, hot ? (uint8_t)(cue->rgb >> 16) : 0);
+        cb_wr_u8(&rec, hot ? (uint8_t)(cue->rgb >> 8) : 0);
+        cb_wr_u8(&rec, hot ? (uint8_t)cue->rgb : 0);
+        cb_wr_zeros(&rec, 2);
     }
-    int ret = RX_ERROR(ENOMEM);
+    int ret = CB_ERROR(ENOMEM);
     if (!rec.err && !ms.err) {
-        RXDbArg a[7] = {
-            { .type = RX_DB_NUM, .num = rmst(c, 8) },
-            { .type = RX_DB_NUM, .num = track },
-            { .type = RX_DB_NUM, .num = !remove },
-            { .type = RX_DB_NUM, .num = (uint32_t)rec.len },
-            { .type = RX_DB_BLOB, .p = rec.p, .len = (uint32_t)rec.len },
-            { .type = RX_DB_NUM, .num = (uint32_t)ms.len },
-            { .type = RX_DB_BLOB, .p = ms.p, .len = (uint32_t)ms.len },
+        CBDbArg a[7] = {
+            { .type = CB_DB_NUM, .num = rmst(c, 8) },
+            { .type = CB_DB_NUM, .num = track },
+            { .type = CB_DB_NUM, .num = !remove },
+            { .type = CB_DB_NUM, .num = (uint32_t)rec.len },
+            { .type = CB_DB_BLOB, .p = rec.p, .len = (uint32_t)rec.len },
+            { .type = CB_DB_NUM, .num = (uint32_t)ms.len },
+            { .type = CB_DB_BLOB, .p = ms.p, .len = (uint32_t)ms.len },
         };
-        ret = request(c, older ? RX_DB_SAVE_CUE : RX_DB_SAVE_CUE_EXT, a, older ? 7 : 5, reply);
+        ret = request(c, older ? CB_DB_SAVE_CUE : CB_DB_SAVE_CUE_EXT, a, older ? 7 : 5, reply);
     }
-    rx_wr_free(&rec);
-    rx_wr_free(&ms);
+    cb_wr_free(&rec);
+    cb_wr_free(&ms);
     return ret;
 }
 
 /* Renders a menu the server said has `count` rows into rows. */
-static int render_all(RXDbClient *c, int location, uint32_t count, RXDbRow **rows, int *nb_rows)
+static int render_all(CBDbClient *c, int location, uint32_t count, CBDbRow **rows, int *nb_rows)
 {
     *rows = NULL;
     *nb_rows = 0;
     /* Only what a reply can hold is believed (the rows themselves are
      * counted as they come). */
-    RXArray a;
-    rx_array_init(&a, sizeof(RXDbRow));
+    CBArray a;
+    cb_array_init(&a, sizeof(CBDbRow));
     int ret = 0;
     uint32_t word = rmst(c, location);
     for (uint32_t offset = 0; offset < count && ret >= 0;) {
-        uint32_t limit = RX_MIN(count - offset, (uint32_t)PAGE);
+        uint32_t limit = CB_MIN(count - offset, (uint32_t)PAGE);
         /* A CDJ-3000's render: offset, limit, 0, the total, 0x0c, 1, 0
          * (rbxport's capture); the older one: offset, limit, 0, limit, 0. */
         const uint32_t v8[] = { word, offset, limit, 0, count, 0x0c, 1, 0 };
         const uint32_t v6[] = { word, offset, limit, 0, limit, 0 };
-        RXDbMsg m = { .txid = c->txid++, .kind = RX_DB_RENDER, .nb_args = c->legacy ? 6 : 8 };
+        CBDbMsg m = { .txid = c->txid++, .kind = CB_DB_RENDER, .nb_args = c->legacy ? 6 : 8 };
         for (int i = 0; i < m.nb_args; i++)
-            m.args[i] = (RXDbArg) { .type = RX_DB_NUM, .num = c->legacy ? v6[i] : v8[i] };
+            m.args[i] = (CBDbArg) { .type = CB_DB_NUM, .num = c->legacy ? v6[i] : v8[i] };
         if ((ret = send_msg(c, &m)) < 0)
             break;
-        RXDbMsg r;
+        CBDbMsg r;
         if ((ret = read_msg(c, &r)) < 0)
             break;
-        if (r.kind != RX_DB_MENU_HEADER || r.txid != m.txid) {
-            ret = RX_ERROR(EPROTO);
+        if (r.kind != CB_DB_MENU_HEADER || r.txid != m.txid) {
+            ret = CB_ERROR(EPROTO);
             break;
         }
         uint32_t got = 0;
@@ -413,17 +413,17 @@ static int render_all(RXDbClient *c, int location, uint32_t count, RXDbRow **row
             if ((ret = read_msg(c, &r)) < 0)
                 break;
             if (r.txid != m.txid) {
-                ret = RX_ERROR(EPROTO);
+                ret = CB_ERROR(EPROTO);
                 break;
             }
-            if (r.kind == RX_DB_MENU_FOOTER)
+            if (r.kind == CB_DB_MENU_FOOTER)
                 break;
-            RXDbRow row;
-            if ((ret = rx_dbrow_parse(&r, &row)) < 0)
+            CBDbRow row;
+            if ((ret = cb_dbrow_parse(&r, &row)) < 0)
                 break;
-            if (!rx_array_push(&a, &row)) {
-                rx_dbrow_free(&row);
-                ret = RX_ERROR(ENOMEM);
+            if (!cb_array_push(&a, &row)) {
+                cb_dbrow_free(&row);
+                ret = CB_ERROR(ENOMEM);
                 break;
             }
             got++;
@@ -433,9 +433,9 @@ static int render_all(RXDbClient *c, int location, uint32_t count, RXDbRow **row
         if (ret >= 0 && !got && limit)
             break;
     }
-    RXDbRow *v = a.data;
+    CBDbRow *v = a.data;
     if (ret < 0) {
-        rx_dbrows_free(&v, (int)a.nb);
+        cb_dbrows_free(&v, (int)a.nb);
         return ret;
     }
     *rows = v;
@@ -443,139 +443,139 @@ static int render_all(RXDbClient *c, int location, uint32_t count, RXDbRow **row
     return 0;
 }
 
-static int menu(RXDbClient *c, uint16_t kind, int location, const RXDbArg *args, int nb,
-                RXDbRow **rows, int *nb_rows)
+static int menu(CBDbClient *c, uint16_t kind, int location, const CBDbArg *args, int nb,
+                CBDbRow **rows, int *nb_rows)
 {
     *rows = NULL;
     *nb_rows = 0;
-    RXDbMsg r;
+    CBDbMsg r;
     int ret = request(c, kind, args, nb, &r);
     if (ret < 0)
         return ret;
-    if (r.kind == RX_DB_ERROR)
-        return RX_ERROR(ENOENT);
-    if (r.kind != RX_DB_AVAILABLE || rx_dbmsg_num(&r, 0) != kind)
-        return RX_ERROR(EPROTO);
-    return render_all(c, location, rx_dbmsg_num(&r, 1), rows, nb_rows);
+    if (r.kind == CB_DB_ERROR)
+        return CB_ERROR(ENOENT);
+    if (r.kind != CB_DB_AVAILABLE || cb_dbmsg_num(&r, 0) != kind)
+        return CB_ERROR(EPROTO);
+    return render_all(c, location, cb_dbmsg_num(&r, 1), rows, nb_rows);
 }
 
-int rx_dbclient_menu(RXDbClient *c, uint16_t kind, int location, const uint32_t *args, int nb,
-                     RXDbRow **rows, int *nb_rows)
+int cb_dbclient_menu(CBDbClient *c, uint16_t kind, int location, const uint32_t *args, int nb,
+                     CBDbRow **rows, int *nb_rows)
 {
-    RXDbArg a[RX_DB_MAX_ARGS];
-    nb = RX_CLAMP(nb, 0, RX_DB_MAX_ARGS - 1);
-    a[0] = (RXDbArg) { .type = RX_DB_NUM, .num = rmst(c, location) };
+    CBDbArg a[CB_DB_MAX_ARGS];
+    nb = CB_CLAMP(nb, 0, CB_DB_MAX_ARGS - 1);
+    a[0] = (CBDbArg) { .type = CB_DB_NUM, .num = rmst(c, location) };
     for (int i = 0; i < nb; i++)
-        a[i + 1] = (RXDbArg) { .type = RX_DB_NUM, .num = args[i] };
+        a[i + 1] = (CBDbArg) { .type = CB_DB_NUM, .num = args[i] };
     return menu(c, kind, location, a, nb + 1, rows, nb_rows);
 }
 
-int rx_dbclient_search(RXDbClient *c, uint16_t kind, const char *text, RXDbRow **rows,
+int cb_dbclient_search(CBDbClient *c, uint16_t kind, const char *text, CBDbRow **rows,
                        int *nb_rows)
 {
     /* Sort, the text's byte length with its NUL, the text, 0 (menus.adoc
      * "Search"). */
-    const RXDbArg a[5] = {
-        { .type = RX_DB_NUM, .num = rmst(c, 1) },
-        { .type = RX_DB_NUM, .num = 0 },
-        { .type = RX_DB_NUM, .num = 2 * ((uint32_t)rx_link_utf16_units(text) + 1) },
-        { .type = RX_DB_STR, .str = text },
-        { .type = RX_DB_NUM, .num = 0 },
+    const CBDbArg a[5] = {
+        { .type = CB_DB_NUM, .num = rmst(c, 1) },
+        { .type = CB_DB_NUM, .num = 0 },
+        { .type = CB_DB_NUM, .num = 2 * ((uint32_t)cb_link_utf16_units(text) + 1) },
+        { .type = CB_DB_STR, .str = text },
+        { .type = CB_DB_NUM, .num = 0 },
     };
     return menu(c, kind, 1, a, 5, rows, nb_rows);
 }
 
-int rx_dbclient_metadata(RXDbClient *c, uint32_t track, RXDbRow **rows, int *nb_rows)
+int cb_dbclient_metadata(CBDbClient *c, uint32_t track, CBDbRow **rows, int *nb_rows)
 {
-    return rx_dbclient_menu(c, RX_DB_METADATA, 2, &track, 1, rows, nb_rows);
+    return cb_dbclient_menu(c, CB_DB_METADATA, 2, &track, 1, rows, nb_rows);
 }
 
-int rx_dbclient_track_info(RXDbClient *c, uint32_t track, char **path, uint64_t *size)
+int cb_dbclient_track_info(CBDbClient *c, uint32_t track, char **path, uint64_t *size)
 {
     *path = NULL;
     *size = 0;
-    RXDbRow *rows;
+    CBDbRow *rows;
     int nb;
-    int ret = rx_dbclient_menu(c, RX_DB_TRACK_INFO, 8, &track, 1, &rows, &nb);
+    int ret = cb_dbclient_menu(c, CB_DB_TRACK_INFO, 8, &track, 1, &rows, &nb);
     if (ret < 0)
         return ret;
-    ret = RX_ERROR(ENOENT);
+    ret = CB_ERROR(ENOENT);
     /* The path row: type 0, the size first, the track's id second
      * (rbxport's capture). */
     for (int i = 0; i < nb; i++) {
-        if (rows[i].type == RX_DB_ITEM_PATH && rows[i].id == track && rows[i].text[0]) {
-            *path = rx_strdup(rows[i].text);
+        if (rows[i].type == CB_DB_ITEM_PATH && rows[i].id == track && rows[i].text[0]) {
+            *path = cb_strdup(rows[i].text);
             *size = rows[i].a;
-            ret = *path ? 0 : RX_ERROR(ENOMEM);
+            ret = *path ? 0 : CB_ERROR(ENOMEM);
             break;
         }
     }
-    rx_dbrows_free(&rows, nb);
+    cb_dbrows_free(&rows, nb);
     return ret;
 }
 
 /* A data reply's blob: [kind, status, length, blob ...]; -ENOENT when the
  * status says there is none. */
-static int take_blob(const RXDbMsg *r, uint16_t want, uint8_t **blob, size_t *size)
+static int take_blob(const CBDbMsg *r, uint16_t want, uint8_t **blob, size_t *size)
 {
     *blob = NULL;
     *size = 0;
-    if (r->kind == RX_DB_ERROR)
-        return RX_ERROR(ENOENT);
+    if (r->kind == CB_DB_ERROR)
+        return CB_ERROR(ENOENT);
     if (r->kind != want || r->nb_args < 4)
-        return RX_ERROR(EPROTO);
+        return CB_ERROR(EPROTO);
     uint32_t len;
-    const uint8_t *p = rx_dbmsg_blob(r, 3, &len);
-    if (rx_dbmsg_num(r, 1) != 0 || !p || !len)
-        return RX_ERROR(ENOENT);
+    const uint8_t *p = cb_dbmsg_blob(r, 3, &len);
+    if (cb_dbmsg_num(r, 1) != 0 || !p || !len)
+        return CB_ERROR(ENOENT);
     if (!(*blob = malloc(len)))
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     memcpy(*blob, p, len);
     *size = len;
     return 0;
 }
 
-int rx_dbclient_artwork(RXDbClient *c, uint32_t id, bool large, uint8_t **jpeg, size_t *size)
+int cb_dbclient_artwork(CBDbClient *c, uint32_t id, bool large, uint8_t **jpeg, size_t *size)
 {
-    RXDbMsg r;
+    CBDbMsg r;
     const uint32_t args[2] = { id, 1 };
-    int ret = rx_dbclient_request(c, RX_DB_ARTWORK, 8, args, large ? 2 : 1, &r);
-    return ret < 0 ? ret : take_blob(&r, RX_DB_ARTWORK_REPLY, jpeg, size);
+    int ret = cb_dbclient_request(c, CB_DB_ARTWORK, 8, args, large ? 2 : 1, &r);
+    return ret < 0 ? ret : take_blob(&r, CB_DB_ARTWORK_REPLY, jpeg, size);
 }
 
-int rx_dbclient_blob(RXDbClient *c, uint16_t kind, uint32_t track, uint8_t **blob, size_t *size)
+int cb_dbclient_blob(CBDbClient *c, uint16_t kind, uint32_t track, uint8_t **blob, size_t *size)
 {
     *blob = NULL;
     *size = 0;
     uint16_t want;
-    RXDbArg a[5];
+    CBDbArg a[5];
     int nb = 2;
-    a[0] = (RXDbArg) { .type = RX_DB_NUM, .num = rmst(c, 8) };
-    a[1] = (RXDbArg) { .type = RX_DB_NUM, .num = track };
+    a[0] = (CBDbArg) { .type = CB_DB_NUM, .num = rmst(c, 8) };
+    a[1] = (CBDbArg) { .type = CB_DB_NUM, .num = track };
     switch (kind) {
-    case RX_DB_PREVIEW:
+    case CB_DB_PREVIEW:
         /* 4, the track, 0 and a blob declared and not sent
          * (track_metadata.adoc "Waveform Previews"). */
-        want = RX_DB_PREVIEW_REPLY;
+        want = CB_DB_PREVIEW_REPLY;
         a[1].num = 4;
-        a[2] = (RXDbArg) { .type = RX_DB_NUM, .num = track };
-        a[3] = (RXDbArg) { .type = RX_DB_NUM, .num = 0 };
-        a[4] = (RXDbArg) { .type = RX_DB_BLOB };
+        a[2] = (CBDbArg) { .type = CB_DB_NUM, .num = track };
+        a[3] = (CBDbArg) { .type = CB_DB_NUM, .num = 0 };
+        a[4] = (CBDbArg) { .type = CB_DB_BLOB };
         nb = 5;
         break;
-    case RX_DB_DETAIL:
-    case RX_DB_CUES_EXT:
-        want = kind == RX_DB_DETAIL ? RX_DB_DETAIL_REPLY : RX_DB_CUES_EXT_REPLY;
-        a[2] = (RXDbArg) { .type = RX_DB_NUM, .num = 0 };
+    case CB_DB_DETAIL:
+    case CB_DB_CUES_EXT:
+        want = kind == CB_DB_DETAIL ? CB_DB_DETAIL_REPLY : CB_DB_CUES_EXT_REPLY;
+        a[2] = (CBDbArg) { .type = CB_DB_NUM, .num = 0 };
         nb = 3;
         break;
-    case RX_DB_GRID:  want = RX_DB_GRID_REPLY; break;
-    case RX_DB_VBR:   want = RX_DB_VBR_REPLY; break;
-    case RX_DB_CUES:  want = RX_DB_CUES_REPLY; break;
+    case CB_DB_GRID:  want = CB_DB_GRID_REPLY; break;
+    case CB_DB_VBR:   want = CB_DB_VBR_REPLY; break;
+    case CB_DB_CUES:  want = CB_DB_CUES_REPLY; break;
     default:
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
     }
-    RXDbMsg r;
+    CBDbMsg r;
     int ret = request(c, kind, a, nb, &r);
     return ret < 0 ? ret : take_blob(&r, want, blob, size);
 }
@@ -588,69 +588,69 @@ static uint32_t ascii_le(const char *s)
     return v;
 }
 
-int rx_dbclient_tag(RXDbClient *c, uint32_t track, const char *fourcc, const char *ext,
+int cb_dbclient_tag(CBDbClient *c, uint32_t track, const char *fourcc, const char *ext,
                     uint8_t **blob, size_t *size)
 {
     /* The .2EX file's tags by 2d04, as a CDJ-3000 asks; the others by
      * 2c04 (rbxport's capture). */
-    uint16_t kind = !strcmp(ext, "2EX") ? RX_DB_TAG_2EX : RX_DB_TAG;
+    uint16_t kind = !strcmp(ext, "2EX") ? CB_DB_TAG_2EX : CB_DB_TAG;
     const uint32_t args[3] = { track, ascii_le(fourcc), ascii_le(ext) };
-    RXDbMsg r;
-    int ret = rx_dbclient_request(c, kind, 8, args, 3, &r);
-    return ret < 0 ? ret : take_blob(&r, RX_DB_TAG_REPLY, blob, size);
+    CBDbMsg r;
+    int ret = cb_dbclient_request(c, kind, 8, args, 3, &r);
+    return ret < 0 ? ret : take_blob(&r, CB_DB_TAG_REPLY, blob, size);
 }
 
 /* ------------------------------------------------------------ decoders */
 
-int rx_db_grid_parse(const uint8_t *blob, size_t size, RXBeat **beats, int *nb)
+int cb_db_grid_parse(const uint8_t *blob, size_t size, CBBeat **beats, int *nb)
 {
     *beats = NULL;
     *nb = 0;
-    RXRd r = rx_rd(blob, size);
+    CBRd r = cb_rd(blob, size);
     /* The layout dbserver.c's grid reply writes (catalog.c). */
-    uint32_t magic = rx_rd_u32le(&r), count = rx_rd_u32le(&r), bytes = rx_rd_u32le(&r);
-    rx_rd_skip(&r, 8);
+    uint32_t magic = cb_rd_u32le(&r), count = cb_rd_u32le(&r), bytes = cb_rd_u32le(&r);
+    cb_rd_skip(&r, 8);
     if (r.err || magic != 0x00080000 || bytes != (uint64_t)count * 16 ||
-        count > rx_rd_left(&r) / 16)
-        return RX_ERROR(EPROTO);
-    RXBeat *v = calloc(RX_MAX(count, 1), sizeof(*v));
+        count > cb_rd_left(&r) / 16)
+        return CB_ERROR(EPROTO);
+    CBBeat *v = calloc(CB_MAX(count, 1), sizeof(*v));
     if (!v)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     for (uint32_t i = 0; i < count; i++) {
-        uint8_t number = rx_rd_u8(&r);
-        rx_rd_skip(&r, 1);
-        uint16_t tempo = rx_rd_u16le(&r);
-        uint32_t ms = rx_rd_u32le(&r);
-        rx_rd_skip(&r, 8);
-        v[i] = (RXBeat) { .time = ms / 1000.0, .number = number, .bpm = tempo / 100.0 };
+        uint8_t number = cb_rd_u8(&r);
+        cb_rd_skip(&r, 1);
+        uint16_t tempo = cb_rd_u16le(&r);
+        uint32_t ms = cb_rd_u32le(&r);
+        cb_rd_skip(&r, 8);
+        v[i] = (CBBeat) { .time = ms / 1000.0, .number = number, .bpm = tempo / 100.0 };
     }
     *beats = v;
     *nb = (int)count;
     return 0;
 }
 
-int rx_db_cues_ext_parse(const uint8_t *blob, size_t size, RXPlanCue **cues, int *nb)
+int cb_db_cues_ext_parse(const uint8_t *blob, size_t size, CBPlanCue **cues, int *nb)
 {
     *cues = NULL;
     *nb = 0;
-    RXArray a;
-    rx_array_init(&a, sizeof(RXPlanCue));
+    CBArray a;
+    cb_array_init(&a, sizeof(CBPlanCue));
     size_t pos = 0;
     int ret = 0;
     while (pos < size) {
-        RXRd r = rx_rd(blob + pos, size - pos);
-        uint32_t len = rx_rd_u32le(&r);
+        CBRd r = cb_rd(blob + pos, size - pos);
+        uint32_t len = cb_rd_u32le(&r);
         /* An entry ends before its comment at 0x48 at the shortest; one
          * may end before its comment or colour (track_metadata.adoc). */
         if (r.err || len < 0x14 || len > size - pos) {
-            ret = RX_ERROR(EPROTO);
+            ret = CB_ERROR(EPROTO);
             break;
         }
-        RXRd e = rx_rd(blob + pos, len);
-        RXPlanCue q = { .hot = -1, .loop_end = -1.0 };
-        uint8_t slot = rx_rd_at_u8(&e, 4), shape = rx_rd_at_u8(&e, 6);
+        CBRd e = cb_rd(blob + pos, len);
+        CBPlanCue q = { .hot = -1, .loop_end = -1.0 };
+        uint8_t slot = cb_rd_at_u8(&e, 4), shape = cb_rd_at_u8(&e, 6);
         e.pos = 0x0c;
-        uint32_t in = rx_rd_u32le(&e), out = rx_rd_u32le(&e);
+        uint32_t in = cb_rd_u32le(&e), out = cb_rd_u32le(&e);
         q.time = in / 1000.0;
         if (shape == 2 && out != 0xffffffff)
             q.loop_end = out / 1000.0;
@@ -658,34 +658,34 @@ int rx_db_cues_ext_parse(const uint8_t *blob, size_t size, RXPlanCue **cues, int
             q.hot = slot - 1;
         if (len >= 0x4a) {
             e.pos = 0x48;
-            uint16_t clen = rx_rd_u16le(&e);
-            const uint8_t *text = rx_rd_bytes(&e, clen);
+            uint16_t clen = cb_rd_u16le(&e);
+            const uint8_t *text = cb_rd_bytes(&e, clen);
             if (text) {
-                char *s = rx_link_utf16_to_utf8(text, clen, false);
+                char *s = cb_link_utf16_to_utf8(text, clen, false);
                 if (!s) {
-                    ret = RX_ERROR(ENOMEM);
+                    ret = CB_ERROR(ENOMEM);
                     break;
                 }
                 snprintf(q.name, sizeof(q.name), "%s", s);
                 free(s);
-                rx_rd_skip(&e, 4);
-                const uint8_t *col = rx_rd_bytes(&e, 4);
+                cb_rd_skip(&e, 4);
+                const uint8_t *col = cb_rd_bytes(&e, 4);
                 if (col && q.hot >= 0) {
                     q.color_code = col[0];
                     q.rgb = (uint32_t)col[1] << 16 | (uint32_t)col[2] << 8 | col[3];
                 }
             }
             if (q.hot < 0 && len > 0x3a)
-                q.color_code = rx_rd_at_u8(&e, 0x3a);
+                q.color_code = cb_rd_at_u8(&e, 0x3a);
         }
-        if (!rx_array_push(&a, &q)) {
-            ret = RX_ERROR(ENOMEM);
+        if (!cb_array_push(&a, &q)) {
+            ret = CB_ERROR(ENOMEM);
             break;
         }
         pos += len;
     }
     if (ret < 0) {
-        rx_array_free(&a);
+        cb_array_free(&a);
         return ret;
     }
     *cues = a.data;
@@ -693,17 +693,17 @@ int rx_db_cues_ext_parse(const uint8_t *blob, size_t size, RXPlanCue **cues, int
     return 0;
 }
 
-int rx_db_tag_parse(const uint8_t *blob, size_t size, RXAnlzTag *tag)
+int cb_db_tag_parse(const uint8_t *blob, size_t size, CBAnlzTag *tag)
 {
-    *tag = (RXAnlzTag) { 0 };
-    RXRd r = rx_rd(blob, size);
-    uint32_t padded = rx_rd_u32le(&r);
-    const uint8_t *raw = rx_rd_bytes(&r, 12);
+    *tag = (CBAnlzTag) { 0 };
+    CBRd r = cb_rd(blob, size);
+    uint32_t padded = cb_rd_u32le(&r);
+    const uint8_t *raw = cb_rd_bytes(&r, 12);
     if (r.err || padded > size - 4 || padded < 12)
-        return RX_ERROR(EPROTO);
-    uint32_t header = rx_rd_at_u32(&r, 8), len = rx_rd_at_u32(&r, 12);
+        return CB_ERROR(EPROTO);
+    uint32_t header = cb_rd_at_u32(&r, 8), len = cb_rd_at_u32(&r, 12);
     if (header < 12 || len < header || len > padded)
-        return RX_ERROR(EPROTO);
+        return CB_ERROR(EPROTO);
     memcpy(tag->fourcc, raw, 4);
     tag->raw = raw;
     tag->raw_size = len;

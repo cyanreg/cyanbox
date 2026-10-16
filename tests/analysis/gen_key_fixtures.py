@@ -11,7 +11,7 @@ progressions of test_key.c (three major, three minor), each plain, detuned
 from a fixed seed (mostly 44.1 and 48 kHz, house and drum & bass tempos).
 The last column marks the quick subset `meson test` runs (two tonics of each
 progression and variant, and the cases the previous detector got wrong or
-mistuned by more than 3 cents); RXBOX_KEY_FULL=1 test_key runs all of them.
+mistuned by more than 3 cents); CYANBOX_KEY_FULL=1 test_key runs all of them.
 
     gen_key_fixtures.py fetch DIR
 
@@ -23,7 +23,7 @@ fallback), checking each file against the dataset's md5.
     gen_key_fixtures.py gs DIR --set key|mtg --prog PROG [--out FILE]
 
 runs a key program over a GiantSteps set: each preview is decoded with the
-ffmpeg CLI to float32 mono at 44.1 kHz (what rx_analyse hands the key
+ffmpeg CLI to float32 mono at 44.1 kHz (what cb_analyse hands the key
 detector) and piped to `PROG - 44100` (test_key's file mode, or anything that
 prints a key name in dj's spelling, optionally followed by a confidence).
 The answers go to FILE as a table; then the score: plain accuracy, the

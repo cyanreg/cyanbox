@@ -1,6 +1,6 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
-/* Positions and key names as people write them (rxbox/notation.h).
+/* Positions and key names as people write them (cyanbox/notation.h).
  *
  * Positions follow dj's sidecar syntax, which people already type: plain
  * seconds, "m:ss.mmm" and "h:mm:ss" (dj's (?:(\d+):)?(\d+):(\d+(?:\.\d*)?)),
@@ -20,7 +20,7 @@
  * 2A/2B/1A/3A/1B/3B), the rule rbxport's src/lib/camelot.ts
  * (trafficLightCodes, trafficLightLit) applies. */
 
-#include "rxbox/notation.h"
+#include "cyanbox/notation.h"
 
 #include <ctype.h>
 #include <math.h>
@@ -148,32 +148,32 @@ static bool parse_beat(const char *s, double *n)
     return true;
 }
 
-int rx_parse_position(const char *spec, const RXGrid *grid, double *time, double *grid_beat)
+int cb_parse_position(const char *spec, const CBGrid *grid, double *time, double *grid_beat)
 {
     char s[64];
     if (!spec || !normalise_spec(spec, s, sizeof(s)) || !s[0])
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
 
     double v, gb = NAN;
     int64_t bar, beat;
     if (parse_clock(s, &v)) {
         /* v is the time */
     } else if (parse_bar(s, &bar, &beat)) {
-        if (!rx_grid_valid(grid))
-            return RX_ERROR(EINVAL);
-        gb = rx_core_grid_bar_index(grid, bar, beat);
-        v = rx_grid_beat_to_time(grid, gb);
+        if (!cb_grid_valid(grid))
+            return CB_ERROR(EINVAL);
+        gb = cb_core_grid_bar_index(grid, bar, beat);
+        v = cb_grid_beat_to_time(grid, gb);
     } else if (parse_beat(s, &v)) {
-        if (!rx_grid_valid(grid))
-            return RX_ERROR(EINVAL);
+        if (!cb_grid_valid(grid))
+            return CB_ERROR(EINVAL);
         gb = v - 1;
-        v = rx_grid_beat_to_time(grid, gb);
+        v = cb_grid_beat_to_time(grid, gb);
     } else {
         /* Plain seconds, as Python's float() would take them. */
         char *end;
         v = strtod(s, &end);
         if (end == s || *end || !isfinite(v))
-            return RX_ERROR(EINVAL);
+            return CB_ERROR(EINVAL);
     }
 
     *time = v;
@@ -182,12 +182,12 @@ int rx_parse_position(const char *spec, const RXGrid *grid, double *time, double
     return 0;
 }
 
-const char *rx_format_grid_position(const RXGrid *grid, double grid_beat, char *buf, size_t size)
+const char *cb_format_grid_position(const CBGrid *grid, double grid_beat, char *buf, size_t size)
 {
     if (!size)
         return NULL;
     buf[0] = '\0';
-    if (!isfinite(grid_beat) || !rx_grid_valid(grid))
+    if (!isfinite(grid_beat) || !cb_grid_valid(grid))
         return NULL;
 
     /* Within a millionth of a beat is on the beat: grid_beat of a quantised
@@ -202,7 +202,7 @@ const char *rx_format_grid_position(const RXGrid *grid, double grid_beat, char *
     if (fabs(grid_beat - whole) < 1e-6) {
         int64_t bar;
         int beat;
-        rx_core_grid_describe(grid, (int64_t)whole, &bar, &beat);
+        cb_core_grid_describe(grid, (int64_t)whole, &bar, &beat);
         if (bar >= 0) {
             if (beat == 1)
                 snprintf(buf, size, "bar %lld", (long long)bar);
@@ -257,7 +257,7 @@ static int key_parse(const char *in, int *tonic, bool *minor)
 {
     char s[32];
     if (!normalise_spec(in, s, sizeof(s)) || !s[0])
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
     while (isspace((unsigned char)*in))
         in++;
 
@@ -266,7 +266,7 @@ static int key_parse(const char *in, int *tonic, bool *minor)
         int num = atoi(s);
         const char *suffix = s + digits;
         if (digits > 2 || num < 1 || num > 12 || strlen(suffix) != 1)
-            return RX_ERROR(EINVAL);
+            return CB_ERROR(EINVAL);
         for (int k = 0; k < 12; k++) {
             for (int m = 0; m < 2; m++) {
                 if ((*suffix == (m ? 'a' : 'b') && camelot_of(k, m) == num) ||
@@ -277,14 +277,14 @@ static int key_parse(const char *in, int *tonic, bool *minor)
                 }
             }
         }
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
     }
 
     /* Pitch classes of A..G. */
     static const int letter_pc[7] = { 9, 11, 0, 2, 4, 5, 7 };
     char letter = (char)toupper((unsigned char)in[0]);
     if (letter < 'A' || letter > 'G')
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
     int pc = letter_pc[letter - 'A'];
     const char *p = in + 1;
     if (*p == '#') {
@@ -312,17 +312,17 @@ static int key_parse(const char *in, int *tonic, bool *minor)
     else if ((n == 1 && *p == 'm') || word_is(p, n, "min") || word_is(p, n, "minor"))
         is_minor = true;
     else
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
 
     *tonic = (pc + 12) % 12;
     *minor = is_minor;
     return 0;
 }
 
-int rx_key_normalise(const char *in, char *classic, size_t size)
+int cb_key_normalise(const char *in, char *classic, size_t size)
 {
     if (!size)
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
     classic[0] = '\0';
     /* Empty means unknown, which is a valid answer. */
     if (!in || !in[strspn(in, " \t\r\n")])
@@ -335,12 +335,12 @@ int rx_key_normalise(const char *in, char *classic, size_t size)
         return ret;
     if (snprintf(classic, size, "%s%s", key_names[tonic], minor ? "m" : "") >= (int)size) {
         classic[0] = '\0';
-        return RX_ERROR(ERANGE);
+        return CB_ERROR(ERANGE);
     }
     return 0;
 }
 
-const char *rx_key_to_camelot(const char *classic, char *buf, size_t size)
+const char *cb_key_to_camelot(const char *classic, char *buf, size_t size)
 {
     int tonic;
     bool minor;
@@ -352,7 +352,7 @@ const char *rx_key_to_camelot(const char *classic, char *buf, size_t size)
     return buf;
 }
 
-const char *rx_key_to_open(const char *classic, char *buf, size_t size)
+const char *cb_key_to_open(const char *classic, char *buf, size_t size)
 {
     int tonic;
     bool minor;
@@ -364,13 +364,13 @@ const char *rx_key_to_open(const char *classic, char *buf, size_t size)
     return buf;
 }
 
-const char *rx_key_display(const char *classic, const char *notation, char *buf, size_t size)
+const char *cb_key_display(const char *classic, const char *notation, char *buf, size_t size)
 {
     if (notation && !strcmp(notation, "camelot"))
-        return rx_key_to_camelot(classic, buf, size);
+        return cb_key_to_camelot(classic, buf, size);
     if (notation && !strcmp(notation, "open"))
-        return rx_key_to_open(classic, buf, size);
-    if (size && rx_key_normalise(classic, buf, size) < 0)
+        return cb_key_to_open(classic, buf, size);
+    if (size && cb_key_normalise(classic, buf, size) < 0)
         buf[0] = '\0';
     return buf;
 }
@@ -379,16 +379,16 @@ const char *rx_key_display(const char *classic, const char *notation, char *buf,
 
 static const char *const reach_names[] = { "off", "same", "related1", "related2", "related3" };
 
-const char *rx_key_reach_name(RXKeyReach reach)
+const char *cb_key_reach_name(CBKeyReach reach)
 {
-    if ((int)reach < 0 || (int)reach >= (int)RX_ARRAY_ELEMS(reach_names))
+    if ((int)reach < 0 || (int)reach >= (int)CB_ARRAY_ELEMS(reach_names))
         return NULL;
     return reach_names[reach];
 }
 
-int rx_key_reach_parse(const char *name)
+int cb_key_reach_parse(const char *name)
 {
-    for (int i = 0; name && i < (int)RX_ARRAY_ELEMS(reach_names); i++) {
+    for (int i = 0; name && i < (int)CB_ARRAY_ELEMS(reach_names); i++) {
         if (!strcmp(name, reach_names[i]))
             return i;
     }
@@ -400,7 +400,7 @@ int rx_key_reach_parse(const char *name)
 static bool wheel_of(const char *key, int *num, bool *minor)
 {
     char code[8];
-    if (!key || !rx_key_to_camelot(key, code, sizeof(code))[0])
+    if (!key || !cb_key_to_camelot(key, code, sizeof(code))[0])
         return false;
     char *letter;
     *num = (int)strtol(code, &letter, 10);
@@ -408,11 +408,11 @@ static bool wheel_of(const char *key, int *num, bool *minor)
     return true;
 }
 
-bool rx_key_traffic_light(const char *key, const char *reference, RXKeyReach reach)
+bool cb_key_traffic_light(const char *key, const char *reference, CBKeyReach reach)
 {
     int n, k;
     bool ref_minor, key_minor;
-    if (reach <= RX_KEY_REACH_OFF || !wheel_of(reference, &n, &ref_minor) ||
+    if (reach <= CB_KEY_REACH_OFF || !wheel_of(reference, &n, &ref_minor) ||
         !wheel_of(key, &k, &key_minor))
         return false;
 
@@ -421,8 +421,8 @@ bool rx_key_traffic_light(const char *key, const char *reference, RXKeyReach rea
     int step = ((k - n) % 12 + 12) % 12;
     bool same_letter = key_minor == ref_minor;
     if (step == 0)
-        return same_letter || reach >= RX_KEY_REACH_RELATED1;
+        return same_letter || reach >= CB_KEY_REACH_RELATED1;
     if (step == 1 || step == 11)
-        return reach >= (same_letter ? RX_KEY_REACH_RELATED2 : RX_KEY_REACH_RELATED3);
+        return reach >= (same_letter ? CB_KEY_REACH_RELATED2 : CB_KEY_REACH_RELATED3);
     return false;
 }

@@ -1,12 +1,12 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
-/* The packet store (rxbox/audio.h) against rx_decode, on the known signal
+/* The packet store (cyanbox/audio.h) against cb_decode, on the known signal
  * as WAV, FLAC, AIFF, MP3 (an Info frame rekordbox counts, so a frame of
  * silence first, and the same file with one it does not), Opus, Vorbis and
  * AAC (MP4 with its edit list, and raw ADTS), all made here.
  *
  * For each: the length (the container's at open, the count once indexed,
- * both rx_decode's), the whole track decoded in chunks in order, sample for
+ * both cb_decode's), the whole track decoded in chunks in order, sample for
  * sample, the first and the last second and a stretch in the middle each
  * decoded straight after a jump, and 64 more jumps: sample for sample
  * where the codec allows a cold start to be (lossless codecs, MP3, Vorbis,
@@ -15,7 +15,7 @@
  * 0 and past the end are silence, a store decodes before it is indexed
  * (indexing as far as it needs), and Matroska is refused. */
 
-#include "rxbox/audio.h"
+#include "cyanbox/audio.h"
 
 #include <inttypes.h>
 #include <math.h>
@@ -36,7 +36,7 @@ static double diff(const float *a, const float *b, int64_t n, int ch)
 }
 
 /* The reference's frames [at, at + n), silence outside it. */
-static void ref_frames(const RXAudio *ref, int64_t at, int64_t n, float *out)
+static void ref_frames(const CBAudio *ref, int64_t at, int64_t n, float *out)
 {
     int ch = ref->channels;
     for (int64_t i = 0; i < n; i++) {
@@ -48,11 +48,11 @@ static void ref_frames(const RXAudio *ref, int64_t at, int64_t n, float *out)
 
 /* Decodes [at, at + n) after a jump (a fresh call that does not follow
  * the last) and compares; returns the difference. */
-static double jump(RXPacketDecoder *d, const RXAudio *ref, int64_t at, int64_t n, float *x,
+static double jump(CBPacketDecoder *d, const CBAudio *ref, int64_t at, int64_t n, float *x,
                    float *want)
 {
-    int64_t got = rx_packets_decode(d, at, n, x, 0);
-    int64_t inside = RX_CLAMP(ref->nb_frames - at, (int64_t)0, n);
+    int64_t got = cb_packets_decode(d, at, n, x, 0);
+    int64_t inside = CB_CLAMP(ref->nb_frames - at, (int64_t)0, n);
     CHECK(got == inside, "decode at %" PRId64 ": %" PRId64 " frames, want %" PRId64, at, got,
           inside);
     ref_frames(ref, at, n, want);
@@ -61,29 +61,29 @@ static double jump(RXPacketDecoder *d, const RXAudio *ref, int64_t at, int64_t n
 
 static void check_file(const char *what, const char *path, double tolerance)
 {
-    RXAudio ref;
-    int ret = rx_decode(path, 0, 0, &ref);
-    CHECK(ret >= 0, "%s: rx_decode %d", what, ret);
+    CBAudio ref;
+    int ret = cb_decode(path, 0, 0, &ref);
+    CHECK(ret >= 0, "%s: cb_decode %d", what, ret);
     if (ret < 0)
         return;
 
-    int64_t t0 = rx_time_us();
-    RXPackets *pk = NULL;
-    ret = rx_packets_open(path, &pk);
-    int64_t t1 = rx_time_us();
-    CHECK(ret >= 0, "%s: rx_packets_open %d", what, ret);
+    int64_t t0 = cb_time_us();
+    CBPackets *pk = NULL;
+    ret = cb_packets_open(path, &pk);
+    int64_t t1 = cb_time_us();
+    CHECK(ret >= 0, "%s: cb_packets_open %d", what, ret);
     if (ret < 0) {
-        rx_audio_free(&ref);
+        cb_audio_free(&ref);
         return;
     }
-    CHECK(rx_packets_rate(pk) == ref.rate && rx_packets_channels(pk) == ref.channels,
-          "%s: %d Hz %d ch, rx_decode %d Hz %d ch", what, rx_packets_rate(pk),
-          rx_packets_channels(pk), ref.rate, ref.channels);
+    CHECK(cb_packets_rate(pk) == ref.rate && cb_packets_channels(pk) == ref.channels,
+          "%s: %d Hz %d ch, cb_decode %d Hz %d ch", what, cb_packets_rate(pk),
+          cb_packets_channels(pk), ref.rate, ref.channels);
     bool exact;
-    int64_t at_open = rx_packets_length(pk, &exact);
+    int64_t at_open = cb_packets_length(pk, &exact);
     /* What the container states: Ogg Vorbis's leading packet makes it 128
      * frames long until the index has counted */
-    CHECK(llabs(at_open - ref.nb_frames) <= 128, "%s: %" PRId64 " frames at open, rx_decode %"
+    CHECK(llabs(at_open - ref.nb_frames) <= 128, "%s: %" PRId64 " frames at open, cb_decode %"
           PRId64, what, at_open, ref.nb_frames);
 
     int ch = ref.channels, rate = ref.rate;
@@ -91,21 +91,21 @@ static void check_file(const char *what, const char *path, double tolerance)
     float *all = malloc(sizeof(float) * (size_t)(n + 2 * CHUNK) * ch);
     float *x = malloc(sizeof(float) * (size_t)48000 * ch);
     float *want = malloc(sizeof(float) * (size_t)48000 * ch);
-    RXPacketDecoder *d = NULL;
-    CHECK(all && x && want && rx_packets_decoder(pk, &d) >= 0, "%s: decoder", what);
+    CBPacketDecoder *d = NULL;
+    CHECK(all && x && want && cb_packets_decoder(pk, &d) >= 0, "%s: decoder", what);
     if (!d)
         goto end;
 
     /* In order, in chunks, to the end and a chunk past it */
     int64_t total = 0;
     for (int64_t at = 0; at < n + CHUNK; at += CHUNK) {
-        int64_t got = rx_packets_decode(d, at, CHUNK, all + at * ch, 0);
+        int64_t got = cb_packets_decode(d, at, CHUNK, all + at * ch, 0);
         CHECK(got >= 0, "%s: decode at %" PRId64 ": %" PRId64, what, at, got);
-        total += RX_MAX(got, (int64_t)0);
+        total += CB_MAX(got, (int64_t)0);
     }
-    int64_t length = rx_packets_length(pk, &exact);
+    int64_t length = cb_packets_length(pk, &exact);
     CHECK(exact && length == n && total == n, "%s: %" PRId64 " frames (exact %d), %" PRId64
-          " decoded, rx_decode %" PRId64, what, length, exact, total, n);
+          " decoded, cb_decode %" PRId64, what, length, exact, total, n);
     double seq = diff(all, ref.samples, n, ch);
     CHECK(seq == 0.0, "%s: in order, %g off", what, seq);
     bool silent = true;
@@ -132,28 +132,28 @@ static void check_file(const char *what, const char *path, double tolerance)
     CHECK(worst <= tolerance, "%s: %g off across 0", what, worst);
 
     printf("%s: open %.2f ms, %" PRId64 " frames, %.0f kB of packets, %g off after jumps\n",
-           what, (t1 - t0) / 1e3, n, rx_packets_memory(pk) / 1024.0, worst);
+           what, (t1 - t0) / 1e3, n, cb_packets_memory(pk) / 1024.0, worst);
 
 end:
-    rx_packets_decoder_free(d);
-    rx_packets_free(pk);
+    cb_packets_decoder_free(d);
+    cb_packets_free(pk);
 
     /* A store not indexed yet decodes the end of the track first, indexing
      * as far as it needs */
-    if (rx_packets_open(path, &pk) >= 0) {
-        CHECK(rx_packets_decoder(pk, &d) >= 0, "%s: decoder", what);
+    if (cb_packets_open(path, &pk) >= 0) {
+        CHECK(cb_packets_decoder(pk, &d) >= 0, "%s: decoder", what);
         if (d) {
             double off = jump(d, &ref, n - rate / 2, rate / 2, x, want);
             CHECK(off <= tolerance, "%s: %g off at the end before indexing", what, off);
-            CHECK(rx_packets_length(pk, &exact) == n && exact, "%s: indexed to the end", what);
+            CHECK(cb_packets_length(pk, &exact) == n && exact, "%s: indexed to the end", what);
         }
-        rx_packets_decoder_free(d);
-        rx_packets_free(pk);
+        cb_packets_decoder_free(d);
+        cb_packets_free(pk);
     }
     free(all);
     free(x);
     free(want);
-    rx_audio_free(&ref);
+    cb_audio_free(&ref);
 }
 
 int main(void)
@@ -181,15 +181,15 @@ int main(void)
         char *mp3 = test_path(dir, "sig.mp3");
         char *mp3b = test_path(dir, "sig-restart.mp3");
         CHECK(!ffmpeg("-i", wav, "-c:a", "libmp3lame", "-b:a", "128k", mp3, NULL), "mp3 encode");
-        RXMp3Info mi;
+        CBMp3Info mi;
         uint8_t *d = NULL;
         size_t size = 0;
-        if (rx_mp3_scan(mp3, &mi) >= 0 && mi.header_frame && rx_file_read(mp3, &d, &size) >= 0) {
+        if (cb_mp3_scan(mp3, &mi) >= 0 && mi.header_frame && cb_file_read(mp3, &d, &size) >= 0) {
             size_t hdr = (size_t)mi.first_frame_offset;
             d[hdr + 3] ^= 0x40;
-            CHECK(rx_file_write_atomic(mp3b, d, size) >= 0, "write %s", mp3b);
-            RXMp3Info mb;
-            CHECK(rx_mp3_scan(mp3b, &mb) >= 0 && mb.header_counts != mi.header_counts,
+            CHECK(cb_file_write_atomic(mp3b, d, size) >= 0, "write %s", mp3b);
+            CBMp3Info mb;
+            CHECK(cb_mp3_scan(mp3b, &mb) >= 0 && mb.header_counts != mi.header_counts,
                   "the flipped Info frame counts the same (%d)", mi.header_counts);
             check_file(mi.header_counts ? "mp3 (header frame counts)" : "mp3", mp3, 0.0);
             check_file(mi.header_counts ? "mp3" : "mp3 (header frame counts)", mp3b, 0.0);
@@ -209,9 +209,9 @@ int main(void)
         /* Matroska's times are milliseconds: refused */
         char *mka = test_path(dir, "sig.mka");
         CHECK(!ffmpeg("-i", opus, "-c", "copy", mka, NULL), "mka remux");
-        RXPackets *pk = NULL;
-        CHECK(rx_packets_open(mka, &pk) == RX_ERROR(ENOTSUP), "Matroska accepted");
-        rx_packets_free(pk);
+        CBPackets *pk = NULL;
+        CHECK(cb_packets_open(mka, &pk) == CB_ERROR(ENOTSUP), "Matroska accepted");
+        cb_packets_free(pk);
         free(mka);
         free(opus);
     }
@@ -230,8 +230,8 @@ int main(void)
     CHECK(!ffmpeg("-i", wav, "-c:a", "aac", "-b:a", "192k", adts, NULL), "adts encode");
     check_file("aac (adts)", adts, 0.0);
 
-    RXPackets *pk = NULL;
-    CHECK(rx_packets_open("/nonexistent/rxbox/x.flac", &pk) < 0 && !pk, "a missing file opened");
+    CBPackets *pk = NULL;
+    CHECK(cb_packets_open("/nonexistent/cyanbox/x.flac", &pk) < 0 && !pk, "a missing file opened");
 
     free(m4a);
     free(adts);

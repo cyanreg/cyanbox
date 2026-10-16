@@ -10,7 +10,7 @@
  * such files. Offsets stay absolute in first_frame_offset and relative to
  * it in the table, as before. */
 
-#include "rxbox/audio.h"
+#include "cyanbox/audio.h"
 
 #include <inttypes.h>
 
@@ -60,7 +60,7 @@ typedef struct FrameHeader {
 static bool parse_frame_header(const uint8_t *data, size_t size, size_t pos, FrameHeader *f)
 {
     const uint8_t *h = data + pos;
-    size_t len = RX_MIN(size - pos, (size_t)16);
+    size_t len = CB_MIN(size - pos, (size_t)16);
     if (len < 6 || h[0] != 0xFF || (h[1] & 0xFE) != 0xF8 || (h[3] & 1))
         return false;
 
@@ -125,13 +125,13 @@ static uint64_t rb(const uint8_t *b, int n)
     return v;
 }
 
-static int push_frame(RXFlacInfo *info, int *cap, int64_t sample, int64_t offset, int block)
+static int push_frame(CBFlacInfo *info, int *cap, int64_t sample, int64_t offset, int block)
 {
     if (info->nb_frames == *cap) {
         int ncap = *cap ? *cap * 2 : 1024;
         void *nf = realloc(info->frames, (size_t)ncap * sizeof(*info->frames));
         if (!nf)
-            return RX_ERROR(ENOMEM);
+            return CB_ERROR(ENOMEM);
         info->frames = nf;
         *cap = ncap;
     }
@@ -142,24 +142,24 @@ static int push_frame(RXFlacInfo *info, int *cap, int64_t sample, int64_t offset
     return 0;
 }
 
-int rx_flac_walk_init(RXFlacWalk *w, const char *path, const uint8_t *d, size_t size,
-                      RXFlacInfo *info, const uint8_t **streaminfo)
+int cb_flac_walk_init(CBFlacWalk *w, const char *path, const uint8_t *d, size_t size,
+                      CBFlacInfo *info, const uint8_t **streaminfo)
 {
-    *w = (RXFlacWalk) { 0 };
-    *info = (RXFlacInfo) { 0 };
+    *w = (CBFlacWalk) { 0 };
+    *info = (CBFlacInfo) { 0 };
     *streaminfo = NULL;
 
-    size_t pos = rx_audio_skip_id3v2(d, size);
+    size_t pos = cb_audio_skip_id3v2(d, size);
     if (size - pos < 4 || memcmp(d + pos, "fLaC", 4)) {
-        rx_debug("%s: not a FLAC file", path);
-        return RX_ERROR(EINVAL);
+        cb_debug("%s: not a FLAC file", path);
+        return CB_ERROR(EINVAL);
     }
     pos += 4;
 
     /* Metadata blocks up to the one flagged last */
     while (1) {
         if (size - pos < 4)
-            return RX_ERROR(EINVAL);
+            return CB_ERROR(EINVAL);
         const uint8_t *hdr = d + pos;
         size_t length = (size_t)rb(hdr + 1, 3);
         if ((hdr[0] & 0x7F) == 0 && length >= 34 && size - pos - 4 >= 34) {
@@ -174,18 +174,18 @@ int rx_flac_walk_init(RXFlacWalk *w, const char *path, const uint8_t *d, size_t 
             *streaminfo = s;
         }
         if (size - pos - 4 < length)
-            return RX_ERROR(EINVAL);
+            return CB_ERROR(EINVAL);
         pos += 4 + length;
         if (hdr[0] & 0x80)
             break;
     }
     if (!*streaminfo) {
-        rx_debug("%s: no STREAMINFO", path);
-        return RX_ERROR(EINVAL);
+        cb_debug("%s: no STREAMINFO", path);
+        return CB_ERROR(EINVAL);
     }
     info->first_frame_offset = (int64_t)pos;
 
-    *w = (RXFlacWalk) {
+    *w = (CBFlacWalk) {
         .data  = d,
         .size  = size,
         .start = pos,
@@ -198,7 +198,7 @@ int rx_flac_walk_init(RXFlacWalk *w, const char *path, const uint8_t *d, size_t 
 /* Each frame is the first sync candidate after the previous one whose
  * header parses with the expected frame number (fixed block size) or
  * sample number (variable). Candidates only move forward, as in dj. */
-int rx_flac_walk_next(RXFlacWalk *w, size_t *offset, int64_t *sample, int *block, bool *complete)
+int cb_flac_walk_next(CBFlacWalk *w, size_t *offset, int64_t *sample, int *block, bool *complete)
 {
     const uint8_t *d = w->data;
     while (w->sample < w->total && w->cand + 1 < w->size) {
@@ -223,28 +223,28 @@ int rx_flac_walk_next(RXFlacWalk *w, size_t *offset, int64_t *sample, int *block
     return 0;
 }
 
-int rx_flac_scan(const char *path, RXFlacInfo *info)
+int cb_flac_scan(const char *path, CBFlacInfo *info)
 {
-    *info = (RXFlacInfo) { 0 };
+    *info = (CBFlacInfo) { 0 };
 
-    RXMap m;
-    int ret = rx_audio_map(path, &m);
+    CBMap m;
+    int ret = cb_audio_map(path, &m);
     if (ret < 0)
         return ret;
 
-    RXFlacWalk w;
+    CBFlacWalk w;
     const uint8_t *streaminfo;
-    ret = rx_flac_walk_init(&w, path, m.data, m.size, info, &streaminfo);
+    ret = cb_flac_walk_init(&w, path, m.data, m.size, info, &streaminfo);
     if (ret < 0)
         goto end;
 
     int cap = 0;
     if (info->max_block > 0) {
         int64_t est = info->total_samples / info->max_block + 2;
-        cap = (int)RX_MIN(est, (int64_t)(1 << 24));
+        cap = (int)CB_MIN(est, (int64_t)(1 << 24));
         info->frames = malloc((size_t)cap * sizeof(*info->frames));
         if (!info->frames) {
-            ret = RX_ERROR(ENOMEM);
+            ret = CB_ERROR(ENOMEM);
             goto end;
         }
     }
@@ -252,15 +252,15 @@ int rx_flac_scan(const char *path, RXFlacInfo *info)
     int64_t sample;
     int block;
     bool complete = false;
-    while (rx_flac_walk_next(&w, &at, &sample, &block, &complete) > 0) {
+    while (cb_flac_walk_next(&w, &at, &sample, &block, &complete) > 0) {
         ret = push_frame(info, &cap, sample, (int64_t)(at - w.start), block);
         if (ret < 0)
             goto end;
     }
     if (!complete) {
-        rx_debug("%s: frames end at sample %" PRId64 ", before the STREAMINFO count %" PRId64,
+        cb_debug("%s: frames end at sample %" PRId64 ", before the STREAMINFO count %" PRId64,
                  path, w.sample, info->total_samples);
-        ret = RX_ERROR(EINVAL);
+        ret = CB_ERROR(EINVAL);
         goto end;
     }
     info->valid = true;
@@ -271,11 +271,11 @@ end:
         info->frames = NULL;
         info->nb_frames = 0;
     }
-    rx_audio_unmap(&m);
+    cb_audio_unmap(&m);
     return ret;
 }
 
-void rx_flac_info_free(RXFlacInfo *info)
+void cb_flac_info_free(CBFlacInfo *info)
 {
     free(info->frames);
     info->frames = NULL;

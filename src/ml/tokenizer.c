@@ -48,7 +48,7 @@ static int table_init(Table *t, size_t nb)
         size <<= 1;
     t->e = calloc(size, sizeof(*t->e));
     t->mask = size - 1;
-    return t->e ? 0 : RX_ERROR(ENOMEM);
+    return t->e ? 0 : CB_ERROR(ENOMEM);
 }
 
 static void table_put(Table *t, const char *key, int32_t value)
@@ -102,11 +102,11 @@ int ml_tok_create(MLTokenizer **out, const MLGguf *f)
     const MLValue *tok = ml_gguf_value(f, "tokenizer.ggml.tokens");
     const MLValue *mer = ml_gguf_value(f, "tokenizer.ggml.merges");
     if (!tok || tok->type != ML_GGUF_STRINGS || !mer || mer->type != ML_GGUF_STRINGS)
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
 
     MLTokenizer *t = calloc(1, sizeof(*t));
     if (!t)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     t->f = f;
     t->tokens = tok->strs;
     t->nb_tokens = (int)tok->nb_strs;
@@ -284,10 +284,10 @@ typedef struct Sym {
 static int push_id(int32_t **ids, int *nb, int *cap, int32_t id)
 {
     if (*nb == *cap) {
-        int c = RX_MAX(*cap * 2, 64);
+        int c = CB_MAX(*cap * 2, 64);
         int32_t *p = realloc(*ids, c * sizeof(*p));
         if (!p)
-            return RX_ERROR(ENOMEM);
+            return CB_ERROR(ENOMEM);
         *ids = p;
         *cap = c;
     }
@@ -300,13 +300,13 @@ static int bpe(const MLTokenizer *t, const char *piece, size_t len, int32_t **id
 {
     /* Each byte as its stand-in, as UTF-8: at most 2 bytes each. */
     char *buf = malloc(len * 2 + 1);
-    Sym *sym = calloc(RX_MAX(len, 1), sizeof(*sym));
+    Sym *sym = calloc(CB_MAX(len, 1), sizeof(*sym));
     char *pair = malloc(len * 4 + 2);
     if (!buf || !sym || !pair) {
         free(buf);
         free(sym);
         free(pair);
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     }
 
     size_t o = 0;
@@ -350,7 +350,7 @@ static int bpe(const MLTokenizer *t, const char *piece, size_t len, int32_t **id
     for (int i = 0; i < ns && ret >= 0; i++) {
         int32_t id = table_get(&t->vocab, sym[i].s, sym[i].n);
         if (id < 0) {
-            rx_warn("ml: no token for a piece of the prompt");
+            cb_warn("ml: no token for a piece of the prompt");
             continue;
         }
         ret = push_id(ids, nb, cap, id);
@@ -378,14 +378,14 @@ int ml_tok_encode(const MLTokenizer *t, const char *text, int32_t **ids, int *nb
 int ml_tok_decode(const MLTokenizer *t, int32_t id, char **out, size_t *len, size_t *cap)
 {
     if (id < 0 || id >= t->nb_tokens)
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
     const char *s = t->tokens[id];
     size_t n = strlen(s);
     if (*len + n + 1 > *cap) {
-        size_t c = RX_MAX(*cap * 2, *len + n + 64);
+        size_t c = CB_MAX(*cap * 2, *len + n + 64);
         char *p = realloc(*out, c);
         if (!p)
-            return RX_ERROR(ENOMEM);
+            return CB_ERROR(ENOMEM);
         *out = p;
         *cap = c;
     }

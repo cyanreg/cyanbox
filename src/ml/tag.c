@@ -1,6 +1,6 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
-/* rx_ml_tag (rxbox/ml.h): a genre, a colour and a comment from the model's
+/* cb_ml_tag (cyanbox/ml.h): a genre, a colour and a comment from the model's
  * answers about a track.
  *
  * What the model can and cannot tell was measured on the author's library
@@ -56,7 +56,7 @@
  * keep eight renormalised scraps.
  */
 
-#include "rxbox/ml.h"
+#include "cyanbox/ml.h"
 
 #include <ctype.h>
 #include <math.h>
@@ -100,7 +100,7 @@ static const char *const q_vocals =
 static const char *const q_mood = "Describe the mood of this track in at most three words.";
 static const char *const q_color = "Which of these descriptions fits this music best?";
 
-/* The longest answers rx_ml_tag lets the model give, in tokens. */
+/* The longest answers cb_ml_tag lets the model give, in tokens. */
 #define GENRE_TOKENS  24
 #define VOCALS_TOKENS 40
 #define MOOD_TOKENS   16
@@ -124,7 +124,7 @@ static char *trim(char *s)
  * letter of each word (after a space or a hyphen) up. */
 static char *genre_of(const char *answer)
 {
-    char *s = rx_strdup(answer);
+    char *s = cb_strdup(answer);
     if (!s)
         return NULL;
     char *t = trim(s);
@@ -140,7 +140,7 @@ static char *genre_of(const char *answer)
         if (i == 0 || t[i - 1] == ' ' || t[i - 1] == '-')
             t[i] = (char)toupper((unsigned char)t[i]);
     }
-    char *g = rx_strdup(t);
+    char *g = cb_strdup(t);
     free(s);
     return g;
 }
@@ -166,7 +166,7 @@ static char *vocals_of(const char *answer)
         "Portuguese", "French", "German", "Italian", "Russian", "Latin", "Hindi", "Arabic",
     };
     if (!strncasecmp(answer, "no", 2) && !isalpha((unsigned char)answer[2]))
-        return rx_strdup("Instrumental");
+        return cb_strdup("Instrumental");
 
     bool female = has_word(answer, "female") || has_word(answer, "woman") ||
                   has_word(answer, "women") || has_word(answer, "girl");
@@ -176,17 +176,17 @@ static char *vocals_of(const char *answer)
     const char *who = rap ? "Rap" : choir ? "Choir" : female && male ? "Female and male vocals" :
                       female ? "Female vocals" : male ? "Male vocals" : "Vocals";
     const char *lang = NULL;
-    for (size_t i = 0; i < RX_ARRAY_ELEMS(langs) && !lang; i++) {
+    for (size_t i = 0; i < CB_ARRAY_ELEMS(langs) && !lang; i++) {
         if (has_word(answer, langs[i]))
             lang = langs[i];
     }
-    return lang ? rx_asprintf("%s, %s", who, lang) : rx_strdup(who);
+    return lang ? cb_asprintf("%s, %s", who, lang) : cb_strdup(who);
 }
 
 /* "Bright, energetic, and uplifting." -> "Bright, energetic, uplifting". */
 static char *mood_of(const char *answer)
 {
-    char *s = rx_strdup(answer);
+    char *s = cb_strdup(answer);
     if (!s)
         return NULL;
     char *t = trim(s);
@@ -208,7 +208,7 @@ static char *mood_of(const char *answer)
     }
     out[o] = 0;
     free(s);
-    char *m = rx_strdup(trim(out));
+    char *m = cb_strdup(trim(out));
     free(out);
     return m;
 }
@@ -237,33 +237,33 @@ static char *pick_prompt(const char *question, const char *const *options, int n
     return prompt;
 }
 
-int rx_ml_pick(RXML *ml, const char *question, const char *const *options, int nb,
+int cb_ml_pick(CBML *ml, const char *question, const char *const *options, int nb,
                float *probs, float *mass)
 {
     if (nb < 2 || nb > 26)
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
     char *prompt = pick_prompt(question, options, nb);
     if (!prompt)
-        return RX_ERROR(ENOMEM);
-    int ret = rx_ml_choose(ml, prompt, NULL, letters, nb, probs, mass);
+        return CB_ERROR(ENOMEM);
+    int ret = cb_ml_choose(ml, prompt, NULL, letters, nb, probs, mass);
     free(prompt);
     return ret;
 }
 
 /* Rotation r of the legend: description (r + k) mod N under the k-th
  * letter. */
-static void rotate(const char *const legend[RX_TRACK_COLORS], int r,
-                   const char *opts[RX_TRACK_COLORS])
+static void rotate(const char *const legend[CB_TRACK_COLORS], int r,
+                   const char *opts[CB_TRACK_COLORS])
 {
-    for (int k = 0; k < RX_TRACK_COLORS; k++)
-        opts[k] = legend[(r + k) % RX_TRACK_COLORS];
+    for (int k = 0; k < CB_TRACK_COLORS; k++)
+        opts[k] = legend[(r + k) % CB_TRACK_COLORS];
 }
 
-int rx_ml_color(RXML *ml, const char *const legend[RX_TRACK_COLORS], int orders,
-                float probs[RX_TRACK_COLORS], float *mass)
+int cb_ml_color(CBML *ml, const char *const legend[CB_TRACK_COLORS], int orders,
+                float probs[CB_TRACK_COLORS], float *mass)
 {
-    enum { N = RX_TRACK_COLORS };
-    orders = RX_CLAMP(orders, 1, N);
+    enum { N = CB_TRACK_COLORS };
+    orders = CB_CLAMP(orders, 1, N);
     double lp[N] = { 0 };
     float mass_sum = 0.0f;
     for (int r = 0; r < orders; r++) {
@@ -273,7 +273,7 @@ int rx_ml_color(RXML *ml, const char *const legend[RX_TRACK_COLORS], int orders,
         const char *opts[N];
         float p[N], m;
         rotate(legend, r, opts);
-        int ret = rx_ml_pick(ml, q_color, opts, N, p, &m);
+        int ret = cb_ml_pick(ml, q_color, opts, N, p, &m);
         if (ret < 0)
             return ret;
         for (int k = 0; k < N; k++)
@@ -297,17 +297,17 @@ int rx_ml_color(RXML *ml, const char *const legend[RX_TRACK_COLORS], int orders,
         if (probs[i] > probs[best])
             best = i;
     }
-    rx_debug("ml: colour %d (%.2f); the letters held %.2f of the answer", best + 1, probs[best],
+    cb_debug("ml: colour %d (%.2f); the letters held %.2f of the answer", best + 1, probs[best],
              mass_sum / orders);
     if (mass)
         *mass = mass_sum / orders;
     return best + 1;
 }
 
-uint32_t rx_ml_legend_hash(const char *const legend[RX_TRACK_COLORS])
+uint32_t cb_ml_legend_hash(const char *const legend[CB_TRACK_COLORS])
 {
     uint32_t h = 2166136261u;
-    for (int i = 0; i < RX_TRACK_COLORS; i++) {
+    for (int i = 0; i < CB_TRACK_COLORS; i++) {
         /* Each description with its end, so "a" "bc" is not "ab" "c". */
         const char *s = legend[i] ? legend[i] : "";
         do {
@@ -320,16 +320,16 @@ uint32_t rx_ml_legend_hash(const char *const legend[RX_TRACK_COLORS])
 
 /* --------------------------------------------------------------- tagging */
 
-void rx_ml_tags_free(RXMLTags *t)
+void cb_ml_tags_free(CBMLTags *t)
 {
     free(t->genre);
     free(t->comment);
-    *t = (RXMLTags) { 0 };
+    *t = (CBMLTags) { 0 };
 }
 
 static double logit(double p)
 {
-    p = RX_CLAMP(p, 1e-4, 1.0 - 1e-4);
+    p = CB_CLAMP(p, 1e-4, 1.0 - 1e-4);
     return log(p / (1.0 - p));
 }
 
@@ -338,16 +338,16 @@ static float unit(double z)
     return (float)(1.0 / (1.0 + exp(-1.7 * z)));
 }
 
-/* The most context any of rx_ml_tag's questions takes after the audio,
+/* The most context any of cb_ml_tag's questions takes after the audio,
  * with its answer: the colour question, in its every rotation, grows with
  * the legend. */
-static int question_room(RXML *ml, const char *const legend[RX_TRACK_COLORS])
+static int question_room(CBML *ml, const char *const legend[CB_TRACK_COLORS])
 {
     int room = 0, ret;
     for (int i = 0; i < NB_YES; i++) {
         if ((ret = ml_question_tokens(ml, yes_q[i].q, NULL)) < 0)
             return ret;
-        room = RX_MAX(room, ret);
+        room = CB_MAX(room, ret);
     }
     static const struct {
         const char *const *q;
@@ -355,30 +355,30 @@ static int question_room(RXML *ml, const char *const legend[RX_TRACK_COLORS])
     } asks[] = {
         { &q_genre, GENRE_TOKENS }, { &q_vocals, VOCALS_TOKENS }, { &q_mood, MOOD_TOKENS },
     };
-    for (size_t i = 0; i < RX_ARRAY_ELEMS(asks); i++) {
+    for (size_t i = 0; i < CB_ARRAY_ELEMS(asks); i++) {
         if ((ret = ml_question_tokens(ml, *asks[i].q, NULL)) < 0)
             return ret;
-        room = RX_MAX(room, ret + asks[i].answer);
+        room = CB_MAX(room, ret + asks[i].answer);
     }
-    for (int r = 0; r < RX_ML_COLOR_ORDERS; r++) {
-        const char *opts[RX_TRACK_COLORS];
+    for (int r = 0; r < CB_ML_COLOR_ORDERS; r++) {
+        const char *opts[CB_TRACK_COLORS];
         rotate(legend, r, opts);
-        char *prompt = pick_prompt(q_color, opts, RX_TRACK_COLORS);
+        char *prompt = pick_prompt(q_color, opts, CB_TRACK_COLORS);
         if (!prompt)
-            return RX_ERROR(ENOMEM);
+            return CB_ERROR(ENOMEM);
         ret = ml_question_tokens(ml, prompt, NULL);
         free(prompt);
         if (ret < 0)
             return ret;
-        room = RX_MAX(room, ret);
+        room = CB_MAX(room, ret);
     }
     return room;
 }
 
-int rx_ml_tag(RXML *ml, const float *pcm, int64_t nb_samples,
-              const char *const legend[RX_TRACK_COLORS], RXMLTags *tags, RXCancel *cancel)
+int cb_ml_tag(CBML *ml, const float *pcm, int64_t nb_samples,
+              const char *const legend[CB_TRACK_COLORS], CBMLTags *tags, CBCancel *cancel)
 {
-    *tags = (RXMLTags) { 0 };
+    *tags = (CBMLTags) { 0 };
     int room = question_room(ml, legend);
     if (room < 0)
         return room;
@@ -386,10 +386,10 @@ int rx_ml_tag(RXML *ml, const float *pcm, int64_t nb_samples,
      * eight minutes. The interface's fields (127 bytes a colour) stay
      * well under it in any script. */
     if (room > ml_max_context(ml) / 4) {
-        rx_err("ml: the colour legend is too long: its question takes %d tokens, at most %d "
+        cb_err("ml: the colour legend is too long: its question takes %d tokens, at most %d "
                "fit beside the audio (shorten the settings color.pink ... color.purple)",
                room, ml_max_context(ml) / 4);
-        return RX_ERROR(E2BIG);
+        return CB_ERROR(E2BIG);
     }
     int ret = ml_listen(ml, pcm, nb_samples, room, cancel);
     if (ret < 0)
@@ -399,55 +399,55 @@ int rx_ml_tag(RXML *ml, const float *pcm, int64_t nb_samples,
     double z[NB_YES];
     for (int i = 0; i < NB_YES; i++) {
         float p[2];
-        if ((ret = rx_ml_choose(ml, yes_q[i].q, NULL, yn, 2, p, NULL)) < 0)
+        if ((ret = cb_ml_choose(ml, yes_q[i].q, NULL, yn, 2, p, NULL)) < 0)
             return ret;
         z[i] = (logit(p[0]) - yes_q[i].mean) / yes_q[i].sd;
-        if (rx_cancelled(cancel))
-            return RX_ERROR(ECANCELED);
+        if (cb_cancelled(cancel))
+            return CB_ERROR(ECANCELED);
     }
     double in = (z[Y_INTENSE] - z[Y_CALM] - z[Y_CHILL]) / 3.0;
     double club = z[Y_CLUB];
     double val = (z[Y_HAPPY] - z[Y_DARK] - z[Y_MELANCHOLIC]) / 3.0;
 
     float mass;
-    if ((ret = rx_ml_color(ml, legend, RX_ML_COLOR_ORDERS, tags->colors, &mass)) < 0)
+    if ((ret = cb_ml_color(ml, legend, CB_ML_COLOR_ORDERS, tags->colors, &mass)) < 0)
         return ret;
     if (!(mass >= MIN_LETTER_MASS)) {
-        rx_err("ml: the letters held only %.0f %% of the model's answer to the colour "
+        cb_err("ml: the letters held only %.0f %% of the model's answer to the colour "
                "question; the legend's words may not read as a list to it", mass * 100.0);
-        return RX_ERROR(EIO);
+        return CB_ERROR(EIO);
     }
     tags->color = ret;
-    tags->legend = rx_ml_legend_hash(legend);
-    if (rx_cancelled(cancel))
-        return RX_ERROR(ECANCELED);
+    tags->legend = cb_ml_legend_hash(legend);
+    if (cb_cancelled(cancel))
+        return CB_ERROR(ECANCELED);
 
     char *genre = NULL, *vocals = NULL, *mood = NULL;
-    if ((ret = rx_ml_ask(ml, q_genre, GENRE_TOKENS, &genre)) < 0 ||
-        (ret = rx_ml_ask(ml, q_vocals, VOCALS_TOKENS, &vocals)) < 0 ||
-        (ret = rx_ml_ask(ml, q_mood, MOOD_TOKENS, &mood)) < 0)
+    if ((ret = cb_ml_ask(ml, q_genre, GENRE_TOKENS, &genre)) < 0 ||
+        (ret = cb_ml_ask(ml, q_vocals, VOCALS_TOKENS, &vocals)) < 0 ||
+        (ret = cb_ml_ask(ml, q_mood, MOOD_TOKENS, &mood)) < 0)
         goto end;
 
     tags->genre = genre_of(genre);
     char *v = vocals_of(vocals), *m = mood_of(mood);
     tags->vocals = v && strcmp(v, "Instrumental") ? 1.0f : 0.0f;
-    tags->comment = v && m && *m ? rx_asprintf("%s. %s.", v, m) : rx_strdup(v ? v : "");
+    tags->comment = v && m && *m ? cb_asprintf("%s. %s.", v, m) : cb_strdup(v ? v : "");
     free(v);
     free(m);
     if (!tags->comment) {
-        ret = RX_ERROR(ENOMEM);
+        ret = CB_ERROR(ENOMEM);
         goto end;
     }
     tags->intensity = unit(in);
     tags->club = unit(club);
     tags->valence = unit(val);
-    rx_debug("ml: intensity %+.2f club %+.2f mood %+.2f, colour %d", in, club, val, tags->color);
+    cb_debug("ml: intensity %+.2f club %+.2f mood %+.2f, colour %d", in, club, val, tags->color);
 
 end:
     free(genre);
     free(vocals);
     free(mood);
     if (ret < 0)
-        rx_ml_tags_free(tags);
+        cb_ml_tags_free(tags);
     return ret;
 }

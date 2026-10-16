@@ -6,7 +6,7 @@
  * the tests. Every socket is tied to the
  * interface with SO_BINDTODEVICE, which Linux allows without privileges
  * on an unbound socket since 5.7; where a kernel refuses it, IP_PKTINFO's
- * arrival interface still drops datagrams from any other (rx_link_recv),
+ * arrival interface still drops datagrams from any other (cb_link_recv),
  * and the TCP sockets are bound to the interface's address. */
 
 #include "net.h"
@@ -26,24 +26,24 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#include "rxbox/common.h"
-#include "rxbox/link.h"
+#include "cyanbox/common.h"
+#include "cyanbox/link.h"
 
 static uint32_t ipv4_of(const struct sockaddr *sa)
 {
     return ntohl(((const struct sockaddr_in *)sa)->sin_addr.s_addr);
 }
 
-void rx_link_addr_text(uint32_t a, char buf[16])
+void cb_link_addr_text(uint32_t a, char buf[16])
 {
     snprintf(buf, 16, "%u.%u.%u.%u", a >> 24, a >> 16 & 0xFF, a >> 8 & 0xFF, a & 0xFF);
 }
 
-int rx_link_addr_parse(const char *s, uint32_t *out)
+int cb_link_addr_parse(const char *s, uint32_t *out)
 {
     struct in_addr a;
     if (!s || inet_pton(AF_INET, s, &a) != 1)
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
     *out = ntohl(a.s_addr);
     return 0;
 }
@@ -91,15 +91,15 @@ static bool is_ethernet(const struct ifaddrs *ifs, const char *name)
 
 /* A point-to-point or loopback interface has no broadcast address of its
  * own: the address with the host bits set stands in. */
-int rx_link_if_find(RXLinkIf *out, const char *name, const char *address, const char *broadcast)
+int cb_link_if_find(CBLinkIf *out, const char *name, const char *address, const char *broadcast)
 {
-    *out = (RXLinkIf) { 0 };
+    *out = (CBLinkIf) { 0 };
     if (!name || strlen(name) >= sizeof(out->name))
-        return RX_ERROR(ENODEV);
+        return CB_ERROR(ENODEV);
     snprintf(out->name, sizeof(out->name), "%s", name);
     struct ifaddrs *ifs;
     if (getifaddrs(&ifs) < 0)
-        return RX_ERROR(errno);
+        return CB_ERROR(errno);
     bool found = false, inet = false, has_bcast = false, loopback = false;
     for (struct ifaddrs *i = ifs; i; i = i->ifa_next) {
         if (!i->ifa_addr || strcmp(i->ifa_name, name))
@@ -130,31 +130,31 @@ int rx_link_if_find(RXLinkIf *out, const char *name, const char *address, const 
     bool ethernet = found && !loopback && is_ethernet(ifs, name);
     freeifaddrs(ifs);
     if (!found) {
-        rx_err("link: no network interface \"%s\"", name);
-        return RX_ERROR(ENODEV);
+        cb_err("link: no network interface \"%s\"", name);
+        return CB_ERROR(ENODEV);
     }
     if (!loopback && !ethernet) {
-        rx_err("link: \"%s\" is not Ethernet: Link runs on Ethernet only", name);
-        return RX_ERROR(EPROTONOSUPPORT);
+        cb_err("link: \"%s\" is not Ethernet: Link runs on Ethernet only", name);
+        return CB_ERROR(EPROTONOSUPPORT);
     }
     if (!inet) {
-        rx_err("link: interface \"%s\" has no IPv4 address", name);
-        return RX_ERROR(EADDRNOTAVAIL);
+        cb_err("link: interface \"%s\" has no IPv4 address", name);
+        return CB_ERROR(EADDRNOTAVAIL);
     }
-    if (address && rx_link_addr_parse(address, &out->addr) < 0) {
-        rx_err("link: \"%s\" is not an IPv4 address", address);
-        return RX_ERROR(EINVAL);
+    if (address && cb_link_addr_parse(address, &out->addr) < 0) {
+        cb_err("link: \"%s\" is not an IPv4 address", address);
+        return CB_ERROR(EINVAL);
     }
     if (broadcast) {
-        if (rx_link_addr_parse(broadcast, &out->bcast) < 0) {
-            rx_err("link: \"%s\" is not an IPv4 address", broadcast);
-            return RX_ERROR(EINVAL);
+        if (cb_link_addr_parse(broadcast, &out->bcast) < 0) {
+            cb_err("link: \"%s\" is not an IPv4 address", broadcast);
+            return CB_ERROR(EINVAL);
         }
     } else if (!has_bcast) {
         out->bcast = out->addr | ~out->mask;
     }
     out->index = (int)if_nametoindex(name);
-    return out->index ? 0 : RX_ERROR(ENODEV);
+    return out->index ? 0 : CB_ERROR(ENODEV);
 }
 
 static bool usable(const struct ifaddrs *ifs, const struct ifaddrs *i)
@@ -166,30 +166,30 @@ static bool usable(const struct ifaddrs *ifs, const struct ifaddrs *i)
 
 static int interface_order(const void *a, const void *b)
 {
-    const RXLinkInterface *x = a, *y = b;
+    const CBLinkInterface *x = a, *y = b;
     if (x->running != y->running)
         return x->running ? -1 : 1;
     return strcmp(x->name, y->name);
 }
 
-int rx_link_interfaces(RXLinkInterface *out, int max)
+int cb_link_interfaces(CBLinkInterface *out, int max)
 {
     struct ifaddrs *ifs;
     if (getifaddrs(&ifs) < 0)
-        return RX_ERROR(errno);
+        return CB_ERROR(errno);
     int nb = 0;
     for (struct ifaddrs *i = ifs; i; i = i->ifa_next) {
         if (!usable(ifs, i))
             continue;
-        /* The first IPv4 address of each, as rx_link_if_find takes. */
+        /* The first IPv4 address of each, as cb_link_if_find takes. */
         bool seen = false;
         for (struct ifaddrs *k = ifs; k != i && !seen; k = k->ifa_next)
             seen = usable(ifs, k) && !strcmp(k->ifa_name, i->ifa_name);
         if (seen)
             continue;
         if (nb < max) {
-            RXLinkInterface *o = &out[nb];
-            *o = (RXLinkInterface) { 0 };
+            CBLinkInterface *o = &out[nb];
+            *o = (CBLinkInterface) { 0 };
             snprintf(o->name, sizeof(o->name), "%s", i->ifa_name);
             o->addr = ipv4_of(i->ifa_addr);
             uint32_t mask = i->ifa_netmask ? ipv4_of(i->ifa_netmask) : 0xFFFFFFFF;
@@ -200,14 +200,14 @@ int rx_link_interfaces(RXLinkInterface *out, int max)
     }
     freeifaddrs(ifs);
     if (out && max > 0)
-        qsort(out, (size_t)RX_MIN(nb, max), sizeof(*out), interface_order);
+        qsort(out, (size_t)CB_MIN(nb, max), sizeof(*out), interface_order);
     return nb;
 }
 
-static void tie(const RXLinkIf *ifc, int fd)
+static void tie(const CBLinkIf *ifc, int fd)
 {
     if (setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, ifc->name, (socklen_t)strlen(ifc->name)) < 0)
-        rx_debug("link: SO_BINDTODEVICE %s: %s", ifc->name, strerror(errno));
+        cb_debug("link: SO_BINDTODEVICE %s: %s", ifc->name, strerror(errno));
 }
 
 static int bound_port(int fd, uint16_t *bound)
@@ -215,19 +215,19 @@ static int bound_port(int fd, uint16_t *bound)
     struct sockaddr_in sa;
     socklen_t len = sizeof(sa);
     if (getsockname(fd, (struct sockaddr *)&sa, &len) < 0)
-        return RX_ERROR(errno);
+        return CB_ERROR(errno);
     *bound = ntohs(sa.sin_port);
     return 0;
 }
 
 /* 64 kB each way, as rekordbox sets them (rbxport's static analysis of
- * libFilSiNE): an NFS READ reply is up to RX_NFS_MAX_READ, about 23 IP
+ * libFilSiNE): an NFS READ reply is up to CB_NFS_MAX_READ, about 23 IP
  * fragments. */
-int rx_link_udp(const RXLinkIf *ifc, uint32_t addr, uint16_t port, uint16_t *bound)
+int cb_link_udp(const CBLinkIf *ifc, uint32_t addr, uint16_t port, uint16_t *bound)
 {
     int fd = socket(AF_INET, SOCK_DGRAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
     if (fd < 0)
-        return RX_ERROR(errno);
+        return CB_ERROR(errno);
     int one = 1, buf = 65536;
     struct sockaddr_in sa = {
         .sin_family = AF_INET,
@@ -251,14 +251,14 @@ int rx_link_udp(const RXLinkIf *ifc, uint32_t addr, uint16_t port, uint16_t *bou
 fail:;
     int err = errno;
     close(fd);
-    return RX_ERROR(err);
+    return CB_ERROR(err);
 }
 
-int rx_link_tcp_listen(const RXLinkIf *ifc, uint16_t port, uint16_t *bound)
+int cb_link_tcp_listen(const CBLinkIf *ifc, uint16_t port, uint16_t *bound)
 {
     int fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
     if (fd < 0)
-        return RX_ERROR(errno);
+        return CB_ERROR(errno);
     int one = 1;
     struct sockaddr_in sa = {
         .sin_family = AF_INET,
@@ -279,14 +279,14 @@ int rx_link_tcp_listen(const RXLinkIf *ifc, uint16_t port, uint16_t *bound)
 fail:;
     int err = errno;
     close(fd);
-    return RX_ERROR(err);
+    return CB_ERROR(err);
 }
 
-int rx_link_tcp_connect(const RXLinkIf *ifc, uint32_t addr, uint16_t port, int timeout_ms)
+int cb_link_tcp_connect(const CBLinkIf *ifc, uint32_t addr, uint16_t port, int timeout_ms)
 {
     int fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
     if (fd < 0)
-        return RX_ERROR(errno);
+        return CB_ERROR(errno);
     tie(ifc, fd);
     struct sockaddr_in local = { .sin_family = AF_INET, .sin_addr.s_addr = htonl(ifc->addr) };
     struct sockaddr_in sa = {
@@ -310,12 +310,12 @@ int rx_link_tcp_connect(const RXLinkIf *ifc, uint32_t addr, uint16_t port, int t
     }
     if (err) {
         close(fd);
-        return RX_ERROR(err);
+        return CB_ERROR(err);
     }
     return fd;
 }
 
-ssize_t rx_link_recv(const RXLinkIf *ifc, int fd, uint8_t *buf, size_t cap, uint32_t *from,
+ssize_t cb_link_recv(const CBLinkIf *ifc, int fd, uint8_t *buf, size_t cap, uint32_t *from,
                      uint16_t *from_port)
 {
     struct sockaddr_in sa;
@@ -334,7 +334,7 @@ ssize_t rx_link_recv(const RXLinkIf *ifc, int fd, uint8_t *buf, size_t cap, uint
     };
     ssize_t n = recvmsg(fd, &mh, MSG_DONTWAIT);
     if (n < 0)
-        return RX_ERROR(errno);
+        return CB_ERROR(errno);
     if (mh.msg_flags & (MSG_TRUNC | MSG_CTRUNC) || mh.msg_namelen < sizeof(sa) ||
         sa.sin_family != AF_INET)
         return 0;
@@ -354,7 +354,7 @@ ssize_t rx_link_recv(const RXLinkIf *ifc, int fd, uint8_t *buf, size_t cap, uint
     return n;
 }
 
-void rx_link_send(int fd, uint32_t to, uint16_t port, const void *buf, size_t len)
+void cb_link_send(int fd, uint32_t to, uint16_t port, const void *buf, size_t len)
 {
     struct sockaddr_in sa = {
         .sin_family = AF_INET,
@@ -364,7 +364,7 @@ void rx_link_send(int fd, uint32_t to, uint16_t port, const void *buf, size_t le
     if (sendto(fd, buf, len, MSG_DONTWAIT, (struct sockaddr *)&sa, sizeof(sa)) < 0 &&
         errno != EAGAIN && errno != EWOULDBLOCK) {
         char a[16];
-        rx_link_addr_text(to, a);
-        rx_debug("link: send to %s:%u: %s", a, port, strerror(errno));
+        cb_link_addr_text(to, a);
+        cb_debug("link: send to %s:%u: %s", a, port, strerror(errno));
     }
 }

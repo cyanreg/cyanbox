@@ -2,17 +2,17 @@
 
 /* Shared by the core tests: a CHECK macro that reports and counts instead
  * of stopping (so one run shows every failure), a scratch directory under
- * the build tree ($RX_TEST_DIR, set by src/core/meson.build), and a WAV
+ * the build tree ($CB_TEST_DIR, set by src/core/meson.build), and a WAV
  * writer with RIFF INFO tags so the library can be fed real files without
  * any encoder. */
 
-#ifndef RXBOX_TESTS_CORE_UTIL_H
-#define RXBOX_TESTS_CORE_UTIL_H
+#ifndef CYANBOX_TESTS_CORE_UTIL_H
+#define CYANBOX_TESTS_CORE_UTIL_H
 
 #include <math.h>
 #include <stdio.h>
 
-#include "rxbox/common.h"
+#include "cyanbox/common.h"
 
 extern int test_failures;
 
@@ -41,7 +41,7 @@ extern int test_failures;
     }                                                                        \
 } while (0)
 
-/* A fresh, empty directory $RX_TEST_DIR/<name> (malloc'd path). */
+/* A fresh, empty directory $CB_TEST_DIR/<name> (malloc'd path). */
 char *test_dir(const char *name);
 /* rm -rf. */
 void test_rm_rf(const char *path);
@@ -60,4 +60,4 @@ int test_write_wav_album(const char *path, double seconds, int rate, int channel
 /* Exit status: 0, or 1 with a summary when anything failed. */
 int test_done(const char *name);
 
-#endif /* RXBOX_TESTS_CORE_UTIL_H */
+#endif /* CYANBOX_TESTS_CORE_UTIL_H */

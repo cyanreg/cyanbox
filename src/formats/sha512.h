@@ -11,27 +11,27 @@
  * directly. Checked against the FIPS 180-4 and RFC 4231 vectors in
  * tests/formats/test_onelibrary.c. */
 
-#ifndef RXBOX_FORMATS_SHA512_H
-#define RXBOX_FORMATS_SHA512_H
+#ifndef CYANBOX_FORMATS_SHA512_H
+#define CYANBOX_FORMATS_SHA512_H
 
 #include <stdint.h>
 #include <string.h>
 
 #include "src/formats/buf.h"
 
-typedef struct RXSHA512 {
+typedef struct CBSHA512 {
     uint64_t state[8];
     uint64_t count;      /* bytes hashed */
     uint8_t  buf[128];   /* a partial block, count % 128 bytes */
-} RXSHA512;
+} CBSHA512;
 
 /* HMAC-SHA512 keyed once: `inner` and `outer` are the states after the
  * ipad and opad blocks, `ctx` the message in progress. */
-typedef struct RXHMACSHA512 {
-    RXSHA512 inner, outer, ctx;
-} RXHMACSHA512;
+typedef struct CBHMACSHA512 {
+    CBSHA512 inner, outer, ctx;
+} CBHMACSHA512;
 
-static const uint64_t rx_sha512_k[80] = {
+static const uint64_t cb_sha512_k[80] = {
     0x428a2f98d728ae22, 0x7137449123ef65cd, 0xb5c0fbcfec4d3b2f, 0xe9b5dba58189dbbc,
     0x3956c25bf348b538, 0x59f111f1b605d019, 0x923f82a4af194f9b, 0xab1c5ed5da6d8118,
     0xd807aa98a3030242, 0x12835b0145706fbe, 0x243185be4ee4b28c, 0x550c7dc3d5ffb4e2,
@@ -54,25 +54,25 @@ static const uint64_t rx_sha512_k[80] = {
     0x4cc5d4becb3e42b6, 0x597f299cfc657e2a, 0x5fcb6fab3ad6faec, 0x6c44198c4a475817,
 };
 
-static inline uint64_t rx_sha512_ror(uint64_t x, int n)
+static inline uint64_t cb_sha512_ror(uint64_t x, int n)
 {
     return x >> n | x << (64 - n);
 }
 
-static inline void rx_sha512_wr_be64(uint8_t *p, uint64_t v)
+static inline void cb_sha512_wr_be64(uint8_t *p, uint64_t v)
 {
-    rx_wr_be32(p, (uint32_t)(v >> 32));
-    rx_wr_be32(p + 4, (uint32_t)v);
+    cb_wr_be32(p, (uint32_t)(v >> 32));
+    cb_wr_be32(p + 4, (uint32_t)v);
 }
 
 /* One block, as 16 big-endian words already read. */
-static inline void rx_sha512_compress(uint64_t st[8], const uint64_t m[16])
+static inline void cb_sha512_compress(uint64_t st[8], const uint64_t m[16])
 {
     uint64_t w[80];
     memcpy(w, m, 16 * sizeof(*w));
     for (int i = 16; i < 80; i++) {
-        uint64_t s0 = rx_sha512_ror(w[i - 15], 1) ^ rx_sha512_ror(w[i - 15], 8) ^ w[i - 15] >> 7;
-        uint64_t s1 = rx_sha512_ror(w[i - 2], 19) ^ rx_sha512_ror(w[i - 2], 61) ^ w[i - 2] >> 6;
+        uint64_t s0 = cb_sha512_ror(w[i - 15], 1) ^ cb_sha512_ror(w[i - 15], 8) ^ w[i - 15] >> 7;
+        uint64_t s1 = cb_sha512_ror(w[i - 2], 19) ^ cb_sha512_ror(w[i - 2], 61) ^ w[i - 2] >> 6;
         w[i] = w[i - 16] + s0 + w[i - 7] + s1;
     }
 
@@ -81,24 +81,24 @@ static inline void rx_sha512_compress(uint64_t st[8], const uint64_t m[16])
     /* Eight rounds a pass with the variables renamed rather than moved:
      * a round leaves its new e in d and its new a in h, which the next
      * round reads as its e and a. */
-#define RX_SHA512_ROUND(a, b, c, d, e, f, g, h, i) do {                                      \
-        h += (rx_sha512_ror(e, 14) ^ rx_sha512_ror(e, 18) ^ rx_sha512_ror(e, 41)) +          \
-             (g ^ (e & (f ^ g))) + rx_sha512_k[i] + w[i];                                     \
+#define CB_SHA512_ROUND(a, b, c, d, e, f, g, h, i) do {                                      \
+        h += (cb_sha512_ror(e, 14) ^ cb_sha512_ror(e, 18) ^ cb_sha512_ror(e, 41)) +          \
+             (g ^ (e & (f ^ g))) + cb_sha512_k[i] + w[i];                                     \
         d += h;                                                                               \
-        h += (rx_sha512_ror(a, 28) ^ rx_sha512_ror(a, 34) ^ rx_sha512_ror(a, 39)) +          \
+        h += (cb_sha512_ror(a, 28) ^ cb_sha512_ror(a, 34) ^ cb_sha512_ror(a, 39)) +          \
              ((a & b) | (c & (a | b)));                                                       \
     } while (0)
     for (int i = 0; i < 80; i += 8) {
-        RX_SHA512_ROUND(a, b, c, d, e, f, g, h, i + 0);
-        RX_SHA512_ROUND(h, a, b, c, d, e, f, g, i + 1);
-        RX_SHA512_ROUND(g, h, a, b, c, d, e, f, i + 2);
-        RX_SHA512_ROUND(f, g, h, a, b, c, d, e, i + 3);
-        RX_SHA512_ROUND(e, f, g, h, a, b, c, d, i + 4);
-        RX_SHA512_ROUND(d, e, f, g, h, a, b, c, i + 5);
-        RX_SHA512_ROUND(c, d, e, f, g, h, a, b, i + 6);
-        RX_SHA512_ROUND(b, c, d, e, f, g, h, a, i + 7);
+        CB_SHA512_ROUND(a, b, c, d, e, f, g, h, i + 0);
+        CB_SHA512_ROUND(h, a, b, c, d, e, f, g, i + 1);
+        CB_SHA512_ROUND(g, h, a, b, c, d, e, f, i + 2);
+        CB_SHA512_ROUND(f, g, h, a, b, c, d, e, i + 3);
+        CB_SHA512_ROUND(e, f, g, h, a, b, c, d, i + 4);
+        CB_SHA512_ROUND(d, e, f, g, h, a, b, c, i + 5);
+        CB_SHA512_ROUND(c, d, e, f, g, h, a, b, i + 6);
+        CB_SHA512_ROUND(b, c, d, e, f, g, h, a, i + 7);
     }
-#undef RX_SHA512_ROUND
+#undef CB_SHA512_ROUND
     st[0] += a;
     st[1] += b;
     st[2] += c;
@@ -109,17 +109,17 @@ static inline void rx_sha512_compress(uint64_t st[8], const uint64_t m[16])
     st[7] += h;
 }
 
-static inline void rx_sha512_block(uint64_t st[8], const uint8_t *p)
+static inline void cb_sha512_block(uint64_t st[8], const uint8_t *p)
 {
     uint64_t m[16];
     for (int i = 0; i < 16; i++)
-        m[i] = rx_rd_be64(p + 8 * i);
-    rx_sha512_compress(st, m);
+        m[i] = cb_rd_be64(p + 8 * i);
+    cb_sha512_compress(st, m);
 }
 
-static inline void rx_sha512_init(RXSHA512 *s)
+static inline void cb_sha512_init(CBSHA512 *s)
 {
-    *s = (RXSHA512) {
+    *s = (CBSHA512) {
         .state = {
             0x6a09e667f3bcc908, 0xbb67ae8584caa73b, 0x3c6ef372fe94f82b, 0xa54ff53a5f1d36f1,
             0x510e527fade682d1, 0x9b05688c2b3e6c1f, 0x1f83d9abfb41bd6b, 0x5be0cd19137e2179,
@@ -127,7 +127,7 @@ static inline void rx_sha512_init(RXSHA512 *s)
     };
 }
 
-static inline void rx_sha512_update(RXSHA512 *s, const uint8_t *p, size_t n)
+static inline void cb_sha512_update(CBSHA512 *s, const uint8_t *p, size_t n)
 {
     size_t have = s->count % 128;
     s->count += n;
@@ -138,68 +138,68 @@ static inline void rx_sha512_update(RXSHA512 *s, const uint8_t *p, size_t n)
         n -= take;
         if (have + take < 128)
             return;
-        rx_sha512_block(s->state, s->buf);
+        cb_sha512_block(s->state, s->buf);
     }
     for (; n >= 128; p += 128, n -= 128)
-        rx_sha512_block(s->state, p);
+        cb_sha512_block(s->state, p);
     memcpy(s->buf, p, n);
 }
 
 /* The padding: 0x80, zeros, the length in bits as 128 bits big-endian. */
-static inline void rx_sha512_final(RXSHA512 *s, uint8_t out[64])
+static inline void cb_sha512_final(CBSHA512 *s, uint8_t out[64])
 {
     size_t have = s->count % 128;
     s->buf[have++] = 0x80;
     if (have > 112) {
         memset(s->buf + have, 0, 128 - have);
-        rx_sha512_block(s->state, s->buf);
+        cb_sha512_block(s->state, s->buf);
         have = 0;
     }
     memset(s->buf + have, 0, 112 - have);
-    rx_sha512_wr_be64(s->buf + 112, s->count >> 61);
-    rx_sha512_wr_be64(s->buf + 120, s->count << 3);
-    rx_sha512_block(s->state, s->buf);
+    cb_sha512_wr_be64(s->buf + 112, s->count >> 61);
+    cb_sha512_wr_be64(s->buf + 120, s->count << 3);
+    cb_sha512_block(s->state, s->buf);
     for (int i = 0; i < 8; i++)
-        rx_sha512_wr_be64(out + 8 * i, s->state[i]);
+        cb_sha512_wr_be64(out + 8 * i, s->state[i]);
 }
 
 /* Keys longer than a block are hashed first (RFC 2104 2). Ready for a
  * message after this and after every final. */
-static inline void rx_hmac_sha512_init(RXHMACSHA512 *h, const uint8_t *key, size_t len)
+static inline void cb_hmac_sha512_init(CBHMACSHA512 *h, const uint8_t *key, size_t len)
 {
     uint8_t k[128] = { 0 }, pad[128];
     if (len > 128) {
-        rx_sha512_init(&h->ctx);
-        rx_sha512_update(&h->ctx, key, len);
-        rx_sha512_final(&h->ctx, k);
+        cb_sha512_init(&h->ctx);
+        cb_sha512_update(&h->ctx, key, len);
+        cb_sha512_final(&h->ctx, k);
     } else {
         memcpy(k, key, len);
     }
     for (int i = 0; i < 128; i++)
         pad[i] = k[i] ^ 0x36;
-    rx_sha512_init(&h->inner);
-    rx_sha512_update(&h->inner, pad, 128);
+    cb_sha512_init(&h->inner);
+    cb_sha512_update(&h->inner, pad, 128);
     for (int i = 0; i < 128; i++)
         pad[i] = k[i] ^ 0x5c;
-    rx_sha512_init(&h->outer);
-    rx_sha512_update(&h->outer, pad, 128);
+    cb_sha512_init(&h->outer);
+    cb_sha512_update(&h->outer, pad, 128);
     h->ctx = h->inner;
     memset_explicit(k, 0, sizeof(k));
     memset_explicit(pad, 0, sizeof(pad));
 }
 
-static inline void rx_hmac_sha512_update(RXHMACSHA512 *h, const uint8_t *p, size_t n)
+static inline void cb_hmac_sha512_update(CBHMACSHA512 *h, const uint8_t *p, size_t n)
 {
-    rx_sha512_update(&h->ctx, p, n);
+    cb_sha512_update(&h->ctx, p, n);
 }
 
-static inline void rx_hmac_sha512_final(RXHMACSHA512 *h, uint8_t out[64])
+static inline void cb_hmac_sha512_final(CBHMACSHA512 *h, uint8_t out[64])
 {
     uint8_t in[64];
-    rx_sha512_final(&h->ctx, in);
+    cb_sha512_final(&h->ctx, in);
     h->ctx = h->outer;
-    rx_sha512_update(&h->ctx, in, 64);
-    rx_sha512_final(&h->ctx, out);
+    cb_sha512_update(&h->ctx, in, 64);
+    cb_sha512_final(&h->ctx, out);
     h->ctx = h->inner;
 }
 
@@ -208,36 +208,36 @@ static inline void rx_hmac_sha512_final(RXHMACSHA512 *h, uint8_t out[64])
  * U_j = PRF(P, U_j-1). From U_2 on each hash is the 128-byte pad block and
  * a 64-byte message, so its last block always has the same padding: the
  * words of U, 0x80, zeros, and the length, 192 bytes. */
-static inline void rx_pbkdf2_sha512(const uint8_t *pass, size_t pass_len,
+static inline void cb_pbkdf2_sha512(const uint8_t *pass, size_t pass_len,
                                     const uint8_t *salt, size_t salt_len, unsigned iter,
                                     uint8_t *dk, size_t dk_len)
 {
-    RXHMACSHA512 h;
-    rx_hmac_sha512_init(&h, pass, pass_len);
+    CBHMACSHA512 h;
+    cb_hmac_sha512_init(&h, pass, pass_len);
     uint64_t m[16] = { [8] = 1ull << 63, [15] = (128 + 64) * 8 };
     for (uint32_t i = 1; dk_len; i++) {
         uint8_t idx[4], u[64];
-        rx_wr_be32(idx, i);
-        rx_hmac_sha512_update(&h, salt, salt_len);
-        rx_hmac_sha512_update(&h, idx, sizeof(idx));
-        rx_hmac_sha512_final(&h, u);
+        cb_wr_be32(idx, i);
+        cb_hmac_sha512_update(&h, salt, salt_len);
+        cb_hmac_sha512_update(&h, idx, sizeof(idx));
+        cb_hmac_sha512_final(&h, u);
 
         uint64_t t[8];
         for (int k = 0; k < 8; k++)
-            t[k] = m[k] = rx_rd_be64(u + 8 * k);
+            t[k] = m[k] = cb_rd_be64(u + 8 * k);
         for (unsigned j = 1; j < iter; j++) {
             uint64_t st[8];
             memcpy(st, h.inner.state, sizeof(st));
-            rx_sha512_compress(st, m);
+            cb_sha512_compress(st, m);
             memcpy(m, st, sizeof(st));
             memcpy(st, h.outer.state, sizeof(st));
-            rx_sha512_compress(st, m);
+            cb_sha512_compress(st, m);
             for (int k = 0; k < 8; k++)
                 t[k] ^= m[k] = st[k];
         }
 
         for (int k = 0; k < 8; k++)
-            rx_sha512_wr_be64(u + 8 * k, t[k]);
+            cb_sha512_wr_be64(u + 8 * k, t[k]);
         size_t n = dk_len < 64 ? dk_len : 64;
         memcpy(dk, u, n);
         dk += n;
@@ -249,4 +249,4 @@ static inline void rx_pbkdf2_sha512(const uint8_t *pass, size_t pass_len,
     memset_explicit(&h, 0, sizeof(h));
 }
 
-#endif /* RXBOX_FORMATS_SHA512_H */
+#endif /* CYANBOX_FORMATS_SHA512_H */

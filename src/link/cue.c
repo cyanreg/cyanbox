@@ -1,6 +1,6 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
-/* LINK CUE (rxbox/link.h, RXLinkCue; docs/LINK.md, "LINK CUE"): which
+/* LINK CUE (cyanbox/link.h, CBLinkCue; docs/LINK.md, "LINK CUE"): which
  * mixer is answered, and with what. The mixer goes by what each audio
  * packet asks (byte 0x24; the DJM-A9's firmware 1.22):
  *
@@ -15,7 +15,7 @@
  *   on        none           go on          plays it again if it was the
  *                                           last elected, at its counter
  *
- * so rxbox never asks to engage, which from the source elected stops it.
+ * so cyanbox never asks to engage, which from the source elected stops it.
  * It takes over when its decks start (a deck started, a mixer heard while
  * one plays, nobody elected yet) and then goes on: every timing answered
  * with the next 336 frames while the decks play, LINK CUE is on and the
@@ -23,10 +23,10 @@
  * it sent, the first packet takes over again: a mixer that ran dry let
  * its source go. A mixer that holds enough asks nothing for a while, and
  * that is no pause. A player that takes
- * the cue over keeps it until the decks start again: rxbox does not fight
+ * the cue over keeps it until the decks start again: cyanbox does not fight
  * a DJ cueing on a deck. */
 
-#include "rxbox/link.h"
+#include "cyanbox/link.h"
 
 #include <errno.h>
 #include <pthread.h>
@@ -34,7 +34,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "rxbox/common.h"
+#include "cyanbox/common.h"
 
 #include "cue.h"
 
@@ -48,9 +48,9 @@
 /* Audio sent this recently is "sending" in the state. */
 #define SENDING_US    100000
 
-struct RXLinkCue {
+struct CBLinkCue {
     pthread_mutex_t lock;
-    rx_link_cue_take_fn take;
+    cb_link_cue_take_fn take;
     void *opaque;
     bool playing;               /* the owner's decks */
     bool claim;                 /* take over at the next timing */
@@ -59,20 +59,20 @@ struct RXLinkCue {
     const void *svc;
     uint32_t addr;
     int64_t heard;
-    RXPktCueTiming last;
+    CBPktCueTiming last;
     int number;
     int64_t sent;               /* our last audio to it, 0 none */
     uint32_t answered;          /* the counter that audio answered */
 };
 
-int rx_link_cue_new(RXLinkCue **out, rx_link_cue_take_fn take, void *opaque)
+int cb_link_cue_new(CBLinkCue **out, cb_link_cue_take_fn take, void *opaque)
 {
     *out = NULL;
     if (!take)
-        return RX_ERROR(EINVAL);
-    RXLinkCue *c = calloc(1, sizeof(*c));
+        return CB_ERROR(EINVAL);
+    CBLinkCue *c = calloc(1, sizeof(*c));
     if (!c)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     pthread_mutex_init(&c->lock, NULL);
     c->take = take;
     c->opaque = opaque;
@@ -80,7 +80,7 @@ int rx_link_cue_new(RXLinkCue **out, rx_link_cue_take_fn take, void *opaque)
     return 0;
 }
 
-void rx_link_cue_free(RXLinkCue **c)
+void cb_link_cue_free(CBLinkCue **c)
 {
     if (!c || !*c)
         return;
@@ -89,7 +89,7 @@ void rx_link_cue_free(RXLinkCue **c)
     *c = NULL;
 }
 
-void rx_link_cue_decks(RXLinkCue *c, bool playing, bool started)
+void cb_link_cue_decks(CBLinkCue *c, bool playing, bool started)
 {
     pthread_mutex_lock(&c->lock);
     c->playing = playing;
@@ -97,9 +97,9 @@ void rx_link_cue_decks(RXLinkCue *c, bool playing, bool started)
     pthread_mutex_unlock(&c->lock);
 }
 
-void rx_link_cue_state_at(RXLinkCue *c, RXLinkCueState *out, int64_t now)
+void cb_link_cue_state_at(CBLinkCue *c, CBLinkCueState *out, int64_t now)
 {
-    *out = (RXLinkCueState) { 0 };
+    *out = (CBLinkCueState) { 0 };
     pthread_mutex_lock(&c->lock);
     if (c->heard && now - c->heard < MIXER_GONE_US) {
         out->mixer = true;
@@ -113,12 +113,12 @@ void rx_link_cue_state_at(RXLinkCue *c, RXLinkCueState *out, int64_t now)
     pthread_mutex_unlock(&c->lock);
 }
 
-void rx_link_cue_state(RXLinkCue *c, RXLinkCueState *out)
+void cb_link_cue_state(CBLinkCue *c, CBLinkCueState *out)
 {
-    rx_link_cue_state_at(c, out, rx_time_us());
+    cb_link_cue_state_at(c, out, cb_time_us());
 }
 
-void rx_link_cue_forget(RXLinkCue *c, const void *svc)
+void cb_link_cue_forget(CBLinkCue *c, const void *svc)
 {
     pthread_mutex_lock(&c->lock);
     if (c->svc == svc)
@@ -126,8 +126,8 @@ void rx_link_cue_forget(RXLinkCue *c, const void *svc)
     pthread_mutex_unlock(&c->lock);
 }
 
-size_t rx_link_cue_answer(RXLinkCue *c, const void *svc, uint32_t from, int number,
-                          const char *name, const RXPktCueTiming *t, int64_t now, uint8_t *out,
+size_t cb_link_cue_answer(CBLinkCue *c, const void *svc, uint32_t from, int number,
+                          const char *name, const CBPktCueTiming *t, int64_t now, uint8_t *out,
                           size_t cap)
 {
     size_t len = 0;
@@ -154,16 +154,16 @@ size_t rx_link_cue_answer(RXLinkCue *c, const void *svc, uint32_t from, int numb
     if (!c->playing)
         c->claim = false;
     else if (c->claim || !t->source)
-        mode = RX_CUE_TAKE;
+        mode = CB_CUE_TAKE;
     else if (t->source == number && t->on)
         mode = c->sent && t->counter == c->answered + 1 && now - c->sent < PAUSE_US
-               ? RX_CUE_GO_ON : RX_CUE_TAKE;
+               ? CB_CUE_GO_ON : CB_CUE_TAKE;
     if (mode >= 0) {
-        RXPktCueAudio a = { .number = number, .mode = mode, .counter = t->counter, .audio = true };
+        CBPktCueAudio a = { .number = number, .mode = mode, .counter = t->counter, .audio = true };
         snprintf(a.name, sizeof(a.name), "%s", name);
-        c->take(c->opaque, a.pcm, RX_CUE_FRAMES);
-        RXWr w = rx_wr(out, cap);
-        rx_pkt_cue_audio(&w, &a);
+        c->take(c->opaque, a.pcm, CB_CUE_FRAMES);
+        CBWr w = cb_wr(out, cap);
+        cb_pkt_cue_audio(&w, &a);
         if (!w.err) {
             len = w.len;
             c->sent = now;

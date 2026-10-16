@@ -1,6 +1,6 @@
 # Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md.
 #
-# ml: MOSS-Audio on Vulkan compute (rxbox/ml.h). Its own VkDevice
+# ml: MOSS-Audio on Vulkan compute (cyanbox/ml.h). Its own VkDevice
 # (ml_priv.h says why); the shaders are GLSL compiled by glslang to SPIR-V
 # at build time and embedded as C arrays (shaders/spv_embed.py), as
 # src/gpu's are. A shader source may build several kernels, by defines.
@@ -47,20 +47,20 @@ foreach sh : [
     )
 endforeach
 
-rx_ml_lib = static_library('rx_ml',
+cb_ml_lib = static_library('cb_ml',
     files('gpu.c', 'gguf.c', 'tokenizer.c', 'moss.c', 'tag.c'), ml_shader_headers,
-    include_directories: rx_inc,
-    dependencies: [ rx_vkdev_dep, m_dep ],
+    include_directories: cb_inc,
+    dependencies: [ cb_vkdev_dep, m_dep ],
 )
-rx_ml_dep = declare_dependency(link_with: rx_ml_lib,
-                               dependencies: [ rx_vkdev_dep ])
+cb_ml_dep = declare_dependency(link_with: cb_ml_lib,
+                               dependencies: [ cb_vkdev_dep ])
 
 # The kernels against plain C on small random inputs. Needs a Vulkan device
 # that can run the model; skipped (77) without one.
 test('ml_kernels',
     executable('test_ml_kernels', '../../tests/ml/test_kernels.c',
-        include_directories: [ rx_inc, include_directories('.') ],
-        dependencies: [ rx_ml_dep ],
+        include_directories: [ cb_inc, include_directories('.') ],
+        dependencies: [ cb_ml_dep ],
     ),
     suite: 'ml',
     timeout: 300,
@@ -71,8 +71,8 @@ test('ml_kernels',
 # wrong shape). No GPU: the refusals all come before the device.
 test('ml_gguf',
     executable('test_ml_gguf', '../../tests/ml/test_gguf.c',
-        include_directories: [ rx_inc, include_directories('.') ],
-        dependencies: [ rx_ml_dep ],
+        include_directories: [ cb_inc, include_directories('.') ],
+        dependencies: [ cb_ml_dep ],
     ),
     suite: 'ml',
     timeout: 60,

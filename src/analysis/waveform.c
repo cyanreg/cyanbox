@@ -54,12 +54,12 @@
  * round(k * rate / 150)) where rbxport cuts fixed floor(rate / 150) sample
  * chunks. The two agree at 44.1, 48, 88.2 and 96 kHz. */
 
-#include "rxbox/analysis.h"
+#include "cyanbox/analysis.h"
 
 #include <math.h>
 #include <stdckdint.h>
 
-#include "rxbox/common.h"
+#include "cyanbox/common.h"
 
 /* Every detail column is 1/150 s (docs/anlz.md, "half-frame"). */
 #define COLUMNS_PER_SECOND 150
@@ -85,7 +85,7 @@ static const double GAIN_CAP[3]    = { 267, 300, 500 };
 static const double BAND_SCALE[3]  = { 1.25, 1.15, 0.6 };
 /* dj's PWV6 = range mean of dj's PWV7 times these (baken's fit of
  * rekordbox's PWV6 against rekordbox's PWV7), and PWV4 bytes 3..5 = that
- * PWV6 times these. rxbox writes rbxport's PWV6 and keeps dj's for PWV4. */
+ * PWV6 times these. cyanbox writes rbxport's PWV6 and keeps dj's for PWV4. */
 static const double PWV6_SCALE[3]  = { 0.56, 0.71, 2.0 };
 static const double PWV4_SCALE[3]  = { 2.4, 1.6, 1.1 };
 
@@ -176,8 +176,8 @@ static inline double onepole_step(OnePole *f, double x)
  * one item long. */
 static void split_range(int64_t n, int parts, int k, int64_t *a, int64_t *b)
 {
-    *a = RX_MIN((int64_t)k * n / parts, n - 1);
-    *b = RX_CLAMP((int64_t)(k + 1) * n / parts, *a + 1, n);
+    *a = CB_MIN((int64_t)k * n / parts, n - 1);
+    *b = CB_CLAMP((int64_t)(k + 1) * n / parts, *a + 1, n);
 }
 
 /* Per-column reductions of the samples, and the sums of the overview
@@ -188,7 +188,7 @@ typedef struct Columns {
     double *split;                   /* n * 3: rbxport's bands, low/mid/high */
     double *sumsq;
     int64_t *count;
-    double *ov;                      /* RX_WAVE_PWV6_COLUMNS * 3: low energy, |mid|, |high| */
+    double *ov;                      /* CB_WAVE_PWV6_COLUMNS * 3: low energy, |mid|, |high| */
     int64_t *ov_count;
 } Columns;
 
@@ -209,7 +209,7 @@ static void columns_free(Columns *c)
  * in integers. Shorter than 1200 samples, some columns are empty. */
 static inline int64_t ov_end(int b, int64_t ns)
 {
-    return (int64_t)(b + 1) * ns / RX_WAVE_PWV6_COLUMNS;
+    return (int64_t)(b + 1) * ns / CB_WAVE_PWV6_COLUMNS;
 }
 
 static int columns_compute(const float *x, int64_t ns, int rate, Columns *c)
@@ -219,9 +219,9 @@ static int columns_compute(const float *x, int64_t ns, int rate, Columns *c)
      * For MP3, `ns` already counts every MPEG frame from sample 0, so this
      * is rekordbox's frames * 1152 * 150 / rate. */
     int64_t n = (int64_t)ceil((double)(ns * COLUMNS_PER_SECOND) / rate);
-    n = RX_MAX(n, 1);
+    n = CB_MAX(n, 1);
     if (n > INT32_MAX / 6)
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
     *c = (Columns) { .n = n };
     c->peak     = calloc(n, sizeof(*c->peak));
     c->white    = calloc(n, sizeof(*c->white));
@@ -229,12 +229,12 @@ static int columns_compute(const float *x, int64_t ns, int rate, Columns *c)
     c->split    = calloc(n * 3, sizeof(*c->split));
     c->sumsq    = calloc(n, sizeof(*c->sumsq));
     c->count    = calloc(n, sizeof(*c->count));
-    c->ov       = calloc(RX_WAVE_PWV6_COLUMNS * 3, sizeof(*c->ov));
-    c->ov_count = calloc(RX_WAVE_PWV6_COLUMNS, sizeof(*c->ov_count));
+    c->ov       = calloc(CB_WAVE_PWV6_COLUMNS * 3, sizeof(*c->ov));
+    c->ov_count = calloc(CB_WAVE_PWV6_COLUMNS, sizeof(*c->ov_count));
     if (!c->peak || !c->white || !c->band || !c->split || !c->sumsq || !c->count || !c->ov ||
         !c->ov_count) {
         columns_free(c);
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     }
 
     Biquad white, low, mid_hp, mid_lp, high;
@@ -266,7 +266,7 @@ static int columns_compute(const float *x, int64_t ns, int rate, Columns *c)
     int64_t start = 0;
     for (int64_t k = 0; k < n; k++) {
         int64_t end = (int64_t)round_half((double)((k + 1) * rate) / COLUMNS_PER_SECOND);
-        end = RX_MIN(end, ns);
+        end = CB_MIN(end, ns);
         double cum0 = cum;
         double pk = 0.0, wh = 0.0, lo = 0.0, md = 0.0, hi = 0.0;
         double s_lo = 0.0, s_md = 0.0, s_hi = 0.0;
@@ -325,7 +325,7 @@ static void rms_over(const Columns *c, const double *cs, const int64_t *cc,
 }
 
 /* dj's PWV6 rule: range means of PWV7 over a 1200-way split, rescaled per
- * band. `acc` holds (n + 1) * 3 running sums. rxbox uses it only for dj's
+ * band. `acc` holds (n + 1) * 3 running sums. cyanbox uses it only for dj's
  * PWV6 levels that PWV4 is built from. */
 static void pwv6_dj(const uint8_t *pwv7, int64_t n, double *acc, uint8_t *pwv6)
 {
@@ -334,9 +334,9 @@ static void pwv6_dj(const uint8_t *pwv7, int64_t n, double *acc, uint8_t *pwv6)
     for (int64_t i = 0; i < n; i++)
         for (int j = 0; j < 3; j++)
             acc[(i + 1) * 3 + j] = acc[i * 3 + j] + pwv7[i * 3 + j];
-    for (int k = 0; k < RX_WAVE_PWV6_COLUMNS; k++) {
+    for (int k = 0; k < CB_WAVE_PWV6_COLUMNS; k++) {
         int64_t a, b;
-        split_range(n, RX_WAVE_PWV6_COLUMNS, k, &a, &b);
+        split_range(n, CB_WAVE_PWV6_COLUMNS, k, &a, &b);
         for (int j = 0; j < 3; j++) {
             double mean = (acc[b * 3 + j] - acc[a * 3 + j]) / (double)(b - a);
             pwv6[k * 3 + j] = (uint8_t)fmin(127, round_half(PWV6_SCALE[j] * mean));
@@ -361,8 +361,8 @@ static void pwv6_rbxport(Columns *c, uint8_t *pwv6)
     double target = frames ? level / (double)frames * PWV6_LEVEL : 0.0;
 
     double *v = c->ov, mean[3] = { 0.0, 0.0, 0.0 };
-    for (int k = 0; k < RX_WAVE_PWV6_COLUMNS; k++) {
-        double cnt = (double)RX_MAX(c->ov_count[k], 1);
+    for (int k = 0; k < CB_WAVE_PWV6_COLUMNS; k++) {
+        double cnt = (double)CB_MAX(c->ov_count[k], 1);
         v[k * 3 + 0] = pow(v[k * 3 + 0] / cnt, PWV6_LOW_POWER);
         v[k * 3 + 1] /= cnt;
         v[k * 3 + 2] /= cnt;
@@ -370,12 +370,12 @@ static void pwv6_rbxport(Columns *c, uint8_t *pwv6)
             mean[j] += v[k * 3 + j];
     }
     for (int j = 0; j < 3; j++)
-        mean[j] /= RX_WAVE_PWV6_COLUMNS;
+        mean[j] /= CB_WAVE_PWV6_COLUMNS;
 
     /* A two-column trailing average ("matches the reference envelope's
      * release and half-bucket alignment"), the first column with itself. */
     double prev[3] = { v[0], v[1], v[2] };
-    for (int k = 0; k < RX_WAVE_PWV6_COLUMNS; k++) {
+    for (int k = 0; k < CB_WAVE_PWV6_COLUMNS; k++) {
         for (int j = 0; j < 3; j++) {
             double cur = v[k * 3 + j];
             v[k * 3 + j] = (cur + prev[j]) / 2;
@@ -383,35 +383,35 @@ static void pwv6_rbxport(Columns *c, uint8_t *pwv6)
         }
     }
 
-    for (int k = 0; k < RX_WAVE_PWV6_COLUMNS; k++) {
+    for (int k = 0; k < CB_WAVE_PWV6_COLUMNS; k++) {
         for (int j = 0; j < 3; j++) {
             double u = mean[j] < PWV6_SILENT ? 0.0 : v[k * 3 + j] * target / mean[j];
-            pwv6[k * 3 + j] = (uint8_t)RX_CLAMP(round(u), 0.0, 127.0);
+            pwv6[k * 3 + j] = (uint8_t)CB_CLAMP(round(u), 0.0, 127.0);
         }
     }
 }
 
-static int alloc_detail(RXWaveforms *w, int n)
+static int alloc_detail(CBWaveforms *w, int n)
 {
     w->nb_detail = n;
     w->pwv3 = malloc((size_t)n);
     w->pwv5 = malloc((size_t)n * 2);
     w->pwv7 = malloc((size_t)n * 3);
     if (!w->pwv3 || !w->pwv5 || !w->pwv7) {
-        rx_waveforms_free(w);
-        return RX_ERROR(ENOMEM);
+        cb_waveforms_free(w);
+        return CB_ERROR(ENOMEM);
     }
     return 0;
 }
 
-int rx_waveforms_compute(const float *mono, int64_t nb_samples, int rate, RXWaveforms *out)
+int cb_waveforms_compute(const float *mono, int64_t nb_samples, int rate, CBWaveforms *out)
 {
-    *out = (RXWaveforms) { 0 };
+    *out = (CBWaveforms) { 0 };
     if (rate <= 0 || nb_samples < 0 || (nb_samples && !mono))
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
     int64_t scaled;
     if (ckd_mul(&scaled, nb_samples, (int64_t)COLUMNS_PER_SECOND))
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
 
     Columns c;
     int ret = columns_compute(mono, nb_samples, rate, &c);
@@ -427,7 +427,7 @@ int rx_waveforms_compute(const float *mono, int64_t nb_samples, int rate, RXWave
     double *acc = malloc((n + 1) * 3 * sizeof(*acc));
     uint8_t *dj7 = malloc(n * 3);
     if (!env || !whiteness || !height || !cs || !cc || !acc || !dj7) {
-        ret = RX_ERROR(ENOMEM);
+        ret = CB_ERROR(ENOMEM);
         goto fail;
     }
     ret = alloc_detail(out, (int)n);
@@ -447,7 +447,7 @@ int rx_waveforms_compute(const float *mono, int64_t nb_samples, int rate, RXWave
             height[i] = (uint8_t)fmin(31, floor(31.5 * (r * r)));
         }
         if (c.peak[i] > 0) {
-            double ratio = RX_CLAMP(c.white[i] / c.peak[i], 0.0, 1.0);
+            double ratio = CB_CLAMP(c.white[i] / c.peak[i], 0.0, 1.0);
             whiteness[i] = 7 - fmin(7, floor(8 * ratio));
         } else {
             whiteness[i] = 7;
@@ -469,10 +469,10 @@ int rx_waveforms_compute(const float *mono, int64_t nb_samples, int rate, RXWave
         }
         double g = GAIN_FLOOR[j];
         if (emax > 0)
-            g = RX_CLAMP(round_half(GAIN_TARGET[j] / emax), GAIN_FLOOR[j], GAIN_CAP[j]);
+            g = CB_CLAMP(round_half(GAIN_TARGET[j] / emax), GAIN_FLOOR[j], GAIN_CAP[j]);
         out->gains[j] = (uint16_t)g;
     }
-    /* dj writes min(127, BAND_SCALE * gain * envelope) as its level; rxbox
+    /* dj writes min(127, BAND_SCALE * gain * envelope) as its level; cyanbox
      * keeps it only for PWV4 (below).
      *
      * PWVC stays dj's gains although PWV7 is no longer scaled by them, as
@@ -538,14 +538,14 @@ int rx_waveforms_compute(const float *mono, int64_t nb_samples, int rate, RXWave
 
     /* PWAV: height from a 400-way RMS normalised to 24, whiteness the mean
      * whiteness over a 200-way split (each covering two columns). */
-    double r400[RX_WAVE_PWAV_COLUMNS], r400max;
-    rms_over(&c, cs, cc, RX_WAVE_PWAV_COLUMNS, r400, &r400max);
+    double r400[CB_WAVE_PWAV_COLUMNS], r400max;
+    rms_over(&c, cs, cc, CB_WAVE_PWAV_COLUMNS, r400, &r400max);
     acc[0] = 0.0;
     for (int64_t i = 0; i < n; i++)
         acc[i + 1] = acc[i] + whiteness[i];
-    for (int k = 0; k < RX_WAVE_PWAV_COLUMNS; k++) {
+    for (int k = 0; k < CB_WAVE_PWAV_COLUMNS; k++) {
         int64_t a, b;
-        split_range(n, RX_WAVE_PWAV_COLUMNS / 2, k / 2, &a, &b);
+        split_range(n, CB_WAVE_PWAV_COLUMNS / 2, k / 2, &a, &b);
         double w200 = round_half((acc[b] - acc[a]) / (double)(b - a));
         double h = r400max > 0 ? fmin(31, round_half(24 * r400[k] / r400max)) : 0;
         /* Firmware fix: never below 2 (see the top of the file). */
@@ -554,9 +554,9 @@ int rx_waveforms_compute(const float *mono, int64_t nb_samples, int rate, RXWave
     }
 
     /* PWV2: 100-way RMS, square-root compressed to 0..15. */
-    double r100[RX_WAVE_PWV2_COLUMNS], r100max;
-    rms_over(&c, cs, cc, RX_WAVE_PWV2_COLUMNS, r100, &r100max);
-    for (int k = 0; k < RX_WAVE_PWV2_COLUMNS; k++) {
+    double r100[CB_WAVE_PWV2_COLUMNS], r100max;
+    rms_over(&c, cs, cc, CB_WAVE_PWV2_COLUMNS, r100, &r100max);
+    for (int k = 0; k < CB_WAVE_PWV2_COLUMNS; k++) {
         double h = r100max > 0 ? fmin(15, round_half(15 * sqrt(r100[k] / r100max))) : 0;
         /* Firmware fix: never below 1 (see the top of the file). */
         out->pwv2[k] = (uint8_t)fmax(h, PWV2_MIN_HEIGHT);
@@ -576,7 +576,7 @@ int rx_waveforms_compute(const float *mono, int64_t nb_samples, int rate, RXWave
      * and fills the strip on a quiet one. The level follows the track's
      * loudness, so a quiet track is a small overview (line 47 above: band
      * means 3.4; a loud master's 25..35). */
-    uint8_t dj6[RX_WAVE_PWV6_COLUMNS * 3];
+    uint8_t dj6[CB_WAVE_PWV6_COLUMNS * 3];
     pwv6_rbxport(&c, out->pwv6);
     pwv6_dj(dj7, n, acc, dj6);
 
@@ -586,7 +586,7 @@ int rx_waveforms_compute(const float *mono, int64_t nb_samples, int rate, RXWave
      * built from those (rbxport measured rekordbox's PWV4 colour bytes
      * about three times hotter than its PWV6, reaching 127 on every track,
      * which this keeps). Columns with no signal are zero. */
-    for (int k = 0; k < RX_WAVE_PWV4_COLUMNS; k++) {
+    for (int k = 0; k < CB_WAVE_PWV4_COLUMNS; k++) {
         uint8_t *p = &out->pwv4[k * 6];
         double b345[3], mx = 0.0, sq = 0.0;
         for (int j = 0; j < 3; j++) {
@@ -599,7 +599,7 @@ int rx_waveforms_compute(const float *mono, int64_t nb_samples, int rate, RXWave
         if (mx > 0) {
             double b0 = fmin(127, round_half(0.88 * mx + 38));
             p[0] = (uint8_t)b0;
-            p[1] = (uint8_t)RX_CLAMP(round_half(203 - 0.49 * b0), 0.0, 255.0);
+            p[1] = (uint8_t)CB_CLAMP(round_half(203 - 0.49 * b0), 0.0, 255.0);
             p[2] = (uint8_t)fmin(127, round_half(0.91 * sqrt(sq)));
         }
     }
@@ -607,7 +607,7 @@ int rx_waveforms_compute(const float *mono, int64_t nb_samples, int rate, RXWave
 
 fail:
     if (ret < 0)
-        rx_waveforms_free(out);
+        cb_waveforms_free(out);
     free(env);
     free(whiteness);
     free(height);
@@ -619,14 +619,14 @@ fail:
     return ret;
 }
 
-void rx_waveforms_free(RXWaveforms *w)
+void cb_waveforms_free(CBWaveforms *w)
 {
     if (!w)
         return;
     free(w->pwv3);
     free(w->pwv5);
     free(w->pwv7);
-    *w = (RXWaveforms) { 0 };
+    *w = (CBWaveforms) { 0 };
 }
 
 /* ---------------------------------------------------------------- packing */
@@ -654,11 +654,12 @@ void rx_waveforms_free(RXWaveforms *w)
  * version 4 rbxport's rules (see "PWV7" and "PWV6" above); older blobs
  * must not be used. The other tags have not changed since version 1, but
  * a blob is recomputed whole: it is one analysis stage. */
-#define RXW_MAGIC "RXWV"
-#define RXW_VERSION 4
-#define RXW_HEADER 24
+/* From when the project was rxbox; kept, so stored blobs read. */
+#define CBW_MAGIC "RXWV"
+#define CBW_VERSION 4
+#define CBW_HEADER 24
 /* 24 hours of columns: anything above is a damaged file, not a track. */
-#define RXW_MAX_DETAIL (COLUMNS_PER_SECOND * 3600 * 24)
+#define CBW_MAX_DETAIL (COLUMNS_PER_SECOND * 3600 * 24)
 
 static void put_le32(uint8_t *p, uint32_t v)
 {
@@ -675,36 +676,36 @@ static uint32_t get_le32(const uint8_t *p)
 
 static size_t rxw_size(int n)
 {
-    return RXW_HEADER + RX_WAVE_PWAV_COLUMNS + RX_WAVE_PWV2_COLUMNS +
-           RX_WAVE_PWV4_COLUMNS * 6 + RX_WAVE_PWV6_COLUMNS * 3 + (size_t)n * 6;
+    return CBW_HEADER + CB_WAVE_PWAV_COLUMNS + CB_WAVE_PWV2_COLUMNS +
+           CB_WAVE_PWV4_COLUMNS * 6 + CB_WAVE_PWV6_COLUMNS * 3 + (size_t)n * 6;
 }
 
-static_assert(RX_WAVE_PACKED_PREVIEW == RXW_HEADER + RX_WAVE_PWAV_COLUMNS + RX_WAVE_PWV2_COLUMNS +
-                                        RX_WAVE_PWV4_COLUMNS * 6 + RX_WAVE_PWV6_COLUMNS * 3,
+static_assert(CB_WAVE_PACKED_PREVIEW == CBW_HEADER + CB_WAVE_PWAV_COLUMNS + CB_WAVE_PWV2_COLUMNS +
+                                        CB_WAVE_PWV4_COLUMNS * 6 + CB_WAVE_PWV6_COLUMNS * 3,
               "the previews end where the detail starts");
 
-int rx_waveforms_pack(const RXWaveforms *w, uint8_t **data, size_t *size)
+int cb_waveforms_pack(const CBWaveforms *w, uint8_t **data, size_t *size)
 {
     *data = NULL;
     *size = 0;
-    if (!w || w->nb_detail <= 0 || w->nb_detail > RXW_MAX_DETAIL ||
+    if (!w || w->nb_detail <= 0 || w->nb_detail > CBW_MAX_DETAIL ||
         !w->pwv3 || !w->pwv5 || !w->pwv7)
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
     size_t n = (size_t)w->nb_detail, len = rxw_size(w->nb_detail);
     uint8_t *buf = malloc(len);
     if (!buf)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
 
-    memcpy(buf, RXW_MAGIC, 4);
-    put_le32(buf + 4, RXW_VERSION);
+    memcpy(buf, CBW_MAGIC, 4);
+    put_le32(buf + 4, CBW_VERSION);
     put_le32(buf + 8, (uint32_t)w->nb_detail);
-    put_le32(buf + 12, (uint32_t)RX_MAX(w->rate, 0));
+    put_le32(buf + 12, (uint32_t)CB_MAX(w->rate, 0));
     for (int j = 0; j < 3; j++) {
         buf[16 + 2 * j] = (uint8_t)w->gains[j];
         buf[17 + 2 * j] = (uint8_t)(w->gains[j] >> 8);
     }
     buf[22] = buf[23] = 0;
-    uint8_t *p = buf + RXW_HEADER;
+    uint8_t *p = buf + CBW_HEADER;
     memcpy(p, w->pwav, sizeof(w->pwav));
     p += sizeof(w->pwav);
     memcpy(p, w->pwv2, sizeof(w->pwv2));
@@ -725,12 +726,12 @@ int rx_waveforms_pack(const RXWaveforms *w, uint8_t **data, size_t *size)
 }
 
 /* The header's rate and gains and the previews, from a blob checked. */
-static void unpack_previews(const uint8_t *data, RXWaveforms *w)
+static void unpack_previews(const uint8_t *data, CBWaveforms *w)
 {
     w->rate = (int)get_le32(data + 12);
     for (int j = 0; j < 3; j++)
         w->gains[j] = (uint16_t)(data[16 + 2 * j] | data[17 + 2 * j] << 8);
-    const uint8_t *p = data + RXW_HEADER;
+    const uint8_t *p = data + CBW_HEADER;
     memcpy(w->pwav, p, sizeof(w->pwav));
     p += sizeof(w->pwav);
     memcpy(w->pwv2, p, sizeof(w->pwv2));
@@ -740,37 +741,37 @@ static void unpack_previews(const uint8_t *data, RXWaveforms *w)
     memcpy(w->pwv6, p, sizeof(w->pwv6));
 }
 
-int rx_waveforms_unpack_previews(const uint8_t *data, size_t size, RXWaveforms *w)
+int cb_waveforms_unpack_previews(const uint8_t *data, size_t size, CBWaveforms *w)
 {
-    *w = (RXWaveforms) { 0 };
-    if (!data || size < RXW_HEADER || memcmp(data, RXW_MAGIC, 4))
-        return RX_ERROR(EINVAL);
-    if (get_le32(data + 4) != RXW_VERSION)
-        return RX_ERROR(EPROTO);
+    *w = (CBWaveforms) { 0 };
+    if (!data || size < CBW_HEADER || memcmp(data, CBW_MAGIC, 4))
+        return CB_ERROR(EINVAL);
+    if (get_le32(data + 4) != CBW_VERSION)
+        return CB_ERROR(EPROTO);
     uint32_t n = get_le32(data + 8), rate = get_le32(data + 12);
-    if (n == 0 || n > RXW_MAX_DETAIL || rate > INT32_MAX || size != RX_WAVE_PACKED_PREVIEW)
-        return RX_ERROR(EINVAL);
+    if (n == 0 || n > CBW_MAX_DETAIL || rate > INT32_MAX || size != CB_WAVE_PACKED_PREVIEW)
+        return CB_ERROR(EINVAL);
     unpack_previews(data, w);
     return 0;
 }
 
-int rx_waveforms_unpack(const uint8_t *data, size_t size, RXWaveforms *w)
+int cb_waveforms_unpack(const uint8_t *data, size_t size, CBWaveforms *w)
 {
-    *w = (RXWaveforms) { 0 };
-    if (!data || size < RXW_HEADER || memcmp(data, RXW_MAGIC, 4))
-        return RX_ERROR(EINVAL);
+    *w = (CBWaveforms) { 0 };
+    if (!data || size < CBW_HEADER || memcmp(data, CBW_MAGIC, 4))
+        return CB_ERROR(EINVAL);
     /* Another format version (1 to 3: older three-band levels): not
      * damaged, but stale, so the caller recomputes */
-    if (get_le32(data + 4) != RXW_VERSION)
-        return RX_ERROR(EPROTO);
+    if (get_le32(data + 4) != CBW_VERSION)
+        return CB_ERROR(EPROTO);
     uint32_t n = get_le32(data + 8), rate = get_le32(data + 12);
-    if (n == 0 || n > RXW_MAX_DETAIL || rate > INT32_MAX || size != rxw_size((int)n))
-        return RX_ERROR(EINVAL);
+    if (n == 0 || n > CBW_MAX_DETAIL || rate > INT32_MAX || size != rxw_size((int)n))
+        return CB_ERROR(EINVAL);
     int ret = alloc_detail(w, (int)n);
     if (ret < 0)
         return ret;
     unpack_previews(data, w);
-    const uint8_t *p = data + RX_WAVE_PACKED_PREVIEW;
+    const uint8_t *p = data + CB_WAVE_PACKED_PREVIEW;
     memcpy(w->pwv3, p, n);
     p += n;
     memcpy(w->pwv5, p, (size_t)n * 2);
@@ -779,29 +780,29 @@ int rx_waveforms_unpack(const uint8_t *data, size_t size, RXWaveforms *w)
     return 0;
 }
 
-int rx_waveforms_save(const RXWaveforms *w, const char *path)
+int cb_waveforms_save(const CBWaveforms *w, const char *path)
 {
     if (!path)
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
     uint8_t *buf;
     size_t size;
-    int ret = rx_waveforms_pack(w, &buf, &size);
+    int ret = cb_waveforms_pack(w, &buf, &size);
     if (ret < 0)
         return ret;
-    ret = rx_file_write_atomic(path, buf, size);
+    ret = cb_file_write_atomic(path, buf, size);
     free(buf);
     return ret;
 }
 
-int rx_waveforms_load(const char *path, RXWaveforms *w)
+int cb_waveforms_load(const char *path, CBWaveforms *w)
 {
-    *w = (RXWaveforms) { 0 };
+    *w = (CBWaveforms) { 0 };
     uint8_t *buf;
     size_t size;
-    int ret = rx_file_read(path, &buf, &size);
+    int ret = cb_file_read(path, &buf, &size);
     if (ret < 0)
         return ret;
-    ret = rx_waveforms_unpack(buf, size, w);
+    ret = cb_waveforms_unpack(buf, size, w);
     free(buf);
     return ret;
 }

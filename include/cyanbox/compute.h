@@ -1,7 +1,7 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
-#ifndef RXBOX_COMPUTE_H
-#define RXBOX_COMPUTE_H
+#ifndef CYANBOX_COMPUTE_H
+#define CYANBOX_COMPUTE_H
 
 /* Vulkan compute without a window: the GPU the analysis' spectral front end
  * runs on. A context is an instance, the chosen device, one compute queue,
@@ -25,42 +25,42 @@
  * work.
  *
  * Environment:
- *   RXBOX_ANALYSIS_GPU=0   no context is made (rx_compute_create: -ENODEV):
+ *   CYANBOX_ANALYSIS_GPU=0   no context is made (cb_compute_create: -ENODEV):
  *                          everything runs on the CPU
- *   RXBOX_ANALYSIS_GPU=1   a GPU is required: callers that can treat its
- *                          absence as an error do (rx_compute_mode)
- *   RXBOX_GPU_DEVICE=NAME  prefer the device whose name contains NAME
+ *   CYANBOX_ANALYSIS_GPU=1   a GPU is required: callers that can treat its
+ *                          absence as an error do (cb_compute_mode)
+ *   CYANBOX_GPU_DEVICE=NAME  prefer the device whose name contains NAME
  *                          (case-insensitive), unless the options name one
- *   RXBOX_GPU_VALIDATION=1 the Khronos validation layer, as options.validation */
+ *   CYANBOX_GPU_VALIDATION=1 the Khronos validation layer, as options.validation */
 
-#include "rxbox/common.h"
+#include "cyanbox/common.h"
 
-typedef struct RXCompute RXCompute;
+typedef struct CBCompute CBCompute;
 
-typedef struct RXComputeOptions {
-    const char *device;         /* substring of the GPU's name; NULL: $RXBOX_GPU_DEVICE, else the
+typedef struct CBComputeOptions {
+    const char *device;         /* substring of the GPU's name; NULL: $CYANBOX_GPU_DEVICE, else the
                                    best: discrete before integrated. A CPU implementation
                                    (llvmpipe) only when named */
     bool validation;            /* VK_LAYER_KHRONOS_validation; errors are counted */
-} RXComputeOptions;
-void rx_compute_options_default(RXComputeOptions *o);
+} CBComputeOptions;
+void cb_compute_options_default(CBComputeOptions *o);
 
-/* -ENODEV when RXBOX_ANALYSIS_GPU=0 or no device can run the shaders
+/* -ENODEV when CYANBOX_ANALYSIS_GPU=0 or no device can run the shaders
  * (Vulkan 1.3 with buffer device addresses and 32 kB of shared memory). */
-int  rx_compute_create(RXCompute **c, const RXComputeOptions *o);
+int  cb_compute_create(CBCompute **c, const CBComputeOptions *o);
 /* Waits for the queue; every plan must have been freed. */
-void rx_compute_destroy(RXCompute **c);
-const char *rx_compute_device_name(const RXCompute *c);
+void cb_compute_destroy(CBCompute **c);
+const char *cb_compute_device_name(const CBCompute *c);
 /* Validation errors reported so far (0 without validation). */
-int  rx_compute_validation_errors(const RXCompute *c);
+int  cb_compute_validation_errors(const CBCompute *c);
 
-/* What RXBOX_ANALYSIS_GPU asks for. */
-enum RXComputeMode {
-    RX_COMPUTE_AUTO = 0,        /* unset: a GPU when there is one, else the CPU */
-    RX_COMPUTE_OFF,             /* 0: the CPU only */
-    RX_COMPUTE_REQUIRED,        /* 1: a GPU, and its absence is an error where it can be */
+/* What CYANBOX_ANALYSIS_GPU asks for. */
+enum CBComputeMode {
+    CB_COMPUTE_AUTO = 0,        /* unset: a GPU when there is one, else the CPU */
+    CB_COMPUTE_OFF,             /* 0: the CPU only */
+    CB_COMPUTE_REQUIRED,        /* 1: a GPU, and its absence is an error where it can be */
 };
-enum RXComputeMode rx_compute_mode(void);
+enum CBComputeMode cb_compute_mode(void);
 
 /* ------------------------------------------------------------ STFT bands */
 
@@ -70,7 +70,7 @@ enum RXComputeMode rx_compute_mode(void);
  * e^(-2 pi i k n / nfft)) gives the power |X_k|^2 of bins 0 .. nfft / 2,
  * and band b sums the power of bins [k0[b], k1[b]) under its weights; the
  * sum s is returned as log(1 + scale * sqrt(s)) (as s when scale is 0). */
-typedef struct RXComputeSTFT {
+typedef struct CBComputeSTFT {
     int nfft;                   /* power of two, 64 .. 8192 */
     int hop;
     const float *window;        /* nfft */
@@ -78,21 +78,21 @@ typedef struct RXComputeSTFT {
     const int *k0, *k1;         /* nb_bands */
     const float *weights;       /* band after band, k1[b] - k0[b] each */
     float scale;
-} RXComputeSTFT;
+} CBComputeSTFT;
 
-typedef struct RXComputeSTFTPlan RXComputeSTFTPlan;
-int  rx_compute_stft_plan(RXCompute *c, const RXComputeSTFT *p, RXComputeSTFTPlan **plan);
-void rx_compute_stft_free(RXComputeSTFTPlan **plan);
+typedef struct CBComputeSTFTPlan CBComputeSTFTPlan;
+int  cb_compute_stft_plan(CBCompute *c, const CBComputeSTFT *p, CBComputeSTFTPlan **plan);
+void cb_compute_stft_free(CBComputeSTFTPlan **plan);
 
 /* Called for consecutive runs of frames, in order: bands[i * nb_bands + b]
  * is band b of frame f0 + i. A negative return stops the run with it. */
-typedef int (*RXComputeFramesFn)(void *opaque, int64_t f0, int nb, const float *bands);
+typedef int (*CBComputeFramesFn)(void *opaque, int64_t f0, int nb, const float *bands);
 
 /* Frames [0, nb_frames) of x[0 .. n). The signal is uploaded a stretch at a
  * time, two stretches in flight, so the callback for one runs while the GPU
  * transforms the next. */
-int  rx_compute_stft_run(RXComputeSTFTPlan *plan, const float *x, int64_t n, int64_t nb_frames,
-                         RXComputeFramesFn fn, void *opaque);
+int  cb_compute_stft_run(CBComputeSTFTPlan *plan, const float *x, int64_t n, int64_t nb_frames,
+                         CBComputeFramesFn fn, void *opaque);
 
 /* ------------------------------------------------------- band envelopes */
 
@@ -103,27 +103,27 @@ int  rx_compute_stft_run(RXComputeSTFTPlan *plan, const float *x, int64_t n, int
  * (unnormalised). Of each band's signal y, the output is the root of the
  * mean of y^2 over [p - h, p + h] (h = smooth[b]) at the points
  * p = nfft / 2 + (i - half) * step, i in [0, 2 * half]. */
-typedef struct RXComputeEnv {
+typedef struct CBComputeEnv {
     int nfft;                   /* power of two, 64 .. 8192 */
     const float *taper;         /* nfft */
     int nb_bands;               /* 1 .. 8 */
     const float *gains;         /* [nb_bands][nfft / 2 + 1] */
     const int *smooth;          /* [nb_bands] */
     int step, half;             /* the points must stay inside the window */
-} RXComputeEnv;
+} CBComputeEnv;
 
-typedef struct RXComputeEnvPlan RXComputeEnvPlan;
-int  rx_compute_env_plan(RXCompute *c, const RXComputeEnv *p, RXComputeEnvPlan **plan);
-void rx_compute_env_free(RXComputeEnvPlan **plan);
+typedef struct CBComputeEnvPlan CBComputeEnvPlan;
+int  cb_compute_env_plan(CBCompute *c, const CBComputeEnv *p, CBComputeEnvPlan **plan);
+void cb_compute_env_free(CBComputeEnvPlan **plan);
 
 /* Window i starts at sample start[i] of x[0 .. n). out is
  * [nb][nb_bands][2 * half + 1]. */
-int  rx_compute_env_run(RXComputeEnvPlan *plan, const float *x, int64_t n,
+int  cb_compute_env_run(CBComputeEnvPlan *plan, const float *x, int64_t n,
                         const int64_t *start, int nb, float *out);
 
 /* GPU time of a plan's work so far, from timestamps (0 when the queue has
  * none), and the wall time its runs took, in milliseconds. */
-void rx_compute_stft_times(const RXComputeSTFTPlan *plan, double *gpu_ms, double *wall_ms);
-void rx_compute_env_times(const RXComputeEnvPlan *plan, double *gpu_ms, double *wall_ms);
+void cb_compute_stft_times(const CBComputeSTFTPlan *plan, double *gpu_ms, double *wall_ms);
+void cb_compute_env_times(const CBComputeEnvPlan *plan, double *gpu_ms, double *wall_ms);
 
-#endif /* RXBOX_COMPUTE_H */
+#endif /* CYANBOX_COMPUTE_H */

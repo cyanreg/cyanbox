@@ -9,28 +9,28 @@
 #include <stdio.h>
 #include <time.h>
 
-#include "rxbox/common.h"
+#include "cyanbox/common.h"
 
 static pthread_mutex_t log_lock = PTHREAD_MUTEX_INITIALIZER;
-static enum RXLogLevel log_max = RX_LOG_INFO;
-static rx_log_sink log_sink;
+static enum CBLogLevel log_max = CB_LOG_INFO;
+static cb_log_sink log_sink;
 static void *log_sink_opaque;
 
 static const char *const level_names[] = { "error", "warn", "info", "debug" };
 
-void rx_log_set_level(enum RXLogLevel level)
+void cb_log_set_level(enum CBLogLevel level)
 {
     pthread_mutex_lock(&log_lock);
     log_max = level;
     pthread_mutex_unlock(&log_lock);
 }
 
-enum RXLogLevel rx_log_level(void)
+enum CBLogLevel cb_log_level(void)
 {
     return log_max;
 }
 
-void rx_log_set_sink(rx_log_sink sink, void *opaque)
+void cb_log_set_sink(cb_log_sink sink, void *opaque)
 {
     pthread_mutex_lock(&log_lock);
     log_sink = sink;
@@ -38,7 +38,7 @@ void rx_log_set_sink(rx_log_sink sink, void *opaque)
     pthread_mutex_unlock(&log_lock);
 }
 
-void rx_vlog(enum RXLogLevel level, const char *fmt, va_list args)
+void cb_vlog(enum CBLogLevel level, const char *fmt, va_list args)
 {
     char line[2048];
 
@@ -56,16 +56,16 @@ void rx_vlog(enum RXLogLevel level, const char *fmt, va_list args)
     if (log_sink) {
         log_sink(log_sink_opaque, level, line);
     } else {
-        fprintf(stderr, "rxbox: %s: %s\n", level_names[RX_CLAMP(level, 0, 3)], line);
+        fprintf(stderr, "cyanbox: %s: %s\n", level_names[CB_CLAMP(level, 0, 3)], line);
     }
     pthread_mutex_unlock(&log_lock);
 }
 
-void rx_log(enum RXLogLevel level, const char *fmt, ...)
+void cb_log(enum CBLogLevel level, const char *fmt, ...)
 {
     va_list args;
 
     va_start(args, fmt);
-    rx_vlog(level, fmt, args);
+    cb_vlog(level, fmt, args);
     va_end(args);
 }

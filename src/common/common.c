@@ -1,6 +1,6 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
-/* The helpers of rxbox/common.h: strings, paths, files, time and the
+/* The helpers of cyanbox/common.h: strings, paths, files, time and the
  * growable array. Nothing here knows about tracks. */
 
 #include <ctype.h>
@@ -14,11 +14,11 @@
 #include <unistd.h>
 #include <stdckdint.h>
 
-#include "rxbox/common.h"
+#include "cyanbox/common.h"
 
 /* ------------------------------------------------------------------ strings */
 
-char *rx_strdup(const char *s)
+char *cb_strdup(const char *s)
 {
     if (!s)
         return NULL;
@@ -29,7 +29,7 @@ char *rx_strdup(const char *s)
     return d;
 }
 
-char *rx_strndup(const char *s, size_t n)
+char *cb_strndup(const char *s, size_t n)
 {
     if (!s)
         return NULL;
@@ -42,7 +42,7 @@ char *rx_strndup(const char *s, size_t n)
     return d;
 }
 
-char *rx_vasprintf(const char *fmt, va_list args)
+char *cb_vasprintf(const char *fmt, va_list args)
 {
     va_list copy;
     va_copy(copy, args);
@@ -57,21 +57,21 @@ char *rx_vasprintf(const char *fmt, va_list args)
     return s;
 }
 
-char *rx_asprintf(const char *fmt, ...)
+char *cb_asprintf(const char *fmt, ...)
 {
     va_list args;
     va_start(args, fmt);
-    char *s = rx_vasprintf(fmt, args);
+    char *s = cb_vasprintf(fmt, args);
     va_end(args);
     return s;
 }
 
-bool rx_str_starts(const char *s, const char *pfx)
+bool cb_str_starts(const char *s, const char *pfx)
 {
     return s && pfx && strncmp(s, pfx, strlen(pfx)) == 0;
 }
 
-bool rx_str_ends(const char *s, const char *sfx)
+bool cb_str_ends(const char *s, const char *sfx)
 {
     if (!s || !sfx)
         return false;
@@ -79,7 +79,7 @@ bool rx_str_ends(const char *s, const char *sfx)
     return lx <= ls && memcmp(s + ls - lx, sfx, lx) == 0;
 }
 
-int rx_strcasecmp(const char *a, const char *b)
+int cb_strcasecmp(const char *a, const char *b)
 {
     while (*a && *b) {
         int ca = tolower((unsigned char)*a), cb = tolower((unsigned char)*b);
@@ -101,7 +101,7 @@ static bool ascii_digit(int c)
     return c >= '0' && c <= '9';
 }
 
-int rx_strnatcasecmp(const char *sa, const char *sb)
+int cb_strnatcasecmp(const char *sa, const char *sb)
 {
     const unsigned char *a = (const unsigned char *)sa, *b = (const unsigned char *)sb;
     int zeros = 0;              /* the first difference in leading zeros */
@@ -189,7 +189,7 @@ static bool match_at(const char *q, const char *n)
     return true;
 }
 
-bool rx_str_contains_fold(const char *haystack, const char *needle)
+bool cb_str_contains_fold(const char *haystack, const char *needle)
 {
     if (!needle || !*needle)
         return true;
@@ -264,7 +264,7 @@ static int fuzzy_score(const FuzzyText *t, const int *pos, int m)
             s += 2 * b;
             run = b;
         } else if (pos[k] == pos[k - 1] + 1) {
-            s += RX_MAX(RX_MAX(b, run), FUZZY_RUN);
+            s += CB_MAX(CB_MAX(b, run), FUZZY_RUN);
         } else {
             s += b + FUZZY_GAP_START + FUZZY_GAP_EXTEND * (pos[k] - pos[k - 1] - 2);
             run = b;
@@ -337,7 +337,7 @@ static bool fuzzy_ascii_has(const char *text, size_t len, const uint32_t *q, int
     return true;
 }
 
-bool rx_fuzzy_match(const char *text, const char *query, int *score, int *hits, int max_hits,
+bool cb_fuzzy_match(const char *text, const char *query, int *score, int *hits, int max_hits,
                     int *nb_hits)
 {
     if (score)
@@ -377,7 +377,7 @@ bool rx_fuzzy_match(const char *text, const char *query, int *score, int *hits, 
         int total = 0;
         for (const char *p = text; *p; utf8_next(&p))
             total++;
-        int skip = RX_MAX(total - FUZZY_TEXT, 0);
+        int skip = CB_MAX(total - FUZZY_TEXT, 0);
         for (const char *p = text; *p;) {
             int off = (int)(p - text);
             uint32_t raw = utf8_next(&p);
@@ -421,30 +421,30 @@ bool rx_fuzzy_match(const char *text, const char *query, int *score, int *hits, 
 
 /* ------------------------------------------------------------- paths & files */
 
-char *rx_path_join(const char *a, const char *b)
+char *cb_path_join(const char *a, const char *b)
 {
     if (!a || !*a)
-        return rx_strdup(b);
+        return cb_strdup(b);
     if (!b || !*b)
-        return rx_strdup(a);
+        return cb_strdup(a);
     if (b[0] == '/')
-        return rx_strdup(b);
+        return cb_strdup(b);
     size_t la = strlen(a);
     while (la > 1 && a[la - 1] == '/')
         la--;
     /* Only the root itself still ends in '/': "/" + "x" is "/x". */
-    return rx_asprintf("%.*s%s%s", (int)la, a, a[la - 1] == '/' ? "" : "/", b);
+    return cb_asprintf("%.*s%s%s", (int)la, a, a[la - 1] == '/' ? "" : "/", b);
 }
 
-const char *rx_path_base(const char *path)
+const char *cb_path_base(const char *path)
 {
     const char *s = strrchr(path, '/');
     return s ? s + 1 : path;
 }
 
-const char *rx_path_ext(const char *path, char *buf, size_t size)
+const char *cb_path_ext(const char *path, char *buf, size_t size)
 {
-    const char *base = rx_path_base(path);
+    const char *base = cb_path_base(path);
     const char *dot = strrchr(base, '.');
     if (!dot || dot == base || size == 0) {
         if (size)
@@ -460,9 +460,9 @@ const char *rx_path_ext(const char *path, char *buf, size_t size)
     return buf;
 }
 
-char *rx_path_abs(const char *path)
+char *cb_path_abs(const char *path)
 {
-    char *expanded = rx_path_expand(path);
+    char *expanded = cb_path_expand(path);
     if (!expanded)
         return NULL;
     char *abs = realpath(expanded, NULL);
@@ -474,45 +474,45 @@ char *rx_path_abs(const char *path)
             *slash = '\0';
             char *dir = realpath(slash == expanded ? "/" : expanded, NULL);
             if (dir) {
-                abs = rx_path_join(dir, slash + 1);
+                abs = cb_path_join(dir, slash + 1);
                 free(dir);
             }
         } else {
             char cwd[PATH_MAX];
             if (getcwd(cwd, sizeof(cwd)))
-                abs = rx_path_join(cwd, expanded);
+                abs = cb_path_join(cwd, expanded);
         }
     }
     free(expanded);
     return abs;
 }
 
-char *rx_path_expand(const char *path)
+char *cb_path_expand(const char *path)
 {
     if (path && path[0] == '~' && (path[1] == '/' || path[1] == '\0')) {
         const char *home = getenv("HOME");
         if (home && *home)
-            return rx_path_join(home, path + 1 + (path[1] == '/'));
+            return cb_path_join(home, path + 1 + (path[1] == '/'));
     }
-    return rx_strdup(path);
+    return cb_strdup(path);
 }
 
-int rx_mkdir_p(const char *path)
+int cb_mkdir_p(const char *path)
 {
     /* The loop below starts after the first byte, so "" needs its own
      * answer: mkdir("")'s. */
     if (!path || !*path)
-        return RX_ERROR(ENOENT);
-    char *tmp = rx_strdup(path);
+        return CB_ERROR(ENOENT);
+    char *tmp = cb_strdup(path);
     if (!tmp)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     int ret = 0;
     for (char *p = tmp + 1; *p; p++) {
         if (*p != '/')
             continue;
         *p = '\0';
         if (mkdir(tmp, 0755) < 0 && errno != EEXIST) {
-            ret = RX_ERROR(errno);
+            ret = CB_ERROR(errno);
             break;
         }
         *p = '/';
@@ -522,21 +522,21 @@ int rx_mkdir_p(const char *path)
          * file in the middle of the path fails the next mkdir instead). */
         int err = errno;
         if (err != EEXIST)
-            ret = RX_ERROR(err);
-        else if (!rx_dir_exists(tmp))
-            ret = RX_ERROR(ENOTDIR);
+            ret = CB_ERROR(err);
+        else if (!cb_dir_exists(tmp))
+            ret = CB_ERROR(ENOTDIR);
     }
     free(tmp);
     return ret;
 }
 
-int rx_file_read(const char *path, uint8_t **out, size_t *size)
+int cb_file_read(const char *path, uint8_t **out, size_t *size)
 {
     *out = NULL;
     *size = 0;
     FILE *f = fopen(path, "rb");
     if (!f)
-        return RX_ERROR(errno);
+        return CB_ERROR(errno);
     int ret = 0;
     size_t cap = 0, len = 0;
     uint8_t *buf = NULL;
@@ -545,7 +545,7 @@ int rx_file_read(const char *path, uint8_t **out, size_t *size)
             size_t ncap = cap ? cap * 2 : 262144;
             uint8_t *nb = realloc(buf, ncap);
             if (!nb) {
-                ret = RX_ERROR(ENOMEM);
+                ret = CB_ERROR(ENOMEM);
                 break;
             }
             buf = nb;
@@ -555,7 +555,7 @@ int rx_file_read(const char *path, uint8_t **out, size_t *size)
         len += n;
         if (n == 0) {
             if (ferror(f))
-                ret = RX_ERROR(EIO);
+                ret = CB_ERROR(EIO);
             break;
         }
     }
@@ -570,11 +570,11 @@ int rx_file_read(const char *path, uint8_t **out, size_t *size)
     return 0;
 }
 
-int rx_file_write(const char *path, const void *data, size_t size)
+int cb_file_write(const char *path, const void *data, size_t size)
 {
     int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
     if (fd < 0)
-        return RX_ERROR(errno);
+        return CB_ERROR(errno);
     int ret = 0;
     const uint8_t *p = data;
     size_t left = size;
@@ -583,29 +583,29 @@ int rx_file_write(const char *path, const void *data, size_t size)
         if (n < 0) {
             if (errno == EINTR)
                 continue;
-            ret = RX_ERROR(errno);
+            ret = CB_ERROR(errno);
             break;
         }
         p += n;
         left -= (size_t)n;
     }
     if (close(fd) < 0 && !ret)
-        ret = RX_ERROR(errno);
+        ret = CB_ERROR(errno);
     return ret;
 }
 
-int rx_file_write_atomic(const char *path, const void *data, size_t size)
+int cb_file_write_atomic(const char *path, const void *data, size_t size)
 {
     /* The temporary is named after the thread, not the process: two
      * threads saving the same file at once would otherwise truncate and
      * rename each other's temporary. (The main thread's id is the pid.) */
-    char *tmp = rx_asprintf("%s.tmp-%ld", path, (long)gettid());
+    char *tmp = cb_asprintf("%s.tmp-%ld", path, (long)gettid());
     if (!tmp)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     int ret = 0;
     int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) {
-        ret = RX_ERROR(errno);
+        ret = CB_ERROR(errno);
         goto out;
     }
     const uint8_t *p = data;
@@ -615,18 +615,18 @@ int rx_file_write_atomic(const char *path, const void *data, size_t size)
         if (n < 0) {
             if (errno == EINTR)
                 continue;
-            ret = RX_ERROR(errno);
+            ret = CB_ERROR(errno);
             break;
         }
         p += n;
         left -= (size_t)n;
     }
     if (!ret && fsync(fd) < 0)
-        ret = RX_ERROR(errno);
+        ret = CB_ERROR(errno);
     if (close(fd) < 0 && !ret)
-        ret = RX_ERROR(errno);
+        ret = CB_ERROR(errno);
     if (!ret && rename(tmp, path) < 0)
-        ret = RX_ERROR(errno);
+        ret = CB_ERROR(errno);
     if (ret) {
         unlink(tmp);
     } else {
@@ -635,7 +635,7 @@ int rx_file_write_atomic(const char *path, const void *data, size_t size)
          * new data already gone. Failing to open the directory (a FAT
          * stick refuses O_RDONLY on some kernels) is not an error for the
          * file itself. */
-        char *dir = rx_strdup(path);
+        char *dir = cb_strdup(path);
         if (dir) {
             char *slash = strrchr(dir, '/');
             int dfd = open(slash && slash != dir ? (*slash = '\0', dir) : ".", O_RDONLY | O_DIRECTORY);
@@ -651,19 +651,19 @@ out:
     return ret;
 }
 
-bool rx_file_exists(const char *path)
+bool cb_file_exists(const char *path)
 {
     struct stat st;
     return path && stat(path, &st) == 0 && S_ISREG(st.st_mode);
 }
 
-bool rx_dir_exists(const char *path)
+bool cb_dir_exists(const char *path)
 {
     struct stat st;
     return path && stat(path, &st) == 0 && S_ISDIR(st.st_mode);
 }
 
-int64_t rx_file_mtime(const char *path)
+int64_t cb_file_mtime(const char *path)
 {
     struct stat st;
     if (!path || stat(path, &st) < 0)
@@ -671,7 +671,7 @@ int64_t rx_file_mtime(const char *path)
     return (int64_t)st.st_mtime;
 }
 
-int64_t rx_file_size(const char *path)
+int64_t cb_file_size(const char *path)
 {
     struct stat st;
     if (!path || stat(path, &st) < 0)
@@ -679,29 +679,29 @@ int64_t rx_file_size(const char *path)
     return (int64_t)st.st_size;
 }
 
-int64_t rx_fs_free_bytes(const char *path)
+int64_t cb_fs_free_bytes(const char *path)
 {
     struct statvfs vfs;
     if (statvfs(path, &vfs) < 0)
-        return RX_ERROR(errno);
+        return CB_ERROR(errno);
     return (int64_t)vfs.f_bavail * (int64_t)vfs.f_frsize;
 }
 
 /* ------------------------------------------------------------------- time */
 
-int64_t rx_time_us(void)
+int64_t cb_time_us(void)
 {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (int64_t)ts.tv_sec * 1000000 + ts.tv_nsec / 1000;
 }
 
-int64_t rx_time_now(void)
+int64_t cb_time_now(void)
 {
     return (int64_t)time(NULL);
 }
 
-const char *rx_fmt_time(double seconds, char *buf, size_t size)
+const char *cb_fmt_time(double seconds, char *buf, size_t size)
 {
     bool neg = seconds < 0;
     if (neg)
@@ -721,30 +721,30 @@ const char *rx_fmt_time(double seconds, char *buf, size_t size)
 
 /* ------------------------------------------------------------- dynamic array */
 
-void rx_array_init(RXArray *a, size_t elem_size)
+void cb_array_init(CBArray *a, size_t elem_size)
 {
     memset(a, 0, sizeof(*a));
     a->elem = elem_size;
 }
 
-int rx_array_reserve(RXArray *a, size_t cap)
+int cb_array_reserve(CBArray *a, size_t cap)
 {
     if (cap <= a->cap)
         return 0;
     size_t bytes;
     if (ckd_mul(&bytes, cap, a->elem))
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     void *d = realloc(a->data, bytes);
     if (!d)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     a->data = d;
     a->cap = cap;
     return 0;
 }
 
-void *rx_array_push(RXArray *a, const void *elem)
+void *cb_array_push(CBArray *a, const void *elem)
 {
-    if (a->nb == a->cap && rx_array_reserve(a, a->cap ? a->cap * 2 : 16) < 0)
+    if (a->nb == a->cap && cb_array_reserve(a, a->cap ? a->cap * 2 : 16) < 0)
         return NULL;
     uint8_t *slot = (uint8_t *)a->data + a->nb * a->elem;
     if (elem)
@@ -755,12 +755,12 @@ void *rx_array_push(RXArray *a, const void *elem)
     return slot;
 }
 
-void *rx_array_at(const RXArray *a, size_t i)
+void *cb_array_at(const CBArray *a, size_t i)
 {
     return i < a->nb ? (uint8_t *)a->data + i * a->elem : NULL;
 }
 
-void rx_array_remove(RXArray *a, size_t i)
+void cb_array_remove(CBArray *a, size_t i)
 {
     if (i >= a->nb)
         return;
@@ -769,12 +769,12 @@ void rx_array_remove(RXArray *a, size_t i)
     a->nb--;
 }
 
-void rx_array_clear(RXArray *a)
+void cb_array_clear(CBArray *a)
 {
     a->nb = 0;
 }
 
-void rx_array_free(RXArray *a)
+void cb_array_free(CBArray *a)
 {
     free(a->data);
     a->data = NULL;

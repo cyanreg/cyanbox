@@ -26,11 +26,11 @@
  *                   key key_confidence beats_per_bar grid_confidence grid_flags
  *                   grid_locked analysed  analysis results and their state
  *                   beats_version key_version waves_version
- *                             the analyser version (RX_*_VERSION, rxbox/analysis.h)
+ *                             the analyser version (CB_*_VERSION, cyanbox/analysis.h)
  *                             each result was made by; 0 older than any
  *                   tags_version ml_club ml_intensity ml_valence ml_vocals
- *                             the model's tagging (rxbox/ml.h), asked for by
- *                             the user: RX_ML_TAGS_VERSION (0 never) and its
+ *                             the model's tagging (cyanbox/ml.h), asked for by
+ *                             the user: CB_ML_TAGS_VERSION (0 never) and its
  *                             measures, 0 to 1, NULL when never tagged
  *                   ml_colors ml_legend
  *                             the probability the model gave each of the
@@ -40,14 +40,14 @@
  *                   added play_count last_played missing
  *   grid_section    track_id, idx (0-based order), start, bpm, beat, measured
  *                   (1: the section is one measured beat of a dynamic grid,
- *                   rxbox/model.h)
+ *                   cyanbox/model.h)
  *   cue             track_id, time, grid_beat (NULL: absolute), hot (-1 memory,
  *                   0..7 = A..H), loop_end (NULL: not a loop), loop_beats (NULL:
  *                   absolute end), active, name, color
  *   track_tag       track_id, position, tag (My Tags, in order, unique per track)
  *   waveform_preview
  *                   track_id, data: the packed waveforms' header and previews
- *                   (rx_waveforms_pack, its first RX_WAVE_PACKED_PREVIEW
+ *                   (cb_waveforms_pack, its first CB_WAVE_PACKED_PREVIEW
  *                   bytes), what the browser's rows draw
  *   waveform_detail track_id, data: the rest, the detail waveforms, which only
  *                   the players and the export read (a track has both or
@@ -72,16 +72,16 @@
  *
  * A new library is made at this schema in one transaction. Of the older
  * ones schema 9 is converted (deck_history made), and schema 8 (the last
- * of the step by step migrations, which an older rxbox ran): its single
- * waveform blob per track is cut in two, at RX_WAVE_PACKED_PREVIEW, then
+ * of the step by step migrations, which an older cyanbox ran): its single
+ * waveform blob per track is cut in two, at CB_WAVE_PACKED_PREVIEW, then
  * as 9. Anything older is
- * refused with the advice to open it once with an rxbox of schema 8; a
+ * refused with the advice to open it once with a cyanbox of schema 8; a
  * database newer than this build is refused rather than written with a
- * schema we do not know, also when a newer rxbox converts it while this
+ * schema we do not know, also when a newer cyanbox converts it while this
  * one opens it (the version is read again under the write lock).
  *
  * Space: auto_vacuum is INCREMENTAL, set before a new library's first
- * table, and a converted one is vacuumed once to switch; rx_db_trim gives
+ * table, and a converted one is vacuumed once to switch; cb_db_trim gives
  * the free pages back to the file system when there are many (at open),
  * so a library shrinks when waveforms, covers or tracks go.
  *
@@ -96,13 +96,14 @@
 
 /* For the size of the packed previews only: nothing of the analysis
  * module is linked. */
-#include "rxbox/analysis.h"
+#include "cyanbox/analysis.h"
 
-#define RX_DB_APPLICATION_ID 0x52584258     /* 'RXBX' */
+/* 'RXBX': the project was rxbox when its libraries began; kept, so they open. */
+#define CB_DB_APPLICATION_ID 0x52584258
 
 /* -------------------------------------------------------------- columns */
 
-const char *const rx_track_file_cols[RX_TRACK_FILE_COLS] = {
+const char *const cb_track_file_cols[CB_TRACK_FILE_COLS] = {
     "mtime", "file_size", "codec", "container", "duration", "total_samples",
     "sample_rate", "channels", "bit_rate", "bit_depth", "has_artwork",
     "file_title", "file_artist", "file_album", "file_album_artist", "file_genre",
@@ -110,7 +111,7 @@ const char *const rx_track_file_cols[RX_TRACK_FILE_COLS] = {
     "file_year", "file_track_number", "file_disc_number",
 };
 
-const char *const rx_track_edit_cols[RX_TRACK_EDIT_COLS] = {
+const char *const cb_track_edit_cols[CB_TRACK_EDIT_COLS] = {
     "title", "artist", "album", "album_artist", "genre",
     "label", "remixer", "composer", "original_artist", "comment",
     "year", "track_number", "disc_number",
@@ -123,7 +124,7 @@ const char *const rx_track_edit_cols[RX_TRACK_EDIT_COLS] = {
 
 /* --------------------------------------------------------------- schema */
 
-#define RX_DB_SCHEMA 10
+#define CB_DB_SCHEMA 10
 
 #define SQL_INT_(x) #x
 #define SQL_INT(x) SQL_INT_(x)
@@ -298,18 +299,18 @@ static const char schema[] =
     "  value TEXT NOT NULL"
     ") STRICT, WITHOUT ROWID;";
 
-/* Schema 8 to 9: each packed waveform blob (rx_waveforms_pack) cut in two
+/* Schema 8 to 9: each packed waveform blob (cb_waveforms_pack) cut in two
  * where its previews end. A blob too short to have detail is damaged or
  * of a format before the previews' layout: it goes, and the track's
  * waveforms are made again. Every other table is as schema 8 had it. */
 static const char from_v8[] =
     WAVEFORM_TABLES
     "INSERT INTO waveform_preview (track_id, data)"
-    "  SELECT track_id, substr(data, 1, " SQL_INT(RX_WAVE_PACKED_PREVIEW) ") FROM waveform"
-    "  WHERE length(data) > " SQL_INT(RX_WAVE_PACKED_PREVIEW) ";"
+    "  SELECT track_id, substr(data, 1, " SQL_INT(CB_WAVE_PACKED_PREVIEW) ") FROM waveform"
+    "  WHERE length(data) > " SQL_INT(CB_WAVE_PACKED_PREVIEW) ";"
     "INSERT INTO waveform_detail (track_id, data)"
-    "  SELECT track_id, substr(data, " SQL_INT(RX_WAVE_PACKED_PREVIEW) " + 1) FROM waveform"
-    "  WHERE length(data) > " SQL_INT(RX_WAVE_PACKED_PREVIEW) ";"
+    "  SELECT track_id, substr(data, " SQL_INT(CB_WAVE_PACKED_PREVIEW) " + 1) FROM waveform"
+    "  WHERE length(data) > " SQL_INT(CB_WAVE_PACKED_PREVIEW) ";"
     "DROP TABLE waveform;"
     HISTORY_TABLE;
 
@@ -318,88 +319,88 @@ static const char from_v9[] = HISTORY_TABLE;
 
 /* ------------------------------------------------------------ statements */
 
-static const char *const fixed_sql[RX_STMT_NB] = {
-    [RX_STMT_TRACK_DELETE]    = "DELETE FROM track WHERE id = ?1",
-    [RX_STMT_TRACK_MISSING]   = "UPDATE track SET missing = ?2 WHERE id = ?1",
-    [RX_STMT_TRACK_PATH]      = "UPDATE track SET path = ?2, missing = ?3 WHERE id = ?1",
-    [RX_STMT_TRACK_PLAYED]    = "UPDATE track SET play_count = ?2, last_played = ?3 WHERE id = ?1",
-    [RX_STMT_PLAY_INSERT]     = "INSERT INTO play (track_id, played_at) VALUES (?1, ?2)",
-    [RX_STMT_HISTORY_INSERT]  = "INSERT INTO deck_history (track_id, played_at, player) "
+static const char *const fixed_sql[CB_STMT_NB] = {
+    [CB_STMT_TRACK_DELETE]    = "DELETE FROM track WHERE id = ?1",
+    [CB_STMT_TRACK_MISSING]   = "UPDATE track SET missing = ?2 WHERE id = ?1",
+    [CB_STMT_TRACK_PATH]      = "UPDATE track SET path = ?2, missing = ?3 WHERE id = ?1",
+    [CB_STMT_TRACK_PLAYED]    = "UPDATE track SET play_count = ?2, last_played = ?3 WHERE id = ?1",
+    [CB_STMT_PLAY_INSERT]     = "INSERT INTO play (track_id, played_at) VALUES (?1, ?2)",
+    [CB_STMT_HISTORY_INSERT]  = "INSERT INTO deck_history (track_id, played_at, player) "
                                 "VALUES (?1, ?2, ?3)",
-    [RX_STMT_HISTORY_DELETE]  = "DELETE FROM deck_history WHERE track_id = ?1",
-    [RX_STMT_SECTION_CLEAR]   = "DELETE FROM grid_section WHERE track_id = ?1",
-    [RX_STMT_SECTION_INSERT]  = "INSERT INTO grid_section (track_id, idx, start, bpm, beat, "
+    [CB_STMT_HISTORY_DELETE]  = "DELETE FROM deck_history WHERE track_id = ?1",
+    [CB_STMT_SECTION_CLEAR]   = "DELETE FROM grid_section WHERE track_id = ?1",
+    [CB_STMT_SECTION_INSERT]  = "INSERT INTO grid_section (track_id, idx, start, bpm, beat, "
                                 "measured) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-    [RX_STMT_CUE_CLEAR]       = "DELETE FROM cue WHERE track_id = ?1",
-    [RX_STMT_CUE_INSERT]      = "INSERT INTO cue (track_id, time, grid_beat, hot, loop_end, "
+    [CB_STMT_CUE_CLEAR]       = "DELETE FROM cue WHERE track_id = ?1",
+    [CB_STMT_CUE_INSERT]      = "INSERT INTO cue (track_id, time, grid_beat, hot, loop_end, "
                                 "loop_beats, active, name, color) "
                                 "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-    [RX_STMT_TAG_CLEAR]       = "DELETE FROM track_tag WHERE track_id = ?1",
-    [RX_STMT_TAG_INSERT]      = "INSERT INTO track_tag (track_id, position, tag) VALUES (?1, ?2, ?3)",
-    [RX_STMT_PREVIEW_PUT]     = "INSERT INTO waveform_preview (track_id, data) VALUES (?1, ?2) "
+    [CB_STMT_TAG_CLEAR]       = "DELETE FROM track_tag WHERE track_id = ?1",
+    [CB_STMT_TAG_INSERT]      = "INSERT INTO track_tag (track_id, position, tag) VALUES (?1, ?2, ?3)",
+    [CB_STMT_PREVIEW_PUT]     = "INSERT INTO waveform_preview (track_id, data) VALUES (?1, ?2) "
                                 "ON CONFLICT (track_id) DO UPDATE SET data = excluded.data",
-    [RX_STMT_PREVIEW_GET]     = "SELECT data FROM waveform_preview WHERE track_id = ?1",
-    [RX_STMT_DETAIL_PUT]      = "INSERT INTO waveform_detail (track_id, data) VALUES (?1, ?2) "
+    [CB_STMT_PREVIEW_GET]     = "SELECT data FROM waveform_preview WHERE track_id = ?1",
+    [CB_STMT_DETAIL_PUT]      = "INSERT INTO waveform_detail (track_id, data) VALUES (?1, ?2) "
                                 "ON CONFLICT (track_id) DO UPDATE SET data = excluded.data",
-    [RX_STMT_DETAIL_GET]      = "SELECT data FROM waveform_detail WHERE track_id = ?1",
-    [RX_STMT_ART_FIND]        = "SELECT id FROM artwork WHERE size = ?1 AND jpeg = ?2",
-    [RX_STMT_ART_PUT]         = "INSERT INTO artwork (size, jpeg, width, height) "
+    [CB_STMT_DETAIL_GET]      = "SELECT data FROM waveform_detail WHERE track_id = ?1",
+    [CB_STMT_ART_FIND]        = "SELECT id FROM artwork WHERE size = ?1 AND jpeg = ?2",
+    [CB_STMT_ART_PUT]         = "INSERT INTO artwork (size, jpeg, width, height) "
                                 "VALUES (?1, ?2, ?3, ?4)",
-    [RX_STMT_ART_LINK]        = "INSERT INTO track_artwork (track_id, artwork_id) VALUES (?1, ?2) "
+    [CB_STMT_ART_LINK]        = "INSERT INTO track_artwork (track_id, artwork_id) VALUES (?1, ?2) "
                                 "ON CONFLICT (track_id) DO UPDATE SET "
                                 "artwork_id = excluded.artwork_id",
-    [RX_STMT_ART_ID]          = "SELECT artwork_id FROM track_artwork WHERE track_id = ?1",
-    [RX_STMT_ART_GET]         = "SELECT a.jpeg, a.width, a.height FROM track_artwork t "
+    [CB_STMT_ART_ID]          = "SELECT artwork_id FROM track_artwork WHERE track_id = ?1",
+    [CB_STMT_ART_GET]         = "SELECT a.jpeg, a.width, a.height FROM track_artwork t "
                                 "JOIN artwork a ON a.id = t.artwork_id WHERE t.track_id = ?1",
-    [RX_STMT_SETTING_GET]     = "SELECT value FROM setting WHERE key = ?1",
-    [RX_STMT_SETTING_PUT]     = "INSERT INTO setting (key, value) VALUES (?1, ?2) "
+    [CB_STMT_SETTING_GET]     = "SELECT value FROM setting WHERE key = ?1",
+    [CB_STMT_SETTING_PUT]     = "INSERT INTO setting (key, value) VALUES (?1, ?2) "
                                 "ON CONFLICT (key) DO UPDATE SET value = excluded.value",
-    [RX_STMT_SETTING_DELETE]  = "DELETE FROM setting WHERE key = ?1",
-    [RX_STMT_SETTING_DELETE_RANGE] = "DELETE FROM setting WHERE key >= ?1 AND key < ?2",
-    [RX_STMT_PLAYLIST_INSERT] = "INSERT INTO playlist (parent_id, name, is_folder, position) "
+    [CB_STMT_SETTING_DELETE]  = "DELETE FROM setting WHERE key = ?1",
+    [CB_STMT_SETTING_DELETE_RANGE] = "DELETE FROM setting WHERE key >= ?1 AND key < ?2",
+    [CB_STMT_PLAYLIST_INSERT] = "INSERT INTO playlist (parent_id, name, is_folder, position) "
                                 "VALUES (?1, ?2, ?3, ?4)",
-    [RX_STMT_PLAYLIST_RENAME] = "UPDATE playlist SET name = ?2 WHERE id = ?1",
-    [RX_STMT_PLAYLIST_DELETE] = "DELETE FROM playlist WHERE id = ?1",
-    [RX_STMT_PLAYLIST_PLACE]  = "UPDATE playlist SET parent_id = ?2, position = ?3 WHERE id = ?1",
-    [RX_STMT_ENTRY_CLEAR]     = "DELETE FROM playlist_entry WHERE playlist_id = ?1",
-    [RX_STMT_ENTRY_INSERT]    = "INSERT INTO playlist_entry (playlist_id, position, track_id) "
+    [CB_STMT_PLAYLIST_RENAME] = "UPDATE playlist SET name = ?2 WHERE id = ?1",
+    [CB_STMT_PLAYLIST_DELETE] = "DELETE FROM playlist WHERE id = ?1",
+    [CB_STMT_PLAYLIST_PLACE]  = "UPDATE playlist SET parent_id = ?2, position = ?3 WHERE id = ?1",
+    [CB_STMT_ENTRY_CLEAR]     = "DELETE FROM playlist_entry WHERE playlist_id = ?1",
+    [CB_STMT_ENTRY_INSERT]    = "INSERT INTO playlist_entry (playlist_id, position, track_id) "
                                 "VALUES (?1, ?2, ?3)",
 };
 
 /* The track statements are generated from the column lists so the order
  * library.c binds in can never drift from the SQL. */
-static char *track_sql(enum RXStmtId id)
+static char *track_sql(enum CBStmtId id)
 {
     char sql[4096];
     size_t n = 0;
 #define PUT(...) n += (size_t)snprintf(sql + n, n < sizeof(sql) ? sizeof(sql) - n : 0, __VA_ARGS__)
 
-    if (id == RX_STMT_TRACK_INSERT) {
+    if (id == CB_STMT_TRACK_INSERT) {
         PUT("INSERT INTO track (path, added, missing");
-        for (int i = 0; i < RX_TRACK_FILE_COLS; i++)
-            PUT(", %s", rx_track_file_cols[i]);
-        for (int i = 0; i < RX_TRACK_EDIT_COLS; i++)
-            PUT(", %s", rx_track_edit_cols[i]);
+        for (int i = 0; i < CB_TRACK_FILE_COLS; i++)
+            PUT(", %s", cb_track_file_cols[i]);
+        for (int i = 0; i < CB_TRACK_EDIT_COLS; i++)
+            PUT(", %s", cb_track_edit_cols[i]);
         PUT(") VALUES (?1, ?2, ?3");
-        for (int i = 4; i <= 3 + RX_TRACK_FILE_COLS + RX_TRACK_EDIT_COLS; i++)
+        for (int i = 4; i <= 3 + CB_TRACK_FILE_COLS + CB_TRACK_EDIT_COLS; i++)
             PUT(", ?%d", i);
         PUT(")");
     } else {
-        bool file = id == RX_STMT_TRACK_FILE;
-        const char *const *cols = file ? rx_track_file_cols : rx_track_edit_cols;
-        int nb = file ? RX_TRACK_FILE_COLS : RX_TRACK_EDIT_COLS;
+        bool file = id == CB_STMT_TRACK_FILE;
+        const char *const *cols = file ? cb_track_file_cols : cb_track_edit_cols;
+        int nb = file ? CB_TRACK_FILE_COLS : CB_TRACK_EDIT_COLS;
         PUT("UPDATE track SET %s", file ? "missing = 0, " : "");
         for (int i = 0; i < nb; i++)
             PUT("%s%s = ?%d", i ? ", " : "", cols[i], i + 2);
         PUT(" WHERE id = ?1");
     }
 #undef PUT
-    return n < sizeof(sql) ? rx_strdup(sql) : NULL;
+    return n < sizeof(sql) ? cb_strdup(sql) : NULL;
 }
 
 /* ---------------------------------------------------------------- errors */
 
-int rx_db_error(RXDb *db, int rc, const char *what)
+int cb_db_error(CBDb *db, int rc, const char *what)
 {
     int err;
     switch (rc & 0xff) {
@@ -419,22 +420,22 @@ int rx_db_error(RXDb *db, int rc, const char *what)
     case SQLITE_MISMATCH:   err = EINVAL; break;
     default:                err = EIO;    break;
     }
-    rx_err("library database: %s: %s (%d)", what,
+    cb_err("library database: %s: %s (%d)", what,
            db && db->db ? sqlite3_errmsg(db->db) : sqlite3_errstr(rc), rc);
-    return RX_ERROR(err);
+    return CB_ERROR(err);
 }
 
-int rx_db_exec(RXDb *db, const char *sql)
+int cb_db_exec(CBDb *db, const char *sql)
 {
     char *msg = NULL;
     int rc = sqlite3_exec(db->db, sql, NULL, NULL, &msg);
     sqlite3_free(msg);
-    return rc == SQLITE_OK ? 0 : rx_db_error(db, rc, sql);
+    return rc == SQLITE_OK ? 0 : cb_db_error(db, rc, sql);
 }
 
 /* -------------------------------------------------------------- binding */
 
-sqlite3_stmt *rx_db_stmt(RXDb *db, enum RXStmtId id)
+sqlite3_stmt *cb_db_stmt(CBDb *db, enum CBStmtId id)
 {
     sqlite3_stmt *st = db->stmt[id];
     sqlite3_reset(st);
@@ -443,51 +444,51 @@ sqlite3_stmt *rx_db_stmt(RXDb *db, enum RXStmtId id)
     return st;
 }
 
-sqlite3_stmt *rx_db_prepare(RXDb *db, const char *sql)
+sqlite3_stmt *cb_db_prepare(CBDb *db, const char *sql)
 {
     sqlite3_stmt *st = NULL;
     int rc = sqlite3_prepare_v2(db->db, sql, -1, &st, NULL);
     if (rc != SQLITE_OK) {
-        rx_db_error(db, rc, sql);
+        cb_db_error(db, rc, sql);
         return NULL;
     }
     db->bind_rc = SQLITE_OK;
     return st;
 }
 
-static void bind_check(RXDb *db, int rc)
+static void bind_check(CBDb *db, int rc)
 {
     if (rc != SQLITE_OK && db->bind_rc == SQLITE_OK)
         db->bind_rc = rc;
 }
 
-void rx_db_bind_int(RXDb *db, sqlite3_stmt *st, int i, int64_t v)
+void cb_db_bind_int(CBDb *db, sqlite3_stmt *st, int i, int64_t v)
 {
     bind_check(db, sqlite3_bind_int64(st, i, v));
 }
 
-void rx_db_bind_double(RXDb *db, sqlite3_stmt *st, int i, double v)
+void cb_db_bind_double(CBDb *db, sqlite3_stmt *st, int i, double v)
 {
     bind_check(db, isnan(v) ? sqlite3_bind_null(st, i) : sqlite3_bind_double(st, i, v));
 }
 
-void rx_db_bind_text(RXDb *db, sqlite3_stmt *st, int i, const char *s)
+void cb_db_bind_text(CBDb *db, sqlite3_stmt *st, int i, const char *s)
 {
     /* SQLITE_STATIC: every string outlives the step that reads it. */
     bind_check(db, s ? sqlite3_bind_text(st, i, s, -1, SQLITE_STATIC) : sqlite3_bind_null(st, i));
 }
 
-void rx_db_bind_blob(RXDb *db, sqlite3_stmt *st, int i, const void *data, size_t size)
+void cb_db_bind_blob(CBDb *db, sqlite3_stmt *st, int i, const void *data, size_t size)
 {
     bind_check(db, sqlite3_bind_blob64(st, i, data ? data : "", size, SQLITE_STATIC));
 }
 
-void rx_db_bind_null(RXDb *db, sqlite3_stmt *st, int i)
+void cb_db_bind_null(CBDb *db, sqlite3_stmt *st, int i)
 {
     bind_check(db, sqlite3_bind_null(st, i));
 }
 
-int rx_db_done(RXDb *db, sqlite3_stmt *st, const char *what)
+int cb_db_done(CBDb *db, sqlite3_stmt *st, const char *what)
 {
     int rc = db->bind_rc;
     if (rc == SQLITE_OK) {
@@ -496,10 +497,10 @@ int rx_db_done(RXDb *db, sqlite3_stmt *st, const char *what)
             rc = sqlite3_step(st);
     }
     sqlite3_reset(st);
-    return rc == SQLITE_DONE ? 0 : rx_db_error(db, rc, what);
+    return rc == SQLITE_DONE ? 0 : cb_db_error(db, rc, what);
 }
 
-int rx_db_row(RXDb *db, sqlite3_stmt *st, const char *what)
+int cb_db_row(CBDb *db, sqlite3_stmt *st, const char *what)
 {
     int rc = db->bind_rc;
     if (rc == SQLITE_OK)
@@ -507,17 +508,17 @@ int rx_db_row(RXDb *db, sqlite3_stmt *st, const char *what)
     if (rc == SQLITE_ROW)
         return 1;
     sqlite3_reset(st);
-    return rc == SQLITE_DONE ? 0 : rx_db_error(db, rc, what);
+    return rc == SQLITE_DONE ? 0 : cb_db_error(db, rc, what);
 }
 
-char *rx_db_column_text(sqlite3_stmt *st, int col, int *err)
+char *cb_db_column_text(sqlite3_stmt *st, int col, int *err)
 {
     const unsigned char *s = sqlite3_column_text(st, col);
     if (!s)
         return NULL;
-    char *copy = rx_strdup((const char *)s);
+    char *copy = cb_strdup((const char *)s);
     if (!copy)
-        *err = RX_ERROR(ENOMEM);
+        *err = CB_ERROR(ENOMEM);
     return copy;
 }
 
@@ -531,60 +532,60 @@ char *rx_db_column_text(sqlite3_stmt *st, int col, int *err)
  * the rest of a batch would be written behind the caller, who is about to
  * report the whole batch as failed. So nothing nests in a lost
  * transaction, and its commit fails (and says why, once). */
-static bool transaction_lost(const RXDb *db)
+static bool transaction_lost(const CBDb *db)
 {
     return db->depth > 0 && sqlite3_get_autocommit(db->db);
 }
 
-int rx_db_begin(RXDb *db)
+int cb_db_begin(CBDb *db)
 {
     if (transaction_lost(db))
-        return RX_ERROR(EIO);
-    int ret = rx_db_exec(db, db->depth ? "SAVEPOINT rx" : "BEGIN IMMEDIATE");
+        return CB_ERROR(EIO);
+    int ret = cb_db_exec(db, db->depth ? "SAVEPOINT cb" : "BEGIN IMMEDIATE");
     if (ret >= 0)
         db->depth++;
     return ret;
 }
 
-int rx_db_begin_read(RXDb *db)
+int cb_db_begin_read(CBDb *db)
 {
     if (db->depth)
-        return rx_db_begin(db);
-    int ret = rx_db_exec(db, "BEGIN");
+        return cb_db_begin(db);
+    int ret = cb_db_exec(db, "BEGIN");
     if (ret >= 0)
         db->depth++;
     return ret;
 }
 
-void rx_db_rollback(RXDb *db)
+void cb_db_rollback(CBDb *db)
 {
     if (db->depth <= 0)
         return;
     if (!transaction_lost(db)) {
         if (db->depth > 1) {
-            rx_db_exec(db, "ROLLBACK TO rx");
-            rx_db_exec(db, "RELEASE rx");
+            cb_db_exec(db, "ROLLBACK TO cb");
+            cb_db_exec(db, "RELEASE cb");
         } else {
-            rx_db_exec(db, "ROLLBACK");
+            cb_db_exec(db, "ROLLBACK");
         }
     }
     db->depth--;
 }
 
-int rx_db_commit(RXDb *db)
+int cb_db_commit(CBDb *db)
 {
     if (db->depth <= 0)
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
     if (transaction_lost(db)) {
         if (db->depth == 1)
-            rx_err("library database: SQLite rolled the transaction back after an error; "
+            cb_err("library database: SQLite rolled the transaction back after an error; "
                    "nothing of it was saved");
         db->depth--;
-        return RX_ERROR(EIO);
+        return CB_ERROR(EIO);
     }
-    int ret = rx_db_exec(db, db->depth > 1 ? "RELEASE rx" : "COMMIT");
+    int ret = cb_db_exec(db, db->depth > 1 ? "RELEASE cb" : "COMMIT");
     if (ret < 0) {
-        rx_db_rollback(db);
+        cb_db_rollback(db);
         return ret;
     }
     db->depth--;
@@ -593,12 +594,12 @@ int rx_db_commit(RXDb *db)
 
 /* ------------------------------------------------------------- open/close */
 
-static int pragma_int(RXDb *db, const char *sql, int64_t *out)
+static int pragma_int(CBDb *db, const char *sql, int64_t *out)
 {
-    sqlite3_stmt *st = rx_db_prepare(db, sql);
+    sqlite3_stmt *st = cb_db_prepare(db, sql);
     if (!st)
-        return RX_ERROR(EIO);
-    int ret = rx_db_row(db, st, sql);
+        return CB_ERROR(EIO);
+    int ret = cb_db_row(db, st, sql);
     if (ret > 0)
         *out = sqlite3_column_int64(st, 0);
     sqlite3_finalize(st);
@@ -607,18 +608,18 @@ static int pragma_int(RXDb *db, const char *sql, int64_t *out)
 
 /* Refuses what is not ours to touch before anything is written to it (the
  * journal mode included): a database of something else, even one without
- * an application id, and one from a newer rxbox. One statement, so one
+ * an application id, and one from a newer cyanbox. One statement, so one
  * snapshot: a library another process is creating right now is either
  * empty or whole here. *version: its schema. */
-static int check_identity(RXDb *db, int64_t *version)
+static int check_identity(CBDb *db, int64_t *version)
 {
     static const char sql[] =
         "SELECT (SELECT application_id FROM pragma_application_id), "
         "(SELECT user_version FROM pragma_user_version), (SELECT count(*) FROM sqlite_schema)";
-    sqlite3_stmt *st = rx_db_prepare(db, sql);
+    sqlite3_stmt *st = cb_db_prepare(db, sql);
     if (!st)
-        return RX_ERROR(EIO);
-    int ret = rx_db_row(db, st, "reading the schema version");
+        return CB_ERROR(EIO);
+    int ret = cb_db_row(db, st, "reading the schema version");
     int64_t app_id = 0, tables = 0;
     *version = 0;
     if (ret > 0) {
@@ -630,20 +631,20 @@ static int check_identity(RXDb *db, int64_t *version)
     if (ret < 0)
         return ret;
 
-    if ((app_id && app_id != RX_DB_APPLICATION_ID) || (!app_id && !*version && tables)) {
-        rx_err("%s is not an rxbox library", db->path);
-        return RX_ERROR(EINVAL);
+    if ((app_id && app_id != CB_DB_APPLICATION_ID) || (!app_id && !*version && tables)) {
+        cb_err("%s is not a cyanbox library", db->path);
+        return CB_ERROR(EINVAL);
     }
-    if (*version > RX_DB_SCHEMA) {
-        rx_err("%s was written by a newer rxbox (schema %lld, this build knows %d); "
-               "not touching it", db->path, (long long)*version, RX_DB_SCHEMA);
-        return RX_ERROR(EPROTO);
+    if (*version > CB_DB_SCHEMA) {
+        cb_err("%s was written by a newer cyanbox (schema %lld, this build knows %d); "
+               "not touching it", db->path, (long long)*version, CB_DB_SCHEMA);
+        return CB_ERROR(EPROTO);
     }
     if (*version > 0 && *version < 8) {
-        rx_err("%s is of schema %lld, older than this build converts (8); open it once with "
-               "an rxbox of schema 8 (before 2026-10-15), then with this one",
+        cb_err("%s is of schema %lld, older than this build converts (8); open it once with "
+               "a cyanbox of schema 8 (before 2026-10-15), then with this one",
                db->path, (long long)*version);
-        return RX_ERROR(EPROTO);
+        return CB_ERROR(EPROTO);
     }
     return 0;
 }
@@ -651,63 +652,63 @@ static int check_identity(RXDb *db, int64_t *version)
 /* Makes a new library (version 0) or converts one of schema 8 or 9, in
  * one transaction with the version bump. The version is read again under the
  * write lock: another process may have made the library meanwhile (it
- * is then at this schema and there is nothing to do), or a newer rxbox
+ * is then at this schema and there is nothing to do), or a newer cyanbox
  * taken it past this build's schema. A converted library is vacuumed
  * once, outside the transaction, to switch to incremental auto_vacuum
  * and give back the old blobs' pages. */
-static int upgrade(RXDb *db, int64_t version)
+static int upgrade(CBDb *db, int64_t version)
 {
-    if (version == RX_DB_SCHEMA)
+    if (version == CB_DB_SCHEMA)
         return 0;
     int64_t pages = 0, page_size = 0;
     pragma_int(db, "PRAGMA page_count", &pages);
     pragma_int(db, "PRAGMA page_size", &page_size);
-    int ret = rx_db_begin(db);
+    int ret = cb_db_begin(db);
     if (ret < 0)
         return ret;
     int64_t now = version;
     ret = pragma_int(db, "PRAGMA user_version", &now);
-    if (ret >= 0 && now > RX_DB_SCHEMA) {
-        rx_db_rollback(db);
-        rx_err("%s was converted by a newer rxbox meanwhile (schema %lld, this build knows %d); "
-               "not touching it", db->path, (long long)now, RX_DB_SCHEMA);
-        return RX_ERROR(EPROTO);
+    if (ret >= 0 && now > CB_DB_SCHEMA) {
+        cb_db_rollback(db);
+        cb_err("%s was converted by a newer cyanbox meanwhile (schema %lld, this build knows %d); "
+               "not touching it", db->path, (long long)now, CB_DB_SCHEMA);
+        return CB_ERROR(EPROTO);
     }
     if (ret >= 0 && now == version) {
         char bump[96];
         snprintf(bump, sizeof(bump), "PRAGMA user_version = %d; PRAGMA application_id = %d",
-                 RX_DB_SCHEMA, RX_DB_APPLICATION_ID);
-        ret = rx_db_exec(db, !version ? schema : version == 8 ? from_v8 : from_v9);
+                 CB_DB_SCHEMA, CB_DB_APPLICATION_ID);
+        ret = cb_db_exec(db, !version ? schema : version == 8 ? from_v8 : from_v9);
         if (ret >= 0)
-            ret = rx_db_exec(db, bump);
-    } else if (ret >= 0 && now != RX_DB_SCHEMA) {
-        ret = RX_ERROR(EPROTO);
+            ret = cb_db_exec(db, bump);
+    } else if (ret >= 0 && now != CB_DB_SCHEMA) {
+        ret = CB_ERROR(EPROTO);
     }
     if (ret < 0) {
-        rx_db_rollback(db);
-        rx_err("%s: %s schema %d failed", db->path, version ? "conversion to" : "making",
-               RX_DB_SCHEMA);
+        cb_db_rollback(db);
+        cb_err("%s: %s schema %d failed", db->path, version ? "conversion to" : "making",
+               CB_DB_SCHEMA);
         return ret;
     }
-    ret = rx_db_commit(db);
+    ret = cb_db_commit(db);
     /* Only schema 8's conversion leaves pages to give back. */
     if (ret < 0 || now != version || version != 8)
         return ret;
 
-    ret = rx_db_exec(db, "PRAGMA auto_vacuum = INCREMENTAL; VACUUM");
+    ret = cb_db_exec(db, "PRAGMA auto_vacuum = INCREMENTAL; VACUUM");
     if (ret < 0) {
-        rx_warn("%s: converted to schema %d, but not vacuumed; it keeps its size", db->path,
-                RX_DB_SCHEMA);
+        cb_warn("%s: converted to schema %d, but not vacuumed; it keeps its size", db->path,
+                CB_DB_SCHEMA);
         return 0;
     }
     int64_t after = 0;
     pragma_int(db, "PRAGMA page_count", &after);
-    rx_info("%s: library converted to schema %d, %.1f MB to %.1f MB", db->path, RX_DB_SCHEMA,
+    cb_info("%s: library converted to schema %d, %.1f MB to %.1f MB", db->path, CB_DB_SCHEMA,
             pages * page_size / 1e6, after * page_size / 1e6);
     return 0;
 }
 
-int rx_db_trim(RXDb *db)
+int cb_db_trim(CBDb *db)
 {
     int64_t free_pages = 0, vacuum = 0;
     int ret = pragma_int(db, "PRAGMA freelist_count", &free_pages);
@@ -716,9 +717,9 @@ int rx_db_trim(RXDb *db)
     if (ret < 0 || vacuum != 2 || free_pages < 256)
         return ret;
     /* sqlite3_exec steps it to the end: each step frees one page. */
-    ret = rx_db_exec(db, "PRAGMA incremental_vacuum");
+    ret = cb_db_exec(db, "PRAGMA incremental_vacuum");
     if (ret >= 0)
-        rx_debug("%s: %lld free pages given back", db->path, (long long)free_pages);
+        cb_debug("%s: %lld free pages given back", db->path, (long long)free_pages);
     return ret;
 }
 
@@ -727,77 +728,77 @@ int rx_db_trim(RXDb *db)
  * locks and SQLite answers one of them SQLITE_BUSY at once, without
  * waiting. The other one switches it, and SQLite moves every connection
  * to WAL when it sees the file is, so that one goes on as it is. */
-static int set_wal(RXDb *db)
+static int set_wal(CBDb *db)
 {
-    sqlite3_stmt *st = rx_db_prepare(db, "PRAGMA journal_mode = WAL");
+    sqlite3_stmt *st = cb_db_prepare(db, "PRAGMA journal_mode = WAL");
     if (!st)
-        return RX_ERROR(EIO);
+        return CB_ERROR(EIO);
     int rc = sqlite3_step(st);
     if (rc == SQLITE_ROW && sqlite3_stricmp((const char *)sqlite3_column_text(st, 0), "wal"))
-        rx_warn("%s: WAL journal not available here (%s); using it as it is", db->path,
+        cb_warn("%s: WAL journal not available here (%s); using it as it is", db->path,
                 (const char *)sqlite3_column_text(st, 0));
     sqlite3_finalize(st);
     if (rc == SQLITE_ROW || rc == SQLITE_DONE)
         return 0;
     if ((rc & 0xff) == SQLITE_BUSY) {
-        rx_debug("%s: busy, not switched to WAL by this connection", db->path);
+        cb_debug("%s: busy, not switched to WAL by this connection", db->path);
         return 0;
     }
-    return rx_db_error(db, rc, "journal_mode");
+    return cb_db_error(db, rc, "journal_mode");
 }
 
-int rx_db_open(RXDb **out, const char *path)
+int cb_db_open(CBDb **out, const char *path)
 {
     *out = NULL;
-    RXDb *db = calloc(1, sizeof(*db));
+    CBDb *db = calloc(1, sizeof(*db));
     if (!db)
-        return RX_ERROR(ENOMEM);
-    db->path = rx_strdup(path);
+        return CB_ERROR(ENOMEM);
+    db->path = cb_strdup(path);
     if (!db->path) {
         free(db);
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     }
 
     int ret;
     int rc = sqlite3_open_v2(path, &db->db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, NULL);
     if (rc != SQLITE_OK) {
-        ret = rx_db_error(db, rc, path);
+        ret = cb_db_error(db, rc, path);
         goto fail;
     }
     sqlite3_extended_result_codes(db->db, 1);
     sqlite3_busy_timeout(db->db, 5000);
 
     int64_t version;
-    ret = rx_db_exec(db, "PRAGMA foreign_keys = ON");
+    ret = cb_db_exec(db, "PRAGMA foreign_keys = ON");
     if (ret >= 0)
         ret = check_identity(db, &version);
     /* Before the first table, and before WAL, which writes the header:
      * after either it no longer takes. */
     if (ret >= 0 && !version)
-        ret = rx_db_exec(db, "PRAGMA auto_vacuum = INCREMENTAL");
+        ret = cb_db_exec(db, "PRAGMA auto_vacuum = INCREMENTAL");
     if (ret >= 0)
         ret = set_wal(db);
     if (ret >= 0)
-        ret = rx_db_exec(db, "PRAGMA synchronous = NORMAL");
+        ret = cb_db_exec(db, "PRAGMA synchronous = NORMAL");
     if (ret >= 0)
         ret = upgrade(db, version);
     if (ret < 0)
         goto fail;
 
-    for (int i = 0; i < RX_STMT_NB; i++) {
+    for (int i = 0; i < CB_STMT_NB; i++) {
         char *gen = NULL;
         const char *sql = fixed_sql[i];
         if (!sql) {
-            gen = track_sql((enum RXStmtId)i);
+            gen = track_sql((enum CBStmtId)i);
             if (!gen) {
-                ret = RX_ERROR(ENOMEM);
+                ret = CB_ERROR(ENOMEM);
                 goto fail;
             }
             sql = gen;
         }
         rc = sqlite3_prepare_v3(db->db, sql, -1, SQLITE_PREPARE_PERSISTENT, &db->stmt[i], NULL);
         if (rc != SQLITE_OK)
-            ret = rx_db_error(db, rc, sql);
+            ret = cb_db_error(db, rc, sql);
         free(gen);
         if (ret < 0)
             goto fail;
@@ -807,22 +808,22 @@ int rx_db_open(RXDb **out, const char *path)
     return 0;
 
 fail:
-    rx_db_close(db);
+    cb_db_close(db);
     return ret;
 }
 
-void rx_db_close(RXDb *db)
+void cb_db_close(CBDb *db)
 {
     if (!db)
         return;
     while (db->depth > 0)
-        rx_db_rollback(db);
-    for (int i = 0; i < RX_STMT_NB; i++)
+        cb_db_rollback(db);
+    for (int i = 0; i < CB_STMT_NB; i++)
         sqlite3_finalize(db->stmt[i]);
     if (db->db) {
         /* Folds the WAL back in so the library is one file at rest. */
         if (sqlite3_close(db->db) != SQLITE_OK) {
-            rx_err("library database: %s", sqlite3_errmsg(db->db));
+            cb_err("library database: %s", sqlite3_errmsg(db->db));
             sqlite3_close_v2(db->db);
         }
     }

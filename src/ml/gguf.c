@@ -67,11 +67,11 @@ static int rd(Reader *r, void *dst, size_t size)
             r->pos += r->len;
             ssize_t got = pread(r->fd, r->buf, sizeof(r->buf), (off_t)r->pos);
             if (got <= 0)
-                return RX_ERROR(EINVAL);
+                return CB_ERROR(EINVAL);
             r->len = (size_t)got;
             r->off = 0;
         }
-        size_t n = RX_MIN(size, r->len - r->off);
+        size_t n = CB_MIN(size, r->len - r->off);
         memcpy(d, r->buf + r->off, n);
         r->off += n;
         d += n;
@@ -90,10 +90,10 @@ static int rd_str(Reader *r, char **out)
     if (ret < 0)
         return ret;
     if (n > (UINT64_C(1) << 24))
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
     char *s = malloc(n + 1);
     if (!s)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     if ((ret = rd(r, s, n)) < 0) {
         free(s);
         return ret;
@@ -119,7 +119,7 @@ static int rd_scalar(Reader *r, uint32_t type, MLValue *v)
     uint8_t b[8] = { 0 };
     int size = scalar_size(type);
     if (!size)
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
     int ret = rd(r, b, size);
     if (ret < 0)
         return ret;
@@ -163,11 +163,11 @@ static int rd_value(Reader *r, MLValue *v)
         return ret;
     if (et == GGUF_STRING) {
         if (n > (UINT64_C(1) << 24))
-            return RX_ERROR(EINVAL);
+            return CB_ERROR(EINVAL);
         v->type = ML_GGUF_STRINGS;
-        v->strs = calloc(RX_MAX(n, 1), sizeof(*v->strs));
+        v->strs = calloc(CB_MAX(n, 1), sizeof(*v->strs));
         if (!v->strs)
-            return RX_ERROR(ENOMEM);
+            return CB_ERROR(ENOMEM);
         for (uint64_t i = 0; i < n; i++) {
             if ((ret = rd_str(r, &v->strs[i])) < 0)
                 return ret;
@@ -179,7 +179,7 @@ static int rd_value(Reader *r, MLValue *v)
     /* Arrays of numbers: none the model needs; skipped. */
     int size = scalar_size(et);
     if (!size)
-        return RX_ERROR(EINVAL);
+        return CB_ERROR(EINVAL);
     v->type = ML_GGUF_OTHER;
     for (uint64_t i = 0; i < n; i++) {
         uint8_t b[8];
@@ -195,7 +195,7 @@ static int tensor_size(const MLTensor *t, uint64_t *size)
     uint64_t n = 1;
     for (int i = 0; i < t->nb_dims; i++) {
         if (ckd_mul(&n, n, (uint64_t)t->ne[i]))
-            return RX_ERROR(EINVAL);
+            return CB_ERROR(EINVAL);
     }
     uint64_t per = 4, block = 1;
     switch (t->type) {
@@ -203,7 +203,7 @@ static int tensor_size(const MLTensor *t, uint64_t *size)
     case ML_TYPE_F16:  per = 2; break;
     case ML_TYPE_Q4_K: per = ML_Q4K_BYTES; block = ML_QK_K; break;
     }
-    return ckd_mul(size, n / block, per) ? RX_ERROR(EINVAL) : 0;
+    return ckd_mul(size, n / block, per) ? CB_ERROR(EINVAL) : 0;
 }
 
 static int cmp_offset(const void *a, const void *b)
@@ -218,36 +218,36 @@ static int check_layout(MLGguf *f, const char *path, uint64_t align)
 {
     off_t end = lseek(f->fd, 0, SEEK_END);
     if (end < 0 || f->data_offset > (uint64_t)end) {
-        rx_err("ml: %s ends before its tensors' data", path);
-        return RX_ERROR(EINVAL);
+        cb_err("ml: %s ends before its tensors' data", path);
+        return CB_ERROR(EINVAL);
     }
     uint64_t room = (uint64_t)end - f->data_offset;
     for (int i = 0; i < f->nb_tensors; i++) {
         const MLTensor *t = &f->tensors[i];
         if (t->offset % align || t->offset % GPU_ALIGN) {
-            rx_err("ml: %s: tensor %s at %llu is not aligned to %llu bytes", path, t->name,
+            cb_err("ml: %s: tensor %s at %llu is not aligned to %llu bytes", path, t->name,
                    (unsigned long long)t->offset,
-                   (unsigned long long)RX_MAX(align, (uint64_t)GPU_ALIGN));
-            return RX_ERROR(EINVAL);
+                   (unsigned long long)CB_MAX(align, (uint64_t)GPU_ALIGN));
+            return CB_ERROR(EINVAL);
         }
         /* Compared so that nothing can wrap around. */
         if (t->offset > room || t->size > room - t->offset) {
-            rx_err("ml: %s: tensor %s runs past the end of the file", path, t->name);
-            return RX_ERROR(EINVAL);
+            cb_err("ml: %s: tensor %s runs past the end of the file", path, t->name);
+            return CB_ERROR(EINVAL);
         }
     }
 
-    const MLTensor **order = calloc(RX_MAX(f->nb_tensors, 1), sizeof(*order));
+    const MLTensor **order = calloc(CB_MAX(f->nb_tensors, 1), sizeof(*order));
     if (!order)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     for (int i = 0; i < f->nb_tensors; i++)
         order[i] = &f->tensors[i];
     qsort(order, f->nb_tensors, sizeof(*order), cmp_offset);
     int ret = 0;
     for (int i = 1; i < f->nb_tensors && ret >= 0; i++) {
         if (order[i]->offset < order[i - 1]->offset + order[i - 1]->size) {
-            rx_err("ml: %s: tensors %s and %s overlap", path, order[i - 1]->name, order[i]->name);
-            ret = RX_ERROR(EINVAL);
+            cb_err("ml: %s: tensors %s and %s overlap", path, order[i - 1]->name, order[i]->name);
+            ret = CB_ERROR(EINVAL);
         }
     }
     free(order);
@@ -259,12 +259,12 @@ int ml_gguf_open(MLGguf *f, const char *path)
     *f = (MLGguf) { .fd = -1 };
     Reader *r = calloc(1, sizeof(*r));
     if (!r)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
 
     int ret = 0;
     f->fd = open(path, O_RDONLY | O_CLOEXEC);
     if (f->fd < 0) {
-        ret = RX_ERROR(errno);
+        ret = CB_ERROR(errno);
         goto fail;
     }
     r->fd = f->fd;
@@ -277,15 +277,15 @@ int ml_gguf_open(MLGguf *f, const char *path)
         goto fail;
     if (memcmp(magic, "GGUF", 4) || version < 2 || version > 3 ||
         nb_tensors > 65536 || nb_values > 65536) {
-        rx_err("ml: %s is not a GGUF file this reads", path);
-        ret = RX_ERROR(EINVAL);
+        cb_err("ml: %s is not a GGUF file this reads", path);
+        ret = CB_ERROR(EINVAL);
         goto fail;
     }
 
-    f->values = calloc(RX_MAX(nb_values, 1), sizeof(*f->values));
-    f->tensors = calloc(RX_MAX(nb_tensors, 1), sizeof(*f->tensors));
+    f->values = calloc(CB_MAX(nb_values, 1), sizeof(*f->values));
+    f->tensors = calloc(CB_MAX(nb_tensors, 1), sizeof(*f->tensors));
     if (!f->values || !f->tensors) {
-        ret = RX_ERROR(ENOMEM);
+        ret = CB_ERROR(ENOMEM);
         goto fail;
     }
 
@@ -303,7 +303,7 @@ int ml_gguf_open(MLGguf *f, const char *path)
         if ((ret = rd_str(r, &t->name)) < 0 || (ret = rd_u32(r, &nb_dims)) < 0)
             goto fail;
         if (nb_dims < 1 || nb_dims > 4) {
-            ret = RX_ERROR(EINVAL);
+            ret = CB_ERROR(EINVAL);
             goto fail;
         }
         t->nb_dims = (int)nb_dims;
@@ -314,9 +314,9 @@ int ml_gguf_open(MLGguf *f, const char *path)
             if ((ret = rd_u64(r, &ne)) < 0)
                 goto fail;
             if (!ne || ne > INT64_MAX) {
-                rx_err("ml: %s: tensor %s has a dimension of %llu", path, t->name,
+                cb_err("ml: %s: tensor %s has a dimension of %llu", path, t->name,
                        (unsigned long long)ne);
-                ret = RX_ERROR(EINVAL);
+                ret = CB_ERROR(EINVAL);
                 goto fail;
             }
             t->ne[d] = (int64_t)ne;
@@ -324,32 +324,32 @@ int ml_gguf_open(MLGguf *f, const char *path)
         if ((ret = rd_u32(r, &type)) < 0 || (ret = rd_u64(r, &t->offset)) < 0)
             goto fail;
         if (type != ML_TYPE_F32 && type != ML_TYPE_F16 && type != ML_TYPE_Q4_K) {
-            rx_err("ml: tensor %s has type %u, which this does not read", t->name, type);
-            ret = RX_ERROR(ENOTSUP);
+            cb_err("ml: tensor %s has type %u, which this does not read", t->name, type);
+            ret = CB_ERROR(ENOTSUP);
             goto fail;
         }
         t->type = (enum MLType)type;
         if (t->type == ML_TYPE_Q4_K && t->ne[0] % ML_QK_K) {
-            ret = RX_ERROR(EINVAL);
+            ret = CB_ERROR(EINVAL);
             goto fail;
         }
         if ((ret = tensor_size(t, &t->size)) < 0 || t->size > SEG_MAX) {
-            rx_err("ml: %s: tensor %s is too large", path, t->name);
-            ret = RX_ERROR(EINVAL);
+            cb_err("ml: %s: tensor %s is too large", path, t->name);
+            ret = CB_ERROR(EINVAL);
             goto fail;
         }
     }
 
-    /* 0 would divide by zero in RX_ALIGN; ggml refuses anything but a
+    /* 0 would divide by zero in CB_ALIGN; ggml refuses anything but a
      * power of two. */
     int64_t align = ml_gguf_int(f, "general.alignment", 32);
     if (align < 1 || (uint64_t)align > MAX_ALIGN || (align & (align - 1))) {
-        rx_err("ml: %s has an alignment of %lld", path, (long long)align);
-        ret = RX_ERROR(EINVAL);
+        cb_err("ml: %s has an alignment of %lld", path, (long long)align);
+        ret = CB_ERROR(EINVAL);
         goto fail;
     }
     uint64_t here = r->pos + r->off;
-    f->data_offset = RX_ALIGN(here, (uint64_t)align);
+    f->data_offset = CB_ALIGN(here, (uint64_t)align);
     if ((ret = check_layout(f, path, (uint64_t)align)) < 0)
         goto fail;
 
@@ -370,21 +370,21 @@ static int read_piece(int fd, bool direct, uint64_t off, uint64_t size, uint8_t 
                       uint64_t *skip)
 {
     uint64_t start = direct ? off / DIRECT_ALIGN * DIRECT_ALIGN : off;
-    uint64_t want = direct ? RX_ALIGN(off + size - start, DIRECT_ALIGN) : size;
+    uint64_t want = direct ? CB_ALIGN(off + size - start, DIRECT_ALIGN) : size;
     uint64_t done = 0;
     while (done < want) {
         ssize_t got = pread(fd, dst + done, want - done, (off_t)(start + done));
         if (got < 0) {
             if (errno == EINTR)
                 continue;
-            return RX_ERROR(errno);
+            return CB_ERROR(errno);
         }
         if (!got)
             break;          /* the end of the file, inside the last block */
         done += (uint64_t)got;
     }
     if (done < off - start + size)
-        return RX_ERROR(EIO);
+        return CB_ERROR(EIO);
     if (!direct)
         posix_fadvise(fd, (off_t)start, (off_t)want, POSIX_FADV_DONTNEED);
     *skip = off - start;
@@ -393,23 +393,23 @@ static int read_piece(int fd, bool direct, uint64_t off, uint64_t size, uint8_t 
 
 int ml_gguf_upload(MLGguf *f, MLGpu *g)
 {
-    MLTensor **order = calloc(RX_MAX(f->nb_tensors, 1), sizeof(*order));
+    MLTensor **order = calloc(CB_MAX(f->nb_tensors, 1), sizeof(*order));
     if (!order)
-        return RX_ERROR(ENOMEM);
+        return CB_ERROR(ENOMEM);
     for (int i = 0; i < f->nb_tensors; i++)
         order[i] = &f->tensors[i];
     qsort(order, f->nb_tensors, sizeof(*order), cmp_offset);
 
     /* Segments: runs of consecutive tensors of at most SEG_MAX bytes. */
-    f->segs = calloc(RX_MAX(f->nb_tensors, 1), sizeof(*f->segs));
-    uint64_t *seg_start = calloc(RX_MAX(f->nb_tensors, 1), sizeof(*seg_start));
-    uint64_t *seg_end = calloc(RX_MAX(f->nb_tensors, 1), sizeof(*seg_end));
-    int *seg_of = calloc(RX_MAX(f->nb_tensors, 1), sizeof(*seg_of));
+    f->segs = calloc(CB_MAX(f->nb_tensors, 1), sizeof(*f->segs));
+    uint64_t *seg_start = calloc(CB_MAX(f->nb_tensors, 1), sizeof(*seg_start));
+    uint64_t *seg_end = calloc(CB_MAX(f->nb_tensors, 1), sizeof(*seg_end));
+    int *seg_of = calloc(CB_MAX(f->nb_tensors, 1), sizeof(*seg_of));
     MLBuf staging = { 0 };
     uint8_t *bounce = NULL;
     int ret = 0;
     if (!f->segs || !seg_start || !seg_end || !seg_of) {
-        ret = RX_ERROR(ENOMEM);
+        ret = CB_ERROR(ENOMEM);
         goto end;
     }
     for (int i = 0; i < f->nb_tensors; i++) {
@@ -419,11 +419,11 @@ int ml_gguf_upload(MLGguf *f, MLGpu *g)
             s = f->nb_segs++;
             seg_start[s] = t->offset;
         }
-        seg_end[s] = RX_MAX(seg_end[s], t->offset + t->size);
+        seg_end[s] = CB_MAX(seg_end[s], t->offset + t->size);
         seg_of[i] = s;
     }
     for (int s = 0; s < f->nb_segs; s++) {
-        if ((ret = ml_buf_create(g, &f->segs[s], RX_ALIGN(seg_end[s] - seg_start[s], 256),
+        if ((ret = ml_buf_create(g, &f->segs[s], CB_ALIGN(seg_end[s] - seg_start[s], 256),
                                  ML_MEM_DEVICE)) < 0)
             goto end;
     }
@@ -442,15 +442,15 @@ int ml_gguf_upload(MLGguf *f, MLGpu *g)
         if (fd >= 0)
             close(fd);
         fd = f->fd;
-        rx_debug("ml: no O_DIRECT, reading the weights buffered");
+        cb_debug("ml: no O_DIRECT, reading the weights buffered");
     }
 
     /* Each segment, a piece at a time. */
-    int64_t t0 = rx_time_us();
+    int64_t t0 = cb_time_us();
     uint64_t total = 0;
     for (int s = 0; s < f->nb_segs && ret >= 0; s++) {
         for (uint64_t off = seg_start[s]; off < seg_end[s]; off += PIECE) {
-            uint64_t size = RX_MIN(PIECE, seg_end[s] - off);
+            uint64_t size = CB_MIN(PIECE, seg_end[s] - off);
             uint64_t skip = 0;
             ret = read_piece(fd, direct, f->data_offset + off, size,
                              direct ? bounce : staging.map, &skip);
@@ -471,8 +471,8 @@ int ml_gguf_upload(MLGguf *f, MLGpu *g)
     if (fd != f->fd)
         close(fd);
     if (ret >= 0) {
-        double sec = (rx_time_us() - t0) * 1e-6;
-        rx_debug("ml: %.2f GB of weights onto the GPU in %.1f s%s", total * 1e-9, sec,
+        double sec = (cb_time_us() - t0) * 1e-6;
+        cb_debug("ml: %.2f GB of weights onto the GPU in %.1f s%s", total * 1e-9, sec,
                  direct ? "" : " (buffered)");
     }
 

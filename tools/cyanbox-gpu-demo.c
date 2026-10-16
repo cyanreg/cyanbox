@@ -1,6 +1,6 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
-/* rxbox-gpu-demo: the gpu module's acceptance test and demo.
+/* cyanbox-gpu-demo: the gpu module's acceptance test and demo.
  *
  * Opens the window and draws, every frame, ImGui's demo window and a panel
  * of synthetic waveforms: 600 columns of a made-up kick/snare pattern as a
@@ -44,8 +44,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "rxbox/common.h"
-#include "rxbox/gpu.h"
+#include "cyanbox/common.h"
+#include "cyanbox/gpu.h"
 
 #include "src/gpu/gpu_demo.h"
 
@@ -87,14 +87,14 @@ typedef struct ScrollRow {
 } ScrollRow;
 
 typedef struct Demo {
-    RXWindow  *w;
+    CBWindow  *w;
     uint8_t    blue_cols[NB_COLUMNS];
-    RXWaveGpu *band, *blue, *rgb;
-    RXWaveGpu *spikes;              /* SPIKE_COLUMNS of the spike pattern */
-    RXWaveGpu *ref[NB_REF];
-    RXWaveGpu *empty;               /* uploaded with no columns */
-    RXWaveGpu *quiet;               /* one column, low band at 32 */
-    RXWaveGpu *spike, *attack;      /* ref_spike, ref_attack */
+    CBWaveGpu *band, *blue, *rgb;
+    CBWaveGpu *spikes;              /* SPIKE_COLUMNS of the spike pattern */
+    CBWaveGpu *ref[NB_REF];
+    CBWaveGpu *empty;               /* uploaded with no columns */
+    CBWaveGpu *quiet;               /* one column, low band at 32 */
+    CBWaveGpu *spike, *attack;      /* ref_spike, ref_attack */
     uint64_t   tex;
     bool       check;
     bool       scroll;
@@ -111,7 +111,7 @@ typedef struct Demo {
 
 static uint8_t level(double v)
 {
-    return (uint8_t)lround(RX_CLAMP(v, 0.0, 127.0));
+    return (uint8_t)lround(CB_CLAMP(v, 0.0, 127.0));
 }
 
 /* 120 BPM at 150 columns a second: a beat every 75 columns, kick on the
@@ -152,13 +152,13 @@ static void synth(uint8_t *band, uint8_t *blue, uint8_t *rgb)
         double sum = low + mid + high;
         int h = (int)lround(31.0 * peak / 127.0);
         int white = sum > 0.0 ? (int)lround(7.0 * (0.5 * mid + high) / sum) : 7;
-        blue[i] = (uint8_t)(RX_CLAMP(white, 0, 7) << 5 | RX_CLAMP(h, 0, 31));
+        blue[i] = (uint8_t)(CB_CLAMP(white, 0, 7) << 5 | CB_CLAMP(h, 0, 31));
 
         /* PWV5-style big-endian rrrgggbbbhhhhh00. */
         unsigned r = (unsigned)lround(7.0 * low / 127.0);
         unsigned g = (unsigned)lround(7.0 * mid / 127.0);
         unsigned b = (unsigned)lround(7.0 * high / 127.0);
-        unsigned word = r << 13 | g << 10 | b << 7 | (unsigned)RX_CLAMP(h, 0, 31) << 2;
+        unsigned word = r << 13 | g << 10 | b << 7 | (unsigned)CB_CLAMP(h, 0, 31) << 2;
         rgb[2 * i + 0] = (uint8_t)(word >> 8);
         rgb[2 * i + 1] = (uint8_t)word;
     }
@@ -219,27 +219,27 @@ static const uint8_t ref_spike[3 * 41] = { [3 * 20] = 100 };
 static const uint8_t ref_attack[] = { 0, 0, 0, 0, 0, 0, 100, 0, 0, 100, 0, 0 };
 
 typedef struct RefStrip {
-    enum RXWaveKind kind;
+    enum CBWaveKind kind;
     const uint8_t *cols;
     int nb;
-    enum RXWaveMode mode;
+    enum CBWaveMode mode;
     float dim;
     bool detail;
 } RefStrip;
 
 #define REF(k, a, m, dim, detail) \
-    { k, a, (int)(sizeof(a) / (k == RX_WAVE_3BAND ? 3 : k == RX_WAVE_BLUE ? 1 : \
-                               k == RX_WAVE_RGB_DETAIL ? 2 : 6)), m, dim, detail }
+    { k, a, (int)(sizeof(a) / (k == CB_WAVE_3BAND ? 3 : k == CB_WAVE_BLUE ? 1 : \
+                               k == CB_WAVE_RGB_DETAIL ? 2 : 6)), m, dim, detail }
 
 static const RefStrip ref_strips[NB_REF] = {
-    REF(RX_WAVE_3BAND,       ref_band,   RX_WAVE_CENTRED,       0.0f, false),  /* cols 0-7 */
-    REF(RX_WAVE_BLUE,        ref_blue,   RX_WAVE_CENTRED,       0.0f, false),  /* 8-9 */
-    REF(RX_WAVE_RGB_DETAIL,  ref_rgb,    RX_WAVE_CENTRED,       0.0f, false),  /* 10-11 */
-    REF(RX_WAVE_RGB_PREVIEW, ref_pwv4,   RX_WAVE_CENTRED,       0.0f, false),  /* 12 */
-    REF(RX_WAVE_3BAND,       ref_stack,  RX_WAVE_HALF_STACKED,  0.0f, false),  /* 13-14 */
-    REF(RX_WAVE_3BAND,       ref_lowmid, RX_WAVE_HALF_OVERLAID, 0.0f, false),  /* 15 */
-    REF(RX_WAVE_3BAND,       ref_low,    RX_WAVE_CENTRED,       0.5f, false),  /* 16 */
-    REF(RX_WAVE_3BAND,       ref_interp, RX_WAVE_CENTRED,       0.0f, true),   /* 17-20 */
+    REF(CB_WAVE_3BAND,       ref_band,   CB_WAVE_CENTRED,       0.0f, false),  /* cols 0-7 */
+    REF(CB_WAVE_BLUE,        ref_blue,   CB_WAVE_CENTRED,       0.0f, false),  /* 8-9 */
+    REF(CB_WAVE_RGB_DETAIL,  ref_rgb,    CB_WAVE_CENTRED,       0.0f, false),  /* 10-11 */
+    REF(CB_WAVE_RGB_PREVIEW, ref_pwv4,   CB_WAVE_CENTRED,       0.0f, false),  /* 12 */
+    REF(CB_WAVE_3BAND,       ref_stack,  CB_WAVE_HALF_STACKED,  0.0f, false),  /* 13-14 */
+    REF(CB_WAVE_3BAND,       ref_lowmid, CB_WAVE_HALF_OVERLAID, 0.0f, false),  /* 15 */
+    REF(CB_WAVE_3BAND,       ref_low,    CB_WAVE_CENTRED,       0.5f, false),  /* 16 */
+    REF(CB_WAVE_3BAND,       ref_interp, CB_WAVE_CENTRED,       0.0f, true),   /* 17-20 */
 };
 
 #define REF_X      20.0f
@@ -247,10 +247,10 @@ static const RefStrip ref_strips[NB_REF] = {
 #define REF_H      100.0f
 #define REF_GAP    12.0f
 
-static float ref_y(RXWindow *w)
+static float ref_y(CBWindow *w)
 {
     int ww, wh;
-    rx_window_size(w, &ww, &wh);
+    cb_window_size(w, &ww, &wh);
     return floorf(wh - REF_H - 20.0f);
 }
 
@@ -270,10 +270,10 @@ static float ref_col_x(int col)
 static int ref_upload(Demo *d)
 {
     for (int i = 0; i < NB_REF; i++) {
-        d->ref[i] = rx_wave_upload(d->w, ref_strips[i].kind, ref_strips[i].cols,
+        d->ref[i] = cb_wave_upload(d->w, ref_strips[i].kind, ref_strips[i].cols,
                                    ref_strips[i].nb);
         if (!d->ref[i])
-            return RX_ERROR(ENOMEM);
+            return CB_ERROR(ENOMEM);
     }
     return 0;
 }
@@ -293,20 +293,20 @@ static float edge_x(int i)
 
 static void draw_edges(Demo *d)
 {
-    void *dl = rx_demo_foreground_draw_list();
+    void *dl = cb_demo_foreground_draw_list();
     float y = ref_y(d->w);
-    rx_demo_rect(dl, edge_x(0) - 4, y - 24, edge_x(NB_EDGES) + 4, y + REF_H + 24, 0x000000FF);
+    cb_demo_rect(dl, edge_x(0) - 4, y - 24, edge_x(NB_EDGES) + 4, y + REF_H + 24, 0x000000FF);
 
     for (int i = 0; i < NB_EDGES; i++) {
         float x = edge_x(i);
-        RXWaveDraw wd = {
+        CBWaveDraw wd = {
             .x0 = x,  .y0 = y,
             .x1 = x + EDGE_W,  .y1 = y + REF_H,
             .col0 = 0, .col1 = 1,
-            .mode  = RX_WAVE_CENTRED,
+            .mode  = CB_WAVE_CENTRED,
             .alpha = 1.0f,
         };
-        const RXWaveGpu *g = d->ref[6];             /* one loud low column */
+        const CBWaveGpu *g = d->ref[6];             /* one loud low column */
         switch (i) {
         case 0: g = d->empty; break;                /* no columns */
         case 1: wd.col0 = 1; wd.col1 = 0; break;    /* reversed */
@@ -327,7 +327,7 @@ static void draw_edges(Demo *d)
             g = d->quiet;
             break;
         }
-        rx_wave_draw(d->w, dl, g, &wd);
+        cb_wave_draw(d->w, dl, g, &wd);
     }
 }
 
@@ -380,28 +380,28 @@ static float hbox_x(Demo *d, int box)
 {
     float x = edge_x(NB_EDGES) + EDGE_GAP;
     for (int i = 0; i < box; i++)
-        x += hboxes[i].width / rx_window_scale(d->w) + EDGE_GAP;
+        x += hboxes[i].width / cb_window_scale(d->w) + EDGE_GAP;
     return x;
 }
 
 static void draw_hboxes(Demo *d)
 {
-    void *dl = rx_demo_foreground_draw_list();
+    void *dl = cb_demo_foreground_draw_list();
     float y = ref_y(d->w);
-    rx_demo_rect(dl, hbox_x(d, 0) - 4, y - 4, hbox_x(d, NB_HBOX) + 4, y + REF_H + 4, 0x000000FF);
+    cb_demo_rect(dl, hbox_x(d, 0) - 4, y - 4, hbox_x(d, NB_HBOX) + 4, y + REF_H + 4, 0x000000FF);
 
     for (int i = 0; i < NB_HBOX; i++) {
         float x = hbox_x(d, i);
-        RXWaveDraw wd = {
+        CBWaveDraw wd = {
             .x0 = x,  .y0 = y,
-            .x1 = x + hboxes[i].width / rx_window_scale(d->w),  .y1 = y + REF_H,
+            .x1 = x + hboxes[i].width / cb_window_scale(d->w),  .y1 = y + REF_H,
             .col0 = hboxes[i].col0,
             .col1 = hboxes[i].col0 + hboxes[i].per_px * hboxes[i].width,
-            .mode   = RX_WAVE_CENTRED,
+            .mode   = CB_WAVE_CENTRED,
             .detail = hboxes[i].detail,
             .alpha  = 1.0f,
         };
-        rx_wave_draw(d->w, dl, hboxes[i].attack ? d->attack : d->spike, &wd);
+        cb_wave_draw(d->w, dl, hboxes[i].attack ? d->attack : d->spike, &wd);
     }
 }
 
@@ -426,16 +426,16 @@ static const struct {
 
 static void draw_reference(Demo *d)
 {
-    void *dl = rx_demo_foreground_draw_list();
+    void *dl = cb_demo_foreground_draw_list();
     float y = ref_y(d->w);
     float end = ref_col_x(1000) - REF_GAP;
 
-    rx_demo_rect(dl, REF_X - 4, y - 4, end + 4, y + REF_H + 4, 0x000000FF);
+    cb_demo_rect(dl, REF_X - 4, y - 4, end + 4, y + REF_H + 4, 0x000000FF);
 
     float x = REF_X;
     for (int i = 0; i < NB_REF; i++) {
         const RefStrip *r = &ref_strips[i];
-        RXWaveDraw wd = {
+        CBWaveDraw wd = {
             .x0 = x,  .y0 = y,
             .x1 = x + r->nb * REF_COL,  .y1 = y + REF_H,
             .col0 = 0, .col1 = r->nb,
@@ -445,7 +445,7 @@ static void draw_reference(Demo *d)
             .dim       = r->dim,
             .dim_until = r->nb,
         };
-        rx_wave_draw(d->w, dl, d->ref[i], &wd);
+        cb_wave_draw(d->w, dl, d->ref[i], &wd);
         x += r->nb * REF_COL + REF_GAP;
     }
 }
@@ -495,14 +495,14 @@ static bool probe(const uint8_t *rgba, int width, int height, const char *what, 
                   uint32_t want)
 {
     if (x < 0 || y < 0 || x >= width || y >= height) {
-        rx_err("demo: probe %s is outside the frame", what);
+        cb_err("demo: probe %s is outside the frame", what);
         return false;
     }
 
     const uint8_t *px = rgba + ((size_t)y * width + x) * 4;
     bool ok = abs(px[0] - (int)(want >> 16 & 0xFF)) <= 2 &&
               abs(px[1] - (int)(want >> 8 & 0xFF)) <= 2 && abs(px[2] - (int)(want & 0xFF)) <= 2;
-    rx_log(ok ? RX_LOG_INFO : RX_LOG_ERROR, "demo: %-28s at %4d,%4d: %02X%02X%02X, want %06X %s",
+    cb_log(ok ? CB_LOG_INFO : CB_LOG_ERROR, "demo: %-28s at %4d,%4d: %02X%02X%02X, want %06X %s",
            what, x, y, px[0], px[1], px[2], want, ok ? "ok" : "WRONG");
     return ok;
 }
@@ -511,42 +511,42 @@ static int run_checks(Demo *d)
 {
     uint8_t *rgba = NULL;
     int width = 0, height = 0;
-    int ret = rx_window_readback(d->w, &rgba, &width, &height);
+    int ret = cb_window_readback(d->w, &rgba, &width, &height);
     if (ret < 0) {
-        rx_err("demo: no captured frame to check (%d)", ret);
+        cb_err("demo: no captured frame to check (%d)", ret);
         return ret;
     }
 
-    float scale = rx_window_scale(d->w);
+    float scale = cb_window_scale(d->w);
     float centre = ref_y(d->w) + REF_H / 2;
     int failed = 0;
-    for (size_t i = 0; i < RX_ARRAY_ELEMS(probes); i++) {
+    for (size_t i = 0; i < CB_ARRAY_ELEMS(probes); i++) {
         const Probe *p = &probes[i];
         int x = (int)floorf((ref_col_x(p->col) + p->dx) * scale);
         int y = (int)floorf((centre + p->dy) * scale);
         failed += !probe(rgba, width, height, p->what, x, y, p->rgb);
     }
 
-    for (size_t i = 0; i < RX_ARRAY_ELEMS(edge_probes); i++) {
+    for (size_t i = 0; i < CB_ARRAY_ELEMS(edge_probes); i++) {
         int x = (int)floorf((edge_x(edge_probes[i].box) + EDGE_W * 0.5f) * scale);
         int y = (int)floorf((centre + edge_probes[i].dy) * scale);
         failed += !probe(rgba, width, height, edge_probes[i].what, x, y, edge_probes[i].rgb);
     }
 
-    for (size_t i = 0; i < RX_ARRAY_ELEMS(hprobes); i++) {
+    for (size_t i = 0; i < CB_ARRAY_ELEMS(hprobes); i++) {
         int x = (int)lroundf(hbox_x(d, hprobes[i].box) * scale) + hprobes[i].px;
         int y = (int)floorf((centre + hprobes[i].dy) * scale);
         failed += !probe(rgba, width, height, hprobes[i].what, x, y, hprobes[i].rgb);
     }
 
     free(rgba);
-    size_t total = RX_ARRAY_ELEMS(probes) + RX_ARRAY_ELEMS(edge_probes) +
-                   RX_ARRAY_ELEMS(hprobes);
+    size_t total = CB_ARRAY_ELEMS(probes) + CB_ARRAY_ELEMS(edge_probes) +
+                   CB_ARRAY_ELEMS(hprobes);
     if (failed)
-        rx_err("demo: %d of %zu pixel checks failed", failed, total);
+        cb_err("demo: %d of %zu pixel checks failed", failed, total);
     else
-        rx_info("demo: all %zu pixel checks pass", total);
-    return failed ? RX_ERROR(EINVAL) : 0;
+        cb_info("demo: all %zu pixel checks pass", total);
+    return failed ? CB_ERROR(EINVAL) : 0;
 }
 
 /* ----------------------------------------------------------------- scroll */
@@ -576,26 +576,26 @@ static float scroll_y(int row, bool white)
  * player's usual one (1.6 columns a pixel, 40 periods). */
 static void scroll_draw(Demo *d, int k)
 {
-    void *dl = rx_demo_foreground_draw_list();
-    float scale = rx_window_scale(d->w);
+    void *dl = cb_demo_foreground_draw_list();
+    float scale = cb_window_scale(d->w);
     for (int r = 0; r < NB_SCROLL; r++) {
         double span = r == 0 ? 3 * SPIKE_PERIOD : 1.6 * SCROLL_W * scale;
         double col0 = 1000.0 + k * SCROLL_STEP;
         for (int white = 0; white < 2; white++) {
             float y = scroll_y(r, white);
-            rx_demo_rect(dl, SCROLL_X - 2, y - 2, SCROLL_X + SCROLL_W + 2, y + SCROLL_H + 2,
+            cb_demo_rect(dl, SCROLL_X - 2, y - 2, SCROLL_X + SCROLL_W + 2, y + SCROLL_H + 2,
                          white ? 0xFFFFFFFF : 0x000000FF);
-            RXWaveDraw wd = {
+            CBWaveDraw wd = {
                 .x0 = SCROLL_X,  .y0 = y,
                 .x1 = SCROLL_X + SCROLL_W,  .y1 = y + SCROLL_H,
                 .col0 = col0,  .col1 = col0 + span,
-                .mode         = RX_WAVE_CENTRED,
+                .mode         = CB_WAVE_CENTRED,
                 .inset_top    = 8.0f,
                 .inset_bottom = 2.0f,
                 .detail       = true,
                 .alpha        = 1.0f,
             };
-            rx_wave_draw(d->w, dl, d->spikes, &wd);
+            cb_wave_draw(d->w, dl, d->spikes, &wd);
         }
     }
 }
@@ -608,12 +608,12 @@ static void scroll_measure(Demo *d, int k)
 {
     uint8_t *rgba = NULL;
     int width = 0, height = 0;
-    if (rx_window_readback(d->w, &rgba, &width, &height) < 0) {
+    if (cb_window_readback(d->w, &rgba, &width, &height) < 0) {
         d->scroll_lost = true;
         return;
     }
 
-    float scale = rx_window_scale(d->w);
+    float scale = cb_window_scale(d->w);
     int x0 = (int)lroundf(SCROLL_X * scale), x1 = (int)lroundf((SCROLL_X + SCROLL_W) * scale);
     int h = (int)lroundf(SCROLL_H * scale);
     for (int r = 0; r < NB_SCROLL; r++) {
@@ -652,7 +652,7 @@ static int scroll_check(Demo *d)
     for (int r = 0; r < NB_SCROLL; r++) {
         const ScrollRow *s = &d->rows[r];
         if (d->scroll_lost || s->nb_frames < SCROLL_FRAMES) {
-            rx_err("demo: scroll, %s: only %d of %d frames read back", scroll_names[r],
+            cb_err("demo: scroll, %s: only %d of %d frames read back", scroll_names[r],
                    s->nb_frames, SCROLL_FRAMES);
             failed++;
             continue;
@@ -682,12 +682,12 @@ static int scroll_check(Demo *d)
         bool ok = cov_var <= SCROLL_MAX_COV && uneven <= SCROLL_MAX_UNEVEN;
         if (!ok)
             failed++;
-        rx_log(ok ? RX_LOG_INFO : RX_LOG_ERROR,
+        cb_log(ok ? CB_LOG_INFO : CB_LOG_ERROR,
                "demo: scroll, %s: coverage %.1f px, varies by %.3f %%; frame difference "
                "%.4f of 255 (%.4f to %.4f, sd %.4f, %.0f %% of the mean) %s", scroll_names[r],
                mean, 100.0 * cov_var, dmean, dlo, dhi, dsd, 100.0 * uneven, ok ? "ok" : "WRONG");
     }
-    return failed ? RX_ERROR(EINVAL) : 0;
+    return failed ? CB_ERROR(EINVAL) : 0;
 }
 
 /* ------------------------------------------------------------------ bench */
@@ -698,28 +698,28 @@ static int scroll_check(Demo *d)
 static void draw_bench(Demo *d)
 {
     int ww, wh;
-    rx_window_size(d->w, &ww, &wh);
-    void *dl = rx_demo_background_draw_list();
-    double span = d->bench * ww * rx_window_scale(d->w);
+    cb_window_size(d->w, &ww, &wh);
+    void *dl = cb_demo_background_draw_list();
+    double span = d->bench * ww * cb_window_scale(d->w);
     for (int i = 0; i < BENCH_LAYERS; i++) {
-        double col0 = 1000.0 + rx_window_frames_drawn(d->w) * 2.5 + i * 0.37;
-        RXWaveDraw wd = {
+        double col0 = 1000.0 + cb_window_frames_drawn(d->w) * 2.5 + i * 0.37;
+        CBWaveDraw wd = {
             .x0 = 0.0f,  .y0 = 0.0f,
             .x1 = (float)ww,  .y1 = (float)wh,
             .col0 = col0,  .col1 = col0 + span,
-            .mode         = RX_WAVE_CENTRED,
+            .mode         = CB_WAVE_CENTRED,
             .inset_top    = 8.0f,
             .inset_bottom = 2.0f,
             .detail       = true,
             .alpha        = 1.0f,
         };
-        rx_wave_draw(d->w, dl, d->spikes, &wd);
+        cb_wave_draw(d->w, dl, d->spikes, &wd);
     }
 }
 
 /* ------------------------------------------------------------------ frame */
 
-static uint64_t make_texture(RXWindow *w, int phase)
+static uint64_t make_texture(CBWindow *w, int phase)
 {
     uint8_t pixels[64 * 64 * 4];
     for (int y = 0; y < 64; y++) {
@@ -731,7 +731,7 @@ static uint64_t make_texture(RXWindow *w, int phase)
             p[3] = 255;
         }
     }
-    return rx_texture_create(w, pixels, 64, 64);
+    return cb_texture_create(w, pixels, 64, 64);
 }
 
 /* Replaces the texture and the blue waveform after they have been drawn in
@@ -739,36 +739,36 @@ static uint64_t make_texture(RXWindow *w, int phase)
  * both alive until the frame's submission has completed. */
 static void churn(Demo *d)
 {
-    int n = rx_window_frames_drawn(d->w);
+    int n = cb_window_frames_drawn(d->w);
     if (n % 20 != 10)
         return;
 
     uint64_t tex = make_texture(d->w, n / 20);
     if (tex) {
-        rx_texture_destroy(d->w, d->tex);
+        cb_texture_destroy(d->w, d->tex);
         d->tex = tex;
     }
 
-    RXWaveGpu *blue = rx_wave_upload(d->w, RX_WAVE_BLUE, d->blue_cols, NB_COLUMNS);
+    CBWaveGpu *blue = cb_wave_upload(d->w, CB_WAVE_BLUE, d->blue_cols, NB_COLUMNS);
     if (blue) {
-        rx_wave_release(d->w, d->blue);
+        cb_wave_release(d->w, d->blue);
         d->blue = blue;
     }
 }
 
-static void wave_row(Demo *d, const char *label, RXWaveGpu *g, enum RXWaveMode mode,
+static void wave_row(Demo *d, const char *label, CBWaveGpu *g, enum CBWaveMode mode,
                      double col0, double col1, double head_col, bool detail, float height,
                      bool fixed_head)
 {
-    rx_demo_text("%s", label);
+    cb_demo_text("%s", label);
 
     float x, y;
-    rx_demo_cursor(&x, &y);
-    float width = rx_demo_avail_width();
-    void *dl = rx_demo_window_draw_list();
+    cb_demo_cursor(&x, &y);
+    float width = cb_demo_avail_width();
+    void *dl = cb_demo_window_draw_list();
 
-    rx_demo_rect(dl, x, y, x + width, y + height, 0x101010FF);
-    RXWaveDraw wd = {
+    cb_demo_rect(dl, x, y, x + width, y + height, 0x101010FF);
+    CBWaveDraw wd = {
         .x0 = x,  .y0 = y,
         .x1 = x + width,  .y1 = y + height,
         .col0 = col0,  .col1 = col1,
@@ -780,57 +780,57 @@ static void wave_row(Demo *d, const char *label, RXWaveGpu *g, enum RXWaveMode m
         .dim          = 0.45f,
         .dim_until    = head_col,
     };
-    rx_wave_draw(d->w, dl, g, &wd);
+    cb_wave_draw(d->w, dl, g, &wd);
 
     float head = fixed_head ? x + width / 2
                             : x + (float)((head_col - col0) / (col1 - col0)) * width;
-    rx_demo_line(dl, head, y, head, y + height, 0xFF3030FF, 2.0f);
-    rx_demo_dummy(width, height);
+    cb_demo_line(dl, head, y, head, y + height, 0xFF3030FF, 2.0f);
+    cb_demo_dummy(width, height);
 }
 
 static void frame(Demo *d)
 {
-    RXWindow *w = d->w;
+    CBWindow *w = d->w;
     int ww, wh;
-    rx_window_size(w, &ww, &wh);
+    cb_window_size(w, &ww, &wh);
 
     /* The playheads move by frame, not by clock, so a run is repeatable.
      * The spike row's moves as the player's does at 60 frames a second
      * (150 columns a second). */
-    d->playhead = fmod(rx_window_frames_drawn(w) * 1.5, NB_COLUMNS);
-    d->spike_head = 2000.0 + fmod(rx_window_frames_drawn(w) * 2.5, 100000.0);
+    d->playhead = fmod(cb_window_frames_drawn(w) * 1.5, NB_COLUMNS);
+    d->spike_head = 2000.0 + fmod(cb_window_frames_drawn(w) * 2.5, 100000.0);
 
-    rx_window_begin_frame(w);
-    rx_demo_show_demo_window();
+    cb_window_begin_frame(w);
+    cb_demo_show_demo_window();
 
     float px = floorf(ww * 0.40f);
-    if (rx_demo_begin("Waveforms", px, 10.0f, ww - px - 10.0f, wh - 20.0f)) {
-        rx_demo_text("%s, frame %d, %.2f ms a frame", rx_window_gpu_name(w),
-                     rx_window_frames_drawn(w), rx_window_frame_interval_ms(w));
-        rx_demo_text("日本語のタイトル: CJK fallback");
+    if (cb_demo_begin("Waveforms", px, 10.0f, ww - px - 10.0f, wh - 20.0f)) {
+        cb_demo_text("%s, frame %d, %.2f ms a frame", cb_window_gpu_name(w),
+                     cb_window_frames_drawn(w), cb_window_frame_interval_ms(w));
+        cb_demo_text("日本語のタイトル: CJK fallback");
 
-        wave_row(d, "3-band detail, centred, whole track", d->band, RX_WAVE_CENTRED,
+        wave_row(d, "3-band detail, centred, whole track", d->band, CB_WAVE_CENTRED,
                  0, NB_COLUMNS, d->playhead, false, 90.0f, false);
         wave_row(d, "3-band detail, zoomed (120 columns), interpolated", d->band,
-                 RX_WAVE_CENTRED, d->playhead - 60, d->playhead + 60, d->playhead, true, 90.0f,
+                 CB_WAVE_CENTRED, d->playhead - 60, d->playhead + 60, d->playhead, true, 90.0f,
                  true);
-        double span = 1.6 * rx_demo_avail_width() * rx_window_scale(w);
+        double span = 1.6 * cb_demo_avail_width() * cb_window_scale(w);
         wave_row(d, "3-band detail, 1.6 columns a pixel, one-column spikes", d->spikes,
-                 RX_WAVE_CENTRED, d->spike_head - span / 2, d->spike_head + span / 2,
+                 CB_WAVE_CENTRED, d->spike_head - span / 2, d->spike_head + span / 2,
                  d->spike_head, true, 90.0f, true);
-        wave_row(d, "3-band, stacked half (row preview)", d->band, RX_WAVE_HALF_STACKED,
+        wave_row(d, "3-band, stacked half (row preview)", d->band, CB_WAVE_HALF_STACKED,
                  0, NB_COLUMNS, d->playhead, false, 45.0f, false);
-        wave_row(d, "3-band, overlaid half (2-player detail)", d->band, RX_WAVE_HALF_OVERLAID,
+        wave_row(d, "3-band, overlaid half (2-player detail)", d->band, CB_WAVE_HALF_OVERLAID,
                  0, NB_COLUMNS, d->playhead, false, 45.0f, false);
-        wave_row(d, "blue", d->blue, RX_WAVE_CENTRED, 0, NB_COLUMNS, d->playhead, false, 70.0f,
+        wave_row(d, "blue", d->blue, CB_WAVE_CENTRED, 0, NB_COLUMNS, d->playhead, false, 70.0f,
                  false);
-        wave_row(d, "rgb", d->rgb, RX_WAVE_CENTRED, 0, NB_COLUMNS, d->playhead, false, 70.0f,
+        wave_row(d, "rgb", d->rgb, CB_WAVE_CENTRED, 0, NB_COLUMNS, d->playhead, false, 70.0f,
                  false);
 
-        rx_demo_text("texture");
-        rx_demo_image(d->tex, 64.0f, 64.0f);
+        cb_demo_text("texture");
+        cb_demo_image(d->tex, 64.0f, 64.0f);
     }
-    rx_demo_end();
+    cb_demo_end();
 
     if (d->check) {
         draw_reference(d);
@@ -842,22 +842,22 @@ static void frame(Demo *d)
 
     /* A frame that is not drawn (the swapchain was out of date) is built
      * again with the same step. */
-    int drawn = rx_window_frames_drawn(w);
+    int drawn = cb_window_frames_drawn(w);
     int step = drawn - SCROLL_START;
     bool scrolling = d->scroll && step >= 0 && step < SCROLL_FRAMES;
     if (scrolling) {
         scroll_draw(d, step);
-        rx_window_capture_next(w);
+        cb_window_capture_next(w);
     }
 
     churn(d);
-    rx_window_end_frame(w);
+    cb_window_end_frame(w);
 
-    if (rx_window_frames_drawn(w) == drawn + 1) {
+    if (cb_window_frames_drawn(w) == drawn + 1) {
         if (scrolling)
             scroll_measure(d, step);
-        if (drawn >= GPU_WARMUP && rx_window_gpu_ms(w) > 0.0) {
-            d->gpu_ms += rx_window_gpu_ms(w);
+        if (drawn >= GPU_WARMUP && cb_window_gpu_ms(w) > 0.0) {
+            d->gpu_ms += cb_window_gpu_ms(w);
             d->gpu_frames++;
         }
     }
@@ -868,7 +868,7 @@ static void frame(Demo *d)
 static void usage(void)
 {
     fprintf(stderr,
-            "usage: rxbox-gpu-demo [--frames N] [--screenshot out.png] [--validation]\n"
+            "usage: cyanbox-gpu-demo [--frames N] [--screenshot out.png] [--validation]\n"
             "                      [--device NAME] [--check] [--scroll] [--bench COLS]\n"
             "                      [--idle] [--stats] [--verbose]\n");
 }
@@ -890,9 +890,9 @@ int main(int argc, char **argv)
         { NULL, 0, NULL, 0 },
     };
 
-    RXWindowOptions opts;
-    rx_window_options_default(&opts);
-    opts.title = "rxbox gpu demo";
+    CBWindowOptions opts;
+    cb_window_options_default(&opts);
+    opts.title = "cyanbox gpu demo";
     opts.max_frames = 120;
     const char *shot = NULL;
     bool idle = false, stats = false;
@@ -910,64 +910,64 @@ int main(int argc, char **argv)
         case 'b': d.bench = atof(optarg); break;
         case 'i': idle = true; break;
         case 'S': stats = true; break;
-        case 'v': rx_log_set_level(RX_LOG_DEBUG); break;
+        case 'v': cb_log_set_level(CB_LOG_DEBUG); break;
         case 'h': usage(); return 0;
         default:  usage(); return 2;
         }
     }
 
     if (d.scroll)
-        opts.max_frames = RX_MAX(opts.max_frames, SCROLL_START + SCROLL_FRAMES + 2);
+        opts.max_frames = CB_MAX(opts.max_frames, SCROLL_START + SCROLL_FRAMES + 2);
 
-    int ret = rx_window_create(&d.w, &opts);
+    int ret = cb_window_create(&d.w, &opts);
     if (ret < 0) {
-        rx_err("demo: no window (%d)", ret);
+        cb_err("demo: no window (%d)", ret);
         return 1;
     }
 
     uint8_t band[3 * NB_COLUMNS], rgb[2 * NB_COLUMNS];
     synth(band, d.blue_cols, rgb);
-    d.band      = rx_wave_upload(d.w, RX_WAVE_3BAND, band, NB_COLUMNS);
-    d.blue      = rx_wave_upload(d.w, RX_WAVE_BLUE, d.blue_cols, NB_COLUMNS);
-    d.rgb       = rx_wave_upload(d.w, RX_WAVE_RGB_DETAIL, rgb, NB_COLUMNS);
+    d.band      = cb_wave_upload(d.w, CB_WAVE_3BAND, band, NB_COLUMNS);
+    d.blue      = cb_wave_upload(d.w, CB_WAVE_BLUE, d.blue_cols, NB_COLUMNS);
+    d.rgb       = cb_wave_upload(d.w, CB_WAVE_RGB_DETAIL, rgb, NB_COLUMNS);
 
     uint8_t *spikes = malloc(3 * SPIKE_COLUMNS);
     if (spikes) {
         synth_spikes(spikes, SPIKE_COLUMNS);
-        d.spikes = rx_wave_upload(d.w, RX_WAVE_3BAND, spikes, SPIKE_COLUMNS);
+        d.spikes = cb_wave_upload(d.w, CB_WAVE_3BAND, spikes, SPIKE_COLUMNS);
         free(spikes);
     }
 
     d.tex = make_texture(d.w, 0);
-    d.empty = rx_wave_upload(d.w, RX_WAVE_3BAND, NULL, 0);
-    d.quiet = rx_wave_upload(d.w, RX_WAVE_3BAND, ref_quiet, 1);
-    d.spike = rx_wave_upload(d.w, RX_WAVE_3BAND, ref_spike, sizeof(ref_spike) / 3);
-    d.attack = rx_wave_upload(d.w, RX_WAVE_3BAND, ref_attack, sizeof(ref_attack) / 3);
+    d.empty = cb_wave_upload(d.w, CB_WAVE_3BAND, NULL, 0);
+    d.quiet = cb_wave_upload(d.w, CB_WAVE_3BAND, ref_quiet, 1);
+    d.spike = cb_wave_upload(d.w, CB_WAVE_3BAND, ref_spike, sizeof(ref_spike) / 3);
+    d.attack = cb_wave_upload(d.w, CB_WAVE_3BAND, ref_attack, sizeof(ref_attack) / 3);
 
     if (!d.band || !d.blue || !d.rgb || !d.spikes || !d.tex || ref_upload(&d) < 0 || !d.empty ||
-        rx_wave_columns(d.empty) != 0 || !d.quiet || !d.spike || !d.attack) {
-        rx_err("demo: could not create the resources");
-        ret = RX_ERROR(ENOMEM);
+        cb_wave_columns(d.empty) != 0 || !d.quiet || !d.spike || !d.attack) {
+        cb_err("demo: could not create the resources");
+        ret = CB_ERROR(ENOMEM);
         goto end;
     }
 
     /* With --idle nothing asks for a frame after the first few: the loop
-     * should sleep in rx_window_poll(), only waking for input. */
-    int64_t last = rx_time_us();
+     * should sleep in cb_window_poll(), only waking for input. */
+    int64_t last = cb_time_us();
     long iterations = 0;
     int last_frames = 0;
-    while (!rx_window_should_close(d.w)) {
-        bool want = !idle || rx_window_frames_drawn(d.w) < 3;
-        if (rx_window_poll(d.w, want, 250))
+    while (!cb_window_should_close(d.w)) {
+        bool want = !idle || cb_window_frames_drawn(d.w) < 3;
+        if (cb_window_poll(d.w, want, 250))
             frame(&d);
 
         iterations++;
-        int64_t now = rx_time_us();
+        int64_t now = cb_time_us();
         if (stats && now - last >= 1000000) {
-            int frames = rx_window_frames_drawn(d.w);
-            rx_info("demo: %d frames drawn (+%d), %ld loop iterations, callback %s", frames,
+            int frames = cb_window_frames_drawn(d.w);
+            cb_info("demo: %d frames drawn (+%d), %ld loop iterations, callback %s", frames,
                     frames - last_frames, iterations,
-                    rx_window_frame_pending(d.w) ? "pending" : "in");
+                    cb_window_frame_pending(d.w) ? "pending" : "in");
             last = now;
             last_frames = frames;
             iterations = 0;
@@ -975,39 +975,39 @@ int main(int argc, char **argv)
     }
 
     if (shot) {
-        ret = rx_window_screenshot(d.w, shot);
+        ret = cb_window_screenshot(d.w, shot);
         if (ret < 0)
-            rx_err("demo: screenshot failed (%d)", ret);
+            cb_err("demo: screenshot failed (%d)", ret);
     }
     if (ret >= 0 && (d.check || d.scroll)) {
         /* Both, whatever the first says: the scroll numbers are worth
          * seeing either way. */
         int err = d.check ? run_checks(&d) : 0;
         if (d.scroll && scroll_check(&d) < 0)
-            err = RX_ERROR(EINVAL);
+            err = CB_ERROR(EINVAL);
         ret = err;
     }
 
 end:;
-    int errors = rx_window_validation_errors(d.w);
+    int errors = cb_window_validation_errors(d.w);
     if (d.gpu_frames)
-        rx_info("demo: GPU %.3f ms a frame (mean of %d frames, after the first %d)",
+        cb_info("demo: GPU %.3f ms a frame (mean of %d frames, after the first %d)",
                 d.gpu_ms / d.gpu_frames, d.gpu_frames, GPU_WARMUP);
-    rx_info("demo: %d frames drawn, %.2f ms frame interval, %d validation errors",
-            rx_window_frames_drawn(d.w), rx_window_frame_interval_ms(d.w), errors);
+    cb_info("demo: %d frames drawn, %.2f ms frame interval, %d validation errors",
+            cb_window_frames_drawn(d.w), cb_window_frame_interval_ms(d.w), errors);
 
-    rx_texture_destroy(d.w, d.tex);
-    rx_wave_release(d.w, d.band);
-    rx_wave_release(d.w, d.blue);
-    rx_wave_release(d.w, d.rgb);
-    rx_wave_release(d.w, d.spikes);
+    cb_texture_destroy(d.w, d.tex);
+    cb_wave_release(d.w, d.band);
+    cb_wave_release(d.w, d.blue);
+    cb_wave_release(d.w, d.rgb);
+    cb_wave_release(d.w, d.spikes);
     for (int i = 0; i < NB_REF; i++)
-        rx_wave_release(d.w, d.ref[i]);
-    rx_wave_release(d.w, d.empty);
-    rx_wave_release(d.w, d.quiet);
-    rx_wave_release(d.w, d.spike);
-    rx_wave_release(d.w, d.attack);
-    rx_window_destroy(d.w);
+        cb_wave_release(d.w, d.ref[i]);
+    cb_wave_release(d.w, d.empty);
+    cb_wave_release(d.w, d.quiet);
+    cb_wave_release(d.w, d.spike);
+    cb_wave_release(d.w, d.attack);
+    cb_window_destroy(d.w);
     for (int i = 0; i < NB_SCROLL; i++)
         free(d.rows[i].prev);
 
