@@ -1,51 +1,80 @@
-# rxbox
+[rxbox](#rxbox)
+===============
+A DJ library manager that prepares USB sticks for Pioneer/AlphaTheta CDJs
+and XDJs without rekordbox, and serves the library to players over PRO DJ
+LINK. It analyses beat grids, keys and waveforms, tags tracks with an audio
+model on the GPU, and has a rekordbox-style interface with one player for
+setting cues, loops and grids. It is a preparation tool, not a mixer.
 
-rxbox prepares USB sticks for Pioneer/AlphaTheta CDJs and XDJs without
-rekordbox. It keeps a library of your audio files in one SQLite database,
-analyses them (beat grid, key, waveforms), tags them with an audio model
-on the GPU when you ask (a genre, a colour and a comment), lets you set
-cues, loops and the grid in a rekordbox-style interface with one player,
-and writes a stick the
-players read: both device libraries (`export.pdb` and the OneLibrary
-`exportLibrary.db`), the analysis files, artwork and My Settings. After a gig
-it reads back what the player saved on the stick (cues, play history,
-settings) so you can take it into the library. It is written in C23, with
-the interface in Dear ImGui on SDL3 and Vulkan under Wayland, and plays
-through PipeWire. It is a preparation tool, not a mixer.
+Written in C23, with the interface in Dear ImGui on SDL3 and Vulkan under
+Wayland, playing through PipeWire.
 
-## Building
+Features
+--------
+ * One [library](#the-library) in a single SQLite database; the audio files
+   stay where they are and are never written to
+ * [Beat grids](#beat-grids) that follow live drummers and tempo ramps beat
+   by beat (dynamic grids), and straight sections for everything else
+ * [Key detection](#keys) more accurate than libKeyFinder on GiantSteps,
+   with classic, Camelot and Open Key notation and rekordbox's Traffic
+   Light
+ * Waveforms in all three of the players' styles: blue, RGB and 3-band
+ * Analysis on the GPU through Vulkan, with the same results on the CPU
+ * [Automatic re-analysis](#analyser-versions) of what an older analyser
+   made, in the background
+ * [Tagging](#tagging) with an audio-language model on the GPU: a colour, a
+   comment and a genre
+ * A [rekordbox-style interface](#the-interface): hot cues A–H, memory cues
+   and loops, beat loops, beat jump, quantize, MASTER TEMPO and grid editing
+ * Gapless [playthrough](#playthrough) of playlists and albums
+ * [USB export](#exporting) for every player generation: both device
+   libraries (`export.pdb` and the OneLibrary `exportLibrary.db`), the
+   analysis files, artwork and My Settings
+ * Incremental exports written straight to the stick, with its real speed
+   and time left
+ * [Older players](#older-players): WAV or AIFF sticks for players that read
+   no FLAC, romaji titles for players that show Latin-1 only
+ * [Sync after a gig](#syncing-after-a-gig): take back the cues, plays and My
+   Settings the players saved on the stick
+ * [PRO DJ LINK](#pro-dj-link): players browse and load the library over
+   Ethernet with no stick, as with rekordbox's Link Export
+ * [LINK CUE](#link-cue): the deck heard in a DJM's headphone cue (so far
+   on emulated mixers only)
+ * [MPRIS](#mpris) media controls
+ * Playlists, folders and m3u8 import and export
+ * A [command line](#cli) for adding, analysing, tagging, exporting and
+   syncing
 
-You need meson (1.4 or later), ninja, `cmake` (meson reads one subproject
-through it), GCC with C23 support (the build checks for `stdckdint.h`) and a
-C++17 compiler, `glslangValidator` (glslang) and `python3` for the shaders,
-and these libraries, by pkg-config name:
+Compiling
+---------
+Dependencies:
 
-- `libavformat`, `libavcodec`, `libavutil`, `libswresample`, `libswscale` (FFmpeg)
-- `sqlite3` (3.44 or later)
-- `libpipewire-0.3`
-- `vulkan` (the interface, and the analysis, whose spectral front end runs
-  on a GPU when there is one: Vulkan 1.3 with buffer device addresses; with
-  no device the analysis runs on the CPU and gives the same results; the
-  tagging model needs a GPU with 16- and 8-bit storage and about 7 GB of
-  memory)
-- `sdl3`, `wayland-client`, `fontconfig` (the interface)
-- `libsystemd`, optional: its sd-bus, the D-Bus library, for MPRIS (The
-  interface, below); on a system without systemd, sd-bus from `libelogind`
-  or `basu` (the standalone sd-bus) instead. LGPL-2.1 or later, linked
-  dynamically; used only when found
-- `libmecab` (MeCab, no pkg-config file; BSD of its three licences) and
-  `icu-i18n` (ICU), optional: for players that show Latin-1 only (the
-  CDJ-900), Japanese titles go as romaji, kanji read by MeCab with its
-  system dictionary (Debian: `libmecab-dev` and `mecab-ipadic-utf8`), and
-  other scripts as Latin through ICU. Each used only when found
-  (`-Dmecab`, `-Dicu`); without MeCab or its dictionary, kana still go as
-  romaji and kanji as they are
+ * meson (1.4 or later), ninja and cmake (meson reads one subproject
+   through it)
+ * GCC with C23 support (the build checks for `stdckdint.h`) and a C++17
+   compiler
+ * glslang (`glslangValidator`) and python3, for the shaders
+ * FFmpeg (libavformat, libavcodec, libavutil, libswresample, libswscale)
+ * SQLite (3.44 or later)
+ * PipeWire (`libpipewire-0.3`)
+ * Vulkan, for the interface and the analysis
+ * SDL3, wayland-client and fontconfig, for the interface
+
+Optional dependencies, each used only when found:
+
+ * sd-bus, from libsystemd, libelogind or basu, for [MPRIS](#mpris)
+   (`-Dmpris`; LGPL-2.1 or later, linked dynamically)
+ * MeCab with its system dictionary (Debian: `libmecab-dev` and
+   `mecab-ipadic-utf8`), to read kanji as romaji for Latin-1 players
+   (`-Dmecab`)
+ * ICU (`icu-i18n`), to write other scripts as Latin for Latin-1 players
+   (`-Dicu`)
 
 Dear ImGui, the Vulkan Memory Allocator and tomlc17 are vendored in
-`third_party/`. Signalsmith Stretch (the MASTER TEMPO pitch shifter) and
-signalsmith-linear are git submodules in `subprojects/`, both MIT and
-header-only, built in statically. The `ffmpeg` command is used only by the
-tests, to make test audio.
+`third_party/`. Signalsmith Stretch (MASTER TEMPO) and signalsmith-linear
+are git submodules in `subprojects/`, header-only and MIT, built in
+statically. The `ffmpeg` command is used only by the tests, to make test
+audio.
 
 ```sh
 git submodule update --init --recursive
@@ -54,425 +83,438 @@ ninja -C build
 meson test -C build
 ```
 
-This builds `build/rxbox` (the interface and every subcommand) and
-`build/src/app/rxbox-cli` (the subcommands only, without the window code).
-The interface and GPU tests are skipped unless you point them at a private
-compositor; see `docs/HACKING.md`.
+This builds `build/rxbox`, the interface with every command, and
+`build/src/app/rxbox-cli`, the commands without the window code. The
+interface and GPU tests are skipped unless pointed at a private compositor;
+see `docs/HACKING.md`.
 
-## The library
+The analysis runs its spectral front end on a GPU with Vulkan 1.3 and
+buffer device addresses when there is one, and on the CPU otherwise. The
+tagging model needs a GPU with 16- and 8-bit storage and about 7 GB of
+memory.
 
-The library is a directory holding `library.db`: `-c DIR` / `--library DIR`,
-else `$RXBOX_LIBRARY`, else `~/.local/share/rxbox`. `rxbox init [DIR]`
-creates one. The database holds the file facts and tags, your edits to the
-tags, grids, keys, cues, rating, colour, My Tags, play counts and history,
-waveforms, artwork thumbnails, playlists and folders, and the settings. The
-audio files stay where they are. A directory is added album by album
-(the albums in the order of their first files' names), each album in the
-order of its disc and track tags (unnumbered files after, by name), and
-files without an album tag last, by name; so an album sits in the
-collection as it runs, even in a folder of several, and the Albums list
-under Collection shows each album that way. A track whose file goes
-missing stays in the library, greyed out, until the file comes back or is
-relocated. A track's library id is also its id on every stick, so players
-keep their cached data across exports.
+CLI
+---
+`rxbox [OPTIONS] COMMAND [ARGS]`. Without a command, rxbox opens the
+[interface](#the-interface). A `TRACK` is an audio file in the library (any
+path to it), a folder (every library track under it) or a library id. The
+commands open no window and no audio device.
 
-The library's cleaning: what the library holds that is not valid, or
-that rxbox does not know, is removed when it opens, not kept and worked
-around, and the log says what went. A colour that is none of the eight
-(no colour), a grid that is not valid (no grid: the next start analyses
-the track again), a cue at an impossible time or slot, a loop that does
-not end after it starts, a second hot cue on one slot, a key that is no
-key, colour probabilities that are not probabilities, a setting whose value its key does not take (its default
-stands) and a setting key rxbox does not know (the interface's `ui.*`
-and the sync's `sync.*` records are its own). A library on read-only
-media opens as it is, cleaned in memory only.
+| Command                         | Description                                                                                  |
+|---------------------------------|----------------------------------------------------------------------------------------------|
+|                                 | **Library**                                                                                  |
+| `init [DIR]`                    | Create a library                                                                             |
+| `add PATH...`                   | Add audio files or folders and analyse them                                                  |
+| `show TRACK...`                 | Print the colour, grid, key, cues, analyser versions, genre, comment and the model's tags   |
+| `color COLOUR TRACK...`         | Set the colour: a name (`aqua`), `none`, or a hue in degrees (the stick gets the nearest)    |
+| `rescan`                        | Check which audio files are missing, or back                                                 |
+| `check`                         | Check the database's integrity and count the tracks an older analyser analysed              |
+| `config [KEY [VALUE]]`          | Show or change a [setting](#settings)                                                        |
+| `settings`                      | List the players' My Settings names and values                                               |
+|                                 | **Analysis**                                                                                 |
+| `analyze [TRACK...]`            | Analyse what is missing or stale, the whole library by default                               |
+| `tag TRACK...`                  | [Tag](#tagging) the tracks with the model                                                    |
+|                                 | **Sticks**                                                                                   |
+| `export STICK`                  | Write the settings, every playlist and their tracks to a mounted stick                       |
+| `inspect STICK`                 | Re-read and validate a stick                                                                 |
+| `sync STICK [--apply]`          | List what a player saved on the stick that the library lacks; `--apply` takes it            |
+| `pull STICK`                    | The same as `sync --apply`                                                                   |
+|                                 | **Playlists**                                                                                |
+| `playlist list`                 | List the playlists                                                                           |
+| `playlist create NAME`          | Create a playlist (`Folder/Name` creates the folders)                                        |
+| `playlist add NAME TRACK...`    | Append tracks to a playlist                                                                  |
+| `playlist remove NAME TRACK...` | Take tracks out of a playlist (they stay in the library)                                     |
+| `playlist delete NAME`          | Delete a playlist (its tracks stay in the library)                                           |
+| `playlist import FILE.m3u8`     | Make a playlist from an m3u8 file                                                            |
+| `playlist export NAME FILE.m3u8`| Write a playlist as an m3u8 file                                                             |
+|                                 | **PRO DJ LINK**                                                                              |
+| `link serve [-i IF]`            | Serve the library to [players](#pro-dj-link) until interrupted                               |
+| `link browse -i IF [HOST]`      | Browse a served library as a player does (a fake CDJ-3000, for diagnostics)                  |
+
+| Option                          | Description                                                                                  |
+|---------------------------------|----------------------------------------------------------------------------------------------|
+|                                 | **General options**                                                                          |
+| `-c`, `--library DIR`           | The library (default `$RXBOX_LIBRARY`, else `~/.local/share/rxbox`)                          |
+| `-v`, `--verbose`               | More messages                                                                                |
+| `--device NAME`                 | The GPU whose name contains NAME, for the analysis and the interface (`$RXBOX_GPU_DEVICE`)  |
+| `--no-gpu`                      | Analyse on the CPU only, with the same results (`RXBOX_ANALYSIS_GPU=0`)                      |
+| `-h`, `--help`                  | Print usage                                                                                  |
+| `-V`, `--version`               | Print the version                                                                            |
+|                                 | **Analysis options**                                                                         |
+| `-f`, `--force`                 | Re-analyse what is there too (a locked grid only when the track is named)                    |
+| `-w`, `--what LIST`             | Any of `beats,key,waves` (default all)                                                       |
+|                                 | **Export options**                                                                           |
+| `--all`                         | Every track in the library, not only those in playlists                                      |
+| `-p`, `--playlist NAME`         | Only this playlist and its tracks (repeatable)                                               |
+| `--prune`                       | Delete files on the stick that are no longer exported                                        |
+| `--compat`, `--no-compat`       | Transcode AAC and hi-res files to 16-bit/44.1 kHz FLAC (on by default)                       |
+| `--format F`                    | The stick's audio: `copy`, `flac`, `wav` or `aiff`, see [older players](#older-players)     |
+| `--ignore-unsynced`             | Export although the stick has player changes not synced back                                 |
+| `-n`, `--dry-run`               | Print what would be copied and deleted, and write nothing                                    |
+|                                 | **Interface options**                                                                        |
+| `--audio pipewire\|none`        | The audio output; `none` plays to no device at all                                           |
+| `--audio-sink NAME`             | The PipeWire node to play to (default: the session manager's choice)                         |
+| `--no-mpris`                    | Stay off the D-Bus session bus                                                               |
+| `--pro-link`                    | Serve the library to players over [PRO DJ LINK](#pro-dj-link) while the interface runs     |
+| `--validation`                  | Enable the Vulkan validation layer                                                           |
+
+`rxbox --help` lists every option, those of `link serve` and `link browse`
+included.
+
+Settings
+--------
+The settings live in the library. `rxbox config` lists them, `rxbox config
+KEY VALUE` changes one and `rxbox config KEY ""` puts its default back. A
+value a key cannot take, or a key rxbox does not know, is refused.
+
+| Key                                    | Default            | Description                                                                 |
+|----------------------------------------|--------------------|-----------------------------------------------------------------------------|
+| `analysis.bpm_min`, `analysis.bpm_max` | none               | The tempo range the beat analyser keeps to                                  |
+| `analysis.snap_bpm`                    | `true`             | Snap to a whole BPM when the track allows                                   |
+| `analysis.allow_sections`              | `true`             | Tempo sections where the tempo or phase really changes                      |
+| `analysis.auto_cues`                   | `true`             | A memory cue at the first downbeat                                          |
+| `analysis.what`                        | `beats,key,waves`  | What the interface's Analyse does                                           |
+| `import.comment`                       | `false`            | Take the file's comment tag when a track is added                           |
+| `export.key_notation`                  | `classic`          | How `export.pdb` names keys: `classic`, `camelot` or `open`                 |
+| `export.pdb`, `export.onelibrary`      | `true`             | Which device libraries an export writes                                     |
+| `export.compat_transcode`              | `true`             | Transcode AAC and hi-res files to 16-bit/44.1 kHz FLAC                      |
+| `export.format`                        | `copy`             | The stick's audio, see [older players](#older-players)                      |
+| `export.device_name`                   | the stick's label  | The name the players show for the stick                                     |
+| `export.background_color`              | `default`          | The players' background for the stick's library, or one of the eight colours |
+| `link.mp3`                             | `false`            | Serve tracks over PRO DJ LINK as 320 kbps MP3 instead of 16-bit WAV         |
+| `audio.sink`                           | the default output | The PipeWire node to play to                                                |
+| `ml.model`                             | `models/...gguf`   | The tagging model's file (also `$RXBOX_ML_MODEL`)                           |
+| `color.pink` ... `color.purple`        | the legend         | What each colour stands for, in the words the [tagging](#tagging) picks by  |
+| `ui.traffic_light`                     | `related3`         | The browser's key highlight (View → Traffic Light)                          |
+| `ui.detail_bars`                       | `12`               | How many bars the detail waveform shows                                     |
+
+The players' My Settings are settings too, as `player.*`, `mixer.*` and
+`device.*`: `rxbox settings` lists their names and values, and see
+[My Settings](#my-settings).
+
+The library
+-----------
+The library is a directory holding `library.db`: `-c DIR` or `--library
+DIR`, else `$RXBOX_LIBRARY`, else `~/.local/share/rxbox`. `rxbox init [DIR]`
+creates one. It holds the tracks' tags and your edits to them, grids, keys,
+cues, ratings, colours, My Tags, play counts and history, waveforms,
+artwork thumbnails, playlists and folders, and the settings. The audio
+files stay where they are, and rxbox never writes to them.
+
+A folder is added album by album, each album in disc and track order, so an
+album sits in the collection as it runs. The browser's Albums and Album
+Artists views list the collection by its tags.
+
+A track whose file goes missing stays in the library, greyed out, until the
+file comes back or is relocated. A track's library id is also its id on
+every stick, so the players keep their cached data across exports.
+
+Whatever the library holds that is not valid, or that rxbox does not know,
+is removed when it opens, and the log says what went: a colour that is not
+one of the eight, a grid that is not valid (the track is analysed again), a
+cue at an impossible time, a setting a key does not take. A library on
+read-only media is cleaned in memory only.
 
 A track's colour is one of rekordbox's eight, pink, red, orange, yellow,
-green, aqua, blue and purple, or none. Each colour stands for what a track
-of that colour sounds like, in words you choose: the legend, the settings
-`color.pink` ... `color.purple` (Settings below), by which the tagging
-model picks a track's colour (Tags below). The library keeps a colour as
-its hue, the HSV hue angle of the colour rekordbox draws (pink 300°, red
-0°, orange 33.6°, yellow 53.7°, green 120°, aqua 193.5°, blue 220.6°,
-purple 276°). A track has one of the eight or none: a hue between them
-(an older rxbox's tagging gave one, and its strip of hues set one) is
-removed when the library opens, as is anything else the library holds
-that is not valid (the library's cleaning, above), and the command line
-refuses one. A library from before hues keeps its colours: each
-name became its colour's hue.
+green, aqua, blue and purple, or none. What each colour means is up to
+you: the [legend](#tagging) says it in words, which the tagging model picks
+by.
 
-The comment field is the tagging's. rxbox reads a file's tags when it adds
-the track but leaves the comment tag out, so the comment starts empty, and
-Analyse tags writes the model's comment there (Tags below); the
-`import.comment` setting takes the file's comment again. A library that
-imported comments before keeps them until a track is tagged. rxbox never
-writes to the audio files.
+The comment field is left for the tagging: rxbox reads a file's tags when
+it adds the track but leaves its comment tag out. The `import.comment`
+setting takes the file's comment instead.
 
-## Analysis
+Beat grids
+----------
+Adding a track analyses its beat grid, key and waveforms. Sequenced music
+gets straight sections, one per tempo or phase change. Where the tempo
+moves, as with a live drummer, rubato or a ramp, the grid follows the music
+beat by beat instead: a dynamic grid, like rekordbox's "dynamic" analysis,
+with the deck showing the local tempo. The players play both as they are.
 
-Adding a track analyses its beat grid, key and waveforms. Where the
-tempo moves (a live drummer, rubato, a ramp) the grid follows the music
-beat by beat, a dynamic grid as rekordbox's "dynamic" analysis makes, with
-the deck showing the local tempo; sequenced tracks get the usual straight
-sections (`docs/BEATS.md`, "Dynamic grids"). After that,
-`rxbox analyze` and Analysis → Analyse all unanalysed in the interface
-analyse only what a track lacks; `-f` (Re-analyse in the interface) does it
-all again. A locked grid is never replaced unless you name the track:
-`rxbox analyze --force TRACK`, RE-ANALYSE on the deck, or a forced
-re-analysis with that one track selected (a selection of several keeps
-its locked grids).
+The grid can be edited on the deck: type the BPM, tap it, nudge the grid,
+set the downbeat, split and merge sections, double or halve the tempo.
+Cues set in bars follow. A locked grid is never replaced by an analysis
+unless you name the track: `rxbox analyze --force TRACK`, RE-ANALYSE on the
+deck, or a forced re-analysis of that one track.
 
+`docs/BEATS.md` describes the analyser and how well it works.
+
+Keys
+----
+| Key detector                     | GiantSteps key (604 tracks) | Time for 5 minutes of audio |
+|----------------------------------|-----------------------------|-----------------------------|
+| libKeyFinder 2                   | 60.4 %, MIREX 0.674         | ~700 ms                     |
+| rxbox                            | 64.7 %, MIREX 0.704         | ~110 ms                     |
+
+Keys show in the players' key display, classic names or Camelot codes, on
+the deck, in the browser and in the info panel; the stick can carry
+classic, Camelot or Open Key names (`export.key_notation`). While a track
+is loaded, the browser's Key column lights every key that mixes with it, as
+rekordbox's Traffic Light does, from the same key to Related 3 (View →
+Traffic Light). `docs/KEY.md` describes the detector.
+
+Analyser versions
+-----------------
 The library keeps the version of the analyser that made each track's grid,
-key and waveforms. When a new rxbox improves one of them, that version goes
-up, and a result an older version made counts as missing, as do waveforms
-stored in a format the new rxbox no longer reads: the interface analyses
-those tracks again in the background when it opens the library, without
-being asked, and `rxbox analyze`, adding a track and an export (before it
-writes) do the same. Only the stale parts are redone, and locked grids are
-kept. A grid you edit by hand keeps the version of the grid it was edited
-from, so it is replaced like any other at the next upgrade of the grid
-analyser: lock a grid you corrected to keep it. `rxbox check` counts the
-stale tracks and `rxbox show` prints a track's versions. A library from
-before versions were kept counts all its results as stale, so the first
-start after that upgrade analyses the whole library again.
+key and waveforms. When a new rxbox improves one of them, what an older
+version made counts as missing: the interface analyses those tracks again
+in the background when it opens the library, and `rxbox analyze`, adding a
+track and exporting do the same. Only the stale parts are redone, and
+locked grids are kept.
 
-## Tags
+A grid you edit by hand keeps the version it was edited from, so lock a
+grid you corrected to keep it through the next upgrade. `rxbox check`
+counts the stale tracks and `rxbox show` prints a track's versions.
 
+Tagging
+-------
 rxbox can listen to a track with MOSS-Audio-4B (OpenMOSS, Apache-2.0), an
-audio-language model, on the GPU, and tag it: a colour, a comment (who
-sings, in what language, and the mood in three words: "Male vocals,
-English. Uplifting, energetic, anthemic.") and a genre ("Hardstyle"; the
-family more often than the subgenre).
+audio-language model, on the GPU, and tag it with:
 
-The colour is the model's choice among the legend's eight descriptions,
-one per colour. By default:
+ * a colour, the one of the eight whose description fits the track best
+ * a comment: who sings, in what language, and the mood in three words
+   (`Male vocals, English. Uplifting, energetic, anthemic.`)
+ * a genre (`Hardstyle`), unless you typed one
 
-| colour | its words |
-| --- | --- |
-| pink | dark and intense, hard |
-| red | intense, peak time |
-| orange | energetic and bright, driving |
-| yellow | bright, uplifting |
-| green | groovy and relaxed, warm |
-| aqua | calm, smooth |
-| blue | deep, melancholic |
-| purple | calm and dark, ambient |
+The colours' descriptions are the legend. By default:
 
-The model is asked which description fits the track best and gives each a
-probability; the colour is the most probable, so the eight colours are its
-own division of the music, not a measure cut into eight afterwards. Say
-what can be heard (energy, brightness, darkness, groove): it hears music,
-not where a track goes in a set. Change the words in Analysis settings or
-with `rxbox config color.red "..."`, and the next tagging picks by them;
-tracks tagged before keep their colour until they are tagged again, and
-`rxbox show` and the info panel say when a colour was picked with words
-since changed.
+| Colour | Description                    |
+|--------|--------------------------------|
+| pink   | dark and intense, hard         |
+| red    | intense, peak time             |
+| orange | energetic and bright, driving  |
+| yellow | bright, uplifting              |
+| green  | groovy and relaxed, warm       |
+| aqua   | calm, smooth                   |
+| blue   | deep, melancholic              |
+| purple | calm and dark, ambient         |
 
-It only ever runs when you ask: the track menu's Analyse tags (the
-selection, or the track clicked), Analysis → Analyse tags of selection, or
-`rxbox tag TRACK...`; never when a track is added, at startup, in Analyse
-all or before an export. A result always writes the colour and the
-comment; the genre goes in only when you have not typed one (the file's
-own genre tag is kept apart, as all its tags are). The eight colours'
-probabilities, the model's measures (intensity, club, mood, vocals, 0 to
-1) and the version of the tagging are kept too: `rxbox show` prints them,
-the info panel has the colour's probability and the runner-up on its Tags
-line.
+The model gives each description a probability and the most probable wins,
+so the eight colours are the model's own division of the music. Describe
+what can be heard (energy, brightness, darkness, groove), not where a track
+goes in a set. Change the words in Analysis settings or with `rxbox config
+color.red "..."`; tracks tagged before keep their colour until they are
+tagged again, and `rxbox show` and the info panel say when a colour was
+picked with words since changed.
 
-Tracks asked for join one batch: the model is loaded once (3.5 s, 4 GB
-of the GPU's memory, up to 7 GB while it listens), tags them one at a
-time, about 4.5 s a track on an RX 6900 XT and 1.7 s more for the
-colour's eight questions (docs/ML.md), takes tracks asked for meanwhile
-into the same batch, and is unloaded after the last one or
-when you stop it (Analysis → Stop tagging). `docs/ML.md` says what the
-model can tell and how it runs.
+Tagging only runs when you ask: the track menu's Analyse tags, Analysis →
+Analyse tags of selection, or `rxbox tag TRACK...`. Never when a track is
+added, at startup or before an export. The model loads once per batch (3.5
+s, 4 GB of the GPU's memory, up to 7 GB while it listens), takes about 6 s
+a track on an RX 6900 XT, takes tracks asked for meanwhile into the same
+batch, and unloads after the last one or when stopped (Analysis → Stop
+tagging). The colours' probabilities and the model's measures (intensity,
+club, mood, vocals) are kept too.
 
-The model's file, `moss-audio-4b-instruct-q4_k.gguf` (4.1 GB, not in
-git), goes in `models/` at the top of the source tree: rxbox looks there
-beside its executable, beside the executable's directory (so a build
-directory finds it) and in the current directory. The setting `ml.model`
-(`rxbox config ml.model PATH`) or `$RXBOX_ML_MODEL` names another file.
+The model's file, `moss-audio-4b-instruct-q4_k.gguf` (4.1 GB, not in git),
+goes in `models/` at the top of the source tree: rxbox looks there beside
+its executable, beside the executable's directory and in the current
+directory. `ml.model` or `$RXBOX_ML_MODEL` names another file.
+`docs/ML.md` describes what the model can tell and how it runs.
 
-## Command line
-
-`rxbox [OPTIONS] COMMAND [ARGS]`. A TRACK is an audio file in the library
-(any path to it), a folder (every library track under it) or a library id.
-
-| Command | What it does |
-| --- | --- |
-| `add PATH...` | add audio files or folders to the library and analyse them |
-| `analyze [TRACK...]` | analyse what is missing or was made by an older analyser (the whole library by default); `-f` re-analyses, `-w beats,key,waves` limits it |
-| `show TRACK...` | print the colour (its name and the legend's words for it), the resolved grid, key, cues, analyser versions, genre, comment and tags (the eight colours' probabilities) |
-| `tag TRACK...` | tag the tracks with the model (Tags above): colour, comment and, unless you typed one, genre; one line per track, with the colour's probability and the runner-up |
-| `color COLOUR TRACK...` | set the tracks' colour: a colour name (`aqua`), `none`, or degrees (0-360; the stick gets the nearest colour) |
-| `export STICK` | write the settings, every playlist and their tracks to a mounted stick (`--all`, `-p NAME`, `--prune`, `--compat`, `--ignore-unsynced`, `-n`) |
-| `inspect STICK` | re-read and validate a stick |
-| `sync STICK [--apply]` | list the cues, plays and settings a player saved on the stick that the library lacks; `--apply` takes them |
-| `pull STICK` | take all of them (`sync --apply`) |
-| `rescan` | check which audio files are missing (or back) |
-| `check` | check the library database's integrity and count the tracks an older analyser analysed |
-| `settings` | list the My Settings names and values |
-| `config [KEY [VALUE]]` | show or change a setting (see Settings below, and `player.quantize` ...) |
-| `init [DIR]` | create a library |
-| `playlist list` | list the playlists |
-| `playlist create NAME` | create a playlist (`Folder/Name` creates the folders) |
-| `playlist add NAME TRACK...` | append tracks to a playlist |
-| `playlist import FILE.m3u8` | make a playlist from an m3u8 file |
-| `playlist export NAME FILE.m3u8` | write a playlist as an m3u8 file |
-
-`rxbox --help` has the full list of options. The subcommands open no window
-and no audio device. Analysing (`add`, `analyze`, the interface) runs the
-beat analyser's transforms on the GPU when there is one, without a window:
-`--device NAME` picks the GPU whose name contains NAME (or
-`RXBOX_GPU_DEVICE`), `--no-gpu` (or `RXBOX_ANALYSIS_GPU=0`) keeps everything
-on the CPU, with the same results.
-
-## Settings
-
-The settings live in the library. `rxbox config` lists them,
-`rxbox config KEY VALUE` changes one and `rxbox config KEY ""` puts its
-default back. A value a key cannot take (a number that is not one, a My
-Setting outside its choices, which are listed) or a key rxbox does not
-know is refused; only `ui.*` keys of the interface's own are taken as
-they come. Besides the players' My Settings
-(`player.*`, `mixer.*`, `device.*`; see Exporting):
-
-| Key | Default | What it does |
-| --- | --- | --- |
-| `analysis.bpm_min`, `analysis.bpm_max` | none | the tempo range the beat analyser keeps to |
-| `analysis.snap_bpm` | `true` | snap to a whole BPM when the track allows |
-| `analysis.allow_sections` | `true` | tempo sections where the tempo or phase really changes |
-| `analysis.auto_cues` | `true` | a memory cue at the first downbeat |
-| `analysis.what` | `beats,key,waves` | what the interface's Analyse does |
-| `import.comment` | `false` | take the file's comment tag when a track is added; `false` leaves the comment empty for you |
-| `export.key_notation` | `classic` | how export.pdb names keys: `classic`, `camelot` or `open` |
-| `export.pdb`, `export.onelibrary` | `true` | which device libraries an export writes |
-| `export.compat_transcode` | `true` | transcode AAC and hi-res files to 16-bit/44.1 kHz FLAC (`--no-compat` for one export) |
-| `export.format` | `copy` | the stick's audio: `copy` (each file as it is), `flac` (lossless files as FLAC), `wav` or `aiff` (everything but MP3 as 16-bit, for players before the CDJ-2000NXS2, which read no FLAC); encoded from the decoded samples as it is written (`--format` for one export) |
-| `export.device_name` | the stick's label | the name the players show for the stick |
-| `link.mp3` | `false` | PRO DJ LINK serves tracks not every player reads (FLAC and the like) as 320 kbps MP3 instead of 16-bit WAV |
-| `audio.sink` | the default output | the PipeWire node to play to |
-| `ml.model` | `models/moss-audio-4b-instruct-q4_k.gguf` | the tagging model's file (also `$RXBOX_ML_MODEL`) |
-| `color.pink` ... `color.purple` | the legend (Tags) | what each track colour stands for, in the words the tagging model picks by; `""` puts the default back |
-| `ui.traffic_light` | `related3` | the browser's key highlight (View → Traffic Light) |
-| `ui.detail_bars` | `12` | how many bars the detail waveform shows (the deck's zoom, remembered) |
-
-## The interface
-
-`rxbox` without a command opens the interface (a Wayland session with Vulkan
-is needed):
+The interface
+-------------
+`rxbox` without a command opens the interface (Wayland with Vulkan):
 
 ```sh
-rxbox                               # the default library, the default PipeWire output
-rxbox --library ~/dj/library        # another library
-rxbox --audio-sink alsa_output.usb-headphones   # play to this PipeWire node
-rxbox --audio none                  # no audio device at all
-rxbox --no-mpris                    # stay off the D-Bus session bus
-rxbox --pro-link                    # offer PRO DJ LINK (the Link menu); the deck
-                                    # heard only in a DJM's LINK CUE, no MPRIS
+rxbox                                          # the default library and output
+rxbox --library ~/dj/library                   # another library
+rxbox --audio-sink alsa_output.usb-headphones  # play to this PipeWire node
+rxbox --audio none                             # no audio device at all
+rxbox --pro-link                               # serve the library to players
 ```
 
-`--audio-sink NAME` (or the `audio.sink` setting) connects the player to that
-PipeWire node and nowhere else; without it the session manager picks the
-default output. `--device NAME` prefers the GPU whose name contains NAME,
-for the window and for the analysis.
-The status bar shows the audio output (`PipeWire 48 kHz · <sink>`, or
-`Audio: none`), the number of tracks and the GPU. The layout and every
-control are described in `docs/UI.md`.
+It is laid out as rekordbox's Export mode with one player:
 
-Playing through a playlist: with a playlist in view, a track in it that
-plays to its end is followed by the row after it with no gap (the next
-track is queued on the player half a minute ahead and taken over at the
-last sample), and the deck stops after the playlist's last track. The
-title row shows what follows as NEXT.
+ * **The player**: the artwork, title and readouts (key, BPM with the local
+   tempo of a dynamic grid, elapsed or remaining time, bar and beat), the
+   overview and the scrolling detail waveform with the grid and every cue
+ * **Cues and loops**: hot cues A–H with colours and names, memory cues and
+   loops, beat loops from 1/4 to 32 beats, loop in, out, halve and double,
+   and a list of every cue of the track
+ * **Transport**: CUE and PLAY, quantize, beat jump from Fine to 32 bars,
+   tempo with ±6, ±10, ±16 % and WIDE ranges, and MASTER TEMPO
+ * **Grid tools**: the grid editing above
+ * **The browser**: Collection, Albums, Album Artists, playlists and folders,
+   a search field, and a sortable table with waveform previews, artwork,
+   key, BPM, time and five-star ratings
+ * **The info panel**: the selected track's tags, rating, colour and My
+   Tags, all editable, its file's facts, and what the tagging model said
 
+The player starts as the players will, from their [My Settings](#my-settings):
+quantize, beat jump size, tempo range, MASTER TEMPO, time mode, waveform
+colour and position, overview type, key display and hot cue colours. The
+status bar shows the audio output, the number of tracks and the GPU.
+`docs/UI.md` describes every control, and Help → Keyboard map lists the
+keys.
+
+### Playthrough
+With a playlist or an album in view, a track that plays to its end is
+followed by the row after it with no gap: the next track is queued half a
+minute ahead and taken over at the last sample. The title row shows what
+follows as NEXT, and the deck stops after the last track.
+
+### MPRIS
 The player is an MPRIS 2 media player on the D-Bus session bus
 (`org.mpris.MediaPlayer2.rxbox`), so media keys, `playerctl` and a
-desktop's media controls show the loaded track (title, artist, album,
-genre, length, rating, cover, the file's URL) and drive it: play, pause,
-stop (back to the cue point, as CUE), seek, the volume, next and previous
-(the row after or before the loaded track in the current view of the
-table), a library track opened by its `file://` URL (never one outside
-the library), and quit. It is built when sd-bus is found (`libsystemd`,
-else `libelogind` or `basu`); the meson option `mpris` (`-Dmpris=disabled`
-leaves it out, `enabled` requires sd-bus) decides. `--no-mpris` keeps the
-interface off the bus, and so does `--pro-link`, whose deck is heard only
-in a mixer's headphone cue; the subcommands never go on it. Without a session
-bus, or with another rxbox holding the name, the interface says so once
-and runs without it.
+desktop's media controls show the loaded track and drive it: play, pause,
+stop (back to the cue point, as CUE), seek, volume, next and previous (the
+rows after and before it), and a library track opened by its `file://` URL.
+It is built when sd-bus is found (`-Dmpris`). `--no-mpris` and
+`--pro-link` keep the interface off the bus, and the commands never go on
+it.
 
-PRO DJ LINK, as rekordbox's Link Export (docs/LINK.md): players with an
-Ethernet port that speak standard PRO DJ LINK (the CDJ-3000, the CDJ-3000X
-and the like), on the same Ethernet, browse the library and load its
-tracks with their grids, cues and waveforms, with no stick. Their
-ORIGINAL ARTIST category shows as ALBUM ARTIST and lists album artists,
-each with its albums' tracks one album after the other. Only with
-`--pro-link`: without it the interface has no Link menu and never opens a
-Link socket. With it, rxbox serves on every Ethernet interface from the
-start, for as long as it runs, taking up an interface as soon as it is up
-with an address (a cable plugged in) and joining the link at once, before
-any player is on; the PRO DJ LINK window (Link → Players…) shows each
-interface and the players and what each plays; a track of ours that a
-player plays for 30 s is counted as a play, as on the deck. The deck's
-title row then shows the players on the link instead of its track: what
-each has loaded, its state, model, key, tempo and time left, over the
-track's overview with the playhead (from the nexus generation on; older
-players do not say where they are). A track goes to a player from the
-track menu (Load in deck N) or by dropping it on its cell, unless it
-plays and the players' Eject/Load Lock is on. A cue saved on a player's
-deck (MEMORY, a hot cue pad) or deleted there, and a rating given there,
-are kept in the library, as rekordbox keeps them. The players' TAG LIST
-(TAG TRACK on a deck) is shared with the interface, which shows it in the
-tree (Tag List) and adds to it from the track menu; it lasts as long as
-rxbox runs. A track a player plays straight on for 1.5 minutes goes on
-the History, which the library keeps and the tree shows (History), the
-latest first; the track menu adds to it by hand. A player
-streams a track as it plays it, not the whole file first: an emulated
-CDJ-2000NXS2 read about 630 kB in the first 2 s after a load, then about
-as fast as it plays (docs/LINK.md). With `--pro-link` the interface's own
-deck is heard only in a DJM's headphone cue, LINK CUE, as rekordbox's Link
-Monitor feeds it: no audio device is opened, and when the deck starts
-playing rxbox asks the mixer for the cue, which it keeps until a player
-takes it over (the status bar says where it stands). Not yet tried on a
-real mixer: the DJM-A9's and DJM-900NXS's firmware take this audio from
-a computer (docs/LINK.md, "LINK CUE"). While it runs,
+Exporting
+---------
+File → Export to USB, or `rxbox export STICK`, writes the settings, the
+playlists and the tracks in them: every playlist by default, only the
+chosen ones (`-p NAME`), or the whole library (`--all`).
+
+ * **Incremental**: audio files already on the stick with the same size and
+   modification time are skipped, and only the analysis files and artwork
+   that differ are written. The settings and both databases are rewritten
+   every time.
+ * **Analysed first**: tracks that lack an analysis, or have a stale one,
+   are analysed before anything is written.
+ * **Direct**: the audio is written straight to the stick
+   (O_DIRECT where the file system takes it, no temporaries, no fsync), so
+   the progress bar, MB/s and time left are the stick's own, and it is
+   synced once at the end.
+ * **Checked**: before writing, the export checks the free space in whole
+   clusters, that every track's row fits a database page and that no two
+   tracks map to the same path, and warns when the stick is neither FAT32
+   nor exFAT. Missing and
+   unanalysed tracks are reported and skipped. `-n` prints what would be
+   copied and deleted and writes nothing.
+ * **Safe**: files no longer exported are only deleted after you confirm
+   (`--prune` on the command line), and a stick holding cues, history or
+   settings a player saved that were not synced back is not overwritten
+   unless you say so (`--ignore-unsynced`, or Export anyway).
+ * **Compatible**: AAC and hi-res files go on the stick as 16-bit/44.1 kHz
+   FLAC by default (`export.compat_transcode`, `--compat`, `--no-compat`).
+
+### What is written to the stick
+
+| Path                                                    | Contents                                                     |
+|---------------------------------------------------------|--------------------------------------------------------------|
+| `/Contents/<Artist>/<Album>/<file>`                     | The audio, as it is or encoded                               |
+| `/PIONEER/rekordbox/export.pdb`                         | The DeviceSQL library older players read                     |
+| `/PIONEER/rekordbox/exportExt.pdb`                      | My Tags, when any track has one                              |
+| `/PIONEER/rekordbox/exportLibrary.db`                   | The OneLibrary database (SQLCipher) newer players read       |
+| `/PIONEER/USBANLZ/.../ANLZ0000.DAT`, `.EXT`, `.2EX`     | Beat grid, cues and loops, waveforms (blue, RGB and 3-band)  |
+| `/PIONEER/Artwork/...`                                  | Cover art, 80 and 240 px                                     |
+| `/PIONEER/MYSETTING.DAT`, `MYSETTING2.DAT`, `DJMMYSETTING.DAT`, `DEVSETTING.DAT` | My Settings                         |
+| `/PIONEER/rxbox/sync.txt`                               | What this export wrote, so a player's later changes are told |
+
+Both databases are written by default, so one stick works on every player
+generation.
+
+The tests check the writers against files rekordbox wrote: the fixed tables
+of `export.pdb` are byte-identical to rekordbox 7.2.18's, its
+`exportLibrary.db` opens with every page's HMAC verified and its schema
+and rows equal rxbox's, the My Settings files are byte-identical to
+rekordbox 7.2.8's, and rekordbox's analysis files read back. These check
+the files; the tests do not run a player.
+
+### Older players
+Players before the CDJ-2000NXS2 (the CDJ-900 and its generation) read no
+FLAC. `export.format` (or `--format` for one export) picks the stick's
+audio:
+
+| Format | Description                                                      |
+|--------|------------------------------------------------------------------|
+| `copy` | Each file as it is (the default)                                 |
+| `flac` | Lossless files as FLAC                                           |
+| `wav`  | Everything but MP3 as 16-bit WAV, for players that read no FLAC  |
+| `aiff` | Everything but MP3 as 16-bit AIFF, for players that read no FLAC |
+
+A file not copied is encoded from its decoded samples as it is written,
+the very audio the analysis was made of, with no copy kept anywhere.
+Encoding runs ahead of the stick, so it costs no time, and a record on the
+stick lets the next export skip what is already there.
+
+For players that show Latin-1 only (the CDJ-900), Japanese titles go as
+romaji, with kanji read by MeCab, and other scripts as Latin through ICU.
+Without MeCab, kana still go as romaji and kanji as they are.
+
+### My Settings
+The players' My Settings (quantize, auto cue level, tempo range, the
+mixer's fader curves, the waveform colour...) go on the stick for the
+sections the library has values for, and the players apply them when you
+LOAD My Settings. File → Player settings (`Ctrl+,`) shows every one of them
+in Player, Mixer and Device tabs, and `rxbox config player.NAME VALUE` sets
+one. The tempo range defaults to ±6 %, not rekordbox's ±10 %.
+
+Syncing after a gig
+-------------------
+`rxbox sync STICK`, or File → Sync from USB, reads what the players left on
+the stick and compares it with the library: hot cues set or cleared, memory
+cues and loops added or removed, plays from the history, and My Settings
+changed on the player. The command line lists them and `--apply` (or
+`rxbox pull STICK`) takes them all; the interface shows one row per change
+to accept or reject. A play the library already has within a minute is not
+counted twice.
+
+PRO DJ LINK
+-----------
+With `--pro-link`, or `rxbox link serve` on the command line, rxbox does
+what rekordbox's Link Export does: it joins the players' network as a
+computer, appears on their SOURCE screen, and the players browse the
+library and load its tracks with their grids, cues and waveforms, with no
+stick. Without it, rxbox never opens a Link socket.
+
+ * **Every Ethernet player** that speaks standard PRO DJ LINK, from the
+   CDJ-900 to the CDJ-3000X. Every track is served as a 16-bit WAV decoded
+   as it is read (or a 320 kbps MP3 with `link.mp3`), so a player plays the
+   very samples the grid and cues were made on, whatever the codec.
+ * **Plug and play**: rxbox serves on every Ethernet interface as soon as
+   it is up with an address, and joins the link at once, before any player
+   is on.
+ * **The players in view**: the PRO DJ LINK window (Link → Players…) and
+   the deck's title row show each player, what it has loaded, its state,
+   key, tempo and time left over the track's overview.
+ * **Load from rxbox**: Load in deck N in the track menu, or drop a track on
+   a player, unless it plays and Eject/Load Lock is on.
+ * **Edits on the deck are kept**: a cue saved or deleted on a player (MEMORY,
+   a hot cue pad) and a rating given there go into the library, as with
+   rekordbox.
+ * **TAG LIST** is shared with the interface for as long as rxbox runs.
+ * **Plays and history**: a track a player plays for 30 s counts as a play,
+   and one it plays straight on for 1.5 minutes goes on the History.
+
+Tried with two real CDJ-900s, a real CDJ-3000 and DJM-A9 (a 1.5 hour set
+without a fault), and emulated CDJ-900, CDJ-2000, CDJ-2000NXS2, CDJ-3000
+and CDJ-3000X players running Pioneer's own firmware.
+
+PRO DJ LINK has no authentication and no encryption. While rxbox serves,
 anything on those networks can read the library's audio, artwork and
 analysis (never other files, and nothing can be written), so use a network
-with only the players on it. `rxbox link serve` serves from the command
-line.
+with only the players on it. `docs/LINK.md` describes the protocol, the
+security and what was tested.
 
-## Exporting
+### LINK CUE
+With `--pro-link`, the interface's deck is heard only in a DJM's headphone
+cue, as rekordbox's Link Monitor feeds it: no audio device is opened. When
+the deck starts playing, rxbox asks the mixer for the cue and streams the
+deck to it, paced by the mixer's clock. It never poses as a player, and
+gives way to a player that takes the cue over until the deck starts again.
+The status bar says where the cue stands.
 
-One export writes the settings, the playlists and the tracks in them;
-nothing else. In the interface it is File → Export to USB; on the command
-line `rxbox export STICK`.
+LINK CUE works end to end on an emulated DJM-A9 (firmware 1.22) and
+DJM-900NXS (firmware 1.32), but has not yet been tried on a real mixer.
 
-- What is exported: every playlist and the union of their tracks by
-  default; only the chosen playlists (`-p NAME`, or "Selected playlists"),
-  or the whole library (`--all`).
-- Tracks that lack an analysis, or have one an older analyser made, are
-  analysed first (the interface waits for those, not for the rest of the
-  analysis queue; a dry run only says how many).
-- Audio files already on the stick with the same size and modification
-  time are skipped. The analysis files (the grid, cues and waveforms in
-  the form players read) and artwork are built from the library, nothing
-  is analysed, and only those that differ from the stick's are written.
-  The settings files and both databases are rewritten every time.
-- Files on the stick that are no longer exported are only deleted after
-  confirmation: the interface lists them and asks once; the command line
-  deletes them only with `--prune` and otherwise reports how many there are.
-- If the stick holds changes a player made that are not synced back (hot
-  cues, memory cues, play history, My Settings), the export refuses to
-  overwrite them: sync first, or export anyway (`--ignore-unsynced`, or
-  "Export anyway" in the interface).
-- Before writing, it checks the free space, that every track row fits a
-  DeviceSQL page, that no two tracks map to the same stick path, and that
-  the destination is a FAT32 or exFAT mount (a warning otherwise). Missing
-  and unanalysed tracks are reported and skipped. `-n` / `--dry-run` prints
-  what would be copied and deleted and writes nothing, the library
-  included. Nothing is written through a symbolic link or onto another
-  file system mounted inside the stick (a staging directory may have
-  them); such a path is named before anything is written.
-- The compatibility transcode (AAC and hi-res files to 16-bit/44.1 kHz
-  FLAC on the stick) is on by default: the `export.compat_transcode`
-  setting is the default of the dialog's checkbox, and `--compat` /
-  `--no-compat` decide for one export.
-- The stick's audio is each file as it is by default (`export.format =
-  copy`), or with `--format flac` the lossless files as FLAC, or with
-  `--format wav` / `--format aiff` everything but MP3 as 16-bit WAV or
-  AIFF for players before the CDJ-2000NXS2 (the CDJ-900 and its
-  generation read no FLAC). A file not copied is encoded from its decoded
-  samples as it is written, the very audio the analysis was made of, no
-  copy kept anywhere: encoding runs ahead of the stick (a FLAC encodes
-  four or five times faster than a USB stick takes it), so it costs no
-  time. A record on the stick (`PIONEER/rxbox/encoded.txt`) lets the next
-  export skip what is there already.
-- Before anything is written the export works out what the stick will
-  take (the audio not yet on it, the analysis files, artwork and
-  databases, in whole clusters) and refuses when there is not enough
-  free; the figures are in the log. The audio is written straight to the
-  stick (O_DIRECT where the file system takes it, no temporaries, no
-  fsync), so the progress bar, the MB/s and the time left are the stick's
-  own; the stick is synced once at the end, a cancelled or failed export's
-  too.
-- The players' My Settings (quantize, auto cue level, tempo range, the
-  mixer's fader curves, the waveform colour...) go on the stick for the
-  sections the library has values for; the players apply them when you LOAD
-  My Settings. `rxbox settings` lists the names and values and
-  `rxbox config player.NAME VALUE` sets one; in the interface, File → Player
-  settings (`Ctrl+,`) shows every one of them in Player, Mixer and Device
-  tabs and changes them in the library at once. The tempo range defaults to
-  ±6 %, not rekordbox's ±10 %.
-- rxbox's own interface follows the same settings, so it shows and starts
-  as the players will: the waveform colour and overview type (the player's
-  overview and detail, and the previews in the track table, half or full),
-  the key display (classic or Camelot keys everywhere), the waveform
-  position, hot cue colours, auto cue, the quantize beat value, play mode
-  (continue plays on into the next track of any view at the end; a
-  playlist being viewed always plays through, gaplessly), and the deck's state at
-  startup (quantize, beat jump size, tempo range, master tempo, time mode;
-  the deck's buttons change only the running deck). The View menu's
-  waveform colour and key notation set those settings. The rest (jog, LCD,
-  language, the mixer...) only go on the stick.
-
-## Syncing after a gig
-
-`rxbox sync STICK` (File → Sync from USB in the interface) reads what the
-player left on the stick and compares it with the library: hot cues set or
-cleared, memory cues and loops added or removed, plays from the history, and
-My Settings values changed on the player. The command line lists them and
-`--apply` takes them all (`rxbox pull STICK` is the same); the interface
-shows one row per change, each accepted or rejected, and applies the
-accepted ones. Plays are not counted twice when the library already has a
-play of the same track within a minute. A directory with neither database
-nor My Settings file is not taken for a stick with nothing to sync: the
-commands fail.
-
-## What is written to the stick
-
-| Path | Contents |
-| --- | --- |
-| `/Contents/<Artist>/<Album>/<file>` | the audio (as it is, or encoded: `export.format`, the compatibility transcode) |
-| `/PIONEER/rekordbox/export.pdb` | the DeviceSQL library older players read |
-| `/PIONEER/rekordbox/exportExt.pdb` | My Tags, when any track has one |
-| `/PIONEER/rekordbox/exportLibrary.db` | the OneLibrary database (SQLCipher) newer players read |
-| `/PIONEER/USBANLZ/.../ANLZ0000.DAT`, `.EXT`, `.2EX` | beat grid, cues and loops, waveforms (blue, RGB and 3-band) |
-| `/PIONEER/Artwork/...` | cover art, 80 and 240 px |
-| `/PIONEER/MYSETTING.DAT`, `MYSETTING2.DAT`, `DJMMYSETTING.DAT`, `DEVSETTING.DAT` | My Settings, for the sections you set (`rxbox settings` lists the names) |
-| `/PIONEER/rxbox/sync.txt` | what this export wrote, so later changes can be told to be a player's |
-
-Both databases are written by default (`export.pdb` and `export.onelibrary`
-settings), so one stick works on every player generation.
-
-The tests check the writers against files rekordbox wrote (in `tests/data`,
-from the Seabass project's CC0 fixtures):
-
-- `export.pdb`: the fixed tables (colours, columns, menus, sort orders) are
-  byte-identical to rekordbox 7.2.18's, and the reader and structural check
-  accept rekordbox's file; the `exportExt.pdb` tag page equals a rekordbox
-  export's.
-- `exportLibrary.db`: the SQLCipher code opens rekordbox 7.2.18's database
-  (every page's HMAC verifies), and its schema and browse rows equal the
-  ones rxbox writes.
-- My Settings: the files are byte-identical to rekordbox 7.2.8's for the
-  same values, and each decodes and re-encodes to the same bytes.
-- ANLZ: the directory hash matches rekordbox's vectors, and rekordbox's
-  analysis files read back (cues, colours, previews).
-- Waveform bytes equal those of `dj`, the Python tool rxbox was ported from,
-  apart from two documented minimums the players' firmware needs.
-
-These are checks of the files; the test suite does not run a player.
-
-## Documentation
-
-- `docs/OVERVIEW.md`: what rxbox is, the decisions behind it, and what it
-  took from the earlier tools
-- `docs/HACKING.md`: code style, layout, tests, running the interface while
-  developing
-- `docs/UI.md`: the interface, control by control
-- `docs/BEATS.md`: the beat-grid analyser
-- `docs/ML.md`: the tagging model, what it can tell and how it runs
-- `docs/pdb.md`, `docs/anlz.md`, `docs/onelibrary.md`, `docs/settings.md`:
-  the stick formats
+Documentation
+-------------
+ * `docs/OVERVIEW.md`: what rxbox is, and the decisions behind it
+ * `docs/HACKING.md`: code style, layout, tests, running the interface while
+   developing
+ * `docs/UI.md`: the interface, control by control
+ * `docs/BEATS.md`: the beat-grid analyser
+ * `docs/KEY.md`: the key detector
+ * `docs/ML.md`: the tagging model
+ * `docs/LINK.md`: PRO DJ LINK and LINK CUE
+ * `docs/pdb.md`, `docs/anlz.md`, `docs/onelibrary.md`, `docs/settings.md`:
+   the stick formats
 
 rxbox is under the BSD 2-Clause licence (`LICENSE.md`).

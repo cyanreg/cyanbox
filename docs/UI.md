@@ -112,7 +112,7 @@ The full width of the window. Rows, top to bottom:
      Fine/1Beat/2Beats/4Beats/8Beats/16Beats/8Bars/16Bars/32Bars;
      right-click picks from a menu). The arrows jump on the press and,
      held, again every 120 ms after 300 ms. Media keys and other MPRIS
-     clients (README.md, The interface; not with `--pro-link`, which
+     clients (README.md, MPRIS; not with `--pro-link`, which
      keeps the interface off the bus) drive the same transport: play
      and pause as PLAY/PAUSE, stop as CUE while playing (back to the cue
      point, paused), seek, and next and previous load the row after or
@@ -398,7 +398,7 @@ grid, key in the players' key display, plays, path). Edits save on focus
 loss as overrides in the library (the file's own tags are kept).
 
 The colour is one of rekordbox's eight or none, each standing for the
-words of the legend (README.md, Tags; settings `color.pink` ...
+words of the legend (README.md, Tagging; settings `color.pink` ...
 `color.purple`), and is kept as that colour's hue (`RXMeta.hue`: pink
 300°, red 0°, orange 33.6°, yellow 53.7°, green 120°, aqua 193.5°, blue
 220.6°, purple 276°, the hues of the RGB rekordbox draws them in). The
@@ -466,7 +466,7 @@ keyboard map), and with `--pro-link` **Link** before Help (Players…, the
 PRO DJ LINK window).
 "Unanalysed" includes results an older analyser made; the
 interface queues those by itself when it opens the library (README.md,
-Analysis), with the usual progress in the status bar. Tags never are:
+Analyser versions), with the usual progress in the status bar. Tags never are:
 the model runs only for Analyse tags (here or in the track menu), never
 for analyse all, a new track, the start or an export. The tracks asked
 for join one batch that loads the model once, tags them one at a time

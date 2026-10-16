@@ -13,7 +13,7 @@ In rxbox it runs only when asked: the track menu's Analyse tags, Analysis →
 Analyse tags of selection, or `rxbox tag TRACK...`. The tracks join one
 batch that loads the model once and unloads it after the last
 (`src/app/jobs.c`); a result writes the colour and the comment, and the
-genre unless the user typed one (README.md, Tags).
+genre unless the user typed one (README.md, Tagging).
 
 ## In short
 
@@ -86,7 +86,7 @@ Melancholic, introspective, atmospheric."
 ### The colour
 
 The colour is one of rekordbox's eight, the one whose words in the legend
-fit the track best (README.md, Tags; the settings `color.pink` ...
+fit the track best (README.md, Tagging; the settings `color.pink` ...
 `color.purple`). After the yes/no questions the model is asked, against
 the same audio in its cache, with the default legend:
 
