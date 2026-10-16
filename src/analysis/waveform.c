@@ -2,7 +2,7 @@
 
 /* The ANLZ waveform tags (PWAV, PWV2, PWV3, PWV4, PWV5, PWV6, PWV7 and the
  * PWVC gains) from the mono mix at the file's native rate, and their packed
- * form (the library's blob and the .rxw file) that keeps them between runs.
+ * form (the library's blob and the .cbw file) that keeps them between runs.
  *
  * PWAV, PWV2, PWV3, PWV4, PWV5 and PWVC are a port of dj's
  * analysis/waveform.py that reproduces its output byte for byte
@@ -632,9 +632,9 @@ void cb_waveforms_free(CBWaveforms *w)
 /* ---------------------------------------------------------------- packing */
 
 /* The packed form, one blob per track in the library database and the
- * content of a .rxw file; all integers little-endian:
+ * content of a .cbw file; all integers little-endian:
  *
- *   0   4  "RXWV"
+ *   0   4  "CBWV"
  *   4   4  version (4)
  *   8   4  nb_detail
  *  12   4  rate
@@ -645,8 +645,8 @@ void cb_waveforms_free(CBWaveforms *w)
  *          the stick.
  *
  * It is a cache of what analysis computes, so a version change just makes
- * unpack fail with -EPROTO and the caller recompute; damaged data fails
- * with -EINVAL. Unpack checks the size exactly against the header before
+ * unpack fail with -EPROTO and the caller recompute, as does rxbox's magic
+ * (the project's name before cyanbox); damaged data fails with -EINVAL. Unpack checks the size exactly against the header before
  * reading anything.
  *
  * Version 1 held dj's PWV6/PWV7 levels, version 2 a first recalibration
@@ -654,8 +654,8 @@ void cb_waveforms_free(CBWaveforms *w)
  * version 4 rbxport's rules (see "PWV7" and "PWV6" above); older blobs
  * must not be used. The other tags have not changed since version 1, but
  * a blob is recomputed whole: it is one analysis stage. */
-/* From when the project was rxbox; kept, so stored blobs read. */
-#define CBW_MAGIC "RXWV"
+#define CBW_MAGIC "CBWV"
+#define CBW_MAGIC_RXBOX "RXWV"
 #define CBW_VERSION 4
 #define CBW_HEADER 24
 /* 24 hours of columns: anything above is a damaged file, not a track. */
@@ -674,7 +674,7 @@ static uint32_t get_le32(const uint8_t *p)
     return p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
 }
 
-static size_t rxw_size(int n)
+static size_t cbw_size(int n)
 {
     return CBW_HEADER + CB_WAVE_PWAV_COLUMNS + CB_WAVE_PWV2_COLUMNS +
            CB_WAVE_PWV4_COLUMNS * 6 + CB_WAVE_PWV6_COLUMNS * 3 + (size_t)n * 6;
@@ -691,7 +691,7 @@ int cb_waveforms_pack(const CBWaveforms *w, uint8_t **data, size_t *size)
     if (!w || w->nb_detail <= 0 || w->nb_detail > CBW_MAX_DETAIL ||
         !w->pwv3 || !w->pwv5 || !w->pwv7)
         return CB_ERROR(EINVAL);
-    size_t n = (size_t)w->nb_detail, len = rxw_size(w->nb_detail);
+    size_t n = (size_t)w->nb_detail, len = cbw_size(w->nb_detail);
     uint8_t *buf = malloc(len);
     if (!buf)
         return CB_ERROR(ENOMEM);
@@ -741,13 +741,27 @@ static void unpack_previews(const uint8_t *data, CBWaveforms *w)
     memcpy(w->pwv6, p, sizeof(w->pwv6));
 }
 
+int cb_waveforms_check_head(const uint8_t *head, size_t size)
+{
+    if (!head || size < 8)
+        return CB_ERROR(EINVAL);
+    /* rxbox's, or another format version (1 to 3: older three-band
+     * levels): not damaged, but stale, so the caller recomputes */
+    if (!memcmp(head, CBW_MAGIC_RXBOX, 4))
+        return CB_ERROR(EPROTO);
+    if (memcmp(head, CBW_MAGIC, 4))
+        return CB_ERROR(EINVAL);
+    return get_le32(head + 4) == CBW_VERSION ? 0 : CB_ERROR(EPROTO);
+}
+
 int cb_waveforms_unpack_previews(const uint8_t *data, size_t size, CBWaveforms *w)
 {
     *w = (CBWaveforms) { 0 };
-    if (!data || size < CBW_HEADER || memcmp(data, CBW_MAGIC, 4))
+    if (!data || size < CBW_HEADER)
         return CB_ERROR(EINVAL);
-    if (get_le32(data + 4) != CBW_VERSION)
-        return CB_ERROR(EPROTO);
+    int ret = cb_waveforms_check_head(data, size);
+    if (ret < 0)
+        return ret;
     uint32_t n = get_le32(data + 8), rate = get_le32(data + 12);
     if (n == 0 || n > CBW_MAX_DETAIL || rate > INT32_MAX || size != CB_WAVE_PACKED_PREVIEW)
         return CB_ERROR(EINVAL);
@@ -758,16 +772,15 @@ int cb_waveforms_unpack_previews(const uint8_t *data, size_t size, CBWaveforms *
 int cb_waveforms_unpack(const uint8_t *data, size_t size, CBWaveforms *w)
 {
     *w = (CBWaveforms) { 0 };
-    if (!data || size < CBW_HEADER || memcmp(data, CBW_MAGIC, 4))
+    if (!data || size < CBW_HEADER)
         return CB_ERROR(EINVAL);
-    /* Another format version (1 to 3: older three-band levels): not
-     * damaged, but stale, so the caller recomputes */
-    if (get_le32(data + 4) != CBW_VERSION)
-        return CB_ERROR(EPROTO);
+    int ret = cb_waveforms_check_head(data, size);
+    if (ret < 0)
+        return ret;
     uint32_t n = get_le32(data + 8), rate = get_le32(data + 12);
-    if (n == 0 || n > CBW_MAX_DETAIL || rate > INT32_MAX || size != rxw_size((int)n))
+    if (n == 0 || n > CBW_MAX_DETAIL || rate > INT32_MAX || size != cbw_size((int)n))
         return CB_ERROR(EINVAL);
-    int ret = alloc_detail(w, (int)n);
+    ret = alloc_detail(w, (int)n);
     if (ret < 0)
         return ret;
     unpack_previews(data, w);

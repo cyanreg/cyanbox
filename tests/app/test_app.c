@@ -21,9 +21,9 @@
  * player moves on by itself), followed there when the view changes as the
  * deck moves on (inside MASTER TEMPO's delay), the next row of any view
  * with PLAY MODE continue, a track removed while loaded and analysed,
- * waveforms of an older format version made again, results of an older
- * analyser made again by "analyse all" and, unasked, by opening the
- * library (a locked grid kept both times), and tearing down with jobs in
+ * rxbox's waveforms made again, results of an older analyser made again
+ * by "analyse all" and, unasked, by opening the library (a locked grid
+ * kept both times), and tearing down with jobs in
  * flight (LeakSanitizer checks the rest).
  *
  * The player is the null backend in manual mode: the ticks advance it.
@@ -109,9 +109,9 @@ static void play_for(CBApp *app, double seconds, double step, int pace_us, doubl
     }
 }
 
-/* Makes a track's stored waveforms format version 1 (bytes 4..7 of its
- * preview blob), as a library analysed before the PWV6/PWV7 recalibration holds
- * them. */
+/* Makes a track's stored waveforms rxbox's (its magic, "RXWV", in bytes
+ * 0..3 of its preview blob), as a library analysed before the project was
+ * cyanbox holds them; cli_test.sh makes them an older format version. */
 static int stale_waveforms(const char *root, uint64_t id)
 {
     char *path = cb_path_join(root, "library.db");
@@ -135,8 +135,7 @@ static int stale_waveforms(const char *root, uint64_t id)
     }
     if (rc == SQLITE_OK) {
         memcpy(data, sqlite3_column_blob(get, 0), size);
-        data[4] = 1;
-        data[5] = data[6] = data[7] = 0;
+        memcpy(data, "RXWV", 4);
         rc = sqlite3_prepare_v2(db, "UPDATE waveform_preview SET data = ? WHERE track_id = ?", -1,
                                 &put, NULL);
     }
@@ -1265,10 +1264,9 @@ int main(int argc, char **argv)
     CHECK(!app.decks[0].track && !cb_deck_loaded(app.player, 0) &&
           !cb_library_find_id(&app.lib, a_id), "the deck still holds a removed track");
 
-    /* A library analysed before the waveform recalibration: b's stored
-     * waveforms are format version 1. They are as good as none, so opening
-     * the library queues b for them, and the deck that loads it meanwhile
-     * gets the new ones. */
+    /* A library rxbox analysed: b's stored waveforms are rxbox's. They are
+     * as good as none, so opening the library queues b for them, and the
+     * deck that loads it meanwhile gets the new ones. */
     uint64_t b_id = b->id;
     cb_app_destroy(&app);
     CHECK(stale_waveforms(root, b_id) == 0, "cannot make b's waveforms stale");

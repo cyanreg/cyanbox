@@ -31,23 +31,11 @@ int cb_library_waveforms_save(CBLibrary *lib, uint64_t id, const CBWaveforms *w)
 
 int cb_library_waveforms_check(const CBLibrary *lib, uint64_t id)
 {
-    /* The blob starts with "RXWV" and its format version, 4 bytes each
-     * (waveform.c). What the packer writes now comes from packing one
-     * column: the format version is the analysis module's to keep. */
-    uint8_t col[3] = { 0 };
-    CBWaveforms w = { .nb_detail = 1, .pwv3 = col, .pwv5 = col, .pwv7 = col };
-    uint8_t *now, head[8];
-    size_t size;
-    int ret = cb_waveforms_pack(&w, &now, &size);
-    if (ret < 0)
-        return ret;
-    ret = cb_core_waveform_blob_head(lib, id, head, sizeof(head));
-    if (ret >= 0 && memcmp(head, now, 4))
-        ret = CB_ERROR(EINVAL);
-    else if (ret >= 0 && memcmp(head + 4, now + 4, 4))
-        ret = CB_ERROR(EPROTO);
-    free(now);
-    return ret;
+    /* The blob starts with its magic and format version, 4 bytes each,
+     * which are the analysis module's to keep (waveform.c). */
+    uint8_t head[8];
+    int ret = cb_core_waveform_blob_head(lib, id, head, sizeof(head));
+    return ret < 0 ? ret : cb_waveforms_check_head(head, sizeof(head));
 }
 
 static int load(const CBLibrary *lib, uint64_t id, bool detail, CBWaveforms *w)

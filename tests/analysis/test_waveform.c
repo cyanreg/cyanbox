@@ -4,7 +4,7 @@
  * is compared with the reference bytes gen_fixtures.py wrote for the same
  * float32 samples (tests/data/analysis), plus the column count rule, the
  * firmware minimums, the three-band rules, and the packed form (the
- * library's blob and the .rxw file): round trip, damaged data refused,
+ * library's blob and the .cbw file): round trip, damaged data refused,
  * older versions stale.
  *
  * PWAV, PWV2, PWV3, PWV4, PWV5 and PWVC are dj.analysis.waveform.compute's
@@ -530,7 +530,7 @@ static void put32(uint8_t *p, uint32_t v)
         p[i] = (uint8_t)(v >> 8 * i);
 }
 
-/* The packed blob the library database stores (the .rxw layout in memory). */
+/* The packed blob the library database stores (the .cbw layout in memory). */
 static int test_pack(void)
 {
     int fails = 0;
@@ -552,7 +552,7 @@ static int test_pack(void)
         return fails + 1;
     }
     CHECK(size == 24 + 400 + 100 + 7200 + 3600 + (size_t)w.nb_detail * 6);
-    CHECK(!memcmp(data, "RXWV", 4) && le32(data + 4) == 4 && le32(data + 8) == (uint32_t)w.nb_detail &&
+    CHECK(!memcmp(data, "CBWV", 4) && le32(data + 4) == 4 && le32(data + 8) == (uint32_t)w.nb_detail &&
           le32(data + 12) == 44100);
     CHECK(cb_waveforms_unpack(data, size, &r) == 0);
     CHECK(same_waves(&r, &w));
@@ -586,7 +586,16 @@ static int test_pack(void)
     }
     data[0] = 'X';
     CHECK(cb_waveforms_unpack(data, size, &r) == CB_ERROR(EINVAL));
-    data[0] = 'R';
+    CHECK(cb_waveforms_check_head(data, 8) == CB_ERROR(EINVAL));
+    data[0] = 'C';
+    CHECK(cb_waveforms_check_head(data, 8) == 0);
+    CHECK(cb_waveforms_check_head(data, 7) == CB_ERROR(EINVAL));
+    /* rxbox's blobs, from before the project was cyanbox, are stale. */
+    memcpy(data, "RXWV", 4);
+    CHECK(cb_waveforms_unpack(data, size, &r) == CB_ERROR(EPROTO) && !r.pwv3);
+    CHECK(cb_waveforms_unpack_previews(data, CB_WAVE_PACKED_PREVIEW, &r) == CB_ERROR(EPROTO));
+    CHECK(cb_waveforms_check_head(data, 8) == CB_ERROR(EPROTO));
+    memcpy(data, "CBWV", 4);
     /* Another version is stale, not damaged: -EPROTO, so the app recomputes.
      * Versions 1 to 3 hold older three-band levels (dj's, then two fits to
      * rekordbox's bytes) in the same layout as version 4. */
