@@ -36,7 +36,7 @@
  * cb_config_set checks a value for its key (`cyanbox config` refuses one that
  * does not parse, rather than storing a row every command then warns of);
  * an empty value is the key's default. A row that does not parse all the
- * same (an older cyanbox stored any) leaves the default in place and is
+ * same (one written by hand) leaves the default in place and is
  * removed once the library has opened (cb_core_config_clean), as is a
  * key cyanbox does not know: a bad row never stops the library from
  * opening, and does not stay. The interface's ui.* keys and the sync's

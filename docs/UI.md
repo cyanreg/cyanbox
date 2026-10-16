@@ -407,8 +407,8 @@ legend's words for it (`red · intense, peak time`); under them nine
 swatches as wide as the field column allows (12 to 20 px): none, then the
 eight in rekordbox's order, each with its name and words as a tooltip,
 the track's own outlined. A click sets the colour and the library saves
-it. A track has one of the eight or none: a hue between them, which an
-older cyanbox's tagging and strip set, is removed when the library opens.
+it. A track has one of the eight or none: a hue between them is removed
+when the library opens.
 The row menu's Set colour shows the same swatches and gives
 the colour clicked to every selected track. A track's colour is drawn as
 its hue at full saturation and the palette's value (`0xF8`).
@@ -511,8 +511,7 @@ it at once.
   default when there is none): a pick is saved at once, in CBConfig and the
   setting table, as `cyanbox config` would write it, and the status bar says
   so (`Player setting Quantize: Off`). A value the export would refuse
-  (one stored by an older cyanbox, before `cyanbox config` checked values)
-  shows in red. Reset to defaults sets the
+  (one written to the library by hand) shows in red. Reset to defaults sets the
   tab's fields that are not at their defaults back to them; their rows
   stay, holding the defaults, so the next export replaces the stick's files
   rather than leaving them. The dialog keeps nothing of its own.

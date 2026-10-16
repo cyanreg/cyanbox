@@ -470,8 +470,8 @@ bool ui_track_colour_menu(UiState *ui, const char *current, char out[CB_COLOR_MA
 // here or by the model), in `width` logical pixels (0: what is left of the
 // line): a "none" swatch and the eight track colours, each with its name
 // and the legend's words as a tooltip. The one the hue is is outlined;
-// none is when the hue is between them, as an older library may hold, and
-// the track is drawn in that hue still. True when one is clicked (its own too, for a selection):
+// none is when the hue is between them, and the track is drawn in that
+// hue still. True when one is clicked (its own too, for a selection):
 // *hue is then its hue, or CB_HUE_NONE; the caller saves.
 bool ui_colour_picker(UiState *ui, const char *id, double *hue, float width);
 // "red · intense, peak time" (the legend's words), "200°, between the

@@ -237,8 +237,8 @@ Decisions and why:
   device, or with `--no-gpu`, everything runs on the CPU (`av_tx`), the
   same results. Decoding and the waveforms now take longer than the beats.
 - **The library is SQLite.** One file, WAL mode, foreign keys, every edit a
-  transaction, one versioned schema (a new library is made at it; of the
-  older ones only the last two, schemas 8 and 9, are converted). The whole track list
+  transaction, one versioned schema (a new library is made at it; nothing
+  older is converted). The whole track list
   is also held in memory (about 1 kB a track; 9,000 tracks open in 0.07 s),
   written through, so the interface sorts, groups and filters without
   touching the database (a few ms at 9,000 tracks). Waveform bytes and

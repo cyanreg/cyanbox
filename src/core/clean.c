@@ -7,8 +7,8 @@
  * invalid grid section or cue). Each kind is counted and said once, at
  * open; each entry at debug level.
  *
- *  - A track colour that is not one of the eight (an older tagging's hue
- *    between them, a hue once set by degrees): no colour.
+ *  - A track colour that is not one of the eight (a hue between them): no
+ *    colour.
  *  - A grid that is not valid (cb_grid_valid: no section, sections out of
  *    order, a tempo out of range, a start that is not a number): no grid,
  *    the lock off, the beats at version 1 (older than any analyser that

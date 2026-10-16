@@ -23,8 +23,7 @@
  * Players ignore unknown files under PIONEER/ (they keep their own CDJ/,
  * LOG/ ... there). A record is only believed by the library that wrote it:
  * another library's track ids are not this one's even when the numbers
- * are the same, and a record without the line (an older cyanbox) is treated
- * as no record. */
+ * are the same, and a record without the line is treated as no record. */
 
 #ifndef CYANBOX_EXPORT_PRIV_H
 #define CYANBOX_EXPORT_PRIV_H

@@ -89,9 +89,7 @@ int main(void)
     CHECK(cb_track_color_name(0) == NULL);
     CHECK_EQ(cb_track_color_rgb(2), 0xF80000);
 
-    /* Each entry's hue is its RGB's: the hues the schema 4 migration
-     * (src/core/db.c) gives the old names, which tests/core/test_library.c
-     * checks against these functions. */
+    /* Each entry's hue is its RGB's. */
     static const double hues[CB_TRACK_COLORS] = {
         300.0, 0.0, 33.6, 53.7, 120.0, 193.54838709677418, 220.6451612903226, 276.0,
     };
@@ -126,8 +124,8 @@ int main(void)
     CHECK_EQ(cb_track_hue_rgb(-1.0), 0);
 
     /* A colour picked from the eight (the model's or a swatch's) is its
-     * hue, and that hue is the colour again; a hue between them, which an
-     * older library may hold, is none of them, and neither is no colour. */
+     * hue, and that hue is the colour again; a hue between them is none
+     * of them, and neither is no colour. */
     for (int id = 1; id <= CB_TRACK_COLORS; id++) {
         CHECK_EQ(cb_track_color_of_hue(cb_track_color_hue(id)), id);
         CHECK_EQ(cb_track_color_of_hue(cb_track_color_hue(id) + 360.0), id);

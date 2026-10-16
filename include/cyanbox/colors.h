@@ -20,9 +20,7 @@ const char *cb_track_color_name(int id);                          /* NULL for 0 
 uint32_t    cb_track_color_rgb(int id);                           /* 0xRRGGBB, as the interface draws it */
 
 /* Their RGB, as rekordbox 7.2.19 draws them (rekordbox::cPink ...
- * ColorTheme, as rbxport's tokens.css records). Macros so the library's
- * schema 4 migration (src/core/db.c), which cannot link this module,
- * computes its hues from the same values. */
+ * ColorTheme, as rbxport's tokens.css records). */
 #define CB_TRACK_RGB_PINK   0xF870F8
 #define CB_TRACK_RGB_RED    0xF80000
 #define CB_TRACK_RGB_ORANGE 0xF8A030
@@ -58,7 +56,7 @@ double      cb_track_color_hue(int id);                           /* -1 for 0/un
 int         cb_track_color_nearest_hue(double hue);
 /* The entry whose hue `hue` is, to a hundredth of a degree, 1..8: a colour
  * picked from the eight (by hand or by the model). 0 for none and for a
- * hue between them, which an older library may hold. */
+ * hue between them. */
 int         cb_track_color_of_hue(double hue);
 /* The RGB a hue is drawn in: full saturation at the value the track
  * colours above are drawn at (0xF8). 0 for none. */

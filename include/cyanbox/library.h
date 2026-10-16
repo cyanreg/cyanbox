@@ -13,34 +13,10 @@
  *   <root>/library.db          (WAL mode, foreign keys on, user_version = schema version)
  *   <root>/cache/transcode/    (compatibility transcodes for export; disposable)
  *
- * Schema (src/core/db.c owns it; migrations bump user_version):
- *   track          id, path (unique, absolute), mtime, file_size, codec, container,
- *                  duration, total_samples, sample_rate, channels, bit_rate, bit_depth,
- *                  has_artwork, file_* (the tags as read from the file), the override
- *                  columns (NULL = use the file's), year, track_number, disc_number,
- *                  rating, hue (REAL, the track colour: the HSV/HSL hue angle in
- *                  degrees, 0 <= hue < 360, 0 red, 60 yellow, 120 green, 180 cyan,
- *                  240 blue, 300 magenta; NULL = none; CBMeta.hue, cyanbox/model.h.
- *                  Schema 4 replaced the colour name with it), key, key_confidence,
- *                  grid_confidence, grid_flags, grid_locked, added, analysed,
- *                  play_count, last_played, missing,
- *                  beats_version, key_version, waves_version (the analyser that made
- *                  the grid, key and waveforms: CB_*_VERSION, 0 before schema 2),
- *                  tags_version, ml_club, ml_intensity, ml_valence, ml_vocals (the
- *                  model's tagging, cyanbox/ml.h: CB_ML_TAGS_VERSION, 0 never, and its
- *                  measures, NULL never; schema 5), ml_colors, ml_legend (the
- *                  probability it gave each of the eight colours, NULL none, and the
- *                  hash of the legend it picked from, 0 none; schema 7)
- *   grid_section   track_id, idx, start, bpm, beat, measured (1: one measured beat of
- *                  a dynamic grid, CBTempoSection.measured; schema 6)
- *   cue            id, track_id, time, grid_beat, hot, loop_end, loop_beats, active, name, color
- *   track_tag      track_id, position, tag
- *   waveform       track_id, data (the packed tags, cb_waveforms_pack)
- *   artwork        track_id, jpeg, width, height (a 240 px thumbnail)
- *   play           track_id, played_at
- *   playlist       id, parent_id (NULL = root), name, is_folder, position
- *   playlist_entry playlist_id, position, track_id
- *   setting        key, value (text)
+ * The schema is src/core/db.c's, which describes it table by table: a
+ * track's colour is its hue (CBMeta.hue, cyanbox/model.h), and the
+ * analysers' versions (CB_*_VERSION) mark what each result was made by.
+ * A database not made by cyanbox at this schema is not opened.
  *
  * Every public edit is one transaction and bumps `generation`, which the
  * interface watches to rebuild its rows. The whole track list is kept in
@@ -188,10 +164,9 @@ typedef struct CBLibrary {
 #define CB_LIBRARY_CHANGES_KEPT 512
 
 /* Opens (creating when absent) the library at `root` (NULL = default),
- * converts one of schema 8 (src/core/db.c), loads every track and
- * playlist, checks which audio files are missing (stat; such tracks are
- * kept, flagged `missing` and shown greyed out; they come back when the
- * file does). */
+ * loads every track and playlist, checks which audio files are missing
+ * (stat; such tracks are kept, flagged `missing` and shown greyed out;
+ * they come back when the file does). */
 int  cb_library_open(CBLibrary *lib, const char *root);
 void cb_library_close(CBLibrary *lib);
 /* Re-checks `missing` on every track (also called by open). Returns how

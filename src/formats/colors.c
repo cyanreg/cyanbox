@@ -26,8 +26,7 @@
  * nearest around the circle, so each of the eight hues comes back as its
  * own entry and anything between goes to the closer neighbour. The
  * interface's swatches and the tagging model set one of the eight hues;
- * cb_track_color_of_hue tells those from a hue between them, which an
- * older library may hold. */
+ * cb_track_color_of_hue tells those from a hue between them. */
 
 #include "cyanbox/colors.h"
 

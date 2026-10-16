@@ -3,7 +3,7 @@
 /* The library database: the SQLite connection, the schema, the cached
  * statements, transactions and error mapping.
  *
- * Schema version 10 (PRAGMA user_version = 10, application_id = 'RXBX').
+ * Schema version 1 (PRAGMA user_version = 1, application_id = 'CBOX').
  * Tables are STRICT so a wrong type is an error instead of a silent
  * conversion, and every row that belongs to a track or a playlist goes
  * with it (ON DELETE CASCADE, foreign keys on for every connection).
@@ -70,20 +70,17 @@
  *                   once per playlist
  *   setting         key, value (text; see config.c for the keys)
  *
- * A new library is made at this schema in one transaction. Of the older
- * ones schema 9 is converted (deck_history made), and schema 8 (the last
- * of the step by step migrations, which an older cyanbox ran): its single
- * waveform blob per track is cut in two, at CB_WAVE_PACKED_PREVIEW, then
- * as 9. Anything older is
- * refused with the advice to open it once with a cyanbox of schema 8; a
- * database newer than this build is refused rather than written with a
- * schema we do not know, also when a newer cyanbox converts it while this
- * one opens it (the version is read again under the write lock).
+ * A new library is made at this schema in one transaction. Nothing older
+ * is converted: a database of another application id (rxbox's, 'RXBX',
+ * among them) is not a library. One newer than this build is refused
+ * rather than written with a schema we do not know, also when a newer
+ * cyanbox makes it while this one opens it (the version is read again
+ * under the write lock).
  *
  * Space: auto_vacuum is INCREMENTAL, set before a new library's first
- * table, and a converted one is vacuumed once to switch; cb_db_trim gives
- * the free pages back to the file system when there are many (at open),
- * so a library shrinks when waveforms, covers or tracks go.
+ * table; cb_db_trim gives the free pages back to the file system when
+ * there are many (at open), so a library shrinks when waveforms, covers
+ * or tracks go.
  *
  * Journal: WAL, synchronous = NORMAL (a crash loses at most the last
  * transactions, never consistency), and a busy timeout because the export
@@ -94,12 +91,7 @@
 #include <math.h>
 #include <stdio.h>
 
-/* For the size of the packed previews only: nothing of the analysis
- * module is linked. */
-#include "cyanbox/analysis.h"
-
-/* 'RXBX': the project was rxbox when its libraries began; kept, so they open. */
-#define CB_DB_APPLICATION_ID 0x52584258
+#define CB_DB_APPLICATION_ID 0x43424F58     /* 'CBOX' */
 
 /* -------------------------------------------------------------- columns */
 
@@ -124,29 +116,7 @@ const char *const cb_track_edit_cols[CB_TRACK_EDIT_COLS] = {
 
 /* --------------------------------------------------------------- schema */
 
-#define CB_DB_SCHEMA 10
-
-#define SQL_INT_(x) #x
-#define SQL_INT(x) SQL_INT_(x)
-
-#define WAVEFORM_TABLES                                                         \
-    "CREATE TABLE waveform_preview ("                                           \
-    "  track_id INTEGER PRIMARY KEY REFERENCES track(id) ON DELETE CASCADE,"    \
-    "  data     BLOB NOT NULL"                                                  \
-    ") STRICT;"                                                                 \
-    "CREATE TABLE waveform_detail ("                                            \
-    "  track_id INTEGER PRIMARY KEY REFERENCES track(id) ON DELETE CASCADE,"    \
-    "  data     BLOB NOT NULL"                                                  \
-    ") STRICT;"
-
-#define HISTORY_TABLE                                                           \
-    "CREATE TABLE deck_history ("                                               \
-    "  id        INTEGER PRIMARY KEY AUTOINCREMENT,"                           \
-    "  track_id  INTEGER NOT NULL REFERENCES track(id) ON DELETE CASCADE,"    \
-    "  played_at INTEGER NOT NULL,"                                             \
-    "  player    INTEGER NOT NULL"                                              \
-    ") STRICT;"                                                                 \
-    "CREATE INDEX deck_history_track ON deck_history(track_id);"
+#define CB_DB_SCHEMA 1
 
 static const char schema[] =
     "CREATE TABLE track ("
@@ -245,7 +215,14 @@ static const char schema[] =
     "  PRIMARY KEY (track_id, tag)"
     ") STRICT, WITHOUT ROWID;"
 
-    WAVEFORM_TABLES
+    "CREATE TABLE waveform_preview ("
+    "  track_id INTEGER PRIMARY KEY REFERENCES track(id) ON DELETE CASCADE,"
+    "  data     BLOB NOT NULL"
+    ") STRICT;"
+    "CREATE TABLE waveform_detail ("
+    "  track_id INTEGER PRIMARY KEY REFERENCES track(id) ON DELETE CASCADE,"
+    "  data     BLOB NOT NULL"
+    ") STRICT;"
 
     "CREATE TABLE artwork ("
     "  id     INTEGER PRIMARY KEY,"
@@ -274,7 +251,13 @@ static const char schema[] =
     "  played_at INTEGER NOT NULL"
     ") STRICT;"
     "CREATE INDEX play_track ON play(track_id);"
-    HISTORY_TABLE
+    "CREATE TABLE deck_history ("
+    "  id        INTEGER PRIMARY KEY AUTOINCREMENT,"
+    "  track_id  INTEGER NOT NULL REFERENCES track(id) ON DELETE CASCADE,"
+    "  played_at INTEGER NOT NULL,"
+    "  player    INTEGER NOT NULL"
+    ") STRICT;"
+    "CREATE INDEX deck_history_track ON deck_history(track_id);"
 
     "CREATE TABLE playlist ("
     "  id        INTEGER PRIMARY KEY AUTOINCREMENT,"
@@ -298,24 +281,6 @@ static const char schema[] =
     "  key   TEXT PRIMARY KEY,"
     "  value TEXT NOT NULL"
     ") STRICT, WITHOUT ROWID;";
-
-/* Schema 8 to 9: each packed waveform blob (cb_waveforms_pack) cut in two
- * where its previews end. A blob too short to have detail is damaged or
- * of a format before the previews' layout: it goes, and the track's
- * waveforms are made again. Every other table is as schema 8 had it. */
-static const char from_v8[] =
-    WAVEFORM_TABLES
-    "INSERT INTO waveform_preview (track_id, data)"
-    "  SELECT track_id, substr(data, 1, " SQL_INT(CB_WAVE_PACKED_PREVIEW) ") FROM waveform"
-    "  WHERE length(data) > " SQL_INT(CB_WAVE_PACKED_PREVIEW) ";"
-    "INSERT INTO waveform_detail (track_id, data)"
-    "  SELECT track_id, substr(data, " SQL_INT(CB_WAVE_PACKED_PREVIEW) " + 1) FROM waveform"
-    "  WHERE length(data) > " SQL_INT(CB_WAVE_PACKED_PREVIEW) ";"
-    "DROP TABLE waveform;"
-    HISTORY_TABLE;
-
-/* Schema 9 to 10: the History, empty. */
-static const char from_v9[] = HISTORY_TABLE;
 
 /* ------------------------------------------------------------ statements */
 
@@ -640,29 +605,18 @@ static int check_identity(CBDb *db, int64_t *version)
                "not touching it", db->path, (long long)*version, CB_DB_SCHEMA);
         return CB_ERROR(EPROTO);
     }
-    if (*version > 0 && *version < 8) {
-        cb_err("%s is of schema %lld, older than this build converts (8); open it once with "
-               "a cyanbox of schema 8 (before 2026-10-15), then with this one",
-               db->path, (long long)*version);
-        return CB_ERROR(EPROTO);
-    }
     return 0;
 }
 
-/* Makes a new library (version 0) or converts one of schema 8 or 9, in
- * one transaction with the version bump. The version is read again under the
- * write lock: another process may have made the library meanwhile (it
- * is then at this schema and there is nothing to do), or a newer cyanbox
- * taken it past this build's schema. A converted library is vacuumed
- * once, outside the transaction, to switch to incremental auto_vacuum
- * and give back the old blobs' pages. */
-static int upgrade(CBDb *db, int64_t version)
+/* Makes a new library (version 0) in one transaction with the version
+ * and the application id. The version is read again under the write
+ * lock: another process may have made the library meanwhile (it is then
+ * at this schema and there is nothing to do), or a newer cyanbox made it
+ * at a schema past this build's. */
+static int create(CBDb *db, int64_t version)
 {
     if (version == CB_DB_SCHEMA)
         return 0;
-    int64_t pages = 0, page_size = 0;
-    pragma_int(db, "PRAGMA page_count", &pages);
-    pragma_int(db, "PRAGMA page_size", &page_size);
     int ret = cb_db_begin(db);
     if (ret < 0)
         return ret;
@@ -670,42 +624,24 @@ static int upgrade(CBDb *db, int64_t version)
     ret = pragma_int(db, "PRAGMA user_version", &now);
     if (ret >= 0 && now > CB_DB_SCHEMA) {
         cb_db_rollback(db);
-        cb_err("%s was converted by a newer cyanbox meanwhile (schema %lld, this build knows %d); "
+        cb_err("%s was made by a newer cyanbox meanwhile (schema %lld, this build knows %d); "
                "not touching it", db->path, (long long)now, CB_DB_SCHEMA);
         return CB_ERROR(EPROTO);
     }
-    if (ret >= 0 && now == version) {
-        char bump[96];
-        snprintf(bump, sizeof(bump), "PRAGMA user_version = %d; PRAGMA application_id = %d",
+    if (ret >= 0 && !now) {
+        char stamp[96];
+        snprintf(stamp, sizeof(stamp), "PRAGMA user_version = %d; PRAGMA application_id = %d",
                  CB_DB_SCHEMA, CB_DB_APPLICATION_ID);
-        ret = cb_db_exec(db, !version ? schema : version == 8 ? from_v8 : from_v9);
+        ret = cb_db_exec(db, schema);
         if (ret >= 0)
-            ret = cb_db_exec(db, bump);
-    } else if (ret >= 0 && now != CB_DB_SCHEMA) {
-        ret = CB_ERROR(EPROTO);
+            ret = cb_db_exec(db, stamp);
     }
     if (ret < 0) {
         cb_db_rollback(db);
-        cb_err("%s: %s schema %d failed", db->path, version ? "conversion to" : "making",
-               CB_DB_SCHEMA);
+        cb_err("%s: making schema %d failed", db->path, CB_DB_SCHEMA);
         return ret;
     }
-    ret = cb_db_commit(db);
-    /* Only schema 8's conversion leaves pages to give back. */
-    if (ret < 0 || now != version || version != 8)
-        return ret;
-
-    ret = cb_db_exec(db, "PRAGMA auto_vacuum = INCREMENTAL; VACUUM");
-    if (ret < 0) {
-        cb_warn("%s: converted to schema %d, but not vacuumed; it keeps its size", db->path,
-                CB_DB_SCHEMA);
-        return 0;
-    }
-    int64_t after = 0;
-    pragma_int(db, "PRAGMA page_count", &after);
-    cb_info("%s: library converted to schema %d, %.1f MB to %.1f MB", db->path, CB_DB_SCHEMA,
-            pages * page_size / 1e6, after * page_size / 1e6);
-    return 0;
+    return cb_db_commit(db);
 }
 
 int cb_db_trim(CBDb *db)
@@ -781,7 +717,7 @@ int cb_db_open(CBDb **out, const char *path)
     if (ret >= 0)
         ret = cb_db_exec(db, "PRAGMA synchronous = NORMAL");
     if (ret >= 0)
-        ret = upgrade(db, version);
+        ret = create(db, version);
     if (ret < 0)
         goto fail;
 

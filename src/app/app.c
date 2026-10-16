@@ -549,11 +549,10 @@ uint64_t cb_app_artwork_texture(CBApp *app, const CBTrack *t)
         return 0;
     e->used = priv->tick;
 
-    /* The library's thumbnail whatever the track says (an older library
-     * may hold one for a track whose flag is off), on the GPU once for
-     * every track that has the cover; else the file's art, when the track
-     * has some. Either way once: GPU_DONE without a texture is the answer
-     * "none" until the entry is recycled. */
+    /* The library's thumbnail whatever the track's flag says, on the GPU
+     * once for every track that has the cover; else the file's art, when
+     * the track has some. Either way once: GPU_DONE without a texture is
+     * the answer "none" until the entry is recycled. */
     if (e->art_state == GPU_UNKNOWN && priv->gpu_budget > 0) {
         priv->gpu_budget--;
         int64_t art = cb_library_artwork_id(&app->lib, t->id);

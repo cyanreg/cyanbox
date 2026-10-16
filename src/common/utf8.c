@@ -2,7 +2,7 @@
 
 /* UTF-8 and Unicode NFC (cyanbox/common.h). Every text cyanbox keeps or gives
  * out is NFC: the library's (core/model.c sets it so, core/clean.c makes
- * what an older library kept so), and so the stick's databases, its paths
+ * any other it finds so), and so the stick's databases, its paths
  * (dj stores every stick path in NFC, export.py _clean; HFS+ hands out NFD
  * names) and what Link serves. A decomposed kana and its dakuten reach a
  * CDJ-2000 as two characters, the mark drawn apart (an emulated one,

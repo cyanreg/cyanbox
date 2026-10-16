@@ -222,8 +222,8 @@ typedef struct CBMeta {
 void cb_meta_free(CBMeta *m);
 int  cb_meta_copy(CBMeta *dst, const CBMeta *src);
 int  cb_meta_set(char **field, const char *value);     /* takes a copy, in NFC; NULL clears */
-/* Every text in NFC (an older library's, or tags from macOS): how many
- * texts changed, or a negative errno. */
+/* Every text in NFC (tags from macOS are often NFD): how many texts
+ * changed, or a negative errno. */
 int  cb_meta_normalise(CBMeta *m);
 int  cb_meta_add_tag(CBMeta *m, const char *tag);
 void cb_meta_clear_tags(CBMeta *m);

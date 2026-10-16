@@ -24,8 +24,8 @@ cb_core_dep = declare_dependency(link_with: cb_core_lib,
 core_test_env = environment()
 core_test_env.set('CB_TEST_DIR', meson.current_build_dir() / 'test-tmp')
 
-# The library test checks the schema 4 migration's hues against the
-# formats module's colour table, which core does not link: colors.c (plain
+# The library test checks the colours it keeps against the formats
+# module's colour table, which core does not link: colors.c (plain
 # arithmetic on its tables) is built into that test alone.
 foreach t : [ 'grid', 'cues', 'notation', 'library', 'playlist' ]
     test('core_' + t,

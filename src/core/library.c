@@ -21,8 +21,8 @@
  * rest and dropped before the row is written, unless the setting
  * import.comment asks for it, so the field starts empty and is free for
  * the user and for tagging later. The file is never written. Re-reading a
- * file keeps the comment the library holds (a library from before this
- * keeps the comments it imported then).
+ * file keeps the comment the library holds (one imported while
+ * import.comment was on stays when it is off).
  *
  * Adding a directory probes its files in parallel on a thread pool (the
  * probe is a file open and a header parse, I/O bound, a few ms each) and
@@ -1523,7 +1523,7 @@ int cb_library_refresh_track(CBLibrary *lib, CBTrack *t)
         goto end;
     }
     /* The file's comment was not read: the one the library holds (none,
-     * or one an older cyanbox imported) stays. */
+     * or one imported while import.comment was on) stays. */
     if (!p.comment && (ret = cb_meta_set(&p.t->file_meta.comment, t->file_meta.comment)) < 0)
         goto end;
 

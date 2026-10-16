@@ -6,9 +6,10 @@
  * and foreign key checks; the file's comment left out on import unless
  * import.comment asks for it; the legend's settings and the model's colour
  * probabilities; a dynamic grid kept; covers stored once, going with their
- * last track; waveforms stored as previews and detail apart; a library of
- * schema 8 converted, an older one refused, and one a newer cyanbox converts
- * while this one opens it; free pages given back.
+ * last track; waveforms stored as previews and detail apart; a new
+ * library's schema and application id, rxbox's library refused untouched,
+ * and one a newer cyanbox makes while this one opens it; free pages given
+ * back.
  * Waveforms are stored through the raw blob layer because the analysis
  * module (which packs them) is not linked here; cyanbox/analysis.h is used
  * for its constants and inline helpers only. */
@@ -178,7 +179,7 @@ static void test_create_and_add(void)
 
     sqlite3_stmt *st;
     sqlite3_prepare_v2(lib.db->db, "PRAGMA user_version", -1, &st, NULL);
-    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 10);
+    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 1);
     sqlite3_finalize(st);
     /* Made with incremental auto_vacuum, which only takes before WAL. */
     sqlite3_prepare_v2(lib.db->db, "PRAGMA auto_vacuum", -1, &st, NULL);
@@ -1025,7 +1026,7 @@ static void test_refusals(void)
     sqlite3 *s;
     sqlite3_open(db, &s);
     char sql[96];
-    snprintf(sql, sizeof(sql), "PRAGMA application_id = %d; PRAGMA user_version = 99", 0x52584258);
+    snprintf(sql, sizeof(sql), "PRAGMA application_id = %d; PRAGMA user_version = 99", 0x43424F58);
     sqlite3_exec(s, sql, NULL, NULL, NULL);
     sqlite3_close(s);
     CBLibrary lib;
@@ -1525,20 +1526,6 @@ static void test_artwork_shared(void)
     free(dir);
 }
 
-/* Takes a library of this schema back to schema 8, which kept each
- * track's waveforms as one blob, with auto_vacuum off as schema 8 made it. */
-static int back_to_schema8(sqlite3 *db)
-{
-    return sqlite3_exec(db, "DROP TABLE deck_history;"
-                            "DROP TABLE waveform_preview; DROP TABLE waveform_detail;"
-                            "CREATE TABLE waveform ("
-                            "  track_id INTEGER PRIMARY KEY REFERENCES track(id) ON DELETE CASCADE,"
-                            "  data     BLOB NOT NULL"
-                            ") STRICT;"
-                            "PRAGMA auto_vacuum = NONE; VACUUM; PRAGMA user_version = 8",
-                        NULL, NULL, NULL);
-}
-
 static int pragma(const CBLibrary *lib, const char *sql)
 {
     sqlite3_stmt *st;
@@ -1551,81 +1538,33 @@ static int pragma(const CBLibrary *lib, const char *sql)
     return v;
 }
 
-/* Schema 8 kept each track's packed waveforms as one blob: opening it
- * cuts each in two where the previews end, every track keeping its
- * waveforms whole; a blob too short to have detail goes (made again by
- * the analysis). The library is vacuumed once into incremental
- * auto_vacuum. An older schema is refused, untouched. */
-static void test_convert_v8(void)
+/* A new library is schema 1 with cyanbox's application id, 'CBOX'.
+ * Nothing older is converted: rxbox's library (application id 'RXBX',
+ * schema 10) is no cyanbox library, and is refused untouched. */
+static void test_identity(void)
 {
-    char *dir = test_dir("library-v8");
+    char *dir = test_dir("library-identity");
     char *db = path_in(dir, "library.db");
     CBLibrary lib;
     CHECK(cb_library_open(&lib, dir) == 0);
-    cb_library_close(&lib);
-
-    size_t n = CB_WAVE_PACKED_PREVIEW + 12;
-    uint8_t *whole = malloc(n);
-    for (size_t i = 0; i < n; i++)
-        whole[i] = (uint8_t)(i * 7 + 3);
-    sqlite3 *s;
-    CHECK(sqlite3_open(db, &s) == SQLITE_OK);
-    CHECK(back_to_schema8(s) == SQLITE_OK);
-    CHECK(sqlite3_exec(s, "INSERT INTO track (id, path) "
-                          "VALUES (1, '/gone/a.wav'), (2, '/gone/b.wav')",
-                       NULL, NULL, NULL) == SQLITE_OK);
-    sqlite3_stmt *st;
-    sqlite3_prepare_v2(s, "INSERT INTO waveform (track_id, data) VALUES (?1, ?2)", -1, &st, NULL);
-    sqlite3_bind_int(st, 1, 1);
-    sqlite3_bind_blob(st, 2, whole, (int)n, SQLITE_STATIC);
-    CHECK(sqlite3_step(st) == SQLITE_DONE);
-    sqlite3_reset(st);
-    sqlite3_bind_int(st, 1, 2);
-    sqlite3_bind_blob(st, 2, whole, CB_WAVE_PACKED_PREVIEW, SQLITE_STATIC);
-    CHECK(sqlite3_step(st) == SQLITE_DONE);
-    sqlite3_finalize(st);
-    sqlite3_close(s);
-
-    CHECK(cb_library_open(&lib, dir) == 0);
-    CHECK(pragma(&lib, "PRAGMA user_version") == 10);
+    CHECK(pragma(&lib, "PRAGMA user_version") == 1);
+    CHECK(pragma(&lib, "PRAGMA application_id") == 0x43424F58);
     CHECK(pragma(&lib, "PRAGMA auto_vacuum") == 2);
-    CHECK(pragma(&lib, "SELECT count(*) FROM deck_history") == 0);
-    CHECK(pragma(&lib, "SELECT count(*) FROM sqlite_schema WHERE name = 'waveform'") == 0);
-    CBTrack *a = cb_library_find_id(&lib, 1), *b = cb_library_find_id(&lib, 2);
-    CHECK(a && a->has_waveforms && b && !b->has_waveforms);
-    uint8_t *data = NULL;
-    size_t size = 0;
-    CHECK(cb_core_waveform_blob_get(&lib, 1, true, &data, &size) == 0);
-    CHECK(size == n && !memcmp(data, whole, n));
-    free(data);
-    CHECK(cb_core_waveform_blob_get(&lib, 1, false, &data, &size) == 0);
-    CHECK(size == CB_WAVE_PACKED_PREVIEW && !memcmp(data, whole, size));
-    free(data);
-    CHECK(cb_core_waveform_blob_get(&lib, 2, false, &data, &size) == CB_ERROR(ENOENT));
-    CHECK(cb_library_check(&lib) == 0);
-    cb_library_close(&lib);
-    free(whole);
-
-    /* Schema 9: the History made, empty, the rest as it was. */
-    CHECK(sqlite3_open(db, &s) == SQLITE_OK);
-    CHECK(sqlite3_exec(s, "DROP TABLE deck_history; PRAGMA user_version = 9", NULL, NULL,
-                       NULL) == SQLITE_OK);
-    sqlite3_close(s);
-    CHECK(cb_library_open(&lib, dir) == 0);
-    CHECK(pragma(&lib, "PRAGMA user_version") == 10);
-    CHECK(pragma(&lib, "SELECT count(*) FROM deck_history") == 0);
-    CHECK(cb_library_find_id(&lib, 1) && cb_library_find_id(&lib, 1)->has_waveforms);
-    CHECK(cb_library_check(&lib) == 0);
     cb_library_close(&lib);
 
-    /* Schema 7 and older: refused, as they are. */
+    sqlite3 *s;
+    char sql[96];
+    snprintf(sql, sizeof(sql), "PRAGMA application_id = %d; PRAGMA user_version = 10", 0x52584258);
     CHECK(sqlite3_open(db, &s) == SQLITE_OK);
-    CHECK(sqlite3_exec(s, "PRAGMA user_version = 7", NULL, NULL, NULL) == SQLITE_OK);
+    CHECK(sqlite3_exec(s, sql, NULL, NULL, NULL) == SQLITE_OK);
     sqlite3_close(s);
-    CHECK(cb_library_open(&lib, dir) == CB_ERROR(EPROTO));
+    CHECK(cb_library_open(&lib, dir) == CB_ERROR(EINVAL));
+    sqlite3_stmt *st;
     CHECK(sqlite3_open(db, &s) == SQLITE_OK);
-    sqlite3_prepare_v2(s, "PRAGMA user_version", -1, &st, NULL);
-    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 7);
+    sqlite3_prepare_v2(s, "SELECT (SELECT application_id FROM pragma_application_id), "
+                          "(SELECT user_version FROM pragma_user_version)", -1, &st, NULL);
+    CHECK(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 0x52584258 &&
+          sqlite3_column_int(st, 1) == 10);
     sqlite3_finalize(st);
     sqlite3_close(s);
 
@@ -1673,21 +1612,16 @@ static void test_trim(void)
     free(dir);
 }
 
-/* A newer cyanbox converting the library while this one opens it (it holds
- * the write lock at schema 99 as this one reads 8 and waits for the
- * lock): this one sees 99 under the lock and refuses, as it does a
- * library newer from the start. */
+/* A newer cyanbox making the library while this one opens it (it holds
+ * the write lock at schema 99 as this one reads an empty file and waits
+ * for the lock): this one sees 99 under the lock and refuses, as it does
+ * a library newer from the start. */
 static void test_newer_meanwhile(void)
 {
     char *dir = test_dir("library-newer-meanwhile");
     char *db = path_in(dir, "library.db");
-    CBLibrary lib;
-    CHECK(cb_library_open(&lib, dir) == 0);
-    cb_library_close(&lib);
-
     sqlite3 *s;
     CHECK(sqlite3_open(db, &s) == SQLITE_OK);
-    CHECK(back_to_schema8(s) == SQLITE_OK);
     CHECK(sqlite3_exec(s, "BEGIN IMMEDIATE; PRAGMA user_version = 99", NULL, NULL, NULL) ==
           SQLITE_OK);
     pthread_barrier_t go;
@@ -1761,7 +1695,7 @@ int main(void)
     test_open_snapshot();
     test_concurrent_create();
     test_artwork_shared();
-    test_convert_v8();
+    test_identity();
     test_trim();
     test_newer_meanwhile();
     test_busy_add();

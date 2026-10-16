@@ -871,12 +871,10 @@ static void ini_line(ImGuiContext *, ImGuiSettingsHandler *h, void *, const char
         ui->detail_half = i != 0;
     else if (sscanf(line, "GridTools=%d", &i) == 1)
         dv->grid_edit = i != 0;
-    // Older layouts' ShowInfo= (the info panel is always shown now), Pads=
-    // and CueList= (the pad mode and cue list tabs, gone since every group
-    // is shown at once) fall through, ignored. So do TempoRange=, Jump= and
-    // MasterTempo=: the deck starts with the players' tempo range, beat
-    // jump size and MASTER TEMPO (follow_settings), and the buttons change
-    // only the running deck.
+    // Anything else falls through, ignored. The tempo range, beat jump
+    // size and MASTER TEMPO are not kept here: the deck starts with the
+    // players' (follow_settings), and the buttons change only the running
+    // deck.
 }
 
 static void ini_write(ImGuiContext *, ImGuiSettingsHandler *h, ImGuiTextBuffer *out)
