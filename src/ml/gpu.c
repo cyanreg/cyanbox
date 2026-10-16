@@ -24,6 +24,12 @@
  *    its driver likes; one that may pick fewer (Intel's 8) is given a size
  *    (Vulkan 1.3's subgroup size control), and one that cannot be is not
  *    used. Those three ask for full subgroups where the device has them.
+ *  - The products (gemm.comp) run in subgroups of 32 where the device lets
+ *    a pipeline ask for it: on RDNA, whose drivers pick 64 for compute,
+ *    they are 10 to 15 % faster so. They use no subgroup operations, so
+ *    every output is the same sums in the same order either way; the
+ *    kernels whose sums go through subgroups keep the driver's size.
+ *    CYANBOX_ML_WAVE32=0 leaves the products the driver's size too.
  *  - A compute-only queue family when there is one, as the compute context
  *    does: the desktop's graphics are not held up behind a transformer
  *    layer.
@@ -110,6 +116,7 @@ static const struct {
 typedef struct DevChoice {
     uint32_t sub_size;          /* the size the subgroup kernels require, 0: any it picks */
     bool full_sub;              /* computeFullSubgroups */
+    bool gemm_wave32;           /* the products may ask for subgroups of 32 */
 } DevChoice;
 
 /* Why a device cannot run the model, or NULL (CBVkDevCheck): `qfam` gets
@@ -171,6 +178,10 @@ static const char *device_unusable(void *opaque, VkPhysicalDevice pd,
      * to use. Sizes are powers of two. */
     c->sub_size = 0;
     c->full_sub = f13.computeFullSubgroups;
+    c->gemm_wave32 = f13.subgroupSizeControl &&
+                     (p13.requiredSubgroupSizeStages & VK_SHADER_STAGE_COMPUTE_BIT) &&
+                     p13.minSubgroupSize <= 32 && p13.maxSubgroupSize >= 32 &&
+                     32u * p13.maxComputeWorkgroupSubgroups >= 256;
     if (p13.minSubgroupSize < SUB_MIN || p13.maxSubgroupSize > SUB_MAX) {
         uint32_t size = CB_MAX(p13.minSubgroupSize, SUB_MIN);
         if (!f13.subgroupSizeControl ||
@@ -218,15 +229,17 @@ static int create_pipelines(MLGpu *g)
             return cb_vk_ret2err(res);
 
         bool sub = k == ML_K_GEMV_Q4K || k == ML_K_ATTN || k == ML_K_ATTN_DEC;
+        bool gemm = k == ML_K_GEMM_F16 || k == ML_K_GEMM_F16_CONV || k == ML_K_GEMM_Q4K ||
+                    k == ML_K_GEMM_Q4K_SMALL;
         VkPipelineShaderStageRequiredSubgroupSizeCreateInfo size = {
             .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_REQUIRED_SUBGROUP_SIZE_CREATE_INFO,
-            .requiredSubgroupSize = g->sub_size,
+            .requiredSubgroupSize = gemm ? 32 : g->sub_size,
         };
         VkComputePipelineCreateInfo pinfo = {
             .sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
             .stage  = {
                 .sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-                .pNext  = sub && g->sub_size ? &size : NULL,
+                .pNext  = (sub && g->sub_size) || (gemm && g->gemm_wave32) ? &size : NULL,
                 .flags  = sub && g->full_sub ?
                           VK_PIPELINE_SHADER_STAGE_CREATE_REQUIRE_FULL_SUBGROUPS_BIT : 0,
                 .stage  = VK_SHADER_STAGE_COMPUTE_BIT,
@@ -251,7 +264,7 @@ static int create_device(MLGpu *g)
     VkPhysicalDeviceVulkan13Features f13 = {
         .sType                = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
         .synchronization2     = VK_TRUE,
-        .subgroupSizeControl  = g->sub_size != 0,
+        .subgroupSizeControl  = g->sub_size != 0 || g->gemm_wave32,
         .computeFullSubgroups = g->full_sub,
     };
     VkPhysicalDeviceVulkan12Features f12 = {
@@ -344,16 +357,19 @@ int ml_gpu_create(MLGpu *g, const char *device, bool validation)
     }
     g->sub_size = choice.sub_size;
     g->full_sub = choice.full_sub;
+    const char *w32 = getenv("CYANBOX_ML_WAVE32");
+    g->gemm_wave32 = choice.gemm_wave32 && !(w32 && !strcmp(w32, "0"));
     if ((ret = create_device(g)) < 0)
         goto fail;
 
     char sub[32] = "as the driver picks";
     if (g->sub_size)
         snprintf(sub, sizeof(sub), "of %u", g->sub_size);
-    cb_debug("ml: %s, Vulkan %u.%u, queue family %u%s, subgroups %s", g->vk.props.deviceName,
+    cb_debug("ml: %s, Vulkan %u.%u, queue family %u%s, subgroups %s%s", g->vk.props.deviceName,
              VK_API_VERSION_MAJOR(g->vk.props.apiVersion),
              VK_API_VERSION_MINOR(g->vk.props.apiVersion), g->vk.qfam,
-             g->vk.ts_mask ? "" : " (no timestamps)", sub);
+             g->vk.ts_mask ? "" : " (no timestamps)", sub,
+             g->gemm_wave32 ? ", of 32 for the products" : "");
     return 0;
 
 fail:

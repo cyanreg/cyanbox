@@ -70,6 +70,7 @@ typedef struct MLGpu {
     CBVkDev vk;
     uint32_t sub_size;          /* the subgroup size gemv and attention require, 0: any */
     bool full_sub;              /* and full subgroups (gpu.c says why) */
+    bool gemm_wave32;           /* the products in subgroups of 32 (gpu.c says why) */
 
     VkSemaphore timeline;
     uint64_t submitted;

@@ -22,9 +22,9 @@ colour and the comment, and the genre unless the user typed one
 | | per track (4–5 min) |
 | --- | --- |
 | Loading the model, once | 3.5 s; 4.1 GB of weights onto the GPU, none kept in RAM |
-| Listening (the whole track) | 2.5–4.5 s on a 6900 XT, ~70x real time: the encoder 0.5–0.9 s, the prompt up to the audio's end (2,700 to 4,600 tokens) 2.0–3.6 s |
-| Every question of `cb_ml_tag` at once (seven yes/no, the colour in eight orders, three in words) | ~0.9 s for their 836 tokens, then 0.1–0.25 s for the answers' 10 to 30 |
-| A track in all, from its audio to the last answer | 4.3 s (the median of 16 tracks of 3 to 6 minutes; 6.7 s when the questions went one at a time and its audio was decoded first, 0.3 s) |
+| Listening (the whole track) | 2.3–4.1 s on a 6900 XT, ~75x real time: the encoder 0.5–0.8 s, the prompt up to the audio's end (2,700 to 4,600 tokens) 1.8–3.3 s |
+| Every question of `cb_ml_tag` at once (seven yes/no, the colour in eight orders, three in words) | ~0.85 s for their 836 tokens, then 0.1–0.25 s for the answers' 10 to 30 |
+| A track in all, from its audio to the last answer | 3.9 s (the median of 16 tracks of 3 to 6 minutes; 6.7 s when the questions went one at a time and its audio was decoded first, 0.3 s) |
 | Memory | 174 MB of RAM at most (64 MB of it a read buffer while loading); 5.6 GB of VRAM in buffers after the questions (4.1 GB weights, 1.2 GB cache, the decoder's scratch for 2048 tokens a pass), 6.1 GB at the peak for a 4-minute track and 6.7 GB for one of 9.5 minutes or more (the encoder's scratch, freed before the decoder reads its rows; the decoder's is freed before it is made) |
 
 What it gives, measured on the author's library (some 150 tracks: house,
@@ -292,12 +292,16 @@ reads back a token or a row of logits, and does nothing else.
   way in; a 32-row variant for a few dozen tokens). `gemv.comp` for one
   to eight rows, at the memory's speed. Each output is the same sum in the
   same order whatever rows come with it, in either GEMM (the GEMV's order
-  is another), which the questions together rely on.
+  is another), which the questions together rely on. The GEMMs run in
+  subgroups of 32 where the device lets a pipeline ask (RADV picks 64 for
+  compute, 10 to 15 % slower here; `CYANBOX_ML_WAVE32=0` leaves it so):
+  none of their sums goes through a subgroup, so no result changes.
 
 | kernel (6900 XT) | |
 | --- | --- |
-| GEMM, F16 weights, 2048 tokens | 12.3 TFLOPS (53 % of the f32 peak) |
-| GEMM, Q4_K, 512 tokens | 10.2–12.9 TFLOPS |
+| GEMM, F16 weights, 2048 tokens | 9.6–11.8 TFLOPS (51 % of the f32 peak at most) |
+| GEMM, Q4_K, 512 tokens | 8.5–12.4 TFLOPS |
+| GEMM, Q4_K, 2048 tokens | 11.8–13.5 TFLOPS |
 | GEMV, Q4_K, one token | 400–445 GB/s (80–87 % of the memory's) |
 | Attention, 512 queries after 3584 keys | 3.3 ms a layer, 9.8 TFLOPS |
 | Attention, one query after 4000 keys | 64 µs a layer |

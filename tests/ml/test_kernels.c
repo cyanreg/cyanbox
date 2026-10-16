@@ -14,7 +14,10 @@
 #include "ml_priv.h"
 #include "kernels.h"
 
-static MLGpu gpu;
+static MLGpu gpu_main;
+/* The device the helpers and the tests run on: gpu_main, but for
+ * test_gemm_waves's second. */
+static MLGpu *dev = &gpu_main;
 static int failures;
 
 /* ---------------------------------------------------------------- helpers */
@@ -47,48 +50,48 @@ static float from_half(uint16_t u)
 static MLBuf upload(const void *data, size_t size)
 {
     MLBuf st, b;
-    if (ml_buf_create(&gpu, &st, size, ML_MEM_UPLOAD) < 0 ||
-        ml_buf_create(&gpu, &b, size, ML_MEM_DEVICE) < 0) {
+    if (ml_buf_create(dev, &st, size, ML_MEM_UPLOAD) < 0 ||
+        ml_buf_create(dev, &b, size, ML_MEM_DEVICE) < 0) {
         fprintf(stderr, "out of memory\n");
         exit(1);
     }
     memcpy(st.map, data, size);
-    ml_buf_flush(&gpu, &st, size);
-    ml_gpu_copy(&gpu, &st, 0, &b, 0, size);
-    ml_gpu_barrier(&gpu);
-    ml_gpu_run(&gpu);
-    ml_buf_free(&gpu, &st);
+    ml_buf_flush(dev, &st, size);
+    ml_gpu_copy(dev, &st, 0, &b, 0, size);
+    ml_gpu_barrier(dev);
+    ml_gpu_run(dev);
+    ml_buf_free(dev, &st);
     return b;
 }
 
 static MLBuf zeros(size_t size)
 {
     MLBuf b;
-    if (ml_buf_create(&gpu, &b, size, ML_MEM_DEVICE) < 0) {
+    if (ml_buf_create(dev, &b, size, ML_MEM_DEVICE) < 0) {
         fprintf(stderr, "out of memory\n");
         exit(1);
     }
-    ml_gpu_fill(&gpu, &b, 0, size, 0);
-    ml_gpu_barrier(&gpu);
+    ml_gpu_fill(dev, &b, 0, size, 0);
+    ml_gpu_barrier(dev);
     return b;
 }
 
 static void download(const MLBuf *b, void *dst, size_t size)
 {
     MLBuf rb;
-    if (ml_buf_create(&gpu, &rb, size, ML_MEM_READBACK) < 0) {
+    if (ml_buf_create(dev, &rb, size, ML_MEM_READBACK) < 0) {
         fprintf(stderr, "out of memory\n");
         exit(1);
     }
-    ml_gpu_barrier(&gpu);
-    ml_gpu_copy(&gpu, b, 0, &rb, 0, size);
-    if (ml_gpu_run(&gpu) < 0) {
+    ml_gpu_barrier(dev);
+    ml_gpu_copy(dev, b, 0, &rb, 0, size);
+    if (ml_gpu_run(dev) < 0) {
         printf("the GPU failed\n");
         failures++;
     }
-    ml_buf_invalidate(&gpu, &rb);
+    ml_buf_invalidate(dev, &rb);
     memcpy(dst, rb.map, size);
-    ml_buf_free(&gpu, &rb);
+    ml_buf_free(dev, &rb);
 }
 
 static void check(const char *name, const float *got, const double *want, size_t n, double tol)
@@ -216,14 +219,14 @@ static void test_gemm(bool q4k, int M, int N, int K, uint32_t flags, bool bench)
     int64_t t0 = cb_time_us();
     for (int r = 0; r < reps; r++) {
         if (gemv)
-            ml_gpu_dispatch(&gpu, k, &p, sizeof(p), (N + 3) / 4, 1, 1);
+            ml_gpu_dispatch(dev, k, &p, sizeof(p), (N + 3) / 4, 1, 1);
         else if (small)
-            ml_gpu_dispatch(&gpu, k, &p, sizeof(p), (N + 127) / 128, (M + 31) / 32, 1);
+            ml_gpu_dispatch(dev, k, &p, sizeof(p), (N + 127) / 128, (M + 31) / 32, 1);
         else
-            ml_gpu_dispatch(&gpu, k, &p, sizeof(p), (N + 127) / 128, (M + 127) / 128, 1);
-        ml_gpu_barrier(&gpu);
+            ml_gpu_dispatch(dev, k, &p, sizeof(p), (N + 127) / 128, (M + 127) / 128, 1);
+        ml_gpu_barrier(dev);
     }
-    ml_gpu_run(&gpu);
+    ml_gpu_run(dev);
     double ms = (cb_time_us() - t0) * 1e-3 / reps;
 
     char name[64];
@@ -240,10 +243,10 @@ static void test_gemm(bool q4k, int M, int N, int K, uint32_t flags, bool bench)
         check(name, got, want, ny, 2e-5 * sqrt((double)K));
     }
 
-    ml_buf_free(&gpu, &bx);
-    ml_buf_free(&gpu, &bb);
-    ml_buf_free(&gpu, &by);
-    ml_buf_free(&gpu, &bw);
+    ml_buf_free(dev, &bx);
+    ml_buf_free(dev, &bb);
+    ml_buf_free(dev, &by);
+    ml_buf_free(dev, &bw);
     free(x); free(w); free(bias); free(y0); free(got); free(want); free(wh); free(wq);
 }
 
@@ -287,8 +290,8 @@ static void test_gemm_rows(void)
         uint32_t gx = k == ML_K_GEMV_Q4K ? (N + 3) / 4 : (N + 127) / 128;
         uint32_t gy = k == ML_K_GEMV_Q4K ? 1 : k == ML_K_GEMM_Q4K_SMALL ? (p.M + 31) / 32 :
                       (p.M + 127) / 128;
-        ml_gpu_dispatch(&gpu, k, &p, sizeof(p), gx, gy, 1);
-        ml_gpu_barrier(&gpu);
+        ml_gpu_dispatch(dev, k, &p, sizeof(p), gx, gy, 1);
+        ml_gpu_barrier(dev);
         download(r ? &bp : &by, r ? part : all, (size_t)M * N * 4);
         if (r == 3) {
             /* The GEMV's reference: its own rows, alone. */
@@ -303,8 +306,84 @@ static void test_gemm_rows(void)
             check_same(name, part + (size_t)runs[r].m0 * N, all + (size_t)runs[r].m0 * N,
                        (size_t)runs[r].m * N * 4);
     }
-    ml_buf_free(&gpu, &bx); ml_buf_free(&gpu, &bw); ml_buf_free(&gpu, &by); ml_buf_free(&gpu, &bp);
+    ml_buf_free(dev, &bx); ml_buf_free(dev, &bw); ml_buf_free(dev, &by); ml_buf_free(dev, &bp);
     free(x); free(w); free(wq); free(all); free(part);
+}
+
+/* One product on the current device, into out[M][N]. */
+static void gemm_on_dev(enum MLKernel k, const void *x, const void *w, size_t wsize,
+                        const float *bias, int M, int N, int K, uint32_t flags, float *out)
+{
+    MLBuf bx = upload(x, (size_t)M * K * 4), bw = upload(w, wsize), bb = upload(bias, N * 4);
+    MLBuf by = upload(out, (size_t)M * N * 4);
+    GemmPush p = {
+        .x = bx.addr, .w = bw.addr, .bias = bb.addr, .y = by.addr,
+        .M = (uint32_t)M, .N = (uint32_t)N, .K = (uint32_t)K, .ldx = (uint32_t)K,
+        .ldy = (uint32_t)N, .flags = flags,
+    };
+    uint32_t rows = k == ML_K_GEMM_Q4K_SMALL ? 32 : 128;
+    ml_gpu_dispatch(dev, k, &p, sizeof(p), (N + 127) / 128, (M + rows - 1) / rows, 1);
+    ml_gpu_barrier(dev);
+    download(&by, out, (size_t)M * N * 4);
+    ml_buf_free(dev, &bx); ml_buf_free(dev, &bw); ml_buf_free(dev, &bb); ml_buf_free(dev, &by);
+}
+
+/* The products in subgroups of 32 (gpu.c) and in the driver's size (a
+ * second device, with CYANBOX_ML_WAVE32=0): the same, bit for bit, as
+ * their invocations share no sums. */
+static void test_gemm_waves(void)
+{
+    if (!gpu_main.gemm_wave32) {
+        printf("%-28s skipped: the device picks its products' subgroups\n", "gemm waves");
+        return;
+    }
+    MLGpu other;
+    setenv("CYANBOX_ML_WAVE32", "0", 1);
+    int ret = ml_gpu_create(&other, NULL, false);
+    unsetenv("CYANBOX_ML_WAVE32");
+    if (ret < 0 || other.gemm_wave32) {
+        printf("%-28s FAIL  no second device in the driver's subgroups\n", "gemm waves");
+        failures++;
+        if (ret >= 0)
+            ml_gpu_destroy(&other);
+        return;
+    }
+
+    const int M = 150, N = 260, K = 512;
+    float *x = malloc((size_t)M * K * 4), *w = malloc((size_t)N * K * 4), *bias = malloc(N * 4);
+    float *y0 = malloc((size_t)M * N * 4), *a = malloc((size_t)M * N * 4);
+    float *b = malloc((size_t)M * N * 4);
+    uint8_t *wq = malloc((size_t)N * K / 256 * 144);
+    uint16_t *wh = malloc((size_t)N * K * 2);
+    for (size_t i = 0; i < (size_t)M * K; i++)
+        x[i] = (float)frand();
+    for (int i = 0; i < N; i++)
+        bias[i] = (float)frand();
+    for (size_t i = 0; i < (size_t)M * N; i++)
+        y0[i] = (float)frand();
+    for (size_t i = 0; i < (size_t)N * K; i++)
+        wh[i] = to_half((float)(frand() * 0.1));
+    make_q4k(wq, w, N, K);
+
+    static const struct { enum MLKernel k; const char *name; int m; uint32_t flags; } runs[] = {
+        { ML_K_GEMM_Q4K, "gemm_q4k waves", 150, FLAG_ADD },
+        { ML_K_GEMM_Q4K_SMALL, "gemm_q4k_small waves", 37, 0 },
+        { ML_K_GEMM_F16, "gemm_f16 waves b g a", 130, FLAG_BIAS | FLAG_GELU | FLAG_ADD },
+    };
+    for (size_t r = 0; r < CB_ARRAY_ELEMS(runs); r++) {
+        bool q4k = runs[r].k != ML_K_GEMM_F16;
+        const void *wd = q4k ? (const void *)wq : (const void *)wh;
+        size_t wsize = q4k ? (size_t)N * K / 256 * 144 : (size_t)N * K * 2;
+        memcpy(a, y0, (size_t)M * N * 4);
+        memcpy(b, y0, (size_t)M * N * 4);
+        gemm_on_dev(runs[r].k, x, wd, wsize, bias, runs[r].m, N, K, runs[r].flags, a);
+        dev = &other;
+        gemm_on_dev(runs[r].k, x, wd, wsize, bias, runs[r].m, N, K, runs[r].flags, b);
+        dev = &gpu_main;
+        check_same(runs[r].name, a, b, (size_t)runs[r].m * N * 4);
+    }
+    ml_gpu_destroy(&other);
+    free(x); free(w); free(bias); free(y0); free(a); free(b); free(wq); free(wh);
 }
 
 /* A 3x3, stride 2, padding 1 convolution through the GEMM's gather. */
@@ -350,13 +429,13 @@ static void test_conv(void)
         .flags = FLAG_BIAS | FLAG_GELU,
         .fin = FIN, .tin = TIN, .fout = FOUT, .tout = TOUT, .cin = CIN,
     };
-    ml_gpu_dispatch(&gpu, ML_K_GEMM_F16_CONV, &p, sizeof(p), (COUT + 127) / 128,
+    ml_gpu_dispatch(dev, ML_K_GEMM_F16_CONV, &p, sizeof(p), (COUT + 127) / 128,
                     (p.M + 127) / 128, 1);
     download(&bo, got, nout * 4);
     check("gemm_f16_conv", got, want, nout, 1e-4);
 
-    ml_buf_free(&gpu, &bi); ml_buf_free(&gpu, &bw); ml_buf_free(&gpu, &bb);
-    ml_buf_free(&gpu, &bo);
+    ml_buf_free(dev, &bi); ml_buf_free(dev, &bw); ml_buf_free(dev, &bb);
+    ml_buf_free(dev, &bo);
     free(in); free(bias); free(got); free(w); free(want);
 }
 
@@ -380,9 +459,9 @@ static void run_attn(const MLBuf *bq, const MLBuf *bo, const MLBuf *bk, const ML
             .nb_q = H, .nb_kv = KV, .nsplit = nsplit,
             .scale = (float)scale, .brk = brk, .shift = shift,
         };
-        ml_gpu_dispatch(&gpu, ML_K_ATTN_DEC, &p, sizeof(p), nsplit, KV, 1);
-        ml_gpu_barrier(&gpu);
-        ml_gpu_dispatch(&gpu, ML_K_ATTN_COMB, &p, sizeof(p), nq * (H / KV), KV, 1);
+        ml_gpu_dispatch(dev, ML_K_ATTN_DEC, &p, sizeof(p), nsplit, KV, 1);
+        ml_gpu_barrier(dev);
+        ml_gpu_dispatch(dev, ML_K_ATTN_COMB, &p, sizeof(p), nq * (H / KV), KV, 1);
     } else {
         /* Split the keys whenever there are 128 or more. */
         uint32_t fsplit = CB_MAX(1, nk / 128), len = CB_ALIGN((nk + fsplit - 1) / fsplit, 32);
@@ -394,15 +473,15 @@ static void run_attn(const MLBuf *bq, const MLBuf *bo, const MLBuf *bk, const ML
             .nb_q = H, .nb_kv = KV, .nsplit = split ? fsplit : 1, .split_len = split ? len : 4096,
             .scale = (float)scale, .brk = brk, .shift = shift,
         };
-        ml_gpu_dispatch(&gpu, ML_K_ATTN, &p, sizeof(p), (nq + 63) / 64, H, p.nsplit);
+        ml_gpu_dispatch(dev, ML_K_ATTN, &p, sizeof(p), (nq + 63) / 64, H, p.nsplit);
         if (p.nsplit > 1) {
-            ml_gpu_barrier(&gpu);
-            ml_gpu_dispatch(&gpu, ML_K_ATTN_FCOMB, &p, sizeof(p), nq, H, 1);
+            ml_gpu_barrier(dev);
+            ml_gpu_dispatch(dev, ML_K_ATTN_FCOMB, &p, sizeof(p), nq, H, 1);
         }
     }
-    ml_gpu_barrier(&gpu);
-    ml_gpu_run(&gpu);
-    ml_buf_free(&gpu, &bp);
+    ml_gpu_barrier(dev);
+    ml_gpu_run(dev);
+    ml_buf_free(dev, &bp);
 }
 
 /* Causal attention of nq queries at [pos0, pos0 + nq) over a cache that
@@ -487,12 +566,12 @@ static void test_attn(int nq, int pos0, bool dec, bool split, int brk, int shift
         download(&bo2, got2, nqv * 4);
         snprintf(name, sizeof(name), "%s keys from %d +%d", dec ? "attn_dec" : "attn", brk, shift);
         check_same(name, got2, got, nqv * 4);
-        ml_buf_free(&gpu, &bk2); ml_buf_free(&gpu, &bv2); ml_buf_free(&gpu, &bo2);
+        ml_buf_free(dev, &bk2); ml_buf_free(dev, &bv2); ml_buf_free(dev, &bo2);
         free(kc2); free(vc2); free(got2);
     }
 
-    ml_buf_free(&gpu, &bq); ml_buf_free(&gpu, &bk); ml_buf_free(&gpu, &bv);
-    ml_buf_free(&gpu, &bo);
+    ml_buf_free(dev, &bq); ml_buf_free(dev, &bk); ml_buf_free(dev, &bv);
+    ml_buf_free(dev, &bo);
     free(q); free(got); free(kc); free(vc); free(want); free(s);
 }
 
@@ -514,9 +593,9 @@ static void bench_attn(int nq, int pos0)
                 .nq = (uint32_t)nq, .pos0 = (uint32_t)pos0, .max_ctx = CTX,
                 .nb_q = H, .nb_kv = KV, .nsplit = nsplit, .scale = 0.1f,
             };
-            ml_gpu_dispatch(&gpu, ML_K_ATTN_DEC, &p, sizeof(p), nsplit, KV, 1);
-            ml_gpu_barrier(&gpu);
-            ml_gpu_dispatch(&gpu, ML_K_ATTN_COMB, &p, sizeof(p), nq * 4, KV, 1);
+            ml_gpu_dispatch(dev, ML_K_ATTN_DEC, &p, sizeof(p), nsplit, KV, 1);
+            ml_gpu_barrier(dev);
+            ml_gpu_dispatch(dev, ML_K_ATTN_COMB, &p, sizeof(p), nq * 4, KV, 1);
         } else {
             uint32_t qblocks = (nq + 63) / 64;
             uint32_t nsplit = CB_MAX(1, 256 / (qblocks * H));
@@ -529,21 +608,21 @@ static void bench_attn(int nq, int pos0)
                 .nq = (uint32_t)nq, .pos0 = (uint32_t)pos0, .max_ctx = CTX,
                 .nb_q = H, .nb_kv = KV, .nsplit = nsplit, .split_len = len, .scale = 0.1f,
             };
-            ml_gpu_dispatch(&gpu, ML_K_ATTN, &p, sizeof(p), qblocks, H, nsplit);
+            ml_gpu_dispatch(dev, ML_K_ATTN, &p, sizeof(p), qblocks, H, nsplit);
             if (nsplit > 1) {
-                ml_gpu_barrier(&gpu);
-                ml_gpu_dispatch(&gpu, ML_K_ATTN_FCOMB, &p, sizeof(p), nq, H, 1);
+                ml_gpu_barrier(dev);
+                ml_gpu_dispatch(dev, ML_K_ATTN_FCOMB, &p, sizeof(p), nq, H, 1);
             }
         }
-        ml_gpu_barrier(&gpu);
+        ml_gpu_barrier(dev);
     }
-    ml_gpu_run(&gpu);
+    ml_gpu_run(dev);
     double ms = (cb_time_us() - t0) * 1e-3 / reps;
     double flops = 4.0 * H * D * ((double)nq * pos0 + (double)nq * nq / 2);
     printf("attn %4d queries after %5d   %8.3f ms  %6.2f TFLOPS\n", nq, pos0, ms,
            flops / (ms * 1e9));
-    ml_buf_free(&gpu, &bq); ml_buf_free(&gpu, &bo); ml_buf_free(&gpu, &bk);
-    ml_buf_free(&gpu, &bv); ml_buf_free(&gpu, &bp);
+    ml_buf_free(dev, &bq); ml_buf_free(dev, &bo); ml_buf_free(dev, &bk);
+    ml_buf_free(dev, &bv); ml_buf_free(dev, &bp);
 }
 
 static void test_enc_attn(void)
@@ -588,14 +667,14 @@ static void test_enc_attn(void)
         .nb_chunks = C, .tail = TAIL,
         .scale = 0.125f,
     };
-    ml_gpu_dispatch(&gpu, ML_K_ENC_ATTN, &p, sizeof(p), C, H, 1);
+    ml_gpu_dispatch(dev, ML_K_ENC_ATTN, &p, sizeof(p), C, H, 1);
     download(&bo, got, n * 4);
     /* Rows past the tail are padding nobody reads. */
     for (size_t i = (size_t)((C - 1) * T + TAIL) * W; i < n; i++)
         got[i] = 0.0f;
     check("enc_attn", got, want, n, 1e-5);
-    ml_buf_free(&gpu, &bq); ml_buf_free(&gpu, &bk); ml_buf_free(&gpu, &bv);
-    ml_buf_free(&gpu, &bo);
+    ml_buf_free(dev, &bq); ml_buf_free(dev, &bk); ml_buf_free(dev, &bv);
+    ml_buf_free(dev, &bo);
     free(q); free(k); free(v); free(got); free(want);
 }
 
@@ -657,7 +736,7 @@ static void test_rope(void)
         .pos0 = POS0, .max_ctx = CTX, .nb_q = H, .nb_kv = KV,
         .eps = 1e-6f,
     };
-    ml_gpu_dispatch(&gpu, ML_K_QK_ROPE, &p, sizeof(p), NT, 1, 1);
+    ml_gpu_dispatch(dev, ML_K_QK_ROPE, &p, sizeof(p), NT, 1, 1);
     download(&bq, gq, nq * 4);
     download(&bkc, gk, nc * 2);
     for (size_t i = 0; i < nc; i++)
@@ -679,7 +758,7 @@ static void test_rope(void)
     p.vc = bvc2.addr;
     p.pos = bpos.addr;
     p.pos0 = 0;
-    ml_gpu_dispatch(&gpu, ML_K_QK_ROPE, &p, sizeof(p), NT, 1, 1);
+    ml_gpu_dispatch(dev, ML_K_QK_ROPE, &p, sizeof(p), NT, 1, 1);
     float *gq2 = malloc(nq * 4);
     uint16_t *gk2 = malloc(nc * 2), *gv = malloc(nc * 2), *gv2 = malloc(nc * 2);
     download(&bq2, gq2, nq * 4);
@@ -695,12 +774,12 @@ static void test_rope(void)
         }
     }
     check_same("qk_rope k, v to the slots", &same, &(bool) { true }, sizeof(same));
-    ml_buf_free(&gpu, &bq2); ml_buf_free(&gpu, &bkc2); ml_buf_free(&gpu, &bvc2);
-    ml_buf_free(&gpu, &bpos);
+    ml_buf_free(dev, &bq2); ml_buf_free(dev, &bkc2); ml_buf_free(dev, &bvc2);
+    ml_buf_free(dev, &bpos);
     free(gq2); free(gk2); free(gv); free(gv2); free(pos);
-    ml_buf_free(&gpu, &bq); ml_buf_free(&gpu, &bk); ml_buf_free(&gpu, &bv);
-    ml_buf_free(&gpu, &bqw); ml_buf_free(&gpu, &bkw); ml_buf_free(&gpu, &br);
-    ml_buf_free(&gpu, &bkc); ml_buf_free(&gpu, &bvc);
+    ml_buf_free(dev, &bq); ml_buf_free(dev, &bk); ml_buf_free(dev, &bv);
+    ml_buf_free(dev, &bqw); ml_buf_free(dev, &bkw); ml_buf_free(dev, &br);
+    ml_buf_free(dev, &bkc); ml_buf_free(dev, &bvc);
     free(q); free(k); free(v); free(rope); free(gq); free(gk); free(wq); free(wk); free(gkf);
 }
 
@@ -760,14 +839,14 @@ static void test_mel(void)
         .maxbits = bm.addr,
         .nb_samples = N, .nb_frames = FR,
     };
-    ml_gpu_dispatch(&gpu, ML_K_MEL, &p, sizeof(p), (FR + 7) / 8, 1, 1);
-    ml_gpu_barrier(&gpu);
+    ml_gpu_dispatch(dev, ML_K_MEL, &p, sizeof(p), (FR + 7) / 8, 1, 1);
+    ml_gpu_barrier(dev);
     MelNormPush np = { .mel = bo.addr, .maxbits = bm.addr, .count = FR * 128 };
-    ml_gpu_dispatch(&gpu, ML_K_MEL_NORM, &np, sizeof(np), (FR * 128 + 255) / 256, 1, 1);
+    ml_gpu_dispatch(dev, ML_K_MEL_NORM, &np, sizeof(np), (FR * 128 + 255) / 256, 1, 1);
     download(&bo, got, (size_t)FR * 128 * 4);
     check("mel", got, want, (size_t)FR * 128, 1e-4);
-    ml_buf_free(&gpu, &bp); ml_buf_free(&gpu, &bw); ml_buf_free(&gpu, &bf);
-    ml_buf_free(&gpu, &bb); ml_buf_free(&gpu, &bo); ml_buf_free(&gpu, &bm);
+    ml_buf_free(dev, &bp); ml_buf_free(dev, &bw); ml_buf_free(dev, &bf);
+    ml_buf_free(dev, &bb); ml_buf_free(dev, &bo); ml_buf_free(dev, &bm);
     free(pcm); free(filt); free(basis); free(got); free(want);
 }
 
@@ -803,22 +882,22 @@ static void test_norm(bool rms)
         .n = N, .ldx = N, .ldy = N,
         .eps = 1e-5f,
     };
-    ml_gpu_dispatch(&gpu, rms ? ML_K_RMSNORM : ML_K_LAYERNORM, &p, sizeof(p), R, 1, 1);
+    ml_gpu_dispatch(dev, rms ? ML_K_RMSNORM : ML_K_LAYERNORM, &p, sizeof(p), R, 1, 1);
     download(&by, got, R * N * 4);
     check(rms ? "rmsnorm" : "layernorm", got, want, R * N, 1e-5);
-    ml_buf_free(&gpu, &bx); ml_buf_free(&gpu, &bw); ml_buf_free(&gpu, &bb); ml_buf_free(&gpu, &by);
+    ml_buf_free(dev, &bx); ml_buf_free(dev, &bw); ml_buf_free(dev, &bb); ml_buf_free(dev, &by);
     free(x); free(got); free(want);
 }
 
 int main(int argc, char **argv)
 {
     bool bench = argc > 1 && !strcmp(argv[1], "-b");
-    int ret = ml_gpu_create(&gpu, NULL, false);
+    int ret = ml_gpu_create(dev, NULL, false);
     if (ret < 0) {
         printf("no device for the model: skipped\n");
         return 77;
     }
-    printf("device: %s\n", gpu.vk.props.deviceName);
+    printf("device: %s\n", dev->vk.props.deviceName);
 
     if (bench) {
         test_gemm(false, 2048, 1280, 1280, FLAG_BIAS, true);
@@ -855,6 +934,7 @@ int main(int argc, char **argv)
         test_conv();
         test_enc_attn();
         test_gemm_rows();
+        test_gemm_waves();
         test_attn(70, 30, false, false, 20, 50);
         test_attn(1, 300, false, false, 0, 0);
         test_attn(3, 129, false, false, 0, 0);
@@ -873,12 +953,12 @@ int main(int argc, char **argv)
 
     /* With CYANBOX_GPU_VALIDATION=1: what the layer found fails the test, as
      * test_compute's does. */
-    int errors = cb_vkdev_validation_errors(&gpu.vk);
+    int errors = cb_vkdev_validation_errors(&dev->vk);
     if (errors) {
         printf("FAIL %d Vulkan validation errors\n", errors);
         failures++;
     }
-    ml_gpu_destroy(&gpu);
+    ml_gpu_destroy(dev);
     printf("%s\n", failures ? "FAILED" : "all ok");
     return failures ? 1 : 0;
 }
