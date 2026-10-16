@@ -2,9 +2,11 @@
 
 /* The ring backend (RX_AUDIO_RING) in real time, as LINK CUE takes it:
  * 336 frames every 7 ms come back as the deck's audio in 16 bits and the
- * deck moves by what was taken; taken at half that pace it moves at half
- * speed (the taker's clock paces the decks); with no one taking it runs
- * on the clock; paused, what is taken is silence. About four seconds. */
+ * deck moves by what was taken; a taker that asks nothing for a while,
+ * as a mixer holding enough does, gets what follows and the deck waits;
+ * taken at half that pace it moves at half speed (the taker's clock paces
+ * the decks); with no one taking it runs on the clock; paused, what is
+ * taken is silence. About four seconds. */
 
 #include "rxbox/player.h"
 
@@ -116,6 +118,22 @@ int main(void)
     CHECK(fabs(moved - (double)got / RATE) < 0.06, "moved %.3f s for %.3f s taken", moved,
           (double)got / RATE);
 
+    /* Nothing asked for 60 ms (the DJM-A9 as its LINK CUE starts) or 120:
+     * the next take is what the ring kept, and the deck waited. */
+    for (int gap = 60; gap <= 120; gap += 60) {
+        static int16_t buf[336 * 2];
+        take_for(p, 7000, 0.1, &level);
+        from = position(p);
+        sleep_us(gap * 1000);
+        int n = rx_player_ring_take(p, buf, 336);
+        moved = position(p) - from;
+        int at = 0;
+        for (int i = 0; i < n; i++)
+            at += abs(buf[i * 2] - 16384) <= 2 && abs(buf[i * 2 + 1] + 8192) <= 2;
+        CHECK(n == 336 && at == n && moved < 0.03,
+              "after %d ms: %d frames, %d at the level, moved %.3f s", gap, n, at, moved);
+    }
+
     /* Taken at half that pace: the deck at half speed. */
     sleep_us(100000);
     from = position(p);
@@ -124,7 +142,9 @@ int main(void)
     CHECK(moved > 0.4 && moved < 0.6 && fabs(moved - (double)got / RATE) < 0.06,
           "half pace: moved %.3f s for %.3f s taken", moved, (double)got / RATE);
 
-    /* No one taking: the clock. */
+    /* No one taking (longer than a mixer that holds enough asks nothing):
+     * the clock. */
+    sleep_us(200000);
     from = position(p);
     sleep_us(500000);
     moved = position(p) - from;

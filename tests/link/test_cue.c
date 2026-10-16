@@ -7,9 +7,11 @@
  * The decisions: nothing while the decks do not play; a deck started
  * takes over, and from then on every timing that names us with LINK CUE
  * on is answered with "go on", its counter echoed and the next 336 frames
- * taken; a player taking the cue over keeps it until the decks start
- * again; LINK CUE off, nothing; after a pause the first packet takes over
- * again; nobody elected yet, taken over; one mixer at a time, the next
+ * taken; a mixer that holds enough asking nothing for a while is no
+ * pause; a player taking the cue over keeps it until the decks start
+ * again; LINK CUE off, nothing; after a timing left unanswered, or a long
+ * pause, the first packet takes over again; nobody elected yet, taken
+ * over; one mixer at a time, the next
  * once the first is silent for a second; a service stopping lets its
  * mixer go.
  *
@@ -125,13 +127,30 @@ static void decisions(void)
     rx_link_cue_state_at(c, &st, now);
     CHECK(st.mixer && st.on && st.source == 17 && st.ours && st.sending);
 
+    /* The mixer holds enough and asks nothing for a while (the DJM-A9: 58
+     * ms as its LINK CUE starts): no pause, the frames go on. Longer than
+     * a mixer holds: taken over again. */
+    now += 58 * MS;
+    CHECK_EQ(answer(c, &a, djm, now, n++, true, 17), RX_CUE_GO_ON);
+    CHECK(frames_from(&got, 21 * 336));
+    now += 120 * MS;
+    CHECK_EQ(answer(c, &a, djm, now, n++, true, 17), RX_CUE_GO_ON);
+    now += 200 * MS;
+    CHECK_EQ(answer(c, &a, djm, now, n++, true, 17), RX_CUE_TAKE);
+    now += 7 * MS;
+    CHECK_EQ(answer(c, &a, djm, now, n++, true, 17), RX_CUE_GO_ON);
+    /* A timing that never came: taken over again. */
+    now += 14 * MS;
+    n++;
+    CHECK_EQ(answer(c, &a, djm, now, n++, true, 17), RX_CUE_TAKE);
+
     /* A player takes the cue over: it keeps it while the decks play on. */
     for (int i = 0; i < 20; i++) {
         now += 7 * MS;
         all &= answer(c, &a, djm, now, n++, true, 2) == -1;
         rx_link_cue_decks(c, true, false);
     }
-    CHECK(all && src.takes == 21);
+    CHECK(all && src.takes == 26);
     rx_link_cue_state_at(c, &st, now);
     CHECK(st.source == 2 && !st.ours && !st.sending);
 

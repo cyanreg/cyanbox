@@ -21,10 +21,13 @@
 #include <time.h>
 
 /* Frames the ring holds (a power of two), what it is kept at while taken,
- * and how long after the last take it counts as not taken. */
+ * and how long after the last take it counts as not taken: longer than a
+ * mixer goes without asking while it holds enough (the DJM-A9: 58 ms as
+ * its LINK CUE starts), which must neither drop what the ring kept nor
+ * let the decks run on. */
 #define RING_FRAMES  4096
 #define RING_TARGET  1024
-#define RING_IDLE_US 50000
+#define RING_IDLE_US 150000
 
 struct RXRingOut {
     pthread_t   thread;

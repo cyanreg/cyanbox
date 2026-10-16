@@ -19,8 +19,10 @@
  * It takes over when its decks start (a deck started, a mixer heard while
  * one plays, nobody elected yet) and then goes on: every timing answered
  * with the next 336 frames while the decks play, LINK CUE is on and the
- * mixer names us. After a pause in what it sent the first packet takes
- * over again: a mixer that ran dry let its source go. A player that takes
+ * mixer names us. After a timing it left unanswered, or a pause in what
+ * it sent, the first packet takes over again: a mixer that ran dry let
+ * its source go. A mixer that holds enough asks nothing for a while, and
+ * that is no pause. A player that takes
  * the cue over keeps it until the decks start again: rxbox does not fight
  * a DJ cueing on a deck. */
 
@@ -38,8 +40,11 @@
 
 /* A mixer not heard for this long is gone, and another may be answered. */
 #define MIXER_GONE_US 1000000
-/* After this long without sending, the next packet takes over again. */
-#define PAUSE_US      50000
+/* After a timing left unanswered, or this long without sending, the next
+ * packet takes over again. Longer than a mixer goes without asking while
+ * it holds enough: the DJM-A9, its 70 ms of silence queued as its LINK
+ * CUE starts, asks nothing for 58 ms. */
+#define PAUSE_US      150000
 /* Audio sent this recently is "sending" in the state. */
 #define SENDING_US    100000
 
@@ -57,6 +62,7 @@ struct RXLinkCue {
     RXPktCueTiming last;
     int number;
     int64_t sent;               /* our last audio to it, 0 none */
+    uint32_t answered;          /* the counter that audio answered */
 };
 
 int rx_link_cue_new(RXLinkCue **out, rx_link_cue_take_fn take, void *opaque)
@@ -150,7 +156,8 @@ size_t rx_link_cue_answer(RXLinkCue *c, const void *svc, uint32_t from, int numb
     else if (c->claim || !t->source)
         mode = RX_CUE_TAKE;
     else if (t->source == number && t->on)
-        mode = c->sent && now - c->sent < PAUSE_US ? RX_CUE_GO_ON : RX_CUE_TAKE;
+        mode = c->sent && t->counter == c->answered + 1 && now - c->sent < PAUSE_US
+               ? RX_CUE_GO_ON : RX_CUE_TAKE;
     if (mode >= 0) {
         RXPktCueAudio a = { .number = number, .mode = mode, .counter = t->counter, .audio = true };
         snprintf(a.name, sizeof(a.name), "%s", name);
@@ -160,6 +167,7 @@ size_t rx_link_cue_answer(RXLinkCue *c, const void *svc, uint32_t from, int numb
         if (!w.err) {
             len = w.len;
             c->sent = now;
+            c->answered = t->counter;
             c->claim = false;
         }
     }

@@ -697,8 +697,10 @@ engage, which from the source elected would stop it: it takes over when
 a deck starts, when it first hears a mixer while one plays, and while
 nobody is elected; then it goes on, each timing that names it with LINK
 CUE on answered with the next 7 ms, so the mixer's clock paces the decks.
-After a pause of 50 ms in what it sent (LINK CUE was off), the first
-packet takes over again: a mixer that ran dry let its source go. A player
+After a timing it left unanswered (LINK CUE was off), or 150 ms without
+sending, the first packet takes over again: a mixer that ran dry let its
+source go. A mixer that holds enough asks nothing for a while (the
+DJM-A9: 58 ms as its LINK CUE starts), and that is no pause. A player
 that takes the cue over keeps it until a deck in rxbox starts again:
 rxbox does not fight a DJ cueing on a deck. While its decks do not play
 nothing is sent. One mixer at a time: the first heard, until it is silent
@@ -707,18 +709,25 @@ for a second.
 **With `--pro-link`** the interface's deck is heard only there: the
 player runs its ring backend (src/player/ringout.c), whose audio the
 services take 336 frames at a time as the mixer asks, and no audio
-device is opened. Each tick tells LINK CUE whether the deck plays (or
-scrubs) and when it starts (src/app/link.c); the status bar says where
+device is opened. The ring counts as taken until 150 ms go by without a
+take, so a mixer that holds enough and asks nothing for a while neither
+loses what the ring kept nor finds the deck run on. Each tick tells LINK
+CUE whether the deck plays (or scrubs) and when it starts
+(src/app/link.c); the status bar says where
 the cue stands (docs/UI.md). `rxbox link serve` has no deck and binds no
 LINK CUE port.
 
-**Proven**: test_cue, the decisions against a driven clock and a service
-on the loopback answering a mixer of the test's own (a second of timings
-answered packet for packet, one takeover, the frames in the order taken,
-nothing to a device off the link); the packets in test_packets, built from
-touch_audio.adoc's figures (nobody captured them for us); the fuzzer;
-the app's test_link, the deck played with the ring backend and heard by a
-mixer of the test's own, the deck moving by what was taken; and by hand,
+**Proven**: test_cue, the decisions against a driven clock (a mixer
+asking nothing for 58 and 120 ms gone on, a timing never answered taken
+over) and a service on the loopback answering a mixer of the test's own
+(a second of timings answered packet for packet, one takeover, the
+frames in the order taken, nothing to a device off the link); the
+packets in test_packets, built from touch_audio.adoc's figures (nobody
+captured them for us); the fuzzer; test_ring, the ring taken in real
+time (after 60 and 120 ms without a take, what it kept, the deck
+waiting); the app's test_link, the deck played with the ring backend and
+heard by a mixer of the test's own, the deck moving by what was taken;
+and by hand,
 the interface with `--pro-link` in tests/link/netns.sh's namespaces and a
 fake mixer on the other host, its status bar saying `LINK CUE: playing on
 DJM-A9`.
@@ -745,14 +754,17 @@ on while rxbox was already elected, got no timing for about a second
 rxbox's.
 **An emulated DJM-A9** (its firmware 1.22 under QEMU, the cdj session's
 `djma9/emu`, 2026-10-16; its port-50000 lengths are big-endian) worked
-the same with nothing changed in rxbox: timing to 17 every 7 ms (3098 in
-21.7 s), rxbox took over with 2 while nobody was elected, the mixer
-handed over and named 17, and once its LINK CUE was on 2847 packets
-followed over 19.93 s, every counter a timing's, all 0 but the first;
-the mixer's output carried 440 Hz for those 19.93 s. Its timing waits
-about 58 ms after LINK CUE goes on (its 70 ms prefill, as on the
-DJM-900NXS), so rxbox, 50 ms without sending, takes over once more from
-the source elected, which changes nothing. There the LINK CUE button is
+the same: timing to 17 every 7 ms (3098 in 21.7 s), rxbox took over
+with 2 while nobody was elected, the mixer handed over and named 17, and
+once its LINK CUE was on every timing was answered, its counter echoed;
+the mixer's output carried 440 Hz for the 19.93 s played. But with a
+hole: as its LINK CUE goes on the mixer queues 70 ms of silence and,
+holding enough, asked nothing for 58 ms after its third timing. rxbox
+(2d195f8) counted that as a pause of its own, took over once more, and
+its ring, not taken from for 50 ms, dropped what it kept and gave 336
+frames of silence: 6.8 ms of nothing in the mixer's output, 14 ms into
+the tone. Since then a mixer asking nothing is no pause (above), for
+LINK CUE and for the ring. There the LINK CUE button is
 set through a stand-in for the panel's microcontroller and the DSP is a
 stand-in that collects the audio; the network, PRO DJ LINK and LINK CUE
 code are the firmware's own.
