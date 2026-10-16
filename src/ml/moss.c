@@ -32,18 +32,20 @@
  *    a step. Each comes out as it would alone, bit for bit (Segment says
  *    how), several times faster: a question of a few dozen tokens alone
  *    keeps most of the GPU idle.
- *  - The prefill goes through the decoder 512 tokens at a time, so its
- *    scratch buffers do not grow with the audio; the decoder's single
- *    tokens use the GEMV kernel, which reads each weight once.
+ *  - The prefill goes through the decoder 2048 tokens a pass, in chunks of
+ *    512 that each keep the attention they would have alone (the GEMM is
+ *    faster on more rows), so its scratch buffers do not grow with the
+ *    audio; the decoder's single tokens use the GEMV kernel, which reads
+ *    each weight once.
  *  - The cache is f16, [layer][kv head][position][128]: a block of keys
  *    is one contiguous read for the attention kernel.
  *  - Tables (the DFT's basis, RoPE's angles, the encoder's positions) are
  *    computed here in double precision and uploaded once.
- *  - The audio's scratch (the encoder's buffers, 1.2 GB for 9.5 minutes,
- *    and the adapter's rows) is freed once the audio is in the cache: the
- *    questions after it read none of it, and the GPU is shared with the
- *    desktop and the analyses. Each listen allocates it again, at the size
- *    it needs.
+ *  - The audio's scratch is freed as soon as nothing reads it: the
+ *    encoder's buffers (1.2 GB for 9.5 minutes) once its rows are made,
+ *    the adapter's rows once the audio is in the cache; the questions
+ *    after it read none of it, and the GPU is shared with the desktop and
+ *    the analyses. Each listen allocates it again, at the size it needs.
  *  - The context left for the questions is what they need, measured by the
  *    caller (cb_ml_tag: the colour question grows with the legend's
  *    words), and never less than QUESTION_ROOM. */
@@ -80,6 +82,11 @@
 #define CONV_BATCH 8
 #define LLM_CHUNK  512
 #define ADAPT_ROWS 2048
+
+/* Rows of a pass through the decoder at most when reading the audio: its
+ * chunks of LLM_CHUNK tokens go through four at a time, each keeping its
+ * own attention (Segment), as the GEMM is faster on more rows. */
+#define PASS_ROWS  2048
 
 #define TOK_ENDOFTEXT 151643
 #define TOK_IM_START  151644
@@ -136,6 +143,7 @@ struct CBML {
 
     /* The context: what the cache holds. */
     int nb_prefix;              /* tokens of the prompt up to the audio's end */
+    int pass_rows;              /* PASS_ROWS, or fewer (ml_set_pass_rows) */
     int nb_audio;               /* audio rows in `audio`, `ds_out` */
 
     double listen_ms, ask_ms;
@@ -309,6 +317,19 @@ static void free_audio_scratch(CBML *ml)
         &ml->ex, &ml->eh, &ml->eq, &ml->ek, &ml->ev, &ml->eo, &ml->ef,
         &ml->ds_x[0], &ml->ds_x[1], &ml->ds_x[2], &ml->ag, &ml->au,
         &ml->audio, &ml->ds_out[0], &ml->ds_out[1], &ml->ds_out[2],
+    };
+    for (size_t i = 0; i < CB_ARRAY_ELEMS(all); i++)
+        ml_buf_free(&ml->g, &all[i]->b);
+}
+
+/* The encoder's scratch, once its rows are made: the decoder reads only
+ * the adapter's and the deepstack's. */
+static void free_encoder_scratch(CBML *ml)
+{
+    Scratch *all[] = {
+        &ml->pcm, &ml->mel, &ml->maxbits, &ml->c1, &ml->c2, &ml->c3, &ml->stem,
+        &ml->ex, &ml->eh, &ml->eq, &ml->ek, &ml->ev, &ml->eo, &ml->ef,
+        &ml->ds_x[0], &ml->ds_x[1], &ml->ds_x[2], &ml->ag, &ml->au,
     };
     for (size_t i = 0; i < CB_ARRAY_ELEMS(all); i++)
         ml_buf_free(&ml->g, &all[i]->b);
@@ -521,6 +542,7 @@ int cb_ml_open(CBML **out, const char *path, const CBMLOptions *opt)
     ml->f.fd = -1;
     ml->max_ctx = opt->max_context > 0 ? opt->max_context : 8192;
     ml->max_ctx = CB_ALIGN(ml->max_ctx, 64);
+    ml->pass_rows = PASS_ROWS;
 
     int64_t t0 = cb_time_us();
     int ret;
@@ -1064,7 +1086,8 @@ static void pass(CBML *ml, const Rows *r, const Segment *segs, int nb_segs, cons
  * the cache; aidx[i] >= 0 puts that audio row at token i instead of its
  * embedding (and adds the deepstack's rows after the first layers). The
  * logits of the last nb_logits tokens (at most 8, and n when n is no more
- * than LLM_CHUNK) end in ml->logits, [nb_logits][VOCAB]. */
+ * than LLM_CHUNK) end in ml->logits, [nb_logits][VOCAB]. The tokens are
+ * read in chunks of LLM_CHUNK, a segment each, up to PASS_ROWS a pass. */
 static int decode(CBML *ml, const int32_t *ids, const int32_t *aidx, int n, int pos0,
                   int nb_logits, CBCancel *cancel)
 {
@@ -1073,10 +1096,10 @@ static int decode(CBML *ml, const int32_t *ids, const int32_t *aidx, int n, int 
     if (pos0 + n > ml->max_ctx)
         return CB_ERROR(E2BIG);
 
-    int step = CB_MIN(n, LLM_CHUNK);
+    int step = CB_MIN(n, LLM_CHUNK), per_pass = CB_MAX(ml->pass_rows / LLM_CHUNK, 1);
     size_t part = CB_MAX((size_t)L_KV * (ml->max_ctx / ATTN_SPLIT + 1) * ATTN_DEC_ROWS,
                          (size_t)ATTN_MAX_PARTS * L_HEADS) * ATTN_PART * 4;
-    if ((ret = reserve_decoder(ml, step, part, 8)) < 0)
+    if ((ret = reserve_decoder(ml, CB_MIN(n, step * per_pass), part, 8)) < 0)
         return ret;
 
     int32_t *up = ml->up.map;
@@ -1091,22 +1114,29 @@ static int decode(CBML *ml, const int32_t *ids, const int32_t *aidx, int n, int 
     ml_gpu_copy(g, &ml->up, (size_t)ml->max_ctx * 4, &ml->aidx.b, 0, n * 4);
     ml_gpu_barrier(g);
 
-    for (int c0 = 0; c0 < n; c0 += step) {
-        int m = CB_MIN(step, n - c0);
+    for (int p0 = 0; p0 < n; p0 += step * per_pass) {
+        Segment segs[PASS_ROWS / LLM_CHUNK + 1];
+        int ns = 0, rows = 0, last = 0;
+        for (int c0 = p0; c0 < n && ns < per_pass; c0 += step) {
+            last = CB_MIN(step, n - c0);
+            segs[ns++] = (Segment) {
+                .row = rows, .m = last, .pos0 = pos0 + c0, .slot0 = pos0 + c0,
+            };
+            rows += last;
+        }
         Rows r = {
-            .ids = ml->ids.b.addr + (VkDeviceAddress)c0 * 4,
-            .aidx = ml->aidx.b.addr + (VkDeviceAddress)c0 * 4,
-            .n = m,
+            .ids = ml->ids.b.addr + (VkDeviceAddress)p0 * 4,
+            .aidx = ml->aidx.b.addr + (VkDeviceAddress)p0 * 4,
+            .n = rows,
             .audio = audio,
         };
-        Segment s = { .row = 0, .m = m, .pos0 = pos0 + c0, .slot0 = pos0 + c0 };
         int lrows[8], nl = 0;
-        if (c0 + m == n) {
-            nl = CB_CLAMP(nb_logits, 1, CB_MIN(8, m));
+        if (p0 + rows == n) {
+            nl = CB_CLAMP(nb_logits, 1, CB_MIN(8, last));
             for (int j = 0; j < nl; j++)
-                lrows[j] = m - nl + j;
+                lrows[j] = rows - nl + j;
         }
-        pass(ml, &r, &s, 1, lrows, nl, 0);
+        pass(ml, &r, segs, ns, lrows, nl, 0);
         if ((ret = ml_gpu_run(g)) < 0)
             return ret;
         if (cb_cancelled(cancel))
@@ -1227,6 +1257,11 @@ const MLStats *ml_stats(const CBML *ml)
     return &ml->stats;
 }
 
+void ml_set_pass_rows(CBML *ml, int rows)
+{
+    ml->pass_rows = CB_CLAMP(rows, LLM_CHUNK, PASS_ROWS);
+}
+
 int ml_listen(CBML *ml, const float *pcm, int64_t n, int room, CBCancel *cancel)
 {
     int64_t t0 = cb_time_us();
@@ -1249,6 +1284,7 @@ int ml_listen(CBML *ml, const float *pcm, int64_t n, int room, CBCancel *cancel)
         return CB_ERROR(E2BIG);
 
     Tokens t = { 0 };
+    uint64_t peak = 0;
     ml->stats = (MLStats) { 0 };
     free_decoder_scratch(ml);
     int ret = encode(ml, pcm, n, cancel);
@@ -1257,6 +1293,8 @@ int ml_listen(CBML *ml, const float *pcm, int64_t n, int room, CBCancel *cancel)
     int nb_audio = ret;
     int64_t t1 = cb_time_us();
     ml->stats.encode_ms = (t1 - t0) * 1e-3;
+    peak = ml_gpu_allocated(&ml->g);
+    free_encoder_scratch(ml);
     if ((ret = tok_head(ml, &t)) < 0 || (ret = tok_push(&t, TOK_AUDIO_BOS, -1)) < 0 ||
         (ret = tok_audio(&t, nb_audio)) < 0 || (ret = tok_push(&t, TOK_AUDIO_EOS, -1)) < 0)
         goto end;
@@ -1275,7 +1313,7 @@ end:
     tok_free(&t);
     if (ret < 0)
         ml_gpu_discard(&ml->g);
-    uint64_t during = ml_gpu_allocated(&ml->g);
+    uint64_t during = CB_MAX(peak, ml_gpu_allocated(&ml->g));
     free_audio_scratch(ml);
     cb_debug("ml: %.2f GB on the GPU while listening, %.2f GB after", during * 1e-9,
              ml_gpu_allocated(&ml->g) * 1e-9);

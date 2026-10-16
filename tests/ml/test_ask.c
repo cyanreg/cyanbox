@@ -5,8 +5,10 @@
  * the byte. Among them a question of a few tokens (the GEMV's), one of
  * over LLM_CHUNK tokens (read in two chunks), answers of one token and of
  * many, and an answer cut short once settled; and all of them twice over,
- * more than the cache has room for beside the audio at once. The audio is
- * made here: 40 s of a beat, a bass line and a chord.
+ * more than the cache has room for beside the audio at once. Before that,
+ * the audio read in passes of one chunk and of several, the questions
+ * alone after each: the same, bit for bit. The audio is made here: 90 s of
+ * a beat, a bass line and a chord, three chunks.
  *
  * Needs the model, $CYANBOX_ML_MODEL (the 4 GB GGUF file), and a GPU that
  * can run it; skipped (77) without either. */
@@ -116,7 +118,7 @@ int main(void)
     }
     CBMLOptions o;
     cb_ml_options_default(&o);
-    o.max_context = 2048;
+    o.max_context = 2560;
     CBML *ml = NULL;
     int ret = cb_ml_open(&ml, path, &o);
     if (ret == CB_ERROR(ENODEV)) {
@@ -128,31 +130,43 @@ int main(void)
         return 1;
     }
 
-    int64_t n = 40 * CB_ML_RATE;
+    int64_t n = 90 * CB_ML_RATE;
     float *pcm = make_audio(n);
     char *long_q = calloc(1, 8192);
-    float *alone_l = malloc((size_t)NQ * ML_VOCAB * 4), *together_l = malloc((size_t)2 * NQ * ML_VOCAB * 4);
-    if (!pcm || !long_q || !alone_l || !together_l) {
+    float *alone_l = malloc((size_t)NQ * ML_VOCAB * 4), *chunked_l = malloc((size_t)NQ * ML_VOCAB * 4);
+    float *together_l = malloc((size_t)2 * NQ * ML_VOCAB * 4);
+    if (!pcm || !long_q || !alone_l || !chunked_l || !together_l) {
         printf("FAIL out of memory\n");
         return 1;
     }
     for (int i = 0; i < 200; i++)
         strcat(long_q, "Listen closely. ");
     strcat(long_q, "Is this music? Answer yes or no.");
-    if ((ret = cb_ml_listen(ml, pcm, n, NULL)) < 0) {
-        printf("FAIL listening: %s\n", strerror(-ret));
-        return 1;
-    }
 
-    /* One at a time, as cb_ml_choose and cb_ml_ask ask. */
-    MLQuery alone[NQ], together[2 * NQ];
-    make_queries(alone, alone_l, long_q);
-    for (int i = 0; i < NQ; i++) {
-        if ((ret = ml_ask_many(ml, &alone[i], 1, NULL)) < 0) {
-            printf("FAIL question %d alone: %s\n", i, strerror(-ret));
+    /* The audio in passes of a chunk, then of several; one question at a
+     * time after each, as cb_ml_choose and cb_ml_ask ask. */
+    MLQuery alone[NQ], chunked[NQ], together[2 * NQ];
+    for (int k = 0; k < 2; k++) {
+        MLQuery *q = k ? alone : chunked;
+        ml_set_pass_rows(ml, k ? 4096 : 512);
+        if ((ret = cb_ml_listen(ml, pcm, n, NULL)) < 0) {
+            printf("FAIL listening: %s\n", strerror(-ret));
             return 1;
         }
+        make_queries(q, k ? alone_l : chunked_l, long_q);
+        for (int i = 0; i < NQ; i++) {
+            if ((ret = ml_ask_many(ml, &q[i], 1, NULL)) < 0) {
+                printf("FAIL question %d alone: %s\n", i, strerror(-ret));
+                return 1;
+            }
+        }
     }
+    printf("the audio is %d tokens\n", ml_stats(ml)->prefill_tokens);
+    if (ml_stats(ml)->prefill_tokens <= 2 * 512) {
+        printf("FAIL the audio is not of the length the test needs\n");
+        failures++;
+    }
+    compare("the audio in passes of several chunks", alone, chunked);
     printf("question 4 is %d tokens; the genre: \"%s\"; the music: \"%s\"\n",
            ml_question_tokens(ml, long_q, NULL), alone[3].answer, alone[5].answer);
     if (ml_question_tokens(ml, long_q, NULL) <= 512 || ml_question_tokens(ml, "Hi", NULL) > 8) {
@@ -186,12 +200,14 @@ int main(void)
 
     for (int i = 0; i < NQ; i++) {
         free(alone[i].answer);
+        free(chunked[i].answer);
         free(together[i].answer);
         free(together[NQ + i].answer);
     }
     free(pcm);
     free(long_q);
     free(alone_l);
+    free(chunked_l);
     free(together_l);
     cb_ml_close(&ml);
     printf("%s\n", failures ? "FAILED" : "all ok");

@@ -211,6 +211,9 @@ int ml_listen(CBML *ml, const float *pcm, int64_t n, int room, CBCancel *cancel)
  * ask it. */
 int ml_question_tokens(CBML *ml, const char *question, const char *prefix);
 int ml_max_context(const CBML *ml);
+/* The most tokens a pass reads the audio in (2048, in chunks of 512 that
+ * each come out as alone; fewer for the tests: 512 at least). */
+void ml_set_pass_rows(CBML *ml, int rows);
 
 /* The model's vocabulary: the logits of a token. */
 #define ML_VOCAB 151936
