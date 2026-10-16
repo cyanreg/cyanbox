@@ -33,8 +33,10 @@ enum MLKernel {
     ML_K_CONV_PERMUTE,
     ML_K_STEM_PERMUTE,
     ML_K_GEMM_F16,              /* shaders/gemm.comp, F16 weights */
+    ML_K_GEMM_F16_BK32,         /*   the same in tiles of 32 columns of K (gpu.c) */
     ML_K_GEMM_F16_CONV,         /*   the same, an im2col gather of a 3x3 convolution */
     ML_K_GEMM_Q4K,              /*   Q4_K weights */
+    ML_K_GEMM_Q4K_BK32,         /*   the same in tiles of 32 columns of K */
     ML_K_GEMM_Q4K_SMALL,        /*   the same in tiles of 32 rows, for a few tokens */
     ML_K_GEMV_Q4K,              /* shaders/gemv.comp: a few rows of Q4_K weights */
     ML_K_LAYERNORM,             /* shaders/norm.comp */

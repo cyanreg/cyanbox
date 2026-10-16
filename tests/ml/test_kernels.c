@@ -386,6 +386,45 @@ static void test_gemm_waves(void)
     free(x); free(w); free(bias); free(y0); free(a); free(b); free(wq); free(wh);
 }
 
+/* The products in tiles of 64 columns of K (where the device has the
+ * shared memory, gpu.c) and of 32: the same, bit for bit, as each output
+ * is the same sum in the same order. */
+static void test_gemm_tiles(void)
+{
+    const int M = 150, N = 260, K = 768;
+    float *x = malloc((size_t)M * K * 4), *w = malloc((size_t)N * K * 4), *bias = malloc(N * 4);
+    float *y0 = malloc((size_t)M * N * 4), *a = malloc((size_t)M * N * 4);
+    float *b = malloc((size_t)M * N * 4);
+    uint8_t *wq = malloc((size_t)N * K / 256 * 144);
+    uint16_t *wh = malloc((size_t)N * K * 2);
+    for (size_t i = 0; i < (size_t)M * K; i++)
+        x[i] = (float)frand();
+    for (int i = 0; i < N; i++)
+        bias[i] = (float)frand();
+    for (size_t i = 0; i < (size_t)M * N; i++)
+        y0[i] = (float)frand();
+    for (size_t i = 0; i < (size_t)N * K; i++)
+        wh[i] = to_half((float)(frand() * 0.1));
+    make_q4k(wq, w, N, K);
+
+    static const struct { enum MLKernel k, k32; const char *name; uint32_t flags; } runs[] = {
+        { ML_K_GEMM_Q4K, ML_K_GEMM_Q4K_BK32, "gemm_q4k tiles of K", FLAG_ADD },
+        { ML_K_GEMM_F16, ML_K_GEMM_F16_BK32, "gemm_f16 tiles of K b g a",
+          FLAG_BIAS | FLAG_GELU | FLAG_ADD },
+    };
+    for (size_t r = 0; r < CB_ARRAY_ELEMS(runs); r++) {
+        bool q4k = runs[r].k == ML_K_GEMM_Q4K;
+        const void *wd = q4k ? (const void *)wq : (const void *)wh;
+        size_t wsize = q4k ? (size_t)N * K / 256 * 144 : (size_t)N * K * 2;
+        memcpy(a, y0, (size_t)M * N * 4);
+        memcpy(b, y0, (size_t)M * N * 4);
+        gemm_on_dev(runs[r].k, x, wd, wsize, bias, M, N, K, runs[r].flags, a);
+        gemm_on_dev(runs[r].k32, x, wd, wsize, bias, M, N, K, runs[r].flags, b);
+        check_same(runs[r].name, a, b, (size_t)M * N * 4);
+    }
+    free(x); free(w); free(bias); free(y0); free(a); free(b); free(wq); free(wh);
+}
+
 /* A 3x3, stride 2, padding 1 convolution through the GEMM's gather. */
 static void test_conv(void)
 {
@@ -935,6 +974,7 @@ int main(int argc, char **argv)
         test_enc_attn();
         test_gemm_rows();
         test_gemm_waves();
+        test_gemm_tiles();
         test_attn(70, 30, false, false, 20, 50);
         test_attn(1, 300, false, false, 0, 0);
         test_attn(3, 129, false, false, 0, 0);

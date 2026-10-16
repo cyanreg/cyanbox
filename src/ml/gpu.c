@@ -30,6 +30,10 @@
  *    every output is the same sums in the same order either way; the
  *    kernels whose sums go through subgroups keep the driver's size.
  *    CYANBOX_ML_WAVE32=0 leaves the products the driver's size too.
+ *  - The products of more than a few dozen rows go through K 64 columns
+ *    at a time where the device has the 64 kB of shared memory that takes
+ *    (AMD's), 32 elsewhere (48 kB, NVIDIA's): some 5 % faster on the 6900
+ *    XT, and every output is the same sum in the same order either way.
  *  - A compute-only queue family when there is one, as the compute context
  *    does: the desktop's graphics are not held up behind a transformer
  *    layer.
@@ -58,8 +62,10 @@
 #include "conv_permute_comp.spv.h"
 #include "stem_permute_comp.spv.h"
 #include "gemm_f16_comp.spv.h"
+#include "gemm_f16_bk32_comp.spv.h"
 #include "gemm_f16_conv_comp.spv.h"
 #include "gemm_q4k_comp.spv.h"
+#include "gemm_q4k_bk32_comp.spv.h"
 #include "gemm_q4k_small_comp.spv.h"
 #include "gemv_q4k_comp.spv.h"
 #include "layernorm_comp.spv.h"
@@ -86,8 +92,10 @@ static const struct {
     K(ML_K_CONV_PERMUTE,  conv_permute),
     K(ML_K_STEM_PERMUTE,  stem_permute),
     K(ML_K_GEMM_F16,      gemm_f16),
+    K(ML_K_GEMM_F16_BK32, gemm_f16_bk32),
     K(ML_K_GEMM_F16_CONV, gemm_f16_conv),
     K(ML_K_GEMM_Q4K,      gemm_q4k),
+    K(ML_K_GEMM_Q4K_BK32, gemm_q4k_bk32),
     K(ML_K_GEMM_Q4K_SMALL, gemm_q4k_small),
     K(ML_K_GEMV_Q4K,      gemv_q4k),
     K(ML_K_LAYERNORM,     layernorm),
@@ -217,11 +225,17 @@ static int create_pipelines(MLGpu *g)
     if (res != VK_SUCCESS)
         return cb_vk_ret2err(res);
 
+    bool bk64 = g->vk.props.limits.maxComputeSharedMemorySize >= 64 * 1024;
     for (int k = 0; k < ML_NB_KERNELS; k++) {
+        /* The products in tiles of 64 columns of K need 64 kB of shared
+         * memory: elsewhere they are their tiles of 32. */
+        int code = k;
+        if (!bk64 && (k == ML_K_GEMM_F16 || k == ML_K_GEMM_Q4K))
+            code = k == ML_K_GEMM_F16 ? ML_K_GEMM_F16_BK32 : ML_K_GEMM_Q4K_BK32;
         VkShaderModuleCreateInfo minfo = {
             .sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
-            .codeSize = kernels[k].size,
-            .pCode    = (const uint32_t *)kernels[k].code,
+            .codeSize = kernels[code].size,
+            .pCode    = (const uint32_t *)kernels[code].code,
         };
         VkShaderModule mod = VK_NULL_HANDLE;
         res = vkCreateShaderModule(g->vk.dev, &minfo, NULL, &mod);
@@ -229,8 +243,8 @@ static int create_pipelines(MLGpu *g)
             return cb_vk_ret2err(res);
 
         bool sub = k == ML_K_GEMV_Q4K || k == ML_K_ATTN || k == ML_K_ATTN_DEC;
-        bool gemm = k == ML_K_GEMM_F16 || k == ML_K_GEMM_F16_CONV || k == ML_K_GEMM_Q4K ||
-                    k == ML_K_GEMM_Q4K_SMALL;
+        bool gemm = k == ML_K_GEMM_F16 || k == ML_K_GEMM_F16_BK32 || k == ML_K_GEMM_F16_CONV ||
+                    k == ML_K_GEMM_Q4K || k == ML_K_GEMM_Q4K_BK32 || k == ML_K_GEMM_Q4K_SMALL;
         VkPipelineShaderStageRequiredSubgroupSizeCreateInfo size = {
             .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_REQUIRED_SUBGROUP_SIZE_CREATE_INFO,
             .requiredSubgroupSize = gemm ? 32 : g->sub_size,

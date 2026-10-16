@@ -22,9 +22,9 @@ colour and the comment, and the genre unless the user typed one
 | | per track (4–5 min) |
 | --- | --- |
 | Loading the model, once | 2.5 s; 4.1 GB of weights onto the GPU, none kept in RAM |
-| Listening (the whole track) | 2.3–4.1 s on a 6900 XT, ~75x real time: the encoder 0.5–0.8 s, the prompt up to the audio's end (2,700 to 4,600 tokens) 1.8–3.2 s |
-| Every question of `cb_ml_tag` at once (seven yes/no, the colour in eight orders, three in words) | ~0.85 s for their 836 tokens, then 0.1–0.25 s for the answers' 10 to 30 |
-| A track in all, from its audio to the last answer | 3.9 s (the median of 16 tracks of 3 to 6 minutes; 6.7 s when the questions went one at a time and its audio was decoded first, 0.3 s) |
+| Listening (the whole track) | 2.2–3.8 s on a 6900 XT, ~80x real time: the encoder 0.45–0.75 s, the prompt up to the audio's end (2,700 to 4,600 tokens) 1.7–3.1 s |
+| Every question of `cb_ml_tag` at once (seven yes/no, the colour in eight orders, three in words) | ~0.83 s for their 836 tokens, then 0.1–0.25 s for the answers' 10 to 30 |
+| A track in all, from its audio to the last answer | 3.75 s (the median of 16 tracks of 3 to 6 minutes; 6.7 s when the questions went one at a time and its audio was decoded first, 0.3 s) |
 | Memory | RAM: two 64 MB read buffers while loading, the audio of this track and the next (19 MB each for 5 minutes), the logits of 15 questions (9 MB); a whole `cyanbox tag` peaks at 280 MB. VRAM: 5.6 GB in buffers after the questions (4.1 GB weights, 1.2 GB cache, the decoder's scratch for 2048 tokens a pass), 6.1 GB at the peak for a 4-minute track and 6.7 GB for one of 9.5 minutes or more (the encoder's scratch, freed before the decoder reads its rows; the decoder's is freed before it is made) |
 
 What it gives, measured on the author's library (some 150 tracks: house,
@@ -297,13 +297,15 @@ reads back a token or a row of logits, and does nothing else.
   is another), which the questions together rely on. The GEMMs run in
   subgroups of 32 where the device lets a pipeline ask (RADV picks 64 for
   compute, 10 to 15 % slower here; `CYANBOX_ML_WAVE32=0` leaves it so):
-  none of their sums goes through a subgroup, so no result changes.
+  none of their sums goes through a subgroup, so no result changes. And
+  they go through K 64 columns at a time where the device has the 64 kB
+  of shared memory that takes (AMD's; 32 elsewhere), some 5 % faster.
 
 | kernel (6900 XT) | |
 | --- | --- |
-| GEMM, F16 weights, 2048 tokens | 9.6–11.8 TFLOPS (51 % of the f32 peak at most) |
-| GEMM, Q4_K, 512 tokens | 8.5–12.4 TFLOPS |
-| GEMM, Q4_K, 2048 tokens | 11.8–13.5 TFLOPS |
+| GEMM, F16 weights, 2048 tokens | 10.5–13.0 TFLOPS (55 % of the f32 peak at most, at the 2.35 GHz it holds under its power cap) |
+| GEMM, Q4_K, 512 tokens | 9.0–13.0 TFLOPS |
+| GEMM, Q4_K, 2048 tokens | 12.1–14.0 TFLOPS |
 | GEMV, Q4_K, one token | 400–445 GB/s (80–87 % of the memory's) |
 | Attention, 512 queries after 3584 keys | 3.3 ms a layer, 9.8 TFLOPS |
 | Attention, one query after 4000 keys | 64 µs a layer |
