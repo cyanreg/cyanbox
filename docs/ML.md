@@ -261,9 +261,9 @@ reads back a token or a row of logits, and does nothing else.
 - **Weights.** The GGUF's tensors are streamed into device buffers that keep
   the file's layout (a segment of up to 1 GB is a copy of a run of the
   file), 64 MB at a time, read with O_DIRECT so they stay out of the page
-  cache, on a thread of their own while the piece before goes onto the
-  GPU (2.5 s; 3.9 s one after the other). The conv weights are reordered once on the GPU for the GEMM's
-  gather.
+  cache, on a thread of their own while the piece before goes onto the GPU
+  (2.5 s; 3.9 s one after the other). The conv weights are reordered once on
+  the GPU for the GEMM's gather.
 - **Features.** Whisper's log-mel (128 bins, 25 ms frames every 10 ms) from a
   DFT table computed in double precision: `mel.comp`, `mel_norm.comp`.
 - **Encoder.** Chunks of 4 s; three 3x3 stride-2 convolutions (the first

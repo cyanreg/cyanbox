@@ -383,7 +383,8 @@ static bool same_tags(const CBMLTags *a, const CBMLTags *b)
 {
     return a && b && a->color == b->color && !memcmp(a->colors, b->colors, sizeof(a->colors)) &&
            a->intensity == b->intensity && a->club == b->club && a->valence == b->valence &&
-           a->vocals == b->vocals && !strcmp(a->comment ? a->comment : "", b->comment ? b->comment : "") &&
+           a->vocals == b->vocals &&
+           !strcmp(a->comment ? a->comment : "", b->comment ? b->comment : "") &&
            !strcmp(a->genre ? a->genre : "", b->genre ? b->genre : "");
 }
 

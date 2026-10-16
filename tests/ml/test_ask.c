@@ -135,7 +135,8 @@ int main(void)
     int64_t n = 90 * CB_ML_RATE;
     float *pcm = make_audio(n);
     char *long_q = calloc(1, 8192);
-    float *alone_l = malloc((size_t)NQ * ML_VOCAB * 4), *chunked_l = malloc((size_t)NQ * ML_VOCAB * 4);
+    float *alone_l = malloc((size_t)NQ * ML_VOCAB * 4);
+    float *chunked_l = malloc((size_t)NQ * ML_VOCAB * 4);
     float *together_l = malloc((size_t)2 * NQ * ML_VOCAB * 4);
     if (!pcm || !long_q || !alone_l || !chunked_l || !together_l) {
         printf("FAIL out of memory\n");
