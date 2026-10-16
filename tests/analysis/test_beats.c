@@ -36,7 +36,11 @@
  * Two more on the octave, not flagged: pop at 100 ("Love me, myself":
  * a kick on 1 and the "and"s of 3 and 4, a snare on 2 and 4, eighths on
  * the hats and the bass), which was read at 200, and UK hardcore at 175
- * (a kick on every beat), whose 87.5 the kick veto keeps out.
+ * (a kick on every beat), whose 87.5 the kick veto keeps out. And two at
+ * 100 with a kick on every eighth, which passed for a four-on-the-floor
+ * 200: one with hats on the eighths and nothing between them
+ * ("Defragmenter"), one with sixteenths (hats, ghost notes) and a snare on
+ * 2 and 4 ("Super-Slow-Internet-san").
  *
  * The GPU front end (cyanbox/compute.h) must give the same results. When a
  * device is there, every case runs on both paths: each must pass on its
@@ -211,6 +215,10 @@ enum {
     STYLE_CLAP,         /* a kick on every beat and a clap on 2 and 4, nothing else */
     STYLE_POP,          /* pop at 100 ("Love me, myself"): kick on 1, the "and" of 3 and of
                          * 4, snare on 2 and 4, hats and a bass on every eighth */
+    STYLE_EIGHTS,       /* a kick and hats on every eighth and nothing between them, no
+                         * snare ("Defragmenter") */
+    STYLE_EIGHTS_SNARE, /* a kick on every eighth, hats and ghost notes on the sixteenths,
+                         * a snare on 2 and 4 ("Super-Slow-Internet-san") */
 };
 
 typedef struct Spec {
@@ -498,6 +506,24 @@ static int synth(const Spec *sp, Track *t, Truth *truth)
                 add_hat(t, tq, 0.5, &l);
                 add_hat(t, th, 0.5, &l);
                 break;
+            case STYLE_EIGHTS:
+                add_kick(t, tq, 1.0);
+                add_kick(t, th, 0.9);
+                add_hat(t, tq, 0.5, &l);
+                add_hat(t, th, 0.5, &l);
+                break;
+            case STYLE_EIGHTS_SNARE:
+                add_kick(t, tq, 1.0);
+                add_kick(t, th, 0.9);
+                if (q == 1 || q == 3)
+                    add_snare_bright(t, tq, 1.0, &l);
+                for (int s = 0; s < 4; s++)
+                    add_hat(t, tq + s * 0.25 * p, 0.4, &l);
+                /* Ghost notes on the sixteenths between the eighths: the
+                 * mid band has them, as the track's does. */
+                add_snare_bright(t, tq + 0.25 * p, 0.2, &l);
+                add_snare_bright(t, tq + 0.75 * p, 0.2, &l);
+                break;
             case STYLE_HIPHOP:
                 if (q == 0 || q == 2)
                     add_kick(t, tq, 1.0);
@@ -637,6 +663,11 @@ static const Spec cases[] = {
       .style = STYLE_POP, .bpm = 100.0, .first_downbeat = 0.4, .bars = 48, .seed = 31 },
     { .name = "UK hardcore 175: a kick on every beat, claps on 2 and 4",
       .style = STYLE_HOUSE, .bpm = 175.0, .first_downbeat = 0.3, .bars = 64, .seed = 32 },
+    { .name = "eighths 100: a kick and hats on every eighth, nothing between",
+      .style = STYLE_EIGHTS, .bpm = 100.0, .first_downbeat = 0.4, .bars = 48, .seed = 33 },
+    { .name = "eighths 100: a kick on every eighth, sixteenths, snare on 2 and 4",
+      .style = STYLE_EIGHTS_SNARE, .bpm = 100.0, .first_downbeat = 0.4, .bars = 48,
+      .seed = 34 },
 };
 
 typedef struct Want {
@@ -678,6 +709,8 @@ static const Want wants[] = {
     { 0, CUTS | CB_GRID_FLAG_UNSTEADY },
     { 0, CUTS | CB_GRID_FLAG_UNSTEADY },
     { 0, CUTS | CB_GRID_FLAG_UNSTEADY },
+    { 0, CUTS | CB_GRID_FLAG_UNSTEADY | CB_GRID_FLAG_OCTAVE_UNCERTAIN },
+    { 0, CUTS | CB_GRID_FLAG_UNSTEADY | CB_GRID_FLAG_OCTAVE_UNCERTAIN },
     { 0, CUTS | CB_GRID_FLAG_UNSTEADY | CB_GRID_FLAG_OCTAVE_UNCERTAIN },
     { 0, CUTS | CB_GRID_FLAG_UNSTEADY | CB_GRID_FLAG_OCTAVE_UNCERTAIN },
 };

@@ -606,6 +606,25 @@ static bool kick_on_every_beat(const CBOctaveEvidence *ev)
     return ev->kick_alt >= 0.7 && ev->kick_bar >= 0.4;
 }
 
+/* A snare once in four beats, nothing like it two beats on: at this
+ * level, the snare on 2 and 4 of half its tempo. */
+static bool lone_snare(const CBOctaveEvidence *ev)
+{
+    return ev->snare >= 0.5 && ev->snare_lone >= 0.8;
+}
+
+/* A level of 150 BPM or more with nothing in the mid band on its half
+ * beats: the eighths of half its tempo, the finest events there are, not
+ * the beat. "Burping", "Defragmenter" (100 BPM by ear), "night walk" (96)
+ * and "Heure bleue" (94) at twice that: 0.01 to 0.05. A fast beat has
+ * something between its beats: drum & bass at 172-180 on the acceptance
+ * list 0.42 to 0.88, "Lucky☆Honey☆Pancake" at 190 0.55, the hardcore
+ * of "ADvantage" at 198-200 0.52 and 0.63. */
+static bool tatum(double bpm, const CBOctaveEvidence *ev)
+{
+    return bpm >= 150.0 && ev->subdiv < 0.15;
+}
+
 /* The octave on a fitted grid. The witnesses are the snares and claps
  * (the mid band, 150-2500 Hz, aligned to the full band), because they are
  * what places the beat in nearly all of this music: on 2 and 4.
@@ -679,14 +698,25 @@ void cb_tempo_octave_decide(const CBOnsets *o, double t0, double period, double 
          * alone at 196 (+0.64, +0.10). Drum & bass is not: on the eight
          * acceptance tracks at 172-180 its snares on 2 and 4 pair (lone
          * 0.08-0.59), or are under 0.5, which is no evidence either way. */
-        if (l < 2 && out->ev[l + 1].snare >= 0.5 && out->ev[l + 1].snare_lone >= 0.8)
+        bool backbeat_below = l < 2 && lone_snare(&out->ev[l + 1]);
+        if (backbeat_below)
             slow = 1.0;
+        /* A fast level that is the eighths of half its tempo is too fast
+         * (tatum), whatever its own beats do. */
+        bool eighths = tatum(out->bpm[l], &out->ev[l]);
+        if (eighths)
+            fast = OCTAVE_FLOOR;
         /* A four-on-the-floor kick (on every beat alike, hardly between)
          * is the beat whatever the mid band does: a stab on the "and"
          * must not halve a house track. Only from 90 BPM: a kick on 1 and
          * 3 of a 125 track looks like that at 62.5. It only ever adds:
-         * as a veto the kick band fails, an off-beat bass fills it. */
-        if (out->bpm[l] >= 90.0 && kick_on_every_beat(&out->ev[l]) && out->ev[l].kick_sub <= 0.4)
+         * as a veto the kick band fails, an off-beat bass fills it. Not
+         * where the level's beats are eighths, nor where its snare is
+         * lone (2 and 4 of half the tempo): a kick on every eighth under a
+         * backbeat is no four-on-the-floor ("Burping", 100 BPM by ear, at
+         * 200: snare 1.28, lone 0.86; "night walk" at 192: 1.18, 1.00). */
+        if (out->bpm[l] >= 90.0 && kick_on_every_beat(&out->ev[l]) && out->ev[l].kick_sub <= 0.4 &&
+            !eighths && !lone_snare(&out->ev[l]))
             pr *= 3.0;
         /* Kicks on the half beats make a level too slow when they belong
          * to a four-on-the-floor one level up (every beat of it has a kick
@@ -696,9 +726,13 @@ void cb_tempo_octave_decide(const CBOnsets *o, double t0, double period, double 
          * one beat in four without a kick at the next level up). Nor
          * when that level is beyond the range (above 200 BPM without
          * one): a busy drum & bass kick, on the beats and the "and"s, is
-         * no four-on-the-floor at 344. */
+         * no four-on-the-floor at 344. Nor when that level's beats are
+         * eighths, or this level has its backbeat (the lone snare above):
+         * then they are this level's eighths ("Super-Slow-Internet-san",
+         * 100 by ear, a kick on every eighth, at 200 snare 0.55, lone 1). */
         double up_hi = automatic ? OCTAVE_AUTO_HI : hi;
-        if (l < 2 && kick_on_every_beat(&out->ev[l + 1]) && out->bpm[l + 1] <= up_hi * 1.001)
+        if (l < 2 && kick_on_every_beat(&out->ev[l + 1]) && out->bpm[l + 1] <= up_hi * 1.001 &&
+            !backbeat_below && !tatum(out->bpm[l + 1], &out->ev[l + 1]))
             slow = fmin(slow, CB_CLAMP((1.0 - out->ev[l].kick_sub) / 0.5, OCTAVE_FLOOR, 1.0));
         /* Without a requested range, a level above 200 or below 60 BPM
          * must win by a factor of four: a pop song at 105 with sixteenths

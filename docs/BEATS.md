@@ -1377,6 +1377,52 @@ half tempo is no longer too slow by the claps and the prior holds it
 8.3 to 5.9). The three tracks heard as 98-100 are right (above), and the
 synthetic pop case at 100 was 200 before.
 
+**Eighths that pass for a four-on-the-floor** (section 8;
+`CB_BEATS_VERSION` 7). Fifteen tracks the user named, with their tempos
+by ear (2026-10-17), ten of them read at twice that: a kick or a bass on
+every eighth at 94-102 is, one level up, a kick on every beat alike, the
+four-on-the-floor that tripled that level's prior and made the true one
+too slow by its kicks on the half beats. Two things now say otherwise:
+
+- A level of 150 BPM or more with nothing in the mid band on its half
+  beats (subdivision under 0.15) is the eighths of half its tempo: too
+  fast, and no four-on-the-floor. "Burping", "Defragmenter", "night
+  walk" (and its instrumental) and "Heure bleue" read 0.01-0.05 at
+  188-200; every fast level chosen on the lists checked has 0.42 or more.
+- A level whose snare is lone (once in four beats) has it on 2 and 4 of
+  half its tempo: no four-on-the-floor there either, and the slower
+  level is not too slow by its kicks between the beats, its own eighths
+  ("Super-Slow-Internet-san" at 200: snare 0.55, lone 1.00; "ALONE" at
+  196: 1.24, 1.00). This was already so for its snares (version 6).
+
+| Track | By ear | Before | Now |
+| --- | --- | --- | --- |
+| Burping | 100 | 200 | 100 |
+| Defragmenter | 100 | 200 | 100 |
+| インターネットが遅いさん (Super-Slow-Internet-san) | 100 | 200 | 100 |
+| ALONE (ReoNa) | 98 | 196 | 98 |
+| night walk, night walk (Instrumental) | 97 | 192 | 96 |
+| Heure bleue | 92 | 188 | 94 |
+| Lucky☆Honey☆Pancake | 190 | 190 | 190 |
+
+On the 57 acceptance tracks and the 60 of "ADvantage" (a hardcore
+compilation, kept as a guard for fast tracks), from `cyanbox-eval`'s
+cache before and after: every tempo, flag and confidence the same. Two
+synthetic cases at 100, one per rule, came out 200 before.
+
+Not fixed: "LIFE GOES ON" (98, read 196) has its snare on 2 and 4 with
+next to nothing on 1 and 3 in the mid band (balance 0.16 at 98), which
+the "too fast" test takes for 16ths, and its kick follows the snare's
+parity, so neither band tells the backbeat from a double tempo. "Egret
+and Willow" (98 by the grid; heard as about 110, which holds no grid)
+is 196 by a margin of 1.2, its lone snare at 196 just under the
+threshold (0.48). "plan goes on" and "In My House" (128) are fitted at
+96 first, a 3:4 family whose grid sits on the hits while the 128 grid
+sits about 100 ms off the kicks, then doubled. "Yay Yeah" (102) is read
+at 82 and 164. Two the user named do not hold the tempo given:
+"Peaky Pumpin" (180 by ear) is 199-200 in every 16-second window of the
+track and 180 in none, and "Reminiscence of Sea" (170) likewise 197.
+
 ### What was tried and dropped
 
 - Octave by "balance × subdivision" on kick+snare onsets with a phase from
@@ -1408,7 +1454,8 @@ synthetic pop case at 100 was 200 before.
   right now (section 8), but by thresholds with little room: the bar's
   kick is 0.27-0.30 on them at double tempo against 0.4, and
   "Skyscraper"'s margin is 1.9 with a pattern that changes by section.
-  More such tracks, checked by ear, would say how general it is.
+  Seven more with a kick or a bass on every eighth are right since
+  version 7; "LIFE GOES ON" and "Egret and Willow" are not (section 8).
 - **Half-time genres**: a lone snare at the faster level is read as the
   half-time of the slower, which is what a listener hears in pop. Dubstep
   and trap at 140 (snare on 3) keep 140 by the prior (8 to 1 over 70);
