@@ -12,8 +12,10 @@ encoder in F16, its decoder (Qwen3-4B) in Q4_K. The code is `src/ml/`
 In cyanbox it runs only when asked: the track menu's Analyse tags, Analysis →
 Analyse tags of selection, or `cyanbox tag TRACK...`. The tracks join one
 batch that loads the model once and unloads it after the last
-(`src/app/jobs.c`); a result writes the colour and the comment, and the
-genre unless the user typed one (README.md, Tagging).
+(`src/app/jobs.c`), and decodes the next track on a CPU while the GPU
+tags this one (the first while the model loads); a result writes the
+colour and the comment, and the genre unless the user typed one
+(README.md, Tagging).
 
 ## In short
 
@@ -22,7 +24,7 @@ genre unless the user typed one (README.md, Tagging).
 | Loading the model, once | 3.5 s; 4.1 GB of weights onto the GPU, none kept in RAM |
 | Listening (the whole track) | 3–4.5 s on a 6900 XT, ~70x real time: the encoder 0.5–0.9 s, the prompt up to the audio's end (3,000 to 4,600 tokens) 2.2–3.8 s |
 | Every question of `cb_ml_tag` at once (seven yes/no, the colour in eight orders, three in words) | ~0.9 s for their 836 tokens, then 0.1–0.25 s for the answers' 10 to 30 |
-| A track in all, from decoding to the last answer | 4.75 s (the median of 16 tracks of 3 to 6 minutes; 6.7 s when the questions went one at a time) |
+| A track in all, from its audio to the last answer | 4.4 s (the median of 16 tracks of 3 to 6 minutes; 6.7 s when the questions went one at a time and its audio was decoded first, 0.3 s) |
 | Memory | 174 MB of RAM at most (64 MB of it a read buffer while loading); 5.6 GB of VRAM in buffers after the questions (4.1 GB weights, 1.2 GB cache, the decoder's scratch for the questions' 836 tokens), 6.2 GB at the peak for a 4-minute track and 6.7 GB for one of 9.5 minutes or more (the encoder's scratch, freed after listening; the questions' is freed before it is made) |
 
 What it gives, measured on the author's library (some 150 tracks: house,
@@ -315,6 +317,10 @@ one alone ran over 250 tracks without fault.
 - `test_ml_ask` (needs the model: `CYANBOX_ML_MODEL=FILE meson test`;
   skipped without) asks questions together and one at a time, in one
   batch and in two, and compares the logits bit for bit and the answers.
+  `jobs_tag` (`test_jobs --tag`, with the model too) tags a batch whose
+  tracks each decode while the one before is tagged, and checks each got
+  its own audio: the same tags as `cb_ml_tag` of it decoded alone. Both
+  run on their own (`is_parallel: false`): one model on a GPU at a time.
 - `tools/ml_check.py` recomputes the encoder stage by stage in PyTorch from
   the reference code (transformers' Whisper feature extractor and encoder
   layer, MOSS-Audio's conv stem and gated MLPs), each stage from the GPU's

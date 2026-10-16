@@ -68,7 +68,8 @@ test('ml_kernels',
 
 # Questions asked together against the same asked one at a time, bit for
 # bit. Needs the model ($CYANBOX_ML_MODEL) and a GPU that runs it; skipped
-# (77) without them.
+# (77) without them. On its own: two models on one GPU have made the
+# driver reset it.
 test('ml_ask',
     executable('test_ml_ask', '../../tests/ml/test_ask.c',
         include_directories: [ cb_inc, include_directories('.') ],
@@ -76,6 +77,7 @@ test('ml_ask',
     ),
     suite: 'ml',
     timeout: 300,
+    is_parallel: false,
 )
 
 # What the tags make of the model's answers in words, and that an answer

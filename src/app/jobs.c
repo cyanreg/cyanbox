@@ -67,7 +67,10 @@
  * first still holds the GPU. Cancelling empties the queue and sets the
  * flag cb_ml_tag watches; a track cancelled half way posts nothing. The
  * model gets the GPU the analyses were given (cb_jobs_set_gpu's name), not
- * their compute context: it keeps a device of its own (src/ml/ml_priv.h). */
+ * their compute context: it keeps a device of its own (src/ml/ml_priv.h).
+ * While the model tags a track, a thread of the batch's own decodes the
+ * next one in the queue (the first while the model loads): a CPU's 0.3 s
+ * a track that the GPU would otherwise wait for. */
 
 #include "cyanbox/jobs.h"
 
@@ -430,11 +433,76 @@ static void post(CBJobs *j, CBJobResult *r, const char *what)
     }
 }
 
-/* One track of the tag batch: decoded mono at the model's rate, tagged. */
-static int tag_one(CBJobs *j, CBML *ml, const TagItem *it, CBJobResult *r)
+/* A track of the tag batch decoded ahead, on a thread of its own: mono at
+ * the model's rate. */
+typedef struct Ahead {
+    pthread_t thread;
+    bool running;
+    char *path;
+    CBAudio audio;
+    int ret;
+} Ahead;
+
+static void *ahead_run(void *arg)
+{
+    Ahead *a = arg;
+    a->ret = cb_decode(a->path, 1, CB_ML_RATE, &a->audio);
+    return NULL;
+}
+
+/* Waits for the track decoded ahead, and drops it. */
+static void ahead_end(Ahead *a)
+{
+    if (a->running)
+        pthread_join(a->thread, NULL);
+    cb_audio_free(&a->audio);
+    free(a->path);
+    *a = (Ahead) { 0 };
+}
+
+/* Starts decoding `path` (may be NULL: nothing) unless it already is. */
+static void ahead_start(Ahead *a, const char *path)
+{
+    if (!path || (a->running && !strcmp(a->path, path)))
+        return;
+    ahead_end(a);
+    if (!(a->path = cb_strdup(path)))
+        return;
+    if (pthread_create(&a->thread, NULL, ahead_run, a)) {
+        free(a->path);
+        a->path = NULL;
+        return;
+    }
+    a->running = true;
+}
+
+/* The audio of `path`: the track decoded ahead if it is that one, else
+ * decoded now. */
+static int ahead_take(Ahead *a, const char *path, CBAudio *out)
+{
+    if (a->running && !strcmp(a->path, path)) {
+        pthread_join(a->thread, NULL);
+        a->running = false;
+        int ret = a->ret;
+        *out = a->audio;
+        a->audio = (CBAudio) { 0 };
+        ahead_end(a);
+        return ret;
+    }
+    ahead_end(a);
+    return cb_decode(path, 1, CB_ML_RATE, out);
+}
+
+/* One track of the tag batch: its audio (decoded ahead, or now), tagged;
+ * the next one's decoded meanwhile. */
+static int tag_one(CBJobs *j, CBML *ml, const TagItem *it, Ahead *ahead, const char *next,
+                   CBJobResult *r)
 {
     CBAudio audio = { 0 };
-    int ret = cb_decode(it->path, 1, CB_ML_RATE, &audio);
+    int64_t t0 = cb_time_us();
+    int ret = ahead_take(ahead, it->path, &audio);
+    cb_debug("jobs: %s's audio after %.0f ms", it->path, (cb_time_us() - t0) * 1e-3);
+    ahead_start(ahead, next);
     if (ret < 0)
         return ret;
 
@@ -460,6 +528,7 @@ static void run_tag(Job *job)
 {
     CBJobs *j = job->j;
     CBML *ml = NULL;
+    Ahead ahead = { 0 };
 
     pthread_mutex_lock(&j->gpu_lock);
     char *device = j->gpu_device ? cb_strdup(j->gpu_device) : NULL;
@@ -467,17 +536,21 @@ static void run_tag(Job *job)
 
     while (1) {
         TagItem it = { 0 };
+        char *next = NULL;
         pthread_mutex_lock(&j->lock);
         bool have = !cb_cancelled(&j->tag_cancel) && j->tag_queue.nb;
         if (have) {
             it = *(TagItem *)cb_array_at(&j->tag_queue, 0);
             cb_array_remove(&j->tag_queue, 0);
+            if (j->tag_queue.nb)
+                next = cb_strdup(((TagItem *)cb_array_at(&j->tag_queue, 0))->path);
         }
         j->tag_current = 0;
         pthread_mutex_unlock(&j->lock);
 
         if (!have) {
             /* Done or cancelled: the model goes before the batch ends. */
+            ahead_end(&ahead);
             if (ml) {
                 cb_ml_close(&ml);
                 cb_info("jobs: the model is unloaded");
@@ -495,6 +568,8 @@ static void run_tag(Job *job)
         }
 
         if (!ml) {
+            /* The track decodes while the model loads. */
+            ahead_start(&ahead, it.path);
             CBMLOptions o;
             cb_ml_options_default(&o);
             o.device = device;
@@ -502,6 +577,8 @@ static void run_tag(Job *job)
             int ret = cb_ml_open(&ml, job->path, &o);
             if (ret < 0) {
                 cb_err("jobs: cannot load the model %s: %s", job->path, strerror(-ret));
+                ahead_end(&ahead);
+                free(next);
                 tag_item_free(&it);
                 /* The failure is posted and the queue dropped under the
                  * lock, so a track asked for after it starts a new batch
@@ -531,7 +608,8 @@ static void run_tag(Job *job)
 
         int64_t t0 = cb_time_us();
         CBJobResult *r = calloc(1, sizeof(*r));
-        int ret = r ? tag_one(j, ml, &it, r) : CB_ERROR(ENOMEM);
+        int ret = r ? tag_one(j, ml, &it, &ahead, next, r) : CB_ERROR(ENOMEM);
+        free(next);
         bool interrupted = ret == CB_ERROR(ECANCELED) && cb_cancelled(&j->tag_cancel);
         if (r && !interrupted) {
             r->kind = CB_JOB_TAG;
@@ -566,6 +644,7 @@ static void run_tag(Job *job)
         tag_item_free(&it);
     }
 
+    ahead_end(&ahead);
     free(device);
 }
 

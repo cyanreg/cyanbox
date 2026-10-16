@@ -51,6 +51,10 @@ if ffmpeg_prog.found()
     test_jobs = executable('test_jobs', files('../../tests/app/test_jobs.c'),
         include_directories: cb_inc, dependencies: [ cb_app_dep ])
     test('jobs', test_jobs, args: [ app_click_wav ], suite: 'app', timeout: 300)
+    # The tag batch with the model ($CYANBOX_ML_MODEL; skipped without), on
+    # its own: two models on one GPU have made the driver reset it.
+    test('jobs_tag', test_jobs, args: [ '--tag', app_click_wav, app_long_wav ], suite: 'app',
+         timeout: 600, is_parallel: false)
 
     test_app = executable('test_app', files('../../tests/app/test_app.c', 'headless.c'),
         include_directories: cb_inc, dependencies: [ cb_app_dep ])
