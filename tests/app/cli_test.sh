@@ -64,7 +64,7 @@ id=$(sed -n 's/^  id \([0-9]*\).*/\1/p' "$dir/show.out")
 run show "$id" | grep -q "click128.flac" || fail "show by id"
 
 # The colour is one of rekordbox's eight, named with the legend's words
-# for it, or none: a hue between them is refused (and one an older library
+# for it, or none: a hue between them is refused (and one the library
 # holds is removed when it opens). none clears it.
 grep -q "^  colour: none$" "$dir/show.out" || fail "a new track has a colour"
 grep -q "^  tags: none" "$dir/show.out" || fail "a new track has tags"
@@ -248,7 +248,7 @@ import sqlite3, sys
 db = sqlite3.connect(sys.argv[1])
 for track_id, data in db.execute("SELECT track_id, data FROM waveform_preview").fetchall():
     data = bytearray(data)
-    data[4:8] = (1).to_bytes(4, "little")
+    data[4:8] = (0).to_bytes(4, "little")
     db.execute("UPDATE waveform_preview SET data = ? WHERE track_id = ?", (bytes(data), track_id))
 db.commit()
 db.close()

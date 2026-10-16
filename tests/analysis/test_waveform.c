@@ -552,7 +552,7 @@ static int test_pack(void)
         return fails + 1;
     }
     CHECK(size == 24 + 400 + 100 + 7200 + 3600 + (size_t)w.nb_detail * 6);
-    CHECK(!memcmp(data, "CBWV", 4) && le32(data + 4) == 4 && le32(data + 8) == (uint32_t)w.nb_detail &&
+    CHECK(!memcmp(data, "CBWV", 4) && le32(data + 4) == 1 && le32(data + 8) == (uint32_t)w.nb_detail &&
           le32(data + 12) == 44100);
     CHECK(cb_waveforms_unpack(data, size, &r) == 0);
     CHECK(same_waves(&r, &w));
@@ -569,9 +569,9 @@ static int test_pack(void)
           !memcmp(r.gains, w.gains, sizeof(w.gains)));
     CHECK(cb_waveforms_unpack_previews(data, size, &r) == CB_ERROR(EINVAL));
     CHECK(cb_waveforms_unpack_previews(data, CB_WAVE_PACKED_PREVIEW - 1, &r) == CB_ERROR(EINVAL));
-    put32(data + 4, 3);
+    put32(data + 4, 2);
     CHECK(cb_waveforms_unpack_previews(data, CB_WAVE_PACKED_PREVIEW, &r) == CB_ERROR(EPROTO));
-    put32(data + 4, 4);
+    put32(data + 4, 1);
 
     /* Refused, with nothing allocated: truncated, one byte too many, bad
      * magic, another version, a column count that disagrees with the size,
@@ -590,22 +590,15 @@ static int test_pack(void)
     data[0] = 'C';
     CHECK(cb_waveforms_check_head(data, 8) == 0);
     CHECK(cb_waveforms_check_head(data, 7) == CB_ERROR(EINVAL));
-    /* rxbox's blobs, from before the project was cyanbox, are stale. */
-    memcpy(data, "RXWV", 4);
-    CHECK(cb_waveforms_unpack(data, size, &r) == CB_ERROR(EPROTO) && !r.pwv3);
-    CHECK(cb_waveforms_unpack_previews(data, CB_WAVE_PACKED_PREVIEW, &r) == CB_ERROR(EPROTO));
-    CHECK(cb_waveforms_check_head(data, 8) == CB_ERROR(EPROTO));
-    memcpy(data, "CBWV", 4);
-    /* Another version is stale, not damaged: -EPROTO, so the app recomputes.
-     * Versions 1 to 3 hold older three-band levels (dj's, then two fits to
-     * rekordbox's bytes) in the same layout as version 4. */
+    /* Another version is stale, not damaged: -EPROTO, so the app recomputes. */
     for (uint32_t v = 0; v < 6; v++) {
-        if (v == 4)
+        if (v == 1)
             continue;
         put32(data + 4, v);
         CHECK(cb_waveforms_unpack(data, size, &r) == CB_ERROR(EPROTO) && !r.pwv3);
+        CHECK(cb_waveforms_check_head(data, 8) == CB_ERROR(EPROTO));
     }
-    put32(data + 4, 4);
+    put32(data + 4, 1);
     put32(data + 8, (uint32_t)w.nb_detail + 1);
     CHECK(cb_waveforms_unpack(data, size, &r) == CB_ERROR(EINVAL));
     put32(data + 8, 0);
@@ -670,15 +663,14 @@ static int test_cache(void)
     CHECK(cb_file_write_atomic(path, buf, size) == 0);
     CHECK(cb_waveforms_load(path, &r) == CB_ERROR(EINVAL));
     buf[8]--;
-    /* A version 1 file (dj's three-band levels) or version 3 one (the last
-     * fit to rekordbox's) is stale: -EPROTO */
+    /* A file of another format version is stale: -EPROTO */
+    buf[4] = 0;
+    CHECK(cb_file_write_atomic(path, buf, size) == 0);
+    CHECK(cb_waveforms_load(path, &r) == CB_ERROR(EPROTO) && !r.pwv3);
+    buf[4] = 2;
+    CHECK(cb_file_write_atomic(path, buf, size) == 0);
+    CHECK(cb_waveforms_load(path, &r) == CB_ERROR(EPROTO) && !r.pwv3);
     buf[4] = 1;
-    CHECK(cb_file_write_atomic(path, buf, size) == 0);
-    CHECK(cb_waveforms_load(path, &r) == CB_ERROR(EPROTO) && !r.pwv3);
-    buf[4] = 3;
-    CHECK(cb_file_write_atomic(path, buf, size) == 0);
-    CHECK(cb_waveforms_load(path, &r) == CB_ERROR(EPROTO) && !r.pwv3);
-    buf[4] = 4;
     buf[0] = 'X';
     CHECK(cb_file_write_atomic(path, buf, size) == 0);
     CHECK(cb_waveforms_load(path, &r) == CB_ERROR(EINVAL));

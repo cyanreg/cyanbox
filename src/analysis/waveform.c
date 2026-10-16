@@ -635,7 +635,7 @@ void cb_waveforms_free(CBWaveforms *w)
  * content of a .cbw file; all integers little-endian:
  *
  *   0   4  "CBWV"
- *   4   4  version (4)
+ *   4   4  version (1)
  *   8   4  nb_detail
  *  12   4  rate
  *  16   6  gains, 3 x u16
@@ -645,18 +645,11 @@ void cb_waveforms_free(CBWaveforms *w)
  *          the stick.
  *
  * It is a cache of what analysis computes, so a version change just makes
- * unpack fail with -EPROTO and the caller recompute, as does rxbox's magic
- * (the project's name before cyanbox); damaged data fails with -EINVAL. Unpack checks the size exactly against the header before
- * reading anything.
- *
- * Version 1 held dj's PWV6/PWV7 levels, version 2 a first recalibration
- * to rekordbox's bytes (dj's levels squared), version 3 a per-band one,
- * version 4 rbxport's rules (see "PWV7" and "PWV6" above); older blobs
- * must not be used. The other tags have not changed since version 1, but
- * a blob is recomputed whole: it is one analysis stage. */
+ * unpack fail with -EPROTO and the caller recompute; damaged data fails
+ * with -EINVAL. Unpack checks the size exactly against the header before
+ * reading anything. A blob is recomputed whole: it is one analysis stage. */
 #define CBW_MAGIC "CBWV"
-#define CBW_MAGIC_RXBOX "RXWV"
-#define CBW_VERSION 4
+#define CBW_VERSION 1
 #define CBW_HEADER 24
 /* 24 hours of columns: anything above is a damaged file, not a track. */
 #define CBW_MAX_DETAIL (COLUMNS_PER_SECOND * 3600 * 24)
@@ -745,12 +738,10 @@ int cb_waveforms_check_head(const uint8_t *head, size_t size)
 {
     if (!head || size < 8)
         return CB_ERROR(EINVAL);
-    /* rxbox's, or another format version (1 to 3: older three-band
-     * levels): not damaged, but stale, so the caller recomputes */
-    if (!memcmp(head, CBW_MAGIC_RXBOX, 4))
-        return CB_ERROR(EPROTO);
     if (memcmp(head, CBW_MAGIC, 4))
         return CB_ERROR(EINVAL);
+    /* Another format version: not damaged, but stale, so the caller
+     * recomputes */
     return get_le32(head + 4) == CBW_VERSION ? 0 : CB_ERROR(EPROTO);
 }
 

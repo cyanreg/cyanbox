@@ -49,8 +49,7 @@ void cb_waveforms_free(CBWaveforms *w);
  * "CBWV", version, nb_detail, rate, gains, then the tags, the previews
  * first: its first CB_WAVE_PACKED_PREVIEW bytes are the header and the
  * previews, which the library keeps apart from the detail after them.
- * Unpack (and load) return -EPROTO for a blob of another format version
- * (versions 1 to 3 held older three-band levels) or rxbox's ("RXWV"):
+ * Unpack (and load) return -EPROTO for a blob of another format version:
  * recompute the waveforms; -EINVAL for damaged data. unpack_previews
  * takes those first bytes alone and leaves the detail out (nb_detail 0).
  * check_head says the same of a blob's first 8 bytes alone. */
