@@ -48,7 +48,7 @@ foreach sh : [
 endforeach
 
 cb_ml_lib = static_library('cb_ml',
-    files('gpu.c', 'gguf.c', 'tokenizer.c', 'moss.c', 'tag.c'), ml_shader_headers,
+    files('gpu.c', 'gguf.c', 'tokenizer.c', 'moss.c', 'tag.c', 'answers.c'), ml_shader_headers,
     include_directories: cb_inc,
     dependencies: [ cb_vkdev_dep, m_dep ],
 )
@@ -76,6 +76,17 @@ test('ml_ask',
     ),
     suite: 'ml',
     timeout: 300,
+)
+
+# What the tags make of the model's answers in words, and that an answer
+# cut short once settled makes the same. No GPU.
+test('ml_answers',
+    executable('test_ml_answers', '../../tests/ml/test_answers.c',
+        include_directories: [ cb_inc, include_directories('.') ],
+        dependencies: [ cb_ml_dep ],
+    ),
+    suite: 'ml',
+    timeout: 60,
 )
 
 # The model file's header against crafted files that must be refused (a

@@ -83,6 +83,14 @@ at the end) and asks:
 The comment is the vocals and the mood: "Female vocals, English.
 Melancholic, introspective, atmospheric."
 
+An answer in words stops being generated once nothing the model could
+add would change what is made of it (`src/ml/answers.c`): the genre and
+the mood once something other than spaces and full stops follows the
+first cut, the vocals once they begin with "No" and something not a
+letter ("No, there are no vocals in this track." is "Instrumental" from
+its second token on). `test_ml_answers` checks every prefix of random
+answers that is called settled against the whole.
+
 ### The colour
 
 The colour is one of rekordbox's eight, the one whose words in the legend

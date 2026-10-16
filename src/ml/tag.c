@@ -108,111 +108,6 @@ static const char *const q_color = "Which of these descriptions fits this music 
 /* The letters' share of the colour's answer below which it is no answer. */
 #define MIN_LETTER_MASS 0.5f
 
-/* --------------------------------------------------------------- answers */
-
-static char *trim(char *s)
-{
-    while (isspace((unsigned char)*s))
-        s++;
-    size_t n = strlen(s);
-    while (n && (isspace((unsigned char)s[n - 1]) || s[n - 1] == '.'))
-        s[--n] = 0;
-    return s;
-}
-
-/* "progressive house" -> "Progressive House", "j-pop" -> "J-Pop": the first
- * letter of each word (after a space or a hyphen) up. */
-static char *genre_of(const char *answer)
-{
-    char *s = cb_strdup(answer);
-    if (!s)
-        return NULL;
-    char *t = trim(s);
-    /* One line, no sentence: "This is ..." answers are cut at the first
-     * newline or comma. */
-    t[strcspn(t, "\n,;")] = 0;
-    t = trim(t);
-    if (!*t) {
-        free(s);
-        return NULL;
-    }
-    for (size_t i = 0; t[i]; i++) {
-        if (i == 0 || t[i - 1] == ' ' || t[i - 1] == '-')
-            t[i] = (char)toupper((unsigned char)t[i]);
-    }
-    char *g = cb_strdup(t);
-    free(s);
-    return g;
-}
-
-static bool has_word(const char *text, const char *word)
-{
-    size_t n = strlen(word);
-    for (const char *p = text; (p = strcasestr(p, word)); p += n) {
-        bool start = p == text || !isalpha((unsigned char)p[-1]);
-        bool end = !isalpha((unsigned char)p[n]);
-        if (start && end)
-            return true;
-    }
-    return false;
-}
-
-/* "Yes, a female vocalist sings in Japanese." -> "Female vocals, Japanese";
- * "No, there are no vocals" -> "Instrumental". */
-static char *vocals_of(const char *answer)
-{
-    static const char *const langs[] = {
-        "Japanese", "English", "Korean", "Chinese", "Mandarin", "Cantonese", "Spanish",
-        "Portuguese", "French", "German", "Italian", "Russian", "Latin", "Hindi", "Arabic",
-    };
-    if (!strncasecmp(answer, "no", 2) && !isalpha((unsigned char)answer[2]))
-        return cb_strdup("Instrumental");
-
-    bool female = has_word(answer, "female") || has_word(answer, "woman") ||
-                  has_word(answer, "women") || has_word(answer, "girl");
-    bool male = has_word(answer, "male") || has_word(answer, "man") || has_word(answer, "men");
-    bool rap = has_word(answer, "rap") || has_word(answer, "rapper") || has_word(answer, "raps");
-    bool choir = has_word(answer, "choir") || has_word(answer, "chorus");
-    const char *who = rap ? "Rap" : choir ? "Choir" : female && male ? "Female and male vocals" :
-                      female ? "Female vocals" : male ? "Male vocals" : "Vocals";
-    const char *lang = NULL;
-    for (size_t i = 0; i < CB_ARRAY_ELEMS(langs) && !lang; i++) {
-        if (has_word(answer, langs[i]))
-            lang = langs[i];
-    }
-    return lang ? cb_asprintf("%s, %s", who, lang) : cb_strdup(who);
-}
-
-/* "Bright, energetic, and uplifting." -> "Bright, energetic, uplifting". */
-static char *mood_of(const char *answer)
-{
-    char *s = cb_strdup(answer);
-    if (!s)
-        return NULL;
-    char *t = trim(s);
-    t[strcspn(t, "\n")] = 0;
-    char *out = calloc(1, strlen(t) + 1);
-    if (!out) {
-        free(s);
-        return NULL;
-    }
-    size_t o = 0;
-    for (const char *p = t; *p;) {
-        if (!strncasecmp(p, "and ", 4) && (p == t || p[-1] == ' ')) {
-            p += 4;
-            continue;
-        }
-        char c = (char)(o == 0 ? toupper((unsigned char)*p) : tolower((unsigned char)*p));
-        out[o++] = c;
-        p++;
-    }
-    out[o] = 0;
-    free(s);
-    char *m = cb_strdup(trim(out));
-    free(out);
-    return m;
-}
-
 /* --------------------------------------------------------- multiple choice */
 
 static const char *const letters[26] = {
@@ -457,12 +352,15 @@ int cb_ml_tag(CBML *ml, const float *pcm, int64_t nb_samples,
         goto end;
     q[Q_GENRE] = (MLQuery) {
         .question = q_genre, .answer_wanted = true, .max_tokens = GENRE_TOKENS,
+        .settled = ml_genre_settled,
     };
     q[Q_VOCALS] = (MLQuery) {
         .question = q_vocals, .answer_wanted = true, .max_tokens = VOCALS_TOKENS,
+        .settled = ml_vocals_settled,
     };
     q[Q_MOOD] = (MLQuery) {
         .question = q_mood, .answer_wanted = true, .max_tokens = MOOD_TOKENS,
+        .settled = ml_mood_settled,
     };
     if ((ret = ml_ask_many(ml, q, NB_Q, cancel)) < 0)
         goto end;
@@ -497,8 +395,8 @@ int cb_ml_tag(CBML *ml, const float *pcm, int64_t nb_samples,
 
     const char *genre = q[Q_GENRE].answer, *vocals = q[Q_VOCALS].answer;
     const char *mood = q[Q_MOOD].answer;
-    tags->genre = genre_of(genre);
-    char *v = vocals_of(vocals), *m = mood_of(mood);
+    tags->genre = ml_genre_of(genre);
+    char *v = ml_vocals_of(vocals), *m = ml_mood_of(mood);
     tags->vocals = v && strcmp(v, "Instrumental") ? 1.0f : 0.0f;
     tags->comment = v && m && *m ? cb_asprintf("%s. %s.", v, m) : cb_strdup(v ? v : "");
     free(v);

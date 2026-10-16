@@ -241,6 +241,21 @@ int ml_choice_ids(CBML *ml, const char *const *choices, int nb, int32_t *ids);
  * numbers, or the choices hold none of it). */
 int ml_choice_probs(const float *logits, const int32_t *ids, int nb, float *probs, float *mass);
 
+/* ------------------------------------------------------------- answers.c */
+
+/* The tags' words from the model's answers, malloc'd: "progressive house"
+ * -> "Progressive House" (NULL: none); "Yes, a female vocalist sings in
+ * Japanese." -> "Female vocals, Japanese", "No, ..." -> "Instrumental";
+ * "Bright, energetic, and uplifting." -> "Bright, energetic, uplifting". */
+char *ml_genre_of(const char *answer);
+char *ml_vocals_of(const char *answer);
+char *ml_mood_of(const char *answer);
+/* Whether the answer so far already makes all that the function above
+ * will make of it, whatever follows (MLQuery.settled). */
+bool ml_genre_settled(const char *answer);
+bool ml_vocals_settled(const char *answer);
+bool ml_mood_settled(const char *answer);
+
 /* Where the time of the last listen and the questions since went, in ms
  * of wall time (each stage waits for the GPU), for the debug log. */
 typedef struct MLStats {
