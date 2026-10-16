@@ -483,7 +483,8 @@ static void test_conv(void)
 /* The attention kernel's dispatches for the test: q, o, the cache and
  * parts in buffers; the keys from brk on shift slots further. */
 static void run_attn(const MLBuf *bq, const MLBuf *bo, const MLBuf *bk, const MLBuf *bv, int nq,
-                     int pos0, bool dec, bool split, uint32_t brk, uint32_t shift)
+                     int pos0, bool dec, bool split, uint32_t brk, uint32_t shift,
+                     enum MLKernel kernel)
 {
     const int H = 32, KV = 8, D = 128, CTX = 4096;
     int nk = pos0 + nq;
@@ -512,7 +513,8 @@ static void run_attn(const MLBuf *bq, const MLBuf *bo, const MLBuf *bk, const ML
             .nb_q = H, .nb_kv = KV, .nsplit = split ? fsplit : 1, .split_len = split ? len : 4096,
             .scale = (float)scale, .brk = brk, .shift = shift,
         };
-        ml_gpu_dispatch(dev, ML_K_ATTN, &p, sizeof(p), (nq + 63) / 64, H, p.nsplit);
+        uint32_t rows = kernel == ML_K_ATTN_32 ? 32 : 64;
+        ml_gpu_dispatch(dev, kernel, &p, sizeof(p), (nq + rows - 1) / rows, H, p.nsplit);
         if (p.nsplit > 1) {
             ml_gpu_barrier(dev);
             ml_gpu_dispatch(dev, ML_K_ATTN_FCOMB, &p, sizeof(p), nq, H, 1);
@@ -577,12 +579,25 @@ static void test_attn(int nq, int pos0, bool dec, bool split, int brk, int shift
 
     MLBuf bq = upload(q, nqv * 4), bk = upload(kc, nc * 2), bv = upload(vc, nc * 2);
     MLBuf bo = zeros(nqv * 4);
-    run_attn(&bq, &bo, &bk, &bv, nq, pos0, dec, split, 0, 0);
+    run_attn(&bq, &bo, &bk, &bv, nq, pos0, dec, split, 0, 0, ML_K_ATTN);
     download(&bo, got, nqv * 4);
     char name[64];
     snprintf(name, sizeof(name), "%s nq %d pos0 %d", dec ? "attn_dec" : split ? "attn split" : "attn",
              nq, pos0);
     check(name, got, want, nqv, 2e-3);
+
+    /* The same in blocks of 32 queries: the same, bit for bit
+     * (attn.comp). */
+    if (!dec) {
+        MLBuf bo2 = zeros(nqv * 4);
+        float *got2 = malloc(nqv * 4);
+        run_attn(&bq, &bo2, &bk, &bv, nq, pos0, dec, split, 0, 0, ML_K_ATTN_32);
+        download(&bo2, got2, nqv * 4);
+        snprintf(name, sizeof(name), "attn_32 nq %d pos0 %d", nq, pos0);
+        check_same(name, got2, got, nqv * 4);
+        ml_buf_free(dev, &bo2);
+        free(got2);
+    }
 
     if (shift) {
         /* The keys from brk on, shift slots further; junk where they were. */
@@ -601,7 +616,8 @@ static void test_attn(int nq, int pos0, bool dec, bool split, int brk, int shift
         }
         MLBuf bk2 = upload(kc2, nc * 2), bv2 = upload(vc2, nc * 2), bo2 = zeros(nqv * 4);
         float *got2 = malloc(nqv * 4);
-        run_attn(&bq, &bo2, &bk2, &bv2, nq, pos0, dec, split, (uint32_t)brk, (uint32_t)shift);
+        run_attn(&bq, &bo2, &bk2, &bv2, nq, pos0, dec, split, (uint32_t)brk, (uint32_t)shift,
+                 nq % 64 && nq % 64 <= 32 ? ML_K_ATTN_32 : ML_K_ATTN);
         download(&bo2, got2, nqv * 4);
         snprintf(name, sizeof(name), "%s keys from %d +%d", dec ? "attn_dec" : "attn", brk, shift);
         check_same(name, got2, got, nqv * 4);
@@ -615,7 +631,7 @@ static void test_attn(int nq, int pos0, bool dec, bool split, int brk, int shift
 }
 
 /* GPU time of one layer's attention: nq queries after pos0 keys. */
-static void bench_attn(int nq, int pos0)
+static void bench_attn(int nq, int pos0, enum MLKernel kernel)
 {
     const int H = 32, KV = 8, D = 128, CTX = 8192;
     size_t nqv = (size_t)nq * H * D, nc = (size_t)KV * CTX * D;
@@ -647,7 +663,8 @@ static void bench_attn(int nq, int pos0)
                 .nq = (uint32_t)nq, .pos0 = (uint32_t)pos0, .max_ctx = CTX,
                 .nb_q = H, .nb_kv = KV, .nsplit = nsplit, .split_len = len, .scale = 0.1f,
             };
-            ml_gpu_dispatch(dev, ML_K_ATTN, &p, sizeof(p), qblocks, H, nsplit);
+            uint32_t rows = kernel == ML_K_ATTN_32 ? 32 : 64;
+            ml_gpu_dispatch(dev, kernel, &p, sizeof(p), (nq + rows - 1) / rows, H, nsplit);
             if (nsplit > 1) {
                 ml_gpu_barrier(dev);
                 ml_gpu_dispatch(dev, ML_K_ATTN_FCOMB, &p, sizeof(p), nq, H, 1);
@@ -658,8 +675,9 @@ static void bench_attn(int nq, int pos0)
     ml_gpu_run(dev);
     double ms = (cb_time_us() - t0) * 1e-3 / reps;
     double flops = 4.0 * H * D * ((double)nq * pos0 + (double)nq * nq / 2);
-    printf("attn %4d queries after %5d   %8.3f ms  %6.2f TFLOPS\n", nq, pos0, ms,
-           flops / (ms * 1e9));
+    printf("%-7s %4d queries after %5d   %8.3f ms  %6.2f TFLOPS\n",
+           nq * 4 <= ATTN_DEC_ROWS ? "attn" : kernel == ML_K_ATTN_32 ? "attn_32" : "attn", nq,
+           pos0, ms, flops / (ms * 1e9));
     ml_buf_free(dev, &bq); ml_buf_free(dev, &bo); ml_buf_free(dev, &bk);
     ml_buf_free(dev, &bv); ml_buf_free(dev, &bp);
 }
@@ -959,9 +977,14 @@ int main(int argc, char **argv)
         test_gemm(true, 32, 9728, 2560, 0, true);
         test_gemm(true, 64, 9728, 2560, 0, true);
         test_gemm(true, 65, 9728, 2560, 0, true);
-        bench_attn(512, 3584);
-        bench_attn(32, 4000);
-        bench_attn(1, 4000);
+        bench_attn(512, 3584, ML_K_ATTN);
+        bench_attn(32, 4000, ML_K_ATTN);
+        bench_attn(32, 4000, ML_K_ATTN_32);
+        bench_attn(17, 3500, ML_K_ATTN);
+        bench_attn(17, 3500, ML_K_ATTN_32);
+        bench_attn(75, 3500, ML_K_ATTN);
+        bench_attn(75, 3500, ML_K_ATTN_32);
+        bench_attn(1, 4000, ML_K_ATTN);
     } else {
         test_gemm(false, 200, 300, 256, FLAG_BIAS, false);
         test_gemm(false, 130, 132, 512, FLAG_BIAS | FLAG_GELU | FLAG_ADD, false);

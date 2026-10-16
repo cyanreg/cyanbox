@@ -45,6 +45,7 @@ enum MLKernel {
     ML_K_ENC_ATTN,              /* shaders/enc_attn.comp */
     ML_K_QK_ROPE,               /* shaders/rope.comp */
     ML_K_ATTN,                  /* shaders/attn.comp: causal, KV cache */
+    ML_K_ATTN_32,               /*   the same in blocks of 32 queries */
     ML_K_ATTN_FCOMB,
     ML_K_ATTN_DEC,              /* shaders/attn_dec.comp: one or two tokens */
     ML_K_ATTN_COMB,

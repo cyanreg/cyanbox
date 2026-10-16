@@ -29,6 +29,7 @@ foreach sh : [
     [ 'enc_attn',      'enc_attn.comp',     [] ],
     [ 'qk_rope',       'qk_rope.comp',      [] ],
     [ 'attn',          'attn.comp',         [] ],
+    [ 'attn_32',       'attn.comp',         [ '-DBR=32' ] ],
     [ 'attn_fcomb',    'attn.comp',         [ '-DCOMBINE' ] ],
     [ 'attn_dec',      'attn_dec.comp',     [] ],
     [ 'attn_comb',     'attn_dec.comp',     [ '-DCOMBINE' ] ],

@@ -23,8 +23,8 @@ colour and the comment, and the genre unless the user typed one
 | --- | --- |
 | Loading the model, once | 2.5 s; 4.1 GB of weights onto the GPU, none kept in RAM |
 | Listening (the whole track) | 2.2–3.8 s on a 6900 XT, ~80x real time: the encoder 0.45–0.75 s, the prompt up to the audio's end (2,700 to 4,600 tokens) 1.7–3.1 s |
-| Every question of `cb_ml_tag` at once (seven yes/no, the colour in eight orders, three in words) | ~0.83 s for their 836 tokens, then 0.1–0.25 s for the answers' 10 to 30 |
-| A track in all, from its audio to the last answer | 3.75 s (the median of 16 tracks of 3 to 6 minutes; 6.7 s when the questions went one at a time and its audio was decoded first, 0.3 s) |
+| Every question of `cb_ml_tag` at once (seven yes/no, the colour in eight orders, three in words) | ~0.73 s for their 836 tokens, then 0.1–0.25 s for the answers' 10 to 30 |
+| A track in all, from its audio to the last answer | 3.7 s (the median of 16 tracks of 3 to 6 minutes; 6.7 s when the questions went one at a time and its audio was decoded first, 0.3 s) |
 | Memory | RAM: two 64 MB read buffers while loading, the audio of this track and the next (19 MB each for 5 minutes), the logits of 15 questions (9 MB); a whole `cyanbox tag` peaks at 280 MB. VRAM: 5.6 GB in buffers after the questions (4.1 GB weights, 1.2 GB cache, the decoder's scratch for 2048 tokens a pass), 6.1 GB at the peak for a 4-minute track and 6.7 GB for one of 9.5 minutes or more (the encoder's scratch, freed before the decoder reads its rows; the decoder's is freed before it is made) |
 
 What it gives, measured on the author's library (some 150 tracks: house,
@@ -273,7 +273,9 @@ reads back a token or a row of logits, and does nothing else.
 - **Decoder.** Qwen3-4B with a 8192-token f16 cache: RMS norms, the q/k
   norms and RoPE from a double-precision table (`qk_rope.comp`), flash
   attention for prefills (`attn.comp`, split over the keys when there are
-  few queries), flash decoding for single tokens (`attn_dec.comp`).
+  few queries, in blocks of 32 queries rather than 64 where 64 would
+  leave half the last block empty), flash decoding for single tokens
+  (`attn_dec.comp`).
   The audio's rows replace their tokens' embeddings, and the deepstack's
   rows are added after layers 0 to 2. The prompt is MOSS-Audio's default
   with its time markers (the seconds every 2 s); the cache holds it up to
@@ -307,7 +309,8 @@ reads back a token or a row of logits, and does nothing else.
 | GEMM, Q4_K, 512 tokens | 9.0–13.0 TFLOPS |
 | GEMM, Q4_K, 2048 tokens | 12.1–14.0 TFLOPS |
 | GEMV, Q4_K, one token | 400–445 GB/s (80–87 % of the memory's) |
-| Attention, 512 queries after 3584 keys | 3.3 ms a layer, 9.8 TFLOPS |
+| Attention, 512 queries after 3584 keys | 3.5 ms a layer, 9.2 TFLOPS |
+| Attention, 17 queries after 3500 keys | 0.24 ms a layer (0.40 ms in a block of 64) |
 | Attention, one query after 4000 keys | 64 µs a layer |
 
 A 5-minute track is ~4,000 tokens through the decoder: ~2.5 s of GEMM,

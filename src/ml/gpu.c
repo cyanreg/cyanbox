@@ -74,6 +74,7 @@
 #include "enc_attn_comp.spv.h"
 #include "qk_rope_comp.spv.h"
 #include "attn_comp.spv.h"
+#include "attn_32_comp.spv.h"
 #include "attn_fcomb_comp.spv.h"
 #include "attn_dec_comp.spv.h"
 #include "attn_comb_comp.spv.h"
@@ -104,6 +105,7 @@ static const struct {
     K(ML_K_ENC_ATTN,      enc_attn),
     K(ML_K_QK_ROPE,       qk_rope),
     K(ML_K_ATTN,          attn),
+    K(ML_K_ATTN_32,       attn_32),
     K(ML_K_ATTN_FCOMB,    attn_fcomb),
     K(ML_K_ATTN_DEC,      attn_dec),
     K(ML_K_ATTN_COMB,     attn_comb),
@@ -242,7 +244,8 @@ static int create_pipelines(MLGpu *g)
         if (res != VK_SUCCESS)
             return cb_vk_ret2err(res);
 
-        bool sub = k == ML_K_GEMV_Q4K || k == ML_K_ATTN || k == ML_K_ATTN_DEC;
+        bool sub = k == ML_K_GEMV_Q4K || k == ML_K_ATTN || k == ML_K_ATTN_32 ||
+                   k == ML_K_ATTN_DEC;
         bool gemm = k == ML_K_GEMM_F16 || k == ML_K_GEMM_F16_BK32 || k == ML_K_GEMM_F16_CONV ||
                     k == ML_K_GEMM_Q4K || k == ML_K_GEMM_Q4K_BK32 || k == ML_K_GEMM_Q4K_SMALL;
         VkPipelineShaderStageRequiredSubgroupSizeCreateInfo size = {

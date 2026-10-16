@@ -961,9 +961,13 @@ static void attention(CBML *ml, int i, const Segment *segs, int nb)
                     .nb_q = L_HEADS, .nb_kv = L_KV, .nsplit = a.nsplit, .split_len = a.split_len,
                     .scale = scale, .brk = brk, .shift = shift,
                 };
+                /* A segment that would leave half of its last block of 64
+                 * queries empty goes in blocks of 32 (the same sums). */
+                bool b32 = m % 64 && m % 64 <= 32;
+                uint32_t rows = b32 ? 32 : 64;
                 if (!phase)
-                    ml_gpu_dispatch(&ml->g, ML_K_ATTN, &p, sizeof(p), (m + 63) / 64, L_HEADS,
-                                    a.nsplit);
+                    ml_gpu_dispatch(&ml->g, b32 ? ML_K_ATTN_32 : ML_K_ATTN, &p, sizeof(p),
+                                    (m + rows - 1) / rows, L_HEADS, a.nsplit);
                 else
                     ml_gpu_dispatch(&ml->g, ML_K_ATTN_FCOMB, &p, sizeof(p), m, L_HEADS, 1);
                 any = true;
