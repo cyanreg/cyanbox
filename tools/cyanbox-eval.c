@@ -814,6 +814,8 @@ static void analyse_one(Job *job, int i)
         take_grid(r, &br.grid);
         r->closest = closest_beats(&br.grid, r->duration);
         r->confidence = br.confidence;
+        r->octave_margin = br.octave_margin;
+        r->phase_margin = br.phase_margin;
         r->flags = br.flags;
         flags_to_str(br.flags, r->flagstr, sizeof(r->flagstr));
         r->music_start = br.music_start;
@@ -1046,7 +1048,7 @@ static void write_csv(const char *fn, const Result *res, int nb)
                "cue,start_section,start_kick,start_struct,start_hit,start_half_beat,start_off,"
                "start_t0,start_period,start_scores,jump_db,start_kick_ratio,dynamic_beats,"
                "dynamic_bpm_lo,dynamic_bpm_hi,key,key_confidence,key_tuning,wave_columns,"
-               "wave_hash\n");
+               "wave_hash,phase_margin,octave_margin\n");
     for (int i = 0; i < nb; i++) {
         const Result *r = &res[i];
         if (!r->ok)
@@ -1073,9 +1075,10 @@ static void write_csv(const char *fn, const Result *res, int nb)
         else
             fputs(",,", f);
         if (r->has_waves)
-            fprintf(f, ",%d,%016llx\n", r->wave_columns, (unsigned long long)r->wave_hash);
+            fprintf(f, ",%d,%016llx", r->wave_columns, (unsigned long long)r->wave_hash);
         else
-            fputs(",,\n", f);
+            fputs(",,", f);
+        fprintf(f, ",%.4f,%.4f\n", r->phase_margin, r->octave_margin);
     }
     fclose(f);
 }
