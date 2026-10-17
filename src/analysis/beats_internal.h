@@ -281,6 +281,13 @@ void cb_beat_envs_free(CBBeatEnvs *e);
  * else the tracked time. */
 double cb_beat_predict(const CBBeatObs *beats, int i, const CBFitSection *s);
 
+/* How many beats, every first interval, a measured passage that opens a
+ * grid gets before its first beat, back to time 0: none when it starts at
+ * or before 0 (it may: the beats are tracked from the onsets' frames) or
+ * has fewer than two beats. The grid's size is counted with it and the
+ * beats are made with it, so the two cannot disagree. */
+int cb_beats_back_to_zero(const CBBeatObs *b, int n);
+
 /* Measures the attack of beats [first, last]: the nearest strong rise of
  * the band's envelope within `tol` seconds of the prediction. */
 void cb_measure_attacks(const CBBeatEnvs *e, CBBeatObs *beats, int first, int last,

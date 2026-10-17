@@ -2677,12 +2677,8 @@ static int analyse(const float *mono, int64_t nb_samples, int rate, CBSpectrum *
         const CBFitSection *s = &c.secs[i];
         int n = s->last - s->first + 1;
         cap += s->dynamic ? n : 1;
-        if (i == 0 && s->dynamic && n > 1) {
-            /* The beats reached back to time 0 at the first interval, as
-             * the build below counts them. */
-            double dt = c.beats[s->first + 1].time - c.beats[s->first].time;
-            cap += (dt > 0.0 ? (int)floor(c.beats[s->first].time / dt) : 0) + 2;
-        }
+        if (i == 0 && s->dynamic && n > 1)
+            cap += cb_beats_back_to_zero(c.beats + s->first, n) + 2;
     }
     out->grid.sections = calloc((size_t)cap, sizeof(*out->grid.sections));
     if (!out->grid.sections) {
@@ -2735,7 +2731,7 @@ static int analyse(const float *mono, int64_t nb_samples, int rate, CBSpectrum *
             if (i == 0 && n > 1) {
                 /* Back to time 0 at the first interval. */
                 double dt = b[1].time - b[0].time;
-                int back = dt > 0.0 ? (int)floor(b[0].time / dt) : 0;
+                int back = cb_beats_back_to_zero(b, n);
                 for (int k = back; k >= 1; k--) {
                     out->grid.sections[ng++] = (CBTempoSection) {
                         .start    = b[0].time - k * dt,

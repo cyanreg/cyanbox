@@ -195,6 +195,16 @@ void cb_beat_envs_free(CBBeatEnvs *e)
     memset(e, 0, sizeof(*e));
 }
 
+int cb_beats_back_to_zero(const CBBeatObs *b, int n)
+{
+    if (n < 2)
+        return 0;
+    double dt = b[1].time - b[0].time;
+    if (!(dt > 0.0) || !(b[0].time > 0.0))
+        return 0;
+    return (int)floor(b[0].time / dt);
+}
+
 double cb_beat_predict(const CBBeatObs *beats, int i, const CBFitSection *s)
 {
     if (!s)

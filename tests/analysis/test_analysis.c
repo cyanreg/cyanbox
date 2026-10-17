@@ -492,6 +492,25 @@ static void test_auto_cue(void)
         printf("ok   the automatic cue without the track's length\n");
 }
 
+/* The beats a measured passage opening a grid gets back to 0 s: the grid is
+ * allocated by this count, so a passage starting before 0 s must count none
+ * (it counted negative ones once: the grid came out two short and the
+ * analysis wrote past it, on a t+pazolite track measured from -1.57 s). */
+static void test_back_to_zero(void)
+{
+    CBBeatObs b[3] = { { .time = 1.30 }, { .time = 1.80 }, { .time = 2.30 } };
+    CHECK(cb_beats_back_to_zero(b, 3) == 2, "1.3 s at 0.5 s: %d beats back, want 2",
+          cb_beats_back_to_zero(b, 3));
+    b[0].time = -1.5672, b[1].time = -1.0668, b[2].time = -0.5664;
+    CHECK(cb_beats_back_to_zero(b, 3) == 0, "a passage from -1.57 s: %d beats back, want 0",
+          cb_beats_back_to_zero(b, 3));
+    b[0].time = 0.0, b[1].time = 0.5;
+    CHECK(cb_beats_back_to_zero(b, 3) == 0, "from 0 s: %d, want 0", cb_beats_back_to_zero(b, 3));
+    b[0].time = 1.0, b[1].time = 1.0;
+    CHECK(cb_beats_back_to_zero(b, 3) == 0, "no interval: %d, want 0", cb_beats_back_to_zero(b, 3));
+    CHECK(cb_beats_back_to_zero(b, 1) == 0, "one beat: %d, want 0", cb_beats_back_to_zero(b, 1));
+}
+
 int main(void)
 {
     const char *base = getenv("CB_TEST_DIR");
@@ -502,6 +521,7 @@ int main(void)
         return 1;
     }
     test_onsets();
+    test_back_to_zero();
     test_first_onset();
     test_auto_cue();
     test_nonfinite(dir);
