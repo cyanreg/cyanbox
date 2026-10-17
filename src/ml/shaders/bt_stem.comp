@@ -1,0 +1,64 @@
+// Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md.
+
+// Beat This!'s stem on chunks of the log-mel spectrogram: the 1-D batch norm
+// (folded to a scale and an offset a bin), the 4x3 convolution of stride
+// (4, 1) and padding (0, 1) from one channel to 32, its bias (the 2-D batch
+// norm folded in), GELU. Out channel-last, [chunk][t][f 32][c 32].
+//
+// Chunk b is frames start[b] .. start[b] + T of the piece. Frames outside
+// the piece are zeros of the log-mel spectrogram (split_piece pads them), so
+// the batch norm makes its offset of them; the convolution's padding at the
+// chunk's ends is zeros after the norm. An invocation is one output.
+
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#include "common.glsl"
+
+layout(local_size_x = 256) in;
+
+#define MELS 128
+#define C    32
+#define FO   32
+
+layout(push_constant, std430) uniform Push {
+    uint64_t mel;           // [nb_frames][128]
+    uint64_t weight;        // f16 [32][4][3]
+    uint64_t bias;          // [32]
+    uint64_t scale, offset; // [128]
+    uint64_t starts;        // int [chunks]
+    uint64_t dst;
+    uint nb_frames;
+    uint T;                 // frames a chunk
+    uint count;             // chunks * T * 32 * 32
+} pc;
+
+void main()
+{
+    uint i = gl_GlobalInvocationID.x + gl_GlobalInvocationID.y * gl_NumWorkGroups.x * 256u;
+    if (i >= pc.count)
+        return;
+    uint c = i % C;
+    uint fo = (i / C) % FO;
+    uint t = (i / (C * FO)) % pc.T;
+    uint b = i / (C * FO * pc.T);
+    F32 mel = F32(pc.mel);
+    F16 w = F16(pc.weight);
+    F32 sc = F32(pc.scale);
+    F32 of = F32(pc.offset);
+    int s = I32(pc.starts).v[b];
+
+    float acc = 0.0;
+    for (uint kf = 0u; kf < 4u; kf++) {
+        uint f = fo * 4u + kf;
+        for (uint kt = 0u; kt < 3u; kt++) {
+            int tau = int(t + kt) - 1;
+            if (tau < 0 || tau >= int(pc.T))
+                continue;
+            int fr = s + tau;
+            float m = fr >= 0 && fr < int(pc.nb_frames) ? mel.v[uint(fr) * MELS + f] : 0.0;
+            float z = m * sc.v[f] + of.v[f];
+            acc += float(w.v[(c * 4u + kf) * 3u + kt]) * z;
+        }
+    }
+    F32(pc.dst).v[i] = gelu(acc + F32(pc.bias).v[c]);
+}

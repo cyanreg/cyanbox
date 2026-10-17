@@ -116,9 +116,36 @@ typedef struct ArgmaxPush {
     uint32_t n;
 } ArgmaxPush;
 
+/* Beat This! (beatthis.c): bt_mel.comp, bt_stem.comp, bt_im2col.comp,
+ * bt_attn.comp */
+typedef struct BtMelPush {
+    uint64_t pcm, window, basis, filters, dst;
+    uint32_t nb_samples, pcm0, frame0, nb_frames;
+} BtMelPush;
+
+typedef struct BtStemPush {
+    uint64_t mel, weight, bias, scale, offset, starts, dst;
+    uint32_t nb_frames, T, count;
+} BtStemPush;
+
+typedef struct BtIm2colPush {
+    uint64_t src, dst;
+    uint32_t T, F, C, count;
+} BtIm2colPush;
+
+typedef struct BtAttnPush {
+    uint64_t qkv, o, rope;
+    uint32_t ld, ldo;
+    uint32_t L, nb_inner, stride0, stride1, tok;
+    uint32_t C;
+    float scale;
+} BtAttnPush;
+
 #define ML_PUSH_CHECK(t) static_assert(sizeof(t) <= 128, #t " is too big for push constants")
 ML_PUSH_CHECK(GemmPush);
 ML_PUSH_CHECK(RopePush);
 ML_PUSH_CHECK(AttnPush);
+ML_PUSH_CHECK(BtStemPush);
+ML_PUSH_CHECK(BtAttnPush);
 
 #endif /* CYANBOX_ML_KERNELS_H */

@@ -1,9 +1,10 @@
 # Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md.
 #
-# ml: MOSS-Audio on Vulkan compute (cyanbox/ml.h). Its own VkDevice
-# (ml_priv.h says why); the shaders are GLSL compiled by glslang to SPIR-V
-# at build time and embedded as C arrays (shaders/spv_embed.py), as
-# src/gpu's are. A shader source may build several kernels, by defines.
+# ml: MOSS-Audio (cyanbox/ml.h) and Beat This! (cyanbox/beatthis.h) on Vulkan
+# compute. Their own VkDevice (ml_priv.h says why); the shaders are GLSL
+# compiled by glslang to SPIR-V at build time and embedded as C arrays
+# (shaders/spv_embed.py), as src/gpu's are. A shader source may build
+# several kernels, by defines.
 
 ml_python = find_program('python3')
 ml_spv_embed = files('shaders/spv_embed.py')
@@ -35,6 +36,10 @@ foreach sh : [
     [ 'attn_comb',     'attn_dec.comp',     [ '-DCOMBINE' ] ],
     [ 'embed',         'embed.comp',        [] ],
     [ 'argmax',        'argmax.comp',       [] ],
+    [ 'bt_mel',        'bt_mel.comp',       [] ],
+    [ 'bt_stem',       'bt_stem.comp',      [] ],
+    [ 'bt_im2col',     'bt_im2col.comp',    [] ],
+    [ 'bt_attn',       'bt_attn.comp',      [] ],
 ]
     spv = custom_target(sh[0] + '_comp_spv',
         input: 'shaders' / sh[1],
@@ -51,7 +56,8 @@ foreach sh : [
 endforeach
 
 cb_ml_lib = static_library('cb_ml',
-    files('gpu.c', 'gguf.c', 'tokenizer.c', 'moss.c', 'tag.c', 'answers.c'), ml_shader_headers,
+    files('gpu.c', 'gguf.c', 'tokenizer.c', 'moss.c', 'tag.c', 'answers.c', 'beatthis.c'),
+    ml_shader_headers,
     include_directories: cb_inc,
     dependencies: [ cb_vkdev_dep, m_dep ],
 )
@@ -80,6 +86,22 @@ test('ml_ask',
     ),
     suite: 'ml',
     timeout: 300,
+    is_parallel: false,
+)
+
+# Beat This! on the GPU against its reference code's logits (beatthis_ref.h,
+# from gen_beatthis_ref.py) for a made beat. Needs models/beat-this-f16.gguf
+# (or $CYANBOX_BEATTHIS_MODEL) and a GPU that runs it; skipped (77) without
+# them. On its own, as ml_ask: one model on the GPU at a time.
+test('ml_beatthis',
+    executable('test_ml_beatthis', '../../tests/ml/test_beatthis.c',
+        include_directories: [ cb_inc, include_directories('.') ],
+        dependencies: [ cb_ml_dep, m_dep ],
+    ),
+    env: { 'CYANBOX_BEATTHIS_MODEL':
+           meson.project_source_root() / 'models' / 'beat-this-f16.gguf' },
+    suite: 'ml',
+    timeout: 120,
     is_parallel: false,
 )
 

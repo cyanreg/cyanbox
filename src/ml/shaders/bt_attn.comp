@@ -1,0 +1,107 @@
+// Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md.
+
+// Beat This!'s attention (roformer.Attention): heads of 32, queries and keys
+// rotated by RoPE (rotary_embedding_torch, interleaved pairs) at their place
+// in the sequence, softmax over every key (no mask), each head's output
+// times the sigmoid of its gate. One kernel for the three uses: the
+// frontend's across frequencies and across time, and the transformer's.
+//
+// The rows hold q, k, v (C = heads * 32 each) and the gates (one a head)
+// side by side, ld floats apart: the product before (gemm.comp) makes them
+// so. Sequence s is rows s0 * stride0 + s1 * stride1 + i * tok for its tokens
+// i < L, where s0 = s / nb_inner and s1 = s % nb_inner; the output goes to
+// the same rows of o (ldo floats apart), the heads side by side.
+//
+// A workgroup is 64 queries of one head of one sequence; an invocation, one
+// query, with an online softmax over the keys, which go through shared
+// memory 64 at a time. RoPE's angles come from a table the CPU made,
+// [position][16] (cos, sin).
+
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#include "common.glsl"
+
+layout(local_size_x = 64) in;
+
+#define D  32
+#define BR 64
+
+layout(push_constant, std430) uniform Push {
+    uint64_t qkv, o, rope;
+    uint ld, ldo;
+    uint L, nb_inner, stride0, stride1, tok;
+    uint C;
+    float scale;
+} pc;
+
+shared float ks[BR][D + 1];
+shared float vs[BR][D + 1];
+
+void rotate(inout float x[D], uint pos)
+{
+    F32 rope = F32(pc.rope);
+    for (uint p = 0u; p < D / 2u; p++) {
+        float c = rope.v[2u * (pos * (D / 2u) + p)];
+        float s = rope.v[2u * (pos * (D / 2u) + p) + 1u];
+        float a = x[2u * p], b = x[2u * p + 1u];
+        x[2u * p] = a * c - b * s;
+        x[2u * p + 1u] = b * c + a * s;
+    }
+}
+
+void main()
+{
+    uint tid = gl_LocalInvocationIndex;
+    uint h = gl_WorkGroupID.y, s = gl_WorkGroupID.z;
+    uint base = (s / pc.nb_inner) * pc.stride0 + (s % pc.nb_inner) * pc.stride1;
+    uint i = gl_WorkGroupID.x * BR + tid;
+    F32 x = F32(pc.qkv);
+
+    float q[D], acc[D];
+    float m = -1e30, l = 0.0;
+    bool live = i < pc.L;
+    uint qrow = (base + i * pc.tok) * pc.ld;
+    for (uint d = 0u; d < D; d++) {
+        q[d] = live ? x.v[qrow + h * D + d] : 0.0;
+        acc[d] = 0.0;
+    }
+    rotate(q, live ? i : 0u);
+    for (uint d = 0u; d < D; d++)
+        q[d] *= pc.scale;
+
+    for (uint j0 = 0u; j0 < pc.L; j0 += BR) {
+        uint j = j0 + tid;
+        if (j < pc.L) {
+            uint row = (base + j * pc.tok) * pc.ld;
+            float k[D];
+            for (uint d = 0u; d < D; d++) {
+                k[d] = x.v[row + pc.C + h * D + d];
+                vs[tid][d] = x.v[row + 2u * pc.C + h * D + d];
+            }
+            rotate(k, j);
+            for (uint d = 0u; d < D; d++)
+                ks[tid][d] = k[d];
+        }
+        barrier();
+        uint n = min(uint(BR), pc.L - j0);
+        for (uint e = 0u; e < n; e++) {
+            float sc = 0.0;
+            for (uint d = 0u; d < D; d++)
+                sc += q[d] * ks[e][d];
+            float mn = max(m, sc);
+            float corr = exp(m - mn), p = exp(sc - mn);
+            l = l * corr + p;
+            for (uint d = 0u; d < D; d++)
+                acc[d] = acc[d] * corr + p * vs[e][d];
+            m = mn;
+        }
+        barrier();
+    }
+    if (!live)
+        return;
+    float g = 1.0 / (1.0 + exp(-x.v[qrow + 3u * pc.C + h]));
+    F32 o = F32(pc.o);
+    uint orow = (base + i * pc.tok) * pc.ldo;
+    for (uint d = 0u; d < D; d++)
+        o.v[orow + h * D + d] = acc[d] / l * g;
+}

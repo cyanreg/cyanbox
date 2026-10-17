@@ -3,7 +3,8 @@
 /* Private to the model (cyanbox/ml.h): the GPU it runs on (gpu.c), the GGUF
  * file its weights come from (gguf.c), the kernels (shaders/, their push
  * constants in kernels.h), the tokenizer (tokenizer.c), the network
- * (moss.c) and the tags made from its answers (tag.c).
+ * (moss.c) and the tags made from its answers (tag.c); Beat This!'s network
+ * (beatthis.c) runs on the same GPU code, its own kernels beside them.
  *
  * The model owns its VkDevice rather than share cyanbox/compute.h's (or the
  * window's), set up as theirs are (src/gpu/vkdev.h): its weights (4 GB)
@@ -51,6 +52,10 @@ enum MLKernel {
     ML_K_ATTN_COMB,
     ML_K_EMBED,                 /* shaders/embed.comp */
     ML_K_ARGMAX,                /* shaders/argmax.comp */
+    ML_K_BT_MEL,                /* Beat This! (beatthis.c): shaders/bt_mel.comp */
+    ML_K_BT_STEM,               /*   shaders/bt_stem.comp */
+    ML_K_BT_IM2COL,             /*   shaders/bt_im2col.comp */
+    ML_K_BT_ATTN,               /*   shaders/bt_attn.comp */
     ML_NB_KERNELS,
 };
 

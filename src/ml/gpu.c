@@ -80,6 +80,10 @@
 #include "attn_comb_comp.spv.h"
 #include "embed_comp.spv.h"
 #include "argmax_comp.spv.h"
+#include "bt_mel_comp.spv.h"
+#include "bt_stem_comp.spv.h"
+#include "bt_im2col_comp.spv.h"
+#include "bt_attn_comp.spv.h"
 
 static const struct {
     const uint8_t *code;
@@ -111,6 +115,10 @@ static const struct {
     K(ML_K_ATTN_COMB,     attn_comb),
     K(ML_K_EMBED,         embed),
     K(ML_K_ARGMAX,        argmax),
+    K(ML_K_BT_MEL,        bt_mel),
+    K(ML_K_BT_STEM,       bt_stem),
+    K(ML_K_BT_IM2COL,     bt_im2col),
+    K(ML_K_BT_ATTN,       bt_attn),
 #undef K
 };
 

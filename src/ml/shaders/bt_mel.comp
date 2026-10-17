@@ -1,0 +1,116 @@
+// Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md.
+
+// Beat This!'s log-mel spectrogram (its LogMelSpect: torchaudio's
+// MelSpectrogram, then log1p(1000 x)): frames of 1024 samples every 441 at
+// 22050 Hz (50 a second), centred and reflected at the ends, times the
+// periodic Hann window, the magnitude of their 513-bin DFT over sqrt(1024)
+// (normalized="frame_length", power 1), the 128 slaney filters.
+//
+// The samples come a window of the piece at a time: sample i of the piece
+// is pcm[i - pcm0], the reflection is the piece's (nb_samples), and the
+// window holds every sample its frames read.
+//
+// A workgroup does FRAMES frames, so each value of the DFT's basis (read
+// from a table the CPU made in double precision, [1024][513] (cos, sin))
+// is loaded once for all of them.
+
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#include "common.glsl"
+
+layout(local_size_x = 256) in;
+
+#define NFFT   1024
+#define HOP    441
+#define BINS   513
+#define MELS   128
+#define FRAMES 8
+#define BPI    3                // bins an invocation sums (3 * 256 >= 513)
+
+layout(push_constant, std430) uniform Push {
+    uint64_t pcm;           // the window of samples
+    uint64_t window;        // 1024
+    uint64_t basis;         // [1024][513] vec2 (cos, sin)
+    uint64_t filters;       // [513][128]
+    uint64_t dst;           // [nb_frames][128], frame f at (f - frame0) * 128
+    uint nb_samples;        // the piece's
+    uint pcm0;              // the window's first sample in the piece
+    uint frame0, nb_frames; // the frames of this dispatch
+} pc;
+
+shared float xs[FRAMES][NFFT];
+shared float mag[FRAMES][BINS];
+
+void main()
+{
+    uint tid = gl_LocalInvocationIndex;
+    uint f0 = gl_WorkGroupID.x * FRAMES;
+    F32 pcm = F32(pc.pcm);
+    F32 win = F32(pc.window);
+    int n = int(pc.nb_samples);
+
+    for (uint e = tid; e < FRAMES * NFFT; e += 256u) {
+        uint fr = e / NFFT, j = e % NFFT;
+        int idx = int((pc.frame0 + f0 + fr) * HOP + j) - NFFT / 2;
+        if (idx < 0)
+            idx = -idx;
+        if (idx >= n)
+            idx = 2 * (n - 1) - idx;
+        idx = clamp(idx, 0, n - 1);
+        xs[fr][j] = pcm.v[uint(idx) - pc.pcm0] * win.v[j];
+    }
+    barrier();
+
+    F32 basis = F32(pc.basis);
+    float re[BPI][FRAMES], im[BPI][FRAMES];
+    for (int b = 0; b < BPI; b++)
+        for (int fr = 0; fr < FRAMES; fr++) {
+            re[b][fr] = 0.0;
+            im[b][fr] = 0.0;
+        }
+    for (uint j = 0u; j < NFFT; j++) {
+        for (uint b = 0u; b < BPI; b++) {
+            uint k = tid + b * 256u;
+            if (k >= BINS)
+                break;
+            float c = basis.v[2u * (j * BINS + k)];
+            float s = basis.v[2u * (j * BINS + k) + 1u];
+            for (int fr = 0; fr < FRAMES; fr++) {
+                re[b][fr] += xs[fr][j] * c;
+                im[b][fr] += xs[fr][j] * s;
+            }
+        }
+    }
+    for (uint b = 0u; b < BPI; b++) {
+        uint k = tid + b * 256u;
+        if (k >= BINS)
+            break;
+        for (int fr = 0; fr < FRAMES; fr++)
+            mag[fr][k] = sqrt(re[b][fr] * re[b][fr] + im[b][fr] * im[b][fr]) * 0.03125;
+    }
+    barrier();
+
+    if (tid < MELS) {
+        F32 filt = F32(pc.filters);
+        F32 dst = F32(pc.dst);
+        float acc[FRAMES];
+        for (int fr = 0; fr < FRAMES; fr++)
+            acc[fr] = 0.0;
+        for (uint k = 0u; k < BINS; k++) {
+            float w = filt.v[k * MELS + tid];
+            for (int fr = 0; fr < FRAMES; fr++)
+                acc[fr] += w * mag[fr][k];
+        }
+        for (uint fr = 0u; fr < FRAMES; fr++) {
+            if (f0 + fr >= pc.nb_frames)
+                break;
+            // log1p, which GLSL lacks: log(u) (u - 1) / x is exact to an ulp or so
+            // where log(1 + x) loses the digits of a small x (quiet frames);
+            // precise, so that no compiler folds (1 + x) - 1 back into x
+            float x = 1000.0 * acc[fr];
+            precise float u = 1.0 + x;
+            precise float d = u - 1.0;
+            dst.v[(f0 + fr) * MELS + tid] = d == 0.0 ? x : log(u) * (x / d);
+        }
+    }
+}

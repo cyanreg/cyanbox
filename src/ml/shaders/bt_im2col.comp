@@ -1,0 +1,37 @@
+// Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md.
+
+// The rows a 2x3 convolution of stride (2, 1) and padding (0, 1) over
+// (frequency, time) multiplies (Beat This!'s frontend blocks), gathered for
+// gemm.comp: x is channel-last [chunk][t][f][cin]; row (b, t, fo) of the
+// output is x at (t + kt - 1, 2 fo + kf) for kf < 2, kt < 3, in that order,
+// cin values each (0 past the chunk's ends), as the weights are permuted to
+// [cout][kf][kt][cin]. The product is then channel-last again,
+// [chunk][t][f / 2][cout]. An invocation is one value.
+
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#include "common.glsl"
+
+layout(local_size_x = 256) in;
+
+layout(push_constant, std430) uniform Push {
+    uint64_t src, dst;
+    uint T, F, C;           // the input's frames a chunk, frequencies, channels
+    uint count;             // chunks * T * F / 2 * 6 * C
+} pc;
+
+void main()
+{
+    uint i = gl_GlobalInvocationID.x + gl_GlobalInvocationID.y * gl_NumWorkGroups.x * 256u;
+    if (i >= pc.count)
+        return;
+    uint K = 6u * pc.C, FO = pc.F / 2u;
+    uint k = i % K, row = i / K;
+    uint ci = k % pc.C, kt = (k / pc.C) % 3u, kf = k / (3u * pc.C);
+    uint fo = row % FO, t = (row / FO) % pc.T, b = row / (FO * pc.T);
+    int tau = int(t + kt) - 1;
+    float v = 0.0;
+    if (tau >= 0 && tau < int(pc.T))
+        v = F32(pc.src).v[((b * pc.T + uint(tau)) * pc.F + 2u * fo + kf) * pc.C + ci];
+    F32(pc.dst).v[i] = v;
+}
