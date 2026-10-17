@@ -15,6 +15,13 @@ executable('cyanbox-gpu-demo', 'cyanbox-gpu-demo.c', gpu_sources,
     dependencies: [ cb_common_dep, vulkan_dep, sdl3_dep, wayland_client, imgui_dep, vma_dep ] + gpu_deps,
 )
 
+# cyanbox-beatthis: Beat This!'s frame activations for files, as .npy, for
+# working on what to make of them (ml module).
+executable('cyanbox-beatthis', 'cyanbox-beatthis.c',
+    include_directories: cb_inc,
+    dependencies: [ cb_ml_dep, cb_audio_dep, m_dep ],
+)
+
 # cyanbox-ml: listens to files with the model and prints its answers to
 # questions, for trying prompts out (ml module).
 executable('cyanbox-ml', 'cyanbox-ml.c',
