@@ -8,6 +8,7 @@ encoder in F16, its decoder (Qwen3-4B) in Q4_K. The code is `src/ml/`
 (`cyanbox/ml.h`), the shaders `src/ml/shaders/`, the kernel tests
 `tests/ml/test_kernels.c`, the check against the reference implementation
 `tools/ml_check.py`, and the tool for trying prompts `tools/cyanbox-ml.c`.
+Beat This!, a beat tracker, runs on the same code (docs/BEATTHIS.md).
 
 In cyanbox it runs only when asked: the track menu's Analyse tags, Analysis →
 Analyse tags of selection, or `cyanbox tag TRACK...`. The tracks join one
