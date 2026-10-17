@@ -125,6 +125,19 @@ int  cb_analyse_beats(const float *mono, int64_t nb_samples, int rate,
                       const CBAnalysisOptions *opt, CBBeatResult *out);
 void cb_beat_result_free(CBBeatResult *r);
 
+/* The grid with Beat This! (docs/BEATS.md, "With Beat This!"): from its
+ * beat and downbeat logits of the audio (cyanbox/beatthis.h, 50 a second)
+ * and cyanbox's own result for it (cb_analyse_beats), which it replaces
+ * in `res`: the grid; the confidence, how well the grid explains Beat
+ * This!'s detections (the F-measure of beats and detections within 50 ms);
+ * the flags, the new grid's shape (tempo-change, phase-cut, dynamic),
+ * low-confidence, and of cyanbox's unsteady. Where the music starts and
+ * the diagnostics stay cyanbox's. Where Beat This! hears too little to
+ * make a grid of (no beat, under 8 s), `res` stays as it was. `duration`:
+ * the audio's, s. Deterministic, the CPU's alone. */
+int  cb_beats_hybrid(const float *beat, const float *downbeat, int nb_frames, double duration,
+                     CBBeatResult *res);
+
 /* --------------------------------------------------------------------- key */
 
 typedef struct CBKeyResult {

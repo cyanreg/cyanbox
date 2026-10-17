@@ -1002,6 +1002,126 @@ grid on the hit already through dj's start vote, and the witness changed
 the phase only where it is described above. A whole-library comparison of
 the final version was not finished (see "Known weaknesses").
 
+## 12. With Beat This! (`hybrid.c`)
+
+Beat This! (Foscarin, Schlüter and Widmer, ISMIR 2024) is a transformer
+that turns a log-mel spectrogram into a beat and a downbeat activation for
+every frame, 50 a second; cyanbox runs it on the GPU (docs/BEATTHIS.md,
+0.2 s for a 4-minute track). It hears the beat where onsets mislead
+cyanbox's own analysis: an off-beat bass taken for the beat, a half tempo,
+the bar. But its own postprocessing picks peaks, so its tempo wanders and
+changes level inside a track, and its beats wobble by 10-20 ms where a
+line through attacks does not. So the grid is made from both
+(`cb_beats_hybrid`), the network's activations and cyanbox's result for
+the same audio (sections 1-11), which are its hints and its arbiter:
+
+1. **The level.** For every 20 s window (every 10 s), the beat period whose
+   grid best explains Beat This!'s detections (its local maxima over 0.5):
+   the F-measure of grid points with a detection within a frame against
+   detections hit, at its best phase, for every tempo from 60 to 240 BPM by
+   0.25; summed over the windows, so drift between them does not matter.
+   Where an octave of the best scores within 15 % (the activations
+   alternate between the two), the level whose bar of 4 (or 3) Beat
+   This!'s downbeats keep wins, else the one cyanbox found. Then folded
+   into 80-201 BPM, and a reading of 88.5-100 that cyanbox hears at the
+   double is doubled: J-core, hardcore and drum and bass, which DJs count at
+   the double (below 88.5 the slow ones, chill-out, deep house, nu-disco,
+   are as many).
+2. **The beats.** Ellis' dynamic programming on the beat activation, with
+   a period per frame (each window's best within 25 % of the level, a
+   median of three windows); each beat on its activation's peak,
+   parabolic between frames; the beats numbered by the periods between
+   them, so a skipped one leaves its number out. A penalised least-squares
+   segmentation (60 a section, the squared error in the beats' own jitter)
+   splits them into constant-tempo sections; sections either side of a
+   breakdown whose beats fall on the grid carried over are one; one line
+   through the whole track when 90 % of the strong beats lie on it.
+   Each section is fitted through cyanbox's beats where 60 % of it has one
+   within 25 ms (they are a few times steadier), else moved by the 9 ms
+   that Beat This!'s beats come later than cyanbox's on the same audio.
+3. **The arbiters**, on cyanbox's grid at this level (its octave above or
+   below made this one's):
+   - *agree*: where three quarters of each grid's beats have one of the
+     other's within 35 ms, cyanbox's grid;
+   - *phase*: where cyanbox's grid has Beat This!'s tempo but another
+     phase (an off-beat bass taken for the beat), its own tempo at the
+     phase Beat This!'s beats keep on it (their circular mean, 80 %
+     concentrated, in 75 % of 30 s windows), section by section after a
+     phase cut. Moved only from 25 ms off when cyanbox was unsure of its
+     phase (a flag, or a phase margin under 10), from a quarter of a beat
+     when it was sure: Beat This!'s own beats stay within 20 ms of a right
+     grid on 95 % of tracks, but were 49 ms late on one that cyanbox had
+     right (MK's "Good Time (Extended Mix)", by ear). Not on a grid with a
+     passage cyanbox measured beat by beat;
+   - *evidence*: cyanbox's grid where it explains Beat This!'s detections
+     as well (within 0.02 of the F-measure).
+4. **The tempo family.** Where cyanbox's tempo is no octave of the grid's
+   but explains Beat This!'s detections as well (within 0.05), the beats
+   are tracked again at cyanbox's tempo (held within 4 % where its grid is
+   one steady line): the fitting can settle on a tempo that is not the
+   network's best.
+5. **The bar.** Per section, the beat place where the downbeat activation
+   adds up most. (Beat by beat, with a Viterbi path that can insert a short
+   bar, was tried: it moved the bar in intros of drums alone, where Beat
+   This!'s downbeats drift by half a bar.)
+
+The grid is then sections: each run of eight or more beats on one line is
+a straight section, any other beat a measured one (section 6), and, as
+cyanbox's, it begins where the music begins (section 11). Where Beat This!
+hears no beat (no 20 s window with four detections) cyanbox's grid stands.
+The confidence is how well the grid explains Beat This!'s detections (the
+F-measure within 50 ms); the flags are the grid's shape, `low-confidence`
+under 0.5, and cyanbox's `unsteady`. It costs about 50 ms of CPU a track
+after the network.
+
+This was worked out in Python (`build-beats/eval/osu/hybrid.py`, frozen as
+"fix16") and ported; the port gives the same beats as the script, to the
+5 decimals they were printed with, on 1293 of 1294 tracks (the other
+20 µs off), given the same logits and cyanbox results.
+
+### How well
+
+**osu! beatmaps.** A map's timing points are a human's grid, every beat
+and the bar, made to play along to: references for beats and downbeats
+that DJ music otherwise lacks. Maps with one tempo throughout, paired with
+their audio (`build-beats/osu/`); beats right within 70 ms (F-measure,
+each algorithm's constant latency removed), and "fully right" when that
+and the downbeats are both at 0.9 or more:
+
+| | cyanbox alone | with Beat This! |
+| --- | --- | --- |
+| **239 maps** (where it was developed) | | |
+| beats and bar right | 137 | 175 |
+| beat F, 70 ms / 20 ms | 0.838 / 0.813 | 0.909 / 0.894 |
+| downbeat F | 0.702 | 0.892 |
+| **623 maps held out** (never looked at while working on it) | | |
+| beats and bar right | 344 (55 %) | 462 (74 %) |
+| beats right (F 0.9 or more) | 66.3 % | 76.2 % |
+| right up to the octave | 91.0 % | 96.1 % |
+| beat F, 70 ms / 20 ms | 0.831 / 0.794 | 0.916 / 0.873 |
+| downbeat F | 0.698 | 0.895 |
+| wrong: the bar / off-beat / other | 69 / 23 / 52 | 13 / 2 / 24 |
+
+The rest are octaves: 122 of the held-out maps are charted above 201 BPM
+(or below 80), which the convention halves (doubles) by design.
+
+**GiantSteps tempo** (414 tracks held out): Acc1 88.6 % (cyanbox alone
+82.3 %, Beat This!'s own peaks 83.7 %, TempoCNN 87.9 %), Acc2 97.1 %.
+
+**By ear.** AD:HOUSE Winter's ten tracks, whose grids were confirmed by
+listening (two corrected so, in blind click tests): all ten beats and all
+ten bars. Eight library tracks named as wrong in cyanbox's grid (MK's "Good
+Time", ケンカするほど仲がいい！？ at half, nomophobia and Cruising off the
+beat, Slowly's tempo and bar, 灯火's first 85 s): each one steady grid now,
+at the tempo heard; "Good Time (Extended Mix)", right before, stays.
+
+The whole pipeline in C, as the app runs it (`cyanbox-eval`: decoding, the
+network on the GPU, cyanbox's analysis, this stage), scores the same on
+the three sets, to the digits above. (`cyanbox-eval --ffmpeg` gives the
+network the mean of the channels, as the app's decoder mixes them:
+ffmpeg's own mono is 3 dB louder, and the network hears it, enough to move
+nine of the 623.)
+
 ## Parameters
 
 | Parameter | Value | Why |

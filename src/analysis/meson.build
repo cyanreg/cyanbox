@@ -13,6 +13,7 @@ cb_analysis_sources = files(
     'start.c',
     'walk.c',
     'analysis.c',
+    'hybrid.c',
     # waveforms and key
     'waveform.c',
     'key.c',
@@ -34,6 +35,10 @@ test('key', test_key, suite: 'analysis', workdir: meson.project_source_root(), t
 test_beats = executable('test_beats', files('../../tests/analysis/test_beats.c'),
     include_directories: cb_inc, dependencies: [ cb_analysis_dep ])
 test('beats', test_beats, suite: 'analysis', workdir: meson.project_source_root(), timeout: 1200)
+# The grid with Beat This! (hybrid.c) on made activations: no GPU.
+test_hybrid = executable('test_hybrid', files('../../tests/analysis/test_hybrid.c'),
+    include_directories: cb_inc, dependencies: [ cb_analysis_dep ])
+test('hybrid', test_hybrid, suite: 'analysis', timeout: 120)
 # cb_analyse's edges: NaN in a float file, the onsets of a few frames, the
 # first loud onset, the automatic cue without a length. Writes its WAVs
 # under the build directory.

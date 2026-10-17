@@ -411,6 +411,28 @@ typedef struct CBBeatDebug {
     double          start_kick_ratio;/* a hit's kick band against the kick beats' */
 } CBBeatDebug;
 
+/* The grid's first beat may lie this much before the music's start (a
+ * line a few ms early on the hit; a fade's start is a frame's estimate). */
+#define CB_BEAT_START_SLACK 0.050
+
+/* ------------------------------------------------------- with Beat This! */
+
+/* What the grid with Beat This! (hybrid.c) takes of cyanbox's analysis. */
+typedef struct CBHybridHints {
+    double        bpm;              /* its tempo (cb_grid_bpm_median), 0: none */
+    const double *beats;            /* its beats (s), in order */
+    int           nb_beats;
+    bool          unsure;           /* of its phase: a flag, or a phase margin under 10 */
+    bool          steady;           /* one straight section */
+    bool          measured;         /* a passage measured beat by beat */
+} CBHybridHints;
+
+/* The beats from Beat This!'s logits (50 a second) and the hints: time,
+ * number in the bar of 4, tempo. *out is malloc'd; none (*nb 0) when too
+ * few beats are heard. */
+int cb_hybrid_beats(const float *beat, const float *downbeat, int nb_frames,
+                    const CBHybridHints *h, CBBeat **out, int *nb);
+
 int  cb_analyse_beats_dbg(const float *mono, int64_t nb_samples, int rate,
                           const CBAnalysisOptions *opt, CBBeatResult *out, CBBeatDebug *dbg);
 /* The same on a 44.1 kHz signal whose spectrum is already computed

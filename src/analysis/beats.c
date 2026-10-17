@@ -202,9 +202,7 @@ void cb_beat_result_free(CBBeatResult *r)
 #define HIT_PHASE         2.5
 #define HIT_DOWNBEAT      2.0
 #define FADE_DOWNBEAT     0.5
-/* The grid's first beat may lie this much before the music's start (a
- * line a few ms early on the hit; a fade's start is a frame's estimate). */
-#define START_SLACK       0.050
+#define START_SLACK       CB_BEAT_START_SLACK
 
 typedef struct Ctx {
     const CBAnalysisOptions *opt;
