@@ -5,4 +5,6 @@ build-*/
 __pycache__/
 .cache/
 subprojects/.wraplock
-models/
+models/*
+!models/beat-this-f16.gguf
+!models/README.md

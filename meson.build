@@ -150,5 +150,8 @@ executable('cyanbox',
     dependencies: [ cyanbox_dep, vulkan_dep, sdl3_dep, wayland_client, imgui_dep, vma_dep ] + gpu_deps,
     install: true,
 )
+# Beat This!'s weights (models/README.md, docs/BEATTHIS.md).
+install_data('models/beat-this-f16.gguf',
+             install_dir: get_option('datadir') / 'cyanbox' / 'models')
 
 subdir('tools')

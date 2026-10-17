@@ -73,8 +73,9 @@ Optional dependencies, each used only when found:
 Dear ImGui, the Vulkan Memory Allocator and tomlc17 are vendored in
 `third_party/`. Signalsmith Stretch (MASTER TEMPO) and signalsmith-linear
 are git submodules in `subprojects/`, header-only and MIT, built in
-statically. The `ffmpeg` command is used only by the tests, to make test
-audio.
+statically. Beat This!'s weights (MIT) are in `models/`
+(`models/README.md`). The `ffmpeg` command is used only by the tests, to
+make test audio.
 
 ```sh
 git submodule update --init --recursive
