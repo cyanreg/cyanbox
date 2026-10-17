@@ -1009,6 +1009,31 @@ static void csv_quote(FILE *f, const char *s)
     fputc('"', f);
 }
 
+/* --beats DIR: each file's grid as a player gets it (cb_grid_beats), one
+ * beat a line (time, number in the bar, bpm), in DIR/NNNNN.txt by the
+ * file's place in the input. */
+static void write_beats(const char *dir, const Result *res, int nb)
+{
+    for (int i = 0; i < nb; i++) {
+        const Result *r = &res[i];
+        CBBeat *b = NULL;
+        int n = 0;
+        if (!r->grid.nb_sections || cb_grid_beats(&r->grid, r->duration, &b, &n) < 0)
+            continue;
+        char *fn = cb_asprintf("%s/%05d.txt", dir, i);
+        FILE *f = fn ? fopen(fn, "w") : NULL;
+        if (!f) {
+            fprintf(stderr, "%s: cannot write\n", fn ? fn : dir);
+        } else {
+            for (int k = 0; k < n; k++)
+                fprintf(f, "%.5f %d %.4f\n", b[k].time, b[k].number, b[k].bpm);
+            fclose(f);
+        }
+        free(fn);
+        free(b);
+    }
+}
+
 static void write_csv(const char *fn, const Result *res, int nb)
 {
     FILE *f = fopen(fn, "w");
@@ -1256,7 +1281,7 @@ static void compare(const Result *res, int nb, const char *ref_fn)
 
 static void usage(void)
 {
-    fprintf(stderr, "usage: cyanbox-eval [-j N] [-l LIST] [--csv OUT] [--from CSV]\n"
+    fprintf(stderr, "usage: cyanbox-eval [-j N] [-l LIST] [--csv OUT] [--beats DIR] [--from CSV]\n"
                     "                  [--compare REF.csv]\n"
                     "                  [--dump-onsets BASE] [--bpm-range LO HI] [--no-sections]\n"
                     "                  [--no-dynamic]\n"
@@ -1269,7 +1294,8 @@ int main(int argc, char **argv)
 {
     Job job = { 0 };
     cb_analysis_options_default(&job.opt);
-    const char *csv = NULL, *from = NULL, *ref = NULL, *list = NULL, *device = NULL;
+    const char *csv = NULL, *beats = NULL, *from = NULL, *ref = NULL, *list = NULL;
+    const char *device = NULL;
     bool no_gpu = false;
     int threads = (int)CB_MAX(sysconf(_SC_NPROCESSORS_ONLN) / 2, 1);
     bool verbose = false;
@@ -1284,6 +1310,8 @@ int main(int argc, char **argv)
             list = argv[++i];
         } else if (!strcmp(a, "--csv") && i + 1 < argc) {
             csv = argv[++i];
+        } else if (!strcmp(a, "--beats") && i + 1 < argc) {
+            beats = argv[++i];
         } else if (!strcmp(a, "--from") && i + 1 < argc) {
             from = argv[++i];
         } else if (!strcmp(a, "--compare") && i + 1 < argc) {
@@ -1522,6 +1550,8 @@ int main(int argc, char **argv)
     }
     if (csv)
         write_csv(csv, res, nb);
+    if (beats)
+        write_beats(beats, res, nb);
     if (ref)
         compare(res, nb, ref);
     if (gpu) {
