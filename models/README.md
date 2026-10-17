@@ -10,9 +10,12 @@ without DBN postprocessing", ISMIR 2024; github.com/CPJKU/beat_this), its
 
     sha256 cfff4ce4a0c88e01330a8393547f11114d4391ebf522526c8dc08c2538782e49
 
-cyanbox reads it with `src/ml/beatthis.c`; `test_ml_beatthis` checks the
-logits it gives against the reference code's (`tests/ml/gen_beatthis_ref.py`
-runs `beat_this` itself with these weights). `meson install` puts it in
+These weights are the checkpoint's to F16: `beat_this`'s reference code with
+them and with the official `final0.ckpt` gives the same beats and downbeats
+on a track (the logits within 0.016 of each other, of ±14). cyanbox reads
+the file with `src/ml/beatthis.c`; `test_ml_beatthis` checks the logits it
+gives against the reference code's with these weights
+(`tests/ml/gen_beatthis_ref.py`). `meson install` puts it in
 share/cyanbox/models, where cyanbox looks after models/ beside the program;
 `CYANBOX_BEATTHIS_MODEL` names another file.
 
