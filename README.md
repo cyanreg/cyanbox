@@ -230,7 +230,7 @@ Beat grids
 Adding a track analyses its beat grid, key and waveforms. The grid is made
 with Beat This!, a neural beat and downbeat tracker run on the GPU, and
 cyanbox's own analysis of the same audio, which keeps it steady where the
-network's beats wobble (`models/`; a GPU is needed). Upgrading from a
+network's beats wobble (`models/`). Upgrading from a
 version without it analyses every unlocked grid again. Sequenced music
 gets straight sections, one per tempo or phase change. Where the tempo
 moves, as with a live drummer, rubato or a ramp, the grid follows the music

@@ -1597,9 +1597,6 @@ track and 180 in none, and "Reminiscence of Sea" (170) likewise 197.
 
 ## Known weaknesses
 
-- **A GPU is needed.** Beat This! runs only on the GPU (Vulkan); without
-  one, or without its weights, the beats fail (the key and the waveforms
-  are made all the same by `cb_analyse`).
 - **The octave is a convention** (section 12): 80-201 BPM, with 88.5-100
   doubled where cyanbox hears the double. Maps charted at 202 BPM and up
   (speedcore, some J-core) are halved by design; ×2 on the deck is one
