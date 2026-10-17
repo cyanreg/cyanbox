@@ -506,7 +506,9 @@ static void print_analysed(int n, int total, const CBTrack *t, const CBJobResult
     char name[256];
     cb_track_display(t, name, sizeof(name));
     if (err < 0) {
-        printf("[%d/%d] FAILED %s: %s\n", n, total, t->path, strerror(-err));
+        printf("[%d/%d] FAILED %s: %s\n", n, total, t->path,
+               err == CB_ERROR(ENODEV) ? "Beat This!, which the grid is made with, cannot run "
+                                         "(no GPU for it?)" : strerror(-err));
         return;
     }
 
@@ -580,6 +582,17 @@ static int analyse_tracks(Cli *cli, CBTrack **tracks, int nb, unsigned what, boo
             return todo;
         }
         cb_jobs_set_gpu(app->jobs, !cli->no_gpu, cli->device);
+    }
+    /* The grid is made with Beat This!: without its model, nothing is
+     * analysed when a grid is wanted (each would fail alike). */
+    bool beats = false;
+    for (int i = 0; i < nb; i++)
+        beats |= (need[i] & CB_ANALYSE_BEATS) != 0;
+    if (cb_app_set_beat_model(app) < 0 && beats) {
+        free(need);
+        free(pending);
+        fail("%s", app->status);
+        return todo;
     }
 
     CBAnalysisOptions opt;

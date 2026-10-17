@@ -1375,11 +1375,11 @@ int cb_app_rescan(CBApp *app)
 
 /* ------------------------------------------------------------------ tagging */
 
-/* `dir`/models/CB_APP_ML_MODEL when it is there. */
-static char *model_in(const char *dir)
+/* `dir`/models/`name` when it is there. */
+static char *model_in(const char *dir, const char *name)
 {
     char *models = cb_path_join(dir, "models");
-    char *p = models ? cb_path_join(models, CB_APP_ML_MODEL) : NULL;
+    char *p = models ? cb_path_join(models, name) : NULL;
     free(models);
     if (p && cb_file_exists(p))
         return p;
@@ -1387,12 +1387,10 @@ static char *model_in(const char *dir)
     return NULL;
 }
 
-int cb_app_ml_model(const CBApp *app, char **path)
+/* A model's file: `named` when set, else `name` in models/ (below). */
+static int find_model(const char *named, const char *name, char **path)
 {
     *path = NULL;
-    const char *named = app->lib.cfg.ml_model;
-    if (!named || !named[0])
-        named = getenv("CYANBOX_ML_MODEL");
     if (named && named[0]) {
         char *p = cb_path_expand(named);
         if (!p)
@@ -1403,7 +1401,8 @@ int cb_app_ml_model(const CBApp *app, char **path)
 
     /* Beside the program, so an installed cyanbox and one run from its
      * build directory (whose parent is the source tree) both find the
-     * tree's models/; then the current directory. */
+     * tree's models/; then the current directory; then where `meson
+     * install` put them. */
     char exe[PATH_MAX];
     ssize_t n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
     if (n > 0) {
@@ -1413,12 +1412,47 @@ int cb_app_ml_model(const CBApp *app, char **path)
             if (!slash)
                 break;
             *slash = '\0';
-            *path = model_in(exe[0] ? exe : "/");
+            *path = model_in(exe[0] ? exe : "/", name);
         }
     }
     if (!*path)
-        *path = model_in(".");
+        *path = model_in(".", name);
+    if (!*path)
+        *path = model_in(CB_MODELS_DIR, name);
     return *path ? 0 : CB_ERROR(ENOENT);
+}
+
+int cb_app_ml_model(const CBApp *app, char **path)
+{
+    const char *named = app->lib.cfg.ml_model;
+    if (!named || !named[0])
+        named = getenv("CYANBOX_ML_MODEL");
+    return find_model(named, CB_APP_ML_MODEL, path);
+}
+
+int cb_app_beat_model(char **path)
+{
+    return find_model(getenv("CYANBOX_BEATTHIS_MODEL"), CB_APP_BEAT_MODEL, path);
+}
+
+int cb_app_set_beat_model(CBApp *app)
+{
+    if (!app->jobs)
+        return CB_ERROR(EINVAL);
+    char *model = NULL;
+    int ret = cb_app_beat_model(&model);
+    cb_jobs_set_beat_model(app->jobs, ret < 0 ? NULL : model);
+    if (ret < 0) {
+        app->last_error_count++;
+        if (model)
+            cb_app_set_status(app, "Cannot analyse beats: there is no Beat This! model at %s",
+                              model);
+        else
+            cb_app_set_status(app, "Cannot analyse beats: no Beat This! model in models/ (%s), "
+                              "and CYANBOX_BEATTHIS_MODEL names none", CB_APP_BEAT_MODEL);
+    }
+    free(model);
+    return ret;
 }
 
 int cb_app_tag_tracks(CBApp *app, const uint64_t *ids, int n)
@@ -1558,6 +1592,8 @@ static const char *analysis_error(int err)
     case CB_ERROR(ENODATA): return "the file does not decode (damaged, or no audio)";
     case CB_ERROR(ENOTSUP): return "the file's format is not supported";
     case CB_ERROR(ENOMEM):  return "out of memory";
+    case CB_ERROR(ENODEV):  return "Beat This!, which the grid is made with, cannot run "
+                                   "(no model, or no GPU for it: see the log)";
     default:                return strerror(-err);
     }
 }
@@ -3537,6 +3573,7 @@ int cb_app_create(CBApp *app, const char *library_root, const CBPlayerOptions *p
      * on the CPU only (--no-gpu). */
     if (window_opt)
         cb_jobs_set_gpu(app->jobs, !window_opt->cpu_analysis, window_opt->device);
+    cb_app_set_beat_model(app);
     ret = cb_jobs_create(&priv->io_jobs, IO_THREADS);
     if (ret < 0)
         goto fail;

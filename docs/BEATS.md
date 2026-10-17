@@ -1,11 +1,15 @@
 # The beat-grid analyser
 
 How cyanbox finds a track's beat grid, why each step is the way it is, and how
-well it works. The code is in `src/analysis/` (`spectrum.c`, `onset.c`,
-`start.c`, `tempo.c`, `grid_fit.c`, `walk.c`, `downbeat.c`, `beats.c`,
-`analysis.c`, the private interface `beats_internal.h`); the tests in
-`tests/analysis/test_beats.c`; the evaluation tool in `tools/cyanbox-eval.c` and
-`tests/analysis/py_beats.py`.
+well it works. The grid is made in two stages: cyanbox's own analysis of the
+audio (sections 1 to 11), then the grid made with Beat This!, a neural beat
+and downbeat tracker run on the GPU, from that analysis and the network's
+activations (section 12, "With Beat This!"). The code is in `src/analysis/`
+(`spectrum.c`, `onset.c`, `start.c`, `tempo.c`, `grid_fit.c`, `walk.c`,
+`downbeat.c`, `beats.c`, `hybrid.c`, `analysis.c`, the private interface
+`beats_internal.h`), the network in `src/ml/beatthis.c` (docs/BEATTHIS.md);
+the tests in `tests/analysis/test_beats.c` and `test_hybrid.c`; the
+evaluation tool in `tools/cyanbox-eval.c` and `tests/analysis/py_beats.py`.
 
 The result (`cyanbox/analysis.h`, `CBBeatResult`) is what a DJ player wants: a
 piecewise-constant grid (one section per tempo or phase, each a start beat, a
@@ -54,6 +58,10 @@ and local tempo, which the players play as they are (docs/anlz.md 4.3).
 11. **Where the music starts**, measured on the level: after silence or a
     noise floor, a hit or a rise. The grid's first beat is the first at or
     after it, and the automatic cue the first downbeat.
+12. **With Beat This!** The network's beat activations choose the level
+    and track the beats; cyanbox's grid, where it agrees or is only off in
+    phase, is kept or moved onto them; its downbeat activation places the
+    bar. Everything above is this stage's hints and arbiter.
 
 It costs about 290 ms of CPU for an average 4.5-minute track (383 ms per six
 minutes of audio), single-threaded, after decoding. dj's Python analyser took
@@ -1586,6 +1594,13 @@ track and 180 in none, and "Reminiscence of Sea" (170) likewise 197.
 
 ## Known weaknesses
 
+- **A GPU is needed.** Beat This! runs only on the GPU (Vulkan); without
+  one, or without its weights, the beats fail (the key and the waveforms
+  are made all the same by `cb_analyse`).
+- **The octave is a convention** (section 12): 80-201 BPM, with 88.5-100
+  doubled where cyanbox hears the double. Maps charted at 202 BPM and up
+  (speedcore, some J-core) are halved by design; ×2 on the deck is one
+  click.
 - **Octave and family remain the main errors** (none of 83 labelled; more on
   J-pop and hard dance, where the right answer is often a convention, and
   3:2 readings like Kneading that neither analyser settles). The

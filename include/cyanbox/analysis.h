@@ -78,6 +78,21 @@ enum CBGridFlag {
 const char *cb_grid_flag_name(enum CBGridFlag f);      /* "tempo-change" ... */
 unsigned    cb_grid_flag_parse(const char *name);     /* 0 if unknown */
 
+/* A beat network: Beat This!'s (cyanbox/beatthis.h), whose frame
+ * activations the grid is made with (cb_beats_hybrid). The analysis does
+ * not open it itself: whoever owns the model (the jobs pool, a tool)
+ * hands this in. `run` takes mono audio at CB_BEAT_NET_RATE and returns
+ * the beat and downbeat logits, CB_BEAT_NET_FPS a second, malloc'd (the
+ * caller frees them), or a negative errno; it may be called from any
+ * thread, so it serialises its own use of the model. */
+#define CB_BEAT_NET_RATE 22050
+#define CB_BEAT_NET_FPS  50
+typedef struct CBBeatNet {
+    int  (*run)(void *opaque, const float *pcm, int64_t nb_samples, float **beat,
+                float **downbeat, int *nb_frames);
+    void  *opaque;
+} CBBeatNet;
+
 typedef struct CBAnalysisOptions {
     double bpm_min, bpm_max;     /* 0, 0 = default search range with octave by evidence */
     double prior_bpm;            /* tie-breaker only; 0 = default */
@@ -94,6 +109,12 @@ typedef struct CBAnalysisOptions {
      * the GPU fail, the CPU takes over. Not owned; it must outlive the
      * call. Default NULL. */
     CBCompute *compute;
+    /* Beat This!, which cb_analyse's grid is made with (cb_beats_hybrid,
+     * docs/BEATS.md, "With Beat This!"): without it cb_analyse's beats
+     * fail (-ENODEV). The jobs pool supplies its own (cb_jobs_set_beat_model).
+     * cb_analyse_beats, cyanbox's own analysis, does not use it. Default
+     * NULL; not owned. */
+    const CBBeatNet *beat_net;
 } CBAnalysisOptions;
 void cb_analysis_options_default(CBAnalysisOptions *o);
 
@@ -120,21 +141,23 @@ typedef struct CBBeatResult {
     double   phase_margin;
 } CBBeatResult;
 
-/* Mono audio at `rate` (any; 44.1 kHz is what it works at internally). */
+/* cyanbox's own analysis of the beats, the first stage of the grid
+ * (cb_beats_hybrid takes it from there). Mono audio at `rate` (any;
+ * 44.1 kHz is what it works at internally). */
 int  cb_analyse_beats(const float *mono, int64_t nb_samples, int rate,
                       const CBAnalysisOptions *opt, CBBeatResult *out);
 void cb_beat_result_free(CBBeatResult *r);
 
 /* The grid with Beat This! (docs/BEATS.md, "With Beat This!"): from its
- * beat and downbeat logits of the audio (cyanbox/beatthis.h, 50 a second)
- * and cyanbox's own result for it (cb_analyse_beats), which it replaces
- * in `res`: the grid; the confidence, how well the grid explains Beat
- * This!'s detections (the F-measure of beats and detections within 50 ms);
- * the flags, the new grid's shape (tempo-change, phase-cut, dynamic),
- * low-confidence, and of cyanbox's unsteady. Where the music starts and
- * the diagnostics stay cyanbox's. Where Beat This! hears too little to
- * make a grid of (no beat, under 8 s), `res` stays as it was. `duration`:
- * the audio's, s. Deterministic, the CPU's alone. */
+ * beat and downbeat logits of the audio (CBBeatNet) and cyanbox's own
+ * result for it (cb_analyse_beats), which it replaces in `res`: the grid;
+ * the confidence, how well the grid explains Beat This!'s detections (the
+ * F-measure of beats and detections within 50 ms); the flags, the new
+ * grid's shape (tempo-change, phase-cut, dynamic), low-confidence, and of
+ * cyanbox's unsteady. Where the music starts and the diagnostics stay
+ * cyanbox's. Where Beat This! hears too little to make a grid of (no
+ * beat, under 8 s), `res` stays as it was. `duration`: the audio's, s.
+ * Deterministic, the CPU's alone. */
 int  cb_beats_hybrid(const float *beat, const float *downbeat, int nb_frames, double duration,
                      CBBeatResult *res);
 
@@ -166,7 +189,7 @@ enum CBAnalyseWhat {
  * CB_WAVES_VERSION is the algorithm; the packed blob has its own format
  * version (cb_waveforms_pack), a storage matter. The two usually bump
  * together, because new levels are what makes old blobs unreadable. */
-#define CB_BEATS_VERSION 8
+#define CB_BEATS_VERSION 9
 #define CB_KEY_VERSION   1
 #define CB_WAVES_VERSION 1
 

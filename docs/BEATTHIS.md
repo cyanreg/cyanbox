@@ -7,13 +7,17 @@ log-mel spectrogram into a beat and a downbeat activation for every frame,
 tagging model uses (`src/ml/`, docs/ML.md, How it runs): `cyanbox/beatthis.h`,
 `src/ml/beatthis.c`, the kernels `src/ml/shaders/bt_*.comp`. The weights
 come from `models/beat-this-f16.gguf` (the final0 checkpoint in F16, its
-batch norms folded), about 40 MB on the GPU.
+batch norms folded; in the repository, `models/README.md`), about 40 MB on
+the GPU.
 
 This is the network, not a beat grid: `cb_beatthis_run` returns the logits
-as the reference's `Audio2Frames` does, and what to make of them is being
-worked out (its own "minimal" postprocessor picks peaks, and its tempo
-wanders and changes level inside a track). Nothing in the analysis uses it
-yet.
+as the reference's `Audio2Frames` does. Every beat grid is made from them
+with cyanbox's own analysis of the same audio (docs/BEATS.md, "With Beat
+This!", `src/analysis/hybrid.c`): its own "minimal" postprocessor picks
+peaks, so its tempo wanders and changes level inside a track. The analysis
+gets it through `CBAnalysisOptions.beat_net`; the jobs pool opens one for
+all its analyses, runs it one track at a time, and closes it while the
+tagging model holds the GPU (cyanbox/jobs.h, `cb_jobs_set_beat_model`).
 
 ## What it does
 

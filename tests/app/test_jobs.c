@@ -8,9 +8,13 @@
  * guard: with a budget smaller than any analysis, two analyses on two
  * workers run one after the other (and both run), one waiting for memory
  * can be cancelled, and with the default budget the same two run at once;
- * a tag batch whose model does not open. With --tag, the tag batch with the
- * model (src/app/jobs.c decodes each track while the one before it is
- * tagged): see test_tag.
+ * a tag batch whose model does not open; an analysis without Beat This!'s
+ * model, which fails. With --tag,
+ * the tag batch with the model (src/app/jobs.c decodes each track while the
+ * one before it is tagged): see test_tag.
+ *
+ * The pools take Beat This!'s weights from $CYANBOX_BEATTHIS_MODEL (meson
+ * names the source tree's), and their grids need the GPU.
  *
  * Usage: test_jobs FILE.wav
  *        test_jobs --tag A.wav B.wav (with $CYANBOX_ML_MODEL) */
@@ -34,6 +38,15 @@ static int failures;
         }                                                                     \
     } while (0)
 
+/* A pool with Beat This!'s model, as the app's. */
+static int new_pool(CBJobs **j, int threads)
+{
+    int ret = cb_jobs_create(j, threads);
+    if (ret >= 0)
+        cb_jobs_set_beat_model(*j, getenv("CYANBOX_BEATTHIS_MODEL"));
+    return ret;
+}
+
 static CBJobResult *wait_result(CBJobs *j, int timeout_s)
 {
     return cb_jobs_wait(j, timeout_s * 1000);
@@ -42,7 +55,7 @@ static CBJobResult *wait_result(CBJobs *j, int timeout_s)
 static void test_analyse(const char *wav)
 {
     CBJobs *j = NULL;
-    int ret = cb_jobs_create(&j, 2);
+    int ret = new_pool(&j, 2);
     CHECK(ret == 0, "cb_jobs_create: %s", strerror(-ret));
     if (ret < 0)
         return;
@@ -102,7 +115,7 @@ end:
 static void test_decode_and_artwork(const char *wav)
 {
     CBJobs *j = NULL;
-    int ret = cb_jobs_create(&j, 2);
+    int ret = new_pool(&j, 2);
     CHECK(ret == 0, "cb_jobs_create: %s", strerror(-ret));
     if (ret < 0)
         return;
@@ -166,7 +179,7 @@ static void test_decode_and_artwork(const char *wav)
 static void test_cancel(const char *wav)
 {
     CBJobs *j = NULL;
-    int ret = cb_jobs_create(&j, 1);
+    int ret = new_pool(&j, 1);
     CHECK(ret == 0, "cb_jobs_create: %s", strerror(-ret));
     if (ret < 0)
         return;
@@ -212,7 +225,7 @@ static void test_cancel(const char *wav)
 
     /* Destroying with work queued: the queued jobs are dropped, the running
      * one finishes, nothing leaks into a hang. */
-    ret = cb_jobs_create(&j, 1);
+    ret = new_pool(&j, 1);
     CHECK(ret == 0, "cb_jobs_create: %s", strerror(-ret));
     if (ret < 0)
         return;
@@ -236,7 +249,7 @@ static bool budget_round(const char *wav, const char *budget_mb)
     else
         unsetenv("CYANBOX_ANALYSIS_BUDGET_MB");
     CBJobs *j = NULL;
-    int ret = cb_jobs_create(&j, 2);
+    int ret = new_pool(&j, 2);
     unsetenv("CYANBOX_ANALYSIS_BUDGET_MB");
     CHECK(ret == 0, "cb_jobs_create: %s", strerror(-ret));
     if (ret < 0)
@@ -312,7 +325,7 @@ static void test_budget(const char *wav)
      * it, and only the running one is reported. */
     setenv("CYANBOX_ANALYSIS_BUDGET_MB", "1", 1);
     CBJobs *j = NULL;
-    int ret = cb_jobs_create(&j, 2);
+    int ret = new_pool(&j, 2);
     unsetenv("CYANBOX_ANALYSIS_BUDGET_MB");
     CHECK(ret == 0, "cb_jobs_create: %s", strerror(-ret));
     if (ret < 0)
@@ -360,7 +373,7 @@ static void test_budget(const char *wav)
 static void test_tag_no_model(const char *wav)
 {
     CBJobs *j = NULL;
-    int ret = cb_jobs_create(&j, 1);
+    int ret = new_pool(&j, 1);
     CHECK(ret == 0, "cb_jobs_create: %s", strerror(-ret));
     if (ret < 0)
         return;
@@ -396,7 +409,7 @@ static bool same_tags(const CBMLTags *a, const CBMLTags *b)
 static int test_tag(const char *model, const char *a, const char *b)
 {
     CBJobs *j = NULL;
-    int ret = cb_jobs_create(&j, 1);
+    int ret = new_pool(&j, 1);
     CHECK(ret == 0, "cb_jobs_create: %s", strerror(-ret));
     if (ret < 0)
         return 1;
@@ -454,6 +467,23 @@ static int test_tag(const char *model, const char *a, const char *b)
     return failures ? 1 : 0;
 }
 
+/* Without Beat This!'s model the beats fail, and with them the job (the
+ * key and the waveforms cb_analyse made go with it). */
+static void test_no_beat_model(const char *wav)
+{
+    CBJobs *j = NULL;
+    int ret = cb_jobs_create(&j, 1);
+    CHECK(ret == 0, "cb_jobs_create: %s", strerror(-ret));
+    if (ret < 0)
+        return;
+    CHECK((int64_t)cb_jobs_analyse(j, 7, wav, NULL, CB_ANALYSE_ALL) > 0, "request");
+    CBJobResult *r = wait_result(j, 300);
+    CHECK(r && r->err == CB_ERROR(ENODEV) && !r->analysis, "without the model: %s",
+          r ? strerror(-r->err) : "no result");
+    cb_job_result_free(r);
+    cb_jobs_destroy(j);
+}
+
 int main(int argc, char **argv)
 {
     if (argc == 4 && !strcmp(argv[1], "--tag")) {
@@ -478,6 +508,7 @@ int main(int argc, char **argv)
     test_cancel(wav);
     test_budget(wav);
     test_tag_no_model(wav);
+    test_no_beat_model(wav);
 
     if (failures) {
         fprintf(stderr, "%d failure%s\n", failures, failures == 1 ? "" : "s");

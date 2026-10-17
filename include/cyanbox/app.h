@@ -293,11 +293,20 @@ bool cb_app_tag_progress(CBApp *app, int *done, int *total, uint64_t *current);
 int  cb_app_apply_tags(CBApp *app, CBTrack *t, const CBMLTags *tags);
 /* The model's file: the setting ml.model when set, else $CYANBOX_ML_MODEL,
  * else models/CB_APP_ML_MODEL in the executable's directory, its parent
- * (a build directory inside the source tree) or the current directory.
+ * (a build directory inside the source tree), the current directory or
+ * the installed data directory (share/cyanbox).
  * -ENOENT when it is not there: *path is then the file the setting or the
  * environment named, or NULL when models/ was looked in. Allocating. */
 #define CB_APP_ML_MODEL "moss-audio-4b-instruct-q4_k.gguf"
 int  cb_app_ml_model(const CBApp *app, char **path);
+/* Beat This!'s model (cyanbox/beatthis.h), which the grid is made with:
+ * $CYANBOX_BEATTHIS_MODEL, else models/CB_APP_BEAT_MODEL as above (the
+ * source tree has it). */
+#define CB_APP_BEAT_MODEL "beat-this-f16.gguf"
+int  cb_app_beat_model(char **path);
+/* Hands it to app->jobs (cb_jobs_set_beat_model); -ENOENT when there is
+ * none, with the status set. */
+int  cb_app_set_beat_model(CBApp *app);
 /* PRO DJ LINK on (src/app/link.c): served on every Ethernet interface, as
  * they come and go (o NULL), or as `o` says (the tests: one interface,
  * ports of their own; its library, when NULL, the app's), by a set

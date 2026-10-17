@@ -1,7 +1,8 @@
 Models
 ======
 
-`beat-this-f16.gguf` is part of cyanbox (docs/BEATTHIS.md). It is the network of
+`beat-this-f16.gguf` is part of cyanbox: every beat grid is made with it
+(docs/BEATS.md, "With Beat This!"; docs/BEATTHIS.md). It is the network of
 Beat This! (Foscarin, Schlüter and Widmer, "Beat this! Accurate beat tracking
 without DBN postprocessing", ISMIR 2024; github.com/CPJKU/beat_this), its
 `final0` checkpoint in F16 with its batch norms folded, in a GGUF file
@@ -12,7 +13,8 @@ without DBN postprocessing", ISMIR 2024; github.com/CPJKU/beat_this), its
 cyanbox reads it with `src/ml/beatthis.c`; `test_ml_beatthis` checks the
 logits it gives against the reference code's (`tests/ml/gen_beatthis_ref.py`
 runs `beat_this` itself with these weights). `meson install` puts it in
-share/cyanbox/models.
+share/cyanbox/models, where cyanbox looks after models/ beside the program;
+`CYANBOX_BEATTHIS_MODEL` names another file.
 
 The tagging model (`moss-audio-4b-instruct-q4_k.gguf`, docs/ML.md) is
 optional and not in the repository: tagging runs only when asked for.

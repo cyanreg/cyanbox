@@ -18,6 +18,13 @@
  * own threads would only compete with its siblings. The result does not
  * depend on it either way.
  *
+ * The grid is made with Beat This!: its network runs on the mono signal
+ * resampled to 22050 Hz (the decoder's resampler, as the research that
+ * measured it decoded), before the 44.1 kHz copy is made, so that the two
+ * copies are never alive together; its logits wait for cyanbox's own
+ * analysis, which cb_beats_hybrid then makes the grid from. Without the
+ * network the beats fail: cyanbox's analysis alone is not the grid.
+ *
  * Each stage stands on its own: one that fails (no memory for an hour's
  * waveforms, say) leaves the others to run, and the first error is
  * returned with what was done in `done`. The samples are taken to be
@@ -70,6 +77,25 @@ int cb_analyse(const CBAudio *audio, const CBAnalysisOptions *opt, unsigned what
         stage_done(out, CB_ANALYSE_WAVES, cb_waveforms_compute(x, n, audio->rate, &out->waves),
                    &first_err);
 
+    /* Beat This!'s logits, while the mono signal is at its own rate. */
+    float *bt_beat = NULL, *bt_down = NULL;
+    int bt_frames = 0, bt_err = 0;
+    if (what & CB_ANALYSE_BEATS) {
+        CBAudio m = { .samples = (float *)x, .nb_frames = n, .channels = 1, .rate = audio->rate };
+        CBAudio m22 = { 0 };
+        if (!opt->beat_net)
+            bt_err = CB_ERROR(ENODEV);
+        else if ((bt_err = cb_audio_resample(&m, CB_BEAT_NET_RATE, &m22)) >= 0)
+            bt_err = opt->beat_net->run(opt->beat_net->opaque, m22.samples, m22.nb_frames,
+                                        &bt_beat, &bt_down, &bt_frames);
+        cb_audio_free(&m22);
+        if (bt_err < 0) {
+            free(bt_beat);
+            free(bt_down);
+            bt_beat = bt_down = NULL;
+        }
+    }
+
     if (what & (CB_ANALYSE_BEATS | CB_ANALYSE_KEY)) {
         /* At 44.1 kHz beats and key read the mono signal itself. Otherwise
          * one resampled copy, and our own mono mix goes before they run:
@@ -88,9 +114,15 @@ int cb_analyse(const CBAudio *audio, const CBAnalysisOptions *opt, unsigned what
             if (!first_err)
                 first_err = ret;
         } else {
-            if (what & CB_ANALYSE_BEATS)
-                stage_done(out, CB_ANALYSE_BEATS,
-                           cb_analyse_beats(x44, n44, CB_BEAT_RATE, opt, &out->beats), &first_err);
+            if (what & CB_ANALYSE_BEATS) {
+                int r = bt_err;
+                if (r >= 0)
+                    r = cb_analyse_beats(x44, n44, CB_BEAT_RATE, opt, &out->beats);
+                if (r >= 0 && (r = cb_beats_hybrid(bt_beat, bt_down, bt_frames, out->duration,
+                                                   &out->beats)) < 0)
+                    cb_beat_result_free(&out->beats);
+                stage_done(out, CB_ANALYSE_BEATS, r, &first_err);
+            }
             if (what & CB_ANALYSE_KEY)
                 stage_done(out, CB_ANALYSE_KEY, cb_analyse_key(x44, n44, CB_BEAT_RATE, &out->key),
                            &first_err);
@@ -98,6 +130,8 @@ int cb_analyse(const CBAudio *audio, const CBAnalysisOptions *opt, unsigned what
         free(own44);
     }
 
+    free(bt_beat);
+    free(bt_down);
     cb_audio_free(&mono);
     return first_err;
 }

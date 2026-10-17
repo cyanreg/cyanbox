@@ -73,9 +73,9 @@ Optional dependencies, each used only when found:
 Dear ImGui, the Vulkan Memory Allocator and tomlc17 are vendored in
 `third_party/`. Signalsmith Stretch (MASTER TEMPO) and signalsmith-linear
 are git submodules in `subprojects/`, header-only and MIT, built in
-statically. Beat This!'s weights (MIT) are in `models/`
-(`models/README.md`). The `ffmpeg` command is used only by the tests, to
-make test audio.
+statically. Beat This!'s weights (MIT), which every beat grid is made with,
+are in `models/` (`models/README.md`). The `ffmpeg` command is used only by
+the tests, to make test audio.
 
 ```sh
 git submodule update --init --recursive
@@ -227,7 +227,11 @@ setting takes the file's comment instead.
 
 Beat grids
 ----------
-Adding a track analyses its beat grid, key and waveforms. Sequenced music
+Adding a track analyses its beat grid, key and waveforms. The grid is made
+with Beat This!, a neural beat and downbeat tracker run on the GPU, and
+cyanbox's own analysis of the same audio, which keeps it steady where the
+network's beats wobble (`models/`; a GPU is needed). Upgrading from a
+version without it analyses every unlocked grid again. Sequenced music
 gets straight sections, one per tempo or phase change. Where the tempo
 moves, as with a live drummer, rubato or a ramp, the grid follows the music
 beat by beat instead: a dynamic grid, like rekordbox's "dynamic" analysis,

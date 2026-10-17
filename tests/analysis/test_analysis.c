@@ -18,7 +18,14 @@
  *    copy;
  *  - the automatic cue of a track whose length is not known yet (0): the
  *    downbeat it gets with a length, from a grid expanded only that far
- *    (it was a million seconds: the process grew by 45 MB).
+ *    (it was a million seconds: the process grew by 45 MB);
+ *  - the beat network cb_analyse makes the grid with: it gets the mono
+ *    signal at 22050 Hz, and without one the beats fail (-ENODEV) while
+ *    the key and the waveforms are made all the same.
+ *
+ * The network here is one that hears no beat (cyanbox's own grid then
+ * stands, cb_beats_hybrid): the plumbing, on the CPU. Beat This! itself is
+ * test_ml_beatthis's, the grid made with it test_hybrid's.
  *
  * Media are written under $CB_TEST_DIR. */
 
@@ -34,6 +41,31 @@
 #include "src/analysis/beats_internal.h"
 
 static int fails;
+
+/* --------------------------------------------------------- a beat network */
+
+/* Hears no beat: logits of -8 throughout, 50 frames a second. Keeps the
+ * length of the audio it was given. */
+static int deaf_run(void *opaque, const float *pcm, int64_t n, float **beat, float **downbeat,
+                    int *nb)
+{
+    *(int64_t *)opaque = n;
+    int f = (int)(1 + n / (CB_BEAT_NET_RATE / CB_BEAT_NET_FPS));
+    *beat = malloc(f * sizeof(float));
+    *downbeat = malloc(f * sizeof(float));
+    if (!*beat || !*downbeat) {
+        free(*beat);
+        free(*downbeat);
+        return -ENOMEM;
+    }
+    for (int i = 0; i < f; i++)
+        (*beat)[i] = (*downbeat)[i] = -8.0f;
+    *nb = f;
+    return 0;
+}
+
+static int64_t deaf_heard;
+static const CBBeatNet deaf = { .run = deaf_run, .opaque = &deaf_heard };
 
 #define CHECK(cond, ...)                                                    \
     do {                                                                    \
@@ -154,7 +186,10 @@ static int analyse_file(const char *path, CBAnalysis *a, CBAudio *au, Lines *lin
         memset(a, 0, sizeof(*a));
         return ret;
     }
-    return cb_analyse(au, NULL, CB_ANALYSE_ALL, a);
+    CBAnalysisOptions opt;
+    cb_analysis_options_default(&opt);
+    opt.beat_net = &deaf;
+    return cb_analyse(au, &opt, CB_ANALYSE_ALL, a);
 }
 
 static bool same_waves(const CBWaveforms *a, const CBWaveforms *b)
@@ -259,6 +294,17 @@ static void test_nonfinite(const char *dir)
               an[0].key.key);
     }
     CHECK(!strcmp(an[0].key.key, "Am"), "the chord's key is %s", an[0].key.key);
+    /* The network had the audio at 22050 Hz (the file's is 44.1 kHz) */
+    CHECK(llabs(deaf_heard - au[0].nb_frames / 2) <= 2, "the network had %lld samples of %lld",
+          (long long)deaf_heard, (long long)au[0].nb_frames);
+    /* Without one: no grid, the rest as before */
+    CBAnalysis none;
+    int r = cb_analyse(&au[0], NULL, CB_ANALYSE_ALL, &none);
+    CHECK(r == -ENODEV && none.done == (CB_ANALYSE_KEY | CB_ANALYSE_WAVES) &&
+          !none.beats.grid.nb_sections && !strcmp(none.key.key, an[0].key.key) &&
+          same_waves(&none.waves, &an[0].waves), "without a beat network: %d, done 0x%x", r,
+          none.done);
+    cb_analysis_free(&none);
     if (fails == fails0)
         printf("ok   NaN and infinite samples: key %s %.3f, %d waveform columns, as with zeros\n",
                an[2].key.key, an[2].key.confidence, an[2].waves.nb_detail);

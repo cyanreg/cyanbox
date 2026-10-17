@@ -1298,14 +1298,35 @@ static int check_misc(CBCompute *gpu)
     return fails;
 }
 
+/* A beat network that hears no beat, for cb_analyse: cyanbox's own grid
+ * then stands (cb_beats_hybrid), which is what is checked here. */
+static int deaf_run(void *opaque, const float *pcm, int64_t n, float **beat, float **downbeat,
+                    int *nb)
+{
+    int f = (int)(1 + n / (CB_BEAT_NET_RATE / CB_BEAT_NET_FPS));
+    *beat = malloc(f * sizeof(float));
+    *downbeat = malloc(f * sizeof(float));
+    if (!*beat || !*downbeat) {
+        free(*beat);
+        free(*downbeat);
+        return -ENOMEM;
+    }
+    for (int i = 0; i < f; i++)
+        (*beat)[i] = (*downbeat)[i] = -8.0f;
+    *nb = f;
+    return 0;
+}
+
 /* cb_analyse on a stereo 48 kHz track (everything requested), and the
  * automatic memory cue. */
 static int check_analyse(CBCompute *gpu)
 {
     const char *path = gpu ? "[gpu] " : "";
+    static const CBBeatNet deaf = { .run = deaf_run };
     CBAnalysisOptions opt;
     cb_analysis_options_default(&opt);
     opt.compute = gpu;
+    opt.beat_net = &deaf;
     int fails = 0;
     Track t;
     Truth truth;

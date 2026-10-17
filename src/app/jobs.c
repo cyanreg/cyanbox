@@ -70,11 +70,25 @@
  * their compute context: it keeps a device of its own (src/ml/ml_priv.h).
  * While the model tags a track, a thread of the batch's own decodes the
  * next one in the queue (the first while the model loads): a CPU's 0.3 s
- * a track that the GPU would otherwise wait for. */
+ * a track that the GPU would otherwise wait for.
+ *
+ * Beat This! (cyanbox/beatthis.h), which the analyses make the grid with
+ * (CBAnalysisOptions.beat_net): the pool's one network, from the file
+ * cb_jobs_set_beat_model names, opened by the first analysis that runs it,
+ * on the GPU the analyses were given, and shared: each run takes `bt_lock`
+ * (the network serves one thread at a time; 0.2 s of a 4-minute track
+ * against the analysis' seconds of CPU). It is never open while the tag
+ * batch holds the GPU, for the same reason as above: the batch closes it
+ * when it starts, and an analysis that wants it meanwhile waits on
+ * `bt_cond` for the batch to end. A file that cannot be opened is
+ * remembered (every analysis would fail alike, each with its own message)
+ * until the model is named again. */
 
 #include "cyanbox/jobs.h"
 
 #include <pthread.h>
+
+#include "cyanbox/beatthis.h"
 #include <stdio.h>
 #include <unistd.h>
 
@@ -87,6 +101,9 @@
  * rest (the decoder, FFT plans, the waveforms and the result). */
 #define ANALYSIS_BUDGET_SHARE 0.4
 #define ANALYSIS_OVERHEAD     0.3
+/* With Beat This!: its 22050 Hz copy beside the decoded audio (half a
+ * 44.1 kHz one), which goes before the analyser's buffers come. */
+#define ANALYSIS_OVERHEAD_BT  0.5
 #define ANALYSIS_BASE_BYTES   (64LL << 20)
 
 enum JobState {
@@ -168,6 +185,15 @@ struct CBJobs {
     int tag_done, tag_total;
     uint64_t tag_current;           /* being tagged; 0 while the model loads */
     CBCancel tag_cancel;
+
+    /* Beat This! for the analyses (above). */
+    pthread_mutex_t bt_lock;        /* guards the five below, and each run of bt */
+    pthread_cond_t bt_cond;         /* with bt_lock: the tag batch let the GPU go */
+    char *bt_model;                 /* cb_jobs_set_beat_model's file; NULL none */
+    CBBeatThis *bt;
+    int bt_err;                     /* why bt_model would not open; 0 */
+    bool tagging;                   /* the tag batch holds the GPU */
+    CBBeatNet beat_net;             /* bt for CBAnalysisOptions.beat_net */
 };
 
 static void job_free(Job *job)
@@ -214,7 +240,7 @@ static void tag_end(CBJobs *j)
  * by packet, so they do not add to it), the analyser's buffers on top, and
  * the fixed part. A file the probe cannot read gets the fixed part only:
  * its decode fails as quickly. */
-static int64_t analysis_estimate(const char *path)
+static int64_t analysis_estimate(const char *path, bool beat_this)
 {
     CBProbe p;
     int64_t samples = 0;
@@ -223,7 +249,8 @@ static int64_t analysis_estimate(const char *path)
         cb_probe_free(&p);
     }
     double audio = (double)samples * sizeof(float);
-    return ANALYSIS_BASE_BYTES + (int64_t)(audio * (1.0 + ANALYSIS_OVERHEAD));
+    double over = beat_this ? ANALYSIS_OVERHEAD_BT : ANALYSIS_OVERHEAD;
+    return ANALYSIS_BASE_BYTES + (int64_t)(audio * (1.0 + over));
 }
 
 static int64_t analysis_budget(void)
@@ -290,6 +317,51 @@ static CBCompute *jobs_gpu(CBJobs *j)
     return gpu;
 }
 
+/* CBBeatNet.run: Beat This! on the pool's one network. */
+static int beat_net_run(void *opaque, const float *pcm, int64_t n, float **beat, float **downbeat,
+                        int *nb_frames)
+{
+    CBJobs *j = opaque;
+    pthread_mutex_lock(&j->bt_lock);
+    while (j->tagging)
+        pthread_cond_wait(&j->bt_cond, &j->bt_lock);
+    /* Any reason it cannot run is -ENODEV to the analysis (the log has the
+     * reason): -ENOENT would read as the track's file missing. */
+    int ret = j->bt_err;
+    if (!ret && !j->bt) {
+        if (!j->bt_model) {
+            ret = CB_ERROR(ENODEV);
+        } else {
+            pthread_mutex_lock(&j->gpu_lock);
+            char *device = j->gpu_device ? cb_strdup(j->gpu_device) : NULL;
+            pthread_mutex_unlock(&j->gpu_lock);
+            CBBeatThisOptions o;
+            cb_beatthis_options_default(&o);
+            o.device = device;
+            int64_t t0 = cb_time_us();
+            ret = cb_beatthis_open(&j->bt, j->bt_model, &o);
+            free(device);
+            if (ret < 0) {
+                cb_err("jobs: cannot load Beat This! %s: %s", j->bt_model, strerror(-ret));
+                ret = j->bt_err = CB_ERROR(ENODEV);
+            } else {
+                cb_info("jobs: Beat This! is loaded on %s in %.2f s",
+                        cb_beatthis_device_name(j->bt), (cb_time_us() - t0) / 1e6);
+            }
+        }
+    }
+    if (ret >= 0) {
+        ret = cb_beatthis_run(j->bt, pcm, n, beat, downbeat, nb_frames);
+        /* As the tagging model's: lost, it is loaded again for the next. */
+        if (ret == CB_ERROR(EIO)) {
+            cb_warn("jobs: Beat This! failed; it is loaded again for the next track");
+            cb_beatthis_close(&j->bt);
+        }
+    }
+    pthread_mutex_unlock(&j->bt_lock);
+    return ret;
+}
+
 static int run_analyse(Job *job, CBJobResult *r)
 {
     CBAudio audio = { 0 };
@@ -298,6 +370,8 @@ static int run_analyse(Job *job, CBJobResult *r)
         return ret;
     if (!job->opt.compute)
         job->opt.compute = jobs_gpu(job->j);
+    if (!job->opt.beat_net)
+        job->opt.beat_net = &job->j->beat_net;
 
     CBAnalysis *a = calloc(1, sizeof(*a));
     if (!a) {
@@ -534,6 +608,15 @@ static void run_tag(Job *job)
     char *device = j->gpu_device ? cb_strdup(j->gpu_device) : NULL;
     pthread_mutex_unlock(&j->gpu_lock);
 
+    /* The GPU is the batch's: Beat This! goes until it ends. */
+    pthread_mutex_lock(&j->bt_lock);
+    j->tagging = true;
+    if (j->bt) {
+        cb_beatthis_close(&j->bt);
+        cb_info("jobs: Beat This! is unloaded while the model tags");
+    }
+    pthread_mutex_unlock(&j->bt_lock);
+
     while (1) {
         TagItem it = { 0 };
         char *next = NULL;
@@ -646,6 +729,11 @@ static void run_tag(Job *job)
 
     ahead_end(&ahead);
     free(device);
+
+    pthread_mutex_lock(&j->bt_lock);
+    j->tagging = false;
+    pthread_cond_broadcast(&j->bt_cond);
+    pthread_mutex_unlock(&j->bt_lock);
 }
 
 /* Every job but the tag batch: one result. */
@@ -703,7 +791,7 @@ static void run_job(void *arg)
     bool cancelled = job->state == JOB_CANCELLED;
     pthread_mutex_unlock(&j->lock);
     if (job->kind == CB_JOB_ANALYSE && !cancelled)
-        bytes = analysis_estimate(job->path);
+        bytes = analysis_estimate(job->path, job->what & CB_ANALYSE_BEATS);
 
     pthread_mutex_lock(&j->lock);
     if (job->state == JOB_CANCELLED || (bytes && !reserve(j, job, bytes))) {
@@ -790,6 +878,24 @@ int cb_jobs_create(CBJobs **out, int threads)
         free(j);
         return CB_ERROR(ret);
     }
+    ret = pthread_mutex_init(&j->bt_lock, NULL);
+    if (ret) {
+        pthread_mutex_destroy(&j->gpu_lock);
+        pthread_cond_destroy(&j->budget_cond);
+        pthread_mutex_destroy(&j->lock);
+        free(j);
+        return CB_ERROR(ret);
+    }
+    ret = pthread_cond_init(&j->bt_cond, NULL);
+    if (ret) {
+        pthread_mutex_destroy(&j->bt_lock);
+        pthread_mutex_destroy(&j->gpu_lock);
+        pthread_cond_destroy(&j->budget_cond);
+        pthread_mutex_destroy(&j->lock);
+        free(j);
+        return CB_ERROR(ret);
+    }
+    j->beat_net = (CBBeatNet) { .run = beat_net_run, .opaque = j };
     j->gpu_enable = true;
     cb_array_init(&j->tag_queue, sizeof(TagItem));
     j->budget = analysis_budget();
@@ -817,6 +923,8 @@ fail:
     if (j->results)
         cb_mailbox_destroy(j->results);
     free(j->slots);
+    pthread_cond_destroy(&j->bt_cond);
+    pthread_mutex_destroy(&j->bt_lock);
     pthread_mutex_destroy(&j->gpu_lock);
     pthread_cond_destroy(&j->budget_cond);
     pthread_mutex_destroy(&j->lock);
@@ -840,6 +948,10 @@ void cb_jobs_destroy(CBJobs *j)
     cb_mailbox_destroy(j->results);
 
     /* No worker is left to use the GPU, nor the tag queue. */
+    cb_beatthis_close(&j->bt);
+    free(j->bt_model);
+    pthread_cond_destroy(&j->bt_cond);
+    pthread_mutex_destroy(&j->bt_lock);
     cb_compute_destroy(&j->gpu);
     tag_drop(j);
     cb_array_free(&j->tag_queue);
@@ -861,6 +973,18 @@ void cb_jobs_set_gpu(CBJobs *j, bool enable, const char *device)
         j->gpu_device = device && device[0] ? cb_strdup(device) : NULL;
     }
     pthread_mutex_unlock(&j->gpu_lock);
+}
+
+void cb_jobs_set_beat_model(CBJobs *j, const char *path)
+{
+    pthread_mutex_lock(&j->bt_lock);
+    if (!(path && j->bt_model && !strcmp(path, j->bt_model))) {
+        cb_beatthis_close(&j->bt);
+        free(j->bt_model);
+        j->bt_model = path && path[0] ? cb_strdup(path) : NULL;
+    }
+    j->bt_err = 0;
+    pthread_mutex_unlock(&j->bt_lock);
 }
 
 /* Under j->lock: the job goes on the list, queued, with its request id. */

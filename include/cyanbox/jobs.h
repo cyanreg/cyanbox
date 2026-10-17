@@ -73,6 +73,17 @@ void cb_jobs_destroy(CBJobs *j);      /* cancels pending, waits for running */
  * Default: enabled, no name. Call before the first cb_jobs_analyse. */
 void cb_jobs_set_gpu(CBJobs *j, bool enable, const char *device);
 
+/* Beat This!'s model file (cyanbox/beatthis.h; NULL: none), which the
+ * analyses make the grid with (the pool is their CBAnalysisOptions.beat_net
+ * unless they bring their own). The pool opens it when the first of them
+ * runs, on the GPU cb_jobs_set_gpu named, shares it, one run at a time,
+ * and closes it in cb_jobs_destroy; never while the tag batch holds the
+ * GPU (only one model is ever open on it): analyses wait for the batch to
+ * end. Without a file, or one that will not open (no GPU that can run
+ * it), they fail their beats with -ENODEV (the log says why). Naming it
+ * again (the same file too) forgets a failure to open it. */
+void cb_jobs_set_beat_model(CBJobs *j, const char *path);
+
 /* Each returns a request id > 0 or a negative errno. */
 uint64_t cb_jobs_analyse(CBJobs *j, uint64_t track_id, const char *path,
                          const CBAnalysisOptions *opt, unsigned what);

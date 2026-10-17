@@ -9,10 +9,13 @@ if sdbus_dep.found()
     cb_app_sources += files('mpris.c')
     cb_app_deps += sdbus_dep
 endif
+# Where `meson install` puts the models (models/ at the top level): looked in
+# after models/ beside the executable (cb_app_ml_model).
 cb_app_lib = static_library('cb_app',
     cb_app_sources,
     include_directories: cb_inc,
     dependencies: cb_app_deps,
+    c_args: [ '-DCB_MODELS_DIR="' + (get_option('prefix') / get_option('datadir') / 'cyanbox') + '"' ],
 )
 cb_app_dep = declare_dependency(link_with: cb_app_lib, dependencies: cb_app_deps)
 
@@ -28,6 +31,10 @@ cyanbox_cli = executable('cyanbox-cli',
 # Test audio, made by the ffmpeg command line: 12 s of a 128 BPM kick with a
 # click on top, 48 kHz stereo.
 ffmpeg_prog = find_program('ffmpeg', required: false)
+# Every grid is made with Beat This! (docs/BEATS.md, "With Beat This!"): the
+# tests that analyse take the weights from the source tree, on the GPU, each
+# on its own (one model on the GPU at a time, as ml_beatthis).
+app_test_env = { 'CYANBOX_BEATTHIS_MODEL': meson.project_source_root() / 'models' / 'beat-this-f16.gguf' }
 if ffmpeg_prog.found()
     app_click_wav = custom_target('app_click_wav',
         output: 'click128.wav',
@@ -50,17 +57,17 @@ if ffmpeg_prog.found()
 
     test_jobs = executable('test_jobs', files('../../tests/app/test_jobs.c'),
         include_directories: cb_inc, dependencies: [ cb_app_dep ])
-    test('jobs', test_jobs, args: [ app_click_wav ], suite: 'app', timeout: 300)
+    test('jobs', test_jobs, args: [ app_click_wav ], suite: 'app', env: app_test_env, timeout: 300, is_parallel: false)
     # The tag batch with the model ($CYANBOX_ML_MODEL; skipped without), on
     # its own: two models on one GPU have made the driver reset it.
     test('jobs_tag', test_jobs, args: [ '--tag', app_click_wav, app_long_wav ], suite: 'app',
-         timeout: 600, is_parallel: false)
+         env: app_test_env, timeout: 600, is_parallel: false)
 
     test_app = executable('test_app', files('../../tests/app/test_app.c', 'headless.c'),
         include_directories: cb_inc, dependencies: [ cb_app_dep ])
     test('app', test_app,
         args: [ app_click_wav, meson.current_build_dir() / 'test-app', app_long_wav ],
-        suite: 'app', timeout: 300)
+        suite: 'app', env: app_test_env, timeout: 300, is_parallel: false)
 
     # MPRIS against a private bus of the test's own (a dbus-daemon, else a
     # dbus-broker; skipped without either), never the session's; its client
@@ -70,7 +77,7 @@ if ffmpeg_prog.found()
             include_directories: cb_inc, dependencies: [ cb_app_dep ])
         test('mpris', test_mpris,
             args: [ app_click_wav, meson.current_build_dir() / 'test-mpris' ],
-            suite: 'app', timeout: 300)
+            suite: 'app', env: app_test_env, timeout: 300, is_parallel: false)
     endif
 
     # Link in the app on the loopback: started with it, the fake player's load
@@ -79,16 +86,16 @@ if ffmpeg_prog.found()
         include_directories: cb_inc, dependencies: [ cb_app_dep ])
     test('app-link', test_link,
         args: [ app_click_wav, meson.current_build_dir() / 'test-link' ],
-        suite: 'link', timeout: 300)
+        suite: 'link', env: app_test_env, timeout: 300, is_parallel: false)
 
     # Link through the CLI on a private two-host network of user and
     # network namespaces (tests/link/netns.sh): rekordbox's own ports,
     # nothing outside the namespaces; skipped where they are not allowed.
     test('netns', find_program('../../tests/link/netns_test.sh'),
         args: [ cyanbox_cli, app_click_wav, meson.current_build_dir() / 'test-netns' ],
-        depends: [ cyanbox_cli ], suite: 'link', timeout: 300)
+        depends: [ cyanbox_cli ], suite: 'link', env: app_test_env, timeout: 300, is_parallel: false)
 
     test('cli', find_program('../../tests/app/cli_test.sh'),
         args: [ cyanbox_cli, meson.current_build_dir() / 'test-cli' ],
-        depends: [ cyanbox_cli ], suite: 'app', timeout: 900)
+        depends: [ cyanbox_cli ], suite: 'app', env: app_test_env, timeout: 900, is_parallel: false)
 endif
