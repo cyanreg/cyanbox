@@ -1078,8 +1078,11 @@ a straight section, any other beat a measured one (section 6), and, as
 cyanbox's, it begins where the music begins (section 11). Where Beat This!
 hears no beat (no 20 s window with four detections) cyanbox's grid stands.
 The confidence is how well the grid explains Beat This!'s detections (the
-F-measure within 50 ms); the flags are the grid's shape, `low-confidence`
-under 0.5, and cyanbox's `unsteady`. It costs about 50 ms of CPU a track
+F-measure within 70 ms: within the arbiter's 50 ms it fell to 0.40 on
+"Good Time (Extended Mix)", heard right, whose detections are 49 ms late;
+within 70 ms no right grid of the osu! maps is under 0.6, and that one is
+0.75); the flags are the grid's shape, `low-confidence` under 0.5, and
+cyanbox's `unsteady`. It costs about 50 ms of CPU a track
 after the network.
 
 This was worked out in Python (`build-beats/eval/osu/hybrid.py`, frozen as

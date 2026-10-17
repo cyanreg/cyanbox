@@ -152,7 +152,7 @@ void cb_beat_result_free(CBBeatResult *r);
  * beat and downbeat logits of the audio (CBBeatNet) and cyanbox's own
  * result for it (cb_analyse_beats), which it replaces in `res`: the grid;
  * the confidence, how well the grid explains Beat This!'s detections (the
- * F-measure of beats and detections within 50 ms); the flags, the new
+ * F-measure of beats and detections within 70 ms); the flags, the new
  * grid's shape (tempo-change, phase-cut, dynamic), low-confidence, and of
  * cyanbox's unsteady. Where the music starts and the diagnostics stay
  * cyanbox's. Where Beat This! hears too little to make a grid of (no

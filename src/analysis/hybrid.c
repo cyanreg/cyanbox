@@ -1327,11 +1327,10 @@ static int shift_sections(const double *c, int nc, const double *ht, int nh, con
 }
 
 /* How well a grid explains Beat This!'s detections (pk, s) over the span
- * they share: the F-measure of its beats with a detection within 50 ms and
+ * they share: the F-measure of its beats with a detection within tol and
  * detections with a beat. */
-static double evidence(const double *g, int ng, const double *pk, int npk)
+static double evidence(const double *g, int ng, const double *pk, int npk, double tol)
 {
-    const double tol = 0.05;
     if (ng < 8 || npk < 8)
         return 0.0;
     double lo = fmax(g[0], pk[0]) - tol, hi = fmin(g[ng - 1], pk[npk - 1]) + tol;
@@ -1547,7 +1546,7 @@ static int run1(Run *R, double force, double hold, CBBeat **out, int *nb)
                 pk[npk++] = i / FPS - LAG;
         }
         free(apk);
-        if (evidence(c.v, c.n, pk, npk) >= evidence(ht, ng, pk, npk) - 0.02) {
+        if (evidence(c.v, c.n, pk, npk, 0.05) >= evidence(ht, ng, pk, npk, 0.05) - 0.02) {
             if ((ret = take(c.v, c.n, &g, &ng)) < 0)
                 goto end;
         }
@@ -1774,7 +1773,10 @@ int cb_beats_hybrid(const float *beat, const float *downbeat, int nb_frames, dou
     }
 
     /* The confidence: how well the grid explains Beat This!'s detections,
-     * the F-measure of beats and detections within 50 ms of each other. */
+     * the F-measure of beats and detections within 70 ms of each other
+     * (within 50 ms, the arbiter's, it fell to 0.40 on a grid heard right
+     * whose detections are 49 ms late; within 70 ms no grid right on the
+     * osu! maps is under 0.6). */
     double conf = 0.0;
     CBBeat *gb = NULL;
     int ngb = 0;
@@ -1799,7 +1801,7 @@ int cb_beats_hybrid(const float *beat, const float *downbeat, int nb_frames, dou
         if (beat[i] > beat[i - 1] && beat[i] >= beat[i + 1] && beat[i] > 0.0f)
             pk[npk++] = i / FPS - LAG;
     }
-    conf = evidence(gt, ngb, pk, npk);
+    conf = evidence(gt, ngb, pk, npk, 0.07);
     free(gt);
     free(pk);
 

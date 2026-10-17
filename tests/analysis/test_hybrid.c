@@ -11,6 +11,9 @@
  *  - a grid 0.3 of a beat late when cyanbox is sure (no flag, a margin of
  *    20): still moved, that being more than the quarter of a beat moving a
  *    sure grid takes (and moved the right way);
+ *  - Beat This! 60 ms late on a grid cyanbox is sure of (as on MK's "Good
+ *    Time (Extended Mix)", heard right, 49 ms): the grid kept, and not
+ *    flagged low-confidence;
  *  - cyanbox at half the tempo: its grid doubled, Beat This!'s level;
  *  - no grid from cyanbox: Beat This!'s own, steady, at its tempo;
  *  - a hit after silence, and no grid from cyanbox: no beat before the
@@ -50,7 +53,7 @@ typedef struct Act {
     int n;
 } Act;
 
-static void make_act(Act *a, double seconds, double bpm, double t0, int down)
+static void make_act_late(Act *a, double seconds, double bpm, double t0, int down, double late)
 {
     a->n = (int)(seconds * FPS) + 1;
     a->beat = malloc(a->n * sizeof(float));
@@ -59,7 +62,7 @@ static void make_act(Act *a, double seconds, double bpm, double t0, int down)
         a->beat[f] = a->down[f] = -8.0f;
     double p = 60.0 / bpm;
     for (int k = 0; t0 + k * p < seconds; k++) {
-        double c = (t0 + k * p + LAG) * FPS;
+        double c = (t0 + k * p + LAG + late) * FPS;
         bool d = ((k - down) % 4 + 4) % 4 == 0;
         for (int f = (int)c - 4; f <= (int)c + 4; f++) {
             if (f < 0 || f >= a->n)
@@ -70,6 +73,11 @@ static void make_act(Act *a, double seconds, double bpm, double t0, int down)
                 a->down[f] = fmaxf(a->down[f], -8.0f + v);
         }
     }
+}
+
+static void make_act(Act *a, double seconds, double bpm, double t0, int down)
+{
+    make_act_late(a, seconds, bpm, t0, down, 0.0);
 }
 
 static void act_free(Act *a)
@@ -170,6 +178,24 @@ static void test_off_beat(bool sure)
     act_free(&a);
 }
 
+static void test_late(void)
+{
+    const double dur = 120.0, bpm = 128.0, t0 = 0.4;
+    Act a;
+    make_act_late(&a, dur, bpm, t0, 0, 0.060);
+    CBBeatResult r;
+    make_cb(&r, bpm, t0, 0, 20.0);
+    int ret = cb_beats_hybrid(a.beat, a.down, a.n, dur, &r);
+    CHECK(ret == 0, "%d", ret);
+    int n;
+    double share = on_line(&r.grid, dur, bpm, t0, 1e-6, 0.0, dur, &n);
+    CHECK(share == 1.0 && n > 250, "%.3f of %d beats on cyanbox's", share, n);
+    CHECK(r.confidence > 0.9 && !(r.flags & CB_GRID_FLAG_LOW_CONFIDENCE),
+          "confidence %.3f, flags %#x", r.confidence, r.flags);
+    cb_beat_result_free(&r);
+    act_free(&a);
+}
+
 static void test_half_tempo(void)
 {
     const double dur = 120.0, bpm = 140.0, t0 = 0.25;
@@ -248,6 +274,7 @@ int main(void)
     test_cyanbox_right();
     test_off_beat(false);
     test_off_beat(true);
+    test_late();
     test_half_tempo();
     test_no_grid();
     test_music_start();
