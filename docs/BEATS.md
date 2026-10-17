@@ -1710,9 +1710,12 @@ build-beats/tools/cyanbox-eval -j 8 -l build-beats/eval/sample.txt --cache ~/cya
     --csv build-beats/eval/cb.csv
 ```
 
-`cyanbox-eval` decodes with `cb_decode` (mono, the file's own rate, as
-`cb_analyse` sees it); `--ffmpeg` pipes from the ffmpeg command line at
-44.1 kHz exactly as dj decodes. Its front end runs on the GPU when there is
+`cyanbox-eval` makes the app's grid: cyanbox's analysis, then the grid with
+Beat This! (section 12; the network on the GPU from `models/`, or `-m
+FILE`); `--first-stage` stops at cyanbox's own analysis, the hints. It
+decodes with `cb_decode` (mono, the file's own rate, as `cb_analyse` sees
+it); `--ffmpeg` pipes from the ffmpeg command line at 44.1 kHz exactly as dj
+decodes (and the mean of its two channels for the network). Its front end runs on the GPU when there is
 one (`--device`, `--no-gpu`); each file's wall time is split into decoding,
 the front end and the decisions (`-v`, and summed at the end).
 

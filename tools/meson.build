@@ -5,7 +5,7 @@
 # (analysis module).
 executable('cyanbox-eval', 'cyanbox-eval.c',
     include_directories: cb_inc,
-    dependencies: [ cb_analysis_dep, cb_audio_dep, cb_core_dep ],
+    dependencies: [ cb_analysis_dep, cb_audio_dep, cb_core_dep, cb_ml_dep ],
 )
 
 # cyanbox-gpu-demo: opens the window, draws ImGui and a synthetic waveform,

@@ -30,11 +30,23 @@
  *     --mem                   print resident memory after decoding and the peak
  *                             after the analysis (meaningful with -j 1)
  *
+ *     -m, --model PATH        Beat This!'s weights (default: $CYANBOX_BEATTHIS_MODEL,
+ *                             else models/beat-this-f16.gguf)
+ *     --first-stage           cyanbox's own analysis alone, without Beat This!
+ *                             (cb_analyse_beats: the hints the grid is made with)
+ *
  *     --cache DIR             keep each file's decoded audio (16-bit mono 44.1 kHz)
  *                             and its front end's arrays in DIR, and use them on
  *                             the next run: only the decisions run again
  *     --device NAME           the GPU for the front end (a part of its name)
  *     --no-gpu                the front end on the CPU (as CYANBOX_ANALYSIS_GPU=0)
+ *
+ * The grid is the app's: cyanbox's own analysis, then the grid made with
+ * Beat This! from it (cb_beats_hybrid), whose network runs on the GPU, one
+ * file at a time, on the audio as decoded (resampled to 22050 Hz), before
+ * the analysis (with --ffmpeg, on the mean of the channels, as the app's
+ * decoder mixes them). The CSV's diagnostics (the margins, the start's
+ * evidence) stay cyanbox's own.
  *
  * The spectral front end runs on the GPU when there is one (cyanbox/compute.h;
  * CYANBOX_ANALYSIS_GPU=1 makes its absence an error). Each file's time is
@@ -74,6 +86,7 @@
 
 #include <linux/magic.h>
 
+#include "cyanbox/beatthis.h"
 #include "cyanbox/compute.h"
 #include "src/analysis/beats_internal.h"
 
@@ -162,6 +175,30 @@ static int decode_ffmpeg(const char *path, float **x, int64_t *n)
         return ret;
     *x = (float *)buf;
     *n = size / sizeof(float);
+    return 0;
+}
+
+/* --ffmpeg, for Beat This!: the mean of the channels at 44.1 kHz, as the
+ * app's decoder mixes them (ffmpeg's own mono, -ac 1, is their sum over
+ * the square root of two: 3 dB louder, and the network hears that). */
+static int decode_ffmpeg_mean(const char *path, float **x, int64_t *n)
+{
+    char *in = cb_asprintf("file:%s", path);
+    if (!in)
+        return CB_ERROR(ENOMEM);
+    char *argv[] = { "ffmpeg", "-v", "error", "-nostdin", "-i", in, "-map", "0:a:0",
+                     "-ac", "2", "-ar", "44100", "-f", "f32le", "-", NULL };
+    uint8_t *buf = NULL;
+    size_t size = 0;
+    int ret = run_capture(argv, &buf, &size);
+    free(in);
+    if (ret < 0)
+        return ret;
+    float *s = (float *)buf;
+    *n = (int64_t)(size / (2 * sizeof(float)));
+    for (int64_t i = 0; i < *n; i++)
+        s[i] = (float)(((double)s[2 * i] + s[2 * i + 1]) * 0.5);
+    *x = s;
     return 0;
 }
 
@@ -556,7 +593,37 @@ typedef struct Job {
     bool               all;
     bool               starts;
     unsigned           what;
+    const CBBeatNet   *net;         /* NULL: --first-stage */
 } Job;
+
+/* Beat This!, one run at a time for the threads. */
+typedef struct Net {
+    CBBeatThis     *bt;
+    pthread_mutex_t lock;
+} Net;
+
+static int net_run(void *opaque, const float *pcm, int64_t n, float **beat, float **downbeat,
+                   int *nb_frames)
+{
+    Net *net = opaque;
+    pthread_mutex_lock(&net->lock);
+    int ret = cb_beatthis_run(net->bt, pcm, n, beat, downbeat, nb_frames);
+    pthread_mutex_unlock(&net->lock);
+    return ret;
+}
+
+/* Beat This!'s logits of mono audio at `rate`. */
+static int net_logits(const CBBeatNet *net, const float *x, int64_t n, int rate, float **beat,
+                      float **downbeat, int *nb)
+{
+    CBAudio m = { .samples = (float *)x, .nb_frames = n, .channels = 1, .rate = rate };
+    CBAudio m22 = { 0 };
+    int ret = cb_audio_resample(&m, CB_BEAT_NET_RATE, &m22);
+    if (ret >= 0)
+        ret = net->run(net->opaque, m22.samples, m22.nb_frames, beat, downbeat, nb);
+    cb_audio_free(&m22);
+    return ret;
+}
 
 static double cpu_ms(void)
 {
@@ -834,6 +901,8 @@ static void analyse_one(Job *job, int i)
     int64_t n = 0;
     int rate = CB_BEAT_RATE;
     CBSpectrum spec = { 0 };
+    float *bt_beat = NULL, *bt_down = NULL;
+    int bt_frames = 0;
     const uint32_t decoder = job->ffmpeg || cb_str_ends(r->path, ".f32");
     int64_t t0 = cb_time_us();
     r->cached = !job->starts && job->cache &&
@@ -864,6 +933,21 @@ static void analyse_one(Job *job, int i)
             free(x);
             return;
         }
+        int bret = 0;
+        if (job->net && decoder && !cb_str_ends(r->path, ".f32")) {
+            float *xm = NULL;
+            int64_t nm = 0;
+            if ((bret = decode_ffmpeg_mean(r->path, &xm, &nm)) >= 0)
+                bret = net_logits(job->net, xm, nm, CB_BEAT_RATE, &bt_beat, &bt_down, &bt_frames);
+            free(xm);
+        } else if (job->net) {
+            bret = net_logits(job->net, x, n, rate, &bt_beat, &bt_down, &bt_frames);
+        }
+        if (bret < 0) {
+            fprintf(stderr, "%s: Beat This! failed\n", r->path);
+            free(x);
+            return;
+        }
         /* At 44.1 kHz, resampled as the analyser itself would. */
         if (rate != CB_BEAT_RATE) {
             float *x44 = NULL;
@@ -879,6 +963,26 @@ static void analyse_one(Job *job, int i)
         }
         if (job->cache)
             quantize16(x, n);
+    }
+    /* From the cache: the 44.1 kHz audio it keeps (ffmpeg's: decoded again
+     * for the mean of the channels). */
+    if (r->cached && job->net) {
+        int bret;
+        if (decoder && !cb_str_ends(r->path, ".f32")) {
+            float *xm = NULL;
+            int64_t nm = 0;
+            if ((bret = decode_ffmpeg_mean(r->path, &xm, &nm)) >= 0)
+                bret = net_logits(job->net, xm, nm, CB_BEAT_RATE, &bt_beat, &bt_down, &bt_frames);
+            free(xm);
+        } else {
+            bret = net_logits(job->net, x, n, CB_BEAT_RATE, &bt_beat, &bt_down, &bt_frames);
+        }
+        if (bret < 0) {
+            fprintf(stderr, "%s: Beat This! failed\n", r->path);
+            free(x);
+            cb_spectrum_free(&spec);
+            return;
+        }
     }
     r->dec_ms = (cb_time_us() - t0) / 1000.0;
     r->tag_bpm = cb_str_ends(r->path, ".f32") ? 0.0 : read_tag_bpm(r->path);
@@ -896,6 +1000,8 @@ static void analyse_one(Job *job, int i)
         if (ret < 0) {
             fprintf(stderr, "%s: the front end failed (%d)\n", r->path, ret);
             free(x);
+            free(bt_beat);
+            free(bt_down);
             return;
         }
         if (job->cache && (ret = cache_store(job->cache, r->path, decoder, x, n, r->duration,
@@ -904,6 +1010,14 @@ static void analyse_one(Job *job, int i)
     }
     int64_t t2 = cb_time_us();
     int ret = cb_analyse_beats_spec(x, n, &spec, &job->opt, &br, job->mem ? NULL : &dbg);
+    if (ret >= 0 && job->net &&
+        (ret = cb_beats_hybrid(bt_beat, bt_down, bt_frames, r->duration, &br)) < 0) {
+        if (!job->mem)
+            cb_beat_debug_free(&dbg);
+        cb_beat_result_free(&br);
+    }
+    free(bt_beat);
+    free(bt_down);
     r->beats_ms = (cb_time_us() - t2) / 1000.0;
     r->ms = cpu_ms() - c0;
     if (job->mem) {
@@ -1289,6 +1403,7 @@ static void usage(void)
                     "                  [--dump-onsets BASE] [--bpm-range LO HI] [--no-sections]\n"
                     "                  [--no-dynamic]\n"
                     "                  [--ffmpeg] [--all] [--what MASK] [--mem] [--starts]\n"
+                    "                  [-m MODEL] [--first-stage]\n"
                     "                  [--cache DIR] [--device NAME] [--no-gpu]\n"
                     "                  [-v|-vv] FILE...\n");
 }
@@ -1298,8 +1413,10 @@ int main(int argc, char **argv)
     Job job = { 0 };
     cb_analysis_options_default(&job.opt);
     const char *csv = NULL, *beats = NULL, *from = NULL, *ref = NULL, *list = NULL;
-    const char *device = NULL;
-    bool no_gpu = false;
+    const char *device = NULL, *model = getenv("CYANBOX_BEATTHIS_MODEL");
+    bool no_gpu = false, first_stage = false;
+    if (!model || !model[0])
+        model = "models/beat-this-f16.gguf";
     int threads = (int)CB_MAX(sysconf(_SC_NPROCESSORS_ONLN) / 2, 1);
     bool verbose = false;
     char **paths = malloc(argc * sizeof(*paths));
@@ -1345,6 +1462,10 @@ int main(int argc, char **argv)
             device = argv[++i];
         } else if (!strcmp(a, "--no-gpu")) {
             no_gpu = true;
+        } else if ((!strcmp(a, "-m") || !strcmp(a, "--model")) && i + 1 < argc) {
+            model = argv[++i];
+        } else if (!strcmp(a, "--first-stage")) {
+            first_stage = true;
         } else if (!strcmp(a, "-v")) {
             verbose = true;
         } else if (!strcmp(a, "-vv")) {
@@ -1372,6 +1493,26 @@ int main(int argc, char **argv)
         }
     }
     job.opt.compute = gpu;
+    if (first_stage && job.all) {
+        fprintf(stderr, "cyanbox-eval: --all is cb_analyse, whose grid is made with Beat This!; "
+                        "--first-stage is without it\n");
+        return 1;
+    }
+    Net net = { 0 };
+    CBBeatNet beat_net = { .run = net_run, .opaque = &net };
+    if (!from && !job.starts && !first_stage) {
+        CBBeatThisOptions bo;
+        cb_beatthis_options_default(&bo);
+        bo.device = device;
+        int ret = cb_beatthis_open(&net.bt, model, &bo);
+        if (ret < 0) {
+            fprintf(stderr, "%s: cannot open Beat This!: %s\n", model, strerror(-ret));
+            return 1;
+        }
+        pthread_mutex_init(&net.lock, NULL);
+        job.net = &beat_net;
+        job.opt.beat_net = &beat_net;
+    }
     if (job.cache) {
         if (cb_mkdir_p(job.cache) < 0) {
             fprintf(stderr, "%s: cannot create the cache directory\n", job.cache);
