@@ -18,6 +18,9 @@
  *  - no grid from cyanbox: Beat This!'s own, steady, at its tempo;
  *  - a hit after silence, and no grid from cyanbox: no beat before the
  *    music starts (Beat This!'s line reaches back to 0);
+ *  - a hit after silence, cyanbox unsure and early, its grid cut by its own
+ *    start a beat after the hit: moved to Beat This!'s phase, the grid
+ *    still begins on the hit (Clean Tears' "Spiral (Lily Remix)");
  *  - under 8 s: no grid, as cyanbox's own.
  *
  * Beat This!'s beats come LAG (9 ms) after cyanbox's on the same audio, as
@@ -256,6 +259,33 @@ static void test_music_start(void)
     act_free(&a);
 }
 
+static void test_start_moved(void)
+{
+    /* A hit at 1 s, Beat This!'s beats from it; cyanbox's line 0.3 of a
+     * beat early and unsure, so its beat 0.3 before the hit fell to its
+     * own start: its grid from 0.7 of a beat after it. */
+    const double dur = 120.0, bpm = 124.0, t0 = 1.0, p = 60.0 / bpm;
+    Act a;
+    make_act(&a, dur, bpm, t0, 0);
+    CBBeatResult r;
+    make_cb(&r, bpm, t0 - 0.3 * p, CB_GRID_FLAG_PHASE_UNCERTAIN, 1.0);
+    cb_grid_start_at(&r.grid, t0 - 0.05);
+    r.music_start = t0;
+    r.start_kind = CB_START_HIT;
+    CHECK(fabs(r.grid.sections[0].start - (t0 + 0.7 * p)) < 1e-9, "cyanbox's first beat %.4f",
+          r.grid.sections[0].start);
+    int ret = cb_beats_hybrid(a.beat, a.down, a.n, dur, &r);
+    CHECK(ret == 0, "%d", ret);
+    int n;
+    double share = on_line(&r.grid, dur, bpm, t0, 0.003, 0.0, dur, &n);
+    CHECK(share > 0.99 && n > 200, "%.3f of %d beats on the beat", share, n);
+    CHECK(cb_grid_valid(&r.grid) && fabs(r.grid.sections[0].start - t0) < 0.003,
+          "first beat at %.4f", r.grid.nb_sections ? r.grid.sections[0].start : NAN);
+    CHECK(number_at(&r.grid, t0) == 1, "number %d", number_at(&r.grid, t0));
+    cb_beat_result_free(&r);
+    act_free(&a);
+}
+
 static void test_short(void)
 {
     Act a;
@@ -278,6 +308,7 @@ int main(void)
     test_half_tempo();
     test_no_grid();
     test_music_start();
+    test_start_moved();
     test_short();
     if (fails) {
         printf("test_hybrid: %d failures\n", fails);

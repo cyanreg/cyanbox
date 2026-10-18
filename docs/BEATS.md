@@ -1075,8 +1075,15 @@ the same audio (sections 1-11), which are its hints and its arbiter:
 
 The grid is then sections: each run of eight or more beats on one line is
 a straight section, any other beat a measured one (section 6), and, as
-cyanbox's, it begins where the music begins (section 11). Where Beat This!
-hears no beat (no 20 s window with four detections) cyanbox's grid stands.
+cyanbox's, it begins where the music begins (section 11): the first
+straight section reaches back to the start of the music by whole beats
+before the start cuts it, also where the grid is cyanbox's moved to Beat
+This!'s phase, whose beat before its own first fell to cyanbox's start
+(Clean Tears' "Spiral (Lily Remix)": its opening hit and downbeat at
+0.156 s, cyanbox's line 77 ms early there, the grid from the beat after;
+six of the 174 tracks of the sample began a beat or more after the music
+so). Where Beat This! hears no beat (no 20 s window with four detections)
+cyanbox's grid stands.
 The confidence is how well the grid explains Beat This!'s detections (the
 F-measure within 70 ms: within the arbiter's 50 ms it fell to 0.40 on
 "Good Time (Extended Mix)", heard right, whose detections are 49 ms late;

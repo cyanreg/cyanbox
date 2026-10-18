@@ -189,7 +189,7 @@ enum CBAnalyseWhat {
  * CB_WAVES_VERSION is the algorithm; the packed blob has its own format
  * version (cb_waveforms_pack), a storage matter. The two usually bump
  * together, because new levels are what makes old blobs unreadable. */
-#define CB_BEATS_VERSION 9
+#define CB_BEATS_VERSION 10
 #define CB_KEY_VERSION   1
 #define CB_WAVES_VERSION 1
 

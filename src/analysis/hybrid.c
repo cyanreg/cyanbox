@@ -1715,6 +1715,30 @@ static int to_grid(const CBBeat *b, int n, CBGrid *g)
     return 0;
 }
 
+/* The first straight section back to its line's first beat at or after
+ * time 0, numbered on, so that the start of the music decides where the
+ * grid begins, as on cyanbox's own grid. A grid taken from cyanbox's
+ * begins where cyanbox's own start cut it, on cyanbox's line: moved to
+ * Beat This!'s phase, a beat that the cut dropped can fall after the start
+ * (Clean Tears' "Spiral (Lily Remix)": its opening hit and downbeat at
+ * 0.156 s, cyanbox's line 77 ms early there, the grid from the beat after). */
+static void extend_back(CBGrid *g)
+{
+    if (!g->nb_sections || g->sections[0].measured)
+        return;
+    CBTempoSection *s = &g->sections[0];
+    const double p = 60.0 / s->bpm;
+    long k = (long)floor(s->start / p);
+    if (s->start - k * p < 0.0)
+        k--;
+    if (k <= 0)
+        return;
+    const int bpb = g->beats_per_bar > 0 ? g->beats_per_bar : 4;
+    const int beat = s->beat > 0 ? s->beat : 1;
+    s->start -= k * p;
+    s->beat = (int)(((beat - 1 - k) % bpb + bpb) % bpb) + 1;
+}
+
 int cb_beats_hybrid(const float *beat, const float *downbeat, int nb_frames, double duration,
                     CBBeatResult *res)
 {
@@ -1766,6 +1790,7 @@ int cb_beats_hybrid(const float *beat, const float *downbeat, int nb_frames, dou
     }
     free(b);
     /* No grid in the silence before the music, as cyanbox's. */
+    extend_back(&g);
     if (g.nb_sections && res->start_kind != CB_START_AT_ONCE &&
         (ret = cb_grid_start_at(&g, fmax(res->music_start - CB_BEAT_START_SLACK, 0.0))) < 0) {
         cb_grid_free(&g);
