@@ -28,7 +28,8 @@
 # player's cue list deletes that cue and nothing else (with
 # CYANBOX_UI_SWAYSOCK only: the click needs a known size). Then the Player
 # settings dialog, shot open, and a value picked in it with two clicks,
-# which must land in the library's setting table (the clicks with
+# which must land in the library's setting table, and a player field's
+# tooltip saying what it does (the clicks and the pointer with
 # CYANBOX_UI_SWAYSOCK only). Then the interface following two of those
 # settings: the overview type for the overview and the row previews, and
 # the key display for the deck's KEY. Then the Link decks in the deck's
@@ -277,8 +278,10 @@ fi
 # the first field's combo (On Air Display, On by default) and one on its
 # second item, Off: the library's setting table must hold
 # player.on_air_display = false afterwards, as `cyanbox config` reads it
-# back, so a change that never reaches the library fails here. The clicks
-# need a known layout, so only with CYANBOX_UI_SWAYSOCK.
+# back, so a change that never reaches the library fails here. Then the
+# pointer resting on a label (Vinyl Speed Adjust, the right-hand column)
+# shows that field's tooltip, and every player field has a description.
+# The clicks need a known layout, so only with CYANBOX_UI_SWAYSOCK.
 (
     export CYANBOX_UI_SHOW=settings
     shoot "$OUT/settings.png"
@@ -290,6 +293,7 @@ if [ -n "${CYANBOX_UI_SWAYSOCK:-}" ]; then
         echo "FAIL: settings-write: the library already has a value: $was"; exit 1; }
     export CYANBOX_UI_SHOW=settings
     variant settings-write "70:click:685:303,80:click:685:350" "track $ID .*popup 0"
+    variant settings-tip "60:move:867:478" 'settings tip "vinyl_speed_adjust" undescribed ""$'
     unset CYANBOX_UI_SHOW
     now=$(rx config player.on_air_display)
     echo "settings-write: $now"

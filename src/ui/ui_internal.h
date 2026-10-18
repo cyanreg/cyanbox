@@ -234,9 +234,9 @@ struct UiSetting {
 struct UiTestEvent {
     int      frame;
     int      type;             // 0 key down, 1 key up, 2 focus out, 3 focus in, 4 click, 5 text,
-                               // 6 right click
+                               // 6 right click, 7 pointer moved
     ImGuiKey key;
-    float    x, y;             // a click's position, logical pixels
+    float    x, y;             // a click's or move's position, logical pixels
     std::string text;          // typed text ('+' for a space)
 };
 
@@ -369,6 +369,7 @@ struct UiState {
     bool      dlg_analysis, dlg_export, dlg_keys, dlg_about, dlg_add, dlg_inspect, dlg_sync;
     bool      dlg_settings, dlg_link;
     bool      settings_focus;  // bring Player settings to the front (Ctrl+, while open)
+    std::string settings_tip;  // the field whose tooltip the frame shows (test log)
     std::vector<UiSetting> settings;   // every My Settings field (ui_settings)
     int       bpm_preset;
     char      vibe_buf[CB_TRACK_COLORS][128];   // the legend's fields in Analysis settings
@@ -500,6 +501,9 @@ const std::vector<UiSetting> &ui_settings(UiState *ui);
 int         ui_setting_key(const char *key, const char **name);       // "player.quantize": section, name
 const char *ui_setting_label(const char *name, char *buf, size_t size);
 const char *ui_setting_value(const char *name, const char *value, char *buf, size_t size);
+// What a player setting does, for its tooltip; NULL for the mixer's and
+// the device's.
+const char *ui_setting_help(int section, const char *name);
 // The value of a My Setting the interface follows ("device.key_display"),
 // as an export would write it: the library's, else the default.
 const char *ui_my_setting(UiState *ui, const char *key);

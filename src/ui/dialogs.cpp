@@ -597,8 +597,8 @@ static void settings_reset(UiState *ui, int section)
                           ui_setting_titles[section], changed);
 }
 
-// One field: its label (in the accent colour when not at its default; the
-// key and the default on hover) and a combo of its values.
+// One field: its label (in the accent colour when not at its default; on
+// hover what it does, the key and the default) and a combo of its values.
 static void setting_row(UiState *ui, const UiSetting &f, float combo_w)
 {
     int cur = setting_current(ui, f);
@@ -612,7 +612,16 @@ static void setting_row(UiState *ui, const UiSetting &f, float combo_w)
     else
         ImGui::TextUnformatted(label);
     ui_setting_value(name, f.values[f.deflt].c_str(), text, sizeof(text));
-    ImGui::SetItemTooltip("%s.%s, by default %s", ui_setting_prefixes[f.section], name, text);
+    if (ImGui::BeginItemTooltip()) {
+        if (const char *help = ui_setting_help(f.section, name)) {
+            ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + PX(360));
+            ImGui::TextUnformatted(help);
+            ImGui::PopTextWrapPos();
+        }
+        ImGui::TextDisabled("%s.%s, by default %s", ui_setting_prefixes[f.section], name, text);
+        ImGui::EndTooltip();
+        ui->settings_tip = f.name;
+    }
 
     ImGui::TableNextColumn();
     char preview[96];
@@ -711,6 +720,7 @@ static void settings_tab(UiState *ui, int section, int rows, float label_w, floa
 // player/mixer/device groups), so the dialog keeps nothing of its own.
 static void settings_dialog(UiState *ui)
 {
+    ui->settings_tip.clear();
     if (!ui->dlg_settings)
         return;
     ui_centre_next(ui, 0, 0);

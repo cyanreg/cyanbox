@@ -36,8 +36,8 @@
 // gives ImGui input at those frames: down:<key> and up:<key> (ImGui's key
 // names: C, Enter, DownArrow...; Ctrl the modifier), focus-out and focus-in, click:<x>:<y> (the pointer moved
 // there, in logical pixels, and the left button pressed and let go two
-// frames later; rclick:<x>:<y> the right one), text:<characters> (typed,
-// '+' for a space).
+// frames later; rclick:<x>:<y> the right one; move:<x>:<y> the pointer
+// only), text:<characters> (typed, '+' for a space).
 
 #include "ui_internal.h"
 
@@ -662,6 +662,83 @@ const char *ui_setting_value(const char *name, const char *value, char *buf, siz
     return buf;
 }
 
+// What a player setting does, as the players' manuals say (the CDJ-3000's
+// and the CDJ-2000NXS2's; the XDJ-XZ's for NEEDLE LOCK), and what cyanbox's
+// deck does with the ones it follows.
+const char *ui_setting_help(int section, const char *name)
+{
+    static const struct { const char *name, *text; } help[] = {
+        { "on_air_display",         "With an On Air Display mixer on PRO DJ LINK, whether the player "
+                                    "shows when its channel is on air." },
+        { "lcd_brightness",         "How bright the main screen is." },
+        { "quantize",               "Quantize as the player starts: cues, loops and hot cues set off "
+                                    "the beat land on the nearest beat of the track's grid. "
+                                    "cyanbox's deck starts with it too." },
+        { "auto_cue_level",         "What Auto Cue takes for silence: the cue goes just before the "
+                                    "first sound louder than this. Memory puts it at the cue point "
+                                    "nearest the start instead. cyanbox's deck does the same." },
+        { "language",               "The language of the player's screens." },
+        { "jog_ring_brightness",    "How bright the light around the jog wheel is." },
+        { "jog_ring_indicator",     "Whether the light around the jog wheel flashes when the "
+                                    "playing track is nearly over." },
+        { "slip_flashing",          "Whether the buttons Slip works with flash while SLIP is on." },
+        { "disc_slot_illumination", "How bright the disc slot's light is (players with a disc "
+                                    "drive)." },
+        { "eject_lock",             "Lock: no track can be loaded, and no disc ejected, while the "
+                                    "deck plays; pause it first. cyanbox's \"Load in deck\" greys "
+                                    "a playing player out too." },
+        { "sync",                   "Beat Sync as the player starts: its tempo and beats follow the "
+                                    "sync master's on PRO DJ LINK." },
+        { "play_mode",              "At a track's end: Continue loads and plays the next one, "
+                                    "Single stops. cyanbox's deck goes on to the next row in any "
+                                    "view with Continue; a playlist plays through either way." },
+        { "quantize_beat_value",    "What Quantize snaps to: every beat, or every 1/2, 1/4 or 1/8 "
+                                    "of one. cyanbox's deck too." },
+        { "hot_cue_autoload",       "Whether a track's hot cues are called up as it loads: On for "
+                                    "every track, rekordbox SETTING for the tracks the library "
+                                    "marks for it, Off for none." },
+        { "hot_cue_color",          "On: the hot cue pads light in each hot cue's own colour. Off: "
+                                    "in the player's default colours. cyanbox's pads and cue "
+                                    "badges follow it too." },
+        { "needle_lock",            "On (the players' LOCK): touching the waveform moves the track "
+                                    "only while paused, or while the jog wheel is held in Vinyl "
+                                    "mode. Off: also while it plays." },
+        { "time_mode",              "The time shown as the player starts: elapsed or remaining. "
+                                    "cyanbox's deck too." },
+        { "jog_mode",               "As the player starts: Vinyl stops and scratches with a press "
+                                    "on top of the jog wheel; CDJ only bends the pitch with it." },
+        { "auto_cue",               "Auto Cue as the player starts: a track loaded is cued just "
+                                    "before its first sound (Auto Cue Level). cyanbox's deck cues "
+                                    "its loads so too." },
+        { "master_tempo",           "Master Tempo as the player starts: the tempo changes without "
+                                    "the key changing. cyanbox's deck too." },
+        { "tempo_range",            "The tempo slider's range as the player starts: ±6, ±10 or "
+                                    "±16 %, or WIDE (±100 %). cyanbox's deck too." },
+        { "phase_meter",            "Which of the two looks the phase meter is drawn in." },
+        { "vinyl_speed_adjust",     "What the Vinyl Speed Adjust knob sets in Vinyl mode: how fast "
+                                    "playback slows to a stop as the jog wheel is pressed (Touch), "
+                                    "how fast it comes back as it is let go (Release), or both." },
+        { "jog_display_mode",       "What the screen in the jog wheel shows: Info, Simple or "
+                                    "Artwork, or Auto." },
+        { "pad_brightness",         "How bright the pads and buttons are." },
+        { "jog_lcd_brightness",     "How bright the screen in the jog wheel is." },
+        { "waveform_divisions",     "What the waveform's divisions mark: time (Time scale) or the "
+                                    "track's phrases (Phrase). cyanbox writes no phrase analysis "
+                                    "to the stick." },
+        { "waveform_area",          "What the playback screen shows: the waveform or the phase "
+                                    "meter." },
+        { "beat_jump_beats",        "How far Beat Jump moves: 1/2 to 64 beats. cyanbox's deck "
+                                    "starts with it too (1/2 is its Fine)." },
+    };
+    if (section != UI_SETTINGS_PLAYER)
+        return nullptr;
+    for (const auto &h : help) {
+        if (!strcmp(h.name, name))
+            return h.text;
+    }
+    return nullptr;
+}
+
 const char *ui_my_setting(UiState *ui, const char *key)
 {
     const char *v = cb_settings_get(&ui->app->lib.cfg, key);
@@ -1248,10 +1325,10 @@ static void parse_test_events(UiState *ui, const char *spec)
             ev.type = 5;
             ev.text = key;
             std::replace(ev.text.begin(), ev.text.end(), '+', ' ');
-        } else if (!strcmp(what, "click") || !strcmp(what, "rclick")) {
-            ev.type = what[0] == 'r' ? 6 : 4;
+        } else if (!strcmp(what, "click") || !strcmp(what, "rclick") || !strcmp(what, "move")) {
+            ev.type = what[0] == 'r' ? 6 : what[0] == 'm' ? 7 : 4;
             if (sscanf(key, "%f:%f", &ev.x, &ev.y) != 2) {
-                cb_warn("CYANBOX_UI_EVENTS: click wants x:y, not %s", key);
+                cb_warn("CYANBOX_UI_EVENTS: %s wants x:y, not %s", what, key);
                 continue;
             }
         } else if (!strcmp(what, "down") || !strcmp(what, "up")) {
@@ -1299,7 +1376,7 @@ static void test_events(UiState *ui)
             io.AddKeyEvent(ev.key, ev.type == 0);
         else if (ev.type == 5)
             io.AddInputCharactersUTF8(ev.text.c_str());
-        else if (ev.type == 4 || ev.type == 6)
+        else if (ev.type == 4 || ev.type == 6 || ev.type == 7)
             io.AddMousePosEvent(PX(ev.x), PX(ev.y));
         else
             io.AddFocusEvent(ev.type == 3);
@@ -1364,6 +1441,17 @@ static void log_test_state(UiState *ui)
     }
     for (const std::string &item : ui->link_menu_log)
         cb_info("ui test: link menu %s", item.c_str());
+    // Player settings: the field whose tooltip shows, and the player
+    // fields with no description in it.
+    if (ui->dlg_settings) {
+        std::string bare;
+        for (const UiSetting &f : ui_settings(ui)) {
+            if (f.section == UI_SETTINGS_PLAYER && !ui_setting_help(f.section, f.name.c_str()))
+                bare += (bare.empty() ? "" : " ") + f.name;
+        }
+        cb_info("ui test: settings tip \"%s\" undescribed \"%s\"", ui->settings_tip.c_str(),
+                bare.c_str());
+    }
     if (ui->link_menu_frame && ui->frame_no - ui->link_menu_frame <= 2)
         cb_info("ui test: load menu locked \"%s\"", ui->link_menu_locked.c_str());
     // File > Remove missing tracks: what it lists, the folders gone, and

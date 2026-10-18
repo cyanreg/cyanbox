@@ -535,8 +535,10 @@ it at once.
   Release, `steep_top` Steep top, on/off On/Off), with the units the
   listing leaves out (-36 dB, ±6 %, WIDE, 16 beats, Type 1); the Sync
   dialog's setting rows use the same words. A field not at its default has
-  its label in orange; hovering it shows its key (`player.quantize`) and
-  default; the combo's list marks the default. The values are the
+  its label in orange; hovering it shows, for a player field, what it does
+  (in the words of the players' manuals, and what cyanbox's deck does with
+  the ones it follows: ui_setting_help), then its key (`player.quantize`)
+  and default; the combo's list marks the default. The values are the
   library's (`player.<name>`, `mixer.<name>`, `device.<name>`, the field's
   default when there is none): a pick is saved at once, in CBConfig and the
   setting table, as `cyanbox config` would write it, and the status bar says
