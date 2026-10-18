@@ -110,39 +110,30 @@ const int MAX_SPAN = 4096;
 const float BOX_SPAN = 16.0;
 
 // The 3-band palette, one colour per combination of bands (bit 0 low,
-// bit 1 mid, bit 2 high). Not rekordbox's blue, amber and white: with
-// those the pairs and the core are shades of brown and cream (mid+high
-// and all 2.6 apart in CIEDE2000, high and all 9.6) and the kicks are a
-// blue of 3.3:1 against the background. These are the colours DJ
-// programs share for frequency, red lows, green mids and blue highs
-// (Serato, rekordbox's own RGB tags PWV4 and PWV5, Traktor, Mixxx's RGB
-// waveforms, djay, Engine DJ 5), moved the way Okabe and Ito's colour
-// universal design moves them (jfly.uni-koeln.de/color): the red towards
-// vermilion and the green towards bluish green, which the red-green
-// colour blind (8 % of men) can still tell apart, and the blue lighter,
-// since pure blue is 2.4:1 against the background and a thin hat in it
-// all but vanishes. Within that, the values are the ones that keep the
-// seven colours furthest apart for normal vision and both red-green
-// dichromacies (CIEDE2000 after Machado et al. 2009's simulation) with
-// each 4.5:1 or more against the waveform's #050505 (WCAG asks 3 of
-// graphics). At full strength (#FF3000, #20F0A0, #4090FF, their pairs the
-// sum scaled to full, as Mixxx mixes its RGB bands, and white) they were
-// too loud to look at for long, the user found, a loud track's core all
-// white; so, in OKLCH, the three bands at 0.6 of those colours' chroma
-// and a lightness of 0.66 (low, high) and 0.74 (mid), the pairs at 0.6 of
-// theirs and 0.86, 0.74 and 0.84 (low+high darker than the others, which
-// keeps it apart from mid+high for the red-green colour blind), and the
-// core a light grey. Each is 6.2:1 or more against the background; the
-// closest two are 19.5 apart, 11.6 for a deuteranope and 8.4 for a
-// protanope (at full strength 24.9, 12.6 and 9.2; rekordbox's 2.6, 2.4 and
-// 2.1).
-const vec3 LOW      = vec3(0xDD, 0x6C, 0x57) / 255.0;
-const vec3 MID      = vec3(0x65, 0xC1, 0x92) / 255.0;
-const vec3 HIGH     = vec3(0x66, 0x94, 0xD5) / 255.0;
-const vec3 LOW_MID  = vec3(0xD5, 0xD6, 0x97) / 255.0;
-const vec3 LOW_HIGH = vec3(0xD2, 0x96, 0xB3) / 255.0;
-const vec3 MID_HIGH = vec3(0x87, 0xDA, 0xE5) / 255.0;
-const vec3 ALL      = vec3(0xDE, 0xDE, 0xDE) / 255.0;
+// bit 1 mid, bit 2 high), in blues: low a deep blue, mid a sky blue, high
+// nearly white, so a band is told by its lightness, as on the CDJ-3000,
+// whose lows are blue and highs white. Not its amber mids: with them the
+// pairs and the core are shades of brown and cream (mid+high and all 2.6
+// apart in CIEDE2000) and the lows a blue of 3.3:1 against the
+// background. Nor the red, green and blue that DJ programs share for
+// frequency (Serato, rekordbox's RGB, Mixxx), which the user tried: at
+// full strength too loud to look at, muted too faded. A pair is between
+// its two (low+mid an azure, mid+high a pale sky), but low+high, rare (the
+// bass and the hats with no mids), a greyish lilac, which keeps it apart
+// from mid for the red-green colour blind; all three are a white with a
+// little blue. Every colour is 4.3:1 or more against the waveform's
+// #050505 (WCAG asks 3 of graphics). The closest two are 10.9 apart, 8.6
+// for a protanope and 9.1 for a deuteranope, but for high alone and all,
+// both near white (4.5), which are told apart by where they are: high
+// alone at the edge of a hat, all in the core. Blues do not lean on red
+// and green, which those 8 % of men confuse.
+const vec3 LOW      = vec3(0x3C, 0x6E, 0xD7) / 255.0;
+const vec3 MID      = vec3(0x5C, 0xBC, 0xF3) / 255.0;
+const vec3 HIGH     = vec3(0xDE, 0xF2, 0xFC) / 255.0;
+const vec3 LOW_MID  = vec3(0x44, 0x95, 0xEA) / 255.0;
+const vec3 LOW_HIGH = vec3(0xAA, 0x9D, 0xC5) / 255.0;
+const vec3 MID_HIGH = vec3(0xA1, 0xDB, 0xF5) / 255.0;
+const vec3 ALL      = vec3(0xF1, 0xFA, 0xFF) / 255.0;
 
 const vec3 COMBO[8] = vec3[8](LOW, LOW, MID, LOW_MID, HIGH, LOW_HIGH, MID_HIGH, ALL);
 
