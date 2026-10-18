@@ -5,8 +5,12 @@
  * deck moves by what was taken; a taker that asks nothing for a while,
  * as a mixer holding enough does, gets what follows and the deck waits;
  * taken at half that pace it moves at half speed (the taker's clock paces
- * the decks); with no one taking it runs on the clock; paused, what is
- * taken is silence. About four seconds. */
+ * the decks); moved to the null backend while it plays
+ * (cb_player_set_backend, as --pro-link moves it when the mixer goes),
+ * the deck plays on, on the clock, and a take is silence; moved back, the
+ * deck's audio again, the deck moving by what was taken alone; with no one
+ * taking it runs on the clock; paused, what is taken is silence. A manual null player
+ * does not move. About five seconds. */
 
 #include "cyanbox/player.h"
 
@@ -142,6 +146,36 @@ int main(void)
     CHECK(moved > 0.4 && moved < 0.6 && fabs(moved - (double)got / RATE) < 0.06,
           "half pace: moved %.3f s for %.3f s taken", moved, (double)got / RATE);
 
+    /* To the null backend while it plays: on, on the clock, and nothing to
+     * take; back to the ring: the deck's audio, at the taker's pace (were
+     * the null backend's thread still mixing, the deck would run ahead). */
+    CHECK(cb_player_set_backend(p, CB_AUDIO_NULL, NULL) == 0 &&
+          cb_player_backend(p) == CB_AUDIO_NULL && cb_player_running(p), "to null");
+    {
+        static int16_t buf[336 * 2];
+        int n = cb_player_ring_take(p, buf, 336), loud = 0;
+        for (int i = 0; i < 336 * 2; i++)
+            loud += buf[i] != 0;
+        CHECK(n == 0 && !loud, "null: took %d frames, %d samples not silent", n, loud);
+    }
+    from = position(p);
+    sleep_us(500000);
+    moved = position(p) - from;
+    CHECK(moved > 0.4 && moved < 0.6, "null: moved %.3f s in 0.5 s", moved);
+    got = take_for(p, 7000, 0.2, &level);
+    CHECK(got == 0, "null: took %lld frames", (long long)got);
+    CHECK(cb_player_set_backend(p, CB_AUDIO_RING, NULL) == 0 &&
+          cb_player_backend(p) == CB_AUDIO_RING && cb_player_running(p), "to the ring");
+    sleep_us(100000);
+    from = position(p);
+    level = 0;
+    got = take_for(p, 7000, 1.0, &level);
+    moved = position(p) - from;
+    CHECK(got > 0.9 * RATE && level == got, "ring again: taken %lld frames, %lld at the level",
+          (long long)got, (long long)level);
+    CHECK(fabs(moved - (double)got / RATE) < 0.06, "ring again: moved %.3f s for %.3f s taken",
+          moved, (double)got / RATE);
+
     /* No one taking (longer than a mixer that holds enough asks nothing):
      * the clock. */
     sleep_us(200000);
@@ -158,6 +192,14 @@ int main(void)
           (long long)level);
 
     cb_player_destroy(p);
+
+    CBPlayer *m = NULL;
+    opt.backend = CB_AUDIO_NULL;
+    opt.period = -256;
+    CHECK(cb_player_create(&m, &opt) == 0 && m, "manual");
+    CHECK(m && cb_player_set_backend(m, CB_AUDIO_RING, NULL) == CB_ERROR(EINVAL) &&
+          cb_player_backend(m) == CB_AUDIO_NULL, "manual moved");
+    cb_player_destroy(m);
     if (failures)
         fprintf(stderr, "test_ring: %d failures\n", failures);
     else

@@ -561,6 +561,28 @@ static void owner_reset(CBDeckOwner *o)
 
 /* ------------------------------------------------------------ the player */
 
+/* The backend p->opt.backend names, opened. */
+static int output_open(CBPlayer *p)
+{
+    if (p->opt.backend == CB_AUDIO_NULL)
+        return cb_player_null_open(p);
+    if (p->opt.backend == CB_AUDIO_RING)
+        return cb_player_ring_open(p);
+    return cb_player_pw_open(p);
+}
+
+/* Whichever backend runs, its thread joined: after this nothing mixes. The
+ * ring itself stays for cb_player_ring_take. */
+static void output_close(CBPlayer *p)
+{
+    if (p->null)
+        cb_player_null_close(p);
+    if (p->ring_out)
+        cb_player_ring_stop(p);
+    if (p->pw)
+        cb_player_pw_close(p);
+}
+
 void cb_player_options_default(CBPlayerOptions *o)
 {
     *o = (CBPlayerOptions) {
@@ -646,12 +668,7 @@ int cb_player_create(CBPlayer **out, const CBPlayerOptions *opt)
         p->rt[i].wake = &p->feed[i].wake;
     }
 
-    if (opt->backend == CB_AUDIO_NULL)
-        ret = cb_player_null_open(p);
-    else if (opt->backend == CB_AUDIO_RING)
-        ret = cb_player_ring_open(p);
-    else
-        ret = cb_player_pw_open(p);
+    ret = output_open(p);
     if (ret < 0)
         goto fail;
 
@@ -670,12 +687,8 @@ void cb_player_destroy(CBPlayer *p)
 
     /* The backend's thread is joined first, then the feeds; after that
      * nothing reads the buffers and every one of them can go. */
-    if (p->null)
-        cb_player_null_close(p);
-    if (p->ring_out)
-        cb_player_ring_close(p);
-    if (p->pw)
-        cb_player_pw_close(p);
+    output_close(p);
+    cb_player_ring_close(p);
     for (int i = 0; i < CB_DECKS; i++)
         cb_player_feed_stop(&p->feed[i]);
 
@@ -706,6 +719,37 @@ enum CBAudioBackend cb_player_backend(const CBPlayer *p)
 const char *cb_player_sink(const CBPlayer *p)
 {
     return p->sink;
+}
+
+int cb_player_set_backend(CBPlayer *p, enum CBAudioBackend backend, const char *sink)
+{
+    if (!p || p->manual ||
+        (backend != CB_AUDIO_PIPEWIRE && backend != CB_AUDIO_NULL && backend != CB_AUDIO_RING))
+        return CB_ERROR(EINVAL);
+    char *s = NULL;
+    if (backend == CB_AUDIO_PIPEWIRE && sink && !(s = cb_strdup(sink)))
+        return CB_ERROR(ENOMEM);
+
+    /* Nothing mixes from here until the new backend's thread starts, and
+     * nothing else writes the output's state: the old thread wrote its
+     * error before it was joined. */
+    output_close(p);
+    free(p->sink);
+    p->sink = s;
+    p->opt.sink = s;
+    p->opt.backend = backend;
+    atomic_store_explicit(&p->device_rate, p->opt.rate, memory_order_relaxed);
+    atomic_store_explicit(&p->error_set, false, memory_order_relaxed);
+    p->error[0] = '\0';
+    atomic_store_explicit(&p->out_state, CB_OUT_CONNECTING, memory_order_release);
+    int ret = output_open(p);
+    if (ret < 0) {
+        output_close(p);
+        p->opt.backend = CB_AUDIO_NULL;
+        if (cb_player_null_open(p) < 0)
+            output_close(p);
+    }
+    return ret;
 }
 
 bool cb_player_running(const CBPlayer *p)

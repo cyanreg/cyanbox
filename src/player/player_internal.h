@@ -555,7 +555,12 @@ void cb_player_null_close(CBPlayer *p);
 /* Manual mode only: runs the mix for `frames` frames on the calling thread. */
 void cb_player_null_run(CBPlayer *p, int frames);
 
+/* The ring outlives its thread: cb_player_ring_stop joins the thread and
+ * keeps the ring for cb_player_ring_take (another thread's), which a
+ * later open starts mixing into again; cb_player_ring_close frees it, when
+ * the player goes. */
 int  cb_player_ring_open(CBPlayer *p);
+void cb_player_ring_stop(CBPlayer *p);
 void cb_player_ring_close(CBPlayer *p);
 
 #endif /* CYANBOX_PLAYER_INTERNAL_H */

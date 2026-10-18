@@ -1,8 +1,9 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
 /* PipeWire smoke test: connects to the sink named by CYANBOX_PW_SINK, plays
- * a second of silence and checks the stream ran and the deck moved, then
- * the teardown paths: a player destroyed while its stream is still
+ * a second of silence and checks the stream ran and the deck moved, moves
+ * it to the ring backend and back (the deck playing on), then the teardown
+ * paths: a player destroyed while its stream is still
  * connecting, a buffer unloaded while playing (released only once
  * PipeWire's data thread has let go of it), and a player destroyed while
  * its stream is playing.
@@ -115,6 +116,30 @@ int main(void)
            (unsigned long long)s.serial);
     if (!ok)
         fprintf(stderr, "the deck did not play\n");
+
+    /* Moved to the ring and back while it plays, as --pro-link moves it
+     * when a mixer comes and goes (cb_player_set_backend): the stream torn
+     * down and made again, to the same sink, and the deck playing on. */
+    if (cb_player_set_backend(p, CB_AUDIO_RING, NULL) < 0 || cb_player_backend(p) != CB_AUDIO_RING ||
+        !cb_player_running(p)) {
+        fprintf(stderr, "not moved to the ring: %s\n", cb_player_error(p));
+        ok = false;
+    }
+    sleep_ms(200);
+    cb_deck_state(p, 0, &s);
+    double was = s.position;
+    ret = cb_player_set_backend(p, CB_AUDIO_PIPEWIRE, sink);
+    for (int i = 0; i < 500 && ret == 0 && !cb_player_running(p); i++)
+        sleep_ms(10);
+    sleep_ms(500);
+    cb_deck_state(p, 0, &s);
+    printf("moved back: %s, %s, the deck %.3f s on\n", ret < 0 ? strerror(-ret) : "ok",
+           cb_player_running(p) ? "running" : cb_player_error(p), s.position - was);
+    if (ret < 0 || cb_player_backend(p) != CB_AUDIO_PIPEWIRE || !cb_player_running(p) ||
+        !cb_player_sink(p) || strcmp(cb_player_sink(p), sink) || s.position - was < 0.3) {
+        fprintf(stderr, "not back on %s\n", sink);
+        ok = false;
+    }
 
     /* Unloaded while playing: released once the data thread has applied
      * the unload, from cb_deck_state on this thread. */

@@ -95,18 +95,23 @@ static void *ring_thread(void *arg)
 
 int cb_player_ring_open(CBPlayer *p)
 {
-    CBRingOut *r = calloc(1, sizeof(*r));
-    if (!r)
-        return CB_ERROR(ENOMEM);
-    p->ring_out = r;
-    r->period = CB_MIN(p->period, RING_TARGET / 2);
-    atomic_init(&r->stop, false);
-    atomic_init(&r->head, 0);
-    atomic_init(&r->tail, 0);
-    atomic_init(&r->taken_us, 0);
-    r->mix = malloc(sizeof(*r->mix) * 2 * (size_t)r->period);
-    if (!r->mix)
-        return CB_ERROR(ENOMEM);
+    CBRingOut *r = p->ring_out;
+    if (!r) {
+        if (!(r = calloc(1, sizeof(*r))))
+            return CB_ERROR(ENOMEM);
+        p->ring_out = r;
+        r->period = CB_MIN(p->period, RING_TARGET / 2);
+        atomic_init(&r->stop, false);
+        atomic_init(&r->head, 0);
+        atomic_init(&r->tail, 0);
+        atomic_init(&r->taken_us, 0);
+        r->mix = malloc(sizeof(*r->mix) * 2 * (size_t)r->period);
+        if (!r->mix)
+            return CB_ERROR(ENOMEM);
+    }
+    /* Opened again: what the ring kept is old, and the first take after a
+     * while drops it. */
+    atomic_store_explicit(&r->stop, false, memory_order_relaxed);
     int err = pthread_create(&r->thread, NULL, ring_thread, p);
     if (err)
         return CB_ERROR(err);
@@ -115,15 +120,25 @@ int cb_player_ring_open(CBPlayer *p)
     return 0;
 }
 
+void cb_player_ring_stop(CBPlayer *p)
+{
+    CBRingOut *r = p->ring_out;
+    if (!r || !r->started)
+        return;
+    atomic_store_explicit(&r->stop, true, memory_order_relaxed);
+    pthread_join(r->thread, NULL);
+    r->started = false;
+    /* What it kept is dropped: until it runs again a take is silence. */
+    atomic_store_explicit(&r->tail, atomic_load_explicit(&r->head, memory_order_relaxed),
+                          memory_order_release);
+}
+
 void cb_player_ring_close(CBPlayer *p)
 {
     CBRingOut *r = p->ring_out;
     if (!r)
         return;
-    if (r->started) {
-        atomic_store_explicit(&r->stop, true, memory_order_relaxed);
-        pthread_join(r->thread, NULL);
-    }
+    cb_player_ring_stop(p);
     free(r->mix);
     free(r);
     p->ring_out = NULL;

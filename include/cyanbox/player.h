@@ -84,6 +84,15 @@ int  cb_player_rate(const CBPlayer *p);
 enum CBAudioBackend cb_player_backend(const CBPlayer *p);
 /* The PipeWire node the stream was told to connect to; NULL = the default. */
 const char *cb_player_sink(const CBPlayer *p);
+/* Moves the mix to another backend (and for PipeWire to `sink`, NULL the
+ * default), on the owner thread: the decks play on as they were, only
+ * where they are heard changes. The old backend's thread is joined before
+ * the new one's starts, so one thread mixes at a time. A backend that does
+ * not open leaves the null one running, so that the decks still move, and
+ * its error is returned. -EINVAL on a manual null backend.
+ * cb_player_ring_take may be called meanwhile, and gives silence while
+ * the ring backend does not run (what the ring held is dropped). */
+int  cb_player_set_backend(CBPlayer *p, enum CBAudioBackend backend, const char *sink);
 /* True once the stream is running; the error string when it is not
  * (NULL while running). */
 bool cb_player_running(const CBPlayer *p);
