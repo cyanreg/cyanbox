@@ -44,6 +44,7 @@
 #include "src/link/catalog.h"
 #include "src/link/dbmsg.h"
 #include "src/link/dbserver.h"
+#include "src/link/nfs.h"
 #include "tests/formats/test.h"
 
 /* ------------------------------------------------------------- helpers */
@@ -234,6 +235,82 @@ static void test_latin1(void)
         cb_dbrow_free(&row);
         cb_wr_free(&w);
     }
+}
+
+/* A CDJ-900's track info (its texts as Latin-1) names a path the NFS tree
+ * has, whatever the path holds: kana and kanji, a typographic apostrophe,
+ * Latin-1, ASCII. The player walks it name by name, so a path made Latin-1
+ * like the texts named no file and the deck gave the track up as soon as
+ * it had loaded it (2026-10-18). The rest of the reply is still Latin-1
+ * for it (the comment row), and every other player gets it all as it is. */
+static void test_latin1_path(void)
+{
+    static const char *const paths[] = {
+        "/Contents/テスト・トーンズ/夜明け/ケンカ.wav",
+        "/Contents/Café Tones/Plain/Don’t Stop.wav",
+        "/Contents/Test Tones/Plain/Warehouse Tool.wav",
+    };
+    enum { N = CB_ARRAY_ELEMS(paths) };
+    CBPlan plan = { .nb_tracks = N };
+    plan.tracks = calloc(N, sizeof(*plan.tracks));
+    CBTrack *tracks[N] = { NULL };
+    for (int i = 0; plan.tracks && i < N; i++) {
+        tracks[i] = cb_track_new(paths[i]);
+        if (tracks[i])
+            cb_meta_set(&tracks[i]->meta.comment, "ごーいん！");
+        plan.tracks[i] = (CBPlanTrack) {
+            .id        = (uint32_t)i + 1,
+            .track     = tracks[i],
+            .usb_path  = cb_strdup(paths[i]),
+            .duration  = 40,
+            .file_type = 11,
+            .file_size = 7056044,
+        };
+    }
+    CBCatalog *cat = NULL;
+    CBVTree *tree = NULL;
+    CHECK(plan.tracks && cb_catalog_new(&cat, NULL, &plan) == 0 && cb_vtree_new(&tree, &plan) == 0);
+    for (int i = 0; cat && tree && i < N; i++) {
+        for (int latin1 = 0; latin1 < 2; latin1++) {
+            CBDbMsg q = { .kind = CB_DB_TRACK_INFO, .nb_args = 2 };
+            q.args[0] = (CBDbArg) { .type = CB_DB_NUM, .num = cb_db_rmst(1, 8, 3, 1) };
+            q.args[1] = (CBDbArg) { .type = CB_DB_NUM, .num = (uint32_t)i + 1 };
+            CBCatMenu m;
+            CHECK_EQ(cb_catalog_menu(cat, &q, &m), 0);
+            CBWr w = cb_wr_dyn();
+            cb_catalog_render(cat, &m, 0, m.nb, 0, true, latin1, 1, &w);
+            cb_catalog_menu_free(&m);
+            char *path = NULL, *comment = NULL;
+            Out o = { .p = w.p, .len = w.len };
+            CBDbMsg r;
+            while (next_msg(&o, &r)) {
+                CBDbRow row;
+                if (cb_dbrow_parse(&r, &row) < 0)
+                    continue;
+                if (row.type == CB_DB_ITEM_PATH && !path)
+                    path = cb_strdup(row.text);
+                else if (row.type == CB_DB_ITEM_COMMENT && !comment)
+                    comment = cb_strdup(row.text);
+                cb_dbrow_free(&row);
+            }
+            cb_wr_free(&w);
+            CHECK_STR(comment, latin1 ? "Gooin!" : "ごーいん！");
+            free(comment);
+            int node = path ? cb_vtree_walk(tree, path) : -1;
+            const CBPlanTrack *pt = cb_vtree_track(tree, node);
+            if (!pt || pt->id != (uint32_t)i + 1) {
+                fprintf(stderr, "track info %s: %s names no file (%s)\n",
+                        latin1 ? "as Latin-1" : "", path ? path : "no path", paths[i]);
+                failures++;
+            }
+            free(path);
+        }
+    }
+    cb_vtree_free(&tree);
+    cb_catalog_free(&cat);
+    cb_plan_free(&plan);
+    for (int i = 0; i < N; i++)
+        cb_track_free(tracks[i]);
 }
 
 static void test_codec(void)
@@ -2363,6 +2440,7 @@ int main(void)
 {
     test_codec();
     test_latin1();
+    test_latin1_path();
     test_capture();
     test_album_artists();
     test_large();

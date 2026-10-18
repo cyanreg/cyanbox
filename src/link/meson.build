@@ -50,7 +50,7 @@ test('fuzz-presence', fuzz_link_presence, suite: 'link', timeout: 300,
 db_test_env = environment()
 db_test_env.set('CB_TEST_DIR', link_test_dir / 'db')
 test_link_db = executable('test_link_db',
-    files('../../tests/link/test_db.c') + link_wire_src + link_db_src,
+    files('../../tests/link/test_db.c', 'vtree.c') + link_wire_src + link_db_src,
     include_directories: cb_inc, dependencies: [ cb_export_dep, cb_analysis_dep ])
 test('db', test_link_db, suite: 'link', env: db_test_env, timeout: 300)
 fuzz_link_db = executable('fuzz_link_db',

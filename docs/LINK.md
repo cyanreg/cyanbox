@@ -78,6 +78,16 @@ CDJ-2000 v4.33, a CDJ-2000NXS2 v1.87; 2026-10-15) showed:
   has no reading for gets its on'yomi from Unicode's Unihan ("秋奈" as
   "Akina", "夜一夜の戰" as "Yoru Ichiya no Sen"). Rows are cut at 63
   bytes by the player itself (its main processor's limit).
+- All but the track info's path, the file's name, which a player looks
+  up over NFS and never shows. Made Latin-1 too at first, it named no
+  file: real CDJ-900s dropped a quarter of a library's tracks (those whose
+  artist, album or file name is beyond Latin-1) as soon as they had
+  loaded them (2026-10-18). An emulated one looked up "Tesuto Toonzu" for
+  テスト・トーンズ, was told NFSERR_NOENT and gave the track up a tenth of a
+  second after the load; given the path as it is, it sent every name
+  whole as UTF-16LE (kana, kanji and Latin-1 alike), found the file and
+  read it through. The path goes to every player as it is now
+  (`cb_catalog_render`).
 - A CDJ-900 accepts the WAV made as it is read (16-bit stereo, 44.1 or
   48 kHz, the plain 44-byte header): a LOOKUP per path component, a
   GETATTR, 2 kB at 0 for the header, then 9408-byte READs (four CD

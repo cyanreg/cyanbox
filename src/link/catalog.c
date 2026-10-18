@@ -1816,6 +1816,14 @@ static bool item_of(CBCatalog *c, const CBCatMenu *m, uint32_t i, int column, bo
     return false;
 }
 
+/* The texts as Latin-1 for a CDJ-900, but the track info's path: the
+ * file's name, which the player looks up name by name over NFS and never
+ * shows. Made Latin-1 it named no file: real CDJ-900s dropped a quarter of
+ * a library's tracks as soon as they had loaded them (2026-10-18), and an
+ * emulated one (firmware 4.32) looked up "Tesuto Toonzu" for テスト・トーンズ,
+ * was told NFSERR_NOENT and let the track go a tenth of a second after the
+ * load. Given the path as it is, it sent every name whole as UTF-16 (kana,
+ * kanji, Latin-1 alike) and read the file through. */
 void cb_catalog_render(CBCatalog *c, const CBCatMenu *m, uint32_t offset, uint32_t count,
                        int column, bool extended, bool latin1, uint32_t txid, CBWr *w)
 {
@@ -1823,7 +1831,8 @@ void cb_catalog_render(CBCatalog *c, const CBCatMenu *m, uint32_t offset, uint32
         CBDbItem it;
         Texts tx;
         if (item_of(c, m, i, column, extended, &it, &tx))
-            cb_dbmsg_item_latin1(w, txid, &it, extended, latin1);
+            cb_dbmsg_item_latin1(w, txid, &it, extended,
+                                 latin1 && !(m->what == CB_CAT_TRACK_INFO && it.type == CB_DB_ITEM_PATH));
     }
 }
 
