@@ -23,28 +23,58 @@ void ui_open_link(UiState *ui)
 const char *ui_link_summary(UiState *ui, char *buf, size_t size, ImU32 *col)
 {
     const auto &ls = ui->app->link_state;
-    int players = 0, up = 0, failed = 0;
+    int players = 0, up = 0, joined = 0, failed = 0;
     for (int i = 0; i < ls.nb_devices; i++)
         players += ls.devices[i].type == CB_LINK_DEVICE_PLAYER;
     for (int i = 0; i < ls.nb_interfaces; i++) {
         up += ls.interfaces[i].running;
+        joined += ls.interfaces[i].running && ls.interfaces[i].state == CB_LINK_UP;
         failed += !ls.interfaces[i].running && ls.interfaces[i].err;
     }
+    // Green once on the link on one network at least, yellow until then.
+    ImU32 ready = joined ? UI_PLAY : UI_YELLOW;
     *col = UI_DIM;
     if (!ls.on) {
         snprintf(buf, size, "Link: off");
     } else if (players) {
         snprintf(buf, size, "Link: %d player%s", players, players == 1 ? "" : "s");
-        *col = UI_ACCENT;
+        *col = ready;
     } else if (up) {
         snprintf(buf, size, "Link: on %d network%s", up, up == 1 ? "" : "s");
-        *col = UI_ACCENT;
+        *col = ready;
     } else if (failed) {
         snprintf(buf, size, "Link: cannot serve");
         *col = UI_RED;
+    } else if (ls.nb_interfaces) {
+        snprintf(buf, size, "Link: starting");
+        *col = UI_YELLOW;
     } else {
         snprintf(buf, size, "Link: no Ethernet");
     }
+    return buf;
+}
+
+const char *ui_link_cue_summary(UiState *ui, char *buf, size_t size, ImU32 *col)
+{
+    const CBLinkCueState &c = ui->app->link_state.cue;
+    if (!ui->app->link_state.cue_enabled || !c.mixer) {
+        snprintf(buf, size, "LINK CUE: no mixer");
+        *col = UI_DIM;
+        return buf;
+    }
+    if (!c.on)
+        snprintf(buf, size, "LINK CUE: off on %s", c.name);
+    else if (c.ours && c.sending)
+        snprintf(buf, size, "LINK CUE: playing on %s", c.name);
+    else if (c.ours || !c.source)
+        snprintf(buf, size, "LINK CUE: %s", c.name);
+    else
+        snprintf(buf, size, "LINK CUE: %s has %s %d", c.name, c.source <= 6 ? "player" : "device",
+                 c.source);
+    // Another source elected keeps it until a deck here starts (cue.c),
+    // and is what the mixer plays once its LINK CUE is on: the mixer can,
+    // but something else has it. Ours, or nobody's yet, it is cyanbox's.
+    *col = c.source && !c.ours ? UI_YELLOW : UI_PLAY;
     return buf;
 }
 

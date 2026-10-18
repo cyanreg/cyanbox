@@ -54,6 +54,8 @@ static const ImU32 UI_ACCENT      = IM_COL32(0xFF, 0x8C, 0x00, 0xFF);
 static const ImU32 UI_QUANTIZE    = IM_COL32(0x3C, 0xEB, 0x50, 0xFF);
 static const ImU32 UI_PLAY        = IM_COL32(0x3C, 0xEB, 0x50, 0xFF);
 static const ImU32 UI_RED         = IM_COL32(0xE8, 0x3A, 0x30, 0xFF);
+// The track colour yellow's (hue 53.7 degrees at the palette's value).
+static const ImU32 UI_YELLOW      = IM_COL32(0xF8, 0xDE, 0x00, 0xFF);
 static const ImU32 UI_BLACK       = IM_COL32(0x00, 0x00, 0x00, 0xFF);
 static const ImU32 UI_WAVE_BG     = IM_COL32(0x05, 0x05, 0x05, 0xFF);
 static const ImU32 UI_CUE_HEAD    = IM_COL32(0xEA, 0x33, 0x23, 0xFF);
@@ -344,6 +346,8 @@ struct UiState {
     int       link_menu_frame;        // the frame the track menu's deck items were last drawn
     std::string link_menu_locked;     // the decks they offered greyed out (numbers, spaced)
     std::string link_decks_fake;
+    std::string link_cue_fake;        // CYANBOX_UI_LINK_CUE's mixer
+    bool      link_joining_fake;      // CYANBOX_UI_LINK_JOINING: not on the link yet
     int64_t   link_decks_fake_us;
     int       link_decks_fake_beat[CB_APP_LINK_DEVICES];
 
@@ -590,8 +594,15 @@ void ui_link_decks_shutdown(UiState *ui);
 // orders the cells, and Players... for the PRO DJ LINK window.
 void ui_link_menu(UiState *ui, bool open, ImVec2 anchor);
 void ui_open_link(UiState *ui);
-// The status bar's word on it ("Link: 2 players"), and its colour.
+// The status bar's word on it ("Link: 2 players"), and its colour: green
+// on the link, yellow while starting or joining it, red when it cannot
+// serve, unlit off or without Ethernet.
 const char *ui_link_summary(UiState *ui, char *buf, size_t size, ImU32 *col);
+// The status bar's audio state while a mixer's LINK CUE has the deck
+// ("LINK CUE: playing on DJM-A9"), and its colour: green while the cue is
+// cyanbox's to take, yellow while the mixer has another source elected,
+// unlit with no mixer.
+const char *ui_link_cue_summary(UiState *ui, char *buf, size_t size, ImU32 *col);
 
 /* ------------------------------------------------------------- finder.cpp */
 

@@ -30,7 +30,10 @@
 // library id (0 nothing loaded), FLAGS any of p (plays), a (on air), m
 // (master), s (synced), BEAT its first beat number (-1 none sent), MAC the
 // last byte of its hardware address 02:00:00:00:00:MAC (default NUMBER); a
-// playing one's beat number moves on at its track's tempo.
+// playing one's beat number moves on at its track's tempo. With them,
+// CYANBOX_UI_LINK_CUE=NAME:ON:SOURCE makes up a mixer's LINK CUE (ON 1 or
+// 0, SOURCE the device it elected, 17 cyanbox, 0 none), and
+// CYANBOX_UI_LINK_JOINING=1 has cyanbox still joining the link.
 //
 // The deck numbers: a player's number on the link is the one it took when
 // it started (the first free, in the order the players came up), so it
@@ -694,8 +697,20 @@ void ui_link_decks_test_tick(UiState *ui)
         snprintf(ls.interfaces[0].interface, sizeof(ls.interfaces[0].interface), "lo");
         ls.interfaces[0].addr = 0x7F000001;
         ls.interfaces[0].running = true;
-        ls.interfaces[0].state = CB_LINK_UP;
+        ls.interfaces[0].state = ui->link_joining_fake ? CB_LINK_JOINING : CB_LINK_UP;
         ls.interfaces[0].number = 17;
+        if (!ui->link_cue_fake.empty()) {
+            CBLinkCueState &c = ls.cue;
+            int on = 0;
+            if (sscanf(ui->link_cue_fake.c_str(), "%20[^:]:%d:%d", c.name, &on, &c.source) == 3) {
+                ls.cue_enabled = c.mixer = true;
+                c.number = 33;
+                c.on = on;
+                c.ours = c.source == 17;
+            } else {
+                cb_warn("CYANBOX_UI_LINK_CUE: %s is not NAME:ON:SOURCE", ui->link_cue_fake.c_str());
+            }
+        }
         const char *s = ui->link_decks_fake.c_str();
         while (*s && ls.nb_devices < CB_APP_LINK_DEVICES) {
             int number = 0, beat = -1, used = 0;

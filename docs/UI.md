@@ -458,15 +458,20 @@ model` before its first track) when no analysis is running. Right: audio
 state (`PipeWire 48 kHz · cyanbox-null`, `Audio: none` under `--audio none`, or
 the error in red), the library track count with the size of its files
 (`58 tracks · 1.7 GB`: what a stick with every track holds), the
-GPU name. With `--pro-link`, Link's word before the audio state (`Link:
-2 players`, `Link: on 1 network`, `Link: no Ethernet`, or in red `Link:
-cannot serve`), which opens the Link menu when clicked (the deck numbers
-and the PRO DJ LINK window: Link decks, above); while a
-mixer is on the link the audio state is LINK CUE's, the deck being heard
-only in its headphone cue (`LINK CUE: off on DJM-A9`, `LINK CUE: DJM-A9`
-elected, `LINK CUE: DJM-A9 has player 2`, in green `LINK CUE: playing on
-DJM-A9`, or `LINK CUE: no mixer` in the two seconds before the deck goes
-back), and with none the usual PipeWire state.
+GPU name. With `--pro-link`, Link's word before the audio state, lit by
+where Link stands: green on the link (`Link: 2 players`, `Link: on 1
+network`), yellow while it starts or joins (`Link: starting`, then the same
+words), red when it cannot serve (`Link: cannot serve`), unlit off or
+without Ethernet (`Link: no Ethernet`); it opens the Link menu when
+clicked (the deck numbers and the PRO DJ LINK window: Link decks, above).
+While a mixer is on the link the audio state is LINK CUE's, the deck being
+heard only in its headphone cue, lit green while the cue is cyanbox's to
+take (`LINK CUE: DJM-A9` elected or nobody's yet, `LINK CUE: playing on
+DJM-A9`, `LINK CUE: off on DJM-A9`), yellow while the mixer has another
+source elected (`LINK CUE: DJM-A9 has player 2`, or off on it with a
+player elected: switched on, it plays that one; a deck started here takes
+it back), and unlit with no mixer (`LINK CUE: no mixer`, in the two
+seconds before the deck goes back); with none the usual PipeWire state.
 
 ## Dialogs and menus
 

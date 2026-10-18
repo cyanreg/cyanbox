@@ -18,7 +18,8 @@
 //
 // The headless test hooks are environment variables read here:
 // CYANBOX_UI_LINK_DECKS=<players> makes up players on the link for the Link
-// decks' panel (link_decks.cpp);
+// decks' panel (link_decks.cpp), with CYANBOX_UI_LINK_CUE=<mixer> a mixer's
+// LINK CUE and with CYANBOX_UI_LINK_JOINING=1 the link not joined yet;
 // CYANBOX_UI_AUTOLOAD=<id> loads that track on the first frame and starts it
 // once it is loaded (CYANBOX_UI_AUTOLOAD_AT=<seconds>: from there);
 // CYANBOX_UI_SHOW=<list> opens panels and dialogs on the first frame (grid,
@@ -1105,20 +1106,7 @@ static void status_bar(UiState *ui, ImVec2 a, ImVec2 b)
     } else if (cb_player_backend(app->player) == CB_AUDIO_RING) {
         // --pro-link with a mixer on the link: the deck heard only in its
         // headphone cue.
-        const CBLinkCueState &c = app->link_state.cue;
-        if (!app->link_state.cue_enabled || !c.mixer)
-            snprintf(audio, sizeof(audio), "LINK CUE: no mixer");
-        else if (!c.on)
-            snprintf(audio, sizeof(audio), "LINK CUE: off on %s", c.name);
-        else if (c.ours && c.sending)
-            snprintf(audio, sizeof(audio), "LINK CUE: playing on %s", c.name);
-        else if (c.ours || !c.source)
-            snprintf(audio, sizeof(audio), "LINK CUE: %s", c.name);
-        else
-            snprintf(audio, sizeof(audio), "LINK CUE: %s has %s %d", c.name,
-                     c.source <= 6 ? "player" : "device", c.source);
-        if (c.ours && c.sending)
-            acol = UI_PLAY;
+        ui_link_cue_summary(ui, audio, sizeof(audio), &acol);
     } else {
         const char *sink = cb_player_sink(app->player);
         snprintf(audio, sizeof(audio), "PipeWire %g kHz \xC2\xB7 %s",
@@ -1329,6 +1317,12 @@ static const char *mode_drawn(int mode)
     }
 }
 
+// A status word's colour, for the log.
+static const char *lit(ImU32 col)
+{
+    return col == UI_PLAY ? "green" : col == UI_YELLOW ? "yellow" : col == UI_RED ? "red" : "none";
+}
+
 static void log_test_state(UiState *ui)
 {
     CBApp *app = ui->app;
@@ -1356,10 +1350,18 @@ static void log_test_state(UiState *ui)
         cb_info("ui test: link decks %d numbers %s", ui->link_decks_drawn,
                 ui->link_decks_order.c_str());
     // The status bar's Link button and, while its menu is open, the menu's
-    // buttons (logical pixels, for a click).
-    if (app->link_state.enabled)
+    // buttons (logical pixels, for a click); Link's word and LINK CUE's as
+    // the status bar has them, each with its colour.
+    if (app->link_state.enabled) {
         cb_info("ui test: link button at %.0f %.0f", ui->link_button.x / ui->s,
                 ui->link_button.y / ui->s);
+        char text[160];
+        ImU32 col;
+        ui_link_summary(ui, text, sizeof(text), &col);
+        cb_info("ui test: link word \"%s\" lit %s", text, lit(col));
+        ui_link_cue_summary(ui, text, sizeof(text), &col);
+        cb_info("ui test: link cue \"%s\" lit %s", text, lit(col));
+    }
     for (const std::string &item : ui->link_menu_log)
         cb_info("ui test: link menu %s", item.c_str());
     if (ui->link_menu_frame && ui->frame_no - ui->link_menu_frame <= 2)
@@ -1577,6 +1579,11 @@ int cb_ui_init(CBApp *app)
     const char *link_decks = getenv("CYANBOX_UI_LINK_DECKS");
     if (link_decks && link_decks[0])
         ui->link_decks_fake = link_decks;
+    const char *link_cue = getenv("CYANBOX_UI_LINK_CUE");
+    if (link_cue && link_cue[0])
+        ui->link_cue_fake = link_cue;
+    const char *joining = getenv("CYANBOX_UI_LINK_JOINING");
+    ui->link_joining_fake = joining && !strcmp(joining, "1");
     return 0;
 }
 

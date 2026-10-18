@@ -34,8 +34,9 @@
 # the key display for the deck's KEY. Then the Link decks in the deck's
 # title row with made-up players, the track menu's "Load in deck" items under the
 # players' Eject/Load Lock, a track added to the TAG LIST and shown, one
-# added to the History and shown, and the players given deck numbers in the
-# status bar's Link menu. Last, File > Remove missing tracks
+# added to the History and shown, the players given deck numbers in the
+# status bar's Link menu, and the status bar's Link and LINK CUE words lit
+# by where they stand. Last, File > Remove missing tracks
 # (CYANBOX_UI_SHOW=remove-missing): it lists the fourth track and a fifth
 # whose folder is gone too, names that folder, and a click on Remove takes
 # both out of the library, the rest kept. Then Album Artists: opened and an
@@ -152,6 +153,12 @@ shoot() {
         echo "cyanbox failed:"; cat "$png.log"; exit 1; }
     [ -s "$png" ] || { echo "no screenshot at $png"; cat "$png.log"; exit 1; }
     echo "screenshot: $png"
+}
+
+# logged NAME STATE: the run NAME's logged state matches STATE as well.
+logged() {
+    grep "ui test:" "$OUT/variant-$1.png.log" | grep -Eq "$2" || {
+        echo "FAIL: variant $1: want \"$2\""; cat "$OUT/variant-$1.png.log"; exit 1; }
 }
 
 # variant NAME EVENTS STATE: a shot with CYANBOX_UI_EVENTS, whose logged
@@ -316,6 +323,24 @@ variant settings-follow "" "track $ID .*overview centred previews centred key $c
 (
     export CYANBOX_UI_LINK_DECKS="1:CDJ-900:$ID:pa:-1,2:CDJ-2000NXS2:$ID2:m:40"
     variant link-decks "" "link decks 2"
+    # The status bar's words lit: Link's green on the link, yellow while
+    # joining it; LINK CUE's unlit with no mixer, green while the cue is
+    # cyanbox's (elected, or nobody's yet), yellow while the mixer has a
+    # player elected, its LINK CUE on or off.
+    logged link-decks 'link word "Link: 2 players" lit green$'
+    logged link-decks 'link cue "LINK CUE: no mixer" lit none$'
+    export CYANBOX_UI_LINK_JOINING=1
+    variant link-joining "" 'link word "Link: 2 players" lit yellow$'
+    unset CYANBOX_UI_LINK_JOINING
+    for cue in "DJM-A9:1:17|LINK CUE: DJM-A9|green" "DJM-A9:1:0|LINK CUE: DJM-A9|green" \
+               "DJM-A9:1:2|LINK CUE: DJM-A9 has player 2|yellow" \
+               "DJM-A9:0:2|LINK CUE: off on DJM-A9|yellow"; do
+        export CYANBOX_UI_LINK_CUE="${cue%%|*}"
+        rest=${cue#*|}
+        variant "link-cue-${CYANBOX_UI_LINK_CUE%%:*}-$(echo "${CYANBOX_UI_LINK_CUE#*:}" | tr : -)" "" \
+            "link cue \"${rest%|*}\" lit ${rest#*|}\$"
+    done
+    unset CYANBOX_UI_LINK_CUE
     if [ -n "${CYANBOX_UI_SWAYSOCK:-}" ]; then
         SWAYSOCK=$CYANBOX_UI_SWAYSOCK swaymsg -q output '*' resolution 1600x900
         rx config player.eject_lock true > /dev/null
