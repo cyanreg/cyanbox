@@ -318,12 +318,12 @@ Waveforms are drawn as rekordbox draws them, as measured by rbxport: the
 stacked row preview uses the measured 128/256/128 scales; the BLUE palette
 shades a column from blue to cream by its whiteness bits; RGB columns are
 drawn saturated by their strongest channel. The 3-band palette is cyanbox's
-own, in blues, a band told by its lightness: low a deep blue (`#3C6ED7`),
-mid a sky blue (`#5CBCF3`), high nearly white (`#DEF2FC`), the pairs
-between their two (`#4495EA` low+mid, `#A1DBF5` mid+high; `#AA9DC5`
-low+high, a greyish lilac) and all three a white with a little blue,
-`#F1FAFF`; not rekordbox's amber mids, whose pairs and core were shades
-of brown and cream (docs/UI.md, Window;
+own, in mixed hues: low a blue (`#4675D8`), mid a light orange
+(`#F7AB5D`), high a green (`#60DB89`), each pair a hue of its own
+(`#E97C48` low+mid, a deeper orange; `#F2E38C` mid+high, a gold;
+`#26C0CF` low+high, a teal) and all three a white with a little blue,
+`#E3F1FB`; not rekordbox's amber mids over blue lows, whose pairs and core
+are shades of brown and cream (docs/UI.md, Window;
 `src/gpu/shaders/wave.frag` has the reasons). The
 3-band levels drawn are rbxport's as well (section 3, item 10), so the same
 rules on the same bytes give rbxport's shapes. The 3-band detail is the

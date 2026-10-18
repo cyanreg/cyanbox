@@ -45,18 +45,18 @@ orange), quantize-on `#3CEB50`. The title row is tinted blue (`#1F3B73` at
 low alpha), as rekordbox's deck 1 is.
 
 Waveform colours (`src/gpu/shaders/wave.frag`, on the waveforms'
-`#050505`): the 3-band waveforms are in blues, a band told by its
-lightness as on the CDJ-3000: low `#3C6ED7` (a deep blue), mid `#5CBCF3`
-(a sky blue), high `#DEF2FC` (nearly white). The stacked half draws each
-band in its colour; centred and overlaid, a pixel two bands reach is
-between the two, low+mid `#4495EA` (an azure), mid+high `#A1DBF5` (a pale
-sky), low+high `#AA9DC5` (a greyish lilac, apart from the mids for the
-red-green colour blind), and one all three reach is a white with a
-little blue, `#F1FAFF`. So the kicks and the bass are the deep blue edge,
-the mids sky blue, the hats white. Every colour is 4.3:1 or more against
-the background. Not the CDJ-3000's amber mids, whose pairs and core were
-shades of brown and cream, nor the DJ programs' red, green and blue,
-which were tried: too loud at full strength, too faded muted.
+`#050505`): the 3-band waveforms are in mixed hues: low `#4675D8` (a
+blue), mid `#F7AB5D` (a light orange), high `#60DB89` (a green). The
+stacked half draws each band in its colour; centred and overlaid, a pixel
+two bands reach has a hue of its own, low+mid `#E97C48` (a deeper
+orange), mid+high `#F2E38C` (a gold), low+high `#26C0CF` (a teal), and one
+all three reach is a white with a little blue, `#E3F1FB`. So the kicks
+are blue at the tips, the mids and the ring round the core orange, the
+hats green here and there. Every colour is 4.7:1 or more against the
+background. Not a blend for a pair: the CDJ-3000's amber mids over blue
+lows give pairs and a core in shades of brown and cream. Tried before:
+all blues (too few colours), and the DJ programs' red, green and blue,
+too loud at full strength and too faded muted.
 BLUE (`#0055E1` to `#F5EBD7` by whiteness) and RGB (the tag's colour, its
 strongest channel at full) are drawn as rekordbox draws them, and silence
 is a 1 px line in `#D2DCFA`.

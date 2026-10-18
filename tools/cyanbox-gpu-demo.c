@@ -371,10 +371,10 @@ static const struct {
     { "NaN alpha",                     4,   0.5f, 0x000000 },
     { "huge insets: above the box",    5, -62.0f, 0x000000 },
     { "huge insets: below the box",    5,  62.0f, 0x000000 },
-    { "huge insets: the centre line",  5,   0.0f, 0x3C6ED7 },
-    { "gain: near the top",            6, -45.0f, 0x3C6ED7 },
+    { "huge insets: the centre line",  5,   0.0f, 0x4675D8 },
+    { "gain: near the top",            6, -45.0f, 0x4675D8 },
     { "no gain: near the top",         7, -45.0f, 0x000000 },
-    { "no gain: within 32/127",        7,  -8.0f, 0x3C6ED7 },
+    { "no gain: within 32/127",        7,  -8.0f, 0x4675D8 },
 };
 
 /* ------------------------------------------------------------- horizontal */
@@ -437,19 +437,19 @@ static const struct {
     float dy;           /* from the box's centre line */
     uint32_t rgb;
 } hprobes[] = {
-    /* 3/4 and 1/4 of #3C6ED7's light, encoded: 3/4 and 1/4 of the encoded
-     * value (#2D52A1, #0F1C36) would be much darker. */
-    { "box filter: 3/4 of a spike",    0, 20, -20.0f, 0x3460BD },
-    { "box filter: 1/4 of a spike",    0, 19, -20.0f, 0x1C3873 },
-    { "box filter: the spike's top",   0, 20, -38.0f, 0x3460BD },
+    /* 3/4 and 1/4 of #4675D8's light, encoded: 3/4 and 1/4 of the encoded
+     * value (#3458A2, #121D36) would be much darker. */
+    { "box filter: 3/4 of a spike",    0, 20, -20.0f, 0x3D66BE },
+    { "box filter: 1/4 of a spike",    0, 19, -20.0f, 0x213C73 },
+    { "box filter: the spike's top",   0, 20, -38.0f, 0x3D66BE },
     { "box filter: above the spike",   0, 20, -41.0f, 0x000000 },
     { "box filter: silence line",      0,  5,   0.0f, 0xD2DCFA },
     { "box filter: above the line",    0,  5,  -2.0f, 0x000000 },
-    { "attack split: 3/4 attack",      1, 20, -20.0f, 0x3460BD },
+    { "attack split: 3/4 attack",      1, 20, -20.0f, 0x3D66BE },
     { "attack split: before it",       1, 19, -20.0f, 0x000000 },
-    { "attack split: after it",        1, 21, -20.0f, 0x3C6ED7 },
-    { "not detail: the maximum",       2,  5, -20.0f, 0x3C6ED7 },
-    { "past 16 columns: the maximum",  3,  1, -20.0f, 0x3C6ED7 },
+    { "attack split: after it",        1, 21, -20.0f, 0x4675D8 },
+    { "not detail: the maximum",       2,  5, -20.0f, 0x4675D8 },
+    { "past 16 columns: the maximum",  3,  1, -20.0f, 0x4675D8 },
 };
 
 /* ------------------------------------------------------------------- bars */
@@ -564,36 +564,36 @@ typedef struct Probe {
 } Probe;
 
 static const Probe probes[] = {
-    { "3-band low",                0, 12.0f,   0.5f, 0x3C6ED7 },
-    { "3-band mid",                1, 12.0f,   0.5f, 0x5CBCF3 },
-    { "3-band high",               2, 12.0f,   0.5f, 0xDEF2FC },
-    { "3-band low+mid core",       3, 12.0f,   0.5f, 0x4495EA },
-    { "3-band low+mid envelope",   3, 12.0f, -35.0f, 0x3C6ED7 },
-    { "3-band all",                4, 12.0f,   0.5f, 0xF1FAFF },
+    { "3-band low",                0, 12.0f,   0.5f, 0x4675D8 },
+    { "3-band mid",                1, 12.0f,   0.5f, 0xF7AB5D },
+    { "3-band high",               2, 12.0f,   0.5f, 0x60DB89 },
+    { "3-band low+mid core",       3, 12.0f,   0.5f, 0xE97C48 },
+    { "3-band low+mid envelope",   3, 12.0f, -35.0f, 0x4675D8 },
+    { "3-band all",                4, 12.0f,   0.5f, 0xE3F1FB },
     { "silence line",              5, 12.0f,   0.0f, 0xD2DCFA },
     { "silence above the line",    5, 12.0f,  -5.0f, 0x000000 },
-    { "3-band low+high core",      6, 12.0f,   0.5f, 0xAA9DC5 },
-    { "3-band low+high envelope",  6, 12.0f, -35.0f, 0xDEF2FC },
-    { "3-band mid+high",           7, 12.0f,   0.5f, 0xA1DBF5 },
+    { "3-band low+high core",      6, 12.0f,   0.5f, 0x26C0CF },
+    { "3-band low+high envelope",  6, 12.0f, -35.0f, 0x60DB89 },
+    { "3-band mid+high",           7, 12.0f,   0.5f, 0xF2E38C },
     { "blue, whiteness 0",         8, 12.0f,   0.5f, 0x0055E1 },
     { "blue, whiteness 7",         9, 12.0f,   0.5f, 0xF5EBD7 },
     { "rgb detail red",           10, 12.0f,   0.5f, 0xFF0000 },
     { "rgb detail red+green",     11, 12.0f,   0.5f, 0xFF6D00 },
     { "rgb preview 100/50/0",     12, 12.0f,   0.5f, 0xFF7F00 },
-    { "stacked low",              13, 12.0f,  45.0f, 0x3C6ED7 },
-    { "stacked high slab",        13, 12.0f, -45.0f, 0xDEF2FC },
-    { "stacked low slab",         14, 12.0f,  40.0f, 0x3C6ED7 },
-    { "stacked mid slab",         14, 12.0f, -10.0f, 0x5CBCF3 },
-    { "overlaid low+mid core",    15, 12.0f,  40.0f, 0x4495EA },
-    { "overlaid low envelope",    15, 12.0f, -30.0f, 0x3C6ED7 },
-    { "dimmed low",               16, 12.0f,   0.5f, 0x1E376B },
+    { "stacked low",              13, 12.0f,  45.0f, 0x4675D8 },
+    { "stacked high slab",        13, 12.0f, -45.0f, 0x60DB89 },
+    { "stacked low slab",         14, 12.0f,  40.0f, 0x4675D8 },
+    { "stacked mid slab",         14, 12.0f, -10.0f, 0xF7AB5D },
+    { "overlaid low+mid core",    15, 12.0f,  40.0f, 0xE97C48 },
+    { "overlaid low envelope",    15, 12.0f, -30.0f, 0x4675D8 },
+    { "dimmed low",               16, 12.0f,   0.5f, 0x233A6C },
     /* At the probe's pixel centre, 12.5 px into column 0, the level is
      * 50.4, a reach of 19.8 px; without the ramp it would be 40, 15.7 px. */
-    { "detail ramp, inside",      17, 12.0f, -18.0f, 0x3C6ED7 },
+    { "detail ramp, inside",      17, 12.0f, -18.0f, 0x4675D8 },
     { "detail ramp, outside",     17, 12.0f, -21.0f, 0x000000 },
     { "sharp attack stays silent", 19, 12.0f, -10.0f, 0x000000 },
     { "sharp attack's silence",   19, 12.0f,   0.0f, 0xD2DCFA },
-    { "attack column",            20, 12.0f, -30.0f, 0x3C6ED7 },
+    { "attack column",            20, 12.0f, -30.0f, 0x4675D8 },
 };
 
 /* One pixel of the frame against its colour, within 2 a channel. */

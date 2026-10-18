@@ -122,10 +122,10 @@ typedef struct CBWaveDraw {
 
 /* Adds the draw to an ImDrawList (passed as void* from C++) as a render
  * callback. Colours are rekordbox's as measured by rbxport, but for the
- * 3-band palette, which is cyanbox's own, in blues (shaders/wave.frag
+ * 3-band palette, which is cyanbox's own, in mixed hues (shaders/wave.frag
  * says why):
- *   3-band: low #3C6ED7, mid #5CBCF3, high #DEF2FC; low+mid #4495EA,
- *           low+high #AA9DC5, mid+high #A1DBF5, all #F1FAFF; stacked, each
+ *   3-band: low #4675D8, mid #F7AB5D, high #60DB89; low+mid #E97C48,
+ *           low+high #26C0CF, mid+high #F2E38C, all #E3F1FB; stacked, each
  *           band in its own colour at scales 128/256/128; silence a 1 px
  *           line in #D2DCFA.
  *   blue:   height 0..31 and whiteness 0..7 ramped from #0055E1 to #F5EBD7.

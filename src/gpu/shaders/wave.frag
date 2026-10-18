@@ -110,30 +110,29 @@ const int MAX_SPAN = 4096;
 const float BOX_SPAN = 16.0;
 
 // The 3-band palette, one colour per combination of bands (bit 0 low,
-// bit 1 mid, bit 2 high), in blues: low a deep blue, mid a sky blue, high
-// nearly white, so a band is told by its lightness, as on the CDJ-3000,
-// whose lows are blue and highs white. Not its amber mids: with them the
-// pairs and the core are shades of brown and cream (mid+high and all 2.6
-// apart in CIEDE2000) and the lows a blue of 3.3:1 against the
-// background. Nor the red, green and blue that DJ programs share for
-// frequency (Serato, rekordbox's RGB, Mixxx), which the user tried: at
-// full strength too loud to look at, muted too faded. A pair is between
-// its two (low+mid an azure, mid+high a pale sky), but low+high, rare (the
-// bass and the hats with no mids), a greyish lilac, which keeps it apart
-// from mid for the red-green colour blind; all three are a white with a
-// little blue. Every colour is 4.3:1 or more against the waveform's
-// #050505 (WCAG asks 3 of graphics). The closest two are 10.9 apart, 8.6
-// for a protanope and 9.1 for a deuteranope, but for high alone and all,
-// both near white (4.5), which are told apart by where they are: high
-// alone at the edge of a hat, all in the core. Blues do not lean on red
-// and green, which those 8 % of men confuse.
-const vec3 LOW      = vec3(0x3C, 0x6E, 0xD7) / 255.0;
-const vec3 MID      = vec3(0x5C, 0xBC, 0xF3) / 255.0;
-const vec3 HIGH     = vec3(0xDE, 0xF2, 0xFC) / 255.0;
-const vec3 LOW_MID  = vec3(0x44, 0x95, 0xEA) / 255.0;
-const vec3 LOW_HIGH = vec3(0xAA, 0x9D, 0xC5) / 255.0;
-const vec3 MID_HIGH = vec3(0xA1, 0xDB, 0xF5) / 255.0;
-const vec3 ALL      = vec3(0xF1, 0xFA, 0xFF) / 255.0;
+// bit 1 mid, bit 2 high), in mixed hues, picked by the user from rendered
+// options: low a blue, mid a light orange, high a green. A pair has a hue
+// of its own, not a blend of its two, which for blue and orange is a grey
+// brown (the CDJ-3000's amber mids over blue lows give pairs and a core in
+// shades of brown and cream): low+mid a deeper orange, the ring round the
+// core on most beats; mid+high a gold; low+high a teal. All three, the
+// core and most of a loud track, are a white with a little blue. So the
+// kicks are blue at the tips, the mids orange, the hats green here and
+// there. Tried before it: all blues (too few colours), and the red, green
+// and blue that DJ programs share for frequency (Serato, rekordbox's RGB,
+// Mixxx), too loud at full strength and too faded muted. Every colour is
+// 4.7:1 or more against the waveform's #050505 (WCAG asks 3 of graphics).
+// The closest two are 14.9 apart in CIEDE2000 (mid and low+mid); for the
+// red-green colour blind, high and mid+high are 5.4 apart for a protanope
+// and the mid and its pairs 8.5 for a deuteranope (the CDJ's closest 2.1
+// and 2.4).
+const vec3 LOW      = vec3(0x46, 0x75, 0xD8) / 255.0;
+const vec3 MID      = vec3(0xF7, 0xAB, 0x5D) / 255.0;
+const vec3 HIGH     = vec3(0x60, 0xDB, 0x89) / 255.0;
+const vec3 LOW_MID  = vec3(0xE9, 0x7C, 0x48) / 255.0;
+const vec3 LOW_HIGH = vec3(0x26, 0xC0, 0xCF) / 255.0;
+const vec3 MID_HIGH = vec3(0xF2, 0xE3, 0x8C) / 255.0;
+const vec3 ALL      = vec3(0xE3, 0xF1, 0xFB) / 255.0;
 
 const vec3 COMBO[8] = vec3[8](LOW, LOW, MID, LOW_MID, HIGH, LOW_HIGH, MID_HIGH, ALL);
 
