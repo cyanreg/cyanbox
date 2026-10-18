@@ -30,6 +30,8 @@
  *                                  picks a track's colour by (cyanbox/ml.h);
  *                                  unset: CB_TRACK_VIBE_* (cyanbox/colors.h)
  *   ui.detail_bars  ui.split_player  ui.split_tree  ui.traffic_light
+ *   ui.rekordbox_colours           the 3-band waveforms as rekordbox draws
+ *                                  them (default false: cyanbox's palette)
  *
  * Booleans are "true"/"false", numbers their shortest exact decimal form,
  * analysis.what the names `cyanbox analyze --what` takes ("beats,key,waves").
@@ -319,6 +321,7 @@ static const struct {
     { "ui.detail_bars",          K_BARS },
     { "ui.split_player",         K_SPLIT },
     { "ui.split_tree",           K_SPLIT },
+    { "ui.rekordbox_colours",    K_BOOL },
 };
 
 static int key_kind(const char *key)
@@ -338,7 +341,8 @@ static bool *bool_field(CBConfig *c, const char *key)
            !strcmp(key, "import.comment")          ? &c->import_comment :
            !strcmp(key, "export.pdb")              ? &c->export_pdb :
            !strcmp(key, "export.onelibrary")       ? &c->export_onelibrary :
-           !strcmp(key, "link.mp3")                ? &c->link_mp3 : &c->compat_transcode;
+           !strcmp(key, "link.mp3")                ? &c->link_mp3 :
+           !strcmp(key, "ui.rekordbox_colours")    ? &c->rekordbox_colours : &c->compat_transcode;
 }
 
 #define STR_(x) #x
@@ -616,6 +620,7 @@ int cb_library_config_save(CBLibrary *lib)
         { "ui.detail_bars",          cb_core_fmt_double(c->detail_bars, bars, sizeof(bars)) },
         { "ui.split_player",         cb_core_fmt_double(c->split_player, split_p, sizeof(split_p)) },
         { "ui.split_tree",           cb_core_fmt_double(c->split_tree, split_t, sizeof(split_t)) },
+        { "ui.rekordbox_colours",    c->rekordbox_colours ? "true" : "false" },
     };
 
     int ret = cb_db_begin(lib->db);

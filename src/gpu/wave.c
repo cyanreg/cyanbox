@@ -65,7 +65,8 @@ static_assert(offsetof(CBWavePush, flags) == 88, "push constant layout");
 static_assert(offsetof(CBWavePush, gain) == 92, "push constant layout");
 static_assert(sizeof(CBWavePush) <= 128, "push constants beyond the guaranteed 128 bytes");
 
-#define CB_WAVE_FLAG_DETAIL 1u
+#define CB_WAVE_FLAG_DETAIL    1u
+#define CB_WAVE_FLAG_REKORDBOX 2u
 
 static int kind_stride(enum CBWaveKind kind)
 {
@@ -382,7 +383,8 @@ void cb_wave_record(const CBWaveCmd *c, VkCommandBuffer cmd, const CBWaveView *v
         .alpha        = fminf(d->alpha, 1.0f),
         .dim          = CB_CLAMP(d->dim, 0.0f, 1.0f),
         .dim_off      = (float)CB_CLAMP(d->dim_until - base, -1e9, 1e9),
-        .flags        = d->detail ? CB_WAVE_FLAG_DETAIL : 0,
+        .flags        = (d->detail ? CB_WAVE_FLAG_DETAIL : 0) |
+                        (d->rekordbox ? CB_WAVE_FLAG_REKORDBOX : 0),
         .gain         = d->gain > 0.0f && isfinite(d->gain) ? fminf(d->gain, 127.0f) : 1.0f,
     };
     vkCmdPushConstants(cmd, w->wave_layout,

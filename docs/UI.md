@@ -60,6 +60,14 @@ mids over blue lows give pairs and a core in shades of brown and cream.
 Tried before: all blues (too few colours), green highs (the green and
 the orange did not fit), cyan lows, and the DJ programs' red, green and
 blue, too loud at full strength and too faded muted.
+View > Waveform colour > 3Band in rekordbox's colours (setting
+`ui.rekordbox_colours`, off by default) draws 3Band as rekordbox does
+instead: its seven colours as sampled from rekordbox (rbxport, after
+mixxxdj/mixxx#12326), low `#0055E1`, mid `#FFA600`, high `#FFFFFF`,
+low+mid `#B4690A`, low+high `#D2DCFA`, mid+high `#FFF0D7`, all `#F5EBD7`,
+the core over all of the shortest reach, and the stacked preview's high
+slab in the core's cream. Only the interface changes: the stick carries
+the same bands either way, and the players draw them their own way.
 BLUE (`#0055E1` to `#F5EBD7` by whiteness) and RGB (the tag's colour, its
 strongest channel at full) are drawn as rekordbox draws them, and silence
 is a 1 px line in `#D2DCFA`.

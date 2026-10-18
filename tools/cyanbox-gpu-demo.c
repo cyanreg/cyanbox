@@ -53,7 +53,7 @@
 #include "src/gpu/gpu_demo.h"
 
 #define NB_COLUMNS 600
-#define NB_REF     8
+#define NB_REF     10
 
 /* The spike pattern repeats every SPIKE_PERIOD columns; the long waveform
  * has enough of them for a full window at 40 columns a pixel. */
@@ -251,21 +251,25 @@ typedef struct RefStrip {
     enum CBWaveMode mode;
     float dim;
     bool detail;
+    bool rekordbox;
 } RefStrip;
 
-#define REF(k, a, m, dim, detail) \
+#define REF(k, a, m, dim, detail, rb) \
     { k, a, (int)(sizeof(a) / (k == CB_WAVE_3BAND ? 3 : k == CB_WAVE_BLUE ? 1 : \
-                               k == CB_WAVE_RGB_DETAIL ? 2 : 6)), m, dim, detail }
+                               k == CB_WAVE_RGB_DETAIL ? 2 : 6)), m, dim, detail, rb }
 
 static const RefStrip ref_strips[NB_REF] = {
-    REF(CB_WAVE_3BAND,       ref_band,   CB_WAVE_CENTRED,       0.0f, false),  /* cols 0-7 */
-    REF(CB_WAVE_BLUE,        ref_blue,   CB_WAVE_CENTRED,       0.0f, false),  /* 8-9 */
-    REF(CB_WAVE_RGB_DETAIL,  ref_rgb,    CB_WAVE_CENTRED,       0.0f, false),  /* 10-11 */
-    REF(CB_WAVE_RGB_PREVIEW, ref_pwv4,   CB_WAVE_CENTRED,       0.0f, false),  /* 12 */
-    REF(CB_WAVE_3BAND,       ref_stack,  CB_WAVE_HALF_STACKED,  0.0f, false),  /* 13-14 */
-    REF(CB_WAVE_3BAND,       ref_lowmid, CB_WAVE_HALF_OVERLAID, 0.0f, false),  /* 15 */
-    REF(CB_WAVE_3BAND,       ref_low,    CB_WAVE_CENTRED,       0.5f, false),  /* 16 */
-    REF(CB_WAVE_3BAND,       ref_interp, CB_WAVE_CENTRED,       0.0f, true),   /* 17-20 */
+    REF(CB_WAVE_3BAND,       ref_band,   CB_WAVE_CENTRED,       0.0f, false, false),  /* cols 0-7 */
+    REF(CB_WAVE_BLUE,        ref_blue,   CB_WAVE_CENTRED,       0.0f, false, false),  /* 8-9 */
+    REF(CB_WAVE_RGB_DETAIL,  ref_rgb,    CB_WAVE_CENTRED,       0.0f, false, false),  /* 10-11 */
+    REF(CB_WAVE_RGB_PREVIEW, ref_pwv4,   CB_WAVE_CENTRED,       0.0f, false, false),  /* 12 */
+    REF(CB_WAVE_3BAND,       ref_stack,  CB_WAVE_HALF_STACKED,  0.0f, false, false),  /* 13-14 */
+    REF(CB_WAVE_3BAND,       ref_lowmid, CB_WAVE_HALF_OVERLAID, 0.0f, false, false),  /* 15 */
+    REF(CB_WAVE_3BAND,       ref_low,    CB_WAVE_CENTRED,       0.5f, false, false),  /* 16 */
+    REF(CB_WAVE_3BAND,       ref_interp, CB_WAVE_CENTRED,       0.0f, true,  false),  /* 17-20 */
+    /* The same 3-band columns as rekordbox draws them. */
+    REF(CB_WAVE_3BAND,       ref_band,   CB_WAVE_CENTRED,       0.0f, false, true),   /* 21-28 */
+    REF(CB_WAVE_3BAND,       ref_stack,  CB_WAVE_HALF_STACKED,  0.0f, false, true),   /* 29-30 */
 };
 
 #define REF_X      20.0f
@@ -549,6 +553,7 @@ static void draw_reference(Demo *d)
             .alpha     = 1.0f,
             .dim       = r->dim,
             .dim_until = r->nb,
+            .rekordbox = r->rekordbox,
         };
         cb_wave_draw(d->w, dl, d->ref[i], &wd);
         x += r->nb * REF_COL + REF_GAP;
@@ -598,6 +603,22 @@ static const Probe probes[] = {
     { "sharp attack stays silent", 19, 12.0f, -10.0f, 0x000000 },
     { "sharp attack's silence",   19, 12.0f,   0.0f, 0xD2DCFA },
     { "attack column",            20, 12.0f, -30.0f, 0x4675D8 },
+    /* rekordbox's: its seven colours, the core over all of the shortest
+     * reach (50 px for the all column), the stacked high slab in cream. */
+    { "rekordbox low",            21, 12.0f,   0.5f, 0x0055E1 },
+    { "rekordbox mid",            22, 12.0f,   0.5f, 0xFFA600 },
+    { "rekordbox high",           23, 12.0f,   0.5f, 0xFFFFFF },
+    { "rekordbox low+mid core",   24, 12.0f,   0.5f, 0xB4690A },
+    { "rekordbox low+mid envelope", 24, 12.0f, -35.0f, 0x0055E1 },
+    { "rekordbox all",            25, 12.0f,   0.5f, 0xF5EBD7 },
+    { "rekordbox all, the whole core", 25, 12.0f, -43.0f, 0xF5EBD7 },
+    { "rekordbox silence line",   26, 12.0f,   0.0f, 0xD2DCFA },
+    { "rekordbox low+high core",  27, 12.0f,   0.5f, 0xD2DCFA },
+    { "rekordbox low+high envelope", 27, 12.0f, -35.0f, 0xFFFFFF },
+    { "rekordbox mid+high",       28, 12.0f,   0.5f, 0xFFF0D7 },
+    { "rekordbox stacked low",    29, 12.0f,  45.0f, 0x0055E1 },
+    { "rekordbox stacked high slab", 29, 12.0f, -45.0f, 0xF5EBD7 },
+    { "rekordbox stacked mid slab", 30, 12.0f, -10.0f, 0xFFA600 },
 };
 
 /* One pixel of the frame against its colour, within 2 a channel. */

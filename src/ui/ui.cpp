@@ -955,6 +955,14 @@ static void menu_bar(UiState *ui)
                 if (ImGui::MenuItem(palettes[i], nullptr, on) && !on)
                     ui_setting_pick(ui, "device.waveform_color", palette_cfg[i]);
             }
+            // How cyanbox draws 3Band (ui.rekordbox_colours): in its own
+            // palette, or as rekordbox draws it. Only the interface: the
+            // stick carries the same bands either way.
+            ImGui::Separator();
+            if (ImGui::MenuItem("3Band in rekordbox's colours", nullptr, cfg->rekordbox_colours)) {
+                cfg->rekordbox_colours = !cfg->rekordbox_colours;
+                ui_save_config(ui);
+            }
             ImGui::EndMenu();
         }
         // The players' key display format (device.key_display), for the

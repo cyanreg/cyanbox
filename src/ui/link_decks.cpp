@@ -235,6 +235,7 @@ static void background(UiState *ui, const CBTrack *t, double pos, ImVec2 a, ImVe
             d.dim = 0.45f;
             d.dim_until = pos / t->duration * cb_wave_columns(g);
         }
+        d.rekordbox = app->lib.cfg.rekordbox_colours;
         cb_wave_draw(app->window, dl, g, &d);
     } else if (t->has_waveforms) {
         ui->previews_pending = true;

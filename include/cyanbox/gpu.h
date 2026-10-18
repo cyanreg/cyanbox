@@ -118,21 +118,28 @@ typedef struct CBWaveDraw {
     float  gain;                /* every band's level is multiplied by it before the full
                                    scale clamps it (an overview of PWV6 at rekordbox's
                                    levels needs about 4 to fill its height); 0 = 1 */
+    bool   rekordbox;           /* the 3-band as rekordbox draws it: its colours, the core
+                                   over all of the shortest reach, the stacked high slab
+                                   in the core's cream (the ui.rekordbox_colours setting) */
 } CBWaveDraw;
 
 /* Adds the draw to an ImDrawList (passed as void* from C++) as a render
  * callback. Colours are rekordbox's as measured by rbxport, but for the
- * 3-band palette, which is cyanbox's own, in mixed hues (shaders/wave.frag
- * says why):
+ * 3-band palette, which is cyanbox's own unless `rekordbox` is set
+ * (shaders/wave.frag says why):
  *   3-band: low #4675D8, mid #F7AB5D, high #F48ABA; low+mid #E97C48,
  *           low+high #A497EA, mid+high #FFC2B1, all #E3F1FB; stacked, each
  *           band in its own colour at scales 128/256/128; silence a 1 px
  *           line in #D2DCFA.
+ *   3-band, `rekordbox`: low #0055E1, mid #FFA600, high #FFFFFF; low+mid
+ *           #B4690A, low+high #D2DCFA, mid+high #FFF0D7, all #F5EBD7;
+ *           stacked, the high slab in #F5EBD7.
  *   blue:   height 0..31 and whiteness 0..7 ramped from #0055E1 to #F5EBD7.
  *   rgb:    the strongest channel at full, the others in proportion.
  * The 3-band centred draw uses the reach rule: each pixel in the colour of
- * exactly the bands that reach it, but that all three's colour fills only
- * the inner 70 % of the shortest reach, the rest the two furthest's.
+ * exactly the bands that reach it, but that in cyanbox's palette all
+ * three's colour fills only the inner 70 % of the shortest reach, the rest
+ * the two furthest's.
  * A detail draw is box-filtered horizontally, so that it scrolls by
  * fractions of a pixel without shimmering: up to 16 columns a pixel, each
  * column the pixel covers is drawn on its own by the rules above and the
