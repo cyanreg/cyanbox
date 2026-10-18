@@ -449,7 +449,8 @@ mixer's fader curves, the waveform colour...) go on the stick for the
 sections the library has values for, and the players apply them when you
 LOAD My Settings. File → Player settings (`Ctrl+,`) shows every one of them
 in Player, Mixer and Device tabs, and `cyanbox config player.NAME VALUE` sets
-one. The tempo range defaults to ±6 %, not rekordbox's ±10 %.
+one. The tempo range defaults to ±6 %, not rekordbox's ±10 %, and
+Eject/Load Lock to Lock.
 
 Syncing after a gig
 -------------------
