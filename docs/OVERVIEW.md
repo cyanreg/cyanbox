@@ -189,7 +189,8 @@ Decisions and why:
   vertically, and the scrolling detail view is box-filtered horizontally: each
   column a pixel covers is coloured on its own (the reach rule: each band
   reaches its level of the height, and every pixel is in the colour of exactly
-  the bands that reach it) and the results are blended by the share of the
+  the bands that reach it, but that the core of all three fills only the inner
+  70 % of the shortest reach) and the results are blended by the share of the
   pixel each column covers; wide columns are interpolated at the pixel's centre
   and a sharp attack's edge is split by area. The blending is done in light,
   not in the sRGB-encoded values the swapchain holds (which would give a
@@ -318,12 +319,13 @@ Waveforms are drawn as rekordbox draws them, as measured by rbxport: the
 stacked row preview uses the measured 128/256/128 scales; the BLUE palette
 shades a column from blue to cream by its whiteness bits; RGB columns are
 drawn saturated by their strongest channel. The 3-band palette is cyanbox's
-own, in mixed hues: low a blue (`#4675D8`), mid a light orange
-(`#F7AB5D`), high a green (`#60DB89`), each pair a hue of its own
-(`#E97C48` low+mid, a deeper orange; `#F2E38C` mid+high, a gold;
-`#26C0CF` low+high, a teal) and all three a white with a little blue,
-`#E3F1FB`; not rekordbox's amber mids over blue lows, whose pairs and core
-are shades of brown and cream (docs/UI.md, Window;
+own, in mixed hues: low a cyan (`#15C6E1`), mid a light orange
+(`#F7AB5D`), high a pink (`#F48ABA`), each pair a hue of its own
+(`#E97C48` low+mid, a deeper orange; `#FFC2B1` mid+high, a peach;
+`#A497EA` low+high, a lavender) and all three a white with a little blue,
+`#E3F1FB`, over the inner 70 % of the shortest reach; not rekordbox's
+amber mids over blue lows, whose pairs and core are shades of brown and
+cream (docs/UI.md, Window;
 `src/gpu/shaders/wave.frag` has the reasons). The
 3-band levels drawn are rbxport's as well (section 3, item 10), so the same
 rules on the same bytes give rbxport's shapes. The 3-band detail is the

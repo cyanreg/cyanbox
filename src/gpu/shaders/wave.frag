@@ -40,7 +40,9 @@
 //     height either way of the centre (at least half a pixel), and each
 //     pixel is in the colour of exactly the bands that reach it: the outer
 //     envelope in the colour of the furthest band alone, the core in the
-//     combination of all. Overlaid half: the same, from the floor, over
+//     combination of all, but only over the inner 70 % of the shortest
+//     reach (CORE), the rest of it in the colour of the two furthest.
+//     Overlaid half: the same, from the floor, over
 //     the whole usable height. Stacked half: low, then mid on it, then high
 //     on that, each in its band's colour, scaled by 128, 256 and 128.
 //   - Blue: height / 31, coloured from #0055E1 to #F5EBD7 by whiteness / 7.
@@ -110,31 +112,39 @@ const int MAX_SPAN = 4096;
 const float BOX_SPAN = 16.0;
 
 // The 3-band palette, one colour per combination of bands (bit 0 low,
-// bit 1 mid, bit 2 high), in mixed hues, picked by the user from rendered
-// options: low a blue, mid a light orange, high a green. A pair has a hue
-// of its own, not a blend of its two, which for blue and orange is a grey
-// brown (the CDJ-3000's amber mids over blue lows give pairs and a core in
+// bit 1 mid, bit 2 high), as the user asked for it after rendered
+// options: low a cyan, mid a light orange, high a pink. A pair has a hue
+// of its own, not a blend of its two, which for cyan and orange is a grey
+// (the CDJ-3000's amber mids over blue lows give pairs and a core in
 // shades of brown and cream): low+mid a deeper orange, the ring round the
-// core on most beats; mid+high a gold; low+high a teal. All three, the
-// core and most of a loud track, are a white with a little blue. So the
-// kicks are blue at the tips, the mids orange, the hats green here and
-// there. Tried before it: all blues (too few colours), and the red, green
-// and blue that DJ programs share for frequency (Serato, rekordbox's RGB,
-// Mixxx), too loud at full strength and too faded muted. Every colour is
-// 4.7:1 or more against the waveform's #050505 (WCAG asks 3 of graphics).
-// The closest two are 14.9 apart in CIEDE2000 (mid and low+mid); for the
-// red-green colour blind, high and mid+high are 5.4 apart for a protanope
-// and the mid and its pairs 8.5 for a deuteranope (the CDJ's closest 2.1
-// and 2.4).
-const vec3 LOW      = vec3(0x46, 0x75, 0xD8) / 255.0;
+// core on most beats; mid+high a peach; low+high a lavender. All three,
+// the core, are a white with a little blue. So the kicks are cyan at the
+// tips, the mids and the ring orange, the hats pink here and there. Tried
+// before it, the same day: all blues (too few colours); blue lows, orange
+// mids and green highs (the green and the orange did not fit together);
+// and the red, green and blue that DJ programs share for frequency
+// (Serato, rekordbox's RGB, Mixxx), too loud at full strength and too
+// faded muted. Every colour is 7.2:1 or more against the waveform's
+// #050505 (WCAG asks 3 of graphics). The closest two are 14.9 apart in
+// CIEDE2000 (mid and low+mid); for the red-green colour blind, low and
+// low+high are 5.6 apart for a deuteranope and low and high 8.9 for a
+// protanope (the CDJ's closest 2.1 and 2.4).
+const vec3 LOW      = vec3(0x15, 0xC6, 0xE1) / 255.0;
 const vec3 MID      = vec3(0xF7, 0xAB, 0x5D) / 255.0;
-const vec3 HIGH     = vec3(0x60, 0xDB, 0x89) / 255.0;
+const vec3 HIGH     = vec3(0xF4, 0x8A, 0xBA) / 255.0;
 const vec3 LOW_MID  = vec3(0xE9, 0x7C, 0x48) / 255.0;
-const vec3 LOW_HIGH = vec3(0x26, 0xC0, 0xCF) / 255.0;
-const vec3 MID_HIGH = vec3(0xF2, 0xE3, 0x8C) / 255.0;
+const vec3 LOW_HIGH = vec3(0xA4, 0x97, 0xEA) / 255.0;
+const vec3 MID_HIGH = vec3(0xFF, 0xC2, 0xB1) / 255.0;
 const vec3 ALL      = vec3(0xE3, 0xF1, 0xFB) / 255.0;
 
 const vec3 COMBO[8] = vec3[8](LOW, LOW, MID, LOW_MID, HIGH, LOW_HIGH, MID_HIGH, ALL);
+
+// The core, in the colour of all three bands, fills this much of the
+// shortest band's reach, the rest of it in the colour of the two that
+// reach further (on a tie the lower bands: a column all three reach as
+// far has a low+mid ring). Filling all of it, the white core was most of
+// a loud track; the user asked for it smaller (70 %, of four sizes shown).
+const float CORE = 0.7;
 
 // rekordbox's colours where cyanbox still draws its way (rbxport's
 // samples): the BLUE kind's ramp from blue to cream, and the line of
@@ -290,6 +300,7 @@ vec4 shade_bands(vec3 v)
     }
 
     float cov[3];
+    r[2] *= CORE;
     for (int k = 0; k < 3; k++)
         cov[k] = centred ? cover(centre - r[k], centre + r[k]) : cover(yfloor - r[k], yfloor);
     rgb = COMBO[bit[0]] * (cov[0] - cov[1]) + COMBO[bit[0] | bit[1]] * (cov[1] - cov[2]) +

@@ -124,14 +124,15 @@ typedef struct CBWaveDraw {
  * callback. Colours are rekordbox's as measured by rbxport, but for the
  * 3-band palette, which is cyanbox's own, in mixed hues (shaders/wave.frag
  * says why):
- *   3-band: low #4675D8, mid #F7AB5D, high #60DB89; low+mid #E97C48,
- *           low+high #26C0CF, mid+high #F2E38C, all #E3F1FB; stacked, each
+ *   3-band: low #15C6E1, mid #F7AB5D, high #F48ABA; low+mid #E97C48,
+ *           low+high #A497EA, mid+high #FFC2B1, all #E3F1FB; stacked, each
  *           band in its own colour at scales 128/256/128; silence a 1 px
  *           line in #D2DCFA.
  *   blue:   height 0..31 and whiteness 0..7 ramped from #0055E1 to #F5EBD7.
  *   rgb:    the strongest channel at full, the others in proportion.
  * The 3-band centred draw uses the reach rule: each pixel in the colour of
- * exactly the bands that reach it.
+ * exactly the bands that reach it, but that all three's colour fills only
+ * the inner 70 % of the shortest reach, the rest the two furthest's.
  * A detail draw is box-filtered horizontally, so that it scrolls by
  * fractions of a pixel without shimmering: up to 16 columns a pixel, each
  * column the pixel covers is drawn on its own by the rules above and the
