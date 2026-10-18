@@ -6,11 +6,11 @@
  * docs/settings.md.
  *
  * Payloads start from rekordbox 7.2.8's defaults (the fixture in
- * tests/data/settings), but for the tempo range, and each setting is one
- * byte chosen from a fixed set. Encoding the fixture's decoded values gives
- * the fixture back byte for byte (tests/formats/test_settings.c). Players
- * apply [player] and [mixer] only when the DJ loads My Settings;
- * DEVSETTING applies directly.
+ * tests/data/settings), but for the tempo range and the eject lock, and
+ * each setting is one byte chosen from a fixed set. Encoding the fixture's
+ * decoded values gives the fixture back byte for byte
+ * (tests/formats/test_settings.c). Players apply [player] and [mixer] only
+ * when the DJ loads My Settings; DEVSETTING applies directly.
  *
  * The tempo range defaults to +-6 % where rekordbox writes +-10 %: cyanbox's
  * deck starts at the range this setting holds (cb_settings_get), as a CDJ
@@ -18,6 +18,9 @@
  * (docs/settings.md 3). The waveform colour defaults to 3-band where
  * rekordbox writes blue, for the same reason: the interface draws the
  * palette this setting holds, and the user wants 3-band on both.
+ * EJECT/LOAD LOCK defaults to Lock where rekordbox writes Unlock: a deck
+ * that plays keeps its track, on the player as from the interface's
+ * "Load in deck" (src/ui/link_decks.cpp), unless the DJ unlocks it.
  *
  * The players' background colour is not in any of these files: rekordbox
  * keeps it in export.pdb's property row and exportLibrary.db's property
@@ -139,10 +142,11 @@ typedef struct File {
 } File;
 
 /* rekordbox 7.2.8's default payloads (dj's DEFAULTS; docs/settings.md 3-7),
- * but MYSETTING's tempo range (byte 36) at 0x80, +-6 %, not 0x81. */
+ * but MYSETTING's eject lock (byte 21) at 0x81, Lock, not 0x80, and its
+ * tempo range (byte 36) at 0x80, +-6 %, not 0x81. */
 static const uint8_t mysetting_default[40] = {
     0x78, 0x56, 0x34, 0x12, 0x02, 0x00, 0x00, 0x00, 0x81, 0x83, 0x81, 0x88, 0x81, 0x01, 0x82, 0x81,
-    0x81, 0x01, 0x01, 0x01, 0x82, 0x80, 0x80, 0x81, 0x80, 0x81, 0x80, 0x00, 0x00, 0x81, 0x00, 0x00,
+    0x81, 0x01, 0x01, 0x01, 0x82, 0x81, 0x80, 0x81, 0x80, 0x81, 0x80, 0x00, 0x00, 0x81, 0x00, 0x00,
     0x81, 0x81, 0x81, 0x80, 0x80, 0x80, 0x00, 0x00,
 };
 static const uint8_t mysetting2_default[40] = {

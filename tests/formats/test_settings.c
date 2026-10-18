@@ -28,10 +28,13 @@ static int read_fixture(const char *name, uint8_t **b, size_t *n)
 
 static void match_rekordbox(void)
 {
-    CBKv changes[4][1] = {
-        { { "tempo_range", "6" } }, { { 0 } }, { { 0 } }, { { "waveform_color", "rgb" } },
+    /* The fixture's eject lock is rekordbox's Unlock, cyanbox's default
+     * Lock. */
+    CBKv changes[4][2] = {
+        { { "tempo_range", "6" }, { "eject_lock", "false" } }, { { 0 } }, { { 0 } },
+        { { "waveform_color", "rgb" } },
     };
-    int nb[4] = { 1, 0, 0, 1 };
+    int nb[4] = { 2, 0, 0, 1 };
     for (int i = 0; i < 4; i++) {
         uint8_t *ref, *ours;
         size_t rn, on;
@@ -101,6 +104,8 @@ static void from_config(void)
     CHECK_EQ(nf, 3);
     if (nf == 3) {
         CHECK_STR(out[0].name, "MYSETTING.DAT");
+        /* The eject lock unset: Lock, cyanbox's default. */
+        CHECK(out[0].size == 148 && out[0].data[0x68 + 21] == 0x81);
         CHECK_STR(out[1].name, "MYSETTING2.DAT");
         CHECK_STR(out[2].name, "DEVSETTING.DAT");
         CHECK(out[1].size == 148 && out[1].data[0x68 + 1] == 0x83);
@@ -148,7 +153,8 @@ static void listed_values(void)
 }
 
 /* What the interface follows: the library's value in its listed form, else
- * the default, the tempo range's being +-6 % (not rekordbox's +-10 %). */
+ * the default, the tempo range's being +-6 % (not rekordbox's +-10 %) and
+ * the eject lock's Lock (not rekordbox's Unlock). */
 static void settings_get(void)
 {
     CBKv player[3] = { { "quantize", "off" }, { "beat_jump_beats", "1/2" }, { "time_mode", "12" } };
@@ -158,6 +164,7 @@ static void settings_get(void)
     CHECK_STR(cb_settings_get(&cfg, "player.beat_jump_beats"), "1/2");
     CHECK_STR(cb_settings_get(&cfg, "player.time_mode"), "remain");
     CHECK_STR(cb_settings_get(&cfg, "player.tempo_range"), "6");
+    CHECK_STR(cb_settings_get(&cfg, "player.eject_lock"), "true");
     CHECK_STR(cb_settings_get(&cfg, "player.auto_cue_level"), "memory");
     CHECK_STR(cb_settings_get(&cfg, "player.hot_cue_color"), "false");
     CHECK_STR(cb_settings_get(&cfg, "device.overview_waveform"), "full");

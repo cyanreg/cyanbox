@@ -485,7 +485,7 @@ stick. Without it, cyanbox never opens a Link socket.
    as the decks stand. The numbers stay with the players' hardware, and
    the players themselves keep their own.
  * **Load from cyanbox**: Load in deck N in the track menu, or drop a track on
-   a player, unless it plays and Eject/Load Lock is on.
+   a player, unless it plays and Eject/Load Lock is on (it is by default).
  * **Edits on the deck are kept**: a cue saved or deleted on a player (MEMORY,
    a hot cue pad) and a rating given there go into the library, as with
    rekordbox.

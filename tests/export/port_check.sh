@@ -102,11 +102,14 @@ waveform_color = "3band"
 [player]
 quantize = true
 tempo_range = "6"
+eject_lock = true
 EOF
 echo "setting device.waveform_color 3band" >> "$W/spec"
 echo "setting player.quantize true" >> "$W/spec"
-# Given to both: cyanbox's default tempo range is ±6 %, dj's rekordbox's ±10 %.
+# Given to both: cyanbox's default tempo range is ±6 %, dj's rekordbox's ±10 %,
+# and its eject lock Lock, dj's Unlock.
 echo "setting player.tempo_range 6" >> "$W/spec"
+echo "setting player.eject_lock true" >> "$W/spec"
 
 mkdir -p "$W/stick-dj" "$W/stick-cb"
 echo "== dj export"

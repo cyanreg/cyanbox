@@ -265,7 +265,8 @@ no time left.
 Tracks dropped on a cell, and the track menu's "Load in deck N" items, go
 to that player as a load command, as rekordbox's drag onto a deck; a deck
 that plays is greyed out in the menu (and refuses the drop) while the
-players' Eject/Load Lock (`player.eject_lock`) is on.
+players' Eject/Load Lock (`player.eject_lock`) is on: Lock by default,
+where rekordbox's is Unlock (docs/settings.md).
 
 The deck numbers: a player's number on the link is the one it took when it
 started (the first free, in the order the players came up), so it says

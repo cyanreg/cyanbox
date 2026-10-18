@@ -126,7 +126,7 @@ confirmed by a real rekordbox file that changes only that setting [ME].
 | 16 | 0x78 | SLIP FLASHING | 0x80 off ✓, 0x81 on | 0x81 |
 | 17–19 | 0x79 | unknown | `01 01 01` | `01 01 01` |
 | 20 | 0x7C | DISC SLOT ILLUMINATION | 0x80 off ✓, 0x81 dark ✓, 0x82 bright | 0x82 |
-| 21 | 0x7D | EJECT/LOAD LOCK | 0x80 unlock, 0x81 lock | 0x80 unlock |
+| 21 | 0x7D | EJECT/LOAD LOCK | 0x80 unlock, 0x81 lock | 0x80 unlock (cyanbox: 0x81 lock) |
 | 22 | 0x7E | SYNC (Beat Sync initial state) | 0x80 off, 0x81 on ✓ | 0x80 off |
 | 23 | 0x7F | PLAY MODE / AUTO PLAY MODE | 0x80 continue, 0x81 single | 0x81 single |
 | 24 | 0x80 | QUANTIZE BEAT VALUE | 0x80 1 beat, 0x81 1/2 ✓, 0x82 1/4 ✓, 0x83 1/8 ✓ | 0x80 (1) |
@@ -148,7 +148,10 @@ confirmed by a real rekordbox file that changes only that setting [ME].
   `player.tempo_range` exports `0x80`, and cyanbox's own deck starts at ±6 % as a CDJ switched on
   does. **cyanbox's default WAVEFORM COLOR is 3-band (`0x04`)**, not rekordbox's blue, for the
   same reason: the interface draws the palette this setting holds (the 3-band one in cyanbox's
-  own colours, docs/UI.md). Every other default is rekordbox's. cyanbox's interface follows
+  own colours, docs/UI.md). **cyanbox's default EJECT/LOAD LOCK is lock (`0x81`)**, not
+  rekordbox's unlock: a deck that plays keeps its track, on the player and from the interface's
+  "Load in deck" (docs/UI.md, which greys a playing deck out while the lock is on). Every other
+  default is rekordbox's. cyanbox's interface follows
   these settings (docs/UI.md, Player settings), so the range the deck starts at and the palette
   it draws are the ones the stick carries.
 * CDJ-3000 factory defaults [MAN] mostly equal these. The CDJ-3000 jog-ring brightness is labelled "OFF, 1, 2".

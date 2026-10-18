@@ -316,10 +316,10 @@ rx config device.key_display alphanumeric > /dev/null
 variant settings-follow "" "track $ID .*overview centred previews centred key $camelot\$"
 
 # The Link decks (CYANBOX_UI_LINK_DECKS: players made up, no network): two
-# share the deck's title row. With the players' Eject/Load Lock on, a right
-# click on the first row (at 1600x900, under the taller title row) opens
-# the track menu, whose "Load
-# in deck" items offer deck 1, which plays, greyed out, and deck 2 not.
+# share the deck's title row. With the players' Eject/Load Lock at its
+# default, Lock, a right click on the first row (at 1600x900, under the
+# taller title row) opens the track menu, whose "Load in deck" items offer
+# deck 1, which plays, greyed out, and deck 2 not; at Unlock, both.
 (
     export CYANBOX_UI_LINK_DECKS="1:CDJ-900:$ID:pa:-1,2:CDJ-2000NXS2:$ID2:m:40"
     variant link-decks "" "link decks 2"
@@ -343,9 +343,10 @@ variant settings-follow "" "track $ID .*overview centred previews centred key $c
     unset CYANBOX_UI_LINK_CUE
     if [ -n "${CYANBOX_UI_SWAYSOCK:-}" ]; then
         SWAYSOCK=$CYANBOX_UI_SWAYSOCK swaymsg -q output '*' resolution 1600x900
-        rx config player.eject_lock true > /dev/null
         variant link-load-locked "60:rclick:600:571" 'load menu locked "1"'
         rx config player.eject_lock false > /dev/null
+        variant link-load-unlocked "60:rclick:600:571" 'load menu locked ""'
+        rx config player.eject_lock "" > /dev/null
         # The TAG LIST (--pro-link only): Add to Tag List in the track
         # menu of the second row (the first, missing, has Relocate too),
         # then a click on the tree's Tag List shows it, that one track in it.
