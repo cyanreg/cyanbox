@@ -320,10 +320,11 @@ shades a column from blue to cream by its whiteness bits; RGB columns are
 drawn saturated by their strongest channel. The 3-band palette is cyanbox's
 own, not rekordbox's blue, amber and white, whose pairs and core were shades
 of brown and cream: the red, green and blue that DJ programs share for low,
-mid and high, in colour universal design's vermilion `#FF3000`, bluish green
-`#20F0A0` and sky blue `#4090FF`, a pair of bands their sum scaled to full
-(`#FEFF8E` low+mid, `#FF99CC` low+high, `#3BECFF` mid+high) and all three
-white (docs/UI.md, Window; `src/gpu/shaders/wave.frag` has the reasons). The
+mid and high, in colour universal design's vermilion, bluish green and sky
+blue, muted (`#DD6C57`, `#65C192`, `#6694D5`), a pair of bands a pale mix
+of the two (`#D5D697` low+mid, `#D296B3` low+high, `#87DAE5` mid+high) and
+all three a light grey, `#DEDEDE` (docs/UI.md, Window;
+`src/gpu/shaders/wave.frag` has the reasons). The
 3-band levels drawn are rbxport's as well (section 3, item 10), so the same
 rules on the same bytes give rbxport's shapes. The 3-band detail is the
 default, as on a CDJ-3000; BLUE and RGB are selectable, since all three are

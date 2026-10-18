@@ -48,14 +48,16 @@ Waveform colours (`src/gpu/shaders/wave.frag`, on the waveforms'
 `#050505`): the 3-band waveforms are in the colours DJ programs share
 for frequency, red lows, green mids and blue highs (Serato, rekordbox's
 RGB, Traktor, Mixxx, djay, Engine DJ), moved as colour universal design
-moves them so that the red-green colour blind can tell them apart: low
-`#FF3000` (a vermilion), mid `#20F0A0` (a bluish green), high `#4090FF`
-(a sky blue). The stacked half draws each band in its colour; centred
-and overlaid, a pixel two bands reach is in their sum scaled to full,
-low+mid `#FEFF8E`, low+high `#FF99CC`, mid+high `#3BECFF`, and one all
-three reach is white. So kicks and the bass are red, hats and cymbals
-blue, the mids green, and a breakdown is the waveform without its red.
-Every colour is 5.5:1 or more against the background. This is cyanbox's
+moves them so that the red-green colour blind can tell them apart, and
+muted (at full strength they were too loud to look at for long): low
+`#DD6C57` (a soft vermilion), mid `#65C192` (a bluish green), high
+`#6694D5` (a sky blue). The stacked half draws each band in its colour;
+centred and overlaid, a pixel two bands reach is in a pale mix of the
+two, low+mid `#D5D697`, low+high `#D296B3`, mid+high `#87DAE5`, and one
+all three reach is a light grey, `#DEDEDE`. So kicks and the bass are
+red, hats and cymbals blue, the mids green, and a breakdown is the
+waveform without its red. Every colour is 6.2:1 or more against the
+background. This is cyanbox's
 own palette, not the CDJ-3000's blue, amber and white, whose pairs and
 core were shades of brown and cream and whose lows were a dark blue.
 BLUE (`#0055E1` to `#F5EBD7` by whiteness) and RGB (the tag's colour, its

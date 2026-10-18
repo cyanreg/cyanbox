@@ -124,8 +124,8 @@ typedef struct CBWaveDraw {
  * callback. Colours are rekordbox's as measured by rbxport, but for the
  * 3-band palette, which is the DJ programs' red, green and blue for low,
  * mid and high (shaders/wave.frag says why):
- *   3-band: low #FF3000, mid #20F0A0, high #4090FF; low+mid #FEFF8E,
- *           low+high #FF99CC, mid+high #3BECFF, all #FFFFFF; stacked, each
+ *   3-band: low #DD6C57, mid #65C192, high #6694D5; low+mid #D5D697,
+ *           low+high #D296B3, mid+high #87DAE5, all #DEDEDE; stacked, each
  *           band in its own colour at scales 128/256/128; silence a 1 px
  *           line in #D2DCFA.
  *   blue:   height 0..31 and whiteness 0..7 ramped from #0055E1 to #F5EBD7.

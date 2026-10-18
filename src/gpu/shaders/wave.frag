@@ -124,18 +124,25 @@ const float BOX_SPAN = 16.0;
 // all but vanishes. Within that, the values are the ones that keep the
 // seven colours furthest apart for normal vision and both red-green
 // dichromacies (CIEDE2000 after Machado et al. 2009's simulation) with
-// each 4.5:1 or more against the waveform's #050505 (they are 5.5 or
-// more; WCAG asks 3 of graphics): the closest two are 24.9 apart, 12.6
-// for a deuteranope and 9.2 for a protanope, where rekordbox's are 2.6,
-// 2.4 and 2.1. A pair is the sum of its two colours scaled to full, as Mixxx
-// mixes its RGB bands; all three are white.
-const vec3 LOW      = vec3(0xFF, 0x30, 0x00) / 255.0;
-const vec3 MID      = vec3(0x20, 0xF0, 0xA0) / 255.0;
-const vec3 HIGH     = vec3(0x40, 0x90, 0xFF) / 255.0;
-const vec3 LOW_MID  = vec3(0xFE, 0xFF, 0x8E) / 255.0;
-const vec3 LOW_HIGH = vec3(0xFF, 0x99, 0xCC) / 255.0;
-const vec3 MID_HIGH = vec3(0x3B, 0xEC, 0xFF) / 255.0;
-const vec3 ALL      = vec3(0xFF, 0xFF, 0xFF) / 255.0;
+// each 4.5:1 or more against the waveform's #050505 (WCAG asks 3 of
+// graphics). At full strength (#FF3000, #20F0A0, #4090FF, their pairs the
+// sum scaled to full, as Mixxx mixes its RGB bands, and white) they were
+// too loud to look at for long, the user found, a loud track's core all
+// white; so, in OKLCH, the three bands at 0.6 of those colours' chroma
+// and a lightness of 0.66 (low, high) and 0.74 (mid), the pairs at 0.6 of
+// theirs and 0.86, 0.74 and 0.84 (low+high darker than the others, which
+// keeps it apart from mid+high for the red-green colour blind), and the
+// core a light grey. Each is 6.2:1 or more against the background; the
+// closest two are 19.5 apart, 11.6 for a deuteranope and 8.4 for a
+// protanope (at full strength 24.9, 12.6 and 9.2; rekordbox's 2.6, 2.4 and
+// 2.1).
+const vec3 LOW      = vec3(0xDD, 0x6C, 0x57) / 255.0;
+const vec3 MID      = vec3(0x65, 0xC1, 0x92) / 255.0;
+const vec3 HIGH     = vec3(0x66, 0x94, 0xD5) / 255.0;
+const vec3 LOW_MID  = vec3(0xD5, 0xD6, 0x97) / 255.0;
+const vec3 LOW_HIGH = vec3(0xD2, 0x96, 0xB3) / 255.0;
+const vec3 MID_HIGH = vec3(0x87, 0xDA, 0xE5) / 255.0;
+const vec3 ALL      = vec3(0xDE, 0xDE, 0xDE) / 255.0;
 
 const vec3 COMBO[8] = vec3[8](LOW, LOW, MID, LOW_MID, HIGH, LOW_HIGH, MID_HIGH, ALL);
 
