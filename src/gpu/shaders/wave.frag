@@ -40,12 +40,9 @@
 //     height either way of the centre (at least half a pixel), and each
 //     pixel is in the colour of exactly the bands that reach it: the outer
 //     envelope in the colour of the furthest band alone, the core in the
-//     combination of all, which in cyanbox's palette fills only the
-//     inner 70 % of the shortest reach (CORE), the rest of it in the
-//     colour of the two furthest. Overlaid half: the same, from the floor, over
+//     combination of all. Overlaid half: the same, from the floor, over
 //     the whole usable height. Stacked half: low, then mid on it, then high
-//     on that, each in its band's colour (rekordbox's: the high in its
-//     cream core colour), scaled by 128, 256 and 128.
+//     on that, in blue, amber and cream, scaled by 128, 256 and 128.
 //   - Blue: height / 31, coloured from #0055E1 to #F5EBD7 by whiteness / 7.
 //   - RGB: the strongest channel at full, the others in proportion.
 //   - `gain` multiplies every band's level before the full scale clamps
@@ -83,7 +80,7 @@ layout(push_constant, std430) uniform Push {
     float   alpha;
     float   dim;
     float   dim_off;        // dim_until minus col_base
-    uint    flags;          // bit 0: detail, bit 1: rekordbox's 3-band
+    uint    flags;          // bit 0: detail
     float   gain;           // every band's level times this, before full scale clamps it
 } pc;
 
@@ -98,8 +95,7 @@ const int MODE_CENTRED  = 0;
 const int MODE_STACKED  = 1;
 const int MODE_OVERLAID = 2;
 
-const uint FLAG_DETAIL    = 1u;
-const uint FLAG_REKORDBOX = 2u;  // the 3-band as rekordbox draws it
+const uint FLAG_DETAIL = 1u;
 
 // A pixel never reads more columns than this; beyond it the span is
 // sampled at a stride (a whole long track squeezed into a few pixels).
@@ -113,70 +109,24 @@ const int MAX_SPAN = 4096;
 // only a slower track or a narrower window at 64 bars goes past 16.
 const float BOX_SPAN = 16.0;
 
-// cyanbox's 3-band palette, one colour per combination of bands (bit 0
-// low, bit 1 mid, bit 2 high), as the user asked for it after rendered
-// options: low a blue, mid a light orange, high a pink. A pair has a hue
-// of its own, not a blend of its two, which for blue and orange is a grey
-// brown (rekordbox's pairs and core, below, are shades of brown and
-// cream): low+mid a deeper orange, the ring round the core on most beats;
-// mid+high a peach; low+high a lavender. All three, the core, are a white
-// with a little blue. So the kicks are blue at the tips, the mids and the
-// ring orange, the hats pink here and there. Tried before it, the same
-// day: all blues (too few colours); green highs (the green and the orange
-// did not fit together); cyan lows (back to blue); and the red, green and
-// blue that DJ programs share for frequency (Serato, rekordbox's RGB,
-// Mixxx), too loud at full strength and too faded muted. Every colour is
-// 4.7:1 or more against the waveform's #050505 (WCAG asks 3 of graphics).
-// The closest two are 14.9 apart in CIEDE2000 (mid and low+mid); for the
-// red-green colour blind 8.6 for a deuteranope (the same two) and 11.1 for
-// a protanope (high and low+high), where rekordbox's are 2.4 and 2.1.
-const vec3 LOW      = vec3(0x46, 0x75, 0xD8) / 255.0;
-const vec3 MID      = vec3(0xF7, 0xAB, 0x5D) / 255.0;
-const vec3 HIGH     = vec3(0xF4, 0x8A, 0xBA) / 255.0;
-const vec3 LOW_MID  = vec3(0xE9, 0x7C, 0x48) / 255.0;
-const vec3 LOW_HIGH = vec3(0xA4, 0x97, 0xEA) / 255.0;
-const vec3 MID_HIGH = vec3(0xFF, 0xC2, 0xB1) / 255.0;
-const vec3 ALL      = vec3(0xE3, 0xF1, 0xFB) / 255.0;
+// rekordbox's 3-band palette, one colour per combination of bands
+// (bit 0 low, bit 1 mid, bit 2 high), sampled by rbxport. cyanbox's own
+// palettes were tried (2026-10-18: the DJ programs' red, green and blue,
+// all blues, mixed hues with a smaller core); the user kept rekordbox's.
+const vec3 LOW      = vec3(0x00, 0x55, 0xE1) / 255.0;
+const vec3 MID      = vec3(0xFF, 0xA6, 0x00) / 255.0;
+const vec3 HIGH     = vec3(0xFF, 0xFF, 0xFF) / 255.0;
+const vec3 LOW_MID  = vec3(0xB4, 0x69, 0x0A) / 255.0;
+const vec3 LOW_HIGH = vec3(0xD2, 0xDC, 0xFA) / 255.0;
+const vec3 MID_HIGH = vec3(0xFF, 0xF0, 0xD7) / 255.0;
+const vec3 ALL      = vec3(0xF5, 0xEB, 0xD7) / 255.0;
 
 const vec3 COMBO[8] = vec3[8](LOW, LOW, MID, LOW_MID, HIGH, LOW_HIGH, MID_HIGH, ALL);
 
-// In cyanbox's palette the core, in the colour of all three bands, fills
-// this much of the shortest band's reach, the rest of it in the colour of
-// the two that reach further (on a tie the lower bands: a column all three
-// reach as far has a low+mid ring). Filling all of it, the white core was
-// most of a loud track; the user asked for it smaller (70 %, of four sizes
-// shown). rekordbox's core fills all of it.
-const float CORE = 0.7;
-
-// rekordbox's 3-band palette (FLAG_REKORDBOX, the ui.rekordbox_colours
-// setting): the seven colours sampled from rekordbox (rbxport, after
-// mixxxdj/mixxx#12326), blue lows, amber mids and white highs, the pairs
-// a brown, a pale blue and a cream, the core a cream, by the same reach
-// rule; a stacked preview's slabs are blue, amber and the core's cream
-// (rbxport's bandStops, measured against a 2x capture of rekordbox).
-// cyanbox's own BLUE kind and line of silence are always in these.
-const vec3 RB_LOW      = vec3(0x00, 0x55, 0xE1) / 255.0;
-const vec3 RB_MID      = vec3(0xFF, 0xA6, 0x00) / 255.0;
-const vec3 RB_HIGH     = vec3(0xFF, 0xFF, 0xFF) / 255.0;
-const vec3 RB_LOW_MID  = vec3(0xB4, 0x69, 0x0A) / 255.0;
-const vec3 RB_LOW_HIGH = vec3(0xD2, 0xDC, 0xFA) / 255.0;
-const vec3 RB_MID_HIGH = vec3(0xFF, 0xF0, 0xD7) / 255.0;
-const vec3 RB_ALL      = vec3(0xF5, 0xEB, 0xD7) / 255.0;
-
-const vec3 RB_COMBO[8] = vec3[8](RB_LOW, RB_LOW, RB_MID, RB_LOW_MID, RB_HIGH, RB_LOW_HIGH,
-                                 RB_MID_HIGH, RB_ALL);
-
-// The BLUE kind's ramp from blue to cream, and the line of silence.
-const vec3 BLUE_LOW  = RB_LOW;
-const vec3 BLUE_HIGH = RB_ALL;
-const vec3 SILENCE   = RB_LOW_HIGH;
-
-// The stacked preview's slabs, in cyanbox's palette each band alone in its
-// own colour, and their full scales (rbxport: measured against a 2x
-// capture of rekordbox, 0.542 / 0.270 / 0.567 px per unit).
-const vec3  STACK_COLOUR[3]    = vec3[3](LOW, MID, HIGH);
-const vec3  RB_STACK_COLOUR[3] = vec3[3](RB_LOW, RB_MID, RB_ALL);
-const float STACK_SCALE[3]     = float[3](128.0, 256.0, 128.0);
+// The stacked preview's slabs and their full scales (rbxport: measured
+// against a 2x capture of rekordbox, 0.542 / 0.270 / 0.567 px per unit).
+const vec3  STACK_COLOUR[3] = vec3[3](LOW, MID, ALL);
+const float STACK_SCALE[3]  = float[3](128.0, 256.0, 128.0);
 
 // The pixel row being shaded, [row, row + 1), and the band of rows the
 // waveform draws in (main sets them once).
@@ -220,7 +170,7 @@ vec4 column(int i)
     if (pc.kind == KIND_BLUE) {
         uint b = byte_at(i);
         float white = float(b >> 5) / 7.0;
-        return vec4(mix(BLUE_LOW, BLUE_HIGH, white), float(b & 31u) / 31.0);
+        return vec4(mix(LOW, ALL, white), float(b & 31u) / 31.0);
     }
 
     if (pc.kind == KIND_RGB_DETAIL) {
@@ -262,7 +212,7 @@ vec4 silence()
     float y = centred ? floor(centre - 0.5 * pc.unit + 0.5)
                       : floor(yfloor - pc.unit + 0.5);
     float cov = cover(y, y + max(1.0, floor(pc.unit + 0.5)));
-    return vec4(SILENCE * cov, cov);
+    return vec4(LOW_HIGH * cov, cov);
 }
 
 // 3-band levels, 0..127 before the gain.
@@ -274,7 +224,6 @@ vec4 shade_bands(vec3 v)
 
     vec3  rgb = vec3(0.0);
     float a = 0.0;
-    bool  rekordbox = (pc.flags & FLAG_REKORDBOX) != 0u;
 
     if (pc.mode == MODE_STACKED) {
         float base = yfloor;
@@ -283,7 +232,7 @@ vec4 shade_bands(vec3 v)
                 continue;
             float tall = min(v[b] / STACK_SCALE[b], 1.0) * usable;
             float cov = cover(max(ytop, base - tall), base);
-            rgb += (rekordbox ? RB_STACK_COLOUR[b] : STACK_COLOUR[b]) * cov;
+            rgb += STACK_COLOUR[b] * cov;
             a += cov;
             base -= tall;
             if (base <= ytop)
@@ -320,14 +269,10 @@ vec4 shade_bands(vec3 v)
     }
 
     float cov[3];
-    if (!rekordbox)
-        r[2] *= CORE;
     for (int k = 0; k < 3; k++)
         cov[k] = centred ? cover(centre - r[k], centre + r[k]) : cover(yfloor - r[k], yfloor);
-    vec3 outer = rekordbox ? RB_COMBO[bit[0]] : COMBO[bit[0]];
-    vec3 pair  = rekordbox ? RB_COMBO[bit[0] | bit[1]] : COMBO[bit[0] | bit[1]];
-    vec3 core  = rekordbox ? RB_ALL : ALL;
-    rgb = outer * (cov[0] - cov[1]) + pair * (cov[1] - cov[2]) + core * cov[2];
+    rgb = COMBO[bit[0]] * (cov[0] - cov[1]) + COMBO[bit[0] | bit[1]] * (cov[1] - cov[2]) +
+          COMBO[7] * cov[2];
     return vec4(rgb, cov[0]);
 }
 

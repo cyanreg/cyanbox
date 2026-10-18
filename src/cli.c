@@ -2403,7 +2403,6 @@ static int cmd_config(Cli *cli, int argc, char **argv)
         printf("ml.model = %s\n", c->ml_model ? c->ml_model : "(models/" CB_APP_ML_MODEL ")");
         printf("ui.traffic_light = %s\n", c->traffic_light);
         printf("ui.detail_bars = %d\n", c->detail_bars);
-        printf("ui.rekordbox_colours = %s\n", c->rekordbox_colours ? "true" : "false");
         for (int id = 1; id <= CB_TRACK_COLORS; id++)
             printf("%s = %s\n", cb_config_vibe_key(id), cb_config_vibe(c, id));
     }

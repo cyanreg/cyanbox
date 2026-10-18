@@ -86,17 +86,13 @@ typedef struct CBConfig {
                                    same, related1, related2, related3 (default) */
     int   detail_bars;          /* 12 */
     float split_player, split_tree;   /* remembered splitter positions, 0 = default */
-    bool  rekordbox_colours;    /* the 3-band waveforms drawn as rekordbox draws them
-                                   (its colours, whole core and cream top slab) rather
-                                   than in cyanbox's own palette; default false */
 } CBConfig;
 
 void cb_config_free(CBConfig *c);
 void cb_config_defaults(CBConfig *c);
 /* One of CBConfig's own settings by its key as the setting table holds it
  * (analysis.*, import.comment, export.*, audio.sink, ml.model, color.*,
- * ui.traffic_light, ui.detail_bars, ui.split_*, ui.rekordbox_colours): 0
- * when `value` is valid
+ * ui.traffic_light, ui.detail_bars, ui.split_*): 0 when `value` is valid
  * for the key and now in c, an empty one (or NULL) putting the default
  * back; -EINVAL when it is not valid (-E2BIG for a description too long),
  * c unchanged; -ENOENT for any other key (the My Settings player.*,

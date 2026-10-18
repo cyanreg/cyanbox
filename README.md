@@ -188,7 +188,6 @@ value a key cannot take, or a key cyanbox does not know, is refused.
 | `color.pink` ... `color.purple`        | the legend         | What each colour stands for, in the words the [tagging](#tagging) picks by  |
 | `ui.traffic_light`                     | `related3`         | The browser's key highlight (View → Traffic Light)                          |
 | `ui.detail_bars`                       | `12`               | How many bars the detail waveform shows                                     |
-| `ui.rekordbox_colours`                 | `false`            | The 3-band waveforms as rekordbox draws them (View → Waveform colour)       |
 
 The players' My Settings are settings too, as `player.*`, `mixer.*` and
 `device.*`: `cyanbox settings` lists their names and values, and see

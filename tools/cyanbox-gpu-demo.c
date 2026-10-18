@@ -53,7 +53,7 @@
 #include "src/gpu/gpu_demo.h"
 
 #define NB_COLUMNS 600
-#define NB_REF     10
+#define NB_REF     8
 
 /* The spike pattern repeats every SPIKE_PERIOD columns; the long waveform
  * has enough of them for a full window at 40 columns a pixel. */
@@ -221,9 +221,9 @@ static void synth_spikes(uint8_t *band, int nb)
 /* Strips of columns whose colours are known exactly, drawn side by side
  * at a fixed place over everything else, each column REF_COL wide. */
 static const uint8_t ref_band[] = {
-    127, 0, 0,      /* low: red */
-    0, 127, 0,      /* mid: green */
-    0, 0, 127,      /* high: blue */
+    127, 0, 0,      /* low: blue */
+    0, 127, 0,      /* mid: amber */
+    0, 0, 127,      /* high: white */
     127, 64, 0,     /* low+mid at the core, low outside */
     127, 127, 127,  /* all */
     0, 0, 0,        /* silence: a line */
@@ -251,25 +251,21 @@ typedef struct RefStrip {
     enum CBWaveMode mode;
     float dim;
     bool detail;
-    bool rekordbox;
 } RefStrip;
 
-#define REF(k, a, m, dim, detail, rb) \
+#define REF(k, a, m, dim, detail) \
     { k, a, (int)(sizeof(a) / (k == CB_WAVE_3BAND ? 3 : k == CB_WAVE_BLUE ? 1 : \
-                               k == CB_WAVE_RGB_DETAIL ? 2 : 6)), m, dim, detail, rb }
+                               k == CB_WAVE_RGB_DETAIL ? 2 : 6)), m, dim, detail }
 
 static const RefStrip ref_strips[NB_REF] = {
-    REF(CB_WAVE_3BAND,       ref_band,   CB_WAVE_CENTRED,       0.0f, false, false),  /* cols 0-7 */
-    REF(CB_WAVE_BLUE,        ref_blue,   CB_WAVE_CENTRED,       0.0f, false, false),  /* 8-9 */
-    REF(CB_WAVE_RGB_DETAIL,  ref_rgb,    CB_WAVE_CENTRED,       0.0f, false, false),  /* 10-11 */
-    REF(CB_WAVE_RGB_PREVIEW, ref_pwv4,   CB_WAVE_CENTRED,       0.0f, false, false),  /* 12 */
-    REF(CB_WAVE_3BAND,       ref_stack,  CB_WAVE_HALF_STACKED,  0.0f, false, false),  /* 13-14 */
-    REF(CB_WAVE_3BAND,       ref_lowmid, CB_WAVE_HALF_OVERLAID, 0.0f, false, false),  /* 15 */
-    REF(CB_WAVE_3BAND,       ref_low,    CB_WAVE_CENTRED,       0.5f, false, false),  /* 16 */
-    REF(CB_WAVE_3BAND,       ref_interp, CB_WAVE_CENTRED,       0.0f, true,  false),  /* 17-20 */
-    /* The same 3-band columns as rekordbox draws them. */
-    REF(CB_WAVE_3BAND,       ref_band,   CB_WAVE_CENTRED,       0.0f, false, true),   /* 21-28 */
-    REF(CB_WAVE_3BAND,       ref_stack,  CB_WAVE_HALF_STACKED,  0.0f, false, true),   /* 29-30 */
+    REF(CB_WAVE_3BAND,       ref_band,   CB_WAVE_CENTRED,       0.0f, false),  /* cols 0-7 */
+    REF(CB_WAVE_BLUE,        ref_blue,   CB_WAVE_CENTRED,       0.0f, false),  /* 8-9 */
+    REF(CB_WAVE_RGB_DETAIL,  ref_rgb,    CB_WAVE_CENTRED,       0.0f, false),  /* 10-11 */
+    REF(CB_WAVE_RGB_PREVIEW, ref_pwv4,   CB_WAVE_CENTRED,       0.0f, false),  /* 12 */
+    REF(CB_WAVE_3BAND,       ref_stack,  CB_WAVE_HALF_STACKED,  0.0f, false),  /* 13-14 */
+    REF(CB_WAVE_3BAND,       ref_lowmid, CB_WAVE_HALF_OVERLAID, 0.0f, false),  /* 15 */
+    REF(CB_WAVE_3BAND,       ref_low,    CB_WAVE_CENTRED,       0.5f, false),  /* 16 */
+    REF(CB_WAVE_3BAND,       ref_interp, CB_WAVE_CENTRED,       0.0f, true),   /* 17-20 */
 };
 
 #define REF_X      20.0f
@@ -375,10 +371,10 @@ static const struct {
     { "NaN alpha",                     4,   0.5f, 0x000000 },
     { "huge insets: above the box",    5, -62.0f, 0x000000 },
     { "huge insets: below the box",    5,  62.0f, 0x000000 },
-    { "huge insets: the centre line",  5,   0.0f, 0x4675D8 },
-    { "gain: near the top",            6, -45.0f, 0x4675D8 },
+    { "huge insets: the centre line",  5,   0.0f, 0x0055E1 },
+    { "gain: near the top",            6, -45.0f, 0x0055E1 },
     { "no gain: near the top",         7, -45.0f, 0x000000 },
-    { "no gain: within 32/127",        7,  -8.0f, 0x4675D8 },
+    { "no gain: within 32/127",        7,  -8.0f, 0x0055E1 },
 };
 
 /* ------------------------------------------------------------- horizontal */
@@ -441,19 +437,19 @@ static const struct {
     float dy;           /* from the box's centre line */
     uint32_t rgb;
 } hprobes[] = {
-    /* 3/4 and 1/4 of #4675D8's light, encoded: 3/4 and 1/4 of the encoded
-     * value (#3458A2, #121D36) would be much darker. */
-    { "box filter: 3/4 of a spike",    0, 20, -20.0f, 0x3D66BE },
-    { "box filter: 1/4 of a spike",    0, 19, -20.0f, 0x213C73 },
-    { "box filter: the spike's top",   0, 20, -38.0f, 0x3D66BE },
+    /* 3/4 and 1/4 of #0055E1's light, encoded: 3/4 and 1/4 of the encoded
+     * value (#0040A9, #001538) would be much darker. */
+    { "box filter: 3/4 of a spike",    0, 20, -20.0f, 0x004AC6 },
+    { "box filter: 1/4 of a spike",    0, 19, -20.0f, 0x002A78 },
+    { "box filter: the spike's top",   0, 20, -38.0f, 0x004AC6 },
     { "box filter: above the spike",   0, 20, -41.0f, 0x000000 },
     { "box filter: silence line",      0,  5,   0.0f, 0xD2DCFA },
     { "box filter: above the line",    0,  5,  -2.0f, 0x000000 },
-    { "attack split: 3/4 attack",      1, 20, -20.0f, 0x3D66BE },
+    { "attack split: 3/4 attack",      1, 20, -20.0f, 0x004AC6 },
     { "attack split: before it",       1, 19, -20.0f, 0x000000 },
-    { "attack split: after it",        1, 21, -20.0f, 0x4675D8 },
-    { "not detail: the maximum",       2,  5, -20.0f, 0x4675D8 },
-    { "past 16 columns: the maximum",  3,  1, -20.0f, 0x4675D8 },
+    { "attack split: after it",        1, 21, -20.0f, 0x0055E1 },
+    { "not detail: the maximum",       2,  5, -20.0f, 0x0055E1 },
+    { "past 16 columns: the maximum",  3,  1, -20.0f, 0x0055E1 },
 };
 
 /* ------------------------------------------------------------------- bars */
@@ -553,7 +549,6 @@ static void draw_reference(Demo *d)
             .alpha     = 1.0f,
             .dim       = r->dim,
             .dim_until = r->nb,
-            .rekordbox = r->rekordbox,
         };
         cb_wave_draw(d->w, dl, d->ref[i], &wd);
         x += r->nb * REF_COL + REF_GAP;
@@ -569,56 +564,37 @@ typedef struct Probe {
 } Probe;
 
 static const Probe probes[] = {
-    { "3-band low",                0, 12.0f,   0.5f, 0x4675D8 },
-    { "3-band mid",                1, 12.0f,   0.5f, 0xF7AB5D },
-    { "3-band high",               2, 12.0f,   0.5f, 0xF48ABA },
-    { "3-band low+mid core",       3, 12.0f,   0.5f, 0xE97C48 },
-    { "3-band low+mid envelope",   3, 12.0f, -35.0f, 0x4675D8 },
-    { "3-band all",                4, 12.0f,   0.5f, 0xE3F1FB },
-    /* All three reach 50 px; the core fills 70 % of it, 35 px, the rest is
-     * the two furthest's colour, on a tie the lower bands', low+mid. */
-    { "3-band all, inside the core",   4, 12.0f, -30.0f, 0xE3F1FB },
-    { "3-band all, past the core",     4, 12.0f, -43.0f, 0xE97C48 },
+    { "3-band low",                0, 12.0f,   0.5f, 0x0055E1 },
+    { "3-band mid",                1, 12.0f,   0.5f, 0xFFA600 },
+    { "3-band high",               2, 12.0f,   0.5f, 0xFFFFFF },
+    { "3-band low+mid core",       3, 12.0f,   0.5f, 0xB4690A },
+    { "3-band low+mid envelope",   3, 12.0f, -35.0f, 0x0055E1 },
+    { "3-band all",                4, 12.0f,   0.5f, 0xF5EBD7 },
+    { "3-band all, the whole core", 4, 12.0f, -43.0f, 0xF5EBD7 },
     { "silence line",              5, 12.0f,   0.0f, 0xD2DCFA },
     { "silence above the line",    5, 12.0f,  -5.0f, 0x000000 },
-    { "3-band low+high core",      6, 12.0f,   0.5f, 0xA497EA },
-    { "3-band low+high envelope",  6, 12.0f, -35.0f, 0xF48ABA },
-    { "3-band mid+high",           7, 12.0f,   0.5f, 0xFFC2B1 },
+    { "3-band low+high core",      6, 12.0f,   0.5f, 0xD2DCFA },
+    { "3-band low+high envelope",  6, 12.0f, -35.0f, 0xFFFFFF },
+    { "3-band mid+high",           7, 12.0f,   0.5f, 0xFFF0D7 },
     { "blue, whiteness 0",         8, 12.0f,   0.5f, 0x0055E1 },
     { "blue, whiteness 7",         9, 12.0f,   0.5f, 0xF5EBD7 },
     { "rgb detail red",           10, 12.0f,   0.5f, 0xFF0000 },
     { "rgb detail red+green",     11, 12.0f,   0.5f, 0xFF6D00 },
     { "rgb preview 100/50/0",     12, 12.0f,   0.5f, 0xFF7F00 },
-    { "stacked low",              13, 12.0f,  45.0f, 0x4675D8 },
-    { "stacked high slab",        13, 12.0f, -45.0f, 0xF48ABA },
-    { "stacked low slab",         14, 12.0f,  40.0f, 0x4675D8 },
-    { "stacked mid slab",         14, 12.0f, -10.0f, 0xF7AB5D },
-    { "overlaid low+mid core",    15, 12.0f,  40.0f, 0xE97C48 },
-    { "overlaid low envelope",    15, 12.0f, -30.0f, 0x4675D8 },
-    { "dimmed low",               16, 12.0f,   0.5f, 0x233A6C },
+    { "stacked low",              13, 12.0f,  45.0f, 0x0055E1 },
+    { "stacked high slab",        13, 12.0f, -45.0f, 0xF5EBD7 },
+    { "stacked low slab",         14, 12.0f,  40.0f, 0x0055E1 },
+    { "stacked mid slab",         14, 12.0f, -10.0f, 0xFFA600 },
+    { "overlaid low+mid core",    15, 12.0f,  40.0f, 0xB4690A },
+    { "overlaid low envelope",    15, 12.0f, -30.0f, 0x0055E1 },
+    { "dimmed low",               16, 12.0f,   0.5f, 0x002B71 },
     /* At the probe's pixel centre, 12.5 px into column 0, the level is
      * 50.4, a reach of 19.8 px; without the ramp it would be 40, 15.7 px. */
-    { "detail ramp, inside",      17, 12.0f, -18.0f, 0x4675D8 },
+    { "detail ramp, inside",      17, 12.0f, -18.0f, 0x0055E1 },
     { "detail ramp, outside",     17, 12.0f, -21.0f, 0x000000 },
     { "sharp attack stays silent", 19, 12.0f, -10.0f, 0x000000 },
     { "sharp attack's silence",   19, 12.0f,   0.0f, 0xD2DCFA },
-    { "attack column",            20, 12.0f, -30.0f, 0x4675D8 },
-    /* rekordbox's: its seven colours, the core over all of the shortest
-     * reach (50 px for the all column), the stacked high slab in cream. */
-    { "rekordbox low",            21, 12.0f,   0.5f, 0x0055E1 },
-    { "rekordbox mid",            22, 12.0f,   0.5f, 0xFFA600 },
-    { "rekordbox high",           23, 12.0f,   0.5f, 0xFFFFFF },
-    { "rekordbox low+mid core",   24, 12.0f,   0.5f, 0xB4690A },
-    { "rekordbox low+mid envelope", 24, 12.0f, -35.0f, 0x0055E1 },
-    { "rekordbox all",            25, 12.0f,   0.5f, 0xF5EBD7 },
-    { "rekordbox all, the whole core", 25, 12.0f, -43.0f, 0xF5EBD7 },
-    { "rekordbox silence line",   26, 12.0f,   0.0f, 0xD2DCFA },
-    { "rekordbox low+high core",  27, 12.0f,   0.5f, 0xD2DCFA },
-    { "rekordbox low+high envelope", 27, 12.0f, -35.0f, 0xFFFFFF },
-    { "rekordbox mid+high",       28, 12.0f,   0.5f, 0xFFF0D7 },
-    { "rekordbox stacked low",    29, 12.0f,  45.0f, 0x0055E1 },
-    { "rekordbox stacked high slab", 29, 12.0f, -45.0f, 0xF5EBD7 },
-    { "rekordbox stacked mid slab", 30, 12.0f, -10.0f, 0xFFA600 },
+    { "attack column",            20, 12.0f, -30.0f, 0x0055E1 },
 };
 
 /* One pixel of the frame against its colour, within 2 a channel. */

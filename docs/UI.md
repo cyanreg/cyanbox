@@ -44,34 +44,6 @@ player's frame while playing, active toggles) `#FF8C00` (rekordbox's
 orange), quantize-on `#3CEB50`. The title row is tinted blue (`#1F3B73` at
 low alpha), as rekordbox's deck 1 is.
 
-Waveform colours (`src/gpu/shaders/wave.frag`, on the waveforms'
-`#050505`): the 3-band waveforms are in mixed hues: low `#4675D8` (a
-blue), mid `#F7AB5D` (a light orange), high `#F48ABA` (a pink). The
-stacked half draws each band in its colour; centred and overlaid, a pixel
-two bands reach has a hue of its own, low+mid `#E97C48` (a deeper
-orange), mid+high `#FFC2B1` (a peach), low+high `#A497EA` (a lavender),
-and one all three reach is a white with a little blue, `#E3F1FB`, over
-the inner 70 % of the shortest band's reach (the rest in the two
-furthest's colour), so that the white core is not most of a loud track.
-So the kicks are blue at the tips, the mids and the ring round the core
-orange, the hats pink here and there. Every colour is 4.7:1 or more
-against the background. Not a blend for a pair: the CDJ-3000's amber
-mids over blue lows give pairs and a core in shades of brown and cream.
-Tried before: all blues (too few colours), green highs (the green and
-the orange did not fit), cyan lows, and the DJ programs' red, green and
-blue, too loud at full strength and too faded muted.
-View > Waveform colour > 3Band in rekordbox's colours (setting
-`ui.rekordbox_colours`, off by default) draws 3Band as rekordbox does
-instead: its seven colours as sampled from rekordbox (rbxport, after
-mixxxdj/mixxx#12326), low `#0055E1`, mid `#FFA600`, high `#FFFFFF`,
-low+mid `#B4690A`, low+high `#D2DCFA`, mid+high `#FFF0D7`, all `#F5EBD7`,
-the core over all of the shortest reach, and the stacked preview's high
-slab in the core's cream. Only the interface changes: the stick carries
-the same bands either way, and the players draw them their own way.
-BLUE (`#0055E1` to `#F5EBD7` by whiteness) and RGB (the tag's colour, its
-strongest channel at full) are drawn as rekordbox draws them, and silence
-is a 1 px line in `#D2DCFA`.
-
 ## Player panel
 
 The full width of the window. Rows, top to bottom:
@@ -97,7 +69,7 @@ The full width of the window. Rows, top to bottom:
    tag's own levels with no gain, rbxport's default overview
    (`overviewWaveform: "half"` in its src/lib/preferences.ts). Full: the
    waveform centred, both halves, at gain 1 (with a gain, the three-band
-   levels of a loud track filled the strip solid white). Either way inset
+   levels of a loud track filled the strip solid cream). Either way inset
    13 above, clear of the cue markers along the top edge, and 1 below; the
    row previews are drawn the same way. Over it: memory cue markers (a red triangle head `#EA3323` at the top with a
    1 px line), hot cues (a filled square badge with the letter in the cue's

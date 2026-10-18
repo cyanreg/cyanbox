@@ -247,7 +247,7 @@ void ui_overview(UiState *ui, int deck, ImVec2 a, ImVec2 b)
         // (src/lib/preferences.ts: overviewWaveform "half", no gain). Full:
         // the waveform centred on the strip, both halves, at the same
         // levels (gain 1: with a gain the three-band levels of a loud track
-        // filled the strip solid white). The top inset keeps the waveform
+        // filled the strip solid cream). The top inset keeps the waveform
         // clear of the hot cue badges and the memory cue heads drawn along
         // the top edge.
         d.mode = ui->overview_full ? CB_WAVE_CENTRED : CB_WAVE_HALF_STACKED;
@@ -258,7 +258,6 @@ void ui_overview(UiState *ui, int deck, ImVec2 a, ImVec2 b)
         // The played part at 55 % brightness, as rekordbox dims it.
         d.dim = 0.45f;
         d.dim_until = pos / dur * cols;
-        d.rekordbox = app->lib.cfg.rekordbox_colours;
         cb_wave_draw(app->window, dl, dv->wave_preview, &d);
         ui->overview_mode_drawn = d.mode;
     } else {
@@ -490,7 +489,6 @@ void ui_detail(UiState *ui, int deck, ImVec2 a, ImVec2 b)
             d.inset_bottom = PX(3);
             d.detail = true;
             d.alpha = 1.0f;
-            d.rekordbox = app->lib.cfg.rekordbox_colours;
             cb_wave_draw(app->window, dl, dv->wave_detail, &d);
         } else {
             ui_text_centre(ui, dl, nullptr, 12.0f, a, b, UI_FAINT, "No waveform: analyse the track");
@@ -642,7 +640,6 @@ void ui_row_preview(UiState *ui, const CBTrack *t, ImVec2 a, ImVec2 b, bool anal
         d.gain = 1.0f;
         d.inset_top = PX(1);
         d.alpha = t->missing ? 0.3f : 1.0f;
-        d.rekordbox = app->lib.cfg.rekordbox_colours;
         cb_wave_draw(app->window, dl, g, &d);
         ui->preview_mode_drawn = d.mode;
     } else if (!t->has_waveforms) {

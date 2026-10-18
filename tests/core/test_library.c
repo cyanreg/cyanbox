@@ -1358,11 +1358,6 @@ static void test_config_set(void)
     CHECK(cb_config_set(&c, "ui.detail_bars", "0") == CB_ERROR(EINVAL) && c.detail_bars == 12);
     CHECK(cb_config_set(&c, "ui.detail_bars", "16") == 0 && c.detail_bars == 16);
     CHECK(cb_config_set(&c, "ui.traffic_light", "loud") == CB_ERROR(EINVAL));
-    CHECK(!c.rekordbox_colours);
-    CHECK(cb_config_set(&c, "ui.rekordbox_colours", "pink") == CB_ERROR(EINVAL) && !c.rekordbox_colours);
-    CHECK(cb_config_set(&c, "ui.rekordbox_colours", "true") == 0 && c.rekordbox_colours &&
-          c.compat_transcode);
-    CHECK(cb_config_set(&c, "ui.rekordbox_colours", "") == 0 && !c.rekordbox_colours);
     CHECK(cb_config_set(&c, "audio.sink", "sink") == 0 && !strcmp(c.audio_sink, "sink"));
     CHECK(cb_config_set(&c, "audio.sink", "") == 0 && !c.audio_sink);
     CHECK(cb_config_set(&c, "ui.layout", "x") == CB_ERROR(ENOENT));
@@ -1385,16 +1380,9 @@ static void test_config_set(void)
     CHECK(cb_library_setting_set(&lib, "analysis.snap_bpm", "") == 0);
     CHECK(cb_library_setting_set(&lib, "analysis.auto_cues", "maybe") == 0);
     CHECK(cb_library_setting_set(&lib, "ui.detail_bars", "8") == 0);
-    CHECK(cb_library_setting_set(&lib, "ui.rekordbox_colours", "true") == 0);
     cb_library_close(&lib);
     CHECK(cb_library_open(&lib, dir) == 0);
     CHECK(lib.cfg.snap_bpm && lib.cfg.auto_cues && lib.cfg.detail_bars == 8);
-    CHECK(lib.cfg.rekordbox_colours);
-    lib.cfg.rekordbox_colours = false;
-    CHECK(cb_library_config_save(&lib) == 0);
-    cb_library_close(&lib);
-    CHECK(cb_library_open(&lib, dir) == 0);
-    CHECK(!lib.cfg.rekordbox_colours);
     cb_library_close(&lib);
     test_rm_rf(dir);
     free(dir);

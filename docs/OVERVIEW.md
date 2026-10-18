@@ -189,16 +189,16 @@ Decisions and why:
   vertically, and the scrolling detail view is box-filtered horizontally: each
   column a pixel covers is coloured on its own (the reach rule: each band
   reaches its level of the height, and every pixel is in the colour of exactly
-  the bands that reach it, but that in cyanbox's palette the core of all three
-  fills only the inner 70 % of the shortest reach) and the results are blended
-  by the share of the pixel each column covers; wide columns are interpolated at
-  the pixel's centre and a sharp attack's edge is split by area. The blending is
-  done in light, not in the sRGB-encoded values the swapchain holds (which would
-  give a column split over two pixels much less light than one inside a pixel).
-  A one-column spike so keeps its light as it moves by fractions of a pixel
+  the bands that reach it) and the results are blended by the share of the
+  pixel each column covers; wide columns are interpolated at the pixel's centre
+  and a sharp attack's edge is split by area. The blending is done in light,
+  not in the sRGB-encoded values the swapchain holds (which would give a
+  column split over two pixels much less light than one inside a pixel). A
+  one-column spike so keeps its light as it moves by fractions of a pixel
   instead of flickering, and so do the beat and cue lines drawn over it
-  (`cb_vbar_draw`). The overview and the row previews, which do not scroll, keep
-  each band's maximum over a pixel's columns. ImGui draws everything else.
+  (`cb_vbar_draw`). The overview and the row previews, which do not scroll,
+  keep each band's maximum over a pixel's columns. ImGui draws everything
+  else.
 - **The track's packets in memory, decoded around the playhead** for
   playback. Loading reads the file's audio packets into a packet store
   (cyanbox/audio.h), placed on the players' timeline, in a few milliseconds;
@@ -314,23 +314,15 @@ and no sync:
   rating, key, BPM, time), with double-click or drag to load a deck.
 - **Status bar:** analysis queue, export progress, audio device, messages.
 
-Waveforms are drawn as rekordbox draws them, as measured by rbxport: the
-stacked row preview uses the measured 128/256/128 scales; the BLUE palette
+Waveform colours are matched to rekordbox as measured by rbxport: the 3-band
+palette is blue `#0055E1`, amber `#FFA600`, white, and the combination colours
+`#B4690A` (low+mid), `#D2DCFA` (low+high), `#FFF0D7` (mid+high), `#F5EBD7` (all);
+the stacked row preview uses the measured 128/256/128 scales; the BLUE palette
 shades a column from blue to cream by its whiteness bits; RGB columns are
-drawn saturated by their strongest channel. The 3-band palette is cyanbox's
-own, in mixed hues: low a blue (`#4675D8`), mid a light orange
-(`#F7AB5D`), high a pink (`#F48ABA`), each pair a hue of its own
-(`#E97C48` low+mid, a deeper orange; `#FFC2B1` mid+high, a peach;
-`#A497EA` low+high, a lavender) and all three a white with a little blue,
-`#E3F1FB`, over the inner 70 % of the shortest reach; not rekordbox's
-amber mids over blue lows, whose pairs and core are shades of brown and
-cream. rekordbox's own, as rbxport sampled them, are a setting,
-`ui.rekordbox_colours` in View > Waveform colour (docs/UI.md, Window;
-`src/gpu/shaders/wave.frag` has the reasons). The
-3-band levels drawn are rbxport's as well (section 3, item 10), so the same
-rules on the same bytes give rbxport's shapes. The 3-band detail is the
-default, as on a CDJ-3000; BLUE and RGB are selectable, since all three are
-on the stick.
+drawn saturated by their strongest channel. The 3-band levels drawn are
+rbxport's as well (section 3, item 10), so the same rules on the same bytes
+give rbxport's picture. The 3-band detail is the default, as on a CDJ-3000;
+BLUE and RGB are selectable, since all three are on the stick.
 
 Keyboard follows rekordbox's Export preset (space, C, M, I/O/R, 1–3 hot cues,
 4–9 beat loops, N/B/X memory cues, cursor jumps, Q quantize).
