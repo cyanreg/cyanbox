@@ -2,7 +2,8 @@
 
 /* Everything of the gpu module that has to be C++: Dear ImGui's context,
  * style and fonts, its SDL3 and Vulkan backends, user textures, the
- * waveform draw callback, and the few ImGui calls the demo makes from C.
+ * waveform draw callback, the bars drawn to a fraction of a pixel over a
+ * scrolling waveform, and the few ImGui calls the demo makes from C.
  *
  * The Vulkan backend renders with dynamic rendering into the swapchain's
  * UNORM format, and rotates its vertex buffers over CB_FRAMES_IN_FLIGHT,
@@ -370,6 +371,60 @@ extern "C" void cb_imgui_add_wave(void *draw_list, const CBWaveCmd *c)
 
     dl->AddCallback(wave_callback, const_cast<CBWaveCmd *>(c), sizeof(*c));
     dl->AddCallback(reset, nullptr);
+}
+
+/* -------------------------------------------------------------------- bars */
+
+/* sRGB's transfer function, encoded value to light and back. */
+static float srgb_light(float v)
+{
+    return v <= 0.04045f ? v / 12.92f : powf((v + 0.055f) / 1.055f, 2.4f);
+}
+
+static float srgb_encoded(float l)
+{
+    return l <= 0.0031308f ? l * 12.92f : 1.055f * powf(l, 1.0f / 2.4f) - 0.055f;
+}
+
+extern "C" void cb_vbar_draw(void *draw_list, float x0, float x1, float y0, float y1,
+                             uint32_t col)
+{
+    ImDrawList *dl = static_cast<ImDrawList *>(draw_list);
+    float alpha = (float)((col >> IM_COL32_A_SHIFT) & 0xFF) / 255.0f;
+    if (!dl || !(x1 > x0) || !(y1 > y0) || !(alpha > 0.0f) || !isfinite(x0) || !isfinite(x1) ||
+        !isfinite(y0) || !isfinite(y1))
+        return;
+
+    /* In device pixels: ImGui may run in logical ones. */
+    float s = ImGui::GetIO().DisplayFramebufferScale.x;
+    if (!(s > 0.0f))
+        s = 1.0f;
+    float org = ImGui::GetMainViewport()->Pos.x;
+    float d0 = (x0 - org) * s, d1 = (x1 - org) * s;
+
+    /* A whole pixel of the bar over black, as its brightest channel shows
+     * it, and its light: a pixel the bar covers a part of gets that part of
+     * the light. */
+    float red = (float)((col >> IM_COL32_R_SHIFT) & 0xFF);
+    float green = (float)((col >> IM_COL32_G_SHIFT) & 0xFF);
+    float blue = (float)((col >> IM_COL32_B_SHIFT) & 0xFF);
+    float full = alpha * fmaxf(fmaxf(red, green), blue) / 255.0f, light = srgb_light(full);
+    auto part = [&](float p0, float p1, float cover) {
+        float a = cover >= 1.0f ? alpha : full > 0.0f ? alpha * srgb_encoded(cover * light) / full
+                                                      : 0.0f;
+        ImU32 c = (col & ~IM_COL32_A_MASK) | ((ImU32)lroundf(a * 255.0f) << IM_COL32_A_SHIFT);
+        dl->AddRectFilled(ImVec2(p0 / s + org, y0), ImVec2(p1 / s + org, y1), c);
+    };
+
+    float l = floorf(d0), r = ceilf(d1);
+    if (r - l <= 1.0f) {
+        part(l, r, d1 - d0);
+        return;
+    }
+    part(l, l + 1.0f, l + 1.0f - d0);
+    if (r - l > 2.0f)
+        part(l + 1.0f, r - 1.0f, 1.0f);
+    part(r - 1.0f, r, d1 - (r - 1.0f));
 }
 
 /* -------------------------------------------------------------- demo hooks */

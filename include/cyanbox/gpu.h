@@ -141,4 +141,16 @@ typedef struct CBWaveDraw {
  * a transient survives. */
 void cb_wave_draw(CBWindow *w, void *im_draw_list, const CBWaveGpu *g, const CBWaveDraw *d);
 
+/* A vertical bar over [x0, x1) x [y0, y1) in ImGui screen pixels, placed to
+ * a fraction of a pixel, for what moves with a scrolling waveform (beat
+ * lines, cue lines, loop edges); the colour is packed as ImGui packs it
+ * (IM_COL32). A device-pixel column the bar covers a part of is drawn with
+ * that part of the light a whole one gives, not that part of the alpha:
+ * the swapchain blends encoded values, so a 1 px line split over two
+ * pixels by alpha would have half its light and pulse as it moves, and
+ * snapped to whole pixels it would jump a pixel at a time against the
+ * waveform. The light is exact over black (the detail's background), and
+ * a bar whose edges are pixel edges is drawn as AddRectFilled draws it. */
+void cb_vbar_draw(void *im_draw_list, float x0, float x1, float y0, float y1, uint32_t col);
+
 #endif /* CYANBOX_GPU_H */

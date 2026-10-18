@@ -94,9 +94,13 @@ The full width of the window. Rows, top to bottom:
    grid's measured beats are drawn where they are, each interval its
    own; the window's span in bars follows the local tempo. Cue markers as on
    the overview but taller; loop bands likewise; the current loop's in/out
-   edges in solid orange. Dragging scrubs (the engine plays grains); the wheel
-   zooms. Right-click opens the cue context menu (set memory cue here, set hot
-   cue A–H here, delete, colour, name).
+   edges in solid orange. The beat lines, the cue lines and the loop's
+   edges are drawn where they fall to a fraction of a pixel, as the
+   waveform is (`cb_vbar_draw`: a pixel a line covers part of gets that
+   part of its light), so that they slide with the waveform as it scrolls
+   instead of jumping a pixel at a time. Dragging scrubs (the engine plays
+   grains); the wheel zooms. Right-click opens the cue context menu (set
+   memory cue here, set hot cue A–H here, delete, colour, name).
 4. **Control row** (height 96: the 18 px labels, one 36 px row of pads,
    16 px, the 24 px strips, 2 px). There are no modes or tabs: every group
    is shown at once, left to right, 16 px apart. Each group but transport

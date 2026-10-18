@@ -195,9 +195,10 @@ Decisions and why:
   not in the sRGB-encoded values the swapchain holds (which would give a
   column split over two pixels much less light than one inside a pixel). A
   one-column spike so keeps its light as it moves by fractions of a pixel
-  instead of flickering. The overview and the row previews, which do not
-  scroll, keep each band's maximum over a pixel's columns. ImGui draws
-  everything else.
+  instead of flickering, and so do the beat and cue lines drawn over it
+  (`cb_vbar_draw`). The overview and the row previews, which do not scroll,
+  keep each band's maximum over a pixel's columns. ImGui draws everything
+  else.
 - **The track's packets in memory, decoded around the playhead** for
   playback. Loading reads the file's audio packets into a packet store
   (cyanbox/audio.h), placed on the players' timeline, in a few milliseconds;

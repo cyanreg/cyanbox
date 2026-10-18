@@ -20,7 +20,9 @@
  *                 gain (a quiet column drawn up to full height, or not),
  *                 and the horizontal rules: a spike and an attack drawn a
  *                 quarter of a pixel off the grid, box-filtered or split
- *                 as light, and the maximum kept where it should be
+ *                 as light, and the maximum kept where it should be; and
+ *                 1 px lines drawn with cb_vbar_draw an eighth of a pixel
+ *                 apart, each with a whole pixel's light, where it was put
  *   --scroll      draw the zoomed detail rows (about 120 columns,
  *                 interpolated; 1.6 columns a pixel) of the spike pattern
  *                 over black and over a dark grey, moving 0.07 columns a
@@ -450,6 +452,83 @@ static const struct {
     { "past 16 columns: the maximum",  3,  1, -20.0f, 0x0055E1 },
 };
 
+/* ------------------------------------------------------------------- bars */
+
+/* Lines one device pixel wide drawn with cb_vbar_draw right of the
+ * horizontal boxes, over black, in the detail's downbeat colour (#9A9A9A
+ * at 0.85), the first centred on a pixel and each next one BAR_GAP pixels
+ * and an eighth of a pixel further. Each must give the light of one whole
+ * pixel of the line, centred where it was put: snapped to whole pixels a
+ * line is up to half a pixel off, and with its coverage as alpha one
+ * between two pixels gives half the light. The first must be its one
+ * pixel alone, as AddLine drew it. */
+#define NB_BARS       8
+#define BAR_GAP       12
+#define BAR_COL       0xD99A9A9Au   /* IM_COL32(0x9A, 0x9A, 0x9A, 217) */
+#define BAR_FULL      0x83          /* 0x9A at 217/255 over black */
+#define BAR_MAX_LIGHT 0.03          /* (max - min) / mean of the lines' light */
+#define BAR_MAX_OFF   0.05          /* device pixels from where a line was put */
+
+/* Device pixels: the left edge of the box, and the centre of line i. */
+static int bars_x(Demo *d)
+{
+    return (int)lroundf((hbox_x(d, NB_HBOX) + EDGE_GAP) * cb_window_scale(d->w));
+}
+
+static double bar_centre(Demo *d, int i)
+{
+    return bars_x(d) + 4 + i * BAR_GAP + 0.5 + i / 8.0;
+}
+
+static void draw_bars(Demo *d)
+{
+    void *dl = cb_demo_foreground_draw_list();
+    float scale = cb_window_scale(d->w);
+    float y = ref_y(d->w), x = bars_x(d) / scale;
+    cb_demo_rect(dl, x, y, x + (8 + NB_BARS * BAR_GAP) / scale, y + REF_H, 0x000000FF);
+    for (int i = 0; i < NB_BARS; i++) {
+        double c = bar_centre(d, i);
+        cb_vbar_draw(dl, (float)((c - 0.5) / scale), (float)((c + 0.5) / scale), y, y + REF_H,
+                     BAR_COL);
+    }
+}
+
+static int check_bars(Demo *d, const uint8_t *rgba, int width, int height)
+{
+    int y = (int)floorf((ref_y(d->w) + REF_H / 2) * cb_window_scale(d->w));
+    double full = srgb_light(BAR_FULL), lo = 1e9, hi = 0.0, sum = 0.0, off = 0.0;
+    bool alone = true;
+    for (int i = 0; i < NB_BARS; i++) {
+        double c = bar_centre(d, i), light = 0.0, at = 0.0;
+        int p0 = (int)floor(c) - 3;
+        if (p0 < 0 || p0 + 7 > width || y >= height)
+            return 1;
+        for (int p = p0; p < p0 + 7; p++) {
+            const uint8_t *px = rgba + ((size_t)y * width + p) * 4;
+            double l = srgb_light(px[1]);
+            light += l;
+            at += l * (p + 0.5);
+            if (i == 0)
+                alone = alone && (p == (int)floor(c) ? abs(px[1] - BAR_FULL) <= 1 : px[1] == 0);
+        }
+        lo = fmin(lo, light);
+        hi = fmax(hi, light);
+        sum += light;
+        if (light > 0.0)
+            off = fmax(off, fabs(at / light - c));
+        else
+            off = 1.0;
+    }
+    double mean = sum / NB_BARS, var = mean > 0.0 ? (hi - lo) / mean : 1.0;
+    bool ok = alone && var <= BAR_MAX_LIGHT && fabs(mean / full - 1.0) <= BAR_MAX_LIGHT &&
+              off <= BAR_MAX_OFF;
+    cb_log(ok ? CB_LOG_INFO : CB_LOG_ERROR,
+           "demo: lines at eighths of a pixel: light %.4f of a whole pixel's %.4f, varies by "
+           "%.2f %%; %.3f px at most from where they were put; the first %s %s", mean, full,
+           100.0 * var, off, alone ? "one pixel" : "NOT one pixel", ok ? "ok" : "WRONG");
+    return ok ? 0 : 1;
+}
+
 static void draw_reference(Demo *d)
 {
     void *dl = cb_demo_foreground_draw_list();
@@ -565,9 +644,11 @@ static int run_checks(Demo *d)
         failed += !probe(rgba, width, height, hprobes[i].what, x, y, hprobes[i].rgb);
     }
 
+    failed += check_bars(d, rgba, width, height);
+
     free(rgba);
     size_t total = CB_ARRAY_ELEMS(probes) + CB_ARRAY_ELEMS(edge_probes) +
-                   CB_ARRAY_ELEMS(hprobes);
+                   CB_ARRAY_ELEMS(hprobes) + 1;
     if (failed)
         cb_err("demo: %d of %zu pixel checks failed", failed, total);
     else
@@ -913,6 +994,7 @@ static void frame(Demo *d)
         draw_reference(d);
         draw_edges(d);
         draw_hboxes(d);
+        draw_bars(d);
     }
     if (d->bench > 0.0)
         draw_bench(d);

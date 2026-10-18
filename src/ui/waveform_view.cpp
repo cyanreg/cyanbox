@@ -497,7 +497,11 @@ void ui_detail(UiState *ui, int deck, ImVec2 a, ImVec2 b)
         // The beat grid over the waveform: beats in #4C4C4C, downbeats in
         // #9A9A9A, bar numbers above the downbeats. Beats closer than 4 px
         // and every beat at 64 bars are left out; bar numbers are thinned
-        // to keep them legible.
+        // to keep them legible. The lines, the cue lines and the loop's
+        // edges below are where they are to a fraction of a pixel
+        // (cb_vbar_draw), as the waveform under them is: snapped to whole
+        // pixels, they jumped a pixel at a time against the waveform as it
+        // scrolled, and flickered.
         if (beats && nb > 0) {
             double beat_px = 60.0 / ImMax(cb_grid_bpm_at(&t->grid, pos), 1.0) / spp;
             bool every_beat = beat_px >= PX(4) && dv->zoom_bars < 64;
@@ -508,10 +512,11 @@ void ui_detail(UiState *ui, int deck, ImVec2 a, ImVec2 b)
                 bool down = beats[i].number == 1;
                 if (!down && !every_beat)
                     continue;
-                float x = floorf(xof(beats[i].time)) + 0.5f;
-                dl->AddLine(ImVec2(x, top), ImVec2(x, b.y),
-                            down ? ui_alpha(UI_DOWNBEAT, 0.85f) : ui_alpha(UI_BEAT, 0.9f));
-                dl->AddLine(ImVec2(x, a.y + PX(10)), ImVec2(x, top), down ? UI_DOWNBEAT : UI_BEAT);
+                float bx = xof(beats[i].time), x = floorf(bx) + 0.5f;
+                cb_vbar_draw(dl, bx - 0.5f, bx + 0.5f, top, b.y,
+                             down ? ui_alpha(UI_DOWNBEAT, 0.85f) : ui_alpha(UI_BEAT, 0.9f));
+                cb_vbar_draw(dl, bx - 0.5f, bx + 0.5f, a.y + PX(10), top,
+                             down ? UI_DOWNBEAT : UI_BEAT);
                 if (down) {
                     int bar = 0, bn = 0;
                     cb_grid_bar_of(&t->grid, beats[i].time + 1e-4, &bar, &bn);
@@ -529,11 +534,11 @@ void ui_detail(UiState *ui, int deck, ImVec2 a, ImVec2 b)
 
         // The current loop's in and out in solid orange.
         if (st.loop_in >= 0 && st.loop_out > st.loop_in) {
-            float li = floorf(xof(st.loop_in)), lo = floorf(xof(st.loop_out));
+            float li = xof(st.loop_in) - 0.5f, lo = xof(st.loop_out) - 0.5f;
             if (li >= a.x && li <= b.x)
-                dl->AddRectFilled(ImVec2(li, top), ImVec2(li + PX(2), b.y), UI_ACCENT);
+                cb_vbar_draw(dl, li, li + PX(2), top, b.y, UI_ACCENT);
             if (lo >= a.x && lo <= b.x)
-                dl->AddRectFilled(ImVec2(lo - PX(2), top), ImVec2(lo, b.y), UI_ACCENT);
+                cb_vbar_draw(dl, lo - PX(2), lo, top, b.y, UI_ACCENT);
         }
 
         // Cue markers, taller than on the overview.
@@ -541,25 +546,25 @@ void ui_detail(UiState *ui, int deck, ImVec2 a, ImVec2 b)
             const CBCue *c = &t->cues[i];
             if (cb_cue_is_hot(c) || c->time < w0 - 1 || c->time > w1 + 1)
                 continue;
-            float x = floorf(xof(c->time)) + 0.5f;
+            float x = xof(c->time);
             ImU32 col = ui_rgb(ui_memory_cue_rgb(c));
-            dl->AddLine(ImVec2(x, top), ImVec2(x, b.y), col);
+            cb_vbar_draw(dl, x - 0.5f, x + 0.5f, top, b.y, col);
             memory_head(dl, x, a.y + PX(2), PX(6), PX(10), col);
         }
         for (int i = 0; i < t->nb_cues; i++) {
             const CBCue *c = &t->cues[i];
             if (!cb_cue_is_hot(c) || c->time < w0 - 1 || c->time > w1 + 1)
                 continue;
-            float x = floorf(xof(c->time));
+            float hx = xof(c->time), x = floorf(hx);
             ImU32 col = ui_rgb(ui_hot_cue_rgb(ui, c));
-            dl->AddLine(ImVec2(x + 0.5f, top), ImVec2(x + 0.5f, b.y), col);
+            cb_vbar_draw(dl, hx - 0.5f, hx + 0.5f, top, b.y, col);
             hot_badge(ui, dl, x, a.y + PX(1), PX(13), b.x + PX(13), c);
             if (c->name[0])
                 ui_text(ui, dl, nullptr, 10.0f, ImVec2(x + PX(16), a.y + PX(1)),
                         ui_alpha(UI_TEXT, 0.85f), c->name, PX(120));
         }
         if (dv->ctl.cue_point >= w0 && dv->ctl.cue_point <= w1)
-            cue_point_mark(dl, floorf(xof(dv->ctl.cue_point)) + 0.5f, b.y, PX(5), UI_ACCENT);
+            cue_point_mark(dl, xof(dv->ctl.cue_point), b.y, PX(5), UI_ACCENT);
     }
 
     // The fixed playhead: 2 px white with a triangle at each end.
