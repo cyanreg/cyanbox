@@ -445,7 +445,7 @@ static void analysis_settings(UiState *ui)
     changed |= ImGui::Checkbox("Allow tempo sections", &cfg->allow_sections);
     ImGui::SetItemTooltip("Split the grid where the tempo or phase really changes.");
     ImGui::SeparatorText("Cues");
-    changed |= ImGui::Checkbox("Memory cue at the first downbeat", &cfg->auto_cues);
+    changed |= ImGui::Checkbox("Memory cue where the drums come in", &cfg->auto_cues);
     ImGui::Spacing();
     ImGui::TextDisabled("Applies to the next analysis.");
     changed |= legend_section(ui, cfg);

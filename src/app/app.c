@@ -1262,6 +1262,17 @@ static int apply_analysis(CBApp *app, CBTrack *t, CBAnalysis *a, bool override_l
     CBLibrary *lib = &app->lib;
     int err = 0;
 
+    /* The cue an earlier analysis placed goes, on the grid it was placed
+     * on, so that this one places it again: it waits for the drums now,
+     * and a cue left on the old place would keep every track's there. */
+    bool renew = false;
+    if ((a->done & CB_ANALYSE_BEATS) && lib->cfg.auto_cues) {
+        int ret = cb_analysis_take_auto_cue(t, &a->beats);
+        if (ret < 0)
+            cb_warn("cannot move the automatic cue: %s", strerror(-ret));
+        renew = ret > 0;
+    }
+
     bool grid_changed = false;
     if ((a->done & CB_ANALYSE_BEATS) && (!t->grid_locked || override_lock) &&
         cb_grid_valid(&a->beats.grid)) {
@@ -1303,14 +1314,14 @@ static int apply_analysis(CBApp *app, CBTrack *t, CBAnalysis *a, bool override_l
     if (grid_changed)
         cb_track_resolve_cues(t);
 
-    /* dj's _auto_cues: a memory cue on the first downbeat once the music
-     * starts, for a track with no cues. On a locked grid it is placed on
-     * that grid. */
-    if ((a->done & CB_ANALYSE_BEATS) && lib->cfg.auto_cues && !t->nb_cues &&
+    /* dj's _auto_cues: a memory cue on the first downbeat once the drums
+     * are in, for a track with no cues, and again where an earlier
+     * analysis had placed one. On a locked grid it is placed on that grid. */
+    if ((a->done & CB_ANALYSE_BEATS) && lib->cfg.auto_cues && (!t->nb_cues || renew) &&
         cb_grid_valid(&t->grid)) {
         CBBeatResult b = a->beats;
         b.grid = t->grid;
-        int ret = cb_analysis_auto_cues(t, &b);
+        int ret = cb_analysis_add_auto_cue(t, &b);
         if (ret < 0)
             cb_warn("cannot add the automatic cue: %s", strerror(-ret));
     }

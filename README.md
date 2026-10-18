@@ -173,7 +173,7 @@ value a key cannot take, or a key cyanbox does not know, is refused.
 | `analysis.bpm_min`, `analysis.bpm_max` | none               | The tempo range the beat analyser keeps to                                  |
 | `analysis.snap_bpm`                    | `true`             | Snap to a whole BPM when the track allows                                   |
 | `analysis.allow_sections`              | `true`             | Tempo sections where the tempo or phase really changes                      |
-| `analysis.auto_cues`                   | `true`             | A memory cue at the first downbeat                                          |
+| `analysis.auto_cues`                   | `true`             | A memory cue on the first downbeat where the drums come in                  |
 | `analysis.what`                        | `beats,key,waves`  | What the interface's Analyse does                                           |
 | `import.comment`                       | `false`            | Take the file's comment tag when a track is added                           |
 | `export.key_notation`                  | `classic`          | How `export.pdb` names keys: `classic`, `camelot` or `open`                 |

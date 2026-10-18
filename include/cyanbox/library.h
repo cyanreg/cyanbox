@@ -39,7 +39,7 @@ typedef struct CBConfig {
     /* analysis.* */
     double bpm_min, bpm_max;    /* 0 = unset */
     bool   snap_bpm;            /* default true */
-    bool   auto_cues;           /* memory cue on the first downbeat, default true */
+    bool   auto_cues;           /* memory cue where the drums come in, default true */
     bool   allow_sections;      /* tempo sections where the tempo or phase really changes,
                                    default true (CBAnalysisOptions.allow_sections) */
     unsigned analyse_what;      /* CBAnalyseWhat the interface's Analyse asks for,

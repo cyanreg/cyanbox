@@ -57,12 +57,15 @@ and local tempo, which the players play as they are (docs/anlz.md 4.3).
 10. **Confidence and flags.**
 11. **Where the music starts**, measured on the level: after silence or a
     noise floor, a hit or a rise. The grid's first beat is the first at or
-    after it, and the automatic cue the first downbeat.
+    after it.
 12. **With Beat This!** The network's beat activations choose the level
     and track the beats; cyanbox's grid, where it agrees or is only off in
     phase, is kept or moved onto them; its downbeat activation places the
     bar, and moves it where it moves for good. Everything above is this
     stage's hints and arbiter.
+13. **Where the drums come in**: the first downbeat whose kick is in at
+    full level, past a fade-in or an intro without drums, is where the
+    automatic cue goes.
 
 It costs about 290 ms of CPU for an average 4.5-minute track (383 ms per six
 minutes of audio), single-threaded, after decoding. dj's Python analyser took
@@ -908,9 +911,9 @@ so bar 1 is the first downbeat at or after the start. dj, rbxport
 (`first_beat_secs`: "the first grid position at or after time zero, as
 rekordbox does") and rekordbox's own analysis extend the first tempo back to
 the start of the file, beats and a bar 1 in the silence; cyanbox's grids no
-longer do (`cyanbox/model.h`, `src/core/grid.c`). **The automatic cue** is the
-first downbeat at or after the start (it was the first after dj's first
-loud onset).
+longer do (`cyanbox/model.h`, `src/core/grid.c`). **The automatic cue**
+was the first downbeat at or after the start (and before that the first
+after dj's first loud onset); it waits for the drums now (section 13).
 
 **Never before time 0.** Where the music starts at once there is no slack:
 the first beat is the line's first at or after 0, so a track whose first
@@ -1161,6 +1164,74 @@ script on the three sets, to the digits before the bar's moves. (`cyanbox-eval -
 network the mean of the channels, as the app's decoder mixes them:
 ffmpeg's own mono is 3 dB louder, and the network hears it, enough to move
 nine of the 623.)
+
+## 13. Where the drums come in (`drums.c`)
+
+A DJ loads a track to start it where it plays. The automatic cue (a
+memory cue, where the players' default AUTO CUE LEVEL = MEMORY puts a
+loaded track) was the first downbeat once the music started (section 11),
+and that was not where the user starts a track. Asked track by track
+(2026-10-18), the rule is **the first downbeat where the drums are in at
+full level**, past a fade-in and past an intro without drums alike: on
+"Rouge" past its fade (to 2.13 s) and its eight bars of synths without
+drums after it, to the kick at 15.84 s; on "Summer Slumber" past eight
+bars of pads and eight of percussion and bass, to the kick at 32.17 s; on
+"Spiral (Lily Remix)", whose drums open the track, its first beat.
+
+**The measure** is the kick: the low band (a fourth-order Butterworth
+low-pass at 150 Hz) in the first 80 ms of each beat (at most 0.4 of the
+beat), its body. A bass alone holds the band all through the beat and the
+kick fills its start, so a bass that comes in before the kick does not
+count (on "Good Morning" the bass is in at 16 s, the kick at 32 s), and a
+kick that is in before the bass joins does ("Sweet Times": a kick 9 dB
+under the drop's kick and bass over the whole beat, within 8 dB of them in
+its first 80 ms). Levels are against the track's loud beats, the 90th
+percentile of every beat's from the start of the music. A downbeat is in
+when:
+
+- its kick is within 8 dB of the loud beats;
+- it is not still rising: not 6 dB under the loudest of the next four
+  downbeats (a fade, a sweep into the drop);
+- two of it and the next three are in: an opening hit over a quiet intro
+  is no drums (AD:HOUSE Winter's "Reticence", whose kick comes in at
+  15.7 s).
+
+The first such downbeat is where the drums come in (`drums_start`), and
+the cue goes on the first downbeat of the track's grid at or after it.
+Where it lies past a third of the track, the start of the music stands: a
+song whose drums only reach full level in a chorus (yanaginagi's "ぼくのと
+もだち", at 47 %; "Stellar Stellar", at 34 %) has no intro to skip, while
+a DJ track's longest (Someday (callasoiled remix), Dead Channel) were at
+19 and 27 %.
+
+**How it was set.** On 39 tracks whose drums were placed by the user (the
+16 named in their report) or by eye on the low band (23 more, among them
+nine that open with the drums, where nothing should move), the rule gets
+38 (the other is Bouquet, whose bar was wrong: section 12, item 5), and a
+wide range of thresholds as many: 6 to 12 dB for "in", 4 to 8 for the
+rise. The level over the whole beat instead got 32 to 35 (a bass taken
+for the drums, an opening hit kept); against a lower reference (the
+median beat) songs move less, but fewer labelled tracks were right. On the
+174 tracks of the library sample, 108 cues move: 37 of them to bar 9 or
+17 (an intro of 8 or 16 bars), 26 by four bars or less, two past 32.
+
+**Taking the old cue off.** The cue is placed once, on a track with no
+cues, and a cue the DJ set is theirs to keep. So that the library's cues
+move with the analysis, the app takes off the analyser's cue before a new
+beat analysis places it again (`cb_analysis_take_auto_cue`): a plain
+memory cue (no name, colour or loop), on the grid, on its first downbeat
+(where it went before) or where this analysis puts it on the same grid.
+A DJ's own plain cue on either downbeat is taken for it; it would be
+placed there again. Of 1449 tracks of the library, 1447 had that cue
+alone and two a hot cue beside it (which stays). CB_BEATS_VERSION 10
+analyses them again.
+
+`test_drums` makes the cases on a 125 BPM grid: a pad for eight bars then
+the kick (bar 9); the kick from the first beat (bar 1); an opening hit, the
+pad, then the kick (bar 9); the kick fading in over four bars (bar 5,
+where it is full); a bass alone, 6 dB under the kick and bass over the
+beat but 13 dB under them in its first 80 ms (bar 9); the kick from 42 %
+(the start); and which cues are the analyser's.
 
 ## Parameters
 

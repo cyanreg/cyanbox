@@ -446,6 +446,7 @@ typedef struct Result {
     unsigned flags;
     char   flagstr[160];
     double music_start;
+    double drums_start;         /* where the drums come in (cb_beats_drums), 0: not known */
     double ms;                  /* CPU time of the front end and the decisions */
     double dec_ms, fe_ms, beats_ms;     /* wall time of decoding, the front end, the decisions */
     bool   cached;              /* decoded audio and front end from --cache */
@@ -482,8 +483,9 @@ static const char *kind_name(int k)
 }
 
 /* The grid's first beat and its number, its first downbeat, and the
- * automatic cue (cb_analysis_auto_cues' rule: the first downbeat at or
- * after the start of the music, 50 ms of slack). */
+ * automatic cue (cb_analysis_auto_cue_at's rule: the first downbeat at or
+ * after where the drums come in, else the start of the music, 50 ms of
+ * slack). */
 static void grid_start(Result *r, const CBGrid *g)
 {
     r->first_beat = r->first_down = r->cue = NAN;
@@ -499,7 +501,7 @@ static void grid_start(Result *r, const CBGrid *g)
             continue;
         if (isnan(r->first_down))
             r->first_down = b[i].time;
-        if (b[i].time >= r->music_start - 0.05) {
+        if (b[i].time >= fmax(r->drums_start, r->music_start) - 0.05) {
             r->cue = b[i].time;
             break;
         }
@@ -886,6 +888,7 @@ static void analyse_one(Job *job, int i)
         r->flags = br.flags;
         flags_to_str(br.flags, r->flagstr, sizeof(r->flagstr));
         r->music_start = br.music_start;
+        r->drums_start = br.drums_start;
         r->start_kind = br.start_kind;
         grid_start(r, &br.grid);
         if (r->ok) {
@@ -1010,8 +1013,9 @@ static void analyse_one(Job *job, int i)
     }
     int64_t t2 = cb_time_us();
     int ret = cb_analyse_beats_spec(x, n, &spec, &job->opt, &br, job->mem ? NULL : &dbg);
-    if (ret >= 0 && job->net &&
-        (ret = cb_beats_hybrid(bt_beat, bt_down, bt_frames, r->duration, &br)) < 0) {
+    if (ret >= 0 && ((job->net &&
+                      (ret = cb_beats_hybrid(bt_beat, bt_down, bt_frames, r->duration, &br)) < 0) ||
+                     (ret = cb_beats_drums(x, n, CB_BEAT_RATE, &br)) < 0)) {
         if (!job->mem)
             cb_beat_debug_free(&dbg);
         cb_beat_result_free(&br);
@@ -1037,6 +1041,7 @@ static void analyse_one(Job *job, int i)
     r->flags = br.flags;
     flags_to_str(br.flags, r->flagstr, sizeof(r->flagstr));
     r->music_start = br.music_start;
+    r->drums_start = br.drums_start;
     r->start_kind = br.start_kind;
     grid_start(r, &br.grid);
     if (!job->mem) {

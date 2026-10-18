@@ -14,6 +14,7 @@ cb_analysis_sources = files(
     'walk.c',
     'analysis.c',
     'hybrid.c',
+    'drums.c',
     # waveforms and key
     'waveform.c',
     'key.c',
@@ -39,6 +40,11 @@ test('beats', test_beats, suite: 'analysis', workdir: meson.project_source_root(
 test_hybrid = executable('test_hybrid', files('../../tests/analysis/test_hybrid.c'),
     include_directories: cb_inc, dependencies: [ cb_analysis_dep ])
 test('hybrid', test_hybrid, suite: 'analysis', timeout: 120)
+# Where the drums come in (drums.c) on made tracks, and the automatic cue
+# that waits for them.
+test_drums = executable('test_drums', files('../../tests/analysis/test_drums.c'),
+    include_directories: cb_inc, dependencies: [ cb_analysis_dep ])
+test('drums', test_drums, suite: 'analysis', timeout: 120)
 # cb_analyse's edges: NaN in a float file, the onsets of a few frames, the
 # first loud onset, the automatic cue without a length. Writes its WAVs
 # under the build directory.

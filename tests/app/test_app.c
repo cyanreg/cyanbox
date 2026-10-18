@@ -1305,6 +1305,23 @@ int main(int argc, char **argv)
         goto end;
     uint64_t c_id = c->id;
     c->beats_version = c->key_version = c->waves_version = 0;
+    /* Its cues as an older analyser left them: the automatic cue on the
+     * grid's first downbeat, beside a hot cue and a named memory cue of the
+     * DJ's. The new analysis takes the automatic cue off and places it
+     * again (where the drums are in: long.wav's kick is there from its
+     * first beat), the DJ's beside it. */
+    while (c->nb_cues)
+        cb_track_remove_cue(c, 0);
+    CBCue old_auto, hot_a, mine;
+    cb_cue_init(&old_auto, cb_grid_beat_to_time(&c->grid, 0.0));
+    cb_cue_attach_to_grid(&old_auto, &c->grid);
+    cb_cue_init(&hot_a, 10.0);
+    hot_a.hot = 0;
+    cb_cue_init(&mine, 20.0);
+    snprintf(mine.name, sizeof(mine.name), "mine");
+    CHECK(cb_track_add_cue(c, &old_auto) >= 0 && cb_track_add_cue(c, &hot_a) >= 0 &&
+          cb_track_add_cue(c, &mine) >= 0, "long.wav's cues");
+    const double first_down = old_auto.time;
     cb_app_save_track(&app, c);
     cb_grid_free(&b->grid);
     CHECK(cb_grid_init(&b->grid, 0.125, 127.0) >= 0, "b's grid by hand");
@@ -1328,6 +1345,21 @@ int main(int argc, char **argv)
           c->waves_version == CB_WAVES_VERSION, "long.wav is at versions %d, %d, %d",
           c->beats_version, c->key_version, c->waves_version);
     CHECK(!cb_analysis_stale(c), "long.wav is still stale");
+    int plain = 0, named = 0, hot = 0;
+    double auto_at = NAN;
+    for (int i = 0; i < c->nb_cues; i++) {
+        const CBCue *q = &c->cues[i];
+        if (cb_cue_is_hot(q))
+            hot++;
+        else if (!strcmp(q->name, "mine"))
+            named++;
+        else if (!q->name[0] && cb_cue_is_musical(q))
+            plain++, auto_at = q->time;
+    }
+    CHECK(c->nb_cues == 3 && plain == 1 && named == 1 && hot == 1 &&
+          fabs(auto_at - first_down) < 0.05, "long.wav's cues after the analysis: %d (%d automatic "
+          "at %.3f, first downbeat %.3f; %d named, %d hot)", c->nb_cues, plain, auto_at, first_down,
+          named, hot);
     CHECK(b->grid_locked && b->beats_version == 0 && hand_grid(b),
           "the locked grid was analysed again (version %d, %d sections)", b->beats_version,
           b->grid.nb_sections);

@@ -135,6 +135,11 @@ typedef struct CBBeatResult {
      * sample, where a fade or a swell leaves the floor. */
     double   music_start;
     enum CBStartKind start_kind;
+    /* Where the drums come in at full level (seconds): a downbeat of the
+     * grid, past a fade-in or an intro without them, the automatic cue's
+     * place (cb_beats_drums); the start of the music when it is not
+     * known, and 0 is read as that. */
+    double   drums_start;
     /* Diagnostics for the evaluation tool; may be empty. */
     double   bpm_second_best;    /* the runner-up tempo, 0 if none */
     double   octave_margin;      /* score ratio of the chosen octave to the other */
@@ -160,6 +165,12 @@ void cb_beat_result_free(CBBeatResult *r);
  * Deterministic, the CPU's alone. */
 int  cb_beats_hybrid(const float *beat, const float *downbeat, int nb_frames, double duration,
                      CBBeatResult *res);
+
+/* Where the drums come in (docs/BEATS.md, "Where the drums come in"):
+ * res->drums_start from the audio (mono at `rate`) on res->grid: the first
+ * downbeat whose kick is in at full level, else the start of the music.
+ * Deterministic. */
+int  cb_beats_drums(const float *mono, int64_t nb_samples, int rate, CBBeatResult *res);
 
 /* --------------------------------------------------------------------- key */
 
@@ -225,8 +236,21 @@ typedef struct CBAnalysis {
 int  cb_analyse(const CBAudio *audio, const CBAnalysisOptions *opt, unsigned what, CBAnalysis *out);
 void cb_analysis_free(CBAnalysis *a);
 
-/* The automatic cue: a memory cue on the first downbeat at or after the
- * start of the music, added when the track has no cues yet. */
+/* The automatic cue: a memory cue on the first downbeat at or after where
+ * the drums come in (beats->drums_start; the start of the music without
+ * it), on the track's grid, or the analysis's when the track has none.
+ * cb_analysis_auto_cue_at: where it goes on grid g (`duration` 0 when not
+ * known): 1 and *at, 0 when g has no downbeat there.
+ * cb_analysis_auto_cues adds it to a track that has no cues yet;
+ * cb_analysis_add_auto_cue whatever cues the track has.
+ * cb_analysis_take_auto_cue removes the one an earlier analysis placed on
+ * the track's grid (on its first downbeat, as before it waited for the
+ * drums, or where `beats` places it), before a new analysis places it
+ * again: 1 when it did. */
+int  cb_analysis_auto_cue_at(const CBGrid *g, const CBBeatResult *beats, double duration,
+                             double *at);
 int  cb_analysis_auto_cues(CBTrack *t, const CBBeatResult *beats);
+int  cb_analysis_add_auto_cue(CBTrack *t, const CBBeatResult *beats);
+int  cb_analysis_take_auto_cue(CBTrack *t, const CBBeatResult *beats);
 
 #endif /* CYANBOX_ANALYSIS_H */
