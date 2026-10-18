@@ -1103,7 +1103,8 @@ static void status_bar(UiState *ui, ImVec2 a, ImVec2 b)
         snprintf(audio, sizeof(audio), "%s", err);
         acol = UI_RED;
     } else if (cb_player_backend(app->player) == CB_AUDIO_RING) {
-        // --pro-link: the deck heard only in a mixer's headphone cue.
+        // --pro-link with a mixer on the link: the deck heard only in its
+        // headphone cue.
         const CBLinkCueState &c = app->link_state.cue;
         if (!app->link_state.cue_enabled || !c.mixer)
             snprintf(audio, sizeof(audio), "LINK CUE: no mixer");

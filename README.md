@@ -499,12 +499,16 @@ with only the players on it. `docs/LINK.md` describes the protocol, the
 security and what was tested.
 
 ### LINK CUE
-With `--pro-link`, the interface's deck is heard only in a DJM's headphone
-cue, as rekordbox's Link Monitor feeds it: no audio device is opened. When
-the deck starts playing, cyanbox asks the mixer for the cue and streams the
-deck to it, paced by the mixer's clock. It never poses as a player, and
-gives way to a player that takes the cue over until the deck starts again.
-The status bar says where the cue stands.
+With `--pro-link`, while a DJM is on the link, the interface's deck is
+heard only in its headphone cue, as rekordbox's Link Monitor feeds it.
+When the deck starts playing, cyanbox asks the mixer for the cue and
+streams the deck to it, paced by the mixer's clock. It never poses as a
+player, and gives way to a player that takes the cue over until the deck
+starts again. With no mixer on the link the deck plays through PipeWire
+as it does without `--pro-link` (or as `--audio` says): it moves to the
+mixer's cue as soon as one is heard, and back two seconds after the last
+one goes quiet, playing on throughout. The status bar says where the
+deck is heard and where the cue stands.
 
 LINK CUE works end to end on an emulated DJM-A9 (firmware 1.22) and
 DJM-900NXS (firmware 1.32), but has not yet been tried on a real mixer.

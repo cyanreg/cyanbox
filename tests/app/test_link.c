@@ -17,6 +17,11 @@
  * the test's own hears nothing while the deck is paused; the deck played,
  * its timing is answered packet for packet with the deck's audio, the
  * deck moving by what was taken, and nothing once it is paused again.
+ * Then the deck's output following the mixer (--pro-link), from the
+ * player's usual output (the null backend here): not moved by the mixer's
+ * keep-alive alone, moved to the ring once its timing is heard and played
+ * there at its pace, back between 2.5 and 4 s after it went silent with
+ * the deck playing on, to the ring again, and back when Link stops.
  *
  * Usage: test_link FILE.wav SCRATCH_DIR */
 
@@ -506,106 +511,208 @@ static void mixer_run(CBApp *app, Mixer *m, int ms)
     }
 }
 
-static void test_cue(const char *wav, const char *dir)
+/* An app on `backend` with a track loaded on its deck, Link on the
+ * loopback with a cue port of its own, and the mixer's sockets. */
+typedef struct Rig {
+    CBApp app;
+    bool created;
+    Mixer m;
+    int fa, fs;
+    CBLinkPorts sp;
+    char *music, *root, *a_wav;
+} Rig;
+
+static void rig_open(Rig *r, const char *wav, const char *dir, enum CBAudioBackend backend)
 {
+    *r = (Rig) { .m = { .counter = 5000, .fd = -1 }, .fa = -1, .fs = -1 };
     nftw(dir, remove_one, 16, FTW_DEPTH | FTW_PHYS);
-    char *music = cb_path_join(dir, "music");
-    char *root = cb_path_join(dir, "lib");
-    char *a_wav = music ? cb_path_join(music, "a.wav") : NULL;
+    r->music = cb_path_join(dir, "music");
+    r->root = cb_path_join(dir, "lib");
+    r->a_wav = r->music ? cb_path_join(r->music, "a.wav") : NULL;
     uint8_t *data = NULL;
     size_t size = 0;
-    CHECK(music && root && a_wav && cb_mkdir_p(music) >= 0 &&
-          cb_file_read(wav, &data, &size) >= 0 && cb_file_write_atomic(a_wav, data, size) >= 0);
+    CHECK(r->music && r->root && r->a_wav && cb_mkdir_p(r->music) >= 0 &&
+          cb_file_read(wav, &data, &size) >= 0 && cb_file_write_atomic(r->a_wav, data, size) >= 0);
     free(data);
 
     CBPlayerOptions po;
     cb_player_options_default(&po);
-    po.backend = CB_AUDIO_RING;
-    CBApp app;
-    CHECK_EQ(cb_app_create(&app, root, &po, NULL), 0);
+    po.backend = backend;
+    CBApp *app = &r->app;
+    CHECK_EQ(cb_app_create(app, r->root, &po, NULL), 0);
+    r->created = true;
     int err = 0;
-    CBTrack *t = cb_library_add_file(&app.lib, a_wav, &err);
-    CHECK(t && cb_app_load_deck(&app, 0, t) == 0);
-    CHECK(tick_until(&app, deck_loaded, 30));
+    CBTrack *t = cb_library_add_file(&app->lib, r->a_wav, &err);
+    CHECK(t && cb_app_load_deck(app, 0, t) == 0);
+    CHECK(tick_until(app, deck_loaded, 30));
 
-    Mixer m = { .counter = 5000 };
+    Mixer *m = &r->m;
     uint16_t ma = 0, ms = 0;
-    CHECK_EQ(cb_link_if_find(&m.ifc, "lo", "127.0.0.2", NULL), 0);
-    int fa = cb_link_udp(&m.ifc, m.ifc.addr, 0, &ma);
-    int fs = cb_link_udp(&m.ifc, m.ifc.addr, 0, &ms);
+    CHECK_EQ(cb_link_if_find(&m->ifc, "lo", "127.0.0.2", NULL), 0);
+    r->fa = cb_link_udp(&m->ifc, m->ifc.addr, 0, &ma);
+    r->fs = cb_link_udp(&m->ifc, m->ifc.addr, 0, &ms);
     uint16_t mc = 0;
-    m.fd = cb_link_udp(&m.ifc, m.ifc.addr, 0, &mc);
-    CBLinkPorts sp = {
+    m->fd = cb_link_udp(&m->ifc, m->ifc.addr, 0, &mc);
+    r->sp = (CBLinkPorts) {
         .announce = free_udp("127.0.0.1"), .status = free_udp("127.0.0.1"),
         .query = free_tcp(), .portmap = free_udp("127.0.0.1"), .cue = free_udp("127.0.0.1"),
     };
-    m.port = sp.cue;
-    CHECK(fa >= 0 && fs >= 0 && m.fd >= 0 && sp.announce && sp.status && sp.query &&
-          sp.portmap && sp.cue);
+    m->port = r->sp.cue;
+    CHECK(r->fa >= 0 && r->fs >= 0 && m->fd >= 0 && r->sp.announce && r->sp.status &&
+          r->sp.query && r->sp.portmap && r->sp.cue);
     CBLinkOptions so;
     cb_link_options_default(&so);
     so.interface = "lo";
     so.broadcast = "127.0.0.2";
-    so.ports = sp;
+    so.ports = r->sp;
     so.peer_ports = (CBLinkPorts) { .announce = ma, .status = ms, .cue = mc };
-    app.link_state.enabled = true;
-    CHECK_EQ(cb_app_link_start(&app, &so), 0);
-    CHECK(app.link_state.cue_enabled);
-    CHECK(tick_until(&app, up, 15));
+    app->link_state.enabled = true;
+    CHECK_EQ(cb_app_link_start(app, &so), 0);
+    CHECK(app->link_state.cue_enabled);
+    CHECK(tick_until(app, up, 15));
+}
 
-    /* The mixer on the link (its keep-alive, as a DJM-V5's). */
+/* The mixer on the link: its keep-alive, as a DJM-V5's. */
+static void rig_keep_alive(Rig *r)
+{
     CBPktKeepAlive k = { .name = "DJM-A9", .proto = 2, .number = 33, .first = 2,
-                         .mac = { 0xc8, 0x3d, 0xfc, 0x1d, 0xfe, 0xa2 }, .addr = m.ifc.addr,
+                         .mac = { 0xc8, 0x3d, 0xfc, 0x1d, 0xfe, 0xa2 }, .addr = r->m.ifc.addr,
                          .peers = 1, .type = 3, .tail = 0x31 };
     uint8_t kb[64];
     CBWr kw = cb_wr(kb, sizeof(kb));
     cb_pkt_keep_alive(&kw, &k);
-    if (fa >= 0)
-        cb_link_send(fa, 0x7F000001, sp.announce, kw.p, kw.len);
-    CHECK(tick_until(&app, sees_mixer, 5));
+    if (r->fa >= 0)
+        cb_link_send(r->fa, 0x7F000001, r->sp.announce, kw.p, kw.len);
+}
+
+static void rig_close(Rig *r)
+{
+    if (r->created) {
+        cb_app_destroy(&r->app);
+        CHECK(!r->app.link);
+    }
+    int fds[] = { r->fa, r->fs, r->m.fd };
+    for (size_t i = 0; i < CB_ARRAY_ELEMS(fds); i++) {
+        if (fds[i] >= 0)
+            close(fds[i]);
+    }
+    free(r->music);
+    free(r->root);
+    free(r->a_wav);
+}
+
+static void test_cue(const char *wav, const char *dir)
+{
+    Rig r;
+    rig_open(&r, wav, dir, CB_AUDIO_RING);
+    CBApp *app = &r.app;
+    Mixer *m = &r.m;
+    rig_keep_alive(&r);
+    CHECK(tick_until(app, sees_mixer, 5));
 
     /* Paused: nothing, the mixer seen. */
-    mixer_run(&app, &m, 150);
-    CHECK(m.sent > 15 && !m.answered && !m.bad);
-    cb_app_tick(&app);
-    const CBLinkCueState *cs = &app.link_state.cue;
+    mixer_run(app, m, 150);
+    CHECK(m->sent > 15 && !m->answered && !m->bad);
+    cb_app_tick(app);
+    const CBLinkCueState *cs = &app->link_state.cue;
     CHECK(cs->mixer && !strcmp(cs->name, "DJM-A9") && cs->number == 33 && cs->on && !cs->ours &&
           !cs->sending);
 
     /* Played: a second of the deck's audio, the deck moving by what was
      * taken (the ring holds 21 ms more). */
     CBDeckState st;
-    cb_deck_state(app.player, 0, &st);
+    cb_deck_state(app->player, 0, &st);
     double from = st.position;
-    cb_deck_play(app.player, 0);
-    cb_app_tick(&app);
-    mixer_run(&app, &m, 1000);
-    cb_deck_state(app.player, 0, &st);
-    double moved = st.position - from, taken = m.answered * (double)CB_CUE_FRAMES / 48000;
+    cb_deck_play(app->player, 0);
+    cb_app_tick(app);
+    mixer_run(app, m, 1000);
+    cb_deck_state(app->player, 0, &st);
+    double moved = st.position - from, taken = m->answered * (double)CB_CUE_FRAMES / 48000;
     fprintf(stderr, "test_link: LINK CUE: %d timings, %d answered, peak %d, moved %.3f s for "
-            "%.3f s taken\n", m.sent, m.answered, m.peak, moved, taken);
-    CHECK(m.answered >= m.sent - 3 && m.takes == 1 && !m.bad);
-    CHECK(m.peak > 10000);
+            "%.3f s taken\n", m->sent, m->answered, m->peak, moved, taken);
+    CHECK(m->answered >= m->sent - 3 && m->takes == 1 && !m->bad);
+    CHECK(m->peak > 10000);
     CHECK(fabs(moved - taken) < 0.06);
-    cb_app_tick(&app);
+    cb_app_tick(app);
     CHECK(cs->mixer && cs->on && cs->source == 17 && cs->ours && cs->sending);
 
     /* Paused again: nothing. */
-    cb_deck_pause(app.player, 0);
-    cb_app_tick(&app);
-    mixer_run(&app, &m, 150);
-    CHECK(m.sent > 15 && !m.answered && !m.bad);
+    cb_deck_pause(app->player, 0);
+    cb_app_tick(app);
+    mixer_run(app, m, 150);
+    CHECK(m->sent > 15 && !m->answered && !m->bad);
+    rig_close(&r);
+}
 
-    cb_app_destroy(&app);
-    CHECK(!app.link);
-    int fds[] = { fa, fs, m.fd };
-    for (size_t i = 0; i < CB_ARRAY_ELEMS(fds); i++) {
-        if (fds[i] >= 0)
-            close(fds[i]);
+static bool on_ring(CBApp *app)
+{
+    return cb_player_backend(app->player) == CB_AUDIO_RING;
+}
+
+static bool on_null(CBApp *app)
+{
+    return cb_player_backend(app->player) == CB_AUDIO_NULL;
+}
+
+static double deck_position(CBApp *app)
+{
+    CBDeckState st;
+    cb_deck_state(app->player, 0, &st);
+    return st.position;
+}
+
+/* The deck's output following the mixer, the player's own (here the null
+ * backend, standing for PipeWire) while there is none. */
+static void test_output(const char *wav, const char *dir)
+{
+    Rig r;
+    rig_open(&r, wav, dir, CB_AUDIO_NULL);
+    CBApp *app = &r.app;
+    Mixer *m = &r.m;
+    CHECK(on_null(app));
+
+    /* The mixer on the link, its keep-alive alone: the deck stays. */
+    rig_keep_alive(&r);
+    CHECK(tick_until(app, sees_mixer, 5));
+    for (int i = 0; i < 15; i++) {
+        cb_app_tick(app);
+        usleep(20000);
     }
-    free(music);
-    free(root);
-    free(a_wav);
+    CHECK(on_null(app) && !app->link_state.cue.mixer);
+
+    /* Its timing heard: the deck in its LINK CUE. */
+    mixer_run(app, m, 150);
+    CHECK(on_ring(app) && app->link_state.cue.mixer && strstr(app->status, "LINK CUE"));
+
+    /* Played: the deck's audio, at the mixer's pace. */
+    double from = deck_position(app);
+    cb_deck_play(app->player, 0);
+    cb_app_tick(app);
+    mixer_run(app, m, 600);
+    double moved = deck_position(app) - from, taken = m->answered * (double)CB_CUE_FRAMES / 48000;
+    CHECK(m->answered >= m->sent - 3 && m->peak > 10000 && !m->bad);
+    CHECK(fabs(moved - taken) < 0.06);
+
+    /* The mixer silent: the deck back where it was after the cue's second
+     * and the two held, playing on all the while. */
+    int64_t t0 = cb_time_us();
+    from = deck_position(app);
+    CHECK(tick_until(app, on_null, 8));
+    double after = (cb_time_us() - t0) / 1e6;
+    moved = deck_position(app) - from;
+    fprintf(stderr, "test_link: output back after %.2f s, the deck moved %.2f s\n", after, moved);
+    CHECK(after > 2.5 && after < 4.0);
+    /* On the clock but for the 150 ms the ring waits for the mixer's next
+     * take after its last (RING_IDLE_US). */
+    CHECK(moved > after - 0.3 && moved < after + 0.05);
+    CHECK(strstr(app->status, "No mixer"));
+
+    /* Heard again, and Link stopped: back. */
+    mixer_run(app, m, 150);
+    CHECK(on_ring(app));
+    cb_app_link_stop(app);
+    CHECK(on_null(app));
+    rig_close(&r);
 }
 
 int main(int argc, char **argv)
@@ -621,5 +728,9 @@ int main(int argc, char **argv)
     if (cue_dir)
         test_cue(argv[1], cue_dir);
     free(cue_dir);
+    char *output_dir = cb_path_join(argv[2], "output");
+    if (output_dir)
+        test_output(argv[1], output_dir);
+    free(output_dir);
     return test_result("test_link");
 }

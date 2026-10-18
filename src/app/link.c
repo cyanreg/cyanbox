@@ -13,9 +13,13 @@
  * player saves on the deck or deletes and the ratings it gives, which the
  * services have served since and hand over (cb_link_set_edits).
  *
- * With the player's ring backend (--pro-link) the deck is heard only in a
- * mixer's LINK CUE: the services take its audio from the ring as the mixer
- * asks (cb_player_ring_take), and each tick tells them whether it plays. */
+ * The deck's output follows the mixer: while a mixer is heard on the link
+ * (its LINK CUE timing) the deck is heard only in its headphone cue, the
+ * player on its ring backend, whose audio the services take as the mixer
+ * asks (cb_player_ring_take); each tick tells them whether it plays. With
+ * no mixer, the deck plays where it would without Link (PipeWire, or what
+ * --audio said), as the user asked: "If no mixer is detected, can you make
+ * the audio output on --pro-link using pipewire as usual?" */
 
 #include "applink.h"
 
@@ -33,6 +37,13 @@
 #define RELOAD_QUIET_US   2000000
 #define RELOAD_LONGEST_US 30000000
 
+/* The deck goes back to its usual output this long after the last mixer
+ * was heard (on top of the second the cue's `mixer` lasts), so that a gap
+ * in a mixer's timing does not move it; an output that would not open is
+ * tried again this long after. */
+#define OUTPUT_HOLD_US  2000000
+#define OUTPUT_RETRY_US 10000000
+
 /* A player's count, by the interface it is on and its number there
  * (numbers repeat from one network to another). */
 typedef struct Counter {
@@ -46,8 +57,15 @@ typedef struct Counter {
 typedef struct CBAppLink {
     CBLinkSet *set;
     CBLinkTagList *tags;        /* the TAG LIST, for as long as the app runs */
-    CBLinkCue *cue;             /* LINK CUE, with the ring backend; as long as the app runs */
+    CBLinkCue *cue;             /* LINK CUE, with a player; as long as the app runs */
     bool cue_playing;           /* the deck played at the last tick */
+    /* The deck's output with no mixer heard: the player's when Link first
+     * started; the ring's while one is. */
+    bool usual_known;
+    enum CBAudioBackend usual;
+    char *usual_sink;           /* NULL the default */
+    int64_t mixer_us;           /* cb_time_us a mixer was last heard, 0 never */
+    int64_t output_failed_us;   /* when moving the output last failed, 0 never */
     unsigned tags_generation;   /* the one the rows were made for */
     unsigned generation;        /* lib.generation the services read last */
     unsigned seen_generation;   /* the last one seen, since changed_us */
@@ -202,8 +220,16 @@ int cb_app_link_start(CBApp *app, const CBLinkOptions *o)
         opt.library = app->lib.root;
     if (!opt.tag_list && !(opt.tag_list = cb_app_tag_list(app)))
         return CB_ERROR(ENOMEM);
-    /* The deck heard only in a mixer's LINK CUE. */
-    if (!opt.cue && app->player && cb_player_backend(app->player) == CB_AUDIO_RING) {
+    /* The deck heard in a mixer's LINK CUE while one is on the link, and
+     * where it is usually heard otherwise. */
+    if (app->player && !l->usual_known) {
+        const char *sink = cb_player_sink(app->player);
+        if (sink && !(l->usual_sink = cb_strdup(sink)))
+            return CB_ERROR(ENOMEM);
+        l->usual = cb_player_backend(app->player);
+        l->usual_known = true;
+    }
+    if (!opt.cue && app->player) {
         if (!l->cue && cb_link_cue_new(&l->cue, ring_take, app->player) < 0)
             return CB_ERROR(ENOMEM);
         opt.cue = l->cue;
@@ -218,6 +244,9 @@ int cb_app_link_start(CBApp *app, const CBLinkOptions *o)
         .set = l->set,
         .tags = l->tags,
         .cue = l->cue,
+        .usual_known = l->usual_known,
+        .usual = l->usual,
+        .usual_sink = l->usual_sink,
         .tags_generation = l->tags_generation,
         .generation = app->lib.generation,
         .seen_generation = app->lib.generation,
@@ -246,7 +275,31 @@ int cb_app_link_load(CBApp *app, int index, uint64_t track_id)
 
 static void take_edits(CBApp *app);
 
-void cb_app_link_stop(CBApp *app)
+/* Moves the deck to `want` (cyanbox/player.h cb_player_set_backend), with
+ * a word in the status bar. True when it moved or tried to. */
+static bool set_output(CBApp *app, enum CBAudioBackend want, const char *mixer, int64_t now)
+{
+    CBAppLink *l = app->link;
+    if (cb_player_backend(app->player) == want ||
+        (l->output_failed_us && now - l->output_failed_us < OUTPUT_RETRY_US))
+        return false;
+    int ret = cb_player_set_backend(app->player, want,
+                                    want == CB_AUDIO_PIPEWIRE ? l->usual_sink : NULL);
+    l->output_failed_us = ret < 0 ? now : 0;
+    if (ret < 0) {
+        app->last_error_count++;
+        cb_app_set_status(app, "The deck's audio cannot move: %s", strerror(-ret));
+    } else if (want == CB_AUDIO_RING) {
+        cb_app_set_status(app, "%s on the link: the deck is heard in its LINK CUE", mixer);
+    } else {
+        cb_app_set_status(app, "No mixer on the link: the deck plays %s",
+                          want == CB_AUDIO_PIPEWIRE ? "through PipeWire" : "silently");
+    }
+    app->dirty = true;
+    return true;
+}
+
+static void link_stop(CBApp *app, bool restore)
 {
     CBAppLink *l = app->link;
     if (!l || !l->set)
@@ -256,7 +309,16 @@ void cb_app_link_stop(CBApp *app)
     for (int i = 0; i < CB_APP_LINK_DEVICES; i++)
         l->counters[i].number = 0;
     state_clear(app);
+    /* No cue any more: the deck where it is usually heard. */
+    l->mixer_us = 0;
+    if (restore && app->player && l->usual_known)
+        set_output(app, l->usual, NULL, cb_time_us());
     app->dirty = true;
+}
+
+void cb_app_link_stop(CBApp *app)
+{
+    link_stop(app, true);
 }
 
 /* ------------------------------------------------------------------ tick */
@@ -522,6 +584,19 @@ static bool follow_cue(CBApp *app)
     return changed;
 }
 
+/* The deck's output: a mixer's LINK CUE while one is heard, OUTPUT_HOLD_US
+ * on, else the usual one. True when it moved. */
+static bool follow_output(CBApp *app, int64_t now)
+{
+    CBAppLink *l = app->link;
+    if (!app->link_state.cue_enabled || !app->player || !l->usual_known)
+        return false;
+    if (app->link_state.cue.mixer)
+        l->mixer_us = now;
+    bool cue = l->mixer_us && now - l->mixer_us < OUTPUT_HOLD_US;
+    return set_output(app, cue ? CB_AUDIO_RING : l->usual, app->link_state.cue.name, now);
+}
+
 bool cb_app_link_tick(CBApp *app)
 {
     CBAppLink *l = app->link;
@@ -532,6 +607,7 @@ bool cb_app_link_tick(CBApp *app)
     int64_t now = cb_time_us();
     bool changed = follow(app, now);
     changed |= follow_cue(app);
+    changed |= follow_output(app, now);
     take_edits(app);
     follow_library(app, now);
     return changed;
@@ -539,10 +615,11 @@ bool cb_app_link_tick(CBApp *app)
 
 void cb_app_link_destroy(CBApp *app)
 {
-    cb_app_link_stop(app);
+    link_stop(app, false);
     if (app->link) {
         cb_link_tag_list_free(&app->link->tags);
         cb_link_cue_free(&app->link->cue);
+        free(app->link->usual_sink);
     }
     free(app->link);
     app->link = NULL;

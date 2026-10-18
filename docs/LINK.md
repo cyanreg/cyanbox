@@ -706,16 +706,23 @@ cyanbox does not fight a DJ cueing on a deck. While its decks do not play
 nothing is sent. One mixer at a time: the first heard, until it is silent
 for a second.
 
-**With `--pro-link`** the interface's deck is heard only there: the
-player runs its ring backend (src/player/ringout.c), whose audio the
-services take 336 frames at a time as the mixer asks, and no audio
-device is opened. The ring counts as taken until 150 ms go by without a
-take, so a mixer that holds enough and asks nothing for a while neither
-loses what the ring kept nor finds the deck run on. Each tick tells LINK
-CUE whether the deck plays (or scrubs) and when it starts
-(src/app/link.c); the status bar says where
-the cue stands (docs/UI.md). `cyanbox link serve` has no deck and binds no
-LINK CUE port.
+**With `--pro-link`** the interface's deck is heard only there while a
+mixer is: once a mixer's timing is heard (CBLinkCueState.mixer) the
+player moves to its ring backend (src/player/ringout.c,
+cb_player_set_backend), whose audio the services take 336 frames at a
+time as the mixer asks, and no audio device is open; two seconds after
+the last mixer's timing stops (a second after its last), and when Link
+stops, it moves back to its usual output, PipeWire or what `--audio`
+says, the deck playing on throughout (src/app/link.c, follow_output).
+Its keep-alive alone does not move it: a mixer that sends no timing
+cannot take the audio. The services' LINK CUE is there from the start,
+listening, whatever the output. The ring counts as taken until 150 ms go
+by without a take, so a mixer that holds enough and asks nothing for a
+while neither loses what the ring kept nor finds the deck run on. Each
+tick tells LINK CUE whether the deck plays (or scrubs) and when it
+starts (src/app/link.c); the status bar says where the cue stands
+(docs/UI.md). `cyanbox link serve` has no deck and binds no LINK CUE
+port.
 
 **Proven**: test_cue, the decisions against a driven clock (a mixer
 asking nothing for 58 and 120 ms gone on, a timing never answered taken
@@ -725,9 +732,13 @@ frames in the order taken, nothing to a device off the link); the
 packets in test_packets, built from touch_audio.adoc's figures (nobody
 captured them for us); the fuzzer; test_ring, the ring taken in real
 time (after 60 and 120 ms without a take, what it kept, the deck
-waiting); the app's test_link, the deck played with the ring backend and
-heard by a mixer of the test's own, the deck moving by what was taken;
-and by hand,
+waiting; moved to the null backend and back while it plays); the app's
+test_link, the deck played with the ring backend and heard by a mixer
+of the test's own, the deck moving by what was taken, and the deck's
+output following the mixer (not moved by its keep-alive alone, to the
+ring at its timing, back about 3 s after it went silent, the deck
+playing on, and back when Link stops); test_pipewire, on a null sink,
+the stream moved to the ring and back while the deck plays; and by hand,
 the interface with `--pro-link` in tests/link/netns.sh's namespaces and a
 fake mixer on the other host, its status bar saying `LINK CUE: playing on
 DJM-A9`.

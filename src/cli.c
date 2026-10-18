@@ -177,10 +177,10 @@ static const char usage_text[] =
     "  --no-mpris               stay off the D-Bus session bus (no MPRIS media controls)\n"
     "  --pro-link               serve the library to players (PRO DJ LINK) on every\n"
     "                           Ethernet interface while the interface runs; without\n"
-    "                           it no Link socket is ever opened. The deck is then\n"
-    "                           heard only in a DJM's headphone cue (LINK CUE): no\n"
-    "                           audio device is opened, --audio does not apply, and\n"
-    "                           it stays off the session bus, as with --no-mpris\n"
+    "                           it no Link socket is ever opened. While a DJM is on\n"
+    "                           the link the deck is heard only in its headphone cue\n"
+    "                           (LINK CUE); with none, as --audio says. It stays off\n"
+    "                           the session bus, as with --no-mpris\n"
     "  --frames N               draw N frames, then exit (tests)\n";
 
 /* ------------------------------------------------------------------ helpers */
@@ -2538,12 +2538,8 @@ static int run_interface(Cli *cli)
     po.backend = cli->audio;
     po.sink = cli->sink;
     po.app_name = "cyanbox";
-    /* With --pro-link the deck is heard only in a mixer's LINK CUE, which
-     * takes its audio from the ring (src/app/link.c). */
-    if (cli->pro_link) {
-        po.backend = CB_AUDIO_RING;
-        po.sink = NULL;
-    }
+    /* With --pro-link the deck is heard in a mixer's LINK CUE while one is
+     * on the link, and here otherwise (src/app/link.c). */
 
     CBWindowOptions wo;
     cb_window_options_default(&wo);
@@ -2568,7 +2564,7 @@ static int run_interface(Cli *cli)
         return fail("cannot start the interface: %s", strerror(-ret));
     }
     /* The deck on the session bus; without one it runs on as it is. Not
-     * with --pro-link: the deck is a mixer's cue then, not the desktop's
+     * with --pro-link: the deck is a mixer's cue there, not the desktop's
      * player, and no media key or desktop control reaches it. */
     if (!cli->no_mpris && !cli->pro_link)
         cb_mpris_create(app);

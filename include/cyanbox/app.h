@@ -154,9 +154,10 @@ typedef struct CBApp {
          * was counted as a play. */
         double   played[CB_APP_LINK_DEVICES];
         bool     counted[CB_APP_LINK_DEVICES];
-        /* LINK CUE: with the player's ring backend (--pro-link) the deck is
-         * heard only in a mixer's headphone cue (cyanbox/link.h CBLinkCue);
-         * where that stands, copied every tick. */
+        /* LINK CUE (cyanbox/link.h CBLinkCue): while a mixer is heard on
+         * the link the deck is heard only in its headphone cue, the player
+         * on its ring backend; with none, as without Link (PipeWire). Where
+         * the cue stands, copied every tick. */
         bool     cue_enabled;
         CBLinkCueState cue;
     } link_state;
@@ -314,10 +315,13 @@ int  cb_app_set_beat_model(CBApp *app);
  * runs, each tick copies its state into link_state, counts a play of a
  * track of ours that a player has played 30 s of (cb_library_record_play,
  * as the deck's), and, a little after the library last changed, has the
- * services read it again. -EPERM without --pro-link (link_state.enabled
- * false), -EALREADY when on. */
+ * services read it again. The deck's output follows the mixer: its LINK
+ * CUE while one is heard (and two seconds on), the player's usual output
+ * (the one it had when Link first started) otherwise. -EPERM without
+ * --pro-link (link_state.enabled false), -EALREADY when on. */
 int  cb_app_link_start(CBApp *app, const CBLinkOptions *o);
-/* Off: every service stopped (it waits for a request in progress). */
+/* Off: every service stopped (it waits for a request in progress), and the
+ * deck back on its usual output. */
 void cb_app_link_stop(CBApp *app);
 /* Re-checks which audio files are missing; returns how many changed. */
 int  cb_app_rescan(CBApp *app);
