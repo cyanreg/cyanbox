@@ -45,20 +45,20 @@ orange), quantize-on `#3CEB50`. The title row is tinted blue (`#1F3B73` at
 low alpha), as rekordbox's deck 1 is.
 
 Waveform colours (`src/gpu/shaders/wave.frag`, on the waveforms'
-`#050505`): the 3-band waveforms are in mixed hues: low `#15C6E1` (a
-cyan), mid `#F7AB5D` (a light orange), high `#F48ABA` (a pink). The
+`#050505`): the 3-band waveforms are in mixed hues: low `#4675D8` (a
+blue), mid `#F7AB5D` (a light orange), high `#F48ABA` (a pink). The
 stacked half draws each band in its colour; centred and overlaid, a pixel
 two bands reach has a hue of its own, low+mid `#E97C48` (a deeper
 orange), mid+high `#FFC2B1` (a peach), low+high `#A497EA` (a lavender),
 and one all three reach is a white with a little blue, `#E3F1FB`, over
 the inner 70 % of the shortest band's reach (the rest in the two
 furthest's colour), so that the white core is not most of a loud track.
-So the kicks are cyan at the tips, the mids and the ring round the core
-orange, the hats pink here and there. Every colour is 7.2:1 or more
+So the kicks are blue at the tips, the mids and the ring round the core
+orange, the hats pink here and there. Every colour is 4.7:1 or more
 against the background. Not a blend for a pair: the CDJ-3000's amber
 mids over blue lows give pairs and a core in shades of brown and cream.
-Tried before: all blues (too few colours), blue, orange and green (the
-green and the orange did not fit), and the DJ programs' red, green and
+Tried before: all blues (too few colours), green highs (the green and
+the orange did not fit), cyan lows, and the DJ programs' red, green and
 blue, too loud at full strength and too faded muted.
 BLUE (`#0055E1` to `#F5EBD7` by whiteness) and RGB (the tag's colour, its
 strongest channel at full) are drawn as rekordbox draws them, and silence

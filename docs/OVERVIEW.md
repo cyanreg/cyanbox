@@ -319,7 +319,7 @@ Waveforms are drawn as rekordbox draws them, as measured by rbxport: the
 stacked row preview uses the measured 128/256/128 scales; the BLUE palette
 shades a column from blue to cream by its whiteness bits; RGB columns are
 drawn saturated by their strongest channel. The 3-band palette is cyanbox's
-own, in mixed hues: low a cyan (`#15C6E1`), mid a light orange
+own, in mixed hues: low a blue (`#4675D8`), mid a light orange
 (`#F7AB5D`), high a pink (`#F48ABA`), each pair a hue of its own
 (`#E97C48` low+mid, a deeper orange; `#FFC2B1` mid+high, a peach;
 `#A497EA` low+high, a lavender) and all three a white with a little blue,

@@ -124,7 +124,7 @@ typedef struct CBWaveDraw {
  * callback. Colours are rekordbox's as measured by rbxport, but for the
  * 3-band palette, which is cyanbox's own, in mixed hues (shaders/wave.frag
  * says why):
- *   3-band: low #15C6E1, mid #F7AB5D, high #F48ABA; low+mid #E97C48,
+ *   3-band: low #4675D8, mid #F7AB5D, high #F48ABA; low+mid #E97C48,
  *           low+high #A497EA, mid+high #FFC2B1, all #E3F1FB; stacked, each
  *           band in its own colour at scales 128/256/128; silence a 1 px
  *           line in #D2DCFA.

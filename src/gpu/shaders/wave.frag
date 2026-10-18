@@ -113,23 +113,23 @@ const float BOX_SPAN = 16.0;
 
 // The 3-band palette, one colour per combination of bands (bit 0 low,
 // bit 1 mid, bit 2 high), as the user asked for it after rendered
-// options: low a cyan, mid a light orange, high a pink. A pair has a hue
-// of its own, not a blend of its two, which for cyan and orange is a grey
-// (the CDJ-3000's amber mids over blue lows give pairs and a core in
+// options: low a blue, mid a light orange, high a pink. A pair has a hue
+// of its own, not a blend of its two, which for blue and orange is a grey
+// brown (the CDJ-3000's amber mids over blue lows give pairs and a core in
 // shades of brown and cream): low+mid a deeper orange, the ring round the
 // core on most beats; mid+high a peach; low+high a lavender. All three,
-// the core, are a white with a little blue. So the kicks are cyan at the
+// the core, are a white with a little blue. So the kicks are blue at the
 // tips, the mids and the ring orange, the hats pink here and there. Tried
-// before it, the same day: all blues (too few colours); blue lows, orange
-// mids and green highs (the green and the orange did not fit together);
+// before it, the same day: all blues (too few colours); green highs (the
+// green and the orange did not fit together); cyan lows (back to blue);
 // and the red, green and blue that DJ programs share for frequency
 // (Serato, rekordbox's RGB, Mixxx), too loud at full strength and too
-// faded muted. Every colour is 7.2:1 or more against the waveform's
+// faded muted. Every colour is 4.7:1 or more against the waveform's
 // #050505 (WCAG asks 3 of graphics). The closest two are 14.9 apart in
-// CIEDE2000 (mid and low+mid); for the red-green colour blind, low and
-// low+high are 5.6 apart for a deuteranope and low and high 8.9 for a
-// protanope (the CDJ's closest 2.1 and 2.4).
-const vec3 LOW      = vec3(0x15, 0xC6, 0xE1) / 255.0;
+// CIEDE2000 (mid and low+mid); for the red-green colour blind 8.6 for a
+// deuteranope (the same two) and 11.1 for a protanope (high and
+// low+high), where the CDJ's are 2.4 and 2.1.
+const vec3 LOW      = vec3(0x46, 0x75, 0xD8) / 255.0;
 const vec3 MID      = vec3(0xF7, 0xAB, 0x5D) / 255.0;
 const vec3 HIGH     = vec3(0xF4, 0x8A, 0xBA) / 255.0;
 const vec3 LOW_MID  = vec3(0xE9, 0x7C, 0x48) / 255.0;
