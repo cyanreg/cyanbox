@@ -19,15 +19,16 @@
  *                 inside it (insets larger than the rectangle), and the
  *                 gain (a quiet column drawn up to full height, or not),
  *                 and the horizontal rules: a spike and an attack drawn a
- *                 quarter of a pixel off the grid, box-filtered or split,
- *                 and the maximum kept where it should be
+ *                 quarter of a pixel off the grid, box-filtered or split
+ *                 as light, and the maximum kept where it should be
  *   --scroll      draw the zoomed detail rows (about 120 columns,
  *                 interpolated; 1.6 columns a pixel) of the spike pattern
- *                 over black and over white, moving 0.07 columns a
+ *                 over black and over a dark grey, moving 0.07 columns a
  *                 frame for 40 frames, read every frame back, and check
  *                 that the picture moves smoothly: the row's total
- *                 coverage stays constant and consecutive frames differ
- *                 little and steadily (see scroll_check)
+ *                 coverage stays constant, consecutive frames differ
+ *                 little and steadily, and every one-column spike of the
+ *                 1.6 row gives the same light (see scroll_check)
  *   --bench COLS  draw four full-window detail waveforms at COLS columns
  *                 a pixel behind everything, for the shader's cost
  *   --idle        stop asking for redraws after the first frames (the
@@ -58,8 +59,10 @@
 #define SPIKE_COLUMNS (1 << 17)
 
 /* --scroll: rows of SCROLL_W logical pixels, each drawn twice (over black
- * and over white, which together give the alpha), stepped SCROLL_STEP
- * columns a frame for SCROLL_FRAMES frames from frame SCROLL_START.
+ * and over a dark grey, which together give the alpha; over white, a pixel
+ * whose colour, blended as light, is brighter than its alpha would clip),
+ * stepped SCROLL_STEP columns a frame for SCROLL_FRAMES frames from frame
+ * SCROLL_START.
  * 1.6 columns a pixel over SCROLL_W is 40 whole periods, and a period is
  * 25.625 pixels, so the pixels meet the spikes at every phase rather than
  * all at the same one: what the row shows is the average over phases. */
@@ -72,6 +75,9 @@
 #define SCROLL_W      1025.0f
 #define SCROLL_H      90.0f
 #define SCROLL_GAP    10.0f
+/* A colour of alpha a blended as light is at most a encoded, below
+ * 1 - 0.44 * (1 - a): over a grey under 0.44 nothing clips. */
+#define SCROLL_GREY   0x40
 
 /* --bench: full-window layers a frame. */
 #define BENCH_LAYERS  4
@@ -81,9 +87,12 @@
 
 typedef struct ScrollRow {
     double   cov[SCROLL_FRAMES];    /* sum of alpha over the row */
-    double   mad[SCROLL_FRAMES];    /* mean |difference| from the frame before, of 255 */
+    double   mad[SCROLL_FRAMES];    /* mean |difference| of light from the frame before */
     uint8_t *prev;                  /* the frame before, over black, RGB */
     int      nb_frames;
+    double   light_lo, light_hi;    /* the one-column spikes' light, every frame (1.6 row) */
+    double   light_sum;
+    int      nb_lights;
 } ScrollRow;
 
 typedef struct Demo {
@@ -112,6 +121,21 @@ typedef struct Demo {
 static uint8_t level(double v)
 {
     return (uint8_t)lround(CB_CLAMP(v, 0.0, 127.0));
+}
+
+/* The light of an 8-bit encoded value read back, 0 to 1. */
+static double srgb_light(int v)
+{
+    static double lut[256];
+    static bool init;
+    if (!init) {
+        for (int i = 0; i < 256; i++) {
+            double c = i / 255.0;
+            lut[i] = c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4);
+        }
+        init = true;
+    }
+    return lut[v & 0xFF];
 }
 
 /* 120 BPM at 150 columns a second: a beat every 75 columns, kick on the
@@ -356,7 +380,7 @@ static const struct {
 /* Boxes right of the edge cases for the horizontal rules, sized in device
  * pixels, a quarter of a pixel off the grid where that matters:
  *   0: the spike, detail at 1 column a pixel: box-filtered, it is in two
- *      pixels at 3/4 and 1/4;
+ *      pixels at 3/4 and 1/4 of its light;
  *   1: the attack, detail at 0.1 columns a pixel: the pixel its vertical
  *      edge runs through is 1/4 silence and 3/4 attack;
  *   2: the spike at 4 columns a pixel, not detail (a row preview): the
@@ -411,13 +435,15 @@ static const struct {
     float dy;           /* from the box's centre line */
     uint32_t rgb;
 } hprobes[] = {
-    { "box filter: 3/4 of a spike",    0, 20, -20.0f, 0x0040A9 },
-    { "box filter: 1/4 of a spike",    0, 19, -20.0f, 0x001538 },
-    { "box filter: the spike's top",   0, 20, -38.0f, 0x0040A9 },
+    /* 3/4 and 1/4 of #0055E1's light, encoded: 3/4 and 1/4 of the encoded
+     * value (#0040A9, #001538) would be much darker. */
+    { "box filter: 3/4 of a spike",    0, 20, -20.0f, 0x004AC6 },
+    { "box filter: 1/4 of a spike",    0, 19, -20.0f, 0x002A78 },
+    { "box filter: the spike's top",   0, 20, -38.0f, 0x004AC6 },
     { "box filter: above the spike",   0, 20, -41.0f, 0x000000 },
     { "box filter: silence line",      0,  5,   0.0f, 0xD2DCFA },
     { "box filter: above the line",    0,  5,  -2.0f, 0x000000 },
-    { "attack split: 3/4 attack",      1, 20, -20.0f, 0x0040A9 },
+    { "attack split: 3/4 attack",      1, 20, -20.0f, 0x004AC6 },
     { "attack split: before it",       1, 19, -20.0f, 0x000000 },
     { "attack split: after it",        1, 21, -20.0f, 0x0055E1 },
     { "not detail: the maximum",       2,  5, -20.0f, 0x0055E1 },
@@ -553,22 +579,27 @@ static int run_checks(Demo *d)
 
 /* What a smooth scroll leaves: the row's total coverage moves only by
  * rounding (the picture over whole periods is the same picture shifted),
- * and consecutive frames differ by about as much every time. Box-filtered,
- * the rows measure 0.003 and 0.022 % and 0.2 and 0.3 %; taking the
- * maximum over whole columns at the left edge, they moved 0.52 and 0.00 %
- * and 11 and 141 % (the 1.6 row unchanged in two frames of three, then a
- * jump). */
+ * consecutive frames differ by about as much light every time, and a
+ * one-column spike gives the same light wherever it is. Box-filtered as
+ * light, the rows measure 0.006 and 0.06 % (over the grey, an alpha is
+ * read to a quarter of the precision white gave) and 0 and 1 %, and the
+ * spikes 0.9 %; blended as encoded values, the spikes' light went from
+ * 12.6 to 27.5 (69 %) as they crossed the pixels. Taking the maximum over
+ * whole columns at the left edge, the rows moved 0.52 and 0.00 % and their
+ * frame differences 11 and 141 % (measured over white and in encoded
+ * values; the 1.6 row unchanged in two frames of three, then a jump). */
 #define SCROLL_MAX_COV    0.001     /* (max - min) / mean of the coverage */
 #define SCROLL_MAX_UNEVEN 0.05      /* standard deviation / mean of the frame differences */
+#define SCROLL_MAX_LIGHT  0.03      /* (max - min) / mean of the spikes' light */
 
 static const char *const scroll_names[NB_SCROLL] = {
     "123 columns, interpolated",
     "1.6 columns a pixel",
 };
 
-static float scroll_y(int row, bool white)
+static float scroll_y(int row, bool grey)
 {
-    return SCROLL_Y + row * 2 * (SCROLL_H + SCROLL_GAP) + (white ? SCROLL_H + SCROLL_GAP : 0.0f);
+    return SCROLL_Y + row * 2 * (SCROLL_H + SCROLL_GAP) + (grey ? SCROLL_H + SCROLL_GAP : 0.0f);
 }
 
 /* The two zoomed detail rows at step k, on the spike pattern: the panel's
@@ -581,10 +612,10 @@ static void scroll_draw(Demo *d, int k)
     for (int r = 0; r < NB_SCROLL; r++) {
         double span = r == 0 ? 3 * SPIKE_PERIOD : 1.6 * SCROLL_W * scale;
         double col0 = 1000.0 + k * SCROLL_STEP;
-        for (int white = 0; white < 2; white++) {
-            float y = scroll_y(r, white);
+        for (int grey = 0; grey < 2; grey++) {
+            float y = scroll_y(r, grey);
             cb_demo_rect(dl, SCROLL_X - 2, y - 2, SCROLL_X + SCROLL_W + 2, y + SCROLL_H + 2,
-                         white ? 0xFFFFFFFF : 0x000000FF);
+                         grey ? SCROLL_GREY * 0x01010100u | 0xFF : 0x000000FF);
             CBWaveDraw wd = {
                 .x0 = SCROLL_X,  .y0 = y,
                 .x1 = SCROLL_X + SCROLL_W,  .y1 = y + SCROLL_H,
@@ -600,10 +631,42 @@ static void scroll_draw(Demo *d, int k)
     }
 }
 
+/* The light of every one-column spike (column 27 of a period) of the 1.6
+ * row in the frame of step k, over black: in the rows from the top of its
+ * reach down to 10 px above the centre line, which no column near it
+ * reaches, and the 5 pixels around it. The coverage cannot tell, but the
+ * eye sees light: blended as encoded values, a spike 0.625 pixels wide gave
+ * 0.16 to 0.35 of a white pixel's light as it crossed the pixels, and
+ * twinkled as it scrolled. */
+static void spike_light(ScrollRow *s, const uint8_t *rgba, int width, int x0, int x1, int yb,
+                        int k, float scale)
+{
+    double col0 = 1000.0 + k * SCROLL_STEP;
+    int y0 = yb + (int)lroundf(8.0f * scale), y1 = yb + (int)lroundf(38.0f * scale);
+    for (int n = (int)(col0 / SPIKE_PERIOD); ; n++) {
+        double xs = x0 + (n * SPIKE_PERIOD + 27 - col0) / 1.6;
+        int p0 = (int)floor(xs) - 2, p1 = (int)floor(xs) + 3;
+        if (p0 < x0)
+            continue;
+        if (p1 > x1)
+            break;
+        double light = 0.0;
+        for (int y = y0; y < y1; y++) {
+            const uint8_t *px = rgba + ((size_t)y * width + p0) * 4;
+            for (int p = p0; p < p1; p++, px += 4)
+                light += srgb_light(px[0]) + srgb_light(px[1]) + srgb_light(px[2]);
+        }
+        s->light_lo = s->nb_lights ? fmin(s->light_lo, light) : light;
+        s->light_hi = s->nb_lights ? fmax(s->light_hi, light) : light;
+        s->light_sum += light;
+        s->nb_lights++;
+    }
+}
+
 /* Reads the frame of step k back: each row's total coverage, with the
  * alpha recovered from its two copies (a premultiplied draw leaves rgb
- * over black and rgb + 1 - alpha over white), and how much its pixels over
- * black changed since step k - 1. */
+ * over black and rgb + (1 - alpha) * grey over the grey), and how much the
+ * light of its pixels over black changed since step k - 1. */
 static void scroll_measure(Demo *d, int k)
 {
     uint8_t *rgba = NULL;
@@ -619,9 +682,9 @@ static void scroll_measure(Demo *d, int k)
     for (int r = 0; r < NB_SCROLL; r++) {
         ScrollRow *s = &d->rows[r];
         int yb = (int)lroundf(scroll_y(r, false) * scale);
-        int yw = (int)lroundf(scroll_y(r, true) * scale);
+        int yg = (int)lroundf(scroll_y(r, true) * scale);
         size_t n = (size_t)(x1 - x0) * h * 3;
-        if (x1 > width || yw + h > height || (!s->prev && !(s->prev = calloc(n, 1)))) {
+        if (x1 > width || yg + h > height || (!s->prev && !(s->prev = calloc(n, 1)))) {
             d->scroll_lost = true;
             break;
         }
@@ -630,11 +693,11 @@ static void scroll_measure(Demo *d, int k)
         uint8_t *prev = s->prev;
         for (int y = 0; y < h; y++) {
             const uint8_t *b = rgba + ((size_t)(yb + y) * width + x0) * 4;
-            const uint8_t *wh = rgba + ((size_t)(yw + y) * width + x0) * 4;
-            for (int x = x0; x < x1; x++, b += 4, wh += 4) {
+            const uint8_t *g = rgba + ((size_t)(yg + y) * width + x0) * 4;
+            for (int x = x0; x < x1; x++, b += 4, g += 4) {
                 for (int c = 0; c < 3; c++) {
-                    cov += 1.0 - (wh[c] - b[c]) / 255.0;
-                    diff += abs(b[c] - *prev);
+                    cov += 1.0 - (g[c] - b[c]) / (double)SCROLL_GREY;
+                    diff += fabs(srgb_light(b[c]) - srgb_light(*prev));
                     *prev++ = b[c];
                 }
             }
@@ -642,6 +705,8 @@ static void scroll_measure(Demo *d, int k)
         s->cov[k] = cov / 3.0;
         s->mad[k] = k > 0 ? diff / (double)n : 0.0;
         s->nb_frames = k + 1;
+        if (r == 1)
+            spike_light(s, rgba, width, x0, x1, yb, k, scale);
     }
     free(rgba);
 }
@@ -684,8 +749,20 @@ static int scroll_check(Demo *d)
             failed++;
         cb_log(ok ? CB_LOG_INFO : CB_LOG_ERROR,
                "demo: scroll, %s: coverage %.1f px, varies by %.3f %%; frame difference "
-               "%.4f of 255 (%.4f to %.4f, sd %.4f, %.0f %% of the mean) %s", scroll_names[r],
+               "%.5f of light (%.5f to %.5f, sd %.5f, %.0f %% of the mean) %s", scroll_names[r],
                mean, 100.0 * cov_var, dmean, dlo, dhi, dsd, 100.0 * uneven, ok ? "ok" : "WRONG");
+
+        if (r != 1)
+            continue;
+        double lmean = s->nb_lights ? s->light_sum / s->nb_lights : 0.0;
+        double light_var = lmean > 0.0 ? (s->light_hi - s->light_lo) / lmean : 1.0;
+        ok = s->nb_lights >= SCROLL_FRAMES && light_var <= SCROLL_MAX_LIGHT;
+        if (!ok)
+            failed++;
+        cb_log(ok ? CB_LOG_INFO : CB_LOG_ERROR,
+               "demo: scroll, %s: %d one-column spikes, light %.3f (%.3f to %.3f), varies by "
+               "%.2f %% %s", scroll_names[r], s->nb_lights, lmean, s->light_lo, s->light_hi,
+               100.0 * light_var, ok ? "ok" : "WRONG");
     }
     return failed ? CB_ERROR(EINVAL) : 0;
 }

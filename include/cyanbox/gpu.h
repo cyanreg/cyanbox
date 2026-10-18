@@ -132,12 +132,13 @@ typedef struct CBWaveDraw {
  * A detail draw is box-filtered horizontally, so that it scrolls by
  * fractions of a pixel without shimmering: up to 16 columns a pixel, each
  * column the pixel covers is drawn on its own by the rules above and the
- * results are blended by the share of the pixel each covers; columns wider
- * than a pixel are interpolated at the pixel's centre, and the pixel a
- * sharp attack's vertical edge runs through is split by area between the
- * two sides. Other draws (the overview, the row previews), and a detail
- * draw past 16 columns a pixel, take each band's maximum over the columns
- * a pixel covers, so that a transient survives. */
+ * results are blended, as light (not as encoded values), by the share of
+ * the pixel each covers; columns wider than a pixel are interpolated at the
+ * pixel's centre, and the pixel a sharp attack's vertical edge runs through
+ * is split by area between the two sides, likewise as light. Other draws
+ * (the overview, the row previews), and a detail draw past 16 columns a
+ * pixel, take each band's maximum over the columns a pixel covers, so that
+ * a transient survives. */
 void cb_wave_draw(CBWindow *w, void *im_draw_list, const CBWaveGpu *g, const CBWaveDraw *d);
 
 #endif /* CYANBOX_GPU_H */

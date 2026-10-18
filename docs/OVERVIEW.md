@@ -191,10 +191,13 @@ Decisions and why:
   reaches its level of the height, and every pixel is in the colour of exactly
   the bands that reach it) and the results are blended by the share of the
   pixel each column covers; wide columns are interpolated at the pixel's centre
-  and a sharp attack's edge is split by area. A one-column spike so keeps its
-  weight as it moves by fractions of a pixel instead of flickering. The
-  overview and the row previews, which do not scroll, keep each band's maximum
-  over a pixel's columns. ImGui draws everything else.
+  and a sharp attack's edge is split by area. The blending is done in light,
+  not in the sRGB-encoded values the swapchain holds (which would give a
+  column split over two pixels much less light than one inside a pixel). A
+  one-column spike so keeps its light as it moves by fractions of a pixel
+  instead of flickering. The overview and the row previews, which do not
+  scroll, keep each band's maximum over a pixel's columns. ImGui draws
+  everything else.
 - **The track's packets in memory, decoded around the playhead** for
   playback. Loading reads the file's audio packets into a packet store
   (cyanbox/audio.h), placed on the players' timeline, in a few milliseconds;

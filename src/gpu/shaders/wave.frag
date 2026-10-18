@@ -13,10 +13,11 @@
 //   - A detail draw is box-filtered horizontally: the pixel is the
 //     picture averaged over [c0, c1). Up to 16 columns a pixel, every
 //     column the pixel covers is drawn on its own (the rules below) and
-//     the results are blended by the fraction of the pixel each covers, so
-//     a column straddling two pixels is in both at those weights and a
-//     one-column spike keeps the same total as it scrolls by fractions of
-//     a pixel, instead of shimmering as the pixels' footprints shift.
+//     the results are blended, as light, by the fraction of the pixel each
+//     covers, so a column straddling two pixels is in both at those
+//     weights and a one-column spike gives the same light as it scrolls by
+//     fractions of a pixel, instead of shimmering as the pixels' footprints
+//     shift.
 //   - When columns are wider than a pixel and the draw is a detail view,
 //     the value is interpolated linearly between a column and the next
 //     one, at the pixel's centre, except at a sharp attack - the next
@@ -24,8 +25,8 @@
 //     the level - which stays vertical, since ramping it turns a kick into
 //     a diamond. The pixel such an edge (or either end of the data) runs
 //     through is split there: each side is drawn on its own value and the
-//     two blended by width, so the edge moves smoothly as the view scrolls
-//     rather than snapping from pixel to pixel.
+//     two blended by width, as light, so the edge moves smoothly as the
+//     view scrolls rather than snapping from pixel to pixel.
 //   - Past 16 columns a pixel, and in a draw that is not a detail view
 //     (the overview and the row previews, which do not scroll) at any
 //     zoom, the columns the pixel covers are [floor(c0), max(floor(c0) + 1,
@@ -294,6 +295,27 @@ vec4 shade(int i)
 
 // ------------------------------------------------------------- the pixel
 
+// The swapchain holds sRGB-encoded values and blends them as they are, so
+// what a pixel blends from several columns is blended here, as light: a
+// premultiplied colour in light, the shares added, and the sum encoded
+// again. Averaged as encoded values, a column a fraction of a pixel wide
+// gives much less light split between two pixels than inside one (at 1.6
+// columns a pixel, 0.16 against 0.35 of white's), and a thin spike pulses
+// as it scrolls across the pixels even though its coverage stays the same.
+vec4 to_light(vec4 c)
+{
+    vec3 v = max(c.rgb, vec3(0.0));
+    return vec4(mix(v / 12.92, pow((v + 0.055) / 1.055, vec3(2.4)), greaterThan(v, vec3(0.04045))),
+                c.a);
+}
+
+vec4 from_light(vec4 c)
+{
+    vec3 l = max(c.rgb, vec3(0.0));
+    return vec4(mix(l * 12.92, 1.055 * pow(l, vec3(1.0 / 2.4)) - 0.055,
+                    greaterThan(l, vec3(0.0031308))), c.a);
+}
+
 // Columns wider than a pixel: the detail interpolation at x (relative to
 // col_base), between the column under it and the next.
 vec4 shade_at(float x)
@@ -331,11 +353,13 @@ vec4 interpolated(float c0, float c1)
 {
     // At most one column boundary lies inside the pixel. Where the picture
     // jumps there, either side is drawn on its own value, weighted by its
-    // width; elsewhere the value at the pixel's centre stands for it.
+    // width, as light; elsewhere the value at the pixel's centre stands
+    // for it.
     float k = floor(c1);
     if (k > c0 && k < c1 && jumps(pc.col_base + int(k))) {
         float wl = (k - c0) / pc.col_per_px;
-        return wl * shade_at(0.5 * (c0 + k)) + (1.0 - wl) * shade_at(0.5 * (k + c1));
+        return from_light(wl * to_light(shade_at(0.5 * (c0 + k))) +
+                          (1.0 - wl) * to_light(shade_at(0.5 * (k + c1))));
     }
     return shade_at(0.5 * (c0 + c1));
 }
@@ -343,7 +367,7 @@ vec4 interpolated(float c0, float c1)
 vec4 box(float c0, float c1)
 {
     // Every column the pixel covers, weighted by the part of [c0, c1) it
-    // covers; columns past the data add nothing.
+    // covers, as light; columns past the data add nothing.
     float f0 = floor(c0);
     int n = min(int(ceil(c1) - f0), int(BOX_SPAN) + 1);
     vec4 sum = vec4(0.0);
@@ -352,9 +376,9 @@ vec4 box(float c0, float c1)
         int i = pc.col_base + int(x);
         if (i < 0 || i >= pc.nb_columns)
             continue;
-        sum += (min(c1, x + 1.0) - max(c0, x)) * shade(i);
+        sum += (min(c1, x + 1.0) - max(c0, x)) * to_light(shade(i));
     }
-    return sum / pc.col_per_px;
+    return from_light(sum / pc.col_per_px);
 }
 
 vec4 widest(float c0, float c1)
