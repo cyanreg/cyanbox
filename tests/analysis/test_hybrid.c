@@ -21,6 +21,11 @@
  *  - a hit after silence, cyanbox unsure and early, its grid cut by its own
  *    start a beat after the hit: moved to Beat This!'s phase, the grid
  *    still begins on the hit (Clean Tears' "Spiral (Lily Remix)");
+ *  - the bar two beats on after 100 beats, every bar of it: the bar moves
+ *    there (Clean Tears' "Bouquet (Reverberations3 Remix)"); and where
+ *    Beat This!'s downbeats only lean that way for 300 beats (on the new
+ *    place, and over a quarter as strong on the old, as where they flip
+ *    between beats 1 and 3), it stays;
  *  - under 8 s: no grid, as cyanbox's own.
  *
  * Beat This!'s beats come LAG (9 ms) after cyanbox's on the same audio, as
@@ -81,6 +86,29 @@ static void make_act_late(Act *a, double seconds, double bpm, double t0, int dow
 static void make_act(Act *a, double seconds, double bpm, double t0, int down)
 {
     make_act_late(a, seconds, bpm, t0, down, 0.0);
+}
+
+/* Downbeats on every fourth from index `down`, but from beat `at` to beat
+ * `until` on every fourth from `down2`; with `lean` > 0 the old place
+ * keeps a bump that much as high there. */
+static void make_act_bar(Act *a, double seconds, double bpm, double t0, int down, int at,
+                         int until, int down2, double lean)
+{
+    make_act(a, seconds, bpm, t0, down);
+    double p = 60.0 / bpm;
+    for (int k = at; k < until && t0 + k * p < seconds; k++) {
+        double c = (t0 + k * p + LAG) * FPS;
+        bool was = ((k - down) % 4 + 4) % 4 == 0, is = ((k - down2) % 4 + 4) % 4 == 0;
+        for (int f = (int)c - 4; f <= (int)c + 4; f++) {
+            if (f < 0 || f >= a->n)
+                continue;
+            float v = (float)(14.0 * exp(-(f - c) * (f - c) / (2 * 0.7 * 0.7)));
+            if (is)
+                a->down[f] = -8.0f + v;
+            else if (was)
+                a->down[f] = lean > 0 ? (float)(-8.0 + lean * v) : -8.0f;
+        }
+    }
 }
 
 static void act_free(Act *a)
@@ -286,6 +314,33 @@ static void test_start_moved(void)
     act_free(&a);
 }
 
+static void test_bar_moves(double lean)
+{
+    /* Two beats on from beat 102 to the end; or, leaning, from beat 102 to
+     * 402 only, with the old place's bump 0.55 as high there (moving the
+     * stretch would pay for its two moves, but it leans 3.6 to one). */
+    const double dur = 300.0, bpm = 128.0, t0 = 0.4, p = 60.0 / bpm;
+    Act a;
+    make_act_bar(&a, dur, bpm, t0, 0, 102, lean > 0 ? 402 : 1000, 2, lean);
+    CBBeatResult r;
+    make_cb(&r, bpm, t0, 0, 20.0);
+    int ret = cb_beats_hybrid(a.beat, a.down, a.n, dur, &r);
+    CHECK(ret == 0, "%d", ret);
+    int n;
+    double share = on_line(&r.grid, dur, bpm, t0, 1e-6, 0.0, dur, &n);
+    CHECK(share == 1.0 && n > 500, "%.3f of %d beats on cyanbox's", share, n);
+    int early = number_at(&r.grid, t0 + 96 * p), late = number_at(&r.grid, t0 + 250 * p),
+        after = number_at(&r.grid, t0 + 452 * p);
+    if (lean > 0)
+        CHECK(early == 1 && late == 3 && after == 1, "leaning: numbers %d %d %d, want 1 3 1",
+              early, late, after);
+    else
+        CHECK(early == 1 && late == 1 && after == 3, "moved: numbers %d %d %d, want 1 1 3",
+              early, late, after);
+    cb_beat_result_free(&r);
+    act_free(&a);
+}
+
 static void test_short(void)
 {
     Act a;
@@ -309,6 +364,8 @@ int main(void)
     test_no_grid();
     test_music_start();
     test_start_moved();
+    test_bar_moves(0.0);
+    test_bar_moves(0.55);
     test_short();
     if (fails) {
         printf("test_hybrid: %d failures\n", fails);

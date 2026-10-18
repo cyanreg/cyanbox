@@ -1367,14 +1367,43 @@ static int take(const double *c, int nc, Beat **g, int *ng)
 /* -------------------------------------------------------------- the bar */
 
 /* The bar per section: the beat place where the downbeat activation adds up
- * most. */
-static void downbeats(const Beat *g, int ng, const float *d, int n, int *num)
+ * most, but where it moves for good, the bar moves with it. Over a
+ * section's beats, stretches of at least BAR_RUN beats, each with its own
+ * place, the sum at the places less BAR_MOVE for each move (a dynamic
+ * programme over where the stretches end; the best stretch before each end
+ * kept as it goes): a track whose bar shifts once, a two-beat bar in a
+ * break (Clean Tears' "Bouquet (Reverberations3 Remix)": Beat This!'s
+ * downbeats two beats on for its first 110 s, every bar of them), is right
+ * on both sides. Beat by beat, with a short bar allowed anywhere, the bar
+ * moved in intros of drums alone, where Beat This!'s downbeats drift; and
+ * where they flip between beats 1 and 3, a stretch they take for the
+ * other half of the bar has them there only two or three times as often
+ * as on the bar (2.4 and 2.5 on the 239 osu! maps, 3.3 on AD:HOUSE
+ * Winter's "Muffled Jazz", whose bar was confirmed by ear; against 4.3 to
+ * 160 where the map's bar moves too, 5.7 on Bouquet): a moved stretch
+ * stands where its place has BAR_WINS times the activation of the
+ * section's own, else the section keeps one place. On those maps the
+ * downbeat F-measure went from 0.892 to 0.901, seven maps better, one
+ * worse (whose map keeps a bar that Beat This! hears move a beat for its
+ * last 40 bars); on the 623 held out from 0.895 to 0.898, eleven better,
+ * four worse; the beats are the same. */
+#ifndef BAR_RUN
+#define BAR_RUN  64                 /* beats: sixteen bars */
+#endif
+#ifndef BAR_MOVE
+#define BAR_MOVE 16.0               /* the sum of sixteen sure downbeats */
+#endif
+#ifndef BAR_WINS
+#define BAR_WINS 4.0                /* a moved stretch's place over the section's */
+#endif
+static int downbeats(const Beat *g, int ng, const float *d, int n, int *num)
 {
     for (int i = 0; i < ng;) {
         int e = i;
         while (e < ng && g[e].sec == g[i].sec)
             e++;
         /* (a section's beats are consecutive: grid_of makes them so) */
+        const int len = e - i;
         double sums[4] = { 0 };
         for (int k = i; k < e; k++)
             sums[(k - i) % 4] += at(d, n, (g[k].t + LAG) * FPS);
@@ -1385,8 +1414,88 @@ static void downbeats(const Beat *g, int ng, const float *d, int n, int *num)
         }
         for (int k = i; k < e; k++)
             num[k] = (((k - i) - r) % 4 + 4) % 4 + 1;
+        if (len < 2 * BAR_RUN) {
+            i = e;
+            continue;
+        }
+
+        /* S[j][q]: the activation at place q over the first j beats;
+         * best[j][q]: the best stretches of the first j beats, the last at
+         * q; from[j][q]: where that last one starts (0: the first). */
+        double (*S)[4] = calloc((size_t)len + 1, sizeof(*S));
+        double (*best)[4] = malloc(((size_t)len + 1) * sizeof(*best));
+        int (*from)[4] = malloc(((size_t)len + 1) * sizeof(*from));
+        if (!S || !best || !from) {
+            free(S);
+            free(best);
+            free(from);
+            return CB_ERROR(ENOMEM);
+        }
+        for (int j = 0; j < len; j++) {
+            const double v = at(d, n, (g[i + j].t + LAG) * FPS);
+            for (int q = 0; q < 4; q++)
+                S[j + 1][q] = S[j][q] + (j % 4 == q ? v : 0.0);
+        }
+        /* pool[q]: the best way into a stretch at q ending far enough
+         * back, less the activation at q up to its end, and that end. */
+        double pool[4] = { -INFINITY, -INFINITY, -INFINITY, -INFINITY };
+        int pool_at[4] = { 0 };
+        for (int j = 0; j <= len; j++) {
+            const int a = j - BAR_RUN;
+            if (a >= BAR_RUN) {
+                for (int q = 0; q < 4; q++) {
+                    for (int o = 0; o < 4; o++) {
+                        if (o != q && best[a][o] - S[a][q] > pool[q]) {
+                            pool[q] = best[a][o] - S[a][q];
+                            pool_at[q] = a;
+                        }
+                    }
+                }
+            }
+            for (int q = 0; q < 4; q++) {
+                best[j][q] = j >= BAR_RUN ? S[j][q] : -INFINITY;
+                from[j][q] = 0;
+                if (pool[q] + S[j][q] - BAR_MOVE > best[j][q]) {
+                    best[j][q] = pool[q] + S[j][q] - BAR_MOVE;
+                    from[j][q] = pool_at[q];
+                }
+            }
+        }
+        int q = r;
+        for (int o = 0; o < 4; o++) {
+            if (best[len][o] > best[len][q])
+                q = o;
+        }
+        /* Back from the end: each stretch at its place; the one before it
+         * at the place that made its start best. */
+        int j = len;
+        bool wins = true;
+        while (j > 0) {
+            const int a = from[j][q];
+            for (int k = a; k < j; k++)
+                num[i + k] = ((k - q) % 4 + 4) % 4 + 1;
+            if (q != r && S[j][q] - S[a][q] < BAR_WINS * (S[j][r] - S[a][r]))
+                wins = false;
+            if (!a)
+                break;
+            int o = q ? 0 : 1;
+            for (int t = 0; t < 4; t++) {
+                if (t != q && best[a][t] > best[a][o])
+                    o = t;
+            }
+            j = a;
+            q = o;
+        }
+        if (!wins) {
+            for (int k = i; k < e; k++)
+                num[k] = (((k - i) - r) % 4 + 4) % 4 + 1;
+        }
+        free(S);
+        free(best);
+        free(from);
         i = e;
     }
+    return 0;
 }
 
 /* ---------------------------------------------------------------- a run */
@@ -1560,7 +1669,10 @@ static int run1(Run *R, double force, double hold, CBBeat **out, int *nb)
         goto end;
     }
     /* the downbeat activation is on Beat This!'s timeline */
-    downbeats(g, ng, R->d, n, num);
+    if ((ret = downbeats(g, ng, R->d, n, num)) < 0) {
+        free(res);
+        goto end;
+    }
     for (int i = 0; i < ng; i++)
         res[i] = (CBBeat) { .time = g[i].t, .number = num[i], .bpm = g[i].bpm };
     *out = res;

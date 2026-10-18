@@ -61,7 +61,8 @@ and local tempo, which the players play as they are (docs/anlz.md 4.3).
 12. **With Beat This!** The network's beat activations choose the level
     and track the beats; cyanbox's grid, where it agrees or is only off in
     phase, is kept or moved onto them; its downbeat activation places the
-    bar. Everything above is this stage's hints and arbiter.
+    bar, and moves it where it moves for good. Everything above is this
+    stage's hints and arbiter.
 
 It costs about 290 ms of CPU for an average 4.5-minute track (383 ms per six
 minutes of audio), single-threaded, after decoding. dj's Python analyser took
@@ -1069,9 +1070,22 @@ the same audio (sections 1-11), which are its hints and its arbiter:
    one steady line): the fitting can settle on a tempo that is not the
    network's best.
 5. **The bar.** Per section, the beat place where the downbeat activation
-   adds up most. (Beat by beat, with a Viterbi path that can insert a short
-   bar, was tried: it moved the bar in intros of drums alone, where Beat
-   This!'s downbeats drift by half a bar.)
+   adds up most; but where it moves for good, the bar moves with it: the
+   section's beats in stretches of at least 64 beats, each at its own
+   place, the activation at the places less 16 (sixteen sure downbeats)
+   for each move, the best found by dynamic programming. A track whose bar
+   shifts once (a two-beat bar in a break: Clean Tears' "Bouquet
+   (Reverberations3 Remix)", Beat This!'s downbeats two beats on for its
+   first 110 s, every bar of them) is right on both sides. A moved stretch
+   stands only where its place has four times the activation of the
+   section's own place there: where Beat This!'s downbeats flip between
+   beats 1 and 3, a stretch they take for the other half of the bar has
+   them only two or three times as often there as on the bar (2.4 and 2.5
+   on the osu! maps, 3.3 on AD:HOUSE Winter's "Muffled Jazz", whose bar was
+   confirmed by ear), against 4.3 to 160 where the map's bar moves too (5.7
+   on Bouquet). (Beat by beat, with a Viterbi path that can insert a short
+   bar anywhere, was tried: it moved the bar in intros of drums alone,
+   where Beat This!'s downbeats drift by half a bar.)
 
 The grid is then sections: each run of eight or more beats on one line is
 a straight section, any other beat a measured one (section 6), and, as
@@ -1095,7 +1109,9 @@ after the network.
 This was worked out in Python (`build-beats/eval/osu/hybrid.py`, frozen as
 "fix16") and ported; the port gives the same beats as the script, to the
 5 decimals they were printed with, on 1293 of 1294 tracks (the other
-20 µs off), given the same logits and cyanbox results.
+20 µs off), given the same logits and cyanbox results. The bar's moves
+came after, in C alone (`build-beats/eval/osu/c/hy_c.c` runs the stage on
+the same inputs).
 
 ### How well
 
@@ -1109,16 +1125,22 @@ and the downbeats are both at 0.9 or more:
 | | cyanbox alone | with Beat This! |
 | --- | --- | --- |
 | **239 maps** (where it was developed) | | |
-| beats and bar right | 137 | 175 |
+| beats and bar right | 137 | 178 |
 | beat F, 70 ms / 20 ms | 0.838 / 0.813 | 0.909 / 0.894 |
-| downbeat F | 0.702 | 0.892 |
+| downbeat F | 0.702 | 0.901 |
 | **623 maps held out** (never looked at while working on it) | | |
-| beats and bar right | 344 (55 %) | 462 (74 %) |
+| beats and bar right | 344 (55 %) | 466 (75 %) |
 | beats right (F 0.9 or more) | 66.3 % | 76.2 % |
 | right up to the octave | 91.0 % | 96.1 % |
 | beat F, 70 ms / 20 ms | 0.831 / 0.794 | 0.916 / 0.873 |
-| downbeat F | 0.698 | 0.895 |
-| wrong: the bar / off-beat / other | 69 / 23 / 52 | 13 / 2 / 24 |
+| downbeat F | 0.698 | 0.898 |
+| wrong: the bar / off-beat / other | 69 / 23 / 52 | 9 / 2 / 24 |
+
+The bar's moves (item 5) made the downbeats of seven of the 239 maps
+better (by 0.3 to 0.6 of the F-measure on five) and one worse, whose map
+keeps a bar that Beat This! hears move a beat for its last 40 bars; of the
+623 held out, eleven better and four worse. Before them: 175 and 462
+fully right, downbeat F 0.892 and 0.895.
 
 The rest are octaves: 122 of the held-out maps are charted above 201 BPM
 (or below 80), which the convention halves (doubles) by design.
@@ -1134,8 +1156,8 @@ beat, Slowly's tempo and bar, 灯火's first 85 s): each one steady grid now,
 at the tempo heard; "Good Time (Extended Mix)", right before, stays.
 
 The whole pipeline in C, as the app runs it (`cyanbox-eval`: decoding, the
-network on the GPU, cyanbox's analysis, this stage), scores the same on
-the three sets, to the digits above. (`cyanbox-eval --ffmpeg` gives the
+network on the GPU, cyanbox's analysis, this stage), scored the same as the
+script on the three sets, to the digits before the bar's moves. (`cyanbox-eval --ffmpeg` gives the
 network the mean of the channels, as the app's decoder mixes them:
 ffmpeg's own mono is 3 dB louder, and the network hears it, enough to move
 nine of the 623.)
