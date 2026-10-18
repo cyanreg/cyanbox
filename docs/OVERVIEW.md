@@ -314,15 +314,20 @@ and no sync:
   rating, key, BPM, time), with double-click or drag to load a deck.
 - **Status bar:** analysis queue, export progress, audio device, messages.
 
-Waveform colours are matched to rekordbox as measured by rbxport: the 3-band
-palette is blue `#0055E1`, amber `#FFA600`, white, and the combination colours
-`#B4690A` (low+mid), `#D2DCFA` (low+high), `#FFF0D7` (mid+high), `#F5EBD7` (all);
-the stacked row preview uses the measured 128/256/128 scales; the BLUE palette
+Waveforms are drawn as rekordbox draws them, as measured by rbxport: the
+stacked row preview uses the measured 128/256/128 scales; the BLUE palette
 shades a column from blue to cream by its whiteness bits; RGB columns are
-drawn saturated by their strongest channel. The 3-band levels drawn are
-rbxport's as well (section 3, item 10), so the same rules on the same bytes
-give rbxport's picture. The 3-band detail is the default, as on a CDJ-3000;
-BLUE and RGB are selectable, since all three are on the stick.
+drawn saturated by their strongest channel. The 3-band palette is cyanbox's
+own, not rekordbox's blue, amber and white, whose pairs and core were shades
+of brown and cream: the red, green and blue that DJ programs share for low,
+mid and high, in colour universal design's vermilion `#FF3000`, bluish green
+`#20F0A0` and sky blue `#4090FF`, a pair of bands their sum scaled to full
+(`#FEFF8E` low+mid, `#FF99CC` low+high, `#3BECFF` mid+high) and all three
+white (docs/UI.md, Window; `src/gpu/shaders/wave.frag` has the reasons). The
+3-band levels drawn are rbxport's as well (section 3, item 10), so the same
+rules on the same bytes give rbxport's shapes. The 3-band detail is the
+default, as on a CDJ-3000; BLUE and RGB are selectable, since all three are
+on the stick.
 
 Keyboard follows rekordbox's Export preset (space, C, M, I/O/R, 1–3 hot cues,
 4–9 beat loops, N/B/X memory cues, cursor jumps, Q quantize).

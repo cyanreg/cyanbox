@@ -247,7 +247,7 @@ void ui_overview(UiState *ui, int deck, ImVec2 a, ImVec2 b)
         // (src/lib/preferences.ts: overviewWaveform "half", no gain). Full:
         // the waveform centred on the strip, both halves, at the same
         // levels (gain 1: with a gain the three-band levels of a loud track
-        // filled the strip solid cream). The top inset keeps the waveform
+        // filled the strip solid white). The top inset keeps the waveform
         // clear of the hot cue badges and the memory cue heads drawn along
         // the top edge.
         d.mode = ui->overview_full ? CB_WAVE_CENTRED : CB_WAVE_HALF_STACKED;

@@ -44,6 +44,24 @@ player's frame while playing, active toggles) `#FF8C00` (rekordbox's
 orange), quantize-on `#3CEB50`. The title row is tinted blue (`#1F3B73` at
 low alpha), as rekordbox's deck 1 is.
 
+Waveform colours (`src/gpu/shaders/wave.frag`, on the waveforms'
+`#050505`): the 3-band waveforms are in the colours DJ programs share
+for frequency, red lows, green mids and blue highs (Serato, rekordbox's
+RGB, Traktor, Mixxx, djay, Engine DJ), moved as colour universal design
+moves them so that the red-green colour blind can tell them apart: low
+`#FF3000` (a vermilion), mid `#20F0A0` (a bluish green), high `#4090FF`
+(a sky blue). The stacked half draws each band in its colour; centred
+and overlaid, a pixel two bands reach is in their sum scaled to full,
+low+mid `#FEFF8E`, low+high `#FF99CC`, mid+high `#3BECFF`, and one all
+three reach is white. So kicks and the bass are red, hats and cymbals
+blue, the mids green, and a breakdown is the waveform without its red.
+Every colour is 5.5:1 or more against the background. This is cyanbox's
+own palette, not the CDJ-3000's blue, amber and white, whose pairs and
+core were shades of brown and cream and whose lows were a dark blue.
+BLUE (`#0055E1` to `#F5EBD7` by whiteness) and RGB (the tag's colour, its
+strongest channel at full) are drawn as rekordbox draws them, and silence
+is a 1 px line in `#D2DCFA`.
+
 ## Player panel
 
 The full width of the window. Rows, top to bottom:
@@ -69,7 +87,7 @@ The full width of the window. Rows, top to bottom:
    tag's own levels with no gain, rbxport's default overview
    (`overviewWaveform: "half"` in its src/lib/preferences.ts). Full: the
    waveform centred, both halves, at gain 1 (with a gain, the three-band
-   levels of a loud track filled the strip solid cream). Either way inset
+   levels of a loud track filled the strip solid white). Either way inset
    13 above, clear of the cue markers along the top edge, and 1 below; the
    row previews are drawn the same way. Over it: memory cue markers (a red triangle head `#EA3323` at the top with a
    1 px line), hot cues (a filled square badge with the letter in the cue's

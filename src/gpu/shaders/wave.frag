@@ -42,7 +42,7 @@
 //     envelope in the colour of the furthest band alone, the core in the
 //     combination of all. Overlaid half: the same, from the floor, over
 //     the whole usable height. Stacked half: low, then mid on it, then high
-//     on that, in blue, amber and cream, scaled by 128, 256 and 128.
+//     on that, each in its band's colour, scaled by 128, 256 and 128.
 //   - Blue: height / 31, coloured from #0055E1 to #F5EBD7 by whiteness / 7.
 //   - RGB: the strongest channel at full, the others in proportion.
 //   - `gain` multiplies every band's level before the full scale clamps
@@ -109,21 +109,47 @@ const int MAX_SPAN = 4096;
 // only a slower track or a narrower window at 64 bars goes past 16.
 const float BOX_SPAN = 16.0;
 
-// rekordbox's 3-band palette, one colour per combination of bands
-// (bit 0 low, bit 1 mid, bit 2 high), sampled by rbxport.
-const vec3 LOW      = vec3(0x00, 0x55, 0xE1) / 255.0;
-const vec3 MID      = vec3(0xFF, 0xA6, 0x00) / 255.0;
-const vec3 HIGH     = vec3(0xFF, 0xFF, 0xFF) / 255.0;
-const vec3 LOW_MID  = vec3(0xB4, 0x69, 0x0A) / 255.0;
-const vec3 LOW_HIGH = vec3(0xD2, 0xDC, 0xFA) / 255.0;
-const vec3 MID_HIGH = vec3(0xFF, 0xF0, 0xD7) / 255.0;
-const vec3 ALL      = vec3(0xF5, 0xEB, 0xD7) / 255.0;
+// The 3-band palette, one colour per combination of bands (bit 0 low,
+// bit 1 mid, bit 2 high). Not rekordbox's blue, amber and white: with
+// those the pairs and the core are shades of brown and cream (mid+high
+// and all 2.6 apart in CIEDE2000, high and all 9.6) and the kicks are a
+// blue of 3.3:1 against the background. These are the colours DJ
+// programs share for frequency, red lows, green mids and blue highs
+// (Serato, rekordbox's own RGB tags PWV4 and PWV5, Traktor, Mixxx's RGB
+// waveforms, djay, Engine DJ 5), moved the way Okabe and Ito's colour
+// universal design moves them (jfly.uni-koeln.de/color): the red towards
+// vermilion and the green towards bluish green, which the red-green
+// colour blind (8 % of men) can still tell apart, and the blue lighter,
+// since pure blue is 2.4:1 against the background and a thin hat in it
+// all but vanishes. Within that, the values are the ones that keep the
+// seven colours furthest apart for normal vision and both red-green
+// dichromacies (CIEDE2000 after Machado et al. 2009's simulation) with
+// each 4.5:1 or more against the waveform's #050505 (they are 5.5 or
+// more; WCAG asks 3 of graphics): the closest two are 24.9 apart, 12.6
+// for a deuteranope and 9.2 for a protanope, where rekordbox's are 2.6,
+// 2.4 and 2.1. A pair is the sum of its two colours scaled to full, as Mixxx
+// mixes its RGB bands; all three are white.
+const vec3 LOW      = vec3(0xFF, 0x30, 0x00) / 255.0;
+const vec3 MID      = vec3(0x20, 0xF0, 0xA0) / 255.0;
+const vec3 HIGH     = vec3(0x40, 0x90, 0xFF) / 255.0;
+const vec3 LOW_MID  = vec3(0xFE, 0xFF, 0x8E) / 255.0;
+const vec3 LOW_HIGH = vec3(0xFF, 0x99, 0xCC) / 255.0;
+const vec3 MID_HIGH = vec3(0x3B, 0xEC, 0xFF) / 255.0;
+const vec3 ALL      = vec3(0xFF, 0xFF, 0xFF) / 255.0;
 
 const vec3 COMBO[8] = vec3[8](LOW, LOW, MID, LOW_MID, HIGH, LOW_HIGH, MID_HIGH, ALL);
 
-// The stacked preview's slabs and their full scales (rbxport: measured
-// against a 2x capture of rekordbox, 0.542 / 0.270 / 0.567 px per unit).
-const vec3  STACK_COLOUR[3] = vec3[3](LOW, MID, ALL);
+// rekordbox's colours where cyanbox still draws its way (rbxport's
+// samples): the BLUE kind's ramp from blue to cream, and the line of
+// silence.
+const vec3 BLUE_LOW  = vec3(0x00, 0x55, 0xE1) / 255.0;
+const vec3 BLUE_HIGH = vec3(0xF5, 0xEB, 0xD7) / 255.0;
+const vec3 SILENCE   = vec3(0xD2, 0xDC, 0xFA) / 255.0;
+
+// The stacked preview's slabs, each band alone in its own colour, and
+// their full scales (rbxport: measured against a 2x capture of rekordbox,
+// 0.542 / 0.270 / 0.567 px per unit).
+const vec3  STACK_COLOUR[3] = vec3[3](LOW, MID, HIGH);
 const float STACK_SCALE[3]  = float[3](128.0, 256.0, 128.0);
 
 // The pixel row being shaded, [row, row + 1), and the band of rows the
@@ -168,7 +194,7 @@ vec4 column(int i)
     if (pc.kind == KIND_BLUE) {
         uint b = byte_at(i);
         float white = float(b >> 5) / 7.0;
-        return vec4(mix(LOW, ALL, white), float(b & 31u) / 31.0);
+        return vec4(mix(BLUE_LOW, BLUE_HIGH, white), float(b & 31u) / 31.0);
     }
 
     if (pc.kind == KIND_RGB_DETAIL) {
@@ -210,7 +236,7 @@ vec4 silence()
     float y = centred ? floor(centre - 0.5 * pc.unit + 0.5)
                       : floor(yfloor - pc.unit + 0.5);
     float cov = cover(y, y + max(1.0, floor(pc.unit + 0.5)));
-    return vec4(LOW_HIGH * cov, cov);
+    return vec4(SILENCE * cov, cov);
 }
 
 // 3-band levels, 0..127 before the gain.

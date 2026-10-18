@@ -121,10 +121,13 @@ typedef struct CBWaveDraw {
 } CBWaveDraw;
 
 /* Adds the draw to an ImDrawList (passed as void* from C++) as a render
- * callback. Colours are rekordbox's as measured by rbxport:
- *   3-band: low #0055E1, mid #FFA600, high #FFFFFF; low+mid #B4690A,
- *           low+high #D2DCFA, mid+high #FFF0D7, all #F5EBD7; stacked scales
- *           128/256/128; silence a 1 px line in #D2DCFA.
+ * callback. Colours are rekordbox's as measured by rbxport, but for the
+ * 3-band palette, which is the DJ programs' red, green and blue for low,
+ * mid and high (shaders/wave.frag says why):
+ *   3-band: low #FF3000, mid #20F0A0, high #4090FF; low+mid #FEFF8E,
+ *           low+high #FF99CC, mid+high #3BECFF, all #FFFFFF; stacked, each
+ *           band in its own colour at scales 128/256/128; silence a 1 px
+ *           line in #D2DCFA.
  *   blue:   height 0..31 and whiteness 0..7 ramped from #0055E1 to #F5EBD7.
  *   rgb:    the strongest channel at full, the others in proportion.
  * The 3-band centred draw uses the reach rule: each pixel in the colour of

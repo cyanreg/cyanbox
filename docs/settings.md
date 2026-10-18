@@ -147,9 +147,10 @@ confirmed by a real rekordbox file that changes only that setting [ME].
 * **cyanbox's default TEMPO RANGE is ±6 % (`0x80`)**, not rekordbox's ±10 %: a library with no
   `player.tempo_range` exports `0x80`, and cyanbox's own deck starts at ±6 % as a CDJ switched on
   does. **cyanbox's default WAVEFORM COLOR is 3-band (`0x04`)**, not rekordbox's blue, for the
-  same reason: the interface draws the palette this setting holds. Every other default is
-  rekordbox's. cyanbox's interface follows these settings (docs/UI.md, Player settings), so the
-  range the deck starts at and the palette it draws are the ones the stick carries.
+  same reason: the interface draws the palette this setting holds (the 3-band one in cyanbox's
+  own colours, docs/UI.md). Every other default is rekordbox's. cyanbox's interface follows
+  these settings (docs/UI.md, Player settings), so the range the deck starts at and the palette
+  it draws are the ones the stick carries.
 * CDJ-3000 factory defaults [MAN] mostly equal these. The CDJ-3000 jog-ring brightness is labelled "OFF, 1, 2".
 * Real rekordbox 7.2.8 MYSETTING payload [SB] ([ME]): same 40-byte layout, no new fields
   (`78563412 02000000 81 83 81 88 81 01 82 81 81 010101 82 80 80 81 80 81 80 0000 81 0000 81 81 81 80 80 80 0000`).
