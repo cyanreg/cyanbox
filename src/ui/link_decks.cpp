@@ -4,13 +4,14 @@
 // title row shows the players on the link instead of the deck's track
 // (deck_view.cpp, ui_deck_panel), one cell each, side by side: the width
 // is shared equally, each at most half of it, so two fill it and one alone
-// takes its side (odd numbers left, even right); with none, it says so. A
-// cell has the track's
-// overview for its background, the part played shaded and the playhead on
-// it when the player says where it is; over it, the cover and the title,
-// the player's state and model, and right-aligned the key, the tempo at
-// the player's pitch and the time left. The rest of the deck is unchanged:
-// cyanbox's own, for editing tracks before they go to a player.
+// takes its side (odd numbers left, even right); with none, it says so. The
+// cells go by deck number, left to right: the number the DJ gave the player
+// in the status bar's Link menu (below), else its own. A cell has the
+// track's overview for its background, the part played shaded and the
+// playhead on it when the player says where it is; over it, the cover and
+// the title, the player's state and model, and right-aligned the key, the
+// tempo at the player's pitch and the time left. The rest of the deck is
+// unchanged: cyanbox's own, for editing tracks before they go to a player.
 //
 // Where the player is: the beat number of its status on the track's grid
 // (the beats Link serves it: cb_grid_beats, anlz.c PQTZ; 0 before the
@@ -25,10 +26,23 @@
 // players' EJECT/LOAD LOCK on (player.eject_lock).
 //
 // CYANBOX_UI_LINK_DECKS (the headless tests) makes up the players instead:
-// a comma-separated list of NUMBER:NAME:TRACK:FLAGS:BEAT, TRACK a library
-// id (0 nothing loaded), FLAGS any of p (plays), a (on air), m (master),
-// s (synced), BEAT its first beat number (-1 none sent); a playing one's
-// beat number moves on at its track's tempo.
+// a comma-separated list of NUMBER:NAME:TRACK:FLAGS:BEAT[:MAC], TRACK a
+// library id (0 nothing loaded), FLAGS any of p (plays), a (on air), m
+// (master), s (synced), BEAT its first beat number (-1 none sent), MAC the
+// last byte of its hardware address 02:00:00:00:00:MAC (default NUMBER); a
+// playing one's beat number moves on at its track's tempo.
+//
+// The deck numbers: a player's number on the link is the one it took when
+// it started (the first free, in the order the players came up), so it
+// says nothing of where the player stands. In the status bar's Link menu
+// the DJ gives each player the number it is to show here, a click on one
+// of a row of numbers, the player showing that number taking the clicked
+// one's old number. A number is given to the player's hardware address
+// (its keep-alives' MAC), kept in the library (ui.link_deck.N): the same
+// player has it again when it comes up as another number. A player given
+// none shows its own number while no other player was given that, else
+// the lowest free. It is cyanbox's numbering only: the players and the
+// mixer go on with theirs.
 
 #include "ui_internal.h"
 
@@ -39,8 +53,8 @@
 #include <algorithm>
 
 
-// The players heard, by number: their indices in link_state.devices.
-static int players(const CBApp *app, int *idx, int max)
+// The players heard: their indices in link_state.devices.
+static int heard(const CBApp *app, int *idx, int max)
 {
     const auto &ls = app->link_state;
     int n = 0;
@@ -51,8 +65,131 @@ static int players(const CBApp *app, int *idx, int max)
         if (d.type == CB_LINK_DEVICE_PLAYER && d.number >= 1 && d.number < UI_LINK_DECKS)
             idx[n++] = i;
     }
-    std::sort(idx, idx + n, [&](int a, int b) { return ls.devices[a].number < ls.devices[b].number; });
     return n;
+}
+
+static bool no_mac(const uint8_t mac[6])
+{
+    static const uint8_t zero[6] = {};
+    return !memcmp(mac, zero, 6);
+}
+
+// The numbers given, from the library's rows, at the first use.
+static void given_read(UiState *ui)
+{
+    if (ui->link_given_read)
+        return;
+    ui->link_given_read = true;
+    for (int k = 1; k <= UI_LINK_NUMBERS; k++) {
+        char key[32], *v = nullptr;
+        unsigned m[6];
+        snprintf(key, sizeof(key), "ui.link_deck.%d", k);
+        if (cb_library_setting_get(&ui->app->lib, key, &v) == 0 && v &&
+            sscanf(v, "%2x:%2x:%2x:%2x:%2x:%2x", &m[0], &m[1], &m[2], &m[3], &m[4], &m[5]) == 6) {
+            for (int i = 0; i < 6; i++)
+                ui->link_given[k][i] = (uint8_t)m[i];
+        }
+        free(v);
+    }
+}
+
+// The number given to a player's address, 0 none.
+static int given(UiState *ui, const uint8_t mac[6])
+{
+    given_read(ui);
+    for (int k = 1; !no_mac(mac) && k <= UI_LINK_NUMBERS; k++) {
+        if (!memcmp(ui->link_given[k], mac, 6))
+            return k;
+    }
+    return 0;
+}
+
+static void put_given(UiState *ui, int k, const uint8_t *mac)
+{
+    char key[32], v[24];
+    snprintf(key, sizeof(key), "ui.link_deck.%d", k);
+    if (mac) {
+        memcpy(ui->link_given[k], mac, 6);
+        snprintf(v, sizeof(v), "%02x:%02x:%02x:%02x:%02x:%02x", mac[0], mac[1], mac[2], mac[3],
+                 mac[4], mac[5]);
+    } else {
+        memset(ui->link_given[k], 0, 6);
+    }
+    if (cb_library_setting_set(&ui->app->lib, key, mac ? v : nullptr) < 0)
+        cb_warn("ui: could not save deck %d's player", k);
+}
+
+// Gives number k (0 none) to an address, taken from whichever had it, and
+// takes the address's old number from it.
+static void give(UiState *ui, const uint8_t mac[6], int k)
+{
+    given_read(ui);
+    if (no_mac(mac))
+        return;
+    for (int j = 1; j <= UI_LINK_NUMBERS; j++) {
+        if (j != k && !memcmp(ui->link_given[j], mac, 6))
+            put_given(ui, j, nullptr);
+    }
+    if (k >= 1 && k <= UI_LINK_NUMBERS && memcmp(ui->link_given[k], mac, 6))
+        put_given(ui, k, mac);
+}
+
+// The players heard, by deck number: their indices in link_state.devices,
+// and the number each shows, by its number on the link (0: no player has
+// that one). The numbers given first, then their own, then the lowest free.
+static int players(UiState *ui, int *idx, int max, int shown[UI_LINK_DECKS])
+{
+    const auto &ls = ui->app->link_state;
+    int n = heard(ui->app, idx, max);
+    bool taken[UI_LINK_DECKS] = {};
+    std::fill(shown, shown + UI_LINK_DECKS, 0);
+    for (int k = 0; k < n; k++) {
+        const CBLinkPlayer &d = ls.devices[idx[k]];
+        int g = given(ui, d.mac);
+        if (g && !taken[g]) {
+            shown[d.number] = g;
+            taken[g] = true;
+        }
+    }
+    for (int k = 0; k < n; k++) {
+        const int number = ls.devices[idx[k]].number;
+        if (!shown[number] && !taken[number]) {
+            shown[number] = number;
+            taken[number] = true;
+        }
+    }
+    for (int k = 0; k < n; k++) {
+        const int number = ls.devices[idx[k]].number;
+        int f = 1;
+        while (!shown[number] && taken[f])
+            f++;
+        if (!shown[number]) {
+            shown[number] = f;
+            taken[f] = true;
+        }
+    }
+    std::sort(idx, idx + n, [&](int a, int b) {
+        return shown[ls.devices[a].number] < shown[ls.devices[b].number];
+    });
+    return n;
+}
+
+// Player `index` shows number k from now on: the player showing k takes
+// its old one.
+static void renumber(UiState *ui, int index, int k, const int *idx, int n,
+                     const int shown[UI_LINK_DECKS])
+{
+    const auto &ls = ui->app->link_state;
+    const CBLinkPlayer &d = ls.devices[index];
+    const int was = shown[d.number];
+    if (was == k)
+        return;
+    for (int j = 0; j < n; j++) {
+        const CBLinkPlayer &o = ls.devices[idx[j]];
+        if (idx[j] != index && shown[o.number] == k)
+            give(ui, o.mac, was <= UI_LINK_NUMBERS ? was : 0);
+    }
+    give(ui, d.mac, k);
 }
 
 // The library track a player has loaded, when it is ours: a rekordbox
@@ -75,42 +212,137 @@ static bool locked(UiState *ui, const CBLinkPlayer &d)
     return d.playing && !strcmp(ui_my_setting(ui, "player.eject_lock"), "true");
 }
 
-static void load_on(UiState *ui, int index, CBTrack *t)
+static void load_on(UiState *ui, int index, int deck, CBTrack *t)
 {
     CBApp *app = ui->app;
     const CBLinkPlayer &d = app->link_state.devices[index];
     int ret = cb_app_link_load(app, index, t->id);
     if (ret >= 0)
-        cb_app_set_status(app, "Deck %d (%s): loading %s", d.number, d.name, ui_title(t));
+        cb_app_set_status(app, "Deck %d (%s): loading %s", deck, d.name, ui_title(t));
     else if (ret == CB_ERROR(EAGAIN))
-        cb_app_set_status(app, "Deck %d: not on its link yet", d.number);
+        cb_app_set_status(app, "Deck %d: not on its link yet", deck);
     else
-        cb_app_set_status(app, "Deck %d is not on the link any more", d.number);
+        cb_app_set_status(app, "Deck %d is not on the link any more", deck);
 }
 
 void ui_link_load_menu(UiState *ui, CBTrack *t)
 {
     CBApp *app = ui->app;
-    int idx[UI_LINK_DECKS];
-    int n = players(app, idx, UI_LINK_DECKS);
+    int idx[UI_LINK_DECKS], shown[UI_LINK_DECKS];
+    int n = players(ui, idx, UI_LINK_DECKS, shown);
     if (!n)
         return;
     ui->link_menu_frame = ui->frame_no;
     ui->link_menu_locked.clear();
     for (int k = 0; k < n; k++) {
         const CBLinkPlayer &d = app->link_state.devices[idx[k]];
+        const int deck = shown[d.number];
         char label[64];
-        snprintf(label, sizeof(label), "Load in deck %d (%s)", d.number, d.name[0] ? d.name : "player");
+        snprintf(label, sizeof(label), "Load in deck %d (%s)", deck, d.name[0] ? d.name : "player");
         bool lock = locked(ui, d);
         if (lock)
-            ui->link_menu_locked += (ui->link_menu_locked.empty() ? "" : " ") + std::to_string(d.number);
+            ui->link_menu_locked += (ui->link_menu_locked.empty() ? "" : " ") + std::to_string(deck);
         if (ImGui::MenuItem(label, nullptr, false, !lock && !t->missing))
-            load_on(ui, idx[k], t);
+            load_on(ui, idx[k], deck, t);
         if (lock && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("Deck %d is playing and the players' Eject/Load Lock is on\n"
-                              "(Player settings)", d.number);
+                              "(Player settings)", deck);
     }
     ImGui::Separator();
+}
+
+void ui_link_menu(UiState *ui, bool open, ImVec2 anchor)
+{
+    CBApp *app = ui->app;
+    ui->link_menu_log.clear();
+    if (open)
+        ImGui::OpenPopup("##link_menu");
+    if (ImGui::IsPopupOpen("##link_menu"))
+        ImGui::SetNextWindowPos(anchor, ImGuiCond_Appearing, ImVec2(1.0f, 1.0f));
+    if (!ImGui::BeginPopup("##link_menu"))
+        return;
+    auto log_item = [&](const char *what) {
+        ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+        char line[96];
+        snprintf(line, sizeof(line), "%s at %.0f %.0f", what, (a.x + b.x) * 0.5f / ui->s,
+                 (a.y + b.y) * 0.5f / ui->s);
+        ui->link_menu_log.push_back(line);
+    };
+
+    int idx[UI_LINK_DECKS], shown[UI_LINK_DECKS];
+    int n = players(ui, idx, UI_LINK_DECKS, shown);
+    int pick = -1, pick_number = 0;
+    if (!n) {
+        ImGui::TextDisabled("No player on the link");
+    } else {
+        // Four numbers, or as many as the players need.
+        int most = std::max(4, n);
+        for (int k = 0; k < n; k++)
+            most = std::max(most, shown[app->link_state.devices[idx[k]].number]);
+        most = std::min(most, UI_LINK_NUMBERS);
+        ImGui::TextDisabled("Deck numbers, left to right");
+        if (ImGui::BeginTable("##link_numbers", 3, ImGuiTableFlags_SizingFixedFit)) {
+            ImGui::PushStyleVar(ImGuiStyleVar_SelectableTextAlign, ImVec2(0.5f, 0.5f));
+            for (int k = 0; k < n; k++) {
+                const CBLinkPlayer &d = app->link_state.devices[idx[k]];
+                CBTrack *t = ours(app, idx[k]);
+                ImGui::PushID(d.number);
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                // The number on the player's screen.
+                ImGui::AlignTextToFramePadding();
+                ImGui::Text("Player %d", d.number);
+                ImGui::TableSetColumnIndex(1);
+                ImGui::AlignTextToFramePadding();
+                ImGui::TextDisabled("%s", d.name[0] ? d.name : "player");
+                if (t) {
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("\xC2\xB7 %s", ui_title(t));
+                }
+                ImGui::TableSetColumnIndex(2);
+                ImGui::BeginDisabled(no_mac(d.mac));
+                for (int v = 1; v <= most; v++) {
+                    char label[8];
+                    snprintf(label, sizeof(label), "%d", v);
+                    if (v > 1)
+                        ImGui::SameLine(0, PX(2));
+                    ImGui::PushID(v);
+                    if (ImGui::Selectable(label, shown[d.number] == v,
+                                          ImGuiSelectableFlags_NoAutoClosePopups,
+                                          ImVec2(PX(26), ImGui::GetFrameHeight()))) {
+                        pick = idx[k];
+                        pick_number = v;
+                    }
+                    ImGui::PopID();
+                    char what[48];
+                    snprintf(what, sizeof(what), "player %d deck %d", d.number, v);
+                    log_item(what);
+                }
+                ImGui::EndDisabled();
+                ImGui::PopID();
+            }
+            ImGui::PopStyleVar();
+            ImGui::EndTable();
+        }
+        if (pick >= 0)
+            renumber(ui, pick, pick_number, idx, n, shown);
+        bool any = false;
+        given_read(ui);
+        for (int k = 1; k <= UI_LINK_NUMBERS; k++)
+            any |= !no_mac(ui->link_given[k]);
+        ImGui::Separator();
+        if (ImGui::MenuItem("The players' own numbers", nullptr, false, any)) {
+            for (int k = 1; k <= UI_LINK_NUMBERS; k++) {
+                if (!no_mac(ui->link_given[k]))
+                    put_given(ui, k, nullptr);
+            }
+        }
+        log_item("own numbers");
+    }
+    ImGui::Separator();
+    if (ImGui::MenuItem("Players..."))
+        ui_open_link(ui);
+    ImGui::EndPopup();
 }
 
 // Where the player is in its track, in seconds; < 0 when it does not say.
@@ -245,7 +477,7 @@ static void background(UiState *ui, const CBTrack *t, double pos, ImVec2 a, ImVe
     }
 }
 
-static void deck_cell(UiState *ui, int index, ImVec2 a, ImVec2 b)
+static void deck_cell(UiState *ui, int index, int deck, ImVec2 a, ImVec2 b)
 {
     CBApp *app = ui->app;
     const CBLinkPlayer &d = app->link_state.devices[index];
@@ -258,9 +490,9 @@ static void deck_cell(UiState *ui, int index, ImVec2 a, ImVec2 b)
 
     background(ui, t, pos, a, b);
 
-    // The number on a dark backing (on air says so in the state); the
-    // cover.
-    snprintf(buf, sizeof(buf), "%d", d.number);
+    // The deck number on a dark backing (on air says so in the state);
+    // the cover.
+    snprintf(buf, sizeof(buf), "%d", deck);
     float nw = PX(48);
     dl->AddRectFilled(a, ImVec2(a.x + nw, b.y), IM_COL32(0, 0, 0, 0xB0), PX(3));
     ui_text_centre(ui, dl, ui->font_bold, NUMBER_SIZE, a, ImVec2(a.x + nw, b.y), UI_TEXT, buf);
@@ -393,9 +625,9 @@ static void deck_cell(UiState *ui, int index, ImVec2 a, ImVec2 b)
             CBTrack *dropped = cb_library_find_id(&app->lib, ids[0]);
             if (locked(ui, d))
                 cb_app_set_status(app, "Deck %d is playing and the players' Eject/Load Lock is on",
-                                  d.number);
+                                  deck);
             else if (dropped && !dropped->missing)
-                load_on(ui, index, dropped);
+                load_on(ui, index, deck, dropped);
         }
         ImGui::EndDragDropTarget();
     }
@@ -404,9 +636,10 @@ static void deck_cell(UiState *ui, int index, ImVec2 a, ImVec2 b)
 void ui_link_decks_row(UiState *ui, ImVec2 a, ImVec2 b)
 {
     CBApp *app = ui->app;
-    int idx[UI_LINK_DECKS];
-    int n = players(app, idx, UI_LINK_DECKS);
+    int idx[UI_LINK_DECKS], shown[UI_LINK_DECKS];
+    int n = players(ui, idx, UI_LINK_DECKS, shown);
     ui->link_decks_drawn = n;
+    ui->link_decks_order.clear();
     if (!n) {
         ImDrawList *dl = ImGui::GetWindowDrawList();
         stext(ui, dl, nullptr, LINE_SIZE, ImVec2(a.x + PX(12), floorf((a.y + b.y) * 0.5f - PX(14))),
@@ -421,12 +654,15 @@ void ui_link_decks_row(UiState *ui, ImVec2 a, ImVec2 b)
     bool moving = false;
     for (int k = 0; k < n; k++) {
         const CBLinkPlayer &d = app->link_state.devices[idx[k]];
-        int slot = n == 1 ? (d.number % 2 ? 0 : 1) : k;
+        const int deck = shown[d.number];
+        int slot = n == 1 ? (deck % 2 ? 0 : 1) : k;
         ImVec2 ca(floorf(a.x + slot * share), a.y);
         ImVec2 cb(floorf(ca.x + share - gap), b.y);
         ImGui::PushID(d.number);
-        deck_cell(ui, idx[k], ca, cb);
+        deck_cell(ui, idx[k], deck, ca, cb);
         ImGui::PopID();
+        ui->link_decks_order +=
+            (k ? " " : "") + std::to_string(deck) + "=" + std::to_string(d.number);
         moving |= d.playing && ui->link_decks[d.number].pos >= 0;
     }
     if (moving)
@@ -469,17 +705,25 @@ void ui_link_decks_test_tick(UiState *ui)
                 cb_warn("CYANBOX_UI_LINK_DECKS: %s is not NUMBER:NAME:TRACK:FLAGS:BEAT", s);
                 break;
             }
-            // FLAGS may be empty.
+            // FLAGS may be empty, and MAC left out.
             sscanf(s + used, "%7[^:,]", flags);
+            const char *comma = strchr(s + used, ',');
             const char *colon = strchr(s + used, ':');
-            if (colon && (!strchr(s + used, ',') || colon < strchr(s + used, ',')))
+            int mac = number;
+            if (colon && (!comma || colon < comma)) {
                 beat = atoi(colon + 1);
+                const char *next = strchr(colon + 1, ':');
+                if (next && (!comma || next < comma))
+                    mac = atoi(next + 1);
+            }
             CBLinkPlayer &d = ls.devices[ls.nb_devices];
             d = CBLinkPlayer();
             d.number = number;
             d.type = CB_LINK_DEVICE_PLAYER;
             snprintf(d.name, sizeof(d.name), "%s", name);
             d.addr = 0x7F000000u | (uint32_t)(10 + number);
+            const uint8_t addr[6] = { 0x02, 0, 0, 0, 0, (uint8_t)mac };
+            memcpy(d.mac, addr, 6);
             d.has_status = true;
             d.track_device = id ? 17 : 0;
             d.track_slot = id ? 4 : 0;
@@ -495,7 +739,6 @@ void ui_link_decks_test_tick(UiState *ui)
             ui->link_decks_fake_beat[ls.nb_devices] = beat;
             ls.device_if[ls.nb_devices] = 0;
             ls.nb_devices++;
-            const char *comma = strchr(s, ',');
             s = comma ? comma + 1 : s + strlen(s);
         }
     }

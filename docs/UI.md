@@ -240,7 +240,7 @@ With `--pro-link` the title row shows the players on the link instead of
 the deck's track (src/ui/link_decks.cpp), 84 px high (1.3 times the title
 row) with its text twice the title row's sizes; the rest of the panel is
 the deck as without it, for editing a track before it goes to a player. One
-cell a player, by number, the width shared equally and each at most half
+cell a player, by deck number, the width shared equally and each at most half
 of it, so two fill it; one alone takes its side (odd numbers left, even
 right); with none, the row says so. A cell has the track's overview for
 its background, drawn as the deck's overview is (the part played at 55 %
@@ -266,6 +266,24 @@ Tracks dropped on a cell, and the track menu's "Load in deck N" items, go
 to that player as a load command, as rekordbox's drag onto a deck; a deck
 that plays is greyed out in the menu (and refuses the drop) while the
 players' Eject/Load Lock (`player.eject_lock`) is on.
+
+The deck numbers: a player's number on the link is the one it took when it
+started (the first free, in the order the players came up), so it says
+nothing of where the player stands. A click on Link's word in the status
+bar opens the Link menu: a row for each player (`Player 2`, the number on
+its screen, its model and the title of a track of ours it has loaded) with
+the numbers 1 to 4 (up to 6 for more players), its own highlighted. A
+click on one gives the player that deck number, and the player that had
+it takes the clicked one's old number; the menu stays open. The cells
+follow the deck numbers left to right, and so do the cell's big number,
+the "Load in deck N" items and the status messages. A number is kept for
+the player's hardware address (the MAC of its keep-alives), in the
+library (`ui.link_deck.1` ... `ui.link_deck.6`): the same player has it
+again when it next comes up as another number. A player given none shows
+its own number unless another player was given that, then the lowest free
+one. `The players' own numbers` in the menu takes every given number back.
+It is cyanbox's numbering only: the players' screens and the mixer keep
+theirs. `Players...` under them opens the PRO DJ LINK window.
 
 ## Browser
 
@@ -442,7 +460,8 @@ the error in red), the library track count with the size of its files
 (`58 tracks · 1.7 GB`: what a stick with every track holds), the
 GPU name. With `--pro-link`, Link's word before the audio state (`Link:
 2 players`, `Link: on 1 network`, `Link: no Ethernet`, or in red `Link:
-cannot serve`), which opens the PRO DJ LINK window when clicked; while a
+cannot serve`), which opens the Link menu when clicked (the deck numbers
+and the PRO DJ LINK window: Link decks, above); while a
 mixer is on the link the audio state is LINK CUE's, the deck being heard
 only in its headphone cue (`LINK CUE: off on DJM-A9`, `LINK CUE: DJM-A9`
 elected, `LINK CUE: DJM-A9 has player 2`, in green `LINK CUE: playing on

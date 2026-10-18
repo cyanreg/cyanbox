@@ -1126,7 +1126,8 @@ static void status_bar(UiState *ui, ImVec2 a, ImVec2 b)
     }
     x -= PX(16) + ui_text_width(ui, nullptr, fs, audio);
     ui_text(ui, dl, nullptr, fs, ImVec2(x, ty), acol, audio);
-    // PRO DJ LINK's word (--pro-link only); a click opens its window.
+    // PRO DJ LINK's word (--pro-link only); a click opens its menu: the
+    // players' deck numbers, and its window.
     if (app->link_state.enabled) {
         char link[96];
         ImU32 col;
@@ -1135,11 +1136,12 @@ static void status_bar(UiState *ui, ImVec2 a, ImVec2 b)
         x -= PX(16) + lw;
         ImVec2 cur = ImGui::GetCursorScreenPos();
         ImGui::SetCursorScreenPos(ImVec2(x, a.y));
-        if (ImGui::InvisibleButton("##link_status", ImVec2(lw, b.y - a.y)))
-            ui_open_link(ui);
+        bool open = ImGui::InvisibleButton("##link_status", ImVec2(lw, b.y - a.y));
         bool hot = ImGui::IsItemHovered();
+        ui->link_button = ImVec2(x + lw * 0.5f, (a.y + b.y) * 0.5f);
         ImGui::SetCursorScreenPos(cur);
         ui_text(ui, dl, nullptr, fs, ImVec2(x, ty), hot ? UI_TEXT : col, link);
+        ui_link_menu(ui, open, ImVec2(x + lw, a.y));
     }
     float right_edge = x - PX(16);
 
@@ -1351,7 +1353,15 @@ static void log_test_state(UiState *ui)
                                              : "None";
     cb_info("ui test: view \"%s\" rows %d", view, app->nb_rows);
     if (ui->link_decks_drawn)
-        cb_info("ui test: link decks %d", ui->link_decks_drawn);
+        cb_info("ui test: link decks %d numbers %s", ui->link_decks_drawn,
+                ui->link_decks_order.c_str());
+    // The status bar's Link button and, while its menu is open, the menu's
+    // buttons (logical pixels, for a click).
+    if (app->link_state.enabled)
+        cb_info("ui test: link button at %.0f %.0f", ui->link_button.x / ui->s,
+                ui->link_button.y / ui->s);
+    for (const std::string &item : ui->link_menu_log)
+        cb_info("ui test: link menu %s", item.c_str());
     if (ui->link_menu_frame && ui->frame_no - ui->link_menu_frame <= 2)
         cb_info("ui test: load menu locked \"%s\"", ui->link_menu_locked.c_str());
     // File > Remove missing tracks: what it lists, the folders gone, and

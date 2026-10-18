@@ -128,6 +128,7 @@ static const double UI_TEMPO_RANGES[] = { 6, 10, 16, 100 };
 // A Link deck as its panel follows it (link_decks.cpp): where the player
 // is in its track, carried forward between its statuses.
 #define UI_LINK_DECKS 16           // by player number
+#define UI_LINK_NUMBERS 6          // the deck numbers the DJ can give: 1..6, a link's players
 struct UiLinkDeck {
     uint32_t track_id = 0;         // the estimate's track, 0 none
     double   pos = -1;             // seconds, < 0 unknown
@@ -332,6 +333,14 @@ struct UiState {
     // made-up players, when it given, from when and at which first beats.
     UiLinkDeck link_decks[UI_LINK_DECKS];
     int       link_decks_drawn;
+    std::string link_decks_order;     // the cells drawn, left to right ("DECK=PLAYER", spaced)
+    // The deck numbers the DJ gave players (the status bar's Link menu): the
+    // hardware address each number is given to, all zero for none, as the
+    // library's ui.link_deck.N rows hold them; read at the first use.
+    uint8_t   link_given[UI_LINK_NUMBERS + 1][6];
+    bool      link_given_read;
+    std::vector<std::string> link_menu_log;  // the menu's buttons, where (the test hooks' log)
+    ImVec2    link_button;            // where the status bar's Link button was drawn (its centre)
     int       link_menu_frame;        // the frame the track menu's deck items were last drawn
     std::string link_menu_locked;     // the decks they offered greyed out (numbers, spaced)
     std::string link_decks_fake;
@@ -576,6 +585,10 @@ void ui_link_decks_row(UiState *ui, ImVec2 a, ImVec2 b);
 void ui_link_load_menu(UiState *ui, CBTrack *t);
 void ui_link_decks_test_tick(UiState *ui);
 void ui_link_decks_shutdown(UiState *ui);
+// The status bar's Link menu, opened when `open` (a click on Link's word),
+// its bottom right at `anchor`: a deck number for each player, which
+// orders the cells, and Players... for the PRO DJ LINK window.
+void ui_link_menu(UiState *ui, bool open, ImVec2 anchor);
 void ui_open_link(UiState *ui);
 // The status bar's word on it ("Link: 2 players"), and its colour.
 const char *ui_link_summary(UiState *ui, char *buf, size_t size, ImU32 *col);

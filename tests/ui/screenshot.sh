@@ -33,8 +33,9 @@
 # settings: the overview type for the overview and the row previews, and
 # the key display for the deck's KEY. Then the Link decks in the deck's
 # title row with made-up players, the track menu's "Load in deck" items under the
-# players' Eject/Load Lock, a track added to the TAG LIST and shown, and
-# one added to the History and shown. Last, File > Remove missing tracks
+# players' Eject/Load Lock, a track added to the TAG LIST and shown, one
+# added to the History and shown, and the players given deck numbers in the
+# status bar's Link menu. Last, File > Remove missing tracks
 # (CYANBOX_UI_SHOW=remove-missing): it lists the fourth track and a fifth
 # whose folder is gone too, names that folder, and a click on Remove takes
 # both out of the library, the rest kept. Then Album Artists: opened and an
@@ -329,6 +330,46 @@ variant settings-follow "" "track $ID .*overview centred previews centred key $c
         # in the same menu, then a click on the tree's History shows it.
         variant history "60:rclick:600:611,70:click:650:813,80:click:60:667" \
             'view "History" rows 1'
+
+        # The deck numbers: a click on the status bar's Link button (where
+        # the last run's log says it is) opens its menu, a row of numbers
+        # for each player; a click on player 2's 1 gives it deck 1, and
+        # player 1, which showed 1, takes its 2: the cells go player 2, then
+        # player 1, and the library keeps each number's player by hardware
+        # address (02:00:00:00:00:11 and :22). Run again, the numbers stand;
+        # with the two players come up the other way round (the same
+        # addresses, the numbers swapped), each keeps its deck. The players'
+        # own numbers in the menu takes them all back.
+        export CYANBOX_UI_LINK_DECKS="1:CDJ-900:$ID:pa:-1:17,2:CDJ-2000NXS2:$ID2:m:40:34"
+        button=$(sed -n 's/.*link button at \([0-9]*\) \([0-9]*\).*/\1:\2/p' \
+                 "$OUT/variant-history.png.log" | tail -n 1)
+        variant link-menu "60:click:$button" 'link menu player 2 deck 1 at [0-9]+ [0-9]+'
+        at() {
+            sed -n "s/.*link menu $1 at \([0-9]*\) \([0-9]*\).*/\1:\2/p" \
+                "$OUT/variant-link-menu.png.log" | tail -n 1
+        }
+        two_one=$(at "player 2 deck 1")
+        own=$(at "own numbers")
+        variant link-number "60:click:$button,70:click:$two_one" 'link decks 2 numbers 1=2 2=1$'
+        given() {
+            command -v python3 > /dev/null || return 0
+            python3 - "$LIB/library.db" "$1" <<'EOF'
+import sqlite3, sys
+db = sqlite3.connect(sys.argv[1])
+rows = db.execute("SELECT key, value FROM setting WHERE key LIKE 'ui.link_deck.%' ORDER BY key").fetchall()
+got = " ".join(f"{k}={v}" for k, v in rows)
+print(f"deck numbers: {got or 'none'}")
+if got != sys.argv[2]:
+    sys.exit(f"FAIL: want {sys.argv[2] or 'none'}")
+EOF
+        }
+        given "ui.link_deck.1=02:00:00:00:00:22 ui.link_deck.2=02:00:00:00:00:11" || exit 1
+        variant link-number-kept "" 'link decks 2 numbers 1=2 2=1$'
+        export CYANBOX_UI_LINK_DECKS="1:CDJ-2000NXS2:$ID2:m:40:34,2:CDJ-900:$ID:pa:-1:17"
+        variant link-number-moved "" 'link decks 2 numbers 1=1 2=2$'
+        export CYANBOX_UI_LINK_DECKS="1:CDJ-900:$ID:pa:-1:17,2:CDJ-2000NXS2:$ID2:m:40:34"
+        variant link-number-own "60:click:$button,70:click:$own" 'link decks 2 numbers 1=1 2=2$'
+        given "" || exit 1
     fi
 ) || exit 1
 

@@ -479,6 +479,11 @@ stick. Without it, cyanbox never opens a Link socket.
  * **The players in view**: the PRO DJ LINK window (Link → Players…) and
    the deck's title row show each player, what it has loaded, its state,
    key, tempo and time left over the track's overview.
+ * **Your deck numbers**: players number themselves in the order they
+   start. A click on `Link: 2 players` in the status bar lets you give each
+   one the deck number it should show, so the title row goes left to right
+   as the decks stand. The numbers stay with the players' hardware, and
+   the players themselves keep their own.
  * **Load from cyanbox**: Load in deck N in the track menu, or drop a track on
    a player, unless it plays and Eject/Load Lock is on.
  * **Edits on the deck are kept**: a cue saved or deleted on a player (MEMORY,
