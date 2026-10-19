@@ -261,11 +261,13 @@ void cb_pkt_my_settings_query(CBWr *w, const char *name, int number, int slot);
 int  cb_pkt_my_settings_parse(CBPktMySettings *m, const uint8_t *buf, size_t len);
 void cb_pkt_my_settings(CBWr *w, const CBPktMySettings *m);
 
-/* A DJM-A9 asks a computer that joined what it has (30, the header alone,
- * subtype 03), about once a second up to ten times; any answer from the
+/* A version question (30, the header alone; MixerVersionInfo in the
+ * CDJ-3000X's firmware): a DJM-900NXS answers its firmware's version
+ * (31, subtype 02, "1.32" in ASCII). A DJM-A9 asks a computer that joined
+ * (subtype 03), about once a second up to ten times; any answer from the
  * computer's number has it offer the computer as a source of its My
  * Settings. rekordbox's answer (31, 0x2c bytes, subtype 03: 06 and seven
- * zeros) as rbxport captured it. */
+ * zeros) as rbxport captured it, asked by an XDJ-RX3. */
 void cb_pkt_property_query(CBWr *w, const char *name, int number);
 void cb_pkt_property(CBWr *w, const char *name, int number);
 

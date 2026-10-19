@@ -730,7 +730,9 @@ settings (docs/settings.md); where the library sets none, rekordbox
   setting of a `43` so laid out, sent by a stand-in for cyanbox with
   rekordbox's defaults and then others; cyanbox's own answer is that
   packet byte for byte (test_packets) but has not yet been sent to an A9.
-  The DJM-900NXS has no such exchange.
+  The DJM-900NXS (1.32) has none of this: of `30`, the version question
+  (MixerVersionInfo by the CDJ-3000X's firmware), it only answers its own
+  version, and it never asks a computer.
 
 Nothing is pushed: rekordbox can send a player its settings unasked
 (`34`, its "Remote Settings using Pro DJ Link", dysentery's
