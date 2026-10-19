@@ -24,6 +24,7 @@
 
 #include "imgui_internal.h"
 
+#include <algorithm>
 #include <math.h>
 #include <stdio.h>
 #include <time.h>
@@ -132,6 +133,96 @@ static CBTrack *row_track(const CBApp *app, int row)
     return idx < (uint32_t)app->lib.nb_tracks ? app->lib.tracks[idx] : nullptr;
 }
 
+// The History shows a track as often as it was played. The selection is
+// of tracks, what Load, Analyse and the playlists take, and in the History
+// of plays besides (ui->history_picked): a row is selected when its track
+// is and either its play was picked or none of its track's plays was, so
+// a selection made elsewhere shows on every play of its tracks. The focus
+// likewise: its track, and the play (ui->focus_entry) when it is one.
+static int64_t row_entry(CBApp *app, int r)
+{
+    int64_t e = 0;
+    return cb_app_history_row(app, r, &e, nullptr) ? e : 0;
+}
+
+static bool row_selected(UiState *ui, int r, const CBTrack *t)
+{
+    if (!ui_is_selected(ui, t->id))
+        return false;
+    int64_t e = row_entry(ui->app, r);
+    if (!e)
+        return true;
+    bool other = false;
+    for (const auto &p : ui->history_picked) {
+        if (p.first == e)
+            return true;
+        other |= p.second == t->id;
+    }
+    return !other;
+}
+
+static bool row_focused(UiState *ui, int r, const CBTrack *t)
+{
+    if (t->id != ui->app->focus_track)
+        return false;
+    int64_t e = row_entry(ui->app, r);
+    return !e || ui->focus_entry_track != t->id || e == ui->focus_entry;
+}
+
+static void set_focus(UiState *ui, int r)
+{
+    CBTrack *t = row_track(ui->app, r);
+    if (!t)
+        return;
+    ui->app->focus_track = t->id;
+    ui->focus_entry = row_entry(ui->app, r);
+    ui->focus_entry_track = t->id;
+}
+
+// Row r alone selected.
+static void select_row(UiState *ui, int r)
+{
+    CBTrack *t = row_track(ui->app, r);
+    if (!t)
+        return;
+    ui_select_only(ui, t->id);
+    ui->history_picked.clear();
+    if (int64_t e = row_entry(ui->app, r))
+        ui->history_picked.push_back({ e, t->id });
+}
+
+// Ctrl+click: row r in or out of the selection; in the History its play,
+// every row that shows selected picked first, the tracks then those of the
+// plays picked.
+static void toggle_row(UiState *ui, int r)
+{
+    CBApp *app = ui->app;
+    CBTrack *t = row_track(app, r);
+    int64_t e = row_entry(app, r);
+    if (!t || !e) {
+        if (t)
+            select_toggle(ui, t->id);
+        return;
+    }
+    std::vector<std::pair<int64_t, uint64_t>> picked;
+    for (int k = 0; k < app->nb_rows; k++) {
+        CBTrack *s = row_track(app, k);
+        int64_t ek = row_entry(app, k);
+        if (s && ek && ek != e && row_selected(ui, k, s))
+            picked.push_back({ ek, s->id });
+    }
+    if (!row_selected(ui, r, t))
+        picked.push_back({ e, t->id });
+    ui->history_picked = picked;
+    app->nb_selection = 0;
+    if (!selection_reserve(app, (int)picked.size()))
+        return;
+    for (const auto &p : picked) {
+        if (!ui_is_selected(ui, p.second))
+            app->selection[app->nb_selection++] = p.second;
+    }
+}
+
 static void select_range(UiState *ui, int from, int to)
 {
     CBApp *app = ui->app;
@@ -142,9 +233,14 @@ static void select_range(UiState *ui, int from, int to)
     if (!selection_reserve(app, to - from + 1))
         return;
     app->nb_selection = 0;
+    ui->history_picked.clear();
     for (int r = from; r <= to; r++) {
         CBTrack *t = row_track(app, r);
-        if (t)
+        if (!t)
+            continue;
+        if (int64_t e = row_entry(app, r))
+            ui->history_picked.push_back({ e, t->id });
+        if (!ui_is_selected(ui, t->id))
             app->selection[app->nb_selection++] = t->id;
     }
 }
@@ -155,11 +251,12 @@ static void select_all(UiState *ui)
         select_range(ui, 0, ui->app->nb_rows - 1);
 }
 
-static int focus_row(const CBApp *app)
+static int focus_row(UiState *ui)
 {
+    CBApp *app = ui->app;
     for (int r = 0; r < app->nb_rows; r++) {
         CBTrack *t = row_track(app, r);
-        if (t && t->id == app->focus_track)
+        if (t && row_focused(ui, r, t))
             return r;
     }
     return -1;
@@ -171,13 +268,12 @@ void ui_move_focus(UiState *ui, int delta)
     CBApp *app = ui->app;
     if (app->nb_rows <= 0)
         return;
-    int r = focus_row(app);
+    int r = focus_row(ui);
     r = r < 0 ? 0 : ImClamp(r + delta, 0, app->nb_rows - 1);
-    CBTrack *t = row_track(app, r);
-    if (!t)
+    if (!row_track(app, r))
         return;
-    app->focus_track = t->id;
-    ui_select_only(ui, t->id);
+    set_focus(ui, r);
+    select_row(ui, r);
     ui->anchor_row = r;
     ui->scroll_to_focus = true;
 }
@@ -372,9 +468,27 @@ static void track_menu(UiState *ui)
             }
             cb_app_set_status(app, "Added %d track%s to the History", added, added == 1 ? "" : "s");
         }
-        if (app->current_history && ImGui::MenuItem("Remove from History")) {
-            for (uint64_t id : menu_tracks(ui, t))
-                cb_library_history_remove(&app->lib, id);
+        // The plays that show selected, not every play of their tracks.
+        bool remove = app->current_history && ImGui::MenuItem("Remove from History");
+        if (app->current_history) {
+            ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+            ui->remove_history_item = ImVec2((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f);
+            ui->remove_history_frame = ui->frame_no;
+        }
+        if (remove) {
+            std::vector<int64_t> gone;
+            for (int r = 0; r < app->nb_rows; r++) {
+                CBTrack *s = row_track(app, r);
+                int64_t e = row_entry(app, r);
+                if (s && e && row_selected(ui, r, s))
+                    gone.push_back(e);
+            }
+            int removed = 0;
+            for (int64_t e : gone)
+                removed += cb_library_history_remove_entry(&app->lib, e) > 0;
+            ui->history_picked.clear();
+            cb_app_set_status(app, "Removed %d play%s from the History", removed,
+                              removed == 1 ? "" : "s");
         }
     }
     if (ImGui::MenuItem("Remove from library...")) {
@@ -593,6 +707,259 @@ static void row_cells(UiState *ui, CBTrack *t, int row, float row_h, const uint6
 
 /* -------------------------------------------------------------------- table */
 
+// What every row of the table shares (track_row).
+struct RowCtx {
+    ImGuiID menu_id;
+    int frow;                   // the row to scroll to, -1 none
+    ImRect clip;
+    const CBTrack *loaded;
+    float outline;
+    const uint64_t *active;
+    int nb_active;
+    bool stripes;               // its own row colour, not the table's count of rows
+    int clicked_row;
+    bool double_clicked;
+};
+
+// One row of the table: its selectable, menu, drag and cells.
+static void track_row(UiState *ui, RowCtx *rc, int r, float row_h)
+{
+    CBApp *app = ui->app;
+    CBTrack *t = row_track(app, r);
+    if (!t)
+        return;
+    ImGui::TableNextRow(ImGuiTableRowFlags_None, row_h);
+    if (rc->stripes)
+        ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,
+                               ImGui::GetColorU32(r & 1 ? ImGuiCol_TableRowBgAlt : ImGuiCol_TableRowBg));
+    int64_t entry = row_entry(app, r);
+    ImGui::PushID((void *)(uintptr_t)(entry ? (uint64_t)entry : t->id));
+    ImGui::TableSetColumnIndex(COL_IDX);
+    bool sel = row_selected(ui, r, t);
+    ui->rows_selected_drawn += sel;
+    bool in_player = rc->loaded && t->id == rc->loaded->id;
+    ImVec2 rp = ImGui::GetCursorScreenPos();
+    // Without the half item spacing a Selectable adds above and
+    // below: rows tile with no gap anyway, and with it a row's fill
+    // and outline reach 2 px into its neighbours (a selected row
+    // under the player's track covered the bottom of its outline).
+    ImGuiSelectableFlags sf = ImGuiSelectableFlags_SpanAllColumns |
+                              ImGuiSelectableFlags_AllowOverlap |
+                              ImGuiSelectableFlags_AllowDoubleClick |
+                              ImGuiSelectableFlags_NoPadWithHalfSpacing;
+    // The player's track selected: a dark amber under its orange
+    // outline, not the selection's blue, which clashes with it.
+    if (in_player) {
+        ImGui::PushStyleColor(ImGuiCol_Header, IM_COL32(0x4A, 0x33, 0x16, 0xFF));
+        ImGui::PushStyleColor(ImGuiCol_HeaderActive, IM_COL32(0x5E, 0x40, 0x1A, 0xFF));
+    }
+    if (ImGui::Selectable("##row", sel, sf, ImVec2(0, row_h))) {
+        rc->clicked_row = r;
+        rc->double_clicked = ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
+    }
+    if (in_player)
+        ImGui::PopStyleColor(2);
+    ImRect row_rect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+    if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
+        if (!sel)
+            select_row(ui, r);
+        set_focus(ui, r);
+        ui->anchor_row = r;
+        ImGui::OpenPopup(rc->menu_id);
+    }
+    if (ImGui::BeginDragDropSource()) {
+        std::vector<uint64_t> ids;
+        if (sel)
+            ids.assign(app->selection, app->selection + app->nb_selection);
+        else
+            ids.push_back(t->id);
+        ImGui::SetDragDropPayload(UI_DND_TRACKS, ids.data(), sizeof(uint64_t) * ids.size());
+        if (ids.size() == 1) {
+            char name[200];
+            ImGui::TextUnformatted(cb_track_display(t, name, sizeof(name)));
+        } else {
+            ImGui::Text("%d tracks", (int)ids.size());
+        }
+        ImGui::EndDragDropSource();
+    }
+    if (r == rc->frow) {
+        if (row_rect.Min.y < rc->clip.Min.y + row_h || row_rect.Max.y > rc->clip.Max.y)
+            ImGui::SetScrollHereY(0.5f);
+        ui->scroll_to_focus = false;
+    }
+    ImGui::SetCursorScreenPos(rp);
+    row_cells(ui, t, r, row_h, rc->active, rc->nb_active);
+    // Over the visible width, so a table scrolled sideways still
+    // shows them: the player's track 1.5 px orange (nested 1 px
+    // rectangles, crisp where a thick line would blur, the half
+    // pixel an inner one at half strength), else the focus 1 px
+    // grey. The focus on the player's track is its outline alone:
+    // a grey line inside the orange is a light seam between it and
+    // the fill, and no other row has the focus's outline then.
+    if (in_player || row_focused(ui, r, t)) {
+        ImDrawList *dl = ImGui::GetWindowDrawList();
+        dl->PushClipRect(rc->clip.Min, rc->clip.Max, false);
+        // AddRect strokes the pixels from a to b less one: on the
+        // fill's edge, not a pixel inside it.
+        ImVec2 a(rc->clip.Min.x, row_rect.Min.y), b(rc->clip.Max.x, row_rect.Max.y);
+        for (int i = 0; in_player && i < rc->outline; i++) {
+            dl->AddRect(a, b, ui_alpha(UI_ACCENT, ImMin(rc->outline - i, 1.0f)));
+            a = ImVec2(a.x + 1, a.y + 1);
+            b = ImVec2(b.x - 1, b.y - 1);
+        }
+        if (!in_player)
+            dl->AddRect(a, b, ui_alpha(UI_TEXT, 0.55f));
+        dl->PopClipRect();
+    }
+    ImGui::PopID();
+}
+
+// The History in its own order, newest or oldest first: a separator above
+// each row whose set (cb_app_history_row: plays less than 15 minutes
+// apart) is not the one of the row before it. Empty for none, and in any
+// other order, which is not the plays'.
+static std::vector<char> history_breaks(CBApp *app)
+{
+    std::vector<char> above;
+    if (!app->current_history || app->sort_column >= 0 || app->nb_rows < 2)
+        return above;
+    above.assign(app->nb_rows, 0);
+    bool any = false;
+    int prev = -1, set;
+    if (!cb_app_history_row(app, 0, nullptr, &prev))
+        prev = -1;
+    for (int r = 1; r < app->nb_rows; r++) {
+        if (!cb_app_history_row(app, r, nullptr, &set))
+            set = -1;
+        if (set >= 0 && prev >= 0 && set != prev) {
+            above[r] = 1;
+            any = true;
+        }
+        if (set >= 0)
+            prev = set;
+    }
+    if (!any)
+        above.clear();
+    return above;
+}
+
+// "Sun 19 Oct 23:46", or "23:46" alone.
+static void fmt_when(int64_t epoch, bool date, char *buf, size_t size)
+{
+    time_t tt = (time_t)epoch;
+    struct tm tm;
+    localtime_r(&tt, &tm);
+    char day[16], month[16];
+    strftime(day, sizeof(day), "%a", &tm);
+    strftime(month, sizeof(month), "%b", &tm);
+    if (date)
+        snprintf(buf, size, "%s %d %s %02d:%02d", day, tm.tm_mday, month, tm.tm_hour, tm.tm_min);
+    else
+        snprintf(buf, size, "%02d:%02d", tm.tm_hour, tm.tm_min);
+}
+
+// What a separator between sets says, by the clock whichever way the rows
+// go: when the set before ended and the one after started, the day once
+// when both are on it.
+static void break_text(CBApp *app, int a, int b, char *buf, size_t size)
+{
+    int64_t s0, e0, s1, e1;
+    buf[0] = 0;
+    if (!cb_app_history_set_times(app, std::min(a, b), &s0, &e0) ||
+        !cb_app_history_set_times(app, std::max(a, b), &s1, &e1))
+        return;
+    time_t t0 = (time_t)e0, t1 = (time_t)s1;
+    struct tm m0, m1;
+    localtime_r(&t0, &m0);
+    localtime_r(&t1, &m1);
+    bool same = m0.tm_year == m1.tm_year && m0.tm_yday == m1.tm_yday;
+    char ended[48], started[48];
+    fmt_when(e0, true, ended, sizeof(ended));
+    fmt_when(s1, !same, started, sizeof(started));
+    snprintf(buf, size, "Set ended %s \xC2\xB7 next started %s", ended, started);
+}
+
+// An empty row standing in for rows out of view, unpainted.
+static void spacer_row(float h)
+{
+    ImGui::TableNextRow(ImGuiTableRowFlags_None, h);
+    ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, 0);
+}
+
+// A separator above row r, lower than a row: its words in small dim type
+// at the left of the visible width, a faint line on to its right edge.
+static void separator_row(UiState *ui, const RowCtx *rc, int r, float h)
+{
+    CBApp *app = ui->app;
+    ImGui::TableNextRow(ImGuiTableRowFlags_None, h);
+    ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, 0);
+    ImGui::TableSetColumnIndex(COL_IDX);
+    float y = ImGui::GetCursorScreenPos().y;
+    char text[160];
+    int a = -1, b = -1;
+    cb_app_history_row(app, r - 1, nullptr, &a);
+    cb_app_history_row(app, r, nullptr, &b);
+    break_text(app, a, b, text, sizeof(text));
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    dl->PushClipRect(rc->clip.Min, rc->clip.Max, false);
+    float fs = 11.5f, x = rc->clip.Min.x + PX(8), mid = y + h * 0.5f;
+    ui_text(ui, dl, nullptr, fs, ImVec2(x, mid - PX(fs) * 0.5f - PX(1)), UI_DIM, text);
+    x += ui_text_width(ui, nullptr, fs, text) + PX(8);
+    if (x < rc->clip.Max.x - PX(8))
+        dl->AddLine(ImVec2(x, mid), ImVec2(rc->clip.Max.x - PX(8), mid), ui_alpha(UI_TEXT, 0.18f));
+    dl->PopClipRect();
+    ui->history_breaks_drawn++;
+    if (ui->history_break_text.empty())
+        ui->history_break_text = text;
+}
+
+// The History's rows with its separators. The clipper takes rows of one
+// height, so the rows in view are found here and the rest stood in for by
+// an empty row above them and one below, as the clipper does; each row
+// takes its colour by its number, which the table's count of rows (the
+// separators in it) no longer gives.
+static void history_rows(UiState *ui, RowCtx *rc, const std::vector<char> &above, float row_h)
+{
+    CBApp *app = ui->app;
+    int n = app->nb_rows;
+    float sep_h = PX(16);
+    std::vector<float> top(n);
+    float y = 0;
+    for (int r = 0; r < n; r++) {
+        y += above[r] ? sep_h : 0;
+        top[r] = y;
+        y += row_h;
+    }
+    float total = y;
+    // Where the rows start, as the clipper finds it: the header row ended.
+    ImGuiTable *table = ImGui::GetCurrentTable();
+    if (table->IsInsideRow)
+        ImGui::TableEndRow(table);
+    float start = ImGui::GetCurrentWindow()->DC.CursorPos.y;
+    float view0 = rc->clip.Min.y - start, view1 = rc->clip.Max.y - start;
+    int first = (int)(std::upper_bound(top.begin(), top.end(), view0 - row_h) - top.begin());
+    int last = (int)(std::lower_bound(top.begin(), top.end(), view1) - top.begin());
+    first = std::clamp(first, 0, n - 1);
+    last = std::clamp(last, first + 1, n);
+    // The row to show, out of view: scrolled to the middle (ImGui::
+    // SetScrollHereY wants it drawn).
+    if (rc->frow >= 0 && rc->frow < n && (rc->frow < first || rc->frow >= last)) {
+        ImGui::SetScrollY(ImGui::GetScrollY() + top[rc->frow] + row_h * 0.5f - (view0 + view1) * 0.5f);
+        ui->scroll_to_focus = false;
+    }
+    rc->stripes = true;
+    float from = top[first] - (above[first] ? sep_h : 0);
+    if (from > 0)
+        spacer_row(from);
+    for (int r = first; r < last; r++) {
+        if (above[r])
+            separator_row(ui, rc, r, sep_h);
+        track_row(ui, rc, r, row_h);
+    }
+    if (total - (top[last - 1] + row_h) > 0)
+        spacer_row(total - (top[last - 1] + row_h));
+}
+
 static void table(UiState *ui, ImVec2 size)
 {
     CBApp *app = ui->app;
@@ -668,103 +1035,30 @@ static void table(UiState *ui, ImVec2 size)
     float row_h = art ? PX(40) : PX(22);
     uint64_t active[32];
     int nb_active = app->jobs ? cb_jobs_active_tracks(app->jobs, active, 32) : 0;
-    int frow = ui->scroll_to_focus ? focus_row(app) : -1;
+    int frow = ui->scroll_to_focus ? focus_row(ui) : -1;
     ImRect clip = ImGui::GetCurrentWindow()->InnerClipRect;
     const CBTrack *loaded = app->decks[0].track;
     float outline = ImMax(1.0f, PX(1.5f));
 
-    ImGuiListClipper clipper;
-    clipper.Begin(app->nb_rows, row_h);
-    if (frow >= 0)
-        clipper.IncludeItemByIndex(frow);
-    int clicked_row = -1;
-    bool double_clicked = false;
-    while (clipper.Step()) {
-        for (int r = clipper.DisplayStart; r < clipper.DisplayEnd; r++) {
-            CBTrack *t = row_track(app, r);
-            if (!t)
-                continue;
-            ImGui::TableNextRow(ImGuiTableRowFlags_None, row_h);
-            ImGui::PushID((void *)(uintptr_t)t->id);
-            ImGui::TableSetColumnIndex(COL_IDX);
-            bool sel = ui_is_selected(ui, t->id);
-            bool in_player = loaded && t->id == loaded->id;
-            ImVec2 rp = ImGui::GetCursorScreenPos();
-            // Without the half item spacing a Selectable adds above and
-            // below: rows tile with no gap anyway, and with it a row's fill
-            // and outline reach 2 px into its neighbours (a selected row
-            // under the player's track covered the bottom of its outline).
-            ImGuiSelectableFlags sf = ImGuiSelectableFlags_SpanAllColumns |
-                                      ImGuiSelectableFlags_AllowOverlap |
-                                      ImGuiSelectableFlags_AllowDoubleClick |
-                                      ImGuiSelectableFlags_NoPadWithHalfSpacing;
-            // The player's track selected: a dark amber under its orange
-            // outline, not the selection's blue, which clashes with it.
-            if (in_player) {
-                ImGui::PushStyleColor(ImGuiCol_Header, IM_COL32(0x4A, 0x33, 0x16, 0xFF));
-                ImGui::PushStyleColor(ImGuiCol_HeaderActive, IM_COL32(0x5E, 0x40, 0x1A, 0xFF));
-            }
-            if (ImGui::Selectable("##row", sel, sf, ImVec2(0, row_h))) {
-                clicked_row = r;
-                double_clicked = ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
-            }
-            if (in_player)
-                ImGui::PopStyleColor(2);
-            ImRect row_rect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
-            if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
-                if (!sel)
-                    ui_select_only(ui, t->id);
-                app->focus_track = t->id;
-                ui->anchor_row = r;
-                ImGui::OpenPopup(menu_id);
-            }
-            if (ImGui::BeginDragDropSource()) {
-                std::vector<uint64_t> ids;
-                if (sel)
-                    ids.assign(app->selection, app->selection + app->nb_selection);
-                else
-                    ids.push_back(t->id);
-                ImGui::SetDragDropPayload(UI_DND_TRACKS, ids.data(), sizeof(uint64_t) * ids.size());
-                if (ids.size() == 1) {
-                    char name[200];
-                    ImGui::TextUnformatted(cb_track_display(t, name, sizeof(name)));
-                } else {
-                    ImGui::Text("%d tracks", (int)ids.size());
-                }
-                ImGui::EndDragDropSource();
-            }
-            if (r == frow) {
-                if (row_rect.Min.y < clip.Min.y + row_h || row_rect.Max.y > clip.Max.y)
-                    ImGui::SetScrollHereY(0.5f);
-                ui->scroll_to_focus = false;
-            }
-            ImGui::SetCursorScreenPos(rp);
-            row_cells(ui, t, r, row_h, active, nb_active);
-            // Over the visible width, so a table scrolled sideways still
-            // shows them: the player's track 1.5 px orange (nested 1 px
-            // rectangles, crisp where a thick line would blur, the half
-            // pixel an inner one at half strength), else the focus 1 px
-            // grey. The focus on the player's track is its outline alone:
-            // a grey line inside the orange is a light seam between it and
-            // the fill, and no other row has the focus's outline then.
-            if (in_player || t->id == app->focus_track) {
-                ImDrawList *dl = ImGui::GetWindowDrawList();
-                dl->PushClipRect(clip.Min, clip.Max, false);
-                // AddRect strokes the pixels from a to b less one: on the
-                // fill's edge, not a pixel inside it.
-                ImVec2 a(clip.Min.x, row_rect.Min.y), b(clip.Max.x, row_rect.Max.y);
-                for (int i = 0; in_player && i < outline; i++) {
-                    dl->AddRect(a, b, ui_alpha(UI_ACCENT, ImMin(outline - i, 1.0f)));
-                    a = ImVec2(a.x + 1, a.y + 1);
-                    b = ImVec2(b.x - 1, b.y - 1);
-                }
-                if (!in_player)
-                    dl->AddRect(a, b, ui_alpha(UI_TEXT, 0.55f));
-                dl->PopClipRect();
-            }
-            ImGui::PopID();
+    RowCtx rc = { menu_id, frow, clip, loaded, outline, active, nb_active, false, -1, false };
+    std::vector<char> seps = history_breaks(app);
+    ui->history_breaks_drawn = 0;
+    ui->history_break_text.clear();
+    ui->rows_selected_drawn = 0;
+    if (seps.empty()) {
+        ImGuiListClipper clipper;
+        clipper.Begin(app->nb_rows, row_h);
+        if (frow >= 0)
+            clipper.IncludeItemByIndex(frow);
+        while (clipper.Step()) {
+            for (int r = clipper.DisplayStart; r < clipper.DisplayEnd; r++)
+                track_row(ui, &rc, r, row_h);
         }
+    } else {
+        history_rows(ui, &rc, seps, row_h);
     }
+    int clicked_row = rc.clicked_row;
+    bool double_clicked = rc.double_clicked;
     if (frow < 0)
         ui->scroll_to_focus = false;
 
@@ -774,15 +1068,15 @@ static void table(UiState *ui, ImVec2 size)
             if (double_clicked) {
                 ui_load(ui, t);
             } else if (io.KeyCtrl) {
-                select_toggle(ui, t->id);
+                toggle_row(ui, clicked_row);
                 ui->anchor_row = clicked_row;
             } else if (io.KeyShift && ui->anchor_row >= 0) {
                 select_range(ui, ui->anchor_row, clicked_row);
             } else {
-                ui_select_only(ui, t->id);
+                select_row(ui, clicked_row);
                 ui->anchor_row = clicked_row;
             }
-            app->focus_track = t->id;
+            set_focus(ui, clicked_row);
         }
     }
     if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows) && !io.WantTextInput &&

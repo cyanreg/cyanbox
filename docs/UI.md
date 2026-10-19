@@ -319,10 +319,21 @@ as long as cyanbox runs, never saved; a click shows it, played through as
 a playlist; its context menu has Clear Tag List), and `History` (with
 `--pro-link`: what the players on the link played straight on for 1.5
 minutes, docs/LINK.md, and what was added to it by hand, kept in the
-library; each track once, at its latest play, with the count of its
-tracks; a click shows it in its own order backwards, the latest first and
-`#` counting down, until a header picks another order, which leaving it
-puts back),
+library; every play, a track as often as it was played, with the count of
+its plays; a click shows it in its own order backwards, the latest first
+and `#` counting down, until a header picks another order, which leaving
+it puts back. In its own order, either way round, a separator lower than
+a row stands between sets, where more than 15 minutes pass between two
+plays (`CB_APP_HISTORY_GAP`), counted over every play: `Set ended Sun 19
+Oct 23:46 · next started 01:10`, by the clock whichever way the rows go,
+the day again when it is another. A set ends as its last track did, its
+start and its length when a deck played it, as it was added otherwise,
+and never after the next starts. Rows of one height go through ImGui's
+clipper; with separators the rows in view are found by their places and
+the rest stood in for by an empty row above and below, each row striped
+by its number. A selection shows on the plays picked: a click selects
+that row's play, Ctrl and Shift add plays, and one made elsewhere (by
+track) shows on every play of its tracks; the focus is a play likewise),
 then the folders and playlists from the library. Click selects the view.
 Right-click: new playlist, new folder (the folder it goes in opens),
 rename, delete (with confirm); m3u8 import and export are on the command
@@ -403,8 +414,9 @@ Analyse tags (the model's genre, colour and comment, docs/ML.md: for the
 selection, or the clicked track when it is not selected),
 Add to playlist (every playlist, folders as submenus), Remove from playlist,
 with `--pro-link` Add to Tag List (and Remove from Tag List in its view)
-and Add to History (as played now; Remove from History in its view, every
-row of the track),
+and Add to History (as played now, another play of a track already on
+it; Remove from History in its view takes off the plays that show
+selected, not the tracks' other plays),
 Remove from library, Set colour, Set rating (and Relocate… for a missing file).
 Keyboard: up/down move the focus, Enter loads the focused track, Delete
 removes it from the playlist (unless a click on the player's cue list

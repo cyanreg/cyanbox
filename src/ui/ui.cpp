@@ -1447,6 +1447,14 @@ static void log_test_state(UiState *ui)
                      : app->current_album[0] ? app->current_album
                                              : "None";
     cb_info("ui test: view \"%s\" rows %d", view, app->nb_rows);
+    if (ui->history_breaks_drawn)
+        cb_info("ui test: history breaks %d \"%s\"", ui->history_breaks_drawn,
+                ui->history_break_text.c_str());
+    if (app->current_history)
+        cb_info("ui test: rows selected %d", ui->rows_selected_drawn);
+    if (ui->remove_history_frame && ui->frame_no - ui->remove_history_frame <= 2)
+        cb_info("ui test: remove from history at %.0f %.0f", ui->remove_history_item.x / ui->s,
+                ui->remove_history_item.y / ui->s);
     if (ui->link_decks_drawn)
         cb_info("ui test: link decks %d numbers %s", ui->link_decks_drawn,
                 ui->link_decks_order.c_str());

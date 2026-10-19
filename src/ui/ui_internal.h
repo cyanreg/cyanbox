@@ -343,6 +343,15 @@ struct UiState {
     bool      link_given_read;
     std::vector<std::string> link_menu_log;  // the menu's buttons, where (the test hooks' log)
     ImVec2    link_button;            // where the status bar's Link button was drawn (its centre)
+    // The History's plays picked and the one focused (browser.cpp: row_selected).
+    std::vector<std::pair<int64_t, uint64_t>> history_picked;
+    int64_t   focus_entry;
+    uint64_t  focus_entry_track;
+    int       rows_selected_drawn;    // the table's rows drawn selected (the test hooks' log)
+    ImVec2    remove_history_item;    // where the track menu's Remove from History was drawn
+    int       remove_history_frame;
+    int       history_breaks_drawn;   // the History's separators the table last drew,
+    std::string history_break_text;   // and the first one's words (the test hooks' log)
     ImVec2    link_menu_bar;          // where the menu bar's Link was drawn (its centre)
     ImVec2    push_item;              // where Link > Push settings was last drawn, and the frame
     int       push_frame;

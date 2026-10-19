@@ -36,7 +36,8 @@
 # title row with made-up players, the track menu's "Load in deck" items under the
 # players' Eject/Load Lock, Link > Push settings offered and clicked, a
 # track added to the TAG LIST and shown, one
-# added to the History and shown, the players given deck numbers in the
+# added to the History and shown, the History's sets with a separator
+# between them (none sorted by title), the players given deck numbers in the
 # status bar's Link menu, and the status bar's Link and LINK CUE words lit
 # by where they stand. Last, File > Remove missing tracks
 # (CYANBOX_UI_SHOW=remove-missing): it lists the fourth track and a fifth
@@ -371,6 +372,42 @@ variant settings-follow "" "track $ID .*overview centred previews centred key $c
         # in the same menu, then a click on the tree's History shows it.
         variant history "60:rclick:600:611,70:click:650:813,80:click:60:667" \
             'view "History" rows 1'
+        # Its sets: three tracks played 3 hours ago, 2 minutes apart, the
+        # one just added among them, and one an hour ago: every play a row,
+        # a separator, lower than a row, where more than 15 minutes pass,
+        # saying when the set before ended and the next started; none
+        # sorted by another column. A click on the latest play of the track
+        # played twice selects that row alone, and Remove from History in
+        # its menu takes off that play, not the track's other.
+        if command -v python3 > /dev/null; then
+            python3 - "$LIB/library.db" <<'PY' || exit 1
+import sqlite3, sys, time
+db = sqlite3.connect(sys.argv[1])
+had = [r[0] for r in db.execute("SELECT track_id FROM deck_history")]
+ids = [r[0] for r in db.execute("SELECT id FROM track ORDER BY id") if r[0] not in had]
+now = int(time.time())
+for tid, ago, player in zip(ids + had, (3 * 3600, 3 * 3600 - 240, 3600, 3 * 3600 - 120),
+                            (1, 2, 1, 1)):
+    db.execute("INSERT INTO deck_history (track_id, played_at, player) VALUES (?, ?, ?)",
+               (tid, now - ago, player))
+db.commit()
+PY
+            variant history-sets "60:click:60:667" \
+                'history breaks 2 "Set ended [A-Z][a-z]+ [0-9]+ [A-Z][a-z]+ [0-9]{2}:[0-9]{2} . next started ([A-Z][a-z]+ [0-9]+ [A-Z][a-z]+ )?[0-9]{2}:[0-9]{2}"$'
+            logged history-sets 'view "History" rows 5$'
+            variant history-by-title "60:click:60:667,70:click:520:545" 'view "History" rows 5$'
+            if grep -q "history breaks" "$OUT/variant-history-by-title.png.log"; then
+                echo "FAIL: history-by-title: separators sorted by title"
+                cat "$OUT/variant-history-by-title.png.log"; exit 1
+            fi
+            variant history-play "60:click:60:667,70:click:600:571" 'rows selected 1$'
+            variant history-remove-menu "60:click:60:667,70:rclick:600:571" \
+                'remove from history at [0-9]+ [0-9]+$'
+            item=$(sed -n 's/.*remove from history at \([0-9]*\) \([0-9]*\).*/\1:\2/p' \
+                   "$OUT/variant-history-remove-menu.png.log" | tail -n 1)
+            variant history-remove "60:click:60:667,70:rclick:600:571,80:click:$item" \
+                'view "History" rows 4$'
+        fi
 
         # The deck numbers: a click on the status bar's Link button (where
         # the last run's log says it is) opens its menu, a row of numbers

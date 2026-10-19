@@ -500,7 +500,9 @@ stick. Without it, cyanbox never opens a Link socket.
    rekordbox.
  * **TAG LIST** is shared with the interface for as long as cyanbox runs.
  * **Plays and history**: a track a player plays for 30 s counts as a play,
-   and one it plays straight on for 1.5 minutes goes on the History.
+   and one it plays straight on for 1.5 minutes goes on the History, every
+   play of it, with a line between sets where more than 15 minutes pass
+   saying when one ended and the next started.
 
 Tried with two real CDJ-900s, a real CDJ-3000 and DJM-A9 (a 1.5 hour set
 without a fault), and emulated CDJ-900, CDJ-2000, CDJ-2000NXS2, CDJ-3000
