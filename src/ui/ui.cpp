@@ -981,6 +981,27 @@ static void save_layout(UiState *ui)
 
 /* ---------------------------------------------------------------- the menus */
 
+// The last item's centre, for the test hooks' log.
+static ImVec2 item_centre()
+{
+    ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+    return ImVec2((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f);
+}
+
+// Link > Push settings: what was sent where, in the status bar.
+static void push_settings(CBApp *app)
+{
+    int players = 0, mixers = 0;
+    int ret = cb_app_link_push_settings(app, &players, &mixers);
+    if (ret == CB_ERROR(EAGAIN) || ret == CB_ERROR(ENOENT))
+        cb_app_set_status(app, "Push settings: not on the link yet");
+    else if (ret < 0)
+        cb_app_set_status(app, "Push settings: the My Settings are not valid (`cyanbox settings`)");
+    else
+        cb_app_set_status(app, "Settings pushed to %d player%s and %d mixer%s", players,
+                          players == 1 ? "" : "s", mixers, mixers == 1 ? "" : "s");
+}
+
 static void menu_bar(UiState *ui)
 {
     CBApp *app = ui->app;
@@ -1112,10 +1133,25 @@ static void menu_bar(UiState *ui)
         ImGui::EndMenu();
     }
 
-    // PRO DJ LINK, only with --pro-link: it serves from the start.
-    if (app->link_state.enabled && ImGui::BeginMenu("Link")) {
+    // PRO DJ LINK, only with --pro-link: it serves from the start. Push
+    // settings sends the Player and Mixer settings, as they are now, to
+    // every player and mixer on the link, as rekordbox's Remote Settings
+    // does; with none there, it is greyed out.
+    bool link = app->link_state.enabled && ImGui::BeginMenu("Link");
+    if (app->link_state.enabled)
+        ui->link_menu_bar = item_centre();
+    if (link) {
         if (ImGui::MenuItem("Players..."))
             ui_open_link(ui);
+        bool any = false;
+        for (int i = 0; i < app->link_state.nb_devices; i++)
+            any |= app->link_state.devices[i].type == CB_LINK_DEVICE_PLAYER ||
+                   app->link_state.devices[i].type == CB_LINK_DEVICE_MIXER;
+        if (ImGui::MenuItem("Push settings", nullptr, false, any))
+            push_settings(app);
+        ui->push_item = item_centre();
+        ui->push_frame = ui->frame_no;
+        ui->push_enabled = any;
         ImGui::EndMenu();
     }
 
@@ -1441,6 +1477,16 @@ static void log_test_state(UiState *ui)
     }
     for (const std::string &item : ui->link_menu_log)
         cb_info("ui test: link menu %s", item.c_str());
+    // The menu bar's Link and, while it is open, its Push settings (logical
+    // pixels, for a click); the status bar's message.
+    if (app->link_state.enabled)
+        cb_info("ui test: link menu bar at %.0f %.0f", ui->link_menu_bar.x / ui->s,
+                ui->link_menu_bar.y / ui->s);
+    if (ui->push_frame && ui->frame_no - ui->push_frame <= 2)
+        cb_info("ui test: push settings at %.0f %.0f enabled %d", ui->push_item.x / ui->s,
+                ui->push_item.y / ui->s, ui->push_enabled);
+    if (app->status[0])
+        cb_info("ui test: status \"%s\"", app->status);
     // Player settings: the field whose tooltip shows, and the player
     // fields with no description in it.
     if (ui->dlg_settings) {

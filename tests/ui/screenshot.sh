@@ -34,7 +34,8 @@
 # settings: the overview type for the overview and the row previews, and
 # the key display for the deck's KEY. Then the Link decks in the deck's
 # title row with made-up players, the track menu's "Load in deck" items under the
-# players' Eject/Load Lock, a track added to the TAG LIST and shown, one
+# players' Eject/Load Lock, Link > Push settings offered and clicked, a
+# track added to the TAG LIST and shown, one
 # added to the History and shown, the players given deck numbers in the
 # status bar's Link menu, and the status bar's Link and LINK CUE words lit
 # by where they stand. Last, File > Remove missing tracks
@@ -351,6 +352,16 @@ variant settings-follow "" "track $ID .*overview centred previews centred key $c
         rx config player.eject_lock false > /dev/null
         variant link-load-unlocked "60:rclick:600:571" 'load menu locked ""'
         rx config player.eject_lock "" > /dev/null
+        # Link > Push settings (where the last run's log says the menu bar's
+        # Link is): offered with players on the link, and pushing; the
+        # players made up, with no link to push on, it says so.
+        bar=$(sed -n 's/.*link menu bar at \([0-9]*\) \([0-9]*\).*/\1:\2/p' \
+              "$OUT/variant-link-load-unlocked.png.log" | tail -n 1)
+        variant link-push-menu "60:click:$bar" 'push settings at [0-9]+ [0-9]+ enabled 1$'
+        item=$(sed -n 's/.*push settings at \([0-9]*\) \([0-9]*\).*/\1:\2/p' \
+               "$OUT/variant-link-push-menu.png.log" | tail -n 1)
+        variant link-push "60:click:$bar,70:click:$item" \
+            'status "Push settings: not on the link yet"$'
         # The TAG LIST (--pro-link only): Add to Tag List in the track
         # menu of the second row (the first, missing, has Relocate too),
         # then a click on the tree's Tag List shows it, that one track in it.

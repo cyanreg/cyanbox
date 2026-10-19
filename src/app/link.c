@@ -273,6 +273,15 @@ int cb_app_link_load(CBApp *app, int index, uint64_t track_id)
     return cb_link_set_load(l->set, app->link_state.device_if[index], p->number, (uint32_t)track_id);
 }
 
+int cb_app_link_push_settings(CBApp *app, int *players, int *mixers)
+{
+    *players = *mixers = 0;
+    CBAppLink *l = app->link;
+    if (!l || !l->set || !app->link_state.on)
+        return CB_ERROR(ENOENT);
+    return cb_link_set_push_settings(l->set, &app->lib.cfg, players, mixers);
+}
+
 static void take_edits(CBApp *app);
 
 /* Moves the deck to `want` (cyanbox/player.h cb_player_set_backend), with

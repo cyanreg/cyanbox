@@ -343,6 +343,10 @@ struct UiState {
     bool      link_given_read;
     std::vector<std::string> link_menu_log;  // the menu's buttons, where (the test hooks' log)
     ImVec2    link_button;            // where the status bar's Link button was drawn (its centre)
+    ImVec2    link_menu_bar;          // where the menu bar's Link was drawn (its centre)
+    ImVec2    push_item;              // where Link > Push settings was last drawn, and the frame
+    int       push_frame;
+    bool      push_enabled;
     int       link_menu_frame;        // the frame the track menu's deck items were last drawn
     std::string link_menu_locked;     // the decks they offered greyed out (numbers, spaced)
     std::string link_decks_fake;

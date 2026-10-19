@@ -412,9 +412,19 @@ static void test_app(const char *wav, const char *dir)
         CHECK(tags && cb_link_tag_list_has(tags, loaded_id));
     }
 
+    /* Link > Push settings: the library's player settings, to the one
+     * player; the lock at its default, Lock. */
+    int np = 0, nm = 0;
+    CHECK_EQ(cb_app_link_push_settings(&app, &np, &nm), 0);
+    CHECK(np == 1 && nm == 0);
+    uint8_t ms[40] = { 0 }, ms2[40] = { 0 };
+    CHECK(player && cb_link_client_wait_pushed_settings(player, 5000, ms, ms2) == 0);
+    CHECK(ms[0] == 0x78 && ms[21] == 0x81);
+
     /* Off. */
     cb_app_link_stop(&app);
     CHECK(!app.link_state.on && !app.link_state.nb_devices && !app.link_state.nb_interfaces);
+    CHECK_EQ(cb_app_link_push_settings(&app, &np, &nm), CB_ERROR(ENOENT));
     cb_link_client_stop(&player);
 
     /* Off right after on: the set's thread may be starting the service. */
