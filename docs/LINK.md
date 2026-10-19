@@ -828,6 +828,11 @@ DJM-900NXS2, and the mixer firmware readings, "Sources"):
 - Nothing else goes to a mixer's 50004: the DJM-A9 takes a datagram that
   does not start with the magic for an encrypted one, and one that does
   not decrypt has every device at its sender's address dropped.
+- An all-in-one has none: the XDJ-RX3's app (`rbp`, firmware 1.20) uses
+  UDP 50000 to 50002 only, port 50004 is nowhere in it, and it sends no
+  timing (a real one, 2026-10-20: cyanbox's deck stayed on its usual
+  output). Its USB-B connection showed this computer a MIDI port and no
+  sound card, so its headphones cannot get cyanbox's decks either way.
 
 **In cyanbox** (src/link/cue.c, `CBLinkCue`): the owner gives a function
 that takes the next frames and says whether its decks play and when one
