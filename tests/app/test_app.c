@@ -849,25 +849,46 @@ int main(int argc, char **argv)
     }
     app.link_state.enabled = false;
 
-    /* The History: none without --pro-link; with it each track once, at its
-     * latest play, the latest first and numbered down (the table's own
-     * order backwards until another is picked); a track's rows taken off
-     * at once; leaving it puts the order back. */
+    /* The History: none without --pro-link; with it every play, a track as
+     * often as it was played, the latest first and numbered down (the
+     * table's own order backwards until another is picked); each row's
+     * play and its set, plays more than 15 minutes apart in sets of their
+     * own, a set ending as its last track did; one play taken off, then a
+     * track's at once; leaving it puts the order back. */
     CHECK(cb_app_history_count(&app) == 0, "a history count without --pro-link");
     cb_app_show_history(&app);
     CHECK(!app.current_history, "the history shown without --pro-link");
     app.link_state.enabled = true;
     CHECK(cb_library_history_add(&app.lib, a, 1000, 1) == 0 &&
-          cb_library_history_add(&app.lib, b, 2000, 2) == 0 &&
+          cb_library_history_add(&app.lib, b, 1600, 2) == 0 &&
           cb_library_history_add(&app.lib, a, 3000, 0) == 0, "adding to the history");
-    CHECK(cb_app_history_count(&app) == 2, "history count %d", cb_app_history_count(&app));
+    CHECK(cb_app_history_count(&app) == 3, "history count %d", cb_app_history_count(&app));
     cb_app_show_history(&app);
     CHECK(app.current_history && !app.current_tag_list && !app.current_playlist &&
           app.sort_column < 0 && app.sort_descending, "the history's view and order");
-    CHECK(app.nb_rows == 2 && app.lib.tracks[app.rows[0]] == a && app.row_numbers[0] == 2 &&
-          app.lib.tracks[app.rows[1]] == b && app.row_numbers[1] == 1,
-          "the history's rows: %d, latest first", app.nb_rows);
-    CHECK(cb_library_history_remove(&app.lib, a->id) == 2, "a's history rows");
+    CHECK(app.nb_rows == 3 && app.lib.tracks[app.rows[0]] == a && app.row_numbers[0] == 3 &&
+          app.lib.tracks[app.rows[1]] == b && app.row_numbers[1] == 2 &&
+          app.lib.tracks[app.rows[2]] == a && app.row_numbers[2] == 1,
+          "the history's rows: %d, latest first, a twice", app.nb_rows);
+    int64_t plays[3] = { 0 };
+    int sets[3] = { -1, -1, -1 };
+    for (int r = 0; r < 3; r++)
+        CHECK(cb_app_history_row(&app, r, &plays[r], &sets[r]), "row %d's play", r);
+    CHECK(plays[0] && plays[1] && plays[2] && plays[0] != plays[2] && sets[0] == 1 &&
+          sets[1] == 0 && sets[2] == 0, "the plays' sets: %d %d %d", sets[0], sets[1], sets[2]);
+    int64_t s0, e0, s1, e1;
+    CHECK(cb_app_history_set_times(&app, 0, &s0, &e0) && cb_app_history_set_times(&app, 1, &s1, &e1) &&
+          !cb_app_history_set_times(&app, 2, &s1, &e1), "the sets' times");
+    CHECK(s0 == 1000 && e0 == 1600 + (int64_t)ceil(b->duration) && s1 == 3000 && e1 == 3000,
+          "the sets: %lld-%lld, %lld-%lld", (long long)s0, (long long)e0, (long long)s1,
+          (long long)e1);
+    CHECK(!cb_app_history_row(&app, 3, NULL, NULL), "a row past the end");
+    CHECK(cb_library_history_remove_entry(&app.lib, plays[0]) == 1, "a's latest play");
+    cb_app_tick(&app);
+    CHECK(app.nb_rows == 2 && app.lib.tracks[app.rows[0]] == b &&
+          app.lib.tracks[app.rows[1]] == a && cb_app_history_count(&app) == 2,
+          "the history after a play's removal: %d rows", app.nb_rows);
+    CHECK(cb_library_history_remove(&app.lib, a->id) == 1, "a's history rows");
     cb_app_tick(&app);
     CHECK(app.nb_rows == 1 && app.lib.tracks[app.rows[0]] == b && cb_app_history_count(&app) == 1,
           "the history after a removal: %d rows", app.nb_rows);

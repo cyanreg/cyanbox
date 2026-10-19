@@ -344,12 +344,23 @@ CBLinkTagList *cb_app_tag_list(CBApp *app);
 void cb_app_show_tag_list(CBApp *app);
 /* The History (cb_library_history), with --pro-link only: what the decks
  * played straight on for 1.5 minutes and what was added to it by hand.
- * The view shows each track once, at its latest play, in the table's own
- * order backwards (the latest first, the numbers going down) until
- * another order is picked; leaving it puts that order back. Nothing
- * without --pro-link. The count is of its tracks, 0 without --pro-link. */
+ * The view shows every play, a track as often as it was played, in the
+ * table's own order backwards (the latest first, the numbers going down)
+ * until another order is picked; leaving it puts that order back. Nothing
+ * without --pro-link. The count is of its plays, 0 without --pro-link. */
 void cb_app_show_history(CBApp *app);
 int  cb_app_history_count(CBApp *app);
+/* The History shown, row `row`'s play: its CBHistoryEntry.id and its set,
+ * from 0 for the oldest. A set is the plays less than CB_APP_HISTORY_GAP
+ * seconds apart (one more than 15 minutes after the one before starts
+ * one), the interface's separators between them. False in another view,
+ * and while the rows wait to be made again. */
+#define CB_APP_HISTORY_GAP (15 * 60)
+bool cb_app_history_row(CBApp *app, int row, int64_t *entry, int *set);
+/* When a set started (its first play) and ended (as its last track did:
+ * its start and its length when a deck played it, not after the next set
+ * started). Nothing without --pro-link. */
+bool cb_app_history_set_times(CBApp *app, int set, int64_t *started, int64_t *ended);
 /* Tells the Link device link_state.devices[index] (a player) to load
  * `track_id` of the library: -ENOENT when it is gone, -EAGAIN before we
  * are on its link (cyanbox/link.h cb_link_load). */

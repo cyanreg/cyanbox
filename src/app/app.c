@@ -210,11 +210,16 @@ struct CBAppPriv {
     CBArray  gpu;               /* GpuEntry, the browser's cache */
     CBArray  covers;            /* CoverTexture: the entries' covers, one per library cover */
     int      gpu_budget;
-    /* The History's tracks, each once, oldest latest play first
-     * (history_tracks); for lib.generation history_generation, 0 none. */
+    /* The History's plays, oldest first (history_tracks): each one's
+     * track, its row's id and its set; each set's start and end, oldest
+     * first. For lib.generation history_generation, 0 none. */
     uint64_t *history;
+    int64_t  *history_entry;
+    int      *history_set;
     int       nb_history;
     unsigned  history_generation;
+    int64_t  *history_sets;
+    int       nb_history_sets;
     CBArray  albums;            /* CBAlbum, the names copies: the tree's list (cb_app_albums) */
     CBArray  album_artists;     /* CBAlbumArtist, the names copies (cb_app_album_artists) */
     CBArray  artist_spans;      /* ArtistSpan, one per album artist */
@@ -2964,9 +2969,14 @@ static bool in_album(const CBTrack *t, const char *album)
     return t->meta.album && !cb_strcasecmp(t->meta.album, album);
 }
 
-/* The History's tracks (cb_app_show_history), each once at its latest
- * play, oldest first, made again when the library has changed. Its count,
- * or a negative errno. */
+/* The History's plays (cb_app_show_history), oldest first, a track as
+ * often as it was played, and its sets, made again when the library has
+ * changed. A set is the plays less than CB_APP_HISTORY_GAP apart; it starts
+ * with its first and ends as its last track did, its start and its length
+ * when a deck played it (it was added by hand otherwise), but not after
+ * the next set starts. Plays of tracks no longer in the library are left
+ * out of the rows, not of the sets. The count of plays, or a negative
+ * errno. */
 static int history_tracks(CBApp *app)
 {
     CBAppPriv *priv = app->priv;
@@ -2978,35 +2988,75 @@ static int history_tracks(CBApp *app)
     CBHistoryEntry *h = NULL;
     int nb = 0;
     int ret = cb_library_history(lib, &h, &nb);
-    bool *seen = ret >= 0 ? calloc((size_t)CB_MAX(lib->nb_tracks, 1), sizeof(*seen)) : NULL;
-    uint64_t *ids = seen ? malloc((size_t)CB_MAX(nb, 1) * sizeof(*ids)) : NULL;
-    if (!ids) {
+    size_t nr = (size_t)CB_MAX(nb, 1);
+    uint64_t *ids = ret >= 0 ? malloc(nr * sizeof(*ids)) : NULL;
+    int64_t *entries = ids ? malloc(nr * sizeof(*entries)) : NULL;
+    int *set_of = entries ? malloc(nr * sizeof(*set_of)) : NULL;
+    int64_t *sets = set_of ? malloc(nr * 2 * sizeof(*sets)) : NULL;
+    if (!sets) {
         free(h);
-        free(seen);
+        free(ids);
+        free(entries);
+        free(set_of);
         return ret < 0 ? ret : CB_ERROR(ENOMEM);
     }
-    /* Newest first, each track at its first sight; then turned round. */
-    int n = 0;
-    for (int i = nb - 1; i >= 0; i--) {
+    int nb_sets = 0, n = 0;
+    for (int i = 0; i < nb; i++) {
+        if (!i || h[i].played_at - h[i - 1].played_at > CB_APP_HISTORY_GAP) {
+            sets[2 * nb_sets] = sets[2 * nb_sets + 1] = h[i].played_at;
+            nb_sets++;
+        }
         const CBTrack *t = cb_library_find_id(lib, h[i].track_id);
-        int idx = t ? cb_library_index_of(lib, t) : -1;
-        if (idx < 0 || seen[idx])
+        int64_t end = h[i].played_at +
+                      (t && h[i].player && t->duration > 0 ? (int64_t)ceil(t->duration) : 0);
+        sets[2 * nb_sets - 1] = CB_MAX(sets[2 * nb_sets - 1], end);
+        if (!t)
             continue;
-        seen[idx] = true;
-        ids[n++] = h[i].track_id;
+        ids[n] = h[i].track_id;
+        entries[n] = h[i].id;
+        set_of[n++] = nb_sets - 1;
     }
-    for (int i = 0; i < n / 2; i++) {
-        uint64_t t = ids[i];
-        ids[i] = ids[n - 1 - i];
-        ids[n - 1 - i] = t;
-    }
+    for (int s = 0; s + 1 < nb_sets; s++)
+        sets[2 * s + 1] = CB_MIN(sets[2 * s + 1], sets[2 * s + 2]);
     free(h);
-    free(seen);
     free(priv->history);
+    free(priv->history_entry);
+    free(priv->history_set);
+    free(priv->history_sets);
     priv->history = ids;
+    priv->history_entry = entries;
+    priv->history_set = set_of;
     priv->nb_history = n;
+    priv->history_sets = sets;
+    priv->nb_history_sets = nb_sets;
     priv->history_generation = lib->generation;
     return n;
+}
+
+bool cb_app_history_row(CBApp *app, int row, int64_t *entry, int *set)
+{
+    if (!app->current_history || app->rows_generation != app->lib.generation || row < 0 ||
+        row >= app->nb_rows || history_tracks(app) < 0)
+        return false;
+    /* `#` numbers the rows in the History's own order: the play's place. */
+    uint32_t k = app->row_numbers[row] - 1;
+    if (k >= (uint32_t)app->priv->nb_history)
+        return false;
+    if (entry)
+        *entry = app->priv->history_entry[k];
+    if (set)
+        *set = app->priv->history_set[k];
+    return true;
+}
+
+bool cb_app_history_set_times(CBApp *app, int set, int64_t *started, int64_t *ended)
+{
+    if (!app->link_state.enabled || history_tracks(app) < 0 || set < 0 ||
+        set >= app->priv->nb_history_sets)
+        return false;
+    *started = app->priv->history_sets[2 * set];
+    *ended = app->priv->history_sets[2 * set + 1];
+    return true;
 }
 
 int cb_app_history_count(CBApp *app)
@@ -3715,6 +3765,9 @@ void cb_app_destroy(CBApp *app)
     albums_free(priv);
     free(priv->rank);
     free(priv->history);
+    free(priv->history_entry);
+    free(priv->history_set);
+    free(priv->history_sets);
     cb_array_free(&priv->albums);
     cb_array_free(&priv->album_artists);
     cb_array_free(&priv->artist_spans);
