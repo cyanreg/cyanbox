@@ -61,6 +61,15 @@ typedef struct CBLinkOptions {
     /* Tests: each reading of the library after the first takes this much
      * longer, so a test sees players answered while one runs. */
     int test_build_ms;
+    /* An all-in-one on USB, a set's only (cb_link_set_start): the ALSA
+     * sound card, by its id (XDJRX3, as /proc/asound/cards has it in
+     * brackets) or its number, whose MIDI port gets rekordbox's
+     * activation every 200 ms while the set runs. An XDJ-RX3 lists the
+     * computer on SOURCE only while it comes (src/link/usb.h). NULL: none.
+     * `test_usb_root`, tests only: a directory standing in for / to find
+     * the card in (NULL the system). */
+    const char *usb_card;
+    const char *test_usb_root;
     /* The TAG LIST the players see and change (below), the owner's to
      * keep; NULL: a service or a set makes its own. */
     CBLinkTagList *tag_list;

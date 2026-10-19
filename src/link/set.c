@@ -29,6 +29,7 @@
 #include "cyanbox/common.h"
 
 #include "net.h"
+#include "usb.h"
 
 #define RESCAN_MS   2000
 /* A service that would not start is tried again this much later. */
@@ -57,6 +58,7 @@ struct CBLinkSet {
     int nb;
     /* The TAG LIST every service shares: the owner's, or the set's own. */
     CBLinkTagList *own_tags;
+    CBLinkUsb *usb;             /* an all-in-one on USB: its activation */
 };
 
 typedef struct Want {
@@ -243,6 +245,7 @@ int cb_link_set_start(CBLinkSet **out, const CBLinkOptions *o)
     s->opt.name = s->name;
     s->opt.broadcast = s->broadcast;
     s->opt.interface = NULL;
+    s->opt.usb_card = s->opt.test_usb_root = NULL;     /* the set's own, below */
     s->wake = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
     int ret = 0;
     if (!o->tag_list && cb_link_tag_list_new(&s->own_tags) >= 0)
@@ -252,9 +255,12 @@ int cb_link_set_start(CBLinkSet **out, const CBLinkOptions *o)
         ret = CB_ERROR(ENOMEM);
     else if (s->wake < 0)
         ret = CB_ERROR(errno);
-    else if ((ret = pthread_create(&s->thread, NULL, manager, s)))
+    else if (o->usb_card)
+        ret = cb_link_usb_start(&s->usb, o->usb_card, o->test_usb_root);
+    if (!ret && (ret = pthread_create(&s->thread, NULL, manager, s)))
         ret = CB_ERROR(ret);
     if (ret) {
+        cb_link_usb_stop(&s->usb);
         set_free(s);
         return ret;
     }
@@ -272,6 +278,7 @@ void cb_link_set_stop(CBLinkSet **sp)
     wake(s);
     if (s->running)
         pthread_join(s->thread, NULL);
+    cb_link_usb_stop(&s->usb);
     set_free(s);
     *sp = NULL;
 }

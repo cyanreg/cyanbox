@@ -15,7 +15,7 @@ link_nfs_src      = files('vtree.c', 'nfs.c', 'nfsclient.c')
 
 cb_link_lib = static_library('cb_link',
     link_wire_src + link_presence_src + link_db_src + link_nfs_src +
-    files('net.c', 'service.c', 'set.c', 'client.c', 'wav.c', 'cue.c'),
+    files('net.c', 'service.c', 'set.c', 'client.c', 'wav.c', 'cue.c', 'usb.c'),
     include_directories: cb_inc,
     dependencies: [ cb_export_dep, cb_analysis_dep, threads_dep ],
 )
@@ -103,3 +103,13 @@ test_link_cue = executable('test_link_cue',
     files('../../tests/link/test_cue.c'),
     include_directories: cb_inc, dependencies: [ cb_link_dep ])
 test('cue', test_link_cue, suite: 'link', env: cue_test_env, timeout: 60)
+
+# ------------------------------------------------------------- all-in-ones
+# rekordbox's activation on an all-in-one's USB MIDI port, to sound cards
+# of the test's own in a directory standing in for /.
+usb_test_env = environment()
+usb_test_env.set('CB_TEST_DIR', link_test_dir / 'usb')
+test_link_usb = executable('test_link_usb',
+    files('../../tests/link/test_usb.c'),
+    include_directories: cb_inc, dependencies: [ cb_link_dep ])
+test('usb', test_link_usb, suite: 'link', env: usb_test_env, timeout: 60)
