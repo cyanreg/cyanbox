@@ -743,17 +743,22 @@ every device on the link, unasked, as rekordbox's "Remote Settings using
 Pro DJ Link" does. A player gets `34` (0x74 bytes, beat-link's layout,
 sendLoadSettingsCommand: 02 at 0x1f, our number at 0x20, which the 3000s
 also read as "MYSETTING2 follows", the target's at 0x21, then MYSETTING
-with version 3 and MYSETTING2); no deck answers it, each shows a caution,
-and each drops it in some of its states, very likely while it plays (the
-cdj session's reading: a 3000 refuses in four of its states). The CDJ-2000
-and 900 take settings from the link only this way ("Your settings were
-duplicated to PLAYER", the 900's text). A mixer gets `44`, WriteReq, as
-the A9 writes its own to a computer: the `43` layout with the mixer's
-number third; the emulated A9 applied one at once and answered `45` (its
-number, the slot, 0 for done). Its handler takes `4b` alike, but a
-CDJ-3000X has a handler for `4b` too (the mixer's settings to its
-media), so that is not sent. The DJM-900NXS and 900NXS2 leave `44`
-unread. A computer gets nothing.
+with version 3 and MYSETTING2); no deck answers it. Emulated, the
+CDJ-3000X, CDJ-3000 and CDJ-2000NXS2 applied every setting pushed while
+stopped or paused (2026-10-19, the cdj session; the NXS2 shows DUPLICATED
+for 2 s), and a deck that plays dropped it, silently, and kept its own
+after a pause too: the status bar says how many of the players play. A
+paused deck takes a new tempo range under its fader as it stands, so its
+pitch moves when the fader is off centre (+5.10 % on ±10 became +8.15 %
+on ±16), as from rekordbox's push. The CDJ-2000 and 900 take settings
+from the link only this way ("Your settings were duplicated to PLAYER",
+the 900's text; not seen on the emulated 900, which has no screen). A
+mixer gets `44`, WriteReq, as the A9 writes its own to a computer: the
+`43` layout with the mixer's number third; the emulated A9 applied
+cyanbox's at once and answered `45` (its number, the slot, 0 for done).
+Its handler takes `4b` alike, but a CDJ-3000X has a handler for `4b` too
+(the mixer's settings to its media), so that is not sent. The DJM-900NXS
+and 900NXS2 leave `44` unread. A computer gets nothing.
 A SAVE of My Settings from the deck to cyanbox (`37`, answered with `38`:
 our number, the slot, 0, a zero) is not answered: the 3000s, whose SAVE
 is under SHORTCUT once a track of ours is loaded, send it long and show
