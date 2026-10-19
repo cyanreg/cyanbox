@@ -665,11 +665,12 @@ and test_link has a deck's TAG TRACK reach it.
 
 ## My Settings over the link
 
-Players and a mixer take settings from cyanbox in three ways, all on
-50002 and all from the library's `device.*`, `player.*` and `mixer.*`
-settings (docs/settings.md); where the library sets none, rekordbox
-7.2.11's own display settings and cyanbox's player and mixer defaults
-(rekordbox 7.2.8's, but the Eject/Load Lock on and ±6 %):
+Players and a mixer take settings from cyanbox in three ways, and
+cyanbox pushes them in a fourth, all on 50002 and all from the library's
+`device.*`, `player.*` and `mixer.*` settings (docs/settings.md); where
+the library sets none, rekordbox 7.2.11's own display settings and
+cyanbox's player and mixer defaults (rekordbox 7.2.8's, but the
+Eject/Load Lock on and ±6 %):
 
 - **The display settings** (DEVSETTING.DAT: overview waveform, waveform
   colour, key display, waveform position) the player asks for as it
@@ -736,11 +737,23 @@ settings (docs/settings.md); where the library sets none, rekordbox
   (MixerVersionInfo by the CDJ-3000X's firmware), it only answers its own
   version, and it never asks a computer.
 
-Nothing is pushed: rekordbox can send a player its settings unasked
-(`34`, its "Remote Settings using Pro DJ Link", dysentery's
-loading_tracks.adoc; MYSETTING and MYSETTING2, version 3); cyanbox does
-not; the CDJ-2000 and 900 take settings from the link only that way
-("Your settings were duplicated to PLAYER", the 900's text) [untested].
+**Pushed**: Link → Push settings sends the settings, as the interface
+has them at that moment (not as the services last read the library), to
+every device on the link, unasked, as rekordbox's "Remote Settings using
+Pro DJ Link" does. A player gets `34` (0x74 bytes, beat-link's layout,
+sendLoadSettingsCommand: 02 at 0x1f, our number at 0x20, which the 3000s
+also read as "MYSETTING2 follows", the target's at 0x21, then MYSETTING
+with version 3 and MYSETTING2); no deck answers it, each shows a caution,
+and each drops it in some of its states, very likely while it plays (the
+cdj session's reading: a 3000 refuses in four of its states). The CDJ-2000
+and 900 take settings from the link only this way ("Your settings were
+duplicated to PLAYER", the 900's text). A mixer gets `44`, WriteReq, as
+the A9 writes its own to a computer: the `43` layout with the mixer's
+number third; the emulated A9 applied one at once and answered `45` (its
+number, the slot, 0 for done). Its handler takes `4b` alike, but a
+CDJ-3000X has a handler for `4b` too (the mixer's settings to its
+media), so that is not sent. The DJM-900NXS and 900NXS2 leave `44`
+unread. A computer gets nothing.
 A SAVE of My Settings from the deck to cyanbox (`37`, answered with `38`:
 our number, the slot, 0, a zero) is not answered: the 3000s, whose SAVE
 is under SHORTCUT once a track of ours is loaded, send it long and show
@@ -748,15 +761,18 @@ nothing when no answer comes; the NXS2 sends it short (MYSETTING alone,
 version 2) and after 15 s says "MY SETTINGS DATA cannot be saved". An
 A9's SAVE (`44`, its own 0xc0-byte blob with seventeen extended entries,
 4 ms after a `42` it sends first) is not answered either (`45`), nor
-taken: it waits 2 s, then leaves it, its settings as they were.
-rekordbox's push to a mixer (`4b`) is not sent. `35` and `42` are
-answered only to a device on the link, as every request is.
+taken: it waits 2 s, then leaves it, its settings as they were. `35`
+and `42` are answered only to a device on the link, as every request
+is.
 test_packets builds S16a's two packets byte for byte and the long answer
 by offset, the A9's `30` and `42` and the `43` it took, and rekordbox's
 `31`, and has a computer answer `35` and `42` only once the settings are
-set, only to a peer, and `42` only when it names us; test_loopback has
-the fake player LOAD the library's defaults, as a deck and as an A9, then
-settings changed in the library.
+set, only to a peer, and `42` only when it names us, and builds both
+pushes (the `34` at beat-link's offsets) and sends them to each player
+and mixer and to no computer; test_loopback has the fake player LOAD the
+library's defaults, as a deck and as an A9, then settings changed in the
+library, and receive a push of settings given; test_link pushes through
+the app.
 
 ## LINK CUE
 

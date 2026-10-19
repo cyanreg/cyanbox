@@ -491,6 +491,10 @@ stick. Without it, cyanbox never opens a Link socket.
    the players themselves keep their own.
  * **Load from cyanbox**: Load in deck N in the track menu, or drop a track on
    a player, unless it plays and Eject/Load Lock is on (it is by default).
+ * **My Settings**: Link → Push settings sends your player and mixer
+   settings to every player and mixer on the link, as rekordbox's Remote
+   Settings does; a player or a DJM-A9 can also LOAD them from cyanbox
+   ([My Settings](#my-settings)).
  * **Edits on the deck are kept**: a cue saved or deleted on a player (MEMORY,
    a hot cue pad) and a rating given there go into the library, as with
    rekordbox.
