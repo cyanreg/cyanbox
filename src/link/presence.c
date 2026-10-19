@@ -131,6 +131,8 @@ struct CBPresence {
 
     int  nb_tracks, nb_playlists;
     uint8_t devsetting[32];
+    uint8_t mysetting[40], mysetting2[40];
+    bool has_mysetting;
 
     int  track_device, track_slot;
     uint32_t track_id;
@@ -150,6 +152,10 @@ struct CBPresence {
         uint32_t addr;
         int64_t next;
         int tracks, playlists;
+        /* A LOAD of My Settings from it (cb_presence_load_settings): asked,
+         * answered, and what it answered. */
+        bool settings_asked, settings_got;
+        CBPktMySettings settings;
     } src;
 };
 
@@ -221,8 +227,10 @@ static void check_source(CBPresence *p)
 {
     if (p->src.step != SRC_NONE) {
         const Device *d = find(p, p->src.number);
-        if (!d || d->d.addr != p->src.addr)
+        if (!d || d->d.addr != p->src.addr) {
             p->src.step = SRC_NONE;
+            p->src.settings_asked = p->src.settings_got = false;
+        }
     }
 }
 
@@ -938,6 +946,14 @@ static void status_in(CBPresence *p, uint32_t from, const uint8_t *buf, size_t l
             p->src.step = SRC_DONE;
             p->src.tracks = m.tracks;
             p->src.playlists = m.playlists;
+        } else if (h.kind == CB_ST_MY_SETTINGS && p->src.settings_asked) {
+            /* What a CDJ-3000X checks before it applies them. */
+            CBPktMySettings m;
+            if (cb_pkt_my_settings_parse(&m, buf, len) == 0 && m.device == p->src.number &&
+                m.slot == CB_SLOT_REKORDBOX && m.result == 0) {
+                p->src.settings = m;
+                p->src.settings_got = true;
+            }
         }
         return;
     }
@@ -957,6 +973,24 @@ static void status_in(CBPresence *p, uint32_t from, const uint8_t *buf, size_t l
     case CB_ST_SETTINGS_QUERY:
         cb_pkt_settings(&w, p->c.name, p->number, p->devsetting);
         break;
+    case CB_ST_MY_SETTINGS_QUERY: {
+        /* A LOAD of My Settings, from us: answered long, as a CDJ-3000X
+         * answers, its version word 3 so that MYSETTING2 is read too, and
+         * about the slot asked about (04, ours). */
+        int asker, slot;
+        if (!p->has_mysetting || cb_pkt_my_settings_query_parse(&asker, &slot, buf, len) < 0)
+            return;
+        cb_debug("link: %s (%d) loads our My Settings", h.name, h.number);
+        CBPktMySettings m = { .number = p->number, .device = p->number, .slot = slot,
+                              .has2 = true };
+        snprintf(m.name, sizeof(m.name), "%s", p->c.name);
+        memcpy(m.mysetting, p->mysetting, 40);
+        m.mysetting[4] = 3;
+        m.mysetting[5] = m.mysetting[6] = m.mysetting[7] = 0;
+        memcpy(m.mysetting2, p->mysetting2, 40);
+        cb_pkt_my_settings(&w, &m);
+        break;
+    }
     default:
         return;
     }
@@ -1148,6 +1182,29 @@ int cb_presence_load(CBPresence *p, int player, uint32_t track_id)
     return 0;
 }
 
+int cb_presence_load_settings(CBPresence *p)
+{
+    if (p->c.role != CB_PRESENCE_PLAYER || p->src.step != SRC_DONE)
+        return CB_ERROR(EAGAIN);
+    uint8_t out[CB_PKT_MAX];
+    CBWr w = cb_wr(out, sizeof(out));
+    cb_pkt_my_settings_query(&w, p->c.name, p->number, CB_SLOT_REKORDBOX);
+    emit(p, CB_LINK_STATUS, p->src.addr, &w);
+    p->src.settings_asked = true;
+    p->src.settings_got = false;
+    return 0;
+}
+
+bool cb_presence_loaded_settings(const CBPresence *p, uint8_t mysetting[40],
+                                 uint8_t mysetting2[40])
+{
+    if (p->src.settings_got) {
+        memcpy(mysetting, p->src.settings.mysetting, 40);
+        memcpy(mysetting2, p->src.settings.mysetting2, 40);
+    }
+    return p->src.settings_got;
+}
+
 void cb_presence_set_media(CBPresence *p, int nb_tracks, int nb_playlists)
 {
     p->nb_tracks = CB_CLAMP(nb_tracks, 0, 0xffff);
@@ -1157,6 +1214,14 @@ void cb_presence_set_media(CBPresence *p, int nb_tracks, int nb_playlists)
 void cb_presence_set_devsetting(CBPresence *p, const uint8_t payload[32])
 {
     memcpy(p->devsetting, payload, sizeof(p->devsetting));
+}
+
+void cb_presence_set_mysetting(CBPresence *p, const uint8_t mysetting[40],
+                               const uint8_t mysetting2[40])
+{
+    memcpy(p->mysetting, mysetting, sizeof(p->mysetting));
+    memcpy(p->mysetting2, mysetting2, sizeof(p->mysetting2));
+    p->has_mysetting = true;
 }
 
 bool cb_presence_source(const CBPresence *p, int *number, uint32_t *addr, int *nb_tracks,

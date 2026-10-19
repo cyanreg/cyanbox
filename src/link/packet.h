@@ -51,7 +51,8 @@ enum CBAnnounceKind {
 };
 
 /* Kinds on port 50002 (djl-analysis packets.adoc; 10, 11, 16, 30, 31, 46
- * and 47 from rbxport's captures of rekordbox 7.2.11). */
+ * and 47 from rbxport's captures of rekordbox 7.2.11; 35 and 36 from
+ * dysentery's S16a capture of two CDJ-2000nexus). */
 enum CBStatusKind {
     CB_ST_MEDIA_QUERY    = 0x05,
     CB_ST_MEDIA_RESPONSE = 0x06,
@@ -62,6 +63,8 @@ enum CBStatusKind {
     CB_ST_LOAD_TRACK     = 0x19,
     CB_ST_LOAD_ACK       = 0x1a,
     CB_ST_MIXER          = 0x29,    /* a mixer's status, and rekordbox's */
+    CB_ST_MY_SETTINGS_QUERY = 0x35,
+    CB_ST_MY_SETTINGS    = 0x36,
     CB_ST_SETTINGS_QUERY = 0x46,
     CB_ST_SETTINGS       = 0x47,
 };
@@ -228,6 +231,30 @@ void cb_pkt_identity(CBWr *w, const char *name, int number, const char *computer
  * (docs/settings.md section 6), its integers big-endian here. */
 void cb_pkt_settings_query(CBWr *w, const char *name, int number);
 void cb_pkt_settings(CBWr *w, const char *name, int number, const uint8_t devsetting[32]);
+/* A player's LOAD of My Settings from another device (35, 0x28 bytes: its
+ * number, the slot, two zeros; 04 for a computer's collection) and the
+ * answer (36): the answerer's number, that slot, 0 for done, a zero, then
+ * the 40-byte MYSETTING.DAT payload (docs/settings.md section 3), its two
+ * words big-endian, and with MYSETTING2.DAT's 40 bytes (subtype 01, 0x78
+ * bytes) or without (subtype 00, 0x50 bytes). A CDJ-3000X (1.41, read
+ * from its firmware by the cdj session) takes MYSETTING2 only from a long
+ * answer whose version word says 3, and checks the slot and the 0; a
+ * CDJ-2000nexus answered short (dysentery's S16a), with the asker's
+ * number first. Byte 0x1f is 01 in both, and the deck refuses either
+ * without it. */
+typedef struct CBPktMySettings {
+    char     name[21];
+    int      number;                /* the sender's, in the header */
+    int      device, slot, result;  /* the four bytes before the payloads */
+    uint8_t  mysetting[40];
+    uint8_t  mysetting2[40];
+    bool     has2;                  /* zeros without */
+} CBPktMySettings;
+
+int  cb_pkt_my_settings_query_parse(int *number, int *slot, const uint8_t *buf, size_t len);
+void cb_pkt_my_settings_query(CBWr *w, const char *name, int number, int slot);
+int  cb_pkt_my_settings_parse(CBPktMySettings *m, const uint8_t *buf, size_t len);
+void cb_pkt_my_settings(CBWr *w, const CBPktMySettings *m);
 
 /* A load command (19, 0x58 bytes), as beat-link's VirtualCdj sends it
  * (sendLoadTrackCommand), to the target's status port: the player

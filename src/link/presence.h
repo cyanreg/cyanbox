@@ -118,6 +118,21 @@ void cb_presence_set_media(CBPresence *p, int nb_tracks, int nb_playlists);
  * (docs/settings.md section 6). Until set, rekordbox 7.2.11's own answer:
  * half overview, 3-band colour, classic keys, centred position. */
 void cb_presence_set_devsetting(CBPresence *p, const uint8_t payload[32]);
+/* CB_PRESENCE_COMPUTER: the player settings a player that LOADs My
+ * Settings from us gets, as the 40-byte MYSETTING.DAT and MYSETTING2.DAT
+ * payloads (docs/settings.md sections 3 and 4). Until set, such a LOAD is
+ * not answered. */
+void cb_presence_set_mysetting(CBPresence *p, const uint8_t mysetting[40],
+                               const uint8_t mysetting2[40]);
+/* CB_PRESENCE_PLAYER: LOADs My Settings from the computer source found,
+ * as a player's UTILITY does (35, about its collection's slot);
+ * cb_presence_loaded_settings then gives the MYSETTING.DAT and
+ * MYSETTING2.DAT payloads it answered (the second zeros in a short
+ * answer), false until it did as a CDJ-3000X takes it. -EAGAIN before a
+ * source is found. */
+int  cb_presence_load_settings(CBPresence *p);
+bool cb_presence_loaded_settings(const CBPresence *p, uint8_t mysetting[40],
+                                 uint8_t mysetting2[40]);
 /* CB_PRESENCE_PLAYER: the computer source the fake player found and what
  * its media response said; false until one answered. Any pointer may be
  * NULL. */

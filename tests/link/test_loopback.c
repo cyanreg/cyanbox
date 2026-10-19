@@ -13,7 +13,9 @@
  *    16-bit WAV of the file made as it is read (src/link/wav.c), the
  *    file's samples as cb_decode has them, and nothing made on disk.
  *  - The server sees what the player loaded and that it plays; a cue
- *    the player saves is handed on for the library's owner.
+ *    the player saves is handed on for the library's owner. A LOAD of
+ *    My Settings gets the library's player settings, cyanbox's defaults
+ *    where it sets none.
  *  - A client that never announced itself (127.0.0.3) gets no database
  *    port and no NFS answer: the fences of docs/LINK.md, "Security".
  *  - A library change is served again: a new track is browsable. It is
@@ -245,6 +247,16 @@ int main(void)
                   seen[i].type == CB_LINK_DEVICE_PLAYER;
     CHECK(listed);
 
+    /* A LOAD of My Settings from the server: the library sets none, so
+     * cyanbox's defaults, Eject/Load Lock on (byte 21), single play
+     * (23), +-6 % (36), and MYSETTING2's, Touch (byte 0)
+     * (docs/settings.md sections 3 and 4), with the version word that has
+     * a CDJ-3000X read MYSETTING2 too. */
+    uint8_t ms[40] = { 0 }, ms2[40] = { 0 };
+    CHECK_EQ(cb_link_client_load_settings(player, 5000, ms, ms2), 0);
+    CHECK(ms[0] == 0x78 && ms[3] == 0x12 && ms[4] == 3 && ms[21] == 0x81 && ms[23] == 0x81 &&
+          ms[36] == 0x80 && ms2[0] == 0x81);
+
     /* Browse and load the first track. */
     CHECK_EQ(cb_link_client_browse(player, 0, quiet_line, NULL), 0);
 
@@ -356,6 +368,8 @@ int main(void)
     CHECK_EQ(make_track("delta.flac", "-c:a flac", 122), 0);
     CHECK_EQ(cb_library_open(&lib, libdir), 0);
     add_track(&lib, "delta.flac", 122);
+    CHECK(cb_library_setting_set(&lib, "player.play_mode", "continue") >= 0);
+    CHECK(cb_library_setting_set(&lib, "player.vinyl_speed_adjust", "release") >= 0);
     cb_library_close(&lib);
     cb_link_library_changed(link);
     /* It is read on a thread of its own: the player is answered at once
@@ -387,6 +401,10 @@ int main(void)
         }
     }
     CHECK(four);
+    /* The library's settings with the rest: continue, Release, the lock
+     * still on. */
+    CHECK_EQ(cb_link_client_load_settings(player, 5000, ms, ms2), 0);
+    CHECK(ms[21] == 0x81 && ms[23] == 0x80 && ms[36] == 0x80 && ms2[0] == 0x82);
     if (db) {
         uint8_t *blob = NULL;
         size_t bn = 0;

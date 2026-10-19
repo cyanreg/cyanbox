@@ -420,24 +420,44 @@ fail:
 }
 
 /* What presence tells players of the library: the counts in the media
- * response, and the display settings (DEVSETTING.DAT's payload, docs/
- * settings.md section 6) when the library has device settings; without
- * them presence answers what rekordbox 7.2.11 did. */
+ * response, the display settings (DEVSETTING.DAT's payload, docs/
+ * settings.md section 6) when the library has device settings, without
+ * them what rekordbox 7.2.11 answered, and the player settings a LOAD of
+ * My Settings gets (MYSETTING.DAT's and MYSETTING2.DAT's, sections 3 and
+ * 4): the library's, or cyanbox's defaults when it sets none, as the
+ * interface shows them (cb_settings_get). */
 static void presence_library(CBLink *l)
 {
     int nb_lists = 0;
     for (int i = 0; i < l->plan->nb_playlists; i++)
         nb_lists += !l->plan->playlists[i].is_folder;
-    CBSettingsFile files[4];
+    CBSettingsFile files[6];
     int nb = 0;
     if (cb_settings_from_config(&l->lib->cfg, files, &nb) < 0)
         nb = 0;
+    const uint8_t *player[2] = { NULL, NULL };
+    for (int i = 0; i < nb; i++) {
+        if (!strcmp(files[i].name, "MYSETTING.DAT") && files[i].size >= 0x68 + 40)
+            player[0] = files[i].data + 0x68;
+        if (!strcmp(files[i].name, "MYSETTING2.DAT") && files[i].size >= 0x68 + 40)
+            player[1] = files[i].data + 0x68;
+    }
+    static const char *const names[2] = { "MYSETTING.DAT", "MYSETTING2.DAT" };
+    for (int k = 0; k < 2; k++) {
+        if (!player[k] && cb_settings_encode(names[k], NULL, 0, &files[nb].data,
+                                             &files[nb].size) >= 0) {
+            files[nb].name = names[k];
+            player[k] = files[nb++].data + 0x68;
+        }
+    }
     pthread_mutex_lock(&l->plock);
     cb_presence_set_media(l->pres, l->plan->nb_tracks, nb_lists);
     for (int i = 0; i < nb; i++) {
-        if (!strcmp(files[i].name, "DEVSETTING.DAT") && files[i].size >= 0x88)
+        if (!strcmp(files[i].name, "DEVSETTING.DAT") && files[i].size >= 0x68 + 32)
             cb_presence_set_devsetting(l->pres, files[i].data + 0x68);
     }
+    if (player[0] && player[1])
+        cb_presence_set_mysetting(l->pres, player[0], player[1]);
     pthread_mutex_unlock(&l->plock);
     for (int i = 0; i < nb; i++)
         free(files[i].data);

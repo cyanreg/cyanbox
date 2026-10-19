@@ -102,6 +102,14 @@ static const char cdj_settings_query[] =
 static const char rb_settings[] =
     "5173707431576d4a4f4c4772656b6f7264626f7800000000000000000000000101110024"
     "110400001234567800000001010104010101000002000000000000000000000000000000";
+/* dysentery's S16a capture (doc/assets/captures/S16a-settings-over-link):
+ * deck 2, a CDJ-2000nexus, LOADs My Settings from deck 1's USB, and
+ * deck 1 answers with its MYSETTING.DAT payload. */
+static const char nxs_my_settings_query[] =
+    "5173707431576d4a4f4c3543444a2d323030306e6578757300000000000000010002000402030000";
+static const char nxs_my_settings[] =
+    "5173707431576d4a4f4c3643444a2d323030306e6578757300000000000000010001002c0203000012345678"
+    "000000028181818881018181810101018080808180818000008000008181818181800000";
 /* rekordbox's identity answer, computer "chrisles-MBP" (2026-09-13). */
 static const char rb_identity[] =
     "5173707431576d4a4f4c1172656b6f7264626f7800000000000000000000000101110104"
@@ -653,6 +661,51 @@ static void questions(void)
     WR(w7);
     cb_pkt_settings(&w7, "rekordbox", 17, devsetting);
     CHECK_W("settings", w7, rb_settings);
+
+    WR(w8);
+    cb_pkt_my_settings_query(&w8, "CDJ-2000nexus", 2, 3);
+    CHECK_W("My Settings request", w8, nxs_my_settings_query);
+    int asker = 0, slot = 0;
+    Pkt q35 = pkt(nxs_my_settings_query);
+    CHECK_EQ(cb_pkt_my_settings_query_parse(&asker, &slot, q35.b, q35.len), 0);
+    CHECK(asker == 2 && slot == 3);
+    /* Byte 0x1f is 01, or a CDJ-3000X reads nothing. */
+    q35.b[0x1f] = 2;
+    CHECK(cb_pkt_my_settings_query_parse(&asker, &slot, q35.b, q35.len) < 0);
+    /* Deck 1's MYSETTING.DAT payload, as the file holds it; the answer
+     * short, with the asker's number first. */
+    CBPktMySettings my = { .name = "CDJ-2000nexus", .number = 1, .device = 2, .slot = 3,
+                          .mysetting = {
+        0x78, 0x56, 0x34, 0x12, 0x02, 0, 0, 0, 0x81, 0x81, 0x81, 0x88, 0x81, 0x01, 0x81, 0x81,
+        0x81, 0x01, 0x01, 0x01, 0x80, 0x80, 0x80, 0x81, 0x80, 0x81, 0x80, 0, 0, 0x80, 0, 0,
+        0x81, 0x81, 0x81, 0x81, 0x81, 0x80, 0, 0,
+    } };
+    WR(w9);
+    cb_pkt_my_settings(&w9, &my);
+    CHECK_W("My Settings", w9, nxs_my_settings);
+    CBPktMySettings back;
+    Pkt a36 = pkt(nxs_my_settings);
+    CHECK_EQ(cb_pkt_my_settings_parse(&back, a36.b, a36.len), 0);
+    CHECK(!strcmp(back.name, my.name) && back.number == 1 && back.device == 2 &&
+          back.slot == 3 && back.result == 0 && !back.has2 &&
+          !memcmp(back.mysetting, my.mysetting, 40));
+    /* The long answer a CDJ-3000X gives: subtype 01, 0x78 bytes, MYSETTING2
+     * after (the cdj session's reading of its firmware). */
+    my.has2 = true;
+    for (int i = 0; i < 40; i++)
+        my.mysetting2[i] = (uint8_t)(0xc0 + i);
+    WR(w10);
+    cb_pkt_my_settings(&w10, &my);
+    CHECK_EQ(w10.len, 0x78);
+    CHECK(w10.len == 0x78 && w10.p[0x20] == 1 && w10.p[0x22] == 0 && w10.p[0x23] == 0x54 &&
+          w10.p[0x2b] == 0x78 && w10.p[0x2f] == 0x02 && w10.p[0x30] == 0x81 && w10.p[0x50] == 0xc0 &&
+          w10.p[0x77] == 0xe7);
+    CHECK_EQ(cb_pkt_my_settings_parse(&back, w10.p, w10.len), 0);
+    CHECK(back.has2 && !memcmp(back.mysetting2, my.mysetting2, 40));
+    /* Long, but saying it is short: the second payload is not read. */
+    w10.p[0x20] = 0;
+    CHECK_EQ(cb_pkt_my_settings_parse(&back, w10.p, w10.len), 0);
+    CHECK(!back.has2 && back.mysetting2[0] == 0);
 }
 
 /* Every captured packet cut short, with its length field lying, or with
@@ -671,9 +724,12 @@ static void malformed(void)
         { rb_media_3, CB_LINK_STATUS }, { cdj_settings_query, CB_LINK_STATUS },
         { rb_settings, CB_LINK_STATUS }, { cdj_load_ack, CB_LINK_STATUS },
         { cdj_status_empty, CB_LINK_STATUS }, { cdj_status_playing, CB_LINK_STATUS },
+        { nxs_my_settings_query, CB_LINK_STATUS }, { nxs_my_settings, CB_LINK_STATUS },
     };
     Cap c = { .now = T0 };
     CBPresence *p = computer(&c, false, NULL);
+    uint8_t mysetting[40] = { 0x78, 0x56, 0x34, 0x12, 0x02 }, mysetting2[40] = { 0x81 };
+    cb_presence_set_mysetting(p, mysetting, mysetting2);
     feed(p, &c, CB_LINK_ANNOUNCE, CDJ_ADDR, cdj_keep_alive);
     run_until(p, &c, T0 + 4000 * MS);
     CHECK_EQ(cb_presence_state(p, NULL), CB_LINK_UP);
@@ -689,11 +745,15 @@ static void malformed(void)
             CBPktStatus st;
             CBPktMediaQuery mq;
             CBPktMedia md;
+            CBPktMySettings ms;
+            int asker, slot;
             bool ok = cb_pkt_keep_alive_parse(&ka, k.b, cut) == 0 ||
                       cb_pkt_claim_parse(&cl, k.b, cut) == 0 ||
                       cb_pkt_status_parse(&st, k.b, cut) == 0 ||
                       cb_pkt_media_query_parse(&mq, k.b, cut) == 0 ||
-                      cb_pkt_media_parse(&md, k.b, cut) == 0;
+                      cb_pkt_media_parse(&md, k.b, cut) == 0 ||
+                      cb_pkt_my_settings_query_parse(&asker, &slot, k.b, cut) == 0 ||
+                      cb_pkt_my_settings_parse(&ms, k.b, cut) == 0;
             if (ok)
                 fprintf(stderr, "packet %zu read when cut to %zu bytes\n", i, cut);
             CHECK(!ok);
@@ -1067,6 +1127,34 @@ static void serving(void)
     CHECK(o != NULL);
     if (o)
         CHECK_HEX("settings", o->b, o->len, rb_settings);
+    /* A LOAD of My Settings: none before the library's are set, then
+     * those, long, about the slot asked about (ours, 04), our number
+     * first and 0 for done, the version word 3. */
+    WR(mq35);
+    cb_pkt_my_settings_query(&mq35, "CDJ-3000", 1, 4);
+    from = c.nb;
+    feed_w(p, &c, CB_LINK_STATUS, CDJ_ADDR, &mq35);
+    CHECK_EQ(c.nb, from);
+    uint8_t mysetting[40] = { 0x78, 0x56, 0x34, 0x12, 0x02, 0, 0, 0 }, mysetting2[40];
+    for (int i = 8; i < 40; i++)
+        mysetting[i] = (uint8_t)(0x80 + i);
+    for (int i = 0; i < 40; i++)
+        mysetting2[i] = (uint8_t)(0xc0 + i);
+    cb_presence_set_mysetting(p, mysetting, mysetting2);
+    feed_w(p, &c, CB_LINK_STATUS, CDJ_ADDR, &mq35);
+    o = find_kind(&c, from, CB_LINK_STATUS, CB_ST_MY_SETTINGS);
+    CHECK(o && o->to == CDJ_ADDR && c.nb == from + 1);
+    if (o)
+        CHECK_HEX("My Settings", o->b, o->len,
+                  "5173707431576d4a4f4c3672656b6f7264626f78000000000000000000000001011100"
+                  "54110400001234567800000003"
+                  "88898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7"
+                  "c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3"
+                  "e4e5e6e7");
+    /* Not to a stranger. */
+    from = c.nb;
+    feed_w(p, &c, CB_LINK_STATUS, 0xc0a80199, &mq35);
+    CHECK_EQ(c.nb, from);
     /* A load acknowledgement is only read. */
     from = c.nb;
     Pkt ack = pkt(cdj_load_ack);

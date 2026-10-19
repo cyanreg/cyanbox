@@ -152,7 +152,7 @@ static size_t build(Rng *r, uint8_t *buf, size_t cap, enum CBLinkPort *port)
     name(r, nm);
     int n = some_number(r);
     *port = CB_LINK_ANNOUNCE;
-    switch (below(r, 19)) {
+    switch (below(r, 21)) {
     case 0: {
         CBPktKeepAlive k = {
             .proto = (int)below(r, 5), .number = n, .first = (int)below(r, 3),
@@ -264,6 +264,23 @@ static size_t build(Rng *r, uint8_t *buf, size_t cap, enum CBLinkPort *port)
             a.pcm[i] = (int16_t)rnd(r);
         cb_pkt_cue_audio(&w, &a);
         *port = CB_LINK_CUE;
+        break;
+    }
+    case 19:
+        cb_pkt_my_settings_query(&w, nm, n, (int)below(r, 6));
+        *port = CB_LINK_STATUS;
+        break;
+    case 20: {
+        CBPktMySettings m = { .number = n, .device = below(r, 2) ? n : (int)below(r, 256),
+                              .slot = (int)below(r, 8), .result = (int)below(r, 2),
+                              .has2 = below(r, 2) };
+        memcpy(m.name, nm, sizeof(m.name));
+        for (int i = 0; i < 40; i++) {
+            m.mysetting[i] = (uint8_t)rnd(r);
+            m.mysetting2[i] = (uint8_t)rnd(r);
+        }
+        cb_pkt_my_settings(&w, &m);
+        *port = CB_LINK_STATUS;
         break;
     }
     default: {
@@ -414,6 +431,21 @@ static void parse_all(const uint8_t *buf, size_t len)
     cb_pkt_media_query_parse(&q, buf, len);
     CBPktMedia m;
     cb_pkt_media_parse(&m, buf, len);
+    int asker, slot;
+    cb_pkt_my_settings_query_parse(&asker, &slot, buf, len);
+    CBPktMySettings ms;
+    if (cb_pkt_my_settings_parse(&ms, buf, len) == 0) {
+        check_name(ms.name);
+        uint8_t again[CB_PKT_MAX];
+        CBWr w = cb_wr(again, sizeof(again));
+        cb_pkt_my_settings(&w, &ms);
+        CBPktMySettings ms2;
+        if (w.err || cb_pkt_my_settings_parse(&ms2, w.p, w.len) < 0 ||
+            ms2.device != ms.device || ms2.slot != ms.slot || ms2.result != ms.result ||
+            ms2.has2 != ms.has2 || memcmp(ms.mysetting, ms2.mysetting, 40) ||
+            memcmp(ms.mysetting2, ms2.mysetting2, 40))
+            fail("My Settings do not survive a round trip");
+    }
 
     CBPktCueTiming t;
     if (cb_pkt_cue_timing_parse(&t, buf, len) == 0) {
@@ -615,6 +647,16 @@ int main(void)
             for (int i = 0; i < 32; i++)
                 ds[i] = (uint8_t)rnd(&r);
             cb_presence_set_devsetting(n->p, ds);
+            uint8_t ms[40], ms2[40];
+            for (int i = 0; i < 40; i++) {
+                ms[i] = (uint8_t)rnd(&r);
+                ms2[i] = (uint8_t)rnd(&r);
+            }
+            cb_presence_set_mysetting(n->p, ms, ms2);
+            int asked = cb_presence_load_settings(n->p);
+            if (asked != 0 && asked != CB_ERROR(EAGAIN))
+                fail("a LOAD of My Settings neither sent nor refused");
+            cb_presence_loaded_settings(n->p, ms, ms2);
             cb_presence_set_loaded(n->p, some_number(&r), (int)below(&r, 6), (uint32_t)rnd(&r),
                                    below(&r, 2));
             cb_presence_set_media(n->p, (int)below(&r, 100000) - 10, (int)below(&r, 100000));

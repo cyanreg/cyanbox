@@ -339,6 +339,12 @@ void cb_link_client_loaded(CBLinkClient *c, int *device, int *slot, uint32_t *tr
  * negative errno (the source has no grid for it, or is gone). */
 int  cb_link_client_play(CBLinkClient *c, uint32_t track);
 
+/* LOADs My Settings from the source, as a player's UTILITY does: the
+ * 40-byte MYSETTING.DAT and MYSETTING2.DAT payloads it answered within
+ * timeout_ms (docs/settings.md sections 3 and 4); -EAGAIN before a source
+ * is found, -ETIMEDOUT when it did not answer. */
+int  cb_link_client_load_settings(CBLinkClient *c, int timeout_ms, uint8_t mysetting[40],
+                                  uint8_t mysetting2[40]);
 /* Saves a cue on `track` as a player does on the deck (as a CDJ-3000X
  * sends one): hot cue `hot` (0..7 for A..H, in its slot's pad colour) or
  * with -1 a memory cue, at `time` seconds. 0 and how many cues the

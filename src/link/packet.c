@@ -763,6 +763,75 @@ void cb_pkt_settings(CBWr *w, const char *name, int number, const uint8_t devset
     st_finish(w, start);
 }
 
+int cb_pkt_my_settings_query_parse(int *number, int *slot, const uint8_t *buf, size_t len)
+{
+    CBRd r;
+    CBPktHeader h;
+    if (!body(&r, &h, CB_LINK_STATUS, CB_ST_MY_SETTINGS_QUERY, buf, len) || buf[0x1f] != 0x01)
+        return CB_ERROR(EINVAL);
+    *number = cb_rd_u8(&r);
+    *slot = cb_rd_u8(&r);
+    cb_rd_skip(&r, 2);
+    return r.err ? CB_ERROR(EINVAL) : 0;
+}
+
+void cb_pkt_my_settings_query(CBWr *w, const char *name, int number, int slot)
+{
+    /* As deck 2 asked deck 1 for its USB's (S16a): 02 03 00 00. */
+    size_t start = st_header(w, CB_ST_MY_SETTINGS_QUERY, 0x00, name, number);
+    cb_wr_u8(w, (uint8_t)number);
+    cb_wr_u8(w, (uint8_t)slot);
+    cb_wr_u16(w, 0);
+    st_finish(w, start);
+}
+
+int cb_pkt_my_settings_parse(CBPktMySettings *m, const uint8_t *buf, size_t len)
+{
+    CBRd r;
+    CBPktHeader h;
+    if (!body(&r, &h, CB_LINK_STATUS, CB_ST_MY_SETTINGS, buf, len) || buf[0x1f] != 0x01)
+        return CB_ERROR(EINVAL);
+    *m = (CBPktMySettings) { .number = h.number };
+    memcpy(m->name, h.name, sizeof(m->name));
+    m->device = cb_rd_u8(&r);
+    m->slot = cb_rd_u8(&r);
+    m->result = cb_rd_u8(&r);
+    cb_rd_skip(&r, 1);
+    CBWr d = cb_wr(m->mysetting, 40);
+    cb_wr_u32le(&d, cb_rd_u32(&r));
+    cb_wr_u32le(&d, cb_rd_u32(&r));
+    const uint8_t *set = cb_rd_bytes(&r, 32);
+    if (!set)
+        return CB_ERROR(EINVAL);
+    cb_wr_bytes(&d, set, 32);
+    /* The second payload as the 3000X reads it: there, and said so. */
+    const uint8_t *set2 = h.subtype ? cb_rd_bytes(&r, 40) : NULL;
+    if (set2) {
+        memcpy(m->mysetting2, set2, 40);
+        m->has2 = true;
+    }
+    return 0;
+}
+
+void cb_pkt_my_settings(CBWr *w, const CBPktMySettings *m)
+{
+    /* The payload as cb_pkt_settings gives DEVSETTING's: its magic and
+     * version words big-endian (12345678 00000002 in S16a), the 32 setting
+     * bytes as they are; MYSETTING2's 40 as they are. */
+    size_t start = st_header(w, CB_ST_MY_SETTINGS, m->has2, m->name, m->number);
+    cb_wr_u8(w, (uint8_t)m->device);
+    cb_wr_u8(w, (uint8_t)m->slot);
+    cb_wr_u8(w, (uint8_t)m->result);
+    cb_wr_u8(w, 0);
+    CBRd d = cb_rd(m->mysetting, 40);
+    cb_wr_u32(w, cb_rd_u32le(&d));
+    cb_wr_u32(w, cb_rd_u32le(&d));
+    cb_wr_bytes(w, cb_rd_bytes(&d, 32), 32);
+    if (m->has2)
+        cb_wr_bytes(w, m->mysetting2, 40);
+    st_finish(w, start);
+}
+
 /* ------------------------------------------------------------- port 50004 */
 
 int cb_pkt_cue_timing_parse(CBPktCueTiming *t, const uint8_t *buf, size_t len)

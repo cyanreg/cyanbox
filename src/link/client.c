@@ -285,6 +285,29 @@ int cb_link_client_save_cue(CBLinkClient *c, uint32_t track, int hot, double tim
     return 0;
 }
 
+int cb_link_client_load_settings(CBLinkClient *c, int timeout_ms, uint8_t mysetting[40],
+                                 uint8_t mysetting2[40])
+{
+    if (!c->pres)
+        return CB_ERROR(EINVAL);
+    pthread_mutex_lock(&c->lock);
+    int ret = cb_presence_load_settings(c->pres);
+    pthread_mutex_unlock(&c->lock);
+    if (ret < 0)
+        return ret;
+    int64_t end = cb_time_us() + (int64_t)timeout_ms * 1000;
+    while (1) {
+        pthread_mutex_lock(&c->lock);
+        bool got = cb_presence_loaded_settings(c->pres, mysetting, mysetting2);
+        pthread_mutex_unlock(&c->lock);
+        if (got)
+            return 0;
+        if (cb_time_us() >= end)
+            return CB_ERROR(ETIMEDOUT);
+        usleep(20000);
+    }
+}
+
 int cb_link_client_play(CBLinkClient *c, uint32_t track)
 {
     if (!c->pres)
