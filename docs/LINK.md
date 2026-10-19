@@ -117,7 +117,14 @@ emulated players): the load command (`19` to the player's status port:
 load track N of device D's slot S, as rekordbox does for a track dragged
 onto a deck) worked on the CDJ-900 and the CDJ-2000NXS2, which answers
 with a `1a`; cyanbox sends it (`cb_link_load`, the interface's Load in
-deck), and its fake player obeys it. Fader start (`02` on 50001) did
+deck), and its fake player obeys it. Since 2026-10-20 it is rekordbox
+7.2's, byte for byte (rbxport's capture of it loading a real CDJ-3000):
+`01` at 0x20 where beat-link has `00`, which an XDJ-RX3 (firmware 1.20)
+requires (OperatingManager::operatePacket drops a load whose 0x20 is
+`00`), and `32` at 0x4b. The target at 0x40 is a player's number less
+one; the RX3 reads it as its deck, `00` the first and any other the
+second (NetworkManager::loadMusic), so its decks 11 and 12 get `00` and
+`01`. Fader start (`02` on 50001) did
 nothing on either; the on-air flags (`03`) only on the NXS2. Nothing else
 of a deck can be worked from the network: not its play button, pitch,
 jog, cues or loops.

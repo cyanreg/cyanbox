@@ -1255,8 +1255,11 @@ int cb_presence_load(CBPresence *p, int player, uint32_t track_id)
     Device *d = find(p, player);
     if (!d || d->d.type != CB_LINK_DEVICE_PLAYER)
         return CB_ERROR(ENOENT);
+    /* An all-in-one's deck is named as its first (0x40 = 0) or not
+     * (an XDJ-RX3's NetworkManager::loadMusic). */
+    int target = d->raw_type == 7 ? (d->unit ? player - d->unit : 0) + 1 : player;
     CBPktLoad l = {
-        .number = p->number, .target = player,
+        .number = p->number, .target = target,
         .device = p->number, .slot = CB_SLOT_REKORDBOX, .type = 1, .id = track_id,
     };
     snprintf(l.name, sizeof(l.name), "%s", p->c.name);

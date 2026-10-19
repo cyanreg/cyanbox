@@ -629,24 +629,33 @@ static void status_packets(void)
  * 3 to load track 2158 of its own collection; and the answer. */
 static void load_command(void)
 {
+    /* rekordbox 7.2 telling players 1 and 2 to load its tracks 19925719
+     * and 73561055 (rbxport, rbl-prolink tests/packets.rs, from the wire;
+     * a real CDJ-3000 loaded them). */
+    static const char rb_load_1[] =
+        "5173707431576d4a4f4c1972656b6f7264626f780000000000000000000000010111003411000000"
+        "1104010001300ad7000000320000000000000000000000000000000000000000000000320000"
+        "00000000000000000000";
+    static const char rb_load_2[] =
+        "5173707431576d4a4f4c1972656b6f7264626f780000000000000000000000010111003411000000"
+        "11040100046273df000000320000000000000000000000000100000000000000000000320000"
+        "00000000000000000000";
     WR(w);
-    CBPktLoad l = { .name = "cyanbox", .number = 17, .target = 3, .device = 17, .slot = 4,
-                    .type = 1, .id = 2158 };
+    CBPktLoad l = { .name = "rekordbox", .number = 17, .target = 1, .device = 17, .slot = 4,
+                    .type = 1, .id = 19925719 };
     cb_pkt_load_track(&w, &l);
-    /* beat-link's payload after the name: 01 00 17 00 34 17, then the
-     * source, slot and type at 9, the id at 0x0d, 32 at 0x14, the target
-     * less one at 0x21. */
-    uint8_t want[0x58 - 0x1f] = { 0x01, 0x00, 17, 0x00, 0x34, 17 };
-    want[0x09] = 17;
-    want[0x0a] = 4;
-    want[0x0b] = 1;
-    want[0x0f] = 0x08;
-    want[0x10] = 0x6e;
-    want[0x14] = 0x32;
-    want[0x21] = 2;
+    CHECK_W("load to player 1", w, rb_load_1);
+    w = cb_wr(w_buf, sizeof(w_buf));
+    l.target = 2;
+    l.id = 73561055;
+    cb_pkt_load_track(&w, &l);
+    CHECK_W("load to player 2", w, rb_load_2);
+    w = cb_wr(w_buf, sizeof(w_buf));
+    l = (CBPktLoad) { .name = "cyanbox", .number = 17, .target = 3, .device = 17, .slot = 4,
+                      .type = 1, .id = 2158 };
+    cb_pkt_load_track(&w, &l);
     CHECK_EQ(w.len, 0x58);
     CHECK_EQ(w_buf[0x0a], CB_ST_LOAD_TRACK);
-    CHECK(!memcmp(w_buf + 0x1f, want, sizeof(want)));
     CBPktLoad back;
     CHECK_EQ(cb_pkt_load_track_parse(&back, w_buf, w.len), 0);
     CHECK(back.number == 17 && back.target == 3 && back.device == 17 && back.slot == 4 &&
@@ -1556,6 +1565,14 @@ static void all_in_one(void)
     CHECK(players == 2 && mixers == 0 && c.nb == from + 2);
     for (int i = from; i < c.nb; i++)
         CHECK(c.out[i].b[0x21] == (c.out[i].to == RX3_ADDR ? 11 : 1));
+
+    /* A load names the deck as the unit counts them: 0 its first. */
+    for (int k = 11; k <= 12; k++) {
+        from = c.nb;
+        CHECK_EQ(cb_presence_load(p, k, 2158), 0);
+        const Out *o = find_kind(&c, from, CB_LINK_STATUS, CB_ST_LOAD_TRACK);
+        CHECK(o && o->to == RX3_ADDR && o->b[0x20] == 1 && o->b[0x40] == k - 11);
+    }
 
     /* Its keep-alive keeps the deck; without it, both go. */
     int64_t t = c.now;

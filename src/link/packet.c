@@ -712,10 +712,14 @@ int cb_pkt_load_track_parse(CBPktLoad *l, const uint8_t *buf, size_t len)
 
 void cb_pkt_load_track(CBWr *w, const CBPktLoad *l)
 {
-    /* The sender's number at 0x24, the track's device, slot and type at
-     * 0x28, its id (big-endian) at 0x2c, 32 at 0x33 [UNKNOWN] and the
-     * target's number less one at 0x40, the rest zeros (beat-link). */
-    size_t start = st_header(w, CB_ST_LOAD_TRACK, 0x00, l->name, l->number);
+    /* As rekordbox 7.2 sent it to a CDJ-3000 (rbxport's capture): 01 at
+     * 0x20, which an XDJ-RX3 requires (its OperatingManager drops a load
+     * with 00 there, as beat-link sends it); the sender's number at 0x24,
+     * the track's device, slot and type at 0x28, its id (big-endian) at
+     * 0x2c, 32 at 0x33 and 0x4b [UNKNOWN], and the target at 0x40: a
+     * player's number less one, an all-in-one's deck (0 its first), the
+     * rest zeros. */
+    size_t start = st_header(w, CB_ST_LOAD_TRACK, 0x01, l->name, l->number);
     uint8_t *b = cb_wr_room(w, 0x58 - 0x24);
     if (b) {
         memset(b, 0, 0x58 - 0x24);
@@ -729,6 +733,7 @@ void cb_pkt_load_track(CBWr *w, const CBPktLoad *l)
         b[0x2f - 0x24] = (uint8_t)l->id;
         b[0x33 - 0x24] = 0x32;
         b[0x40 - 0x24] = (uint8_t)(l->target - 1);
+        b[0x4b - 0x24] = 0x32;
     }
     st_finish(w, start);
 }
