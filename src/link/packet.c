@@ -832,6 +832,99 @@ void cb_pkt_my_settings(CBWr *w, const CBPktMySettings *m)
     st_finish(w, start);
 }
 
+void cb_pkt_property_query(CBWr *w, const char *name, int number)
+{
+    st_header(w, CB_ST_PROPERTY_QUERY, 0x03, name, number);
+}
+
+void cb_pkt_property(CBWr *w, const char *name, int number)
+{
+    size_t start = st_header(w, CB_ST_PROPERTY, 0x03, name, number);
+    cb_wr_u8(w, 0x06);
+    cb_wr_zeros(w, 7);
+    st_finish(w, start);
+}
+
+int cb_pkt_djm_settings_query_parse(int *asker, int *slot, int *target, const uint8_t *buf,
+                                    size_t len)
+{
+    CBRd r;
+    CBPktHeader h;
+    if (!body(&r, &h, CB_LINK_STATUS, CB_ST_DJM_SETTINGS_QUERY, buf, len) || buf[0x1f] != 0x01)
+        return CB_ERROR(EINVAL);
+    *asker = cb_rd_u8(&r);
+    *slot = cb_rd_u8(&r);
+    *target = cb_rd_u8(&r);
+    cb_rd_skip(&r, 1);
+    return r.err ? CB_ERROR(EINVAL) : 0;
+}
+
+void cb_pkt_djm_settings_query(CBWr *w, const char *name, int number, int slot, int target)
+{
+    /* As an A9 (33) asked computer 17 (the cdj session's capture): 21 04
+     * 11 00. */
+    size_t start = st_header(w, CB_ST_DJM_SETTINGS_QUERY, 0x00, name, number);
+    cb_wr_u8(w, (uint8_t)number);
+    cb_wr_u8(w, (uint8_t)slot);
+    cb_wr_u8(w, (uint8_t)target);
+    cb_wr_u8(w, 0);
+    st_finish(w, start);
+}
+
+#define DJM_BLOB (4 + 52)
+
+int cb_pkt_djm_settings_parse(CBPktDjmSettings *m, const uint8_t *buf, size_t len)
+{
+    CBRd r;
+    CBPktHeader h;
+    if (!body(&r, &h, CB_LINK_STATUS, CB_ST_DJM_SETTINGS, buf, len))
+        return CB_ERROR(EINVAL);
+    *m = (CBPktDjmSettings) { .number = h.number };
+    memcpy(m->name, h.name, sizeof(m->name));
+    m->device = cb_rd_u8(&r);
+    m->slot = cb_rd_u8(&r);
+    m->result = cb_rd_u8(&r);
+    cb_rd_skip(&r, 1);
+    unsigned index = cb_rd_u16(&r), count = cb_rd_u16(&r);
+    uint32_t chunk = cb_rd_u32(&r), total = cb_rd_u32(&r);
+    uint32_t blob = cb_rd_u32(&r), magic = cb_rd_u32(&r), version = cb_rd_u32(&r);
+    uint32_t n = cb_rd_u32(&r);
+    const uint8_t *set = cb_rd_bytes(&r, 32);
+    uint32_t entries = cb_rd_u32(&r), size = cb_rd_u32(&r);
+    if (r.err || index != 0 || count != 1 || chunk != total || total < DJM_BLOB ||
+        blob != total - 4 || magic != 0x12345678 || n != 32)
+        return CB_ERROR(EINVAL);
+    CBWr d = cb_wr(m->djmmysetting, 52);
+    cb_wr_u32le(&d, magic);
+    cb_wr_u32le(&d, version);
+    cb_wr_u32le(&d, n);
+    cb_wr_bytes(&d, set, 32);
+    cb_wr_u32le(&d, entries);
+    cb_wr_u32le(&d, size);
+    return 0;
+}
+
+void cb_pkt_djm_settings(CBWr *w, const CBPktDjmSettings *m)
+{
+    size_t start = st_header(w, CB_ST_DJM_SETTINGS, 0x00, m->name, m->number);
+    cb_wr_u8(w, (uint8_t)m->device);
+    cb_wr_u8(w, (uint8_t)m->slot);
+    cb_wr_u8(w, (uint8_t)m->result);
+    cb_wr_u8(w, 0);
+    cb_wr_u16(w, 0);
+    cb_wr_u16(w, 1);
+    cb_wr_u32(w, DJM_BLOB);
+    cb_wr_u32(w, DJM_BLOB);
+    cb_wr_u32(w, DJM_BLOB - 4);
+    CBRd d = cb_rd(m->djmmysetting, 52);
+    for (int i = 0; i < 3; i++)
+        cb_wr_u32(w, cb_rd_u32le(&d));
+    cb_wr_bytes(w, cb_rd_bytes(&d, 32), 32);
+    for (int i = 0; i < 2; i++)
+        cb_wr_u32(w, cb_rd_u32le(&d));
+    st_finish(w, start);
+}
+
 /* ------------------------------------------------------------- port 50004 */
 
 int cb_pkt_cue_timing_parse(CBPktCueTiming *t, const uint8_t *buf, size_t len)

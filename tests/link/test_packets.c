@@ -110,6 +110,22 @@ static const char nxs_my_settings_query[] =
 static const char nxs_my_settings[] =
     "5173707431576d4a4f4c3643444a2d323030306e6578757300000000000000010001002c0203000012345678"
     "000000028181818881018181810101018080808180818000008000008181818181800000";
+/* A DJM-A9 (firmware 1.22, emulated, device 33) LOADs its My Settings from
+ * computer 17 (the cdj session, 2026-10-19, work/myset/a9/a9-myset.pcap):
+ * it asks what the computer has, then for the settings, and takes this
+ * answer, whose payload is rekordbox 7.2.8's DJMMYSETTING.DAT defaults.
+ * rekordbox's answer to the first question, from rbxport's capture
+ * (crates/rbl-prolink/tests/packets.rs), asked by an XDJ-RX3. */
+static const char a9_property_query[] =
+    "5173707431576d4a4f4c30444a4d2d413900000000000000000000000000000103210000";
+static const char rb_property[] =
+    "5173707431576d4a4f4c3172656b6f7264626f78000000000000000000000001031100080600000000000000";
+static const char a9_djm_settings_query[] =
+    "5173707431576d4a4f4c42444a4d2d41390000000000000000000000000000010021000421041100";
+static const char a9_djm_settings[] =
+    "5173707431576d4a4f4c4372656b6f7264626f7800000000000000000000000100110048110400000000000100"
+    "000038000000380000003412345678000000010000002081828080818180818080858280808284818100000000"
+    "000000000000000000000000000000000000";
 /* rekordbox's identity answer, computer "chrisles-MBP" (2026-09-13). */
 static const char rb_identity[] =
     "5173707431576d4a4f4c1172656b6f7264626f7800000000000000000000000101110104"
@@ -706,6 +722,51 @@ static void questions(void)
     w10.p[0x20] = 0;
     CHECK_EQ(cb_pkt_my_settings_parse(&back, w10.p, w10.len), 0);
     CHECK(!back.has2 && back.mysetting2[0] == 0);
+
+    WR(w11);
+    cb_pkt_property_query(&w11, "DJM-A9", 33);
+    CHECK_W("property request", w11, a9_property_query);
+    WR(w12);
+    cb_pkt_property(&w12, "rekordbox", 17);
+    CHECK_W("property", w12, rb_property);
+
+    WR(w13);
+    cb_pkt_djm_settings_query(&w13, "DJM-A9", 33, 4, 17);
+    CHECK_W("mixer My Settings request", w13, a9_djm_settings_query);
+    int target = 0;
+    Pkt q42 = pkt(a9_djm_settings_query);
+    CHECK_EQ(cb_pkt_djm_settings_query_parse(&asker, &slot, &target, q42.b, q42.len), 0);
+    CHECK(asker == 33 && slot == 4 && target == 17);
+    q42.b[0x1f] = 2;
+    CHECK(cb_pkt_djm_settings_query_parse(&asker, &slot, &target, q42.b, q42.len) < 0);
+    CBPktDjmSettings djm = { .name = "rekordbox", .number = 17, .device = 17, .slot = 4,
+                             .djmmysetting = {
+        0x78, 0x56, 0x34, 0x12, 0x01, 0, 0, 0, 0x20, 0, 0, 0, 0x81, 0x82, 0x80, 0x80,
+        0x81, 0x81, 0x80, 0x81, 0x80, 0x80, 0x85, 0x82, 0x80, 0x80, 0x82, 0x84, 0x81, 0x81,
+    } };
+    WR(w14);
+    cb_pkt_djm_settings(&w14, &djm);
+    CHECK_W("mixer My Settings", w14, a9_djm_settings);
+    CBPktDjmSettings djm_back;
+    Pkt a43 = pkt(a9_djm_settings);
+    CHECK_EQ(cb_pkt_djm_settings_parse(&djm_back, a43.b, a43.len), 0);
+    CHECK(!strcmp(djm_back.name, "rekordbox") && djm_back.number == 17 &&
+          djm_back.device == 17 && djm_back.slot == 4 && djm_back.result == 0 &&
+          !memcmp(djm_back.djmmysetting, djm.djmmysetting, 52));
+    /* Not one chunk of 32 settings: not read. */
+    static const struct { size_t at; uint8_t to; } bad[] = {
+        { 0x2b, 2 },        /* two chunks */
+        { 0x29, 1 },        /* the second of one */
+        { 0x2f, 0x39 },     /* a chunk longer than the total */
+        { 0x37, 0x33 },     /* a blob shorter than its chunk */
+        { 0x38, 0x13 },     /* the magic */
+        { 0x43, 0x21 },     /* 33 settings */
+    };
+    for (size_t i = 0; i < CB_ARRAY_ELEMS(bad); i++) {
+        Pkt k = pkt(a9_djm_settings);
+        k.b[bad[i].at] = bad[i].to;
+        CHECK(cb_pkt_djm_settings_parse(&djm_back, k.b, k.len) < 0);
+    }
 }
 
 /* Every captured packet cut short, with its length field lying, or with
@@ -725,11 +786,15 @@ static void malformed(void)
         { rb_settings, CB_LINK_STATUS }, { cdj_load_ack, CB_LINK_STATUS },
         { cdj_status_empty, CB_LINK_STATUS }, { cdj_status_playing, CB_LINK_STATUS },
         { nxs_my_settings_query, CB_LINK_STATUS }, { nxs_my_settings, CB_LINK_STATUS },
+        { a9_property_query, CB_LINK_STATUS }, { rb_property, CB_LINK_STATUS },
+        { a9_djm_settings_query, CB_LINK_STATUS }, { a9_djm_settings, CB_LINK_STATUS },
     };
     Cap c = { .now = T0 };
     CBPresence *p = computer(&c, false, NULL);
     uint8_t mysetting[40] = { 0x78, 0x56, 0x34, 0x12, 0x02 }, mysetting2[40] = { 0x81 };
     cb_presence_set_mysetting(p, mysetting, mysetting2);
+    uint8_t djmmysetting[52] = { 0x78, 0x56, 0x34, 0x12, 0x01, 0, 0, 0, 0x20 };
+    cb_presence_set_djmmysetting(p, djmmysetting);
     feed(p, &c, CB_LINK_ANNOUNCE, CDJ_ADDR, cdj_keep_alive);
     run_until(p, &c, T0 + 4000 * MS);
     CHECK_EQ(cb_presence_state(p, NULL), CB_LINK_UP);
@@ -746,14 +811,17 @@ static void malformed(void)
             CBPktMediaQuery mq;
             CBPktMedia md;
             CBPktMySettings ms;
-            int asker, slot;
+            CBPktDjmSettings djm;
+            int asker, slot, target;
             bool ok = cb_pkt_keep_alive_parse(&ka, k.b, cut) == 0 ||
                       cb_pkt_claim_parse(&cl, k.b, cut) == 0 ||
                       cb_pkt_status_parse(&st, k.b, cut) == 0 ||
                       cb_pkt_media_query_parse(&mq, k.b, cut) == 0 ||
                       cb_pkt_media_parse(&md, k.b, cut) == 0 ||
                       cb_pkt_my_settings_query_parse(&asker, &slot, k.b, cut) == 0 ||
-                      cb_pkt_my_settings_parse(&ms, k.b, cut) == 0;
+                      cb_pkt_my_settings_parse(&ms, k.b, cut) == 0 ||
+                      cb_pkt_djm_settings_query_parse(&asker, &slot, &target, k.b, cut) == 0 ||
+                      cb_pkt_djm_settings_parse(&djm, k.b, cut) == 0;
             if (ok)
                 fprintf(stderr, "packet %zu read when cut to %zu bytes\n", i, cut);
             CHECK(!ok);
@@ -1155,6 +1223,36 @@ static void serving(void)
     from = c.nb;
     feed_w(p, &c, CB_LINK_STATUS, 0xc0a80199, &mq35);
     CHECK_EQ(c.nb, from);
+
+    /* A mixer asks what we have and is answered as rekordbox answers; its
+     * LOAD of its My Settings gets none before the library's are set, nor
+     * when it asks another computer, then those in one chunk. */
+    from = c.nb;
+    feed(p, &c, CB_LINK_STATUS, CDJ_ADDR, a9_property_query);
+    o = find_kind(&c, from, CB_LINK_STATUS, CB_ST_PROPERTY);
+    CHECK(o && o->to == CDJ_ADDR && c.nb == from + 1);
+    if (o)
+        CHECK_HEX("property", o->b, o->len, rb_property);
+    from = c.nb;
+    feed(p, &c, CB_LINK_STATUS, CDJ_ADDR, a9_djm_settings_query);
+    CHECK_EQ(c.nb, from);
+    uint8_t djmmysetting[52] = { 0x78, 0x56, 0x34, 0x12, 0x01, 0, 0, 0, 0x20, 0, 0, 0 };
+    for (int i = 12; i < 44; i++)
+        djmmysetting[i] = (uint8_t)(0x80 + i);
+    cb_presence_set_djmmysetting(p, djmmysetting);
+    Pkt q42 = pkt(a9_djm_settings_query);
+    q42.b[0x26] = 18;
+    cb_presence_input(p, CB_LINK_STATUS, CDJ_ADDR, q42.b, q42.len, c.now);
+    CHECK_EQ(c.nb, from);
+    feed(p, &c, CB_LINK_STATUS, CDJ_ADDR, a9_djm_settings_query);
+    o = find_kind(&c, from, CB_LINK_STATUS, CB_ST_DJM_SETTINGS);
+    CHECK(o && o->to == CDJ_ADDR && c.nb == from + 1);
+    if (o)
+        CHECK_HEX("mixer My Settings", o->b, o->len,
+                  "5173707431576d4a4f4c4372656b6f7264626f78000000000000000000000001001100"
+                  "481104000000000001000000380000003800000034123456780000000100000020"
+                  "8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaab"
+                  "0000000000000000");
     /* A load acknowledgement is only read. */
     from = c.nb;
     Pkt ack = pkt(cdj_load_ack);

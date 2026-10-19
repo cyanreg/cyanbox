@@ -131,8 +131,8 @@ struct CBPresence {
 
     int  nb_tracks, nb_playlists;
     uint8_t devsetting[32];
-    uint8_t mysetting[40], mysetting2[40];
-    bool has_mysetting;
+    uint8_t mysetting[40], mysetting2[40], djmmysetting[52];
+    bool has_mysetting, has_djmmysetting;
 
     int  track_device, track_slot;
     uint32_t track_id;
@@ -156,6 +156,9 @@ struct CBPresence {
          * answered, and what it answered. */
         bool settings_asked, settings_got;
         CBPktMySettings settings;
+        /* The same as a mixer (cb_presence_load_djm_settings). */
+        bool djm_asked, djm_got;
+        uint8_t djm[52];
     } src;
 };
 
@@ -230,6 +233,7 @@ static void check_source(CBPresence *p)
         if (!d || d->d.addr != p->src.addr) {
             p->src.step = SRC_NONE;
             p->src.settings_asked = p->src.settings_got = false;
+            p->src.djm_asked = p->src.djm_got = false;
         }
     }
 }
@@ -954,6 +958,14 @@ static void status_in(CBPresence *p, uint32_t from, const uint8_t *buf, size_t l
                 p->src.settings = m;
                 p->src.settings_got = true;
             }
+        } else if (h.kind == CB_ST_DJM_SETTINGS && p->src.djm_asked) {
+            /* What a DJM-A9 checks before it applies them. */
+            CBPktDjmSettings m;
+            if (cb_pkt_djm_settings_parse(&m, buf, len) == 0 && m.device == p->src.number &&
+                m.slot == CB_SLOT_REKORDBOX && m.result == 0) {
+                memcpy(p->src.djm, m.djmmysetting, 52);
+                p->src.djm_got = true;
+            }
         }
         return;
     }
@@ -989,6 +1001,25 @@ static void status_in(CBPresence *p, uint32_t from, const uint8_t *buf, size_t l
         m.mysetting[5] = m.mysetting[6] = m.mysetting[7] = 0;
         memcpy(m.mysetting2, p->mysetting2, 40);
         cb_pkt_my_settings(&w, &m);
+        break;
+    }
+    case CB_ST_PROPERTY_QUERY:
+        /* A DJM-A9 then offers us as a source of its My Settings. */
+        cb_pkt_property(&w, p->c.name, p->number);
+        break;
+    case CB_ST_DJM_SETTINGS_QUERY: {
+        /* A mixer's LOAD of its My Settings, from us: one chunk, about the
+         * slot asked about. */
+        int asker, slot, target;
+        if (!p->has_djmmysetting ||
+            cb_pkt_djm_settings_query_parse(&asker, &slot, &target, buf, len) < 0 ||
+            target != p->number)
+            return;
+        cb_debug("link: %s (%d) loads our mixer My Settings", h.name, h.number);
+        CBPktDjmSettings m = { .number = p->number, .device = p->number, .slot = slot };
+        snprintf(m.name, sizeof(m.name), "%s", p->c.name);
+        memcpy(m.djmmysetting, p->djmmysetting, 52);
+        cb_pkt_djm_settings(&w, &m);
         break;
     }
     default:
@@ -1193,6 +1224,32 @@ int cb_presence_load_settings(CBPresence *p)
     p->src.settings_asked = true;
     p->src.settings_got = false;
     return 0;
+}
+
+void cb_presence_set_djmmysetting(CBPresence *p, const uint8_t payload[52])
+{
+    memcpy(p->djmmysetting, payload, sizeof(p->djmmysetting));
+    p->has_djmmysetting = true;
+}
+
+int cb_presence_load_djm_settings(CBPresence *p)
+{
+    if (p->c.role != CB_PRESENCE_PLAYER || p->src.step != SRC_DONE)
+        return CB_ERROR(EAGAIN);
+    uint8_t out[CB_PKT_MAX];
+    CBWr w = cb_wr(out, sizeof(out));
+    cb_pkt_djm_settings_query(&w, p->c.name, p->number, CB_SLOT_REKORDBOX, p->src.number);
+    emit(p, CB_LINK_STATUS, p->src.addr, &w);
+    p->src.djm_asked = true;
+    p->src.djm_got = false;
+    return 0;
+}
+
+bool cb_presence_loaded_djm_settings(const CBPresence *p, uint8_t payload[52])
+{
+    if (p->src.djm_got)
+        memcpy(payload, p->src.djm, 52);
+    return p->src.djm_got;
 }
 
 bool cb_presence_loaded_settings(const CBPresence *p, uint8_t mysetting[40],

@@ -345,6 +345,10 @@ int  cb_link_client_play(CBLinkClient *c, uint32_t track);
  * is found, -ETIMEDOUT when it did not answer. */
 int  cb_link_client_load_settings(CBLinkClient *c, int timeout_ms, uint8_t mysetting[40],
                                   uint8_t mysetting2[40]);
+/* LOADs the mixer's My Settings from the source, as a DJM-A9 does: the
+ * 52-byte DJMMYSETTING.DAT payload it answered within timeout_ms
+ * (docs/settings.md section 5); errors as cb_link_client_load_settings. */
+int  cb_link_client_load_djm_settings(CBLinkClient *c, int timeout_ms, uint8_t djmmysetting[52]);
 /* Saves a cue on `track` as a player does on the deck (as a CDJ-3000X
  * sends one): hot cue `hot` (0..7 for A..H, in its slot's pad colour) or
  * with -1 a memory cue, at `time` seconds. 0 and how many cues the

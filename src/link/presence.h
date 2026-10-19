@@ -124,6 +124,16 @@ void cb_presence_set_devsetting(CBPresence *p, const uint8_t payload[32]);
  * not answered. */
 void cb_presence_set_mysetting(CBPresence *p, const uint8_t mysetting[40],
                                const uint8_t mysetting2[40]);
+/* CB_PRESENCE_COMPUTER: the mixer settings a mixer that LOADs its My
+ * Settings from us gets, as the 52-byte DJMMYSETTING.DAT payload
+ * (docs/settings.md section 5). Until set, such a LOAD is not answered. */
+void cb_presence_set_djmmysetting(CBPresence *p, const uint8_t payload[52]);
+/* CB_PRESENCE_PLAYER, for the tests: LOADs the mixer's My Settings from
+ * the computer source found, as a DJM-A9 does (42); the payload it
+ * answered once it did as the A9 takes it. -EAGAIN before a source is
+ * found. */
+int  cb_presence_load_djm_settings(CBPresence *p);
+bool cb_presence_loaded_djm_settings(const CBPresence *p, uint8_t payload[52]);
 /* CB_PRESENCE_PLAYER: LOADs My Settings from the computer source found,
  * as a player's UTILITY does (35, about its collection's slot);
  * cb_presence_loaded_settings then gives the MYSETTING.DAT and

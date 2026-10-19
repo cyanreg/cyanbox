@@ -152,7 +152,7 @@ static size_t build(Rng *r, uint8_t *buf, size_t cap, enum CBLinkPort *port)
     name(r, nm);
     int n = some_number(r);
     *port = CB_LINK_ANNOUNCE;
-    switch (below(r, 21)) {
+    switch (below(r, 24)) {
     case 0: {
         CBPktKeepAlive k = {
             .proto = (int)below(r, 5), .number = n, .first = (int)below(r, 3),
@@ -280,6 +280,33 @@ static size_t build(Rng *r, uint8_t *buf, size_t cap, enum CBLinkPort *port)
             m.mysetting2[i] = (uint8_t)rnd(r);
         }
         cb_pkt_my_settings(&w, &m);
+        *port = CB_LINK_STATUS;
+        break;
+    }
+    case 21:
+        if (below(r, 2))
+            cb_pkt_property_query(&w, nm, n);
+        else
+            cb_pkt_property(&w, nm, n);
+        *port = CB_LINK_STATUS;
+        break;
+    case 22:
+        cb_pkt_djm_settings_query(&w, nm, n, (int)below(r, 6),
+                                  below(r, 2) ? 17 : some_number(r));
+        *port = CB_LINK_STATUS;
+        break;
+    case 23: {
+        CBPktDjmSettings m = { .number = n, .device = below(r, 2) ? n : (int)below(r, 256),
+                               .slot = (int)below(r, 8), .result = (int)below(r, 2) };
+        memcpy(m.name, nm, sizeof(m.name));
+        for (int i = 0; i < 52; i++)
+            m.djmmysetting[i] = (uint8_t)rnd(r);
+        /* The magic and the count, mostly, or it is never read. */
+        if (below(r, 4)) {
+            memcpy(m.djmmysetting, (const uint8_t[]) { 0x78, 0x56, 0x34, 0x12 }, 4);
+            memcpy(m.djmmysetting + 8, (const uint8_t[]) { 0x20, 0, 0, 0 }, 4);
+        }
+        cb_pkt_djm_settings(&w, &m);
         *port = CB_LINK_STATUS;
         break;
     }
@@ -445,6 +472,20 @@ static void parse_all(const uint8_t *buf, size_t len)
             ms2.has2 != ms.has2 || memcmp(ms.mysetting, ms2.mysetting, 40) ||
             memcmp(ms.mysetting2, ms2.mysetting2, 40))
             fail("My Settings do not survive a round trip");
+    }
+    int target;
+    cb_pkt_djm_settings_query_parse(&asker, &slot, &target, buf, len);
+    CBPktDjmSettings djm;
+    if (cb_pkt_djm_settings_parse(&djm, buf, len) == 0) {
+        check_name(djm.name);
+        uint8_t again[CB_PKT_MAX];
+        CBWr w = cb_wr(again, sizeof(again));
+        cb_pkt_djm_settings(&w, &djm);
+        CBPktDjmSettings djm2;
+        if (w.err || cb_pkt_djm_settings_parse(&djm2, w.p, w.len) < 0 ||
+            djm2.device != djm.device || djm2.slot != djm.slot || djm2.result != djm.result ||
+            memcmp(djm.djmmysetting, djm2.djmmysetting, 52))
+            fail("mixer My Settings do not survive a round trip");
     }
 
     CBPktCueTiming t;
@@ -657,6 +698,14 @@ int main(void)
             if (asked != 0 && asked != CB_ERROR(EAGAIN))
                 fail("a LOAD of My Settings neither sent nor refused");
             cb_presence_loaded_settings(n->p, ms, ms2);
+            uint8_t djm[52];
+            for (int i = 0; i < 52; i++)
+                djm[i] = (uint8_t)rnd(&r);
+            cb_presence_set_djmmysetting(n->p, djm);
+            asked = cb_presence_load_djm_settings(n->p);
+            if (asked != 0 && asked != CB_ERROR(EAGAIN))
+                fail("a LOAD of mixer My Settings neither sent nor refused");
+            cb_presence_loaded_djm_settings(n->p, djm);
             cb_presence_set_loaded(n->p, some_number(&r), (int)below(&r, 6), (uint32_t)rnd(&r),
                                    below(&r, 2));
             cb_presence_set_media(n->p, (int)below(&r, 100000) - 10, (int)below(&r, 100000));

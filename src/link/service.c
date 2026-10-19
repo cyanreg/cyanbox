@@ -422,16 +422,17 @@ fail:
 /* What presence tells players of the library: the counts in the media
  * response, the display settings (DEVSETTING.DAT's payload, docs/
  * settings.md section 6) when the library has device settings, without
- * them what rekordbox 7.2.11 answered, and the player settings a LOAD of
- * My Settings gets (MYSETTING.DAT's and MYSETTING2.DAT's, sections 3 and
- * 4): the library's, or cyanbox's defaults when it sets none, as the
- * interface shows them (cb_settings_get). */
+ * them what rekordbox 7.2.11 answered, and the player and mixer settings a
+ * LOAD of My Settings gets (MYSETTING.DAT's and MYSETTING2.DAT's, sections
+ * 3 and 4; DJMMYSETTING.DAT's, section 5): the library's, or cyanbox's
+ * defaults when it sets none, as the interface shows them
+ * (cb_settings_get). */
 static void presence_library(CBLink *l)
 {
     int nb_lists = 0;
     for (int i = 0; i < l->plan->nb_playlists; i++)
         nb_lists += !l->plan->playlists[i].is_folder;
-    CBSettingsFile files[6];
+    CBSettingsFile files[7];
     int nb = 0;
     if (cb_settings_from_config(&l->lib->cfg, files, &nb) < 0)
         nb = 0;
@@ -450,6 +451,16 @@ static void presence_library(CBLink *l)
             player[k] = files[nb++].data + 0x68;
         }
     }
+    const uint8_t *mixer = NULL;
+    for (int i = 0; i < nb; i++) {
+        if (!strcmp(files[i].name, "DJMMYSETTING.DAT") && files[i].size >= 0x68 + 52)
+            mixer = files[i].data + 0x68;
+    }
+    if (!mixer && cb_settings_encode("DJMMYSETTING.DAT", NULL, 0, &files[nb].data,
+                                     &files[nb].size) >= 0) {
+        files[nb].name = "DJMMYSETTING.DAT";
+        mixer = files[nb++].data + 0x68;
+    }
     pthread_mutex_lock(&l->plock);
     cb_presence_set_media(l->pres, l->plan->nb_tracks, nb_lists);
     for (int i = 0; i < nb; i++) {
@@ -458,6 +469,8 @@ static void presence_library(CBLink *l)
     }
     if (player[0] && player[1])
         cb_presence_set_mysetting(l->pres, player[0], player[1]);
+    if (mixer)
+        cb_presence_set_djmmysetting(l->pres, mixer);
     pthread_mutex_unlock(&l->plock);
     for (int i = 0; i < nb; i++)
         free(files[i].data);

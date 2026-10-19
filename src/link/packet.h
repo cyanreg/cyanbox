@@ -52,7 +52,8 @@ enum CBAnnounceKind {
 
 /* Kinds on port 50002 (djl-analysis packets.adoc; 10, 11, 16, 30, 31, 46
  * and 47 from rbxport's captures of rekordbox 7.2.11; 35 and 36 from
- * dysentery's S16a capture of two CDJ-2000nexus). */
+ * dysentery's S16a capture of two CDJ-2000nexus; 42 and 43 from the cdj
+ * session's reading of the DJM-A9's firmware). */
 enum CBStatusKind {
     CB_ST_MEDIA_QUERY    = 0x05,
     CB_ST_MEDIA_RESPONSE = 0x06,
@@ -63,8 +64,12 @@ enum CBStatusKind {
     CB_ST_LOAD_TRACK     = 0x19,
     CB_ST_LOAD_ACK       = 0x1a,
     CB_ST_MIXER          = 0x29,    /* a mixer's status, and rekordbox's */
+    CB_ST_PROPERTY_QUERY = 0x30,
+    CB_ST_PROPERTY       = 0x31,
     CB_ST_MY_SETTINGS_QUERY = 0x35,
     CB_ST_MY_SETTINGS    = 0x36,
+    CB_ST_DJM_SETTINGS_QUERY = 0x42,
+    CB_ST_DJM_SETTINGS   = 0x43,
     CB_ST_SETTINGS_QUERY = 0x46,
     CB_ST_SETTINGS       = 0x47,
 };
@@ -255,6 +260,37 @@ int  cb_pkt_my_settings_query_parse(int *number, int *slot, const uint8_t *buf, 
 void cb_pkt_my_settings_query(CBWr *w, const char *name, int number, int slot);
 int  cb_pkt_my_settings_parse(CBPktMySettings *m, const uint8_t *buf, size_t len);
 void cb_pkt_my_settings(CBWr *w, const CBPktMySettings *m);
+
+/* A DJM-A9 asks a computer that joined what it has (30, the header alone,
+ * subtype 03), about once a second up to ten times; any answer from the
+ * computer's number has it offer the computer as a source of its My
+ * Settings. rekordbox's answer (31, 0x2c bytes, subtype 03: 06 and seven
+ * zeros) as rbxport captured it. */
+void cb_pkt_property_query(CBWr *w, const char *name, int number);
+void cb_pkt_property(CBWr *w, const char *name, int number);
+
+/* A mixer's LOAD of its My Settings from a computer (42, 0x28 bytes: its
+ * number, the slot (04), the computer's number, a zero) and the answer
+ * (43): the computer's number, that slot, 0 for done, a zero; the chunk's
+ * index and the count of chunks (u16 each, 0 of 1 here), its length and
+ * the total (u32 each, both the blob's); the blob: its length after this
+ * word, then the 52-byte DJMMYSETTING.DAT payload (docs/settings.md
+ * section 5) with its six words big-endian. An A9 reads one chunk of
+ * 0x58b bytes at most and blobs to 0x800, extended entries after the 32
+ * setting bytes; the parser reads a single chunk of 32 setting bytes and
+ * leaves out the entries. */
+typedef struct CBPktDjmSettings {
+    char     name[21];
+    int      number;                /* the sender's, in the header */
+    int      device, slot, result;
+    uint8_t  djmmysetting[52];
+} CBPktDjmSettings;
+
+int  cb_pkt_djm_settings_query_parse(int *asker, int *slot, int *target, const uint8_t *buf,
+                                     size_t len);
+void cb_pkt_djm_settings_query(CBWr *w, const char *name, int number, int slot, int target);
+int  cb_pkt_djm_settings_parse(CBPktDjmSettings *m, const uint8_t *buf, size_t len);
+void cb_pkt_djm_settings(CBWr *w, const CBPktDjmSettings *m);
 
 /* A load command (19, 0x58 bytes), as beat-link's VirtualCdj sends it
  * (sendLoadTrackCommand), to the target's status port: the player
