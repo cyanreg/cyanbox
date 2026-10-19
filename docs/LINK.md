@@ -696,18 +696,30 @@ cyanbox's player defaults (the Eject/Load Lock on, ±6 %):
   (4.33) and CDJ-900 (4.32) only answer a LOAD of their own sticks'
   settings: neither firmware has the code to ask for one, so they cannot
   LOAD cyanbox's. The media answer has said "My Settings present" all
-  along, so players offer the LOAD; until now it went unanswered. All of
-  this is read from the firmware; no deck, emulated or real, has LOADed
-  them from cyanbox yet.
+  along, so players offer the LOAD; until now it went unanswered.
+  Emulated, the CDJ-3000X (1.41), CDJ-3000 (3.22) and CDJ-2000NXS2
+  (1.87) then LOADed them from cyanbox (2026-10-19, the cdj session):
+  each asked about slot 04 and took the long answer, said "Your settings
+  were loaded to PLAYER", and changed what the library set (play mode,
+  the lock, tempo range, quantize and its beat value, hot cue colour and
+  auto load, auto cue; on the 3000s MYSETTING2's beat jump too). A
+  setting changed in the interface is served once the library is read
+  again, 2 s later; `cyanbox link serve` reads the library's only as it
+  starts.
 
 Nothing is pushed: rekordbox can send a player its settings unasked
 (`34`, its "Remote Settings using Pro DJ Link", dysentery's
 loading_tracks.adoc; MYSETTING and MYSETTING2, version 3); cyanbox does
-not. A SAVE of My Settings from the deck to cyanbox (`37`, answered with
-`38`) is not answered, and the deck gives up after 15 s; the mixer's
-settings (DJMMYSETTING.DAT, `42` to `45` and `4b`, which the mixer
-asks a deck for, not the deck the source) are not served. `35`
-is answered only to a device on the link, as every request is.
+not; the CDJ-2000 and 900 take settings from the link only that way
+("Your settings were duplicated to PLAYER", the 900's text) [untested].
+A SAVE of My Settings from the deck to cyanbox (`37`, answered with `38`:
+our number, the slot, 0, a zero) is not answered: the 3000s, whose SAVE
+is under SHORTCUT once a track of ours is loaded, send it long and show
+nothing when no answer comes; the NXS2 sends it short (MYSETTING alone,
+version 2) and after 15 s says "MY SETTINGS DATA cannot be saved". The
+mixer's settings (DJMMYSETTING.DAT, `42` to `45` and `4b`, which the
+mixer asks a deck for, not the deck the source) are not served. `35` is
+answered only to a device on the link, as every request is.
 test_packets builds S16a's two packets byte for byte and the long answer
 by offset, and has a computer answer `35` only once the settings are set,
 and only to a peer; test_loopback has the fake player LOAD the library's
