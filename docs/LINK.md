@@ -258,8 +258,9 @@ Every port is above 1024: nothing needs root.
   running, a keep-alive with the number every 2 s, and an "in use" answer
   to anyone probing it.
 - **Status.** A mixer-style status packet every 200 ms on 50002; answers
-  to a player's media query and its device-settings request; a greeting
-  the first time a player reports in.
+  to a player's media query, its device-settings request and its LOAD of
+  My Settings ("My Settings over the link"); a greeting the first time a
+  player reports in.
 - **Listening.** Every player's status packet says what it has loaded and
   from where (our device number as the source), whether it plays, its
   tempo and position: the Link panel and play counting come from these.
@@ -660,6 +661,57 @@ saved. test_db gives a rating as a player does, and test_link has the
 app keep one. test_db adds to, takes off and clears the TAG LIST as a
 player does, its rows marked; test_app shows it in the interface's view,
 and test_link has a deck's TAG TRACK reach it.
+
+## My Settings over the link
+
+A player takes settings from cyanbox in two ways, both on 50002 and both
+from the library's `device.*` and `player.*` settings (docs/settings.md);
+where the library sets none, rekordbox 7.2.11's own display settings and
+cyanbox's player defaults (the Eject/Load Lock on, ±6 %):
+
+- **The display settings** (DEVSETTING.DAT: overview waveform, waveform
+  colour, key display, waveform position) the player asks for as it
+  browses cyanbox and applies at once: `46`, answered with `47` (0x48
+  bytes: our number, 04, two zeros, the 32-byte payload with its integers
+  big-endian), as rekordbox 7.2.11 answered a CDJ-3000 in rbxport's
+  capture.
+- **The player settings** (MYSETTING.DAT and MYSETTING2.DAT: play mode,
+  the lock, quantize, tempo range, auto cue, vinyl speed adjust and the
+  rest) only when the DJ LOADs My Settings on the deck with cyanbox as
+  the source, as from a stick: `35` (0x28 bytes: the asker's number, the
+  slot, two zeros), answered with `36`: our number, the slot asked about
+  (04, the collection's), 0 for done, a zero, the 40-byte MYSETTING
+  payload with its magic and version words big-endian, then MYSETTING2's
+  40 bytes (subtype 01, 0x78 bytes in all). The cdj session read the
+  layout from the CDJ-3000X's firmware (1.41): it refuses either packet
+  without 01 at 0x1f, checks the number (1 to 80), the slot (2 to 4 or 6
+  to 20) and the 0 and nothing else (not who answers), and reads
+  MYSETTING2 only from a long answer whose version word says 3, as
+  rekordbox's own push says (below), where a stick's file says 2. A
+  CDJ-2000nexus answered short (subtype 00, 0x50 bytes, version 2, the
+  asker's number first) in dysentery's S16a capture, where one LOADed
+  them from another's USB; the 3000X takes that too. The CDJ-3000 (3.22)
+  reads them as the 3000X does; the CDJ-2000NXS2 (1.87) checks only the
+  01 and the 0 and reads MYSETTING alone, from either form. The CDJ-2000
+  (4.33) and CDJ-900 (4.32) only answer a LOAD of their own sticks'
+  settings: neither firmware has the code to ask for one, so they cannot
+  LOAD cyanbox's. The media answer has said "My Settings present" all
+  along, so players offer the LOAD; until now it went unanswered. All of
+  this is read from the firmware; no deck, emulated or real, has LOADed
+  them from cyanbox yet.
+
+Nothing is pushed: rekordbox can send a player its settings unasked
+(`34`, its "Remote Settings using Pro DJ Link", dysentery's
+loading_tracks.adoc; MYSETTING and MYSETTING2, version 3); cyanbox does
+not. A SAVE of My Settings from the deck to cyanbox (`37`, answered with
+`38`) is not answered, and the deck gives up after 15 s; the mixer's
+settings (DJMMYSETTING.DAT, `42` to `45` and `4b`, which the mixer
+asks a deck for, not the deck the source) are not served. `35`
+is answered only to a device on the link, as every request is.
+test_packets builds S16a's two packets byte for byte and the long answer
+by offset, and has a computer answer `35` only once the settings are set,
+and only to a peer; test_loopback has the fake player LOAD the library's
+defaults, then settings changed in the library.
 
 ## LINK CUE
 

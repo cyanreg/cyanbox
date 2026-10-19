@@ -40,7 +40,9 @@ both versions are given.
   not always include `DEVSETTING.DAT`, and a CDJ-2000NXS2 reads a stick without it [BK].
 * **How players apply them** [MAN] (CDJ-3000): My Settings are **not** applied automatically. The DJ
   loads them via [SOURCE] > device > [SHORTCUT] > MY SETTINGS [LOAD], or via the device-info
-  "[MY SETTINGS LOAD]" item. Loading is refused while a track is playing.
+  "[MY SETTINGS LOAD]" item. Loading is refused while a track is playing. A player LOADs them
+  over PRO DJ LINK from another player's stick or from rekordbox (or cyanbox) as well
+  (docs/LINK.md, "My Settings over the link").
   The settings covered are the Utility items marked as duplicable, plus time display mode, Auto Cue,
   jog mode, tempo range, Master Tempo, Quantize, Beat Sync and phase meter.
 * No CDJ-3000-specific settings file is known beyond these four. Newer rekordbox versions have
