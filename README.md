@@ -449,11 +449,11 @@ mixer's fader curves, the waveform colour...) go on the stick for the
 sections the library has values for, and the players apply them when you
 LOAD My Settings. Over PRO DJ LINK a CDJ-3000 or CDJ-2000NXS2 LOADs the
 player settings from cyanbox too (MY SETTINGS > LOAD with cyanbox as the
-source; a CDJ-2000 or 900 loads them only from a stick), and every player
-takes the device ones as it browses cyanbox. File → Player settings
-(`Ctrl+,`) shows every one of them in Player, Mixer and Device tabs (hover
-a player setting's name for what it does), and `cyanbox config
-player.NAME VALUE` sets one. The tempo range defaults to ±6 %, not
+source; a CDJ-2000 or 900 loads them only from a stick), a DJM-A9 the
+mixer settings, and every player takes the device ones as it browses
+cyanbox. File → Player settings (`Ctrl+,`) shows every one of them in
+Player, Mixer and Device tabs (hover a player setting's name for what it
+does), and `cyanbox config player.NAME VALUE` sets one. The tempo range defaults to ±6 %, not
 rekordbox's ±10 %, and Eject/Load Lock to Lock.
 
 Syncing after a gig

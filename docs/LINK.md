@@ -259,8 +259,9 @@ Every port is above 1024: nothing needs root.
   to anyone probing it.
 - **Status.** A mixer-style status packet every 200 ms on 50002; answers
   to a player's media query, its device-settings request and its LOAD of
-  My Settings ("My Settings over the link"); a greeting the first time a
-  player reports in.
+  My Settings, and to a mixer's question what we have and its LOAD of its
+  own ("My Settings over the link"); a greeting the first time a player
+  reports in.
 - **Listening.** Every player's status packet says what it has loaded and
   from where (our device number as the source), whether it plays, its
   tempo and position: the Link panel and play counting come from these.
@@ -664,10 +665,11 @@ and test_link has a deck's TAG TRACK reach it.
 
 ## My Settings over the link
 
-A player takes settings from cyanbox in two ways, both on 50002 and both
-from the library's `device.*` and `player.*` settings (docs/settings.md);
-where the library sets none, rekordbox 7.2.11's own display settings and
-cyanbox's player defaults (the Eject/Load Lock on, ±6 %):
+Players and a mixer take settings from cyanbox in three ways, all on
+50002 and all from the library's `device.*`, `player.*` and `mixer.*`
+settings (docs/settings.md); where the library sets none, rekordbox
+7.2.11's own display settings and cyanbox's player and mixer defaults
+(rekordbox 7.2.8's, but the Eject/Load Lock on and ±6 %):
 
 - **The display settings** (DEVSETTING.DAT: overview waveform, waveform
   colour, key display, waveform position) the player asks for as it
@@ -706,6 +708,29 @@ cyanbox's player defaults (the Eject/Load Lock on, ±6 %):
   setting changed in the interface is served once the library is read
   again, 2 s later; `cyanbox link serve` reads the library's only as it
   starts.
+- **The mixer settings** (DJMMYSETTING.DAT: talk over, MIDI, beat FX
+  quantize, mic low cut, brightness and the rest) when a DJM-A9 LOADs its
+  My Settings with cyanbox as the source. The cdj session read how from
+  the A9's firmware (1.22) and ran it on the emulated A9 (2026-10-19,
+  work/myset/a9 in ~/projects/cdj). Once a computer joins, the A9 asks it
+  `30` (the header alone, subtype 03) about once a second, ten times at
+  most; any `31` from that number has it offer the computer as a source.
+  cyanbox answers as rekordbox answered an XDJ-RX3 in rbxport's capture
+  (0x2c bytes, subtype 03, 06 and seven zeros). The LOAD is `42` (0x28
+  bytes: the mixer's number, the slot, 04, the computer's number, a
+  zero), answered within its 2 s with `43`: our number, the slot, 0 for
+  done, a zero, the chunk's index and the count of them (0 of 1), the
+  chunk's length and the total (both the blob's, 0x38), then the blob:
+  its length after that word (0x34) and the 52-byte payload with its six
+  words big-endian (the magic; the version; how many settings, 32; the
+  settings; a count and a size of extended entries, both 0). The A9
+  checks the magic and the counts, applies each byte with the 0x80 bit
+  and sets any without it, or out of range, to its own default; it
+  ignores the fader curves (it has switches for them). It applied every
+  setting of a `43` so laid out, sent by a stand-in for cyanbox with
+  rekordbox's defaults and then others; cyanbox's own answer is that
+  packet byte for byte (test_packets) but has not yet been sent to an A9.
+  The DJM-900NXS has no such exchange.
 
 Nothing is pushed: rekordbox can send a player its settings unasked
 (`34`, its "Remote Settings using Pro DJ Link", dysentery's
@@ -716,14 +741,17 @@ A SAVE of My Settings from the deck to cyanbox (`37`, answered with `38`:
 our number, the slot, 0, a zero) is not answered: the 3000s, whose SAVE
 is under SHORTCUT once a track of ours is loaded, send it long and show
 nothing when no answer comes; the NXS2 sends it short (MYSETTING alone,
-version 2) and after 15 s says "MY SETTINGS DATA cannot be saved". The
-mixer's settings (DJMMYSETTING.DAT, `42` to `45` and `4b`, which the
-mixer asks a deck for, not the deck the source) are not served. `35` is
-answered only to a device on the link, as every request is.
+version 2) and after 15 s says "MY SETTINGS DATA cannot be saved". An
+A9's SAVE (`44`, its own 0xc0-byte blob with seventeen extended entries,
+after a LOAD) is not answered either (`45`), nor taken; rekordbox's push
+to a mixer (`4b`) is not sent. `35` and `42` are answered only to a
+device on the link, as every request is.
 test_packets builds S16a's two packets byte for byte and the long answer
-by offset, and has a computer answer `35` only once the settings are set,
-and only to a peer; test_loopback has the fake player LOAD the library's
-defaults, then settings changed in the library.
+by offset, the A9's `30` and `42` and the `43` it took, and rekordbox's
+`31`, and has a computer answer `35` and `42` only once the settings are
+set, only to a peer, and `42` only when it names us; test_loopback has
+the fake player LOAD the library's defaults, as a deck and as an A9, then
+settings changed in the library.
 
 ## LINK CUE
 
