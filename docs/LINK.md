@@ -916,9 +916,18 @@ late). There the LINK CUE button is set through a stand-in for the
 panel's microcontroller and the DSP is a stand-in that collects the
 audio; the network, PRO DJ LINK and LINK CUE code are the firmware's
 own.
+**An emulated DJM-900NXS2** (its firmware 2.08, the cdj session's
+`djm900nxs2`, 2026-10-19; cyanbox 70d4e49, unchanged) takes LINK CUE from
+players 1 to 4 and computers 17 and 18, with the same timing, handover
+and answer as the A9 and the 900NXS, every 7 ms (6 playing). It held
+back no timing (it does with 0x4e00 bytes or more queued): cyanbox took
+over with one 2, then 0 for 19.93 s, 2846 packets, every counter a
+timing's, and the mixer's feed to its DSP carried 440 Hz for 19.92 s
+without a hole; pauses of 0.5, 3 and 8 s were silences of 0.57, 3.03 and
+7.96 s, each start again one 2 and a handover.
 
-**Not yet**: a real mixer (the emulated DJM-900NXS and DJM-A9 run their
-real firmware, but not their real hardware). The first check at one:
+**Not yet**: a real mixer (the emulated DJM-900NXS, 900NXS2 and DJM-A9
+run their real firmware, but not their real hardware). The first check at one:
 with cyanbox up as device 17, `tcpdump -ni IF udp port 50004` shows a
 42-byte timing packet from the mixer every 7 ms or so; if none come,
 something the readings missed gates it.
