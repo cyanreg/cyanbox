@@ -356,7 +356,8 @@ int  cb_app_history_count(CBApp *app);
 int        cb_app_link_load(CBApp *app, int index, uint64_t track_id);
 /* Pushes the library's My Settings, as they are now, to every player and
  * mixer on the link (cyanbox/link.h cb_link_set_push_settings): how many
- * of each; -ENOENT without Link, -EAGAIN before we are on it. */
+ * of each; -ENOENT without Link, -EAGAIN before we are on it. The status
+ * says it, and how many of the players play, which drop them. */
 int        cb_app_link_push_settings(CBApp *app, int *players, int *mixers);
 /* The thumbnail is still being looked for (the library's is tried for
  * every track, the file's art only when has_artwork): the 0 that

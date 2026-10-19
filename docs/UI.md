@@ -496,7 +496,8 @@ keyboard map), and with `--pro-link` **Link** before Help (Players…, the
 PRO DJ LINK window; Push settings, which sends the Player and Mixer
 settings as they are now to every player and mixer on the link, the way
 rekordbox's Remote Settings does, greyed out with none there, and says in
-the status bar how many it reached).
+the status bar how many it reached and how many of the players play, which
+keep their own).
 "Unanalysed" includes results an older analyser made; the
 interface queues those by itself when it opens the library (README.md,
 Analyser versions), with the usual progress in the status bar. Tags never are:

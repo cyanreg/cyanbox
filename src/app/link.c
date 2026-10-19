@@ -277,9 +277,30 @@ int cb_app_link_push_settings(CBApp *app, int *players, int *mixers)
 {
     *players = *mixers = 0;
     CBAppLink *l = app->link;
-    if (!l || !l->set || !app->link_state.on)
-        return CB_ERROR(ENOENT);
-    return cb_link_set_push_settings(l->set, &app->lib.cfg, players, mixers);
+    int ret = l && l->set && app->link_state.on
+            ? cb_link_set_push_settings(l->set, &app->lib.cfg, players, mixers)
+            : CB_ERROR(ENOENT);
+    if (ret == CB_ERROR(EAGAIN) || ret == CB_ERROR(ENOENT)) {
+        cb_app_set_status(app, "Push settings: not on the link yet");
+        return ret;
+    }
+    if (ret < 0) {
+        cb_app_set_status(app, "Push settings: the My Settings are not valid (`cyanbox settings`)");
+        return ret;
+    }
+    /* A player that plays drops them unanswered (the emulated CDJ-3000X
+     * and NXS2, 2026-10-19): only its status says so. */
+    int playing = 0;
+    for (int i = 0; i < app->link_state.nb_devices; i++)
+        playing += app->link_state.devices[i].type == CB_LINK_DEVICE_PLAYER &&
+                   app->link_state.devices[i].playing;
+    char also[64] = "";
+    if (playing)
+        snprintf(also, sizeof(also), "; %d playing ignore%s them", CB_MIN(playing, *players),
+                 CB_MIN(playing, *players) == 1 ? "s" : "");
+    cb_app_set_status(app, "Settings pushed to %d player%s and %d mixer%s%s", *players,
+                      *players == 1 ? "" : "s", *mixers, *mixers == 1 ? "" : "s", also);
+    return 0;
 }
 
 static void take_edits(CBApp *app);

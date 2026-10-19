@@ -988,20 +988,6 @@ static ImVec2 item_centre()
     return ImVec2((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f);
 }
 
-// Link > Push settings: what was sent where, in the status bar.
-static void push_settings(CBApp *app)
-{
-    int players = 0, mixers = 0;
-    int ret = cb_app_link_push_settings(app, &players, &mixers);
-    if (ret == CB_ERROR(EAGAIN) || ret == CB_ERROR(ENOENT))
-        cb_app_set_status(app, "Push settings: not on the link yet");
-    else if (ret < 0)
-        cb_app_set_status(app, "Push settings: the My Settings are not valid (`cyanbox settings`)");
-    else
-        cb_app_set_status(app, "Settings pushed to %d player%s and %d mixer%s", players,
-                          players == 1 ? "" : "s", mixers, mixers == 1 ? "" : "s");
-}
-
 static void menu_bar(UiState *ui)
 {
     CBApp *app = ui->app;
@@ -1136,7 +1122,8 @@ static void menu_bar(UiState *ui)
     // PRO DJ LINK, only with --pro-link: it serves from the start. Push
     // settings sends the Player and Mixer settings, as they are now, to
     // every player and mixer on the link, as rekordbox's Remote Settings
-    // does; with none there, it is greyed out.
+    // does, and says so in the status bar; with none there, it is greyed
+    // out.
     bool link = app->link_state.enabled && ImGui::BeginMenu("Link");
     if (app->link_state.enabled)
         ui->link_menu_bar = item_centre();
@@ -1147,8 +1134,9 @@ static void menu_bar(UiState *ui)
         for (int i = 0; i < app->link_state.nb_devices; i++)
             any |= app->link_state.devices[i].type == CB_LINK_DEVICE_PLAYER ||
                    app->link_state.devices[i].type == CB_LINK_DEVICE_MIXER;
+        int players, mixers;
         if (ImGui::MenuItem("Push settings", nullptr, false, any))
-            push_settings(app);
+            cb_app_link_push_settings(app, &players, &mixers);
         ui->push_item = item_centre();
         ui->push_frame = ui->frame_no;
         ui->push_enabled = any;
