@@ -846,11 +846,17 @@ DJM-900NXS2, and the mixer firmware readings, "Sources"):
 - Nothing else goes to a mixer's 50004: the DJM-A9 takes a datagram that
   does not start with the magic for an encrypted one, and one that does
   not decrypt has every device at its sender's address dropped.
-- An all-in-one has none: the XDJ-RX3's app (`rbp`, firmware 1.20) uses
-  UDP 50000 to 50002 only, port 50004 is nowhere in it, and it sends no
-  timing (a real one, 2026-10-20: cyanbox's deck stayed on its usual
-  output). Its USB-B connection showed this computer a MIDI port and no
-  sound card, so its headphones cannot get cyanbox's decks either way.
+- An all-in-one's is its own: the XDJ-RX3's LINK CUE button (firmware
+  1.20; the cdj session's reading of `rbp` and its emulator, 2026-10-20)
+  puts its own preview player in its headphones, the track previewed by
+  touching a row's waveform strip in its browser, cyanbox's tracks
+  included: it reads the file over NFS itself, after the track's VBR index
+  (`2504`, answered from PVBR; no preview without one). Nothing goes on
+  the network for it: no socket on 50004, no timing, no source role (a
+  real one sent cyanbox none in a 30-minute session). Pressed, it also
+  sends `B4 4B 7F`/`00` on its USB MIDI. A computer's audio reaches its
+  headphones only in its PC-mixer mode (its own mixer off), so in Link
+  Export cyanbox's decks cannot be cued there.
 
 **In cyanbox** (src/link/cue.c, `CBLinkCue`): the owner gives a function
 that takes the next frames and says whether its decks play and when one

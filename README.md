@@ -524,8 +524,9 @@ cyanbox sends the activation every 200 ms while Link runs, and finds the
 card again if the unit is plugged back in. Its decks are 11 and 12, and Load
 in deck works on both. Browsing, loading and playback were tried on a real
 one, with the same activation sent by hand (`--link-usb` itself is not yet
-tried on the unit). It has no LINK CUE: nothing in its firmware takes a
-computer's audio.
+tried on the unit). Its LINK CUE button cues its own preview of a track
+touched in its browser, cyanbox's tracks included; it takes no audio from
+a computer, so cyanbox's decks are not heard in its headphones.
 Other all-in-ones on USB may take other bytes; only the RX3 is tried.
 
 PRO DJ LINK has no authentication and no encryption. While cyanbox serves,
