@@ -200,6 +200,17 @@ int  cb_settings_decode(const char *file_name, const uint8_t *data, size_t size,
  * four (name, bytes). Only sections with keys produce files. */
 typedef struct CBSettingsFile { const char *name; uint8_t *data; size_t size; } CBSettingsFile;
 int  cb_settings_from_config(const CBConfig *cfg, CBSettingsFile files[4], int *nb);
+/* The four files' payloads (docs/settings.md sections 3 to 6) as the
+ * config's sections make them, with each file's defaults where its
+ * section sets nothing, as cb_settings_get reads them; has_devsetting
+ * says whether [device] set anything. A value not valid fails it, the
+ * defaults all through. What PRO DJ LINK serves and pushes (docs/LINK.md,
+ * "My Settings over the link"). */
+typedef struct CBSettingsPayloads {
+    uint8_t mysetting[40], mysetting2[40], djmmysetting[52], devsetting[32];
+    bool    has_devsetting;
+} CBSettingsPayloads;
+int  cb_settings_payloads(const CBConfig *cfg, CBSettingsPayloads *out);
 /* Lists every setting: calls `cb(name, file, values...)` for each. */
 typedef void (*cb_settings_list_cb)(void *opaque, const char *file, const char *name,
                                     const char *const *values, int nb_values, const char *deflt);

@@ -29,6 +29,7 @@
 
 #include "cyanbox/formats.h"
 
+#include <stddef.h>
 #include <stdio.h>
 #include <strings.h>
 
@@ -443,6 +444,34 @@ fail:
         free(files_out[i].data);
     *nb = 0;
     return ret;
+}
+
+int cb_settings_payloads(const CBConfig *cfg, CBSettingsPayloads *out)
+{
+    *out = (CBSettingsPayloads) { 0 };
+    memcpy(out->mysetting, mysetting_default, sizeof(out->mysetting));
+    memcpy(out->mysetting2, mysetting2_default, sizeof(out->mysetting2));
+    memcpy(out->djmmysetting, djmmysetting_default, sizeof(out->djmmysetting));
+    memcpy(out->devsetting, devsetting_default, sizeof(out->devsetting));
+    CBSettingsFile f[4];
+    int nb = 0, ret = cb_settings_from_config(cfg, f, &nb);
+    if (ret < 0)
+        return ret;
+    static const struct { const char *name; size_t off, len; } dst[] = {
+        { "MYSETTING.DAT", offsetof(CBSettingsPayloads, mysetting), 40 },
+        { "MYSETTING2.DAT", offsetof(CBSettingsPayloads, mysetting2), 40 },
+        { "DJMMYSETTING.DAT", offsetof(CBSettingsPayloads, djmmysetting), 52 },
+        { "DEVSETTING.DAT", offsetof(CBSettingsPayloads, devsetting), 32 },
+    };
+    for (int i = 0; i < nb; i++) {
+        for (size_t k = 0; k < CB_ARRAY_ELEMS(dst); k++) {
+            if (!strcmp(f[i].name, dst[k].name) && f[i].size >= 0x68 + dst[k].len)
+                memcpy((uint8_t *)out + dst[k].off, f[i].data + 0x68, dst[k].len);
+        }
+        out->has_devsetting |= !strcmp(f[i].name, "DEVSETTING.DAT");
+        free(f[i].data);
+    }
+    return 0;
 }
 
 const char *cb_settings_value(const char *file, const char *name, const char *value)

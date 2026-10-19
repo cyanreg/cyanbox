@@ -115,6 +115,33 @@ static void from_config(void)
         free(out[i].data);
 }
 
+/* The payloads Link serves and pushes: each file's defaults where the
+ * config sets nothing, its values where it does; a value not valid fails,
+ * the defaults all through. */
+static void payloads(void)
+{
+    CBConfig none = { 0 };
+    CBSettingsPayloads p;
+    CHECK_EQ(cb_settings_payloads(&none, &p), 0);
+    CHECK(p.mysetting[0] == 0x78 && p.mysetting[21] == 0x81 && p.mysetting[36] == 0x80);
+    CHECK(p.mysetting2[0] == 0x81 && p.djmmysetting[8] == 0x20 && p.djmmysetting[19] == 0x81);
+    CHECK(p.devsetting[10] == 4 && !p.has_devsetting);
+
+    CBKv player[1] = { { "play_mode", "continue" } };
+    CBKv mixer[1] = { { "talk_over_level", "-6" } };
+    CBKv device[1] = { { "waveform_color", "rgb" } };
+    CBConfig cfg = { .player = player, .nb_player = 1, .mixer = mixer, .nb_mixer = 1,
+                     .device = device, .nb_device = 1 };
+    CHECK_EQ(cb_settings_payloads(&cfg, &p), 0);
+    CHECK(p.mysetting[23] == 0x80 && p.mysetting[21] == 0x81 && p.mysetting2[0] == 0x81);
+    CHECK(p.djmmysetting[19] == 0x83 && p.devsetting[10] == 3 && p.has_devsetting);
+
+    CBKv wrong[1] = { { "talk_over_level", "-7" } };
+    cfg.mixer = wrong;
+    CHECK(cb_settings_payloads(&cfg, &p) < 0);
+    CHECK(p.mysetting[23] == 0x81 && p.djmmysetting[19] == 0x81 && !p.has_devsetting);
+}
+
 static void list_cb(void *opaque, const char *file, const char *name, const char *const *values,
                     int nb_values, const char *deflt)
 {
@@ -185,6 +212,7 @@ int main(void)
     match_rekordbox();
     errors();
     from_config();
+    payloads();
     listed_values();
     settings_get();
     int count = 0;
