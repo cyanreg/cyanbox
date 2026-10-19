@@ -37,6 +37,7 @@ enum CBStmtId {
     CB_STMT_PLAY_INSERT,        /* ?1 track_id ?2 played_at */
     CB_STMT_HISTORY_INSERT,     /* ?1 track_id ?2 played_at ?3 player */
     CB_STMT_HISTORY_DELETE,     /* ?1 track_id */
+    CB_STMT_HISTORY_DELETE_ENTRY, /* ?1 id; returns its track_id */
     CB_STMT_SECTION_CLEAR,      /* ?1 track_id */
     CB_STMT_SECTION_INSERT,     /* ?1 track_id ?2 idx ?3 start ?4 bpm ?5 beat */
     CB_STMT_CUE_CLEAR,          /* ?1 track_id */

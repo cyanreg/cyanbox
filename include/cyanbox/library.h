@@ -233,6 +233,8 @@ int      cb_library_history_add(CBLibrary *lib, const CBTrack *t, int64_t played
 int      cb_library_history(CBLibrary *lib, CBHistoryEntry **out, int *nb);
 /* Every row of a track: how many there were. */
 int      cb_library_history_remove(CBLibrary *lib, uint64_t track_id);
+/* One row, by its CBHistoryEntry.id: 1, or 0 when there is none. */
+int      cb_library_history_remove_entry(CBLibrary *lib, int64_t id);
 /* Moves a track to a new path (the file was moved by the user). */
 int      cb_library_relocate(CBLibrary *lib, CBTrack *t, const char *new_abs_path);
 /* The tracks changed since the last call (`*ids`, the caller's to free;

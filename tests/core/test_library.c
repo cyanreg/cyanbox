@@ -561,7 +561,15 @@ static void test_history(void)
         cb_library_close(&lib);
         CHECK(cb_library_open(&lib, dir) == 0);
         CHECK(cb_library_history(&lib, &h, &nb) == 0 && nb == 3);
+        /* One play of a by its row, then the rest of a's. */
+        int64_t first_a = nb == 3 ? h[1].id : 0;
         free(h);
+        CHECK(cb_library_history_remove_entry(&lib, first_a) == 1);
+        CHECK(cb_library_history_remove_entry(&lib, first_a) == 0);
+        CHECK(cb_library_history(&lib, &h, &nb) == 0 && nb == 2 && h[1].track_id == aid &&
+              h[1].played_at == 3000);
+        free(h);
+        CHECK(cb_library_history_add(&lib, cb_library_find_id(&lib, aid), 2000, 1) == 0);
         CHECK(cb_library_history_remove(&lib, aid) == 2);
         CHECK(cb_library_history_remove(&lib, aid) == 0);
         CHECK(cb_library_history(&lib, &h, &nb) == 0 && nb == 1 && h[0].track_id == bid);

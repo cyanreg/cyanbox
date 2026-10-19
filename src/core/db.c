@@ -293,6 +293,7 @@ static const char *const fixed_sql[CB_STMT_NB] = {
     [CB_STMT_HISTORY_INSERT]  = "INSERT INTO deck_history (track_id, played_at, player) "
                                 "VALUES (?1, ?2, ?3)",
     [CB_STMT_HISTORY_DELETE]  = "DELETE FROM deck_history WHERE track_id = ?1",
+    [CB_STMT_HISTORY_DELETE_ENTRY] = "DELETE FROM deck_history WHERE id = ?1 RETURNING track_id",
     [CB_STMT_SECTION_CLEAR]   = "DELETE FROM grid_section WHERE track_id = ?1",
     [CB_STMT_SECTION_INSERT]  = "INSERT INTO grid_section (track_id, idx, start, bpm, beat, "
                                 "measured) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",

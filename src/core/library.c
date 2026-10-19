@@ -1702,6 +1702,19 @@ int cb_library_history_remove(CBLibrary *lib, uint64_t track_id)
     return n;
 }
 
+int cb_library_history_remove_entry(CBLibrary *lib, int64_t id)
+{
+    sqlite3_stmt *st = cb_db_stmt(lib->db, CB_STMT_HISTORY_DELETE_ENTRY);
+    cb_db_bind_int(lib->db, st, 1, id);
+    int ret = cb_db_row(lib->db, st, "the history");
+    if (ret <= 0)
+        return ret;
+    uint64_t track_id = (uint64_t)sqlite3_column_int64(st, 0);
+    sqlite3_reset(st);
+    cb_core_changed(lib, track_id);
+    return 1;
+}
+
 int cb_library_relocate(CBLibrary *lib, CBTrack *t, const char *new_abs_path)
 {
     if (cb_library_index_of(lib, t) < 0 || !new_abs_path || new_abs_path[0] != '/')
