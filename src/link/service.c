@@ -432,48 +432,15 @@ static void presence_library(CBLink *l)
     int nb_lists = 0;
     for (int i = 0; i < l->plan->nb_playlists; i++)
         nb_lists += !l->plan->playlists[i].is_folder;
-    CBSettingsFile files[7];
-    int nb = 0;
-    if (cb_settings_from_config(&l->lib->cfg, files, &nb) < 0)
-        nb = 0;
-    const uint8_t *player[2] = { NULL, NULL };
-    for (int i = 0; i < nb; i++) {
-        if (!strcmp(files[i].name, "MYSETTING.DAT") && files[i].size >= 0x68 + 40)
-            player[0] = files[i].data + 0x68;
-        if (!strcmp(files[i].name, "MYSETTING2.DAT") && files[i].size >= 0x68 + 40)
-            player[1] = files[i].data + 0x68;
-    }
-    static const char *const names[2] = { "MYSETTING.DAT", "MYSETTING2.DAT" };
-    for (int k = 0; k < 2; k++) {
-        if (!player[k] && cb_settings_encode(names[k], NULL, 0, &files[nb].data,
-                                             &files[nb].size) >= 0) {
-            files[nb].name = names[k];
-            player[k] = files[nb++].data + 0x68;
-        }
-    }
-    const uint8_t *mixer = NULL;
-    for (int i = 0; i < nb; i++) {
-        if (!strcmp(files[i].name, "DJMMYSETTING.DAT") && files[i].size >= 0x68 + 52)
-            mixer = files[i].data + 0x68;
-    }
-    if (!mixer && cb_settings_encode("DJMMYSETTING.DAT", NULL, 0, &files[nb].data,
-                                     &files[nb].size) >= 0) {
-        files[nb].name = "DJMMYSETTING.DAT";
-        mixer = files[nb++].data + 0x68;
-    }
+    CBSettingsPayloads set;
+    cb_settings_payloads(&l->lib->cfg, &set);
     pthread_mutex_lock(&l->plock);
     cb_presence_set_media(l->pres, l->plan->nb_tracks, nb_lists);
-    for (int i = 0; i < nb; i++) {
-        if (!strcmp(files[i].name, "DEVSETTING.DAT") && files[i].size >= 0x68 + 32)
-            cb_presence_set_devsetting(l->pres, files[i].data + 0x68);
-    }
-    if (player[0] && player[1])
-        cb_presence_set_mysetting(l->pres, player[0], player[1]);
-    if (mixer)
-        cb_presence_set_djmmysetting(l->pres, mixer);
+    if (set.has_devsetting)
+        cb_presence_set_devsetting(l->pres, set.devsetting);
+    cb_presence_set_mysetting(l->pres, set.mysetting, set.mysetting2);
+    cb_presence_set_djmmysetting(l->pres, set.djmmysetting);
     pthread_mutex_unlock(&l->plock);
-    for (int i = 0; i < nb; i++)
-        free(files[i].data);
 }
 
 static void served_take(CBLink *l, Served *s)
@@ -1105,6 +1072,20 @@ int cb_link_load(CBLink *l, int player, uint32_t track_id)
 {
     pthread_mutex_lock(&l->plock);
     int ret = cb_presence_load(l->pres, player, track_id);
+    pthread_mutex_unlock(&l->plock);
+    return ret;
+}
+
+int cb_link_push_settings(CBLink *l, const CBConfig *cfg, int *players, int *mixers)
+{
+    *players = *mixers = 0;
+    CBSettingsPayloads set;
+    int ret = cb_settings_payloads(cfg, &set);
+    if (ret < 0)
+        return ret;
+    pthread_mutex_lock(&l->plock);
+    ret = cb_presence_push_settings(l->pres, set.mysetting, set.mysetting2, set.djmmysetting,
+                                    players, mixers);
     pthread_mutex_unlock(&l->plock);
     return ret;
 }

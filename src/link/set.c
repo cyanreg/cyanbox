@@ -326,6 +326,28 @@ int cb_link_set_load(CBLinkSet *s, int where, int player, uint32_t track_id)
     return ret;
 }
 
+int cb_link_set_push_settings(CBLinkSet *s, const CBConfig *cfg, int *players, int *mixers)
+{
+    *players = *mixers = 0;
+    int ret = CB_ERROR(EAGAIN);
+    pthread_mutex_lock(&s->lock);
+    for (int i = 0; i < s->nb; i++) {
+        int np, nm;
+        int r = s->served[i].link ? cb_link_push_settings(s->served[i].link, cfg, &np, &nm)
+                                  : CB_ERROR(EAGAIN);
+        if (r >= 0) {
+            *players += np;
+            *mixers += nm;
+            if (ret == CB_ERROR(EAGAIN))
+                ret = 0;
+        } else if (r != CB_ERROR(EAGAIN)) {
+            ret = r;
+        }
+    }
+    pthread_mutex_unlock(&s->lock);
+    return ret;
+}
+
 int cb_link_set_edits(CBLinkSet *s, CBLinkEdit *out, int max)
 {
     pthread_mutex_lock(&s->lock);

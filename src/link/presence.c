@@ -159,6 +159,9 @@ struct CBPresence {
         /* The same as a mixer (cb_presence_load_djm_settings). */
         bool djm_asked, djm_got;
         uint8_t djm[52];
+        /* What it pushed to us, unasked (cb_presence_pushed_settings). */
+        bool pushed;
+        uint8_t pushed_settings[40], pushed_settings2[40];
     } src;
 };
 
@@ -234,6 +237,7 @@ static void check_source(CBPresence *p)
             p->src.step = SRC_NONE;
             p->src.settings_asked = p->src.settings_got = false;
             p->src.djm_asked = p->src.djm_got = false;
+            p->src.pushed = false;
         }
     }
 }
@@ -926,6 +930,12 @@ static void status_in(CBPresence *p, uint32_t from, const uint8_t *buf, size_t l
         cb_debug("link: %s (%d) took the load", h.name, h.number);
         return;
     }
+    if (h.kind == CB_ST_DJM_SETTINGS_WRITTEN && p->c.role == CB_PRESENCE_COMPUTER &&
+        h.len >= 0x27) {
+        cb_debug("link: %s (%d) %s our My Settings", h.name, h.number,
+                 buf[0x26] ? "refused" : "took");
+        return;
+    }
     if (p->c.role == CB_PRESENCE_COMPUTER)
         dump(p->stage != ST_UP ? "status port, not up yet" :
              !cb_presence_is_peer(p, from) ? "status port, not a peer" : "status port", from,
@@ -958,6 +968,12 @@ static void status_in(CBPresence *p, uint32_t from, const uint8_t *buf, size_t l
                 p->src.settings = m;
                 p->src.settings_got = true;
             }
+        } else if (h.kind == CB_ST_MY_SETTINGS_PUSH) {
+            int sender, target;
+            if (cb_pkt_my_settings_push_parse(&sender, &target, p->src.pushed_settings,
+                                              p->src.pushed_settings2, buf, len) == 0 &&
+                sender == p->src.number && target == p->number)
+                p->src.pushed = true;
         } else if (h.kind == CB_ST_DJM_SETTINGS && p->src.djm_asked) {
             /* What a DJM-A9 checks before it applies them. */
             CBPktDjmSettings m;
@@ -1227,6 +1243,37 @@ int cb_presence_load_settings(CBPresence *p)
     return 0;
 }
 
+int cb_presence_push_settings(CBPresence *p, const uint8_t mysetting[40],
+                              const uint8_t mysetting2[40], const uint8_t djmmysetting[52],
+                              int *players, int *mixers)
+{
+    *players = *mixers = 0;
+    if (p->c.role != CB_PRESENCE_COMPUTER || p->stage != ST_UP)
+        return CB_ERROR(EAGAIN);
+    for (int i = 0; i < p->nb_dev; i++) {
+        const CBLinkPlayer *d = &p->dev[i].d;
+        uint8_t out[CB_PKT_MAX];
+        CBWr w = cb_wr(out, sizeof(out));
+        if (d->type == CB_LINK_DEVICE_PLAYER) {
+            cb_pkt_my_settings_push(&w, p->c.name, p->number, d->number, mysetting, mysetting2);
+            (*players)++;
+        } else if (d->type == CB_LINK_DEVICE_MIXER) {
+            /* A DJM-900NXS or 900NXS2 leaves it unread. */
+            CBPktDjmSettings m = { .number = p->number, .device = p->number,
+                                   .slot = CB_SLOT_REKORDBOX };
+            snprintf(m.name, sizeof(m.name), "%s", p->c.name);
+            memcpy(m.djmmysetting, djmmysetting, 52);
+            cb_pkt_djm_settings_push(&w, &m, d->number);
+            (*mixers)++;
+        } else {
+            continue;
+        }
+        emit(p, CB_LINK_STATUS, d->addr, &w);
+        cb_debug("link: pushed our My Settings to %s (%d)", d->name, d->number);
+    }
+    return 0;
+}
+
 void cb_presence_set_djmmysetting(CBPresence *p, const uint8_t payload[52])
 {
     memcpy(p->djmmysetting, payload, sizeof(p->djmmysetting));
@@ -1244,6 +1291,16 @@ int cb_presence_load_djm_settings(CBPresence *p)
     p->src.djm_asked = true;
     p->src.djm_got = false;
     return 0;
+}
+
+bool cb_presence_pushed_settings(const CBPresence *p, uint8_t mysetting[40],
+                                 uint8_t mysetting2[40])
+{
+    if (p->src.pushed) {
+        memcpy(mysetting, p->src.pushed_settings, 40);
+        memcpy(mysetting2, p->src.pushed_settings2, 40);
+    }
+    return p->src.pushed;
 }
 
 bool cb_presence_loaded_djm_settings(const CBPresence *p, uint8_t payload[52])

@@ -151,6 +151,13 @@ void cb_link_tracks_changed(CBLink *l, const uint64_t *ids, int nb);
  * sent: the player's status says when it has loaded it. -EAGAIN before we
  * are on the link, -ENOENT when there is no such player. */
 int  cb_link_load(CBLink *l, int player, uint32_t track_id);
+/* Pushes the My Settings of `cfg` to every player and mixer on the link,
+ * unasked, as rekordbox's "Remote Settings using Pro DJ Link" does
+ * (docs/LINK.md, "My Settings over the link"): the player settings to
+ * the players, the mixer settings to the mixers, cyanbox's defaults where
+ * `cfg` sets none. 0 and how many of each it was sent to; -EAGAIN before
+ * we are on the link, -EINVAL when a setting is not valid. */
+int  cb_link_push_settings(CBLink *l, const CBConfig *cfg, int *players, int *mixers);
 /* The ports bound (with any 0 asked for filled in). */
 void cb_link_bound_ports(CBLink *l, CBLinkPorts *out);
 
@@ -289,6 +296,9 @@ void cb_link_set_tracks_changed(CBLinkSet *s, const uint64_t *ids, int nb);
 /* cb_link_load on the interface `where` (cb_link_set_players' index):
  * -ENOENT when it is not served any more. */
 int  cb_link_set_load(CBLinkSet *s, int where, int player, uint32_t track_id);
+/* cb_link_push_settings on every interface, the counts added up: 0 when
+ * one of them is on its link, -EAGAIN when none is. */
+int  cb_link_set_push_settings(CBLinkSet *s, const CBConfig *cfg, int *players, int *mixers);
 /* cb_link_edits of every service, one after the other. */
 int  cb_link_set_edits(CBLinkSet *s, CBLinkEdit *out, int max);
 
@@ -345,6 +355,11 @@ int  cb_link_client_play(CBLinkClient *c, uint32_t track);
  * is found, -ETIMEDOUT when it did not answer. */
 int  cb_link_client_load_settings(CBLinkClient *c, int timeout_ms, uint8_t mysetting[40],
                                   uint8_t mysetting2[40]);
+/* Waits up to timeout_ms for the source to push us its My Settings (as
+ * cb_link_push_settings does): the payloads, as cb_link_client_load_settings
+ * gives them; -ETIMEDOUT when none came. */
+int  cb_link_client_wait_pushed_settings(CBLinkClient *c, int timeout_ms, uint8_t mysetting[40],
+                                         uint8_t mysetting2[40]);
 /* LOADs the mixer's My Settings from the source, as a DJM-A9 does: the
  * 52-byte DJMMYSETTING.DAT payload it answered within timeout_ms
  * (docs/settings.md section 5); errors as cb_link_client_load_settings. */

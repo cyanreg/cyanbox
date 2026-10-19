@@ -15,7 +15,8 @@
  *  - The server sees what the player loaded and that it plays; a cue
  *    the player saves is handed on for the library's owner. A LOAD of
  *    My Settings gets the library's player settings, and a mixer's its
- *    mixer settings, cyanbox's defaults where it sets none.
+ *    mixer settings, cyanbox's defaults where it sets none; settings
+ *    pushed to the player reach it.
  *  - A client that never announced itself (127.0.0.3) gets no database
  *    port and no NFS answer: the fences of docs/LINK.md, "Security".
  *  - A library change is served again: a new track is browsable. It is
@@ -261,6 +262,22 @@ int main(void)
     uint8_t djm[52] = { 0 };
     CHECK_EQ(cb_link_client_load_djm_settings(player, 5000, djm), 0);
     CHECK(djm[0] == 0x78 && djm[8] == 0x20 && djm[12] == 0x81 && djm[19] == 0x81);
+    /* Pushed unasked, the settings given (as the interface's are when
+     * pushed), not the library's the service read: Continue, Release. */
+    CBKv push_player[2] = { { "play_mode", "continue" }, { "vinyl_speed_adjust", "release" } };
+    CBConfig push_cfg = { .player = push_player, .nb_player = 2 };
+    int pushed_players = 0, pushed_mixers = 0;
+    CHECK_EQ(cb_link_push_settings(link, &push_cfg, &pushed_players, &pushed_mixers), 0);
+    CHECK(pushed_players == 1 && pushed_mixers == 0);
+    memset(ms, 0, sizeof(ms));
+    memset(ms2, 0, sizeof(ms2));
+    CHECK_EQ(cb_link_client_wait_pushed_settings(player, 5000, ms, ms2), 0);
+    CHECK(ms[0] == 0x78 && ms[4] == 3 && ms[21] == 0x81 && ms[23] == 0x80 && ms2[0] == 0x82);
+    CBKv wrong[1] = { { "play_mode", "sometimes" } };
+    push_cfg.player = wrong;
+    push_cfg.nb_player = 1;
+    CHECK_EQ(cb_link_push_settings(link, &push_cfg, &pushed_players, &pushed_mixers),
+             CB_ERROR(EINVAL));
 
     /* Browse and load the first track. */
     CHECK_EQ(cb_link_client_browse(player, 0, quiet_line, NULL), 0);

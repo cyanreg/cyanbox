@@ -66,10 +66,13 @@ enum CBStatusKind {
     CB_ST_MIXER          = 0x29,    /* a mixer's status, and rekordbox's */
     CB_ST_PROPERTY_QUERY = 0x30,
     CB_ST_PROPERTY       = 0x31,
+    CB_ST_MY_SETTINGS_PUSH = 0x34,
     CB_ST_MY_SETTINGS_QUERY = 0x35,
     CB_ST_MY_SETTINGS    = 0x36,
     CB_ST_DJM_SETTINGS_QUERY = 0x42,
     CB_ST_DJM_SETTINGS   = 0x43,
+    CB_ST_DJM_SETTINGS_PUSH = 0x44,
+    CB_ST_DJM_SETTINGS_WRITTEN = 0x45,
     CB_ST_SETTINGS_QUERY = 0x46,
     CB_ST_SETTINGS       = 0x47,
 };
@@ -261,6 +264,17 @@ void cb_pkt_my_settings_query(CBWr *w, const char *name, int number, int slot);
 int  cb_pkt_my_settings_parse(CBPktMySettings *m, const uint8_t *buf, size_t len);
 void cb_pkt_my_settings(CBWr *w, const CBPktMySettings *m);
 
+/* rekordbox's push of its player settings to a player, unasked (34, 0x74
+ * bytes; its "Remote Settings using Pro DJ Link": dysentery's
+ * loading_tracks.adoc, beat-link's sendLoadSettingsCommand): 02 at 0x1f,
+ * then the sender's number and the target's where the subtype and the
+ * number are, then the MYSETTING payload as 36 has it, version 3, and
+ * MYSETTING2's 40 bytes. */
+void cb_pkt_my_settings_push(CBWr *w, const char *name, int number, int target,
+                             const uint8_t mysetting[40], const uint8_t mysetting2[40]);
+int  cb_pkt_my_settings_push_parse(int *number, int *target, uint8_t mysetting[40],
+                                   uint8_t mysetting2[40], const uint8_t *buf, size_t len);
+
 /* A version question (30, the header alone; MixerVersionInfo in the
  * CDJ-3000X's firmware): a DJM-900NXS answers its firmware's version
  * (31, subtype 02, "1.32" in ASCII). A DJM-A9 asks a computer that joined
@@ -293,6 +307,16 @@ int  cb_pkt_djm_settings_query_parse(int *asker, int *slot, int *target, const u
 void cb_pkt_djm_settings_query(CBWr *w, const char *name, int number, int slot, int target);
 int  cb_pkt_djm_settings_parse(CBPktDjmSettings *m, const uint8_t *buf, size_t len);
 void cb_pkt_djm_settings(CBWr *w, const CBPktDjmSettings *m);
+/* The same settings pushed to mixer `target`, unasked (44, WriteReq by
+ * the A9's firmware, as it writes its own to a computer; its handler takes
+ * 4b, DuplicationReq, the same, but a CDJ-3000X has a handler for 4b too):
+ * the four bytes are the sender's number, the slot, the target's number
+ * and a zero, the rest as in 43; an A9 takes it only from a computer's
+ * number and only naming itself, applies it at once and answers 45 (its
+ * number, the slot, 0 for done or 1, a zero). The parser gives the target
+ * in `result`. */
+void cb_pkt_djm_settings_push(CBWr *w, const CBPktDjmSettings *m, int target);
+int  cb_pkt_djm_settings_push_parse(CBPktDjmSettings *m, const uint8_t *buf, size_t len);
 
 /* A load command (19, 0x58 bytes), as beat-link's VirtualCdj sends it
  * (sendLoadTrackCommand), to the target's status port: the player

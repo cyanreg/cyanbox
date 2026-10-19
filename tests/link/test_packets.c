@@ -767,6 +767,53 @@ static void questions(void)
         k.b[bad[i].at] = bad[i].to;
         CHECK(cb_pkt_djm_settings_parse(&djm_back, k.b, k.len) < 0);
     }
+
+    /* The same settings pushed to the A9, unasked: 44, its number third,
+     * the rest as the 43 it took. */
+    WR(w15);
+    cb_pkt_djm_settings_push(&w15, &djm, 33);
+    Pkt took = pkt(a9_djm_settings);
+    CHECK(w15.len == took.len && w15.p[0x0a] == CB_ST_DJM_SETTINGS_PUSH &&
+          !memcmp(w15.p + 0x0b, took.b + 0x0b, 0x26 - 0x0b) && w15.p[0x26] == 33 &&
+          !memcmp(w15.p + 0x27, took.b + 0x27, took.len - 0x27));
+    CHECK_EQ(cb_pkt_djm_settings_push_parse(&djm_back, w15.p, w15.len), 0);
+    CHECK(djm_back.device == 17 && djm_back.slot == 4 && djm_back.result == 33 &&
+          !memcmp(djm_back.djmmysetting, djm.djmmysetting, 52));
+    CHECK(cb_pkt_djm_settings_parse(&djm_back, w15.p, w15.len) < 0);
+
+    /* rekordbox's push to a player, where beat-link's sendLoadSettingsCommand
+     * puts each setting: 02 at 0x1f, our number and the target's, 0x50,
+     * the magic and version 3, then each setting at its place, version 2
+     * in the payload or not. */
+    uint8_t ms[40], ms2[40];
+    for (int i = 0; i < 40; i++) {
+        ms[i] = (uint8_t)(0x80 + i);
+        ms2[i] = (uint8_t)(0xc0 + i);
+    }
+    memcpy(ms, (const uint8_t[]) { 0x78, 0x56, 0x34, 0x12, 0x02, 0, 0, 0 }, 8);
+    WR(w16);
+    cb_pkt_my_settings_push(&w16, "rekordbox", 17, 2, ms, ms2);
+    CHECK_EQ(w16.len, 0x74);
+    CHECK(w16.len == 0x74 && w16.p[0x0a] == 0x34 && !memcmp(w16.p + 0x0b, "rekordbox", 9) &&
+          w16.p[0x1f] == 2 && w16.p[0x20] == 17 && w16.p[0x21] == 2 && w16.p[0x22] == 0 &&
+          w16.p[0x23] == 0x50 && !memcmp(w16.p + 0x24, "\x12\x34\x56\x78\0\0\0\x03", 8));
+    static const uint8_t beat_link[] = {
+        0x2c, 0x2d, 0x2e, 0x2f, 0x30, 0x32, 0x33, 0x34, 0x38, 0x39, 0x3a, 0x3b, 0x3c, 0x3d,
+        0x3e, 0x41, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4c, 0x4d, 0x4e, 0x4f,
+    };
+    for (size_t i = 0; i < sizeof(beat_link) && w16.len == 0x74; i++) {
+        int at = beat_link[i];
+        uint8_t want = at < 0x4c ? ms[at - 0x24] : ms2[at - 0x4c];
+        if (w16.p[at] != want)
+            fprintf(stderr, "push: 0x%02x is %02x, not %02x\n", at, w16.p[at], want), failures++;
+    }
+    int sender = 0;
+    uint8_t ms_back[40], ms2_back[40];
+    CHECK_EQ(cb_pkt_my_settings_push_parse(&sender, &target, ms_back, ms2_back, w16.p, w16.len), 0);
+    CHECK(sender == 17 && target == 2 && !memcmp(ms_back + 8, ms + 8, 32) && ms_back[4] == 3 &&
+          !memcmp(ms2_back, ms2, 40));
+    w16.p[0x1f] = 1;
+    CHECK(cb_pkt_my_settings_push_parse(&sender, &target, ms_back, ms2_back, w16.p, w16.len) < 0);
 }
 
 /* Every captured packet cut short, with its length field lying, or with
@@ -1385,6 +1432,53 @@ static void listing(void)
     free(c.out);
 }
 
+/* Pushing our My Settings: to each player and each mixer on the link, not
+ * to a computer; nothing before we are up. */
+static void pushing(void)
+{
+    Cap c = { .now = T0 };
+    CBPresence *p = computer(&c, false, NULL);
+    uint8_t ms[40] = { 0x78, 0x56, 0x34, 0x12, 0x02 }, ms2[40] = { 0x81 }, djm[52] = {
+        0x78, 0x56, 0x34, 0x12, 0x01, 0, 0, 0, 0x20,
+    };
+    ms[23] = 0x80;
+    djm[19] = 0x83;
+    int players = -1, mixers = -1;
+    CHECK_EQ(cb_presence_push_settings(p, ms, ms2, djm, &players, &mixers), CB_ERROR(EAGAIN));
+    CHECK(players == 0 && mixers == 0 && c.nb == 0);
+    feed(p, &c, CB_LINK_ANNOUNCE, CDJ_ADDR, cdj_keep_alive);
+    run_until(p, &c, T0 + 3950 * MS);
+    CHECK_EQ(cb_presence_state(p, NULL), CB_LINK_UP);
+    feed(p, &c, CB_LINK_ANNOUNCE, 0xc0a80142, djm_keep_alive);
+    Pkt rb = pkt(rb_keep_alive);
+    rb.b[0x24] = 18;
+    rb.b[0x2b] = 0x77;
+    cb_presence_input(p, CB_LINK_ANNOUNCE, 0xc0a80177, rb.b, rb.len, c.now);
+    CHECK_EQ(cb_presence_players(p, NULL, 0), 3);
+    int from = c.nb;
+    CHECK_EQ(cb_presence_push_settings(p, ms, ms2, djm, &players, &mixers), 0);
+    CHECK(players == 1 && mixers == 1 && c.nb == from + 2);
+    const Out *o = find_kind(&c, from, CB_LINK_STATUS, CB_ST_MY_SETTINGS_PUSH);
+    CHECK(o && o->to == CDJ_ADDR);
+    int sender = 0, target = 0;
+    uint8_t ms_back[40], ms2_back[40];
+    CHECK(o && cb_pkt_my_settings_push_parse(&sender, &target, ms_back, ms2_back, o->b,
+                                             o->len) == 0 &&
+          sender == 17 && target == 1 && ms_back[23] == 0x80 && ms2_back[0] == 0x81);
+    o = find_kind(&c, from, CB_LINK_STATUS, CB_ST_DJM_SETTINGS_PUSH);
+    CHECK(o && o->to == 0xc0a80142);
+    CBPktDjmSettings m;
+    CHECK(o && cb_pkt_djm_settings_push_parse(&m, o->b, o->len) == 0 && m.device == 17 &&
+          m.slot == 4 && m.result == 33 && m.djmmysetting[19] == 0x83);
+    /* The A9's word that it took them is only read. */
+    from = c.nb;
+    feed(p, &c, CB_LINK_STATUS, 0xc0a80142,
+         "5173707431576d4a4f4c45444a4d2d41390000000000000000000000000000010021000421040000");
+    CHECK_EQ(c.nb, from);
+    cb_presence_free(&p);
+    free(c.out);
+}
+
 /* ---------------------------------------------------------- back to back */
 
 #define MAX_NODES 4
@@ -1744,6 +1838,7 @@ int main(void)
     serving();
     djm900_on_link();
     listing();
+    pushing();
     back_to_back();
     conflict_on_17();
     cue_packets();

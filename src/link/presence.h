@@ -124,10 +124,22 @@ void cb_presence_set_devsetting(CBPresence *p, const uint8_t payload[32]);
  * not answered. */
 void cb_presence_set_mysetting(CBPresence *p, const uint8_t mysetting[40],
                                const uint8_t mysetting2[40]);
+/* CB_PRESENCE_COMPUTER: pushes My Settings, unasked, to every player on
+ * the link (34, as rekordbox's "Remote Settings using Pro DJ Link": the
+ * MYSETTING.DAT and MYSETTING2.DAT payloads) and every mixer (44: the
+ * DJMMYSETTING.DAT payload; docs/settings.md sections 3 to 5); how many
+ * of each were sent to. -EAGAIN before we are up. */
+int  cb_presence_push_settings(CBPresence *p, const uint8_t mysetting[40],
+                               const uint8_t mysetting2[40], const uint8_t djmmysetting[52],
+                               int *players, int *mixers);
 /* CB_PRESENCE_COMPUTER: the mixer settings a mixer that LOADs its My
  * Settings from us gets, as the 52-byte DJMMYSETTING.DAT payload
  * (docs/settings.md section 5). Until set, such a LOAD is not answered. */
 void cb_presence_set_djmmysetting(CBPresence *p, const uint8_t payload[52]);
+/* CB_PRESENCE_PLAYER: the MYSETTING.DAT and MYSETTING2.DAT payloads the
+ * computer source pushed to us (34 naming us), false until it did. */
+bool cb_presence_pushed_settings(const CBPresence *p, uint8_t mysetting[40],
+                                 uint8_t mysetting2[40]);
 /* CB_PRESENCE_PLAYER, for the tests: LOADs the mixer's My Settings from
  * the computer source found, as a DJM-A9 does (42); the payload it
  * answered once it did as the A9 takes it. -EAGAIN before a source is

@@ -832,6 +832,47 @@ void cb_pkt_my_settings(CBWr *w, const CBPktMySettings *m)
     st_finish(w, start);
 }
 
+void cb_pkt_my_settings_push(CBWr *w, const char *name, int number, int target,
+                             const uint8_t mysetting[40], const uint8_t mysetting2[40])
+{
+    size_t start = w->len;
+    cb_wr_bytes(w, cb_link_magic, sizeof(cb_link_magic));
+    cb_wr_u8(w, CB_ST_MY_SETTINGS_PUSH);
+    put_name(w, name);
+    cb_wr_u8(w, 0x02);
+    cb_wr_u8(w, (uint8_t)number);
+    cb_wr_u8(w, (uint8_t)target);
+    cb_wr_u16(w, 0);
+    CBRd d = cb_rd(mysetting, 40);
+    cb_wr_u32(w, cb_rd_u32le(&d));
+    cb_rd_skip(&d, 4);
+    cb_wr_u32(w, 3);
+    cb_wr_bytes(w, cb_rd_bytes(&d, 32), 32);
+    cb_wr_bytes(w, mysetting2, 40);
+    st_finish(w, start);
+}
+
+int cb_pkt_my_settings_push_parse(int *number, int *target, uint8_t mysetting[40],
+                                  uint8_t mysetting2[40], const uint8_t *buf, size_t len)
+{
+    CBRd r;
+    CBPktHeader h;
+    if (!body(&r, &h, CB_LINK_STATUS, CB_ST_MY_SETTINGS_PUSH, buf, len) || buf[0x1f] != 0x02)
+        return CB_ERROR(EINVAL);
+    uint32_t magic = cb_rd_u32(&r), version = cb_rd_u32(&r);
+    const uint8_t *set = cb_rd_bytes(&r, 32), *set2 = cb_rd_bytes(&r, 40);
+    if (!set || !set2)
+        return CB_ERROR(EINVAL);
+    *number = h.subtype;
+    *target = h.number;
+    CBWr d = cb_wr(mysetting, 40);
+    cb_wr_u32le(&d, magic);
+    cb_wr_u32le(&d, version);
+    cb_wr_bytes(&d, set, 32);
+    memcpy(mysetting2, set2, 40);
+    return 0;
+}
+
 void cb_pkt_property_query(CBWr *w, const char *name, int number)
 {
     st_header(w, CB_ST_PROPERTY_QUERY, 0x03, name, number);
@@ -873,11 +914,11 @@ void cb_pkt_djm_settings_query(CBWr *w, const char *name, int number, int slot, 
 
 #define DJM_BLOB (4 + 52)
 
-int cb_pkt_djm_settings_parse(CBPktDjmSettings *m, const uint8_t *buf, size_t len)
+static int djm_parse(CBPktDjmSettings *m, int kind, const uint8_t *buf, size_t len)
 {
     CBRd r;
     CBPktHeader h;
-    if (!body(&r, &h, CB_LINK_STATUS, CB_ST_DJM_SETTINGS, buf, len))
+    if (!body(&r, &h, CB_LINK_STATUS, kind, buf, len))
         return CB_ERROR(EINVAL);
     *m = (CBPktDjmSettings) { .number = h.number };
     memcpy(m->name, h.name, sizeof(m->name));
@@ -904,12 +945,22 @@ int cb_pkt_djm_settings_parse(CBPktDjmSettings *m, const uint8_t *buf, size_t le
     return 0;
 }
 
-void cb_pkt_djm_settings(CBWr *w, const CBPktDjmSettings *m)
+int cb_pkt_djm_settings_parse(CBPktDjmSettings *m, const uint8_t *buf, size_t len)
 {
-    size_t start = st_header(w, CB_ST_DJM_SETTINGS, 0x00, m->name, m->number);
+    return djm_parse(m, CB_ST_DJM_SETTINGS, buf, len);
+}
+
+int cb_pkt_djm_settings_push_parse(CBPktDjmSettings *m, const uint8_t *buf, size_t len)
+{
+    return djm_parse(m, CB_ST_DJM_SETTINGS_PUSH, buf, len);
+}
+
+static void djm_build(CBWr *w, int kind, const CBPktDjmSettings *m, int third)
+{
+    size_t start = st_header(w, kind, 0x00, m->name, m->number);
     cb_wr_u8(w, (uint8_t)m->device);
     cb_wr_u8(w, (uint8_t)m->slot);
-    cb_wr_u8(w, (uint8_t)m->result);
+    cb_wr_u8(w, (uint8_t)third);
     cb_wr_u8(w, 0);
     cb_wr_u16(w, 0);
     cb_wr_u16(w, 1);
@@ -923,6 +974,16 @@ void cb_pkt_djm_settings(CBWr *w, const CBPktDjmSettings *m)
     for (int i = 0; i < 2; i++)
         cb_wr_u32(w, cb_rd_u32le(&d));
     st_finish(w, start);
+}
+
+void cb_pkt_djm_settings(CBWr *w, const CBPktDjmSettings *m)
+{
+    djm_build(w, CB_ST_DJM_SETTINGS, m, m->result);
+}
+
+void cb_pkt_djm_settings_push(CBWr *w, const CBPktDjmSettings *m, int target)
+{
+    djm_build(w, CB_ST_DJM_SETTINGS_PUSH, m, target);
 }
 
 /* ------------------------------------------------------------- port 50004 */
