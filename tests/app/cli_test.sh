@@ -130,6 +130,14 @@ run config analysis.snap_bpm | grep -q "^analysis.snap_bpm is not set$" || fail 
 run config player.quantize on > /dev/null || fail "config player.quantize on"
 run config player.quantize "" | grep -q "^player.quantize is not set (the default, " ||
     fail "config player.quantize \"\" did not unset"
+# A negative value is a value, not an option; a negative key is not a key.
+run config mixer.talk_over_level -6 > /dev/null || fail "config mixer.talk_over_level -6"
+run config mixer.talk_over_level | grep -q "^mixer.talk_over_level = -6$" ||
+    fail "mixer.talk_over_level is not -6"
+run config mixer.talk_over_level "" > /dev/null || fail "config mixer.talk_over_level \"\""
+set +e
+run config -6 > /dev/null 2>&1; [ $? -eq 1 ] || fail "config took -6 for a key"
+set -e
 run config 2>&1 | grep -q "not valid" && fail "a setting warns after config"
 
 # The file's comment tag was read and left out: the comment is the user's.

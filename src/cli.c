@@ -2285,7 +2285,10 @@ static int cmd_config(Cli *cli, int argc, char **argv)
             return EXIT_USAGE;
         if (r > 0)
             continue;
-        if (is_option(cli, argv[i]))
+        /* A value may be negative: mixer.talk_over_level -6. */
+        bool negative = key && !value && argv[i][0] == '-' && argv[i][1] >= '0' &&
+                        argv[i][1] <= '9';
+        if (is_option(cli, argv[i]) && !negative)
             return usage_error(cli, "config: unknown option %s", argv[i]);
         if (!key)
             key = argv[i];
