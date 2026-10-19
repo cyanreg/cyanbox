@@ -265,6 +265,12 @@ Every port is above 1024: nothing needs root.
 - **Listening.** Every player's status packet says what it has loaded and
   from where (our device number as the source), whether it plays, its
   tempo and position: the Link panel and play counting come from these.
+- **All-in-ones.** An all-in-one (device type 07) keeps one number alive
+  and sends a status for each of its decks: an XDJ-RX3 (firmware 1.20, on
+  its USB-B network adapter) keeps 11 alive and is decks 11 and 12. A
+  status from its address for a number not on the link is its other deck,
+  a player of its own until the unit's keep-alives stop or it starts over;
+  My Settings go to the unit once, to the number it keeps alive.
 - Every packet starts with the same ten-byte magic, a kind, a subtype and
   a twenty-byte device name; rbxport's tests hold the bytes rekordbox
   7.2.11 sent a CDJ-3000, which are the test vectors here.

@@ -167,6 +167,36 @@ static const char cdj_status_playing[] =
     "00000000000000000000000000000000000000050000077a0000077a0b4b0000"
     "00000000";
 
+/* An XDJ-RX3 on firmware 1.20, on its USB-B network adapter (2026-10-20):
+ * its keep-alive (device 11, type 07 at 0x34, 169.254.95.167) and the
+ * status of its two decks, 11 and 12, nothing loaded. */
+static const char rx3_keep_alive[] =
+    "5173707431576d4a4f4c060058444a2d52583300000000000000000000000000010300360b02"
+    "c83dfc1c5fa7a9fe5fa7010000000700";
+static const char rx3_status_11[] =
+    "5173707431576d4a4f4c0a58444a2d5258330000000000000000000000000001"
+    "050b01000b000000000000000000000000000000000000000000000000000000"
+    "0000000000000000000000000000000000000000000000000000000000000000"
+    "00000000000000000b0000000000000400000004000000000000000000000000"
+    "00000000000000000080009e001000007fffffff8000ffff00000000000000ff"
+    "ffffffff01ff0000000000000000000000000000000001000000000000000000"
+    "0000000000000000000000001f01000000000000000000000100000000000000"
+    "0000000000000000000000000000000000000000000000000100000000000000"
+    "0000000000000000000000000000000000000000000000000000000000000000"
+    "00000000";
+static const char rx3_status_12[] =
+    "5173707431576d4a4f4c0a58444a2d5258330000000000000000000000000001"
+    "050c01000c000000000000000000000000000000000000000000000000000000"
+    "0000000000000000000000000000000000000000000000000000000000000000"
+    "0000000000000000000000000000000400000004000000000000000000000000"
+    "00000000000000000080009e001000007fffffff8000ffff00000000000000ff"
+    "ffffffff01ff0000000000000000000000000000000001000000000000000000"
+    "0000000000000000000000001f01000000000000000000000100000000000000"
+    "0000000000000000000000000000000000000000000000000100000000000000"
+    "0000000000000000000000000000000000000000000000000000000000000000"
+    "00000000";
+#define RX3_ADDR 0xa9fe5fa7u    /* 169.254.95.167 */
+
 static const uint8_t rb_mac[6] = { 0x00, 0xe0, 0x4c, 0xcf, 0x63, 0x2e };
 #define RB_ADDR  0xc0a8010eu    /* 192.168.1.14 */
 #define CDJ_ADDR 0xc0a80198u    /* 192.168.1.152 */
@@ -1479,6 +1509,78 @@ static void pushing(void)
     free(c.out);
 }
 
+static bool has_player(CBPresence *p, int number)
+{
+    CBLinkPlayer pl[8];
+    int n = cb_presence_players(p, pl, 8);
+    for (int i = 0; i < n && i < 8; i++) {
+        if (pl[i].number == number)
+            return true;
+    }
+    return false;
+}
+
+/* An all-in-one: one keep-alive, a status for each deck. The deck it does
+ * not keep alive is a player of its own, on the link as long as the unit;
+ * a status alone from anywhere else is no device. */
+static void all_in_one(void)
+{
+    Cap c = { .now = T0 };
+    CBPresence *p = computer(&c, false, NULL);
+    feed(p, &c, CB_LINK_ANNOUNCE, RX3_ADDR, rx3_keep_alive);
+    run_until(p, &c, T0 + 3950 * MS);
+    CHECK_EQ(cb_presence_state(p, NULL), CB_LINK_UP);
+    feed(p, &c, CB_LINK_STATUS, RX3_ADDR, rx3_status_11);
+    feed(p, &c, CB_LINK_STATUS, RX3_ADDR, rx3_status_12);
+    CBLinkPlayer pl[8];
+    CHECK_EQ(cb_presence_players(p, pl, 8), 2);
+    CHECK(pl[0].number == 11 && pl[1].number == 12);
+    CHECK_EQ(pl[1].type, CB_LINK_DEVICE_PLAYER);
+    CHECK(pl[1].addr == RX3_ADDR && !strcmp(pl[1].name, "XDJ-RX3"));
+    CHECK(!memcmp(pl[1].mac, pl[0].mac, 6) && pl[0].mac[5] == 0xa7);
+    CHECK(pl[1].has_status && pl[1].beat == -1);
+
+    /* A CDJ's address, or one not on the link, has no other deck. */
+    feed(p, &c, CB_LINK_ANNOUNCE, CDJ_ADDR, cdj_keep_alive);
+    Pkt s13 = pkt(rx3_status_12);
+    s13.b[0x21] = s13.b[0x24] = 13;
+    cb_presence_input(p, CB_LINK_STATUS, CDJ_ADDR, s13.b, s13.len, c.now);
+    cb_presence_input(p, CB_LINK_STATUS, 0xc0a80177, s13.b, s13.len, c.now);
+    CHECK_EQ(cb_presence_players(p, NULL, 0), 3);
+    CHECK(!has_player(p, 13));
+
+    /* Its settings once, to the number it keeps alive. */
+    int players = -1, mixers = -1, from = c.nb;
+    uint8_t ms[40] = { 0x78, 0x56, 0x34, 0x12, 0x02 }, ms2[40] = { 0 }, djm[52] = { 0 };
+    CHECK_EQ(cb_presence_push_settings(p, ms, ms2, djm, &players, &mixers), 0);
+    CHECK(players == 2 && mixers == 0 && c.nb == from + 2);
+    for (int i = from; i < c.nb; i++)
+        CHECK(c.out[i].b[0x21] == (c.out[i].to == RX3_ADDR ? 11 : 1));
+
+    /* Its keep-alive keeps the deck; without it, both go. */
+    int64_t t = c.now;
+    run_until(p, &c, t + 8000 * MS);
+    feed(p, &c, CB_LINK_ANNOUNCE, RX3_ADDR, rx3_keep_alive);
+    run_until(p, &c, t + 16000 * MS);
+    CHECK(has_player(p, 11) && has_player(p, 12) && !has_player(p, 1));
+    run_until(p, &c, t + 19000 * MS);
+    CHECK_EQ(cb_presence_players(p, NULL, 0), 0);
+
+    /* Starting over, it is forgotten with its decks. */
+    feed(p, &c, CB_LINK_ANNOUNCE, RX3_ADDR, rx3_keep_alive);
+    feed(p, &c, CB_LINK_STATUS, RX3_ADDR, rx3_status_12);
+    CHECK_EQ(cb_presence_players(p, NULL, 0), 2);
+    CBPktClaim again = { .kind = CB_ANN_CLAIM1, .name = "XDJ-RX3", .proto = 3, .counter = 1,
+                         .type = 7 };
+    memcpy(again.mac, pl[0].mac, 6);
+    WR(w);
+    cb_pkt_claim(&w, &again);
+    feed_w(p, &c, CB_LINK_ANNOUNCE, RX3_ADDR, &w);
+    CHECK_EQ(cb_presence_players(p, NULL, 0), 0);
+    cb_presence_free(&p);
+    free(c.out);
+}
+
 /* ---------------------------------------------------------- back to back */
 
 #define MAX_NODES 4
@@ -1839,6 +1941,7 @@ int main(void)
     djm900_on_link();
     listing();
     pushing();
+    all_in_one();
     back_to_back();
     conflict_on_17();
     cue_packets();

@@ -111,6 +111,7 @@ typedef struct Device {
     int  raw_type;
     int  bar_beat;
     bool greeted;
+    int  unit;                  /* a deck of an all-in-one: the number its keep-alive has */
 } Device;
 
 struct CBPresence {
@@ -677,6 +678,12 @@ static void hear_keep_alive(CBPresence *p, uint32_t from, const CBPktKeepAlive *
         memcpy(d->d.name, k->name, sizeof(k->name));
         memcpy(d->d.mac, k->mac, 6);
         d->d.last_seen = now;
+        d->unit = 0;
+        /* Its other decks are on the link as long as it is. */
+        for (int i = 0; i < p->nb_dev; i++) {
+            if (p->dev[i].unit == k->number && p->dev[i].d.addr == from)
+                p->dev[i].d.last_seen = now;
+        }
     }
     if (!computer)
         return;
@@ -839,12 +846,43 @@ static void announce_in(CBPresence *p, uint32_t from, const uint8_t *buf, size_t
     }
 }
 
+/* An all-in-one keeps one number alive and sends a player's status for
+ * each of its decks: an XDJ-RX3 keeps 11 alive and is decks 11 and 12 (a
+ * real one, firmware 1.20, on its USB-B network adapter). A status from
+ * its address for a number not on the link is its other deck. */
+static Device *add_deck(CBPresence *p, uint32_t from, int number, int64_t now)
+{
+    if (number < 1 || number > 80 || (p->stage == ST_UP && number == p->number) ||
+        p->nb_dev >= MAX_DEVICES)
+        return NULL;
+    const Device *u = NULL;
+    for (int i = 0; i < p->nb_dev && !u; i++) {
+        if (p->dev[i].d.addr == from && p->dev[i].raw_type == 7 && !p->dev[i].unit)
+            u = &p->dev[i];
+    }
+    if (!u)
+        return NULL;
+    Device *d = &p->dev[p->nb_dev++];
+    *d = (Device) {
+        .d = { .number = number, .type = u->d.type, .addr = from, .last_seen = now,
+               .beat = -1 },
+        .raw_type = u->raw_type,
+        .unit = u->d.number,
+    };
+    memcpy(d->d.name, u->d.name, sizeof(d->d.name));
+    memcpy(d->d.mac, u->d.mac, 6);
+    cb_debug("link: device %d (%s), a deck of device %d", number, d->d.name, d->unit);
+    return d;
+}
+
 static void hear_status(CBPresence *p, uint32_t from, const uint8_t *buf, size_t len, int64_t now)
 {
     CBPktStatus s;
     if (cb_pkt_status_parse(&s, buf, len) < 0)
         return;
     Device *d = find(p, s.number);
+    if (!d && s.kind == CB_ST_CDJ)
+        d = add_deck(p, from, s.number, now);
     if (!d || d->d.addr != from)
         return;
     CBLinkPlayer *l = &d->d;
@@ -1254,6 +1292,10 @@ int cb_presence_push_settings(CBPresence *p, const uint8_t mysetting[40],
         const CBLinkPlayer *d = &p->dev[i].d;
         uint8_t out[CB_PKT_MAX];
         CBWr w = cb_wr(out, sizeof(out));
+        /* An all-in-one's settings are its own, not a deck's: once, to the
+         * number it keeps alive. */
+        if (p->dev[i].unit)
+            continue;
         if (d->type == CB_LINK_DEVICE_PLAYER) {
             cb_pkt_my_settings_push(&w, p->c.name, p->number, d->number, mysetting, mysetting2);
             (*players)++;
