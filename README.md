@@ -157,6 +157,7 @@ commands open no window and no audio device.
 | `--audio-sink NAME`             | The PipeWire node to play to (default: the session manager's choice)                         |
 | `--no-mpris`                    | Stay off the D-Bus session bus                                                               |
 | `--pro-link`                    | Serve the library to players over [PRO DJ LINK](#pro-dj-link) while the interface runs     |
+| `--link-usb CARD`               | With `--pro-link`: an [all-in-one on USB](#all-in-ones-on-usb), its sound card CARD (`XDJRX3`) |
 | `--validation`                  | Enable the Vulkan validation layer                                                           |
 
 `cyanbox --help` lists every option, those of `link serve` and `link browse`
@@ -505,8 +506,27 @@ stick. Without it, cyanbox never opens a Link socket.
    saying when one ended and the next started.
 
 Tried with two real CDJ-900s, a real CDJ-3000 and DJM-A9 (a 1.5 hour set
-without a fault), and emulated CDJ-900, CDJ-2000, CDJ-2000NXS2, CDJ-3000
-and CDJ-3000X players running Pioneer's own firmware.
+without a fault), a real XDJ-RX3 on USB, and emulated CDJ-900, CDJ-2000,
+CDJ-2000NXS2, CDJ-3000 and CDJ-3000X players running Pioneer's own firmware.
+
+### All-in-ones on USB
+An XDJ-RX3 has no LAN socket: its USB-B cable carries a network adapter,
+on which cyanbox serves it as any Ethernet player, both decks, and its MIDI
+port. The RX3 lists a computer on SOURCE only while that computer sends
+rekordbox's activation on the MIDI port, so name its sound card:
+
+```
+cyanbox --pro-link --link-usb XDJRX3             # or: cyanbox link serve --link-usb XDJRX3
+```
+
+CARD is the name `/proc/asound/cards` shows in brackets (or its number).
+cyanbox sends the activation every 200 ms while Link runs, and finds the
+card again if the unit is plugged back in. Its decks are 11 and 12, and Load
+in deck works on both. Browsing, loading and playback were tried on a real
+one, with the same activation sent by hand (`--link-usb` itself is not yet
+tried on the unit). It has no LINK CUE: nothing in its firmware takes a
+computer's audio.
+Other all-in-ones on USB may take other bytes; only the RX3 is tried.
 
 PRO DJ LINK has no authentication and no encryption. While cyanbox serves,
 anything on those networks can read the library's audio, artwork and

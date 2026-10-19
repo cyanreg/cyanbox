@@ -278,6 +278,24 @@ Every port is above 1024: nothing needs root.
   status from its address for a number not on the link is its other deck,
   a player of its own until the unit's keep-alives stop or it starts over;
   My Settings go to the unit once, to the number it keeps alive.
+- **On USB.** An XDJ-RX3 has no LAN socket: its USB-B socket is a hub
+  with a CDC-ECM network adapter (2b73:0007, `cdc_ether`, an `enx`
+  interface here) wired to its Ethernet, and its own USB device (2b73:003d:
+  audio, MIDI, HID). Link runs on the adapter as on any Ethernet, but the
+  RX3 lists the computer on SOURCE only while rekordbox's activation,
+  `F0 00 40 05 00 00 03 0D 00 50 01 F7`, comes on its USB MIDI every
+  200 ms or so (its PcControlCert gives it a one-second lease; without it
+  the RX3 even mounts the library and reads the root menu, but shows only
+  its software-MIDI source). `--link-usb CARD` (the interface with
+  `--pro-link`, and `link serve`; CBLinkOptions.usb_card, src/link/usb.c)
+  writes it to the sound card CARD's first raw MIDI port,
+  `/dev/snd/midiCnD0`, from a thread of the set's, from the set's start to
+  its stop; CARD is the card's id (`XDJRX3`) or number, and a card that is
+  not there or goes is looked for again every second by its id. Tried on a
+  real RX3 (firmware 1.20, 2026-10-20) with the same bytes sent by `amidi`
+  every 200 ms: browsing, loading from its browser and from cyanbox on
+  both decks, playback; `--link-usb` itself came after, tested on sound
+  cards of the test's own (test_usb), not yet on the unit.
 - Every packet starts with the same ten-byte magic, a kind, a subtype and
   a twenty-byte device name; rbxport's tests hold the bytes rekordbox
   7.2.11 sent a CDJ-3000, which are the test vectors here.

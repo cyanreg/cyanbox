@@ -63,6 +63,7 @@ typedef struct Cli {
     bool  validation;
     bool  no_mpris;             /* --no-mpris: the interface stays off the session bus */
     bool  pro_link;             /* --pro-link: the interface offers PRO DJ LINK */
+    const char *link_usb;       /* --link-usb: an all-in-one's sound card */
     bool  verbose;
     const char *cmd;
     const char *usage;          /* the command's usage line, for usage errors */
@@ -139,6 +140,11 @@ static const char usage_text[] =
     "      -i, --interface IF   only on this interface\n"
     "      --any-peer           answer any address, not only players heard (diagnostics)\n"
     "      --wait               join only once a player is heard, as rekordbox does\n"
+    "      --link-usb CARD      an all-in-one on USB (an XDJ-RX3): rekordbox's\n"
+    "                           activation every 200 ms to the MIDI port of the\n"
+    "                           sound card CARD (its name in /proc/asound/cards,\n"
+    "                           XDJRX3, or its number), without which the unit\n"
+    "                           lists no computer on SOURCE\n"
     "  link browse -i IF [HOST] browse a library served on the network as a player does\n"
     "                           (a fake CDJ-3000): menus, one track's metadata,\n"
     "                           analysis and file; HOST, else the computer source heard\n"
@@ -181,6 +187,7 @@ static const char usage_text[] =
     "                           the link the deck is heard only in its headphone cue\n"
     "                           (LINK CUE); with none, as --audio says. It stays off\n"
     "                           the session bus, as with --no-mpris\n"
+    "  --link-usb CARD          with --pro-link: an all-in-one on USB, as for link serve\n"
     "  --frames N               draw N frames, then exit (tests)\n";
 
 /* ------------------------------------------------------------------ helpers */
@@ -2574,8 +2581,12 @@ static int run_interface(Cli *cli)
     /* Link only when asked for, and then from the start, on every
      * Ethernet interface. */
     app->link_state.enabled = cli->pro_link;
-    if (cli->pro_link)
-        cb_app_link_start(app, NULL);
+    if (cli->pro_link) {
+        CBLinkOptions lo;
+        cb_link_options_default(&lo);
+        lo.usb_card = cli->link_usb;
+        cb_app_link_start(app, &lo);
+    }
     ret = cb_app_run(app);
     cb_app_destroy(app);
     free(app);
@@ -2887,6 +2898,10 @@ static int cmd_link(Cli *cli, int argc, char **argv)
             opt.any_peer = true;
         } else if (opt_flag(cli, argv[i], NULL, "--wait")) {
             opt.start_up = false;
+        } else if ((r = opt_value(cli, argc, argv, &i, NULL, "--link-usb", &val))) {
+            if (r < 0 || !*val)
+                return usage_error(cli, "link: --link-usb needs a sound card (XDJRX3)");
+            opt.usb_card = val;
         } else if (opt_flag(cli, argv[i], NULL, "--quiet")) {
             copt.quiet = true;
         } else if ((r = opt_value(cli, argc, argv, &i, "-n", "--number", &val))) {
@@ -2918,6 +2933,8 @@ static int cmd_link(Cli *cli, int argc, char **argv)
     }
     if (!sub || (strcmp(sub, "serve") && strcmp(sub, "browse")))
         return usage_error(cli, "link: serve or browse");
+    if (!opt.usb_card)
+        opt.usb_card = cli->link_usb;
     if (!strcmp(sub, "serve"))
         return link_serve(cli, &opt);
     if (!opt.interface)
@@ -2953,7 +2970,7 @@ static const struct {
     { "settings", cmd_settings, "settings" },
     { "init",     cmd_init,     "init [DIR]" },
     { "playlist", cmd_playlist, "playlist list|create|add|remove|delete|import|export ..." },
-    { "link",     cmd_link,     "link serve [-i IF] [--any-peer] [--wait] | "
+    { "link",     cmd_link,     "link serve [-i IF] [--any-peer] [--wait] [--link-usb CARD] | "
                                 "link browse -i IF [-n N] [-t ID] [--name NAME] [--hold SEC] "
                                 "[--save-cue X@SEC] [--quiet] [HOST]" },
 };
@@ -3001,6 +3018,12 @@ static int cli_run(int argc, char **argv)
             cli.pro_link = true;
             continue;
         }
+        if ((r = opt_value(&cli, argc, argv, &i, NULL, "--link-usb", &val))) {
+            if (r < 0 || !*val)
+                return usage_error(NULL, "--link-usb needs a sound card (XDJRX3)");
+            cli.link_usb = val;
+            continue;
+        }
         if ((r = opt_value(&cli, argc, argv, &i, NULL, "--audio", &val))) {
             if (r > 0 && !strcmp(val, "none"))
                 cli.audio = CB_AUDIO_NULL;
@@ -3026,6 +3049,8 @@ static int cli_run(int argc, char **argv)
         return usage_error(NULL, "unknown option %s", a);
     }
 
+    if (i >= argc && cli.link_usb && !cli.pro_link)
+        return usage_error(NULL, "--link-usb goes with --pro-link");
     if (i >= argc)
         return run_interface(&cli);
 

@@ -329,6 +329,15 @@ run show "$dir/no-such-track.flac" > /dev/null 2>&1
 [ $? -eq 1 ] || fail "--frames \" 5\" does not exit 1"
 "$cyanbox" -c "" show "$id" > /dev/null 2>&1
 [ $? -eq 1 ] || fail "-c \"\" does not exit 1"
+# --link-usb names a sound card, and goes with --pro-link (nothing starts).
+"$cyanbox" --link-usb XDJRX3 > /dev/null 2> "$dir/usage.err"
+[ $? -eq 1 ] && grep -q "goes with --pro-link" "$dir/usage.err" ||
+    { cat "$dir/usage.err"; fail "--link-usb without --pro-link"; }
+"$cyanbox" --pro-link --link-usb "" > /dev/null 2>&1
+[ $? -eq 1 ] || fail "--link-usb \"\" does not exit 1"
+run link serve --link-usb > /dev/null 2> "$dir/usage.err"
+[ $? -eq 1 ] && grep -q "needs a sound card" "$dir/usage.err" ||
+    { cat "$dir/usage.err"; fail "link serve --link-usb without a card"; }
 for cmd in add analyze analyse show color colour export inspect pull sync rescan check config \
            settings init playlist; do
     run $cmd --bogus > /dev/null 2> "$dir/usage.err"
