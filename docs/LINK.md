@@ -726,10 +726,12 @@ settings (docs/settings.md); where the library sets none, rekordbox
   settings; a count and a size of extended entries, both 0). The A9
   checks the magic and the counts, applies each byte with the 0x80 bit
   and sets any without it, or out of range, to its own default; it
-  ignores the fader curves (it has switches for them). It applied every
-  setting of a `43` so laid out, sent by a stand-in for cyanbox with
-  rekordbox's defaults and then others; cyanbox's own answer is that
-  packet byte for byte (test_packets) but has not yet been sent to an A9.
+  ignores the fader curves (it has switches for them). Emulated, it
+  found cyanbox at its first `30` and LOADed from it rekordbox's defaults,
+  then eight settings changed in the library (MIDI channel, talk over
+  mode and level, mic low cut, display and indicator brightness, mono
+  split, beat FX quantize), and applied every one (2026-10-19). A
+  cyanbox gone for 4.9 s is asked again once it is back.
   The DJM-900NXS (1.32) has none of this: of `30`, the version question
   (MixerVersionInfo by the CDJ-3000X's firmware), it only answers its own
   version, and it never asks a computer.
@@ -745,9 +747,10 @@ is under SHORTCUT once a track of ours is loaded, send it long and show
 nothing when no answer comes; the NXS2 sends it short (MYSETTING alone,
 version 2) and after 15 s says "MY SETTINGS DATA cannot be saved". An
 A9's SAVE (`44`, its own 0xc0-byte blob with seventeen extended entries,
-after a LOAD) is not answered either (`45`), nor taken; rekordbox's push
-to a mixer (`4b`) is not sent. `35` and `42` are answered only to a
-device on the link, as every request is.
+4 ms after a `42` it sends first) is not answered either (`45`), nor
+taken: it waits 2 s, then leaves it, its settings as they were.
+rekordbox's push to a mixer (`4b`) is not sent. `35` and `42` are
+answered only to a device on the link, as every request is.
 test_packets builds S16a's two packets byte for byte and the long answer
 by offset, the A9's `30` and `42` and the `43` it took, and rekordbox's
 `31`, and has a computer answer `35` and `42` only once the settings are

@@ -1015,7 +1015,8 @@ static void status_in(CBPresence *p, uint32_t from, const uint8_t *buf, size_t l
             cb_pkt_djm_settings_query_parse(&asker, &slot, &target, buf, len) < 0 ||
             target != p->number)
             return;
-        cb_debug("link: %s (%d) loads our mixer My Settings", h.name, h.number);
+        /* An A9's SAVE asks for them first too. */
+        cb_debug("link: %s (%d) asks for our mixer My Settings", h.name, h.number);
         CBPktDjmSettings m = { .number = p->number, .device = p->number, .slot = slot };
         snprintf(m.name, sizeof(m.name), "%s", p->c.name);
         memcpy(m.djmmysetting, p->djmmysetting, 52);
