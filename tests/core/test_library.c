@@ -623,6 +623,30 @@ static void test_link_tag(void)
     free(dir2);
 }
 
+/* Link's WAVs made whole in the cache by an earlier cyanbox go when the
+ * library opens; its other transcodes stay. */
+static void test_link_wavs_go(void)
+{
+    char *dir = test_dir("library-link-wavs");
+    CBLibrary lib;
+    CHECK(cb_library_open(&lib, dir) == 0);
+    cb_library_close(&lib);
+    char *cache = path_in(dir, "cache/transcode");
+    CHECK(cache && cb_mkdir_p(cache) == 0);
+    char *wav = path_in(cache, "12.link.wav"), *part = path_in(cache, "13.link.wav.tmp.wav");
+    char *flac = path_in(cache, "12.flac");
+    CHECK(cb_file_write_atomic(wav, "RIFF", 4) == 0 && cb_file_write_atomic(part, "RI", 2) == 0 &&
+          cb_file_write_atomic(flac, "fLaC", 4) == 0);
+    CHECK(cb_library_open(&lib, dir) == 0);
+    CHECK(!cb_file_exists(wav) && !cb_file_exists(part) && cb_file_exists(flac));
+    cb_library_close(&lib);
+    free(wav);
+    free(part);
+    free(flac);
+    free(cache);
+    free(dir);
+}
+
 /* A dynamic grid's measured beats are kept through a save and an open. */
 static void test_dynamic_grid(void)
 {
@@ -1731,6 +1755,7 @@ int main(void)
     test_changes();
     test_history();
     test_link_tag();
+    test_link_wavs_go();
     test_dynamic_grid();
     test_legend();
     test_clean();

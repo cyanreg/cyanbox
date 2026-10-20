@@ -806,6 +806,31 @@ int cb_library_take_changes(CBLibrary *lib, uint64_t **ids, int *nb)
 
 /* ------------------------------------------------------------ open/close */
 
+/* Link's WAVs made whole in the cache before it made every WAV as it is
+ * read (ID.link.wav, and one left half made): nothing reads them now. */
+static void remove_link_wavs(const CBLibrary *lib)
+{
+    char *dir = cb_asprintf("%s/cache/transcode", lib->root);
+    DIR *d = dir ? opendir(dir) : NULL;
+    struct dirent *e;
+    int n = 0;
+    while (d && (e = readdir(d))) {
+        if (!strstr(e->d_name, ".link.wav"))
+            continue;
+        char *file = cb_path_join(dir, e->d_name);
+        if (file && unlink(file) < 0)
+            cb_warn("cannot delete %s: %s", file, strerror(errno));
+        else
+            n++;
+        free(file);
+    }
+    if (d)
+        closedir(d);
+    if (n)
+        cb_info("library: %d WAV%s Link made whole deleted from the cache", n, n == 1 ? "" : "s");
+    free(dir);
+}
+
 int cb_library_open(CBLibrary *lib, const char *root)
 {
     *lib = (CBLibrary) { 0 };
@@ -861,6 +886,7 @@ int cb_library_open(CBLibrary *lib, const char *root)
     /* What is not valid, or not known, goes (clean.c); then the pages it
      * and earlier removals freed go back to the file system. */
     cb_core_clean(lib);
+    remove_link_wavs(lib);
     if (cb_db_trim(lib->db) < 0)
         cb_warn("library: its free pages could not be given back");
 
