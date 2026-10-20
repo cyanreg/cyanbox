@@ -270,7 +270,7 @@ static int convert(CBSource *s, uint8_t *const *dst, int got, int n, const uint8
 
 static int open_input(CBSource *s)
 {
-    avformat_close_input(&s->fmt);
+    cb_audio_close(&s->fmt);
     int ret = cb_audio_open(s->path, &s->fmt, true);
     if (ret < 0)
         return ret;
@@ -481,19 +481,16 @@ int cb_source_seek(CBSource *s, int64_t at)
 
 /* -------------------------------------------------------------------- open */
 
-/* The players' timeline of an MP3 file, from its frames (decode.c). */
+/* The players' timeline of an MP3 file, from its frames, over the mapping
+ * libavformat reads. */
 static void mp3_timeline(CBSource *s)
 {
-    CBMap map;
     CBMp3Info mi;
-    if (cb_audio_map(s->path, &map) < 0)
-        return;
-    if (cb_mp3_scan_mapped(s->path, &map, &mi) >= 0 && mi.nb_frames > 0) {
+    if (cb_mp3_scan_mapped(s->path, cb_audio_input_map(s->fmt), &mi) >= 0 && mi.nb_frames > 0) {
         s->shift = (int64_t)(mi.header_counts - mi.skip_frames) * mi.frame_samples;
         int64_t frames = mi.nb_frames + mi.header_counts - mi.skip_frames;
         s->length = CB_MAX(frames, (int64_t)0) * mi.frame_samples;
     }
-    cb_audio_unmap(&map);
 }
 
 int cb_source_open(CBSource **out, const char *path, const CBAudioFormat *f)
@@ -567,7 +564,7 @@ void cb_source_free(CBSource **ps)
         return;
     swr_free(&s->swr);
     avcodec_free_context(&s->dec);
-    avformat_close_input(&s->fmt);
+    cb_audio_close(&s->fmt);
     av_packet_free(&s->pkt);
     av_frame_free(&s->frame);
     av_channel_layout_uninit(&s->in_layout);

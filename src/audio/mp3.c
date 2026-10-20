@@ -175,9 +175,18 @@ static int count_frame(void *opaque, const uint8_t *frame, size_t size, int samp
     return 0;
 }
 
-int cb_mp3_scan_mapped(const char *path, const CBMap *m, CBMp3Info *info)
+typedef struct Scan {
+    const char  *path;
+    const CBMap *m;
+    CBMp3Info   *info;
+} Scan;
+
+static int scan(void *opaque)
 {
-    *info = (CBMp3Info) { 0 };
+    const Scan *sc = opaque;
+    const char *path = sc->path;
+    const CBMap *m = sc->m;
+    CBMp3Info *info = sc->info;
     const uint8_t *d = m->data;
     size_t size = m->size;
 
@@ -239,6 +248,15 @@ int cb_mp3_scan_mapped(const char *path, const CBMap *m, CBMp3Info *info)
         cb_debug("%s: frame map restarts at frame %d, %d audio frames off the timeline",
                  path, map_start, info->skip_frames);
     return 0;
+}
+
+int cb_mp3_scan_mapped(const char *path, const CBMap *m, CBMp3Info *info)
+{
+    *info = (CBMp3Info) { 0 };
+    int ret = cb_audio_guarded(m, scan, &(Scan) { path, m, info });
+    if (ret < 0)
+        *info = (CBMp3Info) { 0 };
+    return ret;
 }
 
 int cb_mp3_scan(const char *path, CBMp3Info *info)

@@ -234,30 +234,30 @@ static int walk_next(Walk *w, size_t *offset, int64_t *sample, int *block, bool 
     return 0;
 }
 
-int cb_flac_scan(const char *path, CBFlacInfo *info)
+typedef struct Scan {
+    const char  *path;
+    const CBMap *m;
+    CBFlacInfo  *info;
+} Scan;
+
+static int scan(void *opaque)
 {
-    *info = (CBFlacInfo) { 0 };
-
-    CBMap m;
-    int ret = cb_audio_map(path, &m);
-    if (ret < 0)
-        return ret;
-
+    const Scan *sc = opaque;
+    const char *path = sc->path;
+    CBFlacInfo *info = sc->info;
     Walk w;
     const uint8_t *streaminfo;
-    ret = walk_init(&w, path, m.data, m.size, info, &streaminfo);
+    int ret = walk_init(&w, path, sc->m->data, sc->m->size, info, &streaminfo);
     if (ret < 0)
-        goto end;
+        return ret;
 
     int cap = 0;
     if (info->max_block > 0) {
         int64_t est = info->total_samples / info->max_block + 2;
         cap = (int)CB_MIN(est, (int64_t)(1 << 24));
         info->frames = malloc((size_t)cap * sizeof(*info->frames));
-        if (!info->frames) {
-            ret = CB_ERROR(ENOMEM);
-            goto end;
-        }
+        if (!info->frames)
+            return CB_ERROR(ENOMEM);
     }
     size_t at;
     int64_t sample;
@@ -266,22 +266,38 @@ int cb_flac_scan(const char *path, CBFlacInfo *info)
     while (walk_next(&w, &at, &sample, &block, &complete) > 0) {
         ret = push_frame(info, &cap, sample, (int64_t)(at - w.start), block);
         if (ret < 0)
-            goto end;
+            return ret;
     }
     if (!complete) {
         cb_debug("%s: frames end at sample %" PRId64 ", before the STREAMINFO count %" PRId64,
                  path, w.sample, info->total_samples);
-        ret = CB_ERROR(EINVAL);
-        goto end;
+        return CB_ERROR(EINVAL);
     }
     info->valid = true;
+    return 0;
+}
 
-end:
+int cb_flac_scan_mapped(const char *path, const CBMap *m, CBFlacInfo *info)
+{
+    *info = (CBFlacInfo) { 0 };
+    int ret = cb_audio_guarded(m, scan, &(Scan) { path, m, info });
     if (ret < 0) {
         free(info->frames);
         info->frames = NULL;
         info->nb_frames = 0;
+        info->valid = false;
     }
+    return ret;
+}
+
+int cb_flac_scan(const char *path, CBFlacInfo *info)
+{
+    *info = (CBFlacInfo) { 0 };
+    CBMap m;
+    int ret = cb_audio_map(path, &m);
+    if (ret < 0)
+        return ret;
+    ret = cb_flac_scan_mapped(path, &m, info);
     cb_audio_unmap(&m);
     return ret;
 }

@@ -460,7 +460,7 @@ int cb_encode(const char *path, const CBEncodeOptions *o, CBEncoded *out)
         avio_context_free(&e.oc->pb);
     }
     avformat_free_context(e.oc);
-    avformat_close_input(&e.in);
+    cb_audio_close(&e.in);
     avcodec_free_context(&e.enc);
     av_packet_free(&e.pkt);
     av_frame_free(&e.frame);

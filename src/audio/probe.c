@@ -1,7 +1,8 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
 /* Probing a file with libavformat, as dj's audio.probe did with ffprobe, and
- * the helpers the rest of the module shares (opening, mapping, errors).
+ * the helpers the rest of the module shares (logging, errors, tags;
+ * opening and mapping are input.c's).
  *
  * Durations are on the players' timeline: an MP3's comes from the frame scan
  * (exact, the silent header frame included when rekordbox counts it), a
@@ -93,44 +94,6 @@ int cb_audio_error(int averr)
     }
 }
 
-int cb_audio_map(const char *path, CBMap *m)
-{
-    *m = (CBMap) { 0 };
-    int fd = open(path, O_RDONLY | O_CLOEXEC);
-    if (fd < 0)
-        return CB_ERROR(errno);
-    struct stat st;
-    if (fstat(fd, &st) < 0) {
-        int err = errno;
-        close(fd);
-        return CB_ERROR(err);
-    }
-    if (!S_ISREG(st.st_mode)) {
-        close(fd);
-        return CB_ERROR(EINVAL);
-    }
-    if (st.st_size > 0) {
-        void *p = mmap(NULL, (size_t)st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
-        if (p == MAP_FAILED) {
-            int err = errno;
-            close(fd);
-            return CB_ERROR(err);
-        }
-        madvise(p, (size_t)st.st_size, MADV_SEQUENTIAL);
-        m->data = p;
-        m->size = (size_t)st.st_size;
-    }
-    close(fd);
-    return 0;
-}
-
-void cb_audio_unmap(CBMap *m)
-{
-    if (m->data)
-        munmap((void *)m->data, m->size);
-    *m = (CBMap) { 0 };
-}
-
 size_t cb_audio_skip_id3v2(const uint8_t *data, size_t size)
 {
     size_t pos = 0;
@@ -144,38 +107,6 @@ size_t cb_audio_skip_id3v2(const uint8_t *data, size_t size)
         pos = next;
     }
     return pos;
-}
-
-int cb_audio_open(const char *path, AVFormatContext **out, bool find_info)
-{
-    cb_audio_init_logging();
-    *out = NULL;
-    char *url = cb_asprintf("file:%s", path);
-    if (!url)
-        return CB_ERROR(ENOMEM);
-
-    AVFormatContext *fmt = NULL;
-    int ret = avformat_open_input(&fmt, url, NULL, NULL);
-    free(url);
-    if (ret < 0) {
-        cb_debug("%s: %s", path, av_err2str(ret));
-        return cb_audio_error(ret);
-    }
-    if (cb_audio_is_container(fmt, "matroska")) {
-        cb_debug("%s: Matroska is not supported (its times are milliseconds)", path);
-        avformat_close_input(&fmt);
-        return CB_ERROR(ENOTSUP);
-    }
-    if (find_info) {
-        ret = avformat_find_stream_info(fmt, NULL);
-        if (ret < 0) {
-            cb_debug("%s: no stream info: %s", path, av_err2str(ret));
-            avformat_close_input(&fmt);
-            return cb_audio_error(ret);
-        }
-    }
-    *out = fmt;
-    return 0;
 }
 
 int cb_audio_first_stream(const AVFormatContext *fmt, enum AVMediaType type)
@@ -425,7 +356,8 @@ int cb_probe(const char *path, CBProbe *p)
     /* The players' timeline */
     p->total_samples = -1;
     if (par->codec_id == AV_CODEC_ID_MP3 && cb_audio_is_container(fmt, "mp3")) {
-        if (cb_mp3_scan(path, &p->mp3) >= 0 && p->mp3.nb_frames > 0) {
+        if (cb_mp3_scan_mapped(path, cb_audio_input_map(fmt), &p->mp3) >= 0 &&
+            p->mp3.nb_frames > 0) {
             int64_t frames = p->mp3.nb_frames + p->mp3.header_counts - p->mp3.skip_frames;
             p->total_samples = CB_MAX(frames, (int64_t)0) * p->mp3.frame_samples;
             if (p->mp3.sample_rate != p->sample_rate)
@@ -433,7 +365,7 @@ int cb_probe(const char *path, CBProbe *p)
                         p->mp3.sample_rate, p->sample_rate);
         }
     } else if (par->codec_id == AV_CODEC_ID_FLAC && cb_audio_is_container(fmt, "flac")) {
-        if (cb_flac_scan(path, &p->flac) < 0)
+        if (cb_flac_scan_mapped(path, cb_audio_input_map(fmt), &p->flac) < 0)
             cb_warn("%s: FLAC frame scan failed, no seek table", path);
         if (p->flac.total_samples > 0)
             p->total_samples = p->flac.total_samples;
@@ -442,11 +374,11 @@ int cb_probe(const char *path, CBProbe *p)
         p->total_samples = cb_audio_container_samples(fmt, idx);
     p->duration = p->sample_rate > 0 ? (double)p->total_samples / p->sample_rate : 0.0;
 
-    avformat_close_input(&fmt);
+    cb_audio_close(&fmt);
     return 0;
 
 fail:
-    avformat_close_input(&fmt);
+    cb_audio_close(&fmt);
     cb_probe_free(p);
     return ret;
 }

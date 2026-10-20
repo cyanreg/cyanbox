@@ -6,6 +6,7 @@ cb_audio_lib = static_library('cb_audio',
         'encode.c',
         'fifo.c',
         'flac.c',
+        'input.c',
         'mp3.c',
         'pipeline.c',
         'probe.c',
@@ -22,7 +23,7 @@ cb_audio_dep = declare_dependency(link_with: cb_audio_lib,
 audio_test_env = environment()
 audio_test_env.set('CB_TEST_DIR', meson.current_build_dir() / 'test-media')
 
-foreach t : [ 'mp3', 'decode', 'pipeline', 'artwork', 'encode', 'dj' ]
+foreach t : [ 'mp3', 'decode', 'pipeline', 'input', 'artwork', 'encode', 'dj' ]
     test('audio_' + t,
         executable('test_audio_' + t,
             '../../tests/audio/test_' + t + '.c',

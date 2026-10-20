@@ -106,7 +106,7 @@ static int embedded_raw(const char *path, uint8_t **data, size_t *size, char cod
         ret = 0;
         break;
     }
-    avformat_close_input(&fmt);
+    cb_audio_close(&fmt);
     return ret;
 }
 

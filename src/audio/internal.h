@@ -1,6 +1,6 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
-/* Helpers shared by the files of the audio module (implemented in probe.c).
+/* Helpers shared by the files of the audio module (each section names its file).
  * Nothing here is part of cyanbox/audio.h. */
 
 #ifndef CYANBOX_AUDIO_INTERNAL_H
@@ -11,8 +11,10 @@
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 
+/* ------------------------------------------------------------- input.c */
+
 /* A whole file mapped read-only. The scanners walk MP3 and FLAC frames over
- * it, which is faster than reading and needs no copy. */
+ * it, libavformat reads it (cb_audio_open). */
 typedef struct CBMap {
     const uint8_t *data;
     size_t size;
@@ -20,16 +22,24 @@ typedef struct CBMap {
 
 int  cb_audio_map(const char *path, CBMap *m);
 void cb_audio_unmap(CBMap *m);
+/* Runs fn, which reads m, under the SIGBUS guard: -EIO when the file was
+ * cut short under it and fn touched a page past the new end (input.c). */
+int  cb_audio_guarded(const CBMap *m, int (*fn)(void *opaque), void *opaque);
 
-/* avformat_open_input on "file:" + path, so that a name such as
- * "AD:HOUSE 11/x.flac" is not taken for a protocol (the file protocol does
- * no URL unescaping, so '?' and '%' are safe too). find_info runs
- * avformat_find_stream_info, which the codec parameters of MP3 and Ogg need.
- * -ENOTSUP for Matroska (and WebM), whatever the file's name: its times are
- * milliseconds, so a seek cannot say which sample it landed on, and every
- * path that reads a track (the probe, the decks, Link, the stick) needs
- * that. */
+/* avformat_open_input over the file's mapping, the path only naming it
+ * for libavformat's guess by extension (no protocol, so a name such as
+ * "AD:HOUSE 11/x.flac" is safe). find_info runs avformat_find_stream_info,
+ * which the codec parameters of MP3 and Ogg need. -ENOTSUP for Matroska
+ * (and WebM), whatever the file's name: its times are milliseconds, so a
+ * seek cannot say which sample it landed on, and every path that reads a
+ * track (the probe, the decks, Link, the stick) needs that. Closed with
+ * cb_audio_close; cb_audio_input_map is the mapping it reads. */
 int  cb_audio_open(const char *path, AVFormatContext **fmt, bool find_info);
+void cb_audio_close(AVFormatContext **fmt);
+const CBMap *cb_audio_input_map(const AVFormatContext *fmt);
+
+/* ------------------------------------------------------------- probe.c */
+
 /* Index of the first stream of the given type, or -1. */
 int  cb_audio_first_stream(const AVFormatContext *fmt, enum AVMediaType type);
 /* An AVERROR as a negative errno (AVERROR(e) already is one). */
@@ -49,8 +59,9 @@ size_t cb_audio_skip_id3v2(const uint8_t *data, size_t size);
  * list). */
 bool cb_audio_is_container(const AVFormatContext *fmt, const char *name);
 
-/* cb_mp3_scan over a mapped file. */
+/* cb_mp3_scan and cb_flac_scan over a mapped file, under the guard. */
 int  cb_mp3_scan_mapped(const char *path, const CBMap *m, CBMp3Info *info);
+int  cb_flac_scan_mapped(const char *path, const CBMap *m, CBFlacInfo *info);
 
 /* ------------------------------------------------------------ decode.c */
 
