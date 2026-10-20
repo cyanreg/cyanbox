@@ -144,11 +144,9 @@ All of the items the earlier session listed as worth importing are in scope:
     white highs on every kind of track, which is the picture the user wants
     (docs/anlz.md 4.12, 4.13; `src/analysis/waveform.c`).
 
-Plus: an optional "maximum compatibility" transcode (AAC and hi-res FLAC to
-16/44.1 FLAC) at export, since nobody knows what players do with AAC priming;
-and the stick's format (`export.format`: as it is, FLAC, or WAV/AIFF for the
-players before the CDJ-2000NXS2), anything not copied encoded from the decoded
-samples as it is written (cb_encode).
+Plus: the stick's format (`export.format`: FLAC, WAV for the players before
+the CDJ-2000NXS2, or MP3), every track encoded from its decoded samples at
+16-bit/44.1 kHz as it is written (cb_encode).
 
 ## 4. Architecture
 

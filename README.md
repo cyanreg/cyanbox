@@ -32,8 +32,8 @@ Features
    analysis files, artwork and My Settings
  * Incremental exports written straight to the stick, with its real speed
    and time left
- * [Older players](#older-players): WAV or AIFF sticks for players that read
-   no FLAC, romaji titles for players that show Latin-1 only
+ * [Stick formats](#stick-formats): FLAC, or WAV for players that read no
+   FLAC, or MP3; romaji titles for players that show Latin-1 only
  * [Sync after a gig](#syncing-after-a-gig): take back the cues, plays and My
    Settings the players saved on the stick
  * [PRO DJ LINK](#pro-dj-link): players browse and load the library over
@@ -148,8 +148,7 @@ commands open no window and no audio device.
 | `--all`                         | Every track in the library, not only those in playlists                                      |
 | `-p`, `--playlist NAME`         | Only this playlist and its tracks (repeatable)                                               |
 | `--prune`                       | Delete files on the stick that are no longer exported                                        |
-| `--compat`, `--no-compat`       | Transcode AAC and hi-res files to 16-bit/44.1 kHz FLAC (on by default)                       |
-| `--format F`                    | The stick's audio: `copy`, `flac`, `wav` or `aiff`, see [older players](#older-players)     |
+| `--format F`                    | The stick's audio: `flac`, `wav` or `mp3`, see [stick formats](#stick-formats)               |
 | `--ignore-unsynced`             | Export although the stick has player changes not synced back                                 |
 | `-n`, `--dry-run`               | Print what would be copied and deleted, and write nothing                                    |
 |                                 | **Interface options**                                                                        |
@@ -179,8 +178,7 @@ value a key cannot take, or a key cyanbox does not know, is refused.
 | `import.comment`                       | `false`            | Take the file's comment tag when a track is added                           |
 | `export.key_notation`                  | `classic`          | How `export.pdb` names keys: `classic`, `camelot` or `open`                 |
 | `export.pdb`, `export.onelibrary`      | `true`             | Which device libraries an export writes                                     |
-| `export.compat_transcode`              | `true`             | Transcode AAC and hi-res files to 16-bit/44.1 kHz FLAC                      |
-| `export.format`                        | `copy`             | The stick's audio, see [older players](#older-players)                      |
+| `export.format`                        | `flac`             | The stick's audio, see [stick formats](#stick-formats)                      |
 | `export.device_name`                   | the stick's label  | The name the players show for the stick                                     |
 | `export.background_color`              | `default`          | The players' background for the stick's library, or one of the eight colours |
 | `audio.sink`                           | the default output | The PipeWire node to play to                                                |
@@ -396,14 +394,14 @@ chosen ones (`-p NAME`), or the whole library (`--all`).
    (`--prune` on the command line), and a stick holding cues, history or
    settings a player saved that were not synced back is not overwritten
    unless you say so (`--ignore-unsynced`, or Export anyway).
- * **Compatible**: AAC and hi-res files go on the stick as 16-bit/44.1 kHz
-   FLAC by default (`export.compat_transcode`, `--compat`, `--no-compat`).
+ * **Compatible**: every track goes on the stick at 16-bit/44.1 kHz, in
+   the format the stick is for (see [stick formats](#stick-formats)).
 
 ### What is written to the stick
 
 | Path                                                    | Contents                                                     |
 |---------------------------------------------------------|--------------------------------------------------------------|
-| `/Contents/<Artist>/<Album>/<file>`                     | The audio, as it is or encoded                               |
+| `/Contents/<Artist>/<Album>/<file>`                     | The audio, encoded at 16-bit/44.1 kHz                        |
 | `/PIONEER/rekordbox/export.pdb`                         | The DeviceSQL library older players read                     |
 | `/PIONEER/rekordbox/exportExt.pdb`                      | My Tags, when any track has one                              |
 | `/PIONEER/rekordbox/exportLibrary.db`                   | The OneLibrary database (SQLCipher) newer players read       |
@@ -422,22 +420,24 @@ and rows equal cyanbox's, the My Settings files are byte-identical to
 rekordbox 7.2.8's, and rekordbox's analysis files read back. These check
 the files; the tests do not run a player.
 
-### Older players
+### Stick formats
+Every track, whatever it is, is encoded from its decoded samples as it is
+written, at 16-bit/44.1 kHz, the very audio the analysis was made of, with
+no copy kept anywhere: of its one or two channels, stereo for more.
 Players before the CDJ-2000NXS2 (the CDJ-900 and its generation) read no
 FLAC. `export.format` (or `--format` for one export) picks the stick's
 audio:
 
 | Format | Description                                                      |
 |--------|------------------------------------------------------------------|
-| `copy` | Each file as it is (the default)                                 |
-| `flac` | Lossless files as FLAC                                           |
-| `wav`  | Everything but MP3 as 16-bit WAV, for players that read no FLAC  |
-| `aiff` | Everything but MP3 as 16-bit AIFF, for players that read no FLAC |
+| `flac` | FLAC (the default), for the CDJ-2000NXS2 and later               |
+| `wav`  | WAV, which every player reads, the CDJ-900 included              |
+| `mp3`  | MP3 at 320 kbit/s CBR, lined up with the source to the sample    |
 
-A file not copied is encoded from its decoded samples as it is written,
-the very audio the analysis was made of, with no copy kept anywhere.
-Encoding runs ahead of the stick, so it costs no time, and a record on the
-stick lets the next export skip what is already there.
+Encoding runs ahead of the stick, so it costs little time, and a record on
+the stick lets the next export skip what is already there. A library file
+that is where the export would write a track is refused, never written
+over.
 
 For players that show Latin-1 only (the CDJ-900), Japanese titles go as
 romaji, with kanji read by MeCab, and other scripts as Latin through ICU.
