@@ -182,6 +182,8 @@ What has been run against what:
 | --- | --- | --- | --- |
 | cyanbox | two CDJ-900s | Ethernet, a switch, 169.254.0.0/16 | join, mount, browse, the library's MP3s played; WAVs decoded as MP3 until the file type was named |
 | cyanbox's interface | a CDJ-3000 and a DJM-A9 | Ethernet | a 1.5 hour set played from the library (October 2026), without a fault |
+| cyanbox's interface | a DJM-900NXS | Ethernet | the deck heard in its LINK CUE |
+| cyanbox's interface | two CDJ-900NXSs and a DJM-A9 | Ethernet | LINK CUE played nothing, switched on or off (2026-10-19; "Real mixers", below) |
 | cyanbox | emulated CDJ-900, CDJ-2000, CDJ-2000NXS2 (Pioneer's firmware in QEMU) | a bridge, 169.254.0.0/16 | join, mount, browse every category, metadata, waveforms, cues, a load streamed over NFS; the lapse, NFD, CDJ-900 punctuation and CDJ-2000 KEY findings above; FLAC, MP3, AAC and 16- and 24-bit WAV sources played on the NXS2, with tempo, jog, memory loops, and hot cues A to D in their colours (the pads jump, the hot loop loops); the load command (`0x19`) on the CDJ-900 and the NXS2; cues saved and deleted on all three kept in the library ("Edits on the deck") |
 | cyanbox | emulated CDJ-3000 (firmware 3.22, cdj3k-emu) | a bridge, 169.254.0.0/16 | as the 3000X: browse with previews and artwork, a load from the browser and by `0x19`, play, tempo, CUE, a memory loop; cues saved and deleted on the deck kept; no `80`, no probes but `3007` |
 | cyanbox | emulated CDJ-3000X (firmware 1.41, cdj3k-emu) | a bridge, 169.254.0.0/16 | found by name with its counts, browse with previews and artwork, a load from the browser and by `0x19`, play, tempo, memory cues and loops, hot cues A to D in their colours with names and a hot loop; cues saved and deleted on the deck kept in the library (below); `80` and three database probes left unanswered (above) |
@@ -968,8 +970,11 @@ timing's, and the mixer's feed to its DSP carried 440 Hz for 19.92 s
 without a hole; pauses of 0.5, 3 and 8 s were silences of 0.57, 3.03 and
 7.96 s, each start again one 2 and a handover.
 
-**Not yet**: a real mixer (the emulated DJM-900NXS, 900NXS2 and DJM-A9
-run their real firmware, but not their real hardware). The first check at one:
+**Real mixers**: a real DJM-900NXS plays cyanbox's deck in its LINK CUE.
+A real DJM-A9, with two CDJ-900NXSs on the link (2026-10-19), did not:
+its LINK CUE switched on and off played nothing. Nothing was captured
+and its firmware is not known; the emulated A9 (1.22) last ran LINK CUE
+before it asked cyanbox `30` ("My Settings"). The first check at one:
 with cyanbox up as device 17, `tcpdump -ni IF udp port 50004` shows a
 42-byte timing packet from the mixer every 7 ms or so; if none come,
 something the readings missed gates it.

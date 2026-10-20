@@ -38,8 +38,8 @@ Features
    Settings the players saved on the stick
  * [PRO DJ LINK](#pro-dj-link): players browse and load the library over
    Ethernet with no stick, as with rekordbox's Link Export
- * [LINK CUE](#link-cue): the deck heard in a DJM's headphone cue (so far
-   on emulated mixers only)
+ * [LINK CUE](#link-cue): the deck heard in a DJM's headphone cue (a real
+   DJM-900NXS; not yet a real DJM-A9)
  * [MPRIS](#mpris) media controls
  * Playlists, folders and m3u8 import and export
  * A [command line](#cli) for adding, analysing, tagging, exporting and
@@ -547,8 +547,9 @@ mixer's cue as soon as one is heard, and back two seconds after the last
 one goes quiet, playing on throughout. The status bar says where the
 deck is heard and where the cue stands.
 
-LINK CUE works end to end on an emulated DJM-A9 (firmware 1.22) and
-DJM-900NXS (firmware 1.32), but has not yet been tried on a real mixer.
+LINK CUE works on a real DJM-900NXS, and end to end on an emulated DJM-A9
+(firmware 1.22) and DJM-900NXS (firmware 1.32). On a real DJM-A9 with two
+CDJ-900NXSs it played nothing; that is not solved yet.
 
 Documentation
 -------------
