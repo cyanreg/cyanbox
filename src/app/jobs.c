@@ -27,9 +27,8 @@
  * halves the memory of the 11 or so decodes running at once. The decode job
  * for a deck decodes nothing: it opens the track's packet store
  * (cb_packets_open, a few milliseconds), which the deck decodes as it plays,
- * at the file's own rate and channels on the players' timeline; only a
- * file the store refuses (Matroska) is decoded whole, as every track was
- * before, which took one to five seconds. The artwork job also makes
+ * at the file's own rate and channels on the players' timeline, where
+ * decoding it whole took one to five seconds. The artwork job also makes
  * the 240 px JPEG thumbnail the library stores, so the owner thread never
  * encodes.
  *
@@ -400,24 +399,9 @@ static int run_decode(Job *job, CBJobResult *r)
 {
     CBPackets *pk;
     int ret = cb_packets_open(job->path, &pk);
-    if (ret >= 0) {
-        r->packets = pk;
-        return 0;
-    }
-    if (ret != CB_ERROR(ENOTSUP))
+    if (ret < 0)
         return ret;
-
-    CBAudio *audio = calloc(1, sizeof(*audio));
-    if (!audio)
-        return CB_ERROR(ENOMEM);
-
-    ret = cb_decode(job->path, 0, 0, audio);
-    if (ret < 0) {
-        free(audio);
-        return ret;
-    }
-
-    r->audio = audio;
+    r->packets = pk;
     return 0;
 }
 
@@ -1258,10 +1242,6 @@ void cb_job_result_free(CBJobResult *r)
     if (r->analysis) {
         cb_analysis_free(r->analysis);
         free(r->analysis);
-    }
-    if (r->audio) {
-        cb_audio_free(r->audio);
-        free(r->audio);
     }
     cb_packets_free(r->packets);
     free(r->rgba);

@@ -127,7 +127,7 @@ static void test_decode_and_artwork(const char *wav)
     if (r) {
         CHECK(r->kind == CB_JOB_DECODE && r->request == dec && r->track_id == 7 && r->deck == 0,
               "kind %d request %llu deck %d", r->kind, (unsigned long long)r->request, r->deck);
-        CHECK(r->err == 0 && r->packets && !r->audio, "err %s", strerror(-r->err));
+        CHECK(r->err == 0 && r->packets, "err %s", strerror(-r->err));
         if (r->packets) {
             /* The file's packets, decoded as the deck plays them, at the
              * file's own rate and channels: no resampling, no downmix. */

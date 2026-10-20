@@ -1761,24 +1761,14 @@ static void handle_next(CBApp *app, CBJobResult *r, int deck)
     }
     char name[256];
     track_name(t, name, sizeof(name));
-    int ret = r->err < 0 ? r->err : (r->packets || r->audio ? 0 : CB_ERROR(EINVAL));
+    int ret = r->err < 0 ? r->err : (r->packets ? 0 : CB_ERROR(EINVAL));
     if (ret == 0) {
         const CBGrid *grid = cb_grid_valid(&t->grid) ? &t->grid : NULL;
-        if (r->packets) {
-            CBPackets *pk = r->packets;
-            r->packets = NULL;
-            ret = cb_deck_queue_next_packets(app->player, deck, pk, grid);
-            if (ret < 0)
-                cb_packets_free(pk);
-        } else {
-            CBAudio *audio = r->audio;
-            r->audio = NULL;
-            ret = cb_deck_queue_next(app->player, deck, audio, grid);
-            if (ret < 0) {
-                cb_audio_free(audio);
-                free(audio);
-            }
-        }
+        CBPackets *pk = r->packets;
+        r->packets = NULL;
+        ret = cb_deck_queue_next_packets(app->player, deck, pk, grid);
+        if (ret < 0)
+            cb_packets_free(pk);
     }
     if (ret < 0) {
         /* Not asked for again and again: the deck will stop at its end. */
@@ -1822,36 +1812,23 @@ static void handle_decode(CBApp *app, CBJobResult *r)
 
     char name[256];
     track_name(t, name, sizeof(name));
-    if (r->err < 0 || (!r->packets && !r->audio)) {
+    if (r->err < 0 || !r->packets) {
         app->last_error_count++;
         cb_app_set_status(app, "Cannot load %s: %s", name,
                           strerror(r->err < 0 ? -r->err : EINVAL));
         return;
     }
 
-    /* The player owns the packet store, or the buffer decoded whole, from
-     * here (the job malloc'd it, as the player's default release wants); on
-     * failure it stays ours. Loading replaces what the deck plays, so the
-     * old track goes only once the new one is in: a player that cannot
-     * take it (its command queue full while the output stalls) keeps the
-     * track it has. */
+    /* The player owns the packet store from here; on failure it stays
+     * ours. Loading replaces what the deck plays, so the old track goes
+     * only once the new one is in: a player that cannot take it (its
+     * command queue full while the output stalls) keeps the track it has. */
     const CBGrid *grid = cb_grid_valid(&t->grid) ? &t->grid : NULL;
-    int ret;
-    if (r->packets) {
-        CBPackets *pk = r->packets;
-        r->packets = NULL;
-        ret = cb_deck_load_packets(app->player, deck, pk, grid);
-        if (ret < 0)
-            cb_packets_free(pk);
-    } else {
-        CBAudio *audio = r->audio;
-        r->audio = NULL;
-        ret = cb_deck_load(app->player, deck, audio, grid);
-        if (ret < 0) {
-            cb_audio_free(audio);
-            free(audio);
-        }
-    }
+    CBPackets *pk = r->packets;
+    r->packets = NULL;
+    int ret = cb_deck_load_packets(app->player, deck, pk, grid);
+    if (ret < 0)
+        cb_packets_free(pk);
     if (ret < 0) {
         app->last_error_count++;
         cb_app_set_status(app, "Cannot load %s: %s", name, strerror(-ret));
