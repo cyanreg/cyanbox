@@ -989,9 +989,16 @@ its LINK CUE switched on and off played nothing. Nothing was captured
 and its firmware is not known. The emulated A9 (1.22) still plays the
 same code (2026-10-20, the cdj session, `~/projects/cdj/work/a9lc`):
 after its `30` and cyanbox's `31`, 2846 packets and 19.92 s of 440 Hz;
-with an emulated CDJ-900 on the link too, 3559 and 24.93 s. What the
-emulator does not have is the A9's own hardware: its LINK ports, its
-panel, its DSP and the headphones' routing.
+with an emulated CDJ-900 on the link too, 3559 and 24.93 s. Plugged in
+while it runs plays too (`hot/` there): cyanbox moved, up and with its
+address kept, from an emulated DJM-900NXS's link to the A9's, its
+mixer 33 still known or forgotten (the A9 takes a computer by its
+keep-alives alone, no claim needed); its cable out for 5 and 15 s; the
+A9 booted or power-cycled with cyanbox and a player up; cyanbox
+started again. Each time timing came to 17 within about a second,
+cyanbox took over with 2 and the A9 played it. What the emulator does
+not have is the A9's own hardware: its LINK ports, its panel, its DSP
+and the headphones' routing.
 The first checks at a real A9: the status bar, which says `DJM-A9 on
 the link: the deck is heard in its LINK CUE` at the handover (before
 LINK CUE is on); the A9's firmware version, from its screen; which
