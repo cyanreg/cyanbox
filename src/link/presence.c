@@ -261,7 +261,11 @@ static void send_keep_alive(CBPresence *p)
      * side: 01 then 08 at 0x31 and 0x35 for rekordbox, 00 and 64 for the
      * CDJ (djl-analysis: the 64 keeps CDJ-3000s on 5 and 6 on the link).
      * rekordbox counts the other devices, a CDJ itself too (djl-analysis;
-     * rbxport's capture: rekordbox 02 and the CDJ 03 with three present). */
+     * rbxport's capture: rekordbox 02 and the CDJ 03 with three present).
+     * Never with 0x80 at 0x35: a DJM-A9 (1.22) then sends that address
+     * nothing, LINK CUE's timing included, until a TLS session on TCP
+     * 50006 that cyanbox has no part in (the cdj session's reading of its
+     * firmware, 2026-10-20). */
     CBPktKeepAlive k = {
         .proto  = 0x03,
         .number = p->number,
