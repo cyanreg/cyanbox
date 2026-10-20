@@ -2,7 +2,7 @@
 
 /* The player's private structures, shared by player.c (engine, command
  * ring, published state), deck.c (the real-time side of one deck), feed.c
- * (the thread that decodes a deck's packet store), pipewire.c and
+ * (the thread that runs a deck's stream), pipewire.c and
  * nullout.c (the two backends) and controls.c.
  *
  * Three groups of state live in CBPlayer, and each has one writer:
@@ -14,12 +14,13 @@
  *    applies the commands. The owner never touches it after creation.
  *  - CBDeckPub: written by the real-time thread, read by the owner through
  *    C11 atomics.
- * A deck playing a packet store adds a fourth party, its feed thread: the
- * owner hands it the stream and the cue points under the feed's lock (an
- * CBDeckFeed), the feed writes decoded frames into the stream's slots and
- * the real-time thread reads them, both under the slots' sequence locks,
- * and the real-time thread says where it reads through the stream's
- * atomics. The command ring is single-producer (owner) / single-consumer
+ * A deck playing a stream adds a fourth party, its feed thread: the owner
+ * hands it the stream and the cue points under the feed's lock (an
+ * CBDeckFeed), the feed puts its pipelines' chunks in the stream's tables
+ * of pointers and the real-time thread reads them, and lets go of one it
+ * took out only once a callback has finished since (the epoch), and the
+ * real-time thread says where it reads through the stream's atomics. The
+ * command ring is single-producer (owner) / single-consumer
  * (real time). Nothing on the real-time side allocates, locks, logs or
  * does I/O; everything it needs is allocated before it runs.
  *
@@ -37,7 +38,6 @@
 
 #include <math.h>
 #include <pthread.h>
-#include <semaphore.h>
 #include <stdalign.h>
 #include <stdatomic.h>
 
@@ -67,7 +67,7 @@
  * on_process), so a longer one is cut up rather than refused. */
 #define CB_MT_CHUNK 1024
 
-/* A deck playing from a packet store (feed.c has the why): the window of
+/* A deck playing a stream (feed.c has the why): the window of
  * decoded frames is cut in chunks of CB_CHUNK frames and spans
  * CB_WINDOW_BEHIND seconds behind the read position and CB_WINDOW_AHEAD
  * ahead of it; each cue point keeps CB_CUE_CACHE_SECONDS decoded from
@@ -160,12 +160,10 @@ enum CBCmdType {
                                samples nor stream: none */
 };
 
-typedef struct CBStream CBStream;
-
 /* A command is copied into the ring by value. A load (and a next) carries
  * the buffer's fields rather than the CBAudio pointer, so the real-time
- * side never reads the owner's struct; or the stream a packet store plays
- * through; and the track's id. A seek, a loop or a next carries the id of
+ * side never reads the owner's struct; or the stream; and the track's
+ * id. A seek, a loop or a next carries the id of
  * the track the owner meant it for (`track`), and the deck drops it when
  * it no longer reads that track: it moved on into the next before the
  * command came, and the frames, or the order, are the old track's. */
@@ -185,51 +183,60 @@ typedef struct CBCmd {
 
 /* --------------------------------------------------------------- streams */
 
-/* Decoded frames the feed thread publishes and the real-time thread reads,
- * under a sequence lock: the writer makes `seq` odd, writes `first` and the
- * frames, then makes `seq` even with release order; a reader that finds the
- * same even `seq` before and after copying, and the `first` it wanted,
- * copied whole frames. Neither ever waits. */
-typedef struct CBSlot {
-    atomic_uint     seq;
-    _Atomic int64_t first;      /* track frame of data[0], -1 when it holds nothing */
-    _Atomic int64_t len;        /* frames it holds from there */
-    float          *data;       /* channels interleaved */
-} CBSlot;
+/* A chunk out of a table, held until the epoch is past `epoch`. */
+typedef struct CBRetired {
+    CBChunk *c;
+    uint64_t epoch;
+} CBRetired;
 
-/* A packet store as a deck plays it. Made and freed by the owner; while
- * loaded, the feed thread alone decodes into it and the real-time thread
- * alone reads it, and the two talk through the atomics. */
+/* A track as a deck plays it (feed.c): its pipelines' chunks, where the
+ * real-time side looks for them. Made and freed by the owner (or a job's
+ * thread); while loaded, the feed thread alone fills it and the real-time
+ * thread alone reads it, through the atomics. */
 struct CBStream {
-    CBPackets *pk;              /* the feed thread's while loaded */
-    int        channels;        /* in the window: the track's first one or two */
-    int        rate;
-    int        nb_slots;        /* the window: chunk c in slot c % nb_slots */
-    CBSlot    *slots;
-    int64_t    cache_len;       /* frames a cue cache holds at most */
-    /* The cue caches, and last the jump slot: the target of the jump the
-     * owner sent last (`hint`), outside the window, whose slots the old
-     * window still holds until the real-time side gets there */
-    CBSlot     caches[CB_DECK_CUE_POINTS + 1];
-    float     *mem;
-    /* Real time -> feed */
-    _Atomic int64_t playhead;   /* the read position */
-    atomic_bool     starved;    /* the deck holds for frames the window lacks */
+    int         rate, channels;
+    CBPipeline *main, *aux;     /* the feed's */
+    /* The window: chunk c in slots[c % nb_slots] */
+    int         nb_slots;
+    _Atomic(CBChunk *) *slots;
+    /* The cue caches, and last the jump's: cache e holds the chunks from
+     * cache_first[e] (-1: none) on, cpc of them, in cache[e * cpc ...] */
+    int         cpc;
+    int64_t     cache_len;      /* frames a cue cache holds from LEAD before its point */
+    _Atomic(CBChunk *) *cache;
+    _Atomic int64_t cache_first[CB_DECK_CUE_POINTS + 1];
+    /* The container's length until the last chunk says (exact) */
+    _Atomic int64_t length;
+    atomic_bool     exact;
+    /* Real time -> feed: the read position */
+    _Atomic int64_t playhead;
     /* Owner -> feed: where a jump just sent will read, before the real-time
      * side gets to it; -1 none */
     _Atomic int64_t hint;
+
+    /* The feed's */
+    CBChunk    *held;           /* the main pipeline's next, past the window */
+    int64_t     main_next;      /* the chunk the main pipeline gives next */
+    int         main_seeks;     /* the main pipeline sought, counted (tests) */
+    int         aux_job, aux_cue;
+    int64_t     aux_next, aux_to;
+    int64_t     want_first[CB_DECK_CUE_POINTS];    /* frames; -1 unused */
+    bool        cache_done[CB_DECK_CUE_POINTS];
+    bool        error_said;
+    CBRetired  *retired;
+    int         nb_retired, cap_retired;
 };
 
 /* One deck's feed thread (feed.c). The owner hands it the stream to fill,
- * the stream queued to follow it (whose start it decodes once the first
- * has nothing left to do) and the cue points under `lock`, and wakes it;
- * it says which generation of the two it has moved to, after which it no
- * longer touches the streams of the generations before. */
+ * the stream queued to follow it (whose window it fills too) and the cue
+ * points under `lock`, and wakes it; it says which generation of the two
+ * it has moved to, after which it no longer touches the streams of the
+ * generations before. */
 typedef struct CBDeckFeed {
     pthread_t thread;
     bool      started;
-    sem_t     wake;
-    bool      sem_ok;
+    int       wakefd;           /* an eventfd: the owner and the real-time side write it */
+    const _Atomic uint64_t *epoch;  /* the player's */
     pthread_mutex_t lock;
     bool      lock_ok;
     /* under lock */
@@ -295,8 +302,8 @@ typedef struct CBDeckMT {
 
 typedef struct CBDeckRT {
     CBSource     src;           /* the track the main voice plays */
-    bool         length_final;  /* a stream whose index is complete: nb_frames is its count */
-    sem_t       *wake;          /* the deck's feed thread */
+    bool         length_final;  /* a stream whose last chunk came: nb_frames is its length */
+    int          wake;          /* the deck's feed thread's eventfd; -1 none */
     int64_t      posted_chunk;  /* the read position's chunk the feed was last woken for */
     bool         starved;       /* this callback missed frames not decoded yet */
     bool         holding;       /* the main voice holds for them */
@@ -459,8 +466,10 @@ struct CBPlayer {
     CBDeckRT rt[CB_DECKS];
     float    master_gain, master_prev;
 
-    /* The decks' feed threads. */
+    /* The decks' feed threads, and the callbacks finished, after which
+     * they let go of the chunks they took out of the tables before. */
     CBDeckFeed feed[CB_DECKS];
+    alignas(64) _Atomic uint64_t epoch;
 
     /* Published. */
     CBDeckPub   pub[CB_DECKS];
@@ -524,12 +533,10 @@ uint64_t cb_player_deck_old_id(const CBDeckRT *d);
 
 /* ---------------------------------------------------------------- feed.c */
 
-/* Owner thread: a stream for pk (which it then owns), and its release. */
-int  cb_player_stream_create(CBStream **out, CBPackets *pk);
-void cb_player_stream_free(CBStream *s);
-/* Owner thread: starts and stops a deck's feed thread. */
-int  cb_player_feed_start(CBDeckFeed *f);
+/* Owner thread: starts and stops a deck's feed thread, and wakes it. */
+int  cb_player_feed_start(CBDeckFeed *f, const _Atomic uint64_t *epoch);
 void cb_player_feed_stop(CBDeckFeed *f);
+void cb_player_feed_poke(CBDeckFeed *f);
 /* Owner thread: the stream the feed fills (NULL: none) and the one whose
  * start it fills once that has nothing left (NULL: none), returning the
  * generation that tells it (a new stream drops the cue points); the cue

@@ -231,6 +231,8 @@ void cb_player_mix(CBPlayer *p, float *out, int frames)
         cb_player_deck_signal(&p->rt[i]);
         publish(&p->pub[i], &p->rt[i], time_us, rate > 0 ? (int64_t)frames * 1000000 / rate : 0);
     }
+    /* Last: nothing of this callback reads a chunk after it (feed.c). */
+    atomic_fetch_add(&p->epoch, 1);
 }
 
 /* ------------------------------------------------------------ owner side */
@@ -249,7 +251,7 @@ static void release_track(CBPlayer *p, CBOwnTrack *t)
 {
     if (t->audio)
         release_audio(p, t->audio);
-    cb_player_stream_free(t->stream);
+    cb_stream_free(t->stream);
     free(t->grid.sections);
     *t = (CBOwnTrack) { 0 };
 }
@@ -478,12 +480,12 @@ static int send(CBPlayer *p, enum CBCmdType type, int deck, double a)
     });
 }
 
-/* A stream's length is the container's until its index is complete; the
- * real-time side takes the count at the same time (deck.c). */
+/* A stream's length is the container's until its last chunk came; the
+ * real-time side takes it at the same time (deck.c). */
 static void refresh_length(CBDeckOwner *o)
 {
     if (o->cur.stream)
-        o->cur.nb_frames = cb_packets_length(o->cur.stream->pk, NULL);
+        o->cur.nb_frames = cb_stream_length(o->cur.stream, NULL);
 }
 
 static CBDeckOwner *loaded_deck(CBPlayer *p, int deck)
@@ -662,10 +664,10 @@ int cb_player_create(CBPlayer **out, const CBPlayerOptions *opt)
     }
 
     for (int i = 0; i < CB_DECKS; i++) {
-        ret = cb_player_feed_start(&p->feed[i]);
+        ret = cb_player_feed_start(&p->feed[i], &p->epoch);
         if (ret < 0)
             goto fail;
-        p->rt[i].wake = &p->feed[i].wake;
+        p->rt[i].wake = p->feed[i].wakefd;
     }
 
     ret = output_open(p);
@@ -906,26 +908,16 @@ int cb_deck_load(CBPlayer *p, int deck, CBAudio *audio, const CBGrid *grid)
     }, grid);
 }
 
-int cb_deck_load_packets(CBPlayer *p, int deck, CBPackets *pk, const CBGrid *grid)
+int cb_deck_load_stream(CBPlayer *p, int deck, CBStream *s, const CBGrid *grid)
 {
-    if (!p || deck < 0 || deck >= CB_DECKS || !pk)
+    if (!p || deck < 0 || deck >= CB_DECKS || !s)
         return CB_ERROR(EINVAL);
-
-    CBStream *s;
-    int ret = cb_player_stream_create(&s, pk);
-    if (ret < 0)
-        return ret;
-    ret = load(p, deck, (CBOwnTrack) {
+    /* The caller keeps the stream on failure. */
+    return load(p, deck, (CBOwnTrack) {
         .stream    = s,
         .rate      = s->rate,
-        .nb_frames = cb_packets_length(pk, NULL),
+        .nb_frames = cb_stream_length(s, NULL),
     }, grid);
-    if (ret < 0) {
-        /* The caller keeps the packets. */
-        s->pk = NULL;
-        cb_player_stream_free(s);
-    }
-    return ret;
 }
 
 /* The track to follow: pushed as a load is, with the id of the track it
@@ -983,27 +975,15 @@ int cb_deck_queue_next(CBPlayer *p, int deck, CBAudio *audio, const CBGrid *grid
     }, grid);
 }
 
-int cb_deck_queue_next_packets(CBPlayer *p, int deck, CBPackets *pk, const CBGrid *grid)
+int cb_deck_queue_next_stream(CBPlayer *p, int deck, CBStream *s, const CBGrid *grid)
 {
-    if (!p || deck < 0 || deck >= CB_DECKS || !pk)
+    if (!p || deck < 0 || deck >= CB_DECKS || !s)
         return CB_ERROR(EINVAL);
-    if (!loaded_deck(p, deck))
-        return CB_ERROR(ENOENT);
-    CBStream *s;
-    int ret = cb_player_stream_create(&s, pk);
-    if (ret < 0)
-        return ret;
-    ret = queue_next(p, deck, (CBOwnTrack) {
+    return queue_next(p, deck, (CBOwnTrack) {
         .stream    = s,
         .rate      = s->rate,
-        .nb_frames = cb_packets_length(pk, NULL),
+        .nb_frames = cb_stream_length(s, NULL),
     }, grid);
-    if (ret < 0) {
-        /* The caller keeps the packets. */
-        s->pk = NULL;
-        cb_player_stream_free(s);
-    }
-    return ret;
 }
 
 void cb_deck_clear_next(CBPlayer *p, int deck)
@@ -1128,7 +1108,7 @@ static void seek_cmd(CBPlayer *p, int deck, double seconds, enum CBCmdType type)
      * the deck not to wait at all */
     if (o->cur.stream) {
         atomic_store_explicit(&o->cur.stream->hint, (int64_t)frames, memory_order_relaxed);
-        sem_post(&p->feed[deck].wake);
+        cb_player_feed_poke(&p->feed[deck]);
     }
     if (type == CB_CMD_PLAY_FROM) {
         if (o->scrubbing) {

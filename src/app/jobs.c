@@ -25,10 +25,10 @@
  * The analyse job decodes mono: every stage of the analysis works on the
  * mean of the channels (dj's decode_player did the same), and a mono buffer
  * halves the memory of the 11 or so decodes running at once. The decode job
- * for a deck decodes nothing: it opens the track's packet store
- * (cb_packets_open, a few milliseconds), which the deck decodes as it plays,
- * at the file's own rate and channels on the players' timeline, where
- * decoding it whole took one to five seconds. The artwork job also makes
+ * for a deck decodes nothing: it opens the track's stream (cb_stream_open,
+ * a few milliseconds), which the deck decodes as it plays, at the file's
+ * own rate on the players' timeline, where decoding it whole took one to
+ * five seconds. The artwork job also makes
  * the 240 px JPEG thumbnail the library stores, so the owner thread never
  * encodes.
  *
@@ -397,12 +397,7 @@ static int run_analyse(Job *job, CBJobResult *r)
 
 static int run_decode(Job *job, CBJobResult *r)
 {
-    CBPackets *pk;
-    int ret = cb_packets_open(job->path, &pk);
-    if (ret < 0)
-        return ret;
-    r->packets = pk;
-    return 0;
+    return cb_stream_open(job->path, &r->stream);
 }
 
 static int run_artwork(Job *job, CBJobResult *r)
@@ -1243,7 +1238,7 @@ void cb_job_result_free(CBJobResult *r)
         cb_analysis_free(r->analysis);
         free(r->analysis);
     }
-    cb_packets_free(r->packets);
+    cb_stream_free(r->stream);
     free(r->rgba);
     free(r->jpeg);
     if (r->stick) {

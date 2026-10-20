@@ -173,50 +173,6 @@ CBChunk *cb_pipeline_pop(CBPipeline *p);
 /* An eventfd readable once a chunk was queued; reading it clears it. */
 int  cb_pipeline_fd(const CBPipeline *p);
 
-/* ------------------------------------------------------------ packet store */
-
-/* A track demuxed into memory, not decoded, from which any stretch decodes
- * on demand: what a deck plays from (cyanbox/player.h), so that loading costs
- * a read of the file, not a decode of all of it, and memory the size of
- * its audio packets, not of the decoded floats. Frames are on the players'
- * timeline and are cb_decode(path, 0, 0)'s: exactly for MP3 and lossless
- * codecs, and as close as a decoder starting cold gets for Opus, Vorbis and
- * AAC after a jump (src/audio/packets.c says how close).
- *
- * Threads: the store is handed from thread to thread, never shared, except
- * that cb_packets_length may be called from any thread at any time, the
- * real-time one included (two atomic loads). */
-typedef struct CBPackets CBPackets;
-
-/* Opens path and indexes its first packets; cb_packets_index or a decode
- * does the rest. */
-int  cb_packets_open(const char *path, CBPackets **pk);
-void cb_packets_free(CBPackets *pk);
-/* Indexes up to max_packets more: 1 once the whole file is indexed (the
- * length is then exact), 0 while more remains, < 0 on a read error, where
- * the index then ends. */
-int  cb_packets_index(CBPackets *pk, int max_packets);
-/* The track's length in frames: what the container states until the index
- * is complete, then the count (*exact true). */
-int64_t cb_packets_length(const CBPackets *pk, bool *exact);
-int  cb_packets_rate(const CBPackets *pk);
-int  cb_packets_channels(const CBPackets *pk);
-/* Bytes the packets and their index take. */
-size_t cb_packets_memory(const CBPackets *pk);
-
-typedef struct CBPacketDecoder CBPacketDecoder;
-/* A decoder over pk, used on the thread that holds pk. */
-int  cb_packets_decoder(CBPackets *pk, CBPacketDecoder **d);
-void cb_packets_decoder_free(CBPacketDecoder *d);
-/* Frames [start, start + n) into dst, interleaved, the first `channels`
- * channels (0: all), silence outside the track and where a packet does not
- * decode. A call starting where the last one ended carries on; any other
- * starts a decoder again from enough packets before it. Indexes as far as
- * it needs. Returns the frames inside the track (fewer than n at its end)
- * or a negative errno. */
-int64_t cb_packets_decode(CBPacketDecoder *d, int64_t start, int64_t n, float *dst,
-                          int channels);
-
 /* ----------------------------------------------------------------- artwork */
 
 /* The track's cover: the embedded picture (attached picture stream) when

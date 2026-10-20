@@ -127,14 +127,15 @@ static int64_t find_first_frame(const uint8_t *data, size_t size, size_t pos, He
 /* Calls fn for every audio frame from pos on. Junk between frames is
  * skipped when two chained frames follow it. ffmpeg's parser would make the
  * junk and the frame after it one packet that fails to decode, a frame of
- * silence in cyanbox: the same count either way, and cb_decode, which feeds
- * these frames itself, plays the frame. dj stopped counting at the first
+ * silence in cyanbox: the same count either way. dj stopped counting at the first
  * junk instead. A truncated last frame is passed short; dj counted it as a
  * frame and decoders play it as one. fn returning 1 stops the walk after
  * that frame (returns 0, *end is where to go on); 1 is returned at the end
  * of the file. */
+typedef int (*FrameFn)(void *opaque, const uint8_t *frame, size_t size, int samples, int kbps);
+
 static int walk_frames(const char *path, const uint8_t *d, size_t size, size_t pos,
-                       CBMp3FrameFn fn, void *opaque, size_t *end)
+                       FrameFn fn, void *opaque, size_t *end)
 {
     *end = pos;
     while (pos + 4 <= size) {
@@ -238,33 +239,6 @@ int cb_mp3_scan_mapped(const char *path, const CBMap *m, CBMp3Info *info)
         cb_debug("%s: frame map restarts at frame %d, %d audio frames off the timeline",
                  path, map_start, info->skip_frames);
     return 0;
-}
-
-int cb_mp3_frames(const char *path, const CBMap *m, const CBMp3Info *info,
-                  CBMp3FrameFn fn, void *opaque)
-{
-    size_t pos = (size_t)info->first_frame_offset;
-    Header first;
-    if (!info->valid || !parse_header(m->data, m->size, pos, &first))
-        return CB_ERROR(EINVAL);
-    if (info->header_frame)
-        pos += (size_t)first.length;
-    size_t end;
-    return walk_frames(path, m->data, m->size, pos, fn, opaque, &end);
-}
-
-int cb_mp3_frames_step(const char *path, const CBMap *m, const CBMp3Info *info, size_t *pos,
-                       CBMp3FrameFn fn, void *opaque)
-{
-    if (!*pos) {
-        Header first;
-        *pos = (size_t)info->first_frame_offset;
-        if (!info->valid || !parse_header(m->data, m->size, *pos, &first))
-            return CB_ERROR(EINVAL);
-        if (info->header_frame)
-            *pos += (size_t)first.length;
-    }
-    return walk_frames(path, m->data, m->size, *pos, fn, opaque, pos);
 }
 
 int cb_mp3_scan(const char *path, CBMp3Info *info)

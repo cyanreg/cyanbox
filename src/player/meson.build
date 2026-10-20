@@ -42,7 +42,7 @@ test('next_race',
         include_directories: cb_inc, dependencies: [ cb_player_dep ]),
     suite: 'player', workdir: meson.project_source_root(), timeout: 300)
 
-# Decks playing packet stores, with the feed thread decoding for real: the
+# Decks playing streams, with the feed thread and pipelines for real: the
 # test writes its WAV (and a FLAC with the ffmpeg CLI) under this directory.
 player_test_env = environment()
 player_test_env.set('CB_TEST_DIR', meson.current_build_dir() / 'test-media')

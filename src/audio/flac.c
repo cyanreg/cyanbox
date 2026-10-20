@@ -125,6 +125,17 @@ static uint64_t rb(const uint8_t *b, int n)
     return v;
 }
 
+/* The frame walk in steps, over a mapped file. Init reads the metadata into
+ * info (frames not filled) and points *streaminfo at the 34 bytes of
+ * STREAMINFO; next gives the frames in order: 1 with a frame, 0 once
+ * total_samples are covered or the file ends (*complete then says whether
+ * the frames reached total_samples). */
+typedef struct Walk {
+    const uint8_t *data;
+    size_t  size, start, cand;
+    int64_t sample, index, total;
+} Walk;
+
 static int push_frame(CBFlacInfo *info, int *cap, int64_t sample, int64_t offset, int block)
 {
     if (info->nb_frames == *cap) {
@@ -142,10 +153,10 @@ static int push_frame(CBFlacInfo *info, int *cap, int64_t sample, int64_t offset
     return 0;
 }
 
-int cb_flac_walk_init(CBFlacWalk *w, const char *path, const uint8_t *d, size_t size,
+static int walk_init(Walk *w, const char *path, const uint8_t *d, size_t size,
                       CBFlacInfo *info, const uint8_t **streaminfo)
 {
-    *w = (CBFlacWalk) { 0 };
+    *w = (Walk) { 0 };
     *info = (CBFlacInfo) { 0 };
     *streaminfo = NULL;
 
@@ -185,7 +196,7 @@ int cb_flac_walk_init(CBFlacWalk *w, const char *path, const uint8_t *d, size_t 
     }
     info->first_frame_offset = (int64_t)pos;
 
-    *w = (CBFlacWalk) {
+    *w = (Walk) {
         .data  = d,
         .size  = size,
         .start = pos,
@@ -198,7 +209,7 @@ int cb_flac_walk_init(CBFlacWalk *w, const char *path, const uint8_t *d, size_t 
 /* Each frame is the first sync candidate after the previous one whose
  * header parses with the expected frame number (fixed block size) or
  * sample number (variable). Candidates only move forward, as in dj. */
-int cb_flac_walk_next(CBFlacWalk *w, size_t *offset, int64_t *sample, int *block, bool *complete)
+static int walk_next(Walk *w, size_t *offset, int64_t *sample, int *block, bool *complete)
 {
     const uint8_t *d = w->data;
     while (w->sample < w->total && w->cand + 1 < w->size) {
@@ -232,9 +243,9 @@ int cb_flac_scan(const char *path, CBFlacInfo *info)
     if (ret < 0)
         return ret;
 
-    CBFlacWalk w;
+    Walk w;
     const uint8_t *streaminfo;
-    ret = cb_flac_walk_init(&w, path, m.data, m.size, info, &streaminfo);
+    ret = walk_init(&w, path, m.data, m.size, info, &streaminfo);
     if (ret < 0)
         goto end;
 
@@ -252,7 +263,7 @@ int cb_flac_scan(const char *path, CBFlacInfo *info)
     int64_t sample;
     int block;
     bool complete = false;
-    while (cb_flac_walk_next(&w, &at, &sample, &block, &complete) > 0) {
+    while (walk_next(&w, &at, &sample, &block, &complete) > 0) {
         ret = push_frame(info, &cap, sample, (int64_t)(at - w.start), block);
         if (ret < 0)
             goto end;

@@ -1,11 +1,11 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
-/* A deck playing a packet store (cyanbox/player.h, src/player/feed.c) on the
- * null backend in manual mode, with its feed thread decoding for real.
+/* A deck playing a stream (cyanbox/player.h, src/player/feed.c) on the
+ * null backend in manual mode, with its feed thread and pipelines decoding
+ * for real.
  *
  * The track: 60 s at 44.1 kHz, a WAV written here and, when the ffmpeg CLI
- * is there, the same as FLAC (the store's two routes: libavformat's
- * packets and cyanbox's FLAC frame walk). The device runs at the track's
+ * is there, the same as FLAC. The device runs at the track's
  * rate and the deck at tempo 1.0, where the interpolator returns the
  * track's samples themselves, so every output frame can be checked
  * against cb_decode's at the place the deck should be playing.
@@ -20,9 +20,11 @@
  * shorter than the window behind wraps sample-exactly; a long loop and a
  * hot cue jump are served at once from the cue caches, unsettled; the
  * real-time side allocates nothing (a counting malloc around the mix)
- * through seeks, holds, loops, scrubs and MASTER TEMPO; and a track
- * queued to follow plays on from the frame after the last, sample-exact
- * on both sides of the change. */
+ * through seeks, holds, loops, scrubs and MASTER TEMPO; a track queued to
+ * follow plays on from the frame after the last, sample-exact on both
+ * sides of the change; a chunk the feed takes out of the window stays
+ * whole until a callback has finished since; and a mono track plays on
+ * both sides. */
 
 #include "cyanbox/player.h"
 
@@ -131,6 +133,33 @@ static int write_wav(const char *path)
     return fclose(f) ? -1 : 0;
 }
 
+/* The ramp's left channel alone, as a mono WAV. */
+static int write_mono_wav(const char *path)
+{
+    int64_t n = (int64_t)RATE * SECONDS;
+    FILE *f = wav_open(path, n);
+    if (!f)
+        return -1;
+    /* wav_open writes stereo: mono's channel count, byte rate and block */
+    uint8_t one[2] = { 1, 0 }, block[2] = { 2, 0 };
+    uint32_t data = (uint32_t)(n * 2), riff = 36 + data, bytes = RATE * 2;
+    fseek(f, 4, SEEK_SET);
+    fwrite(&riff, 4, 1, f);
+    fseek(f, 22, SEEK_SET);
+    fwrite(one, 1, 2, f);
+    fseek(f, 28, SEEK_SET);
+    fwrite(&bytes, 4, 1, f);
+    fwrite(block, 1, 2, f);
+    fseek(f, 40, SEEK_SET);
+    fwrite(&data, 4, 1, f);
+    fseek(f, 44, SEEK_SET);
+    for (int64_t i = 0; i < n; i++) {
+        int16_t v = (int16_t)((i * 7) % 20000 - 10000);
+        fwrite(&v, 2, 1, f);
+    }
+    return fclose(f) ? -1 : 0;
+}
+
 /* Frames [from, from + n) of one signal: a 441 Hz cosine at half scale on
  * the left, its sine on the right, so frame RATE (a whole number of
  * cycles) is a crest of the left. */
@@ -185,12 +214,12 @@ static CBPlayer *make_player(void)
 static CBPlayer *load_at(const char *path, int rate)
 {
     CBPlayer *p = make_player_at(rate);
-    CBPackets *pk = NULL;
-    int ret = cb_packets_open(path, &pk);
+    CBStream *s = NULL;
+    int ret = cb_stream_open(path, &s);
     CHECK(ret >= 0, "open %s: %d", path, ret);
     if (ret < 0)
         exit(1);
-    ret = cb_deck_load_packets(p, 0, pk, NULL);
+    ret = cb_deck_load_stream(p, 0, s, NULL);
     CHECK(ret == 0, "load: %d", ret);
     return p;
 }
@@ -273,10 +302,13 @@ static void test_play_through(const char *path)
     const CBStream *sm = p->rt[0].src.stream;
     int held = 0;
     for (int i = 0; i < sm->nb_slots; i++)
-        held += atomic_load(&sm->slots[i].first) >= 0;
+        held += atomic_load(&sm->slots[i]) != NULL;
     CHECK(held <= sm->nb_slots && (int64_t)held * CB_CHUNK <=
           (int64_t)((CB_WINDOW_BEHIND + CB_WINDOW_AHEAD) * RATE) + 3 * CB_CHUNK,
           "%s: %d chunks decoded", path, held);
+    /* Played through in order: the main pipeline was never sought (each
+     * chunk past the window kept until the window got there) */
+    CHECK(sm->main_seeks == 0, "%s: the main pipeline sought %d times", path, sm->main_seeks);
     free(out);
     cb_player_destroy(p);
 }
@@ -294,6 +326,17 @@ static void test_far_seek(const char *path)
      * the time it has on one, whatever else the machine does. */
     int fade = (int)(RATE * CB_FADE_SECONDS);
     cb_deck_seek(p, 0, 50.0);
+    /* Before any callback has applied it, the feed decodes the target. */
+    {
+        const CBStream *sm = p->rt[0].src.stream;
+        float probe[2 * 64];
+        int64_t t0 = cb_time_us();
+        bool ready;
+        while (!(ready = cb_player_stream_read(sm, 60 * RATE, 50 * RATE, 64, probe)) &&
+               cb_time_us() - t0 < 2000000)
+            usleep(100);
+        CHECK(ready, "%s: the target of a seek not decoded before it applies", path);
+    }
     int n = RATE;
     float *x = malloc(sizeof(float) * 2 * n);
     for (int done = 0; done < n; done += PERIOD) {
@@ -406,6 +449,18 @@ static void test_hot_cue(const char *path)
               (long long)st(p).frame, (long long)(from + n));
         free(x);
     }
+    /* The window there took the cache's chunks themselves: decoded once */
+    settle(p);
+    const CBStream *sm = p->rt[0].src.stream;
+    int64_t c = ((int64_t)floor(points[3] * RATE) - CB_CUE_CACHE_LEAD) / CB_CHUNK;
+    const CBChunk *w = atomic_load(&sm->slots[c % sm->nb_slots]);
+    bool shared = false;
+    for (int e = 0; e < CB_DECK_CUE_POINTS; e++) {
+        int64_t first = atomic_load(&sm->cache_first[e]);
+        if (first >= 0 && c >= first && c < first + sm->cpc)
+            shared |= w && atomic_load(&sm->cache[e * sm->cpc + (c - first)]) == w;
+    }
+    CHECK(shared, "%s: the window decoded the cue cache's chunk again", path);
     cb_player_destroy(p);
 }
 
@@ -459,18 +514,18 @@ static void test_no_allocation(const char *path)
 }
 
 /* Waits for the feed to have the first two chunks of the stream queued to
- * follow the deck's, which it decodes once the deck's has nothing left. */
+ * follow the deck's. */
 static void settle_next(CBPlayer *p)
 {
     static float probe[2 * 2 * CB_CHUNK];
     CBStream *s = p->own[0].next.stream;
     int64_t t0 = cb_time_us();
-    while (!cb_player_stream_read(s, cb_packets_length(s->pk, NULL), 0, 2 * CB_CHUNK, probe)) {
+    while (!cb_player_stream_read(s, cb_stream_length(s, NULL), 0, 2 * CB_CHUNK, probe)) {
         if (cb_time_us() - t0 > 10000000) {
             CHECK(false, "the start of the next track is not decoded");
             return;
         }
-        sem_post(&p->feed[0].wake);
+        cb_player_feed_poke(&p->feed[0]);
         usleep(50);
     }
 }
@@ -487,7 +542,7 @@ static void render_synced(CBPlayer *p, float *out, int64_t n)
     }
 }
 
-/* The track queued to follow (cb_deck_queue_next_packets): a second copy
+/* The track queued to follow (cb_deck_queue_next_stream): a second copy
  * of the track, queued while the first plays its last half second, plays
  * on from the frame after the first's last, every output frame the
  * track's own on both sides of the change, with no silence; the state is
@@ -498,10 +553,10 @@ static void render_synced(CBPlayer *p, float *out, int64_t n)
 static void test_next(const char *path)
 {
     CBPlayer *p = load(path);
-    CBPackets *pk = NULL;
-    CHECK(cb_deck_queue_next_packets(p, 0, NULL, NULL) == CB_ERROR(EINVAL), "no packets");
-    CHECK(cb_packets_open(path, &pk) >= 0, "open the next");
-    CHECK(cb_deck_queue_next_packets(p, 0, pk, NULL) == 0, "queue the next");
+    CBStream *sn = NULL;
+    CHECK(cb_deck_queue_next_stream(p, 0, NULL, NULL) == CB_ERROR(EINVAL), "no stream");
+    CHECK(cb_stream_open(path, &sn) >= 0, "open the next");
+    CHECK(cb_deck_queue_next_stream(p, 0, sn, NULL) == 0, "queue the next");
     CHECK(st(p).has_next, "a next is queued");
 
     int64_t total = (int64_t)RATE * SECONDS;
@@ -539,8 +594,8 @@ static void test_next(const char *path)
     s = st(p);
     CHECK(!s.playing && s.position == SECONDS, "stopped at the end: %d at %f", s.playing,
           s.position);
-    CHECK(cb_packets_open(path, &pk) >= 0, "open a third");
-    CHECK(cb_deck_queue_next_packets(p, 0, pk, NULL) == 0, "queue after the stop");
+    CHECK(cb_stream_open(path, &sn) >= 0, "open a third");
+    CHECK(cb_deck_queue_next_stream(p, 0, sn, NULL) == 0, "queue after the stop");
     settle(p);
     settle_next(p);
     adv0 = s.advanced;
@@ -555,8 +610,8 @@ static void test_next(const char *path)
     /* Dropped: still pending until the deck has applied the drop (it might
      * have moved on into it before), then gone; the deck stops at its
      * end. */
-    CHECK(cb_packets_open(path, &pk) >= 0, "open a fourth");
-    CHECK(cb_deck_queue_next_packets(p, 0, pk, NULL) == 0, "queue a fourth");
+    CHECK(cb_stream_open(path, &sn) >= 0, "open a fourth");
+    CHECK(cb_deck_queue_next_stream(p, 0, sn, NULL) == 0, "queue a fourth");
     cb_deck_clear_next(p, 0);
     CHECK(st(p).has_next, "dropped, not applied yet");
     render(p, NULL, PERIOD, true);
@@ -598,9 +653,9 @@ static void test_next_junction(const char *whole, const char *first, const char 
             cb_player_destroy(p);
 
             p = load_at(first, rate);
-            CBPackets *pk = NULL;
-            CHECK(cb_packets_open(second, &pk) >= 0, "open %s", second);
-            CHECK(cb_deck_queue_next_packets(p, 0, pk, NULL) == 0, "queue %s", second);
+            CBStream *sn = NULL;
+            CHECK(cb_stream_open(second, &sn) >= 0, "open %s", second);
+            CHECK(cb_deck_queue_next_stream(p, 0, sn, NULL) == 0, "queue %s", second);
             cb_deck_set_tempo(p, 0, tempo);
             cb_deck_play_from(p, 0, 0.9);
             settle(p);
@@ -637,9 +692,9 @@ static void test_next_master_tempo(const char *path)
 {
     CBPlayer *p = load(path);
     CHECK(cb_deck_set_master_tempo(p, 0, true), "master tempo");
-    CBPackets *pk = NULL;
-    CHECK(cb_packets_open(path, &pk) >= 0, "open the next");
-    CHECK(cb_deck_queue_next_packets(p, 0, pk, NULL) == 0, "queue the next");
+    CBStream *sn = NULL;
+    CHECK(cb_stream_open(path, &sn) >= 0, "open the next");
+    CHECK(cb_deck_queue_next_stream(p, 0, sn, NULL) == 0, "queue the next");
     cb_deck_play_from(p, 0, SECONDS - 0.5);
     unsigned adv0 = st(p).advanced;
     int slow = 0, steps = RATE / PERIOD;
@@ -663,15 +718,102 @@ static void test_reload(const char *path)
 {
     CBPlayer *p = make_player();
     for (int i = 0; i < 5; i++) {
-        CBPackets *pk = NULL;
-        CHECK(cb_packets_open(path, &pk) >= 0, "open");
-        CHECK(cb_deck_load_packets(p, 0, pk, NULL) == 0, "load %d", i);
+        CBStream *s = NULL;
+        CHECK(cb_stream_open(path, &s) >= 0, "open");
+        CHECK(cb_deck_load_stream(p, 0, s, NULL) == 0, "load %d", i);
         cb_deck_play_from(p, 0, i * 7.0);
         render(p, NULL, PERIOD * (i + 1), i & 1);
     }
     cb_deck_unload(p, 0);
     CHECK(!cb_deck_loaded(p, 0), "unloaded");
     render(p, NULL, PERIOD, false);
+    cb_player_destroy(p);
+}
+
+/* The real-time side reads the chunks the stream's tables point to without
+ * a reference: a chunk the feed takes out of the window is let go of only
+ * once a callback has finished since. With no callback, the window moved
+ * far away (the read position set as a callback sets it) leaves a chunk
+ * the window held as it was, though its pipeline made a window's worth
+ * since; after callbacks, everything taken out is let go of. */
+static void test_epoch(const char *path)
+{
+    CBPlayer *p = load(path);
+    render(p, NULL, PERIOD, true);
+    CBStream *s = p->rt[0].src.stream;
+    const CBChunk *k = atomic_load(&s->slots[1]);
+    CHECK(k && k->index == 1, "%s: chunk 1 in the window", path);
+    if (!k) {
+        cb_player_destroy(p);
+        return;
+    }
+    size_t bytes = sizeof(float) * CB_CHUNK * s->channels;
+    float *copy = malloc(bytes);
+    memcpy(copy, k->data[0], bytes);
+    int64_t far = 40 * RATE;
+    atomic_store(&s->playhead, far);
+    CHECK(cb_player_feed_wait(&p->feed[0], s, 10000000), "%s: the feed is stuck", path);
+    CHECK(atomic_load(&s->slots[1]) != k, "%s: the window moved", path);
+    CHECK(k->index == 1 && !memcmp(k->data[0], copy, bytes),
+          "%s: a chunk the real-time side may read was let go of", path);
+    free(copy);
+
+    int left = -1;
+    for (int i = 0; i < 1000 && left; i++) {
+        cb_player_mix(p, NULL, 0);
+        cb_player_feed_poke(&p->feed[0]);
+        usleep(1000);
+        left = s->nb_retired;
+    }
+    CHECK(left == 0, "%s: %d chunks never let go of", path, left);
+    cb_player_destroy(p);
+}
+
+/* A FLAC cut short, its STREAMINFO still saying 60 s: the stream's length
+ * is that until the feed has decoded the track's end, then where its last
+ * chunk ends (where cb_decode ends), exact; a deck that played from the
+ * start, the end then out of its window, stops there and reports it. */
+static void test_truncated(const char *path)
+{
+    CBAudio a;
+    CHECK(cb_decode(path, 0, 0, &a) >= 0, "%s: decode", path);
+    int64_t end = a.nb_frames;
+    cb_audio_free(&a);
+    CBPlayer *p = load(path);
+    const CBStream *sm = p->own[0].cur.stream;
+    bool exact = true;
+    CHECK(cb_stream_length(sm, &exact) == (int64_t)RATE * SECONDS && !exact &&
+          end < (int64_t)RATE * (SECONDS - 10) && end > (int64_t)RATE * (CB_WINDOW_AHEAD + 1),
+          "%s: says %lld (exact %d), holds %lld", path, (long long)cb_stream_length(sm, NULL),
+          exact, (long long)end);
+    cb_deck_play(p, 0);
+    render(p, NULL, PERIOD, true);
+    cb_deck_seek(p, 0, (double)end / RATE - 1.0);
+    render(p, NULL, 2 * RATE, true);
+    CBDeckState s = st(p);
+    CHECK(!s.playing && fabs(s.position * RATE - end) < 0.5 && fabs(s.duration * RATE - end) < 0.5,
+          "%s: playing %d at %f s of %f, the track %f s", path, s.playing, s.position, s.duration,
+          (double)end / RATE);
+    CHECK(cb_stream_length(sm, &exact) == end && exact, "%s: length %lld, exact %d", path,
+          (long long)cb_stream_length(sm, NULL), exact);
+    cb_player_destroy(p);
+}
+
+/* A mono track: its one channel on both sides. */
+static void test_mono(const char *path)
+{
+    CBPlayer *p = load(path);
+    cb_deck_play(p, 0);
+    int n = RATE, fade = (int)(RATE * CB_FADE_SECONDS);
+    float *out = malloc(sizeof(float) * 2 * n);
+    render(p, out, n, true);
+    int64_t bad = 0;
+    for (int64_t i = fade; i < n; i++)
+        bad += out[2 * i] != ref.samples[2 * i] || out[2 * i + 1] != ref.samples[2 * i];
+    CHECK(p->rt[0].src.stream->channels == 1, "%s: %d channels", path,
+          p->rt[0].src.stream->channels);
+    CHECK(bad == 0, "%s: %lld frames differ from the left of the ramp", path, (long long)bad);
+    free(out);
     cb_player_destroy(p);
 }
 
@@ -703,7 +845,36 @@ int main(void)
         test_next(paths[i]);
         test_next_master_tempo(paths[i]);
         test_reload(paths[i]);
+        test_epoch(paths[i]);
     }
+
+    if (nb == 2) {
+        /* The FLAC's first sixth */
+        char *cut = cb_path_join(dir, "cut.flac");
+        FILE *in = fopen(flac, "rb"), *out = cut ? fopen(cut, "wb") : NULL;
+        bool ok = in && out && !fseek(in, 0, SEEK_END);
+        long size = ok ? ftell(in) : 0;
+        char *buf = size > 0 ? malloc((size_t)size / 6) : NULL;
+        ok = ok && buf && !fseek(in, 0, SEEK_SET) && fread(buf, 1, (size_t)size / 6, in) == (size_t)size / 6 &&
+             fwrite(buf, 1, (size_t)size / 6, out) == (size_t)size / 6;
+        if (in)
+            fclose(in);
+        if (out && fclose(out))
+            ok = false;
+        free(buf);
+        if (ok)
+            test_truncated(cut);
+        else
+            CHECK(false, "cannot write the cut FLAC in %s", dir);
+        free(cut);
+    }
+
+    char *mono = cb_path_join(dir, "mono.wav");
+    if (mono && write_mono_wav(mono) >= 0)
+        test_mono(mono);
+    else
+        CHECK(false, "cannot write the mono WAV in %s", dir);
+    free(mono);
 
     /* One signal, whole and cut in two on a crest. */
     char *whole = cb_path_join(dir, "cos.wav");

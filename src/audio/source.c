@@ -28,9 +28,10 @@
  *   29 output frames in, measured from 22.05 to 96 kHz. Dither noise starts
  *   again, so 16-bit output that is dithered differs by the noise.
  * - libavcodec, flushed (never opened again), fed from `preroll` input
- *   frames before that (packets.c's measurements: none for codecs that code
- *   every packet alone, MP3's bit reservoir, two Vorbis packets, three AAC
- *   ones, 640 ms of Opus), what it gives before the restart point cut. A
+ *   frames before that (as measured for the deck's old packet store: none
+ *   for codecs that code every packet alone, MP3's bit reservoir, two
+ *   Vorbis packets, three AAC ones, 640 ms of Opus), what it gives before
+ *   the restart point cut. A
  *   skip still pending in it after the flush moves its frames' pts too.
  *   The AAC decoder's flush keeps the last frame's window state, so the
  *   first frame after a seek to the very start, where there is no

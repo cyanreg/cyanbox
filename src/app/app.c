@@ -17,11 +17,10 @@
  *    behind a library-wide analysis.
  *    Request ids are per queue; each kind of request only ever goes to one
  *    of them.
- *  - A decode result's packet store (or, for a file the store refuses, its
- *    CBAudio decoded whole) is handed to the player: cb_deck_load_packets
+ *  - A decode result's stream is handed to the player: cb_deck_load_stream
  *    takes it over on success (and releases what it replaces only once the
  *    real-time thread and the deck's decoding thread have let go of it); on
- *    failure it stays ours to free. The job only opens the store, a few
+ *    failure it stays ours to free. The job only opens the stream, a few
  *    milliseconds, so LOADING shows for about as long as a frame takes.
  *    The track to follow the deck's (the next row of the playlist being
  *    viewed, continue_play) is decoded the same way ahead of the end and
@@ -93,9 +92,9 @@
  * pauses it on the last frame). */
 #define END_SLACK           0.05
 /* The track to follow the deck's is queued on the deck this long before
- * the end (continue_play): its packet store in memory, and its first
- * seconds decoded, well ahead of the end, without holding a second
- * track's store for the whole of the first. */
+ * the end (continue_play): its first seconds decoded well ahead of the
+ * end, without a second track's pipelines running for the whole of the
+ * first. */
 #define NEXT_LEAD_SECONDS   30.0
 /* Workers for decoding and artwork. */
 #define IO_THREADS       2
@@ -1761,14 +1760,14 @@ static void handle_next(CBApp *app, CBJobResult *r, int deck)
     }
     char name[256];
     track_name(t, name, sizeof(name));
-    int ret = r->err < 0 ? r->err : (r->packets ? 0 : CB_ERROR(EINVAL));
+    int ret = r->err < 0 ? r->err : (r->stream ? 0 : CB_ERROR(EINVAL));
     if (ret == 0) {
         const CBGrid *grid = cb_grid_valid(&t->grid) ? &t->grid : NULL;
-        CBPackets *pk = r->packets;
-        r->packets = NULL;
-        ret = cb_deck_queue_next_packets(app->player, deck, pk, grid);
+        CBStream *s = r->stream;
+        r->stream = NULL;
+        ret = cb_deck_queue_next_stream(app->player, deck, s, grid);
         if (ret < 0)
-            cb_packets_free(pk);
+            cb_stream_free(s);
     }
     if (ret < 0) {
         /* Not asked for again and again: the deck will stop at its end. */
@@ -1812,23 +1811,22 @@ static void handle_decode(CBApp *app, CBJobResult *r)
 
     char name[256];
     track_name(t, name, sizeof(name));
-    if (r->err < 0 || !r->packets) {
+    if (r->err < 0 || !r->stream) {
         app->last_error_count++;
         cb_app_set_status(app, "Cannot load %s: %s", name,
                           strerror(r->err < 0 ? -r->err : EINVAL));
         return;
     }
 
-    /* The player owns the packet store from here; on failure it stays
-     * ours. Loading replaces what the deck plays, so the old track goes
+    /* The player owns the stream from here; on failure it stays ours. Loading replaces what the deck plays, so the old track goes
      * only once the new one is in: a player that cannot take it (its
      * command queue full while the output stalls) keeps the track it has. */
     const CBGrid *grid = cb_grid_valid(&t->grid) ? &t->grid : NULL;
-    CBPackets *pk = r->packets;
-    r->packets = NULL;
-    int ret = cb_deck_load_packets(app->player, deck, pk, grid);
+    CBStream *s = r->stream;
+    r->stream = NULL;
+    int ret = cb_deck_load_stream(app->player, deck, s, grid);
     if (ret < 0)
-        cb_packets_free(pk);
+        cb_stream_free(s);
     if (ret < 0) {
         app->last_error_count++;
         cb_app_set_status(app, "Cannot load %s: %s", name, strerror(-ret));

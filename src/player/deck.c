@@ -4,8 +4,9 @@
  * and the renderer that adds it to the mix.
  *
  * Everything here runs on the real-time thread and follows its rules: no
- * allocation, no locks, no logging, no system calls but the sem_post that
- * wakes the deck's feed thread (it never blocks). The buffer is read,
+ * allocation, no locks, no logging, no system calls but the eventfd write
+ * that wakes the deck's feed thread (non-blocking, as PipeWire's own data
+ * thread wakes its main loop). The buffer is read,
  * never written; the owner keeps it alive until this deck has applied the
  * command that replaced it and publishes that it reads it no more (see
  * the release path in player.c). Voices keep positions, never a pointer,
@@ -13,8 +14,8 @@
  * silences the de-click tail and the scrub grains at once, or they would
  * play the old track's positions out of the new one.
  *
- * A deck playing a packet store reads its frames from the window its feed
- * thread decodes (feed.c) instead of a whole buffer, every voice through
+ * A deck playing a stream reads its frames from the chunks its feed
+ * thread puts in the stream's tables (feed.c) instead of a whole buffer, every voice through
  * fetch(): the interpolator's four frames, the de-click tail, the scrub
  * grains and MASTER TEMPO's read-ahead. Frames not decoded yet (after a
  * jump to a place far from the window and from every cue point) make the
@@ -124,6 +125,7 @@
 #include "player_internal.h"
 
 #include <math.h>
+#include <unistd.h>
 
 void cb_player_deck_init(CBDeckRT *d)
 {
@@ -131,6 +133,7 @@ void cb_player_deck_init(CBDeckRT *d)
         .tempo     = 1.0,
         .gain      = 1.0f,
         .gain_prev = 1.0f,
+        .wake      = -1,
     };
 }
 
@@ -947,14 +950,11 @@ void cb_player_deck_render(CBDeckRT *d, float *out, int frames, int rate)
         return;
     d->out_rate = rate;
 
-    /* A stream's length is the container's until its index is complete. */
+    /* A stream's length is the container's until its last chunk came. */
     if (d->src.stream && !d->length_final) {
         bool exact;
-        int64_t len = cb_packets_length(d->src.stream->pk, &exact);
-        if (exact) {
-            d->src.nb_frames = len;
-            d->length_final = true;
-        }
+        d->src.nb_frames = cb_stream_length(d->src.stream, &exact);
+        d->length_final = exact;
     }
 
     CBDeckMT *m = &d->mt;
@@ -1031,13 +1031,14 @@ void cb_player_deck_signal(CBDeckRT *d)
         return;
     int64_t at = d->pos.i;
     atomic_store_explicit(&s->playhead, at, memory_order_relaxed);
-    atomic_store_explicit(&s->starved, d->starved, memory_order_relaxed);
-    /* sem_post neither blocks nor allocates (it is even async-signal-safe):
-     * a futex wake when the feed sleeps. */
+    /* An eventfd's counter: the write neither blocks nor allocates. */
     int64_t c = at / CB_CHUNK;
     if (d->starved || c != d->posted_chunk) {
-        if (d->wake)
-            sem_post(d->wake);
+        if (d->wake >= 0) {
+            uint64_t one = 1;
+            ssize_t w = write(d->wake, &one, sizeof(one));
+            (void)w;
+        }
         d->posted_chunk = c;
     }
     d->starved = false;

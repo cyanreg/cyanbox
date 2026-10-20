@@ -22,12 +22,13 @@
 #include "cyanbox/audio.h"
 #include "cyanbox/export.h"
 #include "cyanbox/ml.h"
+#include "cyanbox/player.h"
 
 typedef struct CBJobs CBJobs;
 
 enum CBJobKind {
     CB_JOB_ANALYSE,     /* decode + analyse: result->analysis */
-    CB_JOB_DECODE,      /* a track for a deck: result->packets (cb_packets_open) */
+    CB_JOB_DECODE,      /* a track for a deck: result->stream (cb_stream_open) */
     CB_JOB_ARTWORK,     /* cover art RGBA: result->rgba, and result->jpeg */
     CB_JOB_STICK_READ,  /* cb_stick_read + cb_stick_diff: result->stick, result->sync_items */
     CB_JOB_INSPECT,     /* cb_inspect: result->report, result->problems */
@@ -44,7 +45,7 @@ typedef struct CBJobResult {
     int        err;             /* 0 or a negative errno */
     double     seconds;         /* wall time the job took */
     CBAnalysis *analysis;       /* owned by the receiver */
-    CBPackets  *packets;        /* CB_JOB_DECODE: owned by the receiver */
+    CBStream   *stream;         /* CB_JOB_DECODE: owned by the receiver */
     uint8_t    *rgba; int width, height;
     uint8_t    *jpeg; size_t jpeg_size;   /* CB_JOB_ARTWORK: the library's 240 px thumbnail
                                              (cb_image_jpeg_square), NULL if it failed */

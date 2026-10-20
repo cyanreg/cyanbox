@@ -127,29 +127,16 @@ static void test_decode_and_artwork(const char *wav)
     if (r) {
         CHECK(r->kind == CB_JOB_DECODE && r->request == dec && r->track_id == 7 && r->deck == 0,
               "kind %d request %llu deck %d", r->kind, (unsigned long long)r->request, r->deck);
-        CHECK(r->err == 0 && r->packets, "err %s", strerror(-r->err));
-        if (r->packets) {
-            /* The file's packets, decoded as the deck plays them, at the
-             * file's own rate and channels: no resampling, no downmix. */
-            CBPackets *pk = r->packets;
-            CHECK(cb_packets_rate(pk) == 48000, "rate %d", cb_packets_rate(pk));
-            CHECK(cb_packets_channels(pk) == 2, "channels %d", cb_packets_channels(pk));
-            CHECK(cb_packets_length(pk, NULL) == 12 * 48000, "%lld frames",
-                  (long long)cb_packets_length(pk, NULL));
-            CBPacketDecoder *d = NULL;
-            float *x = malloc(sizeof(float) * 2 * 48000);
-            float peak = 0;
-            if (x && cb_packets_decoder(pk, &d) >= 0) {
-                for (int64_t at = 0; at < 12 * 48000; at += 48000) {
-                    CHECK(cb_packets_decode(d, at, 48000, x, 2) == 48000, "decode at %lld",
-                          (long long)at);
-                    for (int i = 0; i < 2 * 48000; i++)
-                        peak = fmaxf(peak, fabsf(x[i]));
-                }
-            }
-            CHECK(peak > 0.5f && peak <= 1.0f, "peak %f", peak);
-            cb_packets_decoder_free(d);
-            free(x);
+        CHECK(r->err == 0 && r->stream, "err %s", strerror(-r->err));
+        if (r->stream) {
+            /* The deck's stream, decoded as the deck plays it, at the
+             * file's own rate and channels (tests/player/test_stream.c
+             * plays one). */
+            CBStream *s = r->stream;
+            CHECK(cb_stream_rate(s) == 48000, "rate %d", cb_stream_rate(s));
+            CHECK(cb_stream_channels(s) == 2, "channels %d", cb_stream_channels(s));
+            CHECK(cb_stream_length(s, NULL) == 12 * 48000, "%lld frames",
+                  (long long)cb_stream_length(s, NULL));
         }
         cb_job_result_free(r);
     }

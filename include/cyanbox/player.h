@@ -9,23 +9,23 @@
  * Thread model. The owner thread (the interface's main thread) calls every
  * function here. Commands go to the real-time thread through a lock-free
  * single-producer/single-consumer ring; the real-time thread never
- * allocates, locks, or touches files, and publishes positions through
- * atomics that cb_deck_state() reads. A deck plays a track's packet store
- * (CBPackets: the file's packets in memory, cyanbox/audio.h), which a thread
- * of the deck's own decodes around the playhead and at the cue points as
- * it plays, so a track is ready as soon as its first packets are read; or
- * a whole decoded track (CBAudio, native rate, interleaved float). Where
- * the decoded audio does not reach yet (just after a jump far away), a
- * playing deck holds, silent, until it does. The real-time thread
- * resamples to the device rate with a cubic interpolator, which is also
- * how tempo changes play: pitch follows tempo, as on a CDJ with MASTER
- * TEMPO off. With it on, the deck's output is shifted back by
- * 1 / (tempo + bend) (Signalsmith Stretch), reading ahead by the
- * shifter's delay so that jumps, starts and stops are still heard at once
- * and the position reported is the one heard. Loops wrap sample-exactly
- * inside the callback.
+ * allocates, locks, or touches files (its one system call is the eventfd
+ * write that wakes a deck's feed thread), and publishes positions through
+ * atomics that cb_deck_state() reads. A deck plays a stream (CBStream: the
+ * track's pipelines, cyanbox/audio.h), which a thread of the deck's own
+ * runs around the playhead and at the cue points as it plays, so a track
+ * is ready as soon as the file is opened; or a whole decoded track
+ * (CBAudio, native rate, interleaved float). Where the decoded audio does
+ * not reach yet (just after a jump far away), a playing deck holds,
+ * silent, until it does. The real-time thread resamples to the device
+ * rate with a cubic interpolator, which is also how tempo changes play:
+ * pitch follows tempo, as on a CDJ with MASTER TEMPO off. With it on, the
+ * deck's output is shifted back by 1 / (tempo + bend) (Signalsmith
+ * Stretch), reading ahead by the shifter's delay so that jumps, starts and
+ * stops are still heard at once and the position reported is the one
+ * heard. Loops wrap sample-exactly inside the callback.
  *
- * Loading hands an CBAudio or an CBPackets to the player, which owns it
+ * Loading hands an CBAudio or a CBStream to the player, which owns it
  * until the deck is unloaded or loaded again; the old one is released only
  * after the real-time thread (and the deck's decoding thread) have
  * acknowledged the swap, so freeing is always safe. A second one may be
@@ -69,8 +69,8 @@ typedef struct CBPlayerOptions {
     /* Called on the owner thread when the player lets go of a buffer it was
      * given, once the real-time thread can no longer read it (or at
      * destroy). NULL: cb_audio_free() and free(), so the CBAudio struct
-     * itself must then come from malloc. Packet stores are always freed by
-     * the player (cb_packets_free). */
+     * itself must then come from malloc. Streams are always freed by the
+     * player (cb_stream_free). */
     void      (*release)(void *opaque, CBAudio *audio);
     void       *release_opaque;
 } CBPlayerOptions;
@@ -100,7 +100,7 @@ const char *cb_player_error(const CBPlayer *p);
 void cb_player_set_master_volume(CBPlayer *p, float gain);   /* 0..1 */
 /* Advances the null backend by `frames` synchronously (tests only; no-op
  * on PipeWire and on a null backend with its own thread, period >= 0).
- * Before each callback it waits for a deck playing a packet store to have
+ * Before each callback it waits for a deck playing a stream to have
  * the audio around its playhead decoded, as a device on a machine that
  * keeps up would find it, so the tests see the same output every run. */
 void cb_player_null_advance(CBPlayer *p, int frames);
@@ -111,17 +111,33 @@ void cb_player_null_advance(CBPlayer *p, int frames);
  * thread, one at a time. */
 int  cb_player_ring_take(CBPlayer *p, int16_t *out, int frames);
 
+/* ----------------------------------------------------------------- streams */
+
+/* A track opened for a deck (src/player/feed.c): two pipelines, float at
+ * the file's rate, more than two channels mixed to stereo, mono kept
+ * mono, which the deck's feed thread runs as the deck plays. Opening
+ * probes the file, a few milliseconds, on any thread; the stream is then
+ * handed to the player. The length is the container's until the deck
+ * has decoded the track's end, then the track's own (*exact true); any
+ * thread. */
+typedef struct CBStream CBStream;
+int  cb_stream_open(const char *path, CBStream **s);
+void cb_stream_free(CBStream *s);
+int  cb_stream_rate(const CBStream *s);
+int  cb_stream_channels(const CBStream *s);
+int64_t cb_stream_length(const CBStream *s, bool *exact);
+
 /* ------------------------------------------------------------------- decks */
 
 /* Takes ownership of `audio` on success (see CBPlayerOptions.release); on
  * error the caller keeps it. The grid is copied (NULL = none). */
 int  cb_deck_load(CBPlayer *p, int deck, CBAudio *audio, const CBGrid *grid);
-/* The same for a packet store, which the deck decodes as it plays: from
- * here on the deck's thread holds it (the player frees it). */
-int  cb_deck_load_packets(CBPlayer *p, int deck, CBPackets *pk, const CBGrid *grid);
+/* The same for a stream, which the deck decodes as it plays: from here on
+ * the deck's thread holds it (the player frees it). */
+int  cb_deck_load_stream(CBPlayer *p, int deck, CBStream *s, const CBGrid *grid);
 /* The places a jump may go to on the deck (the start, the cue point, the
  * loop in point, the hot and memory cues), at most CB_DECK_CUE_POINTS, in
- * seconds. A deck playing a packet store keeps half a second decoded at
+ * seconds. A deck playing a stream keeps half a second decoded at
  * each, so a cue, a hot cue or a loop going back plays at once while the
  * decoder moves there. Cheap to call with the same points again (every
  * frame: the controls do). */
@@ -134,7 +150,7 @@ bool cb_deck_loaded(const CBPlayer *p, int deck);
  * its first frame, the step's fraction kept, with no fade, silence or
  * command in between (the two play as one piece of audio); the loop goes
  * with the old track, the tempo and MASTER TEMPO stay. A deck playing a
- * packet store has the start of the next decoded ahead of time, and the
+ * stream has the start of the next decoded ahead of time, and the
  * interpolator reads across the change, so a deck that resamples plays
  * the two as one signal too. The owner learns of the move from
  * CBDeckState.advanced, after which the state (duration, position) is the
@@ -155,11 +171,11 @@ bool cb_deck_loaded(const CBPlayer *p, int deck);
  * applied to the new one: from the read to the heard move they do
  * nothing. */
 int  cb_deck_queue_next(CBPlayer *p, int deck, CBAudio *audio, const CBGrid *grid);
-int  cb_deck_queue_next_packets(CBPlayer *p, int deck, CBPackets *pk, const CBGrid *grid);
+int  cb_deck_queue_next_stream(CBPlayer *p, int deck, CBStream *s, const CBGrid *grid);
 void cb_deck_clear_next(CBPlayer *p, int deck);
 bool cb_deck_has_next(const CBPlayer *p, int deck);
 /* The buffer a deck plays (valid until unload; read-only); NULL for a
- * packet store. */
+ * stream. */
 const CBAudio *cb_deck_audio(const CBPlayer *p, int deck);
 
 void cb_deck_play(CBPlayer *p, int deck);

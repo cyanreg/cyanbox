@@ -1,170 +1,186 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
-/* A deck playing a packet store: the stream the real-time thread reads its
- * frames from, and the deck's feed thread, which decodes them.
+/* A deck playing a track as it decodes it: the stream the real-time thread
+ * reads its frames from, and the deck's feed thread, which fills it.
  *
  * Why: decoding a whole track before it could play took 1.6 to 4.7 s for a
  * 4-minute FLAC or Opus (measured in the interface on this machine, the
  * decode being the whole of it), and 5.4 s and 450 MB of floats for a
- * 10-minute 96 kHz FLAC. A packet store holds the file's packets
- * (cyanbox/audio.h): opened in a few milliseconds, it is what the deck loads,
- * and this file decodes it as the deck plays, a window around the read
- * position, CB_WINDOW_BEHIND seconds behind and CB_WINDOW_AHEAD ahead, and
- * CB_CUE_CACHE_SECONDS at each cue point, so the jumps a DJ makes (cue, hot
- * cue, a loop going back, reloop) play at once while the feed moves its
- * window there. A loop shorter than the window behind needs nothing.
+ * 10-minute 96 kHz FLAC. A stream opens in a few milliseconds and decodes
+ * as the deck plays: a window around the read position, CB_WINDOW_BEHIND
+ * seconds behind and CB_WINDOW_AHEAD ahead, and CB_CUE_CACHE_SECONDS at
+ * each cue point, so the jumps a DJ makes (cue, hot cue, a loop going back,
+ * reloop) play at once while the window moves there. A loop shorter than
+ * the window behind needs nothing.
  *
- * The window is cut in chunks of CB_CHUNK frames, chunk c in slot
- * c % nb_slots. There are slots for the whole window and two more, so the
- * chunks of one window never share a slot, and a slot is only written with
- * a chunk that has left the window. Slots and caches are sequence locks
- * (CBSlot): the real-time side copies and checks, never waits; a copy that
- * raced a write counts as frames not there.
+ * Two pipelines (cyanbox/audio.h) decode it, float at the file's rate, in
+ * chunks of CB_CHUNK frames. The main one plays on through the window
+ * ahead and is sought only when the window lacks a chunk it is not on its
+ * way to; the other fetches what lies elsewhere: the target of a jump the
+ * owner has just sent first, then the cue caches, then the window behind.
+ * The feed moves no samples: it puts each chunk where the real-time side
+ * looks for it, a table of pointers for the window (chunk c in slot
+ * c % nb_slots) and one per cache (its first chunk's index, then its
+ * chunks), and the real-time side reads the chunk itself. A chunk may be
+ * in a cache and in the window at once: after a jump to a cue point, the
+ * window takes the cache's chunks and the main pipeline starts after
+ * them. The jump's cache is apart from the window because the window's
+ * slots still hold the old window, which the main pipeline would refill
+ * over the target before the real-time side got there.
  *
- * The feed's work, one piece at a time, reading the read position again
- * before each: the target of a jump the owner has just sent (cb_deck_seek,
- * a hot cue, a click on the waveform), a chunk's worth into the jump slot
- * kept for it, unless the window or a cue cache has it; the chunks from
- * just behind the read position to the end of the window ahead, nearest
- * first; the cue caches; the window behind; then the rest of the store's
- * index, a few packets at a time. A chunk is a few hundred microseconds of
- * decoding (a millisecond or two after a jump, with the codec's pre-roll).
- * The owner tells the feed of a jump as it sends it, and the real-time
- * side applies it at its next callback, up to a period later: measured
- * with 256-frame callbacks at 48 kHz, a jump far into a FLAC, MP3 or AAC
- * track then plays from the next callback as with the whole track in
- * memory (median 1.9 ms, worst 7.3), an Opus one, whose 640 ms of pre-roll
- * take longer, a callback after that (median 7.2 ms, worst 12.7). The
- * jump slot is apart from the window because the window's slots still hold
- * the old window, which the feed would otherwise refill over the target
- * before the real-time side got there. The real-time side wakes the feed
- * (sem_post, which neither blocks nor allocates) whenever it held for
- * frames, and whenever its read position enters a new chunk; an idle feed
- * also looks every IDLE_MS.
+ * A chunk is reference counted. The real-time side takes no reference: it
+ * loads a pointer and reads, never waits, never frees. The feed, which
+ * holds the references, lets go of a chunk it took out of a table only
+ * once the real-time side has finished a callback since (the player's
+ * epoch, read after the exchange: a callback that loaded the old pointer
+ * ends before the epoch passes what was read), so a callback reads every
+ * chunk it found whole.
  *
- * The real-time side reads every frame through cb_player_stream_read: the
- * interpolator's four frames, the de-click tail, the grains and master
- * tempo's read-ahead (deck.c). Frames that are not there: the main voice
- * holds, silent, and keeps its position; the others play silence.
+ * The feed sleeps in poll() on its pipelines' eventfds and its own, which
+ * the owner writes when it tells it something and the real-time side
+ * after a callback that held for frames or entered a new chunk.
  *
- * A stream queued to follow the deck's (cb_deck_queue_next) is the feed's
- * second: once the first has nothing left to do, the feed decodes the
- * window ahead from the start of the second, with a decoder of its own,
- * so the deck plays on into it the frame after the first ends. Once the
- * real-time side says it reads it (the track id it publishes), the owner
- * makes it the feed's stream (cb_player_feed_set), and the feed goes on
- * with that decoder from the chunks it has. */
+ * A stream queued to follow the deck's (cb_deck_queue_next_stream) is the
+ * feed's second: its main pipeline fills the window from where the deck
+ * reads it, its start until the deck gets there, so the deck plays on
+ * into it the frame after the first ends. Once the real-time side says it
+ * reads it (the track id it publishes), the owner makes it the feed's
+ * stream (cb_player_feed_set), and the feed goes on with it from the
+ * chunks it has. */
 
 #include "player_internal.h"
 
+#include <poll.h>
 #include <stdio.h>
-#include <time.h>
+#include <sys/eventfd.h>
 #include <unistd.h>
 
 /* The window starts this many frames before the read position: the
  * interpolator reads one frame back, the cue caches as many. */
 #define LEAD CB_CUE_CACHE_LEAD
-/* Packets the feed indexes per piece of work once everything else is done. */
-#define INDEX_STEP 64
-/* An idle feed looks again this often, whatever wakes it (ms). */
+/* A feed with nothing to do looks again this often (ms): for the chunks
+ * the real-time side has let go of since. */
 #define IDLE_MS 50
+/* Seconds the pipelines queue: the main one past the window, the other
+ * past what it was asked for. */
+#define MAIN_AHEAD 2.0
+#define AUX_AHEAD  0.25
+
+enum AuxJob { AUX_NONE, AUX_JUMP, AUX_CACHE, AUX_BEHIND };
 
 /* ---------------------------------------------------------------- stream */
 
-int cb_player_stream_create(CBStream **out, CBPackets *pk)
+int cb_stream_open(const char *path, CBStream **out)
 {
     *out = NULL;
-    int rate = cb_packets_rate(pk);
-    int ch = CB_MIN(cb_packets_channels(pk), 2);
-    if (rate <= 0 || ch <= 0)
-        return CB_ERROR(EINVAL);
-
     CBStream *s = calloc(1, sizeof(*s));
     if (!s)
         return CB_ERROR(ENOMEM);
-    int64_t window = (int64_t)ceil((CB_WINDOW_BEHIND + CB_WINDOW_AHEAD) * rate) + LEAD;
-    s->nb_slots  = (int)((window + CB_CHUNK - 1) / CB_CHUNK) + 2;
-    s->cache_len = LEAD + (int64_t)ceil(CB_CUE_CACHE_SECONDS * rate);
-    s->rate      = rate;
-    s->channels  = ch;
-
-    /* Not zeroed: nothing is read before it is written, and pages never
-     * written (caches of points a track does not have) stay unallocated. */
-    size_t chunk = (size_t)CB_CHUNK * ch, cache = (size_t)s->cache_len * ch;
+    CBPipelineOptions o = {
+        .format = { .sample = CB_SAMPLE_FLT },
+        .chunk = CB_CHUNK, .ahead = MAIN_AHEAD,
+    };
+    int ret = cb_pipeline_open(&s->main, path, &o);
+    o.ahead = AUX_AHEAD;
+    if (ret >= 0)
+        ret = cb_pipeline_open(&s->aux, path, &o);
+    if (ret < 0) {
+        cb_stream_free(s);
+        return ret;
+    }
+    s->rate = cb_pipeline_rate(s->main);
+    s->channels = cb_pipeline_channels(s->main);
+    int64_t window = (int64_t)ceil((CB_WINDOW_BEHIND + CB_WINDOW_AHEAD) * s->rate) + LEAD;
+    s->nb_slots = (int)((window + CB_CHUNK - 1) / CB_CHUNK) + 2;
+    s->cache_len = LEAD + (int64_t)ceil(CB_CUE_CACHE_SECONDS * s->rate);
+    s->cpc = (int)((s->cache_len + CB_CHUNK - 1) / CB_CHUNK) + 1;
     s->slots = calloc((size_t)s->nb_slots, sizeof(*s->slots));
-    s->mem = malloc(sizeof(float) * (chunk * s->nb_slots + cache * (CB_DECK_CUE_POINTS + 1)));
-    if (!s->slots || !s->mem) {
-        free(s->slots);
-        free(s->mem);
-        free(s);
+    s->cache = calloc((size_t)(CB_DECK_CUE_POINTS + 1) * s->cpc, sizeof(*s->cache));
+    if (!s->slots || !s->cache) {
+        cb_stream_free(s);
         return CB_ERROR(ENOMEM);
     }
-    for (int i = 0; i < s->nb_slots; i++) {
-        atomic_init(&s->slots[i].seq, 0);
-        atomic_init(&s->slots[i].first, -1);
-        atomic_init(&s->slots[i].len, 0);
-        s->slots[i].data = s->mem + chunk * i;
-    }
-    for (int i = 0; i < CB_DECK_CUE_POINTS + 1; i++) {
-        atomic_init(&s->caches[i].seq, 0);
-        atomic_init(&s->caches[i].first, -1);
-        atomic_init(&s->caches[i].len, 0);
-        s->caches[i].data = s->mem + chunk * s->nb_slots + cache * i;
-    }
+    for (int i = 0; i < s->nb_slots; i++)
+        atomic_init(&s->slots[i], NULL);
+    for (int i = 0; i < (CB_DECK_CUE_POINTS + 1) * s->cpc; i++)
+        atomic_init(&s->cache[i], NULL);
+    for (int e = 0; e <= CB_DECK_CUE_POINTS; e++)
+        atomic_init(&s->cache_first[e], -1);
+    for (int k = 0; k < CB_DECK_CUE_POINTS; k++)
+        s->want_first[k] = -1;
+    atomic_init(&s->length, CB_MAX(cb_pipeline_length(s->main), (int64_t)0));
+    atomic_init(&s->exact, false);
     atomic_init(&s->playhead, 0);
-    atomic_init(&s->starved, false);
     atomic_init(&s->hint, -1);
-    s->pk = pk;
     *out = s;
     return 0;
 }
 
-void cb_player_stream_free(CBStream *s)
+void cb_stream_free(CBStream *s)
 {
     if (!s)
         return;
-    cb_packets_free(s->pk);
+    cb_pipeline_free(&s->main);
+    cb_pipeline_free(&s->aux);
+    for (int i = 0; s->slots && i < s->nb_slots; i++) {
+        CBChunk *c = atomic_load_explicit(&s->slots[i], memory_order_relaxed);
+        cb_chunk_unref(&c);
+    }
+    for (int i = 0; s->cache && i < (CB_DECK_CUE_POINTS + 1) * s->cpc; i++) {
+        CBChunk *c = atomic_load_explicit(&s->cache[i], memory_order_relaxed);
+        cb_chunk_unref(&c);
+    }
+    for (int i = 0; i < s->nb_retired; i++)
+        cb_chunk_unref(&s->retired[i].c);
+    cb_chunk_unref(&s->held);
+    free(s->retired);
     free(s->slots);
-    free(s->mem);
+    free(s->cache);
     free(s);
+}
+
+int cb_stream_rate(const CBStream *s)
+{
+    return s->rate;
+}
+
+int cb_stream_channels(const CBStream *s)
+{
+    return s->channels;
+}
+
+int64_t cb_stream_length(const CBStream *s, bool *exact)
+{
+    CBStream *m = (CBStream *)s;
+    bool e = atomic_load_explicit(&m->exact, memory_order_acquire);
+    if (exact)
+        *exact = e;
+    return atomic_load_explicit(&m->length, memory_order_relaxed);
 }
 
 /* ------------------------------------------------------------- real time */
 
-/* Copies n frames from frame `off` of a slot that should hold `first` on,
- * as stereo pairs. */
-static bool slot_copy(const CBSlot *cs, int64_t first, int64_t off, int n, int ch, float *out)
+/* The chunk of index c in a cache, or NULL. */
+static const CBChunk *cache_at(const CBStream *cs, int64_t c)
 {
-    CBSlot *sl = (CBSlot *)cs;
-    unsigned q = atomic_load_explicit(&sl->seq, memory_order_acquire);
-    if ((q & 1) || atomic_load_explicit(&sl->first, memory_order_relaxed) != first ||
-        off + n > atomic_load_explicit(&sl->len, memory_order_relaxed))
-        return false;
-    const float *x = sl->data + off * ch;
-    if (ch > 1) {
-        for (int k = 0; k < 2 * n; k++)
-            out[k] = x[k];
-    } else {
-        for (int k = 0; k < n; k++)
-            out[2 * k] = out[2 * k + 1] = x[k];
+    CBStream *s = (CBStream *)cs;
+    for (int e = 0; e <= CB_DECK_CUE_POINTS; e++) {
+        int64_t f = atomic_load(&s->cache_first[e]);
+        if (f < 0 || c < f || c >= f + s->cpc)
+            continue;
+        CBChunk *k = atomic_load(&s->cache[e * s->cpc + (c - f)]);
+        if (k && k->index == c)
+            return k;
     }
-    atomic_thread_fence(memory_order_acquire);
-    return atomic_load_explicit(&sl->seq, memory_order_relaxed) == q;
+    return NULL;
 }
 
-/* The cue caches and the jump slot (slot_copy checks again what is read
- * here outside its sequence lock). */
-static bool cache_copy(const CBStream *s, int64_t i, int n, float *out)
+/* The chunk of index c, in the window or a cache, or NULL. */
+static const CBChunk *chunk_at(const CBStream *cs, int64_t c)
 {
-    for (int k = 0; k < CB_DECK_CUE_POINTS + 1; k++) {
-        CBSlot *sl = (CBSlot *)&s->caches[k];
-        int64_t first = atomic_load_explicit(&sl->first, memory_order_relaxed);
-        if (first < 0 || i < first || i + n > first + s->cache_len)
-            continue;
-        if (slot_copy(sl, first, i - first, n, s->channels, out))
-            return true;
-    }
-    return false;
+    CBStream *s = (CBStream *)cs;
+    CBChunk *k = atomic_load(&s->slots[c % s->nb_slots]);
+    return k && k->index == c ? k : cache_at(s, c);
 }
 
 bool cb_player_stream_read(const CBStream *s, int64_t nb_frames, int64_t i, int n, float *out)
@@ -179,9 +195,23 @@ bool cb_player_stream_read(const CBStream *s, int64_t nb_frames, int64_t i, int 
         }
         int64_t c = i / CB_CHUNK, off = i - c * CB_CHUNK;
         int take = (int)CB_MIN((int64_t)n, CB_MIN(CB_CHUNK - off, nb_frames - i));
-        if (!slot_copy(&s->slots[c % s->nb_slots], c * CB_CHUNK, off, take, s->channels, out) &&
-            !cache_copy(s, i, take, out))
+        const CBChunk *k = chunk_at(s, c);
+        if (!k)
             return false;
+        /* Silence past the end of the track's last chunk */
+        int have = (int)CB_CLAMP(k->nb - off, (int64_t)0, (int64_t)take);
+        if (have < take && !k->last)
+            return false;
+        const float *x = (const float *)k->data[0] + off * s->channels;
+        if (s->channels > 1) {
+            for (int f = 0; f < 2 * have; f++)
+                out[f] = x[f];
+        } else {
+            for (int f = 0; f < have; f++)
+                out[2 * f] = out[2 * f + 1] = x[f];
+        }
+        for (int f = 2 * have; f < 2 * take; f++)
+            out[f] = 0.0f;
         out += 2 * take;
         i += take;
         n -= take;
@@ -191,78 +221,105 @@ bool cb_player_stream_read(const CBStream *s, int64_t nb_frames, int64_t i, int 
 
 /* ------------------------------------------------------------------ feed */
 
-/* What the feed thread keeps for the stream it fills, and for the one
- * queued to follow it. */
-typedef struct Work {
-    CBDeckFeed      *f;
-    CBStream        *s;
-    CBPacketDecoder *dec;
-    uint64_t         points_gen;
-    int64_t          cache_first[CB_DECK_CUE_POINTS];  /* -1 unused */
-    bool             cache_done[CB_DECK_CUE_POINTS];
-    bool             error_said;
-    CBStream        *next_s;
-    CBPacketDecoder *next_dec;
-    bool             next_error_said;
-} Work;
-
-static void write_begin(CBSlot *sl)
+/* A chunk out of a table: let go of once the epoch is past `epoch`. */
+static void retire(CBStream *s, CBChunk *c, uint64_t epoch)
 {
-    unsigned q = atomic_load_explicit(&sl->seq, memory_order_relaxed);
-    atomic_store_explicit(&sl->seq, q + 1, memory_order_relaxed);
-    atomic_store_explicit(&sl->first, -1, memory_order_relaxed);
-    atomic_thread_fence(memory_order_release);
-}
-
-static void write_end(CBSlot *sl, int64_t first, int64_t len)
-{
-    atomic_store_explicit(&sl->first, first, memory_order_relaxed);
-    atomic_store_explicit(&sl->len, len, memory_order_relaxed);
-    unsigned q = atomic_load_explicit(&sl->seq, memory_order_relaxed);
-    atomic_store_explicit(&sl->seq, q + 1, memory_order_release);
-}
-
-/* Only this thread writes `first`. */
-static bool holds(const CBSlot *sl, int64_t first)
-{
-    return atomic_load_explicit(&((CBSlot *)sl)->first, memory_order_relaxed) == first;
-}
-
-static void fill_with(CBStream *s, CBPacketDecoder *dec, bool *error_said, CBSlot *sl,
-                      int64_t first, int64_t n)
-{
-    write_begin(sl);
-    int64_t got = cb_packets_decode(dec, first, n, sl->data, s->channels);
-    if (got < 0) {
-        /* Silence rather than a deck waiting for ever. */
-        memset(sl->data, 0, sizeof(float) * (size_t)n * s->channels);
-        if (!*error_said)
-            cb_err("player: cannot decode the track at %.1f s: %s", (double)first / s->rate,
-                   strerror((int)-got));
-        *error_said = true;
-    }
-    write_end(sl, first, n);
-}
-
-/* Into the deck's stream. */
-static void fill(Work *w, CBSlot *sl, int64_t first, int64_t n)
-{
-    atomic_store_explicit(&w->f->settled, -1, memory_order_relaxed);
-    fill_with(w->s, w->dec, &w->error_said, sl, first, n);
-}
-
-static void forget_cache(Work *w, int k)
-{
-    if (w->cache_first[k] < 0)
+    if (!c)
         return;
-    write_begin(&w->s->caches[k]);
-    write_end(&w->s->caches[k], -1, 0);
-    w->cache_first[k] = -1;
+    if (s->nb_retired == s->cap_retired) {
+        int cap = s->cap_retired ? 2 * s->cap_retired : 64;
+        CBRetired *r = realloc(s->retired, (size_t)cap * sizeof(*r));
+        if (!r) {
+            /* Freeing it now could pull it from under the real-time side;
+             * keeping it is the safe failure. */
+            cb_err("player: out of memory, keeping a chunk");
+            return;
+        }
+        s->retired = r;
+        s->cap_retired = cap;
+    }
+    s->retired[s->nb_retired++] = (CBRetired) { .c = c, .epoch = epoch };
+}
+
+static void reclaim(const CBDeckFeed *f, CBStream *s)
+{
+    uint64_t epoch = atomic_load(f->epoch);
+    int k = 0;
+    for (int i = 0; i < s->nb_retired; i++) {
+        if (s->retired[i].epoch < epoch)
+            cb_chunk_unref(&s->retired[i].c);
+        else
+            s->retired[k++] = s->retired[i];
+    }
+    s->nb_retired = k;
+}
+
+/* Puts chunk c (the caller's reference, now the table's; NULL empties) at
+ * `at`, unless the chunk there has its index already. */
+static void place(const CBDeckFeed *f, CBStream *s, _Atomic(CBChunk *) *at, CBChunk *c)
+{
+    CBChunk *old = atomic_load_explicit(at, memory_order_relaxed);
+    if (c && old && old->index == c->index) {
+        cb_chunk_unref(&c);
+        return;
+    }
+    if (!c && !old)
+        return;
+    old = atomic_exchange(at, c);
+    retire(s, old, atomic_load(f->epoch));
+}
+
+static bool holds(const CBStream *s, int64_t c)
+{
+    CBChunk *k = atomic_load_explicit(&((CBStream *)s)->slots[c % s->nb_slots],
+                                      memory_order_relaxed);
+    return k && k->index == c;
+}
+
+/* A chunk the pipelines gave: the track's length, the container's until
+ * the last chunk says (or, when the container says less, as far as the
+ * chunks went); an error said once. */
+static void heard(CBStream *s, const CBChunk *c)
+{
+    if (c->err < 0 && !s->error_said) {
+        cb_err("player: cannot decode the track at %.1f s: %s",
+               (double)c->index * CB_CHUNK / s->rate, strerror(-c->err));
+        s->error_said = true;
+    }
+    if (atomic_load_explicit(&s->exact, memory_order_relaxed))
+        return;
+    int64_t end = c->index * CB_CHUNK + c->nb;
+    if (c->last || end > atomic_load_explicit(&s->length, memory_order_relaxed))
+        atomic_store_explicit(&s->length, end, memory_order_relaxed);
+    if (c->last)
+        atomic_store_explicit(&s->exact, true, memory_order_release);
+}
+
+/* The window's last chunk for the read position ph. */
+static int64_t window_end(const CBStream *s, int64_t ph)
+{
+    int64_t len = cb_stream_length(s, NULL);
+    int64_t last = len > 0 ? (len - 1) / CB_CHUNK : 0;
+    return CB_MIN((ph + (int64_t)(CB_WINDOW_AHEAD * s->rate)) / CB_CHUNK, last);
+}
+
+static int64_t window_start(const CBStream *s, int64_t ph)
+{
+    return CB_MAX(ph - (int64_t)(CB_WINDOW_BEHIND * s->rate), (int64_t)0) / CB_CHUNK;
+}
+
+/* Empties cache e and starts it at chunk `first` (-1: none). */
+static void cache_reset(const CBDeckFeed *f, CBStream *s, int e, int64_t first)
+{
+    atomic_store(&s->cache_first[e], -1);
+    for (int i = 0; i < s->cpc; i++)
+        place(f, s, &s->cache[e * s->cpc + i], NULL);
+    atomic_store(&s->cache_first[e], first);
 }
 
 /* New cue points: caches already at one of them stay, the others go to the
  * points without one. */
-static void take_points(Work *w, const int64_t *points, int nb)
+static void take_points(const CBDeckFeed *f, CBStream *s, const int64_t *points, int nb)
 {
     int64_t want[CB_DECK_CUE_POINTS];
     int nw = 0;
@@ -277,213 +334,260 @@ static void take_points(Work *w, const int64_t *points, int nb)
     bool served[CB_DECK_CUE_POINTS] = { 0 };
     for (int k = 0; k < CB_DECK_CUE_POINTS; k++) {
         int j = 0;
-        while (j < nw && (served[j] || want[j] != w->cache_first[k]))
+        while (j < nw && (served[j] || want[j] != s->want_first[k]))
             j++;
-        if (j < nw && w->cache_first[k] >= 0)
+        if (j < nw && s->want_first[k] >= 0) {
             served[j] = true;
-        else
-            forget_cache(w, k);
+        } else if (s->want_first[k] >= 0) {
+            s->want_first[k] = -1;
+            s->cache_done[k] = false;
+            cache_reset(f, s, k, -1);
+        }
     }
     for (int j = 0, k = 0; j < nw; j++) {
         if (served[j])
             continue;
-        while (k < CB_DECK_CUE_POINTS && w->cache_first[k] >= 0)
+        while (k < CB_DECK_CUE_POINTS && s->want_first[k] >= 0)
             k++;
         if (k == CB_DECK_CUE_POINTS)
             break;
-        w->cache_first[k] = want[j];
-        w->cache_done[k] = false;
+        s->want_first[k] = want[j];
+        s->cache_done[k] = false;
     }
+    if (s->aux_job == AUX_CACHE)
+        s->aux_job = AUX_NONE;
 }
 
-/* One piece of work; false when there was none left. */
-static bool step(Work *w)
+/* What the main pipeline made, into the window, and where it should be
+ * for the read position ph: true while the window lacks a chunk. */
+static bool fill_window(const CBDeckFeed *f, CBStream *s, int64_t ph)
 {
-    CBStream *s = w->s;
-    bool exact;
-    int64_t len = cb_packets_length(s->pk, &exact);
-    int64_t at = atomic_load_explicit(&s->playhead, memory_order_relaxed);
-    int64_t ph = CB_CLAMP(at, (int64_t)0, len);
-    int64_t ahead = (int64_t)(CB_WINDOW_AHEAD * s->rate);
-    int64_t behind = (int64_t)(CB_WINDOW_BEHIND * s->rate);
+    while (1) {
+        CBChunk *k = s->held ? s->held : cb_pipeline_pop(s->main);
+        s->held = NULL;
+        if (!k)
+            break;
+        heard(s, k);
+        s->main_next = k->index + 1;
+        if (k->index > window_end(s, ph)) {
+            /* kept until the window gets there */
+            s->held = k;
+            break;
+        }
+        if (k->index >= window_start(s, ph))
+            place(f, s, &s->slots[k->index % s->nb_slots], k);
+        else
+            cb_chunk_unref(&k);
+    }
 
-    /* A jump the owner just sent: a chunk's worth at its target first, in
-     * the jump slot (the window's slots are the old window's until the
-     * real-time side gets there), so that it is decoded by the time the
-     * real-time side applies the jump, up to a callback later. Not when the
-     * window or a cue cache has it already. */
+    bool exact, busy = false;
+    int64_t len = cb_stream_length(s, &exact);
+    int64_t c0 = CB_MAX(ph - LEAD, (int64_t)0) / CB_CHUNK;
+    int64_t c1 = exact && len <= 0 ? -1 : window_end(s, ph);
+    for (int64_t c = c0; c <= c1; c++) {
+        if (holds(s, c))
+            continue;
+        const CBChunk *k = cache_at(s, c);
+        if (k) {
+            place(f, s, &s->slots[c % s->nb_slots], cb_chunk_ref((CBChunk *)k));
+            continue;
+        }
+        busy = true;
+        if (s->aux_job == AUX_JUMP && c >= s->aux_next && c < s->aux_to) {
+            /* the other pipeline is on its way: on from after it */
+            c = s->aux_to - 1;
+            continue;
+        }
+        if (c != s->main_next) {
+            cb_chunk_unref(&s->held);
+            cb_pipeline_seek(s->main, c);
+            s->main_next = c;
+            s->main_seeks++;
+        }
+        break;
+    }
+    return busy;
+}
+
+/* Whether the real-time side would find frames [i, i + n) now. */
+static bool readable(const CBStream *s, int64_t i, int64_t n)
+{
+    for (int64_t c = i / CB_CHUNK; n > 0 && c <= (i + n - 1) / CB_CHUNK; c++)
+        if (!chunk_at(s, c))
+            return false;
+    return true;
+}
+
+static void aux_start(CBStream *s, int job, int cue, int64_t from, int64_t to)
+{
+    s->aux_job = job;
+    s->aux_cue = cue;
+    s->aux_next = from;
+    s->aux_to = to;
+    cb_pipeline_seek(s->aux, from);
+}
+
+/* What the other pipeline fetches for the read position ph: true while it
+ * has something to do. */
+static bool fill_rest(const CBDeckFeed *f, CBStream *s, int64_t ph)
+{
+    int64_t len = cb_stream_length(s, NULL);
+
+    /* A jump the owner just sent, to a place nothing holds: before what the
+     * other pipeline was doing, which it takes up again after */
     int64_t hint = atomic_exchange_explicit(&s->hint, -1, memory_order_relaxed);
     if (hint >= 0 && hint < len) {
         int64_t first = CB_MAX(hint - LEAD, (int64_t)0);
-        float probe[2 * 2 * LEAD];
-        if (!cb_player_stream_read(s, len, first, 2 * LEAD, probe)) {
-            fill(w, &s->caches[CB_DECK_CUE_POINTS], first, CB_MIN(s->cache_len, CB_CHUNK + LEAD));
-            return true;
+        if (!readable(s, first, CB_MIN(2 * LEAD, len - first))) {
+            int64_t c = first / CB_CHUNK;
+            cache_reset(f, s, CB_DECK_CUE_POINTS, c);
+            aux_start(s, AUX_JUMP, CB_DECK_CUE_POINTS, c, c + s->cpc);
         }
     }
 
-    int64_t c0 = CB_MAX(ph - LEAD, (int64_t)0) / CB_CHUNK;
-    int64_t c1 = len > 0 ? CB_MIN(ph + ahead, len - 1) / CB_CHUNK : -1;
-    for (int64_t c = c0; c <= c1; c++) {
-        CBSlot *sl = &s->slots[c % s->nb_slots];
-        if (!holds(sl, c * CB_CHUNK)) {
-            fill(w, sl, c * CB_CHUNK, CB_CHUNK);
+    while (s->aux_job != AUX_NONE) {
+        CBChunk *k = cb_pipeline_pop(s->aux);
+        if (!k)
             return true;
+        heard(s, k);
+        if (k->index != s->aux_next) {
+            cb_chunk_unref(&k);
+            continue;
+        }
+        s->aux_next++;
+        bool done = k->last || s->aux_next >= s->aux_to;
+        if (s->aux_job == AUX_BEHIND) {
+            /* only into the window as it is now */
+            if (k->index >= window_start(s, ph) && k->index <= window_end(s, ph))
+                place(f, s, &s->slots[k->index % s->nb_slots], k);
+            else
+                cb_chunk_unref(&k);
+        } else {
+            int e = s->aux_cue;
+            int64_t first = atomic_load_explicit(&s->cache_first[e], memory_order_relaxed);
+            if (first >= 0 && k->index >= first && k->index < first + s->cpc)
+                place(f, s, &s->cache[e * s->cpc + (k->index - first)], k);
+            else
+                cb_chunk_unref(&k);
+        }
+        if (done) {
+            if (s->aux_job == AUX_CACHE)
+                s->cache_done[s->aux_cue] = true;
+            s->aux_job = AUX_NONE;
         }
     }
+
+    /* The cue caches */
     for (int k = 0; k < CB_DECK_CUE_POINTS; k++) {
-        if (w->cache_first[k] >= 0 && !w->cache_done[k]) {
-            fill(w, &s->caches[k], w->cache_first[k], s->cache_len);
-            w->cache_done[k] = true;
-            return true;
-        }
-    }
-    for (int64_t c = CB_MAX(ph - behind, (int64_t)0) / CB_CHUNK; c < c0; c++) {
-        CBSlot *sl = &s->slots[c % s->nb_slots];
-        if (!holds(sl, c * CB_CHUNK)) {
-            fill(w, sl, c * CB_CHUNK, CB_CHUNK);
-            return true;
-        }
-    }
-
-    atomic_store_explicit(&w->f->settled, at, memory_order_release);
-    if (!exact) {
-        int ret = cb_packets_index(s->pk, INDEX_STEP);
-        if (ret < 0)
-            cb_warn("player: the track's index ends early: %s", strerror(-ret));
+        if (s->want_first[k] < 0 || s->cache_done[k] || s->want_first[k] >= len)
+            continue;
+        int64_t c = s->want_first[k] / CB_CHUNK;
+        int64_t to = (s->want_first[k] + s->cache_len - 1) / CB_CHUNK + 1;
+        if (atomic_load_explicit(&s->cache_first[k], memory_order_relaxed) != c)
+            cache_reset(f, s, k, c);
+        aux_start(s, AUX_CACHE, k, c, CB_MIN(to, c + s->cpc));
         return true;
     }
-    return false;
-}
-
-/* The stream queued to follow, once the deck's has nothing left: the
- * window ahead from its first frame, a chunk at a time, so the deck
- * plays on into it at once. The rest of it is decoded once it is the
- * deck's stream, from these chunks on. */
-static bool step_next(Work *w)
-{
-    CBStream *s = w->next_s;
-    if (!s || !w->next_dec)
-        return false;
-    int64_t len = cb_packets_length(s->pk, NULL);
-    int64_t ahead = (int64_t)(CB_WINDOW_AHEAD * s->rate);
-    int64_t c1 = len > 0 ? CB_MIN(ahead, len - 1) / CB_CHUNK : -1;
-    for (int64_t c = 0; c <= c1; c++) {
-        CBSlot *sl = &s->slots[c % s->nb_slots];
-        if (!holds(sl, c * CB_CHUNK)) {
-            fill_with(s, w->next_dec, &w->next_error_said, sl, c * CB_CHUNK, CB_CHUNK);
+    /* The window behind */
+    int64_t c0 = CB_MAX(ph - LEAD, (int64_t)0) / CB_CHUNK;
+    for (int64_t c = window_start(s, ph); c < c0; c++) {
+        if (!holds(s, c)) {
+            aux_start(s, AUX_BEHIND, 0, c, c0);
             return true;
         }
     }
     return false;
 }
 
-static void wait_wake(CBDeckFeed *f, bool busy)
+/* ------------------------------------------------------------ the thread */
+
+static void poke(int fd)
 {
-    if (busy) {
-        while (!sem_trywait(&f->wake))
-            ;
+    uint64_t one = 1;
+    ssize_t w = write(fd, &one, sizeof(one));
+    (void)w;
+}
+
+/* Sleeps until something wakes the feed, or IDLE_MS. */
+static void wait_wake(CBDeckFeed *f, const CBStream *s, const CBStream *next)
+{
+    struct pollfd p[4];
+    nfds_t n = 0;
+    p[n++] = (struct pollfd) { .fd = f->wakefd, .events = POLLIN };
+    if (s) {
+        p[n++] = (struct pollfd) { .fd = cb_pipeline_fd(s->main), .events = POLLIN };
+        p[n++] = (struct pollfd) { .fd = cb_pipeline_fd(s->aux), .events = POLLIN };
+    }
+    if (next)
+        p[n++] = (struct pollfd) { .fd = cb_pipeline_fd(next->main), .events = POLLIN };
+    if (poll(p, n, IDLE_MS) <= 0)
         return;
+    for (nfds_t i = 0; i < n; i++) {
+        uint64_t v;
+        if (p[i].revents & POLLIN) {
+            ssize_t r = read(p[i].fd, &v, sizeof(v));
+            (void)r;
+        }
     }
-    struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
-    ts.tv_nsec += IDLE_MS * 1000000L;
-    if (ts.tv_nsec >= 1000000000L) {
-        ts.tv_nsec -= 1000000000L;
-        ts.tv_sec++;
-    }
-    while (sem_timedwait(&f->wake, &ts) && errno == EINTR)
-        ;
 }
 
 static void *feed_main(void *arg)
 {
     CBDeckFeed *f = arg;
-    Work w = { .f = f };
-    for (int k = 0; k < CB_DECK_CUE_POINTS; k++)
-        w.cache_first[k] = -1;
-
-    bool busy = false;
+    CBStream *s = NULL, *next = NULL;
+    uint64_t points_gen = 0;
     while (1) {
-        wait_wake(f, busy);
+        wait_wake(f, s, next);
 
         int64_t points[CB_DECK_CUE_POINTS];
         pthread_mutex_lock(&f->lock);
         bool quit = f->quit;
-        CBStream *s = f->stream;
-        CBStream *next = f->next;
+        CBStream *now = f->stream, *now_next = f->next;
         uint64_t gen = f->gen;
-        bool new_points = f->points_gen != w.points_gen;
+        bool new_points = f->points_gen != points_gen;
         int nb = f->nb_points;
         memcpy(points, f->points, sizeof(points[0]) * nb);
-        w.points_gen = f->points_gen;
+        points_gen = f->points_gen;
         pthread_mutex_unlock(&f->lock);
         if (quit)
             break;
-
-        if (s != w.s) {
-            /* The stream queued to follow, now the deck's: its decoder
-             * and the chunks it has go on. */
-            CBPacketDecoder *dec = NULL;
-            if (s && s == w.next_s) {
-                dec = w.next_dec;
-                w.next_dec = NULL;
-                w.next_s = NULL;
-            }
-            cb_packets_decoder_free(w.dec);
-            w.dec = dec;
-            w.s = s;
-            w.error_said = false;
-            for (int k = 0; k < CB_DECK_CUE_POINTS; k++)
-                w.cache_first[k] = -1;
-            new_points = true;
-            if (s && !w.dec) {
-                int ret = cb_packets_decoder(s->pk, &w.dec);
-                if (ret < 0)
-                    cb_err("player: no decoder for the track: %s", strerror(-ret));
-            }
+        if (now != s)
             atomic_store_explicit(&f->settled, -1, memory_order_relaxed);
-        }
-        if (next != w.next_s) {
-            cb_packets_decoder_free(w.next_dec);
-            w.next_dec = NULL;
-            w.next_s = next;
-            w.next_error_said = false;
-            if (next) {
-                int ret = cb_packets_decoder(next->pk, &w.next_dec);
-                if (ret < 0)
-                    cb_err("player: no decoder for the next track: %s", strerror(-ret));
-            }
-        }
+        s = now;
+        next = now_next != now ? now_next : NULL;
         /* From here on the streams before this generation are not touched. */
         atomic_store_explicit(&f->acked, gen, memory_order_release);
-        if (!w.s || !w.dec) {
-            busy = step_next(&w);
-            continue;
+
+        if (s) {
+            reclaim(f, s);
+            if (new_points)
+                take_points(f, s, points, nb);
+            int64_t at = atomic_load_explicit(&s->playhead, memory_order_relaxed);
+            int64_t ph = CB_CLAMP(at, (int64_t)0, cb_stream_length(s, NULL));
+            bool busy = fill_window(f, s, ph);
+            busy |= fill_rest(f, s, ph);
+            atomic_store_explicit(&f->settled, busy ? -1 : at, memory_order_release);
         }
-        if (new_points)
-            take_points(&w, points, nb);
-        busy = step(&w);
-        if (!busy)
-            busy = step_next(&w);
+        if (next) {
+            reclaim(f, next);
+            int64_t at = atomic_load_explicit(&next->playhead, memory_order_relaxed);
+            fill_window(f, next, CB_CLAMP(at, (int64_t)0, cb_stream_length(next, NULL)));
+        }
     }
-    cb_packets_decoder_free(w.dec);
-    cb_packets_decoder_free(w.next_dec);
     return NULL;
 }
 
-int cb_player_feed_start(CBDeckFeed *f)
+int cb_player_feed_start(CBDeckFeed *f, const _Atomic uint64_t *epoch)
 {
-    *f = (CBDeckFeed) { 0 };
+    *f = (CBDeckFeed) { .wakefd = -1, .epoch = epoch };
     atomic_init(&f->acked, 0);
     atomic_init(&f->settled, -1);
-    if (sem_init(&f->wake, 0, 0))
-        return CB_ERROR(errno);
-    f->sem_ok = true;
     int ret = pthread_mutex_init(&f->lock, NULL);
     if (ret)
         return CB_ERROR(ret);
     f->lock_ok = true;
+    if ((f->wakefd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC)) < 0)
+        return CB_ERROR(errno);
     ret = pthread_create(&f->thread, NULL, feed_main, f);
     if (ret)
         return CB_ERROR(ret);
@@ -491,21 +595,30 @@ int cb_player_feed_start(CBDeckFeed *f)
     return 0;
 }
 
+/* Safe on a feed never started (zeroed) or started part way. */
 void cb_player_feed_stop(CBDeckFeed *f)
 {
     if (f->started) {
         pthread_mutex_lock(&f->lock);
         f->quit = true;
         pthread_mutex_unlock(&f->lock);
-        sem_post(&f->wake);
+        poke(f->wakefd);
         pthread_join(f->thread, NULL);
         f->started = false;
     }
-    if (f->lock_ok)
+    if (f->lock_ok) {
         pthread_mutex_destroy(&f->lock);
-    if (f->sem_ok)
-        sem_destroy(&f->wake);
-    f->lock_ok = f->sem_ok = false;
+        if (f->wakefd >= 0)
+            close(f->wakefd);
+    }
+    f->wakefd = -1;
+    f->lock_ok = false;
+}
+
+void cb_player_feed_poke(CBDeckFeed *f)
+{
+    if (f->lock_ok && f->wakefd >= 0)
+        poke(f->wakefd);
 }
 
 uint64_t cb_player_feed_set(CBDeckFeed *f, CBStream *s, CBStream *next)
@@ -520,7 +633,7 @@ uint64_t cb_player_feed_set(CBDeckFeed *f, CBStream *s, CBStream *next)
     f->next = next;
     uint64_t gen = ++f->gen;
     pthread_mutex_unlock(&f->lock);
-    sem_post(&f->wake);
+    cb_player_feed_poke(f);
     return gen;
 }
 
@@ -532,7 +645,7 @@ void cb_player_feed_points(CBDeckFeed *f, const int64_t *frames, int nb)
     f->nb_points = nb;
     f->points_gen++;
     pthread_mutex_unlock(&f->lock);
-    sem_post(&f->wake);
+    cb_player_feed_poke(f);
 }
 
 bool cb_player_feed_wait(CBDeckFeed *f, const CBStream *s, int64_t timeout_us)
@@ -552,7 +665,7 @@ bool cb_player_feed_wait(CBDeckFeed *f, const CBStream *s, int64_t timeout_us)
            atomic_load_explicit(&f->settled, memory_order_acquire) != want) {
         if (cb_time_us() - t0 > timeout_us)
             return false;
-        sem_post(&f->wake);
+        cb_player_feed_poke(f);
         usleep(50);
     }
     return true;
