@@ -60,17 +60,31 @@ CDJ-2000 v4.33, a CDJ-2000NXS2 v1.87; 2026-10-15) showed:
   mid-load reads on and never mounts again; refused, an NXS2 retried the
   READ 43 times a second for minutes and never finished loading. Now an
   address that was on the link is answered for half an hour after it
-  dropped off, its mount is kept, and a deck that mounted in this session
-  and reads with a handle of it is taken back in (nfs.c, may_read_node).
-  The session is the interface's for as long as cyanbox runs (set.c,
-  CBNfsSession): when the interface loses its address (a USB adapter
-  pulled out, a link-local address dropped with the carrier) its service
-  stops, and the one that starts there when it is back gives out the
-  same handles and knows the same decks, so one that was playing reads
-  on at the same address. netns_test takes the server's address away
-  after the player read the file and puts it back; the player's second
-  read, with the handles it had, is answered (`link browse
-  --fetch-again`).
+  dropped off, its mount is kept, and a deck that reads with a handle of
+  ours is taken back in (nfs.c, may_read_node). Every handle starts with
+  the library's tag, drawn once and kept in it (`link.tag`,
+  cb_library_link_tag), so a deck's handles hold when cyanbox serves
+  again: its interface back (a USB adapter pulled out, a link-local
+  address dropped with the carrier) or cyanbox started again. Another
+  library's are stale: its track ids name other tracks. A peer in the
+  subnet that never mounted is answered with one too, as any peer there
+  may mount and look a file up. netns_test takes the server's address
+  away after the player read the file and puts it back, then stops the
+  server and starts it again; each time the player's second read, with
+  the handles it had, is answered (`link browse --fetch-again`).
+- A cable pulled mid-play (the cdj session's emulated CDJ-900 4.32 and
+  CDJ-2000NXS2 1.87, 2026-10-20): shorter than the deck takes to age the
+  source out (9.2 s after its last keep-alive on the 900; between 6.5
+  and 15.6 s on the NXS2), the gap plays through and the reads go on.
+  Longer, or the deck's own cable out, the deck lets the track go: the
+  900, which reads the whole file within 11 s of the load, unloads it
+  without a word; the NXS2, about 630 KB ahead, shows "Cannot play
+  track" in EMERGENCY LOOP. A first-stage claim (00) from the source
+  does the same at once, and cyanbox sends one when its interface's
+  address comes back and it joins again. Back, the source is mounted
+  again at once, but nothing is loaded: the track is loaded again by
+  hand. The decks do not care who the source is, so rekordbox's would
+  not resume either.
 - Text in NFD (a kana and its dakuten apart, as tags written on macOS
   hold it) reached a CDJ-2000 as two characters. The library keeps all
   its text in NFC now (src/common/utf8.c; existing text is converted as
