@@ -12,13 +12,7 @@
  * plans over it, and stopping one waits for a request in progress, so
  * both happen there. A service is taken out of the list under the lock
  * before it is stopped and put in after it started: whoever reads the
- * list under the lock never meets a service being freed.
- *
- * Each interface keeps its NFS session (nfs.h) for as long as the set runs,
- * by name: a service started again there, after its cable or its USB
- * adapter came back, gives out the same handles and knows the decks that
- * mounted, so a deck that was playing reads on. Only this thread hands
- * them out, each to one service at a time. */
+ * list under the lock never meets a service being freed. */
 
 #include "cyanbox/link.h"
 
@@ -35,15 +29,12 @@
 #include "cyanbox/common.h"
 
 #include "net.h"
-#include "nfs.h"
 #include "usb.h"
 
 #define RESCAN_MS   2000
 /* A service that would not start is tried again this much later. */
 #define RETRY_US    10000000
 #define MAX_SERVED  8
-/* Interfaces whose NFS session is kept; past that, a service's own. */
-#define MAX_SESSIONS 16
 
 typedef struct Served {
     char     name[16];
@@ -68,12 +59,6 @@ struct CBLinkSet {
     /* The TAG LIST every service shares: the owner's, or the set's own. */
     CBLinkTagList *own_tags;
     CBLinkUsb *usb;             /* an all-in-one on USB: its activation */
-    /* Each interface's NFS session, by name (the manager thread's). */
-    struct {
-        char         name[16];
-        CBNfsSession nfs;
-    } sessions[MAX_SESSIONS];
-    int nb_sessions;
 };
 
 typedef struct Want {
@@ -112,21 +97,6 @@ static int find(const CBLinkSet *s, const char *name)
         if (!strcmp(s->served[i].name, name))
             return i;
     return -1;
-}
-
-/* The interface's NFS session, made the first time; NULL past
- * MAX_SESSIONS. */
-static CBNfsSession *session_of(CBLinkSet *s, const char *name)
-{
-    for (int i = 0; i < s->nb_sessions; i++)
-        if (!strcmp(s->sessions[i].name, name))
-            return &s->sessions[i].nfs;
-    if (s->nb_sessions >= MAX_SESSIONS)
-        return NULL;
-    int i = s->nb_sessions++;
-    snprintf(s->sessions[i].name, sizeof(s->sessions[i].name), "%.*s",
-             (int)sizeof(s->sessions[i].name) - 1, name);
-    return &s->sessions[i].nfs;
 }
 
 static int served_order(const void *a, const void *b)
@@ -190,7 +160,6 @@ static void rescan(CBLinkSet *s)
 
         CBLinkOptions o = s->opt;
         o.interface = want[k].name;
-        o.nfs_session = session_of(s, want[k].name);
         CBLink *link = NULL;
         int ret = cb_link_start(&link, &o);
 
@@ -277,7 +246,6 @@ int cb_link_set_start(CBLinkSet **out, const CBLinkOptions *o)
     s->opt.broadcast = s->broadcast;
     s->opt.interface = NULL;
     s->opt.usb_card = s->opt.test_usb_root = NULL;     /* the set's own, below */
-    s->opt.nfs_session = NULL;                          /* each interface's, rescan */
     s->wake = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
     int ret = 0;
     if (!o->tag_list && cb_link_tag_list_new(&s->own_tags) >= 0)

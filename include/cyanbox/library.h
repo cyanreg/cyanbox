@@ -275,6 +275,11 @@ int  cb_library_config_save(CBLibrary *lib);          /* writes lib->cfg to the 
 /* Raw access for anything not in CBConfig (the interface's column layout...). */
 int  cb_library_setting_get(const CBLibrary *lib, const char *key, char **value);   /* -ENOENT when absent */
 int  cb_library_setting_set(CBLibrary *lib, const char *key, const char *value);
+/* PRO DJ LINK's NFS handle tag (CBLinkOptions.nfs_tag): drawn at random
+ * the first time and kept in the library (link.tag), so a deck's handles
+ * hold across cyanbox's restarts and are stale for another library, whose
+ * track ids name other tracks. Never 0. */
+int  cb_library_link_tag(CBLibrary *lib, uint32_t *tag);
 
 /* Disposable files (transcodes): <root>/cache/<kind>/<id>.<ext>, directories created. */
 char *cb_library_cache_path(const CBLibrary *lib, const char *kind, uint64_t id, const char *ext);

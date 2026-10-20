@@ -41,7 +41,7 @@
  * key cyanbox does not know: a bad row never stops the library from
  * opening, and does not stay. The interface's ui.* keys and the sync's
  * sync.* records are free for cb_library_setting_get/set and left alone
- * by cb_library_config_save.
+ * by cb_library_config_save, as is link.tag (cb_library_link_tag).
  *
  * The interface's waveform colour and key notation are the players'
  * device.waveform_color and device.key_display (one setting for cyanbox and
@@ -49,8 +49,11 @@
 
 #include "core.h"
 
+#include <errno.h>
+#include <inttypes.h>
 #include <math.h>
 #include <stdio.h>
+#include <sys/random.h>
 
 #include "cyanbox/analysis.h"
 #include "cyanbox/colors.h"
@@ -474,11 +477,15 @@ static int apply_setting(CBConfig *c, const char *key, const char *value)
     return ret == CB_ERROR(ENOENT) ? 0 : ret;
 }
 
+/* PRO DJ LINK's handle tag (cb_library_link_tag). */
+#define LINK_TAG "link.tag"
+
 /* The keys cyanbox knows besides CBConfig's and My Settings: the interface's
- * own (its layout, under ui.) and the stick sync's records (sync.). */
+ * own (its layout, under ui.), the stick sync's records (sync.) and Link's
+ * handle tag. */
 static bool free_key(const char *key)
 {
-    return cb_str_starts(key, "ui.") || cb_str_starts(key, "sync.");
+    return cb_str_starts(key, "ui.") || cb_str_starts(key, "sync.") || !strcmp(key, LINK_TAG);
 }
 
 int cb_core_config_clean(CBLibrary *lib, int *removed)
@@ -667,4 +674,45 @@ int cb_library_setting_set(CBLibrary *lib, const char *key, const char *value)
     if (ret >= 0)
         cb_core_changed(lib, 0);
     return ret;
+}
+
+/* Eight lowercase hex digits, not 0. */
+static bool parse_tag(const char *s, uint32_t *tag)
+{
+    if (strlen(s) != 8 || strspn(s, "0123456789abcdef") != 8)
+        return false;
+    *tag = (uint32_t)strtoul(s, NULL, 16);
+    return *tag != 0;
+}
+
+int cb_library_link_tag(CBLibrary *lib, uint32_t *tag)
+{
+    *tag = 0;
+    /* Under the write lock, so two cyanboxes opening the library at once
+     * agree on one. */
+    int ret = cb_db_begin(lib->db);
+    if (ret < 0)
+        return ret;
+    char *value = NULL;
+    ret = cb_library_setting_get(lib, LINK_TAG, &value);
+    bool have = ret >= 0 && parse_tag(value, tag);
+    free(value);
+    if (ret == CB_ERROR(ENOENT) || (ret >= 0 && !have)) {
+        uint32_t t = 0;
+        ret = 0;
+        while (!t && !ret) {
+            if (getrandom(&t, sizeof(t), 0) != (ssize_t)sizeof(t) && errno != EINTR)
+                ret = CB_ERROR(errno);
+        }
+        char hex[16];
+        snprintf(hex, sizeof(hex), "%08" PRIx32, t);
+        if (!ret && (ret = put(lib, LINK_TAG, hex)) >= 0)
+            *tag = t;
+    }
+    if (ret < 0) {
+        cb_db_rollback(lib->db);
+        *tag = 0;
+        return ret;
+    }
+    return cb_db_commit(lib->db);
 }

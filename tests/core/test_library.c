@@ -16,6 +16,7 @@
 
 #include "cyanbox/library.h"
 
+#include <inttypes.h>
 #include <pthread.h>
 #include <unistd.h>
 
@@ -583,6 +584,43 @@ static void test_history(void)
     free(pb);
     free(m);
     free(dir);
+}
+
+/* PRO DJ LINK's handle tag: drawn the first time, never 0, written as
+ * eight hex digits, the same after a config save and an open (which takes
+ * away keys cyanbox does not know), another library's another; a row
+ * that is no tag is drawn again. */
+static void test_link_tag(void)
+{
+    char *dir = test_dir("library-link-tag"), *dir2 = test_dir("library-link-tag-other");
+    CBLibrary lib, other;
+    CHECK(cb_library_open(&lib, dir) == 0);
+    uint32_t tag = 0, again = 0, theirs = 0;
+    CHECK(cb_library_link_tag(&lib, &tag) == 0 && tag);
+    char hex[16], *v = NULL;
+    snprintf(hex, sizeof(hex), "%08" PRIx32, tag);
+    CHECK(cb_library_setting_get(&lib, "link.tag", &v) == 0 && v && !strcmp(v, hex));
+    free(v);
+    CHECK(cb_library_link_tag(&lib, &again) == 0 && again == tag);
+    CHECK(cb_library_config_save(&lib) == 0);
+    cb_library_close(&lib);
+    CHECK(cb_library_open(&lib, dir) == 0);
+    CHECK(cb_library_link_tag(&lib, &again) == 0 && again == tag);
+
+    CHECK(cb_library_open(&other, dir2) == 0);
+    CHECK(cb_library_link_tag(&other, &theirs) == 0 && theirs && theirs != tag);
+    cb_library_close(&other);
+
+    const char *bad[] = { "00000000", "1234567", "0x123456", "ABCDEF12", " 1234567", "12345678 " };
+    for (size_t i = 0; i < CB_ARRAY_ELEMS(bad); i++) {
+        CHECK(cb_library_setting_set(&lib, "link.tag", bad[i]) == 0);
+        CHECK(cb_library_link_tag(&lib, &again) == 0 && again);
+        CHECK(cb_library_setting_get(&lib, "link.tag", &v) == 0 && v && strcmp(v, bad[i]));
+        free(v);
+    }
+    cb_library_close(&lib);
+    free(dir);
+    free(dir2);
 }
 
 /* A dynamic grid's measured beats are kept through a save and an open. */
@@ -1692,6 +1730,7 @@ int main(void)
     test_refresh();
     test_changes();
     test_history();
+    test_link_tag();
     test_dynamic_grid();
     test_legend();
     test_clean();
