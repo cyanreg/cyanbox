@@ -46,6 +46,9 @@
 
 static char root[512];
 
+/* The files each stage named: a copy's progress also ticks with no file
+ * (every 250 ms, and while the encoder is behind), more often the slower
+ * the machine. */
 typedef struct Stages {
     int copy, check, prune;
 } Stages;
@@ -55,7 +58,7 @@ static bool on_progress(void *opaque, const char *stage, int done, int total, co
     (void)done;
     (void)total;
     Stages *s = opaque;
-    if (s && !strcmp(stage, "copy"))
+    if (s && !strcmp(stage, "copy") && item)
         s->copy++;
     if (s && !strcmp(stage, "check") && item && !cb_str_starts(item, "warning"))
         s->check++;
