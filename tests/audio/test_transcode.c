@@ -7,10 +7,7 @@
  * samples of the FLAC).
  *
  * Link's: cb_transcode_wav makes a plain WAV, the 44-byte header and the
- * samples, no tags or cover, a 16-bit source sample for sample;
- * cb_transcode_mp3 a 320 kbps MP3 with no ID3 tag and no Xing frame whose
- * clicks, decoded as a player decodes it (delay and all), are where the
- * source has them. */
+ * samples, no tags or cover, a 16-bit source sample for sample. */
 
 #include "cyanbox/audio.h"
 
@@ -152,36 +149,6 @@ int main(void)
           "16-bit link wav not exact");
     cb_audio_free(&at);
     free(lw);
-
-    /* Link's MP3: no tag, no Xing frame, and the clicks in place */
-    if (have_encoder("libmp3lame")) {
-        char *lm = test_path(outdir, "link.mp3");
-        CHECK(cb_transcode_mp3(wav, lm, 48000) >= 0, "transcode to mp3");
-        CBProbe pl;
-        CHECK(cb_probe(lm, &pl) >= 0 && !strcmp(pl.codec, "mp3") && pl.sample_rate == SIG_RATE &&
-              pl.mp3.valid && !pl.mp3.vbr && pl.mp3.bitrate_kbps == 320,
-              "link mp3: %s %d Hz, %d kbps", pl.codec, pl.sample_rate, pl.mp3.bitrate_kbps);
-        uint8_t *mb = NULL;
-        size_t mn = 0;
-        CHECK(cb_file_read(lm, &mb, &mn) >= 0 && mn > 1044 && memcmp(mb, "ID3", 3) &&
-              mb[0] == 0xff && (mb[1] & 0xe0) == 0xe0 && !memmem(mb, 1044, "Xing", 4) &&
-              !memmem(mb, 1044, "Info", 4) && memcmp(mb + mn - 128, "TAG", 3),
-              "link mp3 has a tag or a Xing frame");
-        free(mb);
-        CBAudio al;
-        CHECK(cb_decode(lm, 1, 0, &al) >= 0 && al.nb_frames >= n, "decode link mp3");
-        for (int k = 1; k < 8 && al.nb_frames >= n; k++) {
-            int64_t at_ = (int64_t)k * SIG_CLICK, best = at_ - 200;
-            for (int64_t i = at_ - 200; i <= at_ + 200; i++)
-                if (fabsf(al.samples[i]) > fabsf(al.samples[best]))
-                    best = i;
-            CHECK(llabs(best - at_) <= 2, "link mp3 click %d at %" PRId64 ", not %" PRId64, k,
-                  best, at_);
-        }
-        cb_audio_free(&al);
-        cb_probe_free(&pl);
-        free(lm);
-    }
 
     /* A source that is not there leaves nothing behind */
     char *missing = test_path(dir, "missing.flac");

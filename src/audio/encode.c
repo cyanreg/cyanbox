@@ -23,10 +23,6 @@
  *   end); the MD5 of the samples from the encoder's last STREAMINFO.
  * - WAV and AIFF: the header and the samples, nothing else (no LIST, no
  *   ID3: players take what they show from the database).
- * - MP3: 320 kbit/s CBR, no tags, no Xing frame (a player plays it as a
- *   frame of silence), and the encoder's delay (initial_padding) dropped
- *   from the samples fed to it, so the file as a player decodes it, delay
- *   and all, lines up with the source.
  *
  * A muxer goes back to its header at the end (FLAC's STREAMINFO, the
  * sizes in a WAV or an AIFF) through the caller's seek; without one the
@@ -58,7 +54,6 @@ typedef struct Enc {
     int channels, rate, bits;
     bool exact;
     int frame_size;
-    int64_t skip;               /* frames still to drop (MP3's delay) */
     int64_t limit;              /* frames to write, < 0 no limit */
     int64_t sent;               /* frames into the encoder */
     int filled;                 /* frames in `frame` */
@@ -191,10 +186,6 @@ static void put_samples(Enc *e, const float *x, int n, int64_t first)
         for (int c = 0; c < e->channels; c++) {
             float v = x[(int64_t)i * e->channels + c];
             int at = e->filled + i;
-            if (fmt == AV_SAMPLE_FMT_FLTP) {
-                ((float *)f->extended_data[c])[at] = v;
-                continue;
-            }
             uint64_t k = (uint64_t)(first + i) * (uint64_t)e->channels + (uint64_t)c;
             long s = lrint(v * scale + (e->exact ? 0.0 : tpdf(k)));
             s = CB_CLAMP(s, lo, hi);
@@ -211,12 +202,6 @@ static int take(Enc *e, const float *x, int64_t n)
 {
     if (e->o->cancelled && e->o->cancelled(e->o->opaque))
         return CB_ERROR(ECANCELED);
-    if (e->skip > 0) {
-        int64_t d = CB_MIN(e->skip, n);
-        e->skip -= d;
-        x += d * e->channels;
-        n -= d;
-    }
     if (e->limit >= 0)
         n = CB_MIN(n, e->limit - (e->sent + e->filled));
     while (n > 0) {
@@ -259,11 +244,10 @@ static int open_output(Enc *e)
     const CBEncodeOptions *o = e->o;
     static const enum AVCodecID codecs[] = {
         [CB_ENCODE_FLAC] = AV_CODEC_ID_FLAC, [CB_ENCODE_WAV] = AV_CODEC_ID_PCM_S16LE,
-        [CB_ENCODE_AIFF] = AV_CODEC_ID_PCM_S16BE, [CB_ENCODE_MP3] = AV_CODEC_ID_MP3,
+        [CB_ENCODE_AIFF] = AV_CODEC_ID_PCM_S16BE,
     };
     static const char *const muxers[] = {
         [CB_ENCODE_FLAC] = "flac", [CB_ENCODE_WAV] = "wav", [CB_ENCODE_AIFF] = "aiff",
-        [CB_ENCODE_MP3] = "mp3",
     };
     enum AVCodecID id = codecs[o->format];
     if (e->bits == 24 && o->format == CB_ENCODE_WAV)
@@ -287,13 +271,8 @@ static int open_output(Enc *e)
     e->enc->sample_rate = e->rate;
     e->enc->time_base = (AVRational) { 1, e->rate };
     av_channel_layout_default(&e->enc->ch_layout, e->channels);
-    if (o->format == CB_ENCODE_MP3) {
-        e->enc->sample_fmt = AV_SAMPLE_FMT_FLTP;
-        e->enc->bit_rate = e->rate >= 32000 ? 320000 : 160000;
-    } else {
-        e->enc->sample_fmt = e->bits == 24 ? AV_SAMPLE_FMT_S32 : AV_SAMPLE_FMT_S16;
-        e->enc->bits_per_raw_sample = e->bits;
-    }
+    e->enc->sample_fmt = e->bits == 24 ? AV_SAMPLE_FMT_S32 : AV_SAMPLE_FMT_S16;
+    e->enc->bits_per_raw_sample = e->bits;
     if (o->format == CB_ENCODE_FLAC && o->compression > 0)
         e->enc->compression_level = o->compression;
     if (e->oc->oformat->flags & AVFMT_GLOBALHEADER)
@@ -301,7 +280,6 @@ static int open_output(Enc *e)
     if ((ret = avcodec_open2(e->enc, codec, NULL)) < 0)
         return ret;
     e->frame_size = e->enc->frame_size > 0 ? e->enc->frame_size : PCM_FRAME;
-    e->skip = o->format == CB_ENCODE_MP3 ? CB_MAX(e->enc->initial_padding, 0) : 0;
 
     e->st = avformat_new_stream(e->oc, NULL);
     if (!e->st)
@@ -346,12 +324,8 @@ static int open_output(Enc *e)
     e->oc->pb->seekable = o->seek ? AVIO_SEEKABLE_NORMAL : 0;
 
     AVDictionary *mux = NULL;
-    if (o->format == CB_ENCODE_MP3) {
-        av_dict_set(&mux, "write_xing", "0", 0);
-        av_dict_set(&mux, "id3v2_version", "0", 0);
-    } else if (o->format == CB_ENCODE_AIFF) {
+    if (o->format == CB_ENCODE_AIFF)
         av_dict_set(&mux, "write_id3v2", "0", 0);
-    }
     ret = avformat_write_header(e->oc, &mux);
     av_dict_free(&mux);
     if (ret < 0)
@@ -401,13 +375,13 @@ int cb_encode(const char *path, const CBEncodeOptions *o, CBEncoded *out)
 {
     if (out)
         *out = (CBEncoded) { 0 };
-    if (!path || !o || !o->write || (unsigned)o->format > CB_ENCODE_MP3 ||
-        (o->format != CB_ENCODE_MP3 && o->bits != 16 && o->bits != 24) ||
+    if (!path || !o || !o->write || (unsigned)o->format > CB_ENCODE_AIFF ||
+        (o->bits != 16 && o->bits != 24) ||
         o->channels < 0 || o->channels > 2)
         return CB_ERROR(EINVAL);
     cb_audio_init_logging();
     Enc e = {
-        .o = o, .path = path, .bits = o->format == CB_ENCODE_MP3 ? 0 : o->bits,
+        .o = o, .path = path, .bits = o->bits,
         .exact = o->exact, .limit = o->frames > 0 ? o->frames : -1,
     };
     CBDecodeTo to = { .start = on_start, .frames = on_frames, .opaque = &e };

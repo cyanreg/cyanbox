@@ -198,13 +198,12 @@ int  cb_image_scale(const uint8_t *rgba, int width, int height, int max_w, int m
 /* ---------------------------------------------------------------- encoding */
 
 /* A track encoded as it is decoded (src/audio/encode.c): cb_decode_stream's
- * frames, the analysis's samples, to FLAC, WAV, AIFF or MP3, into the
+ * frames, the analysis's samples, to FLAC, WAV or AIFF, into the
  * caller's write and seek, in memory that does not grow with the file. */
 enum CBEncodeFormat {
     CB_ENCODE_FLAC,
     CB_ENCODE_WAV,
     CB_ENCODE_AIFF,
-    CB_ENCODE_MP3,             /* 320 kbit/s CBR (160 below 32 kHz) */
 };
 
 typedef struct CBEncodeOptions {
@@ -241,11 +240,8 @@ int  cb_encode(const char *path, const CBEncodeOptions *o, CBEncoded *out);
  * artwork. The audio is cb_decode's, on the players' timeline. For the
  * stick's compatibility mode. */
 int  cb_transcode_flac(const char *path, const char *out_path, int max_rate);
-/* For Link: the same audio as a 16-bit PCM WAV, or as a 320 kbps CBR MP3
- * (without a Xing frame, the encoder's delay cut from the start so that it
- * decodes onto the source's timeline), neither with tags or artwork: what
- * every PRO DJ LINK player plays. */
+/* For Link: the same audio as a 16-bit PCM WAV, without tags or artwork:
+ * what every PRO DJ LINK player plays. */
 int  cb_transcode_wav(const char *path, const char *out_path, int max_rate);
-int  cb_transcode_mp3(const char *path, const char *out_path, int max_rate);
 
 #endif /* CYANBOX_AUDIO_H */

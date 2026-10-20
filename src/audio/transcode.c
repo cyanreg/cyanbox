@@ -6,8 +6,7 @@
  * FLAC at the native rate, or at max_rate when the native one is higher,
  * with the tags and the cover copied: dj's export.transcoded did this with
  * the ffmpeg CLI (-map_metadata 0, -c:a flac) for codecs no player
- * handles. Link's are the same audio as a plain 16-bit stereo WAV, or
- * (link.mp3) a 320 kbps CBR stereo MP3 lined up with the source.
+ * handles. Link's are the same audio as a plain 16-bit stereo WAV.
  *
  * The audio is cb_decode's, so it is on the players' timeline: an MP3's
  * silent header frame and encoder delay become plain samples at the start
@@ -114,12 +113,5 @@ int cb_transcode_wav(const char *path, const char *out_path, int max_rate)
     return to_file(path, out_path, (CBEncodeOptions) {
         .format = CB_ENCODE_WAV, .bits = 16, .exact = exact16(path, max_rate), .channels = 2,
         .max_rate = max_rate,
-    });
-}
-
-int cb_transcode_mp3(const char *path, const char *out_path, int max_rate)
-{
-    return to_file(path, out_path, (CBEncodeOptions) {
-        .format = CB_ENCODE_MP3, .channels = 2, .max_rate = max_rate,
     });
 }
