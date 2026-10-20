@@ -142,6 +142,12 @@ typedef struct Req {
     CBRd     args;
     CBWr     w;
     bool     small;             /* an answer to the unknown or malformed */
+    /* A READ of a WAV: its bytes as slices after what w holds, then the
+     * padding; or not made yet */
+    struct iovec *iov;
+    int      niov;
+    size_t   data;
+    bool     again;
     uint32_t prog, proc;        /* for the debug log */
     char     note[160];
 } Req;
@@ -802,9 +808,28 @@ static void nfs_read(Req *q)
     put_fattr(&q->w, n, node, sp);
     size_t at = q->w.len;
     cb_wr_u32(&q->w, 0);
+    if (pt->pcm) {
+        /* The WAV's bytes stay where they are made: slices after the
+         * header, sent with it */
+        int niov = 0;
+        ssize_t got = n->cfg.read(n->cfg.read_opaque, pt, q->peer, offset, want, q->iov, &niov);
+        if (got == CB_ERROR(EAGAIN)) {
+            q->w.len = 0;
+            q->again = true;
+            return;
+        }
+        if (got <= 0) {
+            q->w.len = 0;
+            reply_nfs(q, CB_NFSERR_IO);
+            return;
+        }
+        cb_wr_at_u32(&q->w, at, (uint32_t)got);
+        q->niov = niov;
+        q->data = (size_t)got;
+        return;
+    }
     uint8_t *d = cb_wr_room(&q->w, pad4(want));
-    ssize_t got = !d ? -1 : pt->pcm ? n->cfg.read(n->cfg.read_opaque, pt, offset, d, want)
-                                    : pread_full(f->fd, d, want, (off_t)offset);
+    ssize_t got = !d ? -1 : pread_full(f->fd, d, want, (off_t)offset);
     if (got <= 0) {
         /* The file is shorter than the plan says, or unreadable: the
          * answer so far goes, the status alone instead. */
@@ -1018,22 +1043,28 @@ static bool answer(Req *q, enum CBNfsService svc, const uint8_t *req, size_t len
     return true;
 }
 
-ssize_t cb_nfs_handle(CBNfs *n, enum CBNfsService svc, uint32_t peer,
-                      const uint8_t *req, size_t len, uint8_t *reply, size_t cap)
+ssize_t cb_nfs_handle_iov(CBNfs *n, enum CBNfsService svc, uint32_t peer,
+                          const uint8_t *req, size_t len, uint8_t *reply, size_t cap,
+                          struct iovec *iov, int *niov)
 {
+    static const uint8_t pad[4];
+    *niov = 0;
     if (!n || (!req && len) || !reply || (unsigned)svc > CB_NFS_NFS)
         return CB_ERROR(EINVAL);
     n->clock++;
-    Req q = { .n = n, .peer = peer, .w = cb_wr(reply, cap) };
+    Req q = { .n = n, .peer = peer, .w = cb_wr(reply, cap), .iov = iov };
     bool any = answer(&q, svc, req, len);
     if (cb_log_level() >= CB_LOG_DEBUG) {
         /* The accept status and the first word of the result. */
         const uint8_t *o = q.w.p;
         cb_debug("link: rpc %u.%u from %u.%u.%u.%u %s: %s accept %d, status %d, %zu bytes",
                  q.prog, q.proc, peer >> 24, peer >> 16 & 0xFF, peer >> 8 & 0xFF, peer & 0xFF,
-                 q.note, any ? "" : "(no answer)", q.w.len >= 24 ? (int)be32(o + 20) : -1,
-                 q.w.len >= 28 ? (int)be32(o + 24) : -1, q.w.len);
+                 q.note, q.again ? "(not made yet)" : any ? "" : "(no answer)",
+                 q.w.len >= 24 ? (int)be32(o + 20) : -1, q.w.len >= 28 ? (int)be32(o + 24) : -1,
+                 q.w.len + q.data);
     }
+    if (q.again)
+        return CB_ERROR(EAGAIN);
     if (!any)
         return 0;
     if (q.w.err)
@@ -1042,5 +1073,26 @@ ssize_t cb_nfs_handle(CBNfs *n, enum CBNfsService svc, uint32_t peer,
      * larger than what asked. */
     if (q.small && q.w.len > len)
         return 0;
+    *niov = q.niov;
+    if (q.data % 4)
+        iov[(*niov)++] = (struct iovec) { .iov_base = (void *)pad, .iov_len = 4 - q.data % 4 };
     return (ssize_t)q.w.len;
+}
+
+ssize_t cb_nfs_handle(CBNfs *n, enum CBNfsService svc, uint32_t peer,
+                      const uint8_t *req, size_t len, uint8_t *reply, size_t cap)
+{
+    struct iovec iov[CB_NFS_IOV];
+    int niov;
+    ssize_t r = cb_nfs_handle_iov(n, svc, peer, req, len, reply, cap, iov, &niov);
+    if (r <= 0)
+        return r;
+    size_t at = (size_t)r;
+    for (int i = 0; i < niov; i++) {
+        if (iov[i].iov_len > cap - at)
+            return CB_ERROR(ENOBUFS);
+        memcpy(reply + at, iov[i].iov_base, iov[i].iov_len);
+        at += iov[i].iov_len;
+    }
+    return (ssize_t)at;
 }

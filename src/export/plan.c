@@ -427,13 +427,6 @@ bool cb_plan_codec_playable(const char *codec)
     return false;
 }
 
-/* Whether the cache file is Link's WAV, by its name. */
-static bool link_wav(const char *path)
-{
-    size_t n = strlen(path);
-    return n > 9 && !strcmp(path + n - 9, ".link.wav");
-}
-
 int cb_plan_transcode_path(const CBLibrary *lib, const CBTrack *t, int compat, bool create,
                            char **cache_path, int *max_rate)
 {
@@ -441,16 +434,12 @@ int cb_plan_transcode_path(const CBLibrary *lib, const CBTrack *t, int compat, b
     bool need = !cb_plan_codec_playable(t->codec);
     bool hires = !strcmp(t->codec, "flac") && (t->bit_depth > 16 || t->sample_rate > 48000);
     bool for_compat = compat == CB_TRANSCODE_COMPAT && (!strcmp(t->codec, "aac") || hires);
-    bool pcm16 = (!strcmp(t->codec, "pcm_s16le") || !strcmp(t->codec, "pcm_s16be")) &&
-                 t->sample_rate <= 48000;
-    bool for_wav = (compat == CB_TRANSCODE_LINK && strcmp(t->codec, "mp3") && !pcm16) ||
-                   compat == CB_TRANSCODE_LINK_ANY;
-    if (!need && !for_compat && !for_wav)
+    if (!need && !for_compat)
         return 0;
     /* dj kept up to 96 kHz for formats no player reads; compatibility mode
-     * and Link go to 16 bit at 44.1/48 kHz. */
-    *max_rate = for_compat || for_wav ? 48000 : 96000;
-    const char *ext = for_wav ? "link.wav" : for_compat ? "compat.flac" : "flac";
+     * goes to 16 bit at 44.1/48 kHz. */
+    *max_rate = for_compat ? 48000 : 96000;
+    const char *ext = for_compat ? "compat.flac" : "flac";
     /* cb_library_cache_path's name, without creating its directory. */
     *cache_path = create ? cb_library_cache_path(lib, "transcode", t->id, ext)
                          : cb_asprintf("%s/cache/transcode/%llu.%s", lib->root, (unsigned long long)t->id, ext);
@@ -475,13 +464,12 @@ int cb_plan_transcode(const CBLibrary *lib, const CBTrack *t, int compat, char *
         *source = cache;
         return 0;
     }
-    bool wav = link_wav(cache);
-    char *tmp = cb_asprintf("%s.tmp.%s", cache, wav ? "wav" : "flac");
+    char *tmp = cb_asprintf("%s.tmp.flac", cache);
     if (!tmp) {
         free(cache);
         return CB_ERROR(ENOMEM);
     }
-    ret = wav ? cb_transcode_wav(t->path, tmp, max_rate) : cb_transcode_flac(t->path, tmp, max_rate);
+    ret = cb_transcode_flac(t->path, tmp, max_rate);
     if (ret >= 0 && rename(tmp, cache) < 0)
         ret = CB_ERROR(errno);
     if (ret < 0) {
@@ -994,15 +982,6 @@ static bool stored_probe(const CBTrack *t, CBProbe *p, int64_t *file_size)
  * check, or the WAV's own. Nothing is written. `stored`: the original as the library stored it, unless it
  * changed since (stored_probe); a transcode made already is then
  * described the same way, its size its own. */
-/* What Link serves as a WAV made as it is read (src/link/wav.c): a file
- * of one or two channels at 48 kHz at most, which every player reads as
- * 16-bit stereo, within NFS version 2's 4 GiB. */
-static bool link_pcm(const CBTrack *t)
-{
-    return t->codec[0] && t->sample_rate > 0 && t->sample_rate <= 48000 &&
-           t->channels >= 1 && t->channels <= 2 && t->total_samples > 0 &&
-           t->total_samples < (INT64_C(0xffffffff) - 44) / 4;
-}
 
 /* ---------------------------------------------------------- the stick */
 
@@ -1107,9 +1086,11 @@ static int dry_source(const CBLibrary *lib, const CBTrack *t, int compat, bool s
         return stick_source(t, compat, stored, pt);
 
     /* Link's WAV of the track's own file, described as what a player
-     * gets: 16-bit stereo at the file's rate, the frames the library
-     * counted (the WAV keeps to them), the header and the samples. */
-    if (compat == CB_TRANSCODE_LINK && link_pcm(t)) {
+     * gets (src/link/wav.c): 16-bit at 44.1 kHz, of its one or two
+     * channels (two for more), the frames the library counted at that
+     * rate (the WAV keeps to them), the header and the samples, within
+     * NFS version 2's 4 GiB. */
+    if (compat == CB_TRANSCODE_LINK) {
         int64_t size = 0;
         if (!(stored && stored_probe(t, &pt->probe, &size))) {
             cb_probe_free(&pt->probe);
@@ -1118,19 +1099,25 @@ static int dry_source(const CBLibrary *lib, const CBTrack *t, int compat, bool s
                 return ret;
         }
         CBProbe *p = &pt->probe;
-        if (p->sample_rate <= 0 || p->sample_rate > 48000 || p->total_samples <= 0 ||
-            p->total_samples >= (INT64_C(0xffffffff) - 44) / 4)
+        if (p->sample_rate <= 0 || p->total_samples <= 0 || p->channels <= 0)
             return CB_ERROR(EINVAL);
+        int ch = CB_MIN(p->channels, 2), rate = CB_LINK_RATE;
+        int64_t frames = (p->total_samples * rate + p->sample_rate - 1) / p->sample_rate;
+        if (frames >= (INT64_C(0xffffffff) - 44) / (2 * ch))
+            return CB_ERROR(EFBIG);
         cb_flac_info_free(&p->flac);
         p->mp3 = (CBMp3Info) { 0 };
         snprintf(p->codec, sizeof(p->codec), "pcm_s16le");
         snprintf(p->container, sizeof(p->container), "wav");
-        p->channels = 2;
+        p->sample_rate = rate;
+        p->channels = ch;
         p->bit_depth = 16;
-        p->bit_rate = p->sample_rate * 32;
+        p->bit_rate = rate * 16 * ch;
+        p->total_samples = frames;
+        p->duration = (double)frames / rate;
         pt->source = cb_strdup(t->path);
         pt->pcm = true;
-        pt->file_size = 44 + p->total_samples * 4;
+        pt->file_size = 44 + frames * 2 * ch;
         return pt->source ? 0 : CB_ERROR(ENOMEM);
     }
 
@@ -1157,21 +1144,17 @@ static int dry_source(const CBLibrary *lib, const CBTrack *t, int compat, bool s
     if (!known && (ret = cb_probe(t->path, &pt->probe)) < 0)
         return ret;
     CBProbe *p = &pt->probe;
-    bool wav = link_wav(cache);
     cb_flac_info_free(&p->flac);
     p->mp3 = (CBMp3Info) { 0 };
-    snprintf(p->codec, sizeof(p->codec), wav ? "pcm_s16le" : "flac");
-    snprintf(p->container, sizeof(p->container), wav ? "wav" : "flac");
+    snprintf(p->codec, sizeof(p->codec), "flac");
+    snprintf(p->container, sizeof(p->container), "flac");
     if (max_rate > 0 && p->sample_rate > max_rate) {
         p->total_samples = (int64_t)((double)p->total_samples * max_rate / p->sample_rate);
         p->sample_rate = max_rate;
     }
     p->bit_depth = 16;
-    /* A WAV's size is its header's 44 bytes and the samples. */
     double pcm = (double)p->duration * p->sample_rate * CB_MAX(p->channels, 1) * 2;
-    pt->file_size = fresh ? cb_file_size(cache)
-                  : wav ? 44 + p->total_samples * CB_MAX(p->channels, 1) * 2
-                  : (int64_t)(0.6 * pcm);
+    pt->file_size = fresh ? cb_file_size(cache) : (int64_t)(0.6 * pcm);
     return 0;
 }
 

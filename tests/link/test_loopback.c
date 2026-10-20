@@ -10,8 +10,9 @@
  *    joins, takes 17 and lists the player.
  *  - The player browses as a CDJ-3000 does (cb_link_client_browse) and
  *    reads every track over NFS, at the size the track info gave: each a
- *    16-bit WAV of the file made as it is read (src/link/wav.c), the
- *    file's samples as cb_decode has them, and nothing made on disk.
+ *    16-bit WAV at 44.1 kHz of the file made as it is read
+ *    (src/link/wav.c), the file's samples as a source at that rate
+ *    decodes them, and nothing made on disk.
  *  - The server sees what the player loaded and that it plays; a cue
  *    the player saves is handed on for the library's owner. A LOAD of
  *    My Settings gets the library's player settings, and a mixer's its
@@ -36,8 +37,10 @@
 
 #include "cyanbox/analysis.h"
 #include "cyanbox/audio.h"
+#include "cyanbox/export.h"
 #include "cyanbox/link.h"
 
+#include "src/audio/internal.h"
 #include "src/link/client.h"
 #include "src/link/dbserver.h"
 #include "src/link/net.h"
@@ -133,9 +136,10 @@ static void quiet_line(void *opaque, const char *line)
         fprintf(stderr, "  %s\n", line);
 }
 
-/* The bytes of a track's WAV: the 44-byte header of 16-bit stereo, then
- * the samples of its file (by the name in its path) as cb_decode has them,
- * mono doubled, within dither and rounding. */
+/* The bytes of a track's WAV: the 44-byte header of 16-bit at 44.1 kHz of
+ * its file's one or two channels, then the samples of its file (by the
+ * name in its path) as a source at that rate decodes them, within dither
+ * and rounding. */
 static bool same_as_decoded(const char *usb_path, const uint8_t *data, size_t size)
 {
     const char *base = NULL;
@@ -146,23 +150,31 @@ static bool same_as_decoded(const char *usb_path, const uint8_t *data, size_t si
             base = tracks[i].file;
     }
     char *path = base ? cb_asprintf("%s/%s", music, base) : NULL;
-    CBAudio d = { 0 };
-    bool ok = path && cb_decode(path, 0, 0, &d) >= 0 && size >= 44 && !memcmp(data, "RIFF", 4) &&
-              !memcmp(data + 8, "WAVEfmt ", 8) && !memcmp(data + 36, "data", 4);
-    int64_t frames = ok ? CB_MIN((int64_t)(size - 44) / 4, d.nb_frames) : 0;
-    int64_t off = 0;
-    for (int64_t f = 0; f < frames; f++) {
-        for (int c = 0; c < 2; c++) {
-            const uint8_t *b = data + 44 + f * 4 + c * 2;
-            float x = d.samples[f * d.channels + (d.channels > 1 ? c : 0)];
-            off += fabs((int16_t)(b[0] | b[1] << 8) - (double)x * 32768.0) > 1.5;
+    bool ok = path && size >= 44 && !memcmp(data, "RIFF", 4) && !memcmp(data + 8, "WAVEfmt ", 8) &&
+              !memcmp(data + 36, "data", 4) && (data[22] == 1 || data[22] == 2) &&
+              data[24] + (data[25] << 8) + (data[26] << 16) == CB_LINK_RATE;
+    int ch = ok ? data[22] : 1;
+    CBAudioFormat f = { .sample = CB_SAMPLE_FLT, .rate = CB_LINK_RATE, .channels = ch };
+    CBSource *s = NULL;
+    ok = ok && cb_source_open(&s, path, &f) >= 0;
+    int64_t frames = ok ? (int64_t)(size - 44) / (2 * ch) : 0, off = 0, at = 0;
+    float x[4096 * 2];
+    while (ok && at < frames) {
+        uint8_t *d[1] = { (uint8_t *)x };
+        int got = cb_source_read(s, d, (int)CB_MIN((int64_t)4096, frames - at));
+        if (got <= 0)
+            break;
+        for (int i = 0; i < got * ch; i++) {
+            const uint8_t *b = data + 44 + (at * ch + i) * 2;
+            off += fabs((int16_t)(b[0] | b[1] << 8) - (double)x[i] * 32768.0) > 1.5;
         }
+        at += got;
     }
-    ok = ok && frames > 0 && !off && llabs((int64_t)(size - 44) / 4 - d.nb_frames) < 2048;
+    cb_source_free(&s);
+    ok = ok && frames > 0 && !off && frames - at < 2048;
     if (!ok)
         fprintf(stderr, "%s: %zu bytes over NFS, not a WAV of %s (%lld samples off)\n", usb_path,
                 size, path ? path : "?", (long long)off);
-    cb_audio_free(&d);
     free(path);
     return ok;
 }

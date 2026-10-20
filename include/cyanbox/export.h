@@ -129,25 +129,22 @@ bool cb_plan_codec_playable(const char *codec);
 /* What a track is transcoded for. PLAIN: codecs no player reads, to FLAC.
  * COMPAT (export.compat_transcode): also AAC (nobody knows what players do
  * with its priming) and FLAC above 16 bit/48 kHz, to 16-bit FLAC at most
- * 48 kHz. LINK: everything but MP3 and 16-bit PCM at most 48 kHz, to a
- * 16-bit WAV at most 48 kHz, which every PRO DJ LINK player reads (the
- * players before the CDJ-2000NXS2, the CDJ-900 among them, read no FLAC).
- * LINK_ANY: everything to LINK's WAV, for a track Link cannot serve as a
- * WAV made as it is read (src/link/wav.c). A bool's false and true are
- * PLAIN and COMPAT.
+ * 48 kHz. A bool's false and true are PLAIN and COMPAT.
+ *
+ * LINK: every track as a 16-bit WAV at 44.1 kHz (CB_LINK_RATE) of its one
+ * or two channels, which every PRO DJ LINK player reads (the players
+ * before the CDJ-2000NXS2, the CDJ-900 among them, read no FLAC), made as
+ * it is read (CBPlanTrack.pcm, src/link/wav.c): its plan names no file.
  *
  * STICK_*: an export (CBStickFormat, with or without the compatibility
  * transcode), whose plan names no cache file: what is not copied is
- * encoded as it is written (CBPlanTrack.encode).
- *
- * With LINK, a plan made by cb_plan_build_cb in CB_PLAN_STORED mode makes
- * no file at all for what can be decoded as it is read (CBPlanTrack.pcm);
- * the rest it names as above. */
+ * encoded as it is written (CBPlanTrack.encode). */
+#define CB_LINK_RATE 44100
+
 enum CBTranscode {
     CB_TRANSCODE_PLAIN = 0,
     CB_TRANSCODE_COMPAT,
     CB_TRANSCODE_LINK,
-    CB_TRANSCODE_LINK_ANY,
     CB_TRANSCODE_STICK_COPY,
     CB_TRANSCODE_STICK_COPY_COMPAT,
     CB_TRANSCODE_STICK_FLAC,

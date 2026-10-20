@@ -12,6 +12,7 @@
 #include <net/if.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <sys/uio.h>
 #include <sys/types.h>
 
 typedef struct CBLinkIf {
@@ -43,6 +44,8 @@ int  cb_link_tcp_connect(const CBLinkIf *ifc, uint32_t addr, uint16_t port, int 
 ssize_t cb_link_recv(const CBLinkIf *ifc, int fd, uint8_t *buf, size_t cap, uint32_t *from,
                      uint16_t *from_port);
 void cb_link_send(int fd, uint32_t to, uint16_t port, const void *buf, size_t len);
+/* The same, gathered from slices (sendmsg): one datagram of them all. */
+void cb_link_sendv(int fd, uint32_t to, uint16_t port, const struct iovec *iov, int niov);
 
 void cb_link_addr_text(uint32_t a, char buf[16]);
 int  cb_link_addr_parse(const char *s, uint32_t *out);

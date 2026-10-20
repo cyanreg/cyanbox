@@ -4,10 +4,7 @@
  * 16-bit 44.1 kHz FLAC of the same length with the same tags and cover; a
  * 16-bit WAV goes through sample for sample (no dither); an MP3 keeps its
  * players' timeline (the silent header frame and encoder delay become
- * samples of the FLAC).
- *
- * Link's: cb_transcode_wav makes a plain WAV, the 44-byte header and the
- * samples, no tags or cover, a 16-bit source sample for sample. */
+ * samples of the FLAC). */
 
 #include "cyanbox/audio.h"
 
@@ -125,30 +122,6 @@ int main(void)
         free(mp3);
         free(outm);
     }
-
-    /* Link's WAV: from the 24-bit FLAC with tags and a cover, a plain
-     * 16-bit WAV; from the 16-bit WAV, the same samples */
-    char *lw = test_path(outdir, "link.wav");
-    CHECK(cb_transcode_wav(hi, lw, 48000) >= 0, "transcode to wav");
-    CBProbe pw;
-    CHECK(cb_probe(lw, &pw) >= 0 && !strcmp(pw.codec, "pcm_s16le") && pw.sample_rate == 48000 &&
-          pw.channels == 2 && !pw.has_artwork && !cb_probe_tag(&pw, "title", NULL),
-          "link wav: %s %d Hz %d ch, cover %d", pw.codec, pw.sample_rate, pw.channels,
-          pw.has_artwork);
-    uint8_t *wb = NULL;
-    size_t wn = 0;
-    CHECK(cb_file_read(lw, &wb, &wn) >= 0 && wn > 44 && !memcmp(wb, "RIFF", 4) &&
-          !memcmp(wb + 8, "WAVEfmt ", 8) && wb[16] == 16 && !memcmp(wb + 36, "data", 4) &&
-          wb[40] + (wb[41] << 8) + (wb[42] << 16) + ((size_t)wb[43] << 24) == wn - 44,
-          "link wav is not the plain 44-byte header and the samples");
-    free(wb);
-    cb_probe_free(&pw);
-    CHECK(cb_transcode_wav(wav, lw, 48000) >= 0 && cb_decode(lw, 0, 0, &at) >= 0 &&
-          aw.nb_frames == at.nb_frames &&
-          !memcmp(aw.samples, at.samples, (size_t)aw.nb_frames * 2 * sizeof(float)),
-          "16-bit link wav not exact");
-    cb_audio_free(&at);
-    free(lw);
 
     /* A source that is not there leaves nothing behind */
     char *missing = test_path(dir, "missing.flac");

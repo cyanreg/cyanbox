@@ -1701,8 +1701,8 @@ static void test_library(CBLibrary *lib, CBPlan *plan, CBCatalog **cat)
     CHECK_EQ(cb_dbclient_metadata(c, 0x7fffffff, &rows, &n), 0);
     CHECK_EQ(n, 0);
 
-    /* Track info: the path the NFS tree serves and the size; the opus
-     * track's transcode is made first (the plan was a dry one). */
+    /* Track info: the path the NFS tree serves and the plan's size; a
+     * file the plan names is served as planned, nothing made for it */
     char *path;
     uint64_t size;
     CHECK_EQ(cb_dbclient_track_info(c, alpha, &path, &size), 0);
@@ -1712,8 +1712,7 @@ static void test_library(CBLibrary *lib, CBPlan *plan, CBCatalog **cat)
     CHECK(!cb_file_exists(pc->source));
     CHECK_EQ(cb_dbclient_track_info(c, charlie, &path, &size), 0);
     CHECK(path && cb_str_ends(path, ".flac") && !strcmp(path, pc->usb_path));
-    CHECK(cb_file_exists(pc->source) && size == (uint64_t)cb_file_size(pc->source) &&
-          (int64_t)size == pc->file_size);
+    CHECK(!cb_file_exists(pc->source) && (int64_t)size == pc->file_size);
     free(path);
     CHECK_EQ(cb_dbclient_track_info(c, 0x7fffffff, &path, &size), -ENOENT);
     /* The file's type in the first row's id, a FLAC's 5 for alpha (and a
@@ -2384,15 +2383,11 @@ static void test_stored(CBLibrary *lib)
     same_plans(lib);
 }
 
-/* Link's plan (CB_TRANSCODE_LINK): every track a 16-bit stereo WAV made
- * as it is read, named .wav, its file the track's own and nothing made.
- * When the check at track info refuses one (here charlie), the WAV is made
- * as a file then and served instead, at its own size; the rest make none. */
-static int refuse_charlie(void *opaque, const CBPlanTrack *pt)
-{
-    return cb_str_ends(pt->source, "charlie.opus") ? CB_ERROR(ENOTSUP) : 0;
-}
-
+/* Link's plan (CB_TRANSCODE_LINK): every track a 16-bit WAV at 44.1 kHz,
+ * of its one or two channels, made as it is read, named .wav, its file the
+ * track's own and nothing made: the library's frames at that rate, the
+ * header and the samples. The track info reply names the WAV, at its size;
+ * no file appears for it. */
 static void test_link_plan(CBLibrary *lib)
 {
     CBPlan p;
@@ -2400,29 +2395,26 @@ static void test_link_plan(CBLibrary *lib)
                               CB_PLAN_STORED, &p, NULL, NULL), 0);
     for (int i = 0; i < p.nb_tracks; i++) {
         const CBPlanTrack *t = &p.tracks[i];
+        int ch = CB_MIN(t->track->channels, 2);
+        int64_t frames = (t->track->total_samples * CB_LINK_RATE + t->track->sample_rate - 1) /
+                         t->track->sample_rate;
         CHECK(t->pcm && cb_str_ends(t->usb_path, ".wav") && t->file_type == 11 &&
-              !strcmp(t->source, t->track->path) && t->total_samples == t->track->total_samples &&
-              t->file_size == 44 + 4 * t->total_samples && t->bit_rate == t->sample_rate * 32 / 1000);
+              !strcmp(t->source, t->track->path) && t->sample_rate == CB_LINK_RATE &&
+              t->probe.channels == ch && t->total_samples == frames &&
+              t->file_size == 44 + 2 * ch * t->total_samples &&
+              t->bit_rate == CB_LINK_RATE * 16 * ch / 1000);
     }
     CBCatalog *cat = NULL;
     CHECK_EQ(cb_catalog_new(&cat, lib, &p), 0);
     if (cat) {
-        cb_catalog_set_check(cat, refuse_charlie, NULL);
         Server sv;
         CBDbClient *c = open_pair(&sv, &cat, true);
         uint32_t alpha = (uint32_t)by_file(lib, "alpha.flac")->id;
-        uint32_t charlie = (uint32_t)by_file(lib, "charlie.opus")->id;
-        const CBPlanTrack *pa = plan_track(&p, alpha), *pc = plan_track(&p, charlie);
+        const CBPlanTrack *pa = plan_track(&p, alpha);
         char *path = NULL;
         uint64_t size = 0;
         CHECK(c && cb_dbclient_track_info(c, alpha, &path, &size) == 0);
         CHECK(path && !strcmp(path, pa->usb_path) && pa->pcm && (int64_t)size == pa->file_size);
-        free(path);
-        path = NULL;
-        CHECK(c && cb_dbclient_track_info(c, charlie, &path, &size) == 0);
-        CHECK(path && !strcmp(path, pc->usb_path) && !pc->pcm &&
-              cb_str_ends(pc->source, ".link.wav") && cb_file_exists(pc->source) &&
-              (int64_t)size == cb_file_size(pc->source) && pc->file_size == (int64_t)size);
         free(path);
         if (c)
             close_pair(&sv, &c);

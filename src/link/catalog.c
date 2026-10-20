@@ -101,8 +101,6 @@ struct CBCatalog {
     uint32_t  *order[NB_SORTS]; /* track indices by each sort, made when first asked */
     Analysis   analysis[NB_ANALYSIS];
     uint64_t   clock;
-    int      (*check)(void *opaque, const CBPlanTrack *pt);
-    void      *check_opaque;
     /* Every play of a track served, oldest first (load_plays). */
     struct CatPlay { uint32_t track; int32_t day; int64_t at; int seq; } *plays;
     int        nb_plays;
@@ -266,13 +264,6 @@ int cb_catalog_new(CBCatalog **out, CBLibrary *lib, CBPlan *plan)
     }
     *out = c;
     return 0;
-}
-
-void cb_catalog_set_check(CBCatalog *c, int (*check)(void *opaque, const CBPlanTrack *pt),
-                          void *opaque)
-{
-    c->check = check;
-    c->check_opaque = opaque;
 }
 
 void cb_catalog_set_tag_list(CBCatalog *c, CBLinkTagList *tl)
@@ -1168,75 +1159,10 @@ static int history_tracks(CBCatalog *c, uint32_t day, int sort, CBCatMenu *m)
     return ret;
 }
 
-/* Makes the track's transcode when the plan names one that is not made
- * yet (a dry plan names the cache file before it exists, cb_plan_build_cb),
- * and takes the size of the file that will be read. The plan names the
- * compatibility transcode or the plain one; which is found by asking for
- * both names. The string stays the same: only its file comes to exist. */
-static int prepare_source(CBCatalog *c, CBPlanTrack *pt)
-{
-    const CBTrack *t = pt->track;
-    /* A WAV made as it is read: nothing to make, unless the file will not
-     * decode that way, when the WAV is made whole now and served instead
-     * (the track info reply is the first a player hears of the file). */
-    if (pt->pcm) {
-        if (!c->check || c->check(c->check_opaque, pt) >= 0 || !t || !t->path || !c->lib)
-            return 0;
-        char *made = NULL;
-        cb_info("link: transcoding %s for a player", t->path);
-        int ret = cb_plan_transcode(c->lib, t, CB_TRANSCODE_LINK_ANY, &made);
-        if (ret < 0 || !made) {
-            cb_warn("link: transcoding %s failed: %s", t->path, strerror(ret < 0 ? -ret : ENOMEM));
-            free(made);
-            return ret < 0 ? ret : CB_ERROR(ENOMEM);
-        }
-        free(pt->source);
-        pt->source = made;
-        pt->pcm = false;
-        int64_t size = cb_file_size(made);
-        if (size > 0)
-            pt->file_size = size;
-        return 0;
-    }
-    if (!t || !t->path || !pt->source || !strcmp(pt->source, t->path) || !c->lib)
-        return 0;
-    if (!cb_plan_transcode_fresh(t, pt->source)) {
-        for (int compat = CB_TRANSCODE_PLAIN; compat <= CB_TRANSCODE_LINK_ANY; compat++) {
-            char *cache = NULL;
-            int max_rate = 0;
-            int ret = cb_plan_transcode_path(c->lib, t, compat, false, &cache, &max_rate);
-            bool named = ret > 0 && cache && !strcmp(cache, pt->source);
-            free(cache);
-            if (!named)
-                continue;
-            char *made = NULL;
-            cb_info("link: transcoding %s for a player", t->path);
-            ret = cb_plan_transcode(c->lib, t, compat, &made);
-            if (ret < 0) {
-                cb_warn("link: transcoding %s failed: %s", t->path, strerror(-ret));
-                return ret;
-            }
-            free(made);
-            /* An analysis made before the file was (the preview is asked
-             * for first) lacks the MP3's frame count: made again. */
-            for (int i = 0; i < NB_ANALYSIS; i++)
-                if (c->analysis[i].id == pt->id)
-                    analysis_clear(&c->analysis[i]);
-            break;
-        }
-    }
-    int64_t size = cb_file_size(pt->source);
-    if (size > 0)
-        pt->file_size = size;
-    return 0;
-}
-
 static int track_menu(CBCatalog *c, int what, uint32_t id, CBCatMenu *m)
 {
     int ti = track_index(c, id);
     if (ti < 0)
-        return 0;
-    if (what == CB_CAT_TRACK_INFO && prepare_source(c, c->t[ti].pt) < 0)
         return 0;
     *m = (CBCatMenu) {
         .what  = what,

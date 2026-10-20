@@ -302,8 +302,5 @@ int  cb_encode(const char *path, const CBEncodeOptions *o, CBEncoded *out);
  * artwork. The audio is cb_decode's, on the players' timeline. For the
  * stick's compatibility mode. */
 int  cb_transcode_flac(const char *path, const char *out_path, int max_rate);
-/* For Link: the same audio as a 16-bit PCM WAV, without tags or artwork:
- * what every PRO DJ LINK player plays. */
-int  cb_transcode_wav(const char *path, const char *out_path, int max_rate);
 
 #endif /* CYANBOX_AUDIO_H */

@@ -34,16 +34,9 @@ typedef struct CBCatalog CBCatalog;
 /* What is served, from the library and a plan over all of it (the plan's
  * usb_path is the path the track-info reply names, which the NFS tree
  * serves; its ids are the library's). Both stay the caller's and must
- * outlive the catalog. The catalog may update a plan track's `source` and
- * `file_size` (a transcode made when a player asks for the track). */
+ * outlive the catalog. */
 int  cb_catalog_new(CBCatalog **out, CBLibrary *lib, CBPlan *plan);
 void cb_catalog_free(CBCatalog **c);
-/* What a track info request checks of a track served as a WAV made as it
- * is read (CBPlanTrack.pcm; src/link/wav.c): 0 when it can be, else the
- * catalog has the WAV made as a file first (CB_TRANSCODE_LINK_ANY) and
- * serves that. Without one, such a track is served as it is planned. */
-void cb_catalog_set_check(CBCatalog *c, int (*check)(void *opaque, const CBPlanTrack *pt),
-                          void *opaque);
 /* The TAG LIST the catalog serves and marks tracks of (NULL: none). */
 void cb_catalog_set_tag_list(CBCatalog *c, CBLinkTagList *tl);
 /* Where the catalog hands the cues players save on the deck (the

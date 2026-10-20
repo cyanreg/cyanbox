@@ -1,33 +1,30 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
-/* Link's WAVs (wav.h; docs/LINK.md, section 4). A read is mapped onto the
- * frames it covers, they are decoded by the track's packet decoder (a read
- * that follows the last one carries on, any other starts again from
- * enough packets before it: cb_packets_decode), and they are written as
- * 16-bit samples:
+/* Link's WAVs (wav.h; docs/LINK.md, section 4). Each player reading a
+ * track has a reader: a pipeline (cyanbox/audio.h) making the track's
+ * 16-bit samples at 44.1 kHz in chunks, a few seconds ahead, and a window
+ * of the chunks it made, kept from a second behind the furthest place
+ * read. A read is answered from the window, as slices of the chunks
+ * themselves (nothing is copied before the socket): the 44-byte header,
+ * then the samples, then silence where the file ends before the plan says
+ * (nothing past the plan's length). A read the window does not hold yet
+ * waits (-EAGAIN) while the pipeline is on its way there; one behind the
+ * window, or well past where the pipeline is, seeks it.
  *
- * - A lossless source of 16 bits or fewer goes through exactly: the
- *   decoder's floats are its samples / 32768 (decode.c), rounded back.
- * - Anything else (24-bit, float, lossy) gets triangular dither of one
- *   step, drawn from the sample's place rather than from a running
- *   generator, so that the same bytes come back however often and in
- *   whatever order a player reads them (a CDJ-900 reads 2 kB pieces that
- *   overlap; a jump decodes again).
- * - Mono is doubled. The plan serves nothing of more channels this way.
+ * libswresample converts, mixes and dithers (a 16-bit file at 44.1 kHz
+ * comes through as its samples), and a chunk is the same whether the
+ * pipeline played into it or seeked to it, but for dither noise, which
+ * starts again after a seek. The window covers what the players read
+ * again (docs/LINK.md, from cdj-12's traces): the CDJ-900 reads 2 kB at 0
+ * and then in order in 53.3 ms pieces, the CDJ-2000NXS2 steps back 13.3 ms
+ * at a stream's start and 0.8 s on a hot cue; what they read again much
+ * later (a hot cue's pre-read tail) is a seek.
  *
- * The frames are the decoder's, which are cb_decode's (exactly for MP3 and
- * lossless codecs, within 1e-7 after a jump for Opus and AAC: packets.c),
- * and so the timeline the beat grid and the cues were made on, whatever
- * the codec: a player plays the samples that were analysed.
- *
- * A track's packet store is opened at its first read and kept for the
- * next ones (a player reads a track in thousands of pieces), a few tracks
- * at a time, the least recently read closed first; one is opened again
- * when its file changed. */
+ * A few readers at a time, the least recently read closed first; one is
+ * opened again when its file changed. */
 
 #include "wav.h"
 
-#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -37,43 +34,53 @@
 
 #include "link_priv.h"
 
-#define NB_ENTRIES  8
-#define CHUNK       8192        /* frames decoded per call */
+#define NB_READERS 8
+#define CHUNK      4096         /* frames per chunk: 16 kB of stereo, 93 ms */
+#define WINDOW     64           /* chunks a reader keeps: 6 s */
+#define BEHIND     12           /* of them, behind the furthest read: 1.1 s */
+#define JUMP       24           /* a read this far past the window waits rather than seeks */
+#define AHEAD      4.0          /* seconds the pipeline queues on top */
 
-typedef struct Entry {
-    uint32_t         id;        /* 0: a free slot */
-    char            *path;
-    struct stat      st;        /* the file's when it was opened */
-    CBPackets       *pk;
-    CBPacketDecoder *dec;
-    int              channels;  /* the file's */
-    uint64_t         used;
-} Entry;
+typedef struct Reader {
+    uint32_t    id, peer;       /* id 0: a free slot */
+    char       *path;
+    struct stat st;             /* the file's when it was opened */
+    CBPipeline *p;
+    int         channels;
+    int64_t     frames;         /* the plan's */
+    uint8_t     header[CB_LINK_WAV_HEADER];
+    CBChunk    *win[WINDOW];    /* chunk i in win[i % WINDOW], for base <= i < end */
+    int64_t     base, end;
+    int64_t     last;           /* the track's last chunk once seen, else -1 */
+    int         err;
+    uint64_t    used;
+} Reader;
 
 struct CBLinkWav {
-    size_t   max_memory;
     uint64_t clock;
-    Entry    e[NB_ENTRIES];
-    float   *buf;               /* CHUNK frames at the file's channels */
-    size_t   buf_cap;
-    uint8_t  pcm[CHUNK * 4];
+    Reader   r[NB_READERS];
+    uint8_t  zeros[CHUNK * 4];
 };
 
-int cb_link_wav_new(CBLinkWav **out, size_t max_memory)
+int cb_link_wav_new(CBLinkWav **out)
 {
     *out = calloc(1, sizeof(**out));
-    if (!*out)
-        return CB_ERROR(ENOMEM);
-    (*out)->max_memory = max_memory;
-    return 0;
+    return *out ? 0 : CB_ERROR(ENOMEM);
 }
 
-static void entry_close(Entry *e)
+static void drop_window(Reader *r)
 {
-    cb_packets_decoder_free(e->dec);
-    cb_packets_free(e->pk);
-    free(e->path);
-    *e = (Entry) { 0 };
+    for (int64_t i = r->base; i < r->end; i++)
+        cb_chunk_unref(&r->win[i % WINDOW]);
+    r->base = r->end;
+}
+
+static void reader_close(Reader *r)
+{
+    drop_window(r);
+    cb_pipeline_free(&r->p);
+    free(r->path);
+    *r = (Reader) { 0 };
 }
 
 void cb_link_wav_free(CBLinkWav **pw)
@@ -81,34 +88,39 @@ void cb_link_wav_free(CBLinkWav **pw)
     CBLinkWav *w = *pw;
     if (!w)
         return;
-    for (int i = 0; i < NB_ENTRIES; i++)
-        entry_close(&w->e[i]);
-    free(w->buf);
+    for (int i = 0; i < NB_READERS; i++)
+        reader_close(&w->r[i]);
     free(w);
     *pw = NULL;
 }
 
-/* Closes the least recently read tracks but `keep` until the rest fit. */
-static void trim(CBLinkWav *w, const Entry *keep)
+void cb_link_wav_header(uint8_t h[CB_LINK_WAV_HEADER], int rate, int channels, int64_t frames)
 {
-    while (1) {
-        size_t total = 0;
-        Entry *old = NULL;
-        for (int i = 0; i < NB_ENTRIES; i++) {
-            Entry *e = &w->e[i];
-            if (!e->id)
-                continue;
-            total += cb_packets_memory(e->pk);
-            if (e != keep && (!old || e->used < old->used))
-                old = e;
-        }
-        if (total <= w->max_memory || !old)
-            return;
-        entry_close(old);
-    }
+    uint32_t data = (uint32_t)CB_CLAMP(frames * channels * 2, 0, (int64_t)UINT32_MAX - 36);
+    CBWr w = cb_wr(h, CB_LINK_WAV_HEADER);
+    cb_wr_bytes(&w, "RIFF", 4);
+    cb_wr_u32le(&w, 36 + data);
+    cb_wr_bytes(&w, "WAVEfmt ", 8);
+    cb_wr_u32le(&w, 16);
+    cb_wr_u16le(&w, 1);                         /* PCM */
+    cb_wr_u16le(&w, (uint16_t)channels);
+    cb_wr_u32le(&w, (uint32_t)rate);
+    cb_wr_u32le(&w, (uint32_t)rate * (uint32_t)channels * 2);
+    cb_wr_u16le(&w, (uint16_t)(channels * 2));
+    cb_wr_u16le(&w, 16);
+    cb_wr_bytes(&w, "data", 4);
+    cb_wr_u32le(&w, data);
 }
 
-static Entry *entry_of(CBLinkWav *w, const CBPlanTrack *pt, int *err)
+static size_t chunk_bytes(const Reader *r)
+{
+    return (size_t)CHUNK * (size_t)r->channels * 2;
+}
+
+/* The reader of `peer` for the track, opened (its pipeline starting at the
+ * chunk `offset` falls in) when there is none. */
+static Reader *reader_of(CBLinkWav *w, const CBPlanTrack *pt, uint32_t peer, uint64_t offset,
+                         int *err)
 {
     struct stat st;
     if (!pt->source || pt->source[0] != '/' || stat(pt->source, &st) < 0 || !S_ISREG(st.st_mode)) {
@@ -116,161 +128,163 @@ static Entry *entry_of(CBLinkWav *w, const CBPlanTrack *pt, int *err)
         return NULL;
     }
     w->clock++;
-    Entry *slot = NULL;
-    for (int i = 0; i < NB_ENTRIES; i++) {
-        Entry *e = &w->e[i];
-        if (!e->id || e->id != pt->id)
+    Reader *slot = NULL;
+    for (int i = 0; i < NB_READERS; i++) {
+        Reader *r = &w->r[i];
+        if (!r->id || r->id != pt->id || r->peer != peer)
             continue;
-        if (!strcmp(e->path, pt->source) && e->st.st_dev == st.st_dev &&
-            e->st.st_ino == st.st_ino && e->st.st_size == st.st_size &&
-            e->st.st_mtim.tv_sec == st.st_mtim.tv_sec &&
-            e->st.st_mtim.tv_nsec == st.st_mtim.tv_nsec) {
-            e->used = w->clock;
-            return e;
+        if (!strcmp(r->path, pt->source) && r->st.st_dev == st.st_dev &&
+            r->st.st_ino == st.st_ino && r->st.st_size == st.st_size &&
+            r->st.st_mtim.tv_sec == st.st_mtim.tv_sec &&
+            r->st.st_mtim.tv_nsec == st.st_mtim.tv_nsec && r->frames == pt->total_samples) {
+            r->used = w->clock;
+            return r;
         }
-        entry_close(e);
-        slot = e;
+        reader_close(r);
+        slot = r;
     }
-    for (int i = 0; i < NB_ENTRIES && !slot; i++)
-        if (!w->e[i].id)
-            slot = &w->e[i];
+    for (int i = 0; i < NB_READERS && !slot; i++)
+        if (!w->r[i].id)
+            slot = &w->r[i];
     if (!slot) {
-        slot = &w->e[0];
-        for (int i = 1; i < NB_ENTRIES; i++)
-            if (w->e[i].used < slot->used)
-                slot = &w->e[i];
-        entry_close(slot);
+        slot = &w->r[0];
+        for (int i = 1; i < NB_READERS; i++)
+            if (w->r[i].used < slot->used)
+                slot = &w->r[i];
+        reader_close(slot);
     }
 
-    Entry e = { .id = pt->id, .st = st, .used = w->clock };
-    int ret = cb_packets_open(pt->source, &e.pk);
-    if (ret >= 0)
-        ret = cb_packets_decoder(e.pk, &e.dec);
-    if (ret >= 0) {
-        e.channels = cb_packets_channels(e.pk);
-        /* The plan's WAV is at the file's rate and of its one or two
-         * channels; a file that says otherwise now is not that file. */
-        if (cb_packets_rate(e.pk) != pt->sample_rate || e.channels < 1 || e.channels > 2)
-            ret = CB_ERROR(EINVAL);
+    int ch = pt->probe.channels;
+    if (ch < 1 || ch > 2 || pt->total_samples < 0) {
+        *err = CB_ERROR(EINVAL);
+        return NULL;
     }
-    if (ret >= 0 && !(e.path = cb_strdup(pt->source)))
+    Reader r = { .id = pt->id, .peer = peer, .st = st, .channels = ch,
+                 .frames = pt->total_samples, .last = -1, .used = w->clock };
+    int64_t first = offset > CB_LINK_WAV_HEADER
+                    ? (int64_t)((offset - CB_LINK_WAV_HEADER) / chunk_bytes(&r)) : 0;
+    CBPipelineOptions o = {
+        .format = { .sample = CB_SAMPLE_S16, .rate = CB_LINK_WAV_RATE, .channels = ch },
+        .chunk = CHUNK, .ahead = AHEAD, .start = first,
+    };
+    int ret = cb_pipeline_open(&r.p, pt->source, &o);
+    if (ret >= 0 && !(r.path = cb_strdup(pt->source)))
         ret = CB_ERROR(ENOMEM);
     if (ret < 0) {
         cb_debug("link: %s cannot be served as a WAV: %s", pt->source, strerror(-ret));
-        entry_close(&e);
+        reader_close(&r);
         *err = ret;
         return NULL;
     }
-    *slot = e;
-    trim(w, slot);
+    r.base = r.end = first;
+    cb_link_wav_header(r.header, CB_LINK_WAV_RATE, ch, r.frames);
+    *slot = r;
     return slot;
 }
 
-int cb_link_wav_check(CBLinkWav *w, const CBPlanTrack *pt)
+/* What the pipeline made since, into the window while it has room. */
+static void pump(Reader *r)
 {
-    int err = 0;
-    return entry_of(w, pt, &err) ? 0 : err;
+    while (r->end - r->base < WINDOW && (r->last < 0 || r->end <= r->last)) {
+        CBChunk *c = cb_pipeline_pop(r->p);
+        if (!c)
+            return;
+        if (c->index != r->end) {
+            cb_chunk_unref(&c);
+            continue;
+        }
+        if (c->err < 0)
+            r->err = c->err;
+        if (c->last)
+            r->last = c->index;
+        r->win[r->end % WINDOW] = c;
+        r->end++;
+    }
 }
 
-void cb_link_wav_header(uint8_t h[CB_LINK_WAV_HEADER], int rate, int64_t frames)
+/* Drops the chunks before `to`. */
+static void drop_before(Reader *r, int64_t to)
 {
-    uint32_t data = (uint32_t)CB_CLAMP(frames * 4, 0, (int64_t)UINT32_MAX - 36);
-    CBWr w = cb_wr(h, CB_LINK_WAV_HEADER);
-    cb_wr_bytes(&w, "RIFF", 4);
-    cb_wr_u32le(&w, 36 + data);
-    cb_wr_bytes(&w, "WAVEfmt ", 8);
-    cb_wr_u32le(&w, 16);
-    cb_wr_u16le(&w, 1);                         /* PCM */
-    cb_wr_u16le(&w, 2);
-    cb_wr_u32le(&w, (uint32_t)rate);
-    cb_wr_u32le(&w, (uint32_t)rate * 4);
-    cb_wr_u16le(&w, 4);
-    cb_wr_u16le(&w, 16);
-    cb_wr_bytes(&w, "data", 4);
-    cb_wr_u32le(&w, data);
+    while (r->base < r->end && r->base < to)
+        cb_chunk_unref(&r->win[r->base++ % WINDOW]);
 }
 
-/* Whether the source's samples are 16-bit ones exactly. */
-static bool exact16(const CBPlanTrack *pt)
+static void seek_to(Reader *r, int64_t chunk)
 {
-    const CBTrack *t = pt->track;
-    if (!t || t->bit_depth <= 0 || t->bit_depth > 16)
-        return false;
-    return !strcmp(t->codec, "flac") || !strcmp(t->codec, "alac") ||
-           (cb_str_starts(t->codec, "pcm_") && !cb_str_starts(t->codec, "pcm_f"));
+    drop_window(r);
+    r->base = r->end = chunk;
+    r->err = 0;
+    if (r->last >= 0 && chunk > r->last)
+        return;
+    cb_pipeline_seek(r->p, chunk);
 }
 
-/* Triangular noise of one step, in (-1, 1), for sample i (splitmix64). */
-static float tpdf(uint64_t i)
+static void add(struct iovec *iov, int *niov, const void *p, size_t n)
 {
-    uint64_t z = i + 0x9E3779B97F4A7C15ull;
-    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
-    z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
-    z ^= z >> 31;
-    return (float)(z >> 40) * 0x1p-24f - (float)(z & 0xFFFFFF) * 0x1p-24f;
+    if (n)
+        iov[(*niov)++] = (struct iovec) { .iov_base = (void *)p, .iov_len = n };
 }
 
-static void put16(uint8_t *p, float x, bool exact, uint64_t i)
+ssize_t cb_link_wav_read(CBLinkWav *w, const CBPlanTrack *pt, uint32_t peer, uint64_t offset,
+                         size_t n, struct iovec *iov, int *niov)
 {
-    long v = lrintf(x * 32768.0f + (exact ? 0.0f : tpdf(i)));
-    v = CB_CLAMP(v, -32768, 32767);
-    p[0] = (uint8_t)v;
-    p[1] = (uint8_t)((uint16_t)v >> 8);
-}
-
-ssize_t cb_link_wav_read(CBLinkWav *w, const CBPlanTrack *pt, uint64_t offset, uint8_t *dst,
-                         size_t n)
-{
+    *niov = 0;
     int64_t frames = CB_MAX(pt->total_samples, 0);
-    uint64_t total = CB_LINK_WAV_HEADER + (uint64_t)frames * 4;
+    uint64_t total = CB_LINK_WAV_HEADER + (uint64_t)frames * (uint64_t)CB_MAX(pt->probe.channels, 1) * 2;
     if (offset >= total)
         return 0;
     n = (size_t)CB_MIN((uint64_t)n, total - offset);
-    size_t done = 0;
-    if (offset < CB_LINK_WAV_HEADER) {
-        uint8_t h[CB_LINK_WAV_HEADER];
-        cb_link_wav_header(h, pt->sample_rate, frames);
-        done = CB_MIN(n, (size_t)(CB_LINK_WAV_HEADER - offset));
-        memcpy(dst, h + offset, done);
-    }
-    if (done == n)
-        return (ssize_t)n;
 
     int err = 0;
-    Entry *e = entry_of(w, pt, &err);
-    if (!e)
+    Reader *r = reader_of(w, pt, peer, offset, &err);
+    if (!r)
         return err;
-    size_t need = (size_t)CHUNK * (size_t)e->channels;
-    if (need > w->buf_cap) {
-        float *b = realloc(w->buf, need * sizeof(*b));
-        if (!b)
-            return CB_ERROR(ENOMEM);
-        w->buf = b;
-        w->buf_cap = need;
+    size_t cb = chunk_bytes(r);
+    uint64_t end = offset + n;
+    int64_t c0 = 0, c1 = -1;
+    if (end > CB_LINK_WAV_HEADER) {
+        uint64_t d0 = offset > CB_LINK_WAV_HEADER ? offset - CB_LINK_WAV_HEADER : 0;
+        c0 = (int64_t)(d0 / cb);
+        c1 = (int64_t)((end - CB_LINK_WAV_HEADER - 1) / cb);
+        /* The window keeps BEHIND chunks behind the furthest read */
+        drop_before(r, c0 - BEHIND);
     }
-    bool exact = exact16(pt);
-    while (done < n) {
-        uint64_t at = offset + done - CB_LINK_WAV_HEADER;   /* in the samples */
-        int64_t f0 = (int64_t)(at / 4);
-        size_t skip = (size_t)(at % 4);
-        int64_t nf = CB_MIN((int64_t)CHUNK, (int64_t)((skip + (n - done) + 3) / 4));
-        nf = CB_MIN(nf, frames - f0);
-        int64_t got = cb_packets_decode(e->dec, f0, nf, w->buf, 0);
-        if (got < 0)
-            return done ? (ssize_t)done : (ssize_t)got;
-        /* Past where the decoder ends: silence, to the plan's length. */
-        if (got < nf)
-            memset(w->buf + got * e->channels, 0,
-                   (size_t)(nf - got) * (size_t)e->channels * sizeof(float));
-        for (int64_t f = 0; f < nf; f++) {
-            const float *s = w->buf + f * e->channels;
-            uint64_t i = (uint64_t)(f0 + f) * 2;
-            put16(w->pcm + f * 4, s[0], exact, i);
-            put16(w->pcm + f * 4 + 2, s[e->channels > 1], exact, i + 1);
+    pump(r);
+    if (r->err < 0)
+        return r->err;
+    for (int64_t c = c0; c <= c1; c++) {
+        if ((r->last >= 0 && c > r->last) || (c >= r->base && c < r->end))
+            continue;
+        if (c < r->base || c >= r->end + JUMP)
+            seek_to(r, c);
+        return CB_ERROR(EAGAIN);
+    }
+
+    if (offset < CB_LINK_WAV_HEADER)
+        add(iov, niov, r->header + offset, (size_t)CB_MIN((uint64_t)CB_LINK_WAV_HEADER - offset, n));
+    for (int64_t c = c0; c <= c1; c++) {
+        uint64_t at = CB_LINK_WAV_HEADER + (uint64_t)c * cb;
+        size_t from = c == c0 && offset > at ? (size_t)(offset - at) : 0;
+        size_t to = (size_t)CB_MIN((uint64_t)cb, end - at);
+        size_t have = 0;
+        if (r->last < 0 || c <= r->last) {
+            const CBChunk *k = r->win[c % WINDOW];
+            have = (size_t)k->nb * (size_t)r->channels * 2;
+            if (from < have)
+                add(iov, niov, k->data[0] + from, CB_MIN(to, have) - from);
         }
-        size_t take = CB_MIN((size_t)nf * 4 - skip, n - done);
-        memcpy(dst + done, w->pcm + skip, take);
-        done += take;
+        /* Silence where the file ends before the plan does */
+        if (to > CB_MAX(from, have))
+            add(iov, niov, w->zeros, to - CB_MAX(from, have));
     }
-    return (ssize_t)done;
+    return (ssize_t)n;
+}
+
+int cb_link_wav_fds(const CBLinkWav *w, int *fds, int max)
+{
+    int n = 0;
+    for (int i = 0; i < NB_READERS && n < max; i++)
+        if (w->r[i].id && w->r[i].p)
+            fds[n++] = cb_pipeline_fd(w->r[i].p);
+    return n;
 }

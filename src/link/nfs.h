@@ -18,6 +18,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <sys/types.h>
+#include <sys/uio.h>
 
 #include "cyanbox/formats.h"
 
@@ -82,6 +83,9 @@ enum CBNfsStat {
  * again for the rest of a shorter answer: rbxport's 8 kB cap left 155 kB
  * of a track unfetched in a capture (rbxport, KILLA capture 2026-10-06). */
 #define CB_NFS_MAX_READ 0xfc00
+/* Slices the read callback may give, and a reply's with its padding. */
+#define CB_NFS_READ_IOV 16
+#define CB_NFS_IOV      (CB_NFS_READ_IOV + 1)
 
 /* ---------------------------------------------------------- virtual tree */
 
@@ -143,10 +147,14 @@ typedef struct CBNfsConfig {
      * 0: no group, nobody refused (loopback tests). */
     uint32_t addr, netmask;
     /* The bytes of a track the plan marks `pcm` (a WAV made as it is
-     * read, src/link/wav.c), which has no file: how many it put in dst
-     * (fewer only at the end), or a negative errno. NULL: such a track
-     * reads as an I/O error. Its times are its source's. */
-    ssize_t (*read)(void *opaque, const CBPlanTrack *pt, uint64_t offset, uint8_t *dst, size_t n);
+     * read, src/link/wav.c), which has no file, as `peer` reads them: as
+     * slices (*niov of them, at most CB_NFS_READ_IOV, valid until the
+     * reply is sent), how many bytes (fewer only at the end), -EAGAIN when
+     * they are not there yet (the call is answered when asked again), or
+     * a negative errno. NULL: such a track reads as an I/O error. Its
+     * times are its source's. */
+    ssize_t (*read)(void *opaque, const CBPlanTrack *pt, uint32_t peer, uint64_t offset, size_t n,
+                    struct iovec *iov, int *niov);
     void    *read_opaque;
     /* What every handle starts with: the library's tag
      * (cb_library_link_tag), so a deck's handles hold across a server
@@ -166,6 +174,15 @@ void cb_nfs_set_tree(CBNfs *n, const CBVTree *t);
  * be sent (not a call, or not worth answering), or a negative errno. */
 ssize_t cb_nfs_handle(CBNfs *n, enum CBNfsService svc, uint32_t peer,
                       const uint8_t *req, size_t len, uint8_t *reply, size_t cap);
+/* The same, without copying a WAV's bytes: the reply is what `reply` holds
+ * (the length returned), then the slices iov[0 .. *niov) (at most
+ * CB_NFS_IOV, the padding the last), valid until the next call, which the
+ * caller sends after it in one datagram (sendmsg). -EAGAIN: a READ whose
+ * bytes are not made yet; the same datagram handled again later answers
+ * it. */
+ssize_t cb_nfs_handle_iov(CBNfs *n, enum CBNfsService svc, uint32_t peer,
+                          const uint8_t *req, size_t len, uint8_t *reply, size_t cap,
+                          struct iovec *iov, int *niov);
 /* Whether `peer` has mounted (and so may READ). A peer in the subnet that
  * is not in the table is taken in by its next READ or READDIR with a
  * handle of ours (a deck back from a lapse, or reading on after cyanbox

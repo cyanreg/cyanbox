@@ -368,3 +368,23 @@ void cb_link_send(int fd, uint32_t to, uint16_t port, const void *buf, size_t le
         cb_debug("link: send to %s:%u: %s", a, port, strerror(errno));
     }
 }
+
+void cb_link_sendv(int fd, uint32_t to, uint16_t port, const struct iovec *iov, int niov)
+{
+    struct sockaddr_in sa = {
+        .sin_family = AF_INET,
+        .sin_port = htons(port),
+        .sin_addr.s_addr = htonl(to),
+    };
+    struct msghdr mh = {
+        .msg_name = &sa,
+        .msg_namelen = sizeof(sa),
+        .msg_iov = (struct iovec *)iov,
+        .msg_iovlen = (size_t)niov,
+    };
+    if (sendmsg(fd, &mh, MSG_DONTWAIT) < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+        char a[16];
+        cb_link_addr_text(to, a);
+        cb_debug("link: send to %s:%u: %s", a, port, strerror(errno));
+    }
+}

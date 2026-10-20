@@ -60,10 +60,11 @@ typedef struct CBPlanTrack {
     CBPlanCue   *cues; int nb_cues;
     uint32_t    *tag_ids; int nb_tag_ids;   /* My Tags */
     CBProbe      probe;         /* of `source`, or for `pcm` of the WAV served */
-    /* Link (CB_TRANSCODE_LINK): served as a 16-bit stereo WAV of `source`,
-     * the track's own file, decoded as a player reads it (src/link/wav.c),
-     * total_samples frames long; probe, file_type and file_size are the
-     * WAV's. Never set for an export. */
+    /* Link (CB_TRANSCODE_LINK): served as a 16-bit WAV at 44.1 kHz of
+     * `source`, the track's own file, of its one or two channels, decoded
+     * as a player reads it (src/link/wav.c), total_samples frames long;
+     * probe, file_type and file_size are the WAV's. Never set for an
+     * export. */
     bool         pcm;
     /* An export's track written encoded (CB_TRANSCODE_STICK_*): `source`
      * is the track's own file; probe, file_type and file_size are the

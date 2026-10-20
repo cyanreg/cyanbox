@@ -57,9 +57,14 @@
 #include "presence.h"
 #include "wav.h"
 
-/* What the tracks Link serves as WAVs made as they are read may keep open
- * (their packets, about the size of their files). */
-#define WAV_MEMORY ((size_t)1 << 30)
+/* NFS READs whose WAV bytes are not made yet, kept to be answered once
+ * they are (a reader's pipeline wakes the service thread): how many, and
+ * how long before one is given up (a player asks again after its own
+ * timeout, CDJs within a second). */
+#define MAX_PARKED      32
+#define MAX_READERS     8
+#define PARKED_US       2000000
+#define PARKED_SIZE     512
 
 /* Players open a connection or two each (the browser's and a load's); a
  * full network of six players and a mixer stays well inside. */
@@ -177,6 +182,15 @@ struct CBLink {
     int nb_conns;
     uint8_t dgram[65536];
     uint8_t reply[CB_NFS_MAX_DATAGRAM];
+    struct {
+        int      sock;          /* enum Sock */
+        uint32_t from;
+        uint16_t port;
+        int64_t  at;
+        size_t   len;
+        uint8_t  d[PARKED_SIZE];
+    } parked[MAX_PARKED];
+    int nb_parked;
 
     /* What the owner reads, under `lock`. */
     pthread_mutex_t lock;
@@ -315,20 +329,12 @@ static bool still_wanted(void *opaque, const char *stage, int done, int total, c
     return !atomic_load(&l->stop);
 }
 
-/* The WAV of a track served so, for the catalog and NFS, both on the
- * service thread (and the catalog's first on the starting thread, before
- * the service thread is). */
-static int wav_check(void *opaque, const CBPlanTrack *pt)
+/* The WAV of a track, for NFS on the service thread. */
+static ssize_t wav_read(void *opaque, const CBPlanTrack *pt, uint32_t peer, uint64_t offset,
+                        size_t n, struct iovec *iov, int *niov)
 {
     CBLink *l = opaque;
-    return cb_link_wav_check(l->wav, pt);
-}
-
-static ssize_t wav_read(void *opaque, const CBPlanTrack *pt, uint64_t offset, uint8_t *dst,
-                        size_t n)
-{
-    CBLink *l = opaque;
-    return cb_link_wav_read(l->wav, pt, offset, dst, n);
+    return cb_link_wav_read(l->wav, pt, peer, offset, n, iov, niov);
 }
 
 /* A cue a player saved, applied to what is served already (catalog.c):
@@ -391,9 +397,8 @@ static int served_build(CBLink *l, Served *s)
         if (!lib->tracks[i]->missing && lib->tracks[i]->id <= UINT32_MAX)
             tracks[nb++] = lib->tracks[i];
     }
-    /* Every track as all the players play it: as a 16-bit WAV decoded as
-     * a player reads it (wav.h), what cannot be so as a WAV made when a
-     * player loads the track (CB_TRANSCODE_LINK). */
+    /* Every track as all the players play it: a 16-bit WAV at 44.1 kHz,
+     * made as a player reads it (wav.h, CB_TRANSCODE_LINK). */
     ret = cb_plan_build_cb(lib, tracks, nb, (const CBPlaylist *const *)pls, nb_pls, l->name,
                            CB_TRANSCODE_LINK,
                            CB_PLAN_STORED, s->plan, still_wanted, l);
@@ -405,7 +410,6 @@ static int served_build(CBLink *l, Served *s)
     if ((ret = cb_catalog_new(&s->cat, lib, s->plan)) < 0 ||
         (ret = cb_vtree_new(&s->tree, s->plan)) < 0)
         goto fail;
-    cb_catalog_set_check(s->cat, wav_check, l);
     cb_catalog_set_edit(s->cat, edited, l);
     cb_catalog_set_tag_list(s->cat, l->tags);
     free(tracks);
@@ -701,11 +705,74 @@ static void drain_cue(CBLink *l)
     }
 }
 
-static void drain_nfs(CBLink *l, enum Sock s)
+/* Answers one datagram: sent, or nothing to send, true; false when its
+ * WAV bytes are not made yet. */
+static bool answer_nfs(CBLink *l, enum Sock s, uint32_t from, uint16_t port, const uint8_t *d,
+                       size_t len)
 {
     static const enum CBNfsService svc[NB_SOCKS] = {
         [S_PORTMAP] = CB_NFS_PORTMAP, [S_MOUNT] = CB_NFS_MOUNT, [S_NFS] = CB_NFS_NFS,
     };
+    struct iovec iov[1 + CB_NFS_IOV];
+    int niov = 0;
+    ssize_t r = cb_nfs_handle_iov(l->nfs, svc[s], from, d, len, l->reply, sizeof(l->reply),
+                                  iov + 1, &niov);
+    if (r == CB_ERROR(EAGAIN))
+        return false;
+    if (r > 0) {
+        iov[0] = (struct iovec) { .iov_base = l->reply, .iov_len = (size_t)r };
+        cb_link_sendv(l->fds[s], from, port, iov, 1 + niov);
+    }
+    return true;
+}
+
+/* A READ to answer once its bytes are made; the same one asked again (a
+ * player's retry, the same xid) is kept once. */
+static void park(CBLink *l, enum Sock s, uint32_t from, uint16_t port, const uint8_t *d,
+                 size_t len)
+{
+    if (len > PARKED_SIZE)
+        return;
+    int at = l->nb_parked;
+    for (int i = 0; i < l->nb_parked; i++)
+        if (l->parked[i].from == from && l->parked[i].len >= 4 && len >= 4 &&
+            !memcmp(l->parked[i].d, d, 4))
+            at = i;
+    if (at == MAX_PARKED) {
+        memmove(&l->parked[0], &l->parked[1], (MAX_PARKED - 1) * sizeof(l->parked[0]));
+        at = MAX_PARKED - 1;
+    } else if (at == l->nb_parked) {
+        l->nb_parked++;
+    }
+    l->parked[at].sock = s;
+    l->parked[at].from = from;
+    l->parked[at].port = port;
+    l->parked[at].at = cb_time_us();
+    l->parked[at].len = len;
+    memcpy(l->parked[at].d, d, len);
+}
+
+/* The READs parked, answered when their bytes are there now, given up
+ * when too old. */
+static void unpark(CBLink *l)
+{
+    int64_t now = cb_time_us();
+    int k = 0;
+    for (int i = 0; i < l->nb_parked; i++) {
+        bool done = now - l->parked[i].at > PARKED_US ||
+                    answer_nfs(l, l->parked[i].sock, l->parked[i].from, l->parked[i].port,
+                               l->parked[i].d, l->parked[i].len);
+        if (!done) {
+            if (k != i)
+                l->parked[k] = l->parked[i];
+            k++;
+        }
+    }
+    l->nb_parked = k;
+}
+
+static void drain_nfs(CBLink *l, enum Sock s)
+{
     for (int k = 0; k < DRAIN_MAX; k++) {
         uint32_t from;
         uint16_t port;
@@ -714,10 +781,8 @@ static void drain_nfs(CBLink *l, enum Sock s)
             break;
         if (!n || !admitted(l, from))
             continue;
-        ssize_t r = cb_nfs_handle(l->nfs, svc[s], from, l->dgram, (size_t)n, l->reply,
-                                  sizeof(l->reply));
-        if (r > 0)
-            cb_link_send(l->fds[s], from, port, l->reply, (size_t)r);
+        if (!answer_nfs(l, s, from, port, l->dgram, (size_t)n))
+            park(l, s, from, port, l->dgram, (size_t)n);
     }
 }
 
@@ -822,7 +887,7 @@ static void *service(void *arg)
     CBLink *l = arg;
     while (!atomic_load(&l->stop)) {
         follow(l);
-        struct pollfd pfd[NB_SERVED + 1 + MAX_CONNS];
+        struct pollfd pfd[NB_SERVED + 1 + MAX_CONNS + MAX_READERS];
         int nb = 0;
         for (int i = S_FIRST; i < NB_SOCKS; i++)
             pfd[nb++] = (struct pollfd) { .fd = l->fds[i], .events = POLLIN };
@@ -836,8 +901,13 @@ static void *service(void *arg)
                 ev |= POLLOUT;
             pfd[nb++] = (struct pollfd) { .fd = c->fd, .events = ev };
         }
+        /* The WAVs' pipelines: what they made answers parked READs */
+        int readers = nb, fds[MAX_READERS];
+        int nr = cb_link_wav_fds(l->wav, fds, MAX_READERS);
+        for (int i = 0; i < nr; i++)
+            pfd[nb++] = (struct pollfd) { .fd = fds[i], .events = POLLIN };
 
-        if (poll(pfd, (nfds_t)nb, 1000) < 0 && errno != EINTR) {
+        if (poll(pfd, (nfds_t)nb, l->nb_parked ? 100 : 1000) < 0 && errno != EINTR) {
             cb_err("link: poll: %s", strerror(errno));
             break;
         }
@@ -857,6 +927,17 @@ static void *service(void *arg)
             conn_accept(l, CONN_QUERY);
         if (pfd[S_DB - S_FIRST].revents & POLLIN)
             conn_accept(l, CONN_DB);
+        bool made = false;
+        for (int i = readers; i < nb; i++) {
+            if (pfd[i].revents & POLLIN) {
+                uint64_t v;
+                if (read(pfd[i].fd, &v, sizeof(v)) < 0 && errno != EAGAIN)
+                    cb_debug("link: a WAV's pipeline: %s", strerror(errno));
+                made = true;
+            }
+        }
+        if (made || l->nb_parked)
+            unpark(l);
         for (enum Sock s = S_PORTMAP; s <= S_NFS; s++) {
             if (pfd[s - S_FIRST].revents & POLLIN)
                 drain_nfs(l, s);
@@ -864,7 +945,7 @@ static void *service(void *arg)
         /* The connections polled are the first ones; any accepted above
          * wait for the next turn. Backwards, as closing moves the last
          * one into the closed one's place. */
-        int polled = nb - NB_SERVED - 1;
+        int polled = readers - NB_SERVED - 1;
         for (int i = CB_MIN(polled, l->nb_conns) - 1; i >= 0; i--) {
             Conn *c = &l->conns[i];
             short re = pfd[NB_SERVED + 1 + i].revents;
@@ -935,7 +1016,7 @@ int cb_link_start(CBLink **out, const CBLinkOptions *o)
         goto fail;
     }
 
-    if ((ret = cb_link_wav_new(&l->wav, WAV_MEMORY)) < 0)
+    if ((ret = cb_link_wav_new(&l->wav)) < 0)
         goto fail;
     int64_t t0 = cb_time_us();
     Served s;
