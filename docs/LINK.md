@@ -845,9 +845,22 @@ DJM-900NXS2, and the mixer firmware readings, "Sources"):
   touch cue), and devices 73 to 78 by a status of their own. A computer
   sends no status for it: its keep-alives, which put it in the mixer's
   device table, are all it takes.
+- What the DJM-A9 (1.22) asks of a computer, and nothing more (the cdj
+  session's reading, 2026-10-20): its own link up (state RUN), the
+  computer present by its keep-alives, and its enable, set at start and
+  never cleared. Timing goes to the address the keep-alive gives at
+  0x2c, not to the one it came from. No other player's status touches
+  17 and 18 (a CDJ-900NXS can never be a source itself), and no panel
+  state is read but the two LINK CUE buttons, A and B, which go to 0x28
+  as one: either on, it is 1; which headphones hear it is the DSP's
+  routing. A `31` answer to its `30` changes only what it offers for My
+  Settings.
 - Nothing else goes to a mixer's 50004: the DJM-A9 takes a datagram that
   does not start with the magic for an encrypted one, and one that does
-  not decrypt has every device at its sender's address dropped.
+  not decrypt has every device at its sender's address dropped. It
+  encrypts (AES-GCM, keys from a TLS session on TCP 50006) only for a
+  device whose keep-alive sets bit 0x80 of byte 0x35, and sends such a
+  device nothing until that session is up; cyanbox's is 08, rekordbox's.
 - An all-in-one's is its own: the XDJ-RX3's LINK CUE button (firmware
   1.20; the cdj session's reading of `rbp` and its emulator, 2026-10-20)
   puts its own preview player in its headphones, the track previewed by
@@ -973,11 +986,28 @@ without a hole; pauses of 0.5, 3 and 8 s were silences of 0.57, 3.03 and
 **Real mixers**: a real DJM-900NXS plays cyanbox's deck in its LINK CUE.
 A real DJM-A9, with two CDJ-900NXSs on the link (2026-10-19), did not:
 its LINK CUE switched on and off played nothing. Nothing was captured
-and its firmware is not known; the emulated A9 (1.22) last ran LINK CUE
-before it asked cyanbox `30` ("My Settings"). The first check at one:
-with cyanbox up as device 17, `tcpdump -ni IF udp port 50004` shows a
-42-byte timing packet from the mixer every 7 ms or so; if none come,
-something the readings missed gates it.
+and its firmware is not known. The emulated A9 (1.22) still plays the
+same code (2026-10-20, the cdj session, `~/projects/cdj/work/a9lc`):
+after its `30` and cyanbox's `31`, 2846 packets and 19.92 s of 440 Hz;
+with an emulated CDJ-900 on the link too, 3559 and 24.93 s. What the
+emulator does not have is the A9's own hardware: its LINK ports, its
+panel, its DSP and the headphones' routing.
+The first checks at a real A9: the status bar, which says `DJM-A9 on
+the link: the deck is heard in its LINK CUE` at the handover (before
+LINK CUE is on); the A9's firmware version, from its screen; which
+headphones, which LINK CUE button and where MIXING was. Then a capture
+on cyanbox's interface, cyanbox run with `-v`:
+`tcpdump -ni IF -s 0 -w a9-linkcue.pcap 'udp portrange 50000-50004 or tcp
+portrange 50006-50007'` (the audio is about 12 MB a minute), a deck
+played, LINK CUE A on for 10 s and off, then B, the time of each press
+noted. Timing (42 bytes from the A9 to cyanbox's 50004, every 7 ms or
+so) that never comes means the A9 is not up or does not have 17 present
+at that address; timing whose 0x28 stays 0 through a press means the
+press never reached it; cyanbox not answering timing that comes means
+it does not receive it (a firewall, another interface); everything
+answered, the handover naming 17 and 0x28 at 1, means the protocol is
+whole and the A9's audio path is not; timing that stops about 0.1 s
+after 0x28 goes to 1 means the A9 holds 104 ms and its DSP takes none.
 
 ## Order of work
 
