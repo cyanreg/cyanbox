@@ -3,7 +3,10 @@
 /* The ring backend (CB_AUDIO_RING): the mix kept as 16-bit stereo frames
  * in a ring that another thread takes as it needs them
  * (cb_player_ring_take), never a device: with --pro-link the mixer's
- * LINK CUE, which asks for 7 ms of audio every 7 ms.
+ * LINK CUE, which asks for 7 ms of audio every 7 ms. libswresample turns
+ * the float mix into 16 bits (triangular dither), writing into the ring
+ * itself; it allocates on its first conversion, which the open makes, so
+ * the mixing thread never does.
  *
  * One thread mixes, waking every period on an absolute monotonic
  * schedule as the null backend does. While someone takes (a take in the
@@ -20,6 +23,10 @@
 #include <stdatomic.h>
 #include <time.h>
 
+#include <libavutil/channel_layout.h>
+#include <libavutil/opt.h>
+#include <libswresample/swresample.h>
+
 /* Frames the ring holds (a power of two), what it is kept at while taken,
  * and how long after the last take it counts as not taken: longer than a
  * mixer goes without asking while it holds enough (the DJM-A9: 58 ms as
@@ -35,15 +42,24 @@ struct CBRingOut {
     atomic_bool stop;
     float      *mix;
     int         period;
+    SwrContext *swr;
     int16_t     ring[RING_FRAMES * 2];
     atomic_uint head, tail;         /* frames written and taken, wrapping */
     atomic_llong taken_us;          /* cb_time_us of the last take, 0 never */
 };
 
-static int16_t to_s16(float v)
+/* n frames of the mix into the ring from frame `at`, around its end. */
+static void to_ring(CBRingOut *r, unsigned at, int n)
 {
-    v = v > 1.0f ? 1.0f : v < -1.0f ? -1.0f : v;
-    return (int16_t)lrintf(v * 32767.0f);
+    int done = 0;
+    while (done < n) {
+        unsigned i = (at + (unsigned)done) % RING_FRAMES;
+        int k = (int)CB_MIN((unsigned)(n - done), RING_FRAMES - i);
+        const uint8_t *in[1] = { (const uint8_t *)(r->mix + done * 2) };
+        uint8_t *out[1] = { (uint8_t *)(r->ring + i * 2) };
+        swr_convert(r->swr, out, k, in, k);
+        done += k;
+    }
 }
 
 static void *ring_thread(void *arg)
@@ -61,11 +77,7 @@ static void *ring_thread(void *arg)
             while (head - atomic_load_explicit(&r->tail, memory_order_acquire) + (unsigned)r->period
                    <= RING_TARGET) {
                 cb_player_mix(p, r->mix, r->period);
-                for (int i = 0; i < r->period; i++) {
-                    unsigned at = (head + (unsigned)i) % RING_FRAMES;
-                    r->ring[at * 2] = to_s16(r->mix[i * 2]);
-                    r->ring[at * 2 + 1] = to_s16(r->mix[i * 2 + 1]);
-                }
+                to_ring(r, head, r->period);
                 head += (unsigned)r->period;
                 atomic_store_explicit(&r->head, head, memory_order_release);
             }
@@ -105,9 +117,20 @@ int cb_player_ring_open(CBPlayer *p)
         atomic_init(&r->head, 0);
         atomic_init(&r->tail, 0);
         atomic_init(&r->taken_us, 0);
-        r->mix = malloc(sizeof(*r->mix) * 2 * (size_t)r->period);
+        r->mix = calloc(2 * (size_t)r->period, sizeof(*r->mix));
         if (!r->mix)
             return CB_ERROR(ENOMEM);
+        AVChannelLayout st = AV_CHANNEL_LAYOUT_STEREO;
+        if (swr_alloc_set_opts2(&r->swr, &st, AV_SAMPLE_FMT_S16, 48000, &st, AV_SAMPLE_FMT_FLT,
+                                48000, 0, NULL) < 0 ||
+            av_opt_set_int(r->swr, "dither_method", SWR_DITHER_TRIANGULAR, 0) < 0 ||
+            swr_init(r->swr) < 0)
+            return CB_ERROR(ENOMEM);
+        /* its buffers, sized by a first conversion here */
+        int16_t warm[2 * RING_TARGET];
+        const uint8_t *in[1] = { (const uint8_t *)r->mix };
+        uint8_t *out[1] = { (uint8_t *)warm };
+        swr_convert(r->swr, out, r->period, in, r->period);
     }
     /* Opened again: what the ring kept is old, and the first take after a
      * while drops it. */
@@ -139,6 +162,7 @@ void cb_player_ring_close(CBPlayer *p)
     if (!r)
         return;
     cb_player_ring_stop(p);
+    swr_free(&r->swr);
     free(r->mix);
     free(r);
     p->ring_out = NULL;
