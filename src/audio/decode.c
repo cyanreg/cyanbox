@@ -377,17 +377,21 @@ static int mixer_setup(CBMixer *s, const AVChannelLayout *layout)
             av_channel_layout_default(&in_l, in);
         else if (av_channel_layout_copy(&in_l, layout) < 0)
             return CB_ERROR(ENOMEM);
-        double *m = calloc((size_t)2 * in, sizeof(*m));
+        /* swr_build_matrix2 scales all 64 x 64 entries at the stride it is
+         * given (rematrix.c), whatever the layouts: a matrix of that size */
+        double *m = calloc((size_t)64 * 64, sizeof(*m));
         if (!m) {
             av_channel_layout_uninit(&in_l);
             return CB_ERROR(ENOMEM);
         }
-        int ret = swr_build_matrix2(&in_l, &out_l, M_SQRT1_2, M_SQRT1_2, 0.0, 1.0, 1.0, m, in,
-                                    AV_MATRIX_ENCODING_NONE, NULL);
+        int ret = in <= 64 ? swr_build_matrix2(&in_l, &out_l, M_SQRT1_2, M_SQRT1_2, 0.0, 1.0, 1.0, m,
+                                               64, AV_MATRIX_ENCODING_NONE, NULL)
+                           : CB_ERROR(ENOTSUP);
         av_channel_layout_uninit(&in_l);
         if (ret >= 0) {
-            for (int i = 0; i < 2 * in; i++)
-                s->matrix[i] = (float)m[i];
+            for (int o = 0; o < 2; o++)
+                for (int c = 0; c < in; c++)
+                    s->matrix[o * in + c] = (float)m[o * 64 + c];
             free(m);
             return 0;
         }
