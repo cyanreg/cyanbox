@@ -13,8 +13,6 @@
  *    cold after a jump).
  *  - The size is the plan's whatever the decoder makes: nothing past it,
  *    silence where the file ends first.
- *  - A Matroska file is refused (its times are milliseconds), which has
- *    the catalog make the WAV as a file instead.
  *
  * Skips (77) without the ffmpeg CLI. Usage: test_wav (CB_TEST_DIR set). */
 
@@ -223,23 +221,6 @@ int main(void)
         }
     }
 
-    /* A Matroska file: refused, so made as a file instead. */
-    if (!make("g.mka", "-c:a flac")) {
-        char path[700];
-        snprintf(path, sizeof(path), "%s/g.mka", dir);
-        CBProbe p;
-        CHECK_EQ(cb_probe(path, &p), 0);
-        CBTrack t;
-        CBPlanTrack pt;
-        plan_track(&pt, &t, 9, path, &p);
-        CBLinkWav *w;
-        CHECK_EQ(cb_link_wav_new(&w, (size_t)1 << 30), 0);
-        CHECK(cb_link_wav_check(w, &pt) < 0);
-        uint8_t buf[64];
-        CHECK(cb_link_wav_read(w, &pt, 44, buf, sizeof(buf)) < 0);
-        cb_link_wav_free(&w);
-        cb_probe_free(&p);
-    }
     cb_probe_free(&fp);
     return test_result("test_wav");
 }

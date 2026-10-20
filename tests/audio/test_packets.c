@@ -13,7 +13,8 @@
  * AAC-LC, with the pre-roll packets.c gives them), within 1e-4 for Opus
  * (src/audio/packets.c has the measurements). Then the edges: frames before
  * 0 and past the end are silence, a store decodes before it is indexed
- * (indexing as far as it needs), and Matroska is refused. */
+ * (indexing as far as it needs), and Matroska is refused by the store, the
+ * probe and the decoder alike. */
 
 #include "cyanbox/audio.h"
 
@@ -206,12 +207,26 @@ int main(void)
         CHECK(!ffmpeg("-i", wav, "-c:a", "libopus", "-b:a", "160k", opus, NULL), "opus encode");
         check_file("opus", opus, 1e-4);
 
-        /* Matroska's times are milliseconds: refused */
-        char *mka = test_path(dir, "sig.mka");
+        /* Matroska's times are milliseconds: refused, by its contents, so a
+         * WebM named as Opus too */
+        char *mka = test_path(dir, "sig.mka"), *webm = test_path(dir, "webm.opus");
         CHECK(!ffmpeg("-i", opus, "-c", "copy", mka, NULL), "mka remux");
-        CBPackets *pk = NULL;
-        CHECK(cb_packets_open(mka, &pk) == CB_ERROR(ENOTSUP), "Matroska accepted");
-        cb_packets_free(pk);
+        CHECK(!ffmpeg("-i", opus, "-c", "copy", "-f", "webm", webm, NULL), "webm remux");
+        const char *refused[] = { mka, webm };
+        for (int i = 0; i < 2; i++) {
+            CBPackets *pk = NULL;
+            CHECK(cb_packets_open(refused[i], &pk) == CB_ERROR(ENOTSUP), "%s: store accepted",
+                  refused[i]);
+            cb_packets_free(pk);
+            CBProbe p;
+            CHECK(cb_probe(refused[i], &p) == CB_ERROR(ENOTSUP), "%s: probe accepted",
+                  refused[i]);
+            CBAudio a = { 0 };
+            CHECK(cb_decode(refused[i], 0, 0, &a) == CB_ERROR(ENOTSUP), "%s: decoded",
+                  refused[i]);
+            cb_audio_free(&a);
+        }
+        free(webm);
         free(mka);
         free(opus);
     }

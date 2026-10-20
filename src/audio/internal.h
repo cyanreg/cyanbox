@@ -24,7 +24,11 @@ void cb_audio_unmap(CBMap *m);
 /* avformat_open_input on "file:" + path, so that a name such as
  * "AD:HOUSE 11/x.flac" is not taken for a protocol (the file protocol does
  * no URL unescaping, so '?' and '%' are safe too). find_info runs
- * avformat_find_stream_info, which the codec parameters of MP3 and Ogg need. */
+ * avformat_find_stream_info, which the codec parameters of MP3 and Ogg need.
+ * -ENOTSUP for Matroska (and WebM), whatever the file's name: its times are
+ * milliseconds, so a seek cannot say which sample it landed on, and every
+ * path that reads a track (the probe, the decks, Link, the stick) needs
+ * that. */
 int  cb_audio_open(const char *path, AVFormatContext **fmt, bool find_info);
 /* Index of the first stream of the given type, or -1. */
 int  cb_audio_first_stream(const AVFormatContext *fmt, enum AVMediaType type);

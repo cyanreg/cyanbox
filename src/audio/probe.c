@@ -161,6 +161,11 @@ int cb_audio_open(const char *path, AVFormatContext **out, bool find_info)
         cb_debug("%s: %s", path, av_err2str(ret));
         return cb_audio_error(ret);
     }
+    if (cb_audio_is_container(fmt, "matroska")) {
+        cb_debug("%s: Matroska is not supported (its times are milliseconds)", path);
+        avformat_close_input(&fmt);
+        return CB_ERROR(ENOTSUP);
+    }
     if (find_info) {
         ret = avformat_find_stream_info(fmt, NULL);
         if (ret < 0) {
@@ -314,8 +319,6 @@ static int64_t to_samples(int64_t ts, AVRational tb, int rate)
  * - A duration libavformat only estimated from the bitrate (ADTS AAC and
  *   other raw streams; off by a factor of three on a VBR AAC here): the
  *   packet durations, summed over the whole file. Nothing is trimmed there.
- * - Matroska/WebM keep milliseconds only: the duration less the codec delay
- *   is within a few samples, not exact.
  * - WAV, AIFF, everything else: the stream duration as it is. */
 static int64_t container_samples(AVFormatContext *fmt, int idx)
 {
@@ -347,8 +350,6 @@ static int64_t container_samples(AVFormatContext *fmt, int idx)
     if (cb_audio_is_container(fmt, "ogg")) {
         if (st->start_time != AV_NOPTS_VALUE && st->start_time < 0)
             total += to_samples(st->start_time, st->time_base, rate);
-        total -= par->initial_padding;
-    } else if (cb_audio_is_container(fmt, "matroska")) {
         total -= par->initial_padding;
     }
     return CB_MAX(total, (int64_t)0);

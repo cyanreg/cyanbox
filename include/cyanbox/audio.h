@@ -135,8 +135,7 @@ void cb_audio_free(CBAudio *a);
 typedef struct CBPackets CBPackets;
 
 /* Opens path and indexes its first packets; cb_packets_index or a decode
- * does the rest. -ENOTSUP when the packets cannot place their samples
- * exactly (Matroska keeps milliseconds): cb_decode such a file whole. */
+ * does the rest. */
 int  cb_packets_open(const char *path, CBPackets **pk);
 void cb_packets_free(CBPackets *pk);
 /* Indexes up to max_packets more: 1 once the whole file is indexed (the

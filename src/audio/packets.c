@@ -37,9 +37,10 @@
  *   Vorbis's first packet (pts -128, duration 128) before 0, where the
  *   decoder gives nothing for it. Checked against cb_decode on Opus, Vorbis,
  *   AAC (LC and HE, with their edit lists), ADTS, WAV and AIFF in
- *   tests/audio/test_packets.c. Matroska keeps milliseconds only and is
- *   refused (-ENOTSUP: decode it whole); so is a stream whose packets carry
- *   no durations.
+ *   tests/audio/test_packets.c. A packet without a duration is taken as
+ *   the codec's frame size, else as long as the one before it (the
+ *   silence cb_decode gives a damaged one). Matroska, which keeps
+ *   milliseconds only, never gets here: cb_audio_open refuses it.
  *
  * Decoding a stretch that does not follow the last one starts again: a new
  * decoder (libavcodec keeps its pending skip across a flush), opened with
@@ -477,10 +478,6 @@ static int open_lavf(CBPackets *pk, AVFormatContext *fmt)
     for (unsigned i = 0; i < fmt->nb_streams; i++)
         fmt->streams[i]->discard = (int)i == pk->idx ? AVDISCARD_DEFAULT : AVDISCARD_ALL;
     AVStream *st = fmt->streams[pk->idx];
-    if (cb_audio_is_container(fmt, "matroska")) {
-        cb_debug("%s: Matroska times are in milliseconds, not samples", pk->path);
-        return CB_ERROR(ENOTSUP);
-    }
 
     /* Ogg, MP4, WAV and AIFF give the codec's parameters and the length in
      * their headers; raw streams (ADTS) need packets read for them. */
