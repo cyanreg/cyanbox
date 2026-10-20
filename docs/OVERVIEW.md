@@ -152,7 +152,7 @@ the CDJ-2000NXS2, or MP3), every track encoded from its decoded samples at
 
 ```
 src/core      model, grid arithmetic, the SQLite library (tracks, cues, waveforms, playlists, settings), notation
-src/audio     libavformat/libavcodec decode to memory on the players' timeline, packet stores decoded on demand, probe, tags, artwork, MP3/FLAC scanners
+src/audio     one FFmpeg path on the players' timeline (libavformat, libavcodec, libswresample) as pipelines of chunks, decodes to memory, encoding, probe, tags, artwork, MP3/FLAC scanners
 src/analysis  spectral front end (libavutil av_tx, or the GPU), onset, tempo, grid, downbeat, key, waveforms
 src/formats   export.pdb, ANLZ read/write, OneLibrary (sqlite3 + SQLCipher pages), My Settings, colours
 src/export    stick plan, writer, inspect, pull
@@ -197,19 +197,25 @@ Decisions and why:
   (`cb_vbar_draw`). The overview and the row previews, which do not scroll,
   keep each band's maximum over a pixel's columns. ImGui draws everything
   else.
-- **The track's packets in memory, decoded around the playhead** for
-  playback. Loading reads the file's audio packets into a packet store
-  (cyanbox/audio.h), placed on the players' timeline, in a few milliseconds;
-  a thread of the deck's own decodes a window of 4 s behind and 8 s ahead of
+- **The track decoded around the playhead** for playback. Loading opens
+  the track's stream (cyanbox/player.h) in a few milliseconds: two
+  pipelines (cyanbox/audio.h: libavformat, libavcodec, then libswresample
+  writing float at the file's rate into reference-counted chunks), which a
+  thread of the deck's own runs: a window of 4 s behind and 8 s ahead of
   the playhead, half a second at every cue point, and the target of every
   jump as it is asked for, so cues, hot cues and loops play at once and a
-  click anywhere on the waveform a callback or two later. Decoding the whole
-  track first took one to five seconds per load and 450 MB for ten minutes
-  at 96 kHz. A jump decodes from enough packets before its target that the
-  samples are the analyser's (cb_decode's) exactly, for every codec but
-  HE-AAC: no seek inaccuracy, sample-exact loops, and grid and audio agree on
-  MP3s too. Resampling and varispeed are one cubic interpolator in the
-  real-time callback.
+  click anywhere on the waveform decodes in a millisecond or two (median
+  0.7 ms for a FLAC, 2.8 ms for an Opus, measured from the jump). The feed
+  copies no samples: it puts each chunk's pointer where the real-time
+  callback looks, which reads it without a reference and never waits; a
+  chunk taken out is let go of once a callback has finished since. Decoding
+  the whole track first took one to five seconds per load and 450 MB for
+  ten minutes at 96 kHz. A seek flushes the decoder and starts it from
+  enough before the target that the samples are the analyser's
+  (cb_decode's) exactly, for every codec but the lossy ones' cold start
+  (within 1e-4 for Opus): no seek inaccuracy, sample-exact loops, and grid
+  and audio agree on MP3s too. Resampling and varispeed are one cubic
+  interpolator in the real-time callback.
 - **MASTER TEMPO with Signalsmith Stretch** (MIT, a git submodule in
   `subprojects/`, read through meson's CMake module): the deck's varispeed
   output is shifted back by 1 / (tempo + bend). The shifter's 120 ms delay
@@ -217,8 +223,9 @@ Decisions and why:
   position reported is the one heard. Chosen over Rubber Band, whose
   licence is the GPL, and which measured worse (and allocated inside its
   processing call on first use and on reset).
-- **PipeWire natively** (`pw_stream`), one process callback that never
-  allocates or locks; commands arrive through a lock-free ring, positions leave
+- **PipeWire natively** (`pw_stream`, 48 kHz F32P: planar float, the
+  graph's own format, which the mix writes straight into), one process
+  callback that never allocates or locks; commands arrive through a lock-free ring, positions leave
   through atomics. The sink is selectable (`--audio-sink`, `PIPEWIRE_NODE`) and
   a `--audio none` backend drives the clock without a device, which is what the
   tests and the headless runs use. Nothing is ever routed to the Focusrite
