@@ -48,6 +48,7 @@
 #include "cyanbox/export.h"
 #include "cyanbox/formats.h"
 #include "cyanbox/library.h"
+#include "cyanbox/thread.h"
 
 #include "cue.h"
 #include "dbserver.h"
@@ -464,6 +465,7 @@ static void wake(int fd);
 static void *builder(void *arg)
 {
     CBLink *l = arg;
+    cb_thread_name("link:build");
     if (l->test_build_ms > 0)
         usleep((useconds_t)l->test_build_ms * 1000);
     l->fresh_ret = served_build(l, &l->fresh);
@@ -822,6 +824,7 @@ static void publish(CBLink *l)
 static void *presence_thread(void *arg)
 {
     CBLink *l = arg;
+    cb_thread_name("link:presence");
     while (!atomic_load(&l->stop)) {
         /* Every turn, not only when due: a keep-alive heard makes the
          * join due at once, and a tick only sends what is due. */
@@ -885,6 +888,7 @@ static void follow(CBLink *l)
 static void *service(void *arg)
 {
     CBLink *l = arg;
+    cb_thread_name("link:serve");
     while (!atomic_load(&l->stop)) {
         follow(l);
         struct pollfd pfd[NB_SERVED + 1 + MAX_CONNS + MAX_READERS];

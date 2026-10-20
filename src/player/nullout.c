@@ -16,6 +16,8 @@
 #include <stdatomic.h>
 #include <time.h>
 
+#include "cyanbox/thread.h"
+
 struct CBNullOut {
     pthread_t   thread;
     bool        started;
@@ -27,6 +29,7 @@ struct CBNullOut {
 static void *null_thread(void *arg)
 {
     CBPlayer *p = arg;
+    cb_thread_name("player:null");
     CBNullOut *n = p->null;
     struct timespec next;
     clock_gettime(CLOCK_MONOTONIC, &next);

@@ -18,8 +18,11 @@
 #include "internal.h"
 
 #include <pthread.h>
+#include <stdio.h>
 
 #include <libavutil/refstruct.h>
+
+#include "cyanbox/thread.h"
 
 #include "fifo.h"
 
@@ -46,6 +49,7 @@ struct CBPipeline {
     size_t plane;               /* bytes of one plane */
     bool planar;
     int64_t length;
+    char name[16];              /* the thread's */
 
     pthread_t thread;
     bool started;
@@ -96,6 +100,7 @@ static void push(CBPipeline *p, Chunk *c, uint64_t gen)
 static void *run(void *arg)
 {
     CBPipeline *p = arg;
+    cb_thread_name("%s", p->name);
     pthread_mutex_lock(&p->lock);
     while (!p->stop) {
         if (p->seek_pending) {
@@ -183,6 +188,8 @@ int cb_pipeline_open(CBPipeline **out, const char *path, const CBPipelineOptions
     p->rate = cb_source_rate(p->src);
     p->channels = cb_source_channels(p->src);
     p->length = cb_source_length(p->src);
+    snprintf(p->name, sizeof(p->name), "%s:%s", o->name ? o->name : "pipeline",
+             cb_source_codec(p->src));
     enum AVSampleFormat fmt = cb_source_format(p->src);
     p->planar = av_sample_fmt_is_planar(fmt);
     p->plane = (size_t)o->chunk * av_get_bytes_per_sample(fmt) * (p->planar ? 1 : p->channels);

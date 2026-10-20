@@ -673,7 +673,7 @@ int cb_player_create(CBPlayer **out, const CBPlayerOptions *opt)
     }
 
     for (int i = 0; i < CB_DECKS; i++) {
-        ret = cb_player_feed_start(&p->feed[i], &p->epoch);
+        ret = cb_player_feed_start(&p->feed[i], i, &p->epoch);
         if (ret < 0)
             goto fail;
         p->rt[i].wake = p->feed[i].wakefd;

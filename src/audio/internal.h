@@ -85,6 +85,8 @@ void cb_source_free(CBSource **s);
 int  cb_source_rate(const CBSource *s);
 int  cb_source_channels(const CBSource *s);
 enum AVSampleFormat cb_source_format(const CBSource *s);
+/* The decoder's name (libavcodec's). */
+const char *cb_source_codec(const CBSource *s);
 /* The output's length as the container states it, in frames: an estimate
  * (the last read ends the track), -1 when it states none. */
 int64_t cb_source_length(const CBSource *s);

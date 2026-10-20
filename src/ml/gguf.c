@@ -416,6 +416,7 @@ typedef struct Pieces {
 static void *pieces_run(void *arg)
 {
     Pieces *r = arg;
+    cb_thread_name("gguf:read");
     for (int k = 0; k < r->nb; k++) {
         pthread_mutex_lock(&r->lock);
         while (!r->stop && k - r->used >= 2)

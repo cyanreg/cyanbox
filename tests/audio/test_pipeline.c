@@ -21,10 +21,12 @@
  * - A pipeline's chunks, popped as its eventfd says, come in order and
  *   are the source's read in order; after a seek the next chunk is the one
  *   asked for, never an older one; the last is marked; a missing file
- *   does not open. (test_pipeline_race.c has the race of a seek.) */
+ *   does not open; its thread is named "<name>:<codec>".
+ *   (test_pipeline_race.c has the race of a seek.) */
 
 #include "cyanbox/audio.h"
 
+#include <dirent.h>
 #include <inttypes.h>
 #include <math.h>
 #include <poll.h>
@@ -55,6 +57,29 @@ static unsigned rnd(unsigned *seed)
 }
 
 /* The whole source in order, in CHUNK reads, as float; frames in *n. */
+/* Whether a thread of this process is named `name`. */
+static bool thread_named(const char *name)
+{
+    DIR *d = opendir("/proc/self/task");
+    bool found = false;
+    struct dirent *e;
+    while (d && !found && (e = readdir(d))) {
+        char path[sizeof(e->d_name) + 32], comm[32] = { 0 };
+        snprintf(path, sizeof(path), "/proc/self/task/%s/comm", e->d_name);
+        FILE *f = fopen(path, "r");
+        if (!f)
+            continue;
+        if (fgets(comm, sizeof(comm), f)) {
+            comm[strcspn(comm, "\n")] = 0;
+            found = !strcmp(comm, name);
+        }
+        fclose(f);
+    }
+    if (d)
+        closedir(d);
+    return found;
+}
+
 static float *read_all(const char *path, const CBAudioFormat *f, int64_t *n, int *ch, int *rate)
 {
     CBSource *s;
@@ -265,7 +290,7 @@ static void check_pipeline(const char *path)
     int ch, rate;
     float *x = read_all(path, &f, &n, &ch, &rate);
     CBPipeline *p = NULL;
-    CBPipelineOptions o = { .format = f, .chunk = CHUNK, .ahead = 1.0 };
+    CBPipelineOptions o = { .format = f, .chunk = CHUNK, .ahead = 1.0, .name = "test" };
     CHECK(x && cb_pipeline_open(&p, path, &o) >= 0, "pipeline: open");
     if (!x || !p) {
         free(x);
@@ -293,6 +318,15 @@ static void check_pipeline(const char *path)
     }
     CHECK(last && in_order && same && frames == n, "pipeline: %" PRId64 " frames of %" PRId64
           ", in order %d, the source's %d, last seen %d", frames, n, in_order, same, last);
+
+    /* Its thread: the name asked for, then the file's codec */
+    CBSource *s;
+    char want[16] = "";
+    if (cb_source_open(&s, path, &f) >= 0) {
+        snprintf(want, sizeof(want), "test:%s", cb_source_codec(s));
+        cb_source_free(&s);
+    }
+    CHECK(*want && thread_named(want), "pipeline: no thread named %s", want);
 
     /* Seeks: the chunk asked for comes next */
     unsigned seed = 3;

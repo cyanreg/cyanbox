@@ -358,6 +358,7 @@ static int encode(Enc *e)
         .chunk = e->frame_size, .ahead = AHEAD,
         /* LAME's delay off the front: the file decodes in line */
         .offset = o->format == CB_ENCODE_MP3 ? CB_MAX(e->enc->initial_padding, 0) : 0,
+        .name = "encode",
     };
     CBPipeline *p;
     int ret = cb_pipeline_open(&p, e->path, &po);

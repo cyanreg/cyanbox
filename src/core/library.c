@@ -1419,7 +1419,7 @@ int cb_library_add_path(CBLibrary *lib, const char *path, cb_add_cb cb, void *op
     if (cb_dir_exists(abs)) {
         /* Probing is I/O bound: as many threads as CPUs is plenty. */
         CBThreadPool *pool = NULL;
-        if (cb_pool_create(&pool, 0) < 0)
+        if (cb_pool_create(&pool, 0, "probe") < 0)
             pool = NULL;
         ret = add_dir(lib, pool, abs, cb, opaque);
         cb_pool_destroy(pool);

@@ -11,8 +11,9 @@
 
 typedef struct CBThreadPool CBThreadPool;
 
-/* nb_threads <= 0: one per online CPU. */
-int  cb_pool_create(CBThreadPool **pool, int nb_threads);
+/* nb_threads <= 0: one per online CPU. The threads are named
+ * "<name>:<i>" (cb_thread_name). */
+int  cb_pool_create(CBThreadPool **pool, int nb_threads, const char *name);
 /* Waits for queued work, then joins. */
 void cb_pool_destroy(CBThreadPool *pool);
 int  cb_pool_submit(CBThreadPool *pool, void (*fn)(void *arg), void *arg);
@@ -21,6 +22,11 @@ void cb_pool_wait(CBThreadPool *pool);
 int  cb_pool_threads(const CBThreadPool *pool);
 /* Jobs waiting or running. */
 int  cb_pool_pending(const CBThreadPool *pool);
+
+/* Names the calling thread (pthread_setname_np) as top -H, gdb and perf
+ * show it: what fmt formats, cut to the 15 bytes Linux keeps. Every thread
+ * cyanbox starts calls it first, with "<module>:<what>". */
+void cb_thread_name(const char *fmt, ...) CB_PRINTF(1, 2);
 
 /* Multi-producer, single-consumer mailbox of pointers. */
 typedef struct CBMailbox CBMailbox;

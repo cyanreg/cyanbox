@@ -499,6 +499,7 @@ typedef struct Ahead {
 static void *ahead_run(void *arg)
 {
     Ahead *a = arg;
+    cb_thread_name("jobs:ahead");
     a->ret = cb_decode(a->path, 1, CB_ML_RATE, &a->audio);
     return NULL;
 }
@@ -891,7 +892,7 @@ int cb_jobs_create(CBJobs **out, int threads)
     if (ret < 0)
         goto fail;
 
-    ret = cb_pool_create(&j->pool, threads);
+    ret = cb_pool_create(&j->pool, threads, "jobs");
     if (ret < 0)
         goto fail;
 

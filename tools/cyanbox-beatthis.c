@@ -28,6 +28,7 @@
 
 #include "cyanbox/audio.h"
 #include "cyanbox/beatthis.h"
+#include "cyanbox/thread.h"
 
 static void usage(void)
 {
@@ -164,6 +165,7 @@ static int decode(const Job *job, const char *path, float **pcm, int64_t *n)
 static void *decoder(void *arg)
 {
     Job *job = arg;
+    cb_thread_name("beatthis:decode");
     while (1) {
         pthread_mutex_lock(&job->lock);
         while (job->next < job->nb && job->next >= job->consumed + job->ahead)

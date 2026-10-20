@@ -67,6 +67,7 @@
 #include "cyanbox/formats.h"
 #include "cyanbox/mpris.h"
 #include "cyanbox/notation.h"
+#include "cyanbox/thread.h"
 
 #include "applink.h"
 
@@ -2277,6 +2278,7 @@ static int resolve_playlists(CBLibrary *lib, const ExportJob *ej, CBPlaylist ***
 static void *export_main(void *arg)
 {
     ExportJob *ej = arg;
+    cb_thread_name("export");
     CBPlaylist **playlists = NULL;
 
     /* The snapshot, opened here: reading the library and looking at every

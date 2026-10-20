@@ -24,6 +24,9 @@ through theirs.
   a context struct.
 - Allocation: `malloc`/`calloc`/`free` and the helpers in `cyanbox/common.h`.
   Check every allocation. The real-time audio thread never allocates.
+- Every thread names itself first (`cb_thread_name`, `<module>:<what>` in
+  the 15 bytes Linux keeps, which top -H, gdb and perf show): a pool's
+  workers are `<name>:<i>`, a pipeline's thread `<name>:<codec>`.
 - Names: `cb_<module>_<verb>` for functions, `CB<Thing>` for types,
   `CB_<THING>` for macros and enum values. Static helpers have no prefix.
 - Warnings are errors for implicit declarations, missing prototypes, VLAs,

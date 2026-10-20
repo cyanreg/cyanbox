@@ -23,6 +23,7 @@
 
 #include "cyanbox/colors.h"
 #include "cyanbox/common.h"
+#include "cyanbox/thread.h"
 
 #include "client.h"
 #include "dbserver.h"
@@ -90,6 +91,7 @@ static void drain(CBLinkClient *c, int fd, enum CBLinkPort port)
 static void *presence_thread(void *arg)
 {
     CBLinkClient *c = arg;
+    cb_thread_name("client:presence");
     while (!atomic_load(&c->stop)) {
         pthread_mutex_lock(&c->lock);
         int64_t now = cb_time_us(), next = cb_presence_tick(c->pres, now);

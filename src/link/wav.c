@@ -165,7 +165,7 @@ static Reader *reader_of(CBLinkWav *w, const CBPlanTrack *pt, uint32_t peer, uin
                     ? (int64_t)((offset - CB_LINK_WAV_HEADER) / chunk_bytes(&r)) : 0;
     CBPipelineOptions o = {
         .format = { .sample = CB_SAMPLE_S16, .rate = CB_LINK_WAV_RATE, .channels = ch },
-        .chunk = CHUNK, .ahead = AHEAD, .start = first,
+        .chunk = CHUNK, .ahead = AHEAD, .start = first, .name = "link",
     };
     int ret = cb_pipeline_open(&r.p, pt->source, &o);
     if (ret >= 0 && !(r.path = cb_strdup(pt->source)))

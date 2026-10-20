@@ -89,6 +89,7 @@ static bool kernel_fs(int fd)
 
 static void walk(UiFinder *f)
 {
+    cb_thread_name("ui:finder");
     struct Dir {
         std::string rel;
         int   depth;

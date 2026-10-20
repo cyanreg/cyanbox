@@ -235,6 +235,7 @@ struct CBStream {
 typedef struct CBDeckFeed {
     pthread_t thread;
     bool      started;
+    int       deck;
     int       wakefd;           /* an eventfd: the owner and the real-time side write it */
     const _Atomic uint64_t *epoch;  /* the player's */
     pthread_mutex_t lock;
@@ -543,7 +544,7 @@ uint64_t cb_player_deck_old_id(const CBDeckRT *d);
 /* ---------------------------------------------------------------- feed.c */
 
 /* Owner thread: starts and stops a deck's feed thread, and wakes it. */
-int  cb_player_feed_start(CBDeckFeed *f, const _Atomic uint64_t *epoch);
+int  cb_player_feed_start(CBDeckFeed *f, int deck, const _Atomic uint64_t *epoch);
 void cb_player_feed_stop(CBDeckFeed *f);
 void cb_player_feed_poke(CBDeckFeed *f);
 /* Owner thread: the stream the feed fills (NULL: none) and the one whose

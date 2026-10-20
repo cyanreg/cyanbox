@@ -21,6 +21,7 @@
 #include <unistd.h>
 
 #include "cyanbox/common.h"
+#include "cyanbox/thread.h"
 
 /* rbxport's capture of rekordbox with an XDJ-RX3: Pioneer's SysEx, command
  * 0x50, which the RX3's PcControlViewServer::assortSysExCmd takes as
@@ -81,6 +82,7 @@ static int open_port(const CBLinkUsb *u, char *path, size_t cap)
 static void *run(void *arg)
 {
     CBLinkUsb *u = arg;
+    cb_thread_name("link:usb");
     int fd = -1;
     bool told = false;          /* that the port is missing, once until it is back */
     int64_t retry = 0;

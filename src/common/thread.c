@@ -1,6 +1,7 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
-/* The fixed thread pool and the mailbox of cyanbox/thread.h, on pthreads.
+/* The fixed thread pool, thread names and the mailbox of cyanbox/thread.h,
+ * on pthreads.
  *
  * The pool is a FIFO of jobs behind one mutex and two condition variables:
  * `work` wakes a worker when a job arrives (or the pool shuts down) and
@@ -15,6 +16,8 @@
 #include "cyanbox/thread.h"
 
 #include <pthread.h>
+#include <stdarg.h>
+#include <stdio.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -32,6 +35,8 @@ struct CBThreadPool {
     pthread_cond_t idle;
     CBJob *head, *tail;
     _Atomic int pending;
+    _Atomic int named;              /* workers that took a name */
+    char name[16];
     bool quit;
     int nb_threads;
     pthread_t *threads;
@@ -40,6 +45,7 @@ struct CBThreadPool {
 static void *pool_worker(void *opaque)
 {
     CBThreadPool *pool = opaque;
+    cb_thread_name("%s:%d", pool->name, pool->named++);
 
     pthread_mutex_lock(&pool->lock);
     while (1) {
@@ -66,7 +72,7 @@ static void *pool_worker(void *opaque)
     return NULL;
 }
 
-int cb_pool_create(CBThreadPool **out, int nb_threads)
+int cb_pool_create(CBThreadPool **out, int nb_threads, const char *name)
 {
     *out = NULL;
     if (nb_threads <= 0) {
@@ -82,6 +88,7 @@ int cb_pool_create(CBThreadPool **out, int nb_threads)
         free(pool);
         return CB_ERROR(ENOMEM);
     }
+    snprintf(pool->name, sizeof(pool->name), "%s", name ? name : "pool");
     pthread_mutex_init(&pool->lock, NULL);
     pthread_cond_init(&pool->work, NULL);
     pthread_cond_init(&pool->idle, NULL);
@@ -175,6 +182,18 @@ int cb_pool_threads(const CBThreadPool *pool)
 int cb_pool_pending(const CBThreadPool *pool)
 {
     return pool ? __atomic_load_n(&pool->pending, __ATOMIC_ACQUIRE) : 0;
+}
+
+/* ----------------------------------------------------------------- names */
+
+void cb_thread_name(const char *fmt, ...)
+{
+    char name[16];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(name, sizeof(name), fmt, ap);
+    va_end(ap);
+    pthread_setname_np(pthread_self(), name);
 }
 
 /* --------------------------------------------------------------- mailbox */

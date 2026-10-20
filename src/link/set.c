@@ -27,6 +27,7 @@
 #include <unistd.h>
 
 #include "cyanbox/common.h"
+#include "cyanbox/thread.h"
 
 #include "net.h"
 #include "usb.h"
@@ -181,6 +182,7 @@ static void rescan(CBLinkSet *s)
 static void *manager(void *arg)
 {
     CBLinkSet *s = arg;
+    cb_thread_name("link:set");
     while (!atomic_load(&s->stop)) {
         rescan(s);
         if (atomic_exchange(&s->reload, false)) {

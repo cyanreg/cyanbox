@@ -27,6 +27,8 @@
 #include <libavutil/opt.h>
 #include <libswresample/swresample.h>
 
+#include "cyanbox/thread.h"
+
 /* Frames the ring holds (a power of two), what it is kept at while taken,
  * and how long after the last take it counts as not taken: longer than a
  * mixer goes without asking while it holds enough (the DJM-A9: 58 ms as
@@ -65,6 +67,7 @@ static void to_ring(CBRingOut *r, unsigned at, int n)
 static void *ring_thread(void *arg)
 {
     CBPlayer *p = arg;
+    cb_thread_name("player:ring");
     CBRingOut *r = p->ring_out;
     struct timespec next;
     clock_gettime(CLOCK_MONOTONIC, &next);

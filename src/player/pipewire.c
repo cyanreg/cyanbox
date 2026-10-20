@@ -140,7 +140,7 @@ int cb_player_pw_open(CBPlayer *p)
     pw_init(NULL, NULL);
     pw->inited = true;
 
-    pw->loop = pw_thread_loop_new("cyanbox-audio", NULL);
+    pw->loop = pw_thread_loop_new("player:pipewire", NULL);
     if (!pw->loop)
         return CB_ERROR(errno ? errno : ENOMEM);
 

@@ -2,7 +2,9 @@
 
 /* The thread pool and mailbox (src/common/thread.c): every job runs once,
  * wait and destroy drain the queue, the mailbox loses nothing under
- * several producers, and its timed wait times out. */
+ * several producers, and its timed wait times out. A pool's workers are
+ * named "<name>:<i>", each i once, and a name longer than Linux keeps is
+ * cut to its 15 bytes. */
 
 #include "cyanbox/thread.h"
 
@@ -38,7 +40,7 @@ static void slow_job(void *arg)
 static void test_pool(void)
 {
     CBThreadPool *pool;
-    CHECK(cb_pool_create(&pool, 4) == 0);
+    CHECK(cb_pool_create(&pool, 4, "test") == 0);
     CHECK(cb_pool_threads(pool) == 4);
     CHECK(cb_pool_pending(pool) == 0);
 
@@ -70,10 +72,61 @@ static void test_pool(void)
     CHECK(counter == 40);
 
     /* <= 0 threads: one per CPU. */
-    CHECK(cb_pool_create(&pool, 0) == 0);
+    CHECK(cb_pool_create(&pool, 0, "test") == 0);
     CHECK(cb_pool_threads(pool) == (int)sysconf(_SC_NPROCESSORS_ONLN));
     cb_pool_destroy(pool);
     cb_pool_destroy(NULL);
+}
+
+#define NAMED 3
+
+typedef struct Named {
+    pthread_barrier_t all;
+    _Atomic int nb;
+    char names[NAMED][16];
+} Named;
+
+static void name_job(void *arg)
+{
+    Named *n = arg;
+    /* Each waits for the others: every job on a worker of its own */
+    pthread_barrier_wait(&n->all);
+    int i = __atomic_fetch_add(&n->nb, 1, __ATOMIC_RELAXED);
+    pthread_getname_np(pthread_self(), n->names[i], sizeof(n->names[i]));
+}
+
+static void *long_name(void *arg)
+{
+    cb_thread_name("%s:%d", "a-name-past-fifteen", 7);
+    pthread_getname_np(pthread_self(), arg, 16);
+    return NULL;
+}
+
+static void test_names(void)
+{
+    Named n = { 0 };
+    pthread_barrier_init(&n.all, NULL, NAMED);
+    CBThreadPool *pool;
+    CHECK(cb_pool_create(&pool, NAMED, "named") == 0);
+    for (int i = 0; i < NAMED; i++)
+        cb_pool_submit(pool, name_job, &n);
+    cb_pool_wait(pool);
+    cb_pool_destroy(pool);
+    pthread_barrier_destroy(&n.all);
+    int seen = 0;
+    for (int i = 0; i < NAMED; i++) {
+        int k;
+        char tail;
+        if (sscanf(n.names[i], "named:%d%c", &k, &tail) == 1 && k >= 0 && k < NAMED)
+            seen |= 1 << k;
+    }
+    CHECK(seen == (1 << NAMED) - 1);
+
+    char cut[16] = { 0 };
+    pthread_t th;
+    pthread_create(&th, NULL, long_name, cut);
+    pthread_join(th, NULL);
+    CHECK(!strcmp(cut, "a-name-past-fif"));
 }
 
 #define PRODUCERS 4
@@ -175,6 +228,7 @@ static void test_mailbox(void)
 int main(void)
 {
     test_pool();
+    test_names();
     test_mailbox();
     if (failures) {
         fprintf(stderr, "common_thread: %d checks failed\n", failures);

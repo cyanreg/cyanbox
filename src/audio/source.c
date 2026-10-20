@@ -579,6 +579,11 @@ int cb_source_rate(const CBSource *s)
     return s->out_rate;
 }
 
+const char *cb_source_codec(const CBSource *s)
+{
+    return s->dec->codec->name;
+}
+
 int cb_source_channels(const CBSource *s)
 {
     return s->out_ch;

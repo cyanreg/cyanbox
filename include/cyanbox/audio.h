@@ -155,6 +155,7 @@ typedef struct CBPipelineOptions {
     double  ahead;      /* seconds of chunks it keeps queued, at most */
     int64_t start;      /* the chunk it starts at */
     int64_t offset;     /* output frames before chunk 0: chunk k starts at offset + k * chunk */
+    const char *name;   /* its thread's, the file's codec after it: "<name>:<codec>" */
 } CBPipelineOptions;
 
 int  cb_pipeline_open(CBPipeline **p, const char *path, const CBPipelineOptions *o);

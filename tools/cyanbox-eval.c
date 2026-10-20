@@ -88,6 +88,7 @@
 
 #include "cyanbox/beatthis.h"
 #include "cyanbox/compute.h"
+#include "cyanbox/thread.h"
 #include "src/analysis/beats_internal.h"
 
 /* ------------------------------------------------------------- decoding */
@@ -1089,6 +1090,7 @@ static void analyse_one(Job *job, int i)
 static void *worker(void *arg)
 {
     Job *job = arg;
+    cb_thread_name("eval:worker");
     while (1) {
         int i = atomic_fetch_add(&job->next, 1);
         if (i >= job->nb)

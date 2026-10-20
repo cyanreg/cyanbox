@@ -171,7 +171,7 @@ static void put_free(PutJob *j)
 static int put_submit(Ctx *c, const char *path, uint8_t *data, size_t size, bool owns, int fd)
 {
     int ret = 0;
-    if (!c->pool && (ret = cb_pool_create(&c->pool, PUT_THREADS)) < 0)
+    if (!c->pool && (ret = cb_pool_create(&c->pool, PUT_THREADS, "export:put")) < 0)
         return ret;
     PutJob *j = calloc(1, sizeof(*j));
     char *p = path ? cb_strdup(path) : NULL;
@@ -1778,6 +1778,7 @@ static int produce_skip(Audio *a, int i)
 static void *produce(void *arg)
 {
     Audio *a = arg;
+    cb_thread_name("export:encode");
     for (int i = 0; i < a->plan->nb_tracks && !stopped(a); i++) {
         int ret = a->skip[i] ? produce_skip(a, i) : produce_encode(a, i);
         if (ret < 0) {

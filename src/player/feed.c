@@ -55,6 +55,8 @@
 #include <sys/eventfd.h>
 #include <unistd.h>
 
+#include "cyanbox/thread.h"
+
 /* The window starts this many frames before the read position: the
  * interpolator reads one frame back, the cue caches as many. */
 #define LEAD CB_CUE_CACHE_LEAD
@@ -78,10 +80,11 @@ int cb_stream_open(const char *path, CBStream **out)
         return CB_ERROR(ENOMEM);
     CBPipelineOptions o = {
         .format = { .sample = CB_SAMPLE_FLT },
-        .chunk = CB_CHUNK, .ahead = MAIN_AHEAD,
+        .chunk = CB_CHUNK, .ahead = MAIN_AHEAD, .name = "play",
     };
     int ret = cb_pipeline_open(&s->main, path, &o);
     o.ahead = AUX_AHEAD;
+    o.name = "play-aux";
     if (ret >= 0)
         ret = cb_pipeline_open(&s->aux, path, &o);
     if (ret < 0) {
@@ -538,6 +541,7 @@ static void wait_wake(CBDeckFeed *f, const CBStream *s, const CBStream *next)
 static void *feed_main(void *arg)
 {
     CBDeckFeed *f = arg;
+    cb_thread_name("player:feed:%d", f->deck);
     CBStream *s = NULL, *next = NULL;
     uint64_t points_gen = 0;
     while (1) {
@@ -581,9 +585,9 @@ static void *feed_main(void *arg)
     return NULL;
 }
 
-int cb_player_feed_start(CBDeckFeed *f, const _Atomic uint64_t *epoch)
+int cb_player_feed_start(CBDeckFeed *f, int deck, const _Atomic uint64_t *epoch)
 {
-    *f = (CBDeckFeed) { .wakefd = -1, .epoch = epoch };
+    *f = (CBDeckFeed) { .deck = deck, .wakefd = -1, .epoch = epoch };
     atomic_init(&f->acked, 0);
     atomic_init(&f->settled, -1);
     int ret = pthread_mutex_init(&f->lock, NULL);
