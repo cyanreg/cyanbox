@@ -35,6 +35,12 @@ int  cb_audio_first_stream(const AVFormatContext *fmt, enum AVMediaType type);
 /* An AVERROR as a negative errno (AVERROR(e) already is one). */
 int  cb_audio_error(int averr);
 
+/* The decoded length the container states for stream idx, made to agree
+ * with the decoder (probe.c says how, format by format). A length
+ * libavformat only estimated from the bitrate is counted from every
+ * packet's duration instead, which reads the file to its end. */
+int64_t cb_audio_container_samples(AVFormatContext *fmt, int idx);
+
 /* The ID3v2 tags at the head of a file, one after another: the offset of the
  * first byte after them. */
 size_t cb_audio_skip_id3v2(const uint8_t *data, size_t size);
@@ -107,5 +113,28 @@ void cb_mixer_free(CBMixer *m);
  * initial padding by default, < 0 keeps that). */
 int  cb_audio_open_decoder(AVCodecContext **out, const AVCodecParameters *par, AVRational tb,
                            bool skip_manual, int delay);
+
+/* ------------------------------------------------------------ source.c */
+
+/* A track decoded on the players' timeline and converted by
+ * libswresample to the format asked for, read in order from wherever the
+ * last seek put it (source.c says how). One thread at a time. */
+typedef struct CBSource CBSource;
+
+int  cb_source_open(CBSource **s, const char *path, const CBAudioFormat *f);
+void cb_source_free(CBSource **s);
+/* The output's rate, channels and libavutil sample format. */
+int  cb_source_rate(const CBSource *s);
+int  cb_source_channels(const CBSource *s);
+enum AVSampleFormat cb_source_format(const CBSource *s);
+/* The output's length as the container states it, in frames: an estimate
+ * (the last read ends the track), -1 when it states none. */
+int64_t cb_source_length(const CBSource *s);
+/* The next read starts at output frame `at`. */
+int  cb_source_seek(CBSource *s, int64_t at);
+/* Up to n frames into dst (one plane, or one per channel), written by
+ * libswresample: n, fewer only where the track ends (0 past it), or a
+ * negative errno. */
+int  cb_source_read(CBSource *s, uint8_t *const *dst, int n);
 
 #endif /* CYANBOX_AUDIO_INTERNAL_H */

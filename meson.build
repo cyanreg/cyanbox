@@ -50,7 +50,8 @@ m_dep        = cc.find_library('m', required: false)
 threads_dep  = dependency('threads')
 libavformat  = dependency('libavformat')
 libavcodec   = dependency('libavcodec')
-libavutil    = dependency('libavutil')
+# 59.51.100 for refstruct.h (the pipelines' chunks, src/audio/pipeline.c).
+libavutil    = dependency('libavutil', version: '>= 59.51.100')
 libswresample = dependency('libswresample')
 libswscale   = dependency('libswscale')
 # 3.44 for sqlite3_set_clientdata (the stick database's step budget).

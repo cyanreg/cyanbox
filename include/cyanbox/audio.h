@@ -119,6 +119,69 @@ int  cb_audio_to_mono(const CBAudio *in, CBAudio *out);
 int  cb_audio_resample(const CBAudio *in, int rate, CBAudio *out);
 void cb_audio_free(CBAudio *a);
 
+/* --------------------------------------------------------------- pipelines */
+
+/* A track decoded as it is read, in a thread of its own (src/audio/
+ * pipeline.c over source.c): libavformat's packets, libavcodec's frames,
+ * then libswresample, which converts them to the format asked for and cuts
+ * them into chunks, writing into the chunk itself; nothing of ours copies
+ * the samples. Frames are on the players' timeline, as cb_decode's are, and
+ * a read from any place gives what a read from the start gives there:
+ * exactly, but for a lossy decoder starting cold after a jump (within 1e-4
+ * for Opus) and for the dither of 16-bit output made from samples that
+ * were not 16-bit at that rate already (within two steps). */
+
+enum CBSampleFormat {
+    CB_SAMPLE_FLT,      /* float, interleaved */
+    CB_SAMPLE_FLTP,     /* float, a plane per channel */
+    CB_SAMPLE_S16,      /* 16-bit, interleaved; dithered where that loses precision */
+    CB_SAMPLE_S16P,     /* the same, a plane per channel */
+};
+
+typedef struct CBAudioFormat {
+    enum CBSampleFormat sample;
+    int rate;           /* 0: the file's */
+    int channels;       /* 0: the file's, more than two mixed down to stereo; 1 mono
+                         * (the mean of the channels, of the stereo mix when more than
+                         * two); 2 stereo (mono doubled) */
+} CBAudioFormat;
+
+/* A piece of a pipeline's output, reference counted: whoever holds it
+ * unreferences it, on any thread. */
+typedef struct CBChunk {
+    int64_t  index;     /* frames [index * chunk, index * chunk + nb) of the output */
+    int      nb;        /* the pipeline's chunk, fewer in the last */
+    bool     last;      /* the track ends with it */
+    int      err;       /* < 0: reading failed here (nb 0, last) */
+    uint8_t *data[2];   /* one plane, or one per channel */
+} CBChunk;
+CBChunk *cb_chunk_ref(CBChunk *c);
+void     cb_chunk_unref(CBChunk **c);
+
+typedef struct CBPipeline CBPipeline;
+typedef struct CBPipelineOptions {
+    CBAudioFormat format;
+    int     chunk;      /* frames per chunk */
+    double  ahead;      /* seconds of chunks it keeps queued, at most */
+    int64_t start;      /* the chunk it starts at */
+} CBPipelineOptions;
+
+int  cb_pipeline_open(CBPipeline **p, const char *path, const CBPipelineOptions *o);
+void cb_pipeline_free(CBPipeline **p);
+int  cb_pipeline_rate(const CBPipeline *p);
+int  cb_pipeline_channels(const CBPipeline *p);
+int  cb_pipeline_chunk(const CBPipeline *p);
+/* The output's length in frames as the container states it, -1 when it
+ * states none: the chunk marked last is where the track really ends. */
+int64_t cb_pipeline_length(const CBPipeline *p);
+/* Drops whatever is queued: the chunks from `chunk` on follow. */
+int  cb_pipeline_seek(CBPipeline *p, int64_t chunk);
+/* The next chunk in order, now the caller's, or NULL when none is queued
+ * yet (or the last was popped). Never blocks. */
+CBChunk *cb_pipeline_pop(CBPipeline *p);
+/* An eventfd readable once a chunk was queued; reading it clears it. */
+int  cb_pipeline_fd(const CBPipeline *p);
+
 /* ------------------------------------------------------------ packet store */
 
 /* A track demuxed into memory, not decoded, from which any stretch decodes

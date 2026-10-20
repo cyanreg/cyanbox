@@ -6,7 +6,7 @@
  * Durations are on the players' timeline: an MP3's comes from the frame scan
  * (exact, the silent header frame included when rekordbox counts it), a
  * FLAC's from STREAMINFO, anything else from the container, made to agree
- * with the decoder (container_samples()). Tags are the stream's then the
+ * with the decoder (cb_audio_container_samples()). Tags are the stream's then the
  * container's, keys lower-cased, a container tag replacing a stream tag of
  * the same key (dj filled a dict in that order). Values are stored trimmed
  * of white space the way Python's str.strip() trims it, since dj only ever
@@ -320,7 +320,7 @@ static int64_t to_samples(int64_t ts, AVRational tb, int rate)
  *   other raw streams; off by a factor of three on a VBR AAC here): the
  *   packet durations, summed over the whole file. Nothing is trimmed there.
  * - WAV, AIFF, everything else: the stream duration as it is. */
-static int64_t container_samples(AVFormatContext *fmt, int idx)
+int64_t cb_audio_container_samples(AVFormatContext *fmt, int idx)
 {
     const AVStream *st = fmt->streams[idx];
     const AVCodecParameters *par = st->codecpar;
@@ -439,7 +439,7 @@ int cb_probe(const char *path, CBProbe *p)
             p->total_samples = p->flac.total_samples;
     }
     if (p->total_samples < 0)
-        p->total_samples = container_samples(fmt, idx);
+        p->total_samples = cb_audio_container_samples(fmt, idx);
     p->duration = p->sample_rate > 0 ? (double)p->total_samples / p->sample_rate : 0.0;
 
     avformat_close_input(&fmt);
