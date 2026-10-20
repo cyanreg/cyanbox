@@ -393,10 +393,9 @@ static int served_build(CBLink *l, Served *s)
     }
     /* Every track as all the players play it: as a 16-bit WAV decoded as
      * a player reads it (wav.h), what cannot be so as a WAV made when a
-     * player loads the track; or with link.mp3 anything but an MP3 as an
-     * MP3 made then (CB_TRANSCODE_LINK). */
+     * player loads the track (CB_TRANSCODE_LINK). */
     ret = cb_plan_build_cb(lib, tracks, nb, (const CBPlaylist *const *)pls, nb_pls, l->name,
-                           lib->cfg.link_mp3 ? CB_TRANSCODE_LINK_MP3 : CB_TRANSCODE_LINK,
+                           CB_TRANSCODE_LINK,
                            CB_PLAN_STORED, s->plan, still_wanted, l);
     if (ret < 0) {
         free(s->plan);

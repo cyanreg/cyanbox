@@ -427,12 +427,11 @@ bool cb_plan_codec_playable(const char *codec)
     return false;
 }
 
-/* Link's transcodes, by their names: 'w' a WAV, 'm' an MP3, 0 neither. */
-static int link_transcode(const char *path)
+/* Whether the cache file is Link's WAV, by its name. */
+static bool link_wav(const char *path)
 {
     size_t n = strlen(path);
-    return n <= 9 ? 0 : !strcmp(path + n - 9, ".link.wav") ? 'w' :
-           !strcmp(path + n - 9, ".link.mp3") ? 'm' : 0;
+    return n > 9 && !strcmp(path + n - 9, ".link.wav");
 }
 
 int cb_plan_transcode_path(const CBLibrary *lib, const CBTrack *t, int compat, bool create,
@@ -446,14 +445,12 @@ int cb_plan_transcode_path(const CBLibrary *lib, const CBTrack *t, int compat, b
                  t->sample_rate <= 48000;
     bool for_wav = (compat == CB_TRANSCODE_LINK && strcmp(t->codec, "mp3") && !pcm16) ||
                    compat == CB_TRANSCODE_LINK_ANY;
-    bool for_mp3 = compat == CB_TRANSCODE_LINK_MP3 && strcmp(t->codec, "mp3");
-    bool for_link = for_wav || for_mp3;
-    if (!need && !for_compat && !for_link)
+    if (!need && !for_compat && !for_wav)
         return 0;
     /* dj kept up to 96 kHz for formats no player reads; compatibility mode
-     * and Link go to 16 bit (or MP3) at 44.1/48 kHz. */
-    *max_rate = for_compat || for_link ? 48000 : 96000;
-    const char *ext = for_wav ? "link.wav" : for_mp3 ? "link.mp3" : for_compat ? "compat.flac" : "flac";
+     * and Link go to 16 bit at 44.1/48 kHz. */
+    *max_rate = for_compat || for_wav ? 48000 : 96000;
+    const char *ext = for_wav ? "link.wav" : for_compat ? "compat.flac" : "flac";
     /* cb_library_cache_path's name, without creating its directory. */
     *cache_path = create ? cb_library_cache_path(lib, "transcode", t->id, ext)
                          : cb_asprintf("%s/cache/transcode/%llu.%s", lib->root, (unsigned long long)t->id, ext);
@@ -478,15 +475,13 @@ int cb_plan_transcode(const CBLibrary *lib, const CBTrack *t, int compat, char *
         *source = cache;
         return 0;
     }
-    int link = link_transcode(cache);
-    char *tmp = cb_asprintf("%s.tmp.%s", cache, link == 'w' ? "wav" : link == 'm' ? "mp3" : "flac");
+    bool wav = link_wav(cache);
+    char *tmp = cb_asprintf("%s.tmp.%s", cache, wav ? "wav" : "flac");
     if (!tmp) {
         free(cache);
         return CB_ERROR(ENOMEM);
     }
-    ret = link == 'w' ? cb_transcode_wav(t->path, tmp, max_rate)
-        : link == 'm' ? cb_transcode_mp3(t->path, tmp, max_rate)
-        : cb_transcode_flac(t->path, tmp, max_rate);
+    ret = wav ? cb_transcode_wav(t->path, tmp, max_rate) : cb_transcode_flac(t->path, tmp, max_rate);
     if (ret >= 0 && rename(tmp, cache) < 0)
         ret = CB_ERROR(errno);
     if (ret < 0) {
@@ -995,9 +990,8 @@ static bool stored_probe(const CBTrack *t, CBProbe *p, int64_t *file_size)
 /* A dry run's source for a track whose transcode is not made yet: the
  * cache file it would be, described from the original as the transcode
  * would be (16-bit FLAC at most at max_rate, cb_transcode_flac, or Link's
- * 16-bit WAV or 320 kbps MP3); its size a typical FLAC's 60 % of PCM, for
- * the free-space check, the WAV's own, or the MP3's 40 kB a second. Nothing is
- * written. `stored`: the original as the library stored it, unless it
+ * 16-bit WAV); its size a typical FLAC's 60 % of PCM, for the free-space
+ * check, or the WAV's own. Nothing is written. `stored`: the original as the library stored it, unless it
  * changed since (stored_probe); a transcode made already is then
  * described the same way, its size its own. */
 /* What Link serves as a WAV made as it is read (src/link/wav.c): a file
@@ -1167,25 +1161,19 @@ static int dry_source(const CBLibrary *lib, const CBTrack *t, int compat, bool s
     if (!known && (ret = cb_probe(t->path, &pt->probe)) < 0)
         return ret;
     CBProbe *p = &pt->probe;
-    int link = link_transcode(cache);
-    bool mp3 = link == 'm', wav = link == 'w';
+    bool wav = link_wav(cache);
     cb_flac_info_free(&p->flac);
     p->mp3 = (CBMp3Info) { 0 };
-    snprintf(p->codec, sizeof(p->codec), mp3 ? "mp3" : wav ? "pcm_s16le" : "flac");
-    snprintf(p->container, sizeof(p->container), mp3 ? "mp3" : wav ? "wav" : "flac");
+    snprintf(p->codec, sizeof(p->codec), wav ? "pcm_s16le" : "flac");
+    snprintf(p->container, sizeof(p->container), wav ? "wav" : "flac");
     if (max_rate > 0 && p->sample_rate > max_rate) {
         p->total_samples = (int64_t)((double)p->total_samples * max_rate / p->sample_rate);
         p->sample_rate = max_rate;
     }
-    p->bit_depth = mp3 ? 0 : 16;
-    if (mp3) {
-        p->channels = CB_MIN(p->channels, 2);
-        p->bit_rate = p->sample_rate >= 32000 ? 320000 : 160000;
-    }
+    p->bit_depth = 16;
     /* A WAV's size is its header's 44 bytes and the samples. */
     double pcm = (double)p->duration * p->sample_rate * CB_MAX(p->channels, 1) * 2;
     pt->file_size = fresh ? cb_file_size(cache)
-                  : mp3 ? (int64_t)(p->duration * p->bit_rate / 8)
                   : wav ? 44 + p->total_samples * CB_MAX(p->channels, 1) * 2
                   : (int64_t)(0.6 * pcm);
     return 0;
@@ -1291,7 +1279,7 @@ int cb_plan_build_cb(const CBLibrary *lib, CBTrack *const *tracks, int nb_tracks
 
         /* The extension is what is served's: a WAV's for Link's own. */
         static const char *const as[] = { [CB_ENCODE_FLAC] = "x.flac", [CB_ENCODE_WAV] = "x.wav",
-                                          [CB_ENCODE_AIFF] = "x.aiff", [CB_ENCODE_MP3] = "x.mp3" };
+                                          [CB_ENCODE_AIFF] = "x.aiff" };
         const char *named = pt->pcm ? "pcm.wav" : pt->encode.on ? as[pt->encode.format] : pt->source;
         if (!(pt->usb_path = usb_path(t, named, map_taken, &used))) {
             ret = CB_ERROR(ENOMEM);

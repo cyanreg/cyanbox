@@ -2408,7 +2408,6 @@ static int cmd_config(Cli *cli, int argc, char **argv)
                c->device_name ? c->device_name : "(the stick's label)");
         printf("export.background_color = %s\n",
                c->background_color ? cb_track_color_name(c->background_color) : "default");
-        printf("link.mp3 = %s\n", c->link_mp3 ? "true" : "false");
         print_kv("player", c->player, c->nb_player);
         print_kv("mixer", c->mixer, c->nb_mixer);
         print_kv("device", c->device, c->nb_device);

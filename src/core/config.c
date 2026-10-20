@@ -19,9 +19,6 @@
  *                                  exportLibrary.db's property table)
  *   player.<name>  mixer.<name>  device.<name>     My Settings, names as
  *                                                  `cyanbox settings` lists them
- *   link.mp3                       Link serves what the players cannot all
- *                                  read as 320 kbps MP3 instead of 16-bit
- *                                  WAV (default false; docs/LINK.md)
  *   audio.sink
  *   ml.model                       the model's GGUF file for tagging tracks
  *                                  (cyanbox/ml.h; unset: $CYANBOX_ML_MODEL, else
@@ -311,7 +308,6 @@ static const struct {
     { "export.format",           K_FORMAT },
     { "export.device_name",      K_TEXT },
     { "export.background_color", K_BACKGROUND },
-    { "link.mp3",                K_BOOL },
     { "audio.sink",              K_TEXT },
     { "ml.model",                K_TEXT },
     { "color.pink",              K_VIBE }, { "color.red",    K_VIBE },
@@ -340,8 +336,7 @@ static bool *bool_field(CBConfig *c, const char *key)
            !strcmp(key, "analysis.allow_sections") ? &c->allow_sections :
            !strcmp(key, "import.comment")          ? &c->import_comment :
            !strcmp(key, "export.pdb")              ? &c->export_pdb :
-           !strcmp(key, "export.onelibrary")       ? &c->export_onelibrary :
-           !strcmp(key, "link.mp3")                ? &c->link_mp3 : &c->compat_transcode;
+           !strcmp(key, "export.onelibrary")       ? &c->export_onelibrary : &c->compat_transcode;
 }
 
 #define STR_(x) #x
@@ -616,7 +611,6 @@ int cb_library_config_save(CBLibrary *lib)
         { "export.device_name",      c->device_name },
         { "export.background_color",
           background_names[CB_CLAMP(c->background_color, 0, CB_TRACK_COLORS)] },
-        { "link.mp3",                c->link_mp3 ? "true" : "false" },
         { "audio.sink",              c->audio_sink },
         { "ml.model",                c->ml_model },
         { "ui.traffic_light",        c->traffic_light },

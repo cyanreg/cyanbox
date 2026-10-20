@@ -132,10 +132,9 @@ bool cb_plan_codec_playable(const char *codec);
  * 48 kHz. LINK: everything but MP3 and 16-bit PCM at most 48 kHz, to a
  * 16-bit WAV at most 48 kHz, which every PRO DJ LINK player reads (the
  * players before the CDJ-2000NXS2, the CDJ-900 among them, read no FLAC).
- * LINK_MP3 (link.mp3): everything but MP3, to a 320 kbps MP3 at most
- * 48 kHz. LINK_ANY: everything to LINK's WAV, for a track Link cannot
- * serve as a WAV made as it is read (src/link/wav.c). A bool's false and
- * true are PLAIN and COMPAT.
+ * LINK_ANY: everything to LINK's WAV, for a track Link cannot serve as a
+ * WAV made as it is read (src/link/wav.c). A bool's false and true are
+ * PLAIN and COMPAT.
  *
  * STICK_*: an export (CBStickFormat, with or without the compatibility
  * transcode), whose plan names no cache file: what is not copied is
@@ -148,7 +147,6 @@ enum CBTranscode {
     CB_TRANSCODE_PLAIN = 0,
     CB_TRANSCODE_COMPAT,
     CB_TRANSCODE_LINK,
-    CB_TRANSCODE_LINK_MP3,
     CB_TRANSCODE_LINK_ANY,
     CB_TRANSCODE_STICK_COPY,
     CB_TRANSCODE_STICK_COPY_COMPAT,

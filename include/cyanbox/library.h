@@ -60,9 +60,6 @@ typedef struct CBConfig {
     int    background_color;    /* the players' background for the stick's library:
                                    0 default, 1..8 pink..purple (cyanbox/colors.h) */
 
-    /* link.* */
-    bool   link_mp3;            /* Link converts to 320 kbps MP3 instead of 16-bit WAV */
-
     /* player.* mixer.* device.*: My Settings values the user set */
     CBKv *player; int nb_player;
     CBKv *mixer;  int nb_mixer;
