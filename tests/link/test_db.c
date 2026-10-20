@@ -1701,24 +1701,23 @@ static void test_library(CBLibrary *lib, CBPlan *plan, CBCatalog **cat)
     CHECK_EQ(cb_dbclient_metadata(c, 0x7fffffff, &rows, &n), 0);
     CHECK_EQ(n, 0);
 
-    /* Track info: the path the NFS tree serves and the plan's size; a
-     * file the plan names is served as planned, nothing made for it */
+    /* Track info: the path the NFS tree serves, a WAV, and the WAV's size;
+     * nothing is made for it */
     char *path;
     uint64_t size;
     CHECK_EQ(cb_dbclient_track_info(c, alpha, &path, &size), 0);
     CHECK_STR(path, pa->usb_path);
-    CHECK_EQ(size, (uint64_t)cb_file_size(pa->source));
+    CHECK_EQ(size, (uint64_t)pa->file_size);
     free(path);
-    CHECK(!cb_file_exists(pc->source));
     CHECK_EQ(cb_dbclient_track_info(c, charlie, &path, &size), 0);
-    CHECK(path && cb_str_ends(path, ".flac") && !strcmp(path, pc->usb_path));
-    CHECK(!cb_file_exists(pc->source) && (int64_t)size == pc->file_size);
+    CHECK(path && cb_str_ends(path, ".wav") && !strcmp(path, pc->usb_path));
+    CHECK((int64_t)size == pc->file_size);
     free(path);
     CHECK_EQ(cb_dbclient_track_info(c, 0x7fffffff, &path, &size), -ENOENT);
-    /* The file's type in the first row's id, a FLAC's 5 for alpha (and a
+    /* The file's type in the first row's id, a WAV's 11 for alpha (and a
      * player decodes the file as that); 1 in the 2f row, whatever it is. */
     CHECK_EQ(cb_dbclient_menu(c, CB_DB_TRACK_INFO, 8, &alpha, 1, &rows, &n), 0);
-    CHECK(n == 7 && pa->file_type == 5 && rows[0].type == 0x2304 && rows[0].id == 5 &&
+    CHECK(n == 7 && pa->file_type == 11 && rows[0].type == 0x2304 && rows[0].id == 11 &&
           rows[5].type == CB_DB_ITEM_INFO_2F && rows[5].id == 1);
     cb_dbrows_free(&rows, n);
 
@@ -1811,7 +1810,7 @@ static void test_library(CBLibrary *lib, CBPlan *plan, CBCatalog **cat)
     free(blob);
 
     static const struct { const char *fourcc, *ext; } tags[] = {
-        { "PWV4", "EXT" }, { "PWV5", "EXT" }, { "PQT2", "EXT" }, { "PVB2", "EXT" },
+        { "PWV4", "EXT" }, { "PWV5", "EXT" }, { "PQT2", "EXT" },
         { "PWV6", "2EX" }, { "PWV7", "2EX" }, { "PWVC", "2EX" }, { "PQTZ", "DAT" }, { "PWAV", "DAT" },
     };
     for (size_t i = 0; i < CB_ARRAY_ELEMS(tags); i++) {
@@ -1841,18 +1840,14 @@ static void test_library(CBLibrary *lib, CBPlan *plan, CBCatalog **cat)
     free(ex2_tags);
     cb_waveforms_free(&w);
 
-    /* VBR: the PVBR words little-endian; an MP3's last is its samples,
-     * from its frames, which Link's plan does not read: the catalog does
-     * when a player asks. */
+    /* VBR: an MP3 is served as a WAV like the rest, whose PVBR is all
+     * zero (anlz.c). */
     CHECK_EQ(cb_dbclient_blob(c, CB_DB_VBR, bravo, &blob, &bn), 0);
     CHECK_EQ(bn, 1604);
-    CBMp3Info mp3;
-    CHECK(!pb->probe.mp3.valid && cb_mp3_scan(pb->source, &mp3) >= 0 && mp3.valid);
-    if (bn == 1604) {
-        uint32_t trailer = (uint32_t)blob[1600] | (uint32_t)blob[1601] << 8 |
-                           (uint32_t)blob[1602] << 16 | (uint32_t)blob[1603] << 24;
-        CHECK(trailer && trailer == (uint32_t)(mp3.nb_frames * mp3.frame_samples));
-    }
+    bool zero = bn == 1604;
+    for (size_t i = 0; zero && i < bn; i++)
+        zero = !blob[i];
+    CHECK(zero && !strcmp(pb->probe.codec, "pcm_s16le"));
     free(blob);
 
     /* Cues: the extended list read back; the older list without hot cue D. */
@@ -1907,7 +1902,7 @@ static void test_library(CBLibrary *lib, CBPlan *plan, CBCatalog **cat)
         for (int i = 0; i < 13; i++)
             CHECK_EQ(rows[i].type, types[i]);
         CHECK(rows[4].id == alpha && !strcmp(rows[4].text, "Alpha") && rows[12].a == alpha && rows[12].c == 1);
-        CHECK_EQ(rows[10].id, 5);   /* FLAC */
+        CHECK_EQ(rows[10].id, 11);  /* WAV */
     }
     cb_dbrows_free(&rows, n);
 
@@ -1993,10 +1988,12 @@ static void test_library(CBLibrary *lib, CBPlan *plan, CBCatalog **cat)
     menu_ids(c, CB_DB_COLOR_TRACKS, 2, IDS(0, 8), IDS(charlie), "colour's tracks");
     menu_ids(c, CB_DB_TIMES, 1, IDS(0), IDS(0), "times");
     menu_ids(c, CB_DB_TIME_TRACKS, 2, IDS(0, 0), IDS(alpha, bravo, charlie, delta), "time's tracks");
+    /* Every track a mono WAV at 44.1 kHz: one bitrate, all four */
     CHECK_EQ(cb_dbclient_menu(c, CB_DB_BITRATES, 1, IDS(0), &rows, &n), 0);
-    CHECK(n >= 2 && rows[0].id > rows[n - 1].id && rows[0].type == 0x10);
+    CHECK(n == 1 && rows[0].id == 705 && rows[0].type == 0x10);
     cb_dbrows_free(&rows, n);
-    menu_ids(c, CB_DB_BITRATE_TRACKS, 2, IDS(0, (uint32_t)pb->bit_rate), IDS(bravo), "bitrate's tracks");
+    menu_ids(c, CB_DB_BITRATE_TRACKS, 2, IDS(0, (uint32_t)pb->bit_rate), IDS(alpha, bravo, charlie, delta),
+             "bitrate's tracks");
     /* ORIGINAL ARTIST lists album artists: Synthetic's is the artist its
      * tracks share; charlie and delta have no album, so Unknown, last. */
     menu_ids(c, CB_DB_ORIGINALS, 1, IDS(0), IDS(synth, 0), "album artists");
@@ -2066,7 +2063,7 @@ static void test_library(CBLibrary *lib, CBPlan *plan, CBCatalog **cat)
     /* Track info's first row as a CDJ-2000nexus sends it: a title row, the
      * file type its id and nothing else (dysentery's S13 capture). */
     CHECK_EQ(cb_dbclient_menu(c, CB_DB_TRACK_INFO, 8, &alpha, 1, &rows, &n), 0);
-    CHECK(n == 7 && rows[0].type == CB_DB_ITEM_TITLE && rows[0].id == 5 && !rows[0].a &&
+    CHECK(n == 7 && rows[0].type == CB_DB_ITEM_TITLE && rows[0].id == 11 && !rows[0].a &&
           !rows[0].e && !rows[0].key && rows[5].id == 1);
     cb_dbrows_free(&rows, n);
     close_pair(&sv, &c);
@@ -2319,9 +2316,9 @@ static void same_track(const CBPlanTrack *a, const CBPlanTrack *b)
 static void same_plans(CBLibrary *lib)
 {
     CBPlan dry, stored;
-    CHECK_EQ(cb_plan_build_cb(lib, lib->tracks, lib->nb_tracks, NULL, 0, NULL, false, CB_PLAN_DRY,
+    CHECK_EQ(cb_plan_build_cb(lib, lib->tracks, lib->nb_tracks, NULL, 0, NULL, CB_TRANSCODE_LINK, CB_PLAN_DRY,
                               &dry, NULL, NULL), 0);
-    CHECK_EQ(cb_plan_build_cb(lib, lib->tracks, lib->nb_tracks, NULL, 0, NULL, false,
+    CHECK_EQ(cb_plan_build_cb(lib, lib->tracks, lib->nb_tracks, NULL, 0, NULL, CB_TRANSCODE_LINK,
                               CB_PLAN_STORED, &stored, NULL, NULL), 0);
     CHECK_EQ(dry.nb_tracks, stored.nb_tracks);
     for (int i = 0; i < dry.nb_tracks && i < stored.nb_tracks; i++)
@@ -2372,7 +2369,7 @@ static void test_stored(CBLibrary *lib)
     CHECK_EQ(cb_library_artwork_save(lib, alpha->id, jpeg, size, 240, 240), 0);
     free(jpeg);
     CBPlan p;
-    CHECK_EQ(cb_plan_build_cb(lib, lib->tracks, lib->nb_tracks, NULL, 0, NULL, false,
+    CHECK_EQ(cb_plan_build_cb(lib, lib->tracks, lib->nb_tracks, NULL, 0, NULL, CB_TRANSCODE_LINK,
                               CB_PLAN_STORED, &p, NULL, NULL), 0);
     CHECK_EQ(cover_colour(&p, (uint32_t)alpha->id), 'b');
     CHECK_EQ(cover_colour(&p, (uint32_t)delta->id), 'r');
@@ -2458,7 +2455,7 @@ int main(void)
     test_stored(&lib);
     test_link_plan(&lib);
     CBPlan plan;
-    CHECK_EQ(cb_plan_build_cb(&lib, lib.tracks, lib.nb_tracks, NULL, 0, NULL, false,
+    CHECK_EQ(cb_plan_build_cb(&lib, lib.tracks, lib.nb_tracks, NULL, 0, NULL, CB_TRANSCODE_LINK,
                               CB_PLAN_STORED, &plan, NULL, NULL), 0);
     CBCatalog *cat = NULL;
     CHECK_EQ(cb_catalog_new(&cat, &lib, &plan), 0);

@@ -163,7 +163,7 @@ typedef struct ExportJob {
     char    *dest;
     int64_t *playlists;         /* ids of the selected playlists */
     int      nb_playlists;
-    bool     whole_library, prune, ignore_unsynced, compat, dry_run;
+    bool     whole_library, prune, ignore_unsynced, dry_run;
     int      format;
     CBMailbox *mb;
     CBCancel  *cancel;
@@ -2296,7 +2296,6 @@ static void *export_main(void *arg)
         opt.nb_playlists = ej->nb_playlists;
         opt.prune = ej->prune;
         opt.ignore_unsynced = ej->ignore_unsynced;
-        opt.compat_transcode = ej->compat;
         opt.format = ej->format;
         opt.dry_run = ej->dry_run;
         opt.stats = &ej->stats;
@@ -2403,7 +2402,6 @@ static void export_run(CBApp *app, bool dry_run)
     /* The dry run lists what pruning would delete, for the question. */
     ej->prune = dry_run || es->prune;
     ej->ignore_unsynced = es->ignore_unsynced;
-    ej->compat = es->compat;
     ej->format = es->format;
     ej->dry_run = dry_run;
     ej->mb = priv->export_mb;
@@ -2738,8 +2736,7 @@ int cb_app_start_export(CBApp *app)
     }
     flush_saves(app);
 
-    export_log(app, "Export to %s%s", es->dest,
-               es->compat ? " with the compatibility transcode" : "");
+    export_log(app, "Export to %s as %s", es->dest, cb_stick_format_name(es->format));
     priv->export_phase = EXPORT_ANALYSING;
     snprintf(es->stage, sizeof(es->stage), "analysis");
     if (priv->nb_export_wait) {
@@ -3642,7 +3639,6 @@ int cb_app_create(CBApp *app, const char *library_root, const CBPlayerOptions *p
         dv->zoom_bars = cfg->detail_bars > 0 ? cfg->detail_bars : 12;
     }
     app->wave_palette = palette_of(cfg);
-    app->export_state.compat = cfg->compat_transcode;
     app->export_state.format = cfg->export_format;
     app->sort_column = -1;
     app->rows_dirty = true;

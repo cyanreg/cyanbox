@@ -9,9 +9,9 @@
  *   import.comment                 take the file's comment tag on import
  *                                  (default false: the comment field is the
  *                                  user's and starts empty)
- *   export.key_notation  export.pdb  export.onelibrary  export.compat_transcode
- *   export.format                  the stick's audio: copy (as it is), flac,
- *                                  wav or aiff (cyanbox/export.h CBStickFormat)
+ *   export.key_notation  export.pdb  export.onelibrary
+ *   export.format                  the stick's audio: flac (the default), wav
+ *                                  or mp3 (cyanbox/export.h CBStickFormat)
  *   export.device_name
  *   export.background_color        the players' background for the stick's
  *                                  library: default or one of the eight
@@ -66,7 +66,6 @@ void cb_config_defaults(CBConfig *c)
         .key_notation      = "classic",
         .export_pdb        = true,
         .export_onelibrary = true,
-        .compat_transcode  = true,
         .traffic_light     = "related3",
         .detail_bars       = 12,
     };
@@ -304,7 +303,6 @@ static const struct {
     { "export.key_notation",     K_NOTATION },
     { "export.pdb",              K_BOOL },
     { "export.onelibrary",       K_BOOL },
-    { "export.compat_transcode", K_BOOL },
     { "export.format",           K_FORMAT },
     { "export.device_name",      K_TEXT },
     { "export.background_color", K_BACKGROUND },
@@ -335,15 +333,14 @@ static bool *bool_field(CBConfig *c, const char *key)
            !strcmp(key, "analysis.auto_cues")      ? &c->auto_cues :
            !strcmp(key, "analysis.allow_sections") ? &c->allow_sections :
            !strcmp(key, "import.comment")          ? &c->import_comment :
-           !strcmp(key, "export.pdb")              ? &c->export_pdb :
-           !strcmp(key, "export.onelibrary")       ? &c->export_onelibrary : &c->compat_transcode;
+           !strcmp(key, "export.pdb")              ? &c->export_pdb : &c->export_onelibrary;
 }
 
 #define STR_(x) #x
 #define STR(x) STR_(x)
 
 /* export.format's values, by CBStickFormat (cyanbox/export.h). */
-static const char *const format_names[] = { "copy", "flac", "wav", "aiff" };
+static const char *const format_names[] = { "flac", "wav", "mp3" };
 
 const char *cb_config_takes(const char *key)
 {
@@ -359,7 +356,7 @@ const char *cb_config_takes(const char *key)
     case K_SPLIT:    return "a position, 0 or more (0: the default)";
     case K_BACKGROUND:
         return "default, pink, red, orange, yellow, green, aqua, blue or purple";
-    case K_FORMAT:   return "copy, flac, wav or aiff";
+    case K_FORMAT:   return "flac, wav or mp3";
     default:         return NULL;
     }
 }
@@ -605,7 +602,6 @@ int cb_library_config_save(CBLibrary *lib)
         { "export.key_notation",     c->key_notation },
         { "export.pdb",              c->export_pdb ? "true" : "false" },
         { "export.onelibrary",       c->export_onelibrary ? "true" : "false" },
-        { "export.compat_transcode", c->compat_transcode ? "true" : "false" },
         { "export.format",
           format_names[CB_CLAMP(c->export_format, 0, (int)CB_ARRAY_ELEMS(format_names) - 1)] },
         { "export.device_name",      c->device_name },

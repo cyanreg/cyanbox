@@ -99,12 +99,9 @@ static const char usage_text[] =
     "      --all                every track in the library, not only those in playlists\n"
     "      -p, --playlist NAME  only this playlist and its tracks (repeatable)\n"
     "      --prune              delete files on the stick that are no longer exported\n"
-    "      --compat, --no-compat\n"
-    "                           transcode AAC and hi-res files to 16-bit/44.1 kHz FLAC\n"
-    "                           (on by default: export.compat_transcode)\n"
-    "      --format F           the audio: copy (as it is), flac, wav or aiff (wav and\n"
-    "                           aiff for players before the CDJ-2000NXS2: no FLAC there);\n"
-    "                           default export.format\n"
+    "      --format F           the audio, every track encoded at 16-bit/44.1 kHz: flac,\n"
+    "                           wav (for players before the CDJ-2000NXS2: no FLAC there)\n"
+    "                           or mp3 (320 kbit/s); default export.format (flac)\n"
     "      --ignore-unsynced    export although the stick has player changes not synced\n"
     "      -n, --dry-run        print what would be copied and deleted, write nothing\n"
     "  inspect STICK            re-read and validate a stick\n"
@@ -1756,7 +1753,6 @@ static int cmd_export(Cli *cli, int argc, char **argv)
     const char *stick = NULL;
     CBExportOptions opt;
     cb_export_options_default(&opt);
-    bool compat = false, no_compat = false;
     int format = -1;
     CBArray names;
     cb_array_init(&names, sizeof(char *));
@@ -1780,13 +1776,9 @@ static int cmd_export(Cli *cli, int argc, char **argv)
             opt.whole_library = true;
         } else if (opt_flag(cli, argv[i], NULL, "--prune")) {
             opt.prune = true;
-        } else if (opt_flag(cli, argv[i], NULL, "--compat")) {
-            compat = true;
-        } else if (opt_flag(cli, argv[i], NULL, "--no-compat")) {
-            no_compat = true;
         } else if ((r = opt_value(cli, argc, argv, &i, NULL, "--format", &val))) {
             if (r < 0 || (format = cb_stick_format_parse(val)) < 0) {
-                code = usage_error(cli, "export: --format takes copy, flac, wav or aiff");
+                code = usage_error(cli, "export: --format takes flac, wav or mp3");
                 goto end;
             }
         } else if (opt_flag(cli, argv[i], NULL, "--ignore-unsynced")) {
@@ -1902,7 +1894,6 @@ static int cmd_export(Cli *cli, int argc, char **argv)
 
     opt.playlists = playlists.nb ? (const CBPlaylist *const *)playlists.data : NULL;
     opt.nb_playlists = (int)playlists.nb;
-    opt.compat_transcode = (compat || lib->cfg.compat_transcode) && !no_compat;
     opt.format = format >= 0 ? format : lib->cfg.export_format;
 
     ProgressCtx ctx = {
@@ -2402,7 +2393,6 @@ static int cmd_config(Cli *cli, int argc, char **argv)
         printf("export.key_notation = %s\n", c->key_notation);
         printf("export.pdb = %s\n", c->export_pdb ? "true" : "false");
         printf("export.onelibrary = %s\n", c->export_onelibrary ? "true" : "false");
-        printf("export.compat_transcode = %s\n", c->compat_transcode ? "true" : "false");
         printf("export.format = %s\n", cb_stick_format_name(c->export_format));
         printf("export.device_name = %s\n",
                c->device_name ? c->device_name : "(the stick's label)");
@@ -2985,7 +2975,7 @@ static const struct {
     { "tag",      cmd_tag,      "tag TRACK..." },
     { "color",    cmd_color,    "color HUE|NAME|none TRACK..." },
     { "colour",   cmd_color,    "colour HUE|NAME|none TRACK..." },
-    { "export",   cmd_export,   "export [--all | -p NAME...] [--prune] [--compat | --no-compat] [--format F] "
+    { "export",   cmd_export,   "export [--all | -p NAME...] [--prune] [--format F] "
                                 "[--ignore-unsynced] [-n] STICK" },
     { "inspect",  cmd_inspect,  "inspect STICK" },
     { "pull",     cmd_pull,     "pull STICK" },

@@ -14,6 +14,7 @@
  * module (which packs them) is not linked here; cyanbox/analysis.h is used
  * for its constants and inline helpers only. */
 
+#include "cyanbox/export.h"
 #include "cyanbox/library.h"
 
 #include <inttypes.h>
@@ -294,7 +295,7 @@ static void test_edit_and_reopen(void)
     lib.cfg.bpm_min = 70;
     lib.cfg.bpm_max = 180.5;
     lib.cfg.snap_bpm = false;
-    lib.cfg.compat_transcode = true;
+    lib.cfg.export_format = CB_STICK_MP3;
     lib.cfg.device_name = cb_strdup("MY STICK");
     lib.cfg.audio_sink = cb_strdup("cyanbox-null");
     lib.cfg.detail_bars = 16;
@@ -396,7 +397,8 @@ static void test_edit_and_reopen(void)
     CHECK_STR(cfg->key_notation, "camelot");
     CHECK(cfg->background_color == 8);
     CHECK(cfg->bpm_min == 70 && cfg->bpm_max == 180.5 && !cfg->snap_bpm && cfg->auto_cues);
-    CHECK(cfg->compat_transcode && cfg->export_pdb && cfg->detail_bars == 16 && cfg->split_tree == 0.25f);
+    CHECK(cfg->export_format == CB_STICK_MP3 && cfg->export_pdb && cfg->detail_bars == 16 &&
+          cfg->split_tree == 0.25f);
     CHECK_STR(cfg->device_name, "MY STICK");
     CHECK_STR(cfg->audio_sink, "cyanbox-null");
     CHECK_STR(cfg->traffic_light, "related1");
@@ -623,8 +625,8 @@ static void test_link_tag(void)
     free(dir2);
 }
 
-/* Link's WAVs made whole in the cache by an earlier cyanbox go when the
- * library opens; its other transcodes stay. */
+/* The transcodes an earlier cyanbox kept in the cache (Link's WAVs made
+ * whole, one half made, the stick's FLACs) go when the library opens. */
 static void test_link_wavs_go(void)
 {
     char *dir = test_dir("library-link-wavs");
@@ -638,7 +640,8 @@ static void test_link_wavs_go(void)
     CHECK(cb_file_write_atomic(wav, "RIFF", 4) == 0 && cb_file_write_atomic(part, "RI", 2) == 0 &&
           cb_file_write_atomic(flac, "fLaC", 4) == 0);
     CHECK(cb_library_open(&lib, dir) == 0);
-    CHECK(!cb_file_exists(wav) && !cb_file_exists(part) && cb_file_exists(flac));
+    CHECK(!cb_file_exists(wav) && !cb_file_exists(part) && !cb_file_exists(flac) &&
+          !cb_file_exists(cache));
     cb_library_close(&lib);
     free(wav);
     free(part);
@@ -1043,13 +1046,8 @@ static void test_missing_relocate_remove(void)
     CBPlaylist *pl = cb_library_playlist_create(&lib, NULL, "Set");
     CHECK(pl && cb_library_playlist_add(&lib, pl, a, -1) == 0);
     CHECK(cb_library_playlist_add(&lib, pl, c, -1) == 0);
-    char *cache = cb_library_cache_path(&lib, "transcode", 1, "flac");
-    CHECK(cache && cb_str_ends(cache, "/cache/transcode/1.flac"));
-    FILE *f = fopen(cache, "w");
-    fclose(f);
     CHECK(cb_library_remove(&lib, a) == 0);
     CHECK(!cb_library_find_id(&lib, 1) && lib.nb_tracks == 2);
-    CHECK(!cb_file_exists(cache));
     CHECK(pl->nb == 1 && pl->track_ids[0] == 3);
     static const char *const tables[] = { "cue", "grid_section", "track_tag", "waveform_preview",
                                           "waveform_detail", "track_artwork", "play",
@@ -1082,7 +1080,6 @@ static void test_missing_relocate_remove(void)
     CHECK(cb_library_check(&lib) == 0);
     cb_library_close(&lib);
     free(d);
-    free(cache);
     free(c_old);
     free(c_new);
     free(b_path);

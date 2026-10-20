@@ -7,9 +7,10 @@
  *
  * Order matters for a stick that is unplugged half way: audio first, then
  * the ANLZ files, artwork and settings, and the databases last, so a
- * database never points at files that are not there yet (dj). Audio
- * already on the stick with the same size and a modification time within
- * FAT's two seconds is skipped (dj's _same_file); the analysis files and
+ * database never points at files that are not there yet (dj). Every
+ * track is encoded as it is written (cb_encode, the stick's format): one
+ * on the stick already as this export would write it (the stick's record
+ * of what it encoded says so) is skipped; the analysis files and
  * artwork are rebuilt and written where the stick's differ; the settings
  * files and databases every time. Everything is written in place, the
  * audio straight through to the stick (O_DIRECT), with one sync of the
@@ -30,13 +31,13 @@
  * without waveform tags, both through the callback.
  *
  * Progress counts are 1-based ("copy" 1 of 58 is the first file). A dry
- * run writes nothing anywhere: the transcodes it would make are listed as
+ * run writes nothing anywhere: the tracks it would encode are listed as
  * "transcode" items (and the plan describes them from the originals), and
  * every file it would write as "copy", "skip" or "rewrite". The plan reads
  * no file the library describes already (CB_PLAN_STORED): a file is read
- * once, as it is written, copied or encoded from its decoded samples
- * (cb_encode; CBStickFormat says which), and what the analysis files need
- * of it is learnt then.
+ * once, as it is written, encoded from its decoded samples (cb_encode;
+ * CBStickFormat says how), and what the analysis files need of it is
+ * learnt then.
  *
  * What keeps the stick and the library safe:
  *  - the databases are built during the checks, so a library they cannot
@@ -377,16 +378,6 @@ static int select_tracks(Ctx *c, const CBPlaylist *const *pls, int nb_pls, CBTra
 
 /* -------------------------------------------------------------- files */
 
-/* dj's _same_file(): same size, mtime within FAT's 2 s resolution. The
- * stick's copy is a regular file reached through no link. */
-static bool same_file(int root, const char *src, const char *stick_path)
-{
-    struct stat a, b;
-    if (root < 0 || stat(src, &a) < 0 || cb_stick_stat(root, stick_path, &b) < 0 || !S_ISREG(b.st_mode))
-        return false;
-    return a.st_size == b.st_size && llabs((long long)a.st_mtime - (long long)b.st_mtime) <= 2;
-}
-
 /* The databases and settings files: few, and on the stick before the call
  * returns. */
 static int write_file(Ctx *c, const char *stick_path, const void *data, size_t size)
@@ -445,9 +436,9 @@ static void remove_file(Ctx *c, const char *stick_path)
  * source's size and time when it was, the file's size and frames, and
  * the FLAC's first frame and the frames its PVB2 tag names (the 400 a
  * player seeks by, docs/anlz.md 4.15). An encoded file is not its
- * source, so "the same size and time" (same_file) cannot tell it is
- * there already; this record can, and lets the analysis files be made
- * again without reading the file back. */
+ * source, so its size and time cannot tell it is there already; this
+ * record can, and lets the analysis files be made again without reading
+ * the file back. */
 #define CB_ENCODED_PATH "/PIONEER/cyanbox/encoded.txt"
 #define SEEKS 400
 
@@ -497,9 +488,8 @@ static const Made *record_find(const Record *r, const char *path)
 
 static void spec_of(const CBPlanEncode *e, char out[48])
 {
-    static const char *const names[] = { "flac", "wav", "aiff", "mp3" };
-    snprintf(out, 48, "%s/%d/%d/%d/%d", names[CB_CLAMP(e->format, 0, 3)], e->bits, e->max_rate,
-             e->channels, e->exact);
+    static const char *const names[] = { "flac", "wav", "mp3" };
+    snprintf(out, 48, "%s/16/%d/%d", names[CB_CLAMP(e->format, 0, 2)], CB_ENCODE_RATE, e->channels);
 }
 
 /* The stick's record; empty when it has none or it does not read. */
@@ -625,11 +615,9 @@ static int flac_of(const Made *m, int rate, int channels, int bits, CBFlacInfo *
 }
 
 /* Whether the stick holds the track's file as this export would write
- * it: a copy by same_file(), an encoded file by the record. */
+ * it, by the record. */
 static bool on_stick(int root, const Record *r, const CBPlanTrack *t)
 {
-    if (!t->encode.on)
-        return same_file(root, t->source, t->usb_path);
     const Made *m = record_find(r, t->usb_path);
     char spec[48];
     spec_of(&t->encode, spec);
@@ -1195,6 +1183,33 @@ static int checks(Ctx *c, const CBPlan *plan)
         }
     }
 
+    /* A library file where a track would be written: encoding over it
+     * would destroy it, its own pipeline reading it as it goes. Only a
+     * library on the stick can be there. */
+    CBArray mine;
+    cb_array_init(&mine, sizeof(Keep));
+    for (int i = 0; i < c->lib->nb_tracks; i++) {
+        struct stat st;
+        const CBTrack *t = c->lib->tracks[i];
+        if (t->path && stat(t->path, &st) == 0 && S_ISREG(st.st_mode) && st.st_dev == c->dev &&
+            !cb_array_push(&mine, &(Keep) { st.st_dev, st.st_ino }))
+            ret = ret ? ret : CB_ERROR(ENOMEM);
+    }
+    if (mine.nb)
+        qsort(mine.data, mine.nb, sizeof(Keep), cmp_keep);
+    for (int i = 0; mine.nb && i < plan->nb_tracks; i++) {
+        struct stat st;
+        if (cb_stick_stat(c->root, plan->tracks[i].usb_path, &st) < 0 || !S_ISREG(st.st_mode))
+            continue;
+        Keep e = { st.st_dev, st.st_ino };
+        if (bsearch(&e, mine.data, mine.nb, sizeof(e), cmp_keep)) {
+            reportf(c, "check", "%s%s is a library track's own file; not writing over it",
+                    c->dest, plan->tracks[i].usb_path);
+            ret = ret ? ret : CB_ERROR(EEXIST);
+        }
+    }
+    cb_array_free(&mine);
+
     /* Stick paths on the stick and unique as FAT and exFAT compare names
      * (cb_plan_fold_case). */
     Ours o = { 0 };
@@ -1478,9 +1493,9 @@ static void dry_run_report(Ctx *c, const CBPlan *plan, const bool *skip)
     /* The files that would be encoded, then every file. */
     int nb = 0, listed = 0;
     for (int i = 0; i < plan->nb_tracks; i++)
-        nb += plan->tracks[i].encode.on && !skip[i];
+        nb += !skip[i];
     for (int i = 0; i < plan->nb_tracks; i++) {
-        if (!plan->tracks[i].encode.on || skip[i])
+        if (skip[i])
             continue;
         char name[512];
         cb_track_display(plan->tracks[i].track, name, sizeof(name));
@@ -1530,9 +1545,9 @@ static void dry_run_report(Ctx *c, const CBPlan *plan, const bool *skip)
 
 /* ------------------------------------------------------------- the audio */
 
-/* The audio goes through two threads: a producer that reads each file to
- * copy, or encodes it (cb_encode, from the decoded samples), into pieces
- * of a MiB at most, and this one, which writes them on the stick and keeps
+/* The audio goes through two threads: a producer that encodes each file
+ * (cb_encode, from the decoded samples) into pieces of a MiB at most, and
+ * this one, which writes them on the stick and keeps
  * the rate, the time left and the interface going.
  *
  * Straight onto the stick, in place: no temporary, no fsync. A file is
@@ -1542,12 +1557,12 @@ static void dry_run_report(Ctx *c, const CBPlan *plan, const bool *skip)
  * write an O_DIRECT piece through before returning; ext4 and the like
  * want pieces aligned, so a file's tail and a patch go buffered; tmpfs
  * refuses the flag and gets plain writes). A write that stops part way
- * leaves a shorter file with today's time, which same_file() does not
- * take for the source, and no record line, which on_stick() needs. Encoding the next
+ * leaves a shorter file and no record line, which on_stick() needs.
+ * Encoding the next
  * track overlaps writing this one (a FLAC encodes four or five times
  * faster than a USB stick takes it), and memory holds a queue's worth of
  * pieces whatever the files. A muxer going back to its header at the end
- * (FLAC's STREAMINFO, a WAV's or an AIFF's sizes) sends those bytes as a
+ * (FLAC's STREAMINFO, a WAV's sizes) sends those bytes as a
  * patch, written over what went before, in order. The producer also
  * learns what the analysis files need of each file (its MP3 or FLAC
  * frames), which the plan reads from no file. */
@@ -1654,55 +1669,6 @@ static uint8_t *block(void)
     return posix_memalign(&b, ALIGN, PIECE) ? NULL : b;
 }
 
-/* What the analysis files need of a file written as it is. */
-static void learn_copy(Learnt *l, const CBPlanTrack *t)
-{
-    if (!strcmp(t->probe.codec, "mp3"))
-        l->has_mp3 = cb_mp3_scan(t->source, &l->mp3) >= 0;
-    else if (!strcmp(t->probe.codec, "flac"))
-        l->has_flac = cb_flac_scan(t->source, &l->flac) >= 0;
-}
-
-static int produce_copy(Audio *a, int i)
-{
-    const CBPlanTrack *t = &a->plan->tracks[i];
-    int fd = open(t->source, O_RDONLY | O_CLOEXEC);
-    if (fd < 0)
-        return CB_ERROR(errno);
-    int ret = put_piece(a, (Piece) { .kind = P_OPEN, .track = i });
-    for (int64_t off = 0; ret >= 0;) {
-        uint8_t *b = block();
-        if (!b) {
-            ret = CB_ERROR(ENOMEM);
-            break;
-        }
-        size_t n = 0;
-        while (n < PIECE) {
-            ssize_t r = read(fd, b + n, PIECE - n);
-            if (r < 0 && errno == EINTR)
-                continue;
-            if (r <= 0) {
-                if (r < 0)
-                    ret = CB_ERROR(errno);
-                break;
-            }
-            n += (size_t)r;
-        }
-        if (ret < 0 || !n) {
-            free(b);
-            break;
-        }
-        ret = put_piece(a, (Piece) { .kind = P_DATA, .track = i, .offset = off, .data = b, .len = n });
-        off += (int64_t)n;
-        if (n < PIECE)
-            break;
-    }
-    close(fd);
-    if (ret >= 0)
-        learn_copy(&a->learnt[i], t);
-    return ret < 0 ? ret : put_piece(a, (Piece) { .kind = P_DONE, .track = i });
-}
-
 /* cb_encode's bytes: appended to the block being filled and sent whole;
  * bytes for a place already sent go as a patch. */
 static int enc_write(void *opaque, const uint8_t *b, int n)
@@ -1765,14 +1731,10 @@ static int produce_encode(Audio *a, int i)
     if (!(a->buf = block()))
         return CB_ERROR(ENOMEM);
     int ret = put_piece(a, (Piece) { .kind = P_OPEN, .track = i });
-    /* A WAV's or AIFF's size known before it is written: the plan's
-     * frames, when they are the source's. */
-    const CBTrack *src = t->track;
-    bool same_rate = !e->max_rate || !src || src->sample_rate <= e->max_rate;
+    /* A WAV's size known before it is written: the plan's frames. */
     CBEncodeOptions o = {
-        .format = e->format, .bits = e->bits, .exact = e->exact, .channels = e->channels,
-        .max_rate = e->max_rate, .tags = e->format == CB_ENCODE_FLAC,
-        .frames = e->format != CB_ENCODE_FLAC && same_rate ? t->total_samples : 0,
+        .format = e->format, .channels = e->channels, .tags = e->format != CB_ENCODE_WAV,
+        .frames = e->format == CB_ENCODE_WAV ? t->total_samples : 0,
         .write = enc_write, .seek = enc_seek, .opaque = a, .cancelled = stopped,
     };
     if (ret >= 0)
@@ -1787,18 +1749,28 @@ static int produce_encode(Audio *a, int i)
     return ret < 0 ? ret : put_piece(a, (Piece) { .kind = P_DONE, .track = i });
 }
 
+/* An MP3's frames, as the analysis files need them (PVBR, the PDB row):
+ * CBR at 320 kbit/s, no header frame. */
+static CBMp3Info mp3_of(int channels, int64_t frames)
+{
+    return (CBMp3Info) { .valid = true, .version = 1, .sample_rate = CB_ENCODE_RATE,
+                         .channels = channels, .frame_samples = 1152, .nb_frames = frames,
+                         .bitrate_kbps = 320 };
+}
+
 /* A file on the stick already: what the analysis files need of it, from
- * the source (a copy) or the record (an encoded file). */
+ * the record. */
 static int produce_skip(Audio *a, int i)
 {
     const CBPlanTrack *t = &a->plan->tracks[i];
     Learnt *l = &a->learnt[i];
-    if (!t->encode.on) {
-        learn_copy(l, t);
-    } else if (t->encode.format == CB_ENCODE_FLAC) {
-        const Made *m = record_find(a->old, t->usb_path);
-        if (m && flac_of(m, t->probe.sample_rate, t->probe.channels, t->encode.bits, &l->flac) >= 0)
-            l->has_flac = true;
+    const Made *m = record_find(a->old, t->usb_path);
+    if (m && t->encode.format == CB_ENCODE_FLAC &&
+        flac_of(m, CB_ENCODE_RATE, t->encode.channels, 16, &l->flac) >= 0)
+        l->has_flac = true;
+    if (m && t->encode.format == CB_ENCODE_MP3) {
+        l->mp3 = mp3_of(t->encode.channels, m->frames / 1152);
+        l->has_mp3 = true;
     }
     return put_piece(a, (Piece) { .kind = P_SKIP, .track = i });
 }
@@ -1807,9 +1779,7 @@ static void *produce(void *arg)
 {
     Audio *a = arg;
     for (int i = 0; i < a->plan->nb_tracks && !stopped(a); i++) {
-        const CBPlanTrack *t = &a->plan->tracks[i];
-        int ret = a->skip[i] ? produce_skip(a, i) : t->encode.on ? produce_encode(a, i)
-                                                                  : produce_copy(a, i);
+        int ret = a->skip[i] ? produce_skip(a, i) : produce_encode(a, i);
         if (ret < 0) {
             put_piece(a, (Piece) { .kind = P_FAIL, .track = i, .err = ret });
             return NULL;
@@ -1887,12 +1857,6 @@ static int write_audio(Ctx *c, CBPlan *plan, const bool *skip, const Record *old
                     stats_add(c, (int64_t)p.len);
                 break;
             case P_DONE: {
-                /* The source's time, for same_file() and the record. */
-                struct stat st;
-                if (fd >= 0 && stat(t->source, &st) == 0) {
-                    struct timespec ts[2] = { st.st_atim, st.st_mtim };
-                    futimens(fd, ts);
-                }
                 /* The close on the pool: its tenth of a second overlaps
                  * the next file (PutJob). */
                 if (fd >= 0 && put_submit(c, t->usb_path, NULL, 0, false, fd) < 0)
@@ -1906,7 +1870,7 @@ static int write_audio(Ctx *c, CBPlan *plan, const bool *skip, const Record *old
                 break;
             case P_FAIL:
                 if (p.err != CB_ERROR(ECANCELED))
-                    reportf(c, "copy", "cannot %s %s: %s", t->encode.on ? "encode" : "copy", t->source,
+                    reportf(c, "copy", "cannot encode %s: %s", t->source,
                             strerror(-p.err));
                 ret = p.err;
                 running = false;
@@ -1961,8 +1925,6 @@ static int learn(CBPlan *plan, const bool *skip, const Record *old, Learnt *lear
             t->probe.flac = l->flac;
             l->flac = (CBFlacInfo) { 0 };
         }
-        if (!t->encode.on)
-            continue;
         Made *m = record_add(now);
         if (!m)
             return CB_ERROR(ENOMEM);
@@ -1984,6 +1946,8 @@ static int learn(CBPlan *plan, const bool *skip, const Record *old, Learnt *lear
                 cb_flac_info_free(&t->probe.flac);
                 t->probe.flac = e->flac;
                 l->enc.flac = (CBFlacInfo) { 0 };
+            } else if (t->encode.format == CB_ENCODE_MP3) {
+                t->probe.mp3 = mp3_of(t->encode.channels, e->mp3_frames);
             }
         }
         if (!m->path)
@@ -2005,8 +1969,8 @@ static void learnt_free(Learnt *l, int nb)
     free(l);
 }
 
-/* "copy", "flac", "wav", "aiff". */
-static const char *const stick_formats[] = { "copy", "flac", "wav", "aiff" };
+/* "flac", "wav", "mp3". */
+static const char *const stick_formats[] = { "flac", "wav", "mp3" };
 
 const char *cb_stick_format_name(int format)
 {
@@ -2021,14 +1985,13 @@ int cb_stick_format_parse(const char *name)
     return -1;
 }
 
-/* The plan's kind of transcode for the options (cyanbox/export.h). */
+/* The plan's kind for the options (cyanbox/export.h). */
 static int stick_kind(const CBExportOptions *opt)
 {
     switch (opt->format) {
-    case CB_STICK_FLAC: return opt->compat_transcode ? CB_TRANSCODE_STICK_FLAC_COMPAT : CB_TRANSCODE_STICK_FLAC;
-    case CB_STICK_WAV:  return CB_TRANSCODE_STICK_WAV;
-    case CB_STICK_AIFF: return CB_TRANSCODE_STICK_AIFF;
-    default:            return opt->compat_transcode ? CB_TRANSCODE_STICK_COPY_COMPAT : CB_TRANSCODE_STICK_COPY;
+    case CB_STICK_WAV: return CB_TRANSCODE_STICK_WAV;
+    case CB_STICK_MP3: return CB_TRANSCODE_STICK_MP3;
+    default:           return CB_TRANSCODE_STICK_FLAC;
     }
 }
 
@@ -2087,10 +2050,7 @@ int cb_export(CBLibrary *lib, const char *dest, const CBExportOptions *opt_in, c
         goto out;
 
     /* The plan from what the library stored of each file (no file read
-     * but what changed since): what is copied, and how what is not is
-     * encoded as it is written. The compatibility option alone decides,
-     * not the setting, which is only its default (the dialog's checkbox,
-     * --compat and --no-compat start from it). */
+     * but what changed since): how each is encoded as it is written. */
     if ((ret = cb_plan_build_cb(lib, tracks, nb_tracks, opt->playlists,
                                 opt->playlists ? opt->nb_playlists : 0, opt->device_name,
                                 stick_kind(opt), CB_PLAN_STORED, &plan, cb, opaque)) < 0)

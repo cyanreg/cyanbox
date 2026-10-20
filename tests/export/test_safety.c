@@ -195,7 +195,7 @@ static void player_adds_cue(CBLibrary *lib, CBTrack *t, const char *stick, doubl
 {
     CBTrack *tr[1] = { t };
     CBPlan plan;
-    CHECK_EQ(cb_plan_build(lib, tr, 1, NULL, 0, NULL, false, &plan), 0);
+    CHECK_EQ(cb_plan_build(lib, tr, 1, NULL, 0, NULL, CB_TRANSCODE_STICK_FLAC, &plan), 0);
     if (plan.nb_tracks != 1)
         return;
     CBPlanTrack *pt = &plan.tracks[0];
@@ -224,35 +224,45 @@ static void player_adds_cue(CBLibrary *lib, CBTrack *t, const char *stick, doubl
 /* ----------------------------------------------------------------- tests */
 
 /* The library keeps its audio on the stick, outside the place the plan
- * gives it: prune must not delete the library's own files. */
+ * gives it: prune must not delete the library's own files, and the track
+ * is encoded to its place. One of its files exactly where the plan puts a
+ * track (a WAV named as the stick's FLAC) would be destroyed by encoding
+ * over it: that export is refused before anything is written. */
 static void library_on_stick(void)
 {
     CBLibrary lib = { 0 };
     char *libdir = at("lib-on-stick"), *stick = at("stick-own");
     char *own = at("stick-own/Contents/My Music/song.wav");
-    /* And one exactly where the plan puts it: skipped, not copied onto
-     * itself. */
-    char *there = at("stick-own/Contents/Other/Album/there.wav");
     CHECK_EQ(cb_library_open(&lib, libdir), 0);
     CBTrack *t = add_track(&lib, own, "Artist", -1);
-    add_track(&lib, there, "Other", -1);
-    uint8_t *before = NULL, *after = NULL;
-    size_t nb = 0, na = 0;
-    cb_file_read(there, &before, &nb);
     Stages st = { 0 };
     CHECK_EQ(export_to(&lib, stick, true, &st), 0);
-    char *placed = at("stick-own/Contents/Artist/Album/song.wav");
+    char *placed = at("stick-own/Contents/Artist/Album/song.flac");
     CHECK(cb_file_exists(placed));
     CHECK(cb_file_exists(own));
     CHECK(t && !t->missing);
     CHECK_EQ(st.prune, 0);
     CHECK_EQ(st.copy, 1);
+    cb_library_close(&lib);
+
+    char *libdir2 = at("lib-there"), *stick2 = at("stick-there");
+    char *there = at("stick-there/Contents/Other/Album/there.flac");
+    CHECK_EQ(cb_library_open(&lib, libdir2), 0);
+    add_track(&lib, there, "Other", -1);
+    uint8_t *before = NULL, *after = NULL;
+    size_t nb = 0, na = 0;
+    cb_file_read(there, &before, &nb);
+    st = (Stages) { 0 };
+    CHECK(export_to(&lib, stick2, true, &st) == CB_ERROR(EEXIST));
+    CHECK(st.check > 0 && st.copy == 0);
     CHECK_EQ(cb_file_read(there, &after, &na), 0);
     CHECK(nb && na == nb && !memcmp(before, after, nb));
     free(before);
     free(after);
-    free(there);
     cb_library_close(&lib);
+    free(there);
+    free(libdir2);
+    free(stick2);
     free(placed);
     free(own);
     free(libdir);
@@ -394,7 +404,7 @@ static void damaged_stick(void)
      * cue the stick does not; no exportLibrary.db. */
     CBTrack *tr[1] = { t };
     CBPlan plan;
-    CHECK_EQ(cb_plan_build(&lib, tr, 1, NULL, 0, NULL, false, &plan), 0);
+    CHECK_EQ(cb_plan_build(&lib, tr, 1, NULL, 0, NULL, CB_TRANSCODE_STICK_FLAC, &plan), 0);
     if (plan.nb_tracks == 1) {
         CBPlanTrack *pt = &plan.tracks[0];
         free(pt->anlz_dir);
@@ -578,10 +588,10 @@ static int entries(const char *dir)
     return n;
 }
 
-/* A dry run writes nothing: no transcode into the cache, nothing on the
- * stick; it lists the transcode it would make and every file it would
- * write, four artwork files per cover. The real run then transcodes (on
- * the pool), counts from 1 and dates the tracks by when they were added. */
+/* A dry run writes nothing: no cache, nothing on the stick; it lists the
+ * tracks it would encode and every file it would write, four artwork
+ * files per cover. The real run then encodes them as it writes them,
+ * counts from 1 and dates the tracks by when they were added. */
 static void dry_run_and_dates(void)
 {
     CBLibrary lib = { 0 };
@@ -600,7 +610,7 @@ static void dry_run_and_dates(void)
     CHECK_EQ(write_wav_as(alaw, 330.0, true), 0);
     CBTrack *t1 = add_track(&lib, pcm, "Artist", -1);
     CBTrack *t2 = add_track(&lib, alaw, "Artist", -1);
-    CHECK(t2 && !cb_plan_codec_playable(t2->codec));
+    CHECK(t2);
     /* 2020-01-02 12:00 local time. */
     struct tm tm = { .tm_year = 120, .tm_mon = 0, .tm_mday = 2, .tm_hour = 12, .tm_isdst = -1 };
     if (t1 && t2) {
@@ -618,7 +628,7 @@ static void dry_run_and_dates(void)
     char *cache = at("lib-dry/cache");
     CHECK_EQ(entries(cache), 0);
     CHECK_EQ(entries(stick), 0);
-    CHECK_EQ(seen.transcode, 1);
+    CHECK_EQ(seen.transcode, 2);
     CHECK_EQ(seen.prepare, 2);
     CHECK_EQ(seen.prepare_total, 2);
     CHECK_EQ(seen.art, 4);
@@ -627,8 +637,8 @@ static void dry_run_and_dates(void)
     CHECK_EQ(seen.rewrite, 3 * 2 + 4 + 2 + 1);
     CHECK_EQ(seen.zero, 0);
 
-    /* The real run encodes the A-law file as it writes it (a "copy"
-     * like the other), and keeps nothing of it in the cache. */
+    /* The real run encodes both as it writes them (a "copy" each), and
+     * keeps nothing in the cache. */
     opt.dry_run = false;
     seen = (Seen) { 0 };
     CHECK_EQ(cb_export(&lib, stick, &opt, on_seen, &seen), 0);
@@ -772,9 +782,9 @@ static void case_names(void)
     CBLibrary lib = { 0 };
     char *libdir = at("lib-case"), *stick = at("stick-case");
     char *a = at("music-case/a/song.wav"), *b = at("music-case/b/song.wav");
-    char *first = at("stick-case/Contents/Șerban/Album/song.wav");
-    char *second = at("stick-case/Contents/șerban/Album/song-1.wav");
-    char *stale = at("stick-case/Contents/ȘERBAN/Album/song.wav");
+    char *first = at("stick-case/Contents/Șerban/Album/song.flac");
+    char *second = at("stick-case/Contents/șerban/Album/song-1.flac");
+    char *stale = at("stick-case/Contents/ȘERBAN/Album/song.flac");
     cb_mkdir_p(stick);
     CHECK_EQ(write_wav(a, 440.0), 0);
     CHECK_EQ(write_wav(b, 550.0), 0);
@@ -786,7 +796,7 @@ static void case_names(void)
     CHECK_EQ(st.copy, 2);
     CHECK(cb_file_exists(first));
     CHECK(cb_file_exists(second));
-    CHECK(cb_file_size(first) > 0 && cb_file_size(first) == cb_file_size(a));
+    CHECK(cb_file_size(first) > 0 && cb_file_size(first) != cb_file_size(second));
 
     CHECK_EQ(write_wav(stale, 330.0), 0);
     CBExportOptions opt;

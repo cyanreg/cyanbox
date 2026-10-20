@@ -1,19 +1,20 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
 /* End to end, dj's test_export in cyanbox's model: a small library of
- * generated tracks in five formats (FLAC, MP3, WAV, AAC and Opus, the last
- * transcoded to FLAC for the stick) sharing a folder cover, two playlists,
+ * generated tracks in five formats (FLAC, MP3, WAV, AAC and Opus, every
+ * one encoded to the stick's FLAC) sharing a folder cover, two playlists,
  * player and device presets; exported to a "stick" directory, inspected,
  * exported again (nothing copied), then changed the way a player would
  * (a hot cue moved and recoloured, a memory cue added, a history list, a
  * preset), which must block the next export until synced; pulled into the
  * library; and pruned when a track leaves the playlists.
  *
- * Then the other stick formats (CBStickFormat: FLAC, WAV, AIFF), each to a
- * stick of its own: every file of the type and extension the format says
- * (MP3 always copied), the stick inspected (each file the size its row
- * says), each file's audio the source's decoded samples (exactly where
- * the format holds them, else within the dither), FLAC's PVB2 entries on
+ * Then each stick format (CBStickFormat: FLAC, WAV, MP3) to a stick of its
+ * own: every file of the type and extension the format says, the stick
+ * inspected (each file the size its row says), each file's audio the
+ * source's decoded at 44.1 kHz (exactly for the 16-bit WAV, else within
+ * the dither; the MP3s lined up with it sample for sample, as close as
+ * 320 kbit/s gets, their frames the PVBR tag's), FLAC's PVB2 entries on
  * the file's own frames, exported again with nothing written, and a
  * source changed since encoded again.
  *
@@ -213,9 +214,6 @@ static int setup_library(CBLibrary *lib)
 
     kv_add(&lib->cfg.player, &lib->cfg.nb_player, "quantize", "true");
     kv_add(&lib->cfg.device, &lib->cfg.nb_device, "waveform_color", "3band");
-    /* The compatibility transcode setting stays on (the default): the
-     * export's option alone decides, and main() exports without it, so
-     * four.m4a goes as AAC and only five.opus is transcoded (check_stick). */
     CHECK_EQ(cb_library_config_save(lib), 0);
     return 0;
 }
@@ -232,8 +230,8 @@ static void check_stick(CBLibrary *lib)
     int nr;
     CHECK_EQ(cb_pdb_raw_tracks(b, n, &raw, &nr), 0);
     static const struct { const char *file; int type; int tempo; const char *ext; } want[] = {
-        { "one.flac", 5, 12600, ".flac" }, { "two.mp3", 1, 12800, ".mp3" }, { "three.wav", 11, 14000, ".wav" },
-        { "four.m4a", 4, 12200, ".m4a" }, { "five.opus", 5, 13000, ".flac" },
+        { "one.flac", 5, 12600, ".flac" }, { "two.mp3", 5, 12800, ".flac" }, { "three.wav", 5, 14000, ".flac" },
+        { "four.m4a", 5, 12200, ".flac" }, { "five.opus", 5, 13000, ".flac" },
     };
     for (size_t i = 0; i < CB_ARRAY_ELEMS(want); i++) {
         CBTrack *t = track_named(lib, want[i].file);
@@ -323,20 +321,73 @@ static void check_stick(CBLibrary *lib)
 static uint32_t be32(const uint8_t *p) { return (uint32_t)p[0] << 24 | p[1] << 16 | p[2] << 8 | p[3]; }
 static uint64_t be64(const uint8_t *p) { return (uint64_t)be32(p) << 32 | be32(p + 4); }
 
-/* The stick file's audio against the source's: the same frames, exactly
- * or within `steps` of 16 bits. */
+/* The stick file's audio against the source's decoded at its rate: the
+ * same frames, exactly or within `steps` of 16 bits (a WAV holds the
+ * plan's frames, which a resampled source's decode may miss by one). */
 static void same_audio(const char *src, const char *made, double steps)
 {
     CBAudio a, b;
-    CHECK_EQ(cb_decode(src, 0, 0, &a), 0);
     CHECK_EQ(cb_decode(made, 0, 0, &b), 0);
-    CHECK(a.nb_frames == b.nb_frames && a.channels == b.channels && a.rate == b.rate);
+    CHECK_EQ(cb_decode(src, 0, b.rate, &a), 0);
+    CHECK(llabs(a.nb_frames - b.nb_frames) <= 1 && a.channels == b.channels && a.rate == b.rate);
     double worst = 0;
-    for (int64_t i = 0; i < CB_MIN(a.nb_frames, b.nb_frames) * a.channels && a.channels == b.channels; i++)
+    for (int64_t i = 0; i < (CB_MIN(a.nb_frames, b.nb_frames) - 1) * a.channels && a.channels == b.channels; i++)
         worst = CB_MAX(worst, fabs((double)a.samples[i] - b.samples[i]) * 32768.0);
     if (worst > steps)
         fprintf(stderr, "export: %s is off %s by %.3f steps\n", made, src, worst);
     CHECK(worst <= steps);
+    cb_audio_free(&a);
+    cb_audio_free(&b);
+}
+
+/* An MP3 on the stick against its source decoded at 44.1 kHz: lined up
+ * (the difference is least at lag 0: LAME's delay was taken off what it
+ * was fed), as close as 320 kbit/s gets, and of the frames its PVBR tag
+ * names. */
+static void same_mp3(const char *src, const char *made, const char *dir, const char *anlz_dat)
+{
+    CBAudio a, b;
+    CHECK_EQ(cb_decode(made, 1, 0, &b), 0);
+    CHECK_EQ(cb_decode(src, 1, b.rate, &a), 0);
+    int64_t n = CB_MIN(a.nb_frames, b.nb_frames) - 4096;
+    int best = 0;
+    double least = INFINITY, err = 0, pow = 0;
+    for (int lag = -64; lag <= 64; lag++) {
+        double e = 0;
+        for (int64_t i = 4096; i < n; i += 3)
+            e += ((double)a.samples[i] - b.samples[i + lag]) * ((double)a.samples[i] - b.samples[i + lag]);
+        if (e < least) {
+            least = e;
+            best = lag;
+        }
+    }
+    for (int64_t i = 4096; i < n; i++) {
+        err += ((double)a.samples[i] - b.samples[i]) * ((double)a.samples[i] - b.samples[i]);
+        pow += (double)a.samples[i] * a.samples[i];
+    }
+    double snr = 10 * log10(pow / CB_MAX(err, 1e-30));
+    if (best || snr <= 25)
+        fprintf(stderr, "export: %s is %d frames off its source, %.1f dB\n", made, best, snr);
+    CHECK(best == 0 && snr > 25);
+    CBMp3Info mi;
+    char *dat = cb_asprintf("%s%s", dir, anlz_dat);
+    uint8_t *d = NULL;
+    size_t dn = 0;
+    CHECK(cb_mp3_scan(made, &mi) >= 0 && !mi.vbr && !mi.header_frame && mi.bitrate_kbps == 320);
+    CHECK(dat && cb_file_read(dat, &d, &dn) >= 0);
+    CBAnlzTag *tags = NULL;
+    int nt = 0;
+    bool seen = false;
+    if (d && cb_anlz_parse(d, dn, &tags, &nt) >= 0)
+        for (int i = 0; i < nt; i++)
+            if (!strcmp(tags[i].fourcc, "PVBR") && tags[i].size >= 1608) {
+                seen = true;
+                CHECK_EQ((int64_t)be32(tags[i].body + 1604), mi.nb_frames * 1152);
+            }
+    CHECK(seen);
+    free(tags);
+    free(d);
+    free(dat);
     cb_audio_free(&a);
     cb_audio_free(&b);
 }
@@ -390,13 +441,14 @@ static void test_formats(CBLibrary *lib)
         int type[5];
         double steps[5];                 /* off the source: 0 exact */
     } want[] = {
-        /* one.flac is 24-bit (ffmpeg's choice): FLAC keeps it. */
-        { CB_STICK_FLAC, "flac", { ".flac", ".mp3", ".flac", ".m4a", ".flac" }, { 5, 1, 5, 4, 5 },
-          { 0, 0, 0, 0, 1.5 } },
-        { CB_STICK_WAV, "wav", { ".wav", ".mp3", ".wav", ".wav", ".wav" }, { 11, 1, 11, 11, 11 },
-          { 1.5, 0, 0, 1.5, 1.5 } },
-        { CB_STICK_AIFF, "aiff", { ".aiff", ".mp3", ".aiff", ".aiff", ".aiff" }, { 12, 1, 12, 12, 12 },
-          { 1.5, 0, 0, 1.5, 1.5 } },
+        /* one.flac is 24-bit (ffmpeg's choice), dithered to 16; three.wav
+         * is 16-bit at 44.1 kHz, as it is */
+        { CB_STICK_FLAC, "flac", { ".flac", ".flac", ".flac", ".flac", ".flac" }, { 5, 5, 5, 5, 5 },
+          { 1.5, 1.5, 0, 1.5, 1.5 } },
+        { CB_STICK_WAV, "wav", { ".wav", ".wav", ".wav", ".wav", ".wav" }, { 11, 11, 11, 11, 11 },
+          { 1.5, 1.5, 0, 1.5, 1.5 } },
+        { CB_STICK_MP3, "mp3", { ".mp3", ".mp3", ".mp3", ".mp3", ".mp3" }, { 1, 1, 1, 1, 1 },
+          { -1, -1, -1, -1, -1 } },
     };
     for (size_t w = 0; w < CB_ARRAY_ELEMS(want); w++) {
         char *dir = cb_asprintf("%s/stick-%s", root, want[w].name);
@@ -431,18 +483,11 @@ static void test_formats(CBLibrary *lib)
                 CHECK_EQ(raw[k].file_type, want[w].type[i]);
                 CHECK(cb_str_ends(path, want[w].ext[i]));
                 char *made = cb_stick_file(dir, path);
-                if (i == 1) {
-                    /* The MP3, copied byte for byte. */
-                    uint8_t *x, *y;
-                    size_t xn, yn;
-                    CHECK(cb_file_read(t->path, &x, &xn) >= 0 && cb_file_read(made, &y, &yn) >= 0 &&
-                          xn == yn && !memcmp(x, y, xn));
-                    free(x);
-                    free(y);
-                } else {
+                if (want[w].steps[i] < 0)
+                    same_mp3(t->path, made, dir, raw[k].strings[CB_PDB_STR_ANALYZE_PATH]);
+                else
                     same_audio(t->path, made, want[w].steps[i]);
-                }
-                if (want[w].type[i] == 5 && i != 1)
+                if (want[w].type[i] == 5)
                     check_pvb2(dir, raw[k].strings[CB_PDB_STR_ANALYZE_PATH], made);
                 free(made);
             }
@@ -479,8 +524,19 @@ static void play_a_gig(CBLibrary *lib)
     CBTrack *one = track_named(lib, "one.flac");
     CBTrack *tr[1] = { one };
     CBPlan plan;
-    CHECK_EQ(cb_plan_build(lib, tr, 1, NULL, 0, NULL, false, &plan), 0);
+    CHECK_EQ(cb_plan_build(lib, tr, 1, NULL, 0, NULL, CB_TRANSCODE_STICK_FLAC, &plan), 0);
     CBPlanTrack *pt = &plan.tracks[0];
+    /* The FLAC on the stick, as the export learnt it when it wrote it: a
+     * player changes the cues, nothing else */
+    char *made = cb_stick_file(stick, pt->usb_path);
+    CBFlacInfo fi;
+    CHECK(made && cb_flac_scan(made, &fi) >= 0);
+    cb_flac_info_free(&pt->probe.flac);
+    pt->probe.flac = fi;
+    pt->total_samples = pt->probe.total_samples = fi.total_samples;
+    pt->duration = pt->probe.duration = (double)fi.total_samples / pt->sample_rate;
+    pt->file_size = cb_file_size(made);
+    free(made);
     CBPlanCue *cues = calloc((size_t)pt->nb_cues + 1, sizeof(*cues));
     memcpy(cues, pt->cues, (size_t)pt->nb_cues * sizeof(*cues));
     for (int i = 0; i < pt->nb_cues; i++) {
@@ -574,18 +630,11 @@ int main(void)
     CBExportOptions opt;
     cb_export_options_default(&opt);
     Stages st = { 0 };
-    /* With the transcode asked for, a dry run lists one.flac's (ffmpeg
-     * makes it 24-bit), four.m4a's (AAC) and five.opus's; without it, the
-     * setting's being on adds neither of the first two. */
-    CHECK(lib.cfg.compat_transcode);
-    opt.dry_run = opt.compat_transcode = true;
+    /* A dry run lists every track as one it would encode. */
+    opt.dry_run = true;
     st = (Stages) { .quiet = true };
     CHECK_EQ(cb_export(&lib, stick, &opt, on_progress, &st), 0);
-    CHECK_EQ(st.transcode, 3);
-    opt.compat_transcode = false;
-    st = (Stages) { .quiet = true };
-    CHECK_EQ(cb_export(&lib, stick, &opt, on_progress, &st), 0);
-    CHECK_EQ(st.transcode, 1);
+    CHECK_EQ(st.transcode, 5);
     opt.dry_run = false;
     st = (Stages) { 0 };
     CHECK_EQ(cb_export(&lib, stick, &opt, on_progress, &st), 0);
@@ -694,7 +743,7 @@ int main(void)
     st = (Stages) { .quiet = true };
     CHECK_EQ(cb_export(&lib, stick, &opt, on_progress, &st), 0);
     CHECK_EQ(st.prune, 4);
-    char *four = cb_asprintf("%s/Contents/Synth/Synthetic/four.m4a", stick);
+    char *four = cb_asprintf("%s/Contents/Synth/Synthetic/four.flac", stick);
     CHECK(four && !cb_file_exists(four));
     free(four);
     CHECK_EQ(cb_inspect(stick, on_line, NULL), 0);

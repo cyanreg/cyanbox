@@ -96,24 +96,14 @@ typedef struct CBAudio {
     int64_t  nb_frames;
 } CBAudio;
 
-/* Decodes the first audio stream on the players' timeline.
- *   channels: 0 native, 1 mono (mean of the channels), 2 stereo (mono doubled)
- *   rate:     0 native, else resampled with libswresample (soxr when built in)
+/* Decodes the first audio stream on the players' timeline, whole, through
+ * a source (src/audio/source.c) writing straight into the buffer.
+ *   channels: 0 the file's (more than two mixed to stereo), 1 mono (the
+ *             mean of the channels, of the stereo mix for more than two),
+ *             2 stereo (mono doubled)
+ *   rate:     0 the file's, else resampled with libswresample
  * Damaged frames are decoded as silence rather than dropped. */
 int  cb_decode(const char *path, int channels, int rate, CBAudio *out);
-/* cb_decode's frames handed over as they are decoded instead of kept: the
- * same samples, in pieces of any length (valid during the call), in
- * memory that does not grow with the file. `start` (may be NULL) is told
- * the stream's channels (after `channels`, as cb_decode) and the
- * decoder's rate before any frame, and returns the rate wanted (0: that
- * one; another resamples) or a negative errno to stop; `frames` gets them,
- * returning < 0 to stop. Returns 0, the first such errno, or cb_decode's. */
-typedef struct CBDecodeTo {
-    int  (*start)(void *opaque, int channels, int rate);
-    int  (*frames)(void *opaque, const float *frames, int64_t n);
-    void  *opaque;
-} CBDecodeTo;
-int  cb_decode_stream(const char *path, int channels, const CBDecodeTo *to);
 /* Derived buffers from one already decoded (no file access). */
 int  cb_audio_to_mono(const CBAudio *in, CBAudio *out);
 int  cb_audio_resample(const CBAudio *in, int rate, CBAudio *out);
@@ -149,7 +139,7 @@ typedef struct CBAudioFormat {
 /* A piece of a pipeline's output, reference counted: whoever holds it
  * unreferences it, on any thread. */
 typedef struct CBChunk {
-    int64_t  index;     /* frames [index * chunk, index * chunk + nb) of the output */
+    int64_t  index;     /* frames [offset + index * chunk, ... + nb) of the output */
     int      nb;        /* the pipeline's chunk, fewer in the last */
     bool     last;      /* the track ends with it */
     int      err;       /* < 0: reading failed here (nb 0, last) */
@@ -164,6 +154,7 @@ typedef struct CBPipelineOptions {
     int     chunk;      /* frames per chunk */
     double  ahead;      /* seconds of chunks it keeps queued, at most */
     int64_t start;      /* the chunk it starts at */
+    int64_t offset;     /* output frames before chunk 0: chunk k starts at offset + k * chunk */
 } CBPipelineOptions;
 
 int  cb_pipeline_open(CBPipeline **p, const char *path, const CBPipelineOptions *o);
@@ -259,24 +250,23 @@ int  cb_image_scale(const uint8_t *rgba, int width, int height, int max_w, int m
 
 /* ---------------------------------------------------------------- encoding */
 
-/* A track encoded as it is decoded (src/audio/encode.c): cb_decode_stream's
- * frames, the analysis's samples, to FLAC, WAV or AIFF, into the
- * caller's write and seek, in memory that does not grow with the file. */
+/* A track encoded as it is decoded (src/audio/encode.c): a pipeline's
+ * 16-bit samples at 44.1 kHz, the analysis's timeline, to FLAC, WAV or MP3,
+ * into the caller's write and seek, in memory that does not grow with the
+ * file. */
+#define CB_ENCODE_RATE 44100
+
 enum CBEncodeFormat {
-    CB_ENCODE_FLAC,
+    CB_ENCODE_FLAC,             /* level 8 */
     CB_ENCODE_WAV,
-    CB_ENCODE_AIFF,
+    CB_ENCODE_MP3,              /* 320 kbit/s CBR */
 };
 
 typedef struct CBEncodeOptions {
     enum CBEncodeFormat format;
-    int      bits;              /* FLAC, WAV, AIFF: 16 or 24 */
-    bool     exact;             /* the source's samples fit `bits` exactly: no dither */
-    int      channels;          /* 0 the source's, else 1 or 2 (cb_decode) */
-    int      max_rate;          /* > 0: resampled to it when the source's is higher */
+    int      channels;          /* 0 the source's (more than two: stereo), else 1 or 2 */
     int64_t  frames;            /* > 0: exactly this many (silence to it, nothing past) */
-    bool     tags;              /* FLAC: the source's tags and cover */
-    int      compression;       /* FLAC: 1..12, 0 the encoder's default */
+    bool     tags;              /* FLAC, MP3: the source's tags and cover */
     /* The bytes: as AVIO's write_packet and seek (SEEK_SET only; NULL:
      * the muxer cannot go back to its header). */
     int      (*write)(void *opaque, const uint8_t *buf, int size);
@@ -286,21 +276,14 @@ typedef struct CBEncodeOptions {
 } CBEncodeOptions;
 
 typedef struct CBEncoded {
-    int        rate, channels, bits;
-    int64_t    frames;          /* written */
+    int        rate, channels;
+    int64_t    frames;          /* the length a player decodes: written; an MP3's frames' */
     int64_t    size;            /* bytes */
     CBFlacInfo flac;            /* FLAC: its frame table, for the ANLZ (cb_flac_info_free) */
     uint8_t    md5[16];         /* FLAC: STREAMINFO's MD5 of the samples */
+    int64_t    mp3_frames;      /* MP3: its frames, 1152 samples each */
 } CBEncoded;
 
 int  cb_encode(const char *path, const CBEncodeOptions *o, CBEncoded *out);
-
-/* ------------------------------------------------------------- transcoding */
-
-/* Writes `path` as a 16-bit FLAC to `out_path`, at the native rate or at
- * max_rate when that is lower (max_rate <= 0: native), copying tags and
- * artwork. The audio is cb_decode's, on the players' timeline. For the
- * stick's compatibility mode. */
-int  cb_transcode_flac(const char *path, const char *out_path, int max_rate);
 
 #endif /* CYANBOX_AUDIO_H */

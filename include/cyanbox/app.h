@@ -102,7 +102,7 @@ typedef struct CBApp {
         bool   open;
         char   dest[512];
         bool   running;             /* from the start until the end, confirmation included */
-        bool   prune, compat;
+        bool   prune;
         int    format;              /* the stick's audio (cyanbox/export.h CBStickFormat);
                                        starts as export.format */
         bool   whole_library;       /* every track, not only those in playlists */

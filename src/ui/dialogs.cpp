@@ -950,23 +950,21 @@ static void export_dialog(UiState *ui)
             ImGui::EndChild();
         }
         ImGui::SeparatorText("Options");
-        // What the stick's audio is (CBStickFormat): encoded from the
-        // decoded samples as it is written, when not copied.
+        // What the stick's audio is (CBStickFormat): every track encoded
+        // from its decoded samples as it is written, 16-bit at 44.1 kHz.
         static const char *const formats[] = {
-            "Each file as it is",
-            "FLAC (the lossless files)",
-            "WAV, 16-bit (players before the CDJ-2000NXS2)",
-            "AIFF, 16-bit (players before the CDJ-2000NXS2)",
+            "FLAC (the CDJ-2000NXS2 and later)",
+            "WAV (every player, the CDJ-900 included)",
+            "MP3, 320 kbit/s",
         };
         ImGui::AlignTextToFramePadding();
         ImGui::TextUnformatted("Audio");
         ImGui::SameLine();
         ImGui::SetNextItemWidth(PX(360));
         ImGui::Combo("##format", &es.format, formats, IM_ARRAYSIZE(formats));
-        ui_tooltip("WAV and AIFF are for the CDJ-900 and the other players that read no FLAC; "
-                   "MP3s go as they are. What is not copied is encoded as it is written, "
-                   "from the very audio the analysis was made of.");
-        ImGui::Checkbox("Compatibility transcode (AAC and hi-res to 16-bit/44.1 kHz FLAC)", &es.compat);
+        ui_tooltip("Every track is encoded as it is written, 16-bit at 44.1 kHz, from the very "
+                   "audio the analysis was made of. WAV is for the CDJ-900 and the other players "
+                   "that read no FLAC.");
         background_picker(ui);
         ImGui::TextDisabled("Files already on the stick are skipped. Tracks no longer exported\n"
                             "are deleted from the stick only after you confirm.");

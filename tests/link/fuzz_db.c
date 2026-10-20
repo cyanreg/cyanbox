@@ -505,7 +505,7 @@ int main(void)
         return 1;
     }
     CBPlan plan;
-    ret = cb_plan_build_cb(&lib, lib.tracks, lib.nb_tracks, NULL, 0, NULL, false,
+    ret = cb_plan_build_cb(&lib, lib.tracks, lib.nb_tracks, NULL, 0, NULL, CB_TRANSCODE_LINK,
                            CB_PLAN_STORED, &plan, NULL, NULL);
     if (ret < 0 || add_artwork(&plan) < 0) {
         fprintf(stderr, "fuzz_db: cannot plan: %s\n", strerror(-ret));

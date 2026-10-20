@@ -806,16 +806,18 @@ int cb_library_take_changes(CBLibrary *lib, uint64_t **ids, int *nb)
 
 /* ------------------------------------------------------------ open/close */
 
-/* Link's WAVs made whole in the cache before it made every WAV as it is
- * read (ID.link.wav, and one left half made): nothing reads them now. */
-static void remove_link_wavs(const CBLibrary *lib)
+/* The transcodes earlier cyanboxes kept in <root>/cache/transcode (the
+ * stick's compatibility FLACs, Link's WAVs made whole): nothing makes or
+ * reads them now that every track is encoded or made as it is read, so
+ * they go, with the directory. */
+static void remove_transcodes(const CBLibrary *lib)
 {
     char *dir = cb_asprintf("%s/cache/transcode", lib->root);
     DIR *d = dir ? opendir(dir) : NULL;
     struct dirent *e;
     int n = 0;
     while (d && (e = readdir(d))) {
-        if (!strstr(e->d_name, ".link.wav"))
+        if (e->d_name[0] == '.' && (!e->d_name[1] || !strcmp(e->d_name, "..")))
             continue;
         char *file = cb_path_join(dir, e->d_name);
         if (file && unlink(file) < 0)
@@ -824,10 +826,16 @@ static void remove_link_wavs(const CBLibrary *lib)
             n++;
         free(file);
     }
-    if (d)
+    if (d) {
         closedir(d);
+        rmdir(dir);
+        char *cache = cb_path_join(lib->root, "cache");
+        if (cache)
+            rmdir(cache);
+        free(cache);
+    }
     if (n)
-        cb_info("library: %d WAV%s Link made whole deleted from the cache", n, n == 1 ? "" : "s");
+        cb_info("library: %d old transcode%s deleted from the cache", n, n == 1 ? "" : "s");
     free(dir);
 }
 
@@ -886,7 +894,7 @@ int cb_library_open(CBLibrary *lib, const char *root)
     /* What is not valid, or not known, goes (clean.c); then the pages it
      * and earlier removals freed go back to the file system. */
     cb_core_clean(lib);
-    remove_link_wavs(lib);
+    remove_transcodes(lib);
     if (cb_db_trim(lib->db) < 0)
         cb_warn("library: its free pages could not be given back");
 
@@ -1430,39 +1438,6 @@ int cb_library_add_path(CBLibrary *lib, const char *path, cb_add_cb cb, void *op
 
 /* ------------------------------------------------------------------ edits */
 
-static void remove_cache_files(const CBLibrary *lib, uint64_t id)
-{
-    char *cache = cb_path_join(lib->root, "cache");
-    DIR *d = cache ? opendir(cache) : NULL;
-    if (!d) {
-        free(cache);
-        return;
-    }
-    char prefix[32];
-    int n = snprintf(prefix, sizeof(prefix), "%llu.", (unsigned long long)id);
-    struct dirent *e;
-    while ((e = readdir(d))) {
-        if (e->d_name[0] == '.')
-            continue;
-        char *kind = cb_path_join(cache, e->d_name);
-        DIR *k = kind ? opendir(kind) : NULL;
-        struct dirent *f;
-        while (k && (f = readdir(k))) {
-            if (strncmp(f->d_name, prefix, (size_t)n))
-                continue;
-            char *file = cb_path_join(kind, f->d_name);
-            if (file && unlink(file) < 0)
-                cb_warn("cannot delete %s: %s", file, strerror(errno));
-            free(file);
-        }
-        if (k)
-            closedir(k);
-        free(kind);
-    }
-    closedir(d);
-    free(cache);
-}
-
 int cb_library_remove(CBLibrary *lib, CBTrack *t)
 {
     int idx = cb_library_index_of(lib, t);
@@ -1488,7 +1463,6 @@ int cb_library_remove(CBLibrary *lib, CBTrack *t)
         return ret;
 
     cb_core_playlists_forget_track(lib, t->id);
-    remove_cache_files(lib, t->id);
     index_remove(lib, t);
     memmove(&lib->tracks[idx], &lib->tracks[idx + 1],
             (size_t)(lib->nb_tracks - idx - 1) * sizeof(*lib->tracks));
@@ -2006,23 +1980,4 @@ int cb_library_artwork_load(const CBLibrary *lib, uint64_t id, uint8_t **jpeg, s
     *jpeg = copy;
     *size = n;
     return 0;
-}
-
-char *cb_library_cache_path(const CBLibrary *lib, const char *kind, uint64_t id, const char *ext)
-{
-    char *dir = cb_asprintf("%s/cache/%s", lib->root, kind);
-    if (!dir)
-        return NULL;
-    int ret = cb_mkdir_p(dir);
-    if (ret < 0) {
-        cb_err("cannot create %s: %s", dir, strerror(-ret));
-        free(dir);
-        return NULL;
-    }
-    if (ext && ext[0] == '.')
-        ext++;
-    char *path = cb_asprintf("%s/%llu%s%s", dir, (unsigned long long)id,
-                             ext && *ext ? "." : "", ext ? ext : "");
-    free(dir);
-    return path;
 }

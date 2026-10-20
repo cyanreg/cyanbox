@@ -413,75 +413,6 @@ static bool map_taken(void *opaque, const char *p)
     return taken;
 }
 
-/* ------------------------------------------------------------ transcodes */
-
-bool cb_plan_codec_playable(const char *codec)
-{
-    static const char *const ok[] = {
-        "mp3", "aac", "alac", "flac", "pcm_s16le", "pcm_s24le", "pcm_s32le", "pcm_s16be",
-        "pcm_s24be", "pcm_s32be", "pcm_u8", "pcm_f32le",
-    };
-    for (size_t i = 0; i < CB_ARRAY_ELEMS(ok); i++)
-        if (!strcmp(codec, ok[i]))
-            return true;
-    return false;
-}
-
-int cb_plan_transcode_path(const CBLibrary *lib, const CBTrack *t, int compat, bool create,
-                           char **cache_path, int *max_rate)
-{
-    *cache_path = NULL;
-    bool need = !cb_plan_codec_playable(t->codec);
-    bool hires = !strcmp(t->codec, "flac") && (t->bit_depth > 16 || t->sample_rate > 48000);
-    bool for_compat = compat == CB_TRANSCODE_COMPAT && (!strcmp(t->codec, "aac") || hires);
-    if (!need && !for_compat)
-        return 0;
-    /* dj kept up to 96 kHz for formats no player reads; compatibility mode
-     * goes to 16 bit at 44.1/48 kHz. */
-    *max_rate = for_compat ? 48000 : 96000;
-    const char *ext = for_compat ? "compat.flac" : "flac";
-    /* cb_library_cache_path's name, without creating its directory. */
-    *cache_path = create ? cb_library_cache_path(lib, "transcode", t->id, ext)
-                         : cb_asprintf("%s/cache/transcode/%llu.%s", lib->root, (unsigned long long)t->id, ext);
-    return *cache_path ? 1 : CB_ERROR(ENOMEM);
-}
-
-bool cb_plan_transcode_fresh(const CBTrack *t, const char *cache)
-{
-    return cb_file_exists(cache) && cb_file_mtime(cache) >= cb_file_mtime(t->path);
-}
-
-int cb_plan_transcode(const CBLibrary *lib, const CBTrack *t, int compat, char **source)
-{
-    char *cache;
-    int max_rate = 0;
-    int ret = cb_plan_transcode_path(lib, t, compat, true, &cache, &max_rate);
-    if (ret <= 0) {
-        *source = ret < 0 ? NULL : cb_strdup(t->path);
-        return ret < 0 ? ret : *source ? 0 : CB_ERROR(ENOMEM);
-    }
-    if (cb_plan_transcode_fresh(t, cache)) {
-        *source = cache;
-        return 0;
-    }
-    char *tmp = cb_asprintf("%s.tmp.flac", cache);
-    if (!tmp) {
-        free(cache);
-        return CB_ERROR(ENOMEM);
-    }
-    ret = cb_transcode_flac(t->path, tmp, max_rate);
-    if (ret >= 0 && rename(tmp, cache) < 0)
-        ret = CB_ERROR(errno);
-    if (ret < 0) {
-        unlink(tmp);
-        free(cache);
-        cache = NULL;
-    }
-    free(tmp);
-    *source = cache;
-    return ret;
-}
-
 /* -------------------------------------------------------------- the plan */
 
 typedef struct Names {
@@ -975,68 +906,15 @@ static bool stored_probe(const CBTrack *t, CBProbe *p, int64_t *file_size)
     return true;
 }
 
-/* A dry run's source for a track whose transcode is not made yet: the
- * cache file it would be, described from the original as the transcode
- * would be (16-bit FLAC at most at max_rate, cb_transcode_flac, or Link's
- * 16-bit WAV); its size a typical FLAC's 60 % of PCM, for the free-space
- * check, or the WAV's own. Nothing is written. `stored`: the original as the library stored it, unless it
- * changed since (stored_probe); a transcode made already is then
- * described the same way, its size its own. */
-
 /* ---------------------------------------------------------- the stick */
 
-static bool lossless_codec(const char *c)
-{
-    return !strcmp(c, "flac") || !strcmp(c, "alac") || !strcmp(c, "wavpack") || !strcmp(c, "ape") ||
-           !strcmp(c, "tta") || cb_str_starts(c, "pcm_");
-}
-
-/* How an export writes a file described by `p` (cyanbox/export.h,
- * CBStickFormat): copied (on false) or encoded so. */
-static CBPlanEncode stick_encode(const CBProbe *p, int kind)
-{
-    bool compat = kind == CB_TRANSCODE_STICK_COPY_COMPAT || kind == CB_TRANSCODE_STICK_FLAC_COMPAT;
-    bool mp3 = !strcmp(p->codec, "mp3"), aac = !strcmp(p->codec, "aac");
-    bool lossless = lossless_codec(p->codec), fpcm = cb_str_starts(p->codec, "pcm_f");
-    CBPlanEncode e = { 0 };
-    switch (kind) {
-    case CB_TRANSCODE_STICK_COPY:
-    case CB_TRANSCODE_STICK_COPY_COMPAT:
-        if (!cb_plan_codec_playable(p->codec))
-            e = (CBPlanEncode) { true, CB_ENCODE_FLAC, 16, false, compat ? 48000 : 96000 };
-        else if (compat && (aac || (!strcmp(p->codec, "flac") &&
-                                    (p->bit_depth > 16 || p->sample_rate > 48000))))
-            e = (CBPlanEncode) { true, CB_ENCODE_FLAC, 16, false, 48000 };
-        break;
-    case CB_TRANSCODE_STICK_FLAC:
-    case CB_TRANSCODE_STICK_FLAC_COMPAT:
-        if (mp3 || (aac && !compat))
-            break;
-        e = (CBPlanEncode) { true, CB_ENCODE_FLAC,
-                             !compat && lossless && !fpcm && p->bit_depth > 16 ? 24 : 16, false,
-                             compat ? 48000 : 96000 };
-        break;
-    case CB_TRANSCODE_STICK_WAV:
-    case CB_TRANSCODE_STICK_AIFF:
-        if (mp3)
-            break;
-        e = (CBPlanEncode) { true, kind == CB_TRANSCODE_STICK_WAV ? CB_ENCODE_WAV : CB_ENCODE_AIFF,
-                             16, false, 48000 };
-        break;
-    }
-    if (e.on) {
-        /* Players play stereo: more channels are mixed down. */
-        e.channels = p->channels > 2 ? 2 : 0;
-        e.exact = lossless && !fpcm && p->bit_depth > 0 && p->bit_depth <= e.bits &&
-                  p->sample_rate <= e.max_rate && p->channels <= 2;
-    }
-    return e;
-}
-
-/* An export's source: the track's own file, copied or encoded; nothing
- * made before it is written. An encoded one is described as what it will
- * be (its size the WAV's or AIFF's own, a FLAC's guessed: the source's
- * when it is a FLAC of the same samples, else 60 % of the samples). */
+/* An export's track (cyanbox/export.h, CBStickFormat): encoded as it is
+ * written, 16-bit at 44.1 kHz of its one or two channels, and described as
+ * what it will be, its frames the library's at that rate, its size the
+ * WAV's own, an MP3's 320 kbit/s frames (LAME's delay and padding a frame
+ * more), a FLAC's guessed (the source's when it is a 16-bit 44.1 kHz FLAC
+ * of the same samples, else 60 % of the samples); the export learns the
+ * rest as it writes. */
 static int stick_source(const CBTrack *t, int kind, bool stored, CBPlanTrack *pt)
 {
     int64_t size = 0;
@@ -1050,47 +928,60 @@ static int stick_source(const CBTrack *t, int kind, bool stored, CBPlanTrack *pt
     if (!(pt->source = cb_strdup(t->path)))
         return CB_ERROR(ENOMEM);
     CBProbe *p = &pt->probe;
-    CBPlanEncode e = stick_encode(p, kind);
-    if (!e.on) {
-        pt->file_size = size;
-        return 0;
-    }
+    if (p->sample_rate <= 0 || p->channels <= 0)
+        return CB_ERROR(EINVAL);
+    static const int formats[] = {
+        [CB_TRANSCODE_STICK_FLAC] = CB_ENCODE_FLAC, [CB_TRANSCODE_STICK_WAV] = CB_ENCODE_WAV,
+        [CB_TRANSCODE_STICK_MP3] = CB_ENCODE_MP3,
+    };
+    CBPlanEncode e = { true, formats[kind], CB_MIN(p->channels, 2) };
     pt->encode = e;
-    bool same = !strcmp(p->codec, "flac") && p->bit_depth == e.bits && p->channels <= 2 &&
-                p->sample_rate <= e.max_rate;
-    if (p->sample_rate > e.max_rate) {
-        p->total_samples = (int64_t)((double)p->total_samples * e.max_rate / p->sample_rate);
-        p->sample_rate = e.max_rate;
-    }
-    p->channels = e.channels ? e.channels : p->channels;
-    p->bit_depth = e.bits;
+    bool same = !strcmp(p->codec, "flac") && p->bit_depth == 16 && p->channels <= 2 &&
+                p->sample_rate == CB_ENCODE_RATE;
+    int64_t frames = (p->total_samples * CB_ENCODE_RATE + p->sample_rate - 1) / p->sample_rate;
+    p->sample_rate = CB_ENCODE_RATE;
+    p->channels = e.channels;
+    p->bit_depth = 16;
     cb_flac_info_free(&p->flac);
     p->mp3 = (CBMp3Info) { 0 };
     static const char *const codec[] = { [CB_ENCODE_FLAC] = "flac", [CB_ENCODE_WAV] = "pcm_s16le",
-                                         [CB_ENCODE_AIFF] = "pcm_s16be" };
+                                         [CB_ENCODE_MP3] = "mp3" };
     static const char *const box[] = { [CB_ENCODE_FLAC] = "flac", [CB_ENCODE_WAV] = "wav",
-                                       [CB_ENCODE_AIFF] = "aiff" };
-    snprintf(p->codec, sizeof(p->codec), "%s", e.bits == 24 && e.format == CB_ENCODE_WAV ? "pcm_s24le"
-             : e.bits == 24 && e.format == CB_ENCODE_AIFF ? "pcm_s24be" : codec[e.format]);
+                                       [CB_ENCODE_MP3] = "mp3" };
+    snprintf(p->codec, sizeof(p->codec), "%s", codec[e.format]);
     snprintf(p->container, sizeof(p->container), "%s", box[e.format]);
-    int64_t pcm = p->total_samples * CB_MAX(p->channels, 1) * (e.bits / 8);
-    pt->file_size = e.format == CB_ENCODE_WAV ? 44 + pcm : e.format == CB_ENCODE_AIFF ? 54 + pcm
-                  : same ? size : (int64_t)(0.6 * (double)pcm);
+    int64_t pcm = frames * e.channels * 2;
+    if (e.format == CB_ENCODE_MP3) {
+        int64_t nb = (frames + 1151) / 1152 + 1;
+        p->mp3 = (CBMp3Info) { .valid = true, .version = 1, .sample_rate = CB_ENCODE_RATE,
+                               .channels = e.channels, .frame_samples = 1152, .nb_frames = nb,
+                               .bitrate_kbps = 320 };
+        frames = nb * 1152;
+        p->bit_rate = 320000;
+        pt->file_size = nb * 1045;
+    } else {
+        p->bit_rate = CB_ENCODE_RATE * 16 * e.channels;
+        pt->file_size = e.format == CB_ENCODE_WAV ? 44 + pcm : same ? size : (int64_t)(0.6 * (double)pcm);
+    }
+    p->total_samples = frames;
+    p->duration = (double)frames / CB_ENCODE_RATE;
     return 0;
 }
 
-static int dry_source(const CBLibrary *lib, const CBTrack *t, int compat, bool stored,
-                      CBPlanTrack *pt)
+/* A track's source for a plan, as `kind` has it (cyanbox/export.h):
+ * nothing is written. `stored`: the file as the library stored it, unless
+ * it changed since (stored_probe). */
+static int source_of(const CBTrack *t, int kind, bool stored, CBPlanTrack *pt)
 {
-    if (compat >= CB_TRANSCODE_STICK_COPY)
-        return stick_source(t, compat, stored, pt);
+    if (kind != CB_TRANSCODE_LINK)
+        return stick_source(t, kind, stored, pt);
 
     /* Link's WAV of the track's own file, described as what a player
      * gets (src/link/wav.c): 16-bit at 44.1 kHz, of its one or two
      * channels (two for more), the frames the library counted at that
      * rate (the WAV keeps to them), the header and the samples, within
      * NFS version 2's 4 GiB. */
-    if (compat == CB_TRANSCODE_LINK) {
+    {
         int64_t size = 0;
         if (!(stored && stored_probe(t, &pt->probe, &size))) {
             cb_probe_free(&pt->probe);
@@ -1120,50 +1011,13 @@ static int dry_source(const CBLibrary *lib, const CBTrack *t, int compat, bool s
         pt->file_size = 44 + frames * 2 * ch;
         return pt->source ? 0 : CB_ERROR(ENOMEM);
     }
-
-    char *cache;
-    int max_rate = 0;
-    int ret = cb_plan_transcode_path(lib, t, compat, false, &cache, &max_rate);
-    if (ret < 0)
-        return ret;
-    int64_t size = 0;
-    bool fresh = ret > 0 && cb_plan_transcode_fresh(t, cache);
-    bool known = stored && stored_probe(t, &pt->probe, &size);
-    if (ret == 0 && known) {
-        pt->source = cb_strdup(t->path);
-        pt->file_size = size;
-        return pt->source ? 0 : CB_ERROR(ENOMEM);
-    }
-    if (ret == 0 || (fresh && !known)) {
-        free(cache);
-        cb_probe_free(&pt->probe);
-        ret = cb_plan_transcode(lib, t, compat, &pt->source);
-        return ret < 0 ? ret : cb_probe(pt->source, &pt->probe);
-    }
-    pt->source = cache;
-    if (!known && (ret = cb_probe(t->path, &pt->probe)) < 0)
-        return ret;
-    CBProbe *p = &pt->probe;
-    cb_flac_info_free(&p->flac);
-    p->mp3 = (CBMp3Info) { 0 };
-    snprintf(p->codec, sizeof(p->codec), "flac");
-    snprintf(p->container, sizeof(p->container), "flac");
-    if (max_rate > 0 && p->sample_rate > max_rate) {
-        p->total_samples = (int64_t)((double)p->total_samples * max_rate / p->sample_rate);
-        p->sample_rate = max_rate;
-    }
-    p->bit_depth = 16;
-    double pcm = (double)p->duration * p->sample_rate * CB_MAX(p->channels, 1) * 2;
-    pt->file_size = fresh ? cb_file_size(cache) : (int64_t)(0.6 * pcm);
-    return 0;
 }
 
 int cb_plan_build_cb(const CBLibrary *lib, CBTrack *const *tracks, int nb_tracks,
                      const CBPlaylist *const *playlists, int nb_playlists,
-                     const char *device_name, int compat_transcode, enum CBPlanMode mode,
+                     const char *device_name, int kind, enum CBPlanMode mode,
                      CBPlan *out, cb_progress_cb cb, void *opaque)
 {
-    bool dry = mode != CB_PLAN_EXPORT;
     *out = (CBPlan) { 0 };
     int ret = 0;
     CBTrack **sorted = malloc((size_t)CB_MAX(nb_tracks, 1) * sizeof(*sorted));
@@ -1225,20 +1079,9 @@ int cb_plan_build_cb(const CBLibrary *lib, CBTrack *const *tracks, int nb_tracks
             goto fail;
         }
 
-        if (dry) {
-            if ((ret = dry_source(lib, t, compat_transcode, mode == CB_PLAN_STORED, pt)) < 0) {
-                report(cb, opaque, "%s: cannot read %s (%s)", disp, t->path, strerror(-ret));
-                goto fail;
-            }
-        } else {
-            if ((ret = cb_plan_transcode(lib, t, compat_transcode, &pt->source)) < 0) {
-                report(cb, opaque, "%s: transcoding failed (%s)", disp, strerror(-ret));
-                goto fail;
-            }
-            if ((ret = cb_probe(pt->source, &pt->probe)) < 0) {
-                report(cb, opaque, "%s: cannot read %s (%s)", disp, pt->source, strerror(-ret));
-                goto fail;
-            }
+        if ((ret = source_of(t, kind, mode == CB_PLAN_STORED, pt)) < 0) {
+            report(cb, opaque, "%s: cannot read %s (%s)", disp, t->path, strerror(-ret));
+            goto fail;
         }
         pt->file_type = file_type(&pt->probe);
         if (!pt->file_type) {
@@ -1246,8 +1089,6 @@ int cb_plan_build_cb(const CBLibrary *lib, CBTrack *const *tracks, int nb_tracks
             ret = CB_ERROR(EINVAL);
             goto fail;
         }
-        if (!dry || !pt->file_size)
-            pt->file_size = cb_file_size(pt->source);
         pt->sample_rate = pt->probe.sample_rate;
         pt->duration = pt->probe.duration;
         pt->total_samples = pt->probe.total_samples;
@@ -1258,8 +1099,8 @@ int cb_plan_build_cb(const CBLibrary *lib, CBTrack *const *tracks, int nb_tracks
 
         /* The extension is what is served's: a WAV's for Link's own. */
         static const char *const as[] = { [CB_ENCODE_FLAC] = "x.flac", [CB_ENCODE_WAV] = "x.wav",
-                                          [CB_ENCODE_AIFF] = "x.aiff" };
-        const char *named = pt->pcm ? "pcm.wav" : pt->encode.on ? as[pt->encode.format] : pt->source;
+                                          [CB_ENCODE_MP3] = "x.mp3" };
+        const char *named = pt->pcm ? "pcm.wav" : as[pt->encode.format];
         if (!(pt->usb_path = usb_path(t, named, map_taken, &used))) {
             ret = CB_ERROR(ENOMEM);
             goto fail;
@@ -1453,8 +1294,8 @@ fail:
 
 int cb_plan_build(const CBLibrary *lib, CBTrack *const *tracks, int nb_tracks,
                   const CBPlaylist *const *playlists, int nb_playlists,
-                  const char *device_name, bool compat_transcode, CBPlan *out)
+                  const char *device_name, int kind, CBPlan *out)
 {
     return cb_plan_build_cb(lib, tracks, nb_tracks, playlists, nb_playlists, device_name,
-                            compat_transcode, CB_PLAN_EXPORT, out, NULL, NULL);
+                            kind, CB_PLAN_EXPORT, out, NULL, NULL);
 }

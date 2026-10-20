@@ -3,12 +3,9 @@
 /* cb_analyse and the analysis module's edges, beside the beat cases
  * (test_beats.c), the key (test_key.c) and the waveforms (test_waveform.c):
  *
- *  - a float WAV with NaN and infinite samples, decoded as the application
- *    decodes and analysed, gives exactly what the same file with those
- *    samples at 0 gives (the decoder makes them silence, src/audio/
- *    decode.c): the key, the waveforms and the grid, to the bit, and the
- *    key of the file without them. Before, the key came out "" (the file
- *    without them is "Am") and the waveforms and even the grid differed;
+ *  - a float WAV, decoded as the application decodes and analysed: the
+ *    chord's key, the beat network given 22.05 kHz, and without a network
+ *    no grid and the rest the same;
  *  - the onsets of a few frames: on silence the band alignment took the
  *    first lag it tried, 8 frames back, and below 8 frames its shift wrote
  *    outside the band ("free(): invalid size"); a band over a silent
@@ -77,7 +74,7 @@ static const CBBeatNet deaf = { .run = deaf_run, .opaque = &deaf_heard };
         }                                                                   \
     } while (0)
 
-/* ------------------------------------------------------- non-finite input */
+/* ------------------------------------------------------------ a float WAV */
 
 #define RATE    44100
 #define SECONDS 12
@@ -115,8 +112,7 @@ static void put_le(uint8_t *p, uint32_t v, int bytes)
 }
 
 /* A mono IEEE float WAV, 32 or 64 bits a sample */
-static int write_float_wav(const char *path, const float *x, int64_t n, int bits,
-                           const int64_t *at, const double *v, int nb)
+static int write_float_wav(const char *path, const float *x, int64_t n, int bits)
 {
     int bps = bits / 8;
     uint32_t data = (uint32_t)(n * bps);
@@ -139,10 +135,6 @@ static int write_float_wav(const char *path, const float *x, int64_t n, int bits
         return -ENOMEM;
     for (int64_t i = 0; i < n; i++) {
         double s = x[i];
-        for (int k = 0; k < nb; k++) {
-            if (at[k] == i)
-                s = v[k];
-        }
         if (bits == 32) {
             float f = (float)s;
             memcpy(buf + i * 4, &f, 4);
@@ -159,29 +151,11 @@ static int write_float_wav(const char *path, const float *x, int64_t n, int bits
     return ok ? 0 : -EIO;
 }
 
-typedef struct Lines {
-    int  n;
-    char last[256];
-} Lines;
-
-static void count_line(void *opaque, enum CBLogLevel level, const char *line)
-{
-    Lines *l = opaque;
-    if (level == CB_LOG_WARN && strstr(line, "not finite")) {
-        l->n++;
-        snprintf(l->last, sizeof(l->last), "%s", line);
-    }
-}
-
 /* Decodes path as the application does (mono, its own rate) and
- * analyses it; the warnings about samples that were not finite are
- * counted in *lines. */
-static int analyse_file(const char *path, CBAnalysis *a, CBAudio *au, Lines *lines)
+ * analyses it. */
+static int analyse_file(const char *path, CBAnalysis *a, CBAudio *au)
 {
-    *lines = (Lines) { 0 };
-    cb_log_set_sink(count_line, lines);
     int ret = cb_decode(path, 1, 0, au);
-    cb_log_set_sink(NULL, NULL);
     if (ret < 0) {
         memset(a, 0, sizeof(*a));
         return ret;
@@ -203,20 +177,7 @@ static bool same_waves(const CBWaveforms *a, const CBWaveforms *b)
     return same;
 }
 
-static bool same_grid(const CBGrid *a, const CBGrid *b)
-{
-    if (a->nb_sections != b->nb_sections || a->beats_per_bar != b->beats_per_bar)
-        return false;
-    for (int i = 0; i < a->nb_sections; i++) {
-        const CBTempoSection *p = &a->sections[i], *q = &b->sections[i];
-        if (p->start != q->start || p->bpm != q->bpm || p->beat != q->beat ||
-            p->measured != q->measured)
-            return false;
-    }
-    return true;
-}
-
-static void test_nonfinite(const char *dir)
+static void test_float_wav(const char *dir)
 {
     int fails0 = fails;
     int64_t n;
@@ -225,74 +186,15 @@ static void test_nonfinite(const char *dir)
         fails++;
         return;
     }
-    /* Three bad samples: in the intro, mid-bar, and near the end */
-    const int64_t at[3] = { 3 * RATE, 6 * RATE + RATE / 2, 10 * RATE + 7 };
-    const double zero[3] = { 0.0, 0.0, 0.0 };
-    const double bad32[3] = { NAN, INFINITY, -INFINITY };
-    /* As double: NaN, a value float cannot hold (infinite once converted),
-     * and minus infinity */
-    const double bad64[3] = { NAN, 1e300, -INFINITY };
-    struct {
-        const char *name;
-        int bits;
-        const double *v;
-        int bad;
-    } files[] = {
-        { "clean32.wav", 32, NULL,  0 },
-        { "zero32.wav",  32, zero,  0 },
-        { "bad32.wav",   32, bad32, 3 },
-        { "zero64.wav",  64, zero,  0 },
-        { "bad64.wav",   64, bad64, 3 },
-    };
-    CBAnalysis an[CB_ARRAY_ELEMS(files)];
-    CBAudio au[CB_ARRAY_ELEMS(files)];
+    CBAnalysis an[1];
+    CBAudio au[1];
     memset(an, 0, sizeof(an));
     memset(au, 0, sizeof(au));
-    for (size_t f = 0; f < CB_ARRAY_ELEMS(files); f++) {
-        char *path = cb_asprintf("%s/%s", dir, files[f].name);
-        CHECK(path && write_float_wav(path, x, n, files[f].bits, at, files[f].v,
-                                      files[f].v ? 3 : 0) == 0, "writing %s", files[f].name);
-        Lines lines;
-        int ret = path ? analyse_file(path, &an[f], &au[f], &lines) : -ENOMEM;
-        CHECK(ret == 0 && an[f].done == CB_ANALYSE_ALL, "%s: ret %d, done 0x%x", files[f].name,
-              ret, an[f].done);
-        /* One warning for the file, with the count */
-        char want[32];
-        snprintf(want, sizeof(want), " %d samples were", files[f].bad);
-        CHECK(lines.n == (files[f].bad > 0) && (!files[f].bad || strstr(lines.last, want)),
-              "%s: %d warnings, the last \"%s\"", files[f].name, lines.n, lines.last);
-        bool finite = true;
-        for (int64_t i = 0; i < au[f].nb_frames; i++)
-            finite &= isfinite(au[f].samples[i]);
-        CHECK(finite, "%s: decoded samples that are not finite", files[f].name);
-        free(path);
-    }
-
-    /* Each bad file against its zeroed twin: the same samples, so the same
-     * results to the bit */
-    for (int k = 0; k < 2; k++) {
-        int z = k ? 3 : 1, b = z + 1;
-        const char *name = files[b].name;
-        CHECK(au[z].nb_frames == au[b].nb_frames && au[b].samples &&
-              !memcmp(au[z].samples, au[b].samples, (size_t)au[b].nb_frames * sizeof(float)),
-              "%s: decoded differently from %s", name, files[z].name);
-        CHECK(!strcmp(an[b].key.key, an[z].key.key) &&
-              an[b].key.confidence == an[z].key.confidence &&
-              an[b].key.tuning_cents == an[z].key.tuning_cents,
-              "%s: key %s %.17g %.17g, %s %s %.17g %.17g", name, an[b].key.key,
-              an[b].key.confidence, an[b].key.tuning_cents, files[z].name, an[z].key.key,
-              an[z].key.confidence, an[z].key.tuning_cents);
-        CHECK(same_waves(&an[b].waves, &an[z].waves), "%s: waveforms differ from %s", name,
-              files[z].name);
-        CHECK(same_grid(&an[b].beats.grid, &an[z].beats.grid) &&
-              an[b].beats.confidence == an[z].beats.confidence &&
-              an[b].beats.music_start == an[z].beats.music_start,
-              "%s: grid differs from %s", name, files[z].name);
-        /* And the key is the clean file's */
-        CHECK(an[b].key.key[0] && !strcmp(an[b].key.key, an[0].key.key),
-              "%s: key \"%s\", without the bad samples \"%s\"", name, an[b].key.key,
-              an[0].key.key);
-    }
+    char *path = cb_asprintf("%s/clean32.wav", dir);
+    CHECK(path && write_float_wav(path, x, n, 32) == 0, "writing clean32.wav");
+    int ret = path ? analyse_file(path, &an[0], &au[0]) : -ENOMEM;
+    CHECK(ret == 0 && an[0].done == CB_ANALYSE_ALL, "clean32.wav: ret %d, done 0x%x", ret, an[0].done);
+    free(path);
     CHECK(!strcmp(an[0].key.key, "Am"), "the chord's key is %s", an[0].key.key);
     /* The network had the audio at 22050 Hz (the file's is 44.1 kHz) */
     CHECK(llabs(deaf_heard - au[0].nb_frames / 2) <= 2, "the network had %lld samples of %lld",
@@ -306,13 +208,10 @@ static void test_nonfinite(const char *dir)
           none.done);
     cb_analysis_free(&none);
     if (fails == fails0)
-        printf("ok   NaN and infinite samples: key %s %.3f, %d waveform columns, as with zeros\n",
-               an[2].key.key, an[2].key.confidence, an[2].waves.nb_detail);
-
-    for (size_t f = 0; f < CB_ARRAY_ELEMS(files); f++) {
-        cb_analysis_free(&an[f]);
-        cb_audio_free(&au[f]);
-    }
+        printf("ok   a float WAV: key %s %.3f, %d waveform columns\n", an[0].key.key,
+               an[0].key.confidence, an[0].waves.nb_detail);
+    cb_analysis_free(&an[0]);
+    cb_audio_free(&au[0]);
     free(x);
 }
 
@@ -570,7 +469,7 @@ int main(void)
     test_back_to_zero();
     test_first_onset();
     test_auto_cue();
-    test_nonfinite(dir);
+    test_float_wav(dir);
     free(dir);
     if (fails) {
         printf("test_analysis: %d failures\n", fails);

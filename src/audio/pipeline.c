@@ -35,6 +35,7 @@ struct CBPipeline {
     CBFifo *fifo;
     AVRefStructPool *pool;
     int chunk, rate, channels;
+    int64_t offset;             /* output frames before chunk 0 */
     size_t plane;               /* bytes of one plane */
     bool planar;
     int64_t length;
@@ -79,7 +80,7 @@ static void *run(void *arg)
             uint64_t gen = p->gen;
             p->seek_pending = false;
             pthread_mutex_unlock(&p->lock);
-            int ret = cb_source_seek(p->src, k * p->chunk);
+            int ret = cb_source_seek(p->src, p->offset + k * p->chunk);
             pthread_mutex_lock(&p->lock);
             if (p->gen != gen)
                 continue;
@@ -144,7 +145,7 @@ static void *run(void *arg)
 int cb_pipeline_open(CBPipeline **out, const char *path, const CBPipelineOptions *o)
 {
     *out = NULL;
-    if (!o || o->chunk <= 0 || o->ahead < 0 || o->start < 0)
+    if (!o || o->chunk <= 0 || o->ahead < 0 || o->start < 0 || o->offset < 0)
         return CB_ERROR(EINVAL);
     CBPipeline *p = calloc(1, sizeof(*p));
     if (!p)
@@ -155,6 +156,7 @@ int cb_pipeline_open(CBPipeline **out, const char *path, const CBPipelineOptions
     if (ret < 0)
         goto fail;
     p->chunk = o->chunk;
+    p->offset = o->offset;
     p->rate = cb_source_rate(p->src);
     p->channels = cb_source_channels(p->src);
     p->length = cb_source_length(p->src);
@@ -171,7 +173,8 @@ int cb_pipeline_open(CBPipeline **out, const char *path, const CBPipelineOptions
     ret = CB_ERROR(ENOMEM);
     if (!p->fifo || !p->pool)
         goto fail;
-    if (o->start && (ret = cb_source_seek(p->src, o->start * o->chunk)) < 0)
+    if ((o->start || o->offset) &&
+        (ret = cb_source_seek(p->src, o->offset + o->start * o->chunk)) < 0)
         goto fail;
     p->next = o->start;
     if ((ret = pthread_create(&p->thread, NULL, run, p))) {

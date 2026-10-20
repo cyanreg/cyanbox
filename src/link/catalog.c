@@ -1809,24 +1809,11 @@ static Analysis *analysis_of(CBCatalog *c, uint32_t id)
             old = a;
     }
     analysis_clear(old);
-    /* The frame tables Link's plan leaves out (CB_PLAN_STORED reads no
-     * audio) and the analysis needs (anlz.c): an MP3's frame count for its
-     * PVBR, a FLAC's seek points for its PVB2, read from this one file now
-     * that a player asks for it. */
-    CBPlanTrack full = *c->t[ti].pt;
-    CBFlacInfo flac = { 0 };
-    if (!strcmp(full.probe.codec, "mp3") && !full.probe.mp3.valid) {
-        CBMp3Info mp3;
-        if (cb_mp3_scan(full.source, &mp3) >= 0)
-            full.probe.mp3 = mp3;
-    } else if (!strcmp(full.probe.codec, "flac") && !full.probe.flac.valid &&
-               cb_file_exists(full.source) && cb_flac_scan(full.source, &flac) >= 0) {
-        full.probe.flac = flac;
-    }
+    /* Link serves WAVs, which have no frame tables to describe (no PVBR,
+     * no PVB2): the plan's track as it is. */
     CBWaveforms w = { 0 };
     bool waves = c->lib && c->lib->db && cb_library_waveforms_load(c->lib, id, &w) >= 0;
-    int ret = cb_anlz_build(&full, waves ? &w : NULL, &old->files);
-    cb_flac_info_free(&flac);
+    int ret = cb_anlz_build(c->t[ti].pt, waves ? &w : NULL, &old->files);
     if (waves)
         cb_waveforms_free(&w);
     if (ret < 0) {

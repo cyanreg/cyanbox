@@ -30,15 +30,12 @@ typedef struct CBPlanCue {
     char     name[CB_CUE_NAME_MAX];
 } CBPlanCue;
 
-/* A track the export writes encoded rather than copied (CBStickFormat):
- * how, for cb_encode. */
+/* How the export writes a track (CBStickFormat), for cb_encode: 16-bit
+ * at 44.1 kHz. */
 typedef struct CBPlanEncode {
     bool         on;
     int          format;        /* enum CBEncodeFormat */
-    int          bits;          /* 16 or 24 */
-    bool         exact;         /* the source's samples fit `bits` as they are */
-    int          max_rate;      /* 0: the source's */
-    int          channels;      /* 0: the source's */
+    int          channels;      /* 1 or 2 */
 } CBPlanEncode;
 
 typedef struct CBPlanTrack {
@@ -108,11 +105,12 @@ typedef struct CBPlan {
 } CBPlan;
 
 /* Builds the plan (ids, names, paths, cues, artwork) for the given tracks
- * and playlists. `waves_for(id)` is not needed here: ANLZ files are built
- * per track with cb_anlz_build. */
+ * and playlists, their files as `kind` (enum CBTranscode, cyanbox/export.h)
+ * has them. `waves_for(id)` is not needed here: ANLZ files are built per
+ * track with cb_anlz_build. */
 int  cb_plan_build(const CBLibrary *lib, CBTrack *const *tracks, int nb_tracks,
                    const CBPlaylist *const *playlists, int nb_playlists,
-                   const char *device_name, bool compat_transcode, CBPlan *out);
+                   const char *device_name, int kind, CBPlan *out);
 void cb_plan_free(CBPlan *p);
 /* The FAT-safe, unique on-stick path dj used ("Contents/Artist/Album/file"). */
 char *cb_plan_usb_path(const CBTrack *t, const char *source, const char *const *used, int nb_used);

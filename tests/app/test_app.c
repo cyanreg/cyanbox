@@ -944,8 +944,8 @@ int main(int argc, char **argv)
               app.export_state.copied, app.export_state.skipped);
         app.export_state.whole_library = false;
     }
-    a_on_stick = find_file(stick, "a.wav");
-    CHECK(a_on_stick, "a.wav is not on the stick");
+    a_on_stick = find_file(stick, "a.flac");
+    CHECK(a_on_stick, "a.flac is not on the stick");
 
     /* Exporting only another playlist: the dry run finds b's files on the
      * stick, asks, and pruning on the answer deletes them, and only them:
@@ -979,8 +979,8 @@ int main(int argc, char **argv)
                app.export_state.unsynced, app.export_state.log);
         bool b_listed = false;
         for (int i = 0; i < app.export_state.nb_prune; i++)
-            b_listed |= cb_str_ends(app.export_state.prune_list[i], "/b.wav");
-        CHECK(b_listed, "b.wav is not in the prune list");
+            b_listed |= cb_str_ends(app.export_state.prune_list[i], "/b.flac");
+        CHECK(b_listed, "b.flac is not in the prune list");
         if (app.export_state.confirm) {
             CHECK(cb_library_playlist_remove_at(&app.lib, other, 0) >= 0, "playlist remove");
             app.export_state.prune = true;

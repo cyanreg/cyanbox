@@ -27,9 +27,7 @@
  *
  * Each stage stands on its own: one that fails (no memory for an hour's
  * waveforms, say) leaves the others to run, and the first error is
- * returned with what was done in `done`. The samples are taken to be
- * finite: cb_decode decodes NaN and infinities as silence (src/audio/
- * decode.c), since one of them takes the key and the waveforms with it. */
+ * returned with what was done in `done`. */
 
 #include "cyanbox/analysis.h"
 

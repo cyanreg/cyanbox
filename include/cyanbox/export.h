@@ -67,23 +67,19 @@ static inline void cb_export_rate_text(int64_t rate, int64_t seconds_left, char 
  * holds player-written cues, history or presets not yet synced into the
  * library blocks the export (reported as a "check" item) unless
  * ignore_unsynced is set, so a gig's hot cues are never overwritten. */
-/* What the stick's audio is (export.format). COPY: each file as it is,
- * but for what no player reads (to 16-bit FLAC) and, with the compatibility
- * transcode, AAC and FLAC above 16 bit/48 kHz (to 16-bit FLAC at 48 kHz at
- * most). FLAC: the lossless files as FLAC at their own depth (24 bits at
- * most, 96 kHz at most; 16 and 48 with the compatibility transcode), MP3
- * and AAC as they are. WAV, AIFF: everything but MP3 as 16-bit WAV or AIFF
- * at 48 kHz at most, which every player reads, the CDJ-900 and the others
- * before the CDJ-2000NXS2 included (no FLAC there). Whatever is not copied
- * is encoded from the decoded samples as it is written (cb_encode), so it
- * is the audio the analysis was made of. */
+/* What the stick's audio is (export.format): every track, whatever it
+ * is, encoded as it is written (cb_encode) from its decoded samples at
+ * 44.1 kHz and 16 bits, so it is the audio the analysis was made of; of
+ * its one or two channels, stereo for more. FLAC (the default, level 8,
+ * for the CDJ-2000NXS2 and later), WAV (every player reads it, the
+ * CDJ-900 and the others before the CDJ-2000NXS2 included), or MP3 at
+ * 320 kbit/s CBR. */
 enum CBStickFormat {
-    CB_STICK_COPY = 0,
-    CB_STICK_FLAC,
+    CB_STICK_FLAC = 0,
     CB_STICK_WAV,
-    CB_STICK_AIFF,
+    CB_STICK_MP3,
 };
-/* "copy", "flac", "wav", "aiff"; the parse returns -1 for anything else. */
+/* "flac", "wav", "mp3"; the parse returns -1 for anything else. */
 const char *cb_stick_format_name(int format);
 int  cb_stick_format_parse(const char *name);
 
@@ -93,8 +89,6 @@ typedef struct CBExportOptions {
     const CBPlaylist *const *playlists; int nb_playlists;   /* NULL: every playlist; else only these */
     bool prune;                 /* delete files on the stick that are no longer exported */
     bool ignore_unsynced;       /* export even if the stick has changes not synced back */
-    bool compat_transcode;      /* AAC and hi-res FLAC -> 16/44.1 FLAC; the caller folds in the
-                                   export.compat_transcode setting (its default) */
     bool dry_run;               /* plan and check, report every copy/prune/rewrite, write nothing */
     bool force_analysis;        /* re-analyse everything first */
     const char *device_name;    /* NULL: the config's, else the stick's label */
@@ -120,57 +114,31 @@ void cb_export_options_default(CBExportOptions *o);
 int  cb_export(CBLibrary *lib, const char *dest, const CBExportOptions *opt,
                cb_progress_cb cb, void *opaque);
 
-/* The plan's sources, for whoever serves the library's files as the
- * export would copy them (the export, and Link: docs/LINK.md, section 4). */
-
-/* Codecs every player decodes (dj's PLAYABLE); anything else goes to the
- * stick as FLAC. */
-bool cb_plan_codec_playable(const char *codec);
-/* What a track is transcoded for. PLAIN: codecs no player reads, to FLAC.
- * COMPAT (export.compat_transcode): also AAC (nobody knows what players do
- * with its priming) and FLAC above 16 bit/48 kHz, to 16-bit FLAC at most
- * 48 kHz. A bool's false and true are PLAIN and COMPAT.
+/* What a plan's tracks become, for whoever serves the library's files
+ * (the export, and Link: docs/LINK.md, section 4). Nothing is made ahead:
  *
  * LINK: every track as a 16-bit WAV at 44.1 kHz (CB_LINK_RATE) of its one
  * or two channels, which every PRO DJ LINK player reads (the players
  * before the CDJ-2000NXS2, the CDJ-900 among them, read no FLAC), made as
- * it is read (CBPlanTrack.pcm, src/link/wav.c): its plan names no file.
+ * it is read (CBPlanTrack.pcm, src/link/wav.c).
  *
- * STICK_*: an export (CBStickFormat, with or without the compatibility
- * transcode), whose plan names no cache file: what is not copied is
- * encoded as it is written (CBPlanTrack.encode). */
+ * STICK_*: an export (CBStickFormat), every track encoded as it is
+ * written (CBPlanTrack.encode). */
 #define CB_LINK_RATE 44100
 
 enum CBTranscode {
-    CB_TRANSCODE_PLAIN = 0,
-    CB_TRANSCODE_COMPAT,
-    CB_TRANSCODE_LINK,
-    CB_TRANSCODE_STICK_COPY,
-    CB_TRANSCODE_STICK_COPY_COMPAT,
+    CB_TRANSCODE_LINK = 0,
     CB_TRANSCODE_STICK_FLAC,
-    CB_TRANSCODE_STICK_FLAC_COMPAT,
     CB_TRANSCODE_STICK_WAV,
-    CB_TRANSCODE_STICK_AIFF,
+    CB_TRANSCODE_STICK_MP3,
 };
-
-/* Whether a track is served transcoded (1), and the cache file it goes to
- * (NULL when not), for `compat` an CBTranscode. `create` makes the cache
- * directory; a dry run passes false. */
-int  cb_plan_transcode_path(const CBLibrary *lib, const CBTrack *t, int compat, bool create,
-                            char **cache_path, int *max_rate);
-/* The transcode exists and is newer than the track's file. */
-bool cb_plan_transcode_fresh(const CBTrack *t, const char *cache);
-/* Makes sure the transcode exists and is newer than the track's file. */
-int  cb_plan_transcode(const CBLibrary *lib, const CBTrack *t, int compat, char **source);
 
 /* How a plan learns about the files. */
 enum CBPlanMode {
-    /* The export's: transcodes made, every file probed (its frame tables
-     * too), every cover read from its file. */
+    /* The export's: every file probed (its frame tables too), every cover
+     * read from its file. */
     CB_PLAN_EXPORT = 0,
-    /* The export's dry run: nothing made, a track whose transcode is not
-     * made yet described from its original as the transcode would be;
-     * every file probed, every cover read. */
+    /* The export's dry run: the same. */
     CB_PLAN_DRY,
     /* As dry, but reading no audio: each file described from what the
      * library stored when it probed it (a stat says it is still that
@@ -187,7 +155,7 @@ enum CBPlanMode {
  * exported) reported through `cb`; returning false from it cancels. */
 int  cb_plan_build_cb(const CBLibrary *lib, CBTrack *const *tracks, int nb_tracks,
                       const CBPlaylist *const *playlists, int nb_playlists,
-                      const char *device_name, int compat_transcode, enum CBPlanMode mode,
+                      const char *device_name, int kind, enum CBPlanMode mode,
                       CBPlan *out, cb_progress_cb cb, void *opaque);
 /* A plan track's cues made again from `t`'s, as the plan makes them:
  * Link's plan follows a cue a player saved on the deck. */

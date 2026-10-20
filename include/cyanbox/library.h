@@ -11,7 +11,6 @@
  * work never touches it, the owner applies results.
  *
  *   <root>/library.db          (WAL mode, foreign keys on, user_version = schema version)
- *   <root>/cache/transcode/    (compatibility transcodes for export; disposable)
  *
  * The schema is src/core/db.c's, which describes it table by table: a
  * track's colour is its hue (CBMeta.hue, cyanbox/model.h), and the
@@ -53,8 +52,7 @@ typedef struct CBConfig {
     /* export.* */
     char   key_notation[8];     /* classic (default), camelot, open */
     bool   export_pdb, export_onelibrary;   /* both default true */
-    bool   compat_transcode;    /* AAC and hi-res to 16/44.1 FLAC on the stick */
-    int    export_format;       /* the stick's audio: 0 copy, 1 flac, 2 wav, 3 aiff
+    int    export_format;       /* the stick's audio: 0 flac, 1 wav, 2 mp3
                                    (cyanbox/export.h CBStickFormat) */
     char  *device_name;         /* NULL = stick's label */
     int    background_color;    /* the players' background for the stick's library:
@@ -277,9 +275,6 @@ int  cb_library_setting_set(CBLibrary *lib, const char *key, const char *value);
  * hold across cyanbox's restarts and are stale for another library, whose
  * track ids name other tracks. Never 0. */
 int  cb_library_link_tag(CBLibrary *lib, uint32_t *tag);
-
-/* Disposable files (transcodes): <root>/cache/<kind>/<id>.<ext>, directories created. */
-char *cb_library_cache_path(const CBLibrary *lib, const char *kind, uint64_t id, const char *ext);
 
 /* Playlists. Every edit is a transaction and bumps generation. Positions
  * among siblings are kept dense. */
