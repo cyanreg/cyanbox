@@ -1518,6 +1518,38 @@ static void pushing(void)
     free(c.out);
 }
 
+/* A cable moved to another link while up: its mixer 33 is another, at
+ * another address, before the first is forgotten. The number is the new
+ * one's, and what goes to the mixer goes there. */
+static void another_mixer(void)
+{
+    Cap c = { .now = T0 };
+    CBPresence *p = computer(&c, false, NULL);
+    feed(p, &c, CB_LINK_ANNOUNCE, CDJ_ADDR, cdj_keep_alive);
+    run_until(p, &c, T0 + 3950 * MS);
+    CHECK_EQ(cb_presence_state(p, NULL), CB_LINK_UP);
+    feed(p, &c, CB_LINK_ANNOUNCE, 0xc0a80142, djm_keep_alive);
+    Pkt a9 = pkt(djm_keep_alive);
+    memset(a9.b + 0x0c, 0, 20);
+    memcpy(a9.b + 0x0c, "DJM-A9", 6);
+    a9.b[0x2b] = 0xe0;
+    a9.b[0x2f] = 0xe0;
+    cb_presence_input(p, CB_LINK_ANNOUNCE, 0xc0a801e0, a9.b, a9.len, c.now);
+    CBLinkPlayer pl[8];
+    CHECK_EQ(cb_presence_players(p, pl, 8), 2);
+    CHECK(pl[1].number == 33 && pl[1].addr == 0xc0a801e0 && !strcmp(pl[1].name, "DJM-A9") &&
+          pl[1].mac[5] == 0xe0);
+    CHECK(cb_presence_is_peer(p, 0xc0a801e0));
+    uint8_t ms[40] = { 0x78, 0x56, 0x34, 0x12, 0x02 }, ms2[40] = { 0 }, djm[52] = { 0 };
+    int players = -1, mixers = -1, from = c.nb;
+    CHECK_EQ(cb_presence_push_settings(p, ms, ms2, djm, &players, &mixers), 0);
+    CHECK(players == 1 && mixers == 1);
+    const Out *o = find_kind(&c, from, CB_LINK_STATUS, CB_ST_DJM_SETTINGS_PUSH);
+    CHECK(o && o->to == 0xc0a801e0);
+    cb_presence_free(&p);
+    free(c.out);
+}
+
 static bool has_player(CBPresence *p, int number)
 {
     CBLinkPlayer pl[8];
@@ -1958,6 +1990,7 @@ int main(void)
     djm900_on_link();
     listing();
     pushing();
+    another_mixer();
     all_in_one();
     back_to_back();
     conflict_on_17();

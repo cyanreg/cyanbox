@@ -667,13 +667,17 @@ static void hear_keep_alive(CBPresence *p, uint32_t from, const CBPktKeepAlive *
     }
 
     Device *d = find(p, k->number);
+    bool fresh = !d;
     if (!d && p->nb_dev < MAX_DEVICES) {
         d = &p->dev[p->nb_dev++];
         *d = (Device) { .d = { .number = k->number, .beat = -1 } };
-        cb_debug("link: device %d (%s, type %d) at %u.%u.%u.%u", k->number, k->name, k->type,
-                 from >> 24, (from >> 16) & 0xff, (from >> 8) & 0xff, from & 0xff);
     }
     if (d) {
+        /* Logged again when the number is another device's now: a cable
+         * moved to another link, its mixer 33 too. */
+        if (fresh || d->d.addr != from || memcmp(d->d.mac, k->mac, 6))
+            cb_debug("link: device %d (%s, type %d) at %u.%u.%u.%u", k->number, k->name, k->type,
+                     from >> 24, (from >> 16) & 0xff, (from >> 8) & 0xff, from & 0xff);
         if (d->d.addr != from)
             d->greeted = false;
         d->d.addr = from;
