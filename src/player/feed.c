@@ -358,6 +358,15 @@ static void take_points(const CBDeckFeed *f, CBStream *s, const int64_t *points,
         s->aux_job = AUX_NONE;
 }
 
+/* Chunk c from a cache into the window, when one has it: true then. */
+static bool share(const CBDeckFeed *f, CBStream *s, int64_t c)
+{
+    const CBChunk *k = cache_at(s, c);
+    if (k)
+        place(f, s, &s->slots[c % s->nb_slots], cb_chunk_ref((CBChunk *)k));
+    return k;
+}
+
 /* What the main pipeline made, into the window, and where it should be
  * for the read position ph: true while the window lacks a chunk. */
 static bool fill_window(const CBDeckFeed *f, CBStream *s, int64_t ph)
@@ -380,31 +389,25 @@ static bool fill_window(const CBDeckFeed *f, CBStream *s, int64_t ph)
             cb_chunk_unref(&k);
     }
 
+    /* Everything a cache has first, then the main pipeline to the first
+     * chunk still missing (not one the other pipeline is on its way to) */
     bool exact, busy = false;
     int64_t len = cb_stream_length(s, &exact);
     int64_t c0 = CB_MAX(ph - LEAD, (int64_t)0) / CB_CHUNK;
     int64_t c1 = exact && len <= 0 ? -1 : window_end(s, ph);
+    int64_t want = -1;
     for (int64_t c = c0; c <= c1; c++) {
-        if (holds(s, c))
+        if (holds(s, c) || share(f, s, c))
             continue;
-        const CBChunk *k = cache_at(s, c);
-        if (k) {
-            place(f, s, &s->slots[c % s->nb_slots], cb_chunk_ref((CBChunk *)k));
-            continue;
-        }
         busy = true;
-        if (s->aux_job == AUX_JUMP && c >= s->aux_next && c < s->aux_to) {
-            /* the other pipeline is on its way: on from after it */
-            c = s->aux_to - 1;
-            continue;
-        }
-        if (c != s->main_next) {
-            cb_chunk_unref(&s->held);
-            cb_pipeline_seek(s->main, c);
-            s->main_next = c;
-            s->main_seeks++;
-        }
-        break;
+        if (want < 0 && !(s->aux_job == AUX_JUMP && c >= s->aux_next && c < s->aux_to))
+            want = c;
+    }
+    if (want >= 0 && want != s->main_next) {
+        cb_chunk_unref(&s->held);
+        cb_pipeline_seek(s->main, want);
+        s->main_next = want;
+        s->main_seeks++;
     }
     return busy;
 }
@@ -488,13 +491,14 @@ static bool fill_rest(const CBDeckFeed *f, CBStream *s, int64_t ph)
         aux_start(s, AUX_CACHE, k, c, CB_MIN(to, c + s->cpc));
         return true;
     }
-    /* The window behind */
-    int64_t c0 = CB_MAX(ph - LEAD, (int64_t)0) / CB_CHUNK;
-    for (int64_t c = window_start(s, ph); c < c0; c++) {
-        if (!holds(s, c)) {
-            aux_start(s, AUX_BEHIND, 0, c, c0);
-            return true;
-        }
+    /* The window behind: what the caches have, then the rest */
+    int64_t c0 = CB_MAX(ph - LEAD, (int64_t)0) / CB_CHUNK, from = -1;
+    for (int64_t c = window_start(s, ph); c < c0; c++)
+        if (!holds(s, c) && !share(f, s, c) && from < 0)
+            from = c;
+    if (from >= 0) {
+        aux_start(s, AUX_BEHIND, 0, from, c0);
+        return true;
     }
     return false;
 }

@@ -730,6 +730,33 @@ static void test_reload(const char *path)
     cb_player_destroy(p);
 }
 
+/* A feed that first sees the read position a little past a cue point (a
+ * loaded machine, a callback late) has the cue's first chunks behind it:
+ * the window behind takes them from the cache too, not from a decode. */
+static void test_cache_behind(const char *path)
+{
+    CBPlayer *p = load(path);
+    double points[] = { 0.0, 55.5 };
+    cb_deck_set_cue_points(p, 0, points, 2);
+    cb_deck_play_from(p, 0, 20.0);
+    render(p, NULL, PERIOD, true);
+    CBStream *s = p->rt[0].src.stream;
+    int64_t cue = (int64_t)floor(points[1] * RATE);
+    atomic_store(&s->playhead, cue + 3 * RATE / 10);
+    CHECK(cb_player_feed_wait(&p->feed[0], s, 10000000), "%s: the feed is stuck", path);
+    int64_t c = (cue - CB_CUE_CACHE_LEAD) / CB_CHUNK;
+    const CBChunk *w = atomic_load(&s->slots[c % s->nb_slots]);
+    bool shared = false;
+    for (int e = 0; e < CB_DECK_CUE_POINTS; e++) {
+        int64_t first = atomic_load(&s->cache_first[e]);
+        if (first >= 0 && c >= first && c < first + s->cpc)
+            shared |= w && atomic_load(&s->cache[e * s->cpc + (c - first)]) == w;
+    }
+    CHECK(w && w->index == c && shared, "%s: the window behind decoded the cue cache's chunk again",
+          path);
+    cb_player_destroy(p);
+}
+
 /* The real-time side reads the chunks the stream's tables point to without
  * a reference: a chunk the feed takes out of the window is let go of only
  * once a callback has finished since. With no callback, the window moved
@@ -846,6 +873,7 @@ int main(void)
         test_next_master_tempo(paths[i]);
         test_reload(paths[i]);
         test_epoch(paths[i]);
+        test_cache_behind(paths[i]);
     }
 
     if (nb == 2) {
