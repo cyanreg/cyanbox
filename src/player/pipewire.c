@@ -1,12 +1,14 @@
 /* Copyright © 2026, Lynne. BSD-2-Clause, see LICENSE.md. */
 
-/* The PipeWire backend: one pw_stream, F32 stereo, driven by a
- * pw_thread_loop, its process callback running on PipeWire's real-time
- * data thread (PW_STREAM_FLAG_RT_PROCESS).
+/* The PipeWire backend: one pw_stream, stereo F32P (a plane of floats per
+ * channel, the graph's own format: the adapter converts nothing but the
+ * rate, if the graph's is not 48 kHz), driven by a pw_thread_loop, its
+ * process callback running on PipeWire's real-time data thread
+ * (PW_STREAM_FLAG_RT_PROCESS).
  *
  * The process callback is the real-time thread of player.h: it dequeues a
- * buffer, runs the shared mix into it and queues it back, and does
- * nothing else. State and format changes arrive on the thread loop's own
+ * buffer, runs the shared mix into its two planes and queues it back, and
+ * does nothing else. State and format changes arrive on the thread loop's own
  * (non real-time) thread; they publish through atomics only.
  *
  * Choosing the output. With options.sink the stream targets that node and
@@ -42,22 +44,25 @@ static void on_process(void *data)
         return;
 
     struct spa_buffer *buf = b->buffer;
-    struct spa_data *d = &buf->datas[0];
-    if (!d->data) {
+    if (buf->n_datas < 2 || !buf->datas[0].data || !buf->datas[1].data) {
         pw_stream_queue_buffer(stream, b);
         return;
     }
 
-    uint32_t stride = 2 * sizeof(float);
-    uint32_t frames = d->maxsize / stride;
+    uint32_t stride = sizeof(float);
+    uint32_t frames = SPA_MIN(buf->datas[0].maxsize, buf->datas[1].maxsize) / stride;
     if (b->requested)
         frames = SPA_MIN(frames, (uint32_t)b->requested);
 
-    cb_player_mix(p, d->data, (int)frames);
+    CBMixOut o = { .ch = { buf->datas[0].data, buf->datas[1].data }, .stride = 1 };
+    cb_player_mix_to(p, &o, (int)frames);
 
-    d->chunk->offset = 0;
-    d->chunk->stride = stride;
-    d->chunk->size   = frames * stride;
+    for (int c = 0; c < 2; c++) {
+        struct spa_data *d = &buf->datas[c];
+        d->chunk->offset = 0;
+        d->chunk->stride = (int32_t)stride;
+        d->chunk->size   = frames * stride;
+    }
     pw_stream_queue_buffer(stream, b);
 }
 
@@ -162,7 +167,7 @@ int cb_player_pw_open(CBPlayer *p)
     struct spa_pod_builder b = SPA_POD_BUILDER_INIT(pod, sizeof(pod));
     const struct spa_pod *params[1];
     struct spa_audio_info_raw info = {
-        .format   = SPA_AUDIO_FORMAT_F32,
+        .format   = SPA_AUDIO_FORMAT_F32P,
         .rate     = (uint32_t)rate,
         .channels = 2,
         .position = { SPA_AUDIO_CHANNEL_FL, SPA_AUDIO_CHANNEL_FR },

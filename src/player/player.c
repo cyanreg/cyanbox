@@ -195,7 +195,7 @@ static inline float soft_clip(float x)
     return copysignf(knee + (1.0f - knee) * tanhf((a - knee) / (1.0f - knee)), x);
 }
 
-void cb_player_mix(CBPlayer *p, float *out, int frames)
+void cb_player_mix_to(CBPlayer *p, const CBMixOut *o, int frames)
 {
     int rate = atomic_load_explicit(&p->device_rate, memory_order_relaxed);
     int64_t time_us = now_us();
@@ -213,16 +213,19 @@ void cb_player_mix(CBPlayer *p, float *out, int frames)
     atomic_store_explicit(&p->tail, tail, memory_order_release);
 
     if (frames > 0) {
-        memset(out, 0, sizeof(*out) * 2 * frames);
+        float *l = o->ch[0], *r = o->ch[1];
+        size_t st = (size_t)o->stride;
+        for (int n = 0; n < frames; n++)
+            l[n * st] = r[n * st] = 0.0f;
         for (int i = 0; i < CB_DECKS; i++)
-            cb_player_deck_render(&p->rt[i], out, frames, rate);
+            cb_player_deck_render(&p->rt[i], o, frames, rate);
 
         float g0 = p->master_prev;
         float dg = (p->master_gain - g0) / frames;
         for (int n = 0; n < frames; n++) {
             float g = dg != 0.0f ? g0 + dg * (n + 1) : g0;
-            out[2 * n + 0] = soft_clip(out[2 * n + 0] * g);
-            out[2 * n + 1] = soft_clip(out[2 * n + 1] * g);
+            l[n * st] = soft_clip(l[n * st] * g);
+            r[n * st] = soft_clip(r[n * st] * g);
         }
         p->master_prev = p->master_gain;
     }
@@ -233,6 +236,12 @@ void cb_player_mix(CBPlayer *p, float *out, int frames)
     }
     /* Last: nothing of this callback reads a chunk after it (feed.c). */
     atomic_fetch_add(&p->epoch, 1);
+}
+
+void cb_player_mix(CBPlayer *p, float *out, int frames)
+{
+    CBMixOut o = { .ch = { out, out ? out + 1 : NULL }, .stride = 2 };
+    cb_player_mix_to(p, &o, frames);
 }
 
 /* ------------------------------------------------------------ owner side */

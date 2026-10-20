@@ -32,7 +32,8 @@
  * queued to follow (cb_deck_queue_next): the deck plays on into it at the
  * end of its track, sample-exactly, as one piece of audio.
  *
- * Backends: PipeWire (pw_stream, 48 kHz float stereo, target node from
+ * Backends: PipeWire (pw_stream, 48 kHz planar float stereo, F32P, the
+ * graph's own format, which the mix writes into; target node from
  * options), the null backend, which runs the same callback on a timer
  * thread and discards the audio: for tests and headless runs, or the ring
  * backend, which keeps it for another thread to take (with --pro-link, the

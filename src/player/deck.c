@@ -944,7 +944,7 @@ static void mt_feed(CBDeckRT *d, int n)
     cb_stretch_process(m->st, in, m->out, n);
 }
 
-void cb_player_deck_render(CBDeckRT *d, float *out, int frames, int rate)
+void cb_player_deck_render(CBDeckRT *d, const CBMixOut *o, int frames, int rate)
 {
     if (frames <= 0)
         return;
@@ -1005,8 +1005,8 @@ void cb_player_deck_render(CBDeckRT *d, float *out, int frames, int rate)
                 float g = dg != 0.0f ? g0 + dg * (n + 1) : g0;
                 l *= g;
                 r *= g;
-                out[2 * n + 0] += l;
-                out[2 * n + 1] += r;
+                o->ch[0][(size_t)n * o->stride] += l;
+                o->ch[1][(size_t)n * o->stride] += r;
                 peak_l = fmaxf(peak_l, fabsf(l));
                 peak_r = fmaxf(peak_r, fabsf(r));
             }

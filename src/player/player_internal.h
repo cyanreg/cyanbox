@@ -497,9 +497,18 @@ struct CBPlayer {
 
 /* ---------------------------------------------------------------- engine */
 
-/* The mix callback both backends call: applies the queued commands, renders
- * every deck into `out` (interleaved stereo float, `frames` frames at the
- * device rate) and publishes the state. Real-time safe. */
+/* Where a callback's mix goes: the left and right channels, `stride`
+ * floats from one frame to the next (interleaved: out and out + 1, stride
+ * 2; planar: a plane each, stride 1). */
+typedef struct CBMixOut {
+    float *ch[2];
+    int    stride;
+} CBMixOut;
+
+/* The mix callback the backends call: applies the queued commands, renders
+ * every deck into `o` (`frames` frames at the device rate) and publishes
+ * the state. Real-time safe. cb_player_mix writes interleaved stereo. */
+void cb_player_mix_to(CBPlayer *p, const CBMixOut *o, int frames);
 void cb_player_mix(CBPlayer *p, float *out, int frames);
 
 /* The grid copy kept for a deck (owner thread). */
@@ -515,8 +524,8 @@ int  cb_player_deck_mt_alloc(CBDeckRT *d, int rate);
 void cb_player_deck_mt_free(CBDeckRT *d);
 /* Applies one command for this deck (real-time thread). */
 void cb_player_deck_apply(CBDeckRT *d, const CBCmd *cmd, int rate);
-/* Adds the deck's output to `out` with its gain and updates its meters. */
-void cb_player_deck_render(CBDeckRT *d, float *out, int frames, int rate);
+/* Adds the deck's output to `o` with its gain and updates its meters. */
+void cb_player_deck_render(CBDeckRT *d, const CBMixOut *o, int frames, int rate);
 /* After a callback: tells a stream deck's feed where it reads and whether
  * it went short, waking it when that matters. */
 void cb_player_deck_signal(CBDeckRT *d);
