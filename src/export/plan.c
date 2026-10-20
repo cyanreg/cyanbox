@@ -995,15 +995,11 @@ static bool stored_probe(const CBTrack *t, CBProbe *p, int64_t *file_size)
  * changed since (stored_probe); a transcode made already is then
  * described the same way, its size its own. */
 /* What Link serves as a WAV made as it is read (src/link/wav.c): a file
- * the packet store places sample for sample (Matroska keeps milliseconds),
  * of one or two channels at 48 kHz at most, which every player reads as
  * 16-bit stereo, within NFS version 2's 4 GiB. */
 static bool link_pcm(const CBTrack *t)
 {
-    const char *ext = strrchr(cb_path_base(t->path), '.');
-    bool mkv = ext && (!strcasecmp(ext, ".mka") || !strcasecmp(ext, ".mkv") ||
-                       !strcasecmp(ext, ".webm"));
-    return !mkv && t->codec[0] && t->sample_rate > 0 && t->sample_rate <= 48000 &&
+    return t->codec[0] && t->sample_rate > 0 && t->sample_rate <= 48000 &&
            t->channels >= 1 && t->channels <= 2 && t->total_samples > 0 &&
            t->total_samples < (INT64_C(0xffffffff) - 44) / 4;
 }

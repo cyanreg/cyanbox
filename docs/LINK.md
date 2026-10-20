@@ -470,8 +470,7 @@ index for a player to get wrong. MP3s are served so too.
   tolerated); a 13-minute FLAC reads through 790 times faster than it
   plays. A few tracks are kept open (1 GiB of packets at most),
   the least recently read closed first.
-- What the packet store cannot place sample for sample (Matroska, which
-  keeps milliseconds), above 48 kHz or of more than two channels is made
+- A track above 48 kHz or of more than two channels is made
   as a WAV file when a player loads it (`CB_TRANSCODE_LINK`,
   `cb_transcode_wav`, in the library's cache as `ID.link.wav`), as is a
   track the WAV cannot be made of after all (the track info request
