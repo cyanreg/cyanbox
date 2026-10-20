@@ -21,7 +21,7 @@
  * - A pipeline's chunks, popped as its eventfd says, come in order and
  *   are the source's read in order; after a seek the next chunk is the one
  *   asked for, never an older one; the last is marked; a missing file
- *   does not open. */
+ *   does not open. (test_pipeline_race.c has the race of a seek.) */
 
 #include "cyanbox/audio.h"
 

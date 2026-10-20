@@ -35,3 +35,16 @@ foreach t : [ 'mp3', 'decode', 'pipeline', 'artwork', 'encode', 'dj' ]
         timeout: 120,
     )
 endforeach
+
+# The race of a seek, pipeline.c built into the test with its wait
+test('audio_pipeline_race',
+    executable('test_audio_pipeline_race',
+        '../../tests/audio/test_pipeline_race.c',
+        '../../tests/audio/util.c',
+        include_directories: cb_inc,
+        dependencies: [ cb_audio_dep, m_dep ],
+    ),
+    env: audio_test_env,
+    suite: 'audio',
+    timeout: 120,
+)

@@ -9,10 +9,11 @@
  * dropping a reference allocate nothing, and only the thread that drops a
  * chunk's last reference returns it to the pool (under the pool's mutex).
  *
- * A seek starts a new generation: the queue is drained, a push the thread
- * is blocked in is woken, and a chunk of an older generation is dropped
- * wherever it turns up (in the thread, or queued in the race, which pop
- * drops). */
+ * A seek starts a new generation: the queue is drained before the thread
+ * can take the seek, a push it is blocked in is woken, and a chunk of an
+ * older generation is dropped wherever it turns up (in the thread, or
+ * queued in the race, which pop drops). The pipeline's lock is taken
+ * before the queue's, never the other way round. */
 
 #include "internal.h"
 
@@ -21,6 +22,12 @@
 #include <libavutil/refstruct.h>
 
 #include "fifo.h"
+
+/* Where a seek has let the thread go: tests/audio/test_pipeline_race.c
+ * waits here, so that the thread takes the seek before the call returns. */
+#ifndef SEEK_RACE
+#define SEEK_RACE()
+#endif
 
 /* Bytes before a chunk's samples. */
 #define HEADER 64
@@ -70,6 +77,22 @@ void cb_chunk_unref(CBChunk **c)
 
 /* ------------------------------------------------------------- the thread */
 
+/* Queues chunk c of generation gen, waiting while the queue is full. A
+ * wake gives up a push blocked on a full queue (-EAGAIN), and is meant for
+ * one of an older generation, before a seek or the end; the wake of a seek
+ * can come after the thread has taken it, though, and one of the seek's
+ * own chunks is pushed again. */
+static void push(CBPipeline *p, Chunk *c, uint64_t gen)
+{
+    while (cb_fifo_push(p->fifo, c) == CB_ERROR(EAGAIN)) {
+        pthread_mutex_lock(&p->lock);
+        bool current = p->gen == gen && !p->stop;
+        pthread_mutex_unlock(&p->lock);
+        if (!current)
+            return;
+    }
+}
+
 static void *run(void *arg)
 {
     CBPipeline *p = arg;
@@ -99,7 +122,7 @@ static void *run(void *arg)
                 p->eof = true;
                 pthread_mutex_unlock(&p->lock);
                 if (e)
-                    cb_fifo_push(p->fifo, e);
+                    push(p, e, gen);
                 av_refstruct_unref(&e);
                 pthread_mutex_lock(&p->lock);
             }
@@ -132,7 +155,7 @@ static void *run(void *arg)
         p->eof = !c || c->c.last;
         pthread_mutex_unlock(&p->lock);
         if (c)
-            cb_fifo_push(p->fifo, c);   /* -EAGAIN when a seek or the end woke it */
+            push(p, c, gen);
         av_refstruct_unref(&c);
         pthread_mutex_lock(&p->lock);
     }
@@ -241,9 +264,13 @@ int cb_pipeline_seek(CBPipeline *p, int64_t chunk)
     p->gen++;
     p->seek_to = chunk;
     p->seek_pending = true;
+    /* Under the lock, which the thread takes the seek under: nothing it
+     * makes for the seek is queued yet (drained after the unlock, a chunk
+     * it made meanwhile went, and the reader waited for it for ever) */
+    cb_fifo_drain(p->fifo);
     pthread_cond_signal(&p->cond);
     pthread_mutex_unlock(&p->lock);
-    cb_fifo_drain(p->fifo);
+    SEEK_RACE();
     cb_fifo_wake(p->fifo);
     return 0;
 }
