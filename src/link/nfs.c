@@ -101,7 +101,6 @@
 
 #define NB_MOUNTS           16
 #define NB_FILES            4
-#define NB_EVER             256         /* addresses that mounted, remembered */
 /* A READDIR answer's room: what the call asks, within these. The floor
  * fits one entry of the longest name, so a listing always moves on. */
 #define READDIR_MIN         1024
@@ -129,14 +128,12 @@ typedef struct OpenFile {
 struct CBNfs {
     CBNfsConfig    cfg;
     const CBVTree *tree;
-    uint32_t       tag;
     uint64_t       clock;       /* counts calls: when a mount or a file was last used */
     Mount          mounts[NB_MOUNTS];
     OpenFile       files[NB_FILES];
-    /* Every address that mounted in this session, which a handle of ours
-     * takes back in (may_read_node); the first NB_EVER. */
-    uint32_t       ever[NB_EVER];
-    int            nb_ever;
+    /* The session's tag and every address that mounted in it, which a
+     * handle of ours takes back in (may_read_node): the owner's, or own. */
+    CBNfsSession  *s, own;
 };
 
 /* One call being answered. */
@@ -250,9 +247,12 @@ int cb_nfs_new(CBNfs **out, const CBNfsConfig *c)
     for (int i = 0; i < NB_FILES; i++)
         n->files[i].fd = -1;
     /* The tag tells this session's handles from any other's: a handle a
-     * player kept from before a restart is stale. Never 0. */
-    while (!n->tag) {
-        if (getrandom(&n->tag, sizeof(n->tag), 0) != (ssize_t)sizeof(n->tag) && errno != EINTR) {
+     * player kept from before a restart is stale, unless the owner kept
+     * the session. Never 0. */
+    n->s = c->session ? c->session : &n->own;
+    while (!n->s->tag) {
+        if (getrandom(&n->s->tag, sizeof(n->s->tag), 0) != (ssize_t)sizeof(n->s->tag) &&
+            errno != EINTR) {
             int err = errno;
             free(n);
             return CB_ERROR(err);
@@ -318,16 +318,16 @@ void cb_nfs_forget(CBNfs *n, uint32_t peer)
 
 static bool mounted_ever(const CBNfs *n, uint32_t peer)
 {
-    for (int i = 0; i < n->nb_ever; i++)
-        if (n->ever[i] == peer)
+    for (int i = 0; i < n->s->nb_ever; i++)
+        if (n->s->ever[i] == peer)
             return true;
     return false;
 }
 
 static void add_mount(CBNfs *n, uint32_t peer)
 {
-    if (!mounted_ever(n, peer) && n->nb_ever < NB_EVER)
-        n->ever[n->nb_ever++] = peer;
+    if (!mounted_ever(n, peer) && n->s->nb_ever < CB_NFS_EVER)
+        n->s->ever[n->s->nb_ever++] = peer;
     Mount *m = find_mount(n, peer);
     if (!m) {
         m = &n->mounts[0];
@@ -621,7 +621,7 @@ static void mount_call(Req *q, uint32_t proc)
 
 static void put_handle(CBWr *w, const CBNfs *n, int node)
 {
-    cb_wr_u32(w, n->tag);
+    cb_wr_u32(w, n->s->tag);
     if (cb_vtree_is_dir(n->tree, node)) {
         uint64_t id = cb_vtree_dir_id(n->tree, node);
         cb_wr_u32(w, HANDLE_DIR | (uint32_t)(id >> 32));
@@ -637,7 +637,7 @@ static void put_handle(CBWr *w, const CBNfs *n, int node)
  * handle of ours. Bytes 12 to 31 are not read (the XDJ-700's). */
 static int node_of(const CBNfs *n, const uint8_t *fh)
 {
-    if (!n->tree || be32(fh) != n->tag)
+    if (!n->tree || be32(fh) != n->s->tag)
         return -1;
     uint32_t kind = be32(fh + 4), id = be32(fh + 8);
     if (kind & HANDLE_DIR)

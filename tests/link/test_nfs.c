@@ -979,6 +979,40 @@ static void test_handles(Fixture *f)
     CHECK(getattr(other, oroot, NULL) == 0, "its own handle");
     cb_nfs_free(&other);
 
+    /* A session the owner keeps, given to one server and then the next,
+     * as a set gives it to each service on an interface: the next takes
+     * the first one's handles, and the deck that mounted reads on with
+     * them, never mounting again; a stranger with them does not, and a
+     * server of its own finds them stale. */
+    CBNfsSession *kept = calloc(1, sizeof(*kept));
+    CBNfsConfig kc = {
+        .mount_port = 1, .nfs_port = 2, .addr = HOST, .netmask = MASK, .session = kept,
+    };
+    CBNfs *before = NULL, *after = NULL, *own = NULL;
+    uint8_t kroot[CB_NFS_FHSIZE], kfh[CB_NFS_FHSIZE], kbuf[16];
+    CHECK(kept && cb_nfs_new(&before, &kc) == 0, "a kept session");
+    cb_nfs_set_tree(before, f->tree);
+    CHECK(mnt(before, PLAYER, "/", kroot) == 0 && walk(before, kroot, specs[0].usb, kfh, NULL) == 0,
+          "mounted before");
+    cb_nfs_free(&before);
+    CHECK(kept->tag && kept->nb_ever == 1 && kept->ever[0] == PLAYER, "kept: the tag, the mount");
+    CHECK(cb_nfs_new(&after, &kc) == 0, "the next server");
+    cb_nfs_set_tree(after, f->tree);
+    CHECK(!cb_nfs_mounted(after, PLAYER), "not mounted there");
+    CHECK(nfs_read(after, STRANGER, kfh, 0, 16, kbuf, sizeof(kbuf), NULL) == -EACCES,
+          "a stranger with them");
+    CHECK(nfs_read(after, PLAYER, kfh, 0, 16, kbuf, sizeof(kbuf), NULL) == 16 &&
+          cb_nfs_mounted(after, PLAYER), "the deck reads on");
+    cb_nfs_free(&after);
+    kc.session = NULL;
+    CHECK(cb_nfs_new(&own, &kc) == 0, "a server of its own");
+    cb_nfs_set_tree(own, f->tree);
+    CHECK(getattr(own, kroot, NULL) == -ESTALE && getattr(own, kfh, NULL) == -ESTALE &&
+          nfs_read(own, PLAYER, kfh, 0, 16, kbuf, sizeof(kbuf), NULL) == -EACCES,
+          "stale without the session, and no read");
+    cb_nfs_free(&own);
+    free(kept);
+
     /* Short of a handle: garbage. */
     Call c;
     call(&c, CB_RPC_NFS, CB_RPC_NFS_VERSION, CB_NFSPROC_GETATTR);

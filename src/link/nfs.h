@@ -133,6 +133,19 @@ enum CBNfsService {
  * made) between calls, not during one. */
 typedef struct CBNfs CBNfs;
 
+/* What a session keeps for its decks: the tag every handle it gives out
+ * starts with, and the addresses that mounted (cb_nfs_mounted). A server
+ * has one of its own, or the owner's (CBNfsConfig.session), which outlives
+ * it: a set gives the same one to each service it starts on an interface,
+ * so a deck that reads on through a cable or an adapter that came back is
+ * answered by the service there now. One server at a time uses it. */
+#define CB_NFS_EVER 256
+typedef struct CBNfsSession {
+    uint32_t tag;                       /* 0: drawn by the first server */
+    uint32_t ever[CB_NFS_EVER];         /* the first CB_NFS_EVER */
+    int      nb_ever;
+} CBNfsSession;
+
 typedef struct CBNfsConfig {
     uint16_t mount_port, nfs_port;      /* what portmap gives out */
     uint16_t portmap_port;              /* listed by DUMP; 0 leaves it out */
@@ -148,6 +161,9 @@ typedef struct CBNfsConfig {
      * reads as an I/O error. Its times are its source's. */
     ssize_t (*read)(void *opaque, const CBPlanTrack *pt, uint64_t offset, uint8_t *dst, size_t n);
     void    *read_opaque;
+    /* The owner's session (above); NULL: the server's own, and a handle
+     * from before it is stale. */
+    CBNfsSession *session;
 } CBNfsConfig;
 
 int  cb_nfs_new(CBNfs **out, const CBNfsConfig *c);

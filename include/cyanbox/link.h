@@ -76,6 +76,11 @@ typedef struct CBLinkOptions {
     /* LINK CUE (below): the owner's audio for mixers, the owner's to keep;
      * NULL: none, and its port is not bound. */
     CBLinkCue *cue;
+    /* A set's own, for each service it starts: NFS's session on that
+     * interface (src/link/nfs.h), kept as long as the set runs, so a deck
+     * that reads on after the interface went and came back (a cable, a
+     * USB adapter) is answered. NULL: the service's own. */
+    struct CBNfsSession *nfs_session;
 } CBLinkOptions;
 
 void cb_link_options_default(CBLinkOptions *o);
@@ -348,6 +353,10 @@ void cb_link_client_set_loaded(CBLinkClient *c, int device, int slot, uint32_t t
                                bool playing);
 /* A whole file from the source over NFS, read as a player reads it. */
 int  cb_link_client_fetch(CBLinkClient *c, const char *path, uint8_t **data, size_t *size);
+/* The last file fetched, again, through the mount the first fetch made: as
+ * a deck reads on with the handles it has, never mounting again. -ENOENT
+ * when nothing was fetched. */
+int  cb_link_client_fetch_again(CBLinkClient *c, uint8_t **data, size_t *size);
 /* What our status says is loaded (as set, or as a load command from the
  * source left it): its device, slot and track id, 0 for none. */
 void cb_link_client_loaded(CBLinkClient *c, int *device, int *slot, uint32_t *track_id);

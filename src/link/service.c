@@ -955,6 +955,7 @@ int cb_link_start(CBLink **out, const CBLinkOptions *o)
         .netmask      = l->ifc.mask,
         .read         = wav_read,
         .read_opaque  = l,
+        .session      = o->nfs_session,
     };
     if ((ret = cb_nfs_new(&l->nfs, &nc)) < 0)
         goto fail;
