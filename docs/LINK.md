@@ -62,6 +62,15 @@ CDJ-2000 v4.33, a CDJ-2000NXS2 v1.87; 2026-10-15) showed:
   address that was on the link is answered for half an hour after it
   dropped off, its mount is kept, and a deck that mounted in this session
   and reads with a handle of it is taken back in (nfs.c, may_read_node).
+  The session is the interface's for as long as cyanbox runs (set.c,
+  CBNfsSession): when the interface loses its address (a USB adapter
+  pulled out, a link-local address dropped with the carrier) its service
+  stops, and the one that starts there when it is back gives out the
+  same handles and knows the same decks, so one that was playing reads
+  on at the same address. netns_test takes the server's address away
+  after the player read the file and puts it back; the player's second
+  read, with the handles it had, is answered (`link browse
+  --fetch-again`).
 - Text in NFD (a kana and its dakuten apart, as tags written on macOS
   hold it) reached a CDJ-2000 as two characters. The library keeps all
   its text in NFC now (src/common/utf8.c; existing text is converted as
