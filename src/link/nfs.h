@@ -133,19 +133,6 @@ enum CBNfsService {
  * made) between calls, not during one. */
 typedef struct CBNfs CBNfs;
 
-/* What a session keeps for its decks: the tag every handle it gives out
- * starts with, and the addresses that mounted (cb_nfs_mounted). A server
- * has one of its own, or the owner's (CBNfsConfig.session), which outlives
- * it: a set gives the same one to each service it starts on an interface,
- * so a deck that reads on through a cable or an adapter that came back is
- * answered by the service there now. One server at a time uses it. */
-#define CB_NFS_EVER 256
-typedef struct CBNfsSession {
-    uint32_t tag;                       /* 0: drawn by the first server */
-    uint32_t ever[CB_NFS_EVER];         /* the first CB_NFS_EVER */
-    int      nb_ever;
-} CBNfsSession;
-
 typedef struct CBNfsConfig {
     uint16_t mount_port, nfs_port;      /* what portmap gives out */
     uint16_t portmap_port;              /* listed by DUMP; 0 leaves it out */
@@ -161,9 +148,11 @@ typedef struct CBNfsConfig {
      * reads as an I/O error. Its times are its source's. */
     ssize_t (*read)(void *opaque, const CBPlanTrack *pt, uint64_t offset, uint8_t *dst, size_t n);
     void    *read_opaque;
-    /* The owner's session (above); NULL: the server's own, and a handle
-     * from before it is stale. */
-    CBNfsSession *session;
+    /* What every handle starts with: the library's tag
+     * (cb_library_link_tag), so a deck's handles hold across a server
+     * started again, cyanbox's restart included, and are stale for
+     * another library; 0: one drawn for this server alone. */
+    uint32_t tag;
 } CBNfsConfig;
 
 int  cb_nfs_new(CBNfs **out, const CBNfsConfig *c);
@@ -177,10 +166,10 @@ void cb_nfs_set_tree(CBNfs *n, const CBVTree *t);
  * be sent (not a call, or not worth answering), or a negative errno. */
 ssize_t cb_nfs_handle(CBNfs *n, enum CBNfsService svc, uint32_t peer,
                       const uint8_t *req, size_t len, uint8_t *reply, size_t cap);
-/* Whether `peer` has mounted (and so may READ). A peer forgotten that
- * mounted in this session is taken back in by its next READ or READDIR
- * with a handle of the session (a deck back from a lapse never mounts
- * again); one that never mounted must. */
+/* Whether `peer` has mounted (and so may READ). A peer in the subnet that
+ * is not in the table is taken in by its next READ or READDIR with a
+ * handle of ours (a deck back from a lapse, or reading on after cyanbox
+ * served again, never mounts again); without one it must mount. */
 bool cb_nfs_mounted(const CBNfs *n, uint32_t peer);
 void cb_nfs_forget(CBNfs *n, uint32_t peer);
 

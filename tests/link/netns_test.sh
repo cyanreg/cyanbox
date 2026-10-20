@@ -7,8 +7,8 @@
 # itself; serving two at once on the same ports, one that gets its
 # address only after the server started among them; a hot cue the player
 # saves kept in the library; a player reading on with its handles after
-# the server's address went and came back; and the fence (a browse that
-# never announces itself gets nothing).
+# the server's address went and came back, and after the server restarted;
+# and the fence (a browse that never announces itself gets nothing).
 #
 #   tests/link/netns_test.sh CYANBOX-CLI AUDIO.wav DIR
 #
@@ -80,6 +80,22 @@ status=$?
 echo "$out"
 [ $status -eq 0 ] || { echo "netns_test: reading on after the address came back failed ($status)"; fail=1; }
 check "is gone or has another address: no longer serving there"
+check "^file over NFS again: [0-9]+ bytes$"
+
+# The server itself stopped once the player has read the file, and started
+# again: the library's tag makes the same handles (cb_library_link_tag),
+# and the player's second read is answered.
+rm -f "$dir/restart.log"
+out=$("$here/netns.sh" -w 1 "$cli -c $dir/lib link serve & s=\$!; \
+      while ! grep -q 'file over NFS:' $dir/restart.log 2>/dev/null; do sleep 0.2; done; \
+      kill \$s; wait \$s; echo 'served again'; $cli -c $dir/lib link serve" -- \
+      "set -o pipefail; timeout 60 $cli link browse -i \$CBB --fetch-again 8 | \
+      tee $dir/restart.log" 2>&1)
+status=$?
+echo "$out"
+[ $status -eq 0 ] || { echo "netns_test: reading on after the server restarted failed ($status)"; fail=1; }
+check "^served again$"
+check "reads with a handle of ours: taken back in"
 check "^file over NFS again: [0-9]+ bytes$"
 
 # A browse that never announces itself is refused.

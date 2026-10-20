@@ -2706,8 +2706,13 @@ static int link_serve(Cli *cli, const CBLinkOptions *opt)
         free(root);
         return code;
     }
+    /* The library's handle tag: a deck reads on after cyanbox served again. */
+    int ret;
+    if (!o.nfs_tag && (ret = cb_library_link_tag(&cli->app.lib, &o.nfs_tag)) < 0)
+        cb_warn("link: no handle tag in the library (%s): a deck's handles go stale with a "
+                "restart", strerror(-ret));
     CBLinkSet *set;
-    int ret = cb_link_set_start(&set, &o);
+    ret = cb_link_set_start(&set, &o);
     free(root);
     if (ret < 0)
         return fail("cannot serve: %s", strerror(-ret));

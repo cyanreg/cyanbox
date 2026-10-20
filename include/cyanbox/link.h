@@ -76,11 +76,12 @@ typedef struct CBLinkOptions {
     /* LINK CUE (below): the owner's audio for mixers, the owner's to keep;
      * NULL: none, and its port is not bound. */
     CBLinkCue *cue;
-    /* A set's own, for each service it starts: NFS's session on that
-     * interface (src/link/nfs.h), kept as long as the set runs, so a deck
-     * that reads on after the interface went and came back (a cable, a
-     * USB adapter) is answered. NULL: the service's own. */
-    struct CBNfsSession *nfs_session;
+    /* What every NFS handle starts with: the library's tag
+     * (cb_library_link_tag), so a deck that reads on after cyanbox served
+     * again (its interface back, cyanbox started again) is answered, and
+     * one holding another library's handles is not. 0: each service draws
+     * its own, and a handle from before it is stale. */
+    uint32_t nfs_tag;
 } CBLinkOptions;
 
 void cb_link_options_default(CBLinkOptions *o);

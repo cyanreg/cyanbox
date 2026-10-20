@@ -333,14 +333,19 @@ static void test_app(const char *wav, const char *dir)
     so.ports = sp;
     so.peer_ports = pp;
 
-    /* Without --pro-link nothing starts. */
+    /* Without --pro-link nothing starts, and the library has no handle tag. */
     CHECK_EQ(cb_app_link_start(&app, &so), CB_ERROR(EPERM));
     CHECK(!app.link && !app.link_state.on);
+    char *tag = NULL;
+    CHECK(cb_library_setting_get(&app.lib, "link.tag", &tag) == CB_ERROR(ENOENT));
 
-    /* On the link at once, as device 17, with no player yet. */
+    /* On the link at once, as device 17, with no player yet; the library's
+     * handle tag made for it (cb_library_link_tag). */
     app.link_state.enabled = true;
     CHECK_EQ(cb_app_link_start(&app, &so), 0);
     CHECK(app.link_state.on);
+    CHECK(cb_library_setting_get(&app.lib, "link.tag", &tag) == 0 && tag && strlen(tag) == 8);
+    free(tag);
     CHECK_EQ(cb_app_link_start(&app, &so), CB_ERROR(EALREADY));
     CHECK(tick_until(&app, up, 15));
     CHECK_STR(app.link_state.interfaces[0].interface, "lo");

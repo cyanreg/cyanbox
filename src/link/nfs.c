@@ -26,9 +26,9 @@
  * - Handles: 32 bytes of which only the first 12 mean anything, because
  *   an XDJ-700 (firmware 1.15) writes its own 20 bytes after them in
  *   every LOOKUP and rekordbox ignores them (rbxport 9cdc4f4d, captures
- *   on its issue 43). Ours: the session's random tag; then a directory's
- *   63-bit id with the top bit set, or 0 and a track id for a file; then
- *   20 zero bytes, never read. Anything else is NFSERR_STALE.
+ *   on its issue 43). Ours: the library's tag (CBNfsConfig.tag); then a
+ *   directory's 63-bit id with the top bit set, or 0 and a track id for a
+ *   file; then 20 zero bytes, never read. Anything else is NFSERR_STALE.
  * - Writes are NFSERR_ROFS (docs/LINK.md). rekordbox's own stubs answer
  *   STALE and ACCES instead (rbxport); players do not write, and ROFS is
  *   what a read-only server says.
@@ -131,9 +131,7 @@ struct CBNfs {
     uint64_t       clock;       /* counts calls: when a mount or a file was last used */
     Mount          mounts[NB_MOUNTS];
     OpenFile       files[NB_FILES];
-    /* The session's tag and every address that mounted in it, which a
-     * handle of ours takes back in (may_read_node): the owner's, or own. */
-    CBNfsSession  *s, own;
+    uint32_t       tag;         /* every handle's first word: the library's, or drawn */
 };
 
 /* One call being answered. */
@@ -246,13 +244,12 @@ int cb_nfs_new(CBNfs **out, const CBNfsConfig *c)
     n->cfg = *c;
     for (int i = 0; i < NB_FILES; i++)
         n->files[i].fd = -1;
-    /* The tag tells this session's handles from any other's: a handle a
-     * player kept from before a restart is stale, unless the owner kept
-     * the session. Never 0. */
-    n->s = c->session ? c->session : &n->own;
-    while (!n->s->tag) {
-        if (getrandom(&n->s->tag, sizeof(n->s->tag), 0) != (ssize_t)sizeof(n->s->tag) &&
-            errno != EINTR) {
+    /* The tag tells this library's handles from another's: the library's
+     * own, which holds across restarts; without one, a tag of this server's
+     * alone, so a handle from before it is stale. Never 0. */
+    n->tag = c->tag;
+    while (!n->tag) {
+        if (getrandom(&n->tag, sizeof(n->tag), 0) != (ssize_t)sizeof(n->tag) && errno != EINTR) {
             int err = errno;
             free(n);
             return CB_ERROR(err);
@@ -316,18 +313,8 @@ void cb_nfs_forget(CBNfs *n, uint32_t peer)
         *m = (Mount) { 0 };
 }
 
-static bool mounted_ever(const CBNfs *n, uint32_t peer)
-{
-    for (int i = 0; i < n->s->nb_ever; i++)
-        if (n->s->ever[i] == peer)
-            return true;
-    return false;
-}
-
 static void add_mount(CBNfs *n, uint32_t peer)
 {
-    if (!mounted_ever(n, peer) && n->s->nb_ever < CB_NFS_EVER)
-        n->s->ever[n->s->nb_ever++] = peer;
     Mount *m = find_mount(n, peer);
     if (!m) {
         m = &n->mounts[0];
@@ -351,20 +338,21 @@ static bool may_read(CBNfs *n, uint32_t peer)
 }
 
 /* Whether a peer may READ or READDIR through the handle of `node`: one
- * that is in the table, or one that mounted in this session, is in the
- * subnet still and reads with a handle of this session's (node >= 0),
- * taken back in. A deck that dropped off the table (forgotten, or the
- * oldest of NB_MOUNTS) comes back reading, never mounting again, and a
- * refusal there would hang its load for good (an emulated CDJ-2000NXS2
- * retried a refused READ 43 times a second for minutes, its load never
- * ending). */
+ * that is in the table, or one in the subnet that reads with a handle of
+ * ours (node >= 0, the library's tag), taken in. A deck that dropped off
+ * the table (forgotten, the oldest of NB_MOUNTS, or a server started
+ * again: cyanbox's own restart, its interface back) comes back reading,
+ * never mounting again, and a refusal there would hang its load for good
+ * (an emulated CDJ-2000NXS2 retried a refused READ 43 times a second for
+ * minutes, its load never ending). A handle is no secret worth keeping:
+ * any peer in the subnet may mount and look the file up. */
 static bool in_subnet(const CBNfsConfig *c, uint32_t peer);
 
 static bool may_read_node(CBNfs *n, uint32_t peer, int node)
 {
     if (may_read(n, peer))
         return true;
-    if (node < 0 || !mounted_ever(n, peer) || !in_subnet(&n->cfg, peer))
+    if (node < 0 || !in_subnet(&n->cfg, peer))
         return false;
     cb_info("link: %u.%u.%u.%u reads with a handle of ours: taken back in", peer >> 24,
             peer >> 16 & 0xFF, peer >> 8 & 0xFF, peer & 0xFF);
@@ -621,7 +609,7 @@ static void mount_call(Req *q, uint32_t proc)
 
 static void put_handle(CBWr *w, const CBNfs *n, int node)
 {
-    cb_wr_u32(w, n->s->tag);
+    cb_wr_u32(w, n->tag);
     if (cb_vtree_is_dir(n->tree, node)) {
         uint64_t id = cb_vtree_dir_id(n->tree, node);
         cb_wr_u32(w, HANDLE_DIR | (uint32_t)(id >> 32));
@@ -637,7 +625,7 @@ static void put_handle(CBWr *w, const CBNfs *n, int node)
  * handle of ours. Bytes 12 to 31 are not read (the XDJ-700's). */
 static int node_of(const CBNfs *n, const uint8_t *fh)
 {
-    if (!n->tree || be32(fh) != n->s->tag)
+    if (!n->tree || be32(fh) != n->tag)
         return -1;
     uint32_t kind = be32(fh + 4), id = be32(fh + 8);
     if (kind & HANDLE_DIR)

@@ -234,7 +234,12 @@ int cb_app_link_start(CBApp *app, const CBLinkOptions *o)
             return CB_ERROR(ENOMEM);
         opt.cue = l->cue;
     }
-    int ret = cb_link_set_start(&l->set, &opt);
+    /* The library's handle tag: a deck reads on after cyanbox served again. */
+    int ret;
+    if (!opt.nfs_tag && (ret = cb_library_link_tag(&app->lib, &opt.nfs_tag)) < 0)
+        cb_warn("link: no handle tag in the library (%s): a deck's handles go stale with a "
+                "restart", strerror(-ret));
+    ret = cb_link_set_start(&l->set, &opt);
     if (ret < 0) {
         app->last_error_count++;
         cb_app_set_status(app, "PRO DJ LINK cannot start: %s", strerror(-ret));

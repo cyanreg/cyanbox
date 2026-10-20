@@ -979,39 +979,37 @@ static void test_handles(Fixture *f)
     CHECK(getattr(other, oroot, NULL) == 0, "its own handle");
     cb_nfs_free(&other);
 
-    /* A session the owner keeps, given to one server and then the next,
-     * as a set gives it to each service on an interface: the next takes
-     * the first one's handles, and the deck that mounted reads on with
-     * them, never mounting again; a stranger with them does not, and a
-     * server of its own finds them stale. */
-    CBNfsSession *kept = calloc(1, sizeof(*kept));
+    /* The library's tag, given to one server and then the next (cyanbox
+     * started again, its interface back): the same handles, with the tag
+     * first, and the deck that mounted reads on with them, never mounting
+     * again. Another library's tag finds them stale, and reads nothing. */
     CBNfsConfig kc = {
-        .mount_port = 1, .nfs_port = 2, .addr = HOST, .netmask = MASK, .session = kept,
+        .mount_port = 1, .nfs_port = 2, .addr = HOST, .netmask = MASK, .tag = 0x5eed1e55,
     };
-    CBNfs *before = NULL, *after = NULL, *own = NULL;
-    uint8_t kroot[CB_NFS_FHSIZE], kfh[CB_NFS_FHSIZE], kbuf[16];
-    CHECK(kept && cb_nfs_new(&before, &kc) == 0, "a kept session");
+    static const uint8_t tag[4] = { 0x5e, 0xed, 0x1e, 0x55 };
+    CBNfs *before = NULL, *after = NULL, *another = NULL;
+    uint8_t kroot[CB_NFS_FHSIZE], kfh[CB_NFS_FHSIZE], kagain[CB_NFS_FHSIZE], kbuf[16];
+    CHECK(cb_nfs_new(&before, &kc) == 0, "the library's tag");
     cb_nfs_set_tree(before, f->tree);
     CHECK(mnt(before, PLAYER, "/", kroot) == 0 && walk(before, kroot, specs[0].usb, kfh, NULL) == 0,
           "mounted before");
+    CHECK(!memcmp(kroot, tag, 4) && !memcmp(kfh, tag, 4), "the tag first");
     cb_nfs_free(&before);
-    CHECK(kept->tag && kept->nb_ever == 1 && kept->ever[0] == PLAYER, "kept: the tag, the mount");
     CHECK(cb_nfs_new(&after, &kc) == 0, "the next server");
     cb_nfs_set_tree(after, f->tree);
     CHECK(!cb_nfs_mounted(after, PLAYER), "not mounted there");
-    CHECK(nfs_read(after, STRANGER, kfh, 0, 16, kbuf, sizeof(kbuf), NULL) == -EACCES,
-          "a stranger with them");
     CHECK(nfs_read(after, PLAYER, kfh, 0, 16, kbuf, sizeof(kbuf), NULL) == 16 &&
           cb_nfs_mounted(after, PLAYER), "the deck reads on");
+    CHECK(mnt(after, STRANGER, "/", kagain) == 0 && !memcmp(kagain, kroot, CB_NFS_FHSIZE),
+          "the same handles");
     cb_nfs_free(&after);
-    kc.session = NULL;
-    CHECK(cb_nfs_new(&own, &kc) == 0, "a server of its own");
-    cb_nfs_set_tree(own, f->tree);
-    CHECK(getattr(own, kroot, NULL) == -ESTALE && getattr(own, kfh, NULL) == -ESTALE &&
-          nfs_read(own, PLAYER, kfh, 0, 16, kbuf, sizeof(kbuf), NULL) == -EACCES,
-          "stale without the session, and no read");
-    cb_nfs_free(&own);
-    free(kept);
+    kc.tag = 0x5eed1e56;
+    CHECK(cb_nfs_new(&another, &kc) == 0, "another library");
+    cb_nfs_set_tree(another, f->tree);
+    CHECK(getattr(another, kroot, NULL) == -ESTALE && getattr(another, kfh, NULL) == -ESTALE &&
+          nfs_read(another, PLAYER, kfh, 0, 16, kbuf, sizeof(kbuf), NULL) == -EACCES,
+          "another library's: stale, and no read");
+    cb_nfs_free(&another);
 
     /* Short of a handle: garbage. */
     Call c;
@@ -1029,9 +1027,25 @@ static void test_access(Fixture *f)
     CHECK(mnt(f->nfs, PLAYER, "/", root) == 0, "mount /");
     CHECK(walk(f->nfs, root, specs[0].usb, fh, NULL) == 0, "a.bin");
 
-    /* A peer that did not mount may look, not read or list; the answer is
-     * the status alone. */
+    /* A peer in the subnet that did not mount is taken in by a READ or a
+     * READDIR with a handle of ours, as a deck reading on after cyanbox
+     * served again is (it never mounts again; any peer there may mount
+     * and look the file up all the same). */
     CHECK(!cb_nfs_mounted(f->nfs, STRANGER), "a stranger");
+    List l;
+    CHECK(list(f->nfs, STRANGER, root, 8192, &l) == 0 && l.nb > 0 &&
+          cb_nfs_mounted(f->nfs, STRANGER), "READDIR by a stranger: taken in");
+    list_free(&l);
+    cb_nfs_forget(f->nfs, STRANGER);
+    CHECK(nfs_read(f->nfs, STRANGER, fh, 0, 16, buf, sizeof(buf), NULL) == 16 &&
+          cb_nfs_mounted(f->nfs, STRANGER), "READ by a stranger: taken in");
+    cb_nfs_forget(f->nfs, STRANGER);
+    CHECK(nfs_read(f->nfs, PLAYER, fh, 0, 16, buf, sizeof(buf), NULL) == 16, "the player reads");
+
+    /* Outside the subnet: no mount, so no reads, a handle of ours or not;
+     * the answer is the status alone. */
+    CHECK(mnt(f->nfs, OUTSIDER, "/", buf) == -EACCES && !cb_nfs_mounted(f->nfs, OUTSIDER),
+          "outside the subnet");
     Call c;
     call(&c, CB_RPC_NFS, CB_RPC_NFS_VERSION, CB_NFSPROC_READ);
     cb_nfs_put_handle(&c.w, fh);
@@ -1039,21 +1053,14 @@ static void test_access(Fixture *f)
     cb_wr_u32(&c.w, 32768);
     cb_wr_u32(&c.w, 0);
     CBRd r;
-    ssize_t n = ask(f->nfs, CB_NFS_NFS, STRANGER, &c);
-    CHECK(status_of(n, &c, &r) == -EACCES && n == 28, "READ by a stranger: %zd", n);
-    List l;
-    CHECK(list(f->nfs, STRANGER, root, 8192, &l) == -EACCES, "READDIR by a stranger");
-    CHECK(nfs_read(f->nfs, PLAYER, fh, 0, 16, buf, sizeof(buf), NULL) == 16, "the player reads");
-
-    /* Outside the subnet: no mount, so no reads. */
-    CHECK(mnt(f->nfs, OUTSIDER, "/", buf) == -EACCES && !cb_nfs_mounted(f->nfs, OUTSIDER),
-          "outside the subnet");
-    CHECK(nfs_read(f->nfs, OUTSIDER, fh, 0, 16, buf, sizeof(buf), NULL) == -EACCES, "outsider");
+    ssize_t n = ask(f->nfs, CB_NFS_NFS, OUTSIDER, &c);
+    CHECK(status_of(n, &c, &r) == -EACCES && n == 28, "READ by an outsider: %zd", n);
+    CHECK(list(f->nfs, OUTSIDER, root, 8192, &l) == -EACCES, "READDIR by an outsider");
 
     /* UMNT is answered and changes nothing (an XDJ-AZ's two decks share
      * an address); a peer forgotten (a deck back from a lapse of its
      * keep-alives) that reads with a handle of ours is taken back in, as
-     * it never mounts again; a stranger with one is not. */
+     * it never mounts again. */
     call(&c, CB_RPC_MOUNT, CB_RPC_MOUNT_VERSION, CB_MNT_UMNT);
     cb_nfs_put_name(&c.w, "/");
     n = ask(f->nfs, CB_NFS_MOUNT, PLAYER, &c);
@@ -1063,8 +1070,6 @@ static void test_access(Fixture *f)
     CHECK(!cb_nfs_mounted(f->nfs, PLAYER), "forgotten");
     CHECK(nfs_read(f->nfs, PLAYER, fh, 0, 16, buf, sizeof(buf), NULL) == 16 &&
           cb_nfs_mounted(f->nfs, PLAYER), "taken back in by its handle");
-    CHECK(nfs_read(f->nfs, STRANGER, fh, 0, 16, buf, sizeof(buf), NULL) == -EACCES &&
-          !cb_nfs_mounted(f->nfs, STRANGER), "a stranger with the handle");
     CHECK(mnt(f->nfs, PLAYER, "/", root) == 0, "mount again");
     CHECK(nfs_read(f->nfs, PLAYER, fh, 0, 16, buf, sizeof(buf), NULL) == 16, "reads again");
 
