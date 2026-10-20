@@ -99,7 +99,7 @@ include/cyanbox/    module interfaces (owned by the architecture, edit with care
 src/common        common.c log.c thread.c utf8.c nfc_tables.h         -> cb_common_dep
                   latin1.c kanji_readings.h (romaji: MeCab, Unihan, ICU)
 src/audio         decode.c probe.c mp3.c flac.c artwork.c             -> cb_audio_dep (common)
-                  encode.c source.c pipeline.c fifo.c internal.h
+                  encode.c source.c pipeline.c fifo.c input.c internal.h
 src/core          model.c grid.c db.c library.c playlist.c config.c   -> cb_core_dep (common, audio)
                   notation.c wavestore.c core.h
 src/analysis      spectrum.c onset.c tempo.c grid_fit.c downbeat.c    -> cb_analysis_dep (core, compute)

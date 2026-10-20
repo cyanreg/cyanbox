@@ -152,7 +152,7 @@ the CDJ-2000NXS2, or MP3), every track encoded from its decoded samples at
 
 ```
 src/core      model, grid arithmetic, the SQLite library (tracks, cues, waveforms, playlists, settings), notation
-src/audio     one FFmpeg path on the players' timeline (libavformat, libavcodec, libswresample) as pipelines of chunks, decodes to memory, encoding, probe, tags, artwork, MP3/FLAC scanners
+src/audio     one FFmpeg path on the players' timeline (libavformat over the file's mapping, libavcodec, libswresample) as pipelines of chunks, decodes to memory, encoding, probe, tags, artwork, MP3/FLAC scanners
 src/analysis  spectral front end (libavutil av_tx, or the GPU), onset, tempo, grid, downbeat, key, waveforms
 src/formats   export.pdb, ANLZ read/write, OneLibrary (sqlite3 + SQLCipher pages), My Settings, colours
 src/export    stick plan, writer, inspect, pull
