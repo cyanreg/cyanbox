@@ -183,7 +183,6 @@ value a key cannot take, or a key cyanbox does not know, is refused.
 | `export.format`                        | `copy`             | The stick's audio, see [older players](#older-players)                      |
 | `export.device_name`                   | the stick's label  | The name the players show for the stick                                     |
 | `export.background_color`              | `default`          | The players' background for the stick's library, or one of the eight colours |
-| `link.mp3`                             | `false`            | Serve tracks over PRO DJ LINK as 320 kbps MP3 instead of 16-bit WAV         |
 | `audio.sink`                           | the default output | The PipeWire node to play to                                                |
 | `ml.model`                             | `models/...gguf`   | The tagging model's file (also `$CYANBOX_ML_MODEL`)                           |
 | `color.pink` ... `color.purple`        | the legend         | What each colour stands for, in the words the [tagging](#tagging) picks by  |
@@ -477,8 +476,8 @@ stick. Without it, cyanbox never opens a Link socket.
 
  * **Every Ethernet player** that speaks standard PRO DJ LINK, from the
    CDJ-900 to the CDJ-3000X. Every track is served as a 16-bit WAV decoded
-   as it is read (or a 320 kbps MP3 with `link.mp3`), so a player plays the
-   very samples the grid and cues were made on, whatever the codec.
+   as it is read, so a player plays the very samples the grid and cues were
+   made on, whatever the codec.
  * **Plug and play**: cyanbox serves on every Ethernet interface as soon as
    it is up with an address, and joins the link at once, before any player
    is on.

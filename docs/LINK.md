@@ -32,8 +32,8 @@ firmware 3.22, and the cues a player saves
 on the deck and the ratings it gives are kept in the library, and its
 TAG LIST is shared with the interface ("Edits on the deck"). Then a
 real CDJ-3000 with a DJM-A9 mixer played a 1.5 hour set from cyanbox
-(October 2026) without a fault. Not yet: a WAV played on a real
-CDJ-900 (section 4), a real 3000X, the grid's offset changed on a deck
+(October 2026) without a fault, and a real CDJ-900 played the WAVs
+(section 4). Not yet: a real 3000X, the grid's offset changed on a deck
 (step 8).
 
 What the CDJ-900s showed, and what changed for it (`cyanbox-cli -v link
@@ -241,8 +241,8 @@ tree; `emu_fixture DIR` makes its three-track library and
 `RBXPORT_OPTIONS=DIR/options.json serve cba` serves it.
 
 **Known limits.** A track info request for a track whose transcode is not
-made yet (with `link.mp3`, or for what cannot be decoded as it is read:
-section 4) makes it there and then, on the service thread: the database
+made yet (what cannot be decoded as it is read: section 4) makes it
+there and then, on the service thread: the database
 and NFS wait for it (seconds), presence does not (its own thread, so the
 keep-alives go on), and stopping Link (quitting) waits for it too. HISTORY lists every play
 the library recorded, by day (cb_library_plays), and a track played
@@ -477,14 +477,11 @@ index for a player to get wrong. MP3s are served so too.
   track the WAV cannot be made of after all (the track info request
   checks: `CB_TRANSCODE_LINK_ANY`).
 
-With the `link.mp3` setting it is a 320 kbps CBR MP3 instead, everything
-but an MP3 (`CB_TRANSCODE_LINK_MP3`, `cb_transcode_mp3`), made whole when
-a player loads the track: no tags, no cover, no Xing/LAME frame, and the
-encoder's delay cut from the start of the audio fed to it, so the file as
-a player decodes it lines up with the source and the grid and cues stay
-right (`test_transcode` checks the clicks of its signal to 2 samples).
-A CDJ-900 played the library's own MP3s at once; the WAVs, now that their
-type is named, have played on an emulated one but not yet on a real one.
+A CDJ-900 played the library's own MP3s at once, and the WAVs, once their
+type was named, on an emulated one and then on a real one (October 2026),
+so WAV is all Link serves: the `link.mp3` setting, a 320 kbps MP3 made
+whole instead, is gone, and a library's row of it is cleaned away as it
+opens.
 
 The USB export is not changed by any of this: what the stick gets is its
 own choice (`export.format`, README.md).
