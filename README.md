@@ -475,9 +475,9 @@ library and load its tracks with their grids, cues and waveforms, with no
 stick. Without it, cyanbox never opens a Link socket.
 
  * **Every Ethernet player** that speaks standard PRO DJ LINK, from the
-   CDJ-900 to the CDJ-3000X. Every track is served as a 16-bit WAV decoded
-   as it is read, so a player plays the very samples the grid and cues were
-   made on, whatever the codec.
+   CDJ-900 to the CDJ-3000X. Every track, MP3s too, is served as a 16-bit
+   WAV at 44.1 kHz decoded as it is read, so a player plays the very
+   samples the grid and cues were made on, whatever the codec.
  * **Plug and play**: cyanbox serves on every Ethernet interface as soon as
    it is up with an address, and joins the link at once, before any player
    is on.

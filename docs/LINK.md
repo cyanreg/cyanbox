@@ -111,16 +111,23 @@ CDJ-2000 v4.33, a CDJ-2000NXS2 v1.87; 2026-10-15) showed:
   whole as UTF-16LE (kana, kanji and Latin-1 alike), found the file and
   read it through. The path goes to every player as it is now
   (`cb_catalog_render`).
-- A CDJ-900 accepts the WAV made as it is read (16-bit stereo, 44.1 or
-  48 kHz, the plain 44-byte header): a LOOKUP per path component, a
-  GETATTR, 2 kB at 0 for the header, then 9408-byte READs (four CD
-  sectors). The emulated one went on to read whole tracks at once, even
-  ones it had not loaded; that is the emulation, whose DSP model reports
-  no buffer levels, not the player (a real one has 64 MB of memory, less
-  than a long WAV). A player streams a track as it plays it: an emulated
-  CDJ-2000NXS2, whose DSP code is the real one, read about 630 kB in the
-  first 2 s after a load, then at about the rate it plays (140 to 180
-  kB/s), and nothing of the tracks after it.
+- A CDJ-900 accepts the WAV made as it is read (16-bit, 44.1 or 48 kHz,
+  the plain 44-byte header, mono too): a LOOKUP per path component, a
+  GETATTR, 2 kB at 0 for the header, then READs in order from 44 of 2352
+  frames each (53.3 ms, four CD sectors: 9408 bytes at 44.1 kHz stereo,
+  4704 mono). The emulated one went on to read whole tracks at once, and
+  again; that is the emulation, whose DSP model frees every handover at
+  once and reports no buffer levels, not the player, whose DSP has 32 MB
+  (about 3 min 10 s of the WAV) and so streams (cdj-12, 2026-10-20). How
+  far ahead a real one reads is not measured (`cyanbox-cli -v link serve`
+  while it plays an 8-minute WAV would show it). An emulated
+  CDJ-2000NXS2, whose DSP code is the real one, reads 64 bytes at 0 and
+  2 kB at the file's end on every open; at a load it reads each hot cue's
+  surroundings first, from 2.03 s before it to 2.78 s after, then 1.6 s
+  from the start, steps back 13.3 ms once and streams at the rate it
+  plays in 133 ms groups (140 to 180 kB/s). On a hot cue it reads on from
+  that cue's pre-read, the last 0.8 s of it again; on CALL it reads
+  backwards in 1 s blocks.
 - The older cue list (`0x2104`) gives a pre-nexus deck its memory cues
   and hot cues A to C (a hot loop D is left out: those decks have three),
   memory cues first: a CDJ-2000 takes the first <memory count> records
@@ -210,7 +217,7 @@ What has been run against what:
 | cyanbox | emulated CDJ-900, CDJ-2000, CDJ-2000NXS2 (Pioneer's firmware in QEMU) | a bridge, 169.254.0.0/16 | join, mount, browse every category, metadata, waveforms, cues, a load streamed over NFS; the lapse, NFD, CDJ-900 punctuation and CDJ-2000 KEY findings above; FLAC, MP3, AAC and 16- and 24-bit WAV sources played on the NXS2, with tempo, jog, memory loops, and hot cues A to D in their colours (the pads jump, the hot loop loops); the load command (`0x19`) on the CDJ-900 and the NXS2; cues saved and deleted on all three kept in the library ("Edits on the deck") |
 | cyanbox | emulated CDJ-3000 (firmware 3.22, cdj3k-emu) | a bridge, 169.254.0.0/16 | as the 3000X: browse with previews and artwork, a load from the browser and by `0x19`, play, tempo, CUE, a memory loop; cues saved and deleted on the deck kept; no `80`, no probes but `3007` |
 | cyanbox | emulated CDJ-3000X (firmware 1.41, cdj3k-emu) | a bridge, 169.254.0.0/16 | found by name with its counts, browse with previews and artwork, a load from the browser and by `0x19`, play, tempo, memory cues and loops, hot cues A to D in their colours with names and a hot loop; cues saved and deleted on the deck kept in the library (below); `80` and three database probes left unanswered (above) |
-| cyanbox | cyanbox's fake player | loopback, ports of their own (`test_loopback`) | join, browse, every track's bytes (transcodes too), the player's status, the fences, a library change |
+| cyanbox | cyanbox's fake player | loopback, ports of their own (`test_loopback`) | join, browse, every track's bytes, the player's status, the fences, a library change |
 | cyanbox | cyanbox's fake player | two network namespaces, rekordbox's ports (`tests/link/netns_test.sh`) | the same through the CLI, real broadcasts; the Ethernet interface found by the server, two served at once on the same ports, one of them only once its address came |
 | cyanbox's app | cyanbox's fake player | loopback (`test_link`) | refused without `--pro-link`, on the link before any player, the player and its load seen, 30 s of play recorded, the library read again after it, off, off right after on |
 | cyanbox's interface | cyanbox's fake player | two network namespaces, by hand | the window: on the link as 17, the player's load by title, playing, its play counted |
@@ -240,11 +247,7 @@ rbl-link --example browse --example serve --example emu_fixture` in its
 tree; `emu_fixture DIR` makes its three-track library and
 `RBXPORT_OPTIONS=DIR/options.json serve cba` serves it.
 
-**Known limits.** A track info request for a track whose transcode is not
-made yet (what cannot be decoded as it is read: section 4) makes it
-there and then, on the service thread: the database
-and NFS wait for it (seconds), presence does not (its own thread, so the
-keep-alives go on), and stopping Link (quitting) waits for it too. HISTORY lists every play
+**Known limits.** HISTORY lists every play
 the library recorded, by day (cb_library_plays), and a track played
 before the library kept plays by its last play. A player reading a file
 is not told when the library changes under it; handles name tracks by
@@ -421,8 +424,8 @@ against real players, do exactly this). The path is ours to choose. So
 the export is one virtual root whose only contents are the library's
 tracks, at the paths the export plan already gives them on a stick
 (`CBPlanTrack.usb_path`, `/Contents/Artist/Album/01 Track.flac`), each
-file standing for the plan's `source`: the track's file, or its
-transcode in the cache (section 4), with the plan's size. No host path
+file standing for the plan's `source`, the track's file, made into a WAV
+as it is read (section 4), with the plan's size. No host path
 appears in the protocol, and nothing but the library's audio can be
 named, so nothing else can be read. A file handle is an index into that
 tree with a random per-session tag: a handle from another session is
@@ -443,38 +446,40 @@ copied from a rekordbox capture of MP3s). The `2f` row after the path is
 1 for every format in both captures.
 
 So Link serves every track in one form every Ethernet player reads, from
-the CDJ-900 to the CDJ-3000X, and names its type: a 16-bit stereo WAV,
-made from the track's own file as a player reads it (src/link/wav.c).
-Nothing is made ahead and nothing is written to disk: a read is mapped
-onto the frames it covers, the WAV's 44-byte header and 4 bytes a frame,
-and those frames are decoded then through the packet store the decks
-play from (cyanbox/audio.h), which starts any range from enough packets
-before it for the decoder to give what a continuous decode gives
-(exactly for FLAC, PCM, ALAC and MP3; within 1e-7 for Opus and AAC). So
-a player plays the very samples the beat grid and the cues were made on,
-whatever the codec: no encoder delay to guess for MP3 or AAC, no VBR
-index for a player to get wrong. MP3s are served so too.
+the CDJ-900 to the CDJ-3000X, and names its type: a 16-bit WAV at 44.1 kHz
+of its one or two channels (stereo for more), made from the track's own
+file as a player reads it (src/link/wav.c), whatever the file is, MP3s
+included. Nothing is made ahead of the player and nothing is written to
+disk. Each player reading a track has a pipeline (cyanbox/audio.h,
+src/audio/pipeline.c) of its own, FFmpeg's path in a thread: libavformat's
+packets, libavcodec's frames, libswresample, which converts, mixes and
+dithers them into chunks of 4096 frames a few seconds ahead. A READ is
+answered from a window of those chunks, from a second behind the furthest
+place read to as far as the pipeline got, as slices of the chunks
+themselves, sent after the RPC header in one datagram (sendmsg): nothing
+is copied on the way to the socket. A READ the window does not hold yet
+is kept and answered once the pipeline's eventfd says the bytes are there
+(the service thread never decodes); one behind the window, or well past
+where the pipeline is, seeks the pipeline there.
 
-- 16-bit lossless sources go through bit for bit; 24-bit, float and
-  lossy ones get one step of triangular dither drawn from each sample's
-  place, so the same bytes come back however often and in whatever order
-  a player reads them. Mono is doubled.
+A seek gives what playing into the place gives (src/audio/source.c):
+exactly for FLAC, PCM, ALAC, MP3 and Vorbis, within 1e-4 for Opus, but for
+the dither noise of what is dithered, which starts again. So a player
+plays the very samples the beat grid and the cues were made on, at
+44.1 kHz, whatever the codec: no encoder delay to guess for MP3 or AAC,
+no VBR index for a player to get wrong.
+
+- A 16-bit file at 44.1 kHz goes through bit for bit; everything else
+  (24-bit, float, lossy, another rate) is converted by libswresample with
+  triangular dither.
 - The WAV is the plan's length, the frames the library counted when it
-  probed the file (silence after the file's end, nothing past it): its
-  size is known at the track info reply and never changes under a
-  player, reloads included.
-- On this machine a 2 kB read takes 10 to 16 µs, a 32 kB one 0.15 to
-  0.25 ms, a jump (a hot cue) 0.25 to 0.4 ms, the first read of a track
-  (opening it) 1 to 4 ms with the file in the page cache, about 200 ms
-  from the disk (an emulated CDJ-2000NXS2's first READs: 205 to 227 ms,
-  tolerated); a 13-minute FLAC reads through 790 times faster than it
-  plays. A few tracks are kept open (1 GiB of packets at most),
-  the least recently read closed first.
-- A track above 48 kHz or of more than two channels is made
-  as a WAV file when a player loads it (`CB_TRANSCODE_LINK`,
-  `cb_transcode_wav`, in the library's cache as `ID.link.wav`), as is a
-  track the WAV cannot be made of after all (the track info request
-  checks: `CB_TRANSCODE_LINK_ANY`).
+  probed the file at 44.1 kHz (silence after the file's end, nothing past
+  it): its size is known at the track info reply and never changes under
+  a player, reloads included.
+- The window covers what players read again (above): the CDJ-900 reads in
+  order, the CDJ-2000NXS2 steps back at most 0.8 s within a stream; what
+  it reads again much later (a hot cue's pre-read) is a seek. A few
+  players' tracks at a time, the least recently read closed first.
 
 A CDJ-900 played the library's own MP3s at once, and the WAVs, once their
 type was named, on an emulated one and then on a real one (October 2026),
