@@ -160,6 +160,9 @@ static const char usage_text[] =
     "                           playing on if it was playing, paused if not\n"
     "      --save-cue X@SEC     once loaded, save a cue on the track as a player does on\n"
     "                           the deck: hot cue X (A..H) or a memory cue (M) at SEC\n"
+    "      --fetch-again SEC    once loaded, read the file again SEC seconds later\n"
+    "                           with the handles the first read got, as a deck reads\n"
+    "                           on after its link came back (it never mounts again)\n"
     "\n"
     "  A TRACK is an audio file in the library (any path to it), a folder (every\n"
     "  library track under it) or a library id.\n"
@@ -2832,7 +2835,8 @@ static bool parse_save_cue(const char *s, SaveCue *c)
     return end != s + 2 && !*end && c->time >= 0 && c->time < 86400;
 }
 
-static int link_browse(const CBLinkClientOptions *o, uint32_t track, long hold, SaveCue save)
+static int link_browse(const CBLinkClientOptions *o, uint32_t track, long hold, SaveCue save,
+                       long again)
 {
     CBLinkClient *c;
     int ret = cb_link_client_start(&c, o);
@@ -2865,6 +2869,21 @@ static int link_browse(const CBLinkClientOptions *o, uint32_t track, long hold, 
         else
             printf("saving %s at %s on track %u failed: %s\n", what, at, id, strerror(-ret));
     }
+    if (ret >= 0 && again > 0) {
+        printf("reading the file again in %ld s\n", again);
+        fflush(stdout);
+        int64_t end = cb_time_us() + (int64_t)again * 1000000;
+        while (cb_time_us() < end)
+            usleep(100000);
+        uint8_t *data = NULL;
+        size_t got = 0;
+        ret = cb_link_client_fetch_again(c, &data, &got);
+        if (ret >= 0)
+            printf("file over NFS again: %zu bytes\n", got);
+        else
+            printf("file over NFS again: %s\n", strerror(-ret));
+        free(data);
+    }
     fflush(stdout);
     if (ret >= 0 && hold > 0)
         link_hold(c, hold);
@@ -2880,7 +2899,7 @@ static int cmd_link(Cli *cli, int argc, char **argv)
     cb_link_options_default(&opt);
     CBLinkClientOptions copt;
     cb_link_client_options_default(&copt);
-    long number = 3, track = 0, hold = 0;
+    long number = 3, track = 0, hold = 0, again = 0;
     SaveCue save = { .hot = -2 };
     const char *sub = NULL, *host = NULL;
     for (int i = 1; i < argc; i++) {
@@ -2910,6 +2929,9 @@ static int cmd_link(Cli *cli, int argc, char **argv)
         } else if ((r = opt_value(cli, argc, argv, &i, NULL, "--hold", &val))) {
             if (r < 0 || !parse_count(val, 86400, &hold))
                 return usage_error(cli, "link: --hold takes seconds");
+        } else if ((r = opt_value(cli, argc, argv, &i, NULL, "--fetch-again", &val))) {
+            if (r < 0 || !parse_count(val, 86400, &again))
+                return usage_error(cli, "link: --fetch-again takes seconds");
         } else if ((r = opt_value(cli, argc, argv, &i, "-t", "--track", &val))) {
             if (r < 0 || !parse_count(val, UINT32_MAX, &track))
                 return usage_error(cli, "link: --track takes a track id");
@@ -2944,7 +2966,7 @@ static int cmd_link(Cli *cli, int argc, char **argv)
     copt.interface = opt.interface;
     copt.server = host;
     copt.number = (int)number;
-    return link_browse(&copt, (uint32_t)track, hold, save);
+    return link_browse(&copt, (uint32_t)track, hold, save, again);
 }
 
 static const struct {
@@ -2972,7 +2994,7 @@ static const struct {
     { "playlist", cmd_playlist, "playlist list|create|add|remove|delete|import|export ..." },
     { "link",     cmd_link,     "link serve [-i IF] [--any-peer] [--wait] [--link-usb CARD] | "
                                 "link browse -i IF [-n N] [-t ID] [--name NAME] [--hold SEC] "
-                                "[--save-cue X@SEC] [--quiet] [HOST]" },
+                                "[--save-cue X@SEC] [--fetch-again SEC] [--quiet] [HOST]" },
 };
 
 static int cli_run(int argc, char **argv)

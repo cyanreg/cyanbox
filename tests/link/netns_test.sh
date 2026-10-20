@@ -6,8 +6,9 @@
 # tied to an interface; the server finding the Ethernet interface by
 # itself; serving two at once on the same ports, one that gets its
 # address only after the server started among them; a hot cue the player
-# saves kept in the library; and the fence (a browse that never announces
-# itself gets nothing).
+# saves kept in the library; a player reading on with its handles after
+# the server's address went and came back; and the fence (a browse that
+# never announces itself gets nothing).
 #
 #   tests/link/netns_test.sh CYANBOX-CLI AUDIO.wav DIR
 #
@@ -63,6 +64,23 @@ check "^link up as device 17 on cbc"
 check "^link up as device 17 on cba"
 check "file over NFS: [0-9]+ bytes"
 grep -q "cannot serve" <<< "$out" && { echo "netns_test: a service was refused"; fail=1; }
+
+# The server's address taken away once the player has read the file, and
+# put back three seconds later, as a cable or a USB adapter comes back:
+# the service there stops and starts again, and the player reads the file
+# again with the handles it had (a deck reads on, never mounting again).
+rm -f "$dir/again.log"
+out=$("$here/netns.sh" -w 1 "(while ! grep -q 'file over NFS:' $dir/again.log 2>/dev/null; do \
+      sleep 0.2; done; ip addr del \$ADDR_A/16 dev \$CBA; sleep 3; \
+      ip addr add \$ADDR_A/16 broadcast 169.254.255.255 dev \$CBA) & \
+      $cli -c $dir/lib link serve" -- \
+      "set -o pipefail; timeout 60 $cli link browse -i \$CBB --fetch-again 12 | \
+      tee $dir/again.log" 2>&1)
+status=$?
+echo "$out"
+[ $status -eq 0 ] || { echo "netns_test: reading on after the address came back failed ($status)"; fail=1; }
+check "is gone or has another address: no longer serving there"
+check "^file over NFS again: [0-9]+ bytes$"
 
 # A browse that never announces itself is refused.
 out=$("$here/netns.sh" -w 6 "$cli -c $dir/lib link serve -i \$CBA" -- \

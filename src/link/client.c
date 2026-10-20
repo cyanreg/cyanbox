@@ -43,6 +43,7 @@ struct CBLinkClient {
     pthread_mutex_t lock;
     CBPresence *pres;           /* NULL when quiet */
     CBNfsClient *nfs;           /* made on the first fetch */
+    char *fetched;              /* the last path fetched, for cb_link_client_fetch_again */
     CBDbClient *db;             /* made on first use */
     int number;
     uint8_t dgram[2048];
@@ -192,6 +193,7 @@ void cb_link_client_stop(CBLinkClient **cp)
     }
     cb_dbclient_close(&c->db);
     cb_nfs_client_free(&c->nfs);
+    free(c->fetched);
     cb_presence_free(&c->pres);
     if (c->fd_announce >= 0)
         close(c->fd_announce);
@@ -416,7 +418,21 @@ int cb_link_client_fetch(CBLinkClient *c, const char *path, uint8_t **data, size
     int ret = nfs_open(c);
     if (ret < 0)
         return ret;
+    if (path != c->fetched) {
+        char *p = cb_strdup(path);
+        if (!p)
+            return CB_ERROR(ENOMEM);
+        free(c->fetched);
+        c->fetched = p;
+    }
     return cb_nfs_client_fetch(c->nfs, path, 0, data, size);
+}
+
+int cb_link_client_fetch_again(CBLinkClient *c, uint8_t **data, size_t *size)
+{
+    if (!c->fetched)
+        return CB_ERROR(ENOENT);
+    return cb_link_client_fetch(c, c->fetched, data, size);
 }
 
 /* ------------------------------------------------------------- database */

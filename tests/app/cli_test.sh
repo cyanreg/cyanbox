@@ -338,6 +338,9 @@ run show "$dir/no-such-track.flac" > /dev/null 2>&1
 run link serve --link-usb > /dev/null 2> "$dir/usage.err"
 [ $? -eq 1 ] && grep -q "needs a sound card" "$dir/usage.err" ||
     { cat "$dir/usage.err"; fail "link serve --link-usb without a card"; }
+run link browse -i lo --fetch-again soon > /dev/null 2> "$dir/usage.err"
+[ $? -eq 1 ] && grep -q "fetch-again takes seconds" "$dir/usage.err" ||
+    { cat "$dir/usage.err"; fail "link browse --fetch-again without seconds"; }
 for cmd in add analyze analyse show color colour export inspect pull sync rescan check config \
            settings init playlist; do
     run $cmd --bogus > /dev/null 2> "$dir/usage.err"
