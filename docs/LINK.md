@@ -128,6 +128,13 @@ CDJ-2000 v4.33, a CDJ-2000NXS2 v1.87; 2026-10-15) showed:
   plays in 133 ms groups (140 to 180 kB/s). On a hot cue it reads on from
   that cue's pre-read, the last 0.8 s of it again; on CALL it reads
   backwards in 1 s blocks.
+- An emulated CDJ-3000X (1.41) and CDJ-3000 (3.22) read a whole track
+  into their memory as it loads, every byte once, and nothing after:
+  hot cues, CALL, SEARCH, REV, needle search and the track's end read
+  nothing (cdj-12, 2026-10-21). 32 kB READs from up to three places at
+  once, by turns in bursts of about 40 (1.3 MB): from the start and from
+  2.04 s before hot cues A and B, each until it meets where the next
+  began; 1.9 to 3.7 MB/s in an emulation at 55 to 75 % of real time.
 - WAVs made by a pipeline per player (src/link/wav.c) on the same emulated
   CDJ-900 and CDJ-2000NXS2 (cdj-12, 2026-10-21, rxbox e63155a; an
   8-minute MP3, an 8-minute 48 kHz WAV served at 44.1 kHz and a 3-minute
@@ -320,6 +327,12 @@ Every port is above 1024: nothing needs root.
   status from its address for a number not on the link is its other deck,
   a player of its own until the unit's keep-alives stop or it starts over;
   My Settings go to the unit once, to the number it keeps alive.
+  An XDJ-RX3 (1.20) says nowhere where its decks are in their tracks: the
+  beat number at 0xa0 of its status is 0xffffffff on every path, for
+  both decks, loaded or not (rbp's TotalCnt_SentinelTASK stores it at
+  0xe684c whatever the deck does), and it sends no beat packets and no
+  position packets (cdj-12's reading of the firmware, 2026-10-21). So the
+  Link panel shows no position for its decks.
 - **On USB.** An XDJ-RX3 has no LAN socket: its USB-B socket is a hub
   with a CDC-ECM network adapter (2b73:0007, `cdc_ether`, an `enx`
   interface here) wired to its Ethernet, and its own USB device (2b73:003d:
