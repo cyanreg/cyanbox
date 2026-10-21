@@ -128,6 +128,20 @@ CDJ-2000 v4.33, a CDJ-2000NXS2 v1.87; 2026-10-15) showed:
   plays in 133 ms groups (140 to 180 kB/s). On a hot cue it reads on from
   that cue's pre-read, the last 0.8 s of it again; on CALL it reads
   backwards in 1 s blocks.
+- WAVs made by a pipeline per player (src/link/wav.c) on the same emulated
+  CDJ-900 and CDJ-2000NXS2 (cdj-12, 2026-10-21, rxbox e63155a; an
+  8-minute MP3, an 8-minute 48 kHz WAV served at 44.1 kHz and a 3-minute
+  mono WAV served mono): every case plays as with the WAVs made before
+  (the length, REMAIN, the hot cues, the hot loop, CALL), with the same
+  READs in the same order at the same places in the track, but the
+  48 kHz file's in 9408-byte pieces. Answers take a median under 0.1 ms;
+  a READ elsewhere than the pipeline is, a seek, 3 to 13 ms; a
+  pipeline's first READ, which opens the file, 15 to 43 ms (of a 16-bit
+  WAV's, most is libavformat looking for DTS or AC-3 in its first 32
+  packets); none reached 100 ms, and no READ was sent again. Every NXS2 open starts with 64 bytes at 0: a seek
+  to the start, 39 to 53 ms of the 48 kHz file then, because opening it
+  again probed again; it no longer does (src/audio/source.c,
+  open_input).
 - The older cue list (`0x2104`) gives a pre-nexus deck its memory cues
   and hot cues A to C (a hot loop D is left out: those decks have three),
   memory cues first: a CDJ-2000 takes the first <memory count> records
