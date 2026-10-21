@@ -37,6 +37,18 @@ foreach t : [ 'mp3', 'decode', 'pipeline', 'input', 'artwork', 'encode', 'dj' ]
     )
 endforeach
 
+# A seek to the start of a WAV, source.c built into the test
+test('audio_source_reopen',
+    executable('test_audio_source_reopen',
+        '../../tests/audio/test_source_reopen.c',
+        '../../tests/audio/util.c',
+        include_directories: cb_inc,
+        dependencies: [ cb_audio_dep, m_dep ],
+    ),
+    env: audio_test_env,
+    suite: 'audio',
+)
+
 # The race of a seek, pipeline.c built into the test with its wait
 test('audio_pipeline_race',
     executable('test_audio_pipeline_race',

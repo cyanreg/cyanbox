@@ -270,10 +270,23 @@ static int convert(CBSource *s, uint8_t *const *dst, int got, int n, const uint8
 
 static int open_input(CBSource *s)
 {
+    /* A 16-bit PCM WAV opened again (a seek to the start). libavformat
+     * holds back such a file's first 32 packets to look for DTS or AC-3 in
+     * them (wavdec.c, handle_stream_probing; every format's probe at each
+     * power of two: 18 ms of a 48 kHz stereo file, which every seek to 0
+     * paid). The first open looked at these bytes and found PCM, its first
+     * look at the first packet alone, so probing ends there now with the
+     * same answer, and the parameters the header holds are not looked for
+     * again. Anything else opens as it first did: an ADTS stream's
+     * timestamps depend on what avformat_find_stream_info finds. */
+    bool wav16 = s->fmt && s->dec && s->dec->codec_id == AV_CODEC_ID_PCM_S16LE &&
+                 cb_audio_is_container(s->fmt, "wav");
     cb_audio_close(&s->fmt);
-    int ret = cb_audio_open(s->path, &s->fmt, true);
+    int ret = cb_audio_open(s->path, &s->fmt, !wav16);
     if (ret < 0)
         return ret;
+    if (wav16)
+        s->fmt->probesize = 32;
     s->idx = cb_audio_first_stream(s->fmt, AVMEDIA_TYPE_AUDIO);
     if (s->idx < 0) {
         cb_debug("%s: no audio stream", s->path);
