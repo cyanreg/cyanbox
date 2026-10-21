@@ -21,8 +21,10 @@
  *   32 kB and does not reliably ask again for the rest of a shorter
  *   answer (CB_NFS_MAX_READ). A READ that yields no bytes, at or past the
  *   end or of count 0, is NFSERR_IO, as rekordbox answers it (rbxport's
- *   static analysis of libFilSiNE's _tkfFSReadFile); a player reads to
- *   the size it was given and never asks past it.
+ *   static analysis of libFilSiNE's _tkfFSReadFile). A CDJ-2000NXS2 asks
+ *   for 2 kB at the size it was given on every open and takes the error
+ *   in its stride (emulated, cdj-12's READ traces, 2026-10-20 and 21);
+ *   nothing is read past that.
  * - Handles: 32 bytes of which only the first 12 mean anything, because
  *   an XDJ-700 (firmware 1.15) writes its own 20 bytes after them in
  *   every LOOKUP and rekordbox ignores them (rbxport 9cdc4f4d, captures
