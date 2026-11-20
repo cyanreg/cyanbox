@@ -81,7 +81,7 @@ void cb_jobs_set_gpu(CBJobs *j, bool enable, const char *device);
  * it), they fail their beats with -ENODEV (the log says why). Naming it
  * again (the same file too) forgets a failure to open it. */
 void cb_jobs_set_beat_model(CBJobs *j, const char *path);
-
+void cb_jobs_set_beat_batch(CBJobs *j, int batch);
 /* Each returns a request id > 0 or a negative errno. */
 uint64_t cb_jobs_analyse(CBJobs *j, uint64_t track_id, const char *path,
                          const CBAnalysisOptions *opt, unsigned what);

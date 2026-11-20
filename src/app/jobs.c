@@ -193,6 +193,7 @@ struct CBJobs {
     int bt_err;                     /* why bt_model would not open; 0 */
     bool tagging;                   /* the tag batch holds the GPU */
     CBBeatNet beat_net;             /* bt for CBAnalysisOptions.beat_net */
+    int bt_batch;                   /* Beat This! GPU batch size (1..4) */
 };
 
 static void job_free(Job *job)
@@ -337,6 +338,10 @@ static int beat_net_run(void *opaque, const float *pcm, int64_t n, float **beat,
             CBBeatThisOptions o;
             cb_beatthis_options_default(&o);
             o.device = device;
+            int batch = j->bt_batch;
+            if (batch < 1 || batch > 4)
+              batch = 1;
+            o.batch = batch;
             int64_t t0 = cb_time_us();
             ret = cb_beatthis_open(&j->bt, j->bt_model, &o);
             free(device);
@@ -895,7 +900,7 @@ int cb_jobs_create(CBJobs **out, int threads)
     ret = cb_pool_create(&j->pool, threads, "jobs");
     if (ret < 0)
         goto fail;
-
+    j->bt_batch = 1;
     *out = j;
     return 0;
 
@@ -966,7 +971,20 @@ void cb_jobs_set_beat_model(CBJobs *j, const char *path)
     j->bt_err = 0;
     pthread_mutex_unlock(&j->bt_lock);
 }
-
+void cb_jobs_set_beat_batch(CBJobs *j, int batch)
+{
+    if (!j)
+        return;
+    if (batch < 1 || batch > 4)
+        batch = 1;
+    pthread_mutex_lock(&j->bt_lock);
+    if (j->bt_batch != batch) {
+        j->bt_batch = batch;
+        cb_beatthis_close(&j->bt);
+        j->bt_err = 0;
+    }
+    pthread_mutex_unlock(&j->bt_lock);
+}
 /* Under j->lock: the job goes on the list, queued, with its request id. */
 static void job_link(CBJobs *j, Job *job)
 {

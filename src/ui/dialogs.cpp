@@ -423,6 +423,15 @@ static void analysis_settings(UiState *ui)
     }
     ImGui::TextDisabled("Waveforms are always made.");
 
+    int bt_batch = cfg->beatthis_batch;
+    if (bt_batch < 1 || bt_batch > 4)
+        bt_batch = 1;
+    ImGui::SetNextItemWidth(PX(120));
+    if (ImGui::SliderInt("Beat This batch size", &bt_batch, 1, 4)) {
+    cfg->beatthis_batch = bt_batch;
+    changed = true;
+}
+ImGui::SetItemTooltip("Chunks processed at once on GPU (1-2 helps avoid ring timeouts).");
     ImGui::SeparatorText("Tempo");
     int preset = 0;
     for (int i = 0; i < (int)(sizeof(BPM_PRESETS) / sizeof(BPM_PRESETS[0])); i++) {
