@@ -432,6 +432,11 @@ struct UiState {
     std::vector<UiTestEvent> test_events;   // input to give ImGui (test hook)
     bool      autoload_done;
     double    saved_zoom;
+    std::vector<std::string> pending_imports;
+    size_t import_cursor = 0;
+    int import_total = 0;
+    int import_added = 0;
+    int import_failed = 0;
 };
 
 static inline UiState *ui_of(CBApp *app) { return (UiState *)app->ui; }
