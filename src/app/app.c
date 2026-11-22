@@ -1449,6 +1449,7 @@ int cb_app_ml_model(const CBApp *app, char **path)
 int cb_app_beat_model(char **path)
 {
     return find_model(getenv("CYANBOX_BEATTHIS_MODEL"), CB_APP_BEAT_MODEL, path);
+
 }
 
 int cb_app_set_beat_model(CBApp *app)
@@ -1458,6 +1459,7 @@ int cb_app_set_beat_model(CBApp *app)
     char *model = NULL;
     int ret = cb_app_beat_model(&model);
     cb_jobs_set_beat_model(app->jobs, ret < 0 ? NULL : model);
+    cb_jobs_set_beat_batch(app->jobs, app->lib.cfg.beatthis_batch);
     if (ret < 0) {
         app->last_error_count++;
         if (model)

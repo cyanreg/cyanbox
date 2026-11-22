@@ -39,6 +39,7 @@ typedef struct CBConfig {
     double bpm_min, bpm_max;    /* 0 = unset */
     bool   snap_bpm;            /* default true */
     bool   auto_cues;           /* memory cue where the drums come in, default true */
+    int    beatthis_batch;      /* Beat This! batch size (1..4), default 1 */
     bool   allow_sections;      /* tempo sections where the tempo or phase really changes,
                                    default true (CBAnalysisOptions.allow_sections) */
     unsigned analyse_what;      /* CBAnalyseWhat the interface's Analyse asks for,

@@ -566,7 +566,7 @@ int cb_beatthis_open(CBBeatThis **out, const char *path, const CBBeatThisOptions
         return CB_ERROR(ENOMEM);
     bt->f.fd = -1;
     /* a sequence a frame across frequency is a workgroup row of bt_attn.comp: at most 65535 */
-    bt->batch = opt->batch > 0 ? CB_MIN(opt->batch, 32) : 4;
+    bt->batch = opt->batch > 0 ? CB_MIN(opt->batch, 32) : 1;
 
     int64_t t0 = cb_time_us();
     int ret;

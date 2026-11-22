@@ -61,6 +61,7 @@ void cb_config_defaults(CBConfig *c)
     *c = (CBConfig) {
         .snap_bpm          = true,
         .auto_cues         = true,
+        .beatthis_batch    = 1,
         .allow_sections    = true,
         .analyse_what      = CB_ANALYSE_ALL,
         .key_notation      = "classic",
@@ -279,7 +280,7 @@ static int set_string(char **field, const char *value)
 /* CBConfig's own keys (not the My Settings), what each takes, and how it
  * is read. */
 typedef enum Kind {
-    K_BOOL, K_BPM, K_WHAT, K_NOTATION, K_TEXT, K_VIBE, K_TRAFFIC, K_BARS, K_SPLIT, K_BACKGROUND,
+    K_BOOL, K_BPM, K_WHAT, K_NOTATION, K_TEXT, K_VIBE, K_TRAFFIC, K_BARS, K_BATCH, K_SPLIT, K_BACKGROUND,
     K_FORMAT,
 } Kind;
 
@@ -297,6 +298,7 @@ static const struct {
     { "analysis.bpm_max",        K_BPM },
     { "analysis.snap_bpm",       K_BOOL },
     { "analysis.auto_cues",      K_BOOL },
+    { "analysis.beatthis_batch", K_BATCH },
     { "analysis.allow_sections", K_BOOL },
     { "analysis.what",           K_WHAT },
     { "import.comment",          K_BOOL },
@@ -353,6 +355,7 @@ const char *cb_config_takes(const char *key)
     case K_VIBE:     return "a description of at most " STR(CB_CONFIG_VIBE_MAX) " bytes";
     case K_TRAFFIC:  return "off, same, related1, related2 or related3";
     case K_BARS:     return "a whole number of bars from 1 to 1024";
+    case K_BATCH:    return "a whole number from 1 to 4";
     case K_SPLIT:    return "a position, 0 or more (0: the default)";
     case K_BACKGROUND:
         return "default, pink, red, orange, yellow, green, aqua, blue or purple";
@@ -426,6 +429,11 @@ int cb_config_set(CBConfig *c, const char *key, const char *value)
         if (!reset && (!parse_double(value, &d) || d < 1 || d > 1024 || d != trunc(d)))
             return CB_ERROR(EINVAL);
         c->detail_bars = reset ? def.detail_bars : (int)d;
+        return 0;
+    case K_BATCH:
+        if (!reset && (!parse_double(value, &d) || d < 1 || d > 4 || d != trunc(d)))
+            return CB_ERROR(EINVAL);
+        c->beatthis_batch = reset ? def.beatthis_batch : (int)d;
         return 0;
     case K_SPLIT:
         if (!reset && (!parse_double(value, &d) || d < 0 || d > 1e6))
@@ -588,7 +596,7 @@ static int put_group(CBLibrary *lib, const char *prefix, const CBKv *kv, int nb)
 int cb_library_config_save(CBLibrary *lib)
 {
     const CBConfig *c = &lib->cfg;
-    char bpm_min[32], bpm_max[32], what[32], bars[32], split_p[32], split_t[32];
+    char bpm_min[32], bpm_max[32], what[32], bars[32], split_p[32], split_t[32], bt_batch[32];
     const struct {
         const char *key, *value;
     } rows[] = {
@@ -598,6 +606,7 @@ int cb_library_config_save(CBLibrary *lib)
         { "analysis.auto_cues",      c->auto_cues ? "true" : "false" },
         { "analysis.allow_sections", c->allow_sections ? "true" : "false" },
         { "analysis.what",           fmt_what(c->analyse_what, what, sizeof(what)) },
+        { "analysis.beatthis_batch", cb_core_fmt_double(CB_CLAMP(c->beatthis_batch, 1, 4), bt_batch, sizeof(bt_batch)) },
         { "import.comment",          c->import_comment ? "true" : "false" },
         { "export.key_notation",     c->key_notation },
         { "export.pdb",              c->export_pdb ? "true" : "false" },

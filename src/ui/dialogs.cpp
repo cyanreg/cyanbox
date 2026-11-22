@@ -37,7 +37,8 @@
 #include <stdio.h>
 #include <sys/stat.h>
 #include <time.h>
-
+#include <cstdlib>
+#include <filesystem>
 #include <algorithm>
 
 #include "config.h"
@@ -423,6 +424,15 @@ static void analysis_settings(UiState *ui)
     }
     ImGui::TextDisabled("Waveforms are always made.");
 
+    int bt_batch = cfg->beatthis_batch;
+    if (bt_batch < 1 || bt_batch > 4)
+        bt_batch = 1;
+    ImGui::SetNextItemWidth(PX(120));
+    if (ImGui::SliderInt("Beat This batch size", &bt_batch, 1, 4)) {
+    cfg->beatthis_batch = bt_batch;
+    changed = true;
+}
+ImGui::SetItemTooltip("Chunks processed at once on GPU (1-2 helps avoid ring timeouts).");
     ImGui::SeparatorText("Tempo");
     int preset = 0;
     for (int i = 0; i < (int)(sizeof(BPM_PRESETS) / sizeof(BPM_PRESETS[0])); i++) {
@@ -1644,20 +1654,31 @@ static void fb_add(UiState *ui, const std::string &fallback)
         items.push_back(fallback);
     if (items.empty())
         return;
-    // One item: its own status says what came of it. Several: a count,
-    // the failures in it (each is in the log).
-    int added = 0, failed = 0;
+std::error_code ec;
     for (const std::string &p : items) {
-        if (cb_app_add_path(app, p.c_str()) >= 0)
-            added++;
-        else
-            failed++;
+        if (std::filesystem::is_directory(p, ec)) {
+            for (const auto &entry : std::filesystem::recursive_directory_iterator(
+                     p, std::filesystem::directory_options::skip_permission_denied, ec)) {
+                if (ec) {
+                    ec.clear();
+                    continue;
+                }
+                if (entry.is_regular_file(ec) && cb_is_audio_path(entry.path().c_str()))
+                    ui->pending_imports.push_back(entry.path().string());
+            }
+            ec.clear();
+        } else if (std::filesystem::is_regular_file(p, ec) && cb_is_audio_path(p.c_str())) {
+            ui->pending_imports.push_back(p);
+        } else {
+            ui->import_failed++;
+        }
+        ec.clear();
     }
-    int n = (int)items.size();
-    if (n > 1 && failed)
-        cb_app_set_status(app, "Added %d of %d items; %d could not be added", added, n, failed);
-    else if (n > 1)
-        cb_app_set_status(app, "Added %d items", added);
+    ui->import_total = (int)ui->pending_imports.size();
+    if (ui->import_total > 0)
+        cb_app_set_status(app, "Queued %d tracks for import...", ui->import_total);
+    else if (ui->import_failed > 0)
+        cb_app_set_status(app, "No supported audio files found (%d skipped)", ui->import_failed);
     ui->fb_picked.clear();
     ui->dlg_add = false;
 }
@@ -1700,6 +1721,17 @@ static std::string fb_find_rows(UiState *ui)
     return go;
 }
 
+static std::string fb_mounted_root() {
+    const char *user = std::getenv("USER");
+    if (!user || !*user) user = std::getenv("LOGNAME");
+    std::vector<std::string> c;
+    if (user && *user) { c.push_back(std::string("/run/media/") + user); c.push_back(std::string("/media/") + user); }
+    c.push_back("/run/media"); c.push_back("/media"); c.push_back("/mnt");
+    std::error_code ec;
+    for (const auto &d : c) { if (std::filesystem::is_directory(d, ec)) return d; }
+    return "/";
+}
+
 static void add_dialog(UiState *ui)
 {
     CBApp *app = ui->app;
@@ -1718,10 +1750,15 @@ static void add_dialog(UiState *ui)
     ui_escape_closes(&ui->dlg_add);
     ui_settle_centred();
     ui->fb_focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
-    if (ImGui::Button("Up")) {
+        if (ImGui::Button("Up")) {
         std::string up = ui->fb_path;
         size_t slash = up.find_last_of('/');
         fb_go(ui, slash == 0 || slash == std::string::npos ? "/" : up.substr(0, slash));
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("USB")) {
+        ui->fb_find[0] = '\0';
+        fb_go(ui, fb_mounted_root());
     }
     ImGui::SameLine();
     ImGui::SetNextItemWidth(-FLT_MIN);

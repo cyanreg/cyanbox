@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=cyanbox
+Comment=DJ library manager for Pioneer/AlphaTheta CDJs and XDJs
+Exec=cyanbox
+Icon=cyanbox
+Terminal=false
+Categories=AudioVideo;Audio;Music;
+StartupWMClass=cyanbox

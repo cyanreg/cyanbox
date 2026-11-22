@@ -157,3 +157,14 @@ install_data('models/beat-this-f16.gguf',
              install_dir: get_option('datadir') / 'cyanbox' / 'models')
 
 subdir('tools')
+install_data(
+  'data/cyanbox.desktop',
+  install_dir: get_option('datadir') / 'applications',
+)
+
+meson.add_install_script('tools/install-desktop-icon.sh')
+
+install_data(
+  'data/cyanbox.png',
+  install_dir: get_option('datadir') / 'icons/hicolor/256x256/apps',
+)

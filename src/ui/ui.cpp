@@ -1941,7 +1941,38 @@ bool cb_ui_frame(CBApp *app)
     ui_dialogs(ui);
     if (io.WantSaveIniSettings)
         save_layout(ui);
-
+if (ui->import_cursor < ui->pending_imports.size()) {
+        const size_t batch_limit = 16;
+        size_t processed = 0;
+        int batch_added = 0;
+        while (ui->import_cursor < ui->pending_imports.size() && processed < batch_limit) {
+            const std::string &path = ui->pending_imports[ui->import_cursor++];
+            processed++;
+            int err = 0;
+            CBTrack *t = cb_library_add_file(&app->lib, path.c_str(), &err);
+            if (t) {
+                ui->import_added++;
+                batch_added++;
+                cb_app_analyse_track(app, t, app->lib.cfg.analyse_what, false);
+            } else {
+                ui->import_failed++;
+            }
+        }
+        if (batch_added > 0)
+            cb_app_rebuild_rows(app);
+        if (ui->import_cursor >= ui->pending_imports.size()) {
+            cb_app_set_status(app, "Imported %d of %d tracks (%d skipped)",
+                              ui->import_added, ui->import_total, ui->import_failed);
+            ui->pending_imports.clear();
+            ui->import_cursor = 0;
+            ui->import_total = 0;
+            ui->import_added = 0;
+            ui->import_failed = 0;
+        } else {
+            cb_app_set_status(app, "Importing %zu/%d tracks...",
+                              ui->import_cursor, ui->import_total);
+        }
+    }
     // Another frame is wanted while anything moves.
     bool more = false;
     for (int i = 0; i < CB_DECKS && app->player; i++) {
